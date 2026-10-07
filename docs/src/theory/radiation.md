@@ -252,6 +252,14 @@ The denominator ``(1 - R_1 R_2)^{-1}`` is exactly the geometric sum of
 photons bouncing between the two interfaces — the same structure that
 reappears in §6 as the urban radiosity matrix inverse.
 
+The adding recurrence is sequential in the vertical, but the g-points and
+the columns are independent. The multi-column solves (`solve_sw!` /
+`solve_lw!` on optics `τ[k, g, column]`, #305) therefore run one work
+item per (g-point, column), with the recurrence over ``k`` inside the
+item. The broadband flux is the sum over g-points, taken in ascending
+order. A single column is the one-column case of the same code, so it
+gets the same bits at every thread count.
+
 ## 4. From fluxes to heating rates
 
 The quantity the LES actually needs is a temperature tendency. Net
@@ -319,7 +327,10 @@ modules:
   displacement and inter-cloud scattering that the independent-column
   approximation cannot represent. It is the reference solution against
   which the two-stream result is checked, not a production-speed
-  solver.
+  solver. Every photon draws from its own counter-based random stream,
+  keyed by the seed, the g-point and the photon index (#305). A solve is
+  therefore reproducible from its seed and identical at every thread
+  count, and there is no unseeded default.
 * **Urban radiosity** (`src/Radiosity.jl`) treats the built environment
   as a set of finite facets exchanging radiation through view factors,
   solving the multiple-reflection problem exactly rather than through a

@@ -41,7 +41,7 @@ using ..Fields: Field, interior_view
 
 export SpectralGrid, shortwave_bands, longwave_bands,
        nbands, ngpoints, band_of_gpoint, band_limits, gpoint_range,
-       OpticalProperties, allocate_optics, zero_optics!,
+       OpticalProperties, allocate_optics, allocate_column_optics, zero_optics!,
        combine_optics!, scale_optics!, total_optical_depth,
        RadiativeFluxes, allocate_fluxes, zero_fluxes!,
        net_flux!, flux_divergence!, heating_rate!,
@@ -425,6 +425,20 @@ end
 
 allocate_optics(dims::Tuple, spec::SpectralGrid{T}) where {T} =
     allocate_optics(T, dims, spec)
+
+"""
+    allocate_column_optics(T, nlay, ncol, spec) -> OpticalProperties{T,3}
+
+Zeroed optical properties of `ncol` independent columns of `nlay` layers,
+in the layout of the multi-column radiation solves (KA-n, #305):
+`τ[k, g, c]` for layer `k`, g-point `g`, column `c`. Column `c` is laid out
+exactly as a single column's `allocate_optics(T, (nlay,), spec)`.
+"""
+function allocate_column_optics(::Type{T}, nlay::Integer, ncol::Integer,
+                                spec::SpectralGrid{T}) where {T}
+    shp = (Int(nlay), ngpoints(spec), Int(ncol))
+    return OpticalProperties{T, 3}(zeros(T, shp), zeros(T, shp), zeros(T, shp), spec)
+end
 
 function zero_optics!(o::OpticalProperties)
     fill!(o.τ, 0); fill!(o.ssa, 0); fill!(o.g, 0)

@@ -101,6 +101,7 @@ module Radiosity
 # for bit.
 
 using LinearAlgebra
+using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!
 using ..Grids
 using ..Grids: RegularGrid
 using ..RadiationCore
@@ -125,12 +126,12 @@ export Facet, facet_corners, facet_sample_points, facet_edges,
        canyon_wallside_sky_view_factor,
        solar_unit_vector, facet_sunlit_fraction, sunlit_fractions,
        direct_beam_irradiance, diffuse_sky_irradiance,
-       solve_radiosity_direct, solve_radiosity_iterative,
+       solve_radiosity_direct, solve_radiosity_iterative, RadiosityFactorCache,
        ShortwaveSolution, solve_shortwave,
        LongwaveSolution, solve_longwave,
        LongwaveResponse, longwave_response,
        effective_albedo, longwave_trapping_factor,
-       UrbanRadiationForcing, aggregate_to_grid,
+       UrbanRadiationForcing, aggregate_to_grid, facet_column_index,
        ray_blocked, segment_blocked
 
 # =========================================================================
@@ -495,12 +496,17 @@ function facet_sample_points(f::Facet{T}, nu::Int, nv::Int) where {T}
     pts = Vector{Vec3{T}}(undef, nu * nv)
     n = 0
     for iu in 1:nu, iv in 1:nv
-        su = ((iu - T(0.5)) / nu - T(0.5)) * f.lu
-        sv = ((iv - T(0.5)) / nv - T(0.5)) * f.lv
         n += 1
-        pts[n] = _add(f.centroid, _add(_mul(f.u, su), _mul(f.v, sv)))
+        pts[n] = _sample_point(f, iu, iv, nu, nv)
     end
     return pts, f.area / (nu * nv)
+end
+
+# Midpoint (iu, iv) of the nu × nv subdivision of facet f.
+@inline function _sample_point(f::Facet{T}, iu::Int, iv::Int, nu::Int, nv::Int) where {T}
+    su = ((iu - T(0.5)) / nu - T(0.5)) * f.lu
+    sv = ((iv - T(0.5)) / nv - T(0.5)) * f.lv
+    return _add(f.centroid, _add(_mul(f.u, su), _mul(f.v, sv)))
 end
 
 function Base.show(io::IO, f::Facet{T}) where {T}
@@ -601,6 +607,30 @@ function set_temperatures!(s::RadiosityScene, T_new::Real)
         set_temperature!(s, i, T_new)
     end
     return s
+end
+
+"""
+    set_temperatures!(scene, Ts::AbstractMatrix, facet_col; backend = default_backend())
+
+Give every facet the temperature of its grid column: facet `i` gets
+`Ts[facet_col[i]...]` (`facet_col[i] == scene.facets[i].col`). One
+[`launch!`](@ref Aeolus.Backends.launch!) over the facets (KA-n, #305); each
+facet is written by its own work item.
+"""
+function set_temperatures!(s::RadiosityScene, Ts::AbstractMatrix,
+                           facet_col::AbstractVector{<:NTuple{2,Integer}};
+                           backend::AbstractBackend = default_backend())
+    length(facet_col) == nfacets(s) ||
+        error("set_temperatures!: got $(length(facet_col)) facet columns for " *
+              "$(nfacets(s)) facets")
+    launch!(backend, _set_column_temperature!, (1:nfacets(s),), s, Ts, facet_col)
+    return s
+end
+
+@inline function _set_column_temperature!(i, s, Ts, facet_col)
+    ci, cj = @inbounds facet_col[i]
+    set_temperature!(s, i, Ts[ci, cj])
+    return nothing
 end
 
 function Base.show(io::IO, s::RadiosityScene{T}) where {T}
@@ -1150,16 +1180,19 @@ end
 function _area_exchange_pair(s::RadiosityScene{T}, fi::Facet{T}, fj::Facet{T},
                              niu::Int, niv::Int, nju::Int, njv::Int,
                              δ::T) where {T}
-    pi_, dAi = facet_sample_points(fi, niu, niv)
-    pj_, dAj = facet_sample_points(fj, nju, njv)
+    # The sample points of `facet_sample_points`, generated in its order
+    # (iu outer, iv inner) without allocating them (the pair loop of
+    # `view_factors` runs on many threads; KA-n, #305).
+    dAi = fi.area / (niu * niv)
+    dAj = fj.area / (nju * njv)
     ni = fi.normal; nj = fj.normal
     invπ = inv(T(π))
     un = zero(T); oc = zero(T)
-    @inbounds for a in eachindex(pi_)
-        pa = pi_[a]
+    @inbounds for iua in 1:niu, iva in 1:niv
+        pa = _sample_point(fi, iua, iva, niu, niv)
         pan = _nudge(pa, ni, δ)
-        for b in eachindex(pj_)
-            pb = pj_[b]
+        for iub in 1:nju, ivb in 1:njv
+            pb = _sample_point(fj, iub, ivb, nju, njv)
             d = _sub(pb, pa)
             r2 = _dot(d, d)
             r2 <= 0 && continue
@@ -1252,8 +1285,15 @@ factor is the closure residual `1 - Σ_j F[i,j]`.
 Cost is `O(n²)` pair tests, but the back-face cull disposes of the majority in
 a few dozen flops. A scene of ~300 facets assembles in well under a second.
 
+The pair loop is one [`launch_weighted!`](@ref Aeolus.Backends.launch_weighted!)
+on `backend` (KA-n, #305): work item `p` owns the rows `p` and `n − p` of the
+upper triangle, so every item tests `n − 1` pairs and the threads share the
+triangle evenly. Every entry is computed once, from the same inputs, so `F`
+and `F_sky` are bit-identical at every thread count.
+
 # Keyword arguments
   * `ngauss`, `nsub_max`, `subdiv_density` — passed to [`exchange_area`](@ref).
+  * `backend = default_backend()` — where the pair loop runs.
   * `clamp_sky = true` — clamp `F_sky` into `[0, 1]`. Quadrature error on a
     facet that sees almost nothing but other facets (the bottom strip of a deep
     canyon wall) can push the residual a few times `1e-4` negative; a negative
@@ -1265,7 +1305,8 @@ a few dozen flops. A scene of ~300 facets assembles in well under a second.
 function view_factors(s::RadiosityScene{T};
                       ngauss::Int = 8, nsub_max::Int = 3,
                       subdiv_density::Real = 1.5,
-                      clamp_sky::Bool = true) where {T}
+                      clamp_sky::Bool = true,
+                      backend::AbstractBackend = default_backend()) where {T}
     n = nfacets(s)
     F = zeros(T, n, n)
     A = facet_areas(s)
@@ -1273,25 +1314,66 @@ function view_factors(s::RadiosityScene{T};
     tol = T(1e-9) * max(s.dx, s.dy)
     dens = T(subdiv_density)
     fs = s.facets
-    @inbounds for i in 1:n-1
-        fi = fs[i]
-        for j in i+1:n
-            X = _exchange_area(s, fi, fs[j], ngauss, nsub_max, dens, δ, tol)
-            X == 0 && continue
-            F[i, j] = X / A[i]
-            F[j, i] = X / A[j]
-        end
-    end
+    _gauss_nodes(ngauss)        # fill the node cache before the threads read it
+    # Work item p owns rows p and n − p of the upper triangle (pairs i < j),
+    # so every item has n − 1 pairs to test and a launch over the items
+    # balances the triangle. Each exchange area is computed once and written
+    # to F[i, j] and F[j, i]; no two items write the same entry, and no
+    # entry depends on another, so F is identical at every thread count.
+    # The items are visited with a golden-ratio stride through the row pairs
+    # (a fixed permutation): neighbouring facets cost alike (the same
+    # buildings in the way), so contiguous blocks of rows would leave some
+    # threads with the expensive part of the city.
+    npair = n ÷ 2
+    stride = _coprime_stride(npair)
+    npair > 0 && launch_weighted!(backend, n, _view_factor_rows!, (1:npair,),
+                                  F, s, fs, A, n, npair, stride, ngauss, nsub_max, dens, δ, tol)
     F_sky = Vector{T}(undef, n)
-    @inbounds for i in 1:n
-        acc = zero(T)
-        for j in 1:n
-            acc += F[i, j]
-        end
-        v = one(T) - acc
-        F_sky[i] = clamp_sky ? clamp(v, zero(T), one(T)) : v
-    end
+    launch_weighted!(backend, n, _sky_view_factor_row!, (1:n,), F_sky, F, n, clamp_sky)
     return ViewFactors{T}(F, F_sky, A)
+end
+
+# The smallest stride ≥ 0.618·m that is coprime with m: p ↦ (p−1)·stride mod m
+# is then a permutation of 0:m−1.
+function _coprime_stride(m::Int)
+    m <= 2 && return 1
+    g = max(1, round(Int, 0.6180339887 * m))
+    while gcd(g, m) != 1
+        g += 1
+    end
+    return g
+end
+
+@inline function _view_factor_rows!(item, F, s, fs, A, n, npair, stride, ngauss, nsub_max,
+                                    dens, δ, tol)
+    p = mod((item - 1) * stride, npair) + 1
+    _view_factor_row!(F, s, fs, A, p, n, ngauss, nsub_max, dens, δ, tol)
+    q = n - p
+    q != p && _view_factor_row!(F, s, fs, A, q, n, ngauss, nsub_max, dens, δ, tol)
+    return nothing
+end
+
+function _view_factor_row!(F::Matrix{T}, s, fs, A, i, n, ngauss, nsub_max, dens, δ, tol) where {T}
+    @inbounds fi = fs[i]
+    @inbounds for j in i+1:n
+        X = _exchange_area(s, fi, fs[j], ngauss, nsub_max, dens, δ, tol)
+        X == 0 && continue
+        F[i, j] = X / A[i]
+        F[j, i] = X / A[j]
+    end
+    return nothing
+end
+
+# The sky-view factor of facet i: the closure residual of row i, summed in
+# ascending j (one row per work item).
+@inline function _sky_view_factor_row!(i, F_sky::AbstractVector{T}, F, n, clamp_sky) where {T}
+    acc = zero(T)
+    @inbounds for j in 1:n
+        acc += F[i, j]
+    end
+    v = one(T) - acc
+    @inbounds F_sky[i] = clamp_sky ? clamp(v, zero(T), one(T)) : v
+    return nothing
 end
 
 # -------------------------------------------------------------------------
@@ -1649,7 +1731,75 @@ diffuse_sky_irradiance(vf::ViewFactors{T}, dhi::Real) where {T} =
 # =========================================================================
 
 """
-    solve_radiosity_direct(F, ρ, E) -> B
+    RadiosityFactorCache{T}()
+
+The factorisation of the radiosity operator `M = I − diag(ρ)F`, kept between
+calls of [`solve_radiosity_direct`](@ref) (and of [`solve_shortwave`](@ref) /
+[`solve_longwave`](@ref) with `cache = c`). A dense LU of `M` costs `O(n³)`
+— 1.9 s for the 5639 facets of the Berlin scene on one BLAS thread — while
+solving with a stored LU costs `O(n²)`. The factorisation depends on the view
+factors `F` and on the reflectance `ρ` only, not on the source `E`, so it can
+be reused for as long as both are unchanged (KA-n, #305):
+
+  * **longwave** `ρ = 1 − ε` is fixed for a scene, so its LU is computed once;
+  * **shortwave** `ρ = α`: the urban class albedos depend on the solar zenith
+    angle (`default_urban_materials(; μ₀)`), so the LU is refactorised
+    whenever `α` changes, and reused while it does not.
+
+The cache is keyed on the identity of `F` (`===`; `F` must not be mutated in
+place while it is cached) and on the **values** of `ρ` (`==`). On a hit the
+solve is the same LAPACK `getrs` on the same factors as a refactorisation, so
+a cached solve gives exactly the bits of an uncached one at the same BLAS
+thread count (`init_threads!` pins BLAS to one thread when Julia runs
+threaded). `nfactor` counts the factorisations. Use one cache per band: a
+shortwave and a longwave solve sharing one cache would refactorise every time.
+The cache holds one `n × n` matrix (254 MB at n = 5639).
+"""
+mutable struct RadiosityFactorCache{T<:AbstractFloat}
+    F::Union{Nothing, AbstractMatrix{T}}
+    ρ::Vector{T}
+    fac::Any
+    nfactor::Int
+end
+RadiosityFactorCache{T}() where {T} = RadiosityFactorCache{T}(nothing, T[], nothing, 0)
+RadiosityFactorCache() = RadiosityFactorCache{Float64}()
+
+function Base.show(io::IO, c::RadiosityFactorCache{T}) where {T}
+    print(io, "RadiosityFactorCache{$T}(", c.fac === nothing ? "empty" :
+              "$(length(c.ρ)) facets", ", ", c.nfactor, " factorisations)")
+end
+
+function _cached_factor!(c::RadiosityFactorCache{T}, F::AbstractMatrix{T},
+                         ρ::AbstractVector{T}) where {T}
+    if c.fac === nothing || c.F !== F || c.ρ != ρ
+        c.fac = nothing                      # release the old factors first
+        c.fac = _radiosity_factorize(F, ρ)
+        c.F = F
+        c.ρ = collect(T, ρ)
+        c.nfactor += 1
+    end
+    return c.fac
+end
+
+# M = I − diag(ρ)F, factorised exactly as `M \ E` would factorise it (the
+# triangular cases of `\` included), so the cached and the uncached solve
+# give the same bits.
+function _radiosity_factorize(F::AbstractMatrix{T}, ρ::AbstractVector{T}) where {T}
+    n = length(ρ)
+    M = Matrix{T}(undef, n, n)
+    @inbounds for j in 1:n, i in 1:n
+        M[i, j] = (i == j ? one(T) : zero(T)) - ρ[i] * F[i, j]
+    end
+    if istril(M)
+        return istriu(M) ? Diagonal(M) : LowerTriangular(M)
+    elseif istriu(M)
+        return UpperTriangular(M)
+    end
+    return lu!(M)
+end
+
+"""
+    solve_radiosity_direct(F, ρ, E; cache = nothing) -> B
 
 Dense LU solve of the radiosity system
 
@@ -1668,19 +1818,22 @@ row sums `ρ_i(1 - F_{sky,i}) ≤ max ρ < 1`, so its spectral radius is below o
 and the Neumann series `Σ_k (diag(ρ)F)^k E` — physically, the sum over bounce
 orders — converges geometrically. That is the mathematical statement of
 "radiation eventually gets absorbed".
+
+With `cache` (a [`RadiosityFactorCache`](@ref)) the LU factorisation of
+`I − diag(ρ)F` is kept and reused while `F` and `ρ` are unchanged: the solve
+then costs `O(n²)` instead of `O(n³)`, with bits identical to a
+refactorisation at the same BLAS thread count.
 """
 function solve_radiosity_direct(F::AbstractMatrix{T}, ρ::AbstractVector{T},
-                                E::AbstractVector{T}) where {T}
+                                E::AbstractVector{T};
+                                cache::Union{Nothing, RadiosityFactorCache{T}} = nothing) where {T}
     n = length(E)
     size(F) == (n, n) ||
         error("solve_radiosity_direct: F is $(size(F)), expected ($n, $n)")
     length(ρ) == n ||
         error("solve_radiosity_direct: ρ has $(length(ρ)) entries, expected $n")
-    M = Matrix{T}(undef, n, n)
-    @inbounds for j in 1:n, i in 1:n
-        M[i, j] = (i == j ? one(T) : zero(T)) - ρ[i] * F[i, j]
-    end
-    return M \ collect(E)
+    fac = cache === nothing ? _radiosity_factorize(F, ρ) : _cached_factor!(cache, F, ρ)
+    return fac \ collect(E)
 end
 
 """
@@ -1868,7 +2021,8 @@ function solve_shortwave(s::RadiosityScene{T}, vf::ViewFactors{T}, sun;
                          solver::Symbol = :direct,
                          samples::Int = 2,
                          tol::Real = 1e-12,
-                         maxiter::Int = 10_000) where {T}
+                         maxiter::Int = 10_000,
+                         cache::Union{Nothing, RadiosityFactorCache{T}} = nothing) where {T}
     n = nfacets(s)
     length(vf.F_sky) == n ||
         error("solve_shortwave: view factors have $(length(vf.F_sky)) " *
@@ -1882,7 +2036,7 @@ function solve_shortwave(s::RadiosityScene{T}, vf::ViewFactors{T}, sun;
     E = α .* Qext
 
     B = if solver === :direct
-        solve_radiosity_direct(vf.F, α, E)
+        solve_radiosity_direct(vf.F, α, E; cache = cache)
     else
         first(solve_radiosity_iterative(vf.F, α, E; method = solver,
                                         tol = tol, maxiter = maxiter))
@@ -2019,7 +2173,8 @@ Energy closes as an identity, again from reciprocity and closure:
 """
 function solve_longwave(s::RadiosityScene{T}, vf::ViewFactors{T};
                         L_sky::Real, solver::Symbol = :direct,
-                        tol::Real = 1e-12, maxiter::Int = 10_000) where {T}
+                        tol::Real = 1e-12, maxiter::Int = 10_000,
+                        cache::Union{Nothing, RadiosityFactorCache{T}} = nothing) where {T}
     n = nfacets(s)
     length(vf.F_sky) == n ||
         error("solve_longwave: view factors have $(length(vf.F_sky)) " *
@@ -2035,7 +2190,7 @@ function solve_longwave(s::RadiosityScene{T}, vf::ViewFactors{T};
     E = emitted .+ ρ .* from_sky
 
     B = if solver === :direct
-        solve_radiosity_direct(vf.F, ρ, E)
+        solve_radiosity_direct(vf.F, ρ, E; cache = cache)
     else
         first(solve_radiosity_iterative(vf.F, ρ, E; method = solver,
                                         tol = tol, maxiter = maxiter))
@@ -2270,6 +2425,13 @@ Each facet's flux is weighted by its area and deposited in the column given by
 `Facet.col` — the open column a wall faces, the column itself for ground and
 roof. The result is divided by the cell plan area `dx·dy`.
 
+The columns are filled by one [`launch!`](@ref Aeolus.Backends.launch!) over
+`(i, j)` on `backend` (KA-n, #305): each column gathers its facets through
+[`facet_column_index`](@ref), in ascending facet order, so every sum has the
+order of a serial facet loop and the result is the same at every thread count.
+The dominant class of a column is the material with the largest facet area;
+an exact tie goes to the lowest material index.
+
 Either solution may be omitted (`nothing`), in which case the corresponding
 arrays are zero. `T_surface` is the temperature used when inverting the
 longwave algebra for `lw_down_effective`; it defaults to the area-weighted mean
@@ -2279,69 +2441,121 @@ caller's surface scheme carries one temperature per column.
 function aggregate_to_grid(s::RadiosityScene{T}, vf::ViewFactors{T};
                            sw::Union{Nothing, ShortwaveSolution{T}} = nothing,
                            lw::Union{Nothing, LongwaveSolution{T}} = nothing,
-                           T_surface::Union{Nothing, AbstractMatrix} = nothing) where {T}
+                           T_surface::Union{Nothing, AbstractMatrix} = nothing,
+                           backend::AbstractBackend = default_backend()) where {T}
     nx, ny = size(s.heightmap)
     cell = s.dx * s.dy
     swa = zeros(T, nx, ny)
     lwn = zeros(T, nx, ny)
     aden = zeros(T, nx, ny)
     svf = zeros(T, nx, ny)
-    Tw = zeros(T, nx, ny)
-    cls = fill(URBAN_STREET, nx, ny)
-    # Per column, the dominant class is the one holding the most facet area —
-    # for a built column that is the roof, for a canyon column the ground or
-    # the wall, whichever carries more surface.
-    areaper = Dict{Tuple{Int, Int, Int}, T}()
-
-    @inbounds for i in 1:nfacets(s)
-        f = s.facets[i]
-        ci, cj = f.col
-        (1 <= ci <= nx && 1 <= cj <= ny) || continue
-        a = f.area
-        sw === nothing || (swa[ci, cj] += a * sw.absorbed[i])
-        lw === nothing || (lwn[ci, cj] += a * lw.net_loss[i])
-        aden[ci, cj] += a
-        svf[ci, cj] += a * vf.F_sky[i]
-        Tw[ci, cj] += a * f.temperature
-        k = (ci, cj, f.material)
-        areaper[k] = get(areaper, k, zero(T)) + a
-    end
-
-    @inbounds for j in 1:ny, i in 1:nx
-        if aden[i, j] > 0
-            svf[i, j] /= aden[i, j]
-            Tw[i, j] /= aden[i, j]
-        else
-            svf[i, j] = one(T)
-            Tw[i, j] = T(288.15)
-        end
-        swa[i, j] /= cell
-        lwn[i, j] /= cell
-        aden[i, j] /= cell
-    end
-    # Dominant class per column.
-    best = Dict{Tuple{Int, Int}, T}()
-    for ((i, j, m), a) in areaper
-        if a > get(best, (i, j), T(-Inf))
-            best[(i, j)] = a
-            cls[i, j] = m
-        end
-    end
-
     swe = zeros(T, nx, ny)
     lwe = zeros(T, nx, ny)
-    σ = T(STEFAN_BOLTZMANN)
-    @inbounds for j in 1:ny, i in 1:nx
-        m = cls[i, j]
-        α = s.materials.albedo[m]
-        ε = s.materials.emissivity[m]
-        swe[i, j] = swa[i, j] / max(one(T) - α, eps(T))
-        Tsfc = T_surface === nothing ? Tw[i, j] : T(T_surface[i, j])
-        # the surface balance forms ε·lw_in - ε σ T⁴; we want that to equal -lw_net.
-        lwe[i, j] = σ * Tsfc^4 - lwn[i, j] / max(ε, eps(T))
-    end
-
+    cls = fill(URBAN_STREET, nx, ny)
+    ptr, ids = facet_column_index(s)
+    sw_abs = sw === nothing ? nothing : sw.absorbed
+    lw_net = lw === nothing ? nothing : lw.net_loss
+    # One work item per column gathers the column's facets in ascending
+    # facet order: the same additions, in the same order, as the facet loop
+    # that scattered into the columns before KA-n, so the sums are unchanged.
+    launch!(backend, _aggregate_column!, (1:nx, 1:ny),
+            swa, lwn, aden, svf, swe, lwe, cls, s.facets, ptr, ids, sw_abs, lw_net,
+            vf.F_sky, s.materials.albedo, s.materials.emissivity, T_surface, cell, nx)
     return UrbanRadiationForcing{T}(swa, lwn, aden, svf, swe, lwe, cls)
+end
+
+"""
+    facet_column_index(scene) -> (ptr, ids)
+
+The facets of every grid column in compressed (CSR) form: the facets of
+column `(i, j)` are `ids[ptr[c]:ptr[c+1]-1]` with `c = i + (j-1)·nx`, in
+ascending facet order. Facets whose `col` lies outside the heightmap are left
+out. Built by a counting sort, `O(nfacets + nx·ny)`.
+"""
+function facet_column_index(s::RadiosityScene)
+    nx, ny = size(s.heightmap)
+    cnt = zeros(Int, nx * ny + 1)
+    @inbounds for f in s.facets
+        ci, cj = f.col
+        (1 <= ci <= nx && 1 <= cj <= ny) || continue
+        cnt[ci + (cj - 1) * nx + 1] += 1
+    end
+    ptr = Vector{Int}(undef, nx * ny + 1)
+    ptr[1] = 1
+    @inbounds for c in 1:nx * ny
+        ptr[c + 1] = ptr[c] + cnt[c + 1]
+    end
+    ids = Vector{Int}(undef, ptr[end] - 1)
+    next = ptr[1:end-1]
+    @inbounds for (i, f) in enumerate(s.facets)
+        ci, cj = f.col
+        (1 <= ci <= nx && 1 <= cj <= ny) || continue
+        c = ci + (cj - 1) * nx
+        ids[next[c]] = i
+        next[c] += 1
+    end
+    return ptr, ids
+end
+
+@inline _flux_at(::Nothing, i) = nothing
+@inline _flux_at(v::AbstractVector, i) = @inbounds v[i]
+
+function _aggregate_column!(i, j, swa::AbstractMatrix{T}, lwn, aden, svf, swe, lwe, cls,
+                            facets, ptr, ids, sw_abs, lw_net, F_sky, albedo,
+                            emissivity, T_surface, cell, nx) where {T}
+    c = i + (j - 1) * nx
+    lo, hi = @inbounds ptr[c], ptr[c + 1] - 1
+    sa = zero(T); ln = zero(T); ad = zero(T); sv = zero(T); tw = zero(T)
+    @inbounds for p in lo:hi
+        n = ids[p]
+        f = facets[n]
+        a = f.area
+        sw_abs === nothing || (sa += a * sw_abs[n])
+        lw_net === nothing || (ln += a * lw_net[n])
+        ad += a
+        sv += a * F_sky[n]
+        tw += a * f.temperature
+    end
+    if ad > 0
+        sv /= ad
+        tw /= ad
+    else
+        sv = one(T)
+        tw = T(288.15)
+    end
+    # Dominant class: the material holding the most facet area in the column
+    # (per material, the areas are summed in ascending facet order). Ties go
+    # to the lowest material index.
+    m_best = URBAN_STREET
+    a_best = T(-Inf)
+    @inbounds for m in eachindex(albedo)
+        am = zero(T); seen = false
+        for p in lo:hi
+            f = facets[ids[p]]
+            f.material == m || continue
+            am += f.area; seen = true
+        end
+        if seen && am > a_best
+            a_best = am
+            m_best = m
+        end
+    end
+    sa /= cell
+    ln /= cell
+    @inbounds begin
+        swa[i, j] = sa
+        lwn[i, j] = ln
+        aden[i, j] = ad / cell
+        svf[i, j] = sv
+        cls[i, j] = m_best
+        α = albedo[m_best]
+        ε = emissivity[m_best]
+        swe[i, j] = sa / max(one(T) - α, eps(T))
+        Tsfc = T_surface === nothing ? tw : T(T_surface[i, j])
+        # the surface balance forms ε·lw_in - ε σ T⁴; we want that to equal -lw_net.
+        lwe[i, j] = T(STEFAN_BOLTZMANN) * Tsfc^4 - ln / max(ε, eps(T))
+    end
+    return nothing
 end
 
 end # module
