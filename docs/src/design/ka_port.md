@@ -808,6 +808,128 @@ threads to 1 thread. Two separate processes at `-t 1` and two at `-t 24`
 gave the same fft and dns hashes. At `-t 1` every solve is bit-identical
 to master: no one-time change.
 
+## KA-i: the multigrid V-cycle (#303)
+
+**Kernels.** Every loop nest of `MultigridPoissonSolver` and of the
+V-cycle preconditioner of `MGPreconditionedCG` is a `launch!` of a
+pointwise body, and every sum a canonical plane reduction:
+
+* `_smooth_rbgs!`: per colour, the halo fill and then **one launch over
+  that colour's cells only**. The launch covers half of each i-row; the
+  index `ih` maps to `i = 2ih + ((j + k + colour) & 1)`, so
+  `(i + j + k) & 1 == colour`. It is still red-black Gauss-Seidel. The
+  cells of a colour read only the other colour, so the order they run in
+  does not matter and the sweep has the bits of the serial loop. For an
+  even `nx` every row has `nx/2` cells of a colour and the body has no
+  bounds test. The strided loop then vectorises: one colour at
+  128×128×64 takes 0.65 ms instead of 1.19 ms with the test, and 1.49 ms
+  for the old "skip by parity" loop over all cells. An odd `nx` keeps the test.
+* `_compute_residual!` (constant and variable coefficient: one body,
+  the operator passed as `_ConstOp` / `_VarOp`), `_restrict!` (each
+  coarse cell writes itself), `_prolong_add!` (each fine cell writes
+  itself; the eight weight products `wi·wj·wk` are hoisted out of the
+  body and added in the old loop order: 1.59 ms instead of 2.20 ms at
+  128×128×64), and the fine operator of MG-CG (`_apply_fine!`, which
+  writes `out` directly).
+* `_l2` and `_project_mean!` use `plane_partials!` and `ordered_sum`,
+  with the partials in a per-level buffer (`MGLevel.part`).
+
+`test/ka_multigrid.jl` compares the smoother, residual, fine operator,
+restriction and prolongation with verbatim copies of the old loops, bit
+for bit. It covers even and odd `nx`, constant and cut-cell coefficients
+and three closures, on the default, the serial and a `threshold = 1`
+backend (the last threads every launch).
+
+**Serial coarse levels.** No multigrid-specific threshold: the coarse
+levels go through the global `launch!` threshold (32 768 points). A
+colour sweep covers half a level, so at 64×64×32 only the finest level
+is threaded (65 536 points per colour), and at 128×128×64 the two
+finest. 32×32×16 and below, and the 50 sweeps of the coarsest solve,
+run serially on the calling task. `_restrict_coeff` is setup only and
+stays a serial loop.
+
+**Projections.** The operator is always singular (every axis periodic
+or Neumann), so the mean is projected out up to six times per level per
+cycle: after each smoothing, after the prolongation, from the residual
+and from the coarse right-hand side. Where it saves a sweep the
+projection is fused into a neighbouring kernel:
+
+* the residual's mean is subtracted inside the restriction, which reads
+  `r − m`. The result has the bits of a projection followed by the
+  restriction, and the sweep that wrote the projected `r` is gone;
+* the right-hand side's mean is reduced while it is copied in (fused
+  `plane_reduce!`);
+* the final projection of the solution is fused with the copy-out;
+* the projection of the convergence check's residual is fused with its
+  sum of squares.
+
+The sums were *not* fused into the stencil launches. A `plane_reduce!`
+whose body evaluates the residual and writes it took 1.49 ms at
+128×128×64 on one thread. The residual launch plus a separate sum took
+0.90 ms: the eight-lane reduction keeps the stencil from vectorising.
+The restriction showed the same (0.24 against 0.10 ms).
+
+**One-time change (expectation).** The means and norms were serial
+`for k, j, i` sums. They are now canonical plane sums. This changes the
+solution in the last bits and could have moved a cycle count by ±1 (the
+issue allowed that). Measured over 22 cases (MG with three closures,
+W-cycle, FMG, stretched and cut-cell; MG-CG with two closures, stretched
+and cut-cell; each at 32×32×16 and 64×64×32), every cycle and iteration
+count is identical to the old loops. The largest change of the solution
+is `max|Δx| / max|x|` = 2.2e-15 (MG on the stretched grid at 64×64×32);
+the others are 3.1e-16 to 1.6e-15. No regression reference of the suite
+moved, and no assertion was changed. A solve allocates 0 B on one thread
+(`@allocated`, for every case above).
+
+**Measured.** ms per `solve!`, minimum of 7 (64×64×32) or 3 (128×128×64,
+stretched), load average 7-8, Julia 1.13.1. Old = the merge base
+(master + KA-g) at one thread. Speed-up = old 1 t / new N t; in brackets
+new 1 t / new N t. Source: seeded random, tol 1e-10, default closure
+(periodic x, y; Neumann z) unless stated. Extent 1000 × 1000 × 200 m.
+
+| solver | grid | cycles | old 1 t | new 1 t | new / old | 4 t | 12 t | 24 t |
+| :----- | :--- | -----: | ------: | ------: | --------: | --: | ---: | ---: |
+| MG | 64×64×32 | 21 | 66.0 | 29.1 | 0.44 | 2.3× (1.03×) | 2.5× (1.12×) | 2.0× (0.88×) |
+| MG | 128²×64 | 21 | 580.5 | 284.8 | 0.49 | 3.4× (1.66×) | 4.2× (2.06×) | 3.0× (1.47×) |
+| MG, all Neumann | 64×64×32 | 24 | 76.0 | 33.2 | 0.44 | 2.5× (1.07×) | 2.7× (1.17×) | 2.4× (1.04×) |
+| MG-CG | 64×64×32 | 12 | 41.1 | 19.2 | 0.47 | 2.3× (1.06×) | 2.2× (1.01×) | 1.6× (0.76×) |
+| MG-CG | 128²×64 | 12 | 382.6 | 211.2 | 0.55 | 2.9× (1.57×) | 3.0× (1.68×) | 2.5× (1.36×) |
+| MG-CG, stretched (×1.04) | 64×64×32 | 43 | 212.2 | 126.1 | 0.59 | 2.6× (1.53×) | 2.2× (1.29×) | 1.8× (1.07×) |
+
+Per-level split of one V-cycle at 128×128×64 (ms; a level's own time
+is the cycle from that level minus the cycle from the next coarser one):
+
+| level | size | old 1 t | new 1 t | new 4 t | new 12 t | new 24 t |
+| :---- | :--- | ------: | ------: | ------: | -------: | -------: |
+| 1 | 128×128×64 | 21.44 | 9.45 | 5.10 | 5.01 | 5.44 |
+| 2 | 64×64×32 | 2.47 | 1.09 | 0.92 | 0.93 | 1.00 |
+| 3 | 32×32×16 | 0.32 | 0.13 | 0.14 | 0.14 | 0.14 |
+| 4 | 16×16×8 | 0.043 | 0.021 | 0.022 | 0.021 | 0.025 |
+| 5 (coarsest, 50 sweeps) | 8×8×4 | 0.067 | 0.049 | 0.048 | 0.048 | 0.048 |
+
+Reading the tables:
+
+* **The 1-thread gate holds**, by a wide margin: 0.44-0.59× of the old
+  loops. Most of the gain comes from the smoother (half the cells per
+  launch instead of a parity test on all of them, and vectorised); the
+  rest from the faster prolongation and the dropped projection sweep.
+* **Threads.** The issue asked for at least 2.5× at 4 threads and 4× at
+  12 at 128²×64. Against the old loops it is 3.4× and 4.2×; against the
+  new code on one thread only 1.7× and 2.1×. The finest level stops
+  scaling at 4 threads (5.1 ms, and 5.0 ms at 12). It is memory-bound
+  once vectorised: one colour sweep reads φ and b (17 MB) in 0.65 ms on one
+  thread. Level 2 gains 1.2× (launch start-up against 65 536 points),
+  and the serial levels are flat by design. 24 threads are slower than
+  12 everywhere. The uniform 64×64×32 solves gain 1.0-1.2× from
+  threads (the stretched one 1.5× at 4). As in KA-g, the task start-up
+  of the many small launches per cycle costs about what the work does.
+
+**Thread invariance.** The worker's new `multigrid` section hashes the
+solution, the cycle count and the residual history of MG and MG-CG at
+64×64×32 and 128×128×64. It covers three closures, the W-cycle, FMG,
+stretched z and cut-cell coefficients around a solid block: 58 hashes,
+identical at 1, 4 and 24 threads. The whole harness is quoted in the PR.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0
