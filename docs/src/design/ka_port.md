@@ -125,6 +125,9 @@ unchanged at one thread (axpy 22-24 µs, `set!` 11 µs, the Laplacian
 46-47 µs at 64×64×32); WENO-5 went from 6.3 to 2.0 ms at one thread and
 from 0.83 to 0.39 ms at 12. A call per *row* on the serial path instead
 of one per nest made the Laplacian 1.3× the old loop, hence `_nest!`.
+A 2-D launch on the serial path calls `_nest2!(body!, ir, jr, a1, …,
+aN)` the same way (KA-e, #302): `boundary_scalar_flux`'s face bodies (up
+to 19 arguments) ran 2-2.5× the old loop when they read the tuple.
 
 **Column kernels: `launch_weighted!`** (KA-h, #298). A body that loops
 over a whole column itself — a tridiagonal solve in z, serial within the
