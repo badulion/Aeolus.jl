@@ -103,7 +103,10 @@ Groups of fields:
   run folder's `output/` under `aeolus run`, else `examples/urban/output/`);
   what is printed is decided by the installed logger and its level (#347,
   in TOML `[logging]`): the setup summary is `Debug`, the run's start,
-  output frames and end-of-run report are `Info`, a blowup is an `Error`;
+  output frames (with each coupling's diagnostics) and the end-of-run
+  events (run, stage timing, ledgers) are `Info`, a blowup is an
+  `Error`, all structured (`subsystem = :berlin`, `event = …`, the
+  values as key-values; core/diagnostics.jl, #338);
 * **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
   compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
   coupling calls `init_threads!(cfg.backend)` before building the
