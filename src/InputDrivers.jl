@@ -67,7 +67,7 @@ export latlon_to_meters, DriverVariable, DriverSchema, check_driver, schema_mark
        write_static_driver, read_static_driver, write_static_tiles, read_static_tiles,
        DYNAMIC_SCHEMA, LS_TABLES, DynamicInputs, read_dynamic_driver, write_dynamic_driver,
        FileSnapshot, SlabArray, FileBoundaryData, FileBoundaryFeed, feed_window!, feed_steady!,
-       advance_feed!, feed_coverage, check_coverage, check_planes, shift_table, initial_profile,
+       advance_feed!, feed_coverage, check_coverage, check_planes, shift_table,
        dynamic_forcing, init_time_string, init_day_seconds, surface_pressure_at,
        sounding_dynamic_inputs, forcing_dynamic_inputs, NestBoundaryRecorder, record_boundary!, plane_snapshot
 

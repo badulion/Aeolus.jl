@@ -119,15 +119,19 @@ Markdown.parse(Aeolus.InputDrivers.schema_markdown(Aeolus.InputDrivers.DYNAMIC_S
 `init_time` (ISO-8601 UTC, the model start; `""` for a case without a
 calendar date, the SBL configs), with CF `units = "seconds since …"`.
 
-**Initial state.** Profiles over `init_z` (piecewise linear in height),
+**Initial state.** Profiles over `init_z`,
 or 3-D fields on the run grid (`init_u3d`, …: the interior cells in
 storage order, u at the cell's west face, v at its south face, w at its
-bottom face), and `init_p_surface`. A driver without `init_*` profiles
-starts from its large-scale profile tables at `t = 0`
-([`initial_profile`](@ref Aeolus.InputDrivers.initial_profile)): this is
-how a sounding driver gives the bilinear (height, time) interpolation
-between the two launches that bracket the start, the same arithmetic as
-the CSV path, bit for bit.
+bottom face), and `init_p_surface`. The `init_*` profiles and the
+surface series (below) are schema groups that
+[`write_dynamic_driver`](@ref Aeolus.InputDrivers.write_dynamic_driver)
+and [`read_dynamic_driver`](@ref Aeolus.InputDrivers.read_dynamic_driver)
+round-trip, but no preprocessor fills them and no case reads them yet. A
+sounding driver has no `init_*` profiles: the Berlin case reads its
+`ls_profile_*` tables and `init_p_surface` and evaluates the tables at
+its start time itself (the bilinear (height, time) interpolation between
+the two launches that bracket the start), which is bitwise the CSV path
+(`test/input_dynamic.jl`).
 
 **Large-scale forcing.** Each `ls_<name>` table has its own height and
 time coordinates (`ls_<name>_z`, `ls_<name>_time`, or the shared

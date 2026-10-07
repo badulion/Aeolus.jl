@@ -44,12 +44,13 @@ The dynamic driver (`aeolus_driver = "dynamic"`, `aeolus_form =
 checks that what is present is consistent:
 
 * **initial state** — profiles over `init_z` (`init_theta`, `init_qv`,
-  `init_u`, `init_v`: piecewise linear in height, held at the ends), or
-  3-D fields on the run grid (`init_u3d`, …, over the run's `x`, `y`,
-  `z`, interior cells in storage order: u at the cell's west face, v at
-  its south face, w at its bottom face), and `init_p_surface`. Without
-  profiles the initial state is the large-scale profile tables
-  (`ls_profile_*`) at `t = 0`. Global attribute `init_time`: the model
+  `init_u`, `init_v`; schema only: written and read back, but no
+  preprocessor fills them and no case reads them yet), or 3-D fields on
+  the run grid (`init_u3d`, …, over the run's `x`, `y`, `z`, interior
+  cells in storage order: u at the cell's west face, v at its south face,
+  w at its bottom face), and `init_p_surface`. A sounding driver has no
+  profiles: its consumer evaluates the large-scale profile tables
+  (`ls_profile_*`) at its start. Global attribute `init_time`: the model
   start, ISO-8601 UTC (`""`: a case without a calendar date); every time
   coordinate is in seconds since it.
 * **boundary planes** — for each open face (`west`, `east`, `south`,
@@ -64,7 +65,7 @@ checks that what is present is consistent:
   each over its own height and time coordinate (`ls_<name>_z`,
   `ls_<name>_time`, or a shared `time_bc`), so a table round-trips without
   resampling; and the surface series `sfc_temperature`, `sfc_pressure`
-  over `time_sfc`.
+  over `time_sfc` (schema only, like the `init_*` profiles).
 
 Global attribute `dynamic_source`: `"sounding"`, `"case_table"` or
 `"parent"` (an Aeolus nest parent, [`NestBoundaryRecorder`](@ref)).
@@ -380,25 +381,6 @@ sounding's epoch, a case's model time). Exact for times and shifts that
 are whole seconds below 2⁵³.
 """
 shift_table(tab::ForcingTable, Δt::Real) = ForcingTable(tab.z, tab.t .+ Float64(Δt), tab.values)
-
-"""
-    initial_profile(inputs, name) -> (z -> value) or nothing
-
-The initial profile of `name` (`:theta`, `:qv`, `:u`, `:v`) as a function
-of height: the `init_*` profile (piecewise linear, held at the ends) when
-the driver has one, else the large-scale table `ls_profile_<name>` at
-`t = 0` (bilinear, `forcing_value`), else `nothing`.
-"""
-function initial_profile(d::DynamicInputs, name::Symbol)
-    p = d.profiles
-    if p !== nothing && getproperty(p, name) !== nothing
-        tab = ForcingTable(p.z, getproperty(p, name))
-        return z -> forcing_value(tab, z, 0.0)
-    end
-    tab = get(d.tables, Symbol(:profile_, name), nothing)
-    tab === nothing && return nothing
-    return z -> forcing_value(tab, z, 0.0)
-end
 
 """
     dynamic_forcing(inputs; t0 = 0) -> NamedTuple

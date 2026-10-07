@@ -58,9 +58,9 @@ The dynamic-driver form of a radiosonde sounding: its height-time tables
 up to `z_top`) as `ls_profile_theta`, `_qv`, `_u`, `_v`, `_p` on the axis
 "seconds since init_time" (`t0` is the run start on the sounding's axis,
 [`sounding_time`](@ref Aeolus.LargeScaleForcing.sounding_time)), and
-`p_surface` (Pa) as `init_p_surface`. There are no `init_*` profiles: the
-initial state is the tables at `t = 0` ([`initial_profile`](@ref)), the
-time interpolation between the two launches that bracket the start.
+`p_surface` (Pa) as `init_p_surface`. There are no `init_*` profiles: a
+consumer evaluates the tables at its start time (`t = 0` on this axis),
+the time interpolation between the two launches that bracket the start.
 """
 function sounding_dynamic_inputs(snd::Sounding; t0::Real, init_time::AbstractString, z_top::Real = 3000.0,
                                  p_surface = nothing)
