@@ -105,15 +105,8 @@ function _resolve_target(F::ReferenceDamping, target::Union{ForcingTable,Functio
 end
 function _resolve_target(F::ReferenceDamping, ::Symbol, f, z, t)
     m = f.mesh
-    d = f.data
-    n = m.Nx * m.Ny
-    @inbounds for k in 1:m.Nz
-        s = 0.0
-        for j in 1:m.Ny, i in 1:m.Nx
-            s += d[m.Hx+i, m.Hy+j, m.Hz+k]
-        end
-        F.buf[k] = s / n
-    end
+    # the plane means, one work item per level (KA-k, #307; the former loop)
+    launch_weighted!(backend(f.data), m.Nx * m.Ny, _plane_mean_level!, (1:m.Nz,), F.buf, f.data, m)
     return F.buf
 end
 
