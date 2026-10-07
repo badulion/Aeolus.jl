@@ -12,7 +12,7 @@ using ..Backends: backend, launch!, apply_transform!, pcg!, PCGWorkspace, PointO
                   IdentityPreconditioner
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!, poisson_axis_bcs
+       CGPoissonSolver, solve!, poisson_axis_bcs, solver_stats
 
 """
     AbstractPressureSolver
@@ -37,6 +37,20 @@ Phase 1a ships [`FFTPoissonSolver`](@ref) for triply-periodic
     spectral-element backend (Phase 5).
 """
 abstract type AbstractPressureSolver end
+
+"""
+    solver_stats(solver) -> (iterations, residual)
+
+The work and the convergence of the last `solve!` of `solver`, as the
+solver itself tracks them: `iterations` (CG iterations, multigrid
+cycles) and `residual`, the solver's own stopping measure (the absolute
+‖r‖₂ of [`CGPoissonSolver`](@ref) and of the anelastic
+`DensityWeightedPoissonSolver`, the ‖r‖₂/‖b‖₂ of the multigrid solvers).
+A direct solver (the FFT, cosine-FFT and stretched-z solvers) gives
+`(0, NaN)`: no iteration, no residual computed. The per-step diagnostics
+of the step cores read it after every pressure solve (#336).
+"""
+solver_stats(::AbstractPressureSolver) = (0, NaN)
 
 # -------------------------------------------------------------------------
 # FFTPoissonSolver — triply-periodic direct solve
@@ -582,5 +596,7 @@ function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
     copy_unit_halo_out!(bk, p, solver.x)
     return p
 end
+
+solver_stats(s::CGPoissonSolver) = (s.last_iter[], Float64(s.last_residual[]))
 
 end # module

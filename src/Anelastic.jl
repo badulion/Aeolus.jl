@@ -76,13 +76,14 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
 using ..PressureSolvers: PressureSolvers, AbstractPressureSolver
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
-import ..PressureSolvers: solve!, poisson_axis_bcs
+import ..PressureSolvers: solve!, poisson_axis_bcs, solver_stats
 import ..TimeSteppers: step!
 import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
 
 using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!,
                      StepWorkspaces, axpy!, pressure_from_potential!, zero_storage!,
-                     storage_like, copy_storage!
+                     storage_like, copy_storage!,
+                     _step_begin!, _step_end!, _step_abort!, _note_solve!, _note_pick!, _wall
 import ..Simulations
 using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 using ..Operators: sgs_fields
@@ -764,6 +765,7 @@ poisson_axis_bcs(s::DensityWeightedPoissonSolver) = (bc_x = s.bc_x, bc_y = s.bc_
 solver_iterations(s::DensityWeightedPoissonSolver) = s.last_iter[]
 "Final residual 2-norm of the last [`solve!`](@ref)."
 solver_residual(s::DensityWeightedPoissonSolver) = s.last_residual[]
+solver_stats(s::DensityWeightedPoissonSolver) = (s.last_iter[], Float64(s.last_residual[]))
 
 # --- kernels -------------------------------------------------------------
 
@@ -1559,7 +1561,9 @@ function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
     weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
 
     # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
+    t_solve = time_ns()
     solve!(sim.φ, sim.div_buf, sim.solver)
+    _note_solve!(sim.workspaces.rec, sim.solver, t_solve)   # iterations, residual, wall (#336)
 
     # 10. correction u = u* − ∇φ
     fill_halos!(sim.φ, sim.bcs)
@@ -1571,7 +1575,19 @@ function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
     return sim
 end
 
-function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
+# One step of a sound-proof core inside the step record's bracket (#336).
+function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real; kwargs...) where {S,T}
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    try
+        _mass_weighted_step!(sim, T(dt); kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    return _step_end!(rec, sim, T(dt), outer)
+end
+
+function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               body_force!::Union{Nothing,Function} = nothing,
                               post_predictor!::Union{Nothing,Function} = nothing,
                               sgs = nothing,
@@ -1613,9 +1629,11 @@ function _step_mass_weighted!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 4. SGS closure (the contract shared with the Boussinesq core: the
     #    built-in Smagorinsky, or the `sgs` keyword).
     if closure !== nothing
+        t_sgs = time_ns()
         f = compute_sgs!(closure, sim)
         add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
+        sim.workspaces.rec.wall_sgs += _wall(t_sgs)
     end
 
     # 5. buoyancy with the height-dependent reference θ̄(z)
@@ -1943,11 +1961,17 @@ ignored, so a driver can pass the same keywords to either core.
 """
 function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
                      dt_prev = nothing, sgs = nothing, kwargs...) where {S,T}
+    t_cfl = time_ns()
     m = sim.mesh
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     rate = _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, m)
-    isnan(rate) && return c.dt_min
+    rec = sim.workspaces.rec
+    if isnan(rate)
+        rec.wall_cfl += _wall(t_cfl)
+        return c.dt_min
+    end
     dt = rate > 0 ? c.C_advective / rate : T(Inf)
+    limiter = :advective
 
     closure = _active_sgs(sim, sgs, nothing)
     κmax = zero(T)
@@ -1960,7 +1984,9 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
     end
     νtot = (sim.has_viscosity ? sim.ν : zero(T)) + κmax
     Δ²harm = one(T) / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
-    νtot > 0 && (dt = min(dt, c.C_diffusive * Δ²harm / νtot))
+    if νtot > 0 && c.C_diffusive * Δ²harm / νtot < dt
+        dt = c.C_diffusive * Δ²harm / νtot; limiter = :diffusive
+    end
 
     if sim.has_buoyancy
         θm = horizontal_mean(sim.θ)
@@ -1969,16 +1995,25 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
             N² = max(N², buoyancy_frequency_squared(θm[k-1], θm[k], m.dz, sim.g_accel,
                                                      (θm[k-1] + θm[k]) / 2))
         end
-        N² > 0 && (dt = min(dt, c.C_buoyancy / sqrt(N²)))
+        if N² > 0 && c.C_buoyancy / sqrt(N²) < dt
+            dt = c.C_buoyancy / sqrt(N²); limiter = :buoyancy
+        end
     end
-    sim.has_coriolis && sim.f_coriolis != 0 &&
-        (dt = min(dt, c.C_coriolis / abs(sim.f_coriolis)))
+    if sim.has_coriolis && sim.f_coriolis != 0 && c.C_coriolis / abs(sim.f_coriolis) < dt
+        dt = c.C_coriolis / abs(sim.f_coriolis); limiter = :coriolis
+    end
+    rec.wall_cfl += _wall(t_cfl)
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
         dtp = T(dt_prev)
-        dtp > 0 && (dt = min(dt, c.growth_max * dtp))
+        dtp > 0 && c.growth_max * dtp < dt && (dt = c.growth_max * dtp; limiter = :growth)
     end
-    return clamp(dt, c.dt_min, c.dt_max)
+    dt < c.dt_min && (limiter = :dt_min)
+    dt > c.dt_max && (limiter = :dt_max)
+    dt = clamp(dt, c.dt_min, c.dt_max)
+    # the pick of this state, for the step record of the step it is used for (#336)
+    _note_pick!(rec, sim, rate, νtot / Δ²harm, dt, limiter)
+    return dt
 end
 
 # A sound-proof core carries no qv: its snapshot holds an empty qv buffer.

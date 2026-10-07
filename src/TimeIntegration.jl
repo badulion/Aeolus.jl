@@ -59,7 +59,8 @@ using ..Simulations: BoussinesqSimulation, max_divergence,
                      _dzc, _dzf, _dz_min,     # vertical metrics, stretched-aware (#151)
                      _project_velocity!,      # the projection (steps 8–10 of step!)
                      axpy!, pressure_from_potential!, copy_storage!, storage_like,
-                     _Lin2                    # the field algebra kernels (KA-j, #306)
+                     _Lin2,                   # the field algebra kernels (KA-j, #306)
+                     _step_begin!, _step_end!, _step_abort!, _note_pick!, _wall   # #336
 using ..Operators.FiniteVolume: grid_metrics, _div_at   # the one divergence stencil
 using ..IO: allfinite                    # the one finiteness check (#346)
 using ..TimeSteppers: step!
@@ -280,6 +281,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          sgs_stress::Symbol = :laplacian) where {T}
     m = sim.mesh
     INF = T(Inf)
+    t_cfl = time_ns()
 
     fill_halos!(sim.u, sim.bcs)
     fill_halos!(sim.v, sim.bcs)
@@ -335,6 +337,11 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     if dt_buoy < dt_limiting; dt_limiting = dt_buoy; limiter = :buoyancy;  end
     if dt_cor  < dt_limiting; dt_limiting = dt_cor;  limiter = :coriolis;  end
     if dt_sgs  < dt_limiting; dt_limiting = dt_sgs;  limiter = :sgs;       end
+
+    # the pick of this state, for the step record of the step it is used for (#336)
+    rec = sim.workspaces.rec
+    _note_pick!(rec, sim, rate, max(ν_total, κ_sgs) / Δ²harm, dt_limiting, limiter)
+    rec.wall_cfl += _wall(t_cfl)
 
     return (dt_adv = dt_adv, dt_diff = dt_diff, dt_buoy = dt_buoy,
             dt_cor = dt_cor, dt_sgs = dt_sgs,
@@ -408,13 +415,17 @@ function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
                      sgs_stress::Symbol = :laplacian) where {T}
     d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs, sgs_stress = sgs_stress) :
                                    diagnostics
-    dt = scheme isa IMEXScheme ? first(_explicit_limit(d, scheme)) : d.dt_limiting
+    dt, limiter = scheme isa IMEXScheme ? _explicit_limit(d, scheme) : (d.dt_limiting, d.limiter)
     isnan(dt) && return c.dt_min
     if dt_prev !== nothing
         dtp = T(dt_prev)
-        dtp > 0 && (dt = min(dt, c.growth_max * dtp))
+        dtp > 0 && c.growth_max * dtp < dt && (dt = c.growth_max * dtp; limiter = :growth)
     end
-    return clamp(dt, c.dt_min, c.dt_max)
+    dt < c.dt_min && (limiter = :dt_min)
+    dt > c.dt_max && (limiter = :dt_max)
+    dt = clamp(dt, c.dt_min, c.dt_max)
+    _note_pick!(sim.workspaces.rec, sim, dt, limiter)    # the step record's limiter (#336)
+    return dt
 end
 
 # =========================================================================
@@ -760,21 +771,33 @@ for n in 1:100
 end
 ```
 """
-function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraints;
-                        dt = nothing,
-                        dt_prev = nothing,
-                        body_force!::Union{Nothing,Function} = nothing,
-                        post_predictor!::Union{Nothing,Function} = nothing,
-                        fast_processes = nothing,
-                        schedule::Union{Nothing,SubsteppingSchedule} = nothing,
-                        max_retries::Integer = 3,
-                        stepper = nothing,
-                        scheme::Union{Nothing,Any} = nothing,
-                        snapshot::StateSnapshot = state_snapshot(sim),
-                        divergence_tol::Real = 1e-6,
-                        max_velocity::Real = Inf,
-                        sgs = nothing,
-                        sgs_stress::Symbol = :laplacian) where {T}
+function step_adaptive!(sim::BoussinesqSimulation, constraints::CFLConstraints; kwargs...)
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    res = try
+        _step_adaptive!(sim, constraints; kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    _step_end!(rec, sim, res[2], outer; retries = res[3])
+    return res
+end
+
+function _step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraints;
+                         dt = nothing,
+                         dt_prev = nothing,
+                         body_force!::Union{Nothing,Function} = nothing,
+                         post_predictor!::Union{Nothing,Function} = nothing,
+                         fast_processes = nothing,
+                         schedule::Union{Nothing,SubsteppingSchedule} = nothing,
+                         max_retries::Integer = 3,
+                         stepper = nothing,
+                         scheme::Union{Nothing,Any} = nothing,
+                         snapshot::StateSnapshot = state_snapshot(sim),
+                         divergence_tol::Real = 1e-6,
+                         max_velocity::Real = Inf,
+                         sgs = nothing,
+                         sgs_stress::Symbol = :laplacian) where {T}
 
     closure = sgs_closure(sgs)
     Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme,
@@ -787,12 +810,15 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
         (s, h; kw...) -> step!(s, h; kw..., sgs = closure, sgs_stress = sgs_stress)
     end
 
+    rec = sim.workspaces.rec
+    t_guard = time_ns()
     save_state!(snapshot, sim)
     # open-boundary buffers are state too: a retry must start from them
     bc_snap = open_boundary_snapshot(sim)
     # the closure's memory: the step commits it once (advance_sgs!); a
     # rejected step's commit is rolled back with the prognostic state
     sgs_snap = closure === nothing ? nothing : sgs_state(closure)
+    rec.wall_guard += _wall(t_guard)
     div_tol = T(divergence_tol)
     u_cap   = T(max_velocity)
     n_retries = 0
@@ -814,7 +840,9 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
         end
         if !failed
             # finiteness, divergence and speed cap in one fused sweep (KA-j, #306)
+            t_guard = time_ns()
             reason = _guard_reason(sim, div_tol, u_cap)
+            rec.wall_guard += _wall(t_guard)
             failed = reason !== :ok
         end
 
@@ -828,9 +856,11 @@ function step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraint
                   "retries; last dt = $Δt. State has been restored to the " *
                   "beginning of the step.")
         end
+        t_guard = time_ns()
         restore_state!(sim, snapshot)
         restore_open_boundaries!(sim, bc_snap)
         closure === nothing || restore_sgs_state!(closure, sgs_snap)
+        rec.wall_guard += _wall(t_guard)
         Δt_new = max(Δt / 2, constraints.dt_min)
         if Δt_new == Δt
             error("step_adaptive!: step failed ($reason) at dt_min = " *
@@ -1556,7 +1586,9 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
     fill_halos!(sim.w, sim.bcs)
     fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
     sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
+    t_sgs = time_ns()
     f = compute_sgs!(closure, sim)
+    sim.workspaces.rec.wall_sgs += _wall(t_sgs)
     ws.ν_mom  === nothing && (ws.ν_mom  = similar(sim.νt.data))
     ws.ν_scal === nothing && (ws.ν_scal = similar(sim.νt.data))
     νm = ws.ν_mom::Array{T,3}; νs = ws.ν_scal::Array{T,3}
@@ -1795,15 +1827,18 @@ Notes and limitations:
   * Returns `sim`. The step's solver statistics are in
     `workspace.total_iterations` and `workspace.max_residual`.
 """
-function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
-                    body_force!::Union{Nothing,Function} = nothing,
-                    post_predictor!::Union{Nothing,Function} = nothing,
-                    workspace::IMEXWorkspace = imex_workspace(sim),
-                    tol::Real = 1e-10, maxit::Integer = 200,
-                    momentum_advection::F = momentum_advect!,
-                    sgs = nothing,
-                    eddy_viscosity! = nothing,
-                    sgs_stress::Symbol = :laplacian) where {T, F}
+step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2; kwargs...) where {T} =
+    _recorded_imex!(sim, T(dt), scheme; kwargs...)
+
+function _step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
+                     body_force!::Union{Nothing,Function} = nothing,
+                     post_predictor!::Union{Nothing,Function} = nothing,
+                     workspace::IMEXWorkspace = imex_workspace(sim),
+                     tol::Real = 1e-10, maxit::Integer = 200,
+                     momentum_advection::F = momentum_advect!,
+                     sgs = nothing,
+                     eddy_viscosity! = nothing,
+                     sgs_stress::Symbol = :laplacian) where {T, F}
     Δt = T(dt)
     γ  = T(scheme.γ)
     δ  = T(scheme.δ)
@@ -1871,15 +1906,18 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     return sim
 end
 
-function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
-                    body_force!::Union{Nothing,Function} = nothing,
-                    post_predictor!::Union{Nothing,Function} = nothing,
-                    workspace::IMEXWorkspace = imex_workspace(sim),
-                    tol::Real = 1e-10, maxit::Integer = 200,
-                    momentum_advection::F = momentum_advect!,
-                    sgs = nothing,
-                    eddy_viscosity! = nothing,
-                    sgs_stress::Symbol = :laplacian) where {T, F}
+step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2; kwargs...) where {T} =
+    _recorded_imex!(sim, T(dt), scheme; kwargs...)
+
+function _step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
+                     body_force!::Union{Nothing,Function} = nothing,
+                     post_predictor!::Union{Nothing,Function} = nothing,
+                     workspace::IMEXWorkspace = imex_workspace(sim),
+                     tol::Real = 1e-10, maxit::Integer = 200,
+                     momentum_advection::F = momentum_advect!,
+                     sgs = nothing,
+                     eddy_viscosity! = nothing,
+                     sgs_stress::Symbol = :laplacian) where {T, F}
     Δt  = T(dt)
     γ   = T(scheme.γ)
     a21 = T(scheme.a21)
@@ -1944,6 +1982,22 @@ function step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2;
     closure === nothing || advance_sgs!(closure, sim, Δt)   # once per step
 
     return sim
+end
+
+# One IMEX step inside the step record's bracket (#336), with the
+# implicit-diffusion CG work of the step.
+function _recorded_imex!(sim::BoussinesqSimulation{T}, Δt::T, scheme; kwargs...) where {T}
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    try
+        _step_imex!(sim, Δt, scheme; kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    ws = get(kwargs, :workspace, imex_workspace(sim))
+    rec.implicit_iters += ws.total_iterations
+    rec.implicit_residual = Simulations._nmax(rec.implicit_residual, ws.max_residual)
+    return _step_end!(rec, sim, Δt, outer)
 end
 
 # The step limit of the processes an IMEX scheme treats explicitly

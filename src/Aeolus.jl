@@ -231,11 +231,13 @@ export resolved_tke_profile
 export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
-       CGPoissonSolver, solve!, poisson_axis_bcs
+       CGPoissonSolver, solve!, poisson_axis_bcs, solver_stats
 export ImpermeableWall
 export BoussinesqSimulation, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
+# #336: the per-step record and diagnostics hook of the step cores
+export StepRecord, step_record, set_step_hook!, step_hook, reset_interval!
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
 # #245: full-state checkpoints with bitwise restart, periodic checkpoints
 export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
