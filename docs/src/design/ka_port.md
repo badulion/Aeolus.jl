@@ -966,6 +966,7 @@ the old loops). MG-CG 128²×64 390.3 / 210.2 / 96.6 / 127.7 / 155.9
 and 5.6 / 5.2 / 7.1 ms at 4 / 12 / 24 t. The threaded times vary by
 ±20 % between runs with other agents on the machine; the 1-thread gate
 (≤ 1.10×) holds at 0.43-0.54×.
+
 ## KA-d: grid metrics and the finite-volume kernels (#299)
 
 **One kernel per operator for both grids.** Every kernel of
