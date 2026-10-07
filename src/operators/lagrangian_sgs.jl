@@ -470,10 +470,24 @@ function _lagrangian_relax!(pairs::Tuple, U, V, W, dt, g, θ, memory_time, cell,
     cx = dt / g.dx; cy = dt / g.dy; cz = dt / g.dz
     εfix = memory_time === nothing ? zero(T) : (dtε / memory_time) / (1 + dtε / memory_time)
     mems = _relax_memories(pairs)
-    launch!(Backends.backend(U), _relax_body!, (1:g.Nx, 1:g.Ny, 1:g.Nz), pairs, mems, U, V, W,
-            cx, cy, cz, g, per, cell, θ, Δ, εfix, memory_time, dtε)
+    r = (1:g.Nx, 1:g.Ny, 1:g.Nz)
+    gs = (Nx = g.Nx, Ny = g.Ny, Nz = g.Nz, Hx = g.Hx, Hy = g.Hy, Hz = g.Hz)   # what _upstream_n reads
+    if length(pairs) == 1
+        # one pair: its six arrays as separate arguments (arrays inside a
+        # tuple argument cost 1.2-1.4x here; the KA-d argument rule)
+        launch!(Backends.backend(U), _relax1_body!, r, pairs[1]..., U, V, W,
+                cx, cy, cz, gs, per, cell, θ, Δ, εfix, memory_time, dtε)
+    else
+        launch!(Backends.backend(U), _relax_body!, r, pairs, mems, U, V, W,
+                cx, cy, cz, gs, per, cell, θ, Δ, εfix, memory_time, dtε)
+    end
     return nothing
 end
+
+@inline _relax1_body!(i, j, k, LMn, MMn, ILM, IMM, LM, MM, U, V, W, cx, cy, cz, g, per, cell, θ, Δ,
+                      εfix, memory_time, dtε) =
+    _relax_body!(i, j, k, ((LMn, MMn, ILM, IMM, LM, MM),), (ILM, IMM), U, V, W, cx, cy, cz, g, per,
+                 cell, θ, Δ, εfix, memory_time, dtε)
 
 @inline function _relax_body!(i, j, k, pairs, mems, U, V, W, cx, cy, cz, g, per, cell, θ, Δ, εfix,
                               memory_time, dtε)
@@ -525,15 +539,17 @@ end
     _SecondTestFilter(mesh)
 
 Scratch storage of the second (wider) test filter of the scale-dependent
-Lagrangian model. The 21 Germano quantities of `_germano_terms`
-plus the fluid indicator (22 components, component first) are box-summed
-in three separable passes over the whole field (KA-l, #304): `B` after the
-x pass (`22 × Nx × (Ny+2) × (Nz+2)`), `C` after the y pass
-(`22 × Nx × Ny × (Nz+2)`); the z pass and the identity run per interior
-cell into `QN` ``= Q^d_{ij}N_{ij}`` and `NN` ``= N_{ij}N_{ij}``. At
-64 × 64 × 32 `B` and `C` take 25.3 and 24.5 MB (the plane-by-plane passes
-they replace needed `C` and three one-plane buffers, 26.7 MB in all, but
-could not run as independent work items: +23.1 MB).
+Lagrangian model. The 21 Germano quantities of `_germano_terms` plus the
+fluid indicator (22 components, component first) are box-summed in three
+separable passes (KA-l, #304): the x and y passes per shell plane into the
+full 3-D buffer `C` (`22 × Nx × Ny × (Nz+2)`), then the z pass and the
+identity per interior plane into `QN` ``= Q^d_{ij}N_{ij}`` and `NN` ``=
+N_{ij}N_{ij}``. The planes are split into at most 12 work items (the
+split does not change any bit); each work item owns one slot of `B`
+(`22 × (Nx+2) × (Ny+3)` per slot: the x-pass rows, the row scratch, and the
+z-pass plane), which it reuses for its planes, so the scratch stays in
+cache. At 64 × 64 × 32: `B` 9.3 MB (12 slots), `C` 24.5 MB, 33.9 MB in
+all against 26.7 MB for the shared one-plane scratch it replaces.
 """
 struct _SecondTestFilter{T}
     B::Array{T,4}
@@ -544,9 +560,19 @@ end
 
 function _SecondTestFilter(g::RegularGrid{T}) where {T}
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
-    return _SecondTestFilter{T}(zeros(T, 22, Nx, Ny + 2, Nz + 2), zeros(T, 22, Nx, Ny, Nz + 2),
+    nslot = max(cld(Nz + 2, _box5_planes_per_item(Nz + 2)), cld(Nz, _box5_planes_per_item(Nz)))
+    return _SecondTestFilter{T}(zeros(T, 22, Nx + 2, Ny + 3, nslot), zeros(T, 22, Nx, Ny, Nz + 2),
                                 zeros(T, Nx, Ny, Nz), zeros(T, Nx, Ny, Nz))
 end
+
+# Planes per work item of the x/y and z passes (_BOX5_ITEMS work items at
+# most, independent of the thread count): each work item reuses one slot
+# of the scratch B for its planes, so B stays in cache. The bits do not
+# depend on the split: every plane is computed alone, in a fixed order.
+# (Measured at 64 × 64 × 32, ka_port.md: 12 work items beat one plane per
+# work item at 1, 4, 12 and 24 threads; the passes are memory-bound.)
+const _BOX5_ITEMS = 12
+_box5_planes_per_item(n) = cld(n, min(n, _BOX5_ITEMS))
 
 # The shell index of point m ∈ 1:5 of the 5-cell box around interior index i
 # (shell index l = interior index + 1; 0 = dropped). Periodic: the stencil
@@ -557,71 +583,147 @@ end
 # two cells from the wall. (Computed per point: the per-call stencil vectors
 # it replaces allocated on every call.)
 @inline function _box5_src(i, m, N, per)
-    s = i + m - 3
-    return per ? mod1(s, N) + 1 : (1 <= s <= N ? s + 1 : 0)
+    s = i + m - 3                        # ∈ [i - 2, i + 2]
+    per || return 1 <= s <= N ? s + 1 : 0
+    # wrap without an integer division (N ≥ 2: one period is enough)
+    w = N >= 2 ? (s < 1 ? s + N : (s > N ? s - N : s)) : mod1(s, N)
+    return w + 1
 end
 
-# x pass: B[:, i, b, c] = Σ over the 5-cell x stencil of i of the 22
-# components (fluid-masked Germano quantities and the fluid indicator) of
-# shell cell (s, b, c), the first stencil point assigned and the others
-# added in stencil order (the summation order of the plane passes this
-# replaces).
-@inline function _box5_x_body!(i, b, c, B, ws, cell, oi, oj, ok, Nx, per)
+# The x and y passes of one shell plane c, in slot `sl` of the scratch B
+# (owned by the work item that runs plane c):
+#   x: for every shell row b, the 22 summands of its shell cells (the
+#      fluid-masked Germano quantities and the fluid indicator) go into the
+#      row scratch `B[:, :, Ny+3, sl]`, and B[:, i, b, sl] = Σ over the
+#      5-cell x stencil of i;
+#   y: C[:, i, j, c] = Σ over the y stencil of j of B[:, i, s, sl].
+# Each sum assigns its first stencil point and adds the others in stencil
+# order (a stencil entirely inside: one fused left-to-right sum, the same
+# additions): the bits of the plane-by-plane passes this replaces.
+function _box5_xy_chunk!(ch, B, C, ws, cell, oi, oj, ok, Nx, Ny, Nc, P, perx, pery)
+    for c in (ch - 1) * P + 1 : min(ch * P, Nc)
+        _box5_xy_plane!(c, ch, B, C, ws, cell, oi, oj, ok, Nx, Ny, perx, pery)
+    end
+    return nothing
+end
+
+function _box5_xy_plane!(c, sl, B, C, ws, cell, oi, oj, ok, Nx, Ny, perx, pery)
     T = eltype(B)
-    acc = ntuple(_ -> zero(T), Val(22))
-    first = true
-    @inbounds for m in 1:5
-        s = _box5_src(i, m, Nx, per)
-        s == 0 && continue
-        fluid = cell === nothing || !cell[oi + s, oj + b, ok + c]
-        t = _germano_terms(ws, s, b, c)
-        v = ntuple(q -> q <= 21 ? (fluid ? t[q] : zero(T)) : (fluid ? one(T) : zero(T)), Val(22))
-        acc = first ? v : map(+, acc, v)
-        first = false
+    R = Ny + 3                                     # the scratch row of the slot
+    @inbounds for b in 1:Ny+2
+        for a in 1:Nx+2
+            fluid = cell === nothing || !cell[oi + a, oj + b, ok + c]
+            t = _germano_terms(ws, a, b, c)
+            for q in 1:21
+                B[q, a, R, sl] = fluid ? t[q] : zero(T)
+            end
+            B[22, a, R, sl] = fluid ? one(T) : zero(T)
+        end
+        for i in 1:Nx
+            if 3 <= i <= Nx - 2
+                # every stencil point inside (shell i-1 … i+3): one fused
+                # sum, the same left-to-right additions as below
+                @simd for q in 1:22
+                    B[q, i, b, sl] = (((B[q, i-1, R, sl] + B[q, i, R, sl]) + B[q, i+1, R, sl]) +
+                                      B[q, i+2, R, sl]) + B[q, i+3, R, sl]
+                end
+                continue
+            end
+            first = true
+            for m in 1:5
+                s = _box5_src(i, m, Nx, perx)
+                s == 0 && continue
+                if first
+                    @simd for q in 1:22
+                        B[q, i, b, sl] = B[q, s, R, sl]
+                    end
+                    first = false
+                else
+                    @simd for q in 1:22
+                        B[q, i, b, sl] += B[q, s, R, sl]
+                    end
+                end
+            end
+        end
     end
-    @inbounds for q in 1:22
-        B[q, i, b, c] = acc[q]
+    @inbounds for j in 1:Ny
+        if 3 <= j <= Ny - 2
+            for i in 1:Nx
+                @simd for q in 1:22
+                    C[q, i, j, c] = (((B[q, i, j-1, sl] + B[q, i, j, sl]) + B[q, i, j+1, sl]) +
+                                     B[q, i, j+2, sl]) + B[q, i, j+3, sl]
+                end
+            end
+            continue
+        end
+        first = true
+        for m in 1:5
+            s = _box5_src(j, m, Ny, pery)
+            s == 0 && continue
+            for i in 1:Nx
+                if first
+                    @simd for q in 1:22
+                        C[q, i, j, c] = B[q, i, s, sl]
+                    end
+                else
+                    @simd for q in 1:22
+                        C[q, i, j, c] += B[q, i, s, sl]
+                    end
+                end
+            end
+            first = false
+        end
     end
     return nothing
 end
 
-# y pass: C[:, i, j, c] = Σ over the y stencil of j of B[:, i, s, c].
-@inline function _box5_y_body!(i, j, c, C, B, Ny, per)
-    T = eltype(C)
-    acc = ntuple(_ -> zero(T), Val(22))
-    first = true
-    @inbounds for m in 1:5
-        s = _box5_src(j, m, Ny, per)
-        s == 0 && continue
-        v = ntuple(q -> B[q, i, s, c], Val(22))
-        acc = first ? v : map(+, acc, v)
-        first = false
-    end
-    @inbounds for q in 1:22
-        C[q, i, j, c] = acc[q]
+# The z pass and the identity of one interior plane k: the z sum goes into
+# slot `sl` of the scratch B (free once the x and y passes are done), then
+# the identity per cell.
+function _box5_z_chunk!(ch, QN, NN, C, B, cell, Hx, Hy, Hz, Nx, Ny, Nz, P, per, Δ2, α2sq)
+    for k in (ch - 1) * P + 1 : min(ch * P, Nz)
+        _box5_z_plane!(k, ch, QN, NN, C, B, cell, Hx, Hy, Hz, Nx, Ny, Nz, per, Δ2, α2sq)
     end
     return nothing
 end
 
-# z pass and the identity at interior cell (i, j, k).
-@inline function _box5_z_body!(i, j, k, QN, NN, C, cell, Hx, Hy, Hz, Nz, per, Δ2, α2sq)
+function _box5_z_plane!(k, sl, QN, NN, C, B, cell, Hx, Hy, Hz, Nx, Ny, Nz, per, Δ2, α2sq)
     T = eltype(QN)
-    acc = ntuple(_ -> zero(T), Val(22))
-    first = true
-    @inbounds for m in 1:5
-        s = _box5_src(k, m, Nz, per)
-        s == 0 && continue
-        v = ntuple(q -> C[q, i, j, s], Val(22))
-        acc = first ? v : map(+, acc, v)
-        first = false
+    if 3 <= k <= Nz - 2                       # every stencil plane inside: one fused sum
+        @inbounds for j in 1:Ny, i in 1:Nx
+            @simd for q in 1:22
+                B[q, i, j, sl] = (((C[q, i, j, k-1] + C[q, i, j, k]) + C[q, i, j, k+1]) +
+                                  C[q, i, j, k+2]) + C[q, i, j, k+3]
+            end
+        end
+    else
+        first = true
+        @inbounds for m in 1:5
+            s = _box5_src(k, m, Nz, per)
+            s == 0 && continue
+            for j in 1:Ny, i in 1:Nx
+                if first
+                    @simd for q in 1:22
+                        B[q, i, j, sl] = C[q, i, j, s]
+                    end
+                else
+                    @simd for q in 1:22
+                        B[q, i, j, sl] += C[q, i, j, s]
+                    end
+                end
+            end
+            first = false
+        end
     end
-    n = acc[22]
-    @inbounds if _is_solid(cell, Hx + i, Hy + j, Hz + k) || !(n > 0)
-        QN[i,j,k] = zero(T); NN[i,j,k] = zero(T)
-        return nothing
+    @inbounds for j in 1:Ny, i in 1:Nx
+        n = B[22, i, j, sl]
+        if _is_solid(cell, Hx + i, Hy + j, Hz + k) || !(n > 0)
+            QN[i,j,k] = zero(T); NN[i,j,k] = zero(T)
+            continue
+        end
+        t = ntuple(q -> B[q, i, j, sl], Val(21))
+        QN[i,j,k], NN[i,j,k] = _germano_LM_MM(t, one(T) / n, Δ2, α2sq)
     end
-    t = Base.front(acc)                     # the 21 quantities (no closure over `acc`)
-    @inbounds QN[i,j,k], NN[i,j,k] = _germano_LM_MM(t, one(T) / n, Δ2, α2sq)
     return nothing
 end
 
@@ -655,14 +757,16 @@ function _second_test_filter!(sf::_SecondTestFilter{T}, ws::DynamicSmagorinskyWo
                               g, α2sq, cell, per) where {T}
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     b = Backends.backend(sf.C)
-    # x pass over every shell row, y pass over every shell plane, then the z
-    # pass and the identity: three launches, each reading only the previous
-    # pass's buffer (KA-l: three full 3-D passes instead of a reused plane)
-    launch!(b, _box5_x_body!, (1:Nx, 1:Ny+2, 1:Nz+2), sf.B, ws, cell,
-            g.Hx - 1, g.Hy - 1, g.Hz - 1, Nx, per[1])
-    launch!(b, _box5_y_body!, (1:Nx, 1:Ny, 1:Nz+2), sf.C, sf.B, Ny, per[2])
+    # the x and y passes per shell plane into the full 3-D buffer C, then the
+    # z pass and the identity per interior plane; each work item takes a
+    # chunk of planes and its own slot of the scratch B (KA-l: no scratch
+    # shared between work items)
+    P = _box5_planes_per_item(Nz + 2)
+    launch_weighted!(b, P * Nx * (Ny + 2), _box5_xy_chunk!, (1:cld(Nz + 2, P),), sf.B, sf.C, ws, cell,
+                     g.Hx - 1, g.Hy - 1, g.Hz - 1, Nx, Ny, Nz + 2, P, per[1], per[2])
     Δ2 = (g.dx * g.dy * g.dz)^(2/3)
-    launch!(b, _box5_z_body!, (1:Nx, 1:Ny, 1:Nz), sf.QN, sf.NN, sf.C, cell,
-            g.Hx, g.Hy, g.Hz, Nz, per[3], Δ2, α2sq)
+    Pz = _box5_planes_per_item(Nz)
+    launch_weighted!(b, Pz * Nx * Ny, _box5_z_chunk!, (1:cld(Nz, Pz),), sf.QN, sf.NN, sf.C, sf.B, cell,
+                     g.Hx, g.Hy, g.Hz, Nx, Ny, Nz, Pz, per[3], Δ2, α2sq)
     return nothing
 end

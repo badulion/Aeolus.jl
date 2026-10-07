@@ -146,6 +146,23 @@ sgs_grid() = RegularGrid(Float64; size = (13, 11, 9), extent = (1.3, 1.7, 0.8), 
                             s[1].QN .= s[2].QN; s[1].NN .= s[2].NN),
                       s -> (s[1].QN, s[1].NN))
         end
+        # several planes per work item (Nz + 2 > 12 work items) and rows too
+        # short for the fused bulk sums (N < 5)
+        for gg in (RegularGrid(Float64; size = (9, 4, 30), extent = (0.9, 0.4, 3.0), halo = (2, 2, 2)),
+                   RegularGrid(Float64; size = (4, 9, 3), extent = (0.4, 0.9, 0.3), halo = (2, 2, 2)))
+            uu = sgs_field(rng, FaceX(), gg); vv = sgs_field(rng, FaceY(), gg); ww = sgs_field(rng, FaceZ(), gg)
+            wsg = OPS.DynamicSmagorinskyWorkspace(gg)
+            OPS._germano_identity!(wsg, uu.data, vv.data, ww.data, gg, 9.0)
+            cg = Array{Bool,3}(rand(rng, size(uu.data)...) .< 0.1)
+            for per in ((true, true, false), (false, true, true)), cl in (nothing, cg)
+                sgs_check("second test filter $(gg.Nx)×$(gg.Ny)×$(gg.Nz) per=$per masked=$(cl !== nothing)",
+                          () -> (OPS._SecondTestFilter(gg), LegacySGS.SecondTestFilter(gg)),
+                          s -> OPS._second_test_filter!(s[1], wsg, gg, 25.0, cl, per),
+                          s -> (LegacySGS.second_test_filter!(s[2], wsg, gg, 25.0, cl, per);
+                                s[1].QN .= s[2].QN; s[1].NN .= s[2].NN),
+                          s -> (s[1].QN, s[1].NN))
+            end
+        end
         sf = OPS._SecondTestFilter(g)
         OPS._second_test_filter!(sf, ws0, g, 25.0, nothing, (true, true, false))
         with_backend(CPUBackend(serial = true)) do

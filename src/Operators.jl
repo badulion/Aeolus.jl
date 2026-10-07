@@ -14,6 +14,7 @@ using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI
                              stability_factor_m, stability_factor_h
 using ..MoistThermodynamics: saturated_buoyancy_frequency_squared, DEFAULT_CONSTANTS
 using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
+using StaticArrays: MVector
 using Random: AbstractRNG, default_rng, randn
 
 export ∂x, ∂y, ∂z, laplacian, divergence,

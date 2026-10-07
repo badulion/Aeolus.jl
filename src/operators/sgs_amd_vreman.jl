@@ -295,8 +295,9 @@ AMDClosure(; C::Real = 0.3, Pr_t = nothing, buoyancy::Bool = true) = AMDClosure(
 """
     sgs_buoyancy_parameter(sim) -> βg
 
-`g/θ₀` of a simulation's buoyancy (a number, or a function `k -> g/θ̄(z_k)`
-of the interior level on the sound-proof cores); `0` when buoyancy is off.
+`g/θ₀` of a simulation's buoyancy (a number, or a callable `k -> g/θ̄(z_k)`
+of the interior level on the sound-proof cores, a `_LevelBuoyancy` that a
+kernel takes as a plain argument); `0` when buoyancy is off.
 """
 function sgs_buoyancy_parameter(sim)
     if hasproperty(sim, :ref)                       # anelastic / pseudo-incompressible
