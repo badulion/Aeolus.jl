@@ -94,7 +94,7 @@ using ..TimeSteppers: step!
 
 import ..BoundaryConditions: boundary_values!, snapshot_values, blend_window!
 
-export NestedGrid, nested_grid, refinement_ratio, nest_offset,
+export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
        nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
@@ -119,6 +119,7 @@ const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
 _moist(sim::BoussinesqSimulation) = sim.has_moisture
 _moist(::MassWeightedSimulation)  = false
 
+include("nesting/axis.jl")
 include("nesting/grid.jl")
 include("nesting/measure.jl")
 include("nesting/shell.jl")

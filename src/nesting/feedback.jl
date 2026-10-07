@@ -292,11 +292,15 @@ _sgs_keywords(a::DomainAdvance) = (get(a.kwargs, :sgs, nothing),
 
 _domain_closure(sim, kw) = _active_sgs(sim, kw[1], kw[2])
 
+# (parent, child) plane sizes of a register on side `s`: the conservation
+# box's parent cells and child cells along the two tangential axes (#328;
+# the whole child, nn·r, on an aligned nest).
 function _plane_sizes(nest::NestedGrid, s::Int)
     ax = _side_axis(s)
-    nn = (nest.nx, nest.ny, nest.nz); r = (nest.rx, nest.ry, nest.rz)
+    nn = (nest.nx, nest.ny, nest.nz)
     t1, t2 = ax == 1 ? (2, 3) : ax == 2 ? (1, 3) : (1, 2)
-    return (nn[t1], nn[t2]), (nn[t1] * r[t1], nn[t2] * r[t2])
+    a = nest.axes
+    return (nn[t1], nn[t2]), (length(a[t1].cbox), length(a[t2].cbox))
 end
 
 function _new_planes(nest, sides, which::Int)
@@ -522,9 +526,11 @@ function _book_plane!(M::Matrix{Float64}, sim, ϕ, rec, K, ν, W, nest::NestedGr
         base = H[ax] + oo[ax] + (hi ? nn[ax] : 0)
         o1 = H[t1] + oo[t1] - 1; o2 = H[t2] + oo[t2] - 1
     else
-        N = (g.Nx, g.Ny, g.Nz)
-        base = H[ax] + 1 + (hi ? N[ax] : 0)
-        o1 = H[t1]; o2 = H[t2]
+        # the child faces on the conservation box planes (the child's
+        # boundary faces on an aligned nest, interior faces on a shrunk box)
+        cb = (nest.axes[1].cbox, nest.axes[2].cbox, nest.axes[3].cbox)
+        base = H[ax] + first(cb[ax]) + (hi ? length(cb[ax]) : 0)
+        o1 = H[t1] + first(cb[t1]) - 1; o2 = H[t2] + first(cb[t2]) - 1
     end
     r = (1:size(M, 1), 1:size(M, 2))
     if ϕ === nothing
@@ -569,10 +575,30 @@ function _register_mismatch(r::NestFluxRegisters, n::Int, nest::NestedGrid,
         P = r.pacc[n][s]; C = r.cacc[n][s]
         Pv = r.pvacc[n][s]; Cv = r.cvacc[n][s]
         t1, t2 = _tang(ax)
-        launch!(Backends.backend(M), _register_body!, (1:size(M, 1), 1:size(M, 2)), M, P, C, Pv,
-                Cv, ϕref, rr[t1], rr[t2], nest, ax)
+        if nest.aligned
+            launch!(Backends.backend(M), _register_body!, (1:size(M, 1), 1:size(M, 2)), M, P, C,
+                    Pv, Cv, ϕref, rr[t1], rr[t2], nest, ax)
+        else
+            a1 = nest.axes[t1]; a2 = nest.axes[t2]
+            launch!(Backends.backend(M), _register_ov_body!, (1:size(M, 1), 1:size(M, 2)), M, P,
+                    C, Pv, Cv, ϕref, a1, a2, a1.Hc + first(a1.cbox) - 1,
+                    a2.Hc + first(a2.cbox) - 1, nest, ax)
+        end
     end
     return out
+end
+
+# The general fine sum (#328): the overlap-area mean of the child register
+# faces under the parent face (A, B) (the registers carry flux densities).
+@inline function _register_ov_body!(A, B, M, P, C, Pv, Cv, ϕref, a1, a2, o1, o2, nest, ax)
+    fine = 0.0; den = 0.0
+    @inbounds for q2 in a2.ptr[B]:a2.ptr[B+1]-1, q1 in a1.ptr[A]:a1.ptr[A+1]-1
+        w = a1.len[q1] * a2.len[q2]
+        ia = a1.cidx[q1] - o1; ib = a2.cidx[q2] - o2
+        fine += w * (C[ia, ib] - ϕref * Cv[ia, ib]); den += w
+    end
+    @inbounds M[A, B] = ((P[A, B] - ϕref * Pv[A, B]) - fine / den) * _face_area(nest, nothing, ax, B)
+    return nothing
 end
 
 @inline function _register_body!(A, B, M, P, C, Pv, Cv, ϕref, r1, r2, nest, ax)
@@ -873,7 +899,8 @@ function _plane_correct!(pf::Field, cf::Field, nest::NestedGrid, ax::Int, q::Int
     nn = (nest.nx, nest.ny, nest.nz)
     t1, t2 = _tang(ax)
     ωz = ax == 3 ? nothing : _zweights(measure)
-    g = ωz === nothing ? _plane_geom(nest, ax, q, measure, nothing) :
+    g = !nest.aligned ? _plane_geom_ov(nest, ax, q, measure) :
+        ωz === nothing ? _plane_geom(nest, ax, q, measure, nothing) :
                          _plane_geom(nest, ax, q, measure, ωz)
     launch!(Backends.backend(pf.data), _plane_correct_body!, (1:nn[t1], 1:nn[t2]), pf.data,
             cf.data, g)

@@ -81,7 +81,7 @@ using ..BoundaryConditions: AbstractBoundaryData, OpenPlane, OpenBoundary,      
                             has_open_boundaries, open_boundary_states, _face_local,
                             WindowedBoundaryData
 import ..BoundaryConditions: boundary_values!
-using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range
+using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range, refinement_ratio
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,

@@ -49,7 +49,7 @@ outflow) and the halo depth the child's advection scheme needs there.
 This replaces the `NestBC` no-op halo of the Phase 16/30 nests, whose
 child kept a periodic projection that never saw the parent's flux.
 """
-function nest_bcs(m::RegularGrid, x::Symbol = :nest, y::Symbol = x, z::Symbol = y;
+function nest_bcs(m::NestChildMesh, x::Symbol = :nest, y::Symbol = x, z::Symbol = y;
                   bottom::Symbol = z, top::Symbol = z,
                   moisture::Bool = false, scalars = (),
                   correction::Symbol = :uniform, normal_halo::Symbol = :value,
@@ -140,6 +140,11 @@ cells. Build with [`nest_measure`](@ref).
     `W`-weighted (scalars) and `W`-area-weighted (horizontal-normal
     faces); prolongation conserves `∫ W φ dV` exactly.
 
+`zlen` are the overlaps of every conservation-box parent layer with the
+child layers in the measure coordinate (the rows of the vertical
+[`NestAxis`](@ref)): the weights of the general (non-aligned, stretched
+child) restriction.
+
 Fields (all storage-indexed, halos included): `pc`/`cc` the parent/child
 face coordinates in the measure, `ph`/`ch` the parent/child face heights
 (child faces that coincide with parent faces are bit-identical copies),
@@ -168,6 +173,7 @@ struct NestMeasure
     ch::Vector{Float64}
     cw::Vector{Float64}
     pw::Vector{Float64}
+    zlen::Vector{Float64}       # overlaps of the box layers with the child layers, in the measure (#328)
     plans::Dict{Tuple{Symbol,Int},_Plan1D}
 end
 
@@ -208,12 +214,14 @@ reach into those layers interpolate on the actual face heights.
 
 Use [`nested_grid`](@ref) to build the child mesh from a physical extent.
 """
-struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:RegularGrid{T}}
+struct NestedGrid{T, MP<:AbstractMesh{T}, MC<:AbstractMesh{T}}
     parent_mesh::MP
     child_mesh::MC
-    rx::Int; ry::Int; rz::Int
-    ix::Int; iy::Int; iz::Int
-    nx::Int; ny::Int; nz::Int
+    rx::Int; ry::Int; rz::Int      # integer ratio per axis, 0 where the axis is not integer-aligned
+    ix::Int; iy::Int; iz::Int      # first parent interior cell of the conservation box
+    nx::Int; ny::Int; nz::Int      # conservation box size, in parent cells
+    axes::NTuple{3,NestAxis}       # the per-axis geometry (#328)
+    aligned::Bool                  # integer-aligned on every axis, uniform child: N-nest-a operators
     ledger::Dict{Symbol,Float64}
     plans::Dict{Tuple{Symbol,Int,Int},_Plan1D}
     measures::Dict{_MeasureKey,NestMeasure}   # cached measures (volume / mass)
@@ -282,8 +290,8 @@ function _check_z(parent::StretchedGrid, child::RegularGrid, rz, iz, nz)
     return nothing
 end
 
-function NestedGrid(parent::NestParentMesh{T}, child::RegularGrid{T};
-                    refinement, offset::NTuple{3,Integer}) where {T}
+function _nested_grid_aligned(parent::NestParentMesh{T}, child::RegularGrid{T},
+                              refinement, offset::NTuple{3,Integer}) where {T}
     rx, ry, rz = _triple(refinement)
     ix, iy, iz = Int.(offset)
     (rx >= 1 && ry >= 1 && rz >= 1) ||
@@ -319,10 +327,104 @@ function NestedGrid(parent::NestParentMesh{T}, child::RegularGrid{T};
     end
     _check_z(parent, child, rz, iz, nz)
 
-    return NestedGrid{T, typeof(parent), typeof(child)}(
-        parent, child, rx, ry, rz, ix, iy, iz, nx, ny, nz,
+    axs = _nest_axes(parent, child, true)
+    for (d, r, o) in ((1, rx, ix), (2, ry, iy), (3, rz, iz))
+        axs[d].integer == (r, o) ||
+            error("NestedGrid: internal: axis $d geometry $(axs[d]) does not match the " *
+                  "refinement $r and offset $o")
+    end
+    return _make_nest(parent, child, (rx, ry, rz), (ix, iy, iz), (nx, ny, nz), axs, true)
+end
+
+_make_nest(parent::AbstractMesh{T}, child::AbstractMesh{T}, r, o, n, axs, aligned) where {T} =
+    NestedGrid{T, typeof(parent), typeof(child)}(
+        parent, child, r..., o..., n..., axs, aligned,
         Dict{Symbol,Float64}(), Dict{Tuple{Symbol,Int,Int},_Plan1D}(),
         Dict{_MeasureKey,NestMeasure}(), Dict{NTuple{3,Int},NTuple{3,Array{Float64,3}}}())
+
+# The three axis geometries of a parent–child pair.
+_nest_axes(parent, child, integer::Bool) =
+    ntuple(d -> NestAxis(_mesh_faces(parent, d), _mesh_HN(parent, d)...,
+                         _mesh_faces(child, d), _mesh_HN(child, d)...;
+                         uniform_child = d < 3 || child isa RegularGrid, integer), 3)
+
+"""
+    NestedGrid(parent_mesh, child_mesh; plan = :auto)
+
+The [`NestedGrid`](@ref) of a child placed anywhere inside its parent,
+with the geometry inferred from the two meshes (#328): the refinement may
+be rational (`Δ_p/Δ_c = 5/2`) or 1, the child's origin and extent need
+not lie on parent faces, and the child may be stretched in z (a
+[`StretchedGrid`](@ref) child under a uniform or stretched parent).
+
+Requirements (an error names the axis otherwise):
+
+  * the child interior lies inside the parent interior;
+  * the child is at least as fine as the parent wherever they overlap;
+  * the child's storage (halos included) lies inside the parent's, so
+    every child halo stencil reads parent data.
+
+The *conservation box* is, along each axis, the parent cells between the
+first and the last parent face inside the child that is also a child face
+(a common face). Two-way transfers (anterpolation, refluxing, interface
+flux correction, composite integrals) act on the box; the strip between
+the box and the child's edge is computed by the child but owned by the
+parent. When the child's edges lie on parent faces the box is the whole
+child. A child with no box along some axis can only be nested one-way.
+`nest_covered_range` returns the box, `nx, ny, nz` and `ix, iy, iz` are
+its size and offset, and `refinement_ratio` gives the per-axis ratio
+(`nothing` along a stretched z).
+
+When every axis is aligned with an integer ratio and the child is uniform,
+the result is identical to `NestedGrid(parent, child; refinement, offset)`
+and every operator takes the N-nest-a integer path. `plan = :overlap`
+forces the general overlap operators even then (they reproduce the integer
+operators to round-off, which the tests check).
+"""
+function NestedGrid(parent::NestParentMesh{T}, child::NestChildMesh{T};
+                    refinement = nothing, offset = nothing, plan::Symbol = :auto) where {T}
+    if refinement !== nothing || offset !== nothing
+        (refinement === nothing || offset === nothing) &&
+            throw(ArgumentError("NestedGrid: give both refinement and offset, or neither " *
+                                "(the geometry is then inferred)"))
+        child isa RegularGrid ||
+            throw(ArgumentError("NestedGrid: refinement/offset describe a uniform child; build " *
+                                "a stretched child with NestedGrid(parent, child)"))
+        plan === :auto ||
+            throw(ArgumentError("NestedGrid: plan = :$plan needs the inferred geometry, " *
+                                "NestedGrid(parent, child; plan)"))
+        return _nested_grid_aligned(parent, child, refinement, offset)
+    end
+    plan in (:auto, :overlap) ||
+        throw(ArgumentError("NestedGrid: plan must be :auto or :overlap, got :$plan"))
+    axs = _nest_axes(parent, child, plan === :auto)
+    names = ("x", "y", "z")
+    for d in 1:3
+        a = axs[d]
+        tol = 1e-9 * (a.cf[end] - a.cf[1])
+        a.cf[a.Hc+1] >= a.pf[a.Hp+1] - tol && a.cf[a.Hc+a.Nc+1] <= a.pf[a.Hp+a.Np+1] + tol ||
+            error("NestedGrid: the child's $(names[d]) extent [$(a.cf[a.Hc+1]), " *
+                  "$(a.cf[a.Hc+a.Nc+1])] leaves the parent interior [$(a.pf[a.Hp+1]), " *
+                  "$(a.pf[a.Hp+a.Np+1])].")
+        a.cf[1] >= a.pf[1] - tol && a.cf[end] <= a.pf[end] + tol ||
+            error("NestedGrid: the child's $(names[d]) storage (halos included) " *
+                  "[$(a.cf[1]), $(a.cf[end])] reaches beyond the parent's storage " *
+                  "[$(a.pf[1]), $(a.pf[end])]: the child halo stencils would read no parent " *
+                  "data. Move the child away from the parent's edge or deepen the parent halo.")
+        for c in a.Hc+1:a.Hc+a.Nc
+            h = a.cf[c+1] - a.cf[c]
+            P = clamp(searchsortedlast(a.pf, (a.cf[c] + a.cf[c+1]) / 2), 1, length(a.pf) - 1)
+            h <= (1 + 1e-9) * (a.pf[P+1] - a.pf[P]) ||
+                error("NestedGrid: the child is coarser than its parent along $(names[d]) " *
+                      "(child cell $(c - a.Hc) is $h thick, the parent cell around it " *
+                      "$(a.pf[P+1] - a.pf[P])). A nest must refine its parent.")
+        end
+    end
+    r = ntuple(d -> axs[d].integer === nothing ? 0 : axs[d].integer[1], 3)
+    o = ntuple(d -> isempty(axs[d].pbox) ? 1 : first(axs[d].pbox), 3)
+    n = ntuple(d -> length(axs[d].pbox), 3)
+    aligned = all(>(0), r) && child isa RegularGrid
+    return _make_nest(parent, child, r, o, n, axs, aligned)
 end
 
 """
@@ -336,9 +438,22 @@ offending direction otherwise). On a stretched parent `z₁`, `z₂` must be
 parent face heights and the parent layers between them must all have
 the same thickness (the child is uniform, `dz = dz_parent / rz`).
 `refinement` is an `Int` or `NTuple{3,Int}`.
+
+**Non-aligned children** (#328). On a uniform parent `refinement` may
+also be rational (`5//2`: five child cells in two parent cells) and the
+endpoints need not lie on parent faces: the child then gets
+`Δ_c = Δ_p / r`, its origin at `(x₁, y₁, z₁)`, and each extent must be a
+whole number of child cells. The [`NestedGrid`](@ref) is built from the
+geometry (`NestedGrid(parent, child)`), with its conservation box between
+the first and last common faces.
 """
 function nested_grid(parent::NestParentMesh{T}, child_extent, refinement;
                      halo::NTuple{3,Int}=(parent.Hx, parent.Hy, parent.Hz)) where {T}
+    rr = refinement isa Tuple ? refinement : (refinement, refinement, refinement)
+    length(rr) == 3 || throw(ArgumentError("nested_grid: refinement is a number or a 3-tuple"))
+    if !(all(r -> r isa Integer, rr) && _extent_on_faces(parent, child_extent))
+        return _nested_grid_general(parent, child_extent, rr, halo)
+    end
     rx, ry, rz = _triple(refinement)
     (ax, bx), (ay, by), (az, bz) = child_extent
     ix, nx = _align_extent(ax, bx, parent.x0, parent.dx, parent.Nx, "x")
@@ -354,6 +469,40 @@ function nested_grid(parent::NestParentMesh{T}, child_extent, refinement;
                   parent.y0 + (iy - 1) * parent.dy,
                   zf[parent.Hz + iz]))
     return NestedGrid(parent, child; refinement=(rx, ry, rz), offset=(ix, iy, iz))
+end
+
+# Whether every endpoint of the extent is a parent face (the N-nest-a case).
+function _extent_on_faces(p, ext)
+    (ax, bx), (ay, by), (az, bz) = ext
+    onf(a, o, d) = _near((a - o) / d, round((a - o) / d))
+    zf = _zfaces_storage(p)
+    onz(a) = any(z -> _near(z, a), zf)
+    return onf(ax, p.x0, p.dx) && onf(bx, p.x0, p.dx) && onf(ay, p.y0, p.dy) &&
+           onf(by, p.y0, p.dy) && onz(az) && onz(bz)
+end
+
+function _nested_grid_general(parent::NestParentMesh{T}, ext, rr, halo) where {T}
+    parent isa RegularGrid ||
+        error("nested_grid: a rational refinement or an extent off the parent faces needs a " *
+              "uniform (RegularGrid) parent; on a stretched parent build the child mesh and " *
+              "call NestedGrid(parent, child)")
+    Δp = (parent.dx, parent.dy, parent.dz)
+    N = zeros(Int, 3); L = zeros(Float64, 3); o = zeros(Float64, 3)
+    for d in 1:3
+        r = rr[d]
+        (r isa Real && r >= 1) ||
+            error("nested_grid: refinement must be ≥ 1 per axis, got $r")
+        a, b = ext[d]
+        b > a || error("nested_grid: empty child extent along axis $d")
+        Δc = Δp[d] / r
+        n = round(Int, (b - a) / Δc)
+        abs(n * Δc - (b - a)) <= 1e-9 * (b - a) ||
+            error("nested_grid: the child extent $(b - a) along axis $d is not a whole " *
+                  "number of child cells Δ_p/r = $Δc")
+        N[d] = n; L[d] = n * Δc; o[d] = a
+    end
+    child = RegularGrid(T; size = Tuple(N), extent = Tuple(L), halo = halo, origin = Tuple(o))
+    return NestedGrid(parent, child)
 end
 
 _align_extent_z(p::RegularGrid, a, b) = _align_extent(a, b, p.z0, p.dz, p.Nz, "z")
@@ -386,7 +535,41 @@ function _align_extent(a, b, o, d, N, nm)
     return (ia + 1, n)
 end
 
-refinement_ratio(n::NestedGrid) = (n.rx, n.ry, n.rz)
+"""
+    refinement_ratio(nest) -> NTuple{3}
+
+The refinement per axis: the integer ratio of an integer-aligned axis, the
+rational `Δ_p/Δ_c` (to 1e-9) of a uniform non-integer axis, `nothing`
+along a stretched or non-uniform z (#328).
+"""
+refinement_ratio(n::NestedGrid) = ntuple(d -> _axis_ratio(n, d), 3)
+
+function _axis_ratio(n::NestedGrid, d::Int)
+    r = (n.rx, n.ry, n.rz)[d]
+    r > 0 && return r
+    d == 3 && !(n.child_mesh isa RegularGrid && n.parent_mesh isa RegularGrid) && return nothing
+    Δp = d == 1 ? n.parent_mesh.dx : d == 2 ? n.parent_mesh.dy : n.parent_mesh.dz
+    Δc = d == 1 ? n.child_mesh.dx : d == 2 ? n.child_mesh.dy : n.child_mesh.dz
+    return rationalize(Int, Δp / Δc; tol = 1e-9 * Δp / Δc)
+end
+
+# The largest refinement over the three axes (the default number of child
+# substeps of a fixed-step run), from the cell sizes where no ratio is integer.
+function _max_ratio(n::NestedGrid)
+    r = 1.0
+    for d in 1:3
+        a = n.axes[d]
+        rd = (n.rx, n.ry, n.rz)[d]
+        if rd > 0
+            r = max(r, Float64(rd))
+        else
+            hp = minimum(diff(a.pf[a.Hp+1:a.Hp+a.Np+1]))
+            hc = minimum(diff(a.cf[a.Hc+1:a.Hc+a.Nc+1]))
+            r = max(r, hp / hc)
+        end
+    end
+    return r
+end
 nest_offset(n::NestedGrid)      = (n.ix, n.iy, n.iz)
 nest_parent_mesh(n::NestedGrid) = n.parent_mesh
 nest_child_mesh(n::NestedGrid)  = n.child_mesh

@@ -84,6 +84,12 @@ function _plan(nest::NestedGrid, kind::Symbol, d::Int, order::Int)
     key = (kind, d, order)
     p = get(nest.plans, key, nothing)
     p === nothing || return p
+    a = nest.axes[d]
+    if a.integer === nothing                   # rational / off-face axis (#328)
+        p = _build_coord_plan(kind, order, a.pf, a.cf)
+        nest.plans[key] = p
+        return p
+    end
     pm = nest.parent_mesh; cm = nest.child_mesh
     Hp, Np = d == 1 ? (pm.Hx, pm.Nx) : d == 2 ? (pm.Hy, pm.Ny) : (pm.Hz, pm.Nz)
     Hc, Nc = d == 1 ? (cm.Hx, cm.Nx) : d == 2 ? (cm.Hy, cm.Ny) : (cm.Hz, cm.Nz)
@@ -153,28 +159,69 @@ end
 # For every child storage cell (:avg) or face (:nodal) along z, the parent
 # storage index where the stencil starts and the weights. `pc`, `cc` are
 # the parent / child face coordinates (storage-indexed, length N + 2H + 1).
+#
+# A child cell that straddles parent faces (a rational ratio, an origin off
+# the parent faces, a stretched child: #328) is integrated piecewise: the
+# piece in parent cell P uses the stencil centred on P, and the pieces'
+# weights are summed into one row (one parent cell wider than the stencil).
+# Each stencil polynomial matches the primitive at its own cell's faces, so
+# the child cells of a block of parent cells bounded by common faces carry
+# exactly the block's integral. A child cell inside one parent cell (every
+# aligned case) takes the single-stencil row, bit for bit as before.
 function _build_coord_plan(kind::Symbol, order::Int, pc::Vector{Float64},
                            cc::Vector{Float64})
     ns = max(order, 1)
     npc = length(pc) - 1                 # parent storage cells
     ncc = length(cc) - 1                 # child storage cells (= faces in a Face array)
-    start = Vector{Int}(undef, ncc); W = Matrix{Float64}(undef, ns, ncc); cell = zeros(Int, ncc)
+    rows = Vector{Tuple{Int,Vector{Float64}}}(undef, ncc); cell = zeros(Int, ncc)
+    s0max = max(1, npc - ns + 1)
     @inbounds for ic in 1:ncc
         if kind === :avg
             a = cc[ic]; b = cc[ic+1]
             I  = clamp(searchsortedlast(pc, (a + b) / 2), 1, npc)
-            s0 = clamp(I - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
-            start[ic] = s0; cell[ic] = I
-            W[:, ic] .= _cons_weights_nodes(view(pc, s0:s0+ns), a, b)
+            cell[ic] = I
+            Pa = searchsortedlast(pc, a); Pb = searchsortedfirst(pc, b) - 1
+            if Pa == Pb || Pa < 1 || Pb > npc     # inside one parent cell (or beyond the parent)
+                s0 = clamp(I - ((ns - 1) ÷ 2), 1, s0max)
+                rows[ic] = (s0, _cons_weights_nodes(view(pc, s0:s0+ns), a, b))
+            else
+                rows[ic] = _piecewise_row(pc, a, b, Pa, Pb, ns, s0max)
+            end
         else
             z  = cc[ic]
             F  = clamp(searchsortedlast(pc, z), 1, npc)
-            s0 = clamp(F - ((ns - 1) ÷ 2), 1, max(1, npc - ns + 1))
-            start[ic] = s0
-            W[:, ic] .= _nodal_weights_nodes(view(pc, s0:s0+ns-1), z)
+            s0 = clamp(F - ((ns - 1) ÷ 2), 1, s0max)
+            rows[ic] = (s0, _nodal_weights_nodes(view(pc, s0:s0+ns-1), z))
         end
     end
+    ns_eff = maximum(r -> length(r[2]), rows; init = ns)
+    start = Vector{Int}(undef, ncc); W = zeros(Float64, ns_eff, ncc)
+    for ic in 1:ncc
+        s0, w = rows[ic]
+        s0 = min(s0, max(1, npc - ns_eff + 1))     # a wider plan: keep the row inside the parent
+        off = rows[ic][1] - s0
+        start[ic] = s0
+        W[off+1:off+length(w), ic] .= w
+    end
     return _Plan1D(start, W, cell)
+end
+
+# The conservative row of a child cell [a, b] over the parent cells Pa…Pb:
+# Σ over pieces of (|piece|/(b − a)) × the single-stencil weights of the piece.
+function _piecewise_row(pc, a, b, Pa, Pb, ns, s0max)
+    s0s = [clamp(P - ((ns - 1) ÷ 2), 1, s0max) for P in Pa:Pb]
+    lo = minimum(s0s); hi = maximum(s0s) + ns - 1
+    w = zeros(Float64, hi - lo + 1)
+    for (n, P) in enumerate(Pa:Pb)
+        x0 = max(a, pc[P]); x1 = min(b, pc[P+1])
+        x1 > x0 || continue
+        wp = _cons_weights_nodes(view(pc, s0s[n]:s0s[n]+ns), x0, x1)
+        f = (x1 - x0) / (b - a)
+        for q in 1:ns
+            w[s0s[n] - lo + q] += f * wp[q]
+        end
+    end
+    return (lo, w)
 end
 
 """
@@ -247,7 +294,7 @@ end
 # (`:all`), or the six non-overlapping halo slabs, `H` deep, one deeper on
 # the low side of the field's own staggered axis for `:halo_interface` (the
 # boundary-normal interior face plane of the west/south/bottom faces).
-function _region_boxes(cm::RegularGrid, loc::Location, region::Symbol)
+function _region_boxes(cm::NestChildMesh, loc::Location, region::Symbol)
     n = (cm.Nx + 2cm.Hx, cm.Ny + 2cm.Hy, cm.Nz + 2cm.Hz)
     region === :all && return ((1:n[1], 1:n[2], 1:n[3]),)
     ax = _stagger_axis(loc)
@@ -571,6 +618,7 @@ with no fluid child keeps its value. The fluid-weighted integral
 function restrict_to_parent!(pf::Field{CellCenter}, cf::Field{CellCenter},
                              nest::NestedGrid; measure=nothing, solid=nothing)
     χ = _fluid(nest, solid)
+    nest.aligned || return _restrict_cc_overlap!(pf, cf, nest, _zlen(nest, measure), χ)
     ωz = _zweights(measure)
     (χ === nothing && ωz === nothing) && return _restrict_cc_volume!(pf, cf, nest)
     return _restrict_cc_weighted!(pf, cf, nest, ωz === nothing ? _ones_z(nest) : ωz, χ)
@@ -579,14 +627,23 @@ end
 restrict_to_parent!(pf::Field{L}, cf::Field{L}, nest::NestedGrid;
                     include_boundary::Bool=false, measure=nothing,
                     solid=nothing) where {L<:Union{FaceX,FaceY,FaceZ}} =
-    _restrict_face_any!(pf, cf, nest, _axis_of(L), include_boundary,
-                        _zweights(measure), _fluid(nest, solid))
+    nest.aligned ?
+        _restrict_face_any!(pf, cf, nest, _axis_of(L), include_boundary,
+                            _zweights(measure), _fluid(nest, solid)) :
+        _restrict_face_overlap!(pf, cf, nest, _axis_of(L), include_boundary,
+                                _zlen(nest, measure), _fluid(nest, solid))
 
 # z weights of a restriction: `nothing` for the volume measure (the child
 # layers of a parent layer are equally thick), the child cell masses W Δz
 # for the mass measure.
 _zweights(::Nothing) = nothing
 _zweights(m::NestMeasure) = m.kind === :volume ? nothing : m.cw
+
+# The vertical overlap weights of the general restriction (#328): the box
+# layers' overlaps with the child layers in height (volume measure) or in
+# reference mass (mass measure).
+_zlen(nest::NestedGrid, ::Nothing) = nest.axes[3].len
+_zlen(nest::NestedGrid, m::NestMeasure) = m.kind === :volume ? nest.axes[3].len : m.zlen
 _ones_z(nest::NestedGrid) = ones(Float64, nest.child_mesh.Nz + 2nest.child_mesh.Hz)
 
 # The restrictions are owner-computes launches (KA-f, #297): each covered
@@ -740,6 +797,96 @@ end
     return nothing
 end
 
+# -------------------------------------------------------------------------
+# The general restriction: overlap weights (#328)
+# -------------------------------------------------------------------------
+#
+# A box parent cell P is the overlap-weighted mean of the child cells it
+# meets, φ_P = Σ_c ωx ωy ωz χ_c φ_c / Σ_c ωx ωy ωz χ_c (ω the overlap lengths
+# of the NestAxis rows; ωz in the measure coordinate), so Σ_P V_P φ_P =
+# Σ_c V_c φ_c over the box exactly. A box parent face on a common plane is
+# the overlap-area mean of the child faces on it (the fine flux); a box
+# face between child face planes (inside the box, rational ratio) is the
+# linear interpolation of the two bracketing planes' means. On an aligned
+# nest this is the N-nest-a restriction up to round-off.
+
+function _restrict_cc_overlap!(pf::Field, cf::Field, nest::NestedGrid, zl::Vector{Float64}, χ)
+    launch!(Backends.backend(pf.data), _restrict_cco_body!, _covered_cells(nest), pf.data,
+            cf.data, nest.axes[1], nest.axes[2], nest.axes[3], zl, χ)
+    return pf
+end
+
+@inline _boxidx(a::NestAxis, ip) = ip - a.Hp - first(a.pbox) + 1
+
+@inline function _restrict_cco_body!(ip, jp, kp, pd, cd, ax, ay, az, zl, χ)
+    I = _boxidx(ax, ip); J = _boxidx(ay, jp); K = _boxidx(az, kp)
+    num = 0.0; den = 0.0
+    @inbounds for qz in az.ptr[K]:az.ptr[K+1]-1
+        k = az.cidx[qz]; wz = zl[qz]
+        for qy in ay.ptr[J]:ay.ptr[J+1]-1
+            j = ay.cidx[qy]; wyz = wz * ay.len[qy]
+            for qx in ax.ptr[I]:ax.ptr[I+1]-1
+                i = ax.cidx[qx]
+                (χ === nothing || χ[i, j, k]) || continue
+                w = wyz * ax.len[qx]
+                num += w * cd[i, j, k]; den += w
+            end
+        end
+    end
+    den > 0 || return nothing           # no fluid child: keep the parent value
+    @inbounds pd[ip, jp, kp] = num / den
+    return nothing
+end
+
+# The overlap-weighted mean of the child faces on the child face plane `f`
+# (storage index along `ax`) under the box parent face (A, B), and whether
+# any (fluid) child face was there. `l1`, `l2` the tangential weights.
+@inline function _plane_mean(cd, ax::Int, f::Int, a1::NestAxis, a2::NestAxis, l1, l2,
+                             A::Int, B::Int, χ)
+    t1, _ = _tang(ax)
+    num = 0.0; den = 0.0
+    @inbounds for q2 in a2.ptr[B]:a2.ptr[B+1]-1, q1 in a1.ptr[A]:a1.ptr[A+1]-1
+        cidx = _pos(ax, t1, f, a1.cidx[q1], a2.cidx[q2])
+        if χ !== nothing
+            bidx = Base.setindex(cidx, cidx[ax] - 1, ax)
+            (χ[cidx[1], cidx[2], cidx[3]] && χ[bidx[1], bidx[2], bidx[3]]) || continue
+        end
+        w = l1[q1] * l2[q2]
+        num += w * cd[cidx[1], cidx[2], cidx[3]]; den += w
+    end
+    return (den > 0 ? num / den : 0.0), den > 0
+end
+
+function _restrict_face_overlap!(pf::Field, cf::Field, nest::NestedGrid, ax::Int,
+                                 include_boundary::Bool, zl::Vector{Float64}, χ)
+    pm = nest.parent_mesh
+    o = (pm.Hx + nest.ix - 1, pm.Hy + nest.iy - 1, pm.Hz + nest.iz - 1)
+    t1, t2 = _tang(ax)
+    a = nest.axes
+    l2 = ax == 3 ? a[t2].len : zl          # w faces: horizontal planes, plain area mean
+    launch!(Backends.backend(pf.data), _restrict_faceo_body!,
+            _restricted_faces(nest, ax, include_boundary), pf.data, cf.data, ax, a[ax],
+            a[t1], a[t2], a[t1].len, l2, o, χ)
+    return pf
+end
+
+@inline function _restrict_faceo_body!(ip, jp, kp, pd, cd, ax, an, a1, a2, l1, l2, o, χ)
+    q, A, B = _face_qab(ax, ip, jp, kp, o)
+    @inbounds f = an.cface[q+1]
+    if f != 0
+        v, ok = _plane_mean(cd, ax, f, a1, a2, l1, l2, A, B, χ)
+        ok || return nothing
+    else
+        @inbounds g = an.fbr[q+1]; τ = an.ftau[q+1]
+        v0, ok0 = _plane_mean(cd, ax, g, a1, a2, l1, l2, A, B, χ)
+        v1, ok1 = _plane_mean(cd, ax, g + 1, a1, a2, l1, l2, A, B, χ)
+        (ok0 && ok1) || return nothing
+        v = (1 - τ) * v0 + τ * v1
+    end
+    @inbounds pd[ip, jp, kp] = v
+    return nothing
+end
+
 # =========================================================================
 # Flux mismatch + correction (refluxing)
 # =========================================================================
@@ -850,6 +997,7 @@ end
 # flux correction.
 function _plane_mismatch!(M, pf::Field, cf::Field, nest::NestedGrid, ax::Int, q::Int,
                           measure=nothing)
+    nest.aligned || return _plane_mismatch!(M, pf.data, cf.data, _plane_geom_ov(nest, ax, q, measure))
     ωz = ax == 3 ? nothing : _zweights(measure)
     # one branch per weight type, so `ωz === nothing` is known in the kernel
     return ωz === nothing ?
@@ -887,6 +1035,46 @@ function _plane_geom(nest::NestedGrid, ax::Int, q::Int, measure, ωz)
             ωz, inv = 1 / (r[t1] * r[t2]),
             pq = Hp[ax] + oo[ax] + q, cq = Hc[ax] + q * r[ax] + 1,
             p1 = Hp[t1] + oo[t1] - 1, p2 = Hp[t2] + oo[t2] - 1, c1 = Hc[t1], c2 = Hc[t2])
+end
+
+# The geometry of a box plane of a general nest (#328): the plane is a
+# common face (child face `f`), the fine value of a parent face is the
+# overlap-area mean of the child faces on it, in the measure.
+struct _OvPlane{N<:NestedGrid, M, A<:NestAxis, L1<:AbstractVector, L2<:AbstractVector}
+    nest::N
+    measure::M
+    ax::Int
+    t1::Int
+    n1::Int
+    n2::Int
+    a1::A
+    a2::A
+    l1::L1
+    l2::L2
+    f::Int
+    pq::Int
+    p1::Int
+    p2::Int
+end
+
+function _plane_geom_ov(nest::NestedGrid, ax::Int, q::Int, measure)
+    pm = nest.parent_mesh
+    nn = (nest.nx, nest.ny, nest.nz); oo = (nest.ix, nest.iy, nest.iz)
+    Hp = (pm.Hx, pm.Hy, pm.Hz)
+    t1, t2 = _tang(ax)
+    a = nest.axes
+    f = a[ax].cface[q+1]
+    f != 0 || error("nest: internal: box plane $q along axis $ax is not a common face")
+    l2 = ax == 3 ? a[t2].len : _zlen(nest, measure)
+    return _OvPlane(nest, measure, ax, t1, nn[t1], nn[t2], a[t1], a[t2], a[t1].len, l2, f,
+                    Hp[ax] + oo[ax] + q, Hp[t1] + oo[t1] - 1, Hp[t2] + oo[t2] - 1)
+end
+
+@inline function _mismatch_at(pd, cd, g::_OvPlane, A::Int, B::Int)
+    pidx = _pos(g.ax, g.t1, g.pq, g.p1 + A, g.p2 + B)
+    Ap = _face_area(g.nest, g.measure, g.ax, B)
+    fine, _ = _plane_mean(cd, g.ax, g.f, g.a1, g.a2, g.l1, g.l2, A, B, nothing)
+    @inbounds return (pd[pidx[1], pidx[2], pidx[3]] - fine) * Ap, pidx
 end
 
 # (coarse − Σ fine)·A_p at the interface face (A, B) of the plane `g`, and

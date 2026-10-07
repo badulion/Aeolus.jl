@@ -225,6 +225,9 @@ function _resolve_statistics(statistics, side, parent, nest, kwargs)
         parent === nothing && throw(ArgumentError(
             "InflowTurbulence: the default ParentResolvedStatistics needs a NestedRun; " *
             "pass `statistics` for a single domain"))
+        (nest.rx > 0 && nest.ry > 0) || throw(ArgumentError(
+            "InflowTurbulence: ParentResolvedStatistics needs an integer horizontal " *
+            "refinement (the nest has $(refinement_ratio(nest))); pass `statistics`"))
         cz = nest_covered_range(nest)[3]
         lev = max(1, first(cz) - 1):min(nest.parent_mesh.Nz, last(cz) + 1)
         src = ParentResolvedStatistics(parent; face = side, refine = (nest.rx, nest.ry),

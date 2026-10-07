@@ -84,6 +84,8 @@ Keywords:
   * `limit_scalars` (`:positive`, for `qv` and the tracers), `limit_theta`
     (`:none`), `limit_momentum` (`:none`) — the limiters of the
     prolongation (#329), see [`interpolate_parent_state!`](@ref);
+  * `substeps` — the fixed number of child substeps when `cfl_child = nothing`
+    (default: the largest refinement ratio, rounded up for a rational one);
   * `order` (3), `flux_correction` (true), `scalars`, `state` — as for
     the operators of [`NestInterpState`](@ref). The run allocates its three
     field sets (the parent prolongated at both ends of the parent step and
@@ -250,7 +252,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     t = Float64(parent.t)
     !check_clocks || abs(Float64(child.t) - t) <= 1e-12 * max(1.0, abs(t)) ||
         error("NestedRun: parent clock $(parent.t) and child clock $(child.t) differ")
-    ns = substeps === nothing ? max(nest.rx, nest.ry, nest.rz) : Int(substeps)
+    ns = substeps === nothing ? max(1, ceil(Int, _max_ratio(nest) * (1 - 1e-9))) : Int(substeps)
+    feedback === :two_way && _check_two_way_box(nest, "NestedRun")
     ns >= 1 || error("NestedRun: substeps must be >= 1")
     # without a sponge only the child's open-boundary points are read: the
     # three field sets keep their halo slabs only (#329, item 4)
