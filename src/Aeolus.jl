@@ -175,6 +175,7 @@ export AeolusLogger, TeeLogger, open_run_log, with_run_log, test_logger,
        current_domain, with_domain, parse_log_level
 # Diagnostics registry, CSV writer, progress line (LOG-c, #335)
 export Diagnostic, diagnostics, collect_diagnostics, prefixed, reduce_diagnostic, evaluate_diagnostic,
+       process_diagnostics,
        ProfileDiagnostic, profile_diagnostics, collect_profiles, evaluate_profile,
        DiagnosticsWriter, record_diagnostics!, last_diagnostics, costly_due,
        ProgressLine, progress!, WarningTap, with_progress, note_warning!

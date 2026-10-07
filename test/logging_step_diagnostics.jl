@@ -225,3 +225,44 @@ end
     @test step_record(p).cfl_adv ≈ 0.5 rtol = 1e-12     # the parent's pick: C_advective
     @test rr.retries == 0 && rr.wall_step > 0
 end
+
+@testset "Field reductions: the port's reductions equal serial ones" begin
+    sim = sd_sim()
+    u = sd_raw(sim.u)
+    @test reduce_diagnostic(:max, sim.u) == maximum(u)
+    @test reduce_diagnostic(:min, sim.u) == minimum(u)
+    @test reduce_diagnostic(:maxabs, sim.w) == maximum(abs, sd_raw(sim.w))
+    @test reduce_diagnostic(:sum, sim.u) ≈ sum(u) rtol = 1e-14
+    @test reduce_diagnostic(:mean, sim.θ) ≈ sum(sd_raw(sim.θ)) / length(sd_raw(sim.θ)) rtol = 1e-14
+    @test reduce_diagnostic(:rms, sim.u) ≈ sqrt(sum(abs2, u) / length(u)) rtol = 1e-14
+    @test reduce_diagnostic(:sum, sim.u) ==
+          Aeolus.Backends.interior_sum(sim.u.data, Aeolus.Grids.interior(sim.mesh))
+    # a non-finite value propagates
+    sim.u.data[5, 5, 5] = NaN
+    @test isnan(reduce_diagnostic(:max, sim.u)) && isnan(reduce_diagnostic(:mean, sim.u))
+    @test_throws ArgumentError reduce_diagnostic(:median, sim.u)
+end
+
+@testset "registry: step-record, state-CFL and process diagnostics" begin
+    sim = sd_sim()
+    ds = diagnostics(sim)
+    names = [d.name for d in ds]
+    for n in ("cfl_adv", "cfl_diff", "solver_iters", "solver_residual", "implicit_iters")
+        @test n in names && ds[findfirst(==(n), names)].cadence === :step
+    end
+    for n in ("wall_step", "wall_pressure", "wall_sgs", "wall_cfl", "wall_guard",
+              "cfl_adv_state", "cfl_diff_state")
+        @test n in names && ds[findfirst(==(n), names)].cadence === :costly
+    end
+    ev(n) = evaluate_diagnostic(ds[findfirst(==(n), names)])
+    step!(sim, 0.6)
+    @test ev("cfl_adv_state") ≈ 0.6 * sd_adv_rate(sim) rtol = 1e-14
+    m = sim.mesh
+    @test ev("cfl_diff_state") ≈ 0.6 * max(maximum(sd_raw(sim.νt)), maximum(sd_raw(sim.κt))) *
+                                  (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2) rtol = 1e-12
+    @test ev("solver_iters") == 0 && isnan(ev("cfl_adv"))
+    pd = process_diagnostics()
+    @test [d.name for d in pd] == ["mem_live_mb", "mem_maxrss_mb", "gc_time"]
+    v = evaluate_diagnostic.(pd)
+    @test all(isfinite, v) && v[1] > 0 && v[2] ≥ v[1] && v[3] ≥ 0
+end
