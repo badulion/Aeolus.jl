@@ -249,9 +249,7 @@ with `walls`, #232) books ``a_n q^2`` as shear production.
 function immersed_wall_drag!(a::AbstractVector, iw::ImmersedWalls{L,T}, u, v, w) where {L,T}
     length(a) == length(iw.faces) ||
         throw(DimensionMismatch("immersed_wall_drag!: need one entry per face-wall ($(length(iw.faces))), got $(length(a))"))
-    for n in eachindex(iw.faces)
-        _iw_drag_body!(n, a, iw.faces, u, v, w, iw.Δ, iw.ν)
-    end
+    launch!(backend(u), _iw_drag_body!, (1:length(iw.faces),), a, iw.faces, u, v, w, iw.Δ, iw.ν)
     return a
 end
 
@@ -303,6 +301,14 @@ Returns the volume-integrated kinematic force ``\\sum Δq\\,ΔV/Δt`` per
 component (m⁴ s⁻²); `iw.stats` also holds ``\\sum τ_w ΔA``, the wall
 area and the smallest ``τ_w`` of the step.
 
+**Kernels** (KA-k, #307). Two launches over sparse lists: the drag of
+every pair ([`immersed_wall_drag!`](@ref)), then one work item per
+*face* (the face index of [`ImmersedWalls`](@ref)) that sums its pairs'
+drag in pair order, updates its own velocity and records ``τ_w ΔA`` of
+its pairs. No two work items write the same face, so the result is the
+same at every thread count, and the same bits as the former serial
+scatter. The diagnostics are folded on the calling task in pair order.
+
 This is the IBM wall-stress model of Tessicini et al. (2002) and Chester,
 Meneveau & Parlange (2007) in its simplest, equilibrium form: the stress
 of a wall law at the first fluid point replaces the stencil's unresolved
@@ -332,9 +338,8 @@ function apply_immersed_wall_stress!(sim, iw::ImmersedWalls{L,T}, Δt::Real) whe
     a = immersed_wall_drag!(iw.a, iw, u, v, w)
     # 2. per face (owner computes): the sum of its pairs' drag, the implicit
     #    update, and τ_w ΔA of each of its walls at the end-of-step velocity
-    for p in 1:length(ptr)-1
-        _iw_face_body!(p, u, v, w, faces, ptr, ent, a, iw.Af, iw.dq, iw.τdA, dt, Δ, dV)
-    end
+    launch!(backend(u), _iw_face_body!, (1:length(ptr)-1,),
+            u, v, w, faces, ptr, ent, a, iw.Af, iw.dq, iw.τdA, dt, Δ, dV)
     # 3. the diagnostics, folded in a fixed order: the force over the faces
     #    (in the order of their first pair), τ_w ΔA, the area and the
     #    smallest drag over the pairs (in their order) — the order of the
@@ -422,6 +427,10 @@ part is removed; pass `sgs = true` when `step!` gets an
 Returns the volume-integrated kinematic force the stencil had exerted
 through the walls (m⁴ s⁻²), also kept in `iw.stats[:F_stencil]`.
 
+One work item per face (KA-k, #307) subtracts its pairs' fluxes from
+its own tendency in pair order (the former scatter's order: the same
+bits at every thread count); the force is folded in pair order.
+
 With the IMEX stepper the diffusion is implicit and its wall flux is
 not this explicit expression; the removal is then first-order accurate
 in time (exact for `step!`, the explicit projection step).
@@ -439,9 +448,8 @@ function remove_stencil_wall_flux!(sim, iw::ImmersedWalls{L,T};
     faces, ptr, ent = iw.faces, iw.face_ptr, iw.face_entry
     # per face (owner computes): each pair's flux, taken out of the face's
     # tendency in the order of its pairs
-    for p in 1:length(ptr)-1
-        _iw_flux_body!(p, tu, tv, tw, u, v, w, nt, faces, ptr, ent, iw.flux, νT, sgs, Δ)
-    end
+    launch!(backend(u), _iw_flux_body!, (1:length(ptr)-1,),
+            tu, tv, tw, u, v, w, nt, faces, ptr, ent, iw.flux, νT, sgs, Δ)
     # the force, folded over the pairs in their order (the former loop's)
     F1 = F2 = F3 = zero(T)
     @inbounds for n in eachindex(faces)
