@@ -7,6 +7,11 @@
 #   julia -t N --project=. benchmarks/bench_ka_scaling.jl dns      [N=256] [nwarm=1] [nsteps=3]
 #   julia -t N --project=. benchmarks/bench_ka_scaling.jl kernels  [64,64,32] [256,256,256]
 #   julia -t N --project=. benchmarks/bench_ka_scaling.jl launch
+#   julia -t N --project=. benchmarks/bench_ka_scaling.jl launches [nwarm=2] [nsteps=9]
+#
+# The FFTW planner is the run's (MEASURE by default). Planning a threaded
+# 256³ c2r transform under MEASURE segfaults intermittently at 10-14
+# threads (#397), so run `kernels` and `dns` with AEOLUS_FFTW_PLANNER=estimate.
 #
 # flagship: the Berlin case `CaseConfig(:summer)`: 64 × 64 × 64 child, nested
 #   in its Aeolus parent (the #265 default), no output file. `nwarm` steps
@@ -30,6 +35,10 @@
 #   effective bandwidth from the arrays each one streams (8 B per point per
 #   array read or written): memory-bound kernels stop where the bandwidth
 #   does, compute-bound ones keep scaling.
+# launches: the number of launches per flagship step that run threaded and
+#   serially (counted at `Backends.runs_serially`, which every launch and
+#   reduction asks once; run at -t > 1). With the per-launch cost from
+#   `launch`, it bounds the launch overhead of a step.
 # launch: the KA launch overhead: a no-op body launched threaded
 #   (threshold = 0) over 1 to 4096 rows, against the serial loop.
 #
@@ -45,7 +54,7 @@ using Printf, Random
 
 const MODE = get(ARGS, 1, "launch")
 # loaded at top level, before the functions that use them run (world age)
-MODE in ("flagship", "child") && include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
+MODE in ("flagship", "child", "launches") && include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
 
 const NT = Threads.nthreads()
@@ -77,6 +86,7 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
     nest = BC.find_coupling(case, :nesting)
     wp0 = nest === nothing ? 0.0 : nest.wall_parent
     nw0 = nest === nothing ? 0 : nest.windows
+    pt0 = nest === nothing ? Dict{Symbol,Float64}() : copy(nest.parent.timing)
     n0 = case.clock.n
     fired = Dict{Tuple{Symbol,Symbol},Int}()
     t_dt = Float64[]; t_step = Float64[]
@@ -121,16 +131,50 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
         row(mode, "parent_steps", ms((nest.wall_parent - wp0) / n), "ms")
         row(mode, "parent_windows", nw, "count")
         nw > 0 && row(mode, "parent_per_window", ms((nest.wall_parent - wp0) / nw), "ms")
+        pm = nest.parent.mesh
+        pw = [k => ms((get(nest.parent.timing, k, 0.0) - get(pt0, k, 0.0)) / max(nw, 1))
+              for k in (:total, :dynamics, :surface, :radiation)]
+        @printf("  parent %d × %d × %d, per window (ms):%s\n", pm.Nx, pm.Ny, pm.Nz,
+                join((@sprintf(" %s %.1f", k, v) for (k, v) in pw)))
+        for (k, v) in pw
+            row(mode, "parent_$(k)_per_window", v, "ms")
+        end
     end
-    # the cadenced entries that did not fire in the window: per call
+    # the cadenced entries that did not fire in the window: per call, the
+    # minimum of two after one untimed call (a first call may compile a path
+    # the warm-up did not take; the radiosity then reuses its factorisations,
+    # so its per-call cost is measured on its own: KA-n, ka_port.md)
     dt = BC.step_dt(case)
     for (S, es) in case.schedule, e in es
         k = (S, BC.coupling_name(e.coupling))
         (get(fired, k, 0) > 0 || S in (:body_force, :post_predictor)) && continue
-        t = tmin(() -> BC.timed_run!(case, e, S, dt), 2; warm = 0)
+        t = tmin(() -> BC.timed_run!(case, e, S, dt), 2; warm = 1)
         @printf("  per call %-16s %-17s %9.2f ms\n", S, k[2], ms(t))
         row(mode, "call:$(S)/$(k[2])", ms(t), "ms")
     end
+    return nothing
+end
+
+const N_THREADED = Threads.Atomic{Int}(0)
+const N_SERIAL = Threads.Atomic{Int}(0)
+
+function count_launches(; nwarm = 2, nsteps = 9)
+    BC = Main.BerlinCase
+    case = BC.build_case(BC.CaseConfig(:summer; output_path = nothing))
+    for _ in 1:nwarm
+        BC.step_case!(case, BC.step_dt(case))
+    end
+    # count every decision from here on (the method is replaced for this process)
+    @eval Aeolus.Backends runs_serially(b::CPUBackend, npoints::Integer = typemax(Int)) =
+        (s = b.serial || Threads.nthreads() == 1 || npoints < b.threshold;
+         Threads.atomic_add!(s ? $N_SERIAL : $N_THREADED, 1); s)
+    for _ in 1:nsteps
+        Base.invokelatest(BC.step_case!, case, Base.invokelatest(BC.step_dt, case))
+    end
+    @printf("launches per flagship step (-t %d, %d steps): threaded %.0f, serial %.0f\n",
+            NT, nsteps, N_THREADED[] / nsteps, N_SERIAL[] / nsteps)
+    row("launches", "threaded_per_step", N_THREADED[] / nsteps, "count")
+    row("launches", "serial_per_step", N_SERIAL[] / nsteps, "count")
     return nothing
 end
 
@@ -154,6 +198,14 @@ function bench_dns(N; nwarm = 1, nsteps = 3)
     for _ in 1:nsteps
         push!(t_rk3, @elapsed step_rk3!(sim, dt))
     end
+    # the per-step history dns_step! adds to step_rk3! (test/fixtures/dns_decay.jl)
+    t_ke = tmin(() -> kinetic_energy(sim), 2; warm = 1)
+    t_eps = tmin(() -> Main._dns_epsilon(sim, st.lap), 2; warm = 1)
+    t_sk = tmin(() -> Main.velocity_derivative_skewness(sim), 2; warm = 1)
+    @printf("  history: kinetic_energy %.3f s, ε %.3f s, skewness %.3f s\n", t_ke, t_eps, t_sk)
+    row("dns$N", "kinetic_energy", t_ke, "s")
+    row("dns$N", "epsilon", t_eps, "s")
+    row("dns$N", "skewness", t_sk, "s")
     @printf("  dns_step!  min %8.3f s  (1264 steps: %.2f h)\n", minimum(t_full), 1264 * minimum(t_full) / 3600)
     @printf("  step_rk3!  min %8.3f s\n", minimum(t_rk3))
     row("dns$N", "dns_step", minimum(t_full), "s")
@@ -241,6 +293,8 @@ mode = MODE
 argint(i, d) = length(ARGS) >= i ? parse(Int, ARGS[i]) : d
 if mode in ("flagship", "child")
     bench_berlin(mode; nwarm = argint(2, 2), nsteps = argint(3, 9))
+elseif mode == "launches"
+    count_launches(; nwarm = argint(2, 2), nsteps = argint(3, 9))
 elseif mode == "dns"
     init_threads!()
     bench_dns(argint(2, 256); nwarm = argint(3, 1), nsteps = argint(4, 3))
