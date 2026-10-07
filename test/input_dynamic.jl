@@ -197,6 +197,37 @@ end
     @test occursin("not a sounding driver", msg)
 end
 
+@testset "InputDrivers dynamic: the schema-only groups round-trip (init_* profiles, surface series)" begin
+    # No preprocessor fills these groups yet: the writer and the reader
+    # must still agree on them, value for value, and the file must pass
+    # its schema.
+    dir = mktempdir()
+    p = joinpath(dir, "profiles.nc")
+    z = [0.0, 10.0, 50.0, 200.0, 1000.0]
+    prof = (z = z, theta = 290.0 .+ 0.003 .* z, qv = 8e-3 .* exp.(-z ./ 2000), u = 1.0 .+ z ./ 100, v = nothing)
+    sfc = (t = [0.0, 1800.0, 3600.0], temperature = [289.1, 290.3, 291.7], pressure = [101325.0, 101300.0, 101280.0])
+    write_dynamic_driver(p, DynamicInputs(; init_time = "2019-06-29T04:00:00Z", profiles = prof, p_surface = 100870.5,
+                                          surface = sfc))
+    @test isempty(check_driver(p, DYNAMIC_SCHEMA))
+    d = read_dynamic_driver(p)
+    @test d.init_time == "2019-06-29T04:00:00Z" && d.p_surface === 100870.5
+    @test d.profiles.z == z && d.profiles.theta == prof.theta && d.profiles.qv == prof.qv && d.profiles.u == prof.u
+    @test d.profiles.v === nothing
+    @test d.surface.t == sfc.t && d.surface.temperature == sfc.temperature && d.surface.pressure == sfc.pressure
+    @test isempty(d.fields) && isempty(d.tables) && d.boundary === nothing
+    # a surface series with one variable: the other reads back as nothing
+    p2 = joinpath(dir, "sfc_p.nc")
+    write_dynamic_driver(p2, DynamicInputs(; surface = (t = sfc.t, temperature = nothing, pressure = sfc.pressure)))
+    d2 = read_dynamic_driver(p2)
+    @test d2.profiles === nothing && d2.surface.temperature === nothing && d2.surface.pressure == sfc.pressure
+    # out of the schema's range: init_theta in °C is caught by the reader
+    p3 = joinpath(dir, "celsius.nc")
+    write_dynamic_driver(p3, DynamicInputs(; profiles = (z = z, theta = prof.theta .- 273.15, qv = nothing,
+                                                         u = nothing, v = nothing)))
+    @test !isempty(check_driver(p3, DYNAMIC_SCHEMA))
+    @test_throws Exception read_dynamic_driver(p3)
+end
+
 @testset "InputDrivers dynamic: GABLS3 forcing from its driver" begin
     dir = mktempdir()
     est = ["fftw.planner=\"estimate\""]
@@ -350,47 +381,52 @@ end
     drv = joinpath(dir, "smoke_child_boundaries.nc")
     # the planner of the round trip below (ESTIMATE): the online runs built
     # here and the offline child plan their FFTs alike
+    p0 = Aeolus.Operators.fftw_policy()
     Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
-    # the online run, recording the child's boundaries at every parent step
-    t0 = time()
-    online = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, child_boundaries = drv))
-    BCD.run_case!(online)
-    t_online = time() - t0
-    nc = BCD.find_coupling(online, :nesting)
-    st_on = berlin_state(online)
-    # recording does not change the run: the same case without the recorder
-    plain = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing))
-    BCD.run_case!(plain)
-    st_plain = berlin_state(plain)
-    @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
-    d = read_dynamic_driver(drv; mesh = online.mesh)
-    f = d.boundary
-    # a record per parent step from t = 0; the last window may reach past the run's end
-    @test length(f.time) == nc.windows + 1 && f.time[1] == 0.0 && f.time[end-1] < online.sim.t <= f.time[end]
-    @test isnan(f.step[1]) && all(isfinite, f.step[2:end])
-    @test Set(keys(d.fields)) == Set([:u, :v, :w])
-    @test haskey(d.tables, :profile_u) && size(d.tables[:profile_u].values) == (online.mesh.Nz, length(f.time))
-    @info @sprintf("online smoke with child_boundaries: %d parent windows, %d records, driver %.1f MB, %.1f s",
-                   nc.windows, length(f.time), filesize(drv) / 1024^2, t_online)
-    # the child alone from the file, through aeolus run and its replay
-    r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
-                        overrides = ["initial.dynamic=\"$drv\"", "physics.options.nesting.parent_driver=\"offline\""])
-    @test r.fields_equal && r.diagnostics_equal && r.config_equal
-    rec = read_run_toml(r.runs[1].folder.path)
-    @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(drv)
-    off = r.runs[1].obj.case
-    oc = BCD.find_coupling(off, :nesting)
-    @test BCD.offline(oc) && oc.parent === nothing && oc.windows == nc.windows
-    st_off = berlin_state(off)
-    @test !haskey(st_off, :parent_θ)
-    ks = [k for k in keys(st_off)]
-    @test Set(ks) == Set(k for k in keys(st_on) if !startswith(String(k), "parent_"))
-    bad = [k for k in ks if !isequal(st_off[k], st_on[k])]
-    isempty(bad) || @info "offline child differs from the online child" bad
-    @test isempty(bad)
-    @test off.sim.t == online.sim.t && off.clock.n == online.clock.n
-    @info @sprintf("offline smoke child: %d steps, bitwise the online one-way child in %d fields; %d records read",
-                   off.clock.n, length(ks), oc.feed.reads)
+    try
+        # the online run, recording the child's boundaries at every parent step
+        t0 = time()
+        online = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, child_boundaries = drv))
+        BCD.run_case!(online)
+        t_online = time() - t0
+        nc = BCD.find_coupling(online, :nesting)
+        st_on = berlin_state(online)
+        # recording does not change the run: the same case without the recorder
+        plain = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing))
+        BCD.run_case!(plain)
+        st_plain = berlin_state(plain)
+        @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
+        d = read_dynamic_driver(drv; mesh = online.mesh)
+        f = d.boundary
+        # a record per parent step from t = 0; the last window may reach past the run's end
+        @test length(f.time) == nc.windows + 1 && f.time[1] == 0.0 && f.time[end-1] < online.sim.t <= f.time[end]
+        @test isnan(f.step[1]) && all(isfinite, f.step[2:end])
+        @test Set(keys(d.fields)) == Set([:u, :v, :w])
+        @test haskey(d.tables, :profile_u) && size(d.tables[:profile_u].values) == (online.mesh.Nz, length(f.time))
+        @info @sprintf("online smoke with child_boundaries: %d parent windows, %d records, driver %.1f MB, %.1f s",
+                       nc.windows, length(f.time), filesize(drv) / 1024^2, t_online)
+        # the child alone from the file, through aeolus run and its replay
+        r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
+                            overrides = ["initial.dynamic=\"$drv\"", "physics.options.nesting.parent_driver=\"offline\""])
+        @test r.fields_equal && r.diagnostics_equal && r.config_equal
+        rec = read_run_toml(r.runs[1].folder.path)
+        @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(drv)
+        off = r.runs[1].obj.case
+        oc = BCD.find_coupling(off, :nesting)
+        @test BCD.offline(oc) && oc.parent === nothing && oc.windows == nc.windows
+        st_off = berlin_state(off)
+        @test !haskey(st_off, :parent_θ)
+        ks = [k for k in keys(st_off)]
+        @test Set(ks) == Set(k for k in keys(st_on) if !startswith(String(k), "parent_"))
+        bad = [k for k in ks if !isequal(st_off[k], st_on[k])]
+        isempty(bad) || @info "offline child differs from the online child" bad
+        @test isempty(bad)
+        @test off.sim.t == online.sim.t && off.clock.n == online.clock.n
+        @info @sprintf("offline smoke child: %d steps, bitwise the online one-way child in %d fields; %d records read",
+                       off.clock.n, length(ks), oc.feed.reads)
+    finally
+        Aeolus.Operators.set_fftw_policy!(; planner = p0.planner, threads = p0.threads)
+    end
 end
 
 @testset "InputDrivers dynamic: the open case from the sounding driver's steady planes (smoke, 12 steps)" begin
