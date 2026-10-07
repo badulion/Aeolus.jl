@@ -701,7 +701,7 @@ function attach_immersed_walls!(c::TKEClosure{T}, walls) where {T}
         g = mesh(c.e)
         g isa StretchedGrid &&
             throw(ArgumentError("attach_immersed_walls!: wall-modelled immersed walls are supported on a RegularGrid only"))
-        (size(walls.work[1]) == size(c.e.data) && walls.Δ == (T(g.dx), T(g.dy), T(g.dz))) ||
+        (walls.dims[1] == size(c.e.data) && walls.Δ == (T(g.dx), T(g.dy), T(g.dz))) ||
             throw(DimensionMismatch("attach_immersed_walls!: the walls are of another grid"))
     end
     c.walls[] = walls

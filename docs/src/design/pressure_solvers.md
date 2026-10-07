@@ -146,6 +146,18 @@ its iteration count are identical at every thread count. Iteration
 counts, timings and the one-time last-bit change are in
 [The kernel port](ka_port.md) (section KA-g).
 
+**The V-cycle on the kernel layer (KA-i, #303).** The multigrid
+smoother, residual, restriction and prolongation are `launch!`es of
+pointwise bodies with the bits of the old loops. The red-black smoother
+makes one launch per colour over that colour's cells only. The means
+and norms of the null-space projection and of the convergence test are
+canonical plane sums, so `MultigridPoissonSolver` and the V-cycle
+preconditioner of `MGPreconditionedCG` give the same solution and cycle
+count at every thread count. Levels below the launch threshold
+(32 768 points), including the coarsest solve, run serially. Timings,
+the per-level split and the last-bit change are in
+[The kernel port](ka_port.md) (section KA-i).
+
 ### Column-separable operators: `ColumnTridiagonalSolver` (#309)
 
 Two operators of the code have uniform horizontal spacing and
