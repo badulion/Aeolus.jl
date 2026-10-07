@@ -45,7 +45,7 @@ export RunConfig, ConfigSection, ConfigError, ConfigProblem, load_run_config, wi
        register_driver!, driver_schema, registered_drivers, shipped_configs,
        damerau_levenshtein, CONFIG_SCHEMA_VERSION,
        checkpoint_schedule, apply_fftw_config!,
-       AbstractRunDriver, driver_name, driver_sections, driver_checks, config_dir, build,
+       AbstractRunDriver, driver_name, driver_sections, driver_checks, driver_defaults, config_dir, build,
        state_fields, run_driver, run_config, RunResult, DRIVER_FILES,
        register_preprocessor!, option_reference, write_results, no_checkpoints,
        kwdef_section, kwdef_value, field_key, selected_case_sections,

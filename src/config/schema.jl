@@ -237,7 +237,7 @@ function option!(s::Section, key::AbstractString, T; default = NoDefault(),
 end
 
 """
-    ConfigSchema(name; sections = Section[], checks = Function[])
+    ConfigSchema(name; sections = Section[], checks = Function[], defaults = ())
 
 The schema of a driver `name`: the common sections every run has
 (`[run]`, `[fftw]`, `[logging]`, `[checkpoint]`, `[output]`; see the
@@ -246,7 +246,9 @@ section named like a common one adds its options to that section (the
 `simulation` driver's `[output] fields`); an option already in the common
 section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
 defaults to, and must equal, `name`. `checks` are cross-field checks
-([`check!`](@ref)).
+([`check!`](@ref)). `defaults` (`"section.key" => value` pairs) give a
+common option this driver's own default (the Berlin case's `[output]
+cadence` of 1800 s); its type and constraints stay the common ones.
 """
 struct ConfigSchema
     name::String
@@ -254,9 +256,25 @@ struct ConfigSchema
     checks::Vector{Any}
 end
 
-function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[])
+function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[], defaults = ())
     all_s = _common_sections(String(name))
     ncommon = length(all_s)
+    defaults isa Pair && (defaults = (defaults,))
+    for (key, d) in defaults                # a driver's own default of a common option
+        sname, okey = _split_key(String(key))
+        i = findfirst(c -> c.name == sname, all_s)
+        j = i === nothing ? nothing : findfirst(o -> o.key == okey, all_s[i].options)
+        j === nothing && throw(ArgumentError("schema \"$name\": \"$key\" in defaults is not a common option"))
+        o = all_s[i].options[j]
+        o2 = Option(o.key, o.type, d, o.doc, o.units, o.allowed, o.range, o.open_lower, o.required,
+                    o.input, o.allow_julia)
+        if !(d isa Function)
+            ok, _, why = _coerce(o2, d, true, pwd(), String(key))
+            ok || throw(ArgumentError("schema \"$name\": the default $(repr(d)) of $key is invalid: $why"))
+        end
+        opts = copy(all_s[i].options); opts[j] = o2
+        all_s[i] = Section(all_s[i].name, all_s[i].doc, opts)
+    end
     for s in sections
         i = findfirst(c -> c.name == s.name, all_s)
         if i === nothing
@@ -286,6 +304,9 @@ error the loader throws.
 """
 check!(schema::ConfigSchema, f) = (push!(schema.checks, f); schema)
 
+_split_key(key::String) = (i = findfirst('.', key);
+                           i === nothing ? (key, "") : (key[1:prevind(key, i)], key[nextind(key, i):end]))
+
 _section(schema::ConfigSchema, name) =
     (i = findfirst(s -> s.name == name, schema.sections); i === nothing ? nothing : schema.sections[i])
 _option(s::Section, key) =
@@ -304,17 +325,18 @@ const _DRIVERS = Dict{String,DriverEntry}()
 
 """
     register_driver!(name; sections = Section[], checks = Function[],
-                     config_dir = nothing) -> ConfigSchema
+                     config_dir = nothing, defaults = ()) -> ConfigSchema
 
 Register the configuration schema of the driver `name` (`[run] driver =
 "name"` selects it). `config_dir` is where `extends = "base.toml"` looks
-when the file is not next to the extending one. Registering a name again
+when the file is not next to the extending one; `defaults` are the
+driver's own defaults of common options ([`ConfigSchema`](@ref)). Registering a name again
 replaces it. The driver `"common"` (the common sections only) is always
 registered.
 """
 function register_driver!(name::AbstractString; sections = Section[], checks = Any[],
-                          config_dir = nothing)
-    schema = ConfigSchema(name; sections = sections, checks = checks)
+                          config_dir = nothing, defaults = ())
+    schema = ConfigSchema(name; sections = sections, checks = checks, defaults = defaults)
     _DRIVERS[String(name)] = DriverEntry(schema, config_dir === nothing ? nothing : abspath(config_dir))
     return schema
 end

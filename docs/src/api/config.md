@@ -200,7 +200,7 @@ and `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
 fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
 (#360) are in the table below. `dns` and `dns_decay` run the same DNS
 (the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
-record and its resolution refusal.
+record and its resolution refusal. `berlin` is the Berlin case (`examples/urban/BerlinCase.jl`, CFG-c #358).
 
 ### The example drivers (CFG-e, #360)
 
@@ -346,6 +346,76 @@ The options:
 using Aeolus # hide
 print(Aeolus.Config.option_reference("simulation")) # hide
 ```
+
+## The `berlin` driver
+
+`[run] driver = "berlin"` is the Berlin (Alexanderplatz) case
+(`examples/urban/core/config_schema.jl`, CFG-c #358). The scenarios are
+shipped base files in `examples/urban/configs/`:
+
+| file | what |
+| :-- | :-- |
+| `berlin_summer.toml` | the flagship, **every option written out**: the reference copy |
+| `berlin_winter.toml` | `extends = "berlin_summer.toml"`: 15 January 2024, idealised cold profile |
+| `berlin_smoke.toml` | `extends` summer: 16³ window at noon, small nest parent, 12 steps, no NetCDF |
+| `berlin_mitte_sample.toml` | `extends` summer: the synthetic OSM sample |
+
+```bash
+julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
+julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
+```
+
+`examples/urban/alexanderplatz_diurnal.jl` is a three-line wrapper of the
+first (extra arguments are passed on). The environment variables
+`AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and `AEOLUS_OUTPUT_DT` are gone: use
+the file and `--set clock.nsteps=…`, `--set output.cadence=…`.
+
+The sections are `[grid]`, `[geometry]`, `[clock]`, `[cadence]`,
+`[dynamics]`, `[boundaries]`, `[initial]`, `[ledger]`, `[output]`
+(`netcdf`, the file name; `path`, its directory: the summer file writes
+`examples/urban/output/alexanderplatz.nc`, where the renderers read it;
+`"none"` is the run folder's `output/`) and `[run]` (`scenario`,
+`backend = "cpu"`, `serial`). Most of it is generated from the coupling
+registry, so a coupling never has to repeat itself in a schema:
+
+  * **`[cadence]`** has a key for every named period some coupling
+    declares (the `Symbol` periods of its `stages`, and its
+    `cadence_keys`). A period an enabled coupling needs must be set; a
+    period set in a file that no enabled coupling uses is an error.
+  * **`[physics]`**: `slot = "provider"` for each exclusive slot (the
+    allowed values are the registered providers) and `addon = true/false`
+    for each additive coupling. The registry's `incompatible`
+    declarations are cross-field checks whose message carries the
+    coupling's `incompatible_reason`.
+  * **`[physics.options.<coupling>]`** is validated against that
+    coupling's `default_options`: the key set is closed (an unknown key
+    lists the coupling's options), and a value has its default's type
+    (a `Symbol` is a string, a tuple an array of the same length, a
+    `NamedTuple` a sub-table whose missing keys keep the default, a table
+    by surface class has integer keys, a `nothing` default takes `"none"`
+    or a number). Keys keep their Julia names (`τ`, `U_g`).
+  * **`[physics.options.nesting.parent]`** is the nest parent's own
+    schema (`ParentConfig`), its keys the ASCII field names
+    (`nudging_tau`, `theta_top`). The function-valued fields have TOML
+    forms: `q_surface` / `e_surface` take `{kind = "constant", value}` or
+    `{kind = "series", t = […], value = […]}` (linear in time),
+    `theta_init` / `qv_init` take `"sounding"` or a table
+    `{kind = "table", z = […], values = […]}`, and `u_init` takes
+    `"geostrophic"`, a constant or a table. Any other Julia function goes
+    through `with` and makes the run `replayable = false`.
+
+**One source of truth for the defaults.** The schema holds them;
+`CaseConfig(; kw...)` and `ParentConfig(; kw...)` start from it (the
+structs have no `@kwdef` defaults), and `CaseConfig(cfg::RunConfig)`
+builds the struct that `build_case` consumes. `CaseConfig(:summer)` (and
+the alias `:alexanderplatz`, `:winter`, `:smoke`, `:mitte_sample`) loads
+the shipped file. `test/config_berlin.jl` checks that the struct fields
+and the schema options map one to one, that the four files give, field
+for field and bitwise, the configs the old Julia presets built
+(`test/data/config_berlin/fixture.toml`), and that `berlin_smoke.toml`
+run 12 steps gives state bitwise equal to the Julia-built smoke case and
+passes the round trip with the nest on. The Berlin case has no
+checkpoint/restart yet, so `[checkpoint]` must stay off.
 
 ## The `sbl` driver
 

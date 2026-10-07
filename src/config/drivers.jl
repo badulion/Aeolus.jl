@@ -15,6 +15,8 @@ run into a run folder. A driver type `D` implements
   * `driver_checks(::D)`: cross-field checks ([`check!`](@ref); default none);
   * `config_dir(::D)`: where `extends = "base.toml"` looks for bare names
     (default `nothing`);
+  * `driver_defaults(::D)`: the driver's own defaults of common options,
+    `"section.key" => value` pairs (default none);
   * `build(::D, cfg::RunConfig)`: the runnable object (a simulation and
     what goes with it);
   * `run!(::D, obj, rf::RunFolder, ck::CheckpointSchedule; callback = nothing)`:
@@ -52,6 +54,14 @@ see [`check!`](@ref)).
 driver_checks(::AbstractRunDriver) = Any[]
 
 """
+    driver_defaults(d::AbstractRunDriver)
+
+The driver's own defaults of common options, `"section.key" => value`
+pairs (see [`ConfigSchema`](@ref)); default none.
+"""
+driver_defaults(::AbstractRunDriver) = ()
+
+"""
     config_dir(d::AbstractRunDriver) -> Union{Nothing,String}
 
 The directory of the driver's shipped configs: where `extends` looks for a
@@ -83,14 +93,15 @@ const _RUN_DRIVERS = Dict{String,AbstractRunDriver}()
     register_driver!(d::AbstractRunDriver) -> d
 
 Register the runnable driver `d`: its schema (the common sections plus
-`driver_sections(d)`, with `driver_checks(d)` and `config_dir(d)`) under
+`driver_sections(d)`, with `driver_checks(d)`, `config_dir(d)` and
+`driver_defaults(d)`) under
 `driver_name(d)`, and `d` itself for [`run_config`](@ref). Registering
 a name again replaces it.
 """
 function register_driver!(d::AbstractRunDriver)
     name = String(driver_name(d))
     register_driver!(name; sections = driver_sections(d), checks = driver_checks(d),
-                     config_dir = config_dir(d))
+                     config_dir = config_dir(d), defaults = driver_defaults(d))
     _RUN_DRIVERS[name] = d
     return d
 end
@@ -103,7 +114,7 @@ them: `name => path` relative to the package directory. The file is
 included into a fresh module and must call [`register_driver!`](@ref)
 for `name`. Physics stays in `examples/`; nothing is moved into `src/`
 for the CLI's sake. The migrations of the example drivers (#311) add
-their entries here.
+their entries here: `berlin` (the Berlin case, CFG-c #358).
 """
 const DRIVER_FILES = Dict{String,String}(
     # CFG-d (#359): the stable-boundary-layer cases and the filtered-DNS record
@@ -115,6 +126,8 @@ const DRIVER_FILES = Dict{String,String}(
     "patchy_surface" => "examples/validation/patchy_surface_driver.jl",
     "column" => "examples/validation/column_driver.jl",
     "dns_decay" => "examples/validation/dns_driver.jl",
+    # CFG-c (#358): the Berlin case
+    "berlin" => "examples/urban/BerlinCase.jl",
 )
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))

@@ -174,6 +174,8 @@ const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|sbl_run!|run_ca
 const CONFIG_RUN = r"(run_configs|Aeolus\.main)\("
 const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
 
+const URBAN_LIB = "library of the berlin driver (examples/urban/BerlinCase.jl; configs in examples/urban/configs/, CFG-c #358)"
+
 # Files that call an entry point (or look like runs) but are not runs of
 # their own, each with its reason. Paths relative to examples/.
 const EXEMPT = Dict(
@@ -188,10 +190,19 @@ const EXEMPT = Dict(
         "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
     "poisson_manufactured.jl" => "not a run: manufactured-solution check of the Poisson solver",
     "poisson_neumann_manufactured.jl" => "not a run: manufactured-solution check of the Neumann Poisson solver",
+    "urban/core/bus.jl" => URBAN_LIB,
+    "urban/core/config_schema.jl" => URBAN_LIB,
+    "urban/core/stages.jl" => URBAN_LIB,
+    "urban/couplings/buildings_citymean.jl" => URBAN_LIB,
+    "urban/couplings/nesting.jl" => URBAN_LIB,
+    "urban/couplings/surface_exchange.jl" => URBAN_LIB,
+    "urban/couplings/timestepper.jl" => URBAN_LIB,
+    "urban/parent/case.jl" => URBAN_LIB,
+    "urban/parent/surface.jl" => URBAN_LIB,
 )
 
 # Directories migrated by their own issues.
-const OTHER_ISSUE_DIRS = Dict("urban/" => "#358 (CFG-c, Berlin)", "sbl/" => "#359 (CFG-d, SBL)")
+const OTHER_ISSUE_DIRS = Dict("sbl/" => "#359 (CFG-d, SBL)")
 
 # The rest of #360's scope, migrated in later parts of the issue (it may be
 # split per directory). This list may only shrink: a file migrated to a
@@ -255,5 +266,5 @@ end
     # examples/validation/ is complete: every script there is configured, a driver or exempt
     val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
     @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 12        # the 3 bare runners of CFG-b, 8 validation scripts, kernels/04
+    @test nconfigured == 13        # the 3 bare runners of CFG-b, 8 validation scripts, kernels/04, urban/alexanderplatz_diurnal (CFG-c)
 end

@@ -850,6 +850,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
+    include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

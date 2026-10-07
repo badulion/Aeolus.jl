@@ -198,7 +198,9 @@ function _parse_overrides(overrides)
         end
         key = strip(s[1:prevind(s, i)]); val = strip(s[nextind(s, i):end])
         parts = split(key, '.')
-        if isempty(key) || any(p -> !occursin(r"^[A-Za-z0-9_-]+$", p), parts)
+        # a part is a TOML bare key, or letters and digits of any script
+        # (the Berlin per-coupling options keep their Julia names: "τ", "C_σ")
+        if isempty(key) || any(p -> !occursin(r"^[\p{L}\p{N}_-]+$", p), parts)
             push!(probs, ConfigProblem(String(key), OVERRIDE_ORIGIN, "not a dotted key: \"$key\""))
             continue
         end
@@ -328,7 +330,8 @@ end
 
 "The default of `o`, evaluated (a function is called) and checked."
 function _default(o::Option, key)
-    d = o.default isa Function ? o.default() : o.default
+    # invokelatest: a driver loaded from DRIVER_FILES during this load is newer than the caller's world
+    d = o.default isa Function ? Base.invokelatest(o.default) : o.default
     ok, v, why = _coerce(o, d, true, pwd(), key)
     ok || return (false, nothing, "the default $(_show_raw(d)) is invalid: $why")
     return (true, v, "")
