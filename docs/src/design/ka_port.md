@@ -1342,6 +1342,13 @@ decisions on #291):
   2.3 × 10⁻¹³ K; ql is identical. In the ledgers the park class moves in
   the 14th digit, and the domain evaporation goes from
   1.4646778140248087 × 10⁻⁴ to 1.4646778140248762 × 10⁻⁴.
+  The CFG fixture's smoke digests (`test/data/config_berlin/fixture.toml`,
+  `berlin_smoke.toml`, 12 steps) were re-recorded for this change: the 13
+  child fields move (θ by at most 1.1 × 10⁻¹³ K, 3.9 × 10⁻¹⁶ relative; qv
+  2.8 × 10⁻¹⁷; u 6.1 × 10⁻¹⁵ m s⁻¹; Ts 1.1 × 10⁻¹³ K; O₃ 1.5 × 10⁻¹⁴
+  relative), the nest parent and the zero tracers do not. With the old
+  `e_s` restored the branch reproduces the old digests exactly, so the
+  `e_s` change is the only difference.
 * The total that `fog_adjust!` returns is the plane sums in ascending
   `k`, so its last bits change. The Berlin coupling ignores it, and the
   fields are bit-identical.

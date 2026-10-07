@@ -265,7 +265,9 @@ end
     st = BCC.case_state(case)
     # the nest is on: the parent's fields are compared too
     @test :parent_θ in keys(st) && :parent_qv in keys(st) && :qv in keys(st)
-    # bit-identical to build_case(CaseConfig(:smoke)) on master (the fixture's digests; ESTIMATE)
+    # bit-identical to build_case(CaseConfig(:smoke)) on master (the fixture's digests; ESTIMATE),
+    # apart from the named one-time change of KA-m (#301), the fused-exponential
+    # saturation vapour pressure, for which the 13 child digests were re-recorded
     want = BERLIN_FIXTURE["smoke_digests"]
     got = Dict(string(k) => digest(v) for (k, v) in pairs(st))
     @test sort(collect(keys(got))) == sort(collect(keys(want)))
