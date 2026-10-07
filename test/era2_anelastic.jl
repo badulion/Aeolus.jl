@@ -751,4 +751,103 @@ end
     end
 end
 
+# =====================================================================
+# Reference from a θ profile against the continuous atmosphere, with the
+# MoistThermodynamics constants. Moved from test/berlin_moist.jl,
+# test/berlin_dynamics.jl and test/berlin_air_heat.jl (#320), where it
+# was asserted on the Berlin case's reference state (which is
+# `reference_from_profile` of the case's θ(z)); here on synthetic
+# profiles of the same shapes.
+# =====================================================================
+"""
+The pressure at heights `z` (increasing, above the ground) of the continuous
+hydrostatic atmosphere dp/dz = −g p/(R θ(z) (p/p₀)^κ), RK4 with `nsub`
+sub-steps per interval: the independent reference the discrete balance is
+measured against.
+"""
+function _continuous_hydrostatic(θ, z, p_surf; R, cp, p₀, g, nsub = 1000)
+    κ = R / cp
+    f(zz, pp) = -g * pp / (R * θ(zz) * (pp / p₀)^κ)
+    out = similar(z, Float64)
+    p, zz = Float64(p_surf), 0.0
+    for k in eachindex(z)
+        h = (z[k] - zz) / nsub
+        for _ in 1:nsub
+            k1 = f(zz, p); k2 = f(zz + h / 2, p + h / 2 * k1)
+            k3 = f(zz + h / 2, p + h / 2 * k2); k4 = f(zz + h, p + h * k3)
+            p += h / 6 * (k1 + 2k2 + 2k3 + k4); zz += h
+        end
+        out[k] = p
+    end
+    return out
+end
+
+@testset "reference_from_profile: continuous hydrostatics, ideal gas, Exner, scale height" begin
+    MT = Aeolus.MoistThermodynamics
+    c = MT.DEFAULT_CONSTANTS
+    R, cp, p₀, gg = c.gas_constant / c.molmass_dry, c.cp_dry, c.p_ref, 9.81
+    # a neutral layer under a 3 K/km inversion (the Berlin smoke window:
+    # 16 levels over 100 m, inversion at 60 m), a deeper one (32 over 200 m,
+    # inversion at 100 m), and a 3 km stable column at Δz = 12.5 m (the
+    # discrete balance is second order: the error grows as Δz²)
+    cases = [(RegularGrid(; size = (4, 4, 16), extent = (250.0, 250.0, 100.0), halo = (2, 2, 2)),
+              z -> 294.0 + max(0, z - 60.0) * 3e-3, 101325.0),
+             (RegularGrid(; size = (4, 4, 32), extent = (1000.0, 1000.0, 200.0), halo = (2, 2, 2)),
+              z -> 293.0 + max(0, z - 100.0) * 3e-3, 100400.0),
+             (RegularGrid(; size = (4, 4, 240), extent = (3000.0, 3000.0, 3000.0), halo = (2, 2, 2)),
+              z -> 300.0 + 3e-3 * z, 101325.0)]
+    for (m, θf, ps) in cases
+        r = reference_from_profile(m, θf, ps; R_d = R, cp = cp, p₀ = p₀, g_accel = gg)
+        zc = [(k - 0.5) * m.dz for k in 1:m.Nz]
+        p_cont = _continuous_hydrostatic(θf, zc, ps; R = R, cp = cp, p₀ = p₀, g = gg)
+        err = maximum(abs.(r.p̄ .- p_cont) ./ p_cont)
+        res = max_hydrostatic_residual(r)
+        # −∂ln ρ̄/∂z = (1 − κ) g/(R T̄) + ∂ln θ̄/∂z (hydrostatic ideal gas), on the faces
+        κ = R / cp
+        T̄f = (r.T̄[1:end-1] .+ r.T̄[2:end]) ./ 2
+        expected = (1 - κ) .* gg ./ (R .* T̄f) .+ diff(log.(r.θ̄)) ./ m.dz
+        sh = maximum(abs.((-diff(log.(r.ρ̄)) ./ m.dz) ./ expected .- 1))
+        @printf("  [profile reference] Nz = %d, H = %.0f m: p̄ vs continuous hydrostatic max rel %.1e; discrete residual %.1e Pa/m; scale-height identity %.1e; Hρ %.0f m\n",
+                m.Nz, m.Lz, err, res, sh, 1 / maximum(-diff(log.(r.ρ̄)) ./ m.dz))
+        @test err < 1e-6                   # the Berlin acceptance was 0.1 %; measured ≲ 6e-8
+        @test res < 1e-9                   # Pa/m: the grid balance is exact
+        @test sh < 1e-6                    # measured 5e-9 on the Berlin smoke window
+        @test all(<(0), diff(r.p̄)) && r.p̄[1] < ps
+        for k in 1:m.Nz
+            @test r.θ̄[k] ≈ θf(zc[k]) rtol = 1e-14
+            @test r.T̄[k] ≈ r.θ̄[k] * r.π̄[k] rtol = 1e-12
+            # one source of truth: the Exner function and the ideal gas of
+            # MoistThermodynamics
+            @test r.π̄[k] ≈ MT.exner_function(r.p̄[k]) rtol = 1e-12
+            @test r.ρ̄[k] ≈ MT.air_density(r.T̄[k], r.p̄[k]) rtol = 1e-12
+        end
+    end
+end
+
+@testset "heat content ∫ρ̄ c_p Π̄ θ dz of a uniform-θ layer, analytically (O(Δz²))" begin
+    # θ uniform: dry adiabatic, Π(z) = Π_s − g z/(c_p θ), and
+    # ρΠ = p₀ Π^{c_p/R}/(R θ), so
+    #   ∫ ρ c_p Π θ dz = c_p² θ p₀ /(R g) [Π^{c_p/R+1}/(c_p/R+1)]_{Π_top}^{Π_s}.
+    # The midpoint sum over the discretely hydrostatic ρ̄, Π̄ agrees to O(Δz²).
+    c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
+    R, cp, p₀, gg = c.gas_constant / c.molmass_dry, c.cp_dry, c.p_ref, 9.81
+    θ, ps, H = 294.0, 101325.0, 100.0
+    errs = Float64[]
+    for Nz in (16, 64)
+        m = RegularGrid(; size = (4, 4, Nz), extent = (250.0, 250.0, H), halo = (2, 2, 2))
+        r = reference_from_profile(m, z -> θ, ps; R_d = R, cp = cp, p₀ = p₀, g_accel = gg)
+        Πs = (ps / p₀)^(R / cp)
+        Πt = Πs - gg * H / (cp * θ)
+        a = cp / R + 1
+        H_exact = cp^2 * θ * p₀ / (R * gg) * (Πs^a - Πt^a) / a
+        Hd = sum(r.ρ̄[k] * cp * r.π̄[k] * θ * m.dz for k in 1:Nz)
+        @printf("  [heat content] uniform θ = %.0f K, Nz = %d: %.9e J/m², analytic %.9e (rel %.1e)\n",
+                θ, Nz, Hd, H_exact, abs(Hd / H_exact - 1))
+        # measured 3.1e-8 (Nz = 16) and 2.0e-9 (Nz = 64) on the Berlin meter
+        @test Hd ≈ H_exact rtol = (Nz == 16 ? 1e-7 : 1e-8)
+        push!(errs, abs(Hd / H_exact - 1))
+    end
+    @test errs[1] / errs[2] > 12          # second order: 16 for a 4× finer grid
+end
+
 end # @testset "Era II — Anelastic & pseudo-incompressible"
