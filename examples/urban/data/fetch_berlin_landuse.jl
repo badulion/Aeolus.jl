@@ -22,6 +22,9 @@
 #    n/4, exact) and the building statistics λ_p, λ_f, mean and maximum
 #    height, written with their provenance to
 #    data/berlin_landuse_6km.csv.
+# 4. The run reads the parents' static drivers, not the CSV: re-run
+#    `julia --project -m Aeolus preprocess static examples/urban/configs/berlin_<s>.toml`
+#    after a new table (CFG-f, #361; the old drivers are reported stale).
 #
 # Data © OpenStreetMap contributors, ODbL 1.0 (https://www.openstreetmap.org/copyright).
 
@@ -48,8 +51,8 @@ const ENDPOINTS = ("https://overpass-api.de/api/interpreter",
 "The query box (south, west, north, east) in degrees: the parent box plus a margin."
 function query_box()
     h = L_PARENT / 2 + MARGIN
-    dlat = rad2deg(h / BC._EARTH_R)
-    dlon = rad2deg(h / (BC._EARTH_R * cosd(LAT0)))
+    dlat = rad2deg(h / Aeolus.InputDrivers._EARTH_R)
+    dlon = rad2deg(h / (Aeolus.InputDrivers._EARTH_R * cosd(LAT0)))
     return round.((LAT0 - dlat, LON0 - dlon, LAT0 + dlat, LON0 + dlon); digits = 4)
 end
 

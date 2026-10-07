@@ -75,4 +75,18 @@ Aeolus.Simulations.resolved_flux_wθ
 Aeolus.Simulations.step_rk3!
 Aeolus.Simulations.RK3Workspace
 Aeolus.Simulations.rk3_workspace
+Aeolus.Simulations.StepWorkspaces
+```
+
+### Field algebra of the step cores (KA-j, #306)
+
+The drivers update their fields only through pointwise kernels, which
+give the bits of the broadcasts they replaced at every thread count
+([the kernel port](../design/ka_port.md)).
+
+```@docs
+Aeolus.Simulations.axpy!
+Aeolus.Simulations.pressure_from_potential!
+Aeolus.Simulations.copy_storage!
+Aeolus.Simulations.zero_storage!
 ```

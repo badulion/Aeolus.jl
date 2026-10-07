@@ -59,23 +59,36 @@ extent = [1000.0, 1000.0, 400.0]
 halo = [3, 3, 3]
 
 [geometry]
-# The OSM scene and the site.
-# the OpenStreetMap file of the buildings, parks and water
-osm_path = "../data/alexanderplatz_real.osm"
+# The ground (static drivers) and the site.
+# the static driver of the child (CFG-f #361; `aeolus preprocess static` writes
+# it); "none": rasterise [preprocess] osm_path in memory
+static = "input/berlin_summer_static.nc"
+# the static driver (land-use tiles) of the nest parent; "none": from
+# [preprocess] landuse in memory
+parent_static = "input/berlin_summer_parent_static.nc"
 # latitude of the OSM projection's anchor (and of the solar position) [degree]
 lat0 = 52.522
 # longitude of the anchor [degree]
 lon0 = 13.41
 # the window centre relative to the anchor [m]
 offset = [0.0, 0.0]
-# buildings lower than this are dropped [m]
-min_height = 8.0
 # height above sea level [m]
 elevation = 34.0
 # wall facets per cell face of the radiosity scene
 wall_subdivisions = 1
+
+[preprocess]
+# The sources of the static drivers: `julia --project -m Aeolus preprocess
+# static berlin_summer.toml` writes [geometry] static and parent_static from
+# them (or, with static = "none", they are read in memory at every start).
+# the OpenStreetMap file of the buildings, parks and water
+osm_path = "../data/alexanderplatz_real.osm"
+# buildings lower than this are dropped [m]
+min_height = 8.0
 # leaf-area index of park cells
 park_lai = 2.5
+# the nest parent's land-use table (data/fetch_berlin_landuse.jl)
+landuse = "../data/berlin_landuse_6km.csv"
 
 [clock]
 # Date, start and steps.
