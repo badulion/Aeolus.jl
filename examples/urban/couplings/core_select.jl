@@ -25,15 +25,17 @@
 #
 # The numerics slots (#132) and the sound-proof cores. A sound-proof core
 # is its own projection and its own momentum operator: the projection
-# solves ∇·(W∇φ) = ∇·(W u*) with a density-weighted CG built from the
-# core's base state and weighting, and momentum is advected in the
+# solves ∇·(W∇φ) = ∇·(W u*) with a density-weighted solver built from the
+# core's base state and weighting (direct by default, #309), and momentum is advected in the
 # W-weighted centred flux form (`_step_mass_weighted!` takes no
 # momentum-advection keyword). The SGS closure is the Era VI contract's
 # (`sgs`, #167), which the sound-proof step takes like the Boussinesq one.
 # Hence:
 #
-#   :pressure_solver     only `:density_weighted_cg` (its `tol`, `maxit`
-#                        reach the core's own solver); the Boussinesq
+#   :pressure_solver     only `:density_weighted_direct` (the direct
+#                        FFT/DCT + tridiagonal solve, #309) or
+#                        `:density_weighted_cg` (its `tol`, `maxit` reach
+#                        the core's own CG); the Boussinesq
 #                        solvers (cosine FFT, multigrid, MG-CG) solve the
 #                        constant-coefficient equation and are incompatible;
 #   :momentum_advection  `:centered` (the core's weighted centred form; the
@@ -42,8 +44,8 @@
 #   :sgs                 every provider (`:smagorinsky`, `:dynamic`, `:mlsgs`, `:sigma`):
 #                        the closure is passed as `sgs` to every core.
 #
-# `build_core` also refuses any `sim_options` keyword other than `tol` /
-# `maxit`, so a future solver provider that forgets to declare itself
+# `build_core` also refuses any `sim_options` keyword other than
+# `pressure_solver` / `tol` / `maxit` (and the nest faces), so a future solver provider that forgets to declare itself
 # incompatible fails loudly instead of being ignored.
 #
 # Tracers: under a sound-proof core ∇·u = −w ∂ln W/∂z ≠ 0, so the plain
@@ -86,9 +88,10 @@ sound-proof cores of `Aeolus.Anelastic`, `AnelasticSimulation`
 (`∇·(ρ̄u) = 0`) and `PseudoIncompressibleSimulation` (`∇·(ρ̄θ̄u) = 0`). The
 base state is the case's reference state `case.ref.state`
 ([`build_reference`](@ref): the initial θ(z) from `case_surface_pressure(cfg)`).
-The projection solver is the core's own density-weighted CG; its `tol`
-and `maxit` are options of the `:pressure_solver` provider
-`:density_weighted_cg` (the only one these cores accept).
+The projection solver is the core's own density-weighted solver, chosen by
+the `:pressure_solver` provider: `:density_weighted_direct` (direct, #309)
+or `:density_weighted_cg` (CG, with its `tol` and `maxit`), the only two
+these cores accept.
 
 The constraint the projection enforces is the core's `max_div`
 diagnostic (and checked by the smoke test).
@@ -108,12 +111,12 @@ incompatible(::Type{<:MassWeightedCore}) =
     (:pressure_solver => :cosine_fft, :pressure_solver => :multigrid, :pressure_solver => :mg_cg,
      :momentum_advection => :weno_z)
 incompatible_reason(::Type{<:MassWeightedCore}) =
-    "a sound-proof core projects with its own density-weighted CG (select " *
-    "pressure_solver = :density_weighted_cg) and advects momentum in its weighted centred " *
+    "a sound-proof core projects with its own density-weighted solver (select " *
+    "pressure_solver = :density_weighted_direct or :density_weighted_cg) and advects momentum in its weighted centred " *
     "flux form (momentum_advection = :centered)"
 
 "The `sim_options` keywords a sound-proof core takes (those of its default projection solver)."
-const MASS_WEIGHTED_SIM_KEYWORDS = (:tol, :maxit, :bcs, :θ_bcs, :sponge_target)   # the last three: the nest faces (#265)
+const MASS_WEIGHTED_SIM_KEYWORDS = (:pressure_solver, :tol, :maxit, :bcs, :θ_bcs, :sponge_target)   # the last three: the nest faces (#265)
 
 _mass_weighted_type(::Type{AnelasticCore}) = Aeolus.Anelastic.AnelasticSimulation
 _mass_weighted_type(::Type{PseudoIncompressibleCore}) = Aeolus.Anelastic.PseudoIncompressibleSimulation
@@ -130,13 +133,13 @@ end
 """
     diagnostics(c::MassWeightedCore, case)
 
-The pressure solve of the sound-proof core, every step: `cg_iterations`.
-(The core's own diagnostics, `max_div` = max|∇·(W u)| among them, are
-the simulation's; the plain max|∇·u| is `max_div_plain`, costly.)
+The plain max|∇·u| of the sound-proof core, `max_div_plain` (costly). The
+core's own diagnostics, `max_div` = max|∇·(W u)| among them, are the
+simulation's; the pressure solve's are its `:pressure_solver` provider's
+(the density-weighted CG's `iterations` and `residual`; the direct solve
+has none).
 """
 diagnostics(c::MassWeightedCore, case) = Diagnostic[
-    Diagnostic("cg_iterations", "1", () -> Aeolus.Anelastic.solver_iterations(case.sim.solver);
-               cadence = :step),
     Diagnostic("max_div_plain", "s-1", () -> max_divergence(case.sim);
                description = "max|∇·u|, which the mass-weighted constraint does not make 0")]
 
