@@ -565,7 +565,7 @@ thermostat), a sign that follows from the physics. "It ran" is already
 asserted for every coupling.
 
 **5. Run and quote.** `julia --project=. examples/urban/berlin_checks.jl smoke`
-locally (about 2.5 min); the physics itself is tested in its module's
+locally (about 3.5 min); the physics itself is tested in its module's
 tests, which the fast tier runs.
 In the PR body quote one Berlin diagnostic — a ledger term is often the
 natural one — the configuration it was measured in, and the cost from

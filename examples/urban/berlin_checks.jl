@@ -15,7 +15,8 @@
 #           the registry knows about (test/support/smoke_matrix.jl, shared
 #           with the thread-invariance harness): a finite state, every
 #           coupling's own `smoke_check`s, and the surface-energy, water
-#           and air-heat ledgers closed (≈ 2.5 min, 49 runs);
+#           and air-heat ledgers closed (49 runs, 6494 coupling checks,
+#           204 s measured on 2026-10-07);
 #   parent  the nest parent with every forcing on for 12 steps, heat and
 #           water ledgers closed (#259); encroachment of a CBL under
 #           Q(t) = 0.15 sin(πt/D) into Γ = 3 K/km (Tennekes 1973; Stull 1988
@@ -25,7 +26,8 @@
 #           footprint against the child's surfaces, 24 h offline (#249:
 #           class fractions, the no-unresolved-buildings control equal to
 #           the child to round-off, the Macdonald mosaic within its
-#           margins, energy closure per tile) (≈ 7 min).
+#           margins, energy closure per tile). Both parts: 897 assertions,
+#           6 min 53 s (2026-10-07, one process, other suites alongside).
 #
 # The 24 h Lindenberg checks of the parent are
 # examples/urban/berlin_parent_lindenberg_check.jl. Numbers measured when
