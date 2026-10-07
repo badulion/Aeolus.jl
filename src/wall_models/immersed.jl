@@ -30,9 +30,18 @@ end
 
 The walls of an immersed solid mask as a wall model sees them; built by
 [`immersed_walls`](@ref). Fields: `faces` (a vector of
-[`ImmersedWallFace`](@ref)), `ν` (the kinematic viscosity the laws are
-evaluated with, m² s⁻¹), the grid spacings, and work arrays. The last
-call's diagnostics are kept in `stats`:
+[`ImmersedWallFace`](@ref), one per (face, wall) pair), `ν` (the
+kinematic viscosity the laws are evaluated with, m² s⁻¹), the grid
+spacings `Δ`, the sizes `dims` of the `u`, `v`, `w` data arrays, and the
+**face index** (KA-k, #307): `face_ptr` and `face_entry` group the pairs
+by velocity face (compressed sparse rows: the pairs of face `p` are
+`face_entry[face_ptr[p]:face_ptr[p+1]-1]`, the faces in the order of
+their first pair, the pairs of a face in their order in `faces`). A face
+between two walls (a corner, a gap one cell wide) has two pairs; the
+operators sum them per face (owner computes), so no two work items
+write the same face. `a`, `τdA`, `flux` (per pair) and `Af`, `dq` (per
+face) are the work vectors of the last call. The last call's
+diagnostics are kept in `stats`:
 
   * `F` — the volume-integrated kinematic force of the modelled stress
     (m⁴ s⁻², per component), [`apply_immersed_wall_stress!`](@ref);
@@ -40,13 +49,63 @@ call's diagnostics are kept in `stats`:
     area ``\\sum ΔA`` (m²), `τ_min` — the smallest modelled ``τ_w``;
   * `F_stencil` — the force the stencil exerted through the same walls,
     removed by [`remove_stencil_wall_flux!`](@ref).
+
+    ImmersedWalls(faces, ν, Δ, dims)
+
+builds the face index and the work vectors for any vector of pairs.
 """
 struct ImmersedWalls{L<:AbstractWallLaw, T<:AbstractFloat}
     faces::Vector{ImmersedWallFace{L}}
     ν::T
     Δ::NTuple{3,T}
-    work::NTuple{3,Array{T,3}}
+    dims::NTuple{3,NTuple{3,Int}}
+    face_ptr::Vector{Int32}
+    face_entry::Vector{Int32}
+    a::Vector{T}
+    τdA::Vector{T}
+    flux::Vector{T}
+    Af::Vector{T}
+    dq::Vector{T}
     stats::Dict{Symbol,Any}
+end
+
+function ImmersedWalls(faces::Vector{ImmersedWallFace{L}}, ν::T, Δ::NTuple{3,T},
+                       dims::NTuple{3,NTuple{3,Int}}) where {L, T<:AbstractFloat}
+    ptr, ent = _face_index(faces)
+    n, nf = length(faces), length(ptr) - 1
+    stats = Dict{Symbol,Any}(:F => (zero(T), zero(T), zero(T)), :τA => zero(T),
+                             :area => zero(T), :τ_min => zero(T),
+                             :F_stencil => (zero(T), zero(T), zero(T)))
+    return ImmersedWalls{L,T}(faces, ν, Δ, dims, ptr, ent, zeros(T, n), zeros(T, n), zeros(T, n),
+                              zeros(T, nf), zeros(T, nf), stats)
+end
+
+# The pairs grouped by velocity face (c, I, J, K), built once: the faces in
+# the order of their first pair, the pairs of a face in their order in
+# `faces`. Summing a face's pairs in this order adds them in the order the
+# former scatter `A[c][I,J,K] += a[n]` (a loop over `faces`) did, so the
+# gather gives the same bits.
+function _face_index(faces::AbstractVector{<:ImmersedWallFace})
+    id = Dict{NTuple{4,Int32},Int32}()
+    fid = Vector{Int32}(undef, length(faces))
+    for (n, f) in enumerate(faces)
+        fid[n] = get!(id, (Int32(f.c), f.I, f.J, f.K), Int32(length(id) + 1))
+    end
+    nf = length(id)
+    ptr = ones(Int32, nf + 1)
+    for p in fid
+        ptr[p+1] += 1
+    end
+    for p in 1:nf
+        ptr[p+1] += ptr[p] - 1
+    end
+    next = ptr[1:nf]
+    ent = Vector{Int32}(undef, length(faces))
+    for (n, p) in enumerate(fid)
+        ent[next[p]] = n
+        next[p] += 1
+    end
+    return ptr, ent
 end
 
 """
@@ -145,12 +204,8 @@ function immersed_walls(sim, sm, law; ν::Real = 1.5e-5)
     faces = ImmersedWallFace{L}[ImmersedWallFace{L}(Int8(c), Int32(F[1]), Int32(F[2]), Int32(F[3]),
                                                     Int8(d), Int8(s), l)
                                 for (c, F, d, s, l) in entries]
-    dims = size(sim.u.data)
-    work = (zeros(T, dims), zeros(T, size(sim.v.data)), zeros(T, size(sim.w.data)))
-    stats = Dict{Symbol,Any}(:F => (zero(T), zero(T), zero(T)), :τA => zero(T),
-                             :area => zero(T), :τ_min => zero(T),
-                             :F_stencil => (zero(T), zero(T), zero(T)))
-    return ImmersedWalls{L,T}(faces, T(ν), (T(mesh.dx), T(mesh.dy), T(mesh.dz)), work, stats)
+    dims = (size(sim.u.data), size(sim.v.data), size(sim.w.data))
+    return ImmersedWalls(faces, T(ν), (T(mesh.dx), T(mesh.dy), T(mesh.dz)), dims)
 end
 
 # The speed parallel to the wall of face `f`: the face's own component and
@@ -194,12 +249,20 @@ with `walls`, #232) books ``a_n q^2`` as shear production.
 function immersed_wall_drag!(a::AbstractVector, iw::ImmersedWalls{L,T}, u, v, w) where {L,T}
     length(a) == length(iw.faces) ||
         throw(DimensionMismatch("immersed_wall_drag!: need one entry per face-wall ($(length(iw.faces))), got $(length(a))"))
-    Δ, ν = iw.Δ, iw.ν
-    @inbounds for (n, f) in enumerate(iw.faces)
+    for n in eachindex(iw.faces)
+        _iw_drag_body!(n, a, iw.faces, u, v, w, iw.Δ, iw.ν)
+    end
+    return a
+end
+
+# the drag rate of pair n (pointwise over the pairs; reads u, v, w only)
+@inline function _iw_drag_body!(n, a::AbstractVector{T}, faces, u, v, w, Δ, ν) where {T}
+    @inbounds begin
+        f = faces[n]
         U = _tangential_speed(f, u, v, w)
         a[n] = T(wall_drag(f.law, U, Δ[f.d] / 2; ν = ν)) / Δ[f.d]
     end
-    return a
+    return nothing
 end
 
 """
@@ -260,42 +323,74 @@ no-slip flux (which [`remove_stencil_wall_flux!`](@ref) removes).
 function apply_immersed_wall_stress!(sim, iw::ImmersedWalls{L,T}, Δt::Real) where {L,T}
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
     u, v, w = sim.u.data, sim.v.data, sim.w.data
-    q = (u, v, w)
-    A = iw.work
     Δ = iw.Δ
-    ν = iw.ν
     dV = Δ[1] * Δ[2] * Δ[3]
-    # 1. the drag coefficient of every (face, wall) pair, summed per face
-    a = immersed_wall_drag!(Vector{T}(undef, length(iw.faces)), iw, u, v, w)
-    @inbounds for (n, f) in enumerate(iw.faces)
-        A[f.c][f.I, f.J, f.K] += a[n]
-    end
-    # 2. the implicit update, once per face (the first of its entries)
-    F = zeros(T, 3)
     dt = T(Δt)
-    @inbounds for f in iw.faces
-        Af = A[f.c][f.I, f.J, f.K]
-        Af == 0 && continue
-        q0 = q[f.c][f.I, f.J, f.K]
-        q1 = q0 / (1 + dt * Af)
-        q[f.c][f.I, f.J, f.K] = q1
-        F[f.c] += q1 - q0
-        A[f.c][f.I, f.J, f.K] = 0
+    faces, ptr, ent = iw.faces, iw.face_ptr, iw.face_entry
+    # 1. the drag coefficient of every (face, wall) pair, from the velocity
+    #    before any face is updated
+    a = immersed_wall_drag!(iw.a, iw, u, v, w)
+    # 2. per face (owner computes): the sum of its pairs' drag, the implicit
+    #    update, and τ_w ΔA of each of its walls at the end-of-step velocity
+    for p in 1:length(ptr)-1
+        _iw_face_body!(p, u, v, w, faces, ptr, ent, a, iw.Af, iw.dq, iw.τdA, dt, Δ, dV)
     end
-    # 3. diagnostics: τ_w ΔA at the end-of-step speed along each wall
+    # 3. the diagnostics, folded in a fixed order: the force over the faces
+    #    (in the order of their first pair), τ_w ΔA, the area and the
+    #    smallest drag over the pairs (in their order) — the order of the
+    #    former loops over `faces`, so the same bits
+    F1 = F2 = F3 = zero(T)
+    @inbounds for p in 1:length(ptr)-1
+        iw.Af[p] == 0 && continue
+        c = faces[ent[ptr[p]]].c
+        d = iw.dq[p]
+        c == 1 ? (F1 += d) : c == 2 ? (F2 += d) : (F3 += d)
+    end
     τA = zero(T); area = zero(T); τmin = T(Inf)
-    @inbounds for (n, f) in enumerate(iw.faces)
-        dA = dV / Δ[f.d]
-        τ = a[n] * Δ[f.d] * abs(q[f.c][f.I, f.J, f.K])
-        τA += τ * dA; area += dA
+    @inbounds for n in eachindex(faces)
+        τA += iw.τdA[n]; area += dV / Δ[faces[n].d]
         τmin = min(τmin, a[n])
     end
-    Fo = (F[1] * dV / dt, F[2] * dV / dt, F[3] * dV / dt)
+    Fo = (F1 * dV / dt, F2 * dV / dt, F3 * dV / dt)
     iw.stats[:F] = Fo
     iw.stats[:τA] = τA
     iw.stats[:area] = area
-    iw.stats[:τ_min] = isempty(iw.faces) ? zero(T) : τmin
+    iw.stats[:τ_min] = isempty(faces) ? zero(T) : τmin
     return Fo
+end
+
+# Face p of an ImmersedWalls: q ← q / (1 + Δt Σ a) over its pairs (summed in
+# their order), Af[p] = Σ a, dq[p] = the change (0 when Σ a = 0, the face
+# then untouched), τdA[n] = τ_w ΔA of each of its pairs. Writes only face
+# p's velocity and its own entries; reads only face p's velocity, so the
+# faces are independent (the drag of every pair was computed before).
+@inline function _iw_face_body!(p, u, v, w, faces, ptr, ent, a, Af, dq, τdA, dt, Δ, dV)
+    @inbounds begin
+        e1, e2 = ptr[p], ptr[p+1] - 1
+        f = faces[ent[e1]]
+        c, I, J, K = Int(f.c), Int(f.I), Int(f.J), Int(f.K)
+        q = c == 1 ? u : c == 2 ? v : w
+        A = zero(eltype(a))
+        for e in e1:e2
+            A += a[ent[e]]
+        end
+        Af[p] = A
+        if A == 0
+            dq[p] = zero(A)
+        else
+            q0 = q[I, J, K]
+            q1 = q0 / (1 + dt * A)
+            q[I, J, K] = q1
+            dq[p] = q1 - q0
+        end
+        qe = abs(q[I, J, K])
+        for e in e1:e2
+            n = ent[e]
+            Δd = Δ[faces[n].d]
+            τdA[n] = (a[n] * Δd * qe) * (dV / Δd)
+        end
+    end
+    return nothing
 end
 
 """
@@ -335,16 +430,41 @@ function remove_stencil_wall_flux!(sim, iw::ImmersedWalls{L,T};
                                    ν::Real = (hasproperty(sim, :has_viscosity) && sim.has_viscosity) ? sim.ν : 0,
                                    νt = sim.νt,
                                    sgs::Bool = hasproperty(sim, :has_sgs) && sim.has_sgs) where {L,T}
-    q = (sim.u.data, sim.v.data, sim.w.data)
-    t = (sim.tu.data, sim.tv.data, sim.tw.data)
+    u, v, w = sim.u.data, sim.v.data, sim.w.data
+    tu, tv, tw = sim.tu.data, sim.tv.data, sim.tw.data
     nt = νt isa AbstractArray ? νt : νt.data
     Δ = iw.Δ
     dV = Δ[1] * Δ[2] * Δ[3]
     νT = T(ν)
-    F = zeros(T, 3)
-    @inbounds for f in iw.faces
+    faces, ptr, ent = iw.faces, iw.face_ptr, iw.face_entry
+    # per face (owner computes): each pair's flux, taken out of the face's
+    # tendency in the order of its pairs
+    for p in 1:length(ptr)-1
+        _iw_flux_body!(p, tu, tv, tw, u, v, w, nt, faces, ptr, ent, iw.flux, νT, sgs, Δ)
+    end
+    # the force, folded over the pairs in their order (the former loop's)
+    F1 = F2 = F3 = zero(T)
+    @inbounds for n in eachindex(faces)
+        c = faces[n].c; x = iw.flux[n]
+        c == 1 ? (F1 += x) : c == 2 ? (F2 += x) : (F3 += x)
+    end
+    Fo = (F1 * dV, F2 * dV, F3 * dV)
+    iw.stats[:F_stencil] = Fo
+    return Fo
+end
+
+# Face p: flux[n] = (ν + ν_t,e)(q_N − q_F)/Δ_d² of each of its pairs n,
+# subtracted from the face's tendency pair by pair. Writes only face p's
+# tendency and its own entries.
+@inline function _iw_flux_body!(p, tu, tv, tw, u, v, w, nt, faces, ptr, ent, flux::AbstractVector{T},
+                                νT, sgs, Δ) where {T}
+    @inbounds for e in ptr[p]:ptr[p+1]-1
+        n = ent[e]
+        f = faces[n]
         c, d, s = Int(f.c), Int(f.d), Int(f.s)
         I, J, K = Int(f.I), Int(f.J), Int(f.K)
+        q = c == 1 ? u : c == 2 ? v : w
+        t = c == 1 ? tu : c == 2 ? tv : tw
         Ni, Nj, Nk = I + s * (d == 1), J + s * (d == 2), K
         ci, cj, ck = (c == 1), (c == 2), (c == 3)
         νe = νT
@@ -352,11 +472,9 @@ function remove_stencil_wall_flux!(sim, iw::ImmersedWalls{L,T};
             νe += (nt[I, J, K] + nt[I-ci, J-cj, K-ck] +
                    nt[Ni, Nj, Nk] + nt[Ni-ci, Nj-cj, Nk-ck]) / 4
         end
-        flux = νe * (q[c][Ni, Nj, Nk] - q[c][I, J, K]) / Δ[d]^2
-        t[c][I, J, K] -= flux
-        F[c] += flux
+        x = νe * (q[Ni, Nj, Nk] - q[I, J, K]) / Δ[d]^2
+        t[I, J, K] -= x
+        flux[n] = x
     end
-    Fo = (F[1] * dV, F[2] * dV, F[3] * dV)
-    iw.stats[:F_stencil] = Fo
-    return Fo
+    return nothing
 end
