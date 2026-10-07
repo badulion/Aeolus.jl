@@ -138,11 +138,19 @@ output_fields(c::CloudShadow, case) = OutputField[
     OutputField("cloud_trans", "1", "direct-beam transmittance of the resolved cloud (slant path)",
                 :xy, cs -> c.trans)]
 
-function report(c::CloudShadow, case)
-    c.sun_up || return nothing
-    return @sprintf("cloud shadow: min T %.3f, mean T %.3f, shortwave removed %.2f W/m² (domain mean)",
-                    minimum(c.trans), sum(c.trans) / length(c.trans),
-                    sum(c.removed) / length(c.removed))
+"""
+    diagnostics(c::CloudShadow, case)
+
+The direct-beam transmittance of the resolved cloud `trans_min`,
+`trans_mean` (1) and the shortwave it removed `sw_removed` (W m⁻²,
+domain mean); `NaN` while the sun is down.
+"""
+function diagnostics(c::CloudShadow, case)
+    up(f) = () -> c.sun_up ? f() : NaN
+    return Diagnostic[
+        Diagnostic("trans_min", "1", up(() -> minimum(c.trans))),
+        Diagnostic("trans_mean", "1", up(() -> sum(c.trans) / length(c.trans))),
+        Diagnostic("sw_removed", "W m-2", up(() -> sum(c.removed) / length(c.removed)))]
 end
 
 function smoke_check(c::CloudShadow, case)

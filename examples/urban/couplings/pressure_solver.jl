@@ -10,15 +10,21 @@
 #   :mg_cg       Multigrid.MGPreconditionedCG — CG with one V-cycle as the
 #                preconditioner.
 #
+#   :density_weighted_direct  Anelastic.DirectWeightedPoissonSolver — the
+#                projection of the sound-proof cores, ∇·(W∇φ) = ∇·(W u*) with
+#                W = ρ̄ (anelastic) or ρ̄θ̄ (pseudo-incompressible), solved
+#                directly: FFT/DCT horizontally, one tridiagonal solve per
+#                wavenumber in z (#309), exact to round-off. The core's default.
 #   :density_weighted_cg  Anelastic.DensityWeightedPoissonSolver — the
-#                Jacobi-preconditioned CG of the sound-proof cores (#133),
-#                ∇·(W∇φ) = ∇·(W u*) with W = ρ̄ (anelastic) or ρ̄θ̄ (pseudo-
-#                incompressible). The core builds it from its own base state
-#                and weighting; this provider passes its `tol` and `maxit`.
+#                Jacobi-preconditioned CG of the same operator (#133); this
+#                provider passes its `tol` and `maxit`.
+#
+# The core builds either from its own base state and weighting; the
+# provider selects which (`pressure_solver = :direct | :cg`).
 #
 # The first three solve the constant-coefficient equation of the
 # Boussinesq core and are incompatible with the sound-proof cores; the
-# last solves only the weighted one and is incompatible with Boussinesq.
+# last two solve only the weighted one and are incompatible with Boussinesq.
 #
 # Both multigrid options solve the same 7-point Laplacian with the same
 # boundary conditions as the FFT, so on this uniform grid they only cost
@@ -95,11 +101,12 @@ default_options(::Type{PressureMultigrid}) = (tol = 1e-10, maxcycles = 50, cycle
 sim_options(::Type{PressureMultigrid}, cfg, mesh, o) =
     (solver = MultigridPoissonSolver(mesh; case_poisson_axes(cfg, mesh)...,
                                      tol = o.tol, maxcycles = o.maxcycles, cycle = o.cycle),)
-function report(c::PressureMultigrid, case)
-    s = case.sim.solver
-    return @sprintf("multigrid: %d levels, last solve %d cycles, rel. residual %.1e",
-                    mg_level_count(s), s.last_cycles[], mg_residual_norm(s))
-end
+"`cycles` and `residual` (relative) of the last multigrid solve, every step."
+diagnostics(c::PressureMultigrid, case) = Diagnostic[
+    Diagnostic("cycles", "1", () -> case.sim.solver.last_cycles[]; cadence = :step,
+               description = "V-cycles of the last solve ($(mg_level_count(case.sim.solver)) levels)"),
+    Diagnostic("residual", "1", () -> mg_residual_norm(case.sim.solver); cadence = :step,
+               description = "relative residual of the last solve")]
 function smoke_check(c::PressureMultigrid, case)
     s = case.sim.solver
     return ["the solver is multigrid" => s isa MultigridPoissonSolver,
@@ -126,15 +133,51 @@ default_options(::Type{PressureMGCG}) = (tol = 1e-10, maxit = 200)
 sim_options(::Type{PressureMGCG}, cfg, mesh, o) =
     (solver = MGPreconditionedCG(mesh; case_poisson_axes(cfg, mesh)...,
                                  tol = o.tol, maxit = o.maxit),)
-report(c::PressureMGCG, case) =
-    @sprintf("MG-CG: last solve %d iterations, rel. residual %.1e",
-             case.sim.solver.last_iters[], mg_residual_norm(case.sim.solver))
+"`iterations` and `residual` (relative) of the last MG-CG solve, every step."
+diagnostics(c::PressureMGCG, case) = Diagnostic[
+    Diagnostic("iterations", "1", () -> case.sim.solver.last_iters[]; cadence = :step),
+    Diagnostic("residual", "1", () -> mg_residual_norm(case.sim.solver); cadence = :step,
+               description = "relative residual of the last solve")]
 function smoke_check(c::PressureMGCG, case)
     s = case.sim.solver
     return ["the solver is MG-preconditioned CG" => s isa MGPreconditionedCG,
             solver_axes_check(case),
             "last solve converged (rel. residual < tol)" => mg_residual_norm(s) < s.tol,
             "projected velocity divergence-free (max|∇·u| < 1e-8 s⁻¹)" => case_divergence(case) < 1e-8]
+end
+
+"""
+    PressureDensityDirect
+
+Slot `:pressure_solver`, provider `:density_weighted_direct`: the default
+projection of the sound-proof cores (`core = :anelastic`,
+`:pseudo_incompressible`), `Anelastic.DirectWeightedPoissonSolver`
+(FFT/DCT + tridiagonal, #309), which the core builds from its base state
+(`case.ref.state`) and its weighting. No options. Incompatible with the
+Boussinesq core.
+"""
+struct PressureDensityDirect <: AbstractCoupling end
+coupling_name(::Type{PressureDensityDirect}) = :pressure_density_direct
+slot(::Type{PressureDensityDirect}) = :pressure_solver
+provider(::Type{PressureDensityDirect}) = :density_weighted_direct
+is_default(::Type{PressureDensityDirect}) = false
+modules_used(::Type{PressureDensityDirect}) = (:Anelastic, :PressureSolvers)
+incompatible(::Type{PressureDensityDirect}) = (:core => :boussinesq,)
+incompatible_reason(::Type{PressureDensityDirect}) =
+    "the direct density-weighted solver solves the projection ∇·(W∇φ) = ∇·(W u*) of the " *
+    "sound-proof cores (core = :anelastic or :pseudo_incompressible); the Boussinesq core " *
+    "takes one of cosine_fft, multigrid, mg_cg"
+sim_options(::Type{PressureDensityDirect}, cfg, mesh, o) = (pressure_solver = :direct,)
+function smoke_check(c::PressureDensityDirect, case)
+    s, sim = case.sim.solver, case.sim
+    ref = Aeolus.Anelastic.reference_state(sim)
+    W = sim isa Aeolus.Anelastic.AnelasticSimulation ? ref.ρ̄ : ref.ρ̄ .* ref.θ̄
+    return ["the solver is the direct density-weighted solver" => s isa DirectWeightedPoissonSolver,
+            solver_axes_check(case),
+            "its weight is the core's (ρ̄ or ρ̄θ̄ of case.ref, rel. 1e-12)" =>
+                isapprox(s.w_c, W; rtol = 1e-12),
+            "∇·(W u) at round-off (< 1e-12 s⁻¹)" =>
+                Aeolus.Anelastic.constraint_residual(sim) < 1e-12]
 end
 
 """
@@ -159,10 +202,13 @@ incompatible_reason(::Type{PressureDensityWeighted}) =
     "the density-weighted CG solves the projection ∇·(W∇φ) = ∇·(W u*) of the sound-proof " *
     "cores (core = :anelastic or :pseudo_incompressible); the Boussinesq core takes one of " *
     "cosine_fft, multigrid, mg_cg"
-sim_options(::Type{PressureDensityWeighted}, cfg, mesh, o) = (tol = o.tol, maxit = o.maxit)
-report(c::PressureDensityWeighted, case) =
-    @sprintf("density-weighted CG: last solve %d iterations, ‖r‖ %.1e",
-             solver_iterations(case.sim.solver), solver_residual(case.sim.solver))
+sim_options(::Type{PressureDensityWeighted}, cfg, mesh, o) =
+    (pressure_solver = :cg, tol = o.tol, maxit = o.maxit)
+"`iterations` and `residual` (‖r‖₂) of the last density-weighted CG solve, every step."
+diagnostics(c::PressureDensityWeighted, case) = Diagnostic[
+    Diagnostic("iterations", "1", () -> solver_iterations(case.sim.solver); cadence = :step),
+    Diagnostic("residual", "1", () -> solver_residual(case.sim.solver); cadence = :step,
+               description = "‖r‖₂ of the last solve")]
 function smoke_check(c::PressureDensityWeighted, case)
     s, sim = case.sim.solver, case.sim
     ref = Aeolus.Anelastic.reference_state(sim)
@@ -181,4 +227,5 @@ end
 register!(PressureCosineFFT)
 register!(PressureMultigrid)
 register!(PressureMGCG)
+register!(PressureDensityDirect)    # before the CG: the first provider a sound-proof core is given
 register!(PressureDensityWeighted)

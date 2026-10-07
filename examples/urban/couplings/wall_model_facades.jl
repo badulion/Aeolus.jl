@@ -40,7 +40,7 @@ Additive coupling, on by default: the facade wall model of
   the stencil flux removed here.
 
 Momentum is not in the ledger (the surface-energy and water budgets), so
-there is no `budget!`; `report` prints the facade share of the surface
+there is no `budget!`; its diagnostics give the facade share of the surface
 drag.
 """
 mutable struct WallModelFacades <: AbstractCoupling
@@ -80,9 +80,10 @@ function init!(c::WallModelFacades, case)
         so = step_options(o, case)
         haskey(so, :sgs) && (c.sgs_walls = attach_immersed_walls!(so.sgs, c.iw))
     end
-    @debug(@sprintf("Facade wall model: %d u, %d v, %d w face-walls; z0m wall %.3g m, glass %.3g m",
-                    immersed_wall_count(c.iw)..., c.z0m_wall, c.z0m_glass),
-           subsystem = :berlin, domain = current_domain(), coupling = :wall_model)
+    nu, nv, nw = immersed_wall_count(c.iw)
+    @debug("facade wall model", subsystem = :berlin, domain = current_domain(), event = :init,
+           coupling = :wall_model_facades, u_walls = nu, v_walls = nv, w_walls = nw,
+           z0m_wall = c.z0m_wall, z0m_glass = c.z0m_glass)
     return nothing
 end
 
@@ -134,12 +135,25 @@ function mean_canopy_wind(case)
     return (u = su / n, v = sv / n)
 end
 
-function report(c::WallModelFacades, case)
-    d = facade_drag_share(c, case)
-    F = c.iw.stats[:F]; Fs = c.iw.stats[:F_stencil]
-    A = c.iw.stats[:area]
-    return @sprintf("   facade wall model: ⟨τ_w⟩ %.2e m²/s² over %.0f m², %.1f %% of the surface drag; stencil drag removed |F| %.2e, modelled %.2e m⁴/s²",
-                    d.facade / A, A, 100 * d.share, hypot(Fs[1], Fs[2], Fs[3]), hypot(F...))
+"""
+    diagnostics(c::WallModelFacades, case)
+
+The facade wall model's last application: the mean wall stress
+`tau_w_mean` (m² s⁻²) over the facade area `area` (m²), its `share` of
+the surface drag (1, [`facade_drag_share`](@ref)), and the magnitudes of
+the facade drag the stencil carried and that was removed, `F_stencil`,
+and of the modelled one, `F_model` (m⁴ s⁻²).
+"""
+function diagnostics(c::WallModelFacades, case)
+    st = c.iw.stats
+    d = per_state(() -> facade_drag_share(c, case), case)
+    return Diagnostic[
+        Diagnostic("tau_w_mean", "m2 s-2", () -> d().facade / st[:area]),
+        Diagnostic("area", "m2", () -> st[:area]),
+        Diagnostic("share", "1", () -> d().share; description = "facade share of the surface drag"),
+        Diagnostic("F_stencil", "m4 s-2", () -> hypot(st[:F_stencil]...);
+                   description = "the stencil's facade drag, removed"),
+        Diagnostic("F_model", "m4 s-2", () -> hypot(st[:F]...); description = "the modelled facade drag")]
 end
 
 function smoke_check(c::WallModelFacades, case)

@@ -124,12 +124,23 @@ function output_fields(c::GroundSoil, case)
                     :xy, cs -> soil_map((s, I) -> s.water.θ_liq[1], c, cs))]
 end
 
-function report(c::GroundSoil, case)
-    isempty(c.cols) && return nothing
-    β = [moisture_availability(case.bus.surface[I]) for I in c.cols]
-    θ1 = [case.bus.surface[I].water.θ_liq[1] for I in c.cols]
-    return @sprintf("           soil: β %.3f–%.3f (mean %.3f), top-layer water %.4f–%.4f",
-                    minimum(β), maximum(β), mean(β), minimum(θ1), maximum(θ1))
+"""
+    diagnostics(c::GroundSoil, case)
+
+Over the soil columns: the moisture availability `beta_min`,
+`beta_max`, `beta_mean` (1) and the liquid water of the top layer
+`theta_top_min`, `theta_top_max` (m³ m⁻³). None without soil columns.
+"""
+function diagnostics(c::GroundSoil, case)
+    isempty(c.cols) && return Diagnostic[]
+    β() = [moisture_availability(case.bus.surface[I]) for I in c.cols]
+    θ1() = [case.bus.surface[I].water.θ_liq[1] for I in c.cols]
+    return Diagnostic[
+        Diagnostic("beta_min", "1", β; reduction = :min, description = "moisture availability"),
+        Diagnostic("beta_max", "1", β; reduction = :max, description = "moisture availability"),
+        Diagnostic("beta_mean", "1", β; reduction = :mean, description = "moisture availability"),
+        Diagnostic("theta_top_min", "m3 m-3", θ1; reduction = :min, description = "top-layer liquid water"),
+        Diagnostic("theta_top_max", "m3 m-3", θ1; reduction = :max, description = "top-layer liquid water")]
 end
 
 function smoke_check(c::GroundSoil, case)

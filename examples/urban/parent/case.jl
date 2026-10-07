@@ -141,8 +141,8 @@ function sounding_zi_max(cfg::CaseConfig)
     MT = Aeolus.MoistThermodynamics
     P = S.profiles
     zi = 0.0
-    for l in S.sounding.launches
-        θv = [MT.virtual_temperature(forcing_value(P.θ, z, l.t), MT.PhasePartition(forcing_value(P.qv, z, l.t)))
+    for t in S.times                                     # the launches
+        θv = [MT.virtual_temperature(forcing_value(P.θ, z, t), MT.PhasePartition(forcing_value(P.qv, z, t)))
               for z in P.z]
         zi = max(zi, boundary_layer_height(P.z, θv; method = :parcel))
     end
@@ -454,9 +454,9 @@ function build_parent(pc::ParentConfig; child = nothing)
                                             :delivered_H => 0.0, :delivered_E => 0.0),
                        0.0, 350.0, 0.0, Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w),
                        0, 0, Float64[], Dict{Symbol,Float64}(), Any[])
-    @debug(@sprintf("Berlin parent: %d × %d × %d (Δx %.2f m, Δz %.1f–%.1f m), surface %s, sgs %s, z_g %.0f m, z_i(obs) %.0f m",
-                    Nx, Ny, Nz, mesh.dx, minimum(dzc), maximum(dzc), pc.surface, pc.sgs, z_g, zi_obs),
-           subsystem = :berlin, domain = current_domain(), event = :parent_built)
+    @debug("Berlin parent built", subsystem = :berlin, domain = current_domain(), event = :parent_built,
+           grid = (Nx, Ny, Nz), dx = mesh.dx, dz_min = minimum(dzc), dz_max = maximum(dzc),
+           surface = pc.surface, sgs = pc.sgs, z_g, zi_obs)
     return pcase
 end
 
@@ -961,12 +961,13 @@ function run_parent!(p::ParentCase; hours::Real = p.pc.hours, record::Bool = tru
         all(isfinite, interior_view(p.sim.θ)) || error("run_parent!: non-finite θ at t = $(p.sim.t) s")
         if record && abs(p.sim.t / pc.output_period - round(p.sim.t / pc.output_period)) < 1e-6
             r = parent_record!(p)
-            @info(@sprintf("parent %5.2f h (%05.2f LT): z_i %6.0f m (parcel %6.0f), θ(12.5 m) %.2f K, H %.1f W/m², %d steps, %.0f s wall",
-                           r.t / 3600, r.hour, r.zi, r.zi_parcel, r.θ[1],
-                           length(p.diag) > 1 ? (r.sfc[:H] - p.diag[end-1].sfc[:H]) / pc.output_period : 0.0,
-                           r.nsteps, r.wall),
-                  subsystem = :berlin, domain = current_domain(), event = :parent_record,
-                  t = r.t, zi = r.zi)
+            @info("parent at $(round(r.t / 3600; digits = 2)) h", subsystem = :berlin,
+                  domain = current_domain(), event = :parent_record, t = r.t,
+                  hour = round(r.hour; digits = 2), zi = round(r.zi; digits = 1),
+                  zi_parcel = round(r.zi_parcel; digits = 1), theta1 = round(r.θ[1]; digits = 3),
+                  H = length(p.diag) > 1 ? round((r.sfc[:H] - p.diag[end-1].sfc[:H]) / pc.output_period;
+                                                 sigdigits = 4) : 0.0,
+                  steps = r.nsteps, wall = round(r.wall; digits = 1))
         end
     end
     return p

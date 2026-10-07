@@ -850,6 +850,7 @@ using Aeolus.Fields: set!, interior_view
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
     include("logging_blowup.jl")      # #335: blowup diagnose-dump-stop, run monitor
     include("logging_diagnostics_nc.jl")  # #337: diagnostics.nc (profiles, NetCDF-4, provenance attributes)
+    include("logging_step_diagnostics.jl")  # #336: per-step diagnostics in the step cores, attached monitor
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
@@ -860,6 +861,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
     include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
+    include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

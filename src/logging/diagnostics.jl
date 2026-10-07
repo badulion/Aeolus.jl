@@ -34,10 +34,11 @@ One scalar diagnostic a component declares through [`diagnostics`](@ref):
   60 s simulated; epic #293);
 * `reduction`: how an array is reduced to the scalar: `:max`, `:min`,
   `:maxabs`, `:sum`, `:mean` or `:rms` (root mean square), or `:value`.
-  The reduction is declared rather than done by the source, so the
-  threaded, deterministic reductions of the KernelAbstractions port can
-  replace [`reduce_diagnostic`](@ref) without touching any component
-  (#336).
+  The reduction is declared rather than done by the source. A source
+  that returns a `Field` is reduced over its interior with the threaded,
+  thread-invariant reductions of the KernelAbstractions port (a method of
+  [`reduce_diagnostic`](@ref) for `Field`s, #336); any other array with
+  the serial one.
 
 ```julia
 Diagnostic("max_abs_w", "m s-1", () -> interior_view(sim.w); reduction = :maxabs)
@@ -257,6 +258,28 @@ function evaluate_profile(p::ProfileDiagnostic)
 end
 
 # ---------------------------------------------------------------------------
+# the process (#336)
+# ---------------------------------------------------------------------------
+
+"""
+    process_diagnostics() -> Vector{Diagnostic}
+
+The costly diagnostics of the Julia process itself (#336): `mem_live_mb`
+(memory held by live objects, `Base.gc_live_bytes`), `mem_maxrss_mb`
+(the peak resident set size, `Sys.maxrss`) and `gc_time` (the cumulative
+time spent in garbage collection). The run monitor adds them under
+`proc.` (`proc.mem_maxrss_mb`, …) to the diagnostics it collects.
+"""
+process_diagnostics() = Diagnostic[
+    Diagnostic("mem_live_mb", "MiB", () -> Base.gc_live_bytes() / 2^20;
+               description = "memory held by live Julia objects"),
+    Diagnostic("mem_maxrss_mb", "MiB", () -> Sys.maxrss() / 2^20;
+               description = "peak resident set size of the process"),
+    Diagnostic("gc_time", "s", () -> Base.gc_time_ns() / 1e9;
+               description = "cumulative garbage-collection time"),
+]
+
+# ---------------------------------------------------------------------------
 # evaluation
 # ---------------------------------------------------------------------------
 
@@ -266,9 +289,10 @@ end
 `A` reduced as declared: `:max`, `:min`, `:maxabs`, `:sum`, `:mean`,
 `:rms`. Serial and deterministic (a fixed summation order); a non-finite
 element propagates (`NaN` wins over `max`), so a blowup shows in the
-diagnostics. The threaded deterministic reductions of the
-KernelAbstractions port replace this one function (#336). An empty array
-gives `NaN`.
+diagnostics. An empty array gives `NaN`. A source that returns a
+`Field` is reduced by the method for `Field`s instead, with the
+KernelAbstractions port's threaded, thread-invariant reductions over the
+field's interior (#336).
 """
 function reduce_diagnostic(r::Symbol, A::AbstractArray)
     isempty(A) && return NaN
