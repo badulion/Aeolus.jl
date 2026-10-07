@@ -46,7 +46,7 @@ function _ShellArray{T}(n::NTuple{3,Int}, lo::NTuple{3,Int}, hi::NTuple{3,Int}) 
 end
 
 "A halo-only array for a child field at `loc` on mesh `cm`."
-function _shell_array(::Type{T}, cm::RegularGrid, loc::Location) where {T}
+function _shell_array(::Type{T}, cm::NestChildMesh, loc::Location) where {T}
     H = (cm.Hx, cm.Hy, cm.Hz)
     ax = _stagger_axis(loc)
     lo = ntuple(d -> H[d] + (d == ax), 3)

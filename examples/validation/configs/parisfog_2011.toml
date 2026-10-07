@@ -27,3 +27,12 @@ fog = { droplet_feedback = false }
 [[sweep.member]]
 label = "no_sun"
 fog = { shortwave = false }
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "fog_sounding.duration=10.0",
+]
+member = "reference"

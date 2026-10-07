@@ -26,7 +26,10 @@
 #   run_stage!(c, case, ::Val{S}, dt)
 #   output_fields(c, case)      -> Vector of OutputField, registered when the file is created
 #   budget!(c, case, ledger)    -> energy / water terms for the ledger
-#   report(c, case)             -> Union{Nothing,String}, printed with each output record
+#   diagnostics(c, case)        -> Vector{Diagnostic} (Aeolus.RunLog): the scalars c reports,
+#                                  in diagnostics.csv / .nc and in its log event of each output
+#                                  record (core/diagnostics.jl); a wall-clock one is `wall.<x>`
+#   profile_diagnostics(c, case)-> Vector{ProfileDiagnostic}: its vertical profiles, diagnostics.nc
 #   smoke_variants(::Type{C})   -> tuple of configs worth a smoke run
 #   smoke_check(c, case)        -> Vector{Pair{String,Bool}}
 #   sim_options(::Type{C}, cfg, mesh, opts) -> NamedTuple of keywords of the core's constructor
@@ -133,7 +136,6 @@ first air cell's wind, which reads the face velocity at an edge column).
 init_priority(::Type{<:AbstractCoupling}) = 0
 output_fields(c::AbstractCoupling, case) = OutputField[]
 budget!(c::AbstractCoupling, case, ledger) = nothing
-report(c::AbstractCoupling, case) = nothing
 smoke_variants(::Type{<:AbstractCoupling}) = ()
 smoke_check(c::AbstractCoupling, case) = Pair{String,Bool}[]
 """

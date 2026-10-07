@@ -221,9 +221,9 @@ function init!(c::CityMeanBuildings, case)
                            sum(scene.facets[i].area for i in g.wall_ids);
                            start_weekday = case_weekday(case.cfg))
     bem = c.bem
-    @debug(@sprintf("City-mean building: %.0f m² floor area, %.0f m² walls, %.0f m² roofs",
-                    bem.zone.floor_area, bem.zone.envelope[1].area / (1 - 0.33), bem.zone.envelope[2].area),
-           subsystem = :berlin, domain = current_domain(), coupling = :buildings)
+    @debug("city-mean building", subsystem = :berlin, domain = current_domain(), event = :init,
+           coupling = :buildings_citymean, floor_area = bem.zone.floor_area,
+           wall_area = bem.zone.envelope[1].area / (1 - 0.33), roof_area = bem.zone.envelope[2].area)
     return nothing
 end
 
@@ -246,22 +246,38 @@ run_stage!(c::CityMeanBuildings, case, ::Val{:anthropogenic}, dt) =
     apply_building_heat!(case.sim, tracer(case, :qv), case.bus.sensible, c.bem, dt;
                          ρ = ref_density(case), cp = case.ref.cp, π = case.ref.π̄)
 
-function report(c::CityMeanBuildings, case)
+"""
+    diagnostics(c::CityMeanBuildings, case)
+
+The city-mean building of the last building step (`NaN` before it): the
+zone air temperature `T_in` (K); per unit ground area of the domain
+(W m⁻²) the heat to the air `to_air` and its parts, the HVAC exhaust
+`exhaust` and what leaves through the canyon facades `canyon`
+(ventilation, windows, losses, vented latent heat); the heat the roof
+and wall envelopes take from outside, `roof_envelope` and
+`wall_envelope`; the sun through the windows `window_sun`; and the HVAC
+`heating` and `cooling` (W).
+"""
+function diagnostics(c::CityMeanBuildings, case)
     bem = c.bem
-    bem.release === nothing && return nothing
-    Lx, Ly = case.mesh.Lx, case.mesh.Ly
-    Nx, Ny = case.mesh.Nx, case.mesh.Ny
-    r = bem.release
-    zr, zw = bem.zone.envelope[2], bem.zone.envelope[1]
-    return @sprintf("           buildings: T_in=%5.2f°C  to air %5.1f W/m² (exhaust %5.1f, canyon %5.1f)  (roof env %5.1f, wall env %5.1f)  window sun %5.1f W/m²  heat %6.0f kW  cool %6.0f kW",
-                    zone_air_temperature(bem.zone) - 273.15,
-                    sum(bem.H .+ bem.LE) / (Nx * Ny),
-                    (r.Q_exhaust_sensible + r.Q_exhaust_latent) / (Lx * Ly),
-                    (r.Q_ventilation_sensible + r.Q_ventilation_latent + r.Q_windows + r.Q_lost +
-                     r.Q_latent_vented) / (Lx * Ly),
-                    -zr.area * zr.F_outer / (Lx * Ly), -zw.area * zw.F_outer / (Lx * Ly),
-                    r.Q_solar / (Lx * Ly),
-                    bem.hvac_budget.Q_heating / 1e3, bem.hvac_budget.Q_cooling / 1e3)
+    A = case.mesh.Lx * case.mesh.Ly
+    N = case.mesh.Nx * case.mesh.Ny
+    rel(x) = () -> bem.release === nothing ? NaN : x(bem.release)
+    env(i) = () -> bem.release === nothing ? NaN :
+                   (z = bem.zone.envelope[i]; -z.area * z.F_outer / A)
+    return Diagnostic[
+        Diagnostic("T_in", "K", () -> bem.release === nothing ? NaN : zone_air_temperature(bem.zone);
+                   description = "zone air temperature"),
+        Diagnostic("to_air", "W m-2", () -> bem.release === nothing ? NaN : sum(bem.H .+ bem.LE) / N),
+        Diagnostic("exhaust", "W m-2", rel(r -> (r.Q_exhaust_sensible + r.Q_exhaust_latent) / A)),
+        Diagnostic("canyon", "W m-2",
+                   rel(r -> (r.Q_ventilation_sensible + r.Q_ventilation_latent + r.Q_windows +
+                             r.Q_lost + r.Q_latent_vented) / A)),
+        Diagnostic("roof_envelope", "W m-2", env(2)),
+        Diagnostic("wall_envelope", "W m-2", env(1)),
+        Diagnostic("window_sun", "W m-2", rel(r -> r.Q_solar / A)),
+        Diagnostic("heating", "W", () -> bem.release === nothing ? NaN : bem.hvac_budget.Q_heating),
+        Diagnostic("cooling", "W", () -> bem.release === nothing ? NaN : bem.hvac_budget.Q_cooling)]
 end
 
 # Ledger: the window sun on the walls leaves the surface budget (S ≤ 0 is

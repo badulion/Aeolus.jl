@@ -39,3 +39,15 @@ end_time = 20.0
 [averaging]
 from = 15.0
 interval = 1.0
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,32]",
+    "case.spinup_time=0.1",
+    "stepper.end_time=0.15",
+    "averaging.from=0.1",
+    "averaging.interval=0.05",
+]

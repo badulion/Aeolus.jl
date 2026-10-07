@@ -83,8 +83,30 @@ mutable struct StepStats
     limiters::Dict{Symbol,Int}
     imex_iterations::Int
     imex_residual::Float64
+    last_limiter::Symbol           # what limited the step being taken (LOG-g, #338)
 end
-StepStats() = StepStats(0, 0, 0, 0, Inf, 0.0, 0.0, 0.0, Dict{Symbol,Int}(), 0, 0.0)
+StepStats() = StepStats(0, 0, 0, 0, Inf, 0.0, 0.0, 0.0, Dict{Symbol,Int}(), 0, 0.0, Symbol(""))
+
+"""
+    step_limiter(case) -> String
+
+What limited the step about to be taken, for the diagnostics row and the
+progress line: for the `:adaptive` provider the binding CFL limit
+(`advective`, `diffusive`, …, as `cfl_diagnostics` names it), or the
+clamp of `adaptive_dt` that bound instead (`dt_min`, `dt_max`, `growth`),
+or the coupling whose `limit_dt` shortened the step (`nesting`); `""`
+for a fixed step.
+"""
+function step_limiter(case)
+    ts = timestepper(case)
+    return ts !== nothing && hasproperty(ts, :stats) ? string(ts.stats.last_limiter) : ""
+end
+
+"The rejected attempts of the `:timestepper` provider so far (0 without one)."
+function step_retries(case)
+    ts = timestepper(case)
+    return ts !== nothing && hasproperty(ts, :stats) ? ts.stats.retries : 0
+end
 
 function _record_dt!(s::StepStats, dt, cfl)
     s.n += 1
@@ -186,6 +208,10 @@ function next_dt(c::AdaptiveStep, case)
     dt = adaptive_dt(sim, k; dt_prev = c.dt_prev, diagnostics = d, scheme = c.scheme)
     c.rate = d.advective_rate
     c.stats.limiters[lim] = get(c.stats.limiters, lim, 0) + 1
+    # what bound this step: the clamps of adaptive_dt, or the CFL limit
+    c.stats.last_limiter = dt == k.dt_min ? :dt_min : dt == k.dt_max ? :dt_max :
+                           (c.dt_prev > 0 && isapprox(dt, k.growth_max * c.dt_prev; rtol = 1e-12)) ? :growth :
+                           lim
     return dt
 end
 
@@ -249,20 +275,34 @@ end
 "The advective rate max Σ|uᵢ|/Δxᵢ of `cfl_diagnostics` (s⁻¹); dt × this is the CFL number."
 advective_rate(sim) = cfl_diagnostics(sim; update_νt = false).advective_rate
 
-report(c::AdaptiveStep, case) = step_report(c.stats, "adaptive" * (c.scheme === nothing ? "" : " (ARK2)"))
+diagnostics(c::AdaptiveStep, case) = step_diagnostics(c.stats)
+
+"The CFL limits `cfl_diagnostics` names, each counted by [`step_diagnostics`](@ref)."
+const CFL_LIMITERS = (:advective, :diffusive, :buoyancy, :coriolis, :sgs)
 
 """
-    step_report(stats, label) -> String
+    step_diagnostics(stats::StepStats) -> Vector{Diagnostic}
 
-One log line of [`StepStats`](@ref): steps, dt range and mean, retries,
-largest CFL number and the limiting processes.
+The time stepper's record, every step: `steps`, `dt_min`, `dt_max`,
+`dt_mean` (s), `retries` (all rejected attempts) and `max_retries_step`,
+the largest advective CFL number `cfl_max`, and `limited_<limit>`, the
+steps whose binding CFL limit was each of [`CFL_LIMITERS`](@ref).
 """
-function step_report(s::StepStats, label)
-    s.n == 0 && return "  $label: no steps yet"
-    lims = join(("$k $v" for (k, v) in sort!(collect(s.limiters); by = last, rev = true)), ", ")
-    return @sprintf("  %s: %d steps, dt %.3f–%.3f s (mean %.3f), %d retries (max %d in a step), max CFL %.2f; limited by %s",
-                    label, s.n, s.dt_min, s.dt_max, s.dt_sum / s.n, s.retries, s.max_retries_step,
-                    s.cfl_max, isempty(lims) ? "-" : lims)
+function step_diagnostics(s::StepStats)
+    ds = Diagnostic[
+        Diagnostic("steps", "1", () -> s.n; cadence = :step),
+        Diagnostic("dt_min", "s", () -> s.n == 0 ? NaN : s.dt_min; cadence = :step),
+        Diagnostic("dt_max", "s", () -> s.n == 0 ? NaN : s.dt_max; cadence = :step),
+        Diagnostic("dt_mean", "s", () -> s.n == 0 ? NaN : s.dt_sum / s.n; cadence = :step),
+        Diagnostic("retries", "1", () -> s.retries; cadence = :step),
+        Diagnostic("max_retries_step", "1", () -> s.max_retries_step; cadence = :step),
+        Diagnostic("cfl_max", "1", () -> s.cfl_max; cadence = :step,
+                   description = "largest advective CFL number at a step's start")]
+    for k in CFL_LIMITERS
+        push!(ds, Diagnostic("limited_$k", "1", () -> get(s.limiters, k, 0); cadence = :step,
+                             description = "steps whose binding CFL limit was $k"))
+    end
+    return ds
 end
 
 function smoke_check(c::AdaptiveStep, case)
@@ -319,10 +359,11 @@ function advance_dynamics!(c::IMEXStep, case, dt)
     return nothing
 end
 
-report(c::IMEXStep, case) =
-    step_report(c.stats, "imex (ARK2)") *
-    @sprintf("; last step %d CG iterations, max relative residual %.1e",
-             c.stats.imex_iterations, c.stats.imex_residual)
+"[`step_diagnostics`](@ref) and the last step's implicit solves: `cg_iterations`, `cg_residual` (max relative)."
+diagnostics(c::IMEXStep, case) =
+    vcat(step_diagnostics(c.stats),
+         Diagnostic[Diagnostic("cg_iterations", "1", () -> c.stats.imex_iterations; cadence = :step),
+                    Diagnostic("cg_residual", "1", () -> c.stats.imex_residual; cadence = :step)])
 
 function smoke_check(c::IMEXStep, case)
     s = c.stats

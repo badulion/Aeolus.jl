@@ -19,6 +19,7 @@ using Aeolus.Grids: interior
 using Random: Xoshiro
 using Statistics: mean
 using Printf
+isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
 
 const OPS = Aeolus.Operators
 
@@ -188,10 +189,7 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         # static Smagorinsky 0.17
         mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))
         s = BoussinesqSimulation(mesh; C_s = 0.17, ν = 1e-4)
-        k0 = 1.0
-        isotropic_random_field!(s, k -> (k / k0)^(-5/3); rng = Xoshiro(1), kmax = 8k0)
-        sc = 1 / sqrt(mean(abs2, interior_view(s.u)))
-        foreach(f -> (interior_view(f) .*= sc; fill_halos!(f, s.bcs)), (s.u, s.v, s.w))
+        kolmogorov_field!(s, Xoshiro(1))            # k_c = 8 = N/4, u_rms = 1
         for _ in 1:100
             step!(s, 0.01)
         end

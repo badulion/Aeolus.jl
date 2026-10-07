@@ -22,6 +22,7 @@ import ..Operators: add_sgs_momentum!, add_sgs_scalar!, sgs_scalar_tensor,
                     sgs_scalar_face_diffusivity,
                     sgs_explicit_stress, _fill_sgs_halos!
 using ..AdvectionSchemes: advection_scheme
+using StaticArrays: MMatrix, MVector
 
 # -------------------------------------------------------------------------
 # Small symmetric-tensor helpers
@@ -203,8 +204,9 @@ end
 # eigenvector matrix V (columns), τ = V diag(λ) Vᵀ.
 function _jacobi3(τ)
     T = float(eltype(τ))
-    a = [T(τ[1]) T(τ[4]) T(τ[5]); T(τ[4]) T(τ[2]) T(τ[6]); T(τ[5]) T(τ[6]) T(τ[3])]
-    v = [one(T) zero(T) zero(T); zero(T) one(T) zero(T); zero(T) zero(T) one(T)]
+    # stack-allocated 3 × 3 (KA-l: no heap allocation inside a kernel)
+    a = MMatrix{3,3,T}(T(τ[1]), T(τ[4]), T(τ[5]), T(τ[4]), T(τ[2]), T(τ[6]), T(τ[5]), T(τ[6]), T(τ[3]))
+    v = MMatrix{3,3,T}(one(T), zero(T), zero(T), zero(T), one(T), zero(T), zero(T), zero(T), one(T))
     scale = abs(a[1, 1]) + abs(a[2, 2]) + abs(a[3, 3]) + abs(a[1, 2]) + abs(a[1, 3]) + abs(a[2, 3])
     for _ in 1:50
         off = abs(a[1, 2]) + abs(a[1, 3]) + abs(a[2, 3])
@@ -328,32 +330,44 @@ end
 function _stress_edges!(S::StressTensor, τ, E::_Edges, g::RegularGrid{T}) where {T}
     t11, t22, t33, t12, t13, t23 = τ
     i1, i2, j1, j2, k1, k2 = E.i1, E.i2, E.j1, E.j2, E.k1, E.k2
-    q = T(0.25); c23 = T(2) / 3
-    @inline dev(a, i, j, k) = @inbounds a[i, j, k] - c23 * (t11[i, j, k] + t22[i, j, k] + t33[i, j, k]) / 2
-    @inbounds begin
-        for k in k1:k2, j in j1:j2, i in i1-1:i2
-            S.τ11[i, j, k] = dev(t11, i, j, k)
-        end
-        for k in k1:k2, j in j1-1:j2, i in i1:i2
-            S.τ22[i, j, k] = dev(t22, i, j, k)
-        end
-        for k in k1-1:k2, j in j1:j2, i in i1:i2
-            S.τ33[i, j, k] = dev(t33, i, j, k)
-        end
-        for k in k1:k2, j in j1:j2+1, i in i1:i2+1
-            S.τ12[i, j, k] = _oxy(E, T, i, j, k) *
-                (q * (t12[i-1, j-1, k] + t12[i, j-1, k] + t12[i-1, j, k] + t12[i, j, k]))
-        end
-        for k in k1:k2+1, j in j1:j2, i in i1:i2+1
-            S.τ13[i, j, k] = _oxz(E, T, i, j, k) *
-                (q * (t13[i-1, j, k-1] + t13[i, j, k-1] + t13[i-1, j, k] + t13[i, j, k]))
-        end
-        for k in k1:k2+1, j in j1:j2+1, i in i1:i2
-            S.τ23[i, j, k] = _oyz(E, T, i, j, k) *
-                (q * (t23[i, j-1, k-1] + t23[i, j, k-1] + t23[i, j-1, k] + t23[i, j, k]))
-        end
-    end
+    b = Backends.backend(t11)
+    # KA-l (#304): one pointwise launch per component, over the range its
+    # loop covered (the deviatoric diagonals one cell into the halo on the
+    # low side, the edge stresses one edge past the interior on the high side)
+    launch!(b, _dev_body!, (i1-1:i2, j1:j2, k1:k2), S.τ11, t11, t11, t22, t33)
+    launch!(b, _dev_body!, (i1:i2, j1-1:j2, k1:k2), S.τ22, t22, t11, t22, t33)
+    launch!(b, _dev_body!, (i1:i2, j1:j2, k1-1:k2), S.τ33, t33, t11, t22, t33)
+    launch!(b, _edge_xy_body!, (i1:i2+1, j1:j2+1, k1:k2), S.τ12, t12, E)
+    launch!(b, _edge_xz_body!, (i1:i2+1, j1:j2, k1:k2+1), S.τ13, t13, E)
+    launch!(b, _edge_yz_body!, (i1:i2, j1:j2+1, k1:k2+1), S.τ23, t23, E)
     return S
+end
+
+# the deviatoric part of a diagonal stress at the cell centre
+@inline function _dev_body!(i, j, k, out, a, t11, t22, t33)
+    T = eltype(out)
+    c23 = T(2) / 3
+    @inbounds out[i, j, k] = a[i, j, k] - c23 * (t11[i, j, k] + t22[i, j, k] + t33[i, j, k]) / 2
+    return nothing
+end
+# the off-diagonal stresses averaged from the four cells around an edge (0 on a closed edge)
+@inline function _edge_xy_body!(i, j, k, out, t12, E)
+    T = eltype(out)
+    @inbounds out[i, j, k] = _oxy(E, T, i, j, k) *
+        (T(0.25) * (t12[i-1, j-1, k] + t12[i, j-1, k] + t12[i-1, j, k] + t12[i, j, k]))
+    return nothing
+end
+@inline function _edge_xz_body!(i, j, k, out, t13, E)
+    T = eltype(out)
+    @inbounds out[i, j, k] = _oxz(E, T, i, j, k) *
+        (T(0.25) * (t13[i-1, j, k-1] + t13[i, j, k-1] + t13[i-1, j, k] + t13[i, j, k]))
+    return nothing
+end
+@inline function _edge_yz_body!(i, j, k, out, t23, E)
+    T = eltype(out)
+    @inbounds out[i, j, k] = _oyz(E, T, i, j, k) *
+        (T(0.25) * (t23[i, j-1, k-1] + t23[i, j, k-1] + t23[i, j-1, k] + t23[i, j, k]))
+    return nothing
 end
 
 """
@@ -494,7 +508,7 @@ Fluids Eng. 95, 429–438; Launder, B. E., Reece, G. J. & Rodi, W. (1975),
 Fluid Mech. 68, 537–566; Schumann, U. (1977), *Realizability of
 Reynolds-stress turbulence models*, Phys. Fluids 20, 721–725.
 """
-struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, CT, WS, AS} <: AbstractSGSClosure
+struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, CT, WS, AS, RC} <: AbstractSGSClosure
     τ::NTuple{6,F}
     C1::T; C2::T; C3::T
     C_θ::CT                 # :tke or a number
@@ -512,6 +526,7 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, CT, WS, AS} <: 
     surface::SF             # nothing or (u_star, k)
     transport::Bool
     advection::Symbol
+    recon::RC               # the reconstruction of `advection` (diagonals), built once
     # scratch
     N2::F; ν::F; K2::F
     K::DiffusivityTensor
@@ -519,9 +534,6 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, CT, WS, AS} <: 
     tend::NTuple{6,F}
     ws::WS
     adv::AS
-    L6::Matrix{T}
-    A6::Matrix{T}
-    b6::Vector{T}
     snap::NTuple{6,Array{T,3}}
     stats::Vector{T}
     snapstats::Vector{T}
@@ -569,9 +581,9 @@ function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                  θ₀ === nothing ? T(NaN) : T(θ₀),
                                  g_accel === nothing ? T(NaN) : T(g_accel),
                                  Ωt, Ωa, qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, transport, advs,
+                                 transport ? _reconstruction(advs) : nothing,
                                  mkf(), mkf(), mkf(), DiffusivityTensor(g), StressTensor(g),
                                  ntuple(_ -> mkf(), 6), ws, adv,
-                                 zeros(T, 6, 6), zeros(T, 6, 6), zeros(T, 6),
                                  ntuple(_ -> similar(τf[1].data), 6),
                                  zeros(T, _NRSTATS), zeros(T, _NRSTATS))
 end
@@ -617,13 +629,21 @@ function sgs_coefficients!(f::SGSFields, c::ReynoldsStressClosure{T}, sim) where
     _stratification!(c, sim)
     _fill_stress_halos!(c, _scalar_bcs(sim))
     g = mesh(c.τ[1])
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
     τd = map(x -> x.data, c.τ)
     K = c.K
     Kd = (K.K11.data, K.K22.data, K.K33.data, K.K12.data, K.K13.data, K.K23.data)
-    nd, kd, n2 = f.νh.data, f.κh.data, c.N2.data
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K_ = Hx + i, Hy + j, Hz + k
+    launch!(Backends.backend(f.νh.data), _rsm_coefficients_body!, interior(g), f.νh.data, f.κh.data,
+            Kd, τd, c.N2.data, c, g.Hx, g.Hy, g.Hz)
+    _stress_edges!(c.S, τd, _Edges(c.mask, bounded_directions(sim.bcs), g), g)
+    return f
+end
+
+# KA-l (#304): ν_t, the Daly–Harlow tensor and its isotropic part at one cell
+# (the loop's expressions, bit for bit). `c` is read for its coefficients.
+@inline function _rsm_coefficients_body!(I, J, K_, nd, kd, Kd, τd, n2, c, Hx, Hy, Hz)
+    T = eltype(nd)
+    i, j, k = I - Hx, J - Hy, K_ - Hz
+    @inbounds begin
         τc = _τat(τd, I, J, K_)
         e = _tke(τc)
         if _solid(c.mask, I, J, K_) || !(e > 0)
@@ -631,7 +651,7 @@ function sgs_coefficients!(f::SGSFields, c::ReynoldsStressClosure{T}, sim) where
             for m in 1:6
                 Kd[m][I, J, K_] = zero(T)
             end
-            continue
+            return nothing
         end
         _, _, ν, cθ = _rsm_local(c, e, n2[I, J, K_], i, j, k)
         nd[I, J, K_] = ν
@@ -640,8 +660,7 @@ function sgs_coefficients!(f::SGSFields, c::ReynoldsStressClosure{T}, sim) where
         end
         kd[I, J, K_] = cθ * (2e) / 3
     end
-    _stress_edges!(c.S, τd, _Edges(c.mask, bounded_directions(sim.bcs), g), g)
-    return f
+    return nothing
 end
 
 function _fill_sgs_halos!(f::SGSFields, c::ReynoldsStressClosure, sim)
@@ -744,27 +763,31 @@ end
 
 function _rsm_viscosity!(c::ReynoldsStressClosure{T}) where {T}
     g = mesh(c.τ[1])
-    τd = map(x -> x.data, c.τ)
-    nd, n2 = c.ν.data, c.N2.data
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+    launch!(Backends.backend(c.ν.data), _rsm_viscosity_body!, interior(g), c.ν.data,
+            map(x -> x.data, c.τ), c.N2.data, c, g.Hx, g.Hy, g.Hz)
+    return c.ν
+end
+
+@inline function _rsm_viscosity_body!(I, J, K, nd, τd, n2, c, Hx, Hy, Hz)
+    T = eltype(nd)
+    @inbounds begin
         e = _tke(_τat(τd, I, J, K))
         nd[I, J, K] = (_solid(c.mask, I, J, K) || !(e > 0)) ? zero(T) :
-                      _rsm_local(c, e, n2[I, J, K], i, j, k)[3]
+                      _rsm_local(c, e, n2[I, J, K], I - Hx, J - Hy, K - Hz)[3]
     end
-    return c.ν
+    return nothing
 end
 
 function _rsm_transport!(c::ReynoldsStressClosure, sim, Δt, sbcs)
     _rsm_viscosity!(c)
     fill_halos!(c.ν, sim.bcs)
-    c.K2.data .= 2 .* c.ν.data
+    _double!(c.K2, c.ν)
     for m in 1:6
         t = c.tend[m]
         fill!(t.data, 0)
         if m <= 3
             advect_positive!(t, sim.u, sim.v, sim.w, c.τ[m], Δt;
-                             scheme = c.advection, workspace = c.ws, bcs = sbcs)
+                             scheme = c.recon, workspace = c.ws, bcs = sbcs)
         else
             c.adv(t, sim.u, sim.v, sim.w, c.τ[m])
         end
@@ -774,7 +797,7 @@ function _rsm_transport!(c::ReynoldsStressClosure, sim, Δt, sbcs)
 end
 
 # Gaussian elimination with partial pivoting, A (n×n) x = b in place (b ← x)
-function _solve!(A::Matrix{T}, b::Vector{T}) where {T}
+function _solve!(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     n = length(b)
     @inbounds for p in 1:n
         piv = p; amax = abs(A[p, p])
@@ -827,16 +850,23 @@ operator in every sub-step, so the fixed point is unchanged.
 """
 function reynolds_stress_step(τ, G, dθ, r, cθ, β, dt; C1 = 1.8, C2 = 0.6, C3 = 0.5)
     T = float(promote_type(eltype(τ), typeof(dt)))
-    τ1, _, _ = _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3,
-                              zeros(T, 6, 6), zeros(T, 6, 6), zeros(T, 6))
+    τ1, _, _ = _rsm_substeps(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, T)
     return τ1
 end
 
 # the sub-stepped backward Euler: returns (τ′, τ̄, n) with τ̄ the mean of the
 # sub-step results, so Σₖ h ℓ(τₖ) = dt ℓ(τ̄) for the (linear) ½-trace ℓ —
-# the exact budget of the update
-function _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, L::Matrix{T}, A::Matrix{T},
-                        b::Vector{T}) where {T}
+# the exact budget of the update. The 6 × 6 operator, the system matrix and
+# the right-hand side are stack-allocated locals (KA-l, #304: the closure's
+# shared scratch matrices they replace could not be used by two work items
+# at once); the arithmetic is unchanged.
+@inline function _rsm_substeps(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, ::Type{T}) where {T}
+    L = MMatrix{6,6,T}(undef); A = MMatrix{6,6,T}(undef); b = MVector{6,T}(undef)
+    return _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, L, A, b)
+end
+
+@inline function _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, L::AbstractMatrix{T},
+                                A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     z3 = (zero(T), zero(T), zero(T))
     @inbounds for m in 1:6
         col = reynolds_stress_rhs(_UNIT6[m], G, dθ, r, cθ, β; C1 = C1, C2 = C2, C3 = C3, Ω = z3)
@@ -870,72 +900,28 @@ function _rsm_substeps!(τ, G, dθ, r, cθ, β, dt, C1, C2, C3, L::Matrix{T}, A:
     return x, acc ./ n, n
 end
 
+# KA-l (#304): one work item per plane (`plane_map!`) updates the plane's
+# cells in their loop order; each cell writes its new stresses and adds its
+# contributions to the step's budget and counters (P, βh₃, ε, transport,
+# clips, clipped energy, split cells, unrealizable inputs) to the plane's
+# running sums, and the planes are combined in ascending k. The stresses
+# are the loop's bit for bit; the sums are a named one-time change of order
+# (per-plane sums instead of one running sum over the domain).
 function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     g = mesh(c.τ[1])
-    Hx, Hy, Hz = g.Hx, g.Hy, g.Hz
-    V = g.dx * g.dy * g.dz
-    idx, idy, idz = 1 / g.dx, 1 / g.dy, 1 / g.dz
-    τd = map(x -> x.data, c.τ)
-    td = map(x -> x.data, c.tend)
-    ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
-    θd = sim.θ.data
     q = _qv(c, sim)
-    qd = q === nothing ? nothing : q.data
-    n2 = c.N2.data
-    β = T(_β(c, sim))
     Ω = _rsm_Ω(c, sim)
-    rot = Ω != (zero(T), zero(T), zero(T))
-    R = coriolis_rotation(Ω, Δt)
-    E = _Edges(c.mask, bounded_directions(sim.bcs), g)
-    C1, C2, C3 = c.C1, c.C2, c.C3
-    sP = zero(T); sB = zero(T); sε = zero(T); sT = zero(T)
-    nclip = zero(T); eclip = zero(T); nsplit = 0; nin = 0
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = Hx + i, Hy + j, Hz + k
-        if _solid(c.mask, I, J, K)
-            for m in 1:6
-                τd[m][I, J, K] = zero(T)
-            end
-            continue
-        end
-        τn = _τat(τd, I, J, K)
-        e = _tke(τn)
-        τs = τn
-        if c.transport
-            tr = _τat(td, I, J, K)
-            sT += _tke(tr)
-            τs = ntuple(m -> τn[m] + Δt * tr[m], Val(6))
-        end
-        rot && (τs = rotate_stress(τs, R))
-        is_realizable(τs) || (nin += 1)
-        Gc = _dual_gradient(ud, vd, wd, I, J, K, idx, idy, idz, E)
-        dθ = _θv_gradient(θd, qd, I, J, K, idx, idy, idz)
-        if e > 0
-            _, r, _, cθ = _rsm_local(c, e, n2[I, J, K], i, j, k)
-            τ1, τb, nsub = _rsm_substeps!(τs, Gc, dθ, r, cθ, β, Δt, C1, C2, C3, c.L6, c.A6, c.b6)
-            nsub > 1 && (nsplit += 1)
-        else
-            r = zero(T); cθ = zero(T)
-            τ1 = τs; τb = τs
-        end
-        τp, changed = project_realizable(τ1)
-        if changed
-            nclip += 1
-            eclip += (_tke(τp) - _tke(τ1)) * V
-        end
-        for m in 1:6
-            τd[m][I, J, K] = τp[m]
-        end
-        # the budget of the step, before the correction: ½ tr of the
-        # (sub-stepped) implicit update is exactly Δt (P + βh₃ − r e) at the
-        # mean τb of the sub-step results (τb = τ^{n+1} without sub-steps)
-        if e > 0
-            sP -= τb[1] * Gc[1] + τb[2] * Gc[5] + τb[3] * Gc[9] +
-                  τb[4] * (Gc[2] + Gc[4]) + τb[5] * (Gc[3] + Gc[7]) + τb[6] * (Gc[6] + Gc[8])
-            sB += -β * cθ * (τb[5] * dθ[1] + τb[6] * dθ[2] + τb[3] * dθ[3])
-            sε += r * _tke(τb)
-        end
-    end
+    par = (V = g.dx * g.dy * g.dz, idx = 1 / g.dx, idy = 1 / g.dy, idz = 1 / g.dz,
+           Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, β = T(_β(c, sim)),
+           rot = Ω != (zero(T), zero(T), zero(T)), R = coriolis_rotation(Ω, Δt), Δt = Δt,
+           C1 = c.C1, C2 = c.C2, C3 = c.C3, transport = c.transport)
+    parts = Vector{NTuple{8,T}}(undef, g.Nz)
+    plane_map!(parts, Backends.backend(c.τ[1].data), _rsm_update_plane, interior(g),
+               map(x -> x.data, c.τ), map(x -> x.data, c.tend), sim.u.data, sim.v.data,
+               sim.w.data, sim.θ.data, q === nothing ? nothing : q.data, c.N2.data,
+               _Edges(c.mask, bounded_directions(sim.bcs), g), c, par)
+    sP, sB, sε, sT, nclip, eclip, nsplit, nin = ntuple(n -> ordered_sum(map(p -> p[n], parts)), Val(8))
+    V = par.V
     st = c.stats
     st[1] += nclip; st[2] += eclip
     st[3] = sP * V; st[4] = sB * V; st[5] = sε * V; st[6] = sT * V
@@ -947,6 +933,73 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     return c
 end
 
+# one plane: the cells in their loop order, each updating its stresses and
+# adding its contributions to the plane's running sums
+function _rsm_update_plane(K, ir, jr, τd, td, ud, vd, wd, θd, qd, n2, E, c, p)
+    T = eltype(n2)
+    acc = ntuple(_ -> zero(T), Val(8))
+    for J in jr, I in ir
+        acc = map(+, acc, _rsm_update_body(I, J, K, τd, td, ud, vd, wd, θd, qd, n2, E, c, p))
+    end
+    return acc
+end
+
+@inline function _rsm_update_body(I, J, K, τd, td, ud, vd, wd, θd, qd, n2, E, c, p)
+    T = eltype(n2)
+    z = zero(T)
+    @inbounds begin
+        if _solid(c.mask, I, J, K)
+            for m in 1:6
+                τd[m][I, J, K] = z
+            end
+            return (z, z, z, z, z, z, z, z)
+        end
+        Δt = p.Δt
+        τn = _τat(τd, I, J, K)
+        e = _tke(τn)
+        τs = τn
+        sT = z
+        if p.transport
+            tr = _τat(td, I, J, K)
+            sT = _tke(tr)
+            τs = ntuple(m -> τn[m] + Δt * tr[m], Val(6))
+        end
+        p.rot && (τs = rotate_stress(τs, p.R))
+        nin = is_realizable(τs) ? z : one(T)
+        Gc = _dual_gradient(ud, vd, wd, I, J, K, p.idx, p.idy, p.idz, E)
+        dθ = _θv_gradient(θd, qd, I, J, K, p.idx, p.idy, p.idz)
+        nsplit = z
+        if e > 0
+            _, r, _, cθ = _rsm_local(c, e, n2[I, J, K], I - p.Hx, J - p.Hy, K - p.Hz)
+            τ1, τb, nsub = _rsm_substeps(τs, Gc, dθ, r, cθ, p.β, Δt, p.C1, p.C2, p.C3, T)
+            nsub > 1 && (nsplit = one(T))
+        else
+            r = z; cθ = z
+            τ1 = τs; τb = τs
+        end
+        τp, changed = project_realizable(τ1)
+        nclip = z; eclip = z
+        if changed
+            nclip = one(T)
+            eclip = (_tke(τp) - _tke(τ1)) * p.V
+        end
+        for m in 1:6
+            τd[m][I, J, K] = τp[m]
+        end
+        # the budget of the step, before the correction: ½ tr of the
+        # (sub-stepped) implicit update is exactly Δt (P + βh₃ − r e) at the
+        # mean τb of the sub-step results (τb = τ^{n+1} without sub-steps)
+        sP = z; sB = z; sε = z
+        if e > 0
+            sP = -(τb[1] * Gc[1] + τb[2] * Gc[5] + τb[3] * Gc[9] +
+                   τb[4] * (Gc[2] + Gc[4]) + τb[5] * (Gc[3] + Gc[7]) + τb[6] * (Gc[6] + Gc[8]))
+            sB = -p.β * cθ * (τb[5] * dθ[1] + τb[6] * dθ[2] + τb[3] * dθ[3])
+            sε = r * _tke(τb)
+        end
+        return (sP, sB, sε, sT, nclip, eclip, nsplit, nin)
+    end
+end
+
 """
     sgs_tke!(e, c::ReynoldsStressClosure, sim) -> e
 
@@ -954,10 +1007,10 @@ Half the trace of the transported subgrid stress, ``e = \\tfrac12τ_{ii}``
 (N-inflow-b, #258). See `Operators.sgs_tke!` for the contract.
 """
 function sgs_tke!(e::Field{CellCenter}, c::ReynoldsStressClosure, sim; kwargs...)
-    interior_view(e) .= (interior_view(c.τ[1]) .+ interior_view(c.τ[2]) .+
-                         interior_view(c.τ[3])) ./ 2
+    interior_map!(_half_trace, e, c.τ[1], c.τ[2], c.τ[3])
     return e
 end
+@inline _half_trace(a, b, c) = (a + b + c) / 2
 
 """
     sgs_state(c::ReynoldsStressClosure) / restore_sgs_state!(c, s)
@@ -1063,27 +1116,35 @@ function initialize_reynolds_stress!(c::ReynoldsStressClosure{T}, sim; e_min::Re
     _stratification!(c, sim)
     D = c.ν                                  # scratch
     dual_strain!(D, sim.u, sim.v, sim.w, bcs)
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+    launch!(Backends.backend(D.data), _init_rsm_body!, interior(g), map(x -> x.data, c.τ), D.data,
+            c.N2.data, c, T(e_min), g.Hx, g.Hy, g.Hz)
+    return c
+end
+
+# isotropic τ = ⅔ e I with e the TKE closure's equilibrium (a bisection per cell)
+@inline function _init_rsm_body!(I, J, K, τd, dd, n2, c, e_min, Hx, Hy, Hz)
+    T = eltype(dd)
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
         for m in 4:6
-            c.τ[m].data[I, J, K] = zero(T)
+            τd[m][I, J, K] = zero(T)
         end
         if _solid(c.mask, I, J, K)
             for m in 1:3
-                c.τ[m].data[I, J, K] = zero(T)
+                τd[m][I, J, K] = zero(T)
             end
-            continue
+            return nothing
         end
         fac = _first(c.first_level, i, j, k) ? c.surface_factor : one(T)
-        eq = tke_equilibrium(max(D.data[I, J, K], zero(T)), c.N2.data[I, J, K], c.Δ;
+        eq = tke_equilibrium(max(dd[I, J, K], zero(T)), n2[I, J, K], c.Δ;
                              c_k = c.c_k, c_ε0 = c.c_ε0, c_ε1 = c.c_ε1, c_l = c.c_l,
                              l_wall = _lwall(c.l_wall, i, j, k, T), factor = fac)
-        e = max(T(eq), T(e_min))
+        e = max(T(eq), e_min)
         for m in 1:3
-            c.τ[m].data[I, J, K] = 2e / 3
+            τd[m][I, J, K] = 2e / 3
         end
     end
-    return c
+    return nothing
 end
 
 """
@@ -1103,21 +1164,27 @@ function initialize_reynolds_stress!(c::ReynoldsStressClosure{T}, τ::SymmetricT
     size(τ) == (g.Nx, g.Ny, g.Nz) ||
         throw(DimensionMismatch("initialize_reynolds_stress!: τ is $(size(τ)), interior $((g.Nx, g.Ny, g.Nz))"))
     src = (τ.xx, τ.yy, τ.zz, τ.xy, τ.xz, τ.yz)
-    n = 0
-    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
-        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
-        if _solid(c.mask, I, J, K)
+    parts = zeros(T, g.Nz)                   # changed cells per level (exact counts)
+    plane_reduce!(parts, Backends.backend(c.τ[1].data), _init_rsm_copy_body, interior(g),
+                  map(x -> x.data, c.τ), src, c.mask, g.Hx, g.Hy, g.Hz)
+    return c, round(Int, ordered_sum(parts))
+end
+
+@inline function _init_rsm_copy_body(I, J, K, τd, src, mask, Hx, Hy, Hz)
+    T = eltype(τd[1])
+    i, j, k = I - Hx, J - Hy, K - Hz
+    @inbounds begin
+        if _solid(mask, I, J, K)
             for m in 1:6
-                c.τ[m].data[I, J, K] = zero(T)
+                τd[m][I, J, K] = zero(T)
             end
-            continue
+            return zero(T)
         end
         t = ntuple(m -> T(src[m][i, j, k]), Val(6))
         tp, changed = project_realizable(t)
-        n += changed
         for m in 1:6
-            c.τ[m].data[I, J, K] = tp[m]
+            τd[m][I, J, K] = tp[m]
         end
+        return changed ? one(T) : zero(T)
     end
-    return c, n
 end

@@ -28,7 +28,6 @@ include("NCIO.jl")            # NetCDF-4 output policy over NCDatasets (#310); b
 include("IO.jl")
 include("Config.jl")         # run configuration schema, loader, canonical run.toml (CFG-a, #356)
 include("IBM.jl")
-include("InputDrivers.jl")   # static driver, OSM/GeoJSON preprocessors (CFG-f, #361); needs IBM, NCIO, IO
 include("Parallel.jl")
 include("SpectralElement.jl")
 include("Chemistry.jl")
@@ -90,6 +89,7 @@ include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wal
 include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
+include("InputDrivers.jl")   # static (CFG-f, #361) and dynamic (CFG-g, #362) drivers; needs IBM, NCIO, IO, LargeScaleForcing
 
 # CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
 # so after them; the driver contract and the CLI are in Config).
@@ -368,7 +368,7 @@ export MultigridPoissonSolver, MGPreconditionedCG,
        mg_level_count, mg_iteration_history
 
 # Phase 30 — parent-child nesting (Aeolus.Nesting); Phase 31 — block-structured AMR
-export NestedGrid, nested_grid, refinement_ratio, nest_offset,
+export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        nest_covered_range, nest_child_mesh, nest_parent_mesh,
        nest_bcs, NestBoundaryData, nest_boundary_data, nest_open_sides,
        interpolate_to_nest_boundary!, interpolate_parent_to_child!,
@@ -384,6 +384,7 @@ export NestedGrid, nested_grid, refinement_ratio, nest_offset,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt,
        begin_child_step!, end_child_step!,
+       NestHierarchy, add_nest!, nest_domain, nest_link, proper_nesting_violations,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
        anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights,
        RefinementBlock, AMRHierarchy, amr_hierarchy,

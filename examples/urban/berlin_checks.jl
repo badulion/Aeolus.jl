@@ -42,6 +42,7 @@ using Test
 using Aeolus
 using Aeolus.Fields: interior_view, set!
 using Printf
+using Logging
 using Random: Xoshiro
 using Aeolus.SurfaceTiles: last_tile_fluxes, parameter_aggregate, mosaic_fractions
 
@@ -102,6 +103,14 @@ function berlin_smoke_checks()
                 @test abs(hb.closure / hb.elapsed) <= 1e-10     # W/m²
                 @test !haskey(hb.terms, (:core, :unattributed))
                 @test !haskey(hb.terms, (:output, :between_steps))
+                # every diagnostic and profile of the run evaluates (#338): a
+                # source that throws gives NaN and a warning
+                tl = Test.TestLogger(min_level = Logging.Warn)
+                with_logger(tl) do
+                    foreach(evaluate_diagnostic, BC.case_diagnostics(case))
+                    foreach(evaluate_profile, BC.case_profiles(case))
+                end
+                @test isempty(tl.logs)
                 @info @sprintf("  %-26s %5.1f s  domain Rn %7.2f H %6.2f LE %5.2f G %7.2f dS %7.2f W/m², closure %.1e; water residual %.1e kg/m²; air heat closure %.1e W/m²",
                                label, time() - t0, dom.Rn, dom.H, dom.LE, dom.G, dom.dS,
                                dom.closure, w.residual, hb.closure / hb.elapsed)

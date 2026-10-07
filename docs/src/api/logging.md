@@ -121,8 +121,8 @@ examples and the test fixtures follow one convention:
 
 | level | for | examples |
 | :-- | :-- | :-- |
-| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row |
-| `Info` | milestones | the run header, the progress line, the Berlin setup summary, output frames and end-of-run report |
+| `Debug` | chatter: what a run log should keep but a console need not show | adaptive-step retries, checkpoint fresh start / resume / write, a costly diagnostics row, the Berlin setup summary |
+| `Info` | milestones | the run header, the progress line, the Berlin output frames (with each coupling's diagnostics) and end-of-run events (stage timing, ledgers) |
 | `Warn` | problems the run survives | a solver that did not converge, a non-finite fast process, a restart across Julia versions |
 | `Error` | the run stops | a blowup, an error that ends `with_run` |
 
@@ -148,6 +148,16 @@ A production run writes one folder (#334), `runs/<yyyy-mm-dd>_<case>_<runID>/`:
 | `output/` | the run's output files ([`output_dir`](@ref Aeolus.IO.output_dir)) |
 | `checkpoints/` | the [`CheckpointSchedule`](@ref Aeolus.IO.CheckpointSchedule) and FFTW wisdom ([`run_checkpoints`](@ref Aeolus.IO.run_checkpoints)) |
 | `uncommitted-<n>.diff`, `untracked-<n>.txt` | the uncommitted code of session `n`, only with `allow_uncommitted = true` |
+
+**`run.toml` `[config]` is the configuration of record.** For a run
+started from a [`RunConfig`](config.md) (every `aeolus run`, every shipped
+config), `[config]` is the canonical resolved TOML: every option written
+out, no `extends`, paths absolute, floats bit-exact. It is what
+`load_run_config(folder)` reads, what `aeolus run <folder>/run.toml`
+replays bit for bit and what `aeolus run <folder> --resume` continues; the
+free-form `config` of a run started from a `Dict` or a struct is kept for
+provenance only and cannot be replayed. See
+[Run configuration](../design/run_configuration.md).
 
 ```julia
 using Aeolus
@@ -267,7 +277,11 @@ truth):
 | `WallBoundedCase` | `tau_wall_bottom`, `tau_wall_top`, with a scalar `q_wall_bottom`, `q_wall_top` (all `:step`); a TBLE wall model's under `wall.` |
 | `NestedRun` | `parent_steps`, `child_substeps`, `parent_retries`, `child_retries`, `substeps_last`, `max_child_cfl`, `max_clock_error` (`:step`); the stage wall times; every diagnostic of both domains under `parent.` and `child.` |
 
-The Berlin couplings' `report` strings move onto the registry with #338.
+The Berlin case (an example, not the library) implements the same
+generic for each of its couplings, `diagnostics(c, case)`, and adds its
+frame quantities, ledgers and stage timing; the `berlin` run driver
+hands them to the run monitor (#338, [the Berlin case](../design/berlin_case.md#Diagnostics)).
+Its wall-clock quantities are all named `wall.…`.
 
 ### Profiles
 
@@ -576,8 +590,7 @@ does not affect.
 
 ## Not here yet
 
-The Berlin console text and coupling reports, with their ledger
-residuals, through the registry (#338). The Berlin output file
+The Berlin output file
 (`examples/urban/core/output.jl`) does not carry the provenance
 attributes yet: it is not written inside a run folder.
 

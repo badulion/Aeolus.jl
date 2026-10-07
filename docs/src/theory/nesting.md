@@ -10,13 +10,16 @@ refluxing — and quotes the numbers they are tested at
 
 ## Geometry
 
-The child must align to parent cell boundaries: the child origin sits on
-a parent face, ``N_\text{child} = r\,n`` for an integer number ``n`` of
-covered parent cells, and ``\Delta_\text{child} = \Delta_\text{parent}/r``
-in each direction. `NestedGrid` checks all three and refuses a
-misaligned child with an error that names the direction. On this
-geometry child face ``q\,r + 1`` (counted from the nest's low face)
-coincides with parent face ``q``, for every ``q = 0, \dots, n``.
+This page treats the aligned geometry: the child origin sits on a parent
+face, ``N_\text{child} = r\,n`` for an integer number ``n`` of covered
+parent cells, and ``\Delta_\text{child} = \Delta_\text{parent}/r`` in each
+direction (`NestedGrid(parent, child; refinement, offset)` checks all
+three and refuses a misaligned child with an error that names the
+direction). On this geometry child face ``q\,r + 1`` (counted from the
+nest's low face) coincides with parent face ``q``, for every
+``q = 0, \dots, n``. Rational ratios, children off the parent faces and
+z-stretched children (#328) use the same constructions on overlap pieces;
+see [nest hierarchies, non-aligned and stretched children](nesting_hierarchy.md).
 
 ## Prolongation: the primitive-function construction
 

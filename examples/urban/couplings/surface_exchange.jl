@@ -116,7 +116,7 @@ Slot `:surface_exchange`, provider `:most` (default).
   the skin at the start of the step (`turbulent_fluxes`), one 1-D
   maximisation at the column's wind, `z_ref`, `z0m` and ``θ_{va}``
   (Van de Wiel et al. 2012). `H_max` (W m⁻²) and the ratio of the downward
-  buoyancy flux to the MSHF are output fields; the report prints the
+  buoyancy flux to the MSHF are output fields; the diagnostics give the
   mean ratio of the stable street, roof and park columns and the share
   of them beyond the MSHF point (``z_{ref}/L`` past the peak of the flux
   curve: the very stable, collapsed branch); the smoke
@@ -784,28 +784,54 @@ _cols(case, T, cls = nothing) =
     [I for I in CartesianIndices(case.bus.k_air)
      if case.bus.surface[I] isa T && (cls === nothing || case.geom.sfc[I] == cls)]
 
-function report(c::SurfaceExchangeMOST, case)
+"""
+    diagnostics(c::SurfaceExchangeMOST, case)
+
+Over the columns with a surface: the mean `H`, `LE`, `G` (W m⁻²) and
+the mean friction velocity of the roofs `ustar_roof` and the ground
+`ustar_ground` (m s⁻¹); with the dynamic roughness its `z0_alpha` and
+the street's mean `z0_street` (m). P58-e: the stable columns' downward
+buoyancy flux over their maximum sustainable heat flux, per class,
+`mshf_ratio_<class>` (mean |H|/H_max) and `mshf_beyond_<class>` (the
+fraction beyond it) for street, roof and park, the largest
+`mshf_worst` and what was delivered `mshf_worst_delivered`; and the wall
+time of the MSHF maximisations per surface step `wall.mshf_ms_per_step`.
+"""
+function diagnostics(c::SurfaceExchangeMOST, case)
     bus, sfc = case.bus, case.geom.sfc
     have = [I for I in eachindex(bus.surface) if bus.surface[I] !== nothing]
     roof = [I for I in have if sfc[I] == SURFACE_ROOF]
     ground = [I for I in have if sfc[I] != SURFACE_ROOF]
-    m(x, idx) = isempty(idx) ? NaN : mean(x[idx])
-    dyn = c.dyn === nothing ? "" :
-          @sprintf("  dynamic z0: α %.3g, street %.3g m", c.dyn.α,
-                   m(c.dyn.z0, [I for I in have if sfc[I] == SURFACE_STREET]))
-    # P58-e: the stable columns' downward buoyancy flux over their MSHF,
-    # per class (|H|/H_max; at night every column is stable)
-    stable(cls) = [I for I in have if sfc[I] == cls && c.mshf_ratio[I] > 0]
-    rs = map((SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK)) do cls
-        idx = stable(cls)
-        isempty(idx) ? "–" : @sprintf("%.2f (%.0f%% beyond)", mean(c.mshf_ratio[idx]),
-                                      100 * count(I -> c.mshf_beyond[I], idx) / length(idx))
+    m(x, idx) = () -> isempty(idx) ? NaN : mean(x[idx])
+    ds = Diagnostic[
+        Diagnostic("H", "W m-2", m(bus.H, have); description = "mean sensible heat flux, upward"),
+        Diagnostic("LE", "W m-2", m(bus.LE, have); description = "mean latent heat flux, upward"),
+        Diagnostic("G", "W m-2", m(bus.G, have); description = "mean ground heat flux"),
+        Diagnostic("ustar_roof", "m s-1", m(bus.u_star, roof)),
+        Diagnostic("ustar_ground", "m s-1", m(bus.u_star, ground))]
+    if c.dyn !== nothing
+        street = [I for I in have if sfc[I] == SURFACE_STREET]
+        append!(ds, [Diagnostic("z0_alpha", "1", () -> c.dyn.α),
+                     Diagnostic("z0_street", "m", () -> isempty(street) ? NaN : mean(c.dyn.z0[street]))])
     end
-    return @sprintf("           surface: H %6.1f LE %6.1f G %6.1f W/m²  u* roof %.2f ground %.2f m/s%s\n",
-                    m(bus.H, have), m(bus.LE, have), m(bus.G, have),
-                    m(bus.u_star, roof), m(bus.u_star, ground), dyn) *
-           @sprintf("              MSHF: |H|/H_max (stable cols) street %s roof %s park %s; max %.3f (delivered %.3f); %.1f ms/surface step",
-                    rs..., c.mshf_worst, c.mshf_worst_delivered, 1e3 * c.mshf_time / max(c.nsurface_steps, 1))
+    # the stable columns of a class: those whose MSHF ratio is set (> 0)
+    for (cls, name) in ((SURFACE_STREET, "street"), (SURFACE_ROOF, "roof"), (SURFACE_PARK, "park"))
+        cols = [I for I in have if sfc[I] == cls]
+        stable() = [I for I in cols if c.mshf_ratio[I] > 0]
+        push!(ds, Diagnostic("mshf_ratio_$name", "1",
+                             () -> (idx = stable(); isempty(idx) ? NaN : mean(c.mshf_ratio[idx]));
+                             description = "|H|/H_max, mean over the stable $name columns"))
+        push!(ds, Diagnostic("mshf_beyond_$name", "1",
+                             () -> (idx = stable(); isempty(idx) ? NaN :
+                                    count(I -> c.mshf_beyond[I], idx) / length(idx));
+                             description = "fraction of the stable $name columns beyond the MSHF"))
+    end
+    append!(ds, [Diagnostic("mshf_worst", "1", () -> c.mshf_worst),
+                 Diagnostic("mshf_worst_delivered", "1", () -> c.mshf_worst_delivered),
+                 Diagnostic("wall.mshf_ms_per_step", "ms",
+                            () -> 1e3 * c.mshf_time / max(c.nsurface_steps, 1);
+                            description = "wall time of the MSHF maximisations per surface step")])
+    return ds
 end
 
 function output_fields(c::SurfaceExchangeMOST, case)

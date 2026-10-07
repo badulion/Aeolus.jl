@@ -23,8 +23,30 @@ theta0 = 271.0
 
 [initial]
 sounding = "none"         # the idealised profile
+dynamic = "none"
 theta_surface = 271.0
 qv0 = 0.0025
 ts0 = 272.0
 ts_water_offset = 5.0
 t_soil0 = 276.0
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "grid.extent=[250.0,250.0,100.0]",
+    "geometry.offset=[0.0,-312.5]",
+    "physics.options.nesting.parent.extent=[1000.0,1000.0,500.0]",
+    "physics.options.nesting.parent.refinement=[4,4,8]",
+    "physics.options.nesting.parent.vertical=\"uniform\"",
+    "clock.nsteps=4",
+    "cadence.radiation=8.0",
+    "cadence.soil=4.0",
+    "output.path=\"none\"",
+    "output.netcdf=\"none\"",
+    "output.cadence=8.0",
+    "geometry.static=\"input/berlin_smoke_static.nc\"",
+    "geometry.parent_static=\"input/berlin_smoke_parent_static.nc\"",
+]

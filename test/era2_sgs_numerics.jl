@@ -14,19 +14,9 @@ using Statistics: mean
 using Printf
 
 # A solenoidal random field with E(k) ∝ k^(-5/3) up to k_c (in units of
-# the fundamental wavenumber) and random phases, scaled to u_rms = 1. The
-# field is built by the src initialiser `isotropic_random_field!` (#168),
-# which replaced the test-local construction that used to live here.
-function _kolmogorov_field!(sim, rng; kc = sim.mesh.Nx / 4)
-    k0 = 2π / sim.mesh.Lx
-    isotropic_random_field!(sim, k -> (k / k0)^(-5/3); rng, kmax = kc * k0)
-    s = 1 / sqrt(mean(abs2, interior_view(sim.u)))
-    for f in (sim.u, sim.v, sim.w)
-        interior_view(f) .*= s                     # u_rms = 1
-        fill_halos!(f, sim.bcs)
-    end
-    return sim
-end
+# the fundamental wavenumber) and random phases, scaled to u_rms = 1:
+# `kolmogorov_field!`, shared with the other SGS tests (#317).
+isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
 
 function _dynamic_cs(sim; kw...)
     ws = DynamicSmagorinskyWorkspace(sim.mesh)
@@ -65,7 +55,7 @@ end
 
     @testset "dynamic Smagorinsky: same |S| as the static model, Galilean invariant" begin
         sim = BoussinesqSimulation(mesh)
-        _kolmogorov_field!(sim, Xoshiro(3))
+        kolmogorov_field!(sim, Xoshiro(3))
         _, ws, νt = _dynamic_cs(sim; averaging = :local)
         compute_smagorinsky_νt!(sim.νt, sim.u, sim.v, sim.w, 1.0)       # Δ²|S|
         @test interior_view(νt) ≈ ws.cs2 .* interior_view(sim.νt) rtol = 1e-13
@@ -85,7 +75,7 @@ end
         # (static Smagorinsky LES) the dynamic C_s approaches the
         # inertial-range value 0.17 of Lilly (1967).
         sim = BoussinesqSimulation(mesh; C_s = 0.17, ν = 1e-4)
-        _kolmogorov_field!(sim, Xoshiro(1))
+        kolmogorov_field!(sim, Xoshiro(1))
         cs_random, = _dynamic_cs(sim)
         for _ in 1:100                                                    # t = 1, ~1 turnover
             step!(sim, 0.01)
@@ -113,7 +103,7 @@ end
         mk() = (s = BoussinesqSimulation(RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3));
                                          C_s = 0.17, ν = 1e-4, θ₀ = 300.0, f_coriolis = 1e-4,
                                          bcs = FieldBoundaryConditions(:periodic, :periodic, :wall));
-                _kolmogorov_field!(s, Xoshiro(7); kc = 4); set!(s.θ, (x, y, z) -> 300 + z); s)
+                kolmogorov_field!(s, Xoshiro(7); kc = 4); set!(s.θ, (x, y, z) -> 300 + z); s)
         a, b = mk(), mk()
         ml = MLSGS((νt, u, v, w, m) -> compute_smagorinsky_νt!(νt, u, v, w, 0.17))
         for _ in 1:20
@@ -123,7 +113,7 @@ end
         @test all(f -> getfield(a, f).data == getfield(b, f).data, (:u, :v, :w, :θ, :p, :νt))
         # C_s = 0 disables the built-in closure but not a passed one
         c = BoussinesqSimulation(RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3)))
-        _kolmogorov_field!(c, Xoshiro(7); kc = 4)
+        kolmogorov_field!(c, Xoshiro(7); kc = 4)
         step!(c, 1e-3; eddy_viscosity! = (νt, u, v, w) -> compute_dynamic_smagorinsky_νt!(νt, u, v, w))
         @test maximum(interior_view(c.νt)) > 0
     end
@@ -138,7 +128,7 @@ end
         res = Dict{Symbol,Any}()
         for (name, kw) in ((:centered, (;)), (:weno_z, (momentum_advection = weno,)))
             s = BoussinesqSimulation(m16)
-            _kolmogorov_field!(s, Xoshiro(5); kc = 4)
+            kolmogorov_field!(s, Xoshiro(5); kc = 4)
             P0 = sum(interior_view(s.u)); E0 = kinetic_energy(s)
             for _ in 1:50
                 step!(s, 0.01; kw...)
@@ -153,7 +143,7 @@ end
         @test res[:weno_z].dE < 0 < res[:centered].dE
         # the default keyword is the built-in operator
         a = BoussinesqSimulation(m16); b = BoussinesqSimulation(m16)
-        _kolmogorov_field!(a, Xoshiro(5); kc = 4); _kolmogorov_field!(b, Xoshiro(5); kc = 4)
+        kolmogorov_field!(a, Xoshiro(5); kc = 4); kolmogorov_field!(b, Xoshiro(5); kc = 4)
         step!(a, 0.01); step!(b, 0.01; momentum_advection = momentum_advect!)
         @test a.u.data == b.u.data
     end

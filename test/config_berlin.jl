@@ -15,7 +15,12 @@
 #   * errors: an unknown provider, a parent refinement of 2 integers, an
 #     incompatible pair, an unknown per-coupling option;
 #   * the CLI: `aeolus run berlin_smoke.toml` leaves a completed run folder,
-#     and the run's ledgers close.
+#     and the run's ledgers close;
+#   * the case reports through the diagnostics registry (LOG-g, #338):
+#     every diagnostic evaluated at every step leaves the state bit for bit
+#     unchanged; the CSV's ledger, timing, time-stepper and dt columns equal
+#     the case's own numbers; the log events are structured and carry the
+#     same values.
 
 using Test
 using TOML
@@ -24,6 +29,7 @@ using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml, diagnostics_path
 using Aeolus.Fields: interior_view
+using Logging
 
 isdefined(Main, :BerlinCase) ||
     include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
@@ -257,7 +263,10 @@ end
 
 @testset "Config berlin: berlin_smoke.toml runs bit-identical to the Julia-built case, round trip, ledgers" begin
     t0 = time()
-    r = roundtrip_check(berlin_toml("smoke"); nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"])
+    # every diagnostic evaluated at every step (#338): the state below must
+    # still be the fixture's, bit for bit (the diagnostics only read it)
+    r = roundtrip_check(berlin_toml("smoke"); nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
+                        overrides = ["logging.diagnostics_cadence=1e-3"])
     wall = time() - t0
     @test r.fields_equal
     isempty(r.fields_differing) || @info "fields differing in the round trip" r.fields_differing
@@ -293,6 +302,107 @@ end
     @info @sprintf("berlin_smoke.toml via run_config: 2 runs in %.1f s; surface closure max %.1e W/m², water residual %.1e kg/m², air-heat closure %.1e W/m²; domain Rn %.2f H %.2f LE %.2f W/m²",
                    wall, maximum(abs(x.closure) for x in rows), w.residual, hb.closure / hb.elapsed,
                    rows[end].Rn, rows[end].H, rows[end].LE)
+
+    # the diagnostics files hold the case's own numbers (#338): the last row
+    # is after the last step, so it equals the final ledgers, timing and
+    # time-stepper record exactly (shortest round-trip printing)
+    lines = readlines(diagnostics_path(r.runs[1].folder))
+    head = [first(split(h, " [")) for h in split(lines[1], ',')]
+    col(name) = (i = findfirst(==(name), head); i === nothing ? error("no column $name") : i)
+    cells = [split(l, ',') for l in lines[2:end]]
+    num(row, name) = parse(Float64, row[col(name)])
+    last_row = cells[end]
+    @test length(head) == length(unique(head))
+    dom = rows[end]
+    @test dom.name == "domain"
+    for t in (:Rn, :H, :LE, :G, :dS, :closure)
+        @test num(last_row, "ledger.surface.domain.$t") == getfield(dom, t)
+    end
+    for x in rows[1:end-1]     # every class present has its columns
+        @test num(last_row, "ledger.surface.$(x.name).closure") == x.closure
+    end
+    @test num(last_row, "ledger.water.residual") == w.residual
+    @test num(last_row, "ledger.water.storage") == w.storage
+    @test num(last_row, "ledger.heat.closure") == hb.closure / hb.elapsed
+    @test num(last_row, "ledger.heat.storage") == hb.storage / hb.elapsed
+    # the stage timing: one wall.* column per timed entry, the final value
+    # the case's own (and dropped, with the wall column, by the round trip)
+    @test num(last_row, "wall.dynamics.step") == case.timing[(:dynamics, :step!)]
+    @test num(last_row, "wall.ledger.air_heat") == case.timing[(:ledger, :air_heat)]
+    wallcols = filter(startswith("wall."), head)
+    @test length(wallcols) >= length(case.timing)
+    @test all(k -> "wall.$(BCC.diag_name(k[1])).$(BCC.diag_name(k[2]))" in wallcols, keys(case.timing))
+    # the time stepper's record and the rows' dt / limiter / retries
+    ts = BCC.find_coupling(case, :timestep_adaptive)
+    @test num(last_row, "timestep_adaptive.steps") == ts.stats.n == case.clock.n
+    @test num(last_row, "timestep_adaptive.dt_mean") == ts.stats.dt_sum / ts.stats.n
+    dts = [num(c, "dt") for c in cells]
+    @test sum(dts) ≈ case.sim.t rtol = 1e-12        # every step's dt, summing to the 24 s run
+    @test minimum(dts) == ts.stats.dt_min && maximum(dts) == ts.stats.dt_max
+    lims = [c[col("dt_limiter")] for c in cells]
+    @test all(l -> l in ("advective", "diffusive", "buoyancy", "coriolis", "sgs", "dt_min", "dt_max",
+                         "growth", "nesting"), lims)
+    @test sum(num(c, "retries") for c in cells) == ts.stats.retries
+    # a coupling's diagnostics: the pressure solve and the nest, every step
+    @test num(last_row, "nesting.parent_windows") >= 1
+    @test isfinite(num(last_row, "nesting.boundary_heat_top"))
+    @test "wall.nesting.parent" in head        # a coupling's wall clock is filed under wall.
+    @info @sprintf("berlin_smoke.toml diagnostics.csv: %d columns (%d wall.*), %d rows; dt %.3f–%.3f s, limiters %s",
+                   length(head), length(wallcols), length(cells), minimum(dts), maximum(dts),
+                   join(sort!(unique(lims)), ","))
+end
+
+@testset "Config berlin: the log events are structured and carry the diagnostics' values (#338)" begin
+    cc = BCC.CaseConfig(load_run_config(berlin_toml("smoke"); overrides = ["fftw.planner=\"estimate\""]))
+    case = BCC.build_case(cc)
+    tl = Test.TestLogger(min_level = Logging.Info)
+    with_logger(tl) do
+        BCC.run_case!(case)
+    end
+    recs = filter(r -> get(r.kwargs, :subsystem, nothing) === :berlin, tl.logs)
+    ev(e) = filter(r -> get(r.kwargs, :event, nothing) === e, recs)
+    # no diagnostic source failed (a failing one logs a warning and gives NaN)
+    @test isempty(filter(r -> r.level >= Logging.Warn, tl.logs))
+    @test length(ev(:run_start)) == 1 && length(ev(:run_end)) == 1
+    # one frame per output record; the last frame is the final state
+    frames = ev(:frame)
+    @test length(frames) == case.clock.nrecord == 2
+    f = frames[end].kwargs
+    @test f[:frame] == 2
+    @test f[:Ts_min] == round(minimum(case.bus.Ts); sigdigits = 4)
+    @test f[:Ts_max] == round(maximum(case.bus.Ts); sigdigits = 4)
+    @test f[:theta1_max] == round(maximum(view(Aeolus.Fields.interior_view(case.sim.θ), :, :, 1)); sigdigits = 4)
+    # one :coupling event per coupling with diagnostics per frame, its keys
+    # the coupling's declared names
+    with_diags = [c for c in case.couplings if !isempty(BCC.diagnostics(c, case))]
+    @test length(ev(:coupling)) == 2 * length(with_diags)
+    for c in with_diags
+        e = last(filter(r -> r.kwargs[:coupling] === BCC.coupling_name(c), ev(:coupling)))
+        @test Set(k for k in keys(e.kwargs) if !(k in (:subsystem, :domain, :event, :coupling))) ==
+              Set(Symbol(d.name) for d in BCC.diagnostics(c, case))
+    end
+    tsev = last(filter(r -> r.kwargs[:coupling] === :timestep_adaptive, ev(:coupling))).kwargs
+    @test tsev[:steps] == case.clock.n
+    # the end of the run: steps, the timing of every entry, the ledgers
+    @test ev(:run_end)[1].kwargs[:steps] == case.clock.n
+    tim = ev(:timing)
+    @test length(tim) == length(case.timing)
+    @test issorted([r.kwargs[:seconds] for r in tim]; rev = true)
+    rows = BCC.surface_budget(case.ledger)
+    led = ev(:ledger)
+    sfc = filter(r -> r.kwargs[:ledger] === :surface, led)
+    @test [r.kwargs[:class] for r in sfc] == [x.name for x in rows]
+    @test [r.kwargs[:closure] for r in sfc] == [x.closure for x in rows]
+    wat = only(filter(r -> r.kwargs[:ledger] === :water, led)).kwargs
+    @test wat[:residual] == BCC.water_budget(case.ledger).residual
+    hb = BCC.heat_budget(case.ledger)
+    col = only(filter(r -> r.kwargs[:ledger] === :heat && r.kwargs[:layer] === :column, led)).kwargs
+    @test col[:closure] == hb.closure / hb.elapsed
+    @test length(filter(r -> r.kwargs[:ledger] === :heat_term, led)) == length(hb.terms)
+    # the profiles of diagnostics.nc: the closure's and the turbulence diagnostics', one value per level
+    ps = BCC.case_profiles(case)
+    @test "turbulence_diag.Ri_g" in [p.name for p in ps]
+    @test all(p -> length(Aeolus.RunLog.evaluate_profile(p)) == case.mesh.Nz, ps)
 end
 
 # #392: step_case!(case, cfg.dt) on the default case overrode the adaptive

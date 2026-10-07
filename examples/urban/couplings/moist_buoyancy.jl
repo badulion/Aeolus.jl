@@ -113,7 +113,7 @@ Additive coupling (on by default): every step, in `:body_force`, the
 virtual-temperature and condensate-loading buoyancy
 ``g (θ_ρ − θ)′/θ₀`` of [`moist_buoyancy_perturbation!`](@ref) /
 [`add_moist_buoyancy!`](@ref). `Δ` keeps the last ``(θ_ρ − θ)′`` (K) for
-the output field `b_moist` and the report.
+the output field `b_moist` and the diagnostics.
 """
 struct MoistBuoyancy{V} <: AbstractCoupling
     Δ::Array{Float64,3}
@@ -156,8 +156,31 @@ output_fields(c::MoistBuoyancy, case) =
                  "moist buoyancy perturbation g (theta_rho - theta)'/theta_0 (virtual + condensate loading)",
                  :xyz, cs -> c.Δ .* (c.g / c.θ₀))]
 
-function report(c::MoistBuoyancy, case)
-    rms = sqrt(sum(abs2, c.Δ) / max(count(c.fluid), 1)) * c.g / c.θ₀
+"""
+    diagnostics(c::MoistBuoyancy, case)
+
+The moist buoyancy perturbation `b_rms` and `b_maxabs` (m s⁻²), and of
+the first level the largest relative humidity `rh1_max` (1) and the
+smallest dew-point depression `dewpoint_depression1_min` (K)
+([`moist_level1`](@ref)).
+"""
+function diagnostics(c::MoistBuoyancy, case)
+    l1 = per_state(() -> moist_level1(c, case), case)
+    return Diagnostic[
+        Diagnostic("b_rms", "m s-2", () -> sqrt(sum(abs2, c.Δ) / max(count(c.fluid), 1)) * c.g / c.θ₀),
+        Diagnostic("b_maxabs", "m s-2", () -> maximum(abs, c.Δ) * c.g / c.θ₀),
+        Diagnostic("rh1_max", "1", () -> l1().rh; description = "relative humidity, first level"),
+        Diagnostic("dewpoint_depression1_min", "K", () -> l1().dd; description = "T - Td, first level")]
+end
+
+"""
+    moist_level1(c::MoistBuoyancy, case) -> (rh, dd)
+
+The largest relative humidity `rh` and the smallest dew-point depression
+`dd` (K) over the fluid cells of the first level, at the reference
+pressure and Exner function of the level.
+"""
+function moist_level1(c::MoistBuoyancy, case)
     # relative humidity and dew-point depression of the lowest air layer
     θ1 = view(interior_view(case.sim.θ), :, :, 1)
     q1 = view(interior_view(tracer(case, :qv)), :, :, 1)
@@ -169,8 +192,7 @@ function report(c::MoistBuoyancy, case)
         rh = max(rh, Aeolus.MoistThermodynamics.relative_humidity(T, p1, q1[I]))
         dd = min(dd, T - Aeolus.MoistThermodynamics.dewpoint_temperature(p1, q1[I]))
     end
-    return @sprintf("  moist buoyancy: rms b' = %.2e m/s2, max|b'| = %.2e m/s2; level 1: max RH %.3f, min T-Td %.2f K",
-                    rms, maximum(abs, c.Δ) * c.g / c.θ₀, rh, dd)
+    return (rh = rh, dd = dd)
 end
 
 function smoke_check(c::MoistBuoyancy, case)

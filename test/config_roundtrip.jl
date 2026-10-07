@@ -1,0 +1,208 @@
+# The round-trip coverage suite (CFG-i, #364): every shipped config stays
+# valid, canonical, documented and replayable bit for bit.
+#
+# Every `examples/**/configs/*.toml` (and so `examples/configs/*.toml`) is
+# found by globbing the tree, not from a list, and each one must carry its
+# own smoke size, a `[test]` table:
+#
+#   [test]
+#   overrides = ["grid.size=[16,16,16]", "stepper.nsteps=10"]
+#   member = "lasd_32x32x32"          # a sweep: the member replayed (default: the first)
+#
+# For each file:
+#   1. it validates (every member of a sweep), with and without its overrides;
+#   2. `resolve` is a fixed point: the canonical text of the resolved config
+#      is byte-identical after a reload;
+#   3. every key it holds appears in its driver's generated option reference
+#      (the Markdown the docs build writes), the [physics.options] coupling
+#      tables of the Berlin case included;
+#   4. it replays: run at its smoke size, then re-run from the first run's
+#      run.toml; the state fields, diagnostics.csv, results.toml and
+#      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
+# A configs/*.toml without a [test] table fails the suite with a message
+# naming the file. Resume: for the simulation and sbl drivers, a run
+# interrupted after its middle checkpoint and resumed the way
+# `aeolus run <folder> --resume` does is bitwise the uninterrupted run
+# (Berlin resume is #269).
+
+using Test
+using Aeolus
+using Aeolus.Config
+import Aeolus.Config as C
+
+include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
+
+const RT_EXAMPLES = normpath(joinpath(@__DIR__, "..", "examples"))
+
+"""
+Every shipped config: the `.toml` files directly in a directory named
+`configs` anywhere under `root` (`examples/configs/`, `examples/sbl/configs/`, …).
+"""
+function shipped_config_files(root::AbstractString = RT_EXAMPLES)
+    out = String[]
+    for (dir, _, files) in walkdir(root)
+        basename(dir) == "configs" || continue
+        append!(out, joinpath(dir, f) for f in files if endswith(f, ".toml"))
+    end
+    return sort!(out)
+end
+
+"""
+The smoke plan of every file: `file => (overrides, member)`; an error naming
+every file without a `[test]` table (a new config must say how it is tested).
+"""
+function smoke_plan(files)
+    missing = [f for f in files if config_test_table(f) === nothing]
+    isempty(missing) || error("these shipped configs have no [test] table with their smoke-size " *
+                              "overrides (see test/config_roundtrip.jl):\n  " * join(missing, "\n  "))
+    return [f => config_test_table(f) for f in files]
+end
+
+"Run `f()` in the directory of `file`: a relative path in its [test] overrides is relative to the file."
+in_dir(f, file) = cd(f, dirname(file))
+
+# the pages the docs build writes (docs/make.jl calls the same generate_reference)
+include(joinpath(@__DIR__, "..", "docs", "generate_reference.jl"))
+const RT_REFERENCE = mktempdir()
+const RT_PAGES = generate_reference(RT_REFERENCE)
+
+"The `[section]` keys of the option reference page the docs build writes for `driver`, per table."
+function reference_rows(driver)
+    rows = Dict{String,Set{String}}(); cur = nothing
+    page = joinpath(RT_REFERENCE, "options", driver * ".md")
+    isfile(page) || error("the docs build writes no option reference for the driver \"$driver\"")
+    for l in eachline(page)
+        m = match(r"^#+ `\[(.+)\]`$", l)
+        if m !== nothing
+            cur = String(m[1]); rows[cur] = Set{String}()
+        elseif cur !== nothing && startswith(l, "| `")
+            push!(rows[cur], String(match(r"^\| `([^`]+)` \|", l)[1]))
+        end
+    end
+    return rows
+end
+
+const RT_FILES = shipped_config_files()
+
+@testset "round-trip coverage: the docs build writes a reference page per driver and the input pages" begin
+    @test Set(basename.(RT_PAGES)) ==
+          Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
+    @test issubset(["simulation", "berlin", "sbl", "dns", "column"], reference_drivers())
+    # every option page is the schema's generated Markdown, verbatim after its header
+    for d in reference_drivers()
+        @test endswith(read(joinpath(RT_REFERENCE, "options", d * ".md"), String),
+                       option_reference(d; format = :markdown))
+    end
+    for (f, s) in (("input_static.md", Aeolus.InputDrivers.STATIC_SCHEMA),
+                   ("input_static.md", Aeolus.InputDrivers.STATIC_TILES_SCHEMA),
+                   ("input_dynamic.md", Aeolus.InputDrivers.DYNAMIC_SCHEMA))
+        txt = read(joinpath(RT_REFERENCE, f), String)
+        @test all(v -> occursin("| `$(v.name)` |", txt), s.variables)
+        @test occursin("netcdf ", txt)                       # the ncdump -h example
+    end
+end
+
+@testset "round-trip coverage: every shipped config is found and has a [test] table" begin
+    @test length(RT_FILES) >= 25
+    @test all(f -> startswith(f, RT_EXAMPLES), RT_FILES)
+    @test joinpath(RT_EXAMPLES, "configs", "taylor_green_vortex.toml") in RT_FILES
+    plan = smoke_plan(RT_FILES)
+    @test length(plan) == length(RT_FILES)
+    # every config directory a driver registers is inside the glob
+    for d in C.registered_drivers(), f in shipped_configs()
+        @test f in RT_FILES
+    end
+    # a config without [test] fails, naming the file
+    dir = mkpath(joinpath(mktempdir(), "examples", "new", "configs"))
+    write(joinpath(dir, "fresh.toml"), "[run]\ndriver = \"common\"\n")
+    write(joinpath(dir, "tested.toml"), "[run]\ndriver = \"common\"\n\n[test]\noverrides = []\n")
+    files = shipped_config_files(dirname(dirname(dir)))
+    @test length(files) == 2
+    e = try
+        smoke_plan(files); nothing
+    catch err
+        err
+    end
+    @test e isa ErrorException && occursin(joinpath(dir, "fresh.toml"), e.msg) && !occursin("tested.toml", e.msg)
+    # [test] is checked for shape and stays out of the resolved config
+    write(joinpath(dir, "bad.toml"), "[run]\ndriver = \"common\"\n\n[test]\noverride = []\nmember = 0\n")
+    e = try
+        load_run_config(joinpath(dir, "bad.toml")); nothing
+    catch err
+        err
+    end
+    @test e isa ConfigError && Set(p.key for p in e.problems) == Set(["test.override", "test.member"])
+    cfg = load_run_config(joinpath(dir, "tested.toml"))
+    @test !occursin("[test]", config_text(cfg))
+    @test config_hash(cfg) == config_hash(load_run_config(IOBuffer("[run]\ndriver = \"common\"\n")))
+end
+
+const RT_PLAN = smoke_plan(RT_FILES)
+
+# Inputs a shipped config reads that are made by a preprocessor, not
+# committed: the ERA5 box's dynamic driver (CFG-h, #363), made once from the
+# committed ERA5 sample the way its header says, and passed as an override.
+const RT_MADE_INPUTS = let dir = mktempdir(), out = joinpath(dir, "lindenberg_era5_dynamic.nc"),
+                           cfg = joinpath(RT_EXAMPLES, "configs", "lindenberg_era5.toml")
+    era5 = [joinpath(RT_EXAMPLES, "data", "era5_lindenberg_20190629_$x.nc") for x in ("pl", "sfc")]
+    rc = redirect_stdout(devnull) do
+        Aeolus.main(["preprocess", "dynamic", "--from-era5", era5..., "--config", cfg, "--out", out])
+    end
+    rc == 0 || error("could not preprocess the ERA5 dynamic driver of $cfg")
+    Dict(cfg => ["initial.dynamic=\"$out\""])
+end
+
+@testset "round-trip coverage: $(relpath(f, RT_EXAMPLES))" for (f, t0) in RT_PLAN
+    t = (overrides = vcat(t0.overrides, get(RT_MADE_INPUTS, f, String[])), member = t0.member)
+    # 1. it validates: every member as written, and with its smoke overrides
+    runs = load_sweep(f)
+    @test !isempty(runs)
+    smoke = in_dir(() -> load_sweep(f; overrides = t.overrides), f)
+    @test length(smoke) == length(runs)
+    sweep = !isempty(first(runs).first.label)
+    member = sweep ? something(t.member, 1) : nothing
+    sweep || @test t.member === nothing                   # a member only for a sweep
+    rows = reference_rows(config_schema(first(runs).second).name)
+    for (_, cfg) in runs
+        # 2. resolve is a fixed point: the canonical text, byte for byte
+        t1 = config_text(cfg)
+        @test config_text(load_run_config(IOBuffer(t1))) == t1
+        # 3. every key it holds is in the option reference the docs build
+        sch = config_schema(cfg)
+        for s in sch.sections, k in keys(getfield(getproperty(cfg, Symbol(s.name)), :values))
+            @test k in rows[s.name]
+        end
+        @test isempty(undocumented_keys(cfg))
+    end
+    # 4. it replays from its run.toml, bit for bit
+    r = in_dir(() -> roundtrip_check(f; overrides = t.overrides, member = member), f)
+    @test r.config_equal
+    @test r.fields_equal
+    isempty(r.fields_differing) || @info "round trip differs" f r.fields_differing
+    @test r.diagnostics_equal
+    @test r.results_equal
+    # the replay is of a run that ran: some state, finite
+    fs = Base.invokelatest(state_fields, r.runs[1].obj)
+    @test !isempty(keys(fs))
+    @test all(k -> all(isfinite, fs[k]), keys(fs))
+end
+
+@testset "resume: interrupted after the middle checkpoint, resumed, bitwise the uninterrupted run" begin
+    # simulation driver: buoyant_convection at 16³, 20 steps (dry_convective_bl and the
+    # adaptive TGV resume in config_simulation_driver.jl)
+    r = resume_check(joinpath(RT_EXAMPLES, "configs", "buoyant_convection.toml");
+                     overrides = ["grid.size=[16,16,16]"])
+    @test r.fields_equal && isempty(r.fields_differing)
+    @test r.statuses == ["interrupted", "completed"]
+    @test r.runs[2].obj.stepper.step == 20 && r.runs[2].obj.sim.t === r.runs[1].obj.sim.t
+    # sbl driver: cases99 (GABLS2 with towers and series) at 16 × 16 × 32, 20 steps; the
+    # towers and the series are restored from the checkpoint too
+    r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");
+                     overrides = ["grid.size=[16,16,32]", "towers.hours=[0.0,24.0]", "towers.window=30.0",
+                                  "averaging.series_interval=60.0"],
+                     outputs = ["towers.csv", "series.csv", "statistics.toml"])
+    @test r.fields_equal && isempty(r.fields_differing)
+    @test r.outputs_equal
+    @test r.statuses == ["interrupted", "completed"]
+    @test r.runs[2].obj.case.nsteps == 20 && r.runs[2].obj.case.sim.t === r.runs[1].obj.case.sim.t
+end

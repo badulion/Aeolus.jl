@@ -26,17 +26,8 @@ using Printf
 const OPS = Aeolus.Operators
 
 # A solenoidal random field with E(k) ∝ k^(-5/3) up to k_c, u_rms = 1 (the
-# initialiser of P54-c; the same field as era2_sgs_numerics.jl).
-function _lag_kolmogorov!(sim, rng; kc = sim.mesh.Nx / 4)
-    k0 = 2π / sim.mesh.Lx
-    isotropic_random_field!(sim, k -> (k / k0)^(-5/3); rng, kmax = kc * k0)
-    s = 1 / sqrt(mean(abs2, interior_view(sim.u)))
-    for f in (sim.u, sim.v, sim.w)
-        interior_view(f) .*= s
-        fill_halos!(f, sim.bcs)
-    end
-    return sim
-end
+# initialiser of P54-c; shared with era2_sgs_numerics.jl, #317).
+isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
 
 function _lag_plane_cs(sim; mask = nothing)
     ws = DynamicSmagorinskyWorkspace(sim.mesh)
@@ -185,7 +176,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
         # passively (advance_sgs! after every step), so both averages see
         # the same resolved field.
         sim = BoussinesqSimulation(mesh; C_s = 0.17, ν = 1e-4)
-        _lag_kolmogorov!(sim, Xoshiro(1))
+        kolmogorov_field!(sim, Xoshiro(1))
         lag = LagrangianDynamicSmagorinsky(mesh)
         out = Dict{Int,NTuple{2,Float64}}()
         for n in 1:300
@@ -207,7 +198,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
 
     @testset "5. positivity with the closure driving the flow (200 steps)" begin
         sim = BoussinesqSimulation(mesh; ν = 1e-4)              # C_s = 0: only the closure
-        _lag_kolmogorov!(sim, Xoshiro(2))
+        kolmogorov_field!(sim, Xoshiro(2))
         lag = LagrangianDynamicSmagorinsky(mesh)
         ok_LM = ok_MM = ok_ν = true
         clipmax = 0.0
@@ -232,7 +223,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
         sm = SolidMask(g)
         mark_solid!(sm, (x, y, z) -> 12 < x < 20 && 12 < y < 20 && z < 6)     # 8 × 8 × 6 cells
         sim = BoussinesqSimulation(g; ν = 1e-3, bcs)
-        _lag_kolmogorov!(sim, Xoshiro(6))
+        kolmogorov_field!(sim, Xoshiro(6))
         interior_view(sim.u) .+= 2.0                            # mean flow past the cube
         apply_solid_mask!(sim, sm)
         lag = LagrangianDynamicSmagorinsky(g; mask = sm.mask)
@@ -312,7 +303,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
             g = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
             s = BoussinesqSimulation(g; ν = 1e-5, θ₀ = 300.0)
             interior_view(s.θ) .= 300.0                         # neutral: no buoyancy
-            _lag_kolmogorov!(s, Xoshiro(seed); kc = 4)
+            kolmogorov_field!(s, Xoshiro(seed); kc = 4)
             for f in (s.u, s.v, s.w)
                 interior_view(f) .*= umax
                 fill_halos!(f, s.bcs)

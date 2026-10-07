@@ -19,3 +19,16 @@ size = [64, 64, 128]           # 37.5 m / 12.5 m
 below = 60.0
 window = 300.0
 hours = [18.0, 6.0]
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,32]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+    "averaging.series_interval=0.0",
+    "towers.hours=[0.0,24.0]",
+    "towers.window=30.0",
+]

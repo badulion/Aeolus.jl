@@ -46,9 +46,19 @@ soil = 4.0
 
 [initial]
 sounding = "none"
+dynamic = "none"
 theta_inversion_z = 60.0
 
 [physics.options.nesting.parent]
 extent = [1000.0, 1000.0, 500.0]
 refinement = [4, 4, 8]
 vertical = "uniform"
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "clock.nsteps=4",
+    "output.path=\"none\"",
+]
