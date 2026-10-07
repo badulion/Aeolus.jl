@@ -74,6 +74,8 @@ UrbanCity() = UrbanCity(Building[], Building[])
 
 Base.isequal(a::Building, b::Building) = all(f -> isequal(getfield(a, f), getfield(b, f)), fieldnames(Building))
 Base.isequal(a::UrbanCity, b::UrbanCity) = isequal(a.buildings, b.buildings) && isequal(a.patches, b.patches)
+Base.hash(b::Building, h::UInt) = foldr((f, acc) -> hash(getfield(b, f), acc), fieldnames(Building); init = hash(:Building, h))
+Base.hash(c::UrbanCity, h::UInt) = hash(c.patches, hash(c.buildings, hash(:UrbanCity, h)))
 
 """
     polygon_bbox(poly) -> (xmin, xmax, ymin, ymax)
