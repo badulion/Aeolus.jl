@@ -126,16 +126,24 @@ transform-based solver fails. Cost per solve is
 preconditioning. The preconditioner will start as a simple diagonal
 scaling and can be upgraded to geometric multigrid.
 
-A solve allocates nothing (#295): the source, the iterate and the
-scratch of the dot products live in the solver, as they do in
-`MultigridPoissonSolver` (source buffer) and `MGPreconditionedCG`. The
-dot products are still `sum(a .* b)` — the product is written into the
-scratch array first — so the pairwise summation, the bits and the
-iteration counts are those of the allocating version. On the 64 × 64 ×
-32 flagship grid a plain CG solve went from 11.0 to 7.3 ms, multigrid
-from 60.9 to 55.3 ms and MG-CG from 41.9 to 39.0 ms (1 thread, minimum
-of 2 × 5 calls on a loaded 24-core machine; most of the CG gain is
-garbage collection that no longer runs).
+A solve allocates nothing (#295): the source, the iterate and the CG
+work arrays live in the solver, as they do in `MultigridPoissonSolver`
+(source buffer) and `MGPreconditionedCG`.
+
+**One CG loop (KA-g, #300).** `CGPoissonSolver`, `MGPreconditionedCG`,
+`DensityWeightedPoissonSolver` and the implicit diffusion of the IMEX
+steppers all run [`pcg!`](@ref Aeolus.Backends.pcg!) in `Backends`. A
+solver supplies only its operator (a point stencil, `PointOperator`, or
+a function such as the multigrid fine-grid operator), its preconditioner
+(none, a pointwise Jacobi step, or a V-cycle), whether the constants are
+projected out, and its pinned rows. The CG and density-weighted solvers
+keep their iterates in arrays with one halo layer that
+`fill_unit_halo!` fills (periodic wrap or Neumann mirror) before each
+operator application, so the stencil carries no wrap-around index
+arithmetic. The dot products are canonical plane sums, so a solve and
+its iteration count are identical at every thread count. Iteration
+counts, timings and the one-time last-bit change are in
+[The kernel port](ka_port.md) (section KA-g).
 
 ### `SEMPoissonSolver` (Phase 5)
 
