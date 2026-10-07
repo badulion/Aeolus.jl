@@ -5,8 +5,8 @@
 #
 # and how they combine with the numerics slots of #132: every time
 # stepper carries the step! keywords (momentum advection, SGS closure);
-# the sound-proof cores take only the density-weighted CG pressure
-# solver and their own operators, and every other combination is a
+# the sound-proof cores take only the density-weighted pressure solvers
+# (direct, #309, or CG) and their own operators, and every other combination is a
 # declared incompatibility.
 #
 # Every run here is CaseConfig(:smoke) (250 m × 250 m × 100 m of the real
