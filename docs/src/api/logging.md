@@ -97,7 +97,7 @@ The events the core emits today:
 
 | subsystem | level | event | key-values |
 | :-- | :-- | :-- | :-- |
-| `:pressure` | Warn | `CGPoissonSolver` hit `maxit` | `solver = :cg`, `iterations`, `residual`, `relative_residual`, `tol` |
+| `:pressure` | Warn | `CGPoissonSolver` hit `maxit` / breakdown | `solver = :cg`, `iterations`, `residual`, `relative_residual`, `tol`; for a breakdown `reason = :breakdown`, `curvature` |
 | `:pressure` | Warn | `MultigridPoissonSolver` hit `maxcycles` | `solver = :multigrid`, `cycles`, `relative_residual`, `tol` |
 | `:pressure` | Warn | `DensityWeightedPoissonSolver` breakdown / no convergence | `solver = :density_weighted_cg`, `reason = :breakdown \| :maxit`, `iterations`, `curvature` or `residual`, `relative_residual`, `tol` |
 | `:diffusion` | Warn | `solve_implicit_diffusion!` breakdown / `maxit` (when `warn = true`) | `reason`, `iterations`, `curvature` or `relative_residual`, `tol` |
