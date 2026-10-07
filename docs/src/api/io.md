@@ -94,8 +94,12 @@ The `[fftw]` and `[checkpoint]` tables are sections of the run
 configuration ([Run configuration](config.md), CFG-a #356):
 `checkpoint_schedule(load_run_config("case.toml"), dir)` applies the
 `[fftw]` section and returns the schedule of the `[checkpoint]` section.
-An untyped namelist from `load_config` still works, with `dir` read from
-its `[checkpoint]` table and the missing keys taking the schema defaults:
+The run folder's `run.toml` `[config]` is the canonical form of these
+tables (and of everything else a run is configured with): a restart or a
+replay reads them from there, not from the file the run was started with
+([Run configuration](../design/run_configuration.md)). An untyped namelist
+from `load_config` still works, with `dir` read from its `[checkpoint]`
+table and the missing keys taking the schema defaults:
 
 ```toml
 [fftw]

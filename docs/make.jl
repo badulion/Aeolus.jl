@@ -3,12 +3,24 @@ using Aeolus
 
 DocMeta.setdocmeta!(Aeolus, :DocTestSetup, :(using Aeolus); recursive=true)
 
+# The example drivers (DRIVER_FILES: berlin, sbl, dns, ...) are loaded to
+# document their options and `using FFTW` etc. at top level: give them the
+# package's own environment, whose dependencies the docs environment does
+# not list directly.
+push!(LOAD_PATH, normpath(joinpath(@__DIR__, "..")))
+
+# The option reference of every driver and the input-format specifications,
+# generated from the schemas into docs/src/reference/ (CFG-i, #364; not committed).
+include(joinpath(@__DIR__, "generate_reference.jl"))
+generate_reference()
+const OPTION_PAGES = ["`$d`" => "reference/options/$d.md" for d in reference_drivers()]
+
 makedocs(
     modules  = [Aeolus,
                 Aeolus.Grids, Aeolus.Fields, Aeolus.BoundaryConditions,
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations,
-                Aeolus.SimulationDriver],
+                Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -18,6 +30,10 @@ makedocs(
         repolink   = "https://github.com/badulion/Aeolus.jl",
         assets     = [asset("assets/favicon.svg"; class = :ico, islocal = true)],
         sidebar_sitename = true,
+        # long single pages: the KA port log (223 KiB) and the generated Berlin
+        # option reference (137 KiB, one table per coupling); Documenter's
+        # 200 KiB limit otherwise fails the build
+        size_threshold_ignore = ["design/ka_port.md", "reference/options/berlin.md"],
     ),
     pages = [
         "Home"           => "index.md",
@@ -97,10 +113,16 @@ makedocs(
                 "Air quality"                    => "design/berlin_air_quality.md",
             ],
             "The Berlin parent"           => "design/berlin_parent.md",
+            "Run configuration"           => "design/run_configuration.md",
             "Checkpoint / restart and FFT planning" => "design/checkpoint_restart.md",
             "Kernel port (KernelAbstractions)" => "design/ka_port.md",
             "Roadmap"                     => "design/roadmap.md",
             "Long-range roadmap (Eras II–XI)" => "design/longterm_roadmap.md",
+        ],
+        "Reference" => [
+            "Options"              => OPTION_PAGES,
+            "Static input driver"  => "reference/input_static.md",
+            "Dynamic input driver" => "reference/input_dynamic.md",
         ],
         "API reference" => [
             "Grids"                => "api/grids.md",
