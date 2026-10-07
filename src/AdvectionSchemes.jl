@@ -58,7 +58,7 @@ using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
 using ..Simulations: BoussinesqSimulation, _dzf
 using ..StretchedGrids: StretchedGrid
-using ..Backends: Backends, interior_dot, plane_reduce!, ordered_sum
+using ..Backends: Backends, interior_dot, plane_reduce!, ordered_sum, launch!, runs_serially
 
 export # --- Phase 26: reconstructions -------------------------------------
        weno_z5_left, weno_z5_right, weno_z7_left, weno_z7_right,
@@ -648,15 +648,9 @@ end
 # evaluate the *same* expression, so the flux telescopes bit-for-bit and
 # Σϕ is conserved to round-off.
 
-function _advect_reconstructed!(tend::Field{CellCenter},
-                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                                ϕ::Field{CellCenter},
-                                r::AbstractReconstruction, g::RegularGrid)
-    _check_halo(r, g)
-    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
-    ii, jj, kk = interior(g)
-    ϕd = ϕ.data; ud = u.data; vd = v.data; wd = w.data; td = tend.data
-    @inbounds for k in kk, j in jj, i in ii
+# One cell of the sweep (KA-e, #302): a point body run by `launch!`.
+@inline function _b_recon!(i, j, k, td, ud, vd, wd, ϕd, r, idx, idy, idz)
+    @inbounds begin
         uw = ud[i,   j, k]; ue = ud[i+1, j, k]
         Fx = (ue*_face_x(r, ϕd, i, j, k, ue) - uw*_face_x(r, ϕd, i-1, j, k, uw))*idx
 
@@ -668,6 +662,17 @@ function _advect_reconstructed!(tend::Field{CellCenter},
 
         td[i, j, k] -= Fx + Fy + Fz
     end
+    return nothing
+end
+
+function _advect_reconstructed!(tend::Field{CellCenter},
+                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                ϕ::Field{CellCenter},
+                                r::AbstractReconstruction, g::RegularGrid)
+    _check_halo(r, g)
+    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
+    launch!(Backends.backend(tend.data), _b_recon!, interior(g),
+            tend.data, u.data, v.data, w.data, ϕ.data, r, idx, idy, idz)
     return tend
 end
 
@@ -793,9 +798,39 @@ _check_stretched_recon(r, ::StretchedGrid) =
     throw(ArgumentError("advect_positive! on a StretchedGrid takes scheme = :centered only " *
                         "(the $(scheme_name(r)) stencil assumes uniform spacing)"))
 
+# The vertical metric of the bodies: `1/Δz` on a RegularGrid (the number,
+# the value `_inv_dz` gives at every level), `Δz_c` on a StretchedGrid
+# (`1/Δz_c[k]` evaluated in the body, the expression of `_inv_dz`).
+_dz_metric(g::RegularGrid) = 1 / g.dz
+_dz_metric(g::StretchedGrid) = g.dzc
+@inline _idz_at(idz::Real, k) = idz
+@inline _idz_at(dzc::AbstractVector, k) = @inbounds 1 / dzc[k]
+
 # --- face-flux assembly ---------------------------------------------------
 # Fluxes are stored at their own face index over the interior *plus* the
-# one extra face that closes the last cell (`last+1`).
+# one extra face that closes the last cell (`last+1`). One launch per face
+# direction over its face range (KA-e, #302).
+
+@inline function _b_rflux_x!(i, j, k, F, ud, ϕd, r)
+    @inbounds vel = ud[i, j, k]
+    @inbounds F[i, j, k] = vel * _face_x(r, ϕd, i-1, j, k, vel)
+    return nothing
+end
+@inline function _b_rflux_y!(i, j, k, F, vd, ϕd, r)
+    @inbounds vel = vd[i, j, k]
+    @inbounds F[i, j, k] = vel * _face_y(r, ϕd, i, j-1, k, vel)
+    return nothing
+end
+@inline function _b_rflux_z!(i, j, k, F, wd, ϕd, r)
+    @inbounds vel = wd[i, j, k]
+    @inbounds F[i, j, k] = vel * _face_z(r, ϕd, i, j, k-1, vel)
+    return nothing
+end
+
+# the face ranges: interior plus the closing face along the face's own axis
+_xfaces((ii, jj, kk)) = (first(ii):last(ii)+1, jj, kk)
+_yfaces((ii, jj, kk)) = (ii, first(jj):last(jj)+1, kk)
+_zfaces((ii, jj, kk)) = (ii, jj, first(kk):last(kk)+1)
 
 function _reconstructed_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
@@ -803,74 +838,83 @@ function _reconstructed_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{Fa
                                 g::_PosMesh)
     _check_stretched_recon(r, g)
     _check_halo(r, g)
-    ii, jj, kk = interior(g)
+    I = interior(g)
+    b = Backends.backend(ϕ.data)
     ϕd = ϕ.data
-    @inbounds for k in kk, j in jj, i in first(ii):last(ii)+1
-        vel = u.data[i, j, k]
-        Fx.data[i, j, k] = vel * _face_x(r, ϕd, i-1, j, k, vel)
-    end
-    @inbounds for k in kk, j in first(jj):last(jj)+1, i in ii
-        vel = v.data[i, j, k]
-        Fy.data[i, j, k] = vel * _face_y(r, ϕd, i, j-1, k, vel)
-    end
-    @inbounds for k in first(kk):last(kk)+1, j in jj, i in ii
-        vel = w.data[i, j, k]
-        Fz.data[i, j, k] = vel * _face_z(r, ϕd, i, j, k-1, vel)
-    end
+    launch!(b, _b_rflux_x!, _xfaces(I), Fx.data, u.data, ϕd, r)
+    launch!(b, _b_rflux_y!, _yfaces(I), Fy.data, v.data, ϕd, r)
+    launch!(b, _b_rflux_z!, _zfaces(I), Fz.data, w.data, ϕd, r)
     return (Fx, Fy, Fz)
+end
+
+@inline function _b_uflux_x!(i, j, k, F, ud, ϕd)
+    @inbounds vel = ud[i, j, k]
+    @inbounds F[i, j, k] = vel * ifelse(vel >= 0, ϕd[i-1, j, k], ϕd[i, j, k])
+    return nothing
+end
+@inline function _b_uflux_y!(i, j, k, F, vd, ϕd)
+    @inbounds vel = vd[i, j, k]
+    @inbounds F[i, j, k] = vel * ifelse(vel >= 0, ϕd[i, j-1, k], ϕd[i, j, k])
+    return nothing
+end
+@inline function _b_uflux_z!(i, j, k, F, wd, ϕd)
+    @inbounds vel = wd[i, j, k]
+    @inbounds F[i, j, k] = vel * ifelse(vel >= 0, ϕd[i, j, k-1], ϕd[i, j, k])
+    return nothing
 end
 
 function _upwind_fluxes!(Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                          u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                          ϕ::Field{CellCenter}, g::_PosMesh)
-    ii, jj, kk = interior(g)
+    I = interior(g)
+    b = Backends.backend(ϕ.data)
     ϕd = ϕ.data
-    @inbounds for k in kk, j in jj, i in first(ii):last(ii)+1
-        vel = u.data[i, j, k]
-        Fx.data[i, j, k] = vel * (vel >= 0 ? ϕd[i-1, j, k] : ϕd[i, j, k])
-    end
-    @inbounds for k in kk, j in first(jj):last(jj)+1, i in ii
-        vel = v.data[i, j, k]
-        Fy.data[i, j, k] = vel * (vel >= 0 ? ϕd[i, j-1, k] : ϕd[i, j, k])
-    end
-    @inbounds for k in first(kk):last(kk)+1, j in jj, i in ii
-        vel = w.data[i, j, k]
-        Fz.data[i, j, k] = vel * (vel >= 0 ? ϕd[i, j, k-1] : ϕd[i, j, k])
-    end
+    launch!(b, _b_uflux_x!, _xfaces(I), Fx.data, u.data, ϕd)
+    launch!(b, _b_uflux_y!, _yfaces(I), Fy.data, v.data, ϕd)
+    launch!(b, _b_uflux_z!, _zfaces(I), Fz.data, w.data, ϕd)
     return (Fx, Fy, Fz)
+end
+
+@inline function _b_flux_div!(i, j, k, td, fx, fy, fz, idx, idy, dzm)
+    idz = _idz_at(dzm, k)
+    @inbounds td[i,j,k] -= (fx[i+1,j,k] - fx[i,j,k])*idx +
+                           (fy[i,j+1,k] - fy[i,j,k])*idy +
+                           (fz[i,j,k+1] - fz[i,j,k])*idz
+    return nothing
 end
 
 function _add_flux_divergence!(tend::Field{CellCenter},
                                Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
                                g::_PosMesh)
     idx = 1/g.dx; idy = 1/g.dy
-    ii, jj, kk = interior(g)
-    fx = Fx.data; fy = Fy.data; fz = Fz.data; td = tend.data
-    @inbounds for k in kk, j in jj, i in ii
-        idz = _inv_dz(g, k)
-        td[i,j,k] -= (fx[i+1,j,k] - fx[i,j,k])*idx +
-                     (fy[i,j+1,k] - fy[i,j,k])*idy +
-                     (fz[i,j,k+1] - fz[i,j,k])*idz
-    end
+    launch!(Backends.backend(tend.data), _b_flux_div!, interior(g),
+            tend.data, Fx.data, Fy.data, Fz.data, idx, idy, _dz_metric(g))
     return tend
 end
 
-# one-layer face-normal periodic wrap of a cell-centred field
+# one-layer face-normal periodic wrap of a cell-centred field: three 2-D
+# launches over the face planes (each writes the two halo cells of its own
+# line and reads only interior cells, so the three cannot race)
+@inline _b_wrap_x!(j, k, d, i1, i2) =
+    (@inbounds (d[i1-1, j, k] = d[i2, j, k]; d[i2+1, j, k] = d[i1, j, k]); nothing)
+@inline _b_wrap_y!(i, k, d, j1, j2) =
+    (@inbounds (d[i, j1-1, k] = d[i, j2, k]; d[i, j2+1, k] = d[i, j1, k]); nothing)
+@inline _b_wrap_z!(i, j, d, k1, k2) =
+    (@inbounds (d[i, j, k1-1] = d[i, j, k2]; d[i, j, k2+1] = d[i, j, k1]); nothing)
+
 function _wrap_one_layer!(f::Field{CellCenter}, g::_PosMesh)
     ii, jj, kk = interior(g)
     d = f.data
-    i1, i2 = first(ii), last(ii); j1, j2 = first(jj), last(jj); k1, k2 = first(kk), last(kk)
-    @inbounds for k in kk, j in jj
-        d[i1-1, j, k] = d[i2, j, k]; d[i2+1, j, k] = d[i1, j, k]
-    end
-    @inbounds for k in kk, i in ii
-        d[i, j1-1, k] = d[i, j2, k]; d[i, j2+1, k] = d[i, j1, k]
-    end
-    @inbounds for j in jj, i in ii
-        d[i, j, k1-1] = d[i, j, k2]; d[i, j, k2+1] = d[i, j, k1]
-    end
+    b = Backends.backend(d)
+    launch!(b, _b_wrap_x!, (jj, kk), d, first(ii), last(ii))
+    launch!(b, _b_wrap_y!, (ii, kk), d, first(jj), last(jj))
+    launch!(b, _b_wrap_z!, (ii, jj), d, first(kk), last(kk))
     return f
 end
+
+# Whether `x`'s backend runs launches on several threads, where the
+# positive-definite path refuses to allocate its scratch per call (KA-e).
+_threaded(x::AbstractArray) = !runs_serially(Backends.backend(x))
 
 """
     apply_positivity_limiter!(flux_x, flux_y, flux_z, ϕ, dt, mesh;
@@ -893,10 +937,16 @@ flux.
     unconditional in `dt`; with upwind fluxes the guarantee holds under the
     first-order CFL condition `Σ_d |u_d| dt/Δx_d ≤ 1`.
   * `ratio` — optional `Field{CellCenter}` scratch for the limiter factors.
+    Required when `ϕ`'s backend runs threaded (an `ArgumentError`
+    otherwise): a time loop allocates it once.
   * `bcs` — if given, the limiter field's halo is filled with
     `fill_halos!(ratio, bcs)`; otherwise a one-layer periodic wrap is used
     (harmless at impermeable walls, where the wall-face flux is zero
     anyway).
+
+Runs as three phases of `launch!` (KA-e, #302): the ratio of every cell,
+its halo, then each face flux rescaled with its donor's ratio. Every phase
+is pointwise, so the result is the same at every thread count.
 
 Returns `(flux_x, flux_y, flux_z)`.
 """
@@ -907,6 +957,9 @@ function apply_positivity_limiter!(flux_x::Field{FaceX,T}, flux_y::Field{FaceY,T
                                    ratio::Union{Nothing,Field{CellCenter}} = nothing,
                                    bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
     Δt = T(dt)
+    ratio === nothing && _threaded(ϕ.data) &&
+        throw(ArgumentError("apply_positivity_limiter!: pass `ratio` (a preallocated " *
+                            "Field{CellCenter}) when the backend runs threaded"))
     R  = ratio === nothing ? Field(CellCenter(), m) : ratio
     Lx = flux_lo === nothing ? nothing : _data_or_nothing(flux_lo[1])
     Ly = flux_lo === nothing ? nothing : _data_or_nothing(flux_lo[2])
@@ -914,17 +967,12 @@ function apply_positivity_limiter!(flux_x::Field{FaceX,T}, flux_y::Field{FaceY,T
     return _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt, m, R, Lx, Ly, Lz, bcs)
 end
 
-function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::_PosMesh,
-                            R, Lx, Ly, Lz, bcs) where {T}
-    idx = 1/m.dx; idy = 1/m.dy
-    ii, jj, kk = interior(m)
-    fx = flux_x.data; fy = flux_y.data; fz = flux_z.data
-    ϕd = ϕ.data; Rd = R.data
+# pass 1: the antidiffusive outflow budget of cell (i, j, k) and its ratio
+@inline function _b_limit_ratio!(i, j, k, Rd, fx, fy, fz, ϕd, Lx, Ly, Lz,
+                                 Δt::T, idx, idy, dzm) where {T}
     z = zero(T)
-
-    # --- pass 1: antidiffusive outflow budget per cell --------------------
-    @inbounds for k in kk, j in jj, i in ii
-        idz = T(_inv_dz(m, k))
+    @inbounds begin
+        idz = T(_idz_at(dzm, k))
         lxe = _atlo(Lx, i+1, j, k); lxw = _atlo(Lx, i,   j, k)
         lyn = _atlo(Ly, i, j+1, k); lys = _atlo(Ly, i,   j, k)
         lzt = _atlo(Lz, i, j, k+1); lzb = _atlo(Lz, i, j, k  )
@@ -942,6 +990,49 @@ function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::_PosMesh,
 
         Rd[i,j,k] = Pm > z ? min(one(T), Q/Pm) : one(T)
     end
+    return nothing
+end
+
+# pass 2: each antidiffusive face flux scaled by its donor's ratio
+@inline function _b_limit_x!(i, j, k, fx, Rd, Lx, z)
+    @inbounds begin
+        lo = _atlo(Lx, i, j, k)
+        a  = fx[i,j,k] - lo
+        c  = ifelse(a >= z, Rd[i-1,j,k], Rd[i,j,k])
+        fx[i,j,k] = lo + c*a
+    end
+    return nothing
+end
+@inline function _b_limit_y!(i, j, k, fy, Rd, Ly, z)
+    @inbounds begin
+        lo = _atlo(Ly, i, j, k)
+        a  = fy[i,j,k] - lo
+        c  = ifelse(a >= z, Rd[i,j-1,k], Rd[i,j,k])
+        fy[i,j,k] = lo + c*a
+    end
+    return nothing
+end
+@inline function _b_limit_z!(i, j, k, fz, Rd, Lz, z)
+    @inbounds begin
+        lo = _atlo(Lz, i, j, k)
+        a  = fz[i,j,k] - lo
+        c  = ifelse(a >= z, Rd[i,j,k-1], Rd[i,j,k])
+        fz[i,j,k] = lo + c*a
+    end
+    return nothing
+end
+
+function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::_PosMesh,
+                            R, Lx, Ly, Lz, bcs) where {T}
+    idx = 1/m.dx; idy = 1/m.dy
+    I = interior(m)
+    fx = flux_x.data; fy = flux_y.data; fz = flux_z.data
+    Rd = R.data
+    b = Backends.backend(Rd)
+
+    # --- pass 1: antidiffusive outflow budget per cell --------------------
+    launch!(b, _b_limit_ratio!, I, Rd, fx, fy, fz, ϕ.data, Lx, Ly, Lz, Δt, idx, idy,
+            _dz_metric(m))
 
     # --- limiter halo (needed by the closing faces) -----------------------
     if bcs === nothing
@@ -951,24 +1042,10 @@ function _positivity_limit!(flux_x, flux_y, flux_z, ϕ, Δt::T, m::_PosMesh,
     end
 
     # --- pass 2: scale each antidiffusive flux by the donor's factor ------
-    @inbounds for k in kk, j in jj, i in first(ii):last(ii)+1
-        lo = _atlo(Lx, i, j, k)
-        a  = fx[i,j,k] - lo
-        c  = a >= z ? Rd[i-1,j,k] : Rd[i,j,k]
-        fx[i,j,k] = lo + c*a
-    end
-    @inbounds for k in kk, j in first(jj):last(jj)+1, i in ii
-        lo = _atlo(Ly, i, j, k)
-        a  = fy[i,j,k] - lo
-        c  = a >= z ? Rd[i,j-1,k] : Rd[i,j,k]
-        fy[i,j,k] = lo + c*a
-    end
-    @inbounds for k in first(kk):last(kk)+1, j in jj, i in ii
-        lo = _atlo(Lz, i, j, k)
-        a  = fz[i,j,k] - lo
-        c  = a >= z ? Rd[i,j,k-1] : Rd[i,j,k]
-        fz[i,j,k] = lo + c*a
-    end
+    z = zero(T)
+    launch!(b, _b_limit_x!, _xfaces(I), fx, Rd, Lx, z)
+    launch!(b, _b_limit_y!, _yfaces(I), fy, Rd, Ly, z)
+    launch!(b, _b_limit_z!, _zfaces(I), fz, Rd, Lz, z)
     return (flux_x, flux_y, flux_z)
 end
 
@@ -997,7 +1074,15 @@ negative, so smooth regions keep the full high-order accuracy.
 `tend` must hold only this advection contribution for the guarantee to be
 meaningful; other tendencies (diffusion, sources) are limited separately or
 must be sign-safe themselves. Pass a [`FluxLimiterWorkspace`](@ref) as
-`workspace` to avoid the internal allocation.
+`workspace` to avoid the internal allocation; when `ϕ`'s backend runs
+threaded (`julia -t N`, N > 1) the workspace is required and its absence
+is an `ArgumentError`. With a workspace the call allocates nothing on a
+serial backend.
+
+Every stage (the reconstructed and the upwind face fluxes, the limiter's
+three phases, the flux divergence) is a `launch!` of a pointwise body
+(KA-e, #302): the tendency is identical at every thread count, and at one
+thread identical to the pre-port loops.
 """
 function advect_positive!(tend::Field{CellCenter,T}, u::Field{FaceX,T},
                           v::Field{FaceY,T}, w::Field{FaceZ,T},
@@ -1008,6 +1093,9 @@ function advect_positive!(tend::Field{CellCenter,T}, u::Field{FaceX,T},
                           bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
     m  = mesh(ϕ)
     r  = _reconstruction(scheme; C_T = C_T, p = p)
+    workspace === nothing && _threaded(ϕ.data) &&
+        throw(ArgumentError("advect_positive!: pass `workspace = FluxLimiterWorkspace(mesh)` " *
+                            "(allocated once) when the backend runs threaded"))
     ws = workspace === nothing ? FluxLimiterWorkspace(m) : workspace
 
     _reconstructed_fluxes!(ws.Fx, ws.Fy, ws.Fz, u, v, w, ϕ, r, m)
@@ -1056,16 +1144,10 @@ function momentum_advect_weno_z!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
     return _momentum_advect_recon!(tu, tv, tw, u, v, w, WENOZ(order, p), mesh(u))
 end
 
-function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
-                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                                 r::AbstractReconstruction, g::RegularGrid)
-    _check_halo(r, g)
-    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
-    ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data
-
-    # --- u-momentum (west face of cell i,j,k) ---------------------------
-    @inbounds for k in kk, j in jj, i in ii
+# One launch per momentum component (KA-e, #302); each body is the old
+# loop body of that component.
+@inline function _b_mrecon_u!(i, j, k, tud, ud, vd, wd, r, idx, idy, idz)
+    @inbounds begin
         Ue = (ud[i,   j, k] + ud[i+1, j, k])/2      # at cell centre i
         Uw = (ud[i-1, j, k] + ud[i,   j, k])/2      # at cell centre i-1
         d_uu_dx = (Ue*_face_x(r, ud, i, j, k, Ue) - Uw*_face_x(r, ud, i-1, j, k, Uw))*idx
@@ -1078,11 +1160,12 @@ function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
         Wb = (wd[i-1, j, k  ] + wd[i, j, k  ])/2    # at x-z edge (i,k)
         d_wu_dz = (Wt*_face_z(r, ud, i, j, k, Wt) - Wb*_face_z(r, ud, i, j, k-1, Wb))*idz
 
-        tu.data[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
+        tud[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
     end
-
-    # --- v-momentum (south face of cell i,j,k) --------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_mrecon_v!(i, j, k, tvd, ud, vd, wd, r, idx, idy, idz)
+    @inbounds begin
         Ue = (ud[i+1, j-1, k] + ud[i+1, j, k])/2
         Uw = (ud[i,   j-1, k] + ud[i,   j, k])/2
         d_uv_dx = (Ue*_face_x(r, vd, i, j, k, Ue) - Uw*_face_x(r, vd, i-1, j, k, Uw))*idx
@@ -1095,11 +1178,12 @@ function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
         Wb = (wd[i, j-1, k  ] + wd[i, j, k  ])/2
         d_wv_dz = (Wt*_face_z(r, vd, i, j, k, Wt) - Wb*_face_z(r, vd, i, j, k-1, Wb))*idz
 
-        tv.data[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
+        tvd[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
     end
-
-    # --- w-momentum (bottom face of cell i,j,k) -------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_mrecon_w!(i, j, k, twd, ud, vd, wd, r, idx, idy, idz)
+    @inbounds begin
         Ue = (ud[i+1, j, k-1] + ud[i+1, j, k])/2
         Uw = (ud[i,   j, k-1] + ud[i,   j, k])/2
         d_uw_dx = (Ue*_face_x(r, wd, i, j, k, Ue) - Uw*_face_x(r, wd, i-1, j, k, Uw))*idx
@@ -1112,9 +1196,22 @@ function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{F
         Wb = (wd[i, j, k-1] + wd[i, j, k  ])/2
         d_ww_dz = (Wt*_face_z(r, wd, i, j, k, Wt) - Wb*_face_z(r, wd, i, j, k-1, Wb))*idz
 
-        tw.data[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
+        twd[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
     end
+    return nothing
+end
 
+function _momentum_advect_recon!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                 u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                 r::AbstractReconstruction, g::RegularGrid)
+    _check_halo(r, g)
+    idx = 1/g.dx; idy = 1/g.dy; idz = 1/g.dz
+    I = interior(g)
+    ud = u.data; vd = v.data; wd = w.data
+    b = Backends.backend(tu.data)
+    launch!(b, _b_mrecon_u!, I, tu.data, ud, vd, wd, r, idx, idy, idz)   # west face of cell i,j,k
+    launch!(b, _b_mrecon_v!, I, tv.data, ud, vd, wd, r, idx, idy, idz)   # south face
+    launch!(b, _b_mrecon_w!, I, tw.data, ud, vd, wd, r, idx, idy, idz)   # bottom face
     return (tu, tv, tw)
 end
 
@@ -1193,15 +1290,8 @@ momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
                       u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}) =
     _momentum_advect_skew!(tu, tv, tw, u, v, w, mesh(u))
 
-function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
-                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                                g::RegularGrid)
-    h2x = 1/(2g.dx); h2y = 1/(2g.dy); h2z = 1/(2g.dz)
-    ii, jj, kk = interior(g)
-    ud = u.data; vd = v.data; wd = w.data
-
-    # --- u-momentum ------------------------------------------------------
-    @inbounds for k in kk, j in jj, i in ii
+@inline function _b_skew_u!(i, j, k, tud, ud, vd, wd, h2x, h2y, h2z)
+    @inbounds begin
         Ue = (ud[i,   j, k] + ud[i+1, j, k])/2
         Uw = (ud[i-1, j, k] + ud[i,   j, k])/2
         Vn = (vd[i-1, j+1, k] + vd[i, j+1, k])/2
@@ -1209,13 +1299,14 @@ function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{Fa
         Wt = (wd[i-1, j, k+1] + wd[i, j, k+1])/2
         Wb = (wd[i-1, j, k  ] + wd[i, j, k  ])/2
 
-        tu.data[i,j,k] -= (Ue*ud[i+1,j,k] - Uw*ud[i-1,j,k])*h2x +
-                          (Vn*ud[i,j+1,k] - Vs*ud[i,j-1,k])*h2y +
-                          (Wt*ud[i,j,k+1] - Wb*ud[i,j,k-1])*h2z
+        tud[i,j,k] -= (Ue*ud[i+1,j,k] - Uw*ud[i-1,j,k])*h2x +
+                      (Vn*ud[i,j+1,k] - Vs*ud[i,j-1,k])*h2y +
+                      (Wt*ud[i,j,k+1] - Wb*ud[i,j,k-1])*h2z
     end
-
-    # --- v-momentum ------------------------------------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_skew_v!(i, j, k, tvd, ud, vd, wd, h2x, h2y, h2z)
+    @inbounds begin
         Ue = (ud[i+1, j-1, k] + ud[i+1, j, k])/2
         Uw = (ud[i,   j-1, k] + ud[i,   j, k])/2
         Vn = (vd[i, j,   k] + vd[i, j+1, k])/2
@@ -1223,13 +1314,14 @@ function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{Fa
         Wt = (wd[i, j-1, k+1] + wd[i, j, k+1])/2
         Wb = (wd[i, j-1, k  ] + wd[i, j, k  ])/2
 
-        tv.data[i,j,k] -= (Ue*vd[i+1,j,k] - Uw*vd[i-1,j,k])*h2x +
-                          (Vn*vd[i,j+1,k] - Vs*vd[i,j-1,k])*h2y +
-                          (Wt*vd[i,j,k+1] - Wb*vd[i,j,k-1])*h2z
+        tvd[i,j,k] -= (Ue*vd[i+1,j,k] - Uw*vd[i-1,j,k])*h2x +
+                      (Vn*vd[i,j+1,k] - Vs*vd[i,j-1,k])*h2y +
+                      (Wt*vd[i,j,k+1] - Wb*vd[i,j,k-1])*h2z
     end
-
-    # --- w-momentum ------------------------------------------------------
-    @inbounds for k in kk, j in jj, i in ii
+    return nothing
+end
+@inline function _b_skew_w!(i, j, k, twd, ud, vd, wd, h2x, h2y, h2z)
+    @inbounds begin
         Ue = (ud[i+1, j, k-1] + ud[i+1, j, k])/2
         Uw = (ud[i,   j, k-1] + ud[i,   j, k])/2
         Vn = (vd[i, j+1, k-1] + vd[i, j+1, k])/2
@@ -1237,11 +1329,23 @@ function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{Fa
         Wt = (wd[i, j, k  ] + wd[i, j, k+1])/2
         Wb = (wd[i, j, k-1] + wd[i, j, k  ])/2
 
-        tw.data[i,j,k] -= (Ue*wd[i+1,j,k] - Uw*wd[i-1,j,k])*h2x +
-                          (Vn*wd[i,j+1,k] - Vs*wd[i,j-1,k])*h2y +
-                          (Wt*wd[i,j,k+1] - Wb*wd[i,j,k-1])*h2z
+        twd[i,j,k] -= (Ue*wd[i+1,j,k] - Uw*wd[i-1,j,k])*h2x +
+                      (Vn*wd[i,j+1,k] - Vs*wd[i,j-1,k])*h2y +
+                      (Wt*wd[i,j,k+1] - Wb*wd[i,j,k-1])*h2z
     end
+    return nothing
+end
 
+function _momentum_advect_skew!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                                u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                                g::RegularGrid)
+    h2x = 1/(2g.dx); h2y = 1/(2g.dy); h2z = 1/(2g.dz)
+    I = interior(g)
+    ud = u.data; vd = v.data; wd = w.data
+    b = Backends.backend(tu.data)
+    launch!(b, _b_skew_u!, I, tu.data, ud, vd, wd, h2x, h2y, h2z)
+    launch!(b, _b_skew_v!, I, tv.data, ud, vd, wd, h2x, h2y, h2z)
+    launch!(b, _b_skew_w!, I, tw.data, ud, vd, wd, h2x, h2y, h2z)
     return (tu, tv, tw)
 end
 
@@ -1272,17 +1376,19 @@ advect_variance_conserving!(tend::Field{CellCenter},
                             ϕ::Field{CellCenter}) =
     _advect_variance_conserving!(tend, u, v, w, ϕ, mesh(ϕ))
 
+@inline function _b_varcons!(i, j, k, td, ud, vd, wd, ϕd, h2x, h2y, h2z)
+    @inbounds td[i,j,k] -= (ud[i+1,j,k]*ϕd[i+1,j,k] - ud[i,j,k]*ϕd[i-1,j,k])*h2x +
+                           (vd[i,j+1,k]*ϕd[i,j+1,k] - vd[i,j,k]*ϕd[i,j-1,k])*h2y +
+                           (wd[i,j,k+1]*ϕd[i,j,k+1] - wd[i,j,k]*ϕd[i,j,k-1])*h2z
+    return nothing
+end
+
 function _advect_variance_conserving!(tend::Field{CellCenter},
                                      u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                                      ϕ::Field{CellCenter}, g::RegularGrid)
     h2x = 1/(2g.dx); h2y = 1/(2g.dy); h2z = 1/(2g.dz)
-    ii, jj, kk = interior(g)
-    ϕd = ϕ.data; ud = u.data; vd = v.data; wd = w.data
-    @inbounds for k in kk, j in jj, i in ii
-        tend.data[i,j,k] -= (ud[i+1,j,k]*ϕd[i+1,j,k] - ud[i,j,k]*ϕd[i-1,j,k])*h2x +
-                            (vd[i,j+1,k]*ϕd[i,j+1,k] - vd[i,j,k]*ϕd[i,j-1,k])*h2y +
-                            (wd[i,j,k+1]*ϕd[i,j,k+1] - wd[i,j,k]*ϕd[i,j,k-1])*h2z
-    end
+    launch!(Backends.backend(tend.data), _b_varcons!, interior(g),
+            tend.data, u.data, v.data, w.data, ϕ.data, h2x, h2y, h2z)
     return tend
 end
 
@@ -1828,7 +1934,21 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
                               weights = nothing, fill::Bool = true,
                               diffusivity = nothing, levels = nothing,
                               correction_levels = nothing, face_fluxes = nothing)
+    # A function barrier on the reconstruction (KA-e): a scheme name gives an
+    # uninferred descriptor. The two-point schemes (the heat ledger's
+    # :centered, :upwind) are called statically, so a call allocates nothing;
+    # the others by one dynamic dispatch per call, which compiles only the
+    # schemes in use (all of them statically: 12 s of compilation on the
+    # first call, against 3 s before the port).
     r = _flux_reconstruction(scheme)
+    args = (sim, ϕ, bcs, weights, fill, diffusivity, levels, correction_levels, face_fluxes)
+    r isa Centered2 && return _boundary_scalar_flux(Centered2(), args...)
+    r isa _UpwindFirst && return _boundary_scalar_flux(_UpwindFirst(), args...)
+    return _boundary_scalar_flux(r, args...)
+end
+
+function _boundary_scalar_flux(r, sim, ϕ, bcs, weights, fill, diffusivity, levels,
+                               correction_levels, face_fluxes)
     g = mesh(ϕ)
     vb = sim.bcs
     H = required_halo(r)
@@ -1867,59 +1987,190 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     dB_ = diffusivity !== nothing && bcs.bottom isa AbstractOpenBoundary
     dT_ = diffusivity !== nothing && bcs.top isa AbstractOpenBoundary
     fW = fE = fS = fN = fB = fT = zero(T)
-    @inline addl!(v, k, x) = (v === nothing || (@inbounds v[k - k0] += x); nothing)
     # every face flux is _bsf_face_flux (scalar_face_flux, diffusive part only
     # where the scalar face is open): a top-level function with its arrays as
     # arguments, not a captured closure, which did not infer and allocated
-    # on every face (#327)
+    # on every face (#327).
+    #
+    # KA-e (#302): the face terms of a pair of opposite faces are
+    # `_bsf_x/_y/_z_terms`. When their 2-D launch runs on several tasks (and
+    # the scheme is not a two-point one, `_bsf_threads`) they are computed
+    # by it into a scratch vector, and the sums then run
+    # serially over that scratch in the old loop order; on a serial launch
+    # the sums compute them on the fly (the old fused loop: the dependent
+    # additions hide behind the face work, which a separate pass over the
+    # scratch cannot do: 1.6-2.2x at one thread). Either way every total,
+    # level and correction entry is the old one bit for bit at any thread
+    # count.
+    bk = Backends.backend(ϕd)
+    ST = promote_type(T, Float64, typeof(Ax))
     if !(vb.west isa Periodic)
-        iw = first(ii); ie = last(ii) + 1
-        @inbounds for k in kk, (b, j) in enumerate(jj)
-            w = _wflux(Wc, k) * Ax; wd_ = _wflux(Dc, k) * Ax
-            Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, Kh, ks, g, dW_, Fxd)
-            Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, Kh, ks, g, dE_, Fxd)
-            aw = -(w * Fa_w + wd_ * Fd_w); ae = w * Fa_e + wd_ * Fd_e
-            fW += aw; fE += ae
-            addl!(levels, k, aw + ae)
-            if correction_levels !== nothing
-                _corrected(cW, b, k - k0, -ud[iw, j, k]) && addl!(correction_levels, k, -cW[1] * w * φw)
-                _corrected(cE, b, k - k0, ud[ie, j, k]) && addl!(correction_levels, k, -cE[1] * w * φe)
-            end
-        end
+        xa = (r, ϕd, ud, first(ii), last(ii) + 1, dν, Kh, ks, g, dW_, dE_, Fxd, Wc, Dc, Ax)
+        fW, fE = _bsf_pair(bk, ST, _b_bsf_x!, _bsf_sum_x, (jj, kk), 4, xa,
+                           k0, levels, correction_levels, cW, cE, fW, fE)
     end
     if !(vb.south isa Periodic)
-        js = first(jj); jn = last(jj) + 1
-        @inbounds for k in kk, (a, i) in enumerate(ii)
-            w = _wflux(Wc, k) * Ay; wd_ = _wflux(Dc, k) * Ay
-            Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, Kh, ks, g, dS_, Fyd)
-            Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, Kh, ks, g, dN_, Fyd)
-            as = -(w * Fa_s + wd_ * Fd_s); an = w * Fa_n + wd_ * Fd_n
-            fS += as; fN += an
-            addl!(levels, k, as + an)
-            if correction_levels !== nothing
-                _corrected(cS, a, k - k0, -vd[i, js, k]) && addl!(correction_levels, k, -cS[1] * w * φs)
-                _corrected(cN, a, k - k0, vd[i, jn, k]) && addl!(correction_levels, k, -cN[1] * w * φn)
-            end
-        end
+        ya = (r, ϕd, vd, first(jj), last(jj) + 1, dν, Kh, ks, g, dS_, dN_, Fyd, Wc, Dc, Ay)
+        fS, fN = _bsf_pair(bk, ST, _b_bsf_y!, _bsf_sum_y, (ii, kk), 4, ya,
+                           k0, levels, correction_levels, cS, cN, fS, fN)
     end
     if !(vb.bottom isa Periodic)
         kb = first(kk); kt = last(kk) + 1
         wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
         db_ = _wflux(Df, kb) * Az; dt_ = _wflux(Df, kt) * Az
-        @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
-            Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, Kv, ks, g, dB_, Fzd)
-            Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, Kv, ks, g, dT_, Fzd)
-            ab = -(wb_ * Fa_b + db_ * Fd_b)
-            at = wt_ * Fa_t + dt_ * Fd_t
-            fB += ab; fT += at
-            addl!(levels, kb, ab); addl!(levels, kt - 1, at)
-            if correction_levels !== nothing
-                _corrected(cT, a, b, wd[i, j, kt]) && addl!(correction_levels, kt - 1, -cT[1] * wt_ * φt)
-            end
-        end
+        za = (r, ϕd, wd, kb, kt, dν, Kv, ks, g, dB_, dT_, Fzd, wb_, wt_, db_, dt_)
+        fB, fT = _bsf_pair(bk, ST, _b_bsf_z!, _bsf_sum_z, (ii, jj), 3, za,
+                           k0, levels, correction_levels, cT, nothing, fB, fT)
     end
     return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,
             total = fW + fE + fS + fN + fB + fT)
+end
+
+# One pair of opposite faces of boundary_scalar_flux: the face terms by a 2-D
+# launch into the scratch when it runs on several tasks, then the ordered
+# sums (`sum!`). `m` values per face pair. The two mass-flux corrections
+# `c1, c2` are separate arguments (each `nothing` or a tuple), so the call is
+# split on their union instead of dispatched at run time. The arguments reach the loops as
+# separate arguments, not in a tuple (with a tuple LLVM keeps the array loads
+# in the loop: 1.9x the old loop, as in KA-d's launch!).
+@inline function _bsf_pair(bk, ::Type{ST}, body!::B, sum!::S, (ar, br), m, args, k0, levels, clev, c1, c2,
+                   f1, f2) where {ST, B, S}
+    if !_bsf_threads(args[1]) || runs_serially(bk, length(ar) * length(br))
+        return sum!(nothing, ar, br, k0, levels, clev, c1, c2, f1, f2, args...)
+    end
+    lock(_BSF_LOCK)
+    try
+        sc = _bsf_scratch(ST, m * length(ar) * length(br))
+        launch!(bk, body!, (ar, br), sc, first(ar), first(br), length(ar), args...)
+        return sum!(sc, ar, br, k0, levels, clev, c1, c2, f1, f2, args...)
+    finally
+        unlock(_BSF_LOCK)
+    end
+end
+
+# Whether the face terms of reconstruction `r` are worth a threaded launch:
+# not for the two-point schemes, whose face work is less than the separate
+# ordered pass over the scratch (measured :centered on a 256×256×128 open
+# box: 306 µs fused at one thread, 455 / 487 / 730 µs through the threaded
+# launch at 4 / 12 / 24 threads; :weno_z5 2721 → 1403 µs at 4).
+@inline _bsf_threads(r) = true
+@inline _bsf_threads(::Union{Centered2,_UpwindFirst}) = false
+
+# The scratch of boundary_scalar_flux's face terms on a threaded launch: one
+# vector, grown once and reused (no allocation per call in a time loop),
+# guarded by a lock (calls from several tasks at once take turns); an element
+# type other than Float64 gets a fresh vector.
+const _BSF_SCRATCH = Float64[]
+const _BSF_LOCK = ReentrantLock()
+_bsf_scratch(::Type{Float64}, n) =
+    (length(_BSF_SCRATCH) < n && resize!(_BSF_SCRATCH, n); _BSF_SCRATCH)
+_bsf_scratch(::Type{S}, n) where {S} = Vector{S}(undef, n)
+
+@inline _bsf_addl!(::Nothing, k, x) = nothing
+@inline _bsf_addl!(v::AbstractVector, k, x) = (@inbounds v[k] += x; nothing)
+
+# The face terms (outward flux of the low face, of the high face, the face
+# values) at (j, k) / (i, k) / (i, j): the expressions of the old loops.
+# With a scratch vector `sc`, its entries `n+1 … n+m` instead.
+@inline function _bsf_x_terms(::Nothing, n, j, k, r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_,
+                              F, Wc, Dc, A)
+    w = _wflux(Wc, k) * A; wd_ = _wflux(Dc, k) * A
+    Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, K, ks, g, dW_, F)
+    Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, K, ks, g, dE_, F)
+    return -(w * Fa_w + wd_ * Fd_w), w * Fa_e + wd_ * Fd_e, φw, φe
+end
+@inline function _bsf_y_terms(::Nothing, n, i, k, r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_,
+                              F, Wc, Dc, A)
+    w = _wflux(Wc, k) * A; wd_ = _wflux(Dc, k) * A
+    Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, K, ks, g, dS_, F)
+    Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, K, ks, g, dN_, F)
+    return -(w * Fa_s + wd_ * Fd_s), w * Fa_n + wd_ * Fd_n, φs, φn
+end
+@inline function _bsf_z_terms(::Nothing, n, i, j, r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_,
+                              F, wb_, wt_, db_, dt_)
+    Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, K, ks, g, dB_, F)
+    Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, K, ks, g, dT_, F)
+    return -(wb_ * Fa_b + db_ * Fd_b), wt_ * Fa_t + dt_ * Fd_t, φt
+end
+@inline _bsf_x_terms(sc::AbstractVector, n, j, k, args...) =
+    @inbounds (sc[n+1], sc[n+2], sc[n+3], sc[n+4])
+@inline _bsf_y_terms(sc::AbstractVector, n, i, k, args...) =
+    @inbounds (sc[n+1], sc[n+2], sc[n+3], sc[n+4])
+@inline _bsf_z_terms(sc::AbstractVector, n, i, j, args...) =
+    @inbounds (sc[n+1], sc[n+2], sc[n+3])
+
+# the launch bodies: the terms of one face pair into the scratch
+@inline function _b_bsf_x!(j, k, sc, j0, k0, nj, r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_,
+                           F, Wc, Dc, A)
+    n = 4 * ((j - j0) + nj * (k - k0))
+    aw, ae, φw, φe = _bsf_x_terms(nothing, n, j, k, r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_,
+                                  F, Wc, Dc, A)
+    @inbounds (sc[n+1] = aw; sc[n+2] = ae; sc[n+3] = φw; sc[n+4] = φe)
+    return nothing
+end
+@inline function _b_bsf_y!(i, k, sc, i0, k0, ni, r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_,
+                           F, Wc, Dc, A)
+    n = 4 * ((i - i0) + ni * (k - k0))
+    as, an, φs, φn = _bsf_y_terms(nothing, n, i, k, r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_,
+                                  F, Wc, Dc, A)
+    @inbounds (sc[n+1] = as; sc[n+2] = an; sc[n+3] = φs; sc[n+4] = φn)
+    return nothing
+end
+@inline function _b_bsf_z!(i, j, sc, i0, j0, ni, r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_,
+                           F, wb_, wt_, db_, dt_)
+    n = 3 * ((i - i0) + ni * (j - j0))
+    ab, at, φt = _bsf_z_terms(nothing, n, i, j, r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_,
+                              F, wb_, wt_, db_, dt_)
+    @inbounds (sc[n+1] = ab; sc[n+2] = at; sc[n+3] = φt)
+    return nothing
+end
+
+# the ordered sums of one face pair, in the old loop order
+@inline function _bsf_sum_x(sc, jj, kk, k0, levels, clev, cW, cE, fW, fE,
+                    r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_, F, Wc, Dc, A)
+    j0, kk0, nj = first(jj), first(kk), length(jj)
+    @inbounds for k in kk, (b, j) in enumerate(jj)
+        aw, ae, φw, φe = _bsf_x_terms(sc, 4 * ((j - j0) + nj * (k - kk0)), j, k,
+                                      r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_, F, Wc, Dc, A)
+        fW += aw; fE += ae
+        _bsf_addl!(levels, k - k0, aw + ae)
+        if clev !== nothing
+            w = _wflux(Wc, k) * A
+            _corrected(cW, b, k - k0, -ud[iw, j, k]) && _bsf_addl!(clev, k - k0, -cW[1] * w * φw)
+            _corrected(cE, b, k - k0, ud[ie, j, k]) && _bsf_addl!(clev, k - k0, -cE[1] * w * φe)
+        end
+    end
+    return fW, fE
+end
+@inline function _bsf_sum_y(sc, ii, kk, k0, levels, clev, cS, cN, fS, fN,
+                    r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_, F, Wc, Dc, A)
+    i0, kk0, ni = first(ii), first(kk), length(ii)
+    @inbounds for k in kk, (a, i) in enumerate(ii)
+        as, an, φs, φn = _bsf_y_terms(sc, 4 * ((i - i0) + ni * (k - kk0)), i, k,
+                                      r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_, F, Wc, Dc, A)
+        fS += as; fN += an
+        _bsf_addl!(levels, k - k0, as + an)
+        if clev !== nothing
+            w = _wflux(Wc, k) * A
+            _corrected(cS, a, k - k0, -vd[i, js, k]) && _bsf_addl!(clev, k - k0, -cS[1] * w * φs)
+            _corrected(cN, a, k - k0, vd[i, jn, k]) && _bsf_addl!(clev, k - k0, -cN[1] * w * φn)
+        end
+    end
+    return fS, fN
+end
+@inline function _bsf_sum_z(sc, ii, jj, k0, levels, clev, cT, _, fB, fT,
+                    r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_, F, wb_, wt_, db_, dt_)
+    i0, j0, ni = first(ii), first(jj), length(ii)
+    @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
+        ab, at, φt = _bsf_z_terms(sc, 3 * ((i - i0) + ni * (j - j0)), i, j,
+                                  r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_, F, wb_, wt_, db_, dt_)
+        fB += ab; fT += at
+        _bsf_addl!(levels, kb - k0, ab); _bsf_addl!(levels, kt - 1 - k0, at)
+        if clev !== nothing
+            _corrected(cT, a, b, wd[i, j, kt]) && _bsf_addl!(clev, kt - 1 - k0, -cT[1] * wt_ * φt)
+        end
+    end
+    return fB, fT
 end
 
 # The halo of an open face of boundary_scalar_flux must hold the stencil.
