@@ -168,6 +168,15 @@ loses 5.0 % of its heat through the faces in 80 s and the time integral of
 periodic box keeps it to 6.8e-12); the parent's geostrophic tendency is
 exactly ``(-fV_g, fU_g)`` and the child's IBM hook runs in every child step.
 
+A run with a [`NestSponge`](@ref) cannot be driven this way (#349): the
+sponge relaxes the child inside the run's own subcycling (the velocity on
+every stage's predicted velocity, the scalars after each substep), so an
+externally driven child would get none, and nothing would say so.
+`begin_parent_step!` and `begin_child_step!` refuse such a run with an
+`ArgumentError` before either domain is touched; an externally driven
+child is relaxed by its core's own sponge instead (the Berlin case's top
+sponge toward the parent's mean profile).
+
 A child tracer the parent does not carry (in Berlin: ql, qr, the chemistry
 species) still needs a face condition: its plane is added after the core
 is built ([`add_open_scalars!`](@ref Aeolus.BoundaryConditions.add_open_scalars!))
@@ -276,7 +285,10 @@ These are owned by other issues of the nesting epic (#246).
   cell across a periodic seam and nowhere across a non-periodic boundary
   (it used to wrap on every axis, so a child at the parent top would have
   corrected the parent's lowest layer); `apply_flux_correction!` takes the
-  parent's periodic axes ([`nest_periodic_axes`](@ref)).
+  parent's periodic axes ([`nest_periodic_axes`](@ref)). Since #349 the
+  `periodic` keyword of the cell-centred `apply_flux_correction!` and of
+  `reflux!` is required: its triply periodic default was wrong for every
+  parent with a wall or an open face.
 * **Open (#328):** one parent–child pair per run; nest hierarchies,
   sibling nests, non-aligned parents and stretched children.
 

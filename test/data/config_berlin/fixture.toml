@@ -1,0 +1,708 @@
+commit = "6472aae5e0531876c1f6c3270133140ad20b0bf9"
+smoke_digests_threads = 4
+
+[mitte_sample.case]
+C_s = 0.1
+Pr_t = 0.3333333333333333
+T_soil0 = 288.0
+Ts0 = 285.0
+Ts_water_offset = 5.0
+boundary_frame = 3
+canopy_top = nan
+date = [2019, 6, 29]
+dt = 2.0
+elevation = 34.0
+extent = [1000.0, 1000.0, 400.0]
+f_coriolis = 0.0001
+g = 9.81
+halo = [3, 3, 3]
+lat0 = 52.522
+lateral = "periodic"
+lon0 = 13.41
+min_height = 15.0
+name = "mitte_sample"
+nsteps = 43200
+offset = [0.0, 0.0]
+osm_path = "<pkg>/examples/urban/data/sample_berlin_mitte.osm"
+outflow = "dirichlet"
+output_path = "<pkg>/examples/urban/output/alexanderplatz.nc"
+p_surface = "nothing"
+park_lai = 2.5
+qv0 = 0.01
+qv_scale = 800.0
+scenario = "mitte_sample"
+sgs_stability = "brown94"
+size = [64, 64, 64]
+sounding = "<pkg>/examples/urban/data/lindenberg_10393_20190629.csv"
+sponge_frac = 0.75
+"sponge_α_max" = 0.05
+start_h = 6.0
+u0 = 1.0
+utc_offset = 2.0
+wall_subdivisions = 1
+"θ_inversion_z" = 100.0
+"θ_lapse" = 0.003
+"θ_relaxation" = true
+"θ_surface" = 293.0
+"θ_top" = "initial_gradient"
+"θ₀" = 293.0
+"ν" = 2.0
+
+    [mitte_sample.case.backend]
+    _type = "CPUBackend"
+    serial = false
+    threshold = 32768
+
+        [mitte_sample.case.backend.ka]
+        _type = "CPU"
+        static = false
+
+    [mitte_sample.case.cadence]
+    output = 1800.0
+    radiation = 600.0
+    soil = 30.0
+
+    [mitte_sample.case.options]
+
+    [mitte_sample.case.physics]
+
+[mitte_sample.parent]
+C_advective = 0.9
+E_surface = [0.0, 0.0, 0.0]
+Q_surface = [0.0, 0.0, 0.0]
+U_min = 0.5
+center = "nothing"
+damping_frac = 0.25
+damping_rate = 0.01
+divergence = 0.0
+dz_max = 100.0
+extent = [6000.0, 6000.0, 3000.0]
+geostrophic = true
+halo = [2, 2, 2]
+hours = 24.0
+moisture = true
+nudging_depth = 200.0
+nudging_factor = 1.2
+"nudging_τ" = 21600.0
+output_period = 600.0
+perturbation = 0.2
+perturbation_depth = 100.0
+qv_init = "nothing"
+radiation = true
+radiation_period = 600.0
+ratio = 1.08
+refinement = [2, 2, 4]
+seed = 259
+sgs = "tke"
+stepper = "rk3"
+surface = "tiles"
+surface_period = 60.0
+u_init = "geostrophic"
+vertical = "stretched"
+z_g = nan
+z_uniform = 500.0
+"θ_init" = "nothing"
+"θ_top" = "initial_gradient"
+
+    [mitte_sample.parent.child]
+    C_s = 0.1
+    Pr_t = 0.3333333333333333
+    T_soil0 = 288.0
+    Ts0 = 285.0
+    Ts_water_offset = 5.0
+    _type = "CaseConfig"
+    boundary_frame = 3
+    canopy_top = nan
+    date = [2019, 6, 29]
+    dt = 2.0
+    elevation = 34.0
+    extent = [1000.0, 1000.0, 400.0]
+    f_coriolis = 0.0001
+    g = 9.81
+    halo = [3, 3, 3]
+    lat0 = 52.522
+    lateral = "periodic"
+    lon0 = 13.41
+    min_height = 15.0
+    name = "mitte_sample"
+    nsteps = 43200
+    offset = [0.0, 0.0]
+    osm_path = "<pkg>/examples/urban/data/sample_berlin_mitte.osm"
+    outflow = "dirichlet"
+    output_path = "<pkg>/examples/urban/output/alexanderplatz.nc"
+    p_surface = "nothing"
+    park_lai = 2.5
+    qv0 = 0.01
+    qv_scale = 800.0
+    scenario = "mitte_sample"
+    sgs_stability = "brown94"
+    size = [64, 64, 64]
+    sounding = "<pkg>/examples/urban/data/lindenberg_10393_20190629.csv"
+    sponge_frac = 0.75
+    "sponge_α_max" = 0.05
+    start_h = 6.0
+    u0 = 1.0
+    utc_offset = 2.0
+    wall_subdivisions = 1
+    "θ_inversion_z" = 100.0
+    "θ_lapse" = 0.003
+    "θ_relaxation" = true
+    "θ_surface" = 293.0
+    "θ_top" = "initial_gradient"
+    "θ₀" = 293.0
+    "ν" = 2.0
+
+        [mitte_sample.parent.child.backend]
+        _type = "CPUBackend"
+        serial = false
+        threshold = 32768
+
+            [mitte_sample.parent.child.backend.ka]
+            _type = "CPU"
+            static = false
+
+        [mitte_sample.parent.child.cadence]
+        output = 1800.0
+        radiation = 600.0
+        soil = 30.0
+
+        [mitte_sample.parent.child.options]
+
+        [mitte_sample.parent.child.physics]
+
+[smoke.case]
+C_s = 0.1
+Pr_t = 0.3333333333333333
+T_soil0 = 288.0
+Ts0 = 285.0
+Ts_water_offset = 5.0
+boundary_frame = 3
+canopy_top = nan
+date = [2019, 6, 29]
+dt = 2.0
+elevation = 34.0
+extent = [250.0, 250.0, 100.0]
+f_coriolis = 0.0001
+g = 9.81
+halo = [3, 3, 3]
+lat0 = 52.522
+lateral = "periodic"
+lon0 = 13.41
+min_height = 8.0
+name = "smoke"
+nsteps = 12
+offset = [0.0, -312.5]
+osm_path = "<pkg>/examples/urban/data/alexanderplatz_real.osm"
+outflow = "dirichlet"
+output_path = "nothing"
+p_surface = "nothing"
+park_lai = 2.5
+qv0 = 0.01
+qv_scale = 800.0
+scenario = "smoke"
+sgs_stability = "brown94"
+size = [16, 16, 16]
+sounding = "nothing"
+sponge_frac = 0.75
+"sponge_α_max" = 0.05
+start_h = 12.0
+u0 = 1.0
+utc_offset = 2.0
+wall_subdivisions = 1
+"θ_inversion_z" = 60.0
+"θ_lapse" = 0.003
+"θ_relaxation" = true
+"θ_surface" = 293.0
+"θ_top" = "initial_gradient"
+"θ₀" = 293.0
+"ν" = 2.0
+
+    [smoke.case.backend]
+    _type = "CPUBackend"
+    serial = false
+    threshold = 32768
+
+        [smoke.case.backend.ka]
+        _type = "CPU"
+        static = false
+
+    [smoke.case.cadence]
+    output = 12.0
+    radiation = 8.0
+    soil = 4.0
+
+    [smoke.case.options.nesting.parent]
+    extent = [1000.0, 1000.0, 500.0]
+    refinement = [4, 4, 8]
+    vertical = "uniform"
+
+    [smoke.case.physics]
+
+[smoke.parent]
+C_advective = 0.9
+E_surface = [0.0, 0.0, 0.0]
+Q_surface = [0.0, 0.0, 0.0]
+U_min = 0.5
+center = "nothing"
+damping_frac = 0.25
+damping_rate = 0.01
+divergence = 0.0
+dz_max = 100.0
+extent = [1000.0, 1000.0, 500.0]
+geostrophic = true
+halo = [2, 2, 2]
+hours = 24.0
+moisture = true
+nudging_depth = 200.0
+nudging_factor = 1.2
+"nudging_τ" = 21600.0
+output_period = 600.0
+perturbation = 0.2
+perturbation_depth = 100.0
+qv_init = "nothing"
+radiation = true
+radiation_period = 600.0
+ratio = 1.08
+refinement = [4, 4, 8]
+seed = 259
+sgs = "tke"
+stepper = "rk3"
+surface = "tiles"
+surface_period = 60.0
+u_init = "geostrophic"
+vertical = "uniform"
+z_g = nan
+z_uniform = 500.0
+"θ_init" = "nothing"
+"θ_top" = "initial_gradient"
+
+    [smoke.parent.child]
+    C_s = 0.1
+    Pr_t = 0.3333333333333333
+    T_soil0 = 288.0
+    Ts0 = 285.0
+    Ts_water_offset = 5.0
+    _type = "CaseConfig"
+    boundary_frame = 3
+    canopy_top = nan
+    date = [2019, 6, 29]
+    dt = 2.0
+    elevation = 34.0
+    extent = [250.0, 250.0, 100.0]
+    f_coriolis = 0.0001
+    g = 9.81
+    halo = [3, 3, 3]
+    lat0 = 52.522
+    lateral = "periodic"
+    lon0 = 13.41
+    min_height = 8.0
+    name = "smoke"
+    nsteps = 12
+    offset = [0.0, -312.5]
+    osm_path = "<pkg>/examples/urban/data/alexanderplatz_real.osm"
+    outflow = "dirichlet"
+    output_path = "nothing"
+    p_surface = "nothing"
+    park_lai = 2.5
+    qv0 = 0.01
+    qv_scale = 800.0
+    scenario = "smoke"
+    sgs_stability = "brown94"
+    size = [16, 16, 16]
+    sounding = "nothing"
+    sponge_frac = 0.75
+    "sponge_α_max" = 0.05
+    start_h = 12.0
+    u0 = 1.0
+    utc_offset = 2.0
+    wall_subdivisions = 1
+    "θ_inversion_z" = 60.0
+    "θ_lapse" = 0.003
+    "θ_relaxation" = true
+    "θ_surface" = 293.0
+    "θ_top" = "initial_gradient"
+    "θ₀" = 293.0
+    "ν" = 2.0
+
+        [smoke.parent.child.backend]
+        _type = "CPUBackend"
+        serial = false
+        threshold = 32768
+
+            [smoke.parent.child.backend.ka]
+            _type = "CPU"
+            static = false
+
+        [smoke.parent.child.cadence]
+        output = 12.0
+        radiation = 8.0
+        soil = 4.0
+
+        [smoke.parent.child.options.nesting.parent]
+        extent = [1000.0, 1000.0, 500.0]
+        refinement = [4, 4, 8]
+        vertical = "uniform"
+
+        [smoke.parent.child.physics]
+
+[smoke_digests]
+HNO3 = "3951db839cd1f3c6"
+NO = "c1b20982930bbd8b"
+NO2 = "3bd75cba7b7f3011"
+O3 = "f030b6157f05cf82"
+Ts = "e8dafe9d63956b40"
+VOC = "6af6bb3699121b3f"
+e = "03c66bba3a3e176d"
+p = "10419ce2236fbc7c"
+parent_p = "a20144242790aaea"
+parent_qv = "ea52a59b9bec07f1"
+parent_u = "3b6d738234a763bd"
+parent_v = "ed3d31e263be1438"
+parent_w = "5c2c0fabed842a86"
+"parent_θ" = "51103da606055c46"
+pollutant = "8f6955bf94ec2325"
+ql = "8f6955bf94ec2325"
+qr = "8f6955bf94ec2325"
+qv = "5d990ede311f62ee"
+u = "7f8fbc7cc71dd8dc"
+v = "a1e378254dffb6ff"
+w = "a1d3de5ffb9017b3"
+"θ" = "072f8b50c6bfff61"
+
+[summer.case]
+C_s = 0.1
+Pr_t = 0.3333333333333333
+T_soil0 = 288.0
+Ts0 = 285.0
+Ts_water_offset = 5.0
+boundary_frame = 3
+canopy_top = nan
+date = [2019, 6, 29]
+dt = 2.0
+elevation = 34.0
+extent = [1000.0, 1000.0, 400.0]
+f_coriolis = 0.0001
+g = 9.81
+halo = [3, 3, 3]
+lat0 = 52.522
+lateral = "periodic"
+lon0 = 13.41
+min_height = 8.0
+name = "summer"
+nsteps = 43200
+offset = [0.0, 0.0]
+osm_path = "<pkg>/examples/urban/data/alexanderplatz_real.osm"
+outflow = "dirichlet"
+output_path = "<pkg>/examples/urban/output/alexanderplatz.nc"
+p_surface = "nothing"
+park_lai = 2.5
+qv0 = 0.01
+qv_scale = 800.0
+scenario = "summer"
+sgs_stability = "brown94"
+size = [64, 64, 64]
+sounding = "<pkg>/examples/urban/data/lindenberg_10393_20190629.csv"
+sponge_frac = 0.75
+"sponge_α_max" = 0.05
+start_h = 6.0
+u0 = 1.0
+utc_offset = 2.0
+wall_subdivisions = 1
+"θ_inversion_z" = 100.0
+"θ_lapse" = 0.003
+"θ_relaxation" = true
+"θ_surface" = 293.0
+"θ_top" = "initial_gradient"
+"θ₀" = 293.0
+"ν" = 2.0
+
+    [summer.case.backend]
+    _type = "CPUBackend"
+    serial = false
+    threshold = 32768
+
+        [summer.case.backend.ka]
+        _type = "CPU"
+        static = false
+
+    [summer.case.cadence]
+    output = 1800.0
+    radiation = 600.0
+    soil = 30.0
+
+    [summer.case.options]
+
+    [summer.case.physics]
+
+[summer.parent]
+C_advective = 0.9
+E_surface = [0.0, 0.0, 0.0]
+Q_surface = [0.0, 0.0, 0.0]
+U_min = 0.5
+center = "nothing"
+damping_frac = 0.25
+damping_rate = 0.01
+divergence = 0.0
+dz_max = 100.0
+extent = [6000.0, 6000.0, 3000.0]
+geostrophic = true
+halo = [2, 2, 2]
+hours = 24.0
+moisture = true
+nudging_depth = 200.0
+nudging_factor = 1.2
+"nudging_τ" = 21600.0
+output_period = 600.0
+perturbation = 0.2
+perturbation_depth = 100.0
+qv_init = "nothing"
+radiation = true
+radiation_period = 600.0
+ratio = 1.08
+refinement = [2, 2, 4]
+seed = 259
+sgs = "tke"
+stepper = "rk3"
+surface = "tiles"
+surface_period = 60.0
+u_init = "geostrophic"
+vertical = "stretched"
+z_g = nan
+z_uniform = 500.0
+"θ_init" = "nothing"
+"θ_top" = "initial_gradient"
+
+    [summer.parent.child]
+    C_s = 0.1
+    Pr_t = 0.3333333333333333
+    T_soil0 = 288.0
+    Ts0 = 285.0
+    Ts_water_offset = 5.0
+    _type = "CaseConfig"
+    boundary_frame = 3
+    canopy_top = nan
+    date = [2019, 6, 29]
+    dt = 2.0
+    elevation = 34.0
+    extent = [1000.0, 1000.0, 400.0]
+    f_coriolis = 0.0001
+    g = 9.81
+    halo = [3, 3, 3]
+    lat0 = 52.522
+    lateral = "periodic"
+    lon0 = 13.41
+    min_height = 8.0
+    name = "summer"
+    nsteps = 43200
+    offset = [0.0, 0.0]
+    osm_path = "<pkg>/examples/urban/data/alexanderplatz_real.osm"
+    outflow = "dirichlet"
+    output_path = "<pkg>/examples/urban/output/alexanderplatz.nc"
+    p_surface = "nothing"
+    park_lai = 2.5
+    qv0 = 0.01
+    qv_scale = 800.0
+    scenario = "summer"
+    sgs_stability = "brown94"
+    size = [64, 64, 64]
+    sounding = "<pkg>/examples/urban/data/lindenberg_10393_20190629.csv"
+    sponge_frac = 0.75
+    "sponge_α_max" = 0.05
+    start_h = 6.0
+    u0 = 1.0
+    utc_offset = 2.0
+    wall_subdivisions = 1
+    "θ_inversion_z" = 100.0
+    "θ_lapse" = 0.003
+    "θ_relaxation" = true
+    "θ_surface" = 293.0
+    "θ_top" = "initial_gradient"
+    "θ₀" = 293.0
+    "ν" = 2.0
+
+        [summer.parent.child.backend]
+        _type = "CPUBackend"
+        serial = false
+        threshold = 32768
+
+            [summer.parent.child.backend.ka]
+            _type = "CPU"
+            static = false
+
+        [summer.parent.child.cadence]
+        output = 1800.0
+        radiation = 600.0
+        soil = 30.0
+
+        [summer.parent.child.options]
+
+        [summer.parent.child.physics]
+
+[winter.case]
+C_s = 0.1
+Pr_t = 0.3333333333333333
+T_soil0 = 276.0
+Ts0 = 272.0
+Ts_water_offset = 5.0
+boundary_frame = 3
+canopy_top = nan
+date = [2024, 1, 15]
+dt = 2.0
+elevation = 34.0
+extent = [1000.0, 1000.0, 400.0]
+f_coriolis = 0.0001
+g = 9.81
+halo = [3, 3, 3]
+lat0 = 52.522
+lateral = "periodic"
+lon0 = 13.41
+min_height = 8.0
+name = "winter"
+nsteps = 43200
+offset = [0.0, 0.0]
+osm_path = "<pkg>/examples/urban/data/alexanderplatz_real.osm"
+outflow = "dirichlet"
+output_path = "<pkg>/examples/urban/output/alexanderplatz.nc"
+p_surface = "nothing"
+park_lai = 2.5
+qv0 = 0.0025
+qv_scale = 800.0
+scenario = "winter"
+sgs_stability = "brown94"
+size = [64, 64, 64]
+sounding = "nothing"
+sponge_frac = 0.75
+"sponge_α_max" = 0.05
+start_h = 6.0
+u0 = 1.0
+utc_offset = 1.0
+wall_subdivisions = 1
+"θ_inversion_z" = 100.0
+"θ_lapse" = 0.003
+"θ_relaxation" = true
+"θ_surface" = 271.0
+"θ_top" = "initial_gradient"
+"θ₀" = 271.0
+"ν" = 2.0
+
+    [winter.case.backend]
+    _type = "CPUBackend"
+    serial = false
+    threshold = 32768
+
+        [winter.case.backend.ka]
+        _type = "CPU"
+        static = false
+
+    [winter.case.cadence]
+    output = 1800.0
+    radiation = 600.0
+    soil = 30.0
+
+    [winter.case.options]
+
+    [winter.case.physics]
+
+[winter.parent]
+C_advective = 0.9
+E_surface = [0.0, 0.0, 0.0]
+Q_surface = [0.0, 0.0, 0.0]
+U_min = 0.5
+center = "nothing"
+damping_frac = 0.25
+damping_rate = 0.01
+divergence = 0.0
+dz_max = 100.0
+extent = [6000.0, 6000.0, 3000.0]
+geostrophic = true
+halo = [2, 2, 2]
+hours = 24.0
+moisture = true
+nudging_depth = 200.0
+nudging_factor = 1.2
+"nudging_τ" = 21600.0
+output_period = 600.0
+perturbation = 0.2
+perturbation_depth = 100.0
+qv_init = "nothing"
+radiation = true
+radiation_period = 600.0
+ratio = 1.08
+refinement = [2, 2, 4]
+seed = 259
+sgs = "tke"
+stepper = "rk3"
+surface = "tiles"
+surface_period = 60.0
+u_init = "geostrophic"
+vertical = "stretched"
+z_g = nan
+z_uniform = 500.0
+"θ_init" = "nothing"
+"θ_top" = "initial_gradient"
+
+    [winter.parent.child]
+    C_s = 0.1
+    Pr_t = 0.3333333333333333
+    T_soil0 = 276.0
+    Ts0 = 272.0
+    Ts_water_offset = 5.0
+    _type = "CaseConfig"
+    boundary_frame = 3
+    canopy_top = nan
+    date = [2024, 1, 15]
+    dt = 2.0
+    elevation = 34.0
+    extent = [1000.0, 1000.0, 400.0]
+    f_coriolis = 0.0001
+    g = 9.81
+    halo = [3, 3, 3]
+    lat0 = 52.522
+    lateral = "periodic"
+    lon0 = 13.41
+    min_height = 8.0
+    name = "winter"
+    nsteps = 43200
+    offset = [0.0, 0.0]
+    osm_path = "<pkg>/examples/urban/data/alexanderplatz_real.osm"
+    outflow = "dirichlet"
+    output_path = "<pkg>/examples/urban/output/alexanderplatz.nc"
+    p_surface = "nothing"
+    park_lai = 2.5
+    qv0 = 0.0025
+    qv_scale = 800.0
+    scenario = "winter"
+    sgs_stability = "brown94"
+    size = [64, 64, 64]
+    sounding = "nothing"
+    sponge_frac = 0.75
+    "sponge_α_max" = 0.05
+    start_h = 6.0
+    u0 = 1.0
+    utc_offset = 1.0
+    wall_subdivisions = 1
+    "θ_inversion_z" = 100.0
+    "θ_lapse" = 0.003
+    "θ_relaxation" = true
+    "θ_surface" = 271.0
+    "θ_top" = "initial_gradient"
+    "θ₀" = 271.0
+    "ν" = 2.0
+
+        [winter.parent.child.backend]
+        _type = "CPUBackend"
+        serial = false
+        threshold = 32768
+
+            [winter.parent.child.backend.ka]
+            _type = "CPU"
+            static = false
+
+        [winter.parent.child.cadence]
+        output = 1800.0
+        radiation = 600.0
+        soil = 30.0
+
+        [winter.parent.child.options]
+
+        [winter.parent.child.physics]

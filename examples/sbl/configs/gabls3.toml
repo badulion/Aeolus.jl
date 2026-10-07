@@ -1,0 +1,82 @@
+# GABLS3 — the Cabauw low-level-jet night of 1-2 July 2006 (Basu 2008 case
+# description; Bosveld et al. 2014a,b; LES: Basu, Holtslag & Bosveld 2012).
+#
+# From 00 UTC 2 July: Cabauw (51.9711° N), z0m = 0.15 m, the prescribed
+# 0.25 m θ (z0h = 0.25 m in solve_surface_layer gives exactly the case's
+# w'θ' = u* κ (θ_0.25 - θ_z1) / [ln(z1/0.25) - Ψ_H(z1/L) + Ψ_H(0.25/L)]),
+# stable ψ_M = ψ_H = -5 z/L (the morning's unstable branch is that
+# family's Businger-Dyer, γ = 16), time-height geostrophic wind (the
+# surface values of the case table, linear in z to (-2, 2) m/s at 2000 m)
+# and advective tendencies of u, v, θ (constant above 200 m, linear to zero
+# at the surface), perturbations u, v ~ N(0, 0.2 (1 - z/200)²) and
+# θ ~ N(0, 0.1) below 200 m, a sponge from 600 m damping only the
+# departures from the plane mean. Dry (examples/sbl/cases.jl header).
+# The reference resolution is 6.25 m (128³ on 800 m); the CI test runs
+# 16 × 16 × 48 on 400 m with the sponge from 300 m.
+#
+#   julia -m Aeolus run examples/sbl/configs/gabls3.toml --set grid.size=[64,64,64] \
+#       --set grid.extent=[400.0,400.0,400.0] --set sponge.z=300.0
+
+[run]
+driver = "sbl"
+name = "gabls3"
+seed = 1
+
+[case]
+kind = "homogeneous"
+data = "../data/gabls3_case.csv"
+
+[grid]
+size = [128, 128, 128]
+extent = [800.0, 800.0, 800.0]
+
+[dynamics]
+theta0 = 290.0
+
+[forcing]
+latitude = 51.9711
+u_g = {kind = "table", z = [0.0, 2000.0], time = {table = "geostrophic", column = 1}, levels = [{column = 2}, {value = -2.0}]}
+v_g = {kind = "table", z = [0.0, 2000.0], time = {table = "geostrophic", column = 1}, levels = [{column = 3}, {value = 2.0}]}
+
+[forcing.advective_tendencies]
+u = {kind = "table", z = [0.0, 200.0], time = {table = "advection", column = 1}, levels = [{value = 0.0}, {column = 2}]}
+v = {kind = "table", z = [0.0, 200.0], time = {table = "advection", column = 1}, levels = [{value = 0.0}, {column = 3}]}
+theta = {kind = "table", z = [0.0, 200.0], time = {table = "advection", column = 1}, levels = [{value = 0.0}, {column = 4}]}
+
+[surface]
+z0m = 0.15
+z0h = 0.25                     # the height of the prescribed θ: the scalar reference height
+temperature = {kind = "series", table = "surface", time_column = 1, column = 3}
+stability = {family = "businger_dyer_log_linear", beta = 5.0}
+rho_cp = 1228.5454644005083    # p/(R_d θ) c_p at the first surface row: 102210/(287.05 × 291.28) × 1005
+
+[initial]
+# above 10 m the tabulated sounding; below, θ linear from the 0.25 m value
+# and the wind logarithmic from zero at z0m = 0.15 m
+theta = {kind = "table", table = "thermo", column = 3, below = {kind = "linear", z = 0.25, value = {table = "surface", row = 1, column = 3}}}
+u = {kind = "table", table = "wind", column = 2, below = {kind = "log", z0 = 0.15}}
+v = {kind = "table", table = "wind", column = 3, below = {kind = "log", z0 = 0.15}}
+perturbation = {kind = "gaussian", variance = [0.2, 0.2, 0.1], depth = 200.0, taper = ["linear", "linear", "none"]}
+t_start = 0.0
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+
+[sponge]
+z = 600.0
+alpha = 0.01
+target = "mean"
+
+[stepper]
+end_time = 14400.0             # 04 UTC: the published LES envelope is for 03-04 UTC
+
+[averaging]
+from = 10800.0
+sample_every = 5
+series_interval = 300.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with --resume <run folder> (RESUME= for the scripts)
+keep = 2

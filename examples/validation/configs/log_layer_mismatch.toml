@@ -1,0 +1,108 @@
+# Log-layer mismatch in wall-modelled channel LES (P57-b, #183)
+#
+# The smooth-wall plane channel of `channel_case` (24 × 12 × 16 on
+# 2πδ × πδ × 2δ, SpaldingLaw at both walls, StaticSmagorinsky(0.1)),
+# 20 δ/u_τ, averaged over the second half. Fifteen runs:
+#
+#   re<Re_τ>_first / _fix   the Re_τ of Lee & Moser (2015) with first-cell
+#                           matching, and with the fix: matching height
+#                           h_wm = 3Δz = 0.375δ (Kawai & Larsson 2012) and
+#                           the time filter of Yang, Park & Moin (2017)
+#   static_* / dynamic_*    the closures at Re_τ = 1000
+#   tf<T_f>                 the time-filter scale at Re_τ = 1000 with the fix
+#
+#   julia --project=. examples/validation/log_layer_mismatch.jl        # ~3 min
+#   julia --project=. examples/validation/log_layer_mismatch.jl --set stepper.end_time=8.0
+
+[run]
+driver = "channel"
+name = "log_layer_mismatch"
+seed = 1
+
+[channel]
+kind = "full"
+size = [24, 12, 16]
+
+[wall_model]
+law = "spalding"
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+
+[stepper]
+end_time = 20.0
+average_from_fraction = 0.5
+
+[[sweep.member]]
+label = "re182_first"
+channel = { re_tau = 182.088 }
+
+[[sweep.member]]
+label = "re182_fix"
+channel = { re_tau = 182.088 }
+wall_model = { h_wm = 0.375, filter = "temporal" }
+
+[[sweep.member]]
+label = "re544_first"
+channel = { re_tau = 543.496 }
+
+[[sweep.member]]
+label = "re544_fix"
+channel = { re_tau = 543.496 }
+wall_model = { h_wm = 0.375, filter = "temporal" }
+
+[[sweep.member]]
+label = "re1000_first"
+channel = { re_tau = 1000.512 }
+
+[[sweep.member]]
+label = "re1000_fix"
+channel = { re_tau = 1000.512 }
+wall_model = { h_wm = 0.375, filter = "temporal" }
+
+[[sweep.member]]
+label = "re5186_first"
+channel = { re_tau = 5185.897 }
+
+[[sweep.member]]
+label = "re5186_fix"
+channel = { re_tau = 5185.897 }
+wall_model = { h_wm = 0.375, filter = "temporal" }
+
+[[sweep.member]]
+label = "static_first"
+channel = { re_tau = 1000.0 }
+sgs = { closure = "smagorinsky" }
+
+[[sweep.member]]
+label = "static_fix"
+channel = { re_tau = 1000.0 }
+sgs = { closure = "smagorinsky" }
+wall_model = { h_wm = 0.375, filter = "temporal" }
+
+[[sweep.member]]
+label = "dynamic_first"
+channel = { re_tau = 1000.0 }
+sgs = { closure = "dynamic_smagorinsky" }
+
+[[sweep.member]]
+label = "dynamic_fix"
+channel = { re_tau = 1000.0 }
+sgs = { closure = "dynamic_smagorinsky" }
+wall_model = { h_wm = 0.375, filter = "temporal" }
+
+[[sweep.member]]
+label = "tf0.1"
+channel = { re_tau = 1000.0 }
+wall_model = { h_wm = 0.375, filter = "temporal", t_f = 0.1 }
+
+[[sweep.member]]
+label = "tf0.5"
+channel = { re_tau = 1000.0 }
+wall_model = { h_wm = 0.375, filter = "temporal", t_f = 0.5 }
+
+[[sweep.member]]
+label = "tf2.0"
+channel = { re_tau = 1000.0 }
+wall_model = { h_wm = 0.375, filter = "temporal", t_f = 2.0 }
