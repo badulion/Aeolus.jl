@@ -40,7 +40,7 @@ const BP = Main.BerlinCase
     S = BP.case_sounding(child)
     P = S.profiles
     MT = Aeolus.MoistThermodynamics
-    t12 = BP.sounding_time(S.sounding, 2019, 6, 29, 12.0)         # 14 LT = 12 UTC (released 10:45)
+    t12 = 12 * 3600.0                     # 14 LT = 12 UTC on the tables' axis (s from 00 UTC; released 10:45)
     θv_obs = [MT.virtual_temperature(BP.forcing_value(P.θ, h, t12), MT.PhasePartition(BP.forcing_value(P.qv, h, t12)))
               for h in P.z]
     zi_obs = boundary_layer_height(P.z, θv_obs; method = :parcel)
