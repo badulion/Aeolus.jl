@@ -1934,7 +1934,21 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
                               weights = nothing, fill::Bool = true,
                               diffusivity = nothing, levels = nothing,
                               correction_levels = nothing, face_fluxes = nothing)
+    # A function barrier on the reconstruction (KA-e): a scheme name gives an
+    # uninferred descriptor. The two-point schemes (the heat ledger's
+    # :centered, :upwind) are called statically, so a call allocates nothing;
+    # the others by one dynamic dispatch per call, which compiles only the
+    # schemes in use (all of them statically: 12 s of compilation on the
+    # first call, against 3 s before the port).
     r = _flux_reconstruction(scheme)
+    args = (sim, ϕ, bcs, weights, fill, diffusivity, levels, correction_levels, face_fluxes)
+    r isa Centered2 && return _boundary_scalar_flux(Centered2(), args...)
+    r isa _UpwindFirst && return _boundary_scalar_flux(_UpwindFirst(), args...)
+    return _boundary_scalar_flux(r, args...)
+end
+
+function _boundary_scalar_flux(r, sim, ϕ, bcs, weights, fill, diffusivity, levels,
+                               correction_levels, face_fluxes)
     g = mesh(ϕ)
     vb = sim.bcs
     H = required_halo(r)
@@ -1973,120 +1987,181 @@ function boundary_scalar_flux(sim, ϕ::Field{CellCenter};
     dB_ = diffusivity !== nothing && bcs.bottom isa AbstractOpenBoundary
     dT_ = diffusivity !== nothing && bcs.top isa AbstractOpenBoundary
     fW = fE = fS = fN = fB = fT = zero(T)
-    @inline addl!(v, k, x) = (v === nothing || (@inbounds v[k - k0] += x); nothing)
     # every face flux is _bsf_face_flux (scalar_face_flux, diffusive part only
     # where the scalar face is open): a top-level function with its arrays as
     # arguments, not a captured closure, which did not infer and allocated
     # on every face (#327).
     #
-    # KA-e (#302): the face terms of each pair of opposite faces are one 2-D
-    # launch into a scratch vector (the face reconstruction is the work);
-    # the sums then run serially over that scratch in the old loop order,
-    # so every total, level and correction entry is the old one bit for bit
-    # at any thread count.
-    ni, nj, nk = length(ii), length(jj), length(kk)
-    i0, j0, kk0 = first(ii), first(jj), first(kk)
-    oS = 4 * nj * nk; oB = oS + 4 * ni * nk
+    # KA-e (#302): the face terms of a pair of opposite faces are
+    # `_bsf_x/_y/_z_terms`. When their 2-D launch runs on several tasks they
+    # are computed by it into a scratch vector, and the sums then run
+    # serially over that scratch in the old loop order; on a serial launch
+    # the sums compute them on the fly (the old fused loop: the dependent
+    # additions hide behind the face work, which a separate pass over the
+    # scratch cannot do: 1.6-2.2x at one thread). Either way every total,
+    # level and correction entry is the old one bit for bit at any thread
+    # count.
     bk = Backends.backend(ϕd)
-    lock(_BSF_LOCK)
-    try
-        S = _bsf_scratch(promote_type(T, Float64, typeof(Ax)), oB + 3 * ni * nj)
-        if !(vb.west isa Periodic)
-            iw = first(ii); ie = last(ii) + 1
-            launch!(bk, _b_bsf_x!, (jj, kk), S, 0, j0, kk0, nj, r, ϕd, ud, iw, ie, dν, Kh, ks,
-                    g, dW_, dE_, Fxd, Wc, Dc, Ax)
-            @inbounds for k in kk, (b, j) in enumerate(jj)
-                n = 4 * ((j - j0) + nj * (k - kk0))
-                aw = S[n+1]; ae = S[n+2]
-                fW += aw; fE += ae
-                addl!(levels, k, aw + ae)
-                if correction_levels !== nothing
-                    w = _wflux(Wc, k) * Ax; φw = S[n+3]; φe = S[n+4]
-                    _corrected(cW, b, k - k0, -ud[iw, j, k]) && addl!(correction_levels, k, -cW[1] * w * φw)
-                    _corrected(cE, b, k - k0, ud[ie, j, k]) && addl!(correction_levels, k, -cE[1] * w * φe)
-                end
-            end
-        end
-        if !(vb.south isa Periodic)
-            js = first(jj); jn = last(jj) + 1
-            launch!(bk, _b_bsf_y!, (ii, kk), S, oS, i0, kk0, ni, r, ϕd, vd, js, jn, dν, Kh, ks,
-                    g, dS_, dN_, Fyd, Wc, Dc, Ay)
-            @inbounds for k in kk, (a, i) in enumerate(ii)
-                n = oS + 4 * ((i - i0) + ni * (k - kk0))
-                as = S[n+1]; an = S[n+2]
-                fS += as; fN += an
-                addl!(levels, k, as + an)
-                if correction_levels !== nothing
-                    w = _wflux(Wc, k) * Ay; φs = S[n+3]; φn = S[n+4]
-                    _corrected(cS, a, k - k0, -vd[i, js, k]) && addl!(correction_levels, k, -cS[1] * w * φs)
-                    _corrected(cN, a, k - k0, vd[i, jn, k]) && addl!(correction_levels, k, -cN[1] * w * φn)
-                end
-            end
-        end
-        if !(vb.bottom isa Periodic)
-            kb = first(kk); kt = last(kk) + 1
-            wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
-            db_ = _wflux(Df, kb) * Az; dt_ = _wflux(Df, kt) * Az
-            launch!(bk, _b_bsf_z!, (ii, jj), S, oB, i0, j0, ni, r, ϕd, wd, kb, kt, dν, Kv, ks,
-                    g, dB_, dT_, Fzd, wb_, wt_, db_, dt_)
-            @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
-                n = oB + 3 * ((i - i0) + ni * (j - j0))
-                ab = S[n+1]; at = S[n+2]
-                fB += ab; fT += at
-                addl!(levels, kb, ab); addl!(levels, kt - 1, at)
-                if correction_levels !== nothing
-                    _corrected(cT, a, b, wd[i, j, kt]) && addl!(correction_levels, kt - 1, -cT[1] * wt_ * S[n+3])
-                end
-            end
-        end
-    finally
-        unlock(_BSF_LOCK)
+    ST = promote_type(T, Float64, typeof(Ax))
+    if !(vb.west isa Periodic)
+        xa = (r, ϕd, ud, first(ii), last(ii) + 1, dν, Kh, ks, g, dW_, dE_, Fxd, Wc, Dc, Ax)
+        fW, fE = _bsf_pair(bk, ST, _b_bsf_x!, _bsf_sum_x, (jj, kk), 4, xa,
+                           k0, levels, correction_levels, cW, cE, fW, fE)
+    end
+    if !(vb.south isa Periodic)
+        ya = (r, ϕd, vd, first(jj), last(jj) + 1, dν, Kh, ks, g, dS_, dN_, Fyd, Wc, Dc, Ay)
+        fS, fN = _bsf_pair(bk, ST, _b_bsf_y!, _bsf_sum_y, (ii, kk), 4, ya,
+                           k0, levels, correction_levels, cS, cN, fS, fN)
+    end
+    if !(vb.bottom isa Periodic)
+        kb = first(kk); kt = last(kk) + 1
+        wb_ = _wflux(Wf, kb) * Az; wt_ = _wflux(Wf, kt) * Az
+        db_ = _wflux(Df, kb) * Az; dt_ = _wflux(Df, kt) * Az
+        za = (r, ϕd, wd, kb, kt, dν, Kv, ks, g, dB_, dT_, Fzd, wb_, wt_, db_, dt_)
+        fB, fT = _bsf_pair(bk, ST, _b_bsf_z!, _bsf_sum_z, (ii, jj), 3, za,
+                           k0, levels, correction_levels, cT, nothing, fB, fT)
     end
     return (west = fW, east = fE, south = fS, north = fN, bottom = fB, top = fT,
             total = fW + fE + fS + fN + fB + fT)
 end
 
-# The scratch of boundary_scalar_flux's face terms (KA-e): one vector, grown
-# once and reused, so a call allocates nothing in a time loop. Guarded by a
-# lock (calls from several tasks at once take turns); an element type other
-# than Float64 gets a fresh vector.
+# One pair of opposite faces of boundary_scalar_flux: the face terms by a 2-D
+# launch into the scratch when it runs on several tasks, then the ordered
+# sums (`sum!`). `m` values per face pair. The two mass-flux corrections
+# `c1, c2` are separate arguments (each `nothing` or a tuple), so the call is
+# split on their union instead of dispatched at run time. The arguments reach the loops as
+# separate arguments, not in a tuple (with a tuple LLVM keeps the array loads
+# in the loop: 1.9x the old loop, as in KA-d's launch!).
+@inline function _bsf_pair(bk, ::Type{ST}, body!::B, sum!::S, (ar, br), m, args, k0, levels, clev, c1, c2,
+                   f1, f2) where {ST, B, S}
+    if runs_serially(bk, length(ar) * length(br))
+        return sum!(nothing, ar, br, k0, levels, clev, c1, c2, f1, f2, args...)
+    end
+    lock(_BSF_LOCK)
+    try
+        sc = _bsf_scratch(ST, m * length(ar) * length(br))
+        launch!(bk, body!, (ar, br), sc, first(ar), first(br), length(ar), args...)
+        return sum!(sc, ar, br, k0, levels, clev, c1, c2, f1, f2, args...)
+    finally
+        unlock(_BSF_LOCK)
+    end
+end
+
+# The scratch of boundary_scalar_flux's face terms on a threaded launch: one
+# vector, grown once and reused (no allocation per call in a time loop),
+# guarded by a lock (calls from several tasks at once take turns); an element
+# type other than Float64 gets a fresh vector.
 const _BSF_SCRATCH = Float64[]
 const _BSF_LOCK = ReentrantLock()
 _bsf_scratch(::Type{Float64}, n) =
     (length(_BSF_SCRATCH) < n && resize!(_BSF_SCRATCH, n); _BSF_SCRATCH)
 _bsf_scratch(::Type{S}, n) where {S} = Vector{S}(undef, n)
 
-# The face terms of boundary_scalar_flux, one (j, k) / (i, k) / (i, j) per
-# point of a 2-D launch: (out-flux west, east, face value west, east), …;
-# the expressions of the old loops.
-@inline function _b_bsf_x!(j, k, S, o, j0, k0, nj, r, ϕd, ud, iw, ie, dν, K, ks, g,
-                           dW_, dE_, F, Wc, Dc, A)
+@inline _bsf_addl!(::Nothing, k, x) = nothing
+@inline _bsf_addl!(v::AbstractVector, k, x) = (@inbounds v[k] += x; nothing)
+
+# The face terms (outward flux of the low face, of the high face, the face
+# values) at (j, k) / (i, k) / (i, j): the expressions of the old loops.
+# With a scratch vector `sc`, its entries `n+1 … n+m` instead.
+@inline function _bsf_x_terms(::Nothing, n, j, k, r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_,
+                              F, Wc, Dc, A)
     w = _wflux(Wc, k) * A; wd_ = _wflux(Dc, k) * A
     Fa_w, Fd_w, φw = _bsf_face_flux(r, ϕd, ud, 1, iw, j, k, dν, K, ks, g, dW_, F)
     Fa_e, Fd_e, φe = _bsf_face_flux(r, ϕd, ud, 1, ie, j, k, dν, K, ks, g, dE_, F)
-    n = o + 4 * ((j - j0) + nj * (k - k0))
-    @inbounds (S[n+1] = -(w * Fa_w + wd_ * Fd_w); S[n+2] = w * Fa_e + wd_ * Fd_e;
-               S[n+3] = φw; S[n+4] = φe)
-    return nothing
+    return -(w * Fa_w + wd_ * Fd_w), w * Fa_e + wd_ * Fd_e, φw, φe
 end
-@inline function _b_bsf_y!(i, k, S, o, i0, k0, ni, r, ϕd, vd, js, jn, dν, K, ks, g,
-                           dS_, dN_, F, Wc, Dc, A)
+@inline function _bsf_y_terms(::Nothing, n, i, k, r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_,
+                              F, Wc, Dc, A)
     w = _wflux(Wc, k) * A; wd_ = _wflux(Dc, k) * A
     Fa_s, Fd_s, φs = _bsf_face_flux(r, ϕd, vd, 2, i, js, k, dν, K, ks, g, dS_, F)
     Fa_n, Fd_n, φn = _bsf_face_flux(r, ϕd, vd, 2, i, jn, k, dν, K, ks, g, dN_, F)
-    n = o + 4 * ((i - i0) + ni * (k - k0))
-    @inbounds (S[n+1] = -(w * Fa_s + wd_ * Fd_s); S[n+2] = w * Fa_n + wd_ * Fd_n;
-               S[n+3] = φs; S[n+4] = φn)
-    return nothing
+    return -(w * Fa_s + wd_ * Fd_s), w * Fa_n + wd_ * Fd_n, φs, φn
 end
-@inline function _b_bsf_z!(i, j, S, o, i0, j0, ni, r, ϕd, wd, kb, kt, dν, K, ks, g,
-                           dB_, dT_, F, wb_, wt_, db_, dt_)
+@inline function _bsf_z_terms(::Nothing, n, i, j, r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_,
+                              F, wb_, wt_, db_, dt_)
     Fa_b, Fd_b, _ = _bsf_face_flux(r, ϕd, wd, 3, i, j, kb, dν, K, ks, g, dB_, F)
     Fa_t, Fd_t, φt = _bsf_face_flux(r, ϕd, wd, 3, i, j, kt, dν, K, ks, g, dT_, F)
-    n = o + 3 * ((i - i0) + ni * (j - j0))
-    @inbounds (S[n+1] = -(wb_ * Fa_b + db_ * Fd_b); S[n+2] = wt_ * Fa_t + dt_ * Fd_t;
-               S[n+3] = φt)
+    return -(wb_ * Fa_b + db_ * Fd_b), wt_ * Fa_t + dt_ * Fd_t, φt
+end
+@inline _bsf_x_terms(sc::AbstractVector, n, j, k, args...) =
+    @inbounds (sc[n+1], sc[n+2], sc[n+3], sc[n+4])
+@inline _bsf_y_terms(sc::AbstractVector, n, i, k, args...) =
+    @inbounds (sc[n+1], sc[n+2], sc[n+3], sc[n+4])
+@inline _bsf_z_terms(sc::AbstractVector, n, i, j, args...) =
+    @inbounds (sc[n+1], sc[n+2], sc[n+3])
+
+# the launch bodies: the terms of one face pair into the scratch
+@inline function _b_bsf_x!(j, k, sc, j0, k0, nj, r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_,
+                           F, Wc, Dc, A)
+    n = 4 * ((j - j0) + nj * (k - k0))
+    aw, ae, φw, φe = _bsf_x_terms(nothing, n, j, k, r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_,
+                                  F, Wc, Dc, A)
+    @inbounds (sc[n+1] = aw; sc[n+2] = ae; sc[n+3] = φw; sc[n+4] = φe)
     return nothing
+end
+@inline function _b_bsf_y!(i, k, sc, i0, k0, ni, r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_,
+                           F, Wc, Dc, A)
+    n = 4 * ((i - i0) + ni * (k - k0))
+    as, an, φs, φn = _bsf_y_terms(nothing, n, i, k, r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_,
+                                  F, Wc, Dc, A)
+    @inbounds (sc[n+1] = as; sc[n+2] = an; sc[n+3] = φs; sc[n+4] = φn)
+    return nothing
+end
+@inline function _b_bsf_z!(i, j, sc, i0, j0, ni, r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_,
+                           F, wb_, wt_, db_, dt_)
+    n = 3 * ((i - i0) + ni * (j - j0))
+    ab, at, φt = _bsf_z_terms(nothing, n, i, j, r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_,
+                              F, wb_, wt_, db_, dt_)
+    @inbounds (sc[n+1] = ab; sc[n+2] = at; sc[n+3] = φt)
+    return nothing
+end
+
+# the ordered sums of one face pair, in the old loop order
+@inline function _bsf_sum_x(sc, jj, kk, k0, levels, clev, cW, cE, fW, fE,
+                    r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_, F, Wc, Dc, A)
+    j0, kk0, nj = first(jj), first(kk), length(jj)
+    @inbounds for k in kk, (b, j) in enumerate(jj)
+        aw, ae, φw, φe = _bsf_x_terms(sc, 4 * ((j - j0) + nj * (k - kk0)), j, k,
+                                      r, ϕd, ud, iw, ie, dν, K, ks, g, dW_, dE_, F, Wc, Dc, A)
+        fW += aw; fE += ae
+        _bsf_addl!(levels, k - k0, aw + ae)
+        if clev !== nothing
+            w = _wflux(Wc, k) * A
+            _corrected(cW, b, k - k0, -ud[iw, j, k]) && _bsf_addl!(clev, k - k0, -cW[1] * w * φw)
+            _corrected(cE, b, k - k0, ud[ie, j, k]) && _bsf_addl!(clev, k - k0, -cE[1] * w * φe)
+        end
+    end
+    return fW, fE
+end
+@inline function _bsf_sum_y(sc, ii, kk, k0, levels, clev, cS, cN, fS, fN,
+                    r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_, F, Wc, Dc, A)
+    i0, kk0, ni = first(ii), first(kk), length(ii)
+    @inbounds for k in kk, (a, i) in enumerate(ii)
+        as, an, φs, φn = _bsf_y_terms(sc, 4 * ((i - i0) + ni * (k - kk0)), i, k,
+                                      r, ϕd, vd, js, jn, dν, K, ks, g, dS_, dN_, F, Wc, Dc, A)
+        fS += as; fN += an
+        _bsf_addl!(levels, k - k0, as + an)
+        if clev !== nothing
+            w = _wflux(Wc, k) * A
+            _corrected(cS, a, k - k0, -vd[i, js, k]) && _bsf_addl!(clev, k - k0, -cS[1] * w * φs)
+            _corrected(cN, a, k - k0, vd[i, jn, k]) && _bsf_addl!(clev, k - k0, -cN[1] * w * φn)
+        end
+    end
+    return fS, fN
+end
+@inline function _bsf_sum_z(sc, ii, jj, k0, levels, clev, cT, _, fB, fT,
+                    r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_, F, wb_, wt_, db_, dt_)
+    i0, j0, ni = first(ii), first(jj), length(ii)
+    @inbounds for (b, j) in enumerate(jj), (a, i) in enumerate(ii)
+        ab, at, φt = _bsf_z_terms(sc, 3 * ((i - i0) + ni * (j - j0)), i, j,
+                                  r, ϕd, wd, kb, kt, dν, K, ks, g, dB_, dT_, F, wb_, wt_, db_, dt_)
+        fB += ab; fT += at
+        _bsf_addl!(levels, kb - k0, ab); _bsf_addl!(levels, kt - 1 - k0, at)
+        if clev !== nothing
+            _corrected(cT, a, b, wd[i, j, kt]) && _bsf_addl!(clev, kt - 1 - k0, -cT[1] * wt_ * φt)
+        end
+    end
+    return fB, fT
 end
 
 # The halo of an open face of boundary_scalar_flux must hold the stencil.

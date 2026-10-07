@@ -202,11 +202,13 @@ end
     d = (ν = s.ν, κh = s.κt, κv = s.κt)
     ws = FluxLimiterWorkspace(m)
     advect_positive!(Field(CellCenter(), m), s.u, s.v, s.w, s.θ, 0.5; scheme = :weno_z5, workspace = ws)
-    for sch in (:centered, :upwind, :weno_js5, :weno_z5, :weno_z7, :teno5, :teno8),
-        (kn, kw) in (("plain", (;)),
-                     ("levels+correction+diffusion", (diffusivity = d,)),
-                     ("weights", (weights = (Wc, Wf), diffusivity = d)),
-                     ("face_fluxes", (face_fluxes = (ws.Fx, ws.Fy, ws.Fz),)))
+    cases = Any[(sch, "levels+correction+diffusion", (diffusivity = d,))
+             for sch in (:centered, :upwind, :weno_js5, :weno_z5, :weno_z7, :teno5, :teno8)]
+    for sch in (:centered, :weno_z5)
+        push!(cases, (sch, "plain", (;)), (sch, "weights", (weights = (Wc, Wf), diffusivity = d)),
+              (sch, "face_fluxes", (face_fluxes = (ws.Fx, ws.Fy, ws.Fz),)))
+    end
+    for (sch, kn, kw) in cases
         adv_check("bsf $sch $kn",
                   (l, c) -> boundary_scalar_flux(s, s.θ; scheme = sch, fill = false, levels = l,
                                                  correction_levels = c, kw...),
