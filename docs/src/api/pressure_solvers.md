@@ -11,6 +11,7 @@ Aeolus.PressureSolvers.FFTPoissonSolver
 Aeolus.PressureSolvers.CosineFFTPoissonSolver
 Aeolus.PressureSolvers.solve!
 Aeolus.PressureSolvers.poisson_axis_bcs
+Aeolus.PressureSolvers.solver_stats
 ```
 
 ## Iterative solver

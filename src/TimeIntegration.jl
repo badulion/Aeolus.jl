@@ -272,6 +272,11 @@ for a closure with its own κ (Era VI) whatever it computed.
 
 Ties are broken in the table order above, so a pure-molecular run where
 `dt_diff == dt_sgs` reports `:diffusive`.
+
+The rates and the limiter are also noted as the dt pick of the current
+state in the simulation's [`StepRecord`](@ref Aeolus.Simulations.StepRecord):
+the next step taken from this state reports `dt · advective_rate` as its
+advective CFL number, and the limiter (#336).
 """
 function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          c::CFLConstraints = CFLConstraints(T);
@@ -407,7 +412,9 @@ A non-finite limit (which only happens if the state already contains
 a usable number rather than propagating the `NaN`. Pass `diagnostics` to
 reuse a `cfl_diagnostics` result instead of recomputing it; `sgs` is the
 closure the step will run and `sgs_stress` the form of its momentum
-divergence (see [`cfl_diagnostics`](@ref)).
+divergence (see [`cfl_diagnostics`](@ref)). The step and its limiter
+(`:growth`, `:dt_max`, `:dt_min` when a clamp binds) are noted in the
+simulation's [`StepRecord`](@ref Aeolus.Simulations.StepRecord) (#336).
 """
 function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
                      dt_prev = nothing, diagnostics = nothing,
@@ -760,6 +767,12 @@ at `Debug`: a retry the driver recovers from is not a problem, so a run log
 records it while the console stays quiet (install a logger at `Debug` to see
 it there). A step that fails after `max_retries` throws; a fast process that
 leaves non-finite values is a warning. See the Logging page (#333, #347).
+
+The whole call is **one step** of the simulation's
+[`StepRecord`](@ref Aeolus.Simulations.StepRecord) (#336), with its
+retries, the CFL numbers of its dt pick and the limiter (`:retry` when
+rejected attempts shortened it); the steps it takes inside are part of
+it, and the simulation's diagnostics hook is called once, at the end.
 
 ```julia
 c = CFLConstraints(dt_max = 10.0)
