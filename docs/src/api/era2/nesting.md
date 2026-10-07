@@ -1,7 +1,12 @@
 # Parent ↔ child grid nesting (Phase 30)
 
 `Aeolus.Nesting` is the single home of every parent-child operator:
-the [`NestedGrid`](@ref) geometry (any integer refinement per direction),
+the [`NestedGrid`](@ref) geometry (any integer refinement per direction;
+since #328 also rational ratios, children off the parent faces and
+z-stretched children, described per axis by a [`NestAxis`](@ref)), the
+[`NestHierarchy`](@ref) of several nest levels and siblings
+([`add_nest!`](@ref), [`proper_nesting_violations`](@ref),
+[`nest_link`](@ref), [`nest_domain`](@ref)),
 the conservative staggered prolongation, conservative restriction,
 Berger–Colella refluxing, the [`NestSponge`](@ref), the field-set
 [`NestInterpState`](@ref) (velocities, θ, `qv`, extra scalars), and the
@@ -29,8 +34,9 @@ restriction may be solid-aware ([`nest_fluid_mask`](@ref)). The block-structured
 [`Aeolus.AdaptiveMesh`](adaptive_mesh.md) builds on these operators.
 The theory is on the [nesting theory page](../../theory/nesting.md), the
 [nested time-coupling page](../../theory/nesting_time.md), the
-[nested boundary-conditions page](../../theory/nesting_boundaries.md) and the
-[two-way nesting page](../../theory/nesting_twoway.md).
+[nested boundary-conditions page](../../theory/nesting_boundaries.md), the
+[two-way nesting page](../../theory/nesting_twoway.md) and the
+[nest hierarchy page](../../theory/nesting_hierarchy.md).
 
 ```@autodocs
 Modules = [Aeolus.Nesting]
