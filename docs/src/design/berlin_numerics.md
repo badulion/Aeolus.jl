@@ -8,7 +8,7 @@ options go under the coupling name in `options`.
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
-| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes(cfg, mesh)`, #251: periodic x, y and Neumann z by default, all-Neumann for `lateral = :open` or a nested child; smoke-checked); `tol`, `maxit` of the sound-proof core's own CG, whose axes the core derives from the same `bcs` |
+| `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_direct` (`pressure_density_direct`, sound-proof cores only, the direct FFT/DCT + tridiagonal solve, #309), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes(cfg, mesh)`, #251: periodic x, y and Neumann z by default, all-Neumann for `lateral = :open` or a nested child; smoke-checked); for a sound-proof core `pressure_solver = :direct` or `:cg` (with the CG's `tol`, `maxit`), the core building the solver with axes derived from the same `bcs` |
 | `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
@@ -330,7 +330,7 @@ Two exclusive slots select the dynamics (#133), both in
 ```julia
 cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # a sound-proof core brings its solver
                  physics = Dict{Symbol,Any}(:core => :anelastic,
-                                            :pressure_solver => :density_weighted_cg,
+                                            :pressure_solver => :density_weighted_direct,
                                             :timestepper => :fixed))
 cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated time
                  options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
@@ -357,11 +357,13 @@ case — the one the couplings convert fluxes with and the ledger
 integrates water with — the initial state has no buoyancy, and the flow
 starts as in the Boussinesq core. The dynamics hooks (IBM, canopy drag,
 geostrophic forcing, moist buoyancy, surface drag) touch only
-`sim.u/v/w/tu/tv/θ` and run unchanged. The projection is the core's own
-Jacobi-preconditioned CG solve of ∇·(W∇φ) = ∇·(W u*) (the
-`:pressure_solver` provider `:density_weighted_cg`, options `tol =
-1e-10`, `maxit = 500`), which is what makes them expensive: see the
-numbers below.
+`sim.u/v/w/tu/tv/θ` and run unchanged. The projection solves
+∇·(W∇φ) = ∇·(W u*) with the core's own solver: directly (FFT/DCT +
+tridiagonal, the `:pressure_solver` provider `:density_weighted_direct`,
+#309) or by Jacobi-preconditioned CG (`:density_weighted_cg`, options
+`tol = 1e-10`, `maxit = 500`). The CG is what made the sound-proof cores
+expensive in the #133 table below; the direct solve removes that cost
+(#309 numbers after the table).
 
 **Tracers under a sound-proof core.** ∇·(W u) = 0 does not make ∇·u
 vanish (∇·u = −w ∂ ln W/∂z), so `scalar_advection` advects with the mass
@@ -409,12 +411,12 @@ says why, and the smoke matrix steers around them):
 | provider | incompatible with | why |
 | :-- | :-- | :-- |
 | `timestepper = :adaptive`, `:imex` | `core = :anelastic`, `:pseudo_incompressible` | `adaptive_dt`, `step_adaptive!`, `step_imex!` are typed on `BoussinesqSimulation` |
-| `core = :anelastic`, `:pseudo_incompressible` | `pressure_solver = :cosine_fft`, `:multigrid`, `:mg_cg` | those solve the constant-coefficient ∇²φ = ∇·u*, not the weighted projection; select `:density_weighted_cg` |
+| `core = :anelastic`, `:pseudo_incompressible` | `pressure_solver = :cosine_fft`, `:multigrid`, `:mg_cg` | those solve the constant-coefficient ∇²φ = ∇·u*, not the weighted projection; select `:density_weighted_direct` or `:density_weighted_cg` |
 | | `momentum_advection = :weno_z` | an unweighted operator; the core advects momentum in its W-weighted centred flux form (`:centered` passes no keyword to it) |
-| `pressure_solver = :density_weighted_cg` | `core = :boussinesq` | it solves only the weighted projection of the sound-proof cores |
+| `pressure_solver = :density_weighted_direct`, `:density_weighted_cg` | `core = :boussinesq` | they solve only the weighted projection of the sound-proof cores |
 
 Behind the declarations, `build_core` of a sound-proof core rejects any
-`sim_options` keyword other than `tol` and `maxit`. Every `:sgs` provider
+`sim_options` keyword other than `pressure_solver`, `tol` and `maxit` (and the nest faces). Every `:sgs` provider
 combines with every core: the sound-proof step takes the contract's
 `sgs` closure like the Boussinesq one (#167; before it, `:dynamic` and
 `:mlsgs` were incompatible with the sound-proof cores).
@@ -457,6 +459,15 @@ compare only roughly; the step counts and profiles are exact.
   the sound-proof cores give the Boussinesq mean profile to 0.002 K
   (morning) and 0.004 K (noon) after 1 h, at 2.2× the cost. They are there for deeper domains, not
   for the flagship's physics.
+
+**The direct projection (#309).** Measured on the branch of #309
+(flagship 64 × 64 × 64, nest off, `core = :anelastic`, fixed step, 30
+steps from 06:00, one thread, second run of each so compilation is
+excluded): the whole case step costs 200 ms with
+`:density_weighted_direct` against 391 ms with `:density_weighted_cg`,
+and the anelastic constraint max|(1/ρ̄)∇·(ρ̄u)| after the run is
+2.9e-17 s⁻¹ against 6.4e-13 s⁻¹ (the plain ∇·u, 9.88e-5 s⁻¹, is the
+same in both: the flow is the same).
 
 **The adaptive stepper is the default.** After the merge with #129–#132
 and #135 the fixed 2 s step is no longer safe. Measured on master

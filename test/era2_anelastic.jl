@@ -267,6 +267,106 @@ end
 end
 
 # =====================================================================
+# 5b. The direct solver (#309): FFT/DCT horizontally, Thomas in z. It
+#     inverts the *same* operator as the CG, so it must recover a
+#     manufactured φ to round-off, agree with the CG to the CG tolerance,
+#     and leave the density-weighted flux divergence-free to round-off.
+# =====================================================================
+@testset "DirectWeightedPoissonSolver — exact inverse of the weighted operator (#309)" begin
+    L, Lz = 2000.0, 9000.0                       # deep: ρ̄ drops by e^(9/8.8) ≈ 2.8
+    g = RegularGrid(; size=(20,16,24), extent=(L,1.3L,Lz), halo=(2,2,2))
+    ref = isothermal_reference(g; T_surf=300.0)
+    rng = Xoshiro(309)
+    for wt in (:ρ, :ρθ), bx in (:periodic, :neumann), by in (:periodic, :neumann)
+        d = DirectWeightedPoissonSolver(g, ref; weighting=wt, bc_x=bx, bc_y=by)
+        c = DensityWeightedPoissonSolver(g, ref; weighting=wt, bc_x=bx, bc_y=by,
+                                         tol=1e-14, maxit=5000)
+        @test Aeolus.PressureSolvers.poisson_axis_bcs(d) == Aeolus.PressureSolvers.poisson_axis_bcs(c)
+        @test d.w_c == c.w_c && d.w_f == c.w_f   # one weighting, the reference state's
+        # manufactured: random zero-mean φ, f = ∇·(w∇φ) with the CG's operator
+        φ = Field(CellCenter(), g); f = Field(CellCenter(), g)
+        interior_view(φ) .= _demean(randn(rng, size(interior_view(φ))))
+        apply_weighted_laplacian!(f, φ, c)
+        pd = Field(CellCenter(), g); pc = Field(CellCenter(), g); r = Field(CellCenter(), g)
+        solve!(pd, f, d); solve!(pc, f, c)
+        scale = maximum(abs, interior_view(φ))
+        e_exact = maximum(abs, interior_view(pd) .- interior_view(φ)) / scale
+        e_cg    = maximum(abs, interior_view(pd) .- interior_view(pc)) / scale
+        apply_weighted_laplacian!(r, pd, d)
+        res = maximum(abs, interior_view(r) .- interior_view(f)) / maximum(abs, interior_view(f))
+        @printf("  [direct DW %-2s %-8s %-8s] max|φ−φ_exact|/‖φ‖ = %.2e  vs CG(tol 1e-14) = %.2e  residual = %.2e  mean = %.1e\n",
+                wt, bx, by, e_exact, e_cg, res, abs(sum(interior_view(pd))) / length(interior_view(pd)))
+        @test e_exact < 1e-11                        # exact, not to a tolerance
+        @test e_cg < 1e-10                           # the CG's own error
+        @test res < 1e-12
+        @test abs(sum(interior_view(pd))) / length(interior_view(pd)) < 1e-12 * scale  # zero mean, as the CG
+    end
+
+    # an incompatible source: like the CG, the uniform part is projected
+    # out, and the residual is exactly the (uniform) mean of the source
+    d = DirectWeightedPoissonSolver(g, ref)
+    f = Field(CellCenter(), g); p = Field(CellCenter(), g); r = Field(CellCenter(), g)
+    interior_view(f) .= randn(rng, size(interior_view(f))) .+ 0.7
+    fbar = sum(interior_view(f)) / length(interior_view(f))
+    solve!(p, f, d)
+    apply_weighted_laplacian!(r, p, d)
+    @test maximum(abs, interior_view(r) .- (interior_view(f) .- fbar)) < 1e-12 * maximum(abs, interior_view(f))
+
+    # constant weight c: c ∇²φ = f is the CosineFFT problem scaled by 1/c
+    cst = 2.5
+    for bx in (:periodic, :neumann)
+        dc = DirectWeightedPoissonSolver(g, cst; bc_x=bx, bc_y=bx)
+        cf = CosineFFTPoissonSolver(g; bc_x=bx, bc_y=bx, bc_z=:neumann)
+        interior_view(f) .= _demean(randn(rng, size(interior_view(f))))
+        fs = Field(CellCenter(), g); fs.data .= f.data ./ cst
+        p1 = Field(CellCenter(), g); p2 = Field(CellCenter(), g)
+        solve!(p1, f, dc); solve!(p2, fs, cf)
+        @test maximum(abs, _demean(collect(interior_view(p1))) .- _demean(collect(interior_view(p2)))) <
+              1e-11 * maximum(abs, interior_view(p2))
+    end
+
+    # guard rails
+    ρ̄c, ρ̄f = ref.ρ̄, ref.ρ̄_f
+    @test_throws DimensionMismatch DirectWeightedPoissonSolver(g, ρ̄c[1:end-1], ρ̄f)
+    @test_throws DimensionMismatch DirectWeightedPoissonSolver(g, ρ̄c, ρ̄f[1:end-1])
+    @test_throws ErrorException DirectWeightedPoissonSolver(g, .-ρ̄c, ρ̄f)
+    @test_throws ErrorException DirectWeightedPoissonSolver(g, ref; bc_z=:periodic)
+    @test_throws ErrorException DirectWeightedPoissonSolver(g, ref; weighting=:θ)
+end
+
+# The projection of the sound-proof cores is now the direct solve: the
+# weighted constraint holds to round-off after a step, where the CG leaves
+# it at its tolerance, and the two cores agree to that tolerance.
+@testset "Sound-proof cores project with the direct solver (#309)" begin
+    L, Lz = 3000.0, 6000.0
+    g   = RegularGrid(; size=(16,16,24), extent=(L,L,Lz), halo=(2,2,2))
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    ref = isothermal_reference(g; T_surf=300.0)
+    bubble(x, y, z) = 300.0 + 2.0 * exp(-(((x-L/2)/500)^2 + ((y-L/2)/500)^2 + ((z-1500.0)/500)^2))
+    for (lbl, S) in (("anelastic", AnelasticSimulation), ("pseudo-incompressible", PseudoIncompressibleSimulation))
+        sd = S(g; ref=ref, bcs=bcs)
+        sc = S(g; ref=ref, bcs=bcs, pressure_solver=:cg, tol=1e-12, maxit=3000)
+        @test sd.solver isa DirectWeightedPoissonSolver
+        @test sc.solver isa DensityWeightedPoissonSolver
+        @test_throws ArgumentError S(g; ref=ref, bcs=bcs, pressure_solver=:multigrid)
+        for sim in (sd, sc)
+            set!(sim.θ, bubble)
+            for _ in 1:5
+                step!(sim, 2.0)
+            end
+        end
+        rd, rc = Aeolus.Anelastic.constraint_residual(sd), Aeolus.Anelastic.constraint_residual(sc)
+        wmax = maximum(abs, interior_view(sd.w))
+        dw = maximum(abs, interior_view(sd.w) .- interior_view(sc.w)) / wmax
+        @printf("  [%s] after 5 steps: weighted-constraint residual direct = %.2e s⁻¹, CG(1e-12) = %.2e s⁻¹; max|w_direct − w_CG|/|w|max = %.2e (|w|max = %.3f m/s)\n",
+                lbl, rd, rc, dw, wmax)
+        @test wmax > 1e-3                         # the bubble rises
+        @test rd < 1e-14                          # round-off
+        @test dw < 1e-8                           # same flow as the CG projection
+    end
+end
+
+# =====================================================================
 # 6. The anelastic constraint is what gets satisfied — and ∇·u is not.
 # =====================================================================
 @testset "Anelastic constraint after step_anelastic!" begin
@@ -296,8 +396,8 @@ end
 
     @printf("  [anelastic constraint] t = %.1f s   max|(1/ρ̄)∇·(ρ̄u)| = %.3e s⁻¹   max|∇·(ρ̄u)| = %.3e   max|∇·u| = %.3e s⁻¹\n",
             sim.t, d_anel, d_mass, d_plain)
-    @printf("                         |w|max/H = %.3e s⁻¹  →  ∇·u / (|w|max/H) = %.3f   (CG iterations: %d)\n",
-            predicted, d_plain/predicted, solver_iterations(sim.solver))
+    @printf("                         |w|max/H = %.3e s⁻¹  →  ∇·u / (|w|max/H) = %.3f   (solver: %s)\n",
+            predicted, d_plain/predicted, nameof(typeof(sim.solver)))
 
     @test d_anel  < 1e-10
     @test d_mass  < 1e-10
@@ -515,8 +615,8 @@ end
 
     @printf("  [pseudo-incompressible] after 1 step: max|(1/ρ̄θ̄)∇·(ρ̄θ̄u)| = %.3e s⁻¹; after 10 steps: %.3e s⁻¹; raw max|∇·(ρ̄θ̄u)| = %.3e\n",
             r1, r10, raw_max)
-    @printf("                          anelastic residual of the same field = %.3e;  plain |∇·u| = %.3e;  CG iterations = %d\n",
-            max_anelastic_divergence(sim), max_divergence(sim), solver_iterations(sim.solver))
+    @printf("                          anelastic residual of the same field = %.3e;  plain |∇·u| = %.3e;  solver = %s\n",
+            max_anelastic_divergence(sim), max_divergence(sim), nameof(typeof(sim.solver)))
 
     @test r1  < 1e-10
     @test r10 < 1e-10
