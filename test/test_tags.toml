@@ -39,11 +39,11 @@ weight = "heavy"
 seconds = 225
 reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
 
-["era6_nudging_subsidence.jl"]
+["era6_gabls2.jl"]
 tier = "full"
 weight = "heavy"
-seconds = 151
-reason = "plane-mean nudging and large-scale subsidence runs; LargeScaleForcing stays fast in era6_large_scale_forcing.jl (nudging/subsidence otherwise only in berlin_parent_smoke.jl: #320 must keep a fast check)"
+seconds = 150
+reason = "GABLS2 (reduced) 54 h run with large-scale subsidence; ProfileNudging and Subsidence stay fast in era6_nudging_subsidence.jl (checks 1-7, split off in #320)"
 
 ["era6_stratified_channel.jl"]
 tier = "full"
