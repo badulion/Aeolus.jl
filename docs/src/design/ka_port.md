@@ -1235,6 +1235,181 @@ every section (primitives, dns, reductions, smoke, flagship, nested, fft,
 radiation): all 2900 hashes, the 34 of the radiation section included,
 are identical at 4, 12 and 24 threads to 1 thread.
 
+## KA-l: the SGS closures (#304)
+
+Every subgrid closure's coefficient and memory update runs on `launch!`:
+the Smagorinsky family (static via KA-d; the dynamic procedure with plane,
+local and masked averaging; the Lagrangian scale-invariant and
+scale-dependent models), AMD (velocity and scalar), Vreman, the σ-model,
+the `StabilityCorrected` split with its N² / Ri_g / S² stencils, and the
+prognostic TKE and Reynolds-stress closures of `PrognosticSGS`. The point
+stencil `_velocity_gradient_at` / `_strain_at` stays the one shared
+`@inline` function every body calls.
+
+**What runs how.**
+
+* *Pointwise bodies* (bit-identical to the old loops): the Germano
+  passes (pass 1 over the interior and one shell, `|S|`, pass 2 plain and
+  masked), the local coefficient, `ν_t`, the masked velocities (one launch
+  over the storage), the mask halo fill (one launch per direction and
+  side), the box filter, the Lagrangian coefficient, power law, solid
+  zeroing, cell velocity and pathline relaxation, AMD / Vreman / σ, the
+  stability correction, N² / Ri / S², the TKE and RSM coefficients, the
+  six RSM edge-stress placements, the TKE / RSM initialisations (a
+  bisection per cell) and the storage-wide `κ = ν/Prₜ`, `K = 2ν`,
+  `κ_v = d κ_h` broadcasts (`range_map!`).
+* *Closures captured in kernels are gone.* The `_box_stencil_sum`
+  summands are named types (`_GermanoAt`, `_GermanoFluidAt`,
+  `_FluidCount`, `_ValAt`, `_MaskedValAt`) summed in the fixed `(dk, dj,
+  di)` order; the AMD buoyancy parameter of the sound-proof cores is the
+  callable struct `_LevelBuoyancy` (the arithmetic of the closure it
+  replaces). The point functions keep their small internal closures over
+  isbits locals (`_upstream_n`'s `own()`, the `ntuple` lambdas).
+* *The dynamic plane average* runs one level per work item
+  (`launch_weighted!` over `k`), its `(j, i)` sums in the old order: bit
+  for bit, as the reduction contract foresaw.
+* *The solid masks of `_SGSMask` are `Array{Bool,3}`*: the halo fill writes
+  neighbouring cells from different work items, which would race on the
+  64-bit chunks of a packed `BitArray`.
+* *The Lagrangian relaxation is double-buffered*: each point writes its own
+  entry of the new memories and reads the old memories upstream; the
+  caller copies the new over the old after the launch. With one memory
+  pair its six arrays are separate launch arguments (as a tuple argument
+  the body ran 1.22× the loop; the KA-d argument rule).
+* *The fused updates* (TKE `e`, RSM `τ`) run one plane per work item
+  (`plane_map!`): the plane's cells in their loop order, each writing its
+  own point and adding its budget contributions to the plane's running
+  sums; the planes are combined in ascending `k`. The eight-lane
+  `plane_reduce!` of the same body took 1.09× the old TKE loop (eight
+  tuple components in eight vector lanes) against 1.02× for `plane_map!`.
+* *The RSM's shared 6 × 6 scratch* (`L6`, `A6`, `b6`) is gone: the
+  operator, the system matrix and the right-hand side of the per-cell
+  backward-Euler solve are `MMatrix` / `MVector` locals, and the Jacobi
+  projection uses a 3 × 3 `MMatrix` instead of two heap matrices. Same
+  arithmetic, same bits. StaticArrays becomes a direct dependency; it was
+  already in the tree through KernelAbstractions, so nothing new is
+  installed or loaded (`using Aeolus`, minimum of three fresh processes:
+  606.8 ms before, 604.5 ms after).
+* *The TKE / RSM advection* passes the reconstruction built once in the
+  constructor instead of dispatching on the scheme's `Symbol` every call
+  (maintainer decision on #291).
+
+**The second test filter** (the 5 × 5 × 5 box of the scale-dependent
+model) reused one-plane scratch buffers across the planes of a serial
+loop. It now runs the x and y passes per shell plane into the full 3-D
+buffer `C` and then the z pass and the identity per interior plane. A first
+version with a second full 3-D buffer for the x pass (one plane per work
+item, 26.5 MB at 64×64×32) cost 1.22× the old loop at one thread, almost
+all of it writing the fresh 26 MB every call. The planes now go to at most
+12 work items (a constant, not the thread count); each work item owns one
+slot of the scratch `B` and reuses it for its planes, so `B` stays in cache,
+and a stencil entirely inside the domain is one fused left-to-right sum
+(the same additions as assign-and-add, one store). The split never changes
+a bit (tested with one and several planes per work item, and with rows too
+short for the fused sum). At 64×64×32, one thread: 10.8 ms against
+11.6 ms for the old loop; 12 work items also beat one plane per work item
+at 4, 12 and 24 threads (2.2-3.3 ms against 3.2-3.8 ms). Memory: `B`
+9.3 MB (12 slots) + `C` 24.5 MB = 33.9 MB, against 26.7 MB before. The
+per-call stencil vectors are gone (`_box5_src`).
+
+**The dual strain** of the TKE closure (the exact discrete dual of the
+Laplacian SGS momentum operator) was a scatter: each velocity point added
+its flux shares to up to four cells, then the first halo layer was folded
+onto the interior. It is now an owner-computes gather: each interior cell
+sums the 18 shares per velocity component destined for it (the inverse of
+the scatter's target lists; every share is the scatter's expression, bit
+for bit) and those destined for the halo cells it is the image of. Bulk
+cells skip the range checks. One body serves the RegularGrid and the
+StretchedGrid. The scatter's own halo fold stays for the wall-model
+production, a scatter over the list of wall faces.
+
+**Named one-time changes** (against the pre-port loops):
+
+* *The dual strain*: the same shares in another order. On random fields
+  the gather differs from the scatter by at most 6.2e-16 of max |D|
+  (64×64×32), and the exact duality `Σ ν D V = −Σ u·T(ν) V` still holds to
+  1e-12. After 12 steps of a 64×64×32 TKE LES the largest change of `e` is
+  4.4e-15 m² s⁻² (1.7e-15 relative). After 12 steps of the Berlin flagship
+  (`CaseConfig()`, 64³, default `:tke` closure) the largest change of `e` is
+  4.6e-10 m² s⁻² (2.1e-12 relative to max e = 220 m² s⁻²), of `u` 8.2e-12
+  m s⁻¹ (3.4e-13 relative), of θ 1.8e-11 K; the domain means agree to all
+  printed digits (e 6.6662e-2 m² s⁻²).
+* *The TKE and RSM budget statistics* (`tke_statistics`,
+  `reynolds_stress_statistics`): per-plane running sums combined in
+  ascending `k` instead of one running sum over the domain. Equal to
+  1e-12 relative in `test/ka_sgs.jl`; the counters are exact.
+
+Nothing else changes: compared across versions (the harness's `sgs`
+section run on the old and the new code at one thread), every hash of the
+static, dynamic (plane, local, masked), AMD (and its tracer diffusivity),
+Vreman, σ, stability-corrected and Lagrangian (scale-invariant,
+scale-dependent, masked: coefficients and memories) closures, the masked box
+filter and the 3-step dynamic LES is identical; the 34 hashes that differ
+are the dual strain and what is built from it (the TKE and RSM
+initialisations and states, the TKE LES) and the two closures' statistics.
+
+**Tests.** `test/ka_sgs.jl` compares every ported kernel with a
+transcript of the pre-port loops (`test/support/legacy_sgs.jl`) on random
+fields with random halos, masked and not, periodic and bounded, on the
+serial, threshold-0 and default backends (418 checks): bit for bit, except
+the two named changes above (the fused updates' fields bit for bit and
+their sums to 1e-12; the gather to 64 ε of max |D| plus its exact
+duality). The second test filter allocates nothing per call. The harness
+has an `sgs` section (109 hashes): every closure's coefficients on a seeded
+64×64×32 state, 3 commits of every stateful closure with its statistics,
+the dual strain, the masked box filter, the initialisations, and 3 LES
+steps with the dynamic and with the TKE closure.
+
+**Measurements** (`compute_sgs!` / `advance_sgs!` per closure on a seeded
+64×64×32 LES state, minimum of up to 40 calls, the best of three processes
+per entry; the old loops are today's master, the speed-ups are against the
+old loop at one thread; the machine carried other jobs at load 5-11, so the
+4-24-thread columns are lower bounds). Gate: every kernel at one thread is
+at most 1.05× the old loop (`advance_sgs!` of the Lagrangian model, its
+relaxation's double buffer); the scale-dependent coefficient over (i, j, k)
+cost 1.20× (2.82 ms against 2.35 ms) and now runs over one linear index
+(1.00×). The RSM coefficients take 0.14× (the old Jacobi projection's two heap
+matrices are gone), the dual-strain gather 0.60×.
+
+| kernel (64×64×32) | old loop, 1 t (µs) | KA, 1 t (µs) | 1 t / old | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: | --: | --: |
+| `compute_sgs! static smagorinsky` | 896.6 | 900.0 | 1.00 | 2.9× | 2.7× | 2.9× |
+| `compute_sgs! dynamic plane` | 9837.0 | 9709.4 | 0.99 | 3.9× | 4.9× | 5.0× |
+| `compute_sgs! dynamic local` | 9574.7 | 9652.3 | 1.01 | 3.8× | 4.5× | 4.6× |
+| `compute_sgs! dynamic plane masked` | 14130.0 | 12386.9 | 0.88 | 4.2× | 5.8× | 5.2× |
+| `compute_sgs! lagrangian` | 1058.1 | 925.7 | 0.87 | 2.7× | 2.8× | 2.8× |
+| `advance_sgs! lagrangian` | 18460.6 | 19329.8 | 1.05 | 3.5× | 4.6× | 5.0× |
+| `advance_sgs! lagrangian masked` | 25635.8 | 23455.5 | 0.91 | 3.9× | 5.1× | 5.3× |
+| `compute_sgs! LASD` | 3015.1 | 3084.2 | 1.02 | 3.0× | 3.4× | 3.3× |
+| `advance_sgs! LASD` | 37432.4 | 35235.6 | 0.94 | 3.4× | 4.4× | 4.3× |
+| `compute_sgs! AMD` | 401.7 | 396.0 | 0.99 | 1.8× | 2.3× | 2.2× |
+| `compute_sgs! Vreman` | 1467.6 | 1493.1 | 1.02 | 2.9× | 3.5× | 3.5× |
+| `compute_sgs! sigma` | 6721.3 | 6773.7 | 1.01 | 3.7× | 6.0× | 5.0× |
+| `compute_sgs! stability-corrected smag` | 3498.8 | 3487.1 | 1.00 | 2.9× | 3.5× | 3.1× |
+| `compute_sgs! stability-corrected dynamic` | 12741.5 | 12527.0 | 0.98 | 3.6× | 4.6× | 4.2× |
+| `compute_sgs! TKE` | 241.0 | 238.1 | 0.99 | 1.6× | 1.3× | 1.3× |
+| `advance_sgs! TKE` | 11902.2 | 10129.3 | 0.85 | 1.8× | 1.8× | 1.9× |
+| `initialize_tke!` | 149734.9 | 148087.2 | 0.99 | 4.0× | 7.7× | 7.7× |
+| `dual_strain!` | 4418.3 | 2643.1 | 0.60 | 5.1× | 6.9× | 7.1× |
+| `compute_sgs! RSM` | 17050.5 | 2316.6 | 0.14 | 12.4× | 14.7× | 11.9× |
+| `advance_sgs! RSM` | 64097.6 | 56467.1 | 0.88 | 1.9× | 2.1× | 2.1× |
+
+The thread speed-ups are those of a 64×64×32 domain: the Germano and
+Lagrangian filters, memory-bound, reach 4.4-5.8× at 12 threads (expected
+3-5×); the σ-model 6.0× and the TKE initialisation 7.7× (compute-bound,
+expected 6-9×); the small pointwise closures (AMD 0.40 ms, `compute_sgs!`
+of TKE 0.24 ms) are dominated by their halo fills. The fused TKE and RSM
+updates run one plane per work item over 32 planes and stop at about 2×:
+the advection and the six-component solve they call are not part of this
+issue. Berlin flagship (`CaseConfig()`, 64³, `:tke`, 2 warm-up steps,
+best of three 3-step runs, s/step): old 13.60 / 12.43 / 12.15 / 12.04, new
+14.14 / 11.07 / 10.42 / 10.07 at 1 / 4 / 12 / 24 threads (one process each,
+on the loaded machine: 1.04× at one thread, not separated from the noise
+by a single sample; the SGS kernels themselves measure 0.14-1.05× above).
+A 32-step run (2 warm-up + 3 × 10) of `CaseConfig()` fails on both the old
+and the new code (`step_adaptive!: step failed (velocity) after 3
+retries`), so the flagship is timed over 11 steps.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0

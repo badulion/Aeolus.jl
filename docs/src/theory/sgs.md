@@ -708,7 +708,8 @@ coefficient ratio per doubling of the filter width. The lower clip
 ``β ≥ 1/8`` is Bou-Zeid's. The upper clip, 8, is ours: it is symmetric
 in ``φ`` and keeps the diagnostic finite. The details:
 
-* The box is separable and summed plane by plane. In a periodic direction
+* The box is separable and summed in three passes over the whole field
+  (x, y, then z with the identity; KA-l, #304). In a periodic direction
   it wraps. In a bounded direction it stays in the interior, and the
   points beyond are dropped (renormalised). The 3-cell first filter reads
   the halo cell, but at a free-slip wall that cell holds the mirrored,
