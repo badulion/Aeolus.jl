@@ -195,8 +195,7 @@ Drivers that live under `examples/` (the Berlin, SBL and validation
 drivers) are not moved into `src/`: [`DRIVER_FILES`](@ref
 Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
 package directory, and the first config that names one includes the file
-into a fresh module. `berlin` (the Berlin case, `examples/urban/BerlinCase.jl`)
-is the first entry; the other migrations of #311 add theirs.
+into a fresh module; `berlin` is the Berlin case (`examples/urban/BerlinCase.jl`).
 
 ### The example drivers (CFG-e, #360)
 
