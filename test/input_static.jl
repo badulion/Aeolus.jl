@@ -99,7 +99,7 @@ const ANCHOR = (origin_lat = 52.5, origin_lon = 13.4, origin_x = 0.0, origin_y =
     st7 = static_inputs(city, geo_mesh(126.0, 7.0); ANCHOR...)
     for b in 1:3
         err = abs(count(==(Int32(b)), st7.building_id) * 49.0 - area[b])
-        @test err <= perim[b] * 7.0
+        @test err <= perim[b] * 7.0 / 2                 # half a cell along the perimeter (measured: 82, 80, 166 m²)
     end
     # the code table round-trips through the file
     p = tempname() * ".nc"

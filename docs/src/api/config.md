@@ -372,7 +372,12 @@ first (extra arguments are passed on). The environment variables
 `AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and `AEOLUS_OUTPUT_DT` are gone: use
 the file and `--set clock.nsteps=…`, `--set output.cadence=…`.
 
-The sections are `[grid]`, `[geometry]`, `[clock]`, `[cadence]`,
+The sections are `[grid]`, `[geometry]` (the site and the static
+drivers `static`, `parent_static` the ground is read from, CFG-f #361,
+see [Input drivers](input_drivers.md)), `[preprocess]` (the drivers'
+sources: `osm_path`, `min_height`, `park_lai`, `landuse`; `julia
+--project -m Aeolus preprocess static berlin_<s>.toml` writes the
+drivers from them), `[clock]`, `[cadence]`,
 `[dynamics]`, `[boundaries]`, `[initial]`, `[ledger]`, `[output]`
 (`netcdf`, the file name; `path`, its directory: the summer file writes
 `examples/urban/output/alexanderplatz.nc`, where the renderers read it;
