@@ -324,6 +324,37 @@ end
         @test φ((f, f, f, f), (f, f)) == (0x408f276d, 0x41c83b0e, 0xa20bc7c6, 0x6d5451fd)
         @test φ((0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344), (0xa4093822, 0x299f31d0)) ==
               (0xd16cfe09, 0x94fdcceb, 0x5001e420, 0x24126ea1)
+        # the stream layout: UInt64 number 2b+1, 2b+2 of stream (seed, s, id) is
+        # block b of the counter (b, s, id_lo, id_hi) under the key
+        # (seed_hi, seed_lo), low word first, at any draw count
+        for (seed, s, id) in ((0x0123456789abcdef, 5, 0xfedcba9876543210), (7, 0, 0))
+            key = ((UInt64(seed) >> 32) % UInt32, UInt64(seed) % UInt32)
+            ctr(b) = (UInt32(b), UInt32(s), UInt64(id) % UInt32, (UInt64(id) >> 32) % UInt32)
+            want = UInt64[]
+            for b in 0:40
+                x = φ(ctr(b), key)
+                push!(want, (UInt64(x[2]) << 32) | x[1], (UInt64(x[4]) << 32) | x[3])
+            end
+            for n in (1, 2, 3, 9, 10, 11, 17, 82)
+                rr = counter_rng(seed, s, id)
+                @test [rand(rr, UInt64) for _ in 1:n] == want[1:n]
+            end
+            # re-pointing a generator mid-block starts the new stream
+            rr = counter_rng(99, 1, 1)
+            foreach(_ -> rand(rr, UInt64), 1:5)
+            set_stream!(rr, seed, s, id)
+            @test [rand(rr, UInt64) for _ in 1:20] == want[1:20]
+            # counter_xoshiro: a Xoshiro whose state is the stream's first four
+            @test counter_xoshiro(seed, s, id) == Xoshiro(want[1], want[2], want[3], want[4])
+        end
+        let x = [rand(counter_xoshiro(2026, 0, i)) for i in 0:99_999]   # neighbouring ids
+            @test abs(sum(x) / length(x) - 0.5) < 4 * sqrt(1 / 12 / length(x))
+            @test abs(sum(abs2, x .- 0.5) / length(x) - 1 / 12) < 0.002
+        end
+        let xo = counter_xoshiro(7, 1, 3), y = [rand(xo) for _ in 1:100_000]   # along one stream
+            @test abs(sum(y) / length(y) - 0.5) < 4 * sqrt(1 / 12 / length(y))
+            @test rand(counter_xoshiro(7, 1, 3)) == y[1] != rand(counter_xoshiro(7, 1, 4))
+        end
         r = counter_rng(42, 3, 7)
         a = [rand(r) for _ in 1:9]
         @test a[1] == rand(counter_rng(42, 3, 7))         # a pure function of (seed, stream, id)

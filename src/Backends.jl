@@ -26,7 +26,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
        plane_map!, apply_transform!,
-       CounterRNG, counter_rng, set_stream!
+       CounterRNG, counter_rng, counter_xoshiro, set_stream!
 
 # =========================================================================
 # Backend types
@@ -1042,6 +1042,29 @@ function counter_rng(seed::Integer, stream::Integer, id::Integer)
     s = seed % UInt64
     return set_stream!(CounterRNG(((s >> 32) % UInt32, s % UInt32), 0, 0, 0, 0, false),
                        stream, id)
+end
+
+"""
+    counter_xoshiro(seed, stream, id) -> Random.Xoshiro
+
+A `Xoshiro256++` generator whose state is the first four `UInt64`s of the
+counter stream `(seed, stream, id)` ([`counter_rng`](@ref)), so it is, like
+that stream, a pure function of the triple and the same on every thread.
+For long streams: one Philox block costs about 4 ns (the latency of ten
+dependent rounds) per two `UInt64`s, a Xoshiro draw under 1 ns, so a work
+item that draws hundreds of numbers (a cell's shuffle and pair draws in
+`collision_coalescence!`) takes this, while one that draws a few
+(`randn(counter_rng(k, n, i))` per droplet) keeps the `CounterRNG`, which
+needs no allocation. The draws follow Julia's `Xoshiro` (xoshiro256++,
+Blackman & Vigna 2021, ACM TOMS 47(4) 36), seeded with Philox output as
+Julia seeds its task-local generators from a parent's.
+"""
+function counter_xoshiro(seed::Integer, stream::Integer, id::Integer)
+    r = counter_rng(seed, stream, id)
+    s0, s1, s2, s3 = rand(r, UInt64), rand(r, UInt64), rand(r, UInt64), rand(r, UInt64)
+    # the all-zero state is the one xoshiro cannot leave (probability 2⁻²⁵⁶)
+    (s0 | s1 | s2 | s3) == 0 && (s0 = one(UInt64))
+    return Random.Xoshiro(s0, s1, s2, s3)
 end
 
 """

@@ -79,7 +79,8 @@ module Superdroplet
 #    Precipitation*, 2nd ed. Kluwer.
 
 using Random: AbstractRNG, MersenneTwister, shuffle!, rand
-using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!, counter_rng
+using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!, counter_rng,
+                  counter_xoshiro
 
 # MoistThermodynamics is the Era IV contract (Phase 39): saturation vapour
 # pressure, latent heats and the thermodynamic constants all come from
@@ -1182,8 +1183,11 @@ With `sweep = true` zero-multiplicity particles are removed afterwards.
 
 **Random streams** (KA-n, #305). One `UInt64` key is drawn from `rng` per
 call (so a seeded `rng` gives a reproducible run, one key per step); cell
-`ci` runs its [`coalescence_step!`](@ref) on the counter-based stream
-`(key, 0, ci)` as one work item of a launch over the cells on `backend`.
+`ci` runs its [`coalescence_step!`](@ref) on its own generator,
+[`Aeolus.Backends.counter_xoshiro`](@ref)`(key, 0, ci)` (a Xoshiro seeded
+from the counter-based stream `(key, 0, ci)`: a cell draws a few hundred
+numbers, where Philox would cost 1.3× the old loop), as one work item of a
+launch over the cells on `backend`.
 The cells share no generator, and the collisions are identical at every
 thread count.
 """
@@ -1195,7 +1199,8 @@ function collision_coalescence!(rng::AbstractRNG, sd::SuperdropletSet,
                                 backend::AbstractBackend = default_backend())
     ncells = length(cell_volumes)
     buckets = cell_populations(sd, ncells)
-    # One key per call; cell ci shuffles and draws from the stream (key, 0, ci)
+    # One key per call; cell ci shuffles and draws from its own generator,
+    # seeded from the counter stream (key, 0, ci)
     # in its own work item (KA-n, #305). A cell's superdroplets are touched
     # by its item only, so the result does not depend on the thread count.
     key = rand(rng, UInt64)
@@ -1210,7 +1215,7 @@ end
 function _coalesce_cell!(ci, nc, ne, buckets, key, sd, kernel, dt, cell_volumes, m)
     idx = buckets[ci]
     length(idx) < 2 && return nothing
-    c, e = coalescence_step!(counter_rng(key, 0, ci), sd, kernel, dt, cell_volumes[ci];
+    c, e = coalescence_step!(counter_xoshiro(key, 0, ci), sd, kernel, dt, cell_volumes[ci];
                              indices = idx, m = m)
     @inbounds nc[ci] = c
     @inbounds ne[ci] = e
