@@ -379,10 +379,11 @@ end
 The a-priori metrics of [`sgs_test_filter_metrics`](@ref) of the stress
 `stress()` returns (`(τ, e)`), under `apriori.`: `k_test` (m² s⁻²),
 `ratio` (e/k_test), `rho` (ρ(τ, L)), `II_L`, `II_model` and `outside`
-(the fraction of cells with II > 2/3).
+(the fraction of cells with II > 2/3). They cost about a step, so they
+are evaluated once per output record ([`per_record`](@ref)).
 """
 function sgs_apriori_diagnostics(stress, case)
-    a = per_state(() -> sgs_test_filter_metrics(case, stress()...), case)
+    a = per_record(() -> sgs_test_filter_metrics(case, stress()...), case)   # > a step: once per record
     return Diagnostic[
         Diagnostic("apriori.k_test", "m2 s-2", () -> a().k_test;
                    description = "resolved energy between the grid and the 3-cell test filter, canopy"),

@@ -339,13 +339,15 @@ The transition summary ([`transition_summary`](@ref)): the turbulent
 fraction `gamma_canopy` / `gamma_free`, the fraction of cells with
 Ri_g > 1/4 `Rsup_canopy` / `Rsup_free`, the grid Reynolds number
 `Re_grid_canopy` / `Re_grid_free`, and the relaminarised share of the
-stable cells `relam_fraction` of `relam_nstable` cells (all 1); the
+stable cells `relam_fraction` of `relam_nstable` cells (all 1), once per
+output record, as the NetCDF output ([`per_record`](@ref)); the
 wall time of one evaluation `wall.ms_per_call` (ms). The profiles are
 [`profile_diagnostics`](@ref).
 """
 function diagnostics(c::TurbulenceDiag, case)
-    t = per_state(() -> transition_summary(c, case), case)
-    rel() = (turbulence_diagnostics!(c, case); c)
+    t = per_record(() -> transition_summary(c, case), case)
+    rel = per_record(() -> (turbulence_diagnostics!(c, case); (relam_frac = c.relam_frac,
+                                                               relam_nstable = c.relam_nstable)), case)
     return Diagnostic[
         Diagnostic("gamma_canopy", "1", () -> t().γ_canopy; description = "turbulent fraction"),
         Diagnostic("gamma_free", "1", () -> t().γ_free; description = "turbulent fraction"),
@@ -365,11 +367,14 @@ end
     profile_diagnostics(c::TurbulenceDiag, case)
 
 The fluid-cell plane means per level for `diagnostics.nc`: `N2` (s⁻²),
-`Ri_g` (1) and `f_m` (1), as in the NetCDF output.
+`Ri_g` (1) and `f_m` (1), as in the NetCDF output, once per output
+record ([`per_record`](@ref)).
 """
 function profile_diagnostics(c::TurbulenceDiag, case)
     zc = case_zc(case)
-    ev(f) = () -> copy(f(turbulence_diagnostics!(c, case)))
+    prof = per_record(() -> (turbulence_diagnostics!(c, case); (N2 = copy(c.N2), Ri = copy(c.Ri), fm = copy(c.fm))),
+                      case)
+    ev(f) = () -> f(prof())
     return ProfileDiagnostic[
         ProfileDiagnostic("N2", "s-2", "z", zc, ev(x -> x.N2);
                           description = "plane mean squared buoyancy frequency of theta_v"),

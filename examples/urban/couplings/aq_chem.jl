@@ -417,12 +417,13 @@ end
 
 `NO_sfc`, `NO2_sfc`, `O3_sfc` (ppb): the means over the open columns of
 the first air cell; `leighton_phi` and `leighton_phi_ext` (1), the
-photostationary-state ratios of [`aq_leighton`](@ref); `J_NO2` (s⁻¹), the
+photostationary-state ratios of [`aq_leighton`](@ref) (once per output
+record, [`per_record`](@ref)); `J_NO2` (s⁻¹), the
 NO₂ photolysis frequency of the last photochemistry call.
 """
 function diagnostics(c::AQChem, case)
     m(s) = () -> (x = _aq_surface_layer(c, getfield(c, s)); ok = .!isnan.(x); sum(x[ok]) / count(ok))
-    L = per_state(() -> aq_leighton(c, case), case)
+    L = per_record(() -> aq_leighton(c, case), case)
     return Diagnostic[
         Diagnostic("NO_sfc", "ppb", m(:NO); description = "NO, mean of the first air cell"),
         Diagnostic("NO2_sfc", "ppb", m(:NO2); description = "NO2, mean of the first air cell"),

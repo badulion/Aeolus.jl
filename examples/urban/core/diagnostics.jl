@@ -34,6 +34,30 @@ function per_state(f, case)
     end
 end
 
+"""
+    per_record(f, case) -> () -> f()
+
+`f()` evaluated at most once per output record (`case.clock.nrecord`),
+for the diagnostics that cost more than a step (the SGS a-priori
+metrics, the Leighton ratio, the transition summary): they are
+evaluated at each output frame, where their `:coupling` event shows
+them, and in the first diagnostics row; the costly rows in between
+repeat the last record's value. On the 64 × 64 × 64 summer case these
+three took 168 ms of the 193 ms that every diagnostic and profile take
+together, against a 122 ms step (#338), so evaluating them every 60 s
+of a 2 s step would cost about 4.6 % of the run; at the output cadence
+(1800 s) it is what their report lines cost before.
+"""
+function per_record(f, case)
+    key = Ref(-1)
+    val = Ref{Any}(nothing)
+    return function ()
+        k = case.clock.nrecord
+        k == key[] || (val[] = f(); key[] = k)
+        return val[]
+    end
+end
+
 "Cell-centre heights (m) of the case's levels (stretched or uniform)."
 function case_zc(case)
     dz = level_thickness(case.mesh)
