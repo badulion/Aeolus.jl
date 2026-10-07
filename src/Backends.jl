@@ -262,6 +262,18 @@ identical at every thread count under a deterministic planner (measured
 in docs/src/design/ka_port.md).
 """
 apply_transform!(::CPUBackend, out, plan, in) = (mul!(out, plan, in); out)
+
+"""
+    synchronize(backend)
+
+Wait until every launch issued on `backend` has finished. A launch on the
+[`CPUBackend`](@ref) returns only when its kernel is done, so this is a
+no-op there; a GPU backend (Phase 81) queues its kernels, and the host must
+synchronize before it reads what they wrote — e.g. `step_adaptive!` before
+a retry reads the state that `restore_state!` copied back (KA-j, #306).
+"""
+synchronize(b::CPUBackend) = KA.synchronize(b.ka)
+synchronize(b::GPUBackend) = _gpu_error(b, "synchronize")
 apply_transform!(b::GPUBackend, out, plan, in) = _gpu_error(b, "apply_transform!")
 
 # =========================================================================
@@ -497,6 +509,14 @@ launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
 # the store, which the compiler then vectorises. With two pointers to the
 # same array it cannot prove the loop free of dependences and stays scalar
 # (measured 1.8x slower than the old in-place loop at 64x64x32).
+#
+# Only the *first* argument is substituted, by a branch on `args[1] === out`
+# whose two arms both have concrete argument types (KA-j, #306). Substituting
+# any position by `map(a -> a === out ? _OUT : a, args)` gave a tuple of
+# `Union`s, so every launch was a dynamic dispatch that allocated 128-256 B
+# (a step of the Boussinesq core allocated 1.8 kB). An alias in a later
+# position is read through its own pointer: the same values (the body reads
+# point (i, j, k) before writing it), only not vectorised.
 struct _Out end
 const _OUT = _Out()
 
@@ -522,12 +542,18 @@ end
 `out[I] = f(args[1][I], args[2][I], …)` for every storage index `I` of
 `ranges` (3-D or 2-D); an argument that is not an array (a number) is
 passed as is. A pointwise kernel: bit-identical serially and threaded.
-`Fields.interior_map!` is the field-level form.
+`Fields.interior_map!` is the field-level form. For an in-place update
+pass `out` as the *first* argument (`range_map!(b, f, y, r, y, x)`): it is
+then read through `out`, which keeps the loop vectorisable.
 """
 function range_map!(b::AbstractBackend, f::F, out::AbstractArray, ranges::Tuple,
                     args::Vararg{Any,M}) where {F, M}
     _npoints(ranges) == 0 || _check((out, args...), ranges)
-    launch!(b, _map_body!, ranges, f, out, map(a -> a === out ? _OUT : a, args))
+    if M >= 1 && args[1] === out
+        launch!(b, _map_body!, ranges, f, out, (_OUT, Base.tail(args)...))
+    else
+        launch!(b, _map_body!, ranges, f, out, args)
+    end
     return out
 end
 
@@ -670,7 +696,12 @@ end
 end
 
 # max is exact and commutative: any order gives the same bits, so a plane is
-# scanned in a plain loop (NaN-propagating `max`), as the loops it replaces
+# scanned in a plain loop (NaN-propagating `max`), as the loops it replaces.
+# A tuple-valued body (`range_max` of several maxima in one sweep, KA-j #306)
+# takes the maximum of every component separately.
+@inline _max(a, b) = max(a, b)
+@inline _max(a::Tuple, b::Tuple) = map(max, a, b)
+
 struct _PlaneMax{T, R}
     init::T
     ir::R
@@ -679,7 +710,7 @@ end
 @inline function (p::_PlaneMax{T})(k, g) where {T}
     m = p.init
     @inbounds for j in p.jr, i in p.ir
-        m = max(m, T(g(i, j, k)))
+        m = _max(m, convert(T, g(i, j, k)))
     end
     return m
 end
@@ -883,27 +914,37 @@ The maximum of the indexed `body(i, j, k, args...)` (indexed as in
 commutative, so the result equals any serial maximum of the same values
 (a CFL rate, `max |∇·u|`, a speed cap).
 
+A body that returns an `NTuple` of real numbers gives the tuple of the
+component-wise maxima, each NaN-propagating on its own: several maxima in
+one sweep over the region (the fused CFL and step-guard kernels of KA-j,
+#306). A component that is `x * 0` turns the maximum into a finiteness
+test: `0` if every value was finite, `NaN` otherwise.
+
 Unlike a `plane_reduce!` body, a `range_max` body must **only read**: it
 is evaluated once per point, but a fused update belongs in
 `plane_reduce!`. The result type is the inferred (floating-point) return
 type of `body`, `Float64` when inference gives no concrete real type;
-an empty region gives `-Inf`.
+an empty region gives `-Inf` (in every component).
 """
 function range_max(b::AbstractBackend, body::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}},
                    args::Vararg{Any,M}) where {F, M}
-    (isempty(ir) || isempty(jr) || isempty(kr)) && return -Inf
     T = _max_type(Base.promote_op(body, Int, Int, Int, map(typeof, args)...))
+    (isempty(ir) || isempty(jr) || isempty(kr)) && return _neg_inf(T)
     parts = _plane_partials!(b, Vector{T}(undef, length(kr)),
-                             _PlaneMax(T(-Inf), ir, jr), kr, _Ix(body, args))
-    m = T(-Inf)
+                             _PlaneMax(_neg_inf(T), ir, jr), kr, _Ix(body, args))
+    m = _neg_inf(T)
     for x in parts
-        m = max(m, x)
+        m = _max(m, x)
     end
     return m
 end
 # the body's type without evaluating it (it is never called twice at a point)
 _max_type(::Type{R}) where {R<:Real} = isconcretetype(R) ? float(R) : Float64
+_max_type(::Type{R}) where {N, R<:NTuple{N,Real}} =
+    isconcretetype(R) ? Tuple{map(float, fieldtypes(R))...} : NTuple{N,Float64}
 _max_type(::Type) = Float64
+_neg_inf(::Type{T}) where {T<:Real} = T(-Inf)
+_neg_inf(::Type{T}) where {T<:Tuple} = map(S -> S(-Inf), fieldtypes(T))
 
 range_max(b::AbstractBackend, body::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
           args::Vararg{Any,M}) where {F, M} =

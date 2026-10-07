@@ -1158,10 +1158,13 @@ function restore_open_boundaries!(sim, snap::AbstractVector)
     n = 0
     for st in open_boundary_states(sim), p in st.planes
         n += 1
-        copyto!(p.data, snap[n])
+        size(snap[n]) == size(p.data) || throw(DimensionMismatch("open-boundary snapshot"))
+        # a pointwise kernel over the buffer (KA-j, #306)
+        Backends.range_map!(Backends.backend(p.data), identity, p.data, _buffer_ranges(p.data), snap[n])
     end
     return sim
 end
+_buffer_ranges(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))
 
 """
     combine_open_boundaries!(sim, a, snapshot, b) -> sim
@@ -1176,10 +1179,19 @@ function combine_open_boundaries!(sim, a, snap::AbstractVector, b)
     n = 0
     for st in open_boundary_states(sim), p in st.planes
         n += 1
-        p.data .= a .* snap[n] .+ b .* p.data
+        size(snap[n]) == size(p.data) || throw(DimensionMismatch("open-boundary snapshot"))
+        # a pointwise kernel (KA-j, #306): the expression of the broadcast
+        # `a .* snap .+ b .* buffer`, so the same bits
+        Backends.range_map!(Backends.backend(p.data), _StageCombine(a, b), p.data,
+                            _buffer_ranges(p.data), p.data, snap[n])
     end
     return sim
 end
+struct _StageCombine{A, B}
+    a::A
+    b::B
+end
+@inline (f::_StageCombine)(x, s) = f.a * s + f.b * x   # (buffer, snapshot)
 
 """
     assert_open_face_correction(bcs, dφdx, dφdy) -> nothing
