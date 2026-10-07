@@ -1,6 +1,6 @@
 summer_ref_rho = "7b4caa357e552e05"
 summer_ug = "88b332506aee67a9"
-summer_qv_fine = "61e6b0fb02c6dcf6"
+summer_qv_fine = "cfe924028a14d551"
 summer_ref_T = "6000254d8599eca6"
 summer_theta_fine = "b0a1877c06d525bf"
 summer_vg = "9b57f7c34ba82912"
@@ -8,7 +8,7 @@ summer_ref_pi = "3470f7d5efeebdb4"
 summer_ref_p = "a43e5c5ea1ed0572"
 summer_zi = 0.0
 summer_theta_zc = "e5beaccbd806323d"
-summer_qv_zc = "520fc325f0dc0f92"
+summer_qv_zc = "aa44cf23ab7e2df5"
 summer_p_surface = 101841.77889034548
 summer_zi_max = 1356.189155919033
 
