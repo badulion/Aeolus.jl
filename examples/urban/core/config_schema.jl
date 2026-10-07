@@ -16,7 +16,7 @@
 # the coupling files.
 
 using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Option, OpenTable,
-                     Optional, Either, Path, section, option!, config_origin, config_schema
+                     Optional, Either, Path, section, option!, config_origin, config_schema, config_sources
 using Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir
 using Dates: Date, year, month, day
 
@@ -55,10 +55,11 @@ exactly the union of these keys, each used once (`test/config_berlin.jl`).
 const CASE_FIELDS = (
     name = ("run.name",), scenario = ("run.scenario",),
     size = ("grid.size",), extent = ("grid.extent",), halo = ("grid.halo",),
-    osm_path = ("geometry.osm_path",), lat0 = ("geometry.lat0",), lon0 = ("geometry.lon0",),
-    offset = ("geometry.offset",), min_height = ("geometry.min_height",),
+    static = ("geometry.static",), parent_static = ("geometry.parent_static",),
+    lat0 = ("geometry.lat0",), lon0 = ("geometry.lon0",), offset = ("geometry.offset",),
     elevation = ("geometry.elevation",), wall_subdivisions = ("geometry.wall_subdivisions",),
-    park_lai = ("geometry.park_lai",),
+    osm_path = ("preprocess.osm_path",), min_height = ("preprocess.min_height",),
+    park_lai = ("preprocess.park_lai",), landuse = ("preprocess.landuse",),
     date = ("clock.date",), utc_offset = ("clock.utc_offset",), start_h = ("clock.start_h",),
     dt = ("clock.dt",), nsteps = ("clock.nsteps",),
     cadence = ("cadence.*", "output.cadence"),
@@ -579,21 +580,30 @@ function Config.driver_sections(::BerlinDriver)
         option!(s, "halo", NTuple{3,Int}; default = (3, 3, 3), range = (1, 8),
                 doc = "halo cells per side (3: WENO-Z5 moisture transport)")
     end
-    geo = section("geometry"; doc = "The OSM scene and the site.") do s
-        option!(s, "osm_path", Path; default = joinpath(DATA_DIR, "alexanderplatz_real.osm"),
-                doc = "the OpenStreetMap file of the buildings, parks and water")
+    geo = section("geometry"; doc = "The ground (static drivers) and the site.") do s
+        option!(s, "static", Optional{Path};
+                doc = "the static driver of the child (CFG-f #361; `aeolus preprocess static` writes it); " *
+                      "\"none\": rasterise [preprocess] osm_path in memory")
+        option!(s, "parent_static", Optional{Path};
+                doc = "the static driver (land-use tiles) of the nest parent; \"none\": from [preprocess] landuse in memory")
         option!(s, "lat0", Float64; default = 52.5220, range = (-90, 90), units = "degree",
                 doc = "latitude of the OSM projection's anchor (and of the solar position)")
         option!(s, "lon0", Float64; default = 13.4100, range = (-180, 180), units = "degree",
                 doc = "longitude of the anchor")
         option!(s, "offset", NTuple{2,Float64}; default = (0.0, 0.0), units = "m",
                 doc = "the window centre relative to the anchor")
-        option!(s, "min_height", Float64; default = 8.0, range = (0, Inf), units = "m",
-                doc = "buildings lower than this are dropped")
         option!(s, "elevation", Float64; default = 34.0, units = "m", doc = "height above sea level")
         option!(s, "wall_subdivisions", Int; default = 1, range = (1, 64),
                 doc = "wall facets per cell face of the radiosity scene")
+    end
+    pre = section("preprocess"; doc = "The sources of the static drivers (`aeolus preprocess static`, or in memory with static = \"none\").") do s
+        option!(s, "osm_path", Path; default = joinpath(DATA_DIR, "alexanderplatz_real.osm"),
+                doc = "the OpenStreetMap file of the buildings, parks and water")
+        option!(s, "min_height", Float64; default = 8.0, range = (0, Inf), units = "m",
+                doc = "buildings lower than this are dropped")
         option!(s, "park_lai", Float64; default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
+        option!(s, "landuse", Path; default = joinpath(DATA_DIR, "berlin_landuse_6km.csv"),
+                doc = "the nest parent's land-use table (data/fetch_berlin_landuse.jl)")
     end
     clock = section("clock"; doc = "Date, start and steps.") do s
         option!(s, "date", Date; default = Date(2019, 6, 29),
@@ -696,7 +706,7 @@ function Config.driver_sections(::BerlinDriver)
                       "(the keys are closed, a value has its default's type); " *
                       "[physics.options.nesting.parent] is the parent's schema")
     end
-    return Section[run, grid, geo, clock, cad, dyn, bnd, ini, led, out, phys]
+    return Section[run, grid, geo, pre, clock, cad, dyn, bnd, ini, led, out, phys]
 end
 
 """
@@ -779,6 +789,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
         throw(ArgumentError("CaseConfig: the config is for the driver \"$(config_schema(cfg).name)\", not \"berlin\""))
     r, g, geo, c, dyn, b, ini, out = cfg.run, cfg.grid, cfg.geometry, cfg.clock, cfg.dynamics,
                                       cfg.boundaries, cfg.initial, cfg.output
+    pre = cfg.preprocess
     cad = Dict{Symbol,Float64}(Symbol(k) => cfg.cadence[k] for k in propertynames(cfg.cadence) .|> String
                                if cfg.cadence[k] !== nothing)
     cad[:output] = out.cadence
@@ -787,8 +798,8 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
     dir = out.path !== nothing ? out.path : run_output !== nothing ? run_output : joinpath(URBAN_DIR, "output")
     d = c.date
     return CaseConfig(Symbol(r.name), r.scenario, g.size, g.extent, g.halo,
-                      geo.osm_path, geo.lat0, geo.lon0, geo.offset, geo.min_height, geo.elevation,
-                      geo.wall_subdivisions, geo.park_lai,
+                      geo.static, geo.parent_static, geo.lat0, geo.lon0, geo.offset, geo.elevation,
+                      geo.wall_subdivisions, pre.osm_path, pre.min_height, pre.park_lai, pre.landuse,
                       (year(d), month(d), day(d)), c.utc_offset, c.start_h, c.dt, c.nsteps, cad,
                       dyn.nu, dyn.theta0, dyn.g, dyn.f_coriolis, dyn.c_s, dyn.pr_t, dyn.sgs_stability,
                       dyn.sponge_alpha_max, dyn.sponge_frac, dyn.theta_top,
@@ -818,8 +829,50 @@ mutable struct BerlinRun
 end
 
 # The case is built in run!: its NetCDF output goes into the run folder,
-# which build does not know yet.
-Config.build(::BerlinDriver, cfg::RunConfig) = BerlinRun(cfg, nothing)
+# which build does not know yet. A missing static driver is reported here,
+# before a run folder exists, with the command that makes it.
+function Config.build(::BerlinDriver, cfg::RunConfig)
+    cc = CaseConfig(cfg)
+    src = first(config_sources(cfg)["files"])
+    for (f, key) in ((cc.static, "geometry.static"), (cc.parent_static, "geometry.parent_static"))
+        (f === nothing || isfile(f)) && continue
+        throw(ConfigError(key, "the static driver $f does not exist; generate it with\n" *
+                               "  julia --project -m Aeolus preprocess static $src\n" *
+                               "or set it to \"none\" to preprocess the source in memory"))
+    end
+    return BerlinRun(cfg, nothing)
+end
+
+"""
+    preprocess_static(::BerlinDriver, cfg; out = nothing, parent_out = nothing) -> Vector{String}
+
+`aeolus preprocess static berlin_<s>.toml`: write the child's static
+driver (`[geometry] static`, or `out`) from `[preprocess] osm_path`
+([`berlin_static_inputs`](@ref)) and, for a nested case with a tiled
+parent surface, the parent's (`[geometry] parent_static`, or
+`parent_out`) from `[preprocess] landuse`
+([`parent_landuse_source`](@ref)), each with its source hashed.
+"""
+function Config.preprocess_static(::BerlinDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
+    cc = CaseConfig(cfg)
+    files = String[]
+    child = out !== nothing ? abspath(out) : cc.static
+    child === nothing && throw(ArgumentError("[geometry] static is \"none\": pass --out file.nc"))
+    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
+    write_static_driver(child, berlin_static_inputs(cc, mesh); source = cc.osm_path)
+    push!(files, child)
+    if case_nested(cc)
+        pc = nest_parent_config(cc)
+        ppath = parent_out !== nothing ? abspath(parent_out) : cc.parent_static
+        if pc.surface === :tiles && ppath !== nothing
+            pmesh = parent_mesh(pc)
+            write_static_tiles(ppath, parent_static_tiles(parent_landuse_source(pc, pmesh), pc, pmesh);
+                               source = cc.landuse)
+            push!(files, ppath)
+        end
+    end
+    return files
+end
 
 function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck::CheckpointSchedule;
                                  callback = nothing)
