@@ -315,6 +315,15 @@ for N in 0:24
         end
         return nothing
     end
+    # the 2-D serial nest (KA-e, #302: boundary_scalar_flux's face bodies ran
+    # 2-2.5x the old loop when the 2-D path read their arguments from the tuple)
+    @eval @noinline function _nest2!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int},
+                                     $(sig...)) where {F, $(Ts...)}
+        for j in jr, i in ir
+            body!(i, j, $(as...))
+        end
+        return nothing
+    end
 end
 # more than 24 arguments: the plain loops
 @noinline function _row!(body!::F, ir::UnitRange{Int}, j::Int, k::Int, args::Vararg{Any,N}) where {F, N}
@@ -327,6 +336,13 @@ end
                           args::Vararg{Any,N}) where {F, N}
     for k in kr, j in jr, i in ir
         body!(i, j, k, args...)
+    end
+    return nothing
+end
+@noinline function _nest2!(body!::F, ir::UnitRange{Int}, jr::UnitRange{Int},
+                           args::Vararg{Any,N}) where {F, N}
+    for j in jr, i in ir
+        body!(i, j, args...)
     end
     return nothing
 end
@@ -374,9 +390,7 @@ _npoints(ranges) = prod(length, ranges; init = 1)
     return nothing
 end
 @noinline function _serial!(body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args) where {F}
-    for j in jr, i in ir
-        body!(i, j, args...)
-    end
+    _nest2!(body!, ir, jr, args...)       # for j in jr, i in ir: body!(i, j, args...)
     return nothing
 end
 @noinline function _serial!(body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args) where {F}
