@@ -277,7 +277,8 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        column_partials, interior_max, interior_all_finite, interior_map!,
        plane_reduce!, range_max, plane_map!, apply_transform!,
        pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
-       CounterRNG, counter_rng, counter_xoshiro, set_stream!
+       CounterRNG, counter_rng, counter_xoshiro, set_stream!,
+       foreach_column!, foreach_cell!, column_sums, column_sum
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,
@@ -341,7 +342,7 @@ export ReferenceState,
        constant_stability_reference, reference_from_profile,
        hydrostatic_residual, max_hydrostatic_residual,
        reference_scale_height,
-       DensityWeightedPoissonSolver, apply_weighted_laplacian!,
+       DensityWeightedPoissonSolver, DirectWeightedPoissonSolver, apply_weighted_laplacian!,
        solver_iterations, solver_residual,
        MassWeighting, AnelasticWeighting, PseudoIncompressibleWeighting,
        MassWeightedSimulation, AnelasticSimulation,

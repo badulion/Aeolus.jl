@@ -25,6 +25,7 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS, PhasePar
                              exner_function, virtual_temperature,
                              specific_humidity_from_relative_humidity
 using ..Fields: location
+using ..Backends: launch_weighted!, backend   # KA-k (#307): one work item per level
 using ..Operators: DampingProfile
 using ..Operators.FiniteVolume: _add_damping!, damping_coordinates
 
@@ -305,6 +306,7 @@ struct ProfileNudging{N<:NamedTuple,T<:Real,W} <: AbstractLargeScaleForcing
     τ::T
     weight::W
     last::Base.RefValue{NamedTuple}
+    buf::Vector{Float64}           # the per-level nudging rates of the last field (KA-k, #307)
     function ProfileNudging(targets::N, τ::T; weight::W = nothing) where {N<:NamedTuple,T<:Real,W}
         τ > 0 || throw(ArgumentError("ProfileNudging: τ must be positive, got $τ"))
         isempty(targets) && throw(ArgumentError("ProfileNudging: no target fields"))
@@ -312,7 +314,7 @@ struct ProfileNudging{N<:NamedTuple,T<:Real,W} <: AbstractLargeScaleForcing
             k in _LSF_FIELDS ||
                 throw(ArgumentError("ProfileNudging: cannot nudge :$k (supported: $(_LSF_FIELDS))"))
         end
-        return new{N,T,W}(targets, τ, weight, Ref{NamedTuple}(NamedTuple()))
+        return new{N,T,W}(targets, τ, weight, Ref{NamedTuple}(NamedTuple()), Float64[])
     end
 end
 
@@ -522,16 +524,26 @@ function apply_forcing!(sim, F::GeostrophicPressureGradient, t, Δt; kw...)
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
     t1 = t + Δt
-    @inbounds for k in 1:Nz
-        z = _zc(m, k)
-        fu = T(-(f * forcing_mean(F.V_g, z, t, t1)))
-        fv = T(f * forcing_mean(F.U_g, z, t, t1))
-        for j in 1:Ny, i in 1:Nx
-            tu[Hx+i, Hy+j, Hz+k] += fu
-            tv[Hx+i, Hy+j, Hz+k] += fv
-        end
-    end
+    launch_weighted!(backend(tu), Nx * Ny, _gpg_level!, (1:Nz,), tu, tv, m, F.U_g, F.V_g, f, t, t1)
     return sim
+end
+
+# The large-scale forcings below run one work item per level (KA-k, #307):
+# a level's coefficient is evaluated once and the level's points are
+# updated (and summed) in the former `for j, for i` loop, so every level is
+# computed as before and the levels are independent; what is summed over
+# the levels is folded afterwards in ascending k. The same bits as the
+# former serial loops at every thread count.
+@inline function _gpg_level!(k, tu::AbstractArray{T}, tv, m, U_g, V_g, f, t, t1) where {T}
+    Nx, Ny, Hx, Hy, Hz = m.Nx, m.Ny, m.Hx, m.Hy, m.Hz
+    z = _zc(m, k)
+    fu = T(-(f * forcing_mean(V_g, z, t, t1)))
+    fv = T(f * forcing_mean(U_g, z, t, t1))
+    @inbounds for j in 1:Ny, i in 1:Nx
+        tu[Hx+i, Hy+j, Hz+k] += fu
+        tv[Hx+i, Hy+j, Hz+k] += fv
+    end
+    return nothing
 end
 
 _has_moisture(sim) = hasproperty(sim, :qv) && hasproperty(sim, :tqv) &&
@@ -577,7 +589,7 @@ function apply_forcing!(sim, F::ProfileNudging, t, Δt; kw...)
     names = keys(F.targets)
     vals = ntuple(length(names)) do n
         φ, tφ = _state_tendency(sim, names[n], "ProfileNudging")
-        _nudge_levels!(φ.data, tφ.data, m, F.targets[n], invτ, wfn, t, t1)
+        _nudge_levels!(φ.data, tφ.data, m, F.targets[n], invτ, wfn, t, t1, F.buf)
     end
     res = NamedTuple{names}(vals)
     F.last[] = res
@@ -588,12 +600,21 @@ end
 # The order of operations is that of the #171 GeostrophicNudging (and of
 # the Berlin case's add_geostrophic_wind! before it), so unweighted u, v
 # nudging is bit for bit the former code.
-function _nudge_levels!(d, td, m, ref, invτ, wfn, t, t1)
+function _nudge_levels!(d, td, m, ref, invτ, wfn, t, t1, buf = Float64[])
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
     dA = m.dx * m.dy * (Nx * Ny)
+    resize!(buf, Nz)
+    launch_weighted!(backend(td), Nx * Ny, _nudge_level!, (1:Nz,), buf, d, td, m, ref, invτ, wfn, t, t1)
     I = 0.0
     @inbounds for k in 1:Nz
+        I -= buf[k] * dA * _dzc(m, k)
+    end
+    return I
+end
+
+@inline function _nudge_level!(k, c_out, d, td, m, ref, invτ, wfn, t, t1)
+    Nx, Ny, Hx, Hy, Hz = m.Nx, m.Ny, m.Hx, m.Hy, m.Hz
+    @inbounds begin
         z = _zc(m, k)
         φref = forcing_mean(ref, z, t, t1)
         φ̄ = 0.0
@@ -606,9 +627,9 @@ function _nudge_levels!(d, td, m, ref, invτ, wfn, t, t1)
         for j in 1:Ny, i in 1:Nx
             td[Hx+i, Hy+j, Hz+k] -= c
         end
-        I -= c * dA * _dzc(m, k)
+        c_out[k] = c
     end
-    return I
+    return nothing
 end
 
 function apply_forcing!(sim, F::Subsidence, t, Δt; kw...)
@@ -620,7 +641,7 @@ function apply_forcing!(sim, F::Subsidence, t, Δt; kw...)
         φ, tφ = _state_tendency(sim, name, "Subsidence")
         F.form === :mean_gradient ?
             _subside_mean!(φ.data, tφ.data, m, F.w_s, t, t1, F.buf) :
-            _subside_local!(φ.data, tφ.data, m, F.w_s, t, t1)
+            _subside_local!(φ.data, tφ.data, m, F.w_s, t, t1, F.buf)
     end
     res = NamedTuple{names}(vals)
     F.last[] = res
@@ -633,19 +654,33 @@ end
 
 function _subside_mean!(d, td, m, w_s, t, t1, buf)
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
     Nz >= 2 || return 0.0
-    resize!(buf, Nz)
-    @inbounds for k in 1:Nz
-        s = 0.0
-        for j in 1:Ny, i in 1:Nx
-            s += d[Hx+i, Hy+j, Hz+k]
-        end
-        buf[k] = s / (Nx * Ny)
-    end
+    resize!(buf, 2Nz)          # the level means, then the level tendencies
+    b = backend(td)
+    launch_weighted!(b, Nx * Ny, _plane_mean_level!, (1:Nz,), buf, d, m)
+    launch_weighted!(b, Nx * Ny, _subside_mean_level!, (1:Nz,), buf, td, m, w_s, t, t1)
     dA = m.dx * m.dy * (Nx * Ny)
     I = 0.0
     @inbounds for k in 1:Nz
+        I += buf[Nz+k] * dA * _dzc(m, k)
+    end
+    return I
+end
+
+# buf[k] = the mean of level k (the former loop: one running sum, i fastest)
+@inline function _plane_mean_level!(k, buf, d, m)
+    Nx, Ny, Hx, Hy, Hz = m.Nx, m.Ny, m.Hx, m.Hy, m.Hz
+    s = 0.0
+    @inbounds for j in 1:Ny, i in 1:Nx
+        s += d[Hx+i, Hy+j, Hz+k]
+    end
+    @inbounds buf[k] = s / (Nx * Ny)
+    return nothing
+end
+
+@inline function _subside_mean_level!(k, buf, td, m, w_s, t, t1)
+    Nx, Ny, Nz, Hx, Hy, Hz = m.Nx, m.Ny, m.Nz, m.Hx, m.Hy, m.Hz
+    @inbounds begin
         kl, ku = _grad_levels(k, Nz)
         G = (buf[ku] - buf[kl]) / (_zc(m, ku) - _zc(m, kl))
         z = _zc(m, k)
@@ -653,18 +688,29 @@ function _subside_mean!(d, td, m, w_s, t, t1, buf)
         for j in 1:Ny, i in 1:Nx
             td[Hx+i, Hy+j, Hz+k] += s
         end
-        I += s * dA * _dzc(m, k)
+        buf[Nz+k] = s
+    end
+    return nothing
+end
+
+function _subside_local!(d, td, m, w_s, t, t1, buf = Float64[])
+    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
+    Nz >= 2 || return 0.0
+    resize!(buf, Nz)
+    launch_weighted!(backend(td), Nx * Ny, _subside_local_level!, (1:Nz,), buf, d, td, m, w_s, t, t1)
+    dAc = m.dx * m.dy
+    I = 0.0
+    @inbounds for k in 1:Nz
+        I += buf[k] * dAc * _dzc(m, k)
     end
     return I
 end
 
-function _subside_local!(d, td, m, w_s, t, t1)
-    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    Nz >= 2 || return 0.0
-    dAc = m.dx * m.dy
-    I = 0.0
-    @inbounds for k in 1:Nz
+# level k of the local subsidence; buf[k] = the sum of its tendencies
+# (`d` is read on other levels, `td` written on level k only: different arrays)
+@inline function _subside_local_level!(k, buf, d, td, m, w_s, t, t1)
+    Nx, Ny, Nz, Hx, Hy, Hz = m.Nx, m.Ny, m.Nz, m.Hx, m.Hy, m.Hz
+    @inbounds begin
         z = _zc(m, k)
         w = forcing_mean(w_s, z, t, t1)
         # upwind: from above for descent (w < 0), from below for ascent;
@@ -678,9 +724,9 @@ function _subside_local!(d, td, m, w_s, t, t1)
             td[Hx+i, Hy+j, Hz+k] += s
             Ik += s
         end
-        I += Ik * dAc * _dzc(m, k)
+        buf[k] = Ik
     end
-    return I
+    return nothing
 end
 
 _default_tq(sim) = (hasproperty(sim, :tqv) && hasproperty(sim, :has_moisture) && sim.has_moisture) ?
@@ -700,15 +746,16 @@ function apply_forcing!(sim, F::AdvectiveTendencies, t, Δt; tq = _default_tq(si
 end
 
 function _add_level_tendency!(d, m, x, t, Δt)
-    T = eltype(d)
-    t1 = t + Δt
-    @inbounds for k in 1:m.Nz
-        s = T(forcing_mean(x, _zc(m, k), t, t1))
-        for j in 1:m.Ny, i in 1:m.Nx
-            d[m.Hx+i, m.Hy+j, m.Hz+k] += s
-        end
-    end
+    launch_weighted!(backend(d), m.Nx * m.Ny, _level_tendency!, (1:m.Nz,), d, m, x, t, t + Δt)
     return d
+end
+
+@inline function _level_tendency!(k, d::AbstractArray{T}, m, x, t, t1) where {T}
+    s = T(forcing_mean(x, _zc(m, k), t, t1))
+    @inbounds for j in 1:m.Ny, i in 1:m.Nx
+        d[m.Hx+i, m.Hy+j, m.Hz+k] += s
+    end
+    return nothing
 end
 
 # =========================================================================
