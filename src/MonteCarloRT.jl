@@ -103,6 +103,7 @@ module MonteCarloRT
 
 using Random
 using Random: AbstractRNG
+using ..Backends: AbstractBackend, default_backend, launch_weighted!, counter_rng, set_stream!
 
 using ..Grids: RegularGrid
 using ..IBM: SolidMask
@@ -745,6 +746,10 @@ end
 
 BatchAccum(::Type{T}, dims::Tuple) where {T} =
     BatchAccum{T,length(dims)}(zeros(T, dims), zeros(T, dims), zeros(T, dims))
+# Only the `batch` array: the per-batch buffer of a threaded solve.
+_batch_only(::Type{T}, dims::Tuple) where {T} =
+    BatchAccum{T,length(dims)}(zeros(T, dims), zeros(T, map(_ -> 0, dims)),
+                               zeros(T, map(_ -> 0, dims)))
 
 function flush_batch!(a::BatchAccum{T}) where {T}
     @inbounds for i in eachindex(a.batch)
@@ -811,6 +816,43 @@ function MCTally(::Type{T}, d::MCDomain, nview::Int) where {T}
                       zeros(T, d.nx, d.ny, d.nz + 1),
                       zeros(T, d.nx, d.ny, d.nz + 1),
                       zeros(T, d.nx, d.ny, d.nz + 1))
+end
+
+# The tally buffer of one batch of a threaded solve: the per-batch sums
+# only, merged into the solve's tally in batch order (`_merge_batch!`).
+function _batch_tally(::Type{T}, d::MCDomain, nview::Int) where {T}
+    return MCTally{T}(_batch_only(T, (d.nx, d.ny, d.nz)),
+                      _batch_only(T, (d.nx, d.ny)),
+                      _batch_only(T, (d.nx, d.ny)),
+                      _batch_only(T, (d.nx, d.ny)),
+                      _batch_only(T, (N_FIXED_SCAL + nview,)),
+                      zeros(T, d.nx, d.ny, d.nz),
+                      zeros(T, d.nx, d.ny, d.nz),
+                      zeros(T, d.nx, d.ny, d.nz + 1),
+                      zeros(T, d.nx, d.ny, d.nz + 1),
+                      zeros(T, d.nx, d.ny, d.nz + 1))
+end
+
+# Fold batch `bt` into the solve's tally `t`: its batch sums into the
+# totals and squared totals (as `flush_batch!` does at the end of a serial
+# batch), the plain accumulators added. Called for the batches in
+# ascending order, so the result does not depend on which thread traced
+# which batch.
+function _merge_batch!(t::MCTally{T}, bt::MCTally{T}) where {T}
+    for (a, b) in ((t.absorbed, bt.absorbed), (t.sfc_dir, bt.sfc_dir), (t.sfc_dif, bt.sfc_dif),
+                   (t.sfc_abs, bt.sfc_abs), (t.scal, bt.scal))
+        @inbounds for i in eachindex(a.total)
+            x = b.batch[i]
+            a.total[i] += x
+            a.totalsq[i] += x * x
+        end
+    end
+    t.solid_inc .+= bt.solid_inc
+    t.solid_abs .+= bt.solid_abs
+    t.fup .+= bt.fup
+    t.fdn .+= bt.fdn
+    t.fdir .+= bt.fdir
+    return t
 end
 
 function flush_tally!(t::MCTally)
@@ -1362,7 +1404,8 @@ end
 # =========================================================================
 
 """
-    mc_solve(medium, solver; rng, sun_dir, solar_flux = 1.0) -> MCResult
+    mc_solve(medium, solver; seed | rng, stream = 0, sun_dir, solar_flux = 1.0,
+             backend = default_backend()) -> MCResult
 
 Run the Monte-Carlo solve. `sun_dir` points **toward** the sun in the
 east-north-up frame (anything [`mc_sun_direction`](@ref) accepts, including
@@ -1370,8 +1413,15 @@ a `SolarPosition` or a bare `μ₀`); `solar_flux` is the beam-normal
 irradiance `F₀`, so the horizontal irradiance at the top of the domain is
 `F₀μ₀`.
 
-`rng` is required to be explicit so that a seeded `MersenneTwister` makes
-the whole solve bit-for-bit reproducible.
+**Random streams** (KA-n, #305). Every photon draws from its own
+counter-based stream ([`Aeolus.Backends.counter_rng`](@ref)) keyed by
+`(seed, stream, photon index)`: `seed` directly, or one `UInt64` drawn from
+`rng` (so a seeded `MersenneTwister` still makes the solve reproducible;
+one of the two is required). The batches are the work items of a launch on
+`backend`, each tallying into its own buffer, merged in batch order: the
+result is bit-identical at every thread count. `stream` separates solves
+that share a seed (the g-points of `solve_rt!`). The solver can use at most
+`nbatch` threads.
 
 Photons are launched from the top face, one per stratum of a jittered grid
 when `solver.stratify` is set. Each carries unit weight; the physical
@@ -1379,61 +1429,89 @@ energy a unit of weight represents is `F₀μ₀·A/N`, which is how the tallies
 become absolute fluxes at the end.
 """
 function mc_solve(med::MCMedium{T}, solver::MonteCarloSolver{T};
-                  rng::AbstractRNG,
+                  rng::Union{Nothing,AbstractRNG} = nothing,
+                  seed::Union{Nothing,Integer} = nothing,
+                  stream::Integer = 0,
                   sun_dir,
-                  solar_flux::Real = one(T)) where {T}
+                  solar_flux::Real = one(T),
+                  backend::AbstractBackend = default_backend()) where {T}
+    key = _mc_key(rng, seed, "mc_solve")
     d = med.domain
     sd = mc_sun_direction(sun_dir)
     sx, sy, sz = T(sd[1]), T(sd[2]), T(sd[3])
     sz > 0 || error("mc_solve: the sun must be above the horizon (up-component > 0)")
     μ₀ = sz
-    # photons travel *away* from the sun
-    ux0 = -sx; uy0 = -sy; uz0 = -sz
 
     nb = solver.nbatch
     per = solver.nphoton ÷ nb
     nview = length(solver.view_dirs)
+
+    # One work item per batch, each with its own tally buffer and the photon
+    # streams (key, stream, photon index); the buffers are merged in batch
+    # order. A photon's walk depends only on its own stream, so the solve is
+    # identical at every thread count.
+    tals = [_batch_tally(T, d, nview) for _ in 1:nb]
+    launch_weighted!(backend, per * d.nz, _mc_batch!, (1:nb,), tals, med, solver,
+                     key, stream, per, sx, sy, sz)
     tal = MCTally(T, d, nview)
-
-    Lx = d.nx * d.dx; Ly = d.ny * d.dy
-    ztop = domain_top(d)
-    ncell = d.nx * d.ny
-    slant = (ztop - d.z0) / μ₀      # horizontal run of the beam over the depth
-    pidx = 0
-
-    for _ in 1:nb
-        for _ in 1:per
-            if solver.stratify
-                # Stratify where the unattenuated beam would *land*, not
-                # where it enters. The map from the entry point to the
-                # ground intercept is a rigid translation modulo the
-                # periodic box, hence measure preserving: entry points stay
-                # uniform over the top face, but the direct-beam surface
-                # irradiance map gets exactly one sample per cell per pass
-                # instead of a Poisson-distributed number of them.
-                q = pidx % ncell
-                i0 = q % d.nx
-                j0 = q ÷ d.nx
-                xg = d.x0 + (i0 + rand(rng, T)) * d.dx
-                yg = d.y0 + (j0 + rand(rng, T)) * d.dy
-                x = _wrap(xg + sx * slant, d.x0, Lx)
-                y = _wrap(yg + sy * slant, d.y0, Ly)
-            else
-                x = d.x0 + rand(rng, T) * Lx
-                y = d.y0 + rand(rng, T) * Ly
-            end
-            pidx += 1
-            # incoming beam crosses the model top
-            ii = min(max(floor(Int, (x - d.x0) / d.dx) + 1, 1), d.nx)
-            jj = min(max(floor(Int, (y - d.y0) / d.dy) + 1, 1), d.ny)
-            tal.fdn[ii, jj, d.nz + 1] += one(T)
-            tal.fdir[ii, jj, d.nz + 1] += one(T)
-            _trace_photon!(tal, med, solver, x, y, ztop, ux0, uy0, uz0, rng)
-        end
-        flush_tally!(tal)
+    for b in 1:nb
+        _merge_batch!(tal, tals[b])
     end
 
     return _finalise(tal, med, solver, T(solar_flux), μ₀, (sx, sy, sz), nb, per)
+end
+
+# The 64-bit key of a solve's photon streams: `seed`, else one draw from
+# `rng` (outside any threaded region; a seeded generator gives a
+# reproducible key).
+function _mc_key(rng, seed, name)
+    seed !== nothing && return seed % UInt64
+    rng !== nothing && return rand(rng, UInt64)
+    throw(ArgumentError("$name: pass `seed` (an integer) or `rng` (a seeded generator); " *
+                        "the photon streams are keyed by it"))
+end
+
+# Batch b: photons (b−1)·per … b·per − 1, traced into the batch's buffer.
+function _mc_batch!(b, tals, med::MCMedium{T}, solver, key, stream, per,
+                    sx::T, sy::T, sz::T) where {T}
+    tal = tals[b]
+    d = med.domain
+    ux0 = -sx; uy0 = -sy; uz0 = -sz        # photons travel *away* from the sun
+    Lx = d.nx * d.dx; Ly = d.ny * d.dy
+    ztop = domain_top(d)
+    ncell = d.nx * d.ny
+    slant = (ztop - d.z0) / sz             # horizontal run of the beam over the depth
+    rng = counter_rng(key, stream, 0)
+    for p in 1:per
+        pidx = (b - 1) * per + p - 1
+        set_stream!(rng, stream, pidx)
+        if solver.stratify
+            # Stratify where the unattenuated beam would *land*, not
+            # where it enters. The map from the entry point to the
+            # ground intercept is a rigid translation modulo the
+            # periodic box, hence measure preserving: entry points stay
+            # uniform over the top face, but the direct-beam surface
+            # irradiance map gets exactly one sample per cell per pass
+            # instead of a Poisson-distributed number of them.
+            q = pidx % ncell
+            i0 = q % d.nx
+            j0 = q ÷ d.nx
+            xg = d.x0 + (i0 + rand(rng, T)) * d.dx
+            yg = d.y0 + (j0 + rand(rng, T)) * d.dy
+            x = _wrap(xg + sx * slant, d.x0, Lx)
+            y = _wrap(yg + sy * slant, d.y0, Ly)
+        else
+            x = d.x0 + rand(rng, T) * Lx
+            y = d.y0 + rand(rng, T) * Ly
+        end
+        # incoming beam crosses the model top
+        ii = min(max(floor(Int, (x - d.x0) / d.dx) + 1, 1), d.nx)
+        jj = min(max(floor(Int, (y - d.y0) / d.dy) + 1, 1), d.ny)
+        tal.fdn[ii, jj, d.nz + 1] += one(T)
+        tal.fdir[ii, jj, d.nz + 1] += one(T)
+        _trace_photon!(tal, med, solver, x, y, ztop, ux0, uy0, uz0, rng)
+    end
+    return nothing
 end
 
 function _finalise(tal::MCTally{T}, med::MCMedium{T}, solver::MonteCarloSolver{T},
@@ -1499,7 +1577,8 @@ end
 
 """
     solve_rt!(fluxes, solver::MonteCarloSolver, optics, col::AtmosphericColumn;
-              rng, μ₀ = 1.0, sun_dir = nothing, sfc_albedo = 0.0, kwargs...)
+              seed | rng, μ₀ = 1.0, sun_dir = nothing, sfc_albedo = 0.0,
+              backend = default_backend(), kwargs...)
 
 `AbstractRTSolver` interface, column form. The column's layer thicknesses
 `col.dz` must be uniform — the photon grid is a Cartesian voxel mesh — and
@@ -1508,9 +1587,13 @@ which is exactly the plane-parallel problem the two-stream solver treats.
 
 The solve is run once per g-point with a non-zero solar source and the
 broadband level fluxes are accumulated into `fluxes`, so the output is
-directly comparable with `TwoStream.solve_sw!` on the same optics.
+directly comparable with `TwoStream.solve_sw!` on the same optics. The
+g-point `g` traces the photon streams `(key, g, photon)` of
+[`mc_solve`](@ref); the key is `seed`, one draw from `rng`, or 0 when
+neither is given, so every call is reproducible (KA-n, #305: there is no
+global random stream).
 
-    solve_rt!(fluxes, solver, optics, domain::MCDomain; rng, kwargs...)
+    solve_rt!(fluxes, solver, optics, domain::MCDomain; seed | rng, kwargs...)
 
 3-D form: `optics` is `(nx, ny, nz, ngpt)` (or a column profile replicated
 across the domain) and `fluxes` has shape `(nx, ny, nz+1)`.
@@ -1530,7 +1613,9 @@ end
 
 function solve_rt!(fluxes::RadiativeFluxes{T}, solver::MonteCarloSolver{T},
                    optics::OpticalProperties{T}, dom::MCDomain{T};
-                   rng::AbstractRNG = Random.default_rng(),
+                   rng::Union{Nothing,AbstractRNG} = nothing,
+                   seed::Union{Nothing,Integer} = nothing,
+                   backend::AbstractBackend = default_backend(),
                    μ₀::Real = 1.0,
                    sun_dir = nothing,
                    sfc_albedo = zero(T),
@@ -1548,6 +1633,9 @@ function solve_rt!(fluxes::RadiativeFluxes{T}, solver::MonteCarloSolver{T},
               "the two-stream solver's job")
 
     sd = sun_dir === nothing ? mc_sun_direction(μ₀) : mc_sun_direction(sun_dir)
+    # one key for the call, one stream per g-point; the default seed 0 makes
+    # a call without `rng` / `seed` reproducible (no global generator)
+    key = (rng === nothing && seed === nothing) ? UInt64(0) : _mc_key(rng, seed, "solve_rt!")
 
     fill!(fluxes.flux_up, 0); fill!(fluxes.flux_dn, 0)
     fill!(fluxes.flux_dn_dir, 0)
@@ -1562,7 +1650,8 @@ function solve_rt!(fluxes::RadiativeFluxes{T}, solver::MonteCarloSolver{T},
             med = medium_from_optics(dom, optics, g; sfc_albedo = α,
                                      solid = solid, solid_albedo = solid_albedo,
                                      phase = phase)
-            res = mc_solve(med, solver; rng = rng, sun_dir = sd, solar_flux = F0)
+            res = mc_solve(med, solver; seed = key, stream = g, sun_dir = sd, solar_flux = F0,
+                           backend = backend)
             if is3d
                 @inbounds for kl in 1:dom.nz+1, jj in 1:dom.ny, ii in 1:dom.nx
                     fluxes.flux_up[ii, jj, kl]     += res.flux_up[ii, jj, kl]

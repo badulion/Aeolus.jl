@@ -669,6 +669,7 @@ using Aeolus.Fields: set!, interior_view
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
+    include("ka_radiation.jl")   # KA-n (#305): radiosity LU cache / threaded VF / gather, multi-column two-stream, counter RNG
 
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin
         for N in (2, 3, 4, 6, 8)

@@ -79,6 +79,8 @@ module Superdroplet
 #    Precipitation*, 2nd ed. Kluwer.
 
 using Random: AbstractRNG, MersenneTwister, shuffle!, rand
+using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!, counter_rng,
+                  counter_xoshiro
 
 # MoistThermodynamics is the Era IV contract (Phase 39): saturation vapour
 # pressure, latent heats and the thermodynamic constants all come from
@@ -569,6 +571,11 @@ sampling noise (it is a quasi-Monte-Carlo variance reduction, not a change
 of distribution) and is useful when one wants the deterministic part of
 the coalescence error rather than the sampling part; the convergence study
 uses `stratified = false` so that the `N^(-1/2)` law is actually visible.
+
+**Random streams** (KA-n, #305). One `UInt64` is drawn from `rng`; droplet
+`i` then takes its deviate from the counter-based stream `(key, 0, i)`
+([`Aeolus.Backends.counter_rng`](@ref)), in a launch on `backend`, so the
+population does not depend on the thread count.
 """
 function init_exponential_superdroplets(rng::AbstractRNG, N_sd::Integer,
                                         n0::Real, r_mean::Real, volume::Real;
@@ -576,21 +583,32 @@ function init_exponential_superdroplets(rng::AbstractRNG, N_sd::Integer,
                                         solute_mass::Real = 0.0,
                                         stratified::Bool = false,
                                         ρ_water::Real = DEFAULT_MICRO.ρ_water,
-                                        T::Type{<:AbstractFloat} = Float64)
+                                        T::Type{<:AbstractFloat} = Float64,
+                                        backend::AbstractBackend = default_backend())
     N_sd > 0 || throw(ArgumentError("init_exponential_superdroplets: N_sd must be > 0"))
     sd = SuperdropletSet(T; aerosol = aerosol)
     x̄ = (4π / 3) * float(ρ_water) * float(r_mean)^3     # mean droplet mass, kg
     ξ = round(Int, float(n0) * float(volume) / N_sd)
     ξ >= 1 || throw(ArgumentError("init_exponential_superdroplets: n0·volume/N_sd < 1; " *
                                   "increase the volume or reduce N_sd"))
+    # droplet i draws from the counter-based stream (key, 0, i) (KA-n, #305)
+    key = rand(rng, UInt64)
+    radii = Vector{Float64}(undef, N_sd)
+    launch!(backend, _exponential_radius!, (1:Int(N_sd),), radii, key, Int(N_sd), x̄,
+            float(ρ_water), stratified)
     for i in 1:N_sd
-        u = stratified ? (i - rand(rng)) / N_sd : rand(rng)
-        u = min(max(u, 1e-16), 1 - 1e-16)
-        x = -x̄ * log(u)                                  # inverse CDF
-        r = cbrt(3 * x / (4π * float(ρ_water)))
-        add_superdroplet!(sd; ξ = ξ, radius = r, solute_mass = solute_mass, cell = 1)
+        add_superdroplet!(sd; ξ = ξ, radius = radii[i], solute_mass = solute_mass, cell = 1)
     end
     return sd
+end
+
+@inline function _exponential_radius!(i, radii, key, N_sd, x̄, ρw, stratified)
+    r = counter_rng(key, 0, i)
+    u = stratified ? (i - rand(r)) / N_sd : rand(r)
+    u = min(max(u, 1e-16), 1 - 1e-16)
+    x = -x̄ * log(u)                                  # inverse CDF
+    @inbounds radii[i] = cbrt(3 * x / (4π * ρw))
+    return nothing
 end
 
 """
@@ -1044,7 +1062,8 @@ superdroplets listed in `indices`, assumed to share a well-mixed air
  2. Scale each probability by `N(N-1)/2 / L` (see
     [`coalescence_probability`](@ref)).
  3. Draw the number of coalescences for the pair:
-    `γ = ⌊p⌋ + (rand() < p - ⌊p⌋ ? 1 : 0)`, then cap it at
+    `γ = ⌊p⌋ + (ϕ < p - ⌊p⌋ ? 1 : 0)` with `ϕ = rand(rng)` uniform on
+    `[0, 1)` from the cell's own stream, then cap it at
     `⌊ξ_j/ξ_k⌋` with `ξ_j ≥ ξ_k` — one event can consume at most as many
     droplets as the smaller-multiplicity particle has partners for.
  4. Apply the multiplicity update:
@@ -1147,7 +1166,7 @@ end
 
 """
     collision_coalescence!(rng, sd, kernel, dt, cell_volumes;
-                           ncells = length(cell_volumes), sweep = true)
+                           sweep = true, backend = default_backend())
         -> (ncollisions, nevents)
 
 Multi-cell driver: bucket the superdroplets by `sd.cell` and run one
@@ -1161,24 +1180,46 @@ only if the superdroplet count per cell stays adequate, which is the usual
 practical constraint (~30-100 per cell).
 
 With `sweep = true` zero-multiplicity particles are removed afterwards.
+
+**Random streams** (KA-n, #305). One `UInt64` key is drawn from `rng` per
+call (so a seeded `rng` gives a reproducible run, one key per step); cell
+`ci` runs its [`coalescence_step!`](@ref) on its own generator,
+[`Aeolus.Backends.counter_xoshiro`](@ref)`(key, 0, ci)` (a Xoshiro seeded
+from the counter-based stream `(key, 0, ci)`: a cell draws a few hundred
+numbers, where Philox would cost 1.3× the old loop), as one work item of a
+launch over the cells on `backend`.
+The cells share no generator, and the collisions are identical at every
+thread count.
 """
 function collision_coalescence!(rng::AbstractRNG, sd::SuperdropletSet,
                                 kernel::CollisionKernel, dt::Real,
                                 cell_volumes::AbstractVector{<:Real};
                                 sweep::Bool = true,
-                                m::MicrophysicalConstants = DEFAULT_MICRO)
+                                m::MicrophysicalConstants = DEFAULT_MICRO,
+                                backend::AbstractBackend = default_backend())
     ncells = length(cell_volumes)
     buckets = cell_populations(sd, ncells)
-    ncoll = 0; nevent = 0
-    for ci in 1:ncells
-        idx = buckets[ci]
-        length(idx) < 2 && continue
-        nc, ne = coalescence_step!(rng, sd, kernel, dt, cell_volumes[ci];
-                                   indices = idx, m = m)
-        ncoll += nc; nevent += ne
-    end
+    # One key per call; cell ci shuffles and draws from its own generator,
+    # seeded from the counter stream (key, 0, ci)
+    # in its own work item (KA-n, #305). A cell's superdroplets are touched
+    # by its item only, so the result does not depend on the thread count.
+    key = rand(rng, UInt64)
+    nc = zeros(Int, ncells); ne = zeros(Int, ncells)
+    per_cell = max(1, length(sd.ξ) ÷ max(ncells, 1))
+    launch_weighted!(backend, per_cell, _coalesce_cell!, (1:ncells,), nc, ne, buckets, key,
+                     sd, kernel, dt, cell_volumes, m)
     sweep && compact!(sd)
-    return (ncoll, nevent)
+    return (sum(nc), sum(ne))
+end
+
+function _coalesce_cell!(ci, nc, ne, buckets, key, sd, kernel, dt, cell_volumes, m)
+    idx = buckets[ci]
+    length(idx) < 2 && return nothing
+    c, e = coalescence_step!(counter_xoshiro(key, 0, ci), sd, kernel, dt, cell_volumes[ci];
+                             indices = idx, m = m)
+    @inbounds nc[ci] = c
+    @inbounds ne[ci] = e
+    return nothing
 end
 
 # =========================================================================
