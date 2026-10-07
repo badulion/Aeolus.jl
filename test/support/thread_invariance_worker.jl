@@ -178,7 +178,7 @@ function section_reductions()
     record!("reductions/sgs_stress_dissipation", O.sgs_stress_dissipation(sim.u, sim.v, sim.w, sim.νt))
     record!("reductions/max_advective_rate", TI._max_advective_rate(sim.u.data, sim.v.data, sim.w.data, mesh))
     record!("reductions/brunt_vaisala", TI._brunt_vaisala(sim))
-    record!("reductions/max_speed", TI._max_speed(sim))
+    record!("reductions/max_speed", TI.step_guard(sim).speed)   # KA-j: the speed cap of the fused guard
     record!("reductions/all_finite", TI._all_finite(sim))
     # plane_reduce!: a tuple body and a fused write
     I3 = interior(mesh)
