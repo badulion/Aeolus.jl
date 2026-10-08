@@ -56,10 +56,13 @@
 # solver's work arrays dropped before the statistics (≈ 500 B per cell).
 # Measured (test/fixtures/dns256_apriori.toml, regenerated after #205 on
 # 2026-10-05, #235): 1264 steps to t = 3.85 (ε peak at t = 3.60),
-# wall_s = 5671 s = 1.58 h of DNS on one core (the solver is
+# wall_s = 5671 s = 1.58 h of DNS on one core (the solver was then
 # single-threaded) plus 195 s of statistics; max RSS 9.81 GB as printed
 # by this script, not stored in the TOML. The pre-#205 record took
 # 7397 s (2.05 h) and 9.9 GB for the same 1264 steps on a busier machine.
+# Re-captured after #400 (2026-10-08; the history reductions threaded,
+# docs/src/theory/les_filtering.md): `julia -t 12`, 1975 s of DNS
+# (1.56 s/step) plus 174 s of statistics, max RSS 8.53 GB.
 #
 # Checkpoints: every 30 min of wall clock ([checkpoint] of dns256.toml);
 # an interrupted run (killed job, reboot) resumes bit for bit with
