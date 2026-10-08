@@ -234,9 +234,32 @@ that stops after a prefetch has its parent one window ahead. The Berlin
 case prefetches only under `run_case!`, which knows the run's end
 ([berlin_nesting.md](../design/berlin_nesting.md)).
 
-**Measured** (the Berlin flagship, `CaseConfig(:summer)`, 64 × 64 × 64
-child in its 192 × 192 × 53 parent): see the SC-c section of the KA port
-design page.
+**Measured** on the Berlin flagship (`CaseConfig(:summer)`: 64 × 64 × 64
+child in its 192 × 192 × 53 parent, one parent window of 280–310 ms at 4–24
+threads per nine child steps), `benchmarks/bench_ka_scaling.jl flagship`
+(2 warm-up and 9 timed steps; `AEOLUS_BENCH_PREFETCH=1` starts the
+parent's next window after the warm-up, so the timed steps hold one
+parent window in both modes): `step_case!`, mean ms per step, minimum
+over three processes each started at a 1-minute load below 4 (other
+agents' jobs ran alongside, so single processes scattered by up to 50 %).
+
+| threads | sequential | parent prefetched | gain | speed-up over 1 thread |
+| --: | --: | --: | --: | :-- |
+| 1 | 159.6 | (sequential: one thread has nothing to overlap) | | 1 |
+| 4 | 96.8 | 79.2 | 1.22× | 1.65× → 2.02× |
+| 12 | 95.2 | 69.8 | 1.36× | 1.68× → 2.29× |
+| 24 | 97.5 | 83.6 | 1.17× | 1.64× → 1.91× |
+
+The parent's 35 ms per step (`nest_parent`) drops to 1.6 ms (opening the
+window from the prefetched step); the child's steps run 7–9 ms slower
+while the parent's task shares the threads with them (12 threads:
+`transport` 25.1 → 27.4 ms, `dynamics` 21.3 → 25.4 ms per step): of the
+parent's 35–36 ms per step, 25 ms (72 %) are hidden at 12 threads, 18 ms
+(48 %) at 4 and 14 ms (39 %) at 24. An explicit split of the
+threads — a scoped task budget for the parent's launches of 2, 4 or 6 of
+12 threads — made the parent's step about ten times slower (the child
+waited 2.7–3.1 s per window for it) and was dropped: the two tasks share
+Julia's thread pool.
 
 A child tracer the parent does not carry (in Berlin: ql, qr, the chemistry
 species) still needs a face condition: its plane is added after the core

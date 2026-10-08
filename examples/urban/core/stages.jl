@@ -251,6 +251,13 @@ it (`monitored_step!`: the diagnostics row with the step's dt, its
 [`step_limiter`](@ref) and retries, the progress line, the blowup guard);
 `callback(case, n)` is called after step `n`.
 
+The loop sets the run's horizon on the clock (`t_stop`, `stop_margin`)
+and calls every coupling's [`end_run!`](@ref) after it. With it a
+one-way nest steps the parent's next window on its own task while the
+child steps (SC-c, #403): between steps the nest parent may be busy, so
+a `callback` must not read it (the child is the case's own); after
+`run_case!` returns it is free.
+
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
 `:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
 each step takes `step_dt(case)`, the last one shortened to land on it.
