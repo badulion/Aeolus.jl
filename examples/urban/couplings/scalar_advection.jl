@@ -338,21 +338,19 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
     sim, mesh = case.sim, case.mesh
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
-    if c.refresh_halos
-        fill_halos!(sim.u, sim.bcs)
-        fill_halos!(sim.v, sim.bcs)
-        fill_halos!(sim.w, sim.bcs)
-    end
+    c.refresh_halos && fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     c.dW[] = 0.0; c.dWρ[] = 0.0; c.dWb[] = 0.0
     d = c.diffusion
     d === nothing || (d.dW[] = 0.0; d.dWρ[] = 0.0; d.resid[] = 0.0)
     wt = c.weighted
     u, v, w = wt === nothing ? (sim.u, sim.v, sim.w) :
                                (mass_flux_velocity!(wt, sim); (wt.U, wt.V, wt.Wv))
+    # every advected tracer's halos at once (a tracer's update below touches
+    # only its own field, so a halo filled now is the halo it had before)
+    fill_halos!(advected_fields(case), c.bcs)
     for t in case.tracers
         t.advect || continue
         q = t.field
-        fill_halos!(q, c.bcs)
         iswater = t.name in case.ledger.water_tracers
         limited = t.positive && c.positivity
         fill!(c.tend.data, 0)

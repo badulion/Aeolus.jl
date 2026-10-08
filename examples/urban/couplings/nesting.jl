@@ -310,7 +310,7 @@ function ensure_nest!(c::NestingCoupling, case)
         # a boundary-data driver in place of the parent (the #58 interface)
         set_boundary_data!(sim.bcs, c.driver)
         prepare_open_boundaries!(sim)
-        foreach(f -> fill_halos!(f, sim.bcs), (sim.u, sim.v, sim.w)); fill_halos!(sim.θ, sim.θ_bcs)
+        fill_halos!((sim.u, sim.v, sim.w, sim.θ), (sim.bcs, sim.bcs, sim.bcs, sim.θ_bcs))
         c.run = c.driver
         st = sim.sponge_target
         if st.u isa AbstractVector && c.driver isa ProfileBoundaryData
@@ -464,8 +464,7 @@ end
 function _fill_offline_halos!(c::NestingCoupling, case)
     sim = case.sim
     update_open_boundaries!(sim, sim.t, zero(sim.t))
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)
+    fill_halos!((sim.u, sim.v, sim.w, sim.θ), (sim.bcs, sim.bcs, sim.bcs, sim.θ_bcs))
     foreach(f -> fill_halos!(f, sim.θ_bcs), c.set)
     return c
 end

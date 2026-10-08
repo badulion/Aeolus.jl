@@ -555,8 +555,7 @@ substep; a caller that drives the child itself
 """
 subcycle_dt(R::Real, lim::Real) = R / _nsub(R, lim)
 
-_advective_rate(sim) = (fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs);
-                        fill_halos!(sim.w, sim.bcs);
+_advective_rate(sim) = (fill_halos!((sim.u, sim.v, sim.w), sim.bcs);
                         _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, sim.mesh))
 
 # =========================================================================

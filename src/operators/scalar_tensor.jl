@@ -54,7 +54,7 @@ Fill the halos of the six components of `K` with `bcs` (the boundary
 conditions of the cell-centred eddy coefficients).
 """
 function BoundaryConditions.fill_halos!(K::DiffusivityTensor, bcs)
-    foreach(c -> fill_halos!(c, bcs), _components(K))
+    fill_halos!(_components(K), bcs)          # one set (SC-b, #402)
     return K
 end
 

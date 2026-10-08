@@ -55,7 +55,7 @@ using ..Operators: divergence, laplacian, ∂x, ∂y, ∂z,
                    sgs_explicit_stress
 using ..PressureSolvers: solve!
 using ..Simulations
-using ..Simulations: BoussinesqSimulation, max_divergence,
+using ..Simulations: BoussinesqSimulation, fill_state_halos!, max_divergence,
                      _dzc, _dzf, _dz_min,     # vertical metrics, stretched-aware (#151)
                      _project_velocity!,      # the projection (steps 8–10 of step!)
                      axpy!, pressure_from_potential!, copy_storage!, storage_like,
@@ -288,9 +288,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     INF = T(Inf)
     t_cfl = time_ns()
 
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
 
     # --- the SGS coefficients the step will use ---------------------------
     closure = _active_sgs(sim, sgs, nothing)
@@ -679,9 +677,7 @@ exact); any NaN or Inf in the velocities also makes them NaN or Inf.
 Thread-invariant.
 """
 function step_guard(sim::BoussinesqSimulation{T}) where {T}
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     m = sim.mesh
     qd = sim.has_moisture ? sim.qv.data : nothing
     fin, d, s = range_max(Backends.backend(sim.u.data), _guard_at, interior(m), sim.u.data,
@@ -1527,11 +1523,7 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
                                momentum_advection = momentum_advect!,
                                sgs_transpose = nothing,
                                scalar_tensor = nothing) where {T}
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
+    fill_state_halos!(sim)
 
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
@@ -1594,11 +1586,7 @@ function _freeze_viscosity!(sim::BoussinesqSimulation{T}, ws::IMEXWorkspace{T},
         throw(ArgumentError("step_imex!: the SGS closure $(nameof(typeof(closure))) has its own " *
                             "momentum stress (sgs_explicit_stress), which the implicit eddy-viscosity " *
                             "operator cannot represent; use step! or step_rk3!"))
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)                      # θ-aware closures
-    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
+    fill_state_halos!(sim)                             # θ-aware closures
     t_sgs = time_ns()
     f = compute_sgs!(closure, sim)
     sim.workspaces.rec.wall_sgs += _wall(t_sgs)
@@ -1887,9 +1875,7 @@ function _step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
     sim.t = t0 + γ * Δt
 
     # ---- I(U₁) = ∇·(ν∇U₁) on the projected stage value -------------------
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
+    fill_state_halos!(sim)
     for name in names
         _diffusion!(_diffusion_buffer(sim, ws, name), getfield(sim, name),
                     _coef_for(νm, νs, name), m)

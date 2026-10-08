@@ -2480,6 +2480,355 @@ julia -t 4  --project=. benchmarks/bench_ka_scaling.jl launches 2 9
 Each mode prints readable lines and `ROW <mode> <threads> <name> <value>
 <unit>` lines for collecting the table. The DNS needs about 8 GB.
 
+## SC-a: roofline profile and thread pinning (#401)
+
+Where the time of the flagship step and of the 256³ DNS step goes, kernel
+by kernel, against the machine's memory bandwidth, and whether pinning
+the threads helps. Script: `benchmarks/bench_roofline.jl`; the same
+machine as KA-o (Ryzen 9 7900: 12 cores in two CCDs of 6, 32 MB of L3
+per CCD, 24 hardware threads; dual-channel DDR5), Julia 1.13.1, master of
+2026-10-08. Most runs were taken on the branch point before #400 and
+#392 merged; neither changed `src/`, and the Berlin example changed only
+in the `dt` check of #392, which `step_case!(case)` does not take. The
+`dns_step!` row, whose history #400 rewrote, was re-measured after the
+merge (its `step_rk3!` came out within 3 % of the earlier runs). Every
+run started with the 1-minute load below 4 and at least 12 GB free;
+every figure is the minimum over three or four processes.
+
+**How it is measured.** The script replaces Backends' three launch paths
+(`_launch!`, `_plane_partials!`, `_serial_column_sum`) by copies that time
+each call and book it under the kernel body's name, so every launch of
+the step is seen, with no change to `src/`. Per kernel it records calls
+per step, whether they ran serially (below the backend's threshold), µs
+per call, and the compulsory bytes: every distinct numeric array the body
+reaches, counted once, capped at the launch's points. That is a lower
+bound on the traffic (an axpy counts 2 arrays where STREAM's triad counts
+3). In the same process it measures STREAM copy and triad on 256 MB
+arrays (DRAM) and on 8 MB arrays (L3), and the empty threaded launch.
+Launches over 10⁶ points (the nest parent's 192 × 192 × 53 fields, the
+DNS) are booked apart, as `[≥1M]`. The profiled step runs 0-15 % above
+the plain step even with the profiler's own time taken out (it evicts
+cache), so the step times below are those of plain runs
+(`ROOFLINE_PROF=0`) and the in-launch times those of profiled runs.
+
+**Classes.** *Serial*: ran below the threshold. *Bandwidth*: its bytes at
+the DRAM triad bandwidth take at least half its time, so only moving
+fewer bytes helps. *Compute*: its one-thread time over 12 threads takes
+at least half. *Overhead*: neither, so launch, synchronisation or
+imbalance dominates. "Excess" is the time per call that neither bound
+explains. The roof is DRAM for the 64³ child too: its fields would fit in
+L3, but between two uses of a field the step touches more than L3 holds,
+and its threaded launches move their compulsory bytes at 53 GB/s in all
+(1.32 GB in 24.8 ms per step), 1.35× the DRAM triad and 9 % of the L3
+triad (573-587 GB/s).
+
+### Machine
+
+| at 1 / 4 / 12 / 24 threads | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| STREAM triad, DRAM (GB/s) | 34.9 | 41.3 | 39.7 | 39.0 |
+| STREAM triad, L3 (GB/s) | 114 | 444 | 587 | 179 |
+| empty threaded launch (µs) | (serial) | 1.33 | 1.34 | 1.33 |
+
+One thread gets 88 % of the DRAM bandwidth that twelve get, and four
+threads saturate it. A kernel that streams from DRAM can therefore gain
+little more than 1.2× from threads, however it is launched. (The L3
+triad falls at 24 threads, where two threads share each core.)
+
+### Where the step goes
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| flagship `step_case!`, ms/step (mean of 9) | 158.8 | 92.8 (1.71×) | 87.5 (1.81×) | 95.5 (1.66×) |
+| in launches | 143.5 | 67.5 | 60.4 | 66.6 |
+| outside launches (FFTW, serial code, allocation) | 15.3 | 25.3 | 27.1 | 28.9 |
+| 256³ DNS `step_rk3!`, ms/step | 2105 | 1211 (1.74×) | 1145 (1.84×) | 1181 (1.78×) |
+| in launches | 1114 | 811 | 858 | 928 |
+| outside launches (FFTW: three Poisson solves) | 992 | 401 | 287 | 252 |
+| 256³ DNS `dns_step!` (step + #400's history), ms/step | 2163 | 1300 (1.66×) | 1238 (1.75×) | 1267 (1.71×) |
+
+In launches at 12 threads, by class (ms/step and share of the in-launch
+time):
+
+| class | flagship | 256³ DNS |
+| :-- | --: | --: |
+| bandwidth | 40.5 (68 %, 93 kernels) | 837.7 (98 %, 15 kernels) |
+| serial | 14.5 (24 %, 20 kernels) | — |
+| compute | 2.9 (5 %, 3 kernels) | — |
+| overhead | 1.8 (3 %, 4 kernels) | 20.0 (2 %, 2 kernels) |
+
+By size, at 12 threads: the flagship's launches over 10⁶ points (the
+parent) move 0.77 GB/step at 37.6 GB/s, 95 % of the DRAM triad; the
+DNS's move 28.3 GB/step at 33.8 GB/s, 86 %. At one thread the same
+launches run at 62 % (flagship parent) and 78 % (DNS) of the 12-thread
+DRAM triad, which is why threads give them 1.0-1.8×.
+
+### The roofline table: 256³ DNS, 12 threads
+
+All 17 kernels. MB/call is the compulsory model; a 256³ field is 134 MB.
+
+| kernel | calls/step | MB/call | µs/call 1 t | µs/call 12 t | speed-up | % DRAM triad | excess µs | class | ms/step 12 t |
+| :-- | --: | --: | --: | --: | --: | --: | --: | :-- | --: |
+| `map:_Axpy[≥1M]` | 33 | 268.44 | 8473.6 | 7919.0 | 1.07× | 86 % | 1118 | bandwidth | 261.328 |
+| `_b_laplacian![≥1M]` | 12 | 268.44 | 13753.2 | 8426.1 | 1.63× | 81 % | 1625 | bandwidth | 101.113 |
+| `map:_Lin2r[≥1M]` | 8 | 287.76 | 8569.3 | 8495.0 | 1.01× | 86 % | 1204 | bandwidth | 67.960 |
+| `_b_advect_centered![≥1M]` | 3 | 671.09 | 27677.4 | 18551.3 | 1.49× | 92 % | 1548 | bandwidth | 55.654 |
+| `_b_momentum_w![≥1M]` | 3 | 536.87 | 27474.3 | 16881.2 | 1.63× | 81 % | 3279 | bandwidth | 50.644 |
+| `_b_momentum_u![≥1M]` | 3 | 536.87 | 25984.1 | 16167.2 | 1.61× | 84 % | 2565 | bandwidth | 48.502 |
+| `_b_momentum_v![≥1M]` | 3 | 536.87 | 27289.0 | 15391.3 | 1.77× | 88 % | 1789 | bandwidth | 46.174 |
+| `_b_divergence![≥1M]` | 3 | 536.87 | 16326.9 | 14297.2 | 1.14× | 95 % | 695 | bandwidth | 42.892 |
+| `_b_∂z_cf![≥1M]` | 3 | 268.44 | 10080.2 | 8657.7 | 1.16× | 79 % | 1856 | bandwidth | 25.973 |
+| `_copy_out_body![≥1M]` | 3 | 268.44 | 9875.5 | 8147.2 | 1.21× | 83 % | 1346 | bandwidth | 24.442 |
+| `map:_DivBy[≥1M]` | 3 | 268.44 | 8701.6 | 7992.8 | 1.09× | 85 % | 1192 | bandwidth | 23.979 |
+| `_b_∂y_cf![≥1M]` | 3 | 268.44 | 9480.1 | 7961.7 | 1.19× | 85 % | 1160 | bandwidth | 23.885 |
+| `_b_∂x_cf![≥1M]` | 3 | 268.44 | 8614.0 | 7956.3 | 1.08× | 85 % | 1155 | bandwidth | 23.869 |
+| `_copy_in_body![≥1M]` | 3 | 268.44 | 8993.5 | 7413.6 | 1.21× | 92 % | 612 | bandwidth | 22.241 |
+| `_scale_by_body![≥1M]` | 3 | 202.90 | 8773.3 | 6331.4 | 1.39× | 81 % | 1191 | bandwidth | 18.994 |
+| `_xpencil!` | 24 | 0.55 | 710.5 | 423.9 | 1.68× | 3 % | 365 | overhead | 10.174 |
+| `_periodic_body!` | 48 | 1.65 | 249.0 | 204.8 | 1.22× | 20 % | 163 | overhead | 9.831 |
+
+The DNS step is a sequence of full-field passes at 80-95 % of the DRAM
+bandwidth. 28.3 GB/step in launches at 39.7 GB/s is 713 ms: the
+in-launch time cannot fall below that, at any thread count, without
+moving fewer bytes. The two overhead rows are the periodic halo fills.
+
+### The roofline table: flagship, 12 threads
+
+The 30 kernels with the most time per step (120 in all;
+`bench_roofline.jl merge flagship 12 <logs>` prints every one). `[≥1M]`
+rows are the nest parent's (one parent window in the nine timed child
+steps, so its kernels show fractional calls per step).
+
+| kernel | calls/step | serial | MB/call | µs/call 1 t | µs/call 12 t | speed-up | % DRAM triad | excess µs | class | ms/step 12 t |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | :-- | --: |
+| `_xpencil!` | 152 | 100 % | 0.07 | 24.5 | 29.1 | 0.84× | 6 % | – | serial | 4.428 |
+| `_blend_body!` | 72.2 | 100 % | 0.36 | 43.4 | 41.6 | 1.04× | 22 % | – | serial | 3.001 |
+| `map:_Axpy[≥1M]` | 2.67 | 0 % | 31.26 | 1007.4 | 925.1 | 1.09× | 85 % | 137 | bandwidth | 2.467 |
+| `_interp_body!` | 8.67 | 100 % | 0.23 | 245.8 | 241.8 | 1.02× | 2 % | – | serial | 2.096 |
+| `_b_eddy_scalar_masked!` | 9 | 0 % | 6.55 | 1213.9 | 217.1 | 5.59× | 76 % | 52 | bandwidth | 1.954 |
+| `_mirror_body!` | 149 | 95 % | 0.14 | 10.1 | 12.6 | 0.80× | 29 % | – | serial | 1.881 |
+| `reduce:_photochemistry_at` | 1 | 0 % | 10.49 | 12036.6 | 1566.2 | 7.69× | 17 % | 563 | compute | 1.566 |
+| `reduce:_air_heat_at` | 35 | 0 % | 4.19 | 62.0 | 41.8 | 1.48× | 253 % | 0 | bandwidth | 1.463 |
+| `_coefficients_body![≥1M]` | 0.667 | 0 % | 78.15 | 2726.9 | 2044.4 | 1.33× | 96 % | 74 | bandwidth | 1.363 |
+| `reduce:identity` | 27 | 0 % | 2.10 | 53.7 | 45.6 | 1.18× | 116 % | 0 | bandwidth | 1.231 |
+| `_b_advect_centered![≥1M]` | 0.667 | 0 % | 78.16 | 3092.7 | 1809.6 | 1.71× | 109 % | 0 | bandwidth | 1.206 |
+| `map:_Lin2r[≥1M]` | 1.11 | 0 % | 35.04 | 1041.8 | 1004.5 | 1.04× | 88 % | 121 | bandwidth | 1.116 |
+| `_b_rflux_x!` | 8 | 0 % | 6.39 | 679.1 | 138.1 | 4.92× | 117 % | 0 | bandwidth | 1.104 |
+| `_b_eddy_scalar![≥1M]` | 0.778 | 0 % | 46.90 | 2773.5 | 1391.5 | 1.99× | 85 % | 209 | bandwidth | 1.082 |
+| `_b_rflux_y!` | 8 | 0 % | 6.39 | 679.9 | 129.8 | 5.24× | 124 % | 0 | bandwidth | 1.039 |
+| `_b_rflux_z!` | 8 | 0 % | 6.39 | 714.7 | 121.9 | 5.86× | 132 % | 0 | bandwidth | 0.975 |
+| `_buffer_body!` | 116 | 100 % | 0.24 | 8.1 | 8.3 | 0.97× | 73 % | – | serial | 0.968 |
+| `_b_damping![≥1M]` | 1 | 0 % | 31.26 | 1561.3 | 945.4 | 1.65× | 83 % | 157 | bandwidth | 0.945 |
+| `_b_limit_ratio!` | 8 | 0 % | 16.78 | 512.5 | 117.6 | 4.36× | 360 % | 0 | bandwidth | 0.941 |
+| `map:_Axpy` | 11 | 0 % | 4.19 | 140.2 | 83.2 | 1.68× | 127 % | 0 | bandwidth | 0.916 |
+| `_n2_body!` | 3 | 0 % | 8.39 | 1797.8 | 299.8 | 6.00× | 71 % | 88 | bandwidth | 0.900 |
+| `_b_limit_x!` | 8 | 0 % | 6.39 | 118.8 | 104.1 | 1.14× | 155 % | 0 | bandwidth | 0.833 |
+| `reduce:_fog_plane!` | 1 | 0 % | 6.29 | 4837.9 | 808.2 | 5.99× | 20 % | 405 | overhead | 0.808 |
+| `_coefficients_body!` | 3 | 0 % | 10.75 | 479.3 | 256.2 | 1.87× | 106 % | 0 | bandwidth | 0.769 |
+| `_b_flux_div!` | 8 | 0 % | 8.39 | 207.5 | 96.0 | 2.16× | 220 % | 0 | bandwidth | 0.768 |
+| `_b_momentum_u![≥1M]` | 0.333 | 0 % | 62.53 | 3259.6 | 2251.6 | 1.45× | 70 % | 675 | bandwidth | 0.750 |
+| `_dual_strain_body!` | 1 | 0 % | 8.39 | 4852.2 | 727.6 | 6.67× | 29 % | 323 | compute | 0.728 |
+| `_b_damping_plane![≥1M]` | 0.333 | 0 % | 31.26 | 1666.2 | 1880.1 | 0.89× | 42 % | 1092 | overhead | 0.627 |
+| `_dual_strain_body![≥1M]` | 0.111 | 0 % | 62.52 | 39786.1 | 5637.3 | 7.06× | 28 % | 2322 | compute | 0.626 |
+| `reduce:_tke_update_plane` | 1 | 0 % | 15.21 | 3876.1 | 606.8 | 6.39× | 63 % | 223 | bandwidth | 0.607 |
+
+* **Bandwidth** holds 68 % of the in-launch time: the parent's stencils
+  at 66-157 % of the DRAM triad (above 100 %: part of the data came from
+  L3), and the child's at 54-360 %. These are where KA-o's 1.5-2× comes from.
+* **Serial** launches take 14.5 ms/step at 12 threads, 17 % of the step
+  and as much as at one thread: halo fills (`_xpencil!`, `_mirror_body!`,
+  `_buffer_body!`, `_inflow_body!`, `_periodic_body!`, 7.9 ms together),
+  the nest's open-boundary blend (`_blend_body!`, 3.0 ms) and parent-to-
+  child interpolation (`_interp_body!`, 2.1 ms), and the immersed walls
+  (0.7 ms). Each runs below the 32 768-point threshold: about 570 calls
+  per step, most of 8-40 µs (the interpolation 240 µs).
+* **Launch overhead is not the limit.** The empty threaded launch costs
+  1.35 µs at 12 threads; the overhead class is 1.8 ms/step (3 %), and is
+  most likely imbalance (`_fog_plane!` over 64 planes, `_b_damping_plane!` over the
+  sponge's few planes), not launch cost. Coarser launches alone gain
+  little; fusion pays because it moves fewer bytes, not because it
+  launches less.
+* **Compute** (photochemistry, the dual-grid strain) scales 6.7-7.7×
+  already.
+
+### Thread pinning
+
+`JULIA_EXCLUSIVE=1` (no dependency) pins Julia thread *i* to CPU *i − 1*;
+on this machine CPUs 0-11 are the 12 cores' first hardware threads and
+12-23 their SMT siblings, CPUs 0-5 and 12-17 are CCD 0 (from `lscpu`).
+So `-t 12,0` with it is one thread per physical core across both CCDs,
+`-t 24,0` is SMT on, and `-t 6,0` is one CCD's six cores; `taskset -c
+0-5,12-17 julia -t 12` keeps 12 threads in one CCD (one L3) with SMT.
+Each run logs every thread's CPU (`sched_getcpu`) and affinity mask, and
+the logs confirm the layouts. ms/step, minimum of three processes (the
+spread between processes was up to 40 % for the flagship and 10 % for the
+DNS):
+
+| setting | flagship `step_case!` | 256³ `step_rk3!` |
+| :-- | --: | --: |
+| `-t 12` (default: 12 + 1 interactive, unpinned) | 87.5 | 1145 |
+| `-t 12,0` unpinned | 85.5 | 1160 |
+| `-t 12,0`, `JULIA_EXCLUSIVE=1` (one per core, both CCDs) | 83.0 | 1144 |
+| `-t 24` unpinned (SMT) | 95.5 | 1181 |
+| `-t 24,0`, `JULIA_EXCLUSIVE=1` (SMT, pinned) | 91.2 | 1176 |
+| `-t 4` unpinned | 92.8 | 1211 |
+| `-t 4,0`, `JULIA_EXCLUSIVE=1` | 109.1 | 1225 |
+| `-t 6,0`, `JULIA_EXCLUSIVE=1` (one CCD, 6 cores) | 91.4 | 1180 |
+| `taskset -c 0-5,12-17`, `-t 12` (one CCD, SMT) | 89.6 | 1210 |
+
+**Pinning does not help.** At 12 threads it is within 5 % of unpinned,
+inside the spread between processes; at 4 threads it is 18 % slower for
+the flagship. Pinned SMT is still slower than 12 threads, so KA-o's
+guess that unpinned tasks cause the SMT loss is not borne out: the loss
+is the bandwidth-bound kernels sharing a core's load/store bandwidth.
+One CCD's six cores reach 96 % of the flagship's and 97 % of the DNS's
+12-core speed, the signature of a bandwidth limit: the second CCD adds
+compute, not memory bandwidth. **Recommended launch setting: unchanged,
+`julia -t 12` with no pinning.** ThreadPinning.jl was not tried:
+`JULIA_EXCLUSIVE` and `taskset` produce the three layouts the issue asks
+about without a dependency, and none of them helps.
+
+### Ranked targets for SC-d and SC-e
+
+Savings are estimated from the table: a pass over a field saved is its
+bytes at the measured 33-38 GB/s. DNS figures are per 12-thread step of
+1145 ms; flagship figures per 87.5 ms step (the parent's per child step).
+
+1. **SC-d: fold the diffusion into the tendency kernels** (DNS ≈ 190 ms,
+   17 %). Each substep runs `laplacian(lap, f)` then `axpy!(t, ν, lap)`
+   for u, v, w, θ: 12 Laplacians (101 ms) and 12 of the 33 axpys (≈ 95
+   ms). Adding `ν∇²f` inside the momentum and scalar advection kernels,
+   which already read `f` and write `t`, removes both passes. The parent
+   runs the same core.
+2. **SC-d: fuse the predictor** `axpy!(u, Δt, tu)` (12 per step, ≈ 95 ms)
+   into the last kernel that writes the tendency.
+3. **SC-d: fuse the projection's correction**: `∂x_cf/∂y_cf/∂z_cf(φ)`
+   then an axpy, 9 + 9 passes (≈ 145 ms), into one gradient-and-correct
+   kernel per component (≈ 70 ms saved).
+4. **SC-d: fold the RK3 combinations** (`_Lin2r`, 8 per step, 68 ms) into
+   the predictor of the substep before them, `u = a u₀ + b (u + Δt t)`:
+   one extra read of `u₀` in place of a pass, ≈ 34 ms.
+5. **SC-d: the Poisson right-hand side and result**: `divergence` then
+   `_copy_in_body!` into the FFT buffer, and `_copy_out_body!` then
+   `_DivBy` (≈ 46 ms of 113): write the divergence into the FFT buffer and
+   scale on the way out.
+6. **SC-b: thread the halo fills and the nest transfer** (flagship 14.5
+   ms, 17 % of the step, serial; DNS 20 ms). Not a traffic problem: ~150
+   launches per step below the threshold. Batch the faces and fields of
+   one fill into one launch so it crosses the threshold, and give the
+   nest's blend and interpolation one launch per boundary.
+7. **SC-e: re-scope.** The DNS and parent stencils already move their
+   compulsory bytes at 80-95 % of the DRAM triad, so their real traffic is
+   at most 1.05-1.25× the compulsory one: spatial blocking of a single
+   kernel has at most that to gain. What blocking can buy is across
+   kernels: running items 1-4 for one block of k-planes while it is in L3
+   (temporal blocking), which is the same work as SC-d done per block.
+8. **Not targets**: launch overhead (≤ 3 %), pinning (no gain), compute
+   kernels (already 6-8×). Outside launches the flagship spends 27 ms per
+   step at 12 threads (FFTW and serial code, more than at one thread) and
+   the DNS 287 ms (the three FFT solves, 3.5× from one thread): the FFTs
+   are the next profile, not this one's.
+
+Items 1-5 together remove about 15 GB of the DNS step's 28.3 GB: at the
+measured 33.8 GB/s about 435 ms of 1145, which would bring the 12-thread
+`step_rk3!` to about 0.71 s (3.0× over one thread today, against 1.84×).
+The flagship's child and parent run the same step core, so items 1-4
+apply there too (its axpy, `_Lin2r`, Laplacian and gradient rows).
+
+### Reproducing
+
+```bash
+# one process per thread count / setting; JL_MEM-capped wrapper or plain julia
+julia -t 12 --project=. benchmarks/bench_roofline.jl flagship 2 9 > f12.log
+AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_roofline.jl dns 256 1 3 > d12.log
+ROOFLINE_PROF=0 JULIA_EXCLUSIVE=1 julia -t 12,0 --project=. benchmarks/bench_roofline.jl flagship 2 9
+ROOFLINE_PROF=0 taskset -c 0-5,12-17 julia -t 12 --project=. benchmarks/bench_roofline.jl flagship 2 9
+julia --project=. benchmarks/bench_roofline.jl merge flagship 12 f1.log f12.log ...
+```
+
+## SC-b: threaded halo fills (#402)
+
+KA-o measured `fill_halos!` at 1.0× on 12 threads at 64 × 64 × 32: every
+per-axis phase of a fill (`halo_kernels.jl`) is a separate launch, and at
+the flagship's sizes each face slab is below the backend's 32 768-point
+threshold, so the fills ran serially between threaded stencils.
+
+**Decomposition.** The phases cannot run at once (an edge or corner holds
+the value of the last axis that reaches it), but every x and y phase reads
+and writes one k-plane only (the open-boundary plane buffers are read at
+the same (j, k)) and every z phase one (i, j) column only. A fill is
+therefore two launches: (1) each work item takes a contiguous chunk of
+k-planes of every field and runs that field's x then y phases restricted
+to them; (2) each work item takes a chunk of j-rows and runs the z phases.
+The restriction is carried by the array (`_Clip`, `halo_sets.jl`): the
+fill methods of every BC type run unchanged on it and its `_halo_launch!`
+narrows the phase to the clip's planes or rows, serially in `launch!`'s
+order. Every point is computed from the same operands in the same order as
+the unrestricted fill, so the bits are the same at every thread count and
+every chunking, including the N < H phases whose layers depend on each
+other.
+
+**Sets.** `fill_halos!(fields::Tuple, bcs)` (one `bcs` or one per field,
+plus the per-field open-boundary keys) and
+`fill_halos!(fields::AbstractVector, bcs)` fill a whole set in the same two
+launches, weighted by the halo points of the set. The call sites that fill
+several fields together now do it as one set: the prognostic state in the
+step cores (`fill_state_halos!`), the velocities before the projection,
+the CFL diagnostics and the step guard, the anelastic step, the
+advected tracers, the turbulence diagnostics, the nest's interpolated
+state and the DiffusivityTensor components. A single-field
+`fill_halos!(f, bcs)` is a set of one. Below the threshold and at one
+thread the set is the historical field-by-field, phase-by-phase fill.
+
+**Tests.** `test/ka_halos.jl` checks the set fill (θ, u, v, w as one
+tuple, and a vector of three tracers sharing one set of conditions)
+against the pre-port loops for every closed and open BC case of the KA-f
+tests (23 on the two larger meshes, 10 on the N < H mesh), at 1, 2, 5 and
+more-chunks-than-planes work items and through the public method on the
+serial, default and zero-threshold backends; the
+thread-invariance worker hashes set fills (periodic, walls, open) at
+every thread count. The full harness (every section, 1, 4, 12 and 24
+threads) on this branch merged with master of 2026-10-08: 3785 hashes per
+process, all identical to 1 thread; 21 of 21 checks pass (27 min).
+
+**Measured** (same machine and method as KA-o: `bench_ka_scaling.jl`,
+one process per thread count, 1-minute load below 4 at the start of every
+process, minimum over 3 processes; master `c2a579a5` against this branch,
+alternating):
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| flagship `step_case!`, ms/step (mean of 9), master | 166.3 | 94.1 (1.77×) | 92.1 (1.81×) | 97.3 (1.71×) |
+| flagship `step_case!`, SC-b | 162.0 | 91.3 (1.77×) | 83.4 (1.94×) | 97.4 (1.66×) |
+| flagship `transport/scalar_advection`, master → SC-b | 45.2 → 43.5 | 21.4 → 20.0 | 20.2 → 18.6 | 25.6 → 25.4 |
+| flagship `nest_parent/nesting`, master → SC-b | 54.9 → 54.2 | 37.2 → 36.2 | 35.1 → 33.8 | 34.9 → 35.4 |
+| flagship `step_dt`, master → SC-b | 4.56 → 4.48 | 2.57 → 2.45 | 2.65 → 2.39 | 2.80 → 2.69 |
+| 256³ DNS `step_rk3!`, s/step, master → SC-b | 2.13 → 2.18 | 1.24 → 1.24 | 1.16 → 1.16 | 1.19 → 1.19 |
+| 256³ DNS `dns_step!`, s/step, master → SC-b | 3.31 → 3.19 | 2.29 → 2.29 | 2.25 → 2.21 | 2.24 → 2.24 |
+| `fill_halos!` ×4 at 256³ (kernels mode), µs | 4638 → 4554 | 2805 → 2463 | 2182 → 1707 | 2473 → 2094 |
+
+The flagship step is 9.5 % faster at 12 threads (1.94× against its own
+one-thread step, from 1.81×) and 2.6 % faster at one thread; 24 threads
+are unchanged. The DNS is unchanged within noise: its four 256³ fields
+were already above the threshold phase by phase, and the halo is a small
+part of a step dominated by memory-bound stencils and the FFT. Halo
+filling is 3.9 % of the one-thread flagship step (6.8 ms of 173 ms,
+every `fill_halos!` timed: 68 calls per step on SC-b against 89 on
+master), which bounds what this issue can gain. In isolation a set of
+the four flagship fields (u, v, w, θ) at 192 × 192 × 53 fills in 156 µs
+at 12 threads against 458 µs per-field-per-phase (2.9×); at 64 × 64 × 32
+the set is slower threaded than serial (43.7-46.9 µs at one thread,
+48.2-58.8 µs at 12, 52.4-70.0 µs at 24; periodic, walls, open): task
+start-up there costs more than the fill saves. At 64 × 64 × 64, the
+flagship child, it is 58-61 µs at 4 threads against 66-71 µs.
+A halo point is counted as one point of launch work (`launch_weighted!`):
+an intermediate version counted two halo points as one (a fill of a
+cached field is cheaper than a stencil point) and gained nothing in the
+flagship step at 12 threads (88.3 ms against 89.6 on master, minimum of
+3, an earlier session than the table), presumably because the stencils
+between two fills have evicted the field; at one unit per point it is
+the 83.4 against 92.1 of the table.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0
