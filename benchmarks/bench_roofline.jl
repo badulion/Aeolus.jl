@@ -40,8 +40,10 @@
 # It is a model: a stencil that misses cache reads more, a kernel that
 # reads only part of an array (a boundary row of a 3-D field) less.
 # Time outside the three functions (FFTW, BLAS, the remaining serial code,
-# allocation) is reported as "outside launches". ROOFLINE_PROF=0 times
-# the plain step only (the pinning experiment).
+# allocation) is reported as "outside launches". A body launched over
+# 10⁶ points or more (the nest parent's 192 × 192 × 53 fields, the DNS) is
+# recorded apart, with the suffix `[≥1M]`: its arrays do not fit in L3.
+# ROOFLINE_PROF=0 times the plain step only (the pinning experiment).
 #
 # merge: reads the KROW/ROW lines of several runs of one case (any number
 # of processes per thread count: per kernel the call with the smallest
@@ -111,6 +113,9 @@ function merge_logs(case, ref, files)
     end
     println()
     @printf("in launches at -t %d: %.2f ms/step over %d kernels\n", ref, tot, length(names))
+    gb = sum(n -> haskey(k, (n, ref)) ? k[(n, ref)][1] * k[(n, ref)][4] / 1e9 : 0.0, names)
+    @printf("bytes per step (model): %.2f GB; at the DRAM triad bandwidth that is %.1f ms\n",
+            gb, 1e3gb / bw)
     for (c, n) in sort!(collect(cls); by = first)
         @printf("  %-10s %3d kernels  %8.2f ms/step (%.0f %%)\n", c, n, clsms[c], 100clsms[c] / tot)
     end
@@ -142,15 +147,18 @@ const STATS = Dict{String,KStat}()
 const STATS_LOCK = ReentrantLock()
 const RECORDING = Ref(false)
 
-_fname(f::Function) = (m = first(methods(f));
-                       s = string(nameof(f));
-                       startswith(s, '#') ? "$(m.name)@$(basename(string(m.file))):$(m.line)" : s)
-_fname(f) = string(nameof(typeof(f)))
+const NAMES = Dict{Any,String}()
+_fname(f) = get!(NAMES, typeof(f)) do
+    f isa Function || return string(nameof(typeof(f)))
+    s = string(nameof(f))
+    m = first(methods(f))
+    startswith(s, '#') ? "$(m.name)@$(basename(string(m.file))):$(m.line)" : s
+end
 # range_map! launches one generic body: name it by the mapped function
 _kname(body!, args) = body! === Aeolus.Backends._map_body! ? "map:" * _fname(args[1]) : _fname(body!)
 
 # compulsory bytes of the distinct numeric arrays reachable from x
-function _arrays!(seen, x, depth)
+function _arrays!(seen, @nospecialize(x), depth)
     if x isa AbstractArray
         if isbitstype(eltype(x)) && eltype(x) <: Union{Number,Tuple}
             id = x isa StridedArray ? UInt(pointer(x)) : objectid(x)
@@ -165,7 +173,10 @@ function _arrays!(seen, x, depth)
         isdefined(x, i) && _arrays!(seen, getfield(x, i), depth - 1)
     end
 end
-function _bytes(points, objs...)
+# cached per (arguments, points): walking the arguments costs ~100 µs
+const BYTES = Dict{UInt,Int}()
+_bytes(points, @nospecialize(objs...)) = get!(() -> _walk_bytes(points, objs...), BYTES, hash(objectid(objs), UInt(points)))
+function _walk_bytes(points, @nospecialize(objs...))
     seen = Dict{UInt,Tuple{Int,Int}}()
     for o in objs
         _arrays!(seen, o, 3)
@@ -173,12 +184,18 @@ function _bytes(points, objs...)
     return sum(((n, s),) -> min(n, points) * s, values(seen); init = 0)
 end
 
-function record!(name, serial::Bool, ns, points, objs...)
+const GC_NS = Ref(0)           # GC time in the timed steps
+const OVERHEAD_NS = Ref(0)     # time spent in record! itself (excluded from the step's split)
+function record!(@nospecialize(prefix), @nospecialize(f), @nospecialize(args), serial::Bool, ns, points,
+                 @nospecialize(objs...))
     RECORDING[] || return nothing
+    t0 = time_ns(); g0 = Base.gc_time_ns()
+    name = prefix * _kname(f, args) * (points >= 1_000_000 ? "[≥1M]" : "")
     b = _bytes(points, objs...)
     lock(STATS_LOCK) do
         s = get(STATS, name, KStat(0, 0, 0, 0.0, 0.0))
         STATS[name] = KStat(s.calls + 1, s.serial + serial, s.ns + ns, s.bytes + b, s.points + points)
+        OVERHEAD_NS[] += (time_ns() - t0) - (Base.gc_time_ns() - g0)   # a GC pause is the step's
     end
     return nothing
 end
@@ -197,7 +214,7 @@ if PROF
                 _threaded!(b, body!, ranges, args, weight)
             end
             t1 = time_ns()
-            Main.record!(Main._kname(body!, args), s, Int(t1 - t0), np * weight, body!, args)
+            Main.record!("", body!, args, s, Int(t1 - t0), np * weight, body!, args)
             return nothing
         end
         function _plane_partials!(b::CPUBackend, out::AbstractVector,
@@ -220,7 +237,7 @@ if PROF
             end
             t1 = time_ns()
             f = p isa _PlaneFn ? p.f : g isa _Ix ? g.f : g isa _Vals ? g.f : p
-            Main.record!("reduce:" * Main._fname(f), s, Int(t1 - t0), np, p, g)
+            Main.record!("reduce:", f, (), s, Int(t1 - t0), np, p, g)
             return out
         end
         @noinline function _serial_column_sum(body::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args, s) where {F}
@@ -228,7 +245,7 @@ if PROF
             for j in jr, i in ir
                 s = _add_terms(s, body(i, j, args...))
             end
-            Main.record!("colsum:" * Main._fname(body), true, Int(time_ns() - t0),
+            Main.record!("colsum:", body, (), true, Int(time_ns() - t0),
                          length(ir) * length(jr), body, args)
             return s
         end
@@ -237,7 +254,7 @@ if PROF
             for n in nr
                 s = _add_terms(s, body(n, args...))
             end
-            Main.record!("colsum:" * Main._fname(body), true, Int(time_ns() - t0), length(nr), body, args)
+            Main.record!("colsum:", body, (), true, Int(time_ns() - t0), length(nr), body, args)
             return s
         end
     end
@@ -309,10 +326,16 @@ function dump_stats(case, nsteps, tstep)
                 s.serial / s.calls, s.ns / s.calls / 1e3, s.bytes / s.calls, s.points / s.calls)
         tin += s.ns / 1e6 / nsteps
     end
+    # the profiler's own cost (naming, walking the arguments) is taken out
+    # of the step: `step` is the step without it
+    ov = OVERHEAD_NS[] / 1e6 / nsteps
+    tstep -= ov
     PROF && row(case, "in_launches", tin)
+    row(case, "gc", GC_NS[] / 1e6 / nsteps)
+    PROF && row(case, "profiler_overhead", ov)
     row(case, "step", tstep)
-    PROF && @printf("step %.2f ms, in launches %.2f ms, outside %.2f ms (%d kernels)\n",
-                    tstep, tin, tstep - tin, length(STATS))
+    PROF && @printf("step %.2f ms (profiler's own %.2f ms removed), in launches %.2f ms, outside %.2f ms (%d kernels)\n",
+                    tstep, ov, tin, tstep - tin, length(STATS))
 end
 
 # ---------------------------------------------------------------------------
@@ -328,9 +351,11 @@ function bench_flagship(; nwarm = 2, nsteps = 9)
     end
     t = 0.0
     RECORDING[] = true
+    g0 = Base.gc_time_ns()
     for _ in 1:nsteps
         t += @elapsed(BC.step_case!(case, BC.step_dt(case)) || error("blowup at step $(case.clock.n)"))
     end
+    GC_NS[] = Base.gc_time_ns() - g0
     RECORDING[] = false
     dump_stats("flagship", nsteps, 1e3t / nsteps)
 end
@@ -346,9 +371,11 @@ function bench_dns(N; nwarm = 1, nsteps = 3)
     step_rk3!(sim, dt)
     t = Inf
     RECORDING[] = true
+    g0 = Base.gc_time_ns()
     for _ in 1:nsteps
         t = min(t, @elapsed step_rk3!(sim, dt))
     end
+    GC_NS[] = Base.gc_time_ns() - g0
     RECORDING[] = false
     # minimum per step for the step; the kernel stats are means over all steps
     dump_stats("dns$N", nsteps, 1e3t)
