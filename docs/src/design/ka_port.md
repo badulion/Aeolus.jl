@@ -2288,6 +2288,198 @@ threads equal the 1-thread hashes. `test/ka_columns.jl` at
 `--threads 24` includes the first use of every cache from hundreds of
 tasks at once, and passes.
 
+## KA-o: the scaling report (#308)
+
+The whole port (KA-a to KA-n) measured end to end with
+`benchmarks/bench_ka_scaling.jl`: one process per thread count, 1, 4, 12
+and 24 threads (12 cores, 24 with SMT). Same machine as above, Julia
+1.13.1, BLAS on one thread. Each run started only when the 1-minute load
+was below 4 (below 6 for the 1- and 4-thread runs); other agents' jobs
+still ran on the machine, so every figure is the minimum over two to four
+processes. Speed-up is the new code at 1 thread over the new code at N
+threads (the 1-thread gate against the pre-port loops was each port PR's
+job, above).
+
+**What was run, and what was not.** The issue asked for 300 warm-up and
+300 timed flagship steps. The default case fails near step 12 (#392) and
+long Berlin runs are paused, so the flagship is timed over steps 3-11
+(2 warm-up steps, 9 timed). In those 9 steps the nest opens one parent
+window, so the per-step mean carries one parent window per nine child
+steps (child steps of 0.34 s on average; in a long run the ratio follows
+the two steps). The flagship is `CaseConfig(:summer)`
+as shipped: a 64 × 64 × 64 child (not the 64 × 64 × 32 of the issue; the
+default was deepened for the nest, #246) nested in its 192 × 192 × 53
+parent, MEASURE FFTW plans. The 256³ DNS is timed per step (1 warm-up,
+3 timed) and scaled to the 1264 steps of the measured run
+(`test/fixtures/dns256_apriori.toml`). The kernels and the DNS use
+ESTIMATE plans: MEASURE planning of a threaded 256³ c2r transform
+segfaults intermittently at 10-14 threads, in FFTW itself (#397).
+
+### Results against the targets
+
+| | target | 1 t | 4 t | 12 t | 24 t | met |
+| :-- | :-- | --: | --: | --: | --: | :-- |
+| flagship `step_case!`, ms/step (mean of 9) | ≥ 2.5× at 4, ≥ 4× at 12 | 155.2 | 90.7 (1.71×) | 87.5 (1.77×) | 97.0 (1.60×) | no |
+| flagship, 24 t against 12 t | within ±15 % | | | | +10.8 % | yes |
+| child alone (nest off), ms/step | | 100.3 | 46.8 (2.14×) | 46.5 (2.16×) | 56.4 (1.78×) | |
+| 256³ DNS `dns_step!`, s/step | ≥ 2.5× at 4, ≥ 4× at 12 | 3.28 | 2.30 (1.43×) | 2.29 (1.43×) | 2.25 (1.46×) | no |
+| 256³ DNS `step_rk3!` alone, s/step | | 2.21 | 1.24 (1.78×) | 1.18 (1.87×) | 1.19 (1.85×) | |
+| 256³ DNS, 1264 steps | 2.05 h → ≈ 30 min | 1.15 h | 48 min | 48 min | 47 min | no |
+
+The DNS took 2.05 h single-core when the issue was written and 5671 s
+(1.58 h) in the run of 2026-10-05 (#235). On today's code it is 1.15 h at
+one thread and 48 min at 12 threads: 2.6× against the issue's figure, of
+which 1.8× is one-thread gains since the issue was written (the port's
+serial fixes among them; the timings here use ESTIMATE plans, which are
+not faster) and 1.4× is threads.
+
+Neither target is met. The issue estimated 85-90 % of the flagship step
+to be parallel. Fitting Amdahl's law to the measured step gives a serial
+fraction of 45 % at 4 threads and 53 % at 12. Most of that is not serial
+code: the parts below show it is parallel code that stops at 1.5-2×,
+because it is bandwidth-bound or its launches are too small.
+
+### Where the flagship step goes
+
+`case.timing` per entry, ms per step (mean of the 9 timed steps, minimum
+of four processes). `nest_parent` is the parent's steps (one window of
+469 ms at 1 t, 316 ms at 12 t, spread over 9 child steps). The
+`:body_force` and `:post_predictor` entries run inside `dynamics/step!`.
+
+| entry | 1 t | 4 t | 12 t | 24 t | 12 t speed-up |
+| :-- | --: | --: | --: | --: | --: |
+| **whole step** (`step_case!`) | 155.2 | 90.7 | 87.5 | 97.0 | 1.77× |
+| `step_dt` (timed around the call) | 4.28 | 2.45 | 2.60 | 2.83 | 1.65× |
+| `nest_parent/nesting` (the parent) | 52.2 | 35.5 | 35.2 | 34.9 | 1.48× |
+| `transport/scalar_advection` | 41.0 | 20.9 | 19.7 | 25.4 | 2.08× |
+| `dynamics/step!` | 35.5 | 21.6 | 20.1 | 24.2 | 1.76× |
+| `chemistry/aq_chem` | 12.96 | 4.14 | 2.60 | 2.57 | 4.98× |
+| `fog_dew/fog_dew` | 4.81 | 1.31 | 0.93 | 0.74 | 5.19× |
+| `tracers/pollutant` | 2.21 | 1.45 | 1.53 | 1.79 | 1.45× |
+| `nest_feedback/nesting` | 1.93 | 1.99 | 2.03 | 1.94 | 0.95× |
+| `ledger/air_heat` + `ledger/ledger` | 2.33 | 1.69 | 1.90 | 2.66 | 1.23× |
+| `body_force/moist_buoyancy` | 1.20 | 0.42 | 0.41 | 0.49 | 2.93× |
+| `microphysics/micro_kessler` | 1.03 | 0.55 | 0.53 | 0.69 | 1.95× |
+| `chemistry/aq_aerosol` | 1.03 | 1.08 | 1.08 | 1.18 | 0.95× |
+| facade wall model (both hooks) | 0.66 | 0.74 | 0.80 | 0.89 | 0.83× |
+| thirteen more entries under 0.35 ms each | 1.32 | 1.42 | 1.77 | 1.97 | 0.75× |
+
+* **Three entries hold 83 % of the one-thread step** (the parent, scalar
+  transport, the child's dynamics: 129 of 155 ms) and reach 1.5-2.1×.
+  They are made of stencils at 64³ (child) and 192² × 53 (parent), the
+  sizes where the idealised stencils below stop at 2-3× (memory-bound),
+  with fill-halo and boundary work between them that does not thread at
+  all (`fill_halos!` 1.0× at 64 × 64 × 32). The parent's steps are its
+  dynamics (457 of 462 ms per window at 1 t; its surface takes 1.4 ms and
+  its radiation 0.9 ms). Per-tracer parallelism of the transport was
+  deferred to a follow-up on #291.
+* **The column physics scales** (aq_chem 5.0×, fog_dew 5.2-6.5×, moist
+  buoyancy 2.9×): one work item per column, compute-bound. It is 12 % of
+  the one-thread step.
+* **The serial remainder is small.** The entries that do not speed up at
+  all (nest feedback, aq_aerosol, the wall models, IBM, the surface
+  exchange hooks, glass, sw_modifiers, the radiation heating) take 5.7 ms
+  at 12 threads, 6.5 % of the step; several get slower with threads (task
+  start-up on launches of a few thousand points). The issue's candidates:
+  * *stage driver*: `step_case!` minus its entries is −0.2 to −0.6 ms,
+    i.e. zero within the timer overlap (the air-heat ledger of the hooks
+    inside `step!` is booked twice);
+  * *iterative radiosity*: every 600 s of model time (300-1800 child
+    steps), 2.1× at 4-24 threads by day and 110× at night against the old
+    code (KA-n, above); not in the per-step mean;
+  * *BuildingEnergy facet solves* (`buildings_citymean`): 0.02 ms per step,
+    0.2-0.3 ms per radiation call, flat;
+  * *single-column radiation*: its heating (`column_tendency`) is 0.2-0.3
+    ms per step; the column solve every 600 s takes 45.4 / 12.5 / 7.3 /
+    5.0 ms per call at 1 / 4 / 12 / 24 threads (6.2× at 12, threaded gas
+    optics).
+* **KA launch overhead.** 263 launches per flagship step run threaded and
+  569 run serially (below the 32 768-point threshold; counted at
+  `runs_serially`, `launches` mode). An empty threaded launch costs
+  1.37-1.42 µs with one task and 2.6-9.9 µs with sixteen, at any thread
+  count; so launch overhead is 0.4-2.6 ms of the 87.5 ms step at 12
+  threads, under 3 %.
+
+### Memory-bound and compute-bound kernels
+
+The idealised kernels on seeded fields (`kernels` mode; µs, minimum over
+repeats; the bandwidth counts 8 B per point for every array read or
+written, so it ignores halos and caches):
+
+| kernel | 64×64×32, 1 t | 4 t | 12 t | 24 t | 256³, 1 t | 4 t | 12 t | 24 t | 256³ GB/s at 12 t | bound |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-- |
+| axpy | 22.3 | 1.69× | 1.76× | 1.40× | 8 468 | 1.14× | 1.06× | 1.06× | 50.6 | memory |
+| `set!` value | 10.4 | 0.91× | 0.88× | 0.66× | 4 673 | 1.11× | 1.00× | 0.98× | 28.8 | memory |
+| `interior_sum` | 9.4 | 1.22× | 1.20× | 0.69× | 2 593 | 1.31× | 1.44× | 1.13× | 74.3 | memory |
+| `laplacian` | 44.4 | 2.03× | 2.10× | 1.78× | 13 892 | 1.78× | 1.65× | 1.49× | 31.7 | memory |
+| `advect_centered!` | 88.2 | 2.49× | 3.17× | 2.20× | 29 226 | 1.75× | 1.62× | 1.33× | 44.7 | memory |
+| `momentum_advect!` | 295.8 | 2.48× | 2.98× | 2.21× | 84 891 | 1.95× | 1.80× | 1.48× | 25.7 | memory |
+| `fill_halos!` (4 fields) | 41.9 | 1.00× | 1.01× | 0.99× | 4 637 | 1.67× | 1.89× | 1.71× | | serial / memory |
+| Smagorinsky νₜ | 725.5 | 3.81× | 6.57× | 4.74× | 103 492 | 3.78× | 5.16× | 4.26× | 24.6 | mixed |
+| FFT pressure `solve!` | 499.3 | 2.71× | 1.58× | 1.39× | 334 755 | 2.77× | 3.99× | 4.43× | | mixed |
+| WENO-Z5 `advect_weno_z!` | 2 188 | 3.93× | 5.64× | 5.64× | 325 747 | 4.58× | 8.57× | 9.50× | 20.9 | compute |
+| `set!` sin·exp | 1 056 | 4.19× | 7.25× | 5.30× | 123 104 | 4.25× | 8.07× | 10.08× | 8.8 | compute |
+
+* **Memory-bound**: the streaming kernels reach 50-75 GB/s at 256³ at any
+  thread count, the DRAM bandwidth of this dual-channel DDR5 desktop
+  (the axpy alone streams 47.6 GB/s on one thread). They gain 1.1-1.9× from threads
+  at 256³ and 1.7-3.2× at 64 × 64 × 32, where the arrays sit in L3. The
+  plan's Amdahl estimate assumed more bandwidth per core.
+* **Compute-bound**: WENO-Z5 and transcendental functions reach 8-10× at
+  256³ (5-7× at 64 × 64 × 32, where task start-up costs more). The
+  Smagorinsky viscosity (strain-rate stencil and a square root) and the
+  pressure solve are in between.
+* The 256³ DNS step (`step_rk3!`, centred advection, no SGS) is made of
+  the memory-bound rows plus the FFT solve, hence 1.8-1.9×. Its
+  `dns_step!` adds a per-step history in the fixture code
+  (`test/fixtures/dns_decay.jl`) that is not ported: the velocity
+  derivative skewness (`circshift` and broadcasts, 0.66-0.68 s at every
+  thread count) and ε (0.20-0.24 s). That is 0.88 s of the 2.29 s step at
+  12 threads, and the reason the DNS run ends at 48 min. With both on the
+  reduction primitives the 12-thread step would be about 1.25 s
+  (≈ 26 min for the run); that is a follow-up, not part of this report.
+
+### SMT (24 threads on 12 cores)
+
+Against 12 threads, 24 threads gain where the work is compute-bound
+(WENO-Z5 at 256³ +11 %, `set!` sin·exp +25 %, the FFT solve +11 %,
+fog_dew +25 %) and lose where it is memory-bound (`advect_centered!` and
+`momentum_advect!` at 256³ −18 %, `laplacian` −10 %). The flagship step
+is 10.8 % slower at 24 threads than at 12 (inside the ±15 % target); the
+child alone is 21 % slower. A threaded in-place update of a 2 MB array
+(4096 rows of 64, `launch` mode) takes 29.7 µs at 24 threads against 14.9
+at 12 and 15.0 serially. The likely cause, not profiled, is that the
+tasks are not pinned, so the array moves between the cores' L2 caches
+and between the two CCDs from one launch to the next. **12 threads is the
+better setting on this machine.**
+
+### Thread invariance
+
+The harness with every section (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`; primitives, 64³ DNS, reductions, the
+Berlin smoke matrix, the flagship step, nested, fft, fv, pcg, multigrid,
+steps, radiation, hooks, columns, advection, sgs) on this branch, i.e.
+every port issue merged with master of 2026-10-07: 3746 hashes per
+process, all identical at 4, 12 and 24 threads to 1 thread; 21 of 21
+checks pass (24.7 min; the workers took 340 / 353 / 366 / 391 s).
+The worker plans FFTs under ESTIMATE, as the whole suite does, so #397
+does not reach it.
+
+### Reproducing
+
+```bash
+# one process per thread count and mode; JL_MEM-capped wrapper or plain julia
+julia -t 12 --project=. benchmarks/bench_ka_scaling.jl flagship 2 9
+julia -t 12 --project=. benchmarks/bench_ka_scaling.jl child 2 9
+AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_ka_scaling.jl dns 256 1 3
+AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_ka_scaling.jl kernels 64,64,32 256,256,256
+julia -t 12 --project=. benchmarks/bench_ka_scaling.jl launch
+julia -t 4  --project=. benchmarks/bench_ka_scaling.jl launches 2 9
+```
+
+Each mode prints readable lines and `ROW <mode> <threads> <name> <value>
+<unit>` lines for collecting the table. The DNS needs about 8 GB.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0

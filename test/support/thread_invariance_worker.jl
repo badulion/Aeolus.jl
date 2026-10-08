@@ -16,6 +16,9 @@
 #               fields at 64×64×32 (NaN and Inf cases included);
 #   dns         a 64³ Boussinesq DNS (ν > 0, buoyancy, no SGS) from a seeded
 #               random state: every field of the simulation after 2 steps;
+#               and the DNS fixture (test/fixtures/dns_decay.jl) at 32³,
+#               3 steps: its fields and its history t, K, ε, S, budget
+#               error (the reductions of #400);
 #   reductions  the canonical reductions of KA-b (#296) on a seeded 64³ LES
 #               state: the energy / variance budgets, kinetic energy, the
 #               horizontal-mean profiles, the SGS dissipation, the CFL maxima
@@ -170,6 +173,8 @@ function section_primitives()
 end
 
 # --------------------------------------------------------------------------
+include(joinpath(@__DIR__, "..", "fixtures", "dns_decay.jl"))
+
 function section_dns()
     mesh = RegularGrid(; size = (64, 64, 64), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
     sim = BoussinesqSimulation(mesh; ν = 1e-3, θ₀ = 300.0)
@@ -187,6 +192,18 @@ function section_dns()
     end
     record_sim!("dns64", sim)
     record!("dns64/dt", dts)
+    # the DNS fixture's per-step history (#400): S, ε and the CFL max on
+    # the KA-b reductions, every launch threaded (threshold 0); 32³, 3 steps
+    with_backend(MODE == "serial" ? BACKEND : CPUBackend(threshold = 0)) do
+        st = dns_start(; N = 32)
+        for _ in 1:3
+            dns_step!(st)
+        end
+        record_sim!("dns_fixture32", st.sim)
+        for k in (:t, :K, :ε, :S, :budget_err)
+            record!("dns_fixture32/hist.$k", getfield(st.hist, k))
+        end
+    end
 end
 
 # --------------------------------------------------------------------------

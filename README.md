@@ -8,7 +8,7 @@
 **A Julia-native large-eddy simulation framework**
 
 *Resolved turbulence, high-fidelity radiation and exact moist thermodynamics —
-with one non-standard-library dependency.*
+multithreaded, configured from TOML, with a short dependency list.*
 
 [![CI](https://github.com/badulion/Aeolus.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/badulion/Aeolus.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![Documentation](https://github.com/badulion/Aeolus.jl/actions/workflows/Documenter.yml/badge.svg?branch=master)](https://github.com/badulion/Aeolus.jl/actions/workflows/Documenter.yml?query=branch%3Amaster)
@@ -38,12 +38,18 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **96,755 passing tests in the fast tier** (master `511deda`, 2026-10-06);
-  the full tier adds the validation mini-simulations. 62,000 lines of source,
-  32,000 lines of tests.
-- **Few dependencies** (FFTW, KernelAbstractions, NCDatasets). PNG, Mie
-  scattering, error and Bessel functions are written in the package.
-- Single-node CPU. MPI and GPU are planned, not present.
+- **106,776 assertions in the fast tier (135 jobs)**, run by CI on every
+  pull request; the full tier adds the validation mini-simulations.
+  104,000 lines of source, 72,000 lines of tests.
+- **Few dependencies** (FFTW, KernelAbstractions, StaticArrays, NCDatasets,
+  GRIBDatasets). PNG, Mie scattering, error and Bessel functions are
+  written in the package.
+- **Single-node CPU, multithreaded** through KernelAbstractions, with
+  results bit-identical at every thread count. MPI and GPU are planned,
+  not present.
+- **Every run is a TOML file**: `julia -m Aeolus run config.toml`, strict
+  validation, and a run folder whose `run.toml` replays the run bit for
+  bit.
 
 ---
 
@@ -59,8 +65,10 @@ Rosenbrock2) · adaptive Δt with CFL diagnostics
 </td></tr>
 <tr><td><b>Pressure solvers</b></td><td>
 
-FFT (triply periodic) · cosine-FFT (Neumann in *z*) · conjugate gradient ·
-geometric multigrid · density-weighted variants for anelastic flow
+FFT (triply periodic) · cosine-FFT (Neumann in *z*) · FFT/DCT plus a
+tridiagonal solve in *z* for stretched grids and, by default, the
+density-weighted anelastic operator · one matrix-free preconditioned
+conjugate gradient · geometric multigrid
 
 </td></tr>
 <tr><td><b>Advection &amp; geometry</b></td><td>
@@ -72,8 +80,12 @@ stretched and terrain-following (Gal-Chen) vertical coordinates
 </td></tr>
 <tr><td><b>Mesh refinement</b></td><td>
 
-One- and two-way grid nesting with flux correction · block-structured AMR
-(Berger-Rigoutsos clustering, Berger-Colella refluxing)
+One- and two-way grid nesting with flux registers and refluxing · nest
+hierarchies with sibling nests and recursive Berger-Oliger subcycling ·
+non-aligned children (rational refinement ratios, off-face origins) and
+stretched children · offline nesting from a dynamic driver ·
+block-structured AMR (Berger-Rigoutsos clustering, Berger-Colella
+refluxing)
 
 </td></tr>
 <tr><td><b>Radiation</b></td><td>
@@ -143,10 +155,24 @@ J(NO₂) · resistance-model (r<sub>a</sub> + r<sub>b</sub> + r<sub>c</sub>)
 dry deposition · rain scavenging of HNO₃
 
 </td></tr>
-<tr><td><b>Output</b></td><td>
+<tr><td><b>Configuration &amp; input</b></td><td>
+
+TOML run configuration with a schema, strict validation, `extends` and
+overrides, sweeps · `julia -m Aeolus run | check | resolve | options |
+preprocess` · NetCDF-4 static driver (buildings, surface classes, LAI)
+from OpenStreetMap / GeoJSON · NetCDF-4 dynamic driver (initial
+state, boundary planes, forcing) from a sounding, an Aeolus parent run
+or ERA5 (GRIB2 or NetCDF)
+
+</td></tr>
+<tr><td><b>Output &amp; logging</b></td><td>
 
 CF-1.8 NetCDF-4 (compressed), readable by ncview, xarray, Paraview, CDO and Panoply ·
-pure-Julia PNG, APNG, PPM and SVG rendering
+one run folder per run with `run.toml` provenance (commit, versions,
+seeds, input hashes) · structured logging · `diagnostics.csv` and
+`diagnostics.nc` · blowup diagnosis with a crash checkpoint ·
+full-state checkpoint and restart · pure-Julia PNG, APNG, PPM and SVG
+rendering
 
 </td></tr>
 </table>
@@ -196,6 +222,7 @@ code does not contain.
 | Peak afternoon SST warming, TOGA COARE, 42 days | *r* `0.953` | ship observations |
 | Snow specific surface area after 37 days, Summit | `23.8 m²/kg` | `23 ± 3` (observed) |
 | Effective roughness of two-stripe surfaces, 8 cases | rms ln error `0.074` | LES (Bou-Zeid 2007) |
+| ERA5 driver vs Lindenberg sounding, θ / q<sub>v</sub> RMSE at 200–3000 m | `0.787 K` / `0.718 g/kg` | radiosonde, 2019-06-29 00 UTC |
 
 Plus the classical CFD cases — Taylor-Green vortex, decaying isotropic
 turbulence, channel flow, buoyant convection — in `examples/`.
@@ -211,7 +238,10 @@ Pkg.instantiate()
 ```
 
 Julia ≥ 1.10. Non-standard-library dependencies: **FFTW**,
-**KernelAbstractions** and **NCDatasets** (NetCDF-4 output, #310).
+**KernelAbstractions** and **StaticArrays** (multithreading, #291),
+**NCDatasets** (NetCDF-4, #310) and **GRIBDatasets** (ERA5 input, #363).
+Start Julia with threads (`julia -t 12 …`) to use them; results do not
+depend on the thread count.
 
 > **Why so few dependencies?** Each one is justified in the PR that adds it
 > (`docs/CONTRIBUTING.md`). Some of the in-package code (a PNG/APNG
@@ -339,8 +369,12 @@ see [the Berlin case](docs/src/design/berlin_case.md).
 ## Documentation
 
 Online: [stable](https://badulion.github.io/Aeolus.jl/stable/) (latest
-release) · [dev](https://badulion.github.io/Aeolus.jl/dev/) (`master`),
-deployed by the `Documentation` workflow.
+release) · [dev](https://badulion.github.io/Aeolus.jl/dev/) (`master`).
+The `Documentation` workflow builds the docs on every pull request and
+deploys them to `gh-pages`: `dev` on every push to `master`, `stable` on
+a version tag. The `CI` workflow runs the fast test tier on every pull
+request and push to `master`, and the full tier on push to `master` and
+weekly.
 
 ```bash
 julia --project=docs docs/make.jl     # build locally (never deploys)
@@ -350,7 +384,9 @@ julia --project=docs docs/make.jl     # build locally (never deploys)
   discretization, fractional-step projection, discrete Poisson,
   [radiative transfer](docs/src/theory/radiation.md)
 - **Design** — architecture, dispatch on `Location`, pluggable pressure solvers
-- **API reference** — generated for all 55 modules
+- **Run configuration** — guide, generated option reference for every
+  driver, input-format specifications
+- **API reference** — generated from the docstrings, module by module
 - **Examples** — worked cases with validation output
 
 ---
@@ -394,8 +430,19 @@ ends with a validation target. Full plan:
 - [ ] **Era VIII** — real-world data, forcing and validation *(67–73)*
 - [ ] **Era IX** — data assimilation and inverse problems *(74–79)*
 - [ ] **Era X** — performance and scale: MPI, GPU *(80–87)*
+  - [ ] Phase 81 — GPU port; its CPU half, the KernelAbstractions port
+        for multithreading, landed early (#291): Berlin flagship 155 → 88
+        ms/step at 12 threads (1.77×), short of the 4× target
 - [ ] **Era XI** — machine learning, applications, ecosystem *(88–100)*
 - [ ] **Era XII** *(future direction)* — kilometre-scale regional and climate modelling *(101–112)*
+- [x] **Outside the era plan** — delivered for the Berlin nesting epic and
+      the technical-debt milestone
+  - [x] Nesting: hierarchies, sibling, non-aligned and stretched children (#327–#329, #349)
+  - [x] KernelAbstractions port for CPU multithreading (#291)
+  - [x] Direct anelastic pressure solver (#309)
+  - [x] Structured logging, run folders and diagnostics (#293)
+  - [x] TOML run configuration, static and dynamic input drivers, ERA5 (#311)
+  - [x] Test tiers, CI, docs deployment, Berlin suite folded into module tests (#316, #354, #320, #317)
 
 ---
 
@@ -404,7 +451,10 @@ ends with a validation target. Full plan:
 Caveats of what currently ships, as distinct from what is not yet built.
 
 - **Single-node CPU only.** Domain decomposition and GPU backends exist as
-  interfaces, not implementations. Era X.
+  interfaces, not implementations (Era X). Threading scales less than
+  hoped: the stencils are memory-bound, so the 64³ Berlin flagship
+  gains 1.77× at 12 threads and the 256³ DNS 1.43×, while compute-bound
+  kernels such as WENO-Z5 reach 8.6× (measured on a 12-core desktop).
 - **Gas optics is a band-model reconstruction**, not a fit to line-by-line
   data. `RRTMGP.jl` does not load on every platform, so the *k*-distribution
   is built from a Malkmus narrow-band model via Domoto inversion. Broadband
