@@ -33,7 +33,7 @@ makedocs(
         # long single pages: the KA port log (223 KiB) and the generated Berlin
         # option reference (137 KiB, one table per coupling); Documenter's
         # 200 KiB limit otherwise fails the build
-        size_threshold_ignore = ["design/ka_port.md", "reference/options/berlin.md"],
+        size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/berlin.md"],
     ),
     pages = [
         "Home"           => "index.md",

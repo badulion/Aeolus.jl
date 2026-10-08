@@ -15,7 +15,7 @@ git worktree add .worktrees/issue-42 -b issue/42-p3-microphysics master
 cd .worktrees/issue-42
 
 # 2. Work. Commit after every self-contained subproblem (see below).
-# 3. Run the FAST tier before proposing anything (parallel, ~5 min),
+# 3. Run the FAST tier before proposing anything (parallel; 12.6 min at 4 jobs, #320),
 #    plus the full-tier files of any physics you touched.
 julia --project=. test/run.jl
 julia --project=. test/run.jl --only era6_gabls1.jl,era6_gabls3.jl
@@ -183,7 +183,7 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            65 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl and other module tests, 102,026 fast-tier
+test/           runtests.jl + era*_*.jl and other module tests, 106,776 fast-tier
                 assertions; run.jl = parallel runner, test_tags.toml = tiers
 examples/       worked cases; examples/urban/ is the flagship
 docs/src/       theory, design, API reference

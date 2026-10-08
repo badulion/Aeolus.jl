@@ -1614,14 +1614,12 @@ the σ-model in `Operators`; #172, #184, #180, #185, #195 / PRs #209,
 milestone pulled forward. None of it is an era phase. Parts of it are
 early halves of Phases 30, 67, 73 and 81, which point here.*
 
-**Status: the code of all six blocks below is merged** (master
-`c2a579a`, 2026-10-07). The epic issues #246, #291, #293 and #311 are
-still open on GitHub: closing them is the maintainer's. Two PRs were
-still open when this was written, and the numbers quoted from them were
-measured on their branches: the KA-o scaling report (#308 / PR #399:
-benchmark script and the report section of `ka_port.md`, no `src`
-change) and FLAG-a (#392 / PR #398). The fast tier on master after
-these merges: **102,026 assertions in 133 jobs**.
+**Status: all six blocks below are merged** (master `4b3a16b`,
+2026-10-08, after the KA-o scaling report #308 / PR #399 and FLAG-a
+#392 / PR #398). The fast tier on that master: **106,776 assertions in 135 jobs** (0 fail, 8 broken).
+The KA port epic #291 and the run-configuration epic #311 are closed;
+#246 and #293 stay open for the maintainer. The follow-up to KA-o is the
+scaling epic #406 (SC-a … SC-e, #400, #397), open.
 
 ### Nesting: hardening, hierarchies, siblings, non-aligned and stretched children ✅ SHIPPED
 
@@ -1800,6 +1798,11 @@ small to split (the 64³ flagship). Also open:
   flagship size: `launch_weighted!` weights by points, not cost.
 - Remaining for Phase 81: the GPU backend, GPU-resident FFT and
   multigrid, SoA surfaces.
+- Follow-up: the scaling epic #406 (roofline profile and thread
+  pinning, threaded halo fills, concurrent parent/child stepping, kernel
+  fusion, cache blocking, the DNS statistics on the reduction
+  primitives, the FFTW MEASURE crash #397) — move fewer bytes, launch
+  fewer and larger kernels; target flagship 3–4× at 12 threads.
 
 **Bugs the tests caught**:
 - A rejected adaptive step left the blown-up NaN `νt`/`κt` in the
@@ -1993,11 +1996,18 @@ PR #395; `docs/src/testing.md`). What was built:
 
 **Measured**: fast tier after #320, 4 jobs: 21.0 → 12.6 min (at
 different machine loads, 2.8 and 6.2). On master after all the merges
-above: **102,026 assertions in 133 jobs**.
+above: **106,776 assertions in 135 jobs** (0 fail, 8 broken).
 
-**Open after these blocks**: #392 / PR #398 (the default flagship
-failed near step 12 because a timing script forced 2 s steps past the
-stable dt; the fix refuses such a dt); #397 (FFTW MEASURE segfault);
+**Shipped with these blocks**: FLAG-a (#392 / PR #398): the default
+flagship failed near step 12 because a timing script forced 2 s steps
+past the stable dt (0.47 → 0.098 s within 9 steps; |v| 7.8 → 49 m/s,
+θ 229–360 K at step 15); `step_case!(case, dt)` now refuses a dt above
+the adaptive stepper's `stable_dt`, and the default case runs 20 steps
+without a retry (max CFL 0.46). The issue's premise proved wrong: it
+read as an instability of the default case, but the case is stable when
+stepped at its own dt; the failure was the forced step.
+
+**Open after these blocks**: #397 (FFTW MEASURE segfault);
 #238 (implausible Berlin nights).
 
 ---
@@ -2218,7 +2228,7 @@ min (1.43x; step_rk3! 1.87x); thread-invariant at 1/4/12/24 (3746
 hashes). The scaling targets of #308 (≥ 2.5× at 4 threads, ≥ 4× at 12)
 were **missed**: the stencils are memory-bound at the 50–75 GB/s DRAM
 bandwidth of that machine, while compute-bound kernels such as WENO-Z5
-reach 8.6×.
+reach 8.6×. The follow-up is the scaling epic #406 (open).
 
 ### Phase 82 — Multi-GPU and heterogeneous execution
 Multi-GPU per node and multi-node GPU with CUDA-aware MPI, plus
