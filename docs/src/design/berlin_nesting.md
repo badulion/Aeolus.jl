@@ -63,13 +63,37 @@ landing on the parent's windows:
 | where | what |
 | :-- | :-- |
 | `step_dt` → `limit_dt` | the child's step: `subcycle_dt(R, dt)`, `R` the time left in the open window, or the parent's next step `parent_dt` when none is open |
-| `:nest_parent` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed |
+| `:nest_parent` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed. One-way under `run_case!`: the parent's step of the next window starts on its own task (`prefetch_parent_step!`, SC-c #403, below) |
 | dynamics (`advance_dynamics!`) | every core reads the blended parent at its stage times |
 | `:nest_feedback` (after `:column_tendency`) | the child reached the window's end: `end_parent_step!` (one-way: the clock and the statistics; two-way: also the feedback onto the parent, see below) |
 
 The nest is built in `init!` before the other couplings
 (`init_priority = -1`): they initialise from the faces' data and the
 child's wind.
+
+**The parent ahead (SC-c, #403).** A one-way parent never sees the child,
+so its step of window ``n+1`` needs only the parent at the end of window
+``n``. When `:nest_parent` opens window ``n`` and the run will step past
+its end, it starts that step on its own task
+([`prefetch_parent_step!`](@ref)) and the child steps through window
+``n`` meanwhile; the next `:nest_parent` takes the step
+([`begin_parent_step!`](@ref)). The step size is the sequential one:
+`parent_dt` of the parent at the window start, which `limit_dt` would
+read there (the child's step is never longer than the window, so the
+window is exactly that), or, with a fixed child step, the whole number of
+child steps. The child's and the parent's states are bit-identical to
+sequential stepping (all 22 state fields, `:smoke` scenario, 12 steps,
+adaptive and fixed steppers). Only `run_case!` enables it: it sets the
+run's horizon on the clock (`Clock.t_stop`, `stop_margin`: a step starts
+at ``t`` exactly when `t_stop − t > stop_margin`), so a step is prefetched
+only for a window the run will open, and its `end_run!` hook waits for a
+step left over by a run stopped early (a blow-up; the parent is then one
+window ahead). A caller that steps the case itself leaves the horizon
+unknown and the nest sequential; nothing may read the parent while a
+step is prefetched. Two-way nests stay sequential (the next parent step
+needs the window's feedback), and so does a 1-thread run. `wall.parent`
+is then the time the child still waited for the parent; the parent's own
+time is `run.stats.wall_parent`.
 
 **Ledgers.** The heat and water the faces carry are N-open-d's terms:
 `(:dynamics, :boundary_heat)`, `(:dynamics, :mass_correction)` and

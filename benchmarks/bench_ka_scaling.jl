@@ -42,6 +42,14 @@
 # launch: the KA launch overhead: a no-op body launched threaded
 #   (threshold = 0) over 1 to 4096 rows, against the serial loop.
 #
+# AEOLUS_BENCH_PREFETCH=1 (flagship, SC-c #403): the nest's parent step of
+#   the next window runs on its own task while the child steps (what
+#   `run_case!` does). It is started after the warm-up — `run_case!` would
+#   start it when the open window opened, during step 1's compilation —
+#   and the run's horizon ends with that window, so the timed steps hold
+#   the same parent work as the sequential run: one parent step, here
+#   alongside the child's steps.
+#
 # Each mode prints readable lines and machine-readable `ROW` lines
 # (`ROW <mode> <threads> <name> <value> <unit>`).
 
@@ -58,6 +66,7 @@ MODE in ("flagship", "child", "launches") && include(joinpath(@__DIR__, "..", "e
 MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
 
 const NT = Threads.nthreads()
+const PREFETCH = get(ENV, "AEOLUS_BENCH_PREFETCH", "0") == "1"
 row(mode, name, v, unit) = @printf("ROW %s %d %s %.6g %s\n", mode, NT, name, v, unit)
 
 function tmin(f, n; warm = 2)
@@ -80,13 +89,21 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
     tb = @elapsed case = BC.build_case(cfg)
     m = case.mesh
     @printf("%s: %d × %d × %d child, -t %d, build %.1f s\n", mode, m.Nx, m.Ny, m.Nz, NT, tb)
+    dtw = 0.0
     for _ in 1:nwarm
-        BC.step_case!(case, BC.step_dt(case)) || error("blowup in warm-up")
+        dtw = BC.step_dt(case)
+        BC.step_case!(case, dtw) || error("blowup in warm-up")
     end
     nest = BC.find_coupling(case, :nesting)
     wp0 = nest === nothing ? 0.0 : nest.wall_parent
     nw0 = nest === nothing ? 0 : nest.windows
     pt0 = nest === nothing ? Dict{Symbol,Float64}() : copy(nest.parent.timing)
+    if PREFETCH && nest !== nothing && nest.window !== nothing
+        case.clock.t_stop = Inf; case.clock.stop_margin = 0.0
+        BC._prefetch_parent!(nest, case, dtw)
+        nest.run.ahead === nothing || (case.clock.t_stop = nest.window.t_child_end + nest.run.ahead.dt)
+        @printf("  parent's next window prefetched: %s\n", nest.run.ahead !== nothing)
+    end
     n0 = case.clock.n
     fired = Dict{Tuple{Symbol,Symbol},Int}()
     t_dt = Float64[]; t_step = Float64[]
@@ -124,7 +141,11 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
     # inside (:dynamics, :step!) and in (:ledger, :air_heat): counted twice
     @printf("  %-34s %9.3f ms/step\n", "driver (step_case! − entries)", ms(drv / n))
     row(mode, "driver", ms(drv / n), "ms")
+    nest === nothing || wait_parent_step!(nest.run)     # the parent may be read now
     if nest !== nothing
+        st = nest.run.stats
+        @printf("  parent steps prefetched %d, waited for %.3f s\n", st.prefetched, st.wall_parent_wait)
+        row(mode, "parent_prefetched", st.prefetched, "count")
         nw = nest.windows - nw0
         @printf("  %-34s %9.2f ms/step, %d parent windows opened\n", "parent steps (nest.wall_parent)",
                 ms((nest.wall_parent - wp0) / n), nw)
