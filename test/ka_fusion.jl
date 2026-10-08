@@ -1,7 +1,7 @@
 # SC-d (#404): kernel fusion in the step cores.
 #
-#   1. step! and step_rk3! with the fused passes (one tendency launch, the
-#      divergence into the spectral solver's buffer, one correction pass
+#   1. step! and step_rk3! with the fused passes (write-only tendency
+#      launches, the divergence into the solver's buffer, one correction pass
 #      that also writes p and the RK3 combination, the halo shell) give the
 #      bits of the pre-fusion cores (test/support/legacy_fusion.jl), for
 #      every field of the simulation, halos included: triply periodic (FFT
