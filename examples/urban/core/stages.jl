@@ -251,6 +251,13 @@ it (`monitored_step!`: the diagnostics row with the step's dt, its
 [`step_limiter`](@ref) and retries, the progress line, the blowup guard);
 `callback(case, n)` is called after step `n`.
 
+The loop sets the run's horizon on the clock (`t_stop`, `stop_margin`)
+and calls every coupling's [`end_run!`](@ref) after it. With it a
+one-way nest steps the parent's next window on its own task while the
+child steps (SC-c, #403): between steps the nest parent may be busy, so
+a `callback` must not read it (the child is the case's own); after
+`run_case!` returns it is free.
+
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
 `:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
 each step takes `step_dt(case)`, the last one shortened to land on it.
@@ -283,15 +290,25 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
         ok && callback !== nothing && callback(case, case.clock.n)
         return ok
     end
-    if variable
-        t_end = case.sim.t + nsteps * cfg.dt
-        while t_end - case.sim.t > 1e-9 * cfg.dt
-            one_step(last_step_dt(step_dt(case), t_end - case.sim.t)) || break
+    # the horizon: a step starts at t exactly when t_stop - t > stop_margin
+    # (the fixed loop's steps start on multiples of dt, so half a step is margin)
+    clk = case.clock
+    clk.t_stop = case.sim.t + nsteps * cfg.dt
+    clk.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
+    try
+        if variable
+            t_end = clk.t_stop
+            while t_end - case.sim.t > 1e-9 * cfg.dt
+                one_step(last_step_dt(step_dt(case), t_end - case.sim.t)) || break
+            end
+        else
+            for _ in 1:nsteps
+                one_step(cfg.dt) || break
+            end
         end
-    else
-        for _ in 1:nsteps
-            one_step(cfg.dt) || break
-        end
+    finally
+        clk.t_stop = NaN
+        foreach(c -> end_run!(c, case), case.couplings)
     end
     nsteps = case.clock.n - n0
     t_wall = time() - case.clock.t_wall0

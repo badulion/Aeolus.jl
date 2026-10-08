@@ -78,6 +78,7 @@ using ..Simulations
 using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!,
                      StepRecord, _step_begin!, _step_end!, _nmax   # the step record (#336)
 import ..Simulations: step_record
+using ..RunLog: current_domain, with_domain
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
 using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights,
                    _project_mass_weighted!
@@ -111,6 +112,7 @@ export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        NestMeasure, nest_measure, nest_reference_mismatch, nest_fluid_mask,
        DomainAdvance, domain_advance, stage_times,
        NestedRun, NestRunStats, boundary_time, begin_parent_step!, end_parent_step!, subcycle_dt,
+       prefetch_parent_step!, wait_parent_step!,
        begin_child_step!, end_child_step!,
        NestHierarchy, add_nest!, nest_domain, nest_link, proper_nesting_violations,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,

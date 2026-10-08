@@ -6,8 +6,12 @@
 Step counter and time state of a case: `n` (steps taken), `hour`
 (local hour of day at the start of the current step), `sun` (the solar
 position of the last radiation update), `blowup` (set by the `:sanity`
-stage), `nrecord` (output records written) and `t_wall0` (wall-clock
-start of `run_case!`).
+stage), `nrecord` (output records written), `t_wall0` (wall-clock
+start of `run_case!`) and the run's horizon, set by `run_case!` for the
+length of its loop: a step starts at time `t` exactly when
+`t_stop - t > stop_margin` (`t_stop = NaN`: unknown, a caller steps the
+case itself). A coupling that works ahead of the child (the nest's
+prefetched parent step, SC-c #403) does so only for steps that will run.
 """
 mutable struct Clock
     n::Int
@@ -16,7 +20,12 @@ mutable struct Clock
     blowup::Bool
     nrecord::Int
     t_wall0::Float64
+    t_stop::Float64
+    stop_margin::Float64
 end
+
+"Whether `run_case!` will start a step at time `t` (false when it does not know)."
+step_will_run(clk::Clock, t::Real) = clk.t_stop - t > clk.stop_margin
 
 "One scheduled call: `coupling` runs stage `S` at `order` with `cadence`."
 struct ScheduleEntry
@@ -178,7 +187,7 @@ function build_case(cfg::CaseConfig)
     ledger = Ledger()
     ledger.ρ = copy(ref.ρ̄)
 
-    clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time())
+    clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0)
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
                 nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
