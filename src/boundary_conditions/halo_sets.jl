@@ -112,11 +112,20 @@ end
 end
 
 # The two launches. One work item per thread and chunk: `n` parts of every
-# field, each launch weighted by the points it writes (so the backend's
-# threshold and points-per-task rule see the real work).
+# field, each launch weighted by its work in stencil-point equivalents, so
+# that the backend's threshold and points-per-task rule see the real work.
+# A halo point is a copy (one read, one write, mostly contiguous): a fill of
+# u, v, w, θ at 64 × 64 × 32 writes 245 000 halo points in 47 µs at one
+# thread, 0.19 ns per point, cheaper than a stencil point. Counting two
+# halo points as one unit measured best over 1/2/4/8 (SC-b in ka_port.md):
+# one per unit started too many tasks for one field (a 64³ field 1.1-1.4×
+# slower than serially at 12-24 threads), four per unit too few for a set.
+const _HALO_POINTS_PER_UNIT = 2
+_halo_work(np) = cld(np, _HALO_POINTS_PER_UNIT)
+
 function _fill_set_threaded!(b, fs::Tuple, bcs::Tuple, keys::Tuple, n::Int)
-    wxy = cld(sum(_xy_points, fs), n)
-    wz  = cld(sum(_z_points, fs), n)
+    wxy = cld(_halo_work(sum(_xy_points, fs)), n)
+    wz  = cld(_halo_work(sum(_z_points, fs)), n)
     launch_weighted!(b, wxy, _xy_item!, (1:n,), fs, bcs, keys, n)
     launch_weighted!(b, wz,  _z_item!,  (1:n,), fs, bcs, keys, n)
     return fs
@@ -130,8 +139,8 @@ function _fill_set_serial!(fs::Tuple, bcs::Tuple, keys::Tuple)
     return _fill_set_serial!(Base.tail(fs), Base.tail(bcs), Base.tail(keys))
 end
 
-_bcs_tuple(bcs::Tuple, n) = bcs
-_bcs_tuple(bcs, n) = ntuple(_ -> bcs, n)
+_bcs_tuple(bcs::Tuple, fs) = bcs
+_bcs_tuple(bcs, fs) = map(_ -> bcs, fs)
 
 """
     fill_halos!(fields::Tuple, bcs; keys = data of each field) -> fields
@@ -147,18 +156,19 @@ of every field, a chunk of k-planes per work item, then the z phases, a
 chunk of j-rows per work item (every x/y phase stays inside a plane and
 every z phase inside a column, so the axis order x, y, z of the edges and
 corners is kept). Below the backend's threshold (counted over the halo
-points of the whole set) and at one thread the fields are filled one after
-the other with the per-phase launches.
+points of the whole set, two halo points per unit of work) and at one
+thread the fields are filled one after the other with the per-phase
+launches.
 """
 function fill_halos!(fs::Tuple{Vararg{Field}}, bcs; keys::Tuple = map(f -> f.data, fs))
     n = length(fs)
     n == 0 && return fs
-    bt = _bcs_tuple(bcs, n)
+    bt = _bcs_tuple(bcs, fs)
     length(bt) == n && length(keys) == n ||
         throw(ArgumentError("fill_halos!: $n fields, $(length(bt)) boundary conditions, $(length(keys)) keys"))
     b = Backends.backend(first(fs).data)
     np = sum(_xy_points, fs) + sum(_z_points, fs)
-    if b isa Backends.CPUBackend && !runs_serially(b, np)
+    if b isa Backends.CPUBackend && !runs_serially(b, _halo_work(np))
         _fill_set_threaded!(b, fs, bt, keys, Threads.nthreads())
     else
         _fill_set_serial!(fs, bt, keys)
