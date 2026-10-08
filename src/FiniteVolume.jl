@@ -1944,41 +1944,53 @@ end
 @inline _pred(f, y, x, ::Nothing, i, j, k) = f(y, x)
 @inline _pred(f, y, x, snap::AbstractArray, i, j, k) = @inbounds f(y, x, snap[i, j, k])
 
-# one row (j, k) of tendencies into buf[:, a, b, f.., s]
-@inline function _trow_mom!(buf, a, b, s, j, k, ii, u, v, w, m, ν)
-    @inbounds for i in ii
+# One row (j, k) of tendencies into buf[:, a, b, f, s], and the predictor of
+# one row from it. Each loop is its own @noinline function with the arrays
+# as separate arguments (as `Backends._row!`: LLVM then hoists the array
+# loads and vectorises); `ivdep`: within a row no store feeds a load (the
+# tendencies only read the state, the predictor reads and writes one point).
+@noinline function _trow_mom!(buf, a, b, s, j, k, ii, u, v, w, m, ν)
+    @inbounds @simd ivdep for i in ii
         buf[i, a, b, 1, s] = _tend_u(i, j, k, u, v, w, m, ν)
         buf[i, a, b, 2, s] = _tend_v(i, j, k, u, v, w, m, ν)
         buf[i, a, b, 3, s] = _tend_w(i, j, k, u, v, w, m, ν)
     end
+    return nothing
 end
-@inline _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, ::Nothing, m, ν) = nothing
-@inline function _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, sc, m, ν)
-    ϕ = sc[1]
-    @inbounds for i in ii
+@noinline function _trow_ϕ!(buf, a, b, f, s, j, k, ii, u, v, w, ϕ, m, ν)
+    @inbounds @simd ivdep for i in ii
         buf[i, a, b, f, s] = _tend_ϕ(i, j, k, u, v, w, ϕ, m, ν)
     end
+    return nothing
 end
+@noinline function _prow_mom!(u, v, w, buf, a, b, s, j, k, ii, pu)
+    @inbounds @simd ivdep for i in ii
+        u[i, j, k] = pu(u[i, j, k], buf[i, a, b, 1, s])
+        v[i, j, k] = pu(v[i, j, k], buf[i, a, b, 2, s])
+        w[i, j, k] = pu(w[i, j, k], buf[i, a, b, 3, s])
+    end
+    return nothing
+end
+@noinline function _prow_ϕ!(ϕ, buf, a, b, f, s, j, k, ii, ps, snap)
+    @inbounds @simd ivdep for i in ii
+        ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], buf[i, a, b, f, s], snap, i, j, k)
+    end
+    return nothing
+end
+@inline _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, ::Nothing, m, ν) = nothing
+@inline _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, sc::Tuple, m, ν) =
+    _trow_ϕ!(buf, a, b, f, s, j, k, ii, u, v, w, sc[1], m, ν)
+@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ::Nothing) = nothing
+@inline _prow_sc!(buf, a, b, f, s, j, k, ii, sc::Tuple) =
+    _prow_ϕ!(sc[1], buf, a, b, f, s, j, k, ii, sc[2], sc[3])
+
 @inline function _trows!(buf, a, b, s, j, k, ii, u, v, w, s1, s2, m, ν)
     _trow_mom!(buf, a, b, s, j, k, ii, u, v, w, m, ν)
     _trow_sc!(buf, a, b, 4, s, j, k, ii, u, v, w, s1, m, ν)
     _trow_sc!(buf, a, b, 5, s, j, k, ii, u, v, w, s2, m, ν)
 end
-
-# the predictor of one row (j, k) from buf[:, a, b, f.., s]
-@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ::Nothing) = nothing
-@inline function _prow_sc!(buf, a, b, f, s, j, k, ii, sc)
-    ϕ, ps, snap = sc
-    @inbounds for i in ii
-        ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], buf[i, a, b, f, s], snap, i, j, k)
-    end
-end
 @inline function _prows!(buf, a, b, s, j, k, ii, u, v, w, pu, s1, s2)
-    @inbounds for i in ii
-        u[i, j, k] = pu(u[i, j, k], buf[i, a, b, 1, s])
-        v[i, j, k] = pu(v[i, j, k], buf[i, a, b, 2, s])
-        w[i, j, k] = pu(w[i, j, k], buf[i, a, b, 3, s])
-    end
+    _prow_mom!(u, v, w, buf, a, b, s, j, k, ii, pu)
     _prow_sc!(buf, a, b, 4, s, j, k, ii, s1)
     _prow_sc!(buf, a, b, 5, s, j, k, ii, s2)
 end
