@@ -211,7 +211,14 @@ clocks, statistics and step records against window-by-window stepping
 over 5 windows with fixed and adaptive parent steps, SSP-RK3 and the
 projection step, a moist pair with a tracer, a sponged child and a
 z-stretched parent, and the externally driven child of the Berlin
-pattern.
+pattern. The thread-invariance harness (`test/thread_invariance.jl`)
+hashes the Berlin smoke matrix and the flagship, nest parent included,
+at 1/4/12/24 threads: the threaded runs prefetch, the 1-thread run does
+not, and all hashes agree. Its loop runs a variable-step case to the
+horizon it sets, as `run_case!` does; a loop that stops short of its
+own horizon (it did, at first) leaves the threaded parent one window
+ahead of the sequential one — the child agreed bit for bit, the parent
+did not.
 
 The threads are shared between the two tasks: each domain's launches
 spread over Julia's thread pool, and the scheduler divides it between
