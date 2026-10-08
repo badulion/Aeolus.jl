@@ -35,7 +35,7 @@
 # diagonalise.
 
 using ..PressureSolvers: AbstractPressureSolver, ColumnTridiagonalSolver
-import ..PressureSolvers: solve!, poisson_axis_bcs
+import ..PressureSolvers: solve!, poisson_axis_bcs, source_buffer, solve_source_buffer!
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic
 import ..Simulations: _default_solver
 
@@ -103,6 +103,10 @@ end
 
 solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T}, s::StretchedPoissonSolver{T}) where {T} =
     solve!(p, source, s.core)
+# the column solver's source buffer (SC-d, #404: the step cores write the divergence into it)
+source_buffer(s::StretchedPoissonSolver) = source_buffer(s.core)
+solve_source_buffer!(p::Field{CellCenter,T}, s::StretchedPoissonSolver{T}) where {T} =
+    solve_source_buffer!(p, s.core)
 poisson_axis_bcs(s::StretchedPoissonSolver) = poisson_axis_bcs(s.core)
 
 # =========================================================================

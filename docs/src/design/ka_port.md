@@ -1538,6 +1538,9 @@ field algebra below.
   and forms the stage combinations `¾uⁿ + ¼u` and `⅓uⁿ + ⅔u` as kernels
   over the whole storage (`combine_storage!`; the in-place array is the
   first argument, so the loop vectorises: 0.56-0.68× the broadcast).
+  Since SC-d (#404) the combination is written by the projection's
+  correction pass and the scalar update, and on the halos by one
+  halo-shell launch; `combine_storage!` is gone (see "SC-d" below).
 * **Fused CFL sweep.** `cfl_diagnostics` made five sweeps: the advective
   rate and one maximum each of `νh`, `νv`, `κh`, `κv`. It now makes one:
   a `range_max` whose body returns the 5-tuple, each component
@@ -2828,6 +2831,142 @@ flagship step at 12 threads (88.3 ms against 89.6 on master, minimum of
 3, an earlier session than the table), presumably because the stencils
 between two fills have evicted the field; at one unit per point it is
 the 83.4 against 92.1 of the table.
+
+## SC-d: kernel fusion in the step cores (#404)
+
+SC-a (#401) found the 256³ DNS step 98 % bandwidth-bound in its launches
+and the step cores built from single-purpose passes, each streaming its
+fields from DRAM. SC-d fuses them, following SC-a's ranked targets 1-5,
+so each field streams once per pass group. Every fused value is computed
+from the same operands in the same order as the separate passes, so the
+results are the old bits (`test/ka_fusion.jl` checks every field of the
+simulation, halos included, against the pre-fusion cores kept in
+`test/support/legacy_fusion.jl`).
+
+**What is fused** (`FiniteVolume`, "Fused step-core kernels";
+`Simulations._euler_projection!`, `_project_velocity!`):
+
+| before (per substep) | after |
+| :-- | :-- |
+| `zero_storage!` ×4-5 (`memset`), `momentum_advect!` (3 launches, each reading u, v, w), `advect_centered!` θ (and qv), 4-5 `laplacian` into scratch, 4-5 `axpy!(t, ν, ∇²f)` | write-only launches `t = (0 − A) + ν∇²f`: u, v, w in one (`_b_tendency_momentum!`, reading u, v, w once), θ and qv one each (`_b_tendency_scalar!`); the tendencies' halos zeroed by one halo-shell launch |
+| `divergence` into `div_buf`, then the solver's copy into its buffer | `_divergence_into!` writes ∇·u into the spectral solver's source buffer (`PressureSolvers.source_buffer`, `solve_source_buffer!`) |
+| `∂x/∂y/∂z(φ)` into `dφdx…` + three `axpy!(u, −1, dφdx)`; `p = φ/Δt` | one launch `_b_correct!`: `u − (φᵢ − φᵢ₋₁)/Δx` … and `p = φ/Δt` (`u + (−1)·d` is `u − d` exactly); an open face's gradient slab only, for its check |
+| RK3: after substeps 2 and 3, `combine_storage!` ×4-5 over the storage | the correction writes `c(u − ∇φ, uⁿ)`; θ (qv) `c(θ + Δt tθ, θⁿ)` in its predictor pass; the halos `c(u, uⁿ)` in one halo-shell launch |
+
+**How much to put in one launch.** A launch that writes all five
+tendencies reads u, v and w once, but with five stores and some ten
+arrays per point the loop stops vectorising. Measured, ms per call of the
+five tendencies (minimum of 8; 1 / 12 threads):
+
+| layout | viscous dry 256³ | moist inviscid stretched 192 × 192 × 53 | moist inviscid regular 192 × 192 × 53 |
+| :-- | --: | --: | --: |
+| before SC-d (`memset` + 5 read-modify-write launches) | — | 18.3 / 10.8 | 18.9 / 10.8 |
+| all five in one launch | 82.1 / 48.3 | 33.2 / 6.5 | 39.0 / 6.1 |
+| one launch per tendency | 108.8 / 65.6 | 14.6 / 6.7 | 14.7 / 7.0 |
+| **u, v, w in one launch, one per scalar** (kept) | 86.0 / 53.1 | 12.0 / 6.1 | 11.6 / 6.0 |
+
+The first version of SC-d used the single launch, which made the
+flagship's parent (the moist stretched case) 10 % slower at one thread
+(`parent_steps` 51.1 → 56.1 ms, minimum of 3); the kept layout is the
+fastest or within 10 % of it everywhere. The correction pass (u, v, w and
+p in one launch) does not have the problem: fused 2.9 ms against 3.2 ms
+split at one thread, 1.5 against 1.9 at 12 (regular 192 × 192 × 53).
+
+The *halo shell* (`Simulations._shell_map!`) covers what the old passes did
+outside the interior (the `memset` zeroed the tendencies' halos; the RK3
+combination ran over the storage): one launch over the storage's (j, k)
+rows, each row only its halo points, for a tuple of arrays. The fused
+tendency kernel applies when the core's momentum advection is the
+built-in `momentum_advect!` (the default; a custom `momentum_advection`
+keeps the separate passes). The divergence goes into the buffer for the
+FFT, cosine-FFT and column (stretched-z, `ColumnTridiagonalSolver`)
+solvers: the DNS, the child and the nest parent; the iterative solvers
+keep `div_buf`. `div_buf`, `dφdx/dφdy/dφdz` and the
+`lap_*` fields are no longer written by `step!` / `step_rk3!` (no reader
+used them after a step).
+
+**Serial launches.** The nest's prolongation (`_interp_box!`) sums 8-27
+parent values per child point; it now counts that stencil as launch work
+(`launch_weighted!`), so the 64³ child's halo boxes (~14 000 points)
+run threaded: one halo prolongation of a field at `-t 12` took 2070-2089
+µs and takes 867-886 µs (64³ child, ratio 3, order 3; 1 thread 2490-2534
+µs, unchanged). The open boundary's time blend (`_blend_body!`, 72 calls
+per flagship step, one per plane) stays serial: on a warm 3 × 70 × 70
+plane it takes 14.2 µs serially and 28.5 µs threaded (y and z planes 3.0
+against 5.0 µs), so threading or merging the planes does not pay.
+
+**Not fused.** The predictor `u ← u + Δt tu` (9 passes per RK3 step) stays
+a separate pass: the tendency kernel cannot write `u` in place (its
+stencil reads the neighbours), and the divergence cannot form `u*` on
+the fly without the halo fill, the open-boundary update and the
+`post_predictor!` hook that run between them. The SGS, buoyancy, Coriolis,
+sponge and hook terms still add to the tendencies in their own passes.
+
+### Bytes and launches per step
+
+From `bench_roofline.jl` (12 threads, the compulsory-bytes model of SC-a;
+the halo-shell launch counted at its halo points, which the model would
+count as the whole storage: 4.03 GB/step of the DNS row, 0.27 GB real):
+
+| | before | after |
+| :-- | --: | --: |
+| 256³ DNS `step_rk3!`, GB/step in launches | 29.14 | 14.90 (−49 %) |
+| 256³ DNS, tendency `memset`s (outside launches) | 1.73 GB | none |
+| 256³ DNS, launches/step (profiler, nested included): threaded / serial | 107 / 864 | 55 / 864 |
+| flagship `step_case!`, GB/step in launches | 2.313 | 2.194 (−5 %) |
+| flagship, of which the nest parent's launches over 10⁶ points | 0.766 | 0.666 (−13 %) |
+| flagship, launches/step (KA-o's `launches` mode): threaded / serial | 416 / 6476 | 405 / 6469 |
+
+SC-a estimated 15 GB for targets 1-5; the fusion removes 14.2 GB of the
+DNS's launches and the 1.7 GB of `memset`s (keeping u, v, w apart from
+the scalars' tendency launches costs 1.2 GB of it, see above). The
+flagship gains far less: its step cores are a small part of its step (the child's SGS, scalar
+transport, surface and radiation couplings are not step-core passes). The
+launch counts of the flagship include, since SC-b, the serial per-item
+launches inside its threaded set fills, so they are not comparable with
+KA-o's 263 / 569.
+
+### Measured speed-ups
+
+`benchmarks/bench_ka_scaling.jl` (KA-o), one process per thread count,
+base (the branch point: SC-a + SC-b + master) and SC-d run alternately;
+every process started with the 1-minute load below 4 and at least 12 GB
+free; each figure is the minimum over 3 processes. Flagship: 2 warm-up and
+9 timed steps, the mean `step_case!` of the 9 (long Berlin runs are
+paused). DNS: `AEOLUS_FFTW_PLANNER=estimate`, 1 warm-up and 3 timed steps.
+Speed-ups in brackets are over the same code at one thread.
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| 256³ DNS `step_rk3!`, base (s) | 2.090 | 1.210 (1.73×) | 1.141 (1.83×) | 1.173 (1.78×) |
+| 256³ DNS `step_rk3!`, SC-d (s) | **1.627** (−22 %) | **0.793** (2.05×) | **0.693** (2.35×) | **0.693** (2.35×) |
+| SC-d over base at one thread | 1.28× | 2.63× | 3.02× | 3.02× |
+| 256³ DNS `dns_step!` (with the history), base → SC-d (s) | 2.172 → 1.726 | 1.276 → 0.856 | 1.209 → 0.762 | 1.245 → 0.765 |
+| flagship `step_case!`, base (ms) | 157.2 | 88.7 (1.77×) | 83.5 (1.88×) | 94.1 (1.67×) |
+| flagship `step_case!`, SC-d (ms) | **152.6** (−3 %) | **83.3** (1.83×) | **76.6** (1.99×) | **87.6** (1.74×) |
+| flagship, the nest parent (`parent_steps`), base → SC-d (ms) | 51.1 → 47.6 | 35.4 → 30.3 | 32.8 → 27.8 | 33.9 → 29.2 |
+| flagship, the child's core (`dynamics/step!`), base → SC-d (ms) | 35.0 → 33.4 | 20.3 → 19.5 | 19.3 → 18.1 | 22.4 → 20.1 |
+
+The 12-thread DNS step is 0.693 s against SC-a's estimate of 0.71 s for
+targets 1-5. Single-thread time is better, not worse: −22 % for the DNS
+and −3 % for the flagship. The flagship's spread between processes is up
+to 18 % (SC-a saw 40 %); its minima move by 3-8 %, consistent with the 5 %
+fewer bytes, while its child-core and parent entries are steadier
+(−4 to −15 %).
+
+Thread invariance: the harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`) passes, 21 of 21 checks, 3785 hashes
+identical at 1, 4, 12 and 24 threads.
+
+### Reproducing
+
+```bash
+# base and SC-d, one process per thread count, alternating, load < 4
+julia -t 12 --project=. benchmarks/bench_ka_scaling.jl flagship 2 9
+AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_ka_scaling.jl dns 256 1 3
+julia -t 12 --project=. benchmarks/bench_roofline.jl flagship 2 9    # bytes and launches
+julia -t 12 --project=. benchmarks/bench_ka_scaling.jl launches 2 9
+```
 
 ## Dependency tree
 
