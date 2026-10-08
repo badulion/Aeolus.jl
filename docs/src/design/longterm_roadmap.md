@@ -218,6 +218,9 @@ r=3; flux-preserving prolongation interface mismatch **1.5e-33**;
 **mass error 0.0 with flux correction vs 1.06e-3 without** — the
 correction doing real, measurable work; nest sponge reduces reflected
 amplitude **12.6×** (3.71e-2 → 2.94e-3).
+*Since then* the parent–child operators moved to `src/Nesting.jl`
+(#250) and gained multi-level hierarchies, sibling, non-aligned and
+stretched children (#328); see "Delivered outside the era plan" below.
 
 ### Phase 31 — Adaptive mesh refinement ✅
 `src/AdaptiveMesh.jl`. Block-structured AMR: Löhner gradient, vorticity
@@ -1605,6 +1608,400 @@ the σ-model in `Operators`; #172, #184, #180, #185, #195 / PRs #209,
 
 ---
 
+# Delivered outside the era plan ✅ SHIPPED
+
+*Infrastructure that the Berlin nesting epic and the Technical-debt
+milestone pulled forward. None of it is an era phase. Parts of it are
+early halves of Phases 30, 67, 73 and 81, which point here.*
+
+**Status: the code of all six blocks below is merged** (master
+`c2a579a`, 2026-10-07). The epic issues #246, #291, #293 and #311 are
+still open on GitHub: closing them is the maintainer's. Two PRs were
+still open when this was written, and the numbers quoted from them were
+measured on their branches: the KA-o scaling report (#308 / PR #399:
+benchmark script and the report section of `ka_port.md`, no `src`
+change) and FLAG-a (#392 / PR #398). The fast tier on master after
+these merges: **102,026 assertions in 133 jobs**.
+
+### Nesting: hardening, hierarchies, siblings, non-aligned and stretched children ✅ SHIPPED
+
+**✅ SHIPPED** (`src/Nesting.jl`, `src/nesting/`; follow-ups of the
+Berlin nesting epic #246, whose N-* PRs #272–#292, #323, #330 and #343
+are counted with Era VI; #327 / PR #339, #329 / PR #348, #349 / PR #371,
+#328 / PR #394). What was built:
+- **Hardening M1–M6 (#327).** One mixed-core two-way guard,
+  `_check_two_way_pair`. One per-face advective-plus-diffusive kernel,
+  `scalar_face_flux`, replacing two copies. Flux registers that book the
+  flux the transport actually applied (`book_nest_flux!`,
+  `applied_by = :transport`), with qv allowed as a tracer. One
+  solid-at-open-face path (`mark_open_boundary_solids!`). `_try_advance!`
+  retries only numerical failures (`NumericalFailure`) and rethrows the
+  rest.
+- **Minor findings (#329).** Outflow and halo passed through `nest_bcs`.
+  Refluxing respects the parent's boundary conditions. `NestSponge` acts
+  before the projection. Halo-only (shell) field sets. Typed nesting
+  state. Conservative prolongation limiters `:positive` (Zhang & Shu
+  2010) and `:monotone` (Barth & Jespersen 1989). One two-snapshot time
+  blend, `WindowedBoundaryData`. A public `fill_nest_halos!`.
+- **Follow-ups (#349).** A sponged `NestedRun` refuses to be driven
+  externally. The `periodic` keyword of the flux correction and of
+  refluxing is required.
+- **Hierarchies (#328).** `NestAxis` overlap geometry (rational
+  refinement ratios, off-face origins), overlap prolongation and
+  restriction, stretched children, open boundaries on a z-stretched
+  mesh, and `NestHierarchy`: nest levels and sibling nests with
+  recursive Berger–Oliger subcycling. `NestedRun` is now a facade over
+  it, golden-tested bit-identical to the old pair. Theory:
+  `docs/src/theory/nesting_hierarchy.md`.
+
+**Measured**:
+- Flux registers (M3), 100 steps with a WENO-Z5 tracer slot: composite
+  tracer drift **1.2e-14 per step** booked by the transport, against
+  2.9e-7 booked by the core hook (the pre-#327 way) and 2.5e-6 unbooked.
+- Two-way circulation (M5), 4–6 seeds per configuration: two-way minus
+  one-way child-mean w at mid-depth −0.163 ± 0.057 m/s (6 of 6 seeds),
+  and none at r = 1 (+0.034 ± 0.062 m/s). It is thermally direct: a
+  standalone CBL at the child's spacing is 0.080 K cooler below 800 m.
+- Sponge before the projection: child max|∇·u| **2.8e-14 s⁻¹**, against
+  1.6 s⁻¹ with the same relaxation after the step.
+- Memory and allocation: a 32³ child's field sets 5144 → 2144 KiB; per
+  nested step one-way 5371 → 57.7 KiB and two-way 9009 → 78.0 KiB; a
+  32³ Boussinesq `step!` 1641 KiB → 0.
+- Limiters: an unlimited oblique 0/1 front gives [−0.250, 1.250]
+  (order 3); `:monotone` keeps [0, 1] and the parent mean.
+- Hierarchies (three levels, two siblings at r = 2 and 3, r = 5/2 with
+  off-face edges, a stretched child; one- and two-way; `step!` and
+  `step_rk3!`): free stream max|u − U|/|U| ≤ **3.8e-15** and
+  |∇·u|Δ/|U| ≤ 7.5e-16; composite θ with refluxing ≤ **5.2e-15 per
+  step** (3.5e-8 to 2.7e-7 without); prolongation order 1.99–4.00 for
+  r ∈ {5/2, 3/2, 7/3}, and 1.98 / 2.99 / 3.98 on a stretched child.
+  RMS error over the nest against an exact solution: coarse 0.235,
+  child 0.106, grandchild 0.070, uniform 25 m reference 0.031.
+
+**Bugs the tests caught**:
+- #287 had deleted the mixed-core two-way guard (M1): a Boussinesq
+  parent with an anelastic child ran two-way, silently wrong.
+- The merged M2 flux kernel inferred as `Tuple{Any,Any,Any}`: 313 kB per
+  call and about 43× slower. Now 0 B, with an `@inferred` test.
+- A vertically periodic open box never initialised its radiating
+  outflow, so a `:convective` nest face stayed Dirichlet (residual 1.0
+  instead of 1.15e-7).
+- `boundary_time` and the two-way feedback did not invalidate the cached
+  sponge target: two sponged RK3 runs differed by 1.4e-3.
+- Refluxing wrapped every axis with `mod1`, so a top-plane correction
+  landed in the parent's lowest layer.
+- A sponged child driven through `begin_child_step!` got no velocity
+  relaxation and no warning (max|Δu| 4.02e-3 in one step).
+- A first version made `:positive` the default of the low-level
+  interpolators; the prolongation-order tests on products of sines
+  failed. The code default was wrong, not the tests.
+
+**Expectations that were wrong**:
+- The mass-measure refluxing test passed only because the triply
+  periodic default wrapped a flux through the parent's ground into its
+  top layer. Its registers are now physical (drift 3.86e-15 with
+  refluxing, 1.71e-7 without).
+- "The two-way circulation has the opposite sign to the literature"
+  (M5): the descent is a resolution effect, not a coupling bug.
+
+**Not built**: overlapping siblings (refused; no priority rule); two-way
+feedback on a non-aligned child without a common-face conservation box
+(refused); escalating rollback; validation in the Berlin geometry
+(idealised cases only, Berlin runs paused). `AdaptiveMesh` keeps its own
+index-space proper-nesting check.
+
+### KernelAbstractions port for CPU multithreading (epic #291) ✅ SHIPPED
+
+Phase 81's port, pulled forward for single-node multithreading through
+KernelAbstractions' CPU backend, with one code path that the GPU
+backend will reuse.
+
+**✅ SHIPPED** (`src/Backends.jl` and every hot loop in `src/`; KA-a to
+KA-n, #294–#307 / PRs #342, #367, #341, #377, #353, #378, #352, #384,
+#381, #382, #391, #383, #379, #385; scaling report KA-o #308 / PR #399;
+design `docs/src/design/ka_port.md`). KernelAbstractions port landed
+early (epic #291) for CPU multithreading; the GPU backend, GPU-resident
+FFT/MG and SoA surfaces remain. Measured (KA-o #308, Ryzen 9 7900):
+Berlin flagship 155 -> 88 ms/step at 12 threads (1.77x), 256³ DNS
+1.15 h -> 48 min (1.43x; step_rk3! 1.87x); thread-invariant at 1/4/12/24
+(3746 hashes). What was built:
+- **Primitives (KA-a).** A real `CPUBackend` on `KernelAbstractions.CPU()`;
+  `launch!` over storage-index ranges (one i-row per work item, serial
+  below 32,768 points, at least 16,384 points per task); canonical
+  eight-lane reductions; `init_threads!` (BLAS pinned to one thread when
+  Julia runs threaded); the opt-in thread-invariance harness
+  (`AEOLUS_THREAD_TESTS=1`, `test/thread_invariance.jl`).
+- **Serial baseline (KA-c).** Compile-time integer powers in WENO-Z/TENO,
+  allocation-free halos and solvers, an RK3 workspace: flagship
+  allocation 30.4 → 1.0 MB per step.
+- **Deterministic sums (KA-b).** Every order-dependent sum on the step
+  path goes through `plane_reduce!`, `plane_map!` or `range_max`, so its
+  order does not depend on the thread count.
+- **Kernels.** Finite volume on a `GridMetrics` abstraction that folds
+  about twenty duplicated StretchedGrid kernels into one source (KA-d);
+  halos, open boundaries and nesting operators as owner-computes gathers
+  (KA-f); one matrix-free `pcg!` for all four CG solvers (KA-g);
+  threaded FFTW by default and the stretched Thomas solve over
+  wavenumbers (KA-h); colour-indexed multigrid (KA-i); the step cores
+  with one fused CFL sweep (5 → 1) and one fused step guard (11 → 1)
+  and per-simulation workspaces (KA-j); IBM, wall stress, canopy drag
+  and large-scale forcing (KA-k); every SGS closure (KA-l); column
+  physics one work item per column, with prefilled or locked caches
+  (KA-m); radiosity LU caching, threaded view factors, multi-column
+  two-stream and Philox4x32-10 counter-based random streams for
+  Monte-Carlo and superdroplets (KA-n); WENO/TENO scalar transport and
+  the positivity limiter (KA-e).
+- **Dependency policy (2026-10-06).** "Minimal dependencies" replaces
+  "no binary dependencies". KernelAbstractions and StaticArrays are
+  direct dependencies.
+
+**Measured** (KA-o; Ryzen 9 7900, 12 cores / 24 threads, dual-channel
+DDR5, Julia 1.13.1; speed-up = new code at 1 thread / at N threads):
+- Flagship `CaseConfig(:summer)` (64×64×64 child in its 192×192×53
+  parent): `step_case!` **155.2 → 90.7 / 87.5 / 97.0 ms** at 4 / 12 / 24
+  threads (1.71× / 1.77× / 1.60×). The child alone (nest off): 100.3 →
+  46.5 ms at 12 threads (2.16×). Per entry at 12 threads: aq_chem 4.98×,
+  fog_dew 5.19×, scalar_advection 2.08×, dynamics 1.76×, the nest
+  parent 1.48×.
+- 256³ DNS: `dns_step!` **3.28 → 2.29 s** (1.43×); `step_rk3!` alone
+  2.21 → 1.18 s (1.87×); the 1264-step run 1.15 h → 48 min. The
+  unported per-step history diagnostics cost 0.88 s of the 2.29 s.
+- Kernels at 256³, 12 threads: WENO-Z5 **8.57×** and `set!` sin·exp
+  8.07× (compute-bound); axpy 1.06×, `laplacian` 1.65×,
+  `momentum_advect!` 1.80× (memory-bound).
+- Launch overhead: 263 threaded and 569 serial launches per flagship
+  step, under 3 % of the step at 12 threads. SMT: 24 threads gain on
+  compute-bound work and lose on memory-bound work (−18 %); 12 threads
+  is the better setting on this machine.
+- Thread invariance: **3746 hashes identical at 1/4/12/24 threads**;
+  fast tier 101,558 pass on the KA-o branch.
+- Serial wins on the way (new code at 1 thread vs the pre-port loops):
+  CG-family solves 0.41–0.61×; multigrid 0.43–0.59×; the radiosity day
+  call 3.78 → 1.80 s and the night call 1.89 s → 17 ms (LU cache);
+  `Subsidence(:local)` 15.1 → 0.15 ms; canopy drag 1.01 → 0.10 ms;
+  `fog_adjust!` 11.4 → 5.0 ms.
+
+**Not met** — the targets of #308 were **MISSED** and are not changed
+after the fact: ≥ 2.5× at 4 threads and ≥ 4× at 12, for the flagship
+(1.71× / 1.77×) and for the DNS (1.43× / 1.43×; 48 min against the ≈ 30
+min aimed for). The stencils are memory-bound: streaming kernels reach
+50–75 GB/s, the DRAM bandwidth of this dual-channel desktop, while
+compute-bound kernels such as WENO-Z5 reach 8.6×. An Amdahl fit gives a
+serial fraction of 45–53 %, against the 10–15 % estimated; most of it is
+parallel code that stops at 1.5–2× on bandwidth or on launches too
+small to split (the 64³ flagship). Also open:
+- FFTW MEASURE plans are not thread-invariant (3 of 13 solvers differ
+  at 64×64×32): production keeps MEASURE, the tests use ESTIMATE.
+  MEASURE planning of a threaded 256³ c2r transform segfaults at 10–14
+  threads (#397).
+- The radiosity ≥ 10× target is met at night only; by day the SW
+  operator is refactorised every call (μ₀-dependent albedos).
+- Sparse lists (immersed walls, canopy faces) do not thread at the
+  flagship size: `launch_weighted!` weights by points, not cost.
+- Remaining for Phase 81: the GPU backend, GPU-resident FFT and
+  multigrid, SoA surfaces.
+
+**Bugs the tests caught**:
+- A rejected adaptive step left the blown-up NaN `νt`/`κt` in the
+  simulation, where diagnostics and crash checkpoints read them; the
+  rollback now restores them (KA-j, #346).
+- The process-global `WeakKeyDict` step workspaces raced when two
+  domains were stepped from different tasks (KA-j).
+- The Mie log-derivative buffer was one global vector: two tasks
+  calling `mie_sphere` at once corrupted each other's recursion (KA-m's
+  first-use test).
+- `CGPoissonSolver` divided by a vanishing p·Ap at breakdown and kept
+  going (KA-g).
+- A KA-d commit deleted three launch kernels; the suite at `-t 1` missed
+  it (every launch is serial there), the threaded benchmarks caught the
+  `UndefVarError`.
+- The 1-thread gate (new ≤ 1.10× old) caught performance bugs the tests
+  could not: widened `Vararg` arguments (axpy 375× the old loop), an
+  in-place aliasing path (1.8×), a boxed accumulator in `column_sums`
+  (roughness 97–101 ms against 8.3 ms), loads not hoisted from the
+  argument tuple (WENO-5 6.3 against 2.1 ms).
+- The harness worker at `-t 1` left OpenBLAS at its default thread
+  count, and LAPACK's bits depend on it (2216 differing smoke hashes);
+  the worker now pins BLAS to one thread.
+
+**Expectations that were wrong**:
+- `interior_dot` against Base `sum(abs2, view)` at rtol 1e-13: Base's
+  sequential sum was the less accurate side (2.9e-13 against 3.1e-16
+  for the eight-lane order, both measured against BigFloat).
+- A `backends.jl` test field was identically ±0 instead of spanning
+  four decades (KA-b).
+- `era2_stretched` asked which module defines the StretchedGrid method;
+  with one kernel per operator that question is obsolete (KA-d).
+- `era2_multigrid` asserted that MG-CG's dot product equals
+  `sum(x .* y)`, untrue after the planned reduction-order change; it now
+  checks `interior_dot`. Iteration counts are unchanged in all 28
+  measured CG cases and 22 multigrid cases (KA-g, KA-i).
+- "`init_threads!` keeps the FFTW policy": changed by the maintainer's
+  threaded-FFTW decision (KA-h).
+- `logging_blowup` expected `[:v, :νt, :κt]` non-finite after a
+  rollback: it described the missing restore (KA-j).
+- Monte-Carlo shadow test `argmin(profile) == i_expect` assumed one
+  darkest cell; the τ = 20 shadow is a six-cell plateau within the
+  noise. Three other Monte-Carlo assertions held only for the old
+  random realisation; their photon counts were raised, tolerances
+  unchanged (KA-n).
+- Bit-pattern references re-recorded after named last-bits changes:
+  the P3 precipitation-fraction golden values and the CFG Berlin
+  fixture digests after KA-m's fused saturation vapour pressure (≤ 8.3e-16
+  relative in e_s over 230–320 K); 13 Berlin fixture digests after
+  KA-l's dual-strain gather (Berlin e moves 4.6e-10 m² s⁻² after 12
+  steps); and, in the merge train, the `input_dynamic` bitwise qv
+  digests, which went stale after KA-m's fused e_s.
+
+### Direct anelastic pressure solver (#309) ✅ SHIPPED
+
+**✅ SHIPPED** (`PressureSolvers.ColumnTridiagonalSolver`,
+`Anelastic.DirectWeightedPoissonSolver`; #309 / PR #386). The
+density-weighted operator div(w(z) grad) is separable, so the
+sound-proof cores now project with a horizontal FFT/DCT plus one
+tridiagonal solve per wavenumber. It is the default
+(`pressure_solver = :direct`); the Jacobi-preconditioned CG stays as
+`:cg`. `StretchedPoissonSolver` delegates to the same column solver,
+so the FFT/DCT + Thomas code has one source.
+
+**Measured**: manufactured solution recovered to 1.2e-15–3.9e-15
+relative; agreement with the CG 8.7e-14–2.7e-13; a single solve at one
+thread 176 ms (367 CG iterations) → **1.05 ms** at 64³ (166×) and
+1868 → 8.1 ms at 128×128×64 (231×). Berlin, 64³, nest off,
+`core = :anelastic`: **391 → 200 ms per step**, weighted divergence
+6.4e-13 → 2.9e-17 s⁻¹.
+
+**Expectation that was wrong** (merge train):
+`logging_step_diagnostics` assumed the old CG default of the
+sound-proof cores (an iterative solve with iteration counts) after PS-a
+made the direct solve the default.
+
+**Not built**: a periodic vertical (the sound-proof cores reject one;
+the CG covers it).
+
+### Structured logging, run folders and diagnostics (epic #293) ✅ SHIPPED
+
+**✅ SHIPPED** (`src/logging/RunLog.jl`, `src/io/run_folder.jl`; LOG-a
+to LOG-g, #333–#338 and #347 / PRs #340, #344, #346, #370, #373, #388,
+#390; `docs/src/api/logging.md`). What was built: structured events
+through stdlib `Logging` (the library never prints; a quiet test
+logger); one run folder per run with `run.toml` provenance (commit,
+versions, Manifest hash, FFTW policy, seeds, one `[[session]]` per
+restart) and a dirty-tree policy; a diagnostics registry writing
+`diagnostics.csv` and `diagnostics.nc` (NetCDF-4, per-step rows and
+costly rows with profiles); a progress line; a blowup guard that
+diagnoses, writes a crash checkpoint and stops; a `StepRecord` filled
+by every step core (dt and its limiter, CFL, solver iterations and
+residuals, wall time per stage) with the run monitor attached to the
+cores; the `verbose` keywords removed; the Berlin console output
+through the logger.
+
+**Measured**: one six-key record to `run.log` 7.9 µs with the 5 s flush
+policy; the default monitor's parts **0.084 ms per step, 1.56 %** of a
+64×64×32 step (budget 2 %, asserted by the benchmark); `step!` still
+allocates 0 B with a hook installed; a run folder costs 11.6 ms per run.
+
+**Bugs the tests caught**: `latest_run` compared Float64 timestamps as
+strings, so `resume = :latest` could restart the wrong run; the
+`diagnostics.nc` provenance of a restart that changed its config
+recorded the run's first config.
+
+### Run configuration and input drivers (epic #311) ✅ SHIPPED
+
+**✅ SHIPPED** (`src/Config.jl`, `src/config/`, `src/InputDrivers.jl`,
+`src/input_drivers/`; CFG-a to CFG-i, #356–#364 / PRs #366, #372, #376,
+#375, #374, #380, #389, #393, #396; `docs/src/design/run_configuration.md`).
+What was built:
+- **`Aeolus.Config`**: a declarative schema with strict validation (every
+  problem in one `ConfigError`, with suggestions), `extends` chains (at
+  most 8 links), dotted overrides, a canonical resolved `run.toml` with
+  `config_hash` and input hashes, and `load_run_config` to replay it.
+- **One entry point**: `julia -m Aeolus run | check | resolve | options |
+  preprocess`, a run-driver contract and drivers for bare simulations,
+  Berlin, SBL, DNS, channels, columns, CBC decay, patchy surfaces and
+  DNS decay; `[sweep]` tables; every example script runs a shipped
+  config.
+- **Static driver** (NetCDF-4): terrain, buildings, surface and ground
+  classes, LAI and polygons, written by the OSM/GeoJSON preprocessor;
+  Berlin reads its geometry from one committed file.
+- **Dynamic driver** (NetCDF-4): initial state, boundary planes and
+  forcing, from sounding, Aeolus-parent and ERA5 (GRIB2 or NetCDF)
+  preprocessors; the Berlin offline nest. New dependency GRIBDatasets.
+- **Docs and coverage**: generated option and input-format references
+  and a round-trip suite over every shipped config.
+
+**Measured**:
+- 400 random configs (NaN, ±Inf, −0.0, control characters, emoji) are
+  a canonical fixed point; Float64 bits survive TOML → config → TOML.
+- **25 of 25 shipped configs** replay bitwise from their own `run.toml`
+  (4190 assertions); a resumed run is bitwise equal to an uninterrupted
+  one for the simulation and SBL drivers.
+- Berlin: the four TOML scenarios equal the Julia presets field for
+  field, and the 22 state digests after 12 steps are bit-identical;
+  geometry from the static driver is bit-identical to the OSM path.
+- ERA5 preprocessor on an analytic atmosphere: level heights 2.2e-16,
+  θ 1.9e-16, geostrophic wind 1.2e-13 relative; GRIB2 and NetCDF paths
+  bitwise identical. Real ERA5 against the Lindenberg sounding
+  (2019-06-29 00 UTC, 200–3000 m): θ RMSE **0.787 K**, qv RMSE
+  **0.718 g/kg** (bound 1.5 each).
+
+**Bugs the tests caught**:
+- `sbl_surface!` read stale periodic halos at the end of an RK3 step,
+  so the surface layer of the last row and column used an old wind
+  (GABLS1 32³: max|Δu| 1.9e-4 m/s; the reduced GABLS2 inversion moves
+  856.0 → 851.7 m). Caught by CFG-d's bit-identity digests.
+- The case-section check compared value origins, so a `run.toml`
+  (which records every default) did not replay (CFG-e).
+
+**Expectations that were wrong**:
+- The DYCOMS RF01 prescribed flux jump "between 50 and 75 W/m²": the
+  measured 47.9 W/m² is the exact (F₀ − F₁)(1 − e^{−κ LWP}), now asserted
+  to 1e-12.
+- "At least 20 CBC steps": the decay is 16 steps at 16³.
+- CFG-a's "a driver section may not share a common section's name"
+  became a rule change in CFG-b (a same-named driver section extends the
+  common one).
+- In the merge train, CFG-h's `lindenberg_era5.toml` needed a `[test]`
+  table and an ERA5 dynamic driver made once at test time before CFG-i's
+  round-trip suite could cover it.
+
+**Not met / not built**: `config_roundtrip.jl` takes 154–176 s against
+the 120 s budget (first-call compilation); Berlin resume (#269);
+vegetation, soil and water type rasters in the static driver; terrain
+(`zt` is written as 0).
+
+### Tests, CI and documentation deployment ✅ SHIPPED
+
+**✅ SHIPPED** (#316 / PR #325, #354 / PR #355, #320 / PR #387, #317 /
+PR #395; `docs/src/testing.md`). What was built:
+- **Tiers and runner**: `test/run.jl` runs the files in parallel; the
+  fast tier gates PRs, the full tier adds the validation
+  mini-simulations at merge.
+- **CI** (GitHub Actions): the fast tier on every PR and push to
+  `master`; the full tier on push to `master`, weekly (Mondays 03:17
+  UTC) and on demand; Julia 1.13, 4 jobs × 1 thread. The Documenter
+  workflow builds the docs on every PR and deploys `dev` from `master`
+  and `stable` from tags to `gh-pages`.
+- **Berlin test suite removed (#320)**: the 13 `test/berlin_*.jl` files
+  (4162 assertions, 1260 s of job time) and the coverage lists are gone.
+  Every `src` physics check moved into a module test with a synthetic
+  setup; the example's end-to-end runs are a by-hand script,
+  `examples/urban/berlin_checks.jl` (897 assertions).
+- **Pruning (#317)**: `era6_large_scale_forcing.jl` 78.3 → 12.6 s (a
+  turbulent box instead of 100 Berlin smoke steps); one shared
+  k^(−5/3) fixture for five SGS files.
+
+**Measured**: fast tier after #320, 4 jobs: 21.0 → 12.6 min (at
+different machine loads, 2.8 and 6.2). On master after all the merges
+above: **102,026 assertions in 133 jobs**.
+
+**Open after these blocks**: #392 / PR #398 (the default flagship
+failed near step 12 because a timing script forced 2 s steps past the
+stable dt; the fix refuses such a dt); #397 (FFTW MEASURE segfault);
+#238 (implausible Berlin nights).
+
+---
+
 # Era VII — High-fidelity chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*
@@ -1684,6 +2081,11 @@ conditions, and their time evolution over a multi-day run.
 **Validated by**: reproduction of an observed boundary-layer evolution
 for several real dates.
 
+*Partly built early* (CFG-h, #363 / PR #393): an ERA5 reader (GRIB2 and
+NetCDF) writes the dynamic driver, compared with the Lindenberg sounding
+for one date (θ RMSE 0.787 K, qv RMSE 0.718 g/kg). MERRA-2, multi-day
+runs and the validation across several dates remain.
+
 ### Phase 68 — Mesoscale model nesting
 Offline and online nesting into WRF, ICON and IFS output, with the
 interface handling different vertical coordinates, different
@@ -1728,6 +2130,13 @@ Full run provenance: input hashes, library versions, compiler flags,
 a deterministic-mode guarantee, and archived reference output so that
 any result in the docs can be regenerated years later.
 **Deliverable**: a `provenance.toml` per run and a `reproduce` command.
+
+*Partly built early* (LOG-b #334, CFG-a/b #356–#357, the KA port #291):
+every run folder's `run.toml` records the commit, versions, Manifest
+hash, FFTW policy, seeds and input hashes; `julia -m Aeolus run
+run.toml` replays it bitwise under ESTIMATE FFTW plans, and results do
+not depend on the thread count. Archived reference output and
+compiler-flag provenance remain.
 
 ---
 
@@ -1799,6 +2208,17 @@ multigrid, GPU microphysics and chemistry, and a single-source
 CPU/GPU code path.
 **Validated by**: bit-comparable results within tolerance; 10–50×
 speed-up over single-CPU-core on realistic cases.
+
+**CPU half ✅ SHIPPED early** (epic #291; details under "Delivered
+outside the era plan" above). KernelAbstractions port landed early
+(epic #291) for CPU multithreading; the GPU backend, GPU-resident FFT/MG
+and SoA surfaces remain. Measured (KA-o #308, Ryzen 9 7900): Berlin
+flagship 155 -> 88 ms/step at 12 threads (1.77x), 256³ DNS 1.15 h -> 48
+min (1.43x; step_rk3! 1.87x); thread-invariant at 1/4/12/24 (3746
+hashes). The scaling targets of #308 (≥ 2.5× at 4 threads, ≥ 4× at 12)
+were **missed**: the stencils are memory-bound at the 50–75 GB/s DRAM
+bandwidth of that machine, while compute-bound kernels such as WENO-Z5
+reach 8.6×.
 
 ### Phase 82 — Multi-GPU and heterogeneous execution
 Multi-GPU per node and multi-node GPU with CUDA-aware MPI, plus
