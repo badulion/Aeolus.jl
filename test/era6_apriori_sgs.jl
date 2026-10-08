@@ -13,9 +13,9 @@
 #      dynamic C_s against the dissipation-matched one;
 #   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
 #      pipeline DNS → statistics → TOML → read-back at 32³ on every run;
-#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 1.6–2.1 h
-#      on one core, the solver is single-threaded; 9.8–9.9 GB max RSS as
-#      reported by the run, not stored in the TOML;
+#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 36 min
+#      at 12 threads after #400, 1.6–2.1 h on one core before the port;
+#      8.5–9.9 GB max RSS as reported by the run, not stored in the TOML;
 #      examples/validation/configs/dns256.toml, through the `dns` run
 #      driver, is the same run); and, when
 #      test/fixtures/dns256_apriori.toml exists, the literature band at
@@ -373,7 +373,7 @@ end
             @test isfile(DNS256_TOML)
             @test all(v for (k, v) in rec["checks"] if k ∉ ADVISORY_CHECKS)
         else
-            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 2 h on one core, ≈ 10 GB)"
+            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 36 min at 12 threads, ≈ 9 GB)"
         end
     end
 
