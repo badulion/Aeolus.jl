@@ -2910,22 +2910,53 @@ count as the whole storage: 4.03 GB/step of the DNS row, 0.27 GB real):
 
 | | before | after |
 | :-- | --: | --: |
-| 256³ DNS `step_rk3!`, GB/step in launches | 29.14 | 13.69 (−53 %) |
+| 256³ DNS `step_rk3!`, GB/step in launches | 29.14 | 14.90 (−49 %) |
 | 256³ DNS, tendency `memset`s (outside launches) | 1.73 GB | none |
-| 256³ DNS, launches/step (profiler, nested included): threaded / serial | 107 / 864 | 52 / 864 |
-| flagship `step_case!`, GB/step in launches | 2.313 | 2.157 (−7 %) |
-| flagship, of which the nest parent's launches over 10⁶ points | 0.766 | 0.635 (−17 %) |
-| flagship, launches/step (KA-o's `launches` mode): threaded / serial | 416 / 6476 | 404 / 6469 |
+| 256³ DNS, launches/step (profiler, nested included): threaded / serial | 107 / 864 | 55 / 864 |
+| flagship `step_case!`, GB/step in launches | 2.313 | 2.194 (−5 %) |
+| flagship, of which the nest parent's launches over 10⁶ points | 0.766 | 0.666 (−13 %) |
+| flagship, launches/step (KA-o's `launches` mode): threaded / serial | 416 / 6476 | 405 / 6469 |
 
-SC-a estimated 15 GB for targets 1-5; the fusion removes 15.5 GB of the
-DNS's launches and the 1.7 GB of `memset`s. The flagship gains far less:
-its step cores are a small part of its step (the child's SGS, scalar
+SC-a estimated 15 GB for targets 1-5; the fusion removes 14.2 GB of the
+DNS's launches and the 1.7 GB of `memset`s (keeping u, v, w apart from
+the scalars' tendency launches costs 1.2 GB of it, see above). The
+flagship gains far less: its step cores are a small part of its step (the child's SGS, scalar
 transport, surface and radiation couplings are not step-core passes). The
 launch counts of the flagship include, since SC-b, the serial per-item
 launches inside its threaded set fills, so they are not comparable with
 KA-o's 263 / 569.
 
-<!-- SC-d timing -->
+### Measured speed-ups
+
+`benchmarks/bench_ka_scaling.jl` (KA-o), one process per thread count,
+base (the branch point: SC-a + SC-b + master) and SC-d run alternately;
+every process started with the 1-minute load below 4 and at least 12 GB
+free; each figure is the minimum over 3 processes. Flagship: 2 warm-up and
+9 timed steps, the mean `step_case!` of the 9 (long Berlin runs are
+paused). DNS: `AEOLUS_FFTW_PLANNER=estimate`, 1 warm-up and 3 timed steps.
+Speed-ups in brackets are over the same code at one thread.
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| 256³ DNS `step_rk3!`, base (s) | 2.090 | 1.210 (1.73×) | 1.141 (1.83×) | 1.173 (1.78×) |
+| 256³ DNS `step_rk3!`, SC-d (s) | **1.627** (−22 %) | **0.793** (2.05×) | **0.693** (2.35×) | **0.693** (2.35×) |
+| SC-d over base at one thread | 1.28× | 2.63× | 3.02× | 3.02× |
+| 256³ DNS `dns_step!` (with the history), base → SC-d (s) | 2.172 → 1.726 | 1.276 → 0.856 | 1.209 → 0.762 | 1.245 → 0.765 |
+| flagship `step_case!`, base (ms) | 157.2 | 88.7 (1.77×) | 83.5 (1.88×) | 94.1 (1.67×) |
+| flagship `step_case!`, SC-d (ms) | **152.6** (−3 %) | **83.3** (1.83×) | **76.6** (1.99×) | **87.6** (1.74×) |
+| flagship, the nest parent (`parent_steps`), base → SC-d (ms) | 51.1 → 47.6 | 35.4 → 30.3 | 32.8 → 27.8 | 33.9 → 29.2 |
+| flagship, the child's core (`dynamics/step!`), base → SC-d (ms) | 35.0 → 33.4 | 20.3 → 19.5 | 19.3 → 18.1 | 22.4 → 20.1 |
+
+The 12-thread DNS step is 0.693 s against SC-a's estimate of 0.71 s for
+targets 1-5. Single-thread time is better, not worse: −22 % for the DNS
+and −3 % for the flagship. The flagship's spread between processes is up
+to 18 % (SC-a saw 40 %); its minima move by 3-8 %, consistent with the 5 %
+fewer bytes, while its child-core and parent entries are steadier
+(−4 to −15 %).
+
+Thread invariance: the harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`) passes, 21 of 21 checks, 3785 hashes
+identical at 1, 4, 12 and 24 threads.
 
 ### Reproducing
 
