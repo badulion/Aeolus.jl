@@ -261,11 +261,15 @@ _dim_kinds(::FaceZ)      = (:avg,   :avg,   :nodal)
 # array; a slab of a halo-only `_ShellArray` otherwise). Owner computes
 # (KA-f, #297): one launch, each child point interpolates from its parent
 # stencil. A function barrier with concrete argument types: no allocation,
-# no dynamic dispatch.
+# no dynamic dispatch. Each point sums its whole parent stencil, so the
+# launch counts that many points of work against the backend's serial
+# threshold (SC-d, #404: a 64³ child's halo boxes, ~14 000 points of 8-27
+# terms each, ran serially at 250 µs per box).
 function _interp_box!(dst::Array{T,3}, off::NTuple{3,Int}, pd::AbstractArray{<:Real,3},
                       px::_Plan1D, py::_Plan1D, pz::_Plan1D,
                       ir::UnitRange{Int}, jr::UnitRange{Int}, kr::UnitRange{Int}) where {T}
-    launch!(Backends.backend(dst), _interp_body!, (ir, jr, kr), dst, off, pd, px, py, pz)
+    Backends.launch_weighted!(Backends.backend(dst), _stencil(px) * _stencil(py) * _stencil(pz),
+                              _interp_body!, (ir, jr, kr), dst, off, pd, px, py, pz)
     return dst
 end
 

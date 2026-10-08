@@ -92,10 +92,19 @@ end
             LegacyStep._combine4!(o0, 1.0, A, -0.2, B, 1.2, C, 0.29, D, g)
             @test o.data == o0.data
             a = copy(A.data); a0 = copy(A.data); s = randn(rng, size(a))
-            SIM.combine_storage!(SIM._Lin2r(0.75, 0.25), a, s); LegacyStep.rk3_combine2!(a0, s)
+            # the RK3 combination over the storage: the interior pass and the
+            # halo-shell pass of the fused cores (SC-d, #404)
+            comb!(c, a, s) = (Aeolus.Backends.range_map!(Aeolus.Backends.backend(a), c, a, interior(g), a, s);
+                              SIM._shell_map!(c, (a,), (s,), g))
+            comb!(SIM._Lin2r(0.75, 0.25), a, s); LegacyStep.rk3_combine2!(a0, s)
             @test a == a0
-            SIM.combine_storage!(SIM._Lin2r(1 / 3, 2 / 3), a, s); LegacyStep.rk3_combine3!(a0, s, 1 / 3, 2 / 3)
+            comb!(SIM._Lin2r(1 / 3, 2 / 3), a, s); LegacyStep.rk3_combine3!(a0, s, 1 / 3, 2 / 3)
             @test a == a0
+            z = mk(); SIM._shell_map!(SIM._Zero(), (z.data,), nothing, g)
+            @test all(iszero, z.data[setdiff(1:size(z.data, 1), interior(g)[1]), :, :]) &&
+                  all(iszero, z.data[:, setdiff(1:size(z.data, 2), interior(g)[2]), :]) &&
+                  all(iszero, z.data[:, :, setdiff(1:size(z.data, 3), interior(g)[3])]) &&
+                  !any(iszero, z.data[interior(g)...])
             p = Field(CellCenter(), g); p0 = Field(CellCenter(), g); φ = _ks_rand!(Field(CellCenter(), g), rng)
             SIM.pressure_from_potential!(p, φ, 0.07); LegacyStep.pressure!(p0, φ, 0.07, g)
             @test p.data == p0.data

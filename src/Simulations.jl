@@ -5,7 +5,7 @@ using ..Grids: AbstractMesh, RegularGrid, CellCenter, FaceX, FaceY, FaceZ, inter
 using ..Fields
 using ..Fields: Field, interior_view, interior_map!
 using ..Backends: Backends, plane_partials!, plane_reduce!, plane_mean!, ordered_sum, range_max,
-                  range_map!, interior_max
+                  range_map!, interior_max, launch_weighted!
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, Periodic, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
@@ -24,7 +24,10 @@ using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
                    _sq_dev_at                  # (f - m_k)², shared with abl_diagnostics
 using ..PressureSolvers
 using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver, solve!,
-                        poisson_axis_bcs, solver_stats
+                        poisson_axis_bcs, solver_stats, source_buffer, solve_source_buffer!
+# the fused step-core kernels (SC-d, #404)
+using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gradient_slabs!,
+                                _divergence_into!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
@@ -436,30 +439,36 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
                             closure::C, body_force!, post_predictor!,
                             momentum_advection::F,
                             sgs_stress::Symbol = :laplacian,
-                            t_bc = sim.t + Δt) where {T, C, F}
+                            t_bc = sim.t + Δt, stage = nothing) where {T, C, F}
     # 1. Halo fill so all stencils see valid neighbours.
     fill_state_halos!(sim)
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
-    # 2. Zero tendencies and add momentum + scalar advection.
-    zero_storage!(sim.tu); zero_storage!(sim.tv); zero_storage!(sim.tw)
-    zero_storage!(sim.tθ)
-    sim.has_moisture && zero_storage!(sim.tqv)
-    momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
-    advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
-    sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
-
-    # 3. Molecular viscosity / diffusion.
-    if sim.has_viscosity
-        laplacian(sim.lap_u, sim.u); laplacian(sim.lap_v, sim.v); laplacian(sim.lap_w, sim.w)
-        laplacian(sim.lap_θ, sim.θ)
-        axpy!(sim.tu, sim.ν, sim.lap_u)
-        axpy!(sim.tv, sim.ν, sim.lap_v)
-        axpy!(sim.tw, sim.ν, sim.lap_w)
-        axpy!(sim.tθ, sim.ν, sim.lap_θ)
-        if sim.has_moisture                 # qv: the same molecular diffusivity as θ (#177)
-            laplacian(sim.lap_θ, sim.qv)
-            axpy!(sim.tqv, sim.ν, sim.lap_θ)
+    # 2.-3. The tendencies from zero: momentum + scalar advection, then the
+    #       molecular viscosity / diffusion (qv: the same molecular
+    #       diffusivity as θ, #177). With the built-in centred momentum
+    #       advection all of it is one fused pass (SC-d, #404), the bits of
+    #       the separate passes below.
+    if momentum_advection === momentum_advect!
+        _base_tendencies!(sim)
+    else
+        zero_storage!(sim.tu); zero_storage!(sim.tv); zero_storage!(sim.tw)
+        zero_storage!(sim.tθ)
+        sim.has_moisture && zero_storage!(sim.tqv)
+        momentum_advection(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w)
+        advect_centered!(sim.tθ, sim.u, sim.v, sim.w, sim.θ)
+        sim.has_moisture && advect_centered!(sim.tqv, sim.u, sim.v, sim.w, sim.qv)
+        if sim.has_viscosity
+            laplacian(sim.lap_u, sim.u); laplacian(sim.lap_v, sim.v); laplacian(sim.lap_w, sim.w)
+            laplacian(sim.lap_θ, sim.θ)
+            axpy!(sim.tu, sim.ν, sim.lap_u)
+            axpy!(sim.tv, sim.ν, sim.lap_v)
+            axpy!(sim.tw, sim.ν, sim.lap_w)
+            axpy!(sim.tθ, sim.ν, sim.lap_θ)
+            if sim.has_moisture
+                laplacian(sim.lap_θ, sim.qv)
+                axpy!(sim.tqv, sim.ν, sim.lap_θ)
+            end
         end
     end
 
@@ -519,42 +528,111 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     # halo fill below writes the corrected normal velocity into u*.
     update_open_boundaries!(sim, t_bc, Δt)
 
-    # 8.–10. Chorin projection of the predicted velocity.
-    _project_velocity!(sim)
+    # 8.–10. Chorin projection of the predicted velocity; the correction
+    # also writes the physical pressure p = φ/Δt (step 12) and, inside
+    # step_rk3!, the stage combination with the step-start state (SC-d).
+    _project_velocity!(sim, _DivBy(Δt), stage)
 
-    # 11. Advance θ (no projection needed for scalar).
-    axpy!(sim.θ, Δt, sim.tθ)
-    sim.has_moisture && axpy!(sim.qv, Δt, sim.tqv)
+    # 11. Advance θ (no projection needed for scalar), combined with the
+    # step-start θ inside step_rk3!.
+    _advance_scalar!(sim.θ, Δt, sim.tθ, stage, stage === nothing ? nothing : stage.ws.θ0)
+    sim.has_moisture &&
+        _advance_scalar!(sim.qv, Δt, sim.tqv, stage, stage === nothing ? nothing : stage.ws.q0)
 
-    # 12. Recover physical pressure and advance clock.
-    pressure_from_potential!(sim.p, sim.φ, Δt)
+    # 12. Advance the clock.
     sim.t += Δt
 
     return sim
 end
+
+# The tendencies of steps 2-3 in one launch (`_fused_tendencies!`), and the
+# zero of their halos (`zero_storage!` zeroed the whole storage).
+function _base_tendencies!(sim::BoussinesqSimulation)
+    if sim.has_moisture
+        _shell_map!(_Zero(), (sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, sim.tqv.data),
+                    nothing, sim.mesh)
+        _base_tendencies!(sim, (sim.tqv, sim.qv))
+    else
+        _shell_map!(_Zero(), (sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data), nothing, sim.mesh)
+        _base_tendencies!(sim, nothing)
+    end
+    return sim
+end
+function _base_tendencies!(sim::BoussinesqSimulation, q)
+    ν = sim.ν
+    if sim.has_viscosity
+        _fused_tendencies!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w, ν, (sim.tθ, sim.θ), q, sim.mesh)
+    else
+        _fused_tendencies!(sim.tu, sim.tv, sim.tw, sim.u, sim.v, sim.w, nothing, (sim.tθ, sim.θ), q,
+                           sim.mesh)
+    end
+    return sim
+end
+
+# ϕ ← ϕ + Δt·tϕ over the interior; inside step_rk3! (`stage`) combined with
+# the step-start ϕ0, ϕ ← c(ϕ + Δt·tϕ, ϕ0) over the interior and ϕ ← c(ϕ, ϕ0)
+# on the halo: the axpy then `combine_storage!`, in one pass (SC-d, #404).
+_advance_scalar!(ϕ::Field, Δt, tϕ::Field, ::Nothing, ::Nothing) = axpy!(ϕ, Δt, tϕ)
+function _advance_scalar!(ϕ::Field, Δt, tϕ::Field, stage, ϕ0::AbstractArray)
+    size(ϕ0) == size(ϕ.data) == size(tϕ.data) || throw(DimensionMismatch("_advance_scalar!: sizes differ"))
+    range_map!(Backends.backend(ϕ.data), _AxpyStage(_Axpy(Δt), stage.c), ϕ.data, interior(ϕ.mesh),
+               ϕ.data, tϕ.data, ϕ0)
+    _shell_map!(stage.c, (ϕ.data,), (ϕ0,), ϕ.mesh)
+    return ϕ
+end
+struct _AxpyStage{A, C}
+    ax::A
+    c::C
+end
+@inline (f::_AxpyStage)(y, x, snap) = f.c(f.ax(y, x), snap)
 
 # Steps 8–10 of the fractional step: the divergence of the velocity, the
 # Poisson solve ∇²φ = ∇·u, the correction u ← u − ∇φ. `sim.φ` holds the
 # potential afterwards; `sim.p` is not touched. Shared by step!/step_rk3!,
 # the per-stage projection of the IMEX steppers and the re-projection of a
 # two-way nest parent after the feedback (N-nest-e, #263).
-function _project_velocity!(sim::BoussinesqSimulation{T}) where {T}
-    # 8. Divergence of predicted velocity.
+#
+# Fused (SC-d, #404): a spectral solver's source buffer receives the
+# divergence directly (no `div_buf`, no copy-in); the correction is one
+# pass over u, v, w that reads φ once (no `dφdx`, `dφdy`, `dφdz`; only an
+# open face's slab is computed, for its check). `pf` (the step cores'
+# `_DivBy(Δt)`) also writes p = φ/Δt in that pass, and `stage` (inside
+# step_rk3!: `(c = _Lin2r(a, b), ws = RK3Workspace)`) writes the stage
+# combination c(u − ∇φ, u0) on the interior and c(u, u0) on the halo,
+# which is what `combine_storage!` made of the corrected field. The same
+# bits as the separate passes.
+function _project_velocity!(sim::BoussinesqSimulation{T}, pf = nothing, stage = nothing) where {T}
+    # 8. Divergence of predicted velocity, 9. solve ∇²φ = ∇·u*.
     fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
-    divergence(sim.div_buf, sim.u, sim.v, sim.w)
-
-    # 9. Solve ∇²φ = ∇·u*.
-    t_solve = time_ns()
-    solve!(sim.φ, sim.div_buf, sim.solver)
+    buf = source_buffer(sim.solver)
+    if buf === nothing
+        divergence(sim.div_buf, sim.u, sim.v, sim.w)
+        t_solve = time_ns()
+        solve!(sim.φ, sim.div_buf, sim.solver)
+    else
+        _divergence_into!(buf, sim.u, sim.v, sim.w, sim.mesh)
+        t_solve = time_ns()
+        solve_source_buffer!(sim.φ, sim.solver)
+    end
     _note_solve!(sim.workspaces.rec, sim.solver, t_solve)   # iterations, residual, wall (#336)
 
     # 10. Correct velocity.
     fill_halos!(sim.φ, sim.bcs)
-    ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
-    assert_open_face_correction(sim.bcs, sim.dφdx, sim.dφdy, sim.dφdz)   # ∂φ/∂n = 0 on open faces
-    axpy!(sim.u, -one(T), sim.dφdx)
-    axpy!(sim.v, -one(T), sim.dφdy)
-    axpy!(sim.w, -one(T), sim.dφdz)
+    b = sim.bcs
+    if has_open_boundaries(b)                                # ∂φ/∂n = 0 on open faces
+        _face_gradient_slabs!(sim.dφdx, sim.dφdy, sim.dφdz, sim.φ, sim.mesh, b.west isa OpenBoundary,
+                              b.south isa OpenBoundary, b.bottom isa OpenBoundary)
+        assert_open_face_correction(b, sim.dφdx, sim.dφdy, sim.dφdz)
+    end
+    p = pf === nothing ? nothing : sim.p.data
+    if stage === nothing
+        _correct_velocity!(sim.u, sim.v, sim.w, sim.φ, sim.mesh; p, pf)
+    else
+        ws = stage.ws
+        _correct_velocity!(sim.u, sim.v, sim.w, sim.φ, sim.mesh; p, pf, stage = stage.c,
+                           u0 = ws.u0, v0 = ws.v0, w0 = ws.w0)
+        _shell_map!(stage.c, (sim.u.data, sim.v.data, sim.w.data), (ws.u0, ws.v0, ws.w0), sim.mesh)
+    end
     return sim
 end
 
@@ -689,23 +767,19 @@ function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                   t0 + Δt)                                                        # u1 = uⁿ + Δt L(uⁿ), then project
     # u1 stays in sim (the next substage advances it in place)
 
-    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
-                  t0 + 2Δt)                                                       # u1 → u1 + Δt L(u1), then project
-    # combine to u2 = 3/4 uⁿ + 1/4 (…)
+    # u1 → u1 + Δt L(u1), projected and combined to u2 = 3/4 uⁿ + 1/4 (…):
+    # the combination is written by the projection's correction and the
+    # scalar update (SC-d, #404), the bits of `combine_storage!` after them
     c2 = _Lin2r(0.75, 0.25)
-    combine_storage!(c2, sim.u.data, u0); combine_storage!(c2, sim.v.data, v0)
-    combine_storage!(c2, sim.w.data, w0); combine_storage!(c2, sim.θ.data, θ0)
-    moist && combine_storage!(c2, sim.qv.data, q0)
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
+                  t0 + 2Δt, (c = c2, ws = _RK3Stage(u0, v0, w0, θ0, q0)))
     combine_open_boundaries!(sim, 0.75, bc0, 0.25)
 
-    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
-                  t0 + 3Δt / 2)                                                   # u2 → u2 + Δt L(u2), then project
-    # combine to uⁿ⁺¹ = 1/3 uⁿ + 2/3 (…)
+    # u2 → u2 + Δt L(u2), projected and combined to uⁿ⁺¹ = 1/3 uⁿ + 2/3 (…)
     inv3 = one(T)/3; two3 = 2*inv3
     c3 = _Lin2r(inv3, two3)
-    combine_storage!(c3, sim.u.data, u0); combine_storage!(c3, sim.v.data, v0)
-    combine_storage!(c3, sim.w.data, w0); combine_storage!(c3, sim.θ.data, θ0)
-    moist && combine_storage!(c3, sim.qv.data, q0)
+    _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
+                  t0 + 3Δt / 2, (c = c3, ws = _RK3Stage(u0, v0, w0, θ0, q0)))
     combine_open_boundaries!(sim, inv3, bc0, two3)
 
     # sim.t was advanced 3× by _rk3_substep!; correct to one nominal step
@@ -718,9 +792,14 @@ end
 # projection), without step!'s commit of the closure memory.
 _rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force! = nothing,
               post_predictor! = nothing, sgs_stress::Symbol = :laplacian,
-              t_bc = sim.t + Δt) =
+              t_bc = sim.t + Δt, stage = nothing) =
     _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advect!,
-                       sgs_stress, t_bc)
+                       sgs_stress, t_bc, stage)
+
+# The step-start arrays a combined substage reads (`q0` is `θ0` when dry).
+struct _RK3Stage{A<:AbstractArray}
+    u0::A; v0::A; w0::A; θ0::A; q0::A
+end
 
 # -------------------------------------------------------------------------
 # Diagnostics
@@ -954,8 +1033,6 @@ struct _DivBy{T}
 end
 @inline (f::_DivBy)(x) = x / f.d
 
-# The whole storage of an array (halos included) as launch ranges.
-_storage(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))
 
 """
     copy_storage!(dst, src) -> dst
@@ -972,12 +1049,6 @@ function copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {
     return dst
 end
 
-# `out = a·snap + b·out` over the whole storage (the RK3 stage combinations)
-function combine_storage!(f::_Lin2r, out::AbstractArray{T,3}, snap::AbstractArray{T,3}) where {T}
-    size(out) == size(snap) || throw(DimensionMismatch("combine_storage!: sizes differ"))
-    range_map!(Backends.backend(out), f, out, _storage(out), out, snap)
-    return out
-end
 
 """
     zero_storage!(f::Field) -> f
@@ -992,6 +1063,61 @@ function zero_storage!(f::Field)
     fill!(f.data, zero(eltype(f.data)))
     return f
 end
+
+# ---- the halo shell (SC-d, #404) ------------------------------------------
+# The fused kernels write the interior; what the separate passes did to the
+# rest of the storage (zero the tendencies' halos, combine the halos of the
+# RK3 stages) is done by one launch over the halo shell: the (j, k) rows of
+# the storage, each row its halo points only (all of it outside the
+# interior's j, k), for a tuple of arrays.
+
+struct _Zero end
+@inline (::_Zero)(x, s) = zero(x)
+
+@inline _shell_point!(f, ::Tuple{}, ins, i, j, k) = nothing
+@inline function _shell_point!(f, outs::Tuple, ins, i, j, k)
+    o = first(outs)
+    @inbounds o[i, j, k] = f(o[i, j, k], _shell_in(ins, i, j, k))
+    _shell_point!(f, Base.tail(outs), _shell_tail(ins), i, j, k)
+    return nothing
+end
+@inline _shell_in(::Nothing, i, j, k) = nothing
+@inline _shell_in(ins::Tuple, i, j, k) = @inbounds first(ins)[i, j, k]
+@inline _shell_tail(::Nothing) = nothing
+@inline _shell_tail(ins::Tuple) = Base.tail(ins)
+
+@inline function _b_shell!(j, k, f, outs, ins, ir, jr, kr, ni)
+    if j in jr && k in kr
+        for i in 1:first(ir) - 1
+            _shell_point!(f, outs, ins, i, j, k)
+        end
+        for i in last(ir) + 1:ni
+            _shell_point!(f, outs, ins, i, j, k)
+        end
+    else
+        for i in 1:ni
+            _shell_point!(f, outs, ins, i, j, k)
+        end
+    end
+    return nothing
+end
+
+# out = f(out, in) at every storage point outside `interior(mesh)`, for
+# each array of `outs` (and the matching array of `ins`, or `nothing`):
+# one launch, the same bits as the pointwise passes over the storage.
+function _shell_map!(f::F, outs::Tuple, ins, mesh) where {F}
+    o1 = first(outs)
+    all(o -> size(o) == size(o1), outs) || throw(DimensionMismatch("_shell_map!: sizes differ"))
+    ins === nothing || all(a -> size(a) == size(o1), ins) ||
+        throw(DimensionMismatch("_shell_map!: sizes differ"))
+    ni, nj, nk = size(o1)
+    ir, jr, kr = interior(mesh)
+    launch_weighted!(Backends.backend(o1), ni, _b_shell!, (1:nj, 1:nk), f, outs, ins, ir, jr, kr, ni)
+    return nothing
+end
+
+# The whole storage of an array (halos included) as launch ranges.
+_storage(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))
 
 # A zero-filled array shaped like `a`, on its backend.
 storage_like(a::AbstractArray{T}) where {T} = Backends.allocate(Backends.backend(a), T, size(a))
