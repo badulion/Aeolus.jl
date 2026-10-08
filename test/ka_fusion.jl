@@ -8,7 +8,7 @@
 #      solver) and walls (cosine solver), with and without viscosity,
 #      moisture, buoyancy, Coriolis, surface flux, sponge, the SGS closure,
 #      body-force and post-predictor hooks, a custom momentum advection (the
-#      unfused path), a stretched grid (no source buffer) and open
+#      unfused path), a stretched grid (the column solver) and open
 #      boundaries (the open-face check);
 #   2. on the serial, threshold-0 and default backends;
 #   3. the fused correction leaves a discretely solenoidal field
@@ -93,9 +93,10 @@ end
     @test _kf_same(a, f)        # the fused and the unfused path agree too
 end
 
-@testset "stretched grid (no source buffer): the same bits" begin
+@testset "stretched grid (the column solver's source buffer): the same bits" begin
     sg = StretchedGrid(; size = (12, 12, 16), extent = (240.0, 240.0, 600.0), stretching = (:tanh, 1.5))
     bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)
+    @test Aeolus.PressureSolvers.source_buffer(BoussinesqSimulation(sg; bcs = bcs).solver) isa Array
     # projected first (one step! of the pre-fusion core): an RK3 step combines
     # with the step-start state, solenoidal only if that state is
     mk() = (s = _kf_seed!(BoussinesqSimulation(sg; ν = 1e-2, θ₀ = 300.0, C_s = 0.17, bcs = bcs));

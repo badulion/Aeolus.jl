@@ -65,6 +65,8 @@ field, without writing the field and copying it in (two passes over the
 domain per solve).
 """
 source_buffer(::AbstractPressureSolver) = nothing
+# methods: FFTPoissonSolver, CosineFFTPoissonSolver, ColumnTridiagonalSolver
+# (and StretchedPoissonSolver, through its column solver)
 
 """
     solve_source_buffer!(p, solver) -> p
@@ -570,11 +572,17 @@ end
 
 poisson_axis_bcs(s::ColumnTridiagonalSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = :neumann)
 
+source_buffer(s::ColumnTridiagonalSolver) = s.buf
+
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 s::ColumnTridiagonalSolver{T}) where {T}
+    copy_interior_in!(backend(s.buf), s.buf, source)
+    return solve_source_buffer!(p, s)
+end
+
+function solve_source_buffer!(p::Field{CellCenter,T}, s::ColumnTridiagonalSolver{T}) where {T}
     be = backend(s.buf)
     Nx, Ny, Nz = size(s.buf)
-    copy_interior_in!(be, s.buf, source)
     apply_transform!(be, s.buf2, s.plan_fwd, s.buf)
     b = s.buf2
     @views s.col .= b[1, 1, :]          # the mean mode, solved separately
