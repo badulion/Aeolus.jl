@@ -254,15 +254,25 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
         ok && callback !== nothing && callback(case, case.clock.n)
         return ok
     end
-    if variable
-        t_end = case.sim.t + nsteps * cfg.dt
-        while t_end - case.sim.t > 1e-9 * cfg.dt
-            one_step(last_step_dt(step_dt(case), t_end - case.sim.t)) || break
+    # the horizon: a step starts at t exactly when t_stop - t > stop_margin
+    # (the fixed loop's steps start on multiples of dt, so half a step is margin)
+    clk = case.clock
+    clk.t_stop = case.sim.t + nsteps * cfg.dt
+    clk.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
+    try
+        if variable
+            t_end = clk.t_stop
+            while t_end - case.sim.t > 1e-9 * cfg.dt
+                one_step(last_step_dt(step_dt(case), t_end - case.sim.t)) || break
+            end
+        else
+            for _ in 1:nsteps
+                one_step(cfg.dt) || break
+            end
         end
-    else
-        for _ in 1:nsteps
-            one_step(cfg.dt) || break
-        end
+    finally
+        clk.t_stop = NaN
+        foreach(c -> end_run!(c, case), case.couplings)
     end
     nsteps = case.clock.n - n0
     t_wall = time() - case.clock.t_wall0
