@@ -32,10 +32,15 @@ isdefined(@__MODULE__, :LegacyFusion) || include(joinpath(@__DIR__, "support", "
 const _KF_BACKENDS = (("serial", CPUBackend(serial = true)), ("threshold 0", CPUBackend(threshold = 0)),
                       ("default", CPUBackend()))
 
-# every array of the state and the scratch the step writes
+# every array of the state and the scratch the step writes. A hook-free
+# core (no SGS, buoyancy, Coriolis, flux, sponge, hooks or open faces) takes
+# the blocked sweep of SC-e (#405), which keeps the tendencies in its own
+# buffers: there the tendency fields are not written and only the state is
+# compared (test/ka_blocking.jl).
 _kf_fields(s) = (s.u, s.v, s.w, s.p, s.θ, s.qv, s.tu, s.tv, s.tw, s.tθ, s.tqv, s.φ)
-_kf_same(a, b) = all(i -> _kf_fields(a)[i].data == _kf_fields(b)[i].data, eachindex(_kf_fields(a))) &&
-                 a.t == b.t
+_kf_state(s) = (s.u, s.v, s.w, s.p, s.θ, s.qv, s.φ)
+_kf_same(a, b; fields = _kf_fields) = all(i -> fields(a)[i].data == fields(b)[i].data, eachindex(fields(a))) &&
+                                      a.t == b.t
 
 function _kf_seed!(s; U = 0.3, seed = 404)
     rng = Xoshiro(seed)
@@ -75,7 +80,7 @@ cases = (
                 for _ in 1:3
                     drv(a, 0.5; kw...); ref(r, 0.5; kw...)
                 end
-                @test _kf_same(a, r)
+                @test _kf_same(a, r; fields = startswith(name, "periodic") ? _kf_state : _kf_fields)
             end
         end
     end

@@ -1731,18 +1731,27 @@ end
 # 256³ box but 33 / 6.5 on the moist 192 × 192 × 53 parent (the loop
 # stops vectorising with five stores); one launch per tendency 109 / 66
 # and 15 / 6.7; this split 86 / 53 and 12 / 6.1.
+# The tendency values at one point (also those of the blocked sweep below,
+# SC-e #405).
+@inline _tend_u(i, j, k, u, v, w, m, ν) =
+    _visc(ν, zero(eltype(u)) - _mom_u_at(i, j, k, u, v, w, m), i, j, k, u, m, FaceX())
+@inline _tend_v(i, j, k, u, v, w, m, ν) =
+    _visc(ν, zero(eltype(v)) - _mom_v_at(i, j, k, u, v, w, m), i, j, k, v, m, FaceY())
+@inline _tend_w(i, j, k, u, v, w, m, ν) =
+    _visc(ν, zero(eltype(w)) - _mom_w_at(i, j, k, u, v, w, m), i, j, k, w, m, FaceZ())
+@inline _tend_ϕ(i, j, k, u, v, w, ϕ, m, ν) =
+    _visc(ν, zero(eltype(ϕ)) - _adv_centered_at(i, j, k, u, v, w, ϕ, m), i, j, k, ϕ, m, CellCenter())
+
 @inline function _b_tendency_momentum!(i, j, k, tu, tv, tw, u, v, w, m, ν)
-    z = zero(eltype(tu))
     @inbounds begin
-        tu[i, j, k] = _visc(ν, z - _mom_u_at(i, j, k, u, v, w, m), i, j, k, u, m, FaceX())
-        tv[i, j, k] = _visc(ν, z - _mom_v_at(i, j, k, u, v, w, m), i, j, k, v, m, FaceY())
-        tw[i, j, k] = _visc(ν, z - _mom_w_at(i, j, k, u, v, w, m), i, j, k, w, m, FaceZ())
+        tu[i, j, k] = _tend_u(i, j, k, u, v, w, m, ν)
+        tv[i, j, k] = _tend_v(i, j, k, u, v, w, m, ν)
+        tw[i, j, k] = _tend_w(i, j, k, u, v, w, m, ν)
     end
     return nothing
 end
 @inline function _b_tendency_scalar!(i, j, k, t, u, v, w, ϕ, m, ν)
-    @inbounds t[i, j, k] = _visc(ν, zero(eltype(t)) - _adv_centered_at(i, j, k, u, v, w, ϕ, m),
-                                 i, j, k, ϕ, m, CellCenter())
+    @inbounds t[i, j, k] = _tend_ϕ(i, j, k, u, v, w, ϕ, m, ν)
     return nothing
 end
 
@@ -1849,6 +1858,214 @@ function _divergence_into!(buf::AbstractArray{T,3}, u::Field{FaceX}, v::Field{Fa
     _fv!(_b_divergence_into!, (1:length(ii), 1:length(jj), 1:length(kk)), buf,
          u.data, v.data, w.data, grid_metrics(g), first(ii) - 1, first(jj) - 1, first(kk) - 1)
     return buf
+end
+
+# =========================================================================
+# Temporal blocking of the hook-free step core (SC-e, #405)
+# =========================================================================
+# After SC-d a substage still streams u, v, w (and θ, qv) twice: the
+# tendency launch reads them and writes the tendencies, then the predictor
+# `u ← u + Δt·tu` reads both back and writes u. When nothing adds to the
+# tendencies in between (no SGS closure, buoyancy, Coriolis, surface flux,
+# sponge, hooks or open boundaries: the DNS core) both run in one sweep per
+# block, while the block is in cache:
+#
+#   * the k-range is cut into `ns` slabs, one task each;
+#   * a slab is swept j-row by j-row: the tendencies of row j (every k of
+#     the slab) go into a ring of two rows, then row j − 1 gets its
+#     predictor. Its old values are read by no later tendency of the slab
+#     (the stencils reach j ± 1, k ± 1), so the update can be in place;
+#   * the slab's first and last planes are read by the neighbouring slabs'
+#     stencils, so their tendencies are kept (`edge`) and their predictor
+#     runs in a second launch, after every slab is done.
+#
+# Every value is the expression of the separate passes (`_tend_*`, then the
+# predictor functor `pu` / `ps`), so the bits do not depend on the number
+# of slabs, of threads, or on whether the sweep is used. The tendency
+# fields are neither read nor written. Measured in
+# docs/src/design/ka_port.md, "SC-e".
+
+"""
+    SweepBuffers
+
+The scratch of [`blocked_predictor!`](@ref): `ring[i, kl, r, f, s]`, the
+tendencies of field `f` on two j-rows (`r`) of slab `s`'s inner planes
+(`kl = k − k0 + 1`), and `edge[i, j, e, f, s]`, those of its first
+(`e = 1`) and last (`e = 2`) planes. `ns` slabs, `nf` fields.
+"""
+mutable struct SweepBuffers{A<:AbstractArray}    # mutable: kept in an `Any` slot without a box per step
+    ring::A
+    edge::A
+    ns::Int
+    nf::Int
+end
+
+"""
+    sweep_buffers(old, data, nf, ns, nk) -> SweepBuffers
+
+Buffers for `ns` slabs of a k-range of length `nk`, `nf` fields shaped like
+the storage array `data`; `old` (a `SweepBuffers` or `nothing`) is
+returned when it already fits.
+"""
+function sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int) where {T}
+    # (the split keeps a cached `old::Any` from a dynamic call: no allocation)
+    return old isa SweepBuffers{_buf_type(data)} ? _sweep_buffers(old, data, nf, ns, nk) :
+                                                   _sweep_buffers(nothing, data, nf, ns, nk)
+end
+function _sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int) where {T}
+    old isa SweepBuffers && old.ns == ns && old.nf == nf &&
+        size(old.edge, 1) == size(data, 1) && size(old.edge, 2) == size(data, 2) &&
+        size(old.ring, 2) >= cld(nk, ns) && return old
+    ring = similar(data, size(data, 1), cld(nk, ns), 2, nf, ns)
+    edge = similar(data, size(data, 1), size(data, 2), 2, nf, ns)
+    return SweepBuffers(ring, edge, ns, nf)
+end
+
+# the buffers' array type (a concrete type, so `sweep_buffers` infers)
+_buf_type(::Array{T,3}) where {T} = Array{T,5}
+_buf_type(a::AbstractArray) = typeof(similar(a, 0, 0, 0, 0, 0))
+
+"""
+    sweep_slabs(backend, npoints, nk) -> Int
+
+The number of slabs of the blocked sweep: one per thread (at least two
+planes each) when a launch of `npoints` runs threaded, else one.
+"""
+sweep_slabs(b, npoints::Integer, nk::Integer) =
+    Backends.runs_serially(b, npoints) ? 1 : clamp(Threads.nthreads(), 1, max(1, nk ÷ 2))
+
+@inline function _slab(kk, ns, s)
+    nk = length(kk)
+    return first(kk) + ((s - 1) * nk) ÷ ns, first(kk) + (s * nk) ÷ ns - 1
+end
+
+# the predictor of one value: `f(y, x)`, or `f(y, x, snap)` with a
+# step-start array (the RK3 stage combination of a scalar)
+@inline _pred(f, y, x, ::Nothing, i, j, k) = f(y, x)
+@inline _pred(f, y, x, snap::AbstractArray, i, j, k) = @inbounds f(y, x, snap[i, j, k])
+
+# one row (j, k) of tendencies into buf[:, a, b, f.., s]
+@inline function _trow_mom!(buf, a, b, s, j, k, ii, u, v, w, m, ν)
+    @inbounds for i in ii
+        buf[i, a, b, 1, s] = _tend_u(i, j, k, u, v, w, m, ν)
+        buf[i, a, b, 2, s] = _tend_v(i, j, k, u, v, w, m, ν)
+        buf[i, a, b, 3, s] = _tend_w(i, j, k, u, v, w, m, ν)
+    end
+end
+@inline _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, ::Nothing, m, ν) = nothing
+@inline function _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, sc, m, ν)
+    ϕ = sc[1]
+    @inbounds for i in ii
+        buf[i, a, b, f, s] = _tend_ϕ(i, j, k, u, v, w, ϕ, m, ν)
+    end
+end
+@inline function _trows!(buf, a, b, s, j, k, ii, u, v, w, s1, s2, m, ν)
+    _trow_mom!(buf, a, b, s, j, k, ii, u, v, w, m, ν)
+    _trow_sc!(buf, a, b, 4, s, j, k, ii, u, v, w, s1, m, ν)
+    _trow_sc!(buf, a, b, 5, s, j, k, ii, u, v, w, s2, m, ν)
+end
+
+# the predictor of one row (j, k) from buf[:, a, b, f.., s]
+@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ::Nothing) = nothing
+@inline function _prow_sc!(buf, a, b, f, s, j, k, ii, sc)
+    ϕ, ps, snap = sc
+    @inbounds for i in ii
+        ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], buf[i, a, b, f, s], snap, i, j, k)
+    end
+end
+@inline function _prows!(buf, a, b, s, j, k, ii, u, v, w, pu, s1, s2)
+    @inbounds for i in ii
+        u[i, j, k] = pu(u[i, j, k], buf[i, a, b, 1, s])
+        v[i, j, k] = pu(v[i, j, k], buf[i, a, b, 2, s])
+        w[i, j, k] = pu(w[i, j, k], buf[i, a, b, 3, s])
+    end
+    _prow_sc!(buf, a, b, 4, s, j, k, ii, s1)
+    _prow_sc!(buf, a, b, 5, s, j, k, ii, s2)
+end
+
+# slab s: the j-row sweep (one launch item per slab; slabs write disjoint
+# planes and read the others' only on their edge planes, not yet updated)
+function _b_sweep_slab!(s, u, v, w, s1, s2, ring, edge, m, ν, pu, ii, jj, kk, ns)
+    k0, k1 = _slab(kk, ns, s)
+    for j in jj
+        r = (j & 1) + 1
+        for k in k0:k1
+            if k == k0
+                _trows!(edge, j, 1, s, j, k, ii, u, v, w, s1, s2, m, ν)
+            elseif k == k1
+                _trows!(edge, j, 2, s, j, k, ii, u, v, w, s1, s2, m, ν)
+            else
+                _trows!(ring, k - k0 + 1, r, s, j, k, ii, u, v, w, s1, s2, m, ν)
+            end
+        end
+        if j > first(jj)
+            for k in k0+1:k1-1
+                _prows!(ring, k - k0 + 1, 3 - r, s, j - 1, k, ii, u, v, w, pu, s1, s2)
+            end
+        end
+    end
+    jl = last(jj)
+    for k in k0+1:k1-1
+        _prows!(ring, k - k0 + 1, (jl & 1) + 1, s, jl, k, ii, u, v, w, pu, s1, s2)
+    end
+    return nothing
+end
+
+# the edge planes, after every slab: (i, j, n), n = 2s − 1 the first and
+# n = 2s the last plane of slab s
+@inline function _b_sweep_edge!(i, j, n, u, v, w, s1, s2, edge, pu, kk, ns)
+    s = (n + 1) >> 1
+    e = 2 - (n & 1)
+    k0, k1 = _slab(kk, ns, s)
+    k = e == 1 ? k0 : k1
+    (e == 2 && k1 == k0) && return nothing
+    @inbounds begin
+        u[i, j, k] = pu(u[i, j, k], edge[i, j, e, 1, s])
+        v[i, j, k] = pu(v[i, j, k], edge[i, j, e, 2, s])
+        w[i, j, k] = pu(w[i, j, k], edge[i, j, e, 3, s])
+    end
+    _edge_sc!(i, j, k, e, 4, s, s1, edge)
+    _edge_sc!(i, j, k, e, 5, s, s2, edge)
+    return nothing
+end
+@inline _edge_sc!(i, j, k, e, f, s, ::Nothing, edge) = nothing
+@inline function _edge_sc!(i, j, k, e, f, s, sc, edge)
+    ϕ, ps, snap = sc
+    @inbounds ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], edge[i, j, e, f, s], snap, i, j, k)
+    return nothing
+end
+
+_sweep_arg(::Nothing) = nothing
+_sweep_arg((ϕ, ps, snap)::Tuple{Field{CellCenter}, Any, Any}) = (ϕ.data, ps, snap)
+
+"""
+    blocked_predictor!(bufs, u, v, w, ν, pu, s1, s2, g)
+
+The tendencies of a hook-free substage and its predictor in one sweep
+(SC-e, #405): `u ← pu(u, −∂(uⱼu)/∂xⱼ + ν∇²u)` (likewise v, w) and, for each
+scalar `s = (ϕ, ps, snap)` (or `nothing`), `ϕ ← ps(ϕ, −∂(uⱼϕ)/∂xⱼ + ν∇²ϕ)`
+(`ps(ϕ, t, snap[i, j, k])` when `snap` is an array), over the interior of
+`g`; `ν = nothing` drops the diffusion. Bit for bit `_fused_tendencies!`
+into the tendency fields followed by the predictor passes, but the
+tendencies stay in `bufs` ([`sweep_buffers`](@ref), `bufs.nf` ≥ 3 + the
+number of scalars), blocked so each field is streamed once. Every halo
+read must be filled; nothing else may read or write the fields meanwhile.
+"""
+function blocked_predictor!(bufs::SweepBuffers, u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                            ν, pu, s1, s2, g::AbstractMesh)
+    ii, jj, kk = interior(g)
+    ns = bufs.ns
+    nf = 3 + (s1 === nothing ? 0 : 1) + (s2 === nothing ? 0 : 1)
+    (s1 === nothing && s2 !== nothing) && throw(ArgumentError("blocked_predictor!: s2 without s1"))
+    bufs.nf >= nf && size(bufs.ring, 2) >= cld(length(kk), ns) && 2ns <= max(2, length(kk)) ||
+        throw(DimensionMismatch("blocked_predictor!: buffers do not fit ($ns slabs over $(length(kk)) planes)"))
+    m = grid_metrics(g)
+    a1, a2 = _sweep_arg(s1), _sweep_arg(s2)
+    b = Backends.backend(u.data)
+    launch_weighted!(b, cld(length(ii) * length(jj) * length(kk), ns), _b_sweep_slab!, (1:ns,),
+                     u.data, v.data, w.data, a1, a2, bufs.ring, bufs.edge, m, ν, pu, ii, jj, kk, ns)
+    launch!(b, _b_sweep_edge!, (ii, jj, 1:2ns), u.data, v.data, w.data, a1, a2, bufs.edge, pu, kk, ns)
+    return nothing
 end
 
 end # module
