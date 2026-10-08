@@ -35,3 +35,6 @@ examples/urban/data/raw/
 
 # Run folders (#334): runs/<date>_<case>_<runID>/ (run.log, run.toml, output, checkpoints)
 runs/
+
+# Generated reference pages (docs/generate_reference.jl, CFG-i #364)
+/docs/src/reference/

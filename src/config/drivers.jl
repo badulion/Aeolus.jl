@@ -12,7 +12,8 @@ run into a run folder. A driver type `D` implements
   * `driver_name(::D) -> String`: the `[run] driver` value that selects it;
   * `driver_sections(::D) -> Vector{Section}`: its sections, on top of the
     common ones (a section named like a common one adds options to it);
-  * `driver_checks(::D)`: cross-field checks ([`check!`](@ref); default none);
+  * `driver_checks(::D)`: cross-field checks, `"what it checks" => f` pairs
+    ([`check!`](@ref); default none);
   * `config_dir(::D)`: where `extends = "base.toml"` looks for bare names
     (default `nothing`);
   * `driver_defaults(::D)`: the driver's own defaults of common options,
@@ -48,8 +49,9 @@ driver_sections(::AbstractRunDriver) = Section[]
 """
     driver_checks(d::AbstractRunDriver) -> Vector
 
-The cross-field checks of the driver `d` (functions `cfg -> Vector{ConfigError}`,
-see [`check!`](@ref)).
+The cross-field checks of the driver `d`: `"what it checks, in words" => f`
+pairs with `f(cfg) -> Vector{ConfigError}` (see [`check!`](@ref)). The
+text goes into the option reference, one bullet per line.
 """
 driver_checks(::AbstractRunDriver) = Any[]
 
@@ -97,6 +99,28 @@ default: the driver has no static preprocessor (an `ArgumentError`).
 """
 preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing) =
     throw(ArgumentError("the driver \"$(driver_name(d))\" has no static preprocessor"))
+
+"""
+    preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from, out = nothing, child = nothing)
+        -> Vector{String}
+
+Write the dynamic input driver of the run `cfg` (CFG-g, #362:
+`Aeolus.InputDrivers`) and return the paths written: `from = :sounding`
+from the sounding or case tables the config names, `from = :parent` by
+running the config's nest parent with the child's boundary slabs recorded
+at every parent step (`child`, a `RunConfig`, when the child is not `cfg`
+itself). `out` replaces the path the config gives the driver. `aeolus
+preprocess dynamic (--from-sounding | --from-parent) <config.toml>` calls
+it. The default: the driver has no dynamic preprocessor (an
+`ArgumentError`).
+
+`from = :era5` (CFG-h, #363; `aeolus preprocess dynamic --from-era5
+<files…> --config <config.toml> [--box deg]`) passes two more keywords,
+`files` (the ERA5 files) and `box` (degrees, or `nothing`: the config's);
+a driver with an ERA5 preprocessor accepts them (the `simulation` driver).
+"""
+preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing) =
+    throw(ArgumentError("the driver \"$(driver_name(d))\" has no dynamic preprocessor"))
 
 # Simulations.run!(::AbstractRunDriver, obj, rf, ck; callback) is the
 # contract's run method (it adds a method to the generic run!).

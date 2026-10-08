@@ -31,6 +31,7 @@ using Aeolus
 using Aeolus.Fields: interior_view
 using Aeolus.Operators: sigma_operator, sigma_singular_values, _sigma_operator_raw,
                         _velocity_gradient_at
+isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
 
 # Fill every point of `f` (halos included) from the analytic `fn(x, y, z)`;
 # `off` is the location of the field in cell units ((0, ½, ½) for u @ FaceX …).
@@ -248,12 +249,7 @@ end
         ke(sim) = 0.5 * sum(f -> mean(abs2, interior_view(f)), (sim.u, sim.v, sim.w))
         function hit(sgs, seed)
             sim = BoussinesqSimulation(mesh; ν = 1e-4)
-            k0 = 2π / mesh.Lx
-            isotropic_random_field!(sim, k -> (k / k0)^(-5 / 3); rng = Xoshiro(seed), kmax = 8k0)
-            sc = 1 / sqrt(mean(abs2, interior_view(sim.u)))
-            for f in (sim.u, sim.v, sim.w)
-                interior_view(f) .*= sc; fill_halos!(f, sim.bcs)
-            end
+            kolmogorov_field!(sim, Xoshiro(seed))   # k_c = 8 = N/4, u_rms = 1
             K = Float64[]
             for n in 1:300
                 step_rk3!(sim, 0.01; sgs = sgs)

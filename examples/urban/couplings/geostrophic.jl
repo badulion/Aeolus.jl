@@ -135,9 +135,18 @@ function run_stage!(c::GeostrophicCoupling, case, ::Val{:body_force}, dt)
     return nothing
 end
 
-report(c::GeostrophicCoupling, case) =
-    @sprintf("geostrophic (%s%s): mean wind (%.2f, %.2f) m/s, forcing (%.2e, %.2e) m/s²",
-             c.mode, c.sponge_ref ? ", sponge → U_g" : "", c.ū, c.v̄, c.dtu, c.dtv)
+"""
+    diagnostics(c::GeostrophicCoupling, case)
+
+The interior mean wind `u_mean`, `v_mean` (m s⁻¹) and the mean forcing
+the coupling applied `forcing_u`, `forcing_v` (m s⁻²), every step.
+"""
+diagnostics(c::GeostrophicCoupling, case) = Diagnostic[
+    Diagnostic("u_mean", "m s-1", () -> c.ū; cadence = :step),
+    Diagnostic("v_mean", "m s-1", () -> c.v̄; cadence = :step),
+    Diagnostic("forcing_u", "m s-2", () -> c.dtu; cadence = :step,
+               description = "mean forcing ($(c.mode)$(c.sponge_ref ? ", sponge to U_g" : ""))"),
+    Diagnostic("forcing_v", "m s-2", () -> c.dtv; cadence = :step)]
 
 # The open-box variants of the case (#262) live here: the open faces are fed
 # with this coupling's (U_g, V_g). Every coupling is on in both.

@@ -192,9 +192,15 @@ Three findings:
 
 * No Berlin coupling on `master` yet: the Berlin multi-domain case is
   N-berlin-nest (#265, PR #330).
-* `NestedRun` is one parent–child pair with an aligned, uniform child:
-  nest hierarchies, sibling nests, non-aligned parents and stretched
-  children are #328.
+* Since #328 the boundary data of a [`NestHierarchy`](@ref) flow down
+  level by level through the same contract (a grandchild's data come from
+  the child's state at the child's substep ends), and a stretched child's
+  open faces use the per-level face areas of its mesh in the mass-flux
+  correction; see [nest hierarchies, non-aligned and stretched
+  children](nesting_hierarchy.md). A one-way child with Dirichlet outflow
+  faces keeps a reflected residual after a sharp feature has left it
+  (measured there); a radiation outflow (`outflow = :convective`) does
+  not.
 
 Resolved since N-nest-d:
 

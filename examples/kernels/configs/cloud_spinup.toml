@@ -22,3 +22,9 @@ qv = 0.01
 ql = 3e-3
 cloud_layer = [0.6, 0.9]
 dt = [60.0, 60.0, 120.0, 120.0, 120.0]
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = []                  # already a smoke run

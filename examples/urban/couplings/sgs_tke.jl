@@ -129,13 +129,22 @@ function tke_model_stress(c::SGSTKE, case)
     return τ, e
 end
 
-function report(c::SGSTKE, case)
-    p = tke_profile(c, case)
-    st = tke_statistics(c.closure)
-    τ, e = tke_model_stress(c, case)
-    return @sprintf("SGS TKE: mean e canopy %.3f, free stream %.3f m²/s²; mean ν_t canopy %.3f m²/s; %d clips",
-                    p.canopy, p.free, p.νt_canopy, st.clips) *
-           "\n    SGS TKE " * sgs_apriori_line(sgs_test_filter_metrics(case, τ, e))
+"""
+    diagnostics(c::SGSTKE, case)
+
+The mean SGS energy `e_canopy`, `e_free` (m² s⁻²) and `nu_t_canopy`
+(m² s⁻¹) of [`tke_profile`](@ref), the closure's `clips` (cumulative),
+and the a-priori metrics of the implied stress
+([`sgs_apriori_diagnostics`](@ref)).
+"""
+function diagnostics(c::SGSTKE, case)
+    p = per_state(() -> tke_profile(c, case), case)
+    return vcat(Diagnostic[
+                    Diagnostic("e_canopy", "m2 s-2", () -> p().canopy),
+                    Diagnostic("e_free", "m2 s-2", () -> p().free),
+                    Diagnostic("nu_t_canopy", "m2 s-1", () -> p().νt_canopy),
+                    Diagnostic("clips", "1", () -> tke_statistics(c.closure).clips; cadence = :step)],
+                sgs_apriori_diagnostics(() -> tke_model_stress(c, case), case))
 end
 
 # e is the registered tracer :e (written already); II of the implied stress

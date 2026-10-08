@@ -277,8 +277,8 @@ machine, so the ratios are rough.
 
 ### A-priori metrics, outputs and a 1 h comparison (P56-e, #192)
 
-No new physics. Both prognostic providers now add an a-priori line to
-their `report`. It comes from `sgs_test_filter_metrics` in
+No new physics. Both prognostic providers now add a-priori metrics to
+their diagnostics (`apriori.*`, #338; a report line before). It comes from `sgs_test_filter_metrics` in
 `couplings/sgs.jl`, which compares the closure's subfilter stress over the
 canopy fluid cells with the resolved (Germano) stress at the test-filter
 scale. That stress is ``L_{ij} = \widehat{\bar u_i\bar u_j} − \hat{\bar u}_i\hat{\bar u}_j``,

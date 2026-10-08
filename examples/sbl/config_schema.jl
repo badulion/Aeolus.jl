@@ -33,6 +33,7 @@ using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section,
                      Optional, Path, section, option!, register_driver!, config_schema
 using Aeolus.IO: IO, RunFolder, CheckpointSchedule, with_monitor, monitor!, output_dir
 using Aeolus.Simulations: Simulations
+using Aeolus.InputDrivers: read_dynamic_driver, dynamic_forcing, forcing_dynamic_inputs, write_dynamic_driver
 import TOML
 
 """
@@ -286,19 +287,23 @@ function Config.driver_sections(::SBLDriver)
                 doc = "homogeneous (sbl_case: GABLS1-4, CASES-99), stratified_channel (stratified_channel_run), relaminarisation_channel (relam_spinup + relam_run), collapse_channel (collapse_run)")
         option!(s, "data", Optional{Path};
                 doc = "the case table (a CSV of examples/sbl/data/ with a table name in its first column) that table references read; \"none\": no table")
-        option!(s, "richardson", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "dynamic", Optional{Path};
+                doc = "homogeneous: a dynamic driver (CFG-g #362, `aeolus preprocess dynamic --from-sounding`) whose " *
+                      "tables replace the config's: geostrophic wind, advective tendencies, subsidence, nudging and " *
+                      "the surface θ series, each when the driver holds it; \"none\": the config's own")
+        option!(s, "richardson", Float64; units = "1", default = 0.0, range = (0, Inf),
                 doc = "stratified_channel: the friction Richardson number Ri_τ (0: θ passive, g = 0)")
-        option!(s, "re_tau", Float64; default = 180.0, range = (0, Inf), open_lower = true,
+        option!(s, "re_tau", Float64; units = "1", default = 180.0, range = (0, Inf), open_lower = true,
                 doc = "relaminarisation_channel: the friction Reynolds number Re_τ")
-        option!(s, "h_over_l", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "h_over_l", Float64; units = "1", default = 0.0, range = (0, Inf),
                 doc = "relaminarisation_channel: the stability h/L of the cooling (0: neutral)")
-        option!(s, "heat_flux_fraction", Float64; default = 0.0, range = (0, Inf),
+        option!(s, "heat_flux_fraction", Float64; units = "1", default = 0.0, range = (0, Inf),
                 doc = "collapse_channel: the surface cooling in units of the maximum sustainable heat flux at Δz/2 (0: neutral)")
-        option!(s, "z0", Float64; default = 1e-4, range = (0, Inf), open_lower = true,
+        option!(s, "z0", Float64; units = "H", default = 1e-4, range = (0, Inf), open_lower = true,
                 doc = "collapse_channel: the roughness length z0/H")
         option!(s, "theta_ref", Float64; default = 300.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "collapse_channel: the reference temperature of the flux wall law and the MSHF")
-        option!(s, "spinup_time", Float64; default = 10.0, range = (0, Inf),
+        option!(s, "spinup_time", Float64; units = "δ/u_τ, h/u_τ or H/u*", default = 10.0, range = (0, Inf),
                 doc = "channels: the neutral spin-up (δ/u_τ, h/u_τ, H/u*) the run starts from; stratified_channel: 0 starts from noise")
     end
     grid = section("grid"; doc = "The mesh.") do s
@@ -364,7 +369,7 @@ function Config.driver_sections(::SBLDriver)
         option!(s, "closure", Symbol; default = :smagorinsky,
                 allowed = [:smagorinsky, :vreman, :sigma, :amd, :dynamic_smagorinsky],
                 doc = "homogeneous: smagorinsky, vreman, sigma or amd; stratified_channel: dynamic_smagorinsky; relaminarisation_channel: sigma; collapse_channel: smagorinsky")
-        option!(s, "c_s", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "c_s", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
                 doc = "the closure's coefficient; \"none\": smagorinsky 0.1, vreman 0.17, sigma 1.35, amd 0.3 (dynamic_smagorinsky has none)")
         option!(s, "stability", Symbol; default = :brown94,
                 allowed = [:brown94, :lilly, :long_tail, :short_tail, :none],
@@ -379,7 +384,7 @@ function Config.driver_sections(::SBLDriver)
                 doc = "geostrophic: relax toward U_g(z, t); mean: damp only the departures from the plane mean")
     end
     stepper = section("stepper"; doc = "Time stepping (SSP-RK3).") do s
-        option!(s, "cfl", Optional{Float64}; range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
                 doc = "advective Courant number of the adaptive step; \"none\": the kind's (homogeneous 1.2, channels 0.5, the only value they take)")
         option!(s, "end_time", Optional{Float64}; units = "s (channels: δ/u_τ)",
                 doc = "the model time to run to (homogeneous: from t_start; channels: the run after the spin-up)")
@@ -391,7 +396,7 @@ function Config.driver_sections(::SBLDriver)
                 doc = "model time from which the profiles are averaged (homogeneous, stratified_channel, collapse_channel)")
         option!(s, "sample_every", Int; default = 10, range = (1, typemax(Int)),
                 doc = "homogeneous: sample every n-th step")
-        option!(s, "interval", Float64; default = 0.5, range = (0, Inf), open_lower = true,
+        option!(s, "interval", Float64; units = "h/u_τ or H/u*", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "relaminarisation_channel, collapse_channel: model time between samples")
         option!(s, "series_interval", Float64; default = 0.0, range = (0, Inf), units = "s",
                 doc = "homogeneous: model time between the rows of output/series.csv; 0: no series")
@@ -401,7 +406,7 @@ function Config.driver_sections(::SBLDriver)
                 doc = "towers at every cell centre below this height; 0: no towers")
         option!(s, "window", Float64; default = 300.0, range = (0, Inf), open_lower = true, units = "s",
                 doc = "averaging segment")
-        option!(s, "hours", NTuple{2,Float64}; default = (18.0, 6.0), range = (0, 24),
+        option!(s, "hours", NTuple{2,Float64}; units = "h", default = (18.0, 6.0), range = (0, 24),
                 doc = "local hours (from, to) in which the towers record; (0, 24): always")
     end
     return Section[case, grid, dyn, forcing, surface, initial, sgs, sponge, stepper, avg, towers]
@@ -415,7 +420,7 @@ end
 # kind that does not use it is an error (a silently ignored key is a bug)
 const _SBL_HOMOG = (:homogeneous,)
 const _SBL_KIND_USE = Dict(
-    "case.data" => _SBL_HOMOG, "case.richardson" => (:stratified_channel,),
+    "case.data" => _SBL_HOMOG, "case.dynamic" => _SBL_HOMOG, "case.richardson" => (:stratified_channel,),
     "case.re_tau" => (:relaminarisation_channel,), "case.h_over_l" => (:relaminarisation_channel,),
     "case.heat_flux_fraction" => (:collapse_channel,), "case.z0" => (:collapse_channel,),
     "case.theta_ref" => (:collapse_channel,),
@@ -509,6 +514,10 @@ function _sbl_checks(cfg)
                    ("initial.theta", cfg.initial.theta), ("initial.u", cfg.initial.u), ("initial.v", cfg.initial.v))
         _sbl_table_refs(v, k, refs)
     end
+    dd = cfg.case.dynamic
+    dd === nothing || isfile(dd) ||
+        push!(e, ConfigError("case.dynamic", "the dynamic driver $dd does not exist; generate it with\n" *
+                             "  julia --project -m Aeolus preprocess dynamic --from-sounding <this config> --out $dd"))
     if d !== nothing && !isfile(d)
         push!(e, ConfigError("case.data", "the case table $d does not exist"))
     elseif !isempty(refs) && d === nothing
@@ -526,7 +535,15 @@ function _sbl_checks(cfg)
     return e
 end
 
-Config.driver_checks(::SBLDriver) = Any[_sbl_checks]
+const _SBL_CHECKS_DOC = """
+a key of a section that `case.kind` does not use must keep its default (it would be ignored)
+homogeneous: exactly one of `stepper.end_time` and `stepper.nsteps`, exactly one of `forcing.f` and `forcing.latitude`; `sgs.closure` is `smagorinsky`, `vreman`, `sigma` or `amd`
+channels: run to `stepper.end_time` with the builder's closure (`stratified_channel`: `dynamic_smagorinsky` with `brown94` or no stability correction; `relaminarisation_channel`: `sigma`; `collapse_channel`: `smagorinsky`, laplacian stress) and `sgs.stability = "brown94"`
+checkpoints only for `homogeneous` and `relaminarisation_channel`
+`case.dynamic`, when given, exists (the message prints the `aeolus preprocess dynamic` command)
+`case.data` exists, and every table and column a forcing, surface or initial option refers to is in it"""
+
+Config.driver_checks(::SBLDriver) = Any[_SBL_CHECKS_DOC => _sbl_checks]
 
 # ---------------------------------------------------------------------------
 # config -> Julia objects
@@ -651,6 +668,69 @@ function sbl_extra_forcing(f, T)
 end
 
 """
+    sbl_forcing(cfg::RunConfig) -> (; U_g, V_g, extra, surface)
+
+The large-scale forcing of a homogeneous `sbl` config as `LargeScaleForcing`
+objects: the geostrophic wind `U_g`, `V_g`, the `extra` forcings
+([`sbl_extra_forcing`](@ref)) and the `sbl_case` keywords of the surface
+temperature ([`sbl_surface_temperature`](@ref)), from the config's own
+quantities and case table, or, for those a dynamic driver `case.dynamic`
+holds (CFG-g #362), from the driver (its times shifted from "seconds
+since init_time" to the model time, `initial.t_start` at the start): the
+geostrophic wind, the extra forcings (all of them, when it holds any) and
+the surface θ series.
+"""
+function sbl_forcing(cfg::RunConfig)
+    T = _sbl_tables(cfg)
+    f = cfg.forcing; t0 = cfg.initial.t_start
+    Ug = sbl_quantity(f.u_g, T); Vg = sbl_quantity(f.v_g, T)
+    extra = sbl_extra_forcing(f, T)
+    sfc = sbl_surface_temperature(cfg.surface.temperature, T, t0)
+    cfg.case.dynamic === nothing && return (; U_g = Ug, V_g = Vg, extra, surface = sfc)
+    d = read_dynamic_driver(cfg.case.dynamic; planes = false)
+    F = dynamic_forcing(d; t0 = t0)
+    F.U_g === nothing || (Ug = F.U_g)
+    F.V_g === nothing || (Vg = F.V_g)
+    isempty(F.extra) || (extra = F.extra)
+    s = d.surface
+    s === nothing || s.temperature === nothing ||
+        (sfc = (; T_s = SurfaceTemperatureSeries(s.t .+ t0, s.temperature)))
+    return (; U_g = Ug, V_g = Vg, extra, surface = sfc)
+end
+
+"""
+    preprocess_dynamic(::SBLDriver, cfg; from = :sounding, out = nothing) -> Vector{String}
+
+`aeolus preprocess dynamic --from-sounding <sbl config>`: the case-table
+preprocessor of the homogeneous SBL cases (GABLS2-4, CASES-99): the
+config's table quantities ([`sbl_forcing`](@ref) without a driver: the
+geostrophic wind, advective tendencies, subsidence, nudging, the surface
+θ series) as a dynamic driver at `case.dynamic` (or `out`), times since
+the run start `initial.t_start`, the case table hashed. Numbers and
+formulas stay in the config. `init_time` is empty: the configs carry no
+calendar date.
+"""
+function Config.preprocess_dynamic(::SBLDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
+    from === :sounding || throw(ArgumentError("the sbl driver has the case-table preprocessor only (--from-sounding)"))
+    cfg.case.kind === :homogeneous || throw(ArgumentError("--from-sounding: case.kind = $(cfg.case.kind) has no forcing tables"))
+    path = out !== nothing ? abspath(out) : cfg.case.dynamic
+    path === nothing && throw(ArgumentError("[case] dynamic is \"none\": pass --out file.nc"))
+    F = sbl_forcing(with_case_dynamic(cfg, nothing))
+    sfc = haskey(F.surface, :T_s) ? (t = F.surface.T_s.t, temperature = F.surface.T_s.T_s, pressure = nothing) : nothing
+    d = forcing_dynamic_inputs(; U_g = F.U_g, V_g = F.V_g, extra = F.extra, surface = sfc,
+                               t_start = cfg.initial.t_start)
+    isempty(d.tables) && d.surface === nothing &&
+        throw(ArgumentError("--from-sounding: the config has no forcing tables (only numbers and formulas)"))
+    lat = cfg.forcing.latitude === nothing ? NaN : cfg.forcing.latitude
+    write_dynamic_driver(path, d; source = something(cfg.case.data, ""), origin_lat = lat,
+                         preprocessor = "aeolus preprocess dynamic --from-sounding")
+    return [path]
+end
+
+# `cfg` with case.dynamic replaced (the preprocessor reads the config's own tables)
+with_case_dynamic(cfg::RunConfig, path) = path === cfg.case.dynamic ? cfg : with(cfg, "case.dynamic" => path)
+
+"""
     sbl_case(cfg::RunConfig) -> SBLCase
 
 The homogeneous SBL case of a resolved `sbl` config (`[case] kind =
@@ -661,17 +741,17 @@ function sbl_case(cfg::RunConfig)
     T = _sbl_tables(cfg)
     f = cfg.forcing; sf = cfg.surface; ini = cfg.initial; sp = cfg.sponge
     fc = f.f === nothing ? sbl_coriolis(f.latitude) : f.f
-    Ug = sbl_quantity(f.u_g, T); Vg = sbl_quantity(f.v_g, T)
+    F = sbl_forcing(cfg)
+    Ug = F.U_g; Vg = F.V_g
     θi = sbl_profile(ini.theta, T)
     kw = (; N = cfg.grid.size, extent = something(cfg.grid.extent, (400.0, 400.0, 400.0)),
           U_g = Ug, V_g = Vg, f = fc, z0m = sf.z0m, z0h = something(sf.z0h, sf.z0m), θ₀ = cfg.dynamics.theta0,
           base = sbl_base_closure(cfg.sgs), sgs_stability = cfg.sgs.stability,
           sgs_stress = cfg.sgs.stress, stability = sbl_stability(sf.stability),
           sponge_z = sp.z, sponge_α = sp.alpha, sponge_target = sp.target, seed = cfg.run.seed,
-          extra_forcing = sbl_extra_forcing(f, T), θ_init = θi, u_init = sbl_profile(ini.u, T),
+          extra_forcing = F.extra, θ_init = θi, u_init = sbl_profile(ini.u, T),
           v_init = sbl_profile(ini.v, T), t_start = ini.t_start, ρcp = sf.rho_cp)
-    return sbl_case(; kw..., sbl_perturbation(ini.perturbation)...,
-                    sbl_surface_temperature(sf.temperature, T, ini.t_start)...)
+    return sbl_case(; kw..., sbl_perturbation(ini.perturbation)..., F.surface...)
 end
 
 """

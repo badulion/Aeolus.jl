@@ -32,17 +32,27 @@ the default", never `nothing`.
 struct Optional{T} end
 
 """
-    OpenTable(validator = tbl -> String[])
+    OpenTable(validator = tbl -> String[]; reference = nothing)
 
 Option type for a table whose keys a driver decides (the per-coupling
 options of the Berlin case). `validator(tbl::Dict{String,Any})` returns
 the problems it finds: strings (attached to the option's key) or
 [`ConfigError`](@ref)s whose keys are relative to the table.
+
+`reference`, when given, is a zero-argument function returning the
+documented sub-tables, a `Vector{Section}` whose names are dotted paths
+below the option (`"aq_chem"`, `"nesting.parent"`); the option reference
+([`option_reference`](@ref)) lists them after the option's section, and
+[`undocumented_keys`](@ref) checks a config's keys against them. Their
+options may be [`reference_option`](@ref)s (a type and a default given
+as text).
 """
 struct OpenTable
     validator::Any
+    reference::Any
 end
-OpenTable() = OpenTable(_ -> String[])
+OpenTable(validator; reference = nothing) = OpenTable(validator, reference)
+OpenTable() = OpenTable(_ -> String[], nothing)
 
 """
     OneOf(T1, T2, …)
@@ -148,6 +158,19 @@ struct Option
 end
 
 """
+    reference_option(key, type_text, default_text; doc = "", units = "") -> Option
+
+An option of a documented sub-table of an [`OpenTable`](@ref) whose type
+and default are given as text (the per-coupling options of the Berlin
+case, validated by the driver itself): it appears in the option
+reference and nowhere else.
+"""
+reference_option(key::AbstractString, type_text::AbstractString, default_text::AbstractString;
+                 doc::AbstractString = "", units::AbstractString = "") =
+    Option(String(key), String(type_text), String(default_text), String(doc), String(units),
+           nothing, nothing, false, false, false, false)
+
+"""
     Section
 
 A named table of [`Option`](@ref)s, built with [`section`](@ref) and
@@ -246,15 +269,23 @@ section named like a common one adds its options to that section (the
 `simulation` driver's `[output] fields`); an option already in the common
 section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
 defaults to, and must equal, `name`. `checks` are cross-field checks
-([`check!`](@ref)). `defaults` (`"section.key" => value` pairs) give a
+([`check!`](@ref)): functions, or `"what it checks, in words" => f`
+pairs, whose text goes into the option reference ([`option_reference`](@ref)).
+`defaults` (`"section.key" => value` pairs) give a
 common option this driver's own default (the Berlin case's `[output]
 cadence` of 1800 s); its type and constraints stay the common ones.
 """
 struct ConfigSchema
     name::String
     sections::Vector{Section}
-    checks::Vector{Any}
+    checks::Vector{Pair{String,Any}}
+    ConfigSchema(name::String, sections::Vector{Section}, checks) =
+        new(name, sections, Pair{String,Any}[_check_entry(c) for c in checks])
 end
+
+"A cross-field check as `description => f` (a bare function has the description `\"\"`)."
+_check_entry(c::Pair) = String(first(c)) => last(c)
+_check_entry(f) = "" => f
 
 function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[], defaults = ())
     all_s = _common_sections(String(name))
@@ -295,14 +326,16 @@ function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[]
 end
 
 """
-    check!(schema, f) -> schema
+    check!(schema, f; doc = "") -> schema
 
 Add a cross-field check: `f(cfg::RunConfig)` returns a vector of
 [`ConfigError`](@ref)s (empty when the config is consistent). Run after
 every option has passed its own checks; their problems go into the one
-error the loader throws.
+error the loader throws. `doc` says what it checks, in words: the option
+reference lists it under "Cross-field checks".
 """
-check!(schema::ConfigSchema, f) = (push!(schema.checks, f); schema)
+check!(schema::ConfigSchema, f; doc::AbstractString = "") =
+    (push!(schema.checks, String(doc) => f); schema)
 
 _split_key(key::String) = (i = findfirst('.', key);
                            i === nothing ? (key, "") : (key[1:prevind(key, i)], key[nextind(key, i):end]))

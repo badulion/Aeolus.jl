@@ -16,19 +16,70 @@ using .BerlinCase
 cfg  = CaseConfig(:alexanderplatz; nsteps = 1800)   # 1 h at dt = 2 s
 case = build_case(cfg)
 print(describe(case))                               # couplings and schedule
-run_case!(case)                                     # NetCDF + log + timing table
+run_case!(case)                                     # NetCDF + log events (frames, timing, ledgers)
 ```
 
 What the case prints is the installed logger's choice (#347; there is no
-`verbose` setting and no `io` keyword): every line is a log record with
-`subsystem = :berlin` and an `event` key. The setup summary (buildings,
-radiosity scene, surfaces, facade wall model, city-mean building) is
-`Debug`; the run's start, each output frame with the couplings' reports,
-the end-of-run summary, the timing table and the ledgers are `Info`; a
-blowup is an `Error`. `with_logger(NullLogger()) do … end` silences a run.
-Under `aeolus run` (below) the run folder's log takes everything from
-`[logging] file_level` (`debug`) up and the console `[logging]
-console_level` (`info`; `debug` adds the setup summary).
+`verbose` setting and no `io` keyword): every line is a structured log
+record with `subsystem = :berlin`, an `event` key and its values as
+key-values (#338; the code is `examples/urban/core/diagnostics.jl`):
+
+| event | level | key-values |
+| :-- | :-- | :-- |
+| `:built`, `:radiosity_scene`, `:init`, `:parent_built` | `Debug` | the setup summary: grid, buildings, solid / wall / glass cells, couplings; facets, view-factor reciprocity and closure, sky-view factor; the facade walls; the city-mean building |
+| `:run_start` | `Info` | `nsteps`, `t_end`, `dt`, `variable_dt`, `records` |
+| `:frame` | `Info` | each output record: `frame`, `wall` and the frame diagnostics (`hour`, `solar_elevation`, `Ts_min`/`Ts_max`, `sw_min`/`sw_max`, `theta1_min`/`theta1_max`, `qv1_min`, `dew_max`, `ql1_max`) |
+| `:coupling` | `Info` | with each frame, one per coupling that declares diagnostics: `coupling` and its values |
+| `:run_end` | `Info` | `steps`, `wall`, `records`, `output`, `size_mb`, `peak_uhi`, `max_div` |
+| `:timing` | `Info` | one per stage entry, largest first: `stage`, `entry`, `seconds`, `ms_per_step` |
+| `:ledger` | `Info` | `ledger = :surface` per class (`Rn`, `H`, `LE`, `G`, `dS`, `residual`, the extra terms, `closure`, W m⁻²); `:water` (`storage`, the sources, `residual`, kg m⁻²); `:heat` per layer (`storage`, `closure`, W m⁻²); `:heat_term` per attributed term (W m⁻² per layer) |
+| `:blowup` | `Error` | `step` |
+
+`with_logger(NullLogger()) do … end` silences a run. Under `aeolus run`
+(below) the run folder's log takes everything from `[logging]
+file_level` (`debug`) up and the console `[logging] console_level`
+(`info`; `debug` adds the setup summary).
+
+### Diagnostics
+
+A coupling reports through the library's diagnostics registry
+([Logging](../api/logging.md)): it declares its scalars with
+`diagnostics(c, case)` and its vertical profiles with
+`profile_diagnostics(c, case)`, as it declares `output_fields`. The same
+declarations are the coupling's `:coupling` log event and its columns of
+the run folder's `diagnostics.csv` and `diagnostics.nc`, so there is one
+source of truth for what a coupling reports. `case_diagnostics(case)`
+collects every scalar of the run:
+
+* the dynamical core's (`ke_mean`, `max_div`, `theta_min`, …);
+* the frame quantities (`Ts_min`, `sw_max`, …), the closure the steps
+  run under `sgs.` (`sgs.nu_h_max`, `sgs.e_mean`, …);
+* the ledgers under `ledger.`: `ledger.surface.<class>.<term>` (`Rn`,
+  `H`, `LE`, `G`, `dS`, `closure`, W m⁻², mean over the run, for every
+  class present and `domain`), `ledger.water.storage` /
+  `ledger.water.residual` (kg m⁻²), `ledger.heat.storage` /
+  `ledger.heat.closure` (W m⁻², whole column);
+* the stage timing, `wall.<stage>.<entry>` (s, cumulative);
+* each coupling's, prefixed with its name (`pressure_multigrid.cycles`,
+  `timestep_adaptive.dt_mean`, `nesting.boundary_heat_top`, …).
+
+Every wall-clock quantity is named `wall.…`: a coupling declares one as
+`wall.<x>` and it is filed as `wall.<coupling>.<x>`, so a comparison of
+two runs that must agree bit for bit (the configuration round trip of
+#358) drops them all by the prefix, with the CSV's own `wall` column.
+The rows carry the step's `dt`, what limited it (`dt_limiter`: the
+binding CFL limit, `dt_min`, `dt_max`, `growth`, or the coupling whose
+`limit_dt` shortened it) and its `retries`. The quantities that cost a
+reduction or more are on the costly cadence (`[logging]
+diagnostics_cadence`, 60 s simulated); counts and solver residuals
+every step. The three that cost more than a step (the SGS a-priori
+metrics, the Leighton ratio, the transition summary and its profiles)
+are evaluated once per output record (`per_record`), as their report
+lines were, and repeated in the rows in between. Measured on the
+64 × 64 × 64 summer case (#338): a step 122 ms; every diagnostic and
+profile evaluated afresh 193 ms, of which those three 168 ms; with them
+once per record a costly row costs 16 ms, 0.4 % of the run at a 2 s
+step and the 60 s cadence.
 
 The flagship is configured in TOML (CFG-c, #358): the scenarios are the
 shipped files `examples/urban/configs/berlin_<scenario>.toml`, run by the
@@ -44,6 +95,50 @@ the log and `diagnostics.csv`; the NetCDF output still goes to
 `examples/urban/output/alexanderplatz.nc` (`[output] path`). See
 [the `berlin` driver](../api/config.md#The-berlin-driver) for the schema;
 `CaseConfig(:summer)` in Julia loads the same file.
+
+### Configuring with TOML
+
+A variant of a scenario is a file that `extends` it and sets only what
+differs, or a `--set` on the command line:
+
+```toml
+# my_berlin.toml
+extends = "berlin_summer.toml"     # found next to this file, else in examples/urban/configs/
+
+[run]
+name = "summer_no_traffic_nox"
+
+[physics]
+sgs = "smagorinsky"                # a slot: one of its registered providers
+
+[physics.options.aq_chem]
+nox_street = 0.0                   # a coupling option, checked against its default_options
+```
+
+`julia --project -m Aeolus check my_berlin.toml` validates it,
+`resolve` prints every option it resolves to, and `run` starts it. In
+Julia, `CaseConfig(load_run_config("my_berlin.toml"))` gives the
+`CaseConfig` that `build_case` takes. Every key, with its type, default,
+units and range, is in the generated
+[option reference of the `berlin` driver](../reference/options/berlin.md);
+the guide to files, overrides, replays and `--resume` is
+[Run configuration](run_configuration.md). The run's `run.toml` holds the
+resolved config, so `aeolus run <folder>/run.toml` replays the run bit for
+bit.
+
+**A coupling's `default_options` is its option table.** The schema of
+`[physics.options.<name>]` is generated from the coupling's
+`default_options` `NamedTuple`: the keys are closed (an unknown key is an
+error that lists the coupling's options), each value must have its
+default's type (a `Symbol` is a string, a tuple an array of its length,
+a `NamedTuple` a sub-table). The option reference documents the table
+(`berlin_options_reference`), one row per key with its TOML form and its
+default, generated from the same `NamedTuple`; the meaning of each key is
+documented on the coupling's docstring. Adding a key to `default_options`
+is all it takes to make it configurable from TOML and listed in the
+reference; there is no separate schema to edit. `[physics]` gets one key per
+slot (allowed values: the registered providers) and one per additive
+coupling, and `[cadence]` one per named period a coupling declares.
 
 ## Status of the epic (#125)
 
@@ -90,7 +185,8 @@ examples/urban/
     open_boundary.jl   cfg.lateral (:periodic / :open), the open faces' data and heat (#262)
     output.jl          NetCDF output driven by the registry
     case.jl            Case, build_case
-    stages.jl          the stage loop: step_case!, run_case!, timing_report
+    stages.jl          the stage loop: step_case!, run_case!
+    diagnostics.jl     the case's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
   couplings/           one file per coupling, each ending in register!(Type)
   configs/             berlin_summer.toml (every option), _winter, _smoke, _mitte_sample
   alexanderplatz_diurnal.jl              the run (a wrapper of `aeolus run configs/berlin_summer.toml`)
@@ -125,7 +221,8 @@ default.
 | `run_stage!(c, case, ::Val{S}, dt)` | the work of stage `S` |
 | `output_fields(c, case)` | `OutputField`s added to the NetCDF file |
 | `budget!(c, case, ledger)` | this step's surface-energy and water terms (see [the ledger](berlin_ledgers.md#The-budget-ledger)) |
-| `report(c, case)` | an extra log line with each output record |
+| `diagnostics(c, case)` | `Vector{Diagnostic}`: the scalars it reports, in `diagnostics.csv` / `.nc` and its `:coupling` log event with each output record (see [Diagnostics](#Diagnostics)) |
+| `profile_diagnostics(c, case)` | `Vector{ProfileDiagnostic}`: its vertical profiles, in `diagnostics.nc` |
 | `smoke_variants(::Type{C})` | extra smoke-run configurations, a tuple of `NamedTuple`s (see [the smoke runs](berlin_ledgers.md#Smoke-test)) |
 | `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run (`examples/urban/berlin_checks.jl`) |
 | `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](berlin_numerics.md#Numerics-slots)) |
@@ -197,14 +294,15 @@ in the integer `order` their couplings declare.
 | `:nest_feedback` | `nesting` (10): closes the window when the child reaches its end (one-way: clock and statistics; `mode = :two_way`, #267: also the feedback onto the parent, see [Nesting](berlin_nesting.md#Two-way-option-(#267))) |
 | `:sanity` | the core finiteness check |
 | (ledger) | every coupling's `budget!`, and the change of water in the air (core) |
-| `:output` (1800 s) | NetCDF record and log line (core), then coupling entries: `turbulence_diag` (10) |
+| `:output` (1800 s) | NetCDF record and log events (core), then coupling entries: `turbulence_diag` (10) |
 
 The order was the order of the pre-refactor loop, floating-point order
 included (#126). The surface exchange (#129) replaced the slab, whose
 latent flux sat at the end of `:anthropogenic` and whose Ts clamp ran in
 `:sanity` only to keep that order; see [Surface exchange](berlin_surface_radiation.md#Surface-exchange-(#129)).
 
-`run_case!` logs the wall time of every entry (`timing_report`). At
+`run_case!` logs the wall time of every entry (the `:timing` events and
+the `wall.*` diagnostics). At
 #126, in the 1 h flagship run (1800 steps, first-call compilation
 included), the largest entry was the WENO-Z5 scalar transport, about
 17 ms/step, ahead of `step!` itself (about 12.5 ms/step), then `fog_dew`
@@ -451,9 +549,9 @@ incompressible core, so subtracting it only changes the diagnosed
 pressure. The condensate `q_c` is every tracer the ledger counts as
 water other than `qv` (`ql` and `qr` today), so a microphysics provider
 that calls `water_tracer!` has its species loaded without touching this
-coupling. It writes `b_moist` (m s⁻²) to the NetCDF file and a report
-line (rms and max of b′, max RH and min dew-point depression of the
-lowest layer).
+coupling. It writes `b_moist` (m s⁻²) to the NetCDF file and declares
+diagnostics (rms and max of b′, max RH and min dew-point depression of
+the lowest layer).
 
 In the flagship configuration (1 h from 06:00, no fog) it costs 0.86
 ms/step. At the end of the hour the rms moist buoyancy is 8.8e-4 m s⁻²
@@ -523,7 +621,7 @@ between entries of the same stage and order).
   the one with `is_default = true`. Coupling new physics into the
   example is welcome where it makes sense, not required (the rule of
   #123 was dropped on 2026-10-06); quote the cost per step from
-  `timing_report` in the PR.
+  the `:timing` events in the PR.
 * **Cadence.** An expensive stage can run every `P` seconds:
   `Cadence(600.0)`, or `Cadence(:mykey)` with a default in
   `cfg.cadence` (add the key through the scenario or your option; a
@@ -569,7 +667,7 @@ locally (about 3.5 min); the physics itself is tested in its module's
 tests, which the fast tier runs.
 In the PR body quote one Berlin diagnostic — a ledger term is often the
 natural one — the configuration it was measured in, and the cost from
-`timing_report`.
+the `:timing` events.
 
 ## Validation of the refactor (#126)
 

@@ -140,6 +140,19 @@ end
     @test occursin("fields : [string, …] = []", out)        # [output] extended by the driver
     rc, out, _ = cli("options")
     @test rc == 0 && occursin("registered drivers: ", out) && occursin("simulation", out)
+    # the cross-field checks, in words (CFG-i, #364): after the sections, one line each
+    rc, out, _ = cli("options", "simulation")
+    @test occursin("\ncross-field checks:\n  - exactly one of `stepper.dt` and `stepper.cfl`", out)
+    rc, out1, _ = cli("options", "simulation", "grid")
+    @test !occursin("cross-field checks", out1)          # one section: no checks
+    # --markdown: the docs' tables, the same text option_reference(...; format = :markdown) gives
+    rc, md, _ = cli("options", "simulation", "--markdown")
+    @test rc == 0 && md == option_reference("simulation"; format = :markdown)
+    @test occursin("\n## `[grid]`\n", md) && occursin("\n## Cross-field checks\n", md)
+    @test occursin("| `extent` | [3 × float] | `[1.0, 1.0, 1.0]` | `m` | (0, Inf] |", md)
+    # `|` inside a cell is escaped, so a row keeps its six cells
+    @test occursin("| `cfl` | float \\| \"none\" | `\"none\"` | `1` |", md)
+    @test_throws ArgumentError option_reference("simulation"; format = :html)
 end
 
 @testset "aeolus preprocess: registered preprocessors" begin

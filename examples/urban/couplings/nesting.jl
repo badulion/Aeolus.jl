@@ -116,6 +116,11 @@ mutable struct NestingCoupling <: AbstractCoupling
     wall_build::Float64           # s building the parent and the nest
     targets::Any                  # (u, v, θ) level vectors the relaxations use, or nothing
     feedback::Dict{Symbol,Float64}   # two-way: what the feedbacks did (J m⁻², kg m⁻², counts)
+    feed::Any                     # offline: the FileBoundaryFeed of cfg.dynamic, or nothing
+    inputs::Any                   # offline: the DynamicInputs of cfg.dynamic
+    k::Int                        # offline: the record the next window starts from
+    set::Vector{Any}              # offline: the child fields of the field set's tracers, in order
+    recorder::Any                 # online with cfg.child_boundaries: the NestBoundaryRecorder
 end
 
 coupling_name(::Type{<:NestingCoupling}) = :nesting
@@ -181,15 +186,28 @@ end
 
 function build(::Type{<:NestingCoupling}, case, o)
     d = o.parent_driver
-    driver = d === :aeolus ? :aeolus : d === :profile ? case_boundary_data(case.cfg) :
+    driver = d in (:aeolus, :offline) ? d : d === :profile ? case_boundary_data(case.cfg) :
              d isa AbstractBoundaryData ? d :
-             error("nesting: parent_driver must be :aeolus, :profile or an AbstractBoundaryData, got $(repr(d))")
+             error("nesting: parent_driver must be :aeolus, :profile, :offline or an AbstractBoundaryData, got $(repr(d))")
     return NestingCoupling(o.mode, o, driver, nest_parent_config(case.cfg), nothing, nothing, nothing, NaN,
-                           Symbol[], Symbol[], 0, 0.0, 0.0, nothing, Dict{Symbol,Float64}())
+                           Symbol[], Symbol[], 0, 0.0, 0.0, nothing, Dict{Symbol,Float64}(),
+                           nothing, nothing, 1, Any[], nothing)
 end
 
-"Whether the nest's faces are fed by boundary data other than the Aeolus parent (`parent_driver`)."
-external_driver(c::NestingCoupling) = c.driver !== :aeolus
+"Whether the nest's faces are fed by boundary data other than the Aeolus parent or its file (`parent_driver`)."
+external_driver(c::NestingCoupling) = !(c.driver in (:aeolus, :offline))
+
+"Whether the nest's faces replay a parent-made dynamic driver (`parent_driver = :offline`, CFG-g #362)."
+offline(c::NestingCoupling) = c.driver === :offline
+
+"""
+    nest_offline(cfg) -> Bool
+
+Whether the nested case `cfg` replays its parent from the parent-made
+dynamic driver `cfg.dynamic` (`options[:nesting].parent_driver =
+:offline`, CFG-g #362) instead of running it.
+"""
+nest_offline(cfg::CaseConfig) = case_nested(cfg) && coupling_options(NestingCoupling, cfg).parent_driver === :offline
 
 "Whether the nest feeds the child back onto the parent (`mode = :two_way`, #267)."
 two_way(c::NestingCoupling) = c.mode === :two_way
@@ -272,6 +290,11 @@ function ensure_nest!(c::NestingCoupling, case)
     c.run === nothing || return c
     t0 = time_ns()
     sim = case.sim
+    if offline(c)
+        _ensure_offline!(c, case)
+        c.wall_build += (time_ns() - t0) * 1e-9
+        return c
+    end
     if external_driver(c)
         # a boundary-data driver in place of the parent (the #58 interface)
         set_boundary_data!(sim.bcs, c.driver)
@@ -332,7 +355,120 @@ function ensure_nest!(c::NestingCoupling, case)
                  θ = case.open === nothing || case.open.damping === nothing ? nothing :
                      case.open.damping.target)
     _update_targets!(c, case)
+    case.cfg.child_boundaries === nothing || _start_recorder!(c, case)
     c.wall_build += (time_ns() - t0) * 1e-9
+    return c
+end
+
+# --- the parent-made dynamic driver (CFG-g, #362) ----------------------------
+
+# The mean-profile targets as the recorder's `profiles` (only those the case relaxes toward).
+_target_profiles(c::NestingCoupling) =
+    (; (n => v for (n, v) in ((:u, c.targets.u), (:v, c.targets.v), (:theta, c.targets.θ)) if v !== nothing)...)
+
+# Online, with cfg.child_boundaries: the in-run writer of the child's
+# boundary slabs (Aeolus.InputDrivers.NestBoundaryRecorder), started with
+# the child's initial wind and the first record, B(0), the data the child
+# starts from.
+function _start_recorder!(c::NestingCoupling, case)
+    two_way(c) && error("nesting: [output] child_boundaries records a one-way nest (the offline child " *
+                        "cannot feed back); mode = :two_way")
+    cfg, sim, m = case.cfg, case.sim, case.mesh
+    planes = [p for st in open_boundary_states(sim) for p in st.planes]
+    ox, oy = anchor_xy(cfg, m)
+    fields = Dict{Symbol,Array{Float64,3}}(n => Array{Float64}(interior_view(getproperty(sim, n))) for n in (:u, :v, :w))
+    c.recorder = NestBoundaryRecorder(cfg.child_boundaries, planes, m; init_time = case_init_time(cfg),
+        fields = fields, profiles = collect(keys(_target_profiles(c))),
+        attributes = Dict{String,Any}("nest_from_parent" => join(String.(c.from_parent), " "),
+                                      "nest_inflow" => join(String.(c.inflow), " "),
+                                      "nest_refinement" => collect(Int, c.pc.refinement)),
+        preprocessor = "aeolus preprocess dynamic --from-parent",
+        origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy)
+    record_boundary!(c.recorder, sim.t, NaN, c.run.data.a; profiles = _target_profiles(c))
+    return c
+end
+
+# Offline: the faces, the field set, the initial wind and the targets from
+# the parent-made driver, in the order the online ensure_nest! sets them.
+function _ensure_offline!(c::NestingCoupling, case)
+    cfg, sim, m = case.cfg, case.sim, case.mesh
+    two_way(c) && error("nesting: parent_driver = :offline replays a one-way nest; mode = :two_way needs the parent")
+    path = cfg.dynamic
+    path === nothing && error("nesting: parent_driver = :offline reads the nest faces from [initial] dynamic, " *
+                              "which is \"none\" (write one with aeolus preprocess dynamic --from-parent)")
+    ox, oy = anchor_xy(cfg, m)
+    d = read_dynamic_driver(path; mesh = m, origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy)
+    src = get(d.attributes, "dynamic_source", "")
+    src == "parent" || error("nesting: parent_driver = :offline needs a parent-made dynamic driver; $path has " *
+                             "dynamic_source = $(repr(src))")
+    d.boundary === nothing && error("nesting: the dynamic driver $path has no boundary planes")
+    d.init_time == case_init_time(cfg) ||
+        error("nesting: the dynamic driver $path starts at $(d.init_time), the case at $(case_init_time(cfg))")
+    want_p = Set(Symbol.(split(get(d.attributes, "nest_from_parent", ""))))
+    want_i = Set(Symbol.(split(get(d.attributes, "nest_inflow", ""))))
+    for t in case.tracers
+        (t.advect || t.name in (:ql, :qr)) || continue
+        push!(t.name in want_p ? c.from_parent : c.inflow, t.name)
+        push!(c.set, t.field)
+    end
+    (Set(c.from_parent) == want_p && Set(c.inflow) == want_i) ||
+        error("nesting: the dynamic driver $path was written for the tracers $(sort!(collect(want_p))) " *
+              "(from the parent) and $(sort!(collect(want_i))) (zero inflow); this case advects " *
+              "$(sort!(vcat(c.from_parent, c.inflow)))")
+    isempty(c.from_parent) || add_open_scalars!(sim.bcs, c.from_parent; mode = :value)
+    isempty(c.inflow) || add_open_scalars!(sim.bcs, c.inflow; mode = :inflow)
+    feed = d.boundary
+    for st in open_boundary_states(sim)
+        check_planes(feed, st.planes)
+    end
+    check_coverage(feed, sim.t, sim.t + cfg.nsteps * cfg.dt)
+    for (f, n) in ((sim.u, :u), (sim.v, :v), (sim.w, :w))
+        haskey(d.fields, n) || error("nesting: the dynamic driver $path has no 3-D initial $n")
+    end
+    Aeolus.Nesting._mark_nest_solids!(sim, case.geom.sm)
+    feed_steady!(feed, 1)
+    for st in open_boundary_states(sim)
+        st.data = feed.data
+        st.initialized = false
+        for t in case.tracers
+            (t.advect || t.name in (:ql, :qr)) && (st.bound[t.field.data] = t.name)
+        end
+    end
+    _fill_offline_halos!(c, case)
+    for (f, n) in ((sim.u, :u), (sim.v, :v), (sim.w, :w))
+        interior_view(f) .= d.fields[n]
+    end
+    _fill_offline_halos!(c, case)
+    c.feed, c.inputs, c.run, c.k = feed, d, feed, 1
+    st = sim.sponge_target
+    c.targets = (u = st.u isa AbstractVector ? st.u : nothing,
+                 v = st.v isa AbstractVector ? st.v : nothing,
+                 θ = case.open === nothing || case.open.damping === nothing ? nothing : case.open.damping.target)
+    _offline_targets!(c, 1)
+    return c
+end
+
+# The open-boundary buffers at the child's time and the halos of the field
+# set (Nesting.fill_nest_halos!, member for member).
+function _fill_offline_halos!(c::NestingCoupling, case)
+    sim = case.sim
+    update_open_boundaries!(sim, sim.t, zero(sim.t))
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    fill_halos!(sim.θ, sim.θ_bcs)
+    foreach(f -> fill_halos!(f, sim.θ_bcs), c.set)
+    return c
+end
+
+# The relaxation targets of record k (the parent's mean profiles at time_bc[k]).
+function _offline_targets!(c::NestingCoupling, k::Int)
+    tg = c.targets
+    tg === nothing && return c
+    for (v, n) in ((tg.u, :profile_u), (tg.v, :profile_v), (tg.θ, :profile_theta))
+        v === nothing && continue
+        tab = get(c.inputs.tables, n, nothing)
+        tab === nothing && error("nesting: the dynamic driver $(c.feed.path) has no ls_$n, a target this case relaxes toward")
+        v .= view(tab.values, :, k)
+    end
     return c
 end
 
@@ -378,8 +514,13 @@ function limit_dt(c::NestingCoupling, case, dt)
     ensure_nest!(c, case)
     external_driver(c) && return dt
     if c.window === nothing
-        isnan(c.pending) && (c.pending = parent_dt(c.parent))
-        R = c.pending
+        if offline(c)
+            c.k < length(c.feed.time) || return dt          # past the records: run_stage! reports it
+            R = c.feed.step[c.k + 1]
+        else
+            isnan(c.pending) && (c.pending = parent_dt(c.parent))
+            R = c.pending
+        end
     else
         R = c.window.t_child_end - case.sim.t
     end
@@ -391,7 +532,9 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
     ensure_nest!(c, case)
     external_driver(c) && return nothing
     t = case.sim.t
-    if c.window === nothing
+    if c.window === nothing && offline(c)
+        _open_offline_window!(c, case)
+    elseif c.window === nothing
         Δt_p = isnan(c.pending) ? _fixed_window(c, dt) : max(c.pending, dt)
         tw = time_ns()
         c.window = begin_parent_step!(c.run; dt = Δt_p)
@@ -399,6 +542,9 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
         c.pending = NaN
         c.windows += 1
         _update_targets!(c, case)
+        c.recorder === nothing ||
+            record_boundary!(c.recorder, c.window.t_child_end, c.window.Δt, c.run.data.b;
+                             profiles = _target_profiles(c))
     end
     w = c.window
     t + dt <= w.t_child_end + 1e-9 * w.Δt ||
@@ -428,10 +574,33 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_feedback}, dt)
     w === nothing && return nothing
     two_way(c) && end_child_step!(c.run)
     if abs(case.sim.t - w.t_child_end) <= 1e-9 * w.Δt
-        two_way(c) ? _feedback!(c, case, w) : end_parent_step!(c.run, w)
+        if offline(c)                       # end_parent_step!'s clock: the child lands on the record
+            case.sim.t = w.t_child_end
+            c.k += 1
+        else
+            two_way(c) ? _feedback!(c, case, w) : end_parent_step!(c.run, w)
+        end
         c.window = nothing
     end
     return nothing
+end
+
+# Offline: open the window from record k to k + 1 (begin_parent_step!'s
+# window: t0 the child's clock, Δt = time_bc[k+1] − time_bc[k]), refresh the
+# faces at its start and the targets to its end, as the online nest does.
+function _open_offline_window!(c::NestingCoupling, case)
+    f, k, sim = c.feed, c.k, case.sim
+    k < length(f.time) || check_coverage(f, sim.t, sim.t + case.cfg.dt)
+    tol = 1e-9 * max(f.time[k+1] - f.time[k], 1.0)
+    abs(sim.t - f.time[k]) <= tol ||
+        error("nesting: the child is at t = $(sim.t), the window of record $k of $(f.path) starts at $(f.time[k])")
+    feed_window!(f, k)
+    f.data.t0 = Float64(sim.t)
+    c.window = (t_child_end = f.time[k+1], Δt = f.step[k+1])
+    c.windows += 1
+    _fill_offline_halos!(c, case)
+    _offline_targets!(c, k + 1)
+    return c
 end
 
 # Close a two-way window: the feedback onto the parent, its heat and water
@@ -464,17 +633,52 @@ function _feedback!(c::NestingCoupling, case, w)
     return c
 end
 
-function report(c::NestingCoupling, case)
-    c.run === nothing && return "  nesting: parent not built"
-    external_driver(c) && return "  nesting: faces fed by $(nameof(typeof(c.driver))) (parent_driver)"
-    st, ob, t = c.run.stats, case.open, max(case.sim.t, eps())
-    fbk = two_way(c) ? @sprintf("; feedback: %d, parent heat %+.3e J/m², water %+.3e kg/m², %.2f s wall",
-                                Int(get(c.feedback, :n, 0.0)), get(c.feedback, :heat, 0.0),
-                                get(c.feedback, :water, 0.0), get(c.feedback, :wall, 0.0)) : ""
-    return @sprintf("  nesting (%s): %d parent windows, dt_p %.2f–%.2f s, parent %.1f s wall; boundary heat sides %.2f, top %.2f W/m² (mean), max|δ| %.1e m/s%s",
-                    two_way(c) ? "two-way" : "one-way", st.parent_steps + (c.window === nothing ? 0 : 1), st.dt_parent_min, st.dt_parent_max,
-                    c.wall_parent, ob === nothing ? NaN : ob.lateral / t, ob === nothing ? NaN : ob.top / t,
-                    ob === nothing ? NaN : ob.δmax, fbk)
+"""
+    diagnostics(c::NestingCoupling, case)
+
+With the Aeolus parent: `parent_windows` (parent steps begun),
+`dt_parent_min` / `dt_parent_max` (s); the heat the open faces carried,
+`boundary_heat_sides` / `boundary_heat_top` (W m⁻², mean over the run)
+and the largest normal-velocity correction `delta_max` (m s⁻¹); a
+two-way nest adds `feedback_count`, `feedback_heat` (J m⁻², into the
+parent) and `feedback_water` (kg m⁻²). The wall time of the parent run
+`wall.parent` and of the feedback `wall.feedback` (s, cumulative). An
+offline nest (`parent_driver = :offline`, #362): `parent_windows`
+(windows replayed) and `boundary_records` (records read from the
+dynamic driver). None for an external `parent_driver`.
+"""
+function diagnostics(c::NestingCoupling, case)
+    offline(c) && return Diagnostic[
+        Diagnostic("parent_windows", "1", () -> c.windows; cadence = :step,
+                   description = "parent windows replayed from the dynamic driver"),
+        Diagnostic("boundary_records", "1", () -> c.feed === nothing ? 0 : c.feed.reads;
+                   description = "boundary records read from the dynamic driver")]
+    (c.run === nothing || external_driver(c)) && return Diagnostic[]
+    st() = c.run.stats
+    ob = case.open
+    perrun(x) = () -> ob === nothing ? NaN : x(ob) / max(case.sim.t, eps())
+    ds = Diagnostic[
+        Diagnostic("parent_windows", "1", () -> st().parent_steps + (c.window === nothing ? 0 : 1);
+                   cadence = :step),
+        Diagnostic("dt_parent_min", "s", () -> st().dt_parent_min),
+        Diagnostic("dt_parent_max", "s", () -> st().dt_parent_max),
+        Diagnostic("boundary_heat_sides", "W m-2", perrun(o -> o.lateral);
+                   description = "heat through the lateral faces, mean over the run"),
+        Diagnostic("boundary_heat_top", "W m-2", perrun(o -> o.top);
+                   description = "heat through the top face, mean over the run"),
+        Diagnostic("delta_max", "m s-1", () -> ob === nothing ? NaN : ob.δmax;
+                   description = "largest normal-velocity correction of the open faces"),
+        Diagnostic("wall.parent", "s", () -> c.wall_parent; description = "wall time of the parent run")]
+    if two_way(c)
+        append!(ds, [Diagnostic("feedback_count", "1", () -> get(c.feedback, :n, 0.0)),
+                     Diagnostic("feedback_heat", "J m-2", () -> get(c.feedback, :heat, 0.0);
+                                description = "heat the feedback put into the parent"),
+                     Diagnostic("feedback_water", "kg m-2", () -> get(c.feedback, :water, 0.0);
+                                description = "water the feedback put into the parent"),
+                     Diagnostic("wall.feedback", "s", () -> get(c.feedback, :wall, 0.0);
+                                description = "wall time of the feedback")])
+    end
+    return ds
 end
 
 # --- smoke checks ------------------------------------------------------------
@@ -488,12 +692,13 @@ end
 
 function smoke_check(c::NestingCoupling, case)
     c.run === nothing && return ["the nest was built" => false]
-    if external_driver(c)
+    if external_driver(c) || offline(c)
         sim = case.sim; m = case.mesh
         A = 2 * (m.Lx + m.Ly) * m.Lz + m.Lx * m.Ly
         U = max(maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)), 1e-3)
+        data = offline(c) ? c.feed.data : c.driver
         return ["parent_driver: the nest faces carry the driver's data" =>
-                    all(st -> st.data === c.driver, open_boundary_states(sim)),
+                    all(st -> st.data === data, open_boundary_states(sim)),
                 "child: net boundary volume flux after the correction ≤ 1e-12 U A" =>
                     abs(open_boundary_ledger(sim).residual) <= 1e-12 * U * A]
     end

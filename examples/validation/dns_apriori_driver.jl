@@ -56,7 +56,7 @@ function Config.driver_sections(::DNSDriver)
         option!(s, "nu", OneOf(Float64, Symbol); default = :scaled, allowed = [:scaled], range = (0, Inf),
                 open_lower = true, units = "m^2 s^-1",
                 doc = "kinematic viscosity; \"scaled\": nu_margin × 0.018 (48/N)^{4/3}, the fixture's scaling that holds k_max η fixed")
-        option!(s, "nu_margin", Float64; default = 1.035, range = (0, Inf), open_lower = true,
+        option!(s, "nu_margin", Float64; units = "1", default = 1.035, range = (0, Inf), open_lower = true,
                 doc = "the factor of \"scaled\" over the fixture's ν (1.035: the offline generator's 3.5 % margin, k_max η × 1.026; 1: the CI fixture)")
     end
     initial = section("initial"; doc = "The initial field (isotropic_random_field!, u' = 1).") do s
@@ -65,13 +65,13 @@ function Config.driver_sections(::DNSDriver)
                 doc = "{kind = \"k4_gaussian\", k_p}: E(k) ∝ k⁴ exp(-2 (k/k_p)²); the seed is [run] seed")
     end
     stepper = section("stepper"; doc = "Projected SSP-RK3, no SGS model.") do s
-        option!(s, "cfl", Float64; default = 0.5, range = (0, Inf), open_lower = true,
+        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "advective Courant number")
-        option!(s, "end_time", Float64; default = 2.0, range = (0, Inf), open_lower = true,
+        option!(s, "end_time", Float64; units = "L/u'", default = 2.0, range = (0, Inf), open_lower = true,
                 doc = "the run goes at least to this time")
-        option!(s, "past_peak", Float64; default = 0.25, range = (0, Inf),
+        option!(s, "past_peak", Float64; units = "L/u'", default = 0.25, range = (0, Inf),
                 doc = "then on until this far past the maximum of ε (0: stop at end_time)")
-        option!(s, "max_time", Float64; default = 6.0, range = (0, Inf), open_lower = true,
+        option!(s, "max_time", Float64; units = "L/u'", default = 6.0, range = (0, Inf), open_lower = true,
                 doc = "the cap of the run past the peak")
         option!(s, "nsteps", Optional{Int}; range = (1, typemax(Int)),
                 doc = "stop after this many steps (\"none\": no cap)")
@@ -98,7 +98,9 @@ function _dns_checks(cfg)
     return e
 end
 
-Config.driver_checks(::DNSDriver) = Any[_dns_checks]
+Config.driver_checks(::DNSDriver) = Any[
+    """`stepper.max_time` ≥ `stepper.end_time`
+    every `apriori.widths` entry divides `grid.n`""" => _dns_checks]
 
 """
     dns_kwargs(cfg::RunConfig) -> NamedTuple

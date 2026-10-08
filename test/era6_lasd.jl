@@ -25,16 +25,8 @@ using Printf
 
 const LOPS = Aeolus.Operators
 
-function _lasd_kolmogorov!(sim, rng; kc = sim.mesh.Nx / 4)
-    k0 = 2π / sim.mesh.Lx
-    isotropic_random_field!(sim, k -> (k / k0)^(-5/3); rng, kmax = kc * k0)
-    s = 1 / sqrt(mean(abs2, interior_view(sim.u)))
-    for f in (sim.u, sim.v, sim.w)
-        interior_view(f) .*= s
-        fill_halos!(f, sim.bcs)
-    end
-    return sim
-end
+# the k^(-5/3) initial field of the SGS tests (era2_sgs_numerics.jl, #317)
+isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
 
 # geometric mean of β, 2^⟨log₂ β⟩ = 2^⟨φ⟩: the mean power-law exponent
 _geomean(β) = exp2(mean(log2, β))
@@ -138,7 +130,7 @@ _geomean(β) = exp2(mean(log2, β))
     @testset "0d. cadence: transport between evaluations, ε over the elapsed time" begin
         g = RegularGrid(; size = (12, 10, 8), extent = (2π, 2.0, 1.0), halo = (2, 2, 2))
         sim = BoussinesqSimulation(g; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-        _lasd_kolmogorov!(sim, Xoshiro(5); kc = 3)
+        kolmogorov_field!(sim, Xoshiro(5); kc = 3)
         interior_view(sim.u) .+= 1.0
         for f in (sim.u, sim.v, sim.w); fill_halos!(f, sim.bcs); end
         dt = 0.01; N = 4
@@ -184,7 +176,7 @@ _geomean(β) = exp2(mean(log2, β))
         # Smagorinsky 0.17 LES of a k^(-5/3) field, the two memories follow
         # it passively, so LASD and LASI see the same resolved field.
         sim = BoussinesqSimulation(mesh; C_s = 0.17, ν = 1e-4)
-        _lasd_kolmogorov!(sim, Xoshiro(1))
+        kolmogorov_field!(sim, Xoshiro(1))
         lasd = LagrangianDynamicSmagorinsky(mesh; scale_dependent = true)
         lasi = LagrangianDynamicSmagorinsky(mesh)
         for n in 1:300
@@ -225,7 +217,7 @@ _geomean(β) = exp2(mean(log2, β))
 
     @testset "2. exact reduction: β ≡ 1 is LASI bit for bit" begin
         sa = BoussinesqSimulation(mesh; ν = 1e-4)
-        _lasd_kolmogorov!(sa, Xoshiro(4))
+        kolmogorov_field!(sa, Xoshiro(4))
         sb = deepcopy(sa)
         a = LagrangianDynamicSmagorinsky(mesh)
         b = LagrangianDynamicSmagorinsky(mesh; scale_dependent = true, beta = 1.0)
@@ -313,7 +305,7 @@ _geomean(β) = exp2(mean(log2, β))
 
     @testset "5. robustness: 500 steps, ν_t ≥ 0, β ≥ 1/8, no NaN" begin
         sim = BoussinesqSimulation(mesh; ν = 1e-4)              # C_s = 0: only the closure
-        _lasd_kolmogorov!(sim, Xoshiro(2))
+        kolmogorov_field!(sim, Xoshiro(2))
         c = LagrangianDynamicSmagorinsky(mesh; scale_dependent = true)
         ok = true; βmin = Inf; νmin = Inf
         for n in 1:500
@@ -333,7 +325,7 @@ _geomean(β) = exp2(mean(log2, β))
         sm = SolidMask(g)
         mark_solid!(sm, (x, y, z) -> 12 < x < 20 && 12 < y < 20 && z < 6)
         sc = BoussinesqSimulation(g; ν = 1e-3, bcs)
-        _lasd_kolmogorov!(sc, Xoshiro(6))
+        kolmogorov_field!(sc, Xoshiro(6))
         interior_view(sc.u) .+= 2.0
         apply_solid_mask!(sc, sm)
         cc = LagrangianDynamicSmagorinsky(g; mask = sm.mask, scale_dependent = true)
