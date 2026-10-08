@@ -177,6 +177,67 @@ externally driven child would get none, and nothing would say so.
 child is relaxed by its core's own sponge instead (the Berlin case's top
 sponge toward the parent's mean profile).
 
+## The parent stepped concurrently (SC-c, #403)
+
+In a one-way run the data dependencies between the two domains are
+
+```
+parent step n ──► B(t_n+1) ──► child substeps of window n
+      │
+      └──► parent step n+1 ──► B(t_n+2) ──► child substeps of window n+1
+```
+
+The parent step of window ``n+1`` reads nothing but the parent at the end
+of window ``n``: it does not wait for the child. So it can run on its own
+task while the child subcycles through window ``n``:
+[`prefetch_parent_step!`](@ref)`(run, window; dt)` starts it (after
+[`begin_parent_step!`](@ref) has opened window ``n``), and the next
+`begin_parent_step!` takes it instead of stepping the parent.
+[`step_nested!`](@ref)`(run, n)` steps ``n`` windows this way, prefetching
+every window but the first.
+
+The exchange stays at the existing synchronisation points. The task
+prolongates the parent at the end of its step into a spare state; when
+the next window opens, its start state ``B(t_p)`` is the current window's
+end state (the parent has not changed since: the `reuse_boundary` path)
+and its end state is the task's. While the task runs, the child reads only
+the current window's two states, which nothing writes. The step size is
+the sequential one (the parent's `adaptive_dt` from its state at the end
+of window ``n`` with ``Δt_n`` as the previous step, or the `dt` the caller
+will ask for, which `begin_parent_step!` checks). Every operation is the
+sequential run's, on the same data, so the result is **bit-identical**:
+`test/era2_nest_concurrent.jl` checks child, parent, bound scalars,
+clocks, statistics and step records against window-by-window stepping
+over 5 windows with fixed and adaptive parent steps, SSP-RK3 and the
+projection step, a moist pair with a tracer, a sponged child and a
+z-stretched parent, and the externally driven child of the Berlin
+pattern.
+
+The threads are shared between the two tasks: each domain's launches
+spread over Julia's thread pool, and the scheduler divides it between
+them. What can be prefetched, and what cannot:
+
+* **one-way, `sync = :subcycle`** (or a fixed `dt`): prefetched;
+* **two-way**: not — the parent step of window ``n+1`` needs the
+  feedback of window ``n``, and the child's window ``n`` needs
+  ``B(t_{n+1})`` from the parent step ``n``: the chain is strictly serial.
+  `prefetch_parent_step!` refuses it (`ArgumentError`) and
+  `step_nested!(run, n)` steps it sequentially;
+* **`sync = :shared_min_dt`**: not — the step size needs the child's
+  limit as well.
+
+Until the next `begin_parent_step!` (or [`wait_parent_step!`](@ref)) the
+parent belongs to the task: the caller must not read or change it, the
+parent's hooks run on the task, and `end_parent_step!` takes the parent's
+clock and limiter from the window instead of reading the parent. A run
+that stops after a prefetch has its parent one window ahead. The Berlin
+case prefetches only under `run_case!`, which knows the run's end
+([berlin_nesting.md](../design/berlin_nesting.md)).
+
+**Measured** (the Berlin flagship, `CaseConfig(:summer)`, 64 × 64 × 64
+child in its 192 × 192 × 53 parent): see the SC-c section of the KA port
+design page.
+
 A child tracer the parent does not carry (in Berlin: ql, qr, the chemistry
 species) still needs a face condition: its plane is added after the core
 is built ([`add_open_scalars!`](@ref Aeolus.BoundaryConditions.add_open_scalars!))
