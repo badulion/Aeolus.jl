@@ -192,17 +192,19 @@ advances, however often the limit is estimated.
 sgs_cfl_diagnostics(case, k) = cfl_diagnostics(case.sim, k; sgs = get(case.step_kwargs, :sgs, nothing),
                                                sgs_stress = get(case.step_kwargs, :sgs_stress, :laplacian))
 
+# The stability diagnostics the step pick uses: `cfl_diagnostics` with the
+# SGS closure (explicit step), or the IMEX limit of the explicit processes.
+function _step_limits(c::AdaptiveStep, case)
+    c.scheme === nothing && (d = sgs_cfl_diagnostics(case, c.constraints); return (d, d.limiter, d.dt_limiting))
+    l = imex_stability_limit(case.sim, c.scheme; constraints = c.constraints,
+                             sgs = get(case.step_kwargs, :sgs, nothing),
+                             sgs_stress = get(case.step_kwargs, :sgs_stress, :laplacian))
+    return (l.diagnostics, l.limiter, l.dt_explicit)
+end
+
 function next_dt(c::AdaptiveStep, case)
     sim, k = case.sim, c.constraints
-    if c.scheme === nothing
-        d = sgs_cfl_diagnostics(case, k)
-        lim = d.limiter
-    else
-        l = imex_stability_limit(sim, c.scheme; constraints = k,
-                                 sgs = get(case.step_kwargs, :sgs, nothing),
-                                 sgs_stress = get(case.step_kwargs, :sgs_stress, :laplacian))
-        d, lim = l.diagnostics, l.limiter
-    end
+    d, lim, _ = _step_limits(c, case)
     dt = adaptive_dt(sim, k; dt_prev = c.dt_prev, diagnostics = d, scheme = c.scheme)
     c.rate = d.advective_rate
     c.stats.limiters[lim] = get(c.stats.limiters, lim, 0) + 1
@@ -211,6 +213,29 @@ function next_dt(c::AdaptiveStep, case)
                            (c.dt_prev > 0 && isapprox(dt, k.growth_max * c.dt_prev; rtol = 1e-12)) ? :growth :
                            lim
     return dt
+end
+
+"""
+    stable_dt(c::AdaptiveStep, case) -> dt
+
+The longest step the adaptive provider allows from the current flow: the
+limit of `cfl_diagnostics` (advective `C_advective`, diffusive, buoyancy,
+Coriolis), or with `imex = true` the explicit processes' limit, clamped
+to `[dt_min, dt_max]`. No growth limit, and nothing is counted or
+recorded (`next_dt` does both), so it can be asked at any time. A
+non-finite flow gives `dt_min`, as in `adaptive_dt`.
+
+`step_adaptive!` checks finiteness, divergence and a speed cap, not the
+CFL number, so a step forced above this limit is accepted while it
+amplifies the flow: at `dt = cfg.dt = 2 s` (4–20× this limit over steps 1–9) the
+flagship's |v| grows from 12 to 49 m/s over steps 6–12 and the run
+fails at step 16 (#392). [`step_case!`](@ref) therefore rejects such a
+`dt`.
+"""
+function stable_dt(c::AdaptiveStep, case)
+    _, _, dt = _step_limits(c, case)
+    k = c.constraints
+    return isnan(dt) ? k.dt_min : clamp(Float64(dt), k.dt_min, k.dt_max)
 end
 
 function advance_dynamics!(c::AdaptiveStep, case, dt)
