@@ -98,3 +98,6 @@ end
 
 "The registered tracers with `advect = true`, in registration order."
 advected_tracers(case) = [t for t in case.tracers.list if t.advect]
+
+"The fields of the advected tracers, in registration order (one halo set fill)."
+advected_fields(case) = [t.field for t in case.tracers.list if t.advect]

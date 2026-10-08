@@ -147,10 +147,8 @@ function turbulence_diagnostics!(c::TurbulenceDiag, case)
     copyto!(c.w.data, sim.w.data); copyto!(c.θ.data, sim.θ.data)
     copyto!(c.qv.data, tracer(case, :qv).data)
     copyto!(c.ql.data, tracer(case, :ql).data)
-    fill_halos!(c.u, c.bcs); fill_halos!(c.v, c.bcs); fill_halos!(c.w, c.bcs)
-    fill_halos!(c.θ, c.θ_bcs)
-    fill_halos!(c.qv, Aeolus.BoundaryConditions.passive_scalar_bcs(c.θ_bcs))   # not θ's top gradient
-    fill_halos!(c.ql, Aeolus.BoundaryConditions.passive_scalar_bcs(c.θ_bcs))
+    qb = Aeolus.BoundaryConditions.passive_scalar_bcs(c.θ_bcs)    # not θ's top gradient
+    fill_halos!((c.u, c.v, c.w, c.θ, c.qv, c.ql), (c.bcs, c.bcs, c.bcs, c.θ_bcs, qb, qb))
     cfg = case.cfg
     # cloudy-air N² (#239): condensate loading, saturated N² in fog / cloud
     buoyancy_frequency_squared!(c.N2f, c.θ, c.qv, c.ql; θ₀ = cfg.θ₀, g = cfg.g, p = c.p)
