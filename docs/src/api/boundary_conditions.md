@@ -18,6 +18,15 @@ pre-port plane copies at every thread count. The multigrid level halo
 shares the same kernels. The rules are in
 [The kernel port](../design/ka_port.md) (section KA-f).
 
+Fields filled together are filled as a set,
+`fill_halos!((u, v, w), bcs)` or `fill_halos!((u, v, w, θ), (bcs, bcs, bcs, θ_bcs))`
+(SC-b, #402): threaded, the whole set is two launches — the x and y
+phases of every field by chunks of k-planes, then the z phases by chunks
+of j-rows — because every x/y phase stays inside one plane and every z
+phase inside one column. The result is the field-by-field fill, bit for
+bit; below the backend's threshold and at one thread it *is* the
+field-by-field fill. A single-field `fill_halos!(f, bcs)` is a set of one.
+
 ## BC types
 
 ```@docs

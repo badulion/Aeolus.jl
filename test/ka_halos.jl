@@ -22,7 +22,10 @@
 #      (test/support/legacy_nesting.jl) on every backend;
 #   6. a short one-way and two-way (with a sponge) nested run: serial =
 #      threaded, in process (across processes: the worker's `nested`
-#      section of test/thread_invariance.jl).
+#      section of test/thread_invariance.jl);
+#   7. SC-b (#402): the fill of a set of fields (two launches: x and y by
+#      k-planes, then z by j-rows) is bit for bit the pre-port fill of each
+#      field, for every BC type and every chunking of the planes and rows.
 
 using Test
 using Random: Xoshiro, randn
@@ -318,4 +321,84 @@ end
             @test res[1] == res[2]
         end
     end
+
+    @testset "SC-b: set fills, by planes then rows, bit for bit (#402)" begin
+        BCm = Aeolus.BoundaryConditions
+        for (mlab, m) in meshes
+            rng = Xoshiro(402)
+            cases = Any[(lab, bcs, nothing) for (lab, bcs) in kh_closed_cases(m)]
+            m.Ny >= 3 && append!(cases, kh_open_cases(m, rng))
+            n = 0
+            for (lab, bcs, st) in cases
+                fs = Tuple(Field(loc, m) for loc in KH_LOCS)        # θ, u, v, w
+                # a gradient top is a scalar condition: the velocities take the wall pair
+                vb = bcs.top isa FluxBC ? FieldBoundaryConditions(bcs.west, bcs.east, bcs.south, bcs.north,
+                                                                  bcs.bottom, bcs.bottom) : bcs
+                bt = (bcs, vb, vb, vb)
+                st === nothing || (st.bound[fs[1].data] = endswith(lab, "inflow scalar") ? :qv : :θ)
+                init = [randn(rng, size(f.data)) for f in fs]
+                ref = map(fs, bt, init) do f, b, x
+                    r = Field(Aeolus.Fields.location(f), m); r.data .= x
+                    LegacyHalos.legacy_fill!(r, b; key = f.data)
+                    kh_bits(r.data)
+                end
+                same() = all(kh_bits(f.data) == r for (f, r) in zip(fs, ref))
+                # every chunking, including more chunks than planes or rows
+                for nc in (1, 2, 5, 3 + size(fs[1].data, 3))
+                    foreach((f, x) -> f.data .= x, fs, init)
+                    BCm._fill_set_threaded!(CPUBackend(), fs, bt, map(f -> f.data, fs), nc)
+                    ok = same()
+                    ok || @info "set fill differs: $mlab, $lab, $nc chunks"
+                    @test ok
+                end
+                for (_, b) in KH_BACKENDS                       # the public set fill
+                    foreach((f, x) -> f.data .= x, fs, init)
+                    with_backend(() -> fill_halos!(fs, bt), b)
+                    @test same()
+                end
+                n += 1
+            end
+            @info "SC-b set fills, $mlab: $n BC cases × 4 locations bit-identical to the pre-port loops"
+        end
+        # a vector of tracers with one set of boundary conditions (each field its own key)
+        for (mlab, m) in meshes
+            rng = Xoshiro(4021)
+            cases = Any[(lab, bcs, nothing) for (lab, bcs) in kh_closed_cases(m)]
+            m.Ny >= 3 && append!(cases, kh_open_cases(m, rng))
+            for (lab, bcs, st) in cases
+                qs = [Field(CellCenter(), m) for _ in 1:3]
+                # two tracers with boundary data, the third without (the mirror)
+                st === nothing || (st.bound[qs[1].data] = :θ; st.bound[qs[2].data] = :θ)
+                init = [randn(rng, size(q.data)) for q in qs]
+                ref = map(qs, init) do q, x
+                    r = Field(CellCenter(), m); r.data .= x
+                    LegacyHalos.legacy_fill!(r, bcs; key = q.data)
+                    kh_bits(r.data)
+                end
+                for nc in (1, 4, 3 + size(qs[1].data, 3))
+                    foreach((q, x) -> q.data .= x, qs, init)
+                    BCm._fill_set_threaded!(CPUBackend(), qs, bcs, nothing, nc)
+                    @test all(kh_bits(q.data) == r for (q, r) in zip(qs, ref))
+                end
+                for (_, b) in KH_BACKENDS
+                    foreach((q, x) -> q.data .= x, qs, init)
+                    with_backend(() -> fill_halos!(qs, bcs), b)
+                    @test all(kh_bits(q.data) == r for (q, r) in zip(qs, ref))
+                end
+            end
+        end
+        @test fill_halos!(Field[], FieldBoundaryConditions(:periodic)) == Field[]
+        m = meshes[1][2]
+        fs = (Field(FaceX(), m), Field(CellCenter(), m))
+        bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+        @test_throws ArgumentError fill_halos!(fs, (bcs,))
+        @test_throws ArgumentError fill_halos!(fs, bcs; keys = (fs[1].data,))
+        @test fill_halos!((), bcs) === ()
+        # a z phase restricted to k-planes would break the x, y, z corner order
+        @test_throws ArgumentError BCm._fill_z!(BCm._Clip(fs[2].data, 3, 1:2), bcs.bottom, bcs.top,
+                                                m.Hz, m.Nz, CellCenter(), m, fs[2].data)
+        fill_halos!(fs, bcs); fill_halos!(fs, bcs)
+        @test (@allocated fill_halos!(fs, bcs)) == 0      # below the threshold: the serial fills
+    end
+
 end

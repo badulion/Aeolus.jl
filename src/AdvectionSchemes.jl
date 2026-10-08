@@ -56,7 +56,7 @@ using ..Operators: advect_centered!, momentum_advect!, laplacian, ∂x, ∂y, �
                    add_eddy_diffusion_scalar!, add_surface_flux!, advect_weno5!
 using ..Operators: compute_sgs!, add_sgs_momentum!, sgs_closure
 using ..Simulations
-using ..Simulations: BoussinesqSimulation, _dzf
+using ..Simulations: BoussinesqSimulation, fill_state_halos!, _dzf
 using ..StretchedGrids: StretchedGrid
 using ..Backends: Backends, interior_dot, plane_reduce!, ordered_sum, launch!, runs_serially
 
@@ -1451,9 +1451,7 @@ function kinetic_energy_budget(sim::BoussinesqSimulation{T};
                                momentum_advection! = momentum_advect!,
                                sgs = nothing) where {T}
     m = sim.mesh
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
+    fill_state_halos!(sim)
 
     tu = Field(FaceX(), m); tv = Field(FaceY(), m); tw = Field(FaceZ(), m)
     au = Field(FaceX(), m); av = Field(FaceY(), m); aw = Field(FaceZ(), m)
@@ -1551,8 +1549,7 @@ skew-symmetric operator, or any of the Phase 26 schemes.
 function scalar_variance_budget(sim::BoussinesqSimulation{T}, ϕ::Field{CellCenter};
                                 advection! = advect_centered!) where {T}
     m = sim.mesh
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-    fill_halos!(ϕ, sim.θ_bcs)
+    fill_halos!((sim.u, sim.v, sim.w, ϕ), (sim.bcs, sim.bcs, sim.bcs, sim.θ_bcs))
     tϕ = Field(CellCenter(), m); aϕ = Field(CellCenter(), m)
     u, v, w = sim.u, sim.v, sim.w
 
@@ -1609,7 +1606,7 @@ The sum runs over one edge per interior cell, which tiles the periodic
 domain exactly. `enstrophy(sim)` refills the velocity halos first.
 """
 function enstrophy(sim::BoussinesqSimulation)
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     return enstrophy(sim.u, sim.v, sim.w)
 end
 
@@ -1963,8 +1960,7 @@ function _boundary_scalar_flux(r, sim, ϕ, bcs, weights, fill, diffusivity, leve
     correction_levels === nothing || length(correction_levels) == g.Nz ||
         throw(DimensionMismatch("boundary_scalar_flux: correction_levels needs Nz = $(g.Nz) entries"))
     if fill
-        fill_halos!(sim.u, vb); fill_halos!(sim.v, vb); fill_halos!(sim.w, vb)
-        fill_halos!(ϕ, bcs)
+        fill_halos!((sim.u, sim.v, sim.w, ϕ), (vb, vb, vb, bcs))
     end
     Wc, Wf = weights === nothing ? (nothing, nothing) : weights
     T = eltype(ϕ.data)

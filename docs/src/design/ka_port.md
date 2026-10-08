@@ -2480,6 +2480,89 @@ julia -t 4  --project=. benchmarks/bench_ka_scaling.jl launches 2 9
 Each mode prints readable lines and `ROW <mode> <threads> <name> <value>
 <unit>` lines for collecting the table. The DNS needs about 8 GB.
 
+## SC-b: threaded halo fills (#402)
+
+KA-o measured `fill_halos!` at 1.0× on 12 threads at 64 × 64 × 32: every
+per-axis phase of a fill (`halo_kernels.jl`) is a separate launch, and at
+the flagship's sizes each face slab is below the backend's 32 768-point
+threshold, so the fills ran serially between threaded stencils.
+
+**Decomposition.** The phases cannot run at once (an edge or corner holds
+the value of the last axis that reaches it), but every x and y phase reads
+and writes one k-plane only (the open-boundary plane buffers are read at
+the same (j, k)) and every z phase one (i, j) column only. A fill is
+therefore two launches: (1) each work item takes a contiguous chunk of
+k-planes of every field and runs that field's x then y phases restricted
+to them; (2) each work item takes a chunk of j-rows and runs the z phases.
+The restriction is carried by the array (`_Clip`, `halo_sets.jl`): the
+fill methods of every BC type run unchanged on it and its `_halo_launch!`
+narrows the phase to the clip's planes or rows, serially in `launch!`'s
+order. Every point is computed from the same operands in the same order as
+the unrestricted fill, so the bits are the same at every thread count and
+every chunking, including the N < H phases whose layers depend on each
+other.
+
+**Sets.** `fill_halos!(fields::Tuple, bcs)` (one `bcs` or one per field,
+plus the per-field open-boundary keys) and
+`fill_halos!(fields::AbstractVector, bcs)` fill a whole set in the same two
+launches, weighted by the halo points of the set. The call sites that fill
+several fields together now do it as one set: the prognostic state in the
+step cores (`fill_state_halos!`), the velocities before the projection,
+the CFL diagnostics and the step guard, the anelastic step, the
+advected tracers, the turbulence diagnostics, the nest's interpolated
+state and the DiffusivityTensor components. A single-field
+`fill_halos!(f, bcs)` is a set of one. Below the threshold and at one
+thread the set is the historical field-by-field, phase-by-phase fill.
+
+**Tests.** `test/ka_halos.jl` checks the set fill (θ, u, v, w as one
+tuple, and a vector of three tracers sharing one set of conditions)
+against the pre-port loops for every closed and open BC case of the KA-f
+tests (23 on the two larger meshes, 10 on the N < H mesh), at 1, 2, 5 and
+more-chunks-than-planes work items and through the public method on the
+serial, default and zero-threshold backends; the
+thread-invariance worker hashes set fills (periodic, walls, open) at
+every thread count. The full harness (every section, 1, 4, 12 and 24
+threads) on this branch merged with master of 2026-10-08: 3785 hashes per
+process, all identical to 1 thread; 21 of 21 checks pass (27 min).
+
+**Measured** (same machine and method as KA-o: `bench_ka_scaling.jl`,
+one process per thread count, 1-minute load below 4 at the start of every
+process, minimum over 3 processes; master `c2a579a5` against this branch,
+alternating):
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| flagship `step_case!`, ms/step (mean of 9), master | 166.3 | 94.1 (1.77×) | 92.1 (1.81×) | 97.3 (1.71×) |
+| flagship `step_case!`, SC-b | 162.0 | 91.3 (1.77×) | 83.4 (1.94×) | 97.4 (1.66×) |
+| flagship `transport/scalar_advection`, master → SC-b | 45.2 → 43.5 | 21.4 → 20.0 | 20.2 → 18.6 | 25.6 → 25.4 |
+| flagship `nest_parent/nesting`, master → SC-b | 54.9 → 54.2 | 37.2 → 36.2 | 35.1 → 33.8 | 34.9 → 35.4 |
+| flagship `step_dt`, master → SC-b | 4.56 → 4.48 | 2.57 → 2.45 | 2.65 → 2.39 | 2.80 → 2.69 |
+| 256³ DNS `step_rk3!`, s/step, master → SC-b | 2.13 → 2.18 | 1.24 → 1.24 | 1.16 → 1.16 | 1.19 → 1.19 |
+| 256³ DNS `dns_step!`, s/step, master → SC-b | 3.31 → 3.19 | 2.29 → 2.29 | 2.25 → 2.21 | 2.24 → 2.24 |
+| `fill_halos!` ×4 at 256³ (kernels mode), µs | 4638 → 4554 | 2805 → 2463 | 2182 → 1707 | 2473 → 2094 |
+
+The flagship step is 9.5 % faster at 12 threads (1.94× against its own
+one-thread step, from 1.81×) and 2.6 % faster at one thread; 24 threads
+are unchanged. The DNS is unchanged within noise: its four 256³ fields
+were already above the threshold phase by phase, and the halo is a small
+part of a step dominated by memory-bound stencils and the FFT. Halo
+filling is 3.9 % of the one-thread flagship step (6.8 ms of 173 ms,
+every `fill_halos!` timed: 68 calls per step on SC-b against 89 on
+master), which bounds what this issue can gain. In isolation a set of
+the four flagship fields (u, v, w, θ) at 192 × 192 × 53 fills in 156 µs
+at 12 threads against 458 µs per-field-per-phase (2.9×); at 64 × 64 × 32
+the set is slower threaded than serial (43.7-46.9 µs at one thread,
+48.2-58.8 µs at 12, 52.4-70.0 µs at 24; periodic, walls, open): task
+start-up there costs more than the fill saves. At 64 × 64 × 64, the
+flagship child, it is 58-61 µs at 4 threads against 66-71 µs.
+A halo point is counted as one point of launch work (`launch_weighted!`):
+an intermediate version counted two halo points as one (a fill of a
+cached field is cheaper than a stencil point) and gained nothing in the
+flagship step at 12 threads (88.3 ms against 89.6 on master, minimum of
+3, an earlier session than the table), presumably because the stencils
+between two fills have evicted the field; at one unit per point it is
+the 83.4 against 92.1 of the table.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0

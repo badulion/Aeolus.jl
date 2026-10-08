@@ -4,7 +4,7 @@ using ..Grids
 using ..Grids: CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: location, Field
-using ..Backends: Backends, launch!
+using ..Backends: Backends, launch!, launch_weighted!, runs_serially
 
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!
@@ -189,9 +189,15 @@ The axes are filled x, then y, then z, over the whole face slab, so an
 edge or corner holds the value of the last axis that reaches it. Each
 fill phase is one [`launch!`](@ref Aeolus.Backends.launch!) of a per-axis
 halo kernel (KA-f, #297): threaded for large faces, serial below the
-backend's threshold, and identical bits at every thread count.
+backend's threshold, and identical bits at every thread count. When the
+halo of the field is large enough to thread, the whole fill is the two
+launches of the set fill, `fill_halos!((f,), bcs)` (SC-b, #402).
 """
-function fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data)
+fill_halos!(f::Field, bcs::FieldBoundaryConditions; key = f.data) =
+    (fill_halos!((f,), bcs; keys = (key,)); f)
+
+# The fill of one field, phase by phase (one launch each).
+function _fill_one!(f::Field, bcs::FieldBoundaryConditions, key)
     g   = f.mesh
     d   = f.data
     loc = location(f)
@@ -255,6 +261,7 @@ include("boundary_conditions/open_boundary.jl") # N-open-b (#255)
 include("boundary_conditions/outflow.jl")       # N-open-c (#260)
 include("boundary_conditions/free_stream.jl")   # P59-d (#185)
 include("boundary_conditions/gradient_top.jl")  # N-parent-b (#254)
+include("boundary_conditions/halo_sets.jl")     # SC-b (#402): threaded fills of field sets
 
 # =========================================================================
 # Pressure-Poisson boundary kind of a velocity face (N-open-a, #251)
