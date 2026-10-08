@@ -13,9 +13,9 @@
 #      dynamic C_s against the dissipation-matched one;
 #   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
 #      pipeline DNS → statistics → TOML → read-back at 32³ on every run;
-#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 1.6–2.1 h
-#      on one core, the solver is single-threaded; 9.8–9.9 GB max RSS as
-#      reported by the run, not stored in the TOML;
+#      the 256³ regeneration only with AEOLUS_DNS256=1 (measured 36 min
+#      at 12 threads after #400, 1.6–2.1 h on one core before the port;
+#      8.5–9.9 GB max RSS as reported by the run, not stored in the TOML;
 #      examples/validation/configs/dns256.toml, through the `dns` run
 #      driver, is the same run); and, when
 #      test/fixtures/dns256_apriori.toml exists, the literature band at
@@ -195,6 +195,35 @@ end
         @test d.wall < 300                                    # CI budget (88–138 s measured)
     end
 
+    # The history runs on the KA-b reductions (#400). On the final 96³
+    # state: S is the moment ratio of the old serial formula (circshift and
+    # `sum`, pairwise order) to rounding; ε = −ν⟨u_i ∇²u_i⟩ equals
+    # ν⟨|D⁺u_i|²⟩ (summation by parts on the periodic grid: the discrete
+    # Laplacian is −D⁻·D⁺) to rounding; the CFL max is the serial maximum
+    # bit for bit (max is exact); and all three are bit-identical with
+    # the serial backend and the threaded one (threshold 0).
+    @testset "history reductions: the quantities they replace, thread-invariant (#400)" begin
+        s = d.sim; n = length(interior_view(s.u))
+        fwd(a, dir, h) = (circshift(a, ntuple(i -> i == dir ? -1 : 0, 3)) .- a) ./ h
+        hs = (s.mesh.dx, s.mesh.dy, s.mesh.dz)
+        num = 0.0; den = 0.0
+        for (f, dir) in ((s.u, 1), (s.v, 2), (s.w, 3))
+            gd = fwd(interior_view(f), dir, hs[dir])
+            num += sum(gd .^ 3) / n; den += sum(gd .^ 2) / n
+        end
+        @test velocity_derivative_skewness(s) ≈ (num / 3) / (den / 3)^1.5 rtol = 1e-12
+        lap = (Field(FaceX(), s.mesh), Field(FaceY(), s.mesh), Field(FaceZ(), s.mesh))
+        ε = _dns_epsilon(s, lap)
+        g2 = sum(sum(abs2, fwd(interior_view(f), dir, hs[dir])) for f in (s.u, s.v, s.w), dir in 1:3) / n
+        @test ε ≈ s.ν * g2 rtol = 1e-10
+        @test ε == d.ε[end]                                         # the recorded history value
+        @test _dns_umax(s) === maximum(f -> maximum(abs, interior_view(f)), (s.u, s.v, s.w))
+        ser, thr = CPUBackend(serial = true), CPUBackend(threshold = 0)
+        for q in (velocity_derivative_skewness, x -> _dns_epsilon(x, lap), _dns_umax)
+            @test with_backend(() -> q(s), ser) === with_backend(() -> q(s), thr)
+        end
+    end
+
     sim = d.sim; g = sim.mesh; h = g.dx
     res = Dict{Int,Any}()
     for r in (4, 8)
@@ -344,7 +373,7 @@ end
             @test isfile(DNS256_TOML)
             @test all(v for (k, v) in rec["checks"] if k ∉ ADVISORY_CHECKS)
         else
-            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 2 h on one core, ≈ 10 GB)"
+            @info "  256³ regeneration skipped (set AEOLUS_DNS256=1; ≈ 36 min at 12 threads, ≈ 9 GB)"
         end
     end
 
