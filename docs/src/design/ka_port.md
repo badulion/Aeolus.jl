@@ -2968,6 +2968,145 @@ julia -t 12 --project=. benchmarks/bench_roofline.jl flagship 2 9    # bytes and
 julia -t 12 --project=. benchmarks/bench_ka_scaling.jl launches 2 9
 ```
 
+## SC-e: temporal blocking of the hook-free step core (#405)
+
+The issue asked for spatial cache blocking of the bandwidth-bound
+stencils at 256³ that SC-d's fusion leaves. Re-measured after SC-d
+(`bench_roofline.jl dns 256 1 3`, 12 threads, profiled), every remaining
+full-field kernel already moves its compulsory bytes, plus the
+write-allocate of its outputs, at 88-120 % of the DRAM triad (39.1 GB/s
+in the same process):
+
+| kernel (256³, 12 t, after SC-d) | calls/step | MB/call (compulsory + write-allocate) | ms/call | GB/s | % DRAM triad |
+| :-- | --: | --: | --: | --: | --: |
+| `_b_tendency_momentum!` | 3 | 805 + 403 | 35.1 | 34.4 | 88 % |
+| `_b_correct!` (u, v, w, p, RK3 combination) | 3 | 940 + 134 | 30.5 | 35.2 | 90 % |
+| `_b_tendency_scalar!` (θ) | 3 | 671 + 134 | 18.8 | 42.9 | 110 % |
+| `_b_divergence_into!` | 3 | 537 + 134 | 14.3 | 47.0 | 120 % |
+| `map:_Axpy` (the u, v, w predictors) | 10 | 268 + 0 | 7.8 | 34.2 | 88 % |
+| `map:_AxpyStage` (θ predictor + RK3 combination) | 2 | 403 + 0 | 10.8 | 37.2 | 95 % |
+
+So the stencils' neighbour planes are already reused from cache, and no
+tiling of a single kernel can move fewer bytes than these: **spatial
+blocking has nothing left to win**. What is left is the traffic *between*
+kernels. Of SC-d's "not fused" list only one pair has nothing global
+between its two halves: the tendencies and the predictor `u ← u + Δt·tu`
+(the divergence needs the halo fill of u*, the correction the FFT
+solve). SC-d could not fuse them pointwise (the tendency stencil reads
+the neighbours of the point the predictor would overwrite); blocking
+can, when nothing else touches the tendencies in between.
+
+**The sweep** (`FiniteVolume.blocked_predictor!`). The k-range is cut
+into one slab per thread. A slab is swept j-row by j-row: the tendencies
+of row j (every k of the slab) go into a ring of two rows (`SweepBuffers`,
+2 × 5 × 22 × 262 values per slab at 256³, in L2), then row j − 1 gets its
+predictor in place, since no later tendency of the slab reads it (the
+stencils reach j ± 1, k ± 1). A slab's first and last planes are read by
+the neighbouring slabs, so their tendencies are kept (`edge`) and updated
+in a second launch once every slab is done. Every value is the
+expression of the separate passes (`_tend_u` … then the predictor
+functor), so the bits are the same for any slab count and thread count,
+and the same as the unblocked core: `test/ka_blocking.jl` checks 1-5
+slabs, regular and stretched grids, dry and moist, `step!` and
+`step_rk3!` against the separate passes and against the pre-fusion cores
+of `test/support/legacy_fusion.jl`. The tendency fields are neither read
+nor written on this path; the halo zeroing of the tendencies goes too.
+
+It applies when **nothing adds to the tendencies or reads the state
+between the base tendencies and the predictor** (`_blocked_core`): the
+built-in momentum advection and no SGS closure, buoyancy, Coriolis,
+surface flux, sponge, `body_force!`/`post_predictor!` hook or open
+boundary, on the CPU. That is the DNS core. θ (and qv) are updated in the
+same sweep, before the projection, which does not read them. The flagship
+child and parent have SGS, buoyancy and hooks, so they keep the SC-d path:
+SC-e does not change the flagship.
+
+Three layouts were tried first (a prototype outside `src/`, momentum
+only, 256³, ms per substage, minimum of 3-6 processes at load < 4; its
+row loops were inlined, see below):
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| SC-d: tendency launch + 3 predictor launches | 82.6 | 55.7 | 56.5 | 62.2 |
+| plane-lagged per slab, tendencies still in `tu, tv, tw` | 84.2 | 46.7 | 54.1 | 60.9 |
+| plane-lagged, a ring of two k-planes | 63.4 | 29.1 | 40.1 | 53.1 |
+| **j-row-lagged, a ring of two j-rows** (kept) | 78.1 | 27.9 | 27.6 | 37.3 |
+
+Writing the tendencies to memory keeps almost all the traffic (the
+second row). A ring of whole planes holds 7.5 MB per thread, more than
+the 32 MB L3 of a CCD holds for six threads, so it gains little at 12 and
+24 threads; a ring of j-rows fits in L2. **The row loops must be their own
+`@noinline` functions with the arrays as arguments** (the rule of
+`Backends._row!`): inlined into the slab body the first version did not
+vectorise and ran at 0.51× of the separate passes at one thread (253.6
+against 130.1 ms per substage, momentum + θ); with `@noinline` and
+`@simd ivdep` it is 98.8 against 119.5 ms at one thread and 26.1 against
+83.0 ms at 12 (3.2×). One slab per thread is the fastest count at 12
+threads (4: 31.3, 8: 27.7, 12: 26.1, 16: 29.3, 24: 30.8 ms); at one
+thread 4-12 slabs are 5 % faster than one, which is kept for simplicity.
+
+### Measured speed-ups
+
+`benchmarks/bench_ka_scaling.jl` (KA-o), one process per thread count,
+base (the branch point: SC-a + SC-b + SC-c + SC-d + master) and SC-e
+alternately; every process started with the 1-minute load below 4 and at
+least 12 GB free; each figure is the minimum over 3 processes. DNS:
+`AEOLUS_FFTW_PLANNER=estimate`, 1 warm-up and 3 timed steps. Brackets:
+speed-up over the same code at one thread.
+
+| | 1 t | 4 t | 12 t | 24 t |
+| :-- | --: | --: | --: | --: |
+| 256³ DNS `step_rk3!`, base (s) | 1.628 | 0.798 (2.04×) | 0.692 (2.35×) | 0.690 (2.36×) |
+| 256³ DNS `step_rk3!`, SC-e (s) | **1.545** (−5 %) | **0.650** (2.38×) | **0.509** (3.03×) | **0.495** (3.12×) |
+| SC-e over base at the same thread count | 1.05× | 1.23× | 1.36× | 1.39× |
+| 256³ DNS `dns_step!` (with the history), base → SC-e (s) | 1.718 → 1.643 | 0.866 → 0.711 | 0.762 → 0.573 | 0.763 → 0.569 |
+| flagship `step_case!`, base (ms) | 161.4 | 90.4 (1.79×) | 80.5 (2.01×) | 89.7 (1.80×) |
+| flagship `step_case!`, SC-e (ms) | 163.6 | 86.1 (1.90×) | 81.1 (2.02×) | 91.4 (1.79×) |
+| flagship, the nest parent (`nest_parent`), base → SC-e (ms) | 52.9 → 53.1 | 32.3 → 32.2 | 29.3 → 29.2 | 30.0 → 30.1 |
+| flagship, the child's core (`dynamics/step!`), base → SC-e (ms) | 37.5 → 37.3 | 20.8 → 20.8 | 19.2 → 19.4 | 22.0 → 20.4 |
+
+The flagship does not take the blocked path (its cores have SGS,
+buoyancy and hooks), and its times agree within the spread between
+processes (up to 12 % here: 161-173 ms at one thread).
+
+The 12-thread DNS step went from 0.692 to 0.509 s (−26 %), 3.0× over one
+thread of the same code and 4.1× over the 2.090 s of the pre-SC-d base at
+one thread. Single-thread time is better, not worse (−5 %).
+From a profiled run at 12 threads (`bench_roofline.jl dns`, the
+compulsory-bytes model of SC-a), the kernels the sweep replaces, per
+step:
+
+| | before (SC-d) | after (SC-e) |
+| :-- | --: | --: |
+| launches | `_b_tendency_momentum!` ×3, `_b_tendency_scalar!` ×3, `map:_Axpy` ×10, `map:_AxpyStage` ×2, halo shells ×7 | `_b_sweep_slab!` ×3, `_b_sweep_edge!` ×3, halo shells ×4 (the tendencies' are gone) |
+| compulsory GB/step (shells not counted) | 7.92 | 2.26 |
+| ms/step at 12 t (shells included) | 275.3 | 96.2 |
+
+One sweep call reads and writes u, v, w and θ once (1.07 GB of real
+traffic with the write-back) plus the edge planes, in 25.9 ms: 42 GB/s,
+at the DRAM triad (39.1 GB/s in the same process). That is the minimum
+for an in-place update of four fields; the sweep is itself at the roof.
+The top-level kernels of the profiled step sum to 517 ms before and 341
+ms after.
+Of the 0.509 s at 12 threads, the FFTs of the three Poisson solves
+(outside launches) are now the larger part: SC-a measured 287 ms of them,
+and no kernel change touches them. They, not blocking, are the next
+target.
+
+Thread invariance: the harness (`AEOLUS_THREAD_TESTS=1`,
+`AEOLUS_THREAD_COUNTS=1,4,12,24`) passes, 21 of 21 checks, 4797 hashes
+identical at 1, 4, 12 and 24 threads; its DNS fixture section takes the
+blocked path with 1, 4, 12 and 16 slabs (threshold 0, 32³).
+
+### Reproducing
+
+```bash
+# base and SC-e, one process per thread count, alternating, load < 4
+AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_ka_scaling.jl dns 256 1 3
+julia -t 12 --project=. benchmarks/bench_ka_scaling.jl flagship 2 9
+AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_roofline.jl dns 256 1 3
+```
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0
