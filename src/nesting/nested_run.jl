@@ -60,6 +60,23 @@ end
 NestRunStats() = NestRunStats(0, 0, 0, 0, 0, typemax(Int), 0, Inf, 0.0, Inf, 0.0,
                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0)
 
+# A prefetched parent step: the task, the window it opens (`t_p`, the
+# accepted `Δt`, `t_end`, the parent's limiter), the `dt` it was asked for
+# (`nothing`: the parent's adaptive step), the state it prolongated into,
+# and what it booked (merged into the run's statistics when it is taken).
+mutable struct _ParentAhead{S}
+    task::Union{Nothing,Task}
+    t_p::Float64
+    dt::Union{Nothing,Float64}
+    s::S
+    Δt::Float64
+    t_end::Float64
+    limiter::Symbol
+    parent_retries::Int
+    wall_parent::Float64
+    wall_boundary::Float64
+end
+
 """
     NestedRun(parent, child, nest; kwargs...)
 
@@ -203,7 +220,7 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     step_record::StepRecord        # the run's per-step record and diagnostics hook (#336)
     retry_mark::Int                # parent + child retries at the start of the window
     s_spare::Union{Nothing,S}      # the state a prefetched parent step prolongates into (SC-c, #403)
-    ahead::Any                     # the prefetched parent step (a _ParentAhead), or nothing
+    ahead::Union{Nothing,_ParentAhead{S}}   # the prefetched parent step, or nothing
 end
 
 # Scratch of the two-way feedback, allocated once (#329, item 6): the
@@ -985,22 +1002,6 @@ end
 # Every operation is the one the sequential run does, on the same data, so
 # the result is bit-identical.
 
-# A prefetched parent step: the task, the window it opens (`t_p`, the
-# accepted `Δt`, `t_end`, the parent's limiter), the `dt` it was asked for
-# (`nothing`: the parent's adaptive step), the state it prolongated into,
-# and what it booked (merged into the run's statistics when it is taken).
-mutable struct _ParentAhead{S}
-    task::Union{Nothing,Task}
-    t_p::Float64
-    dt::Union{Nothing,Float64}
-    s::S
-    Δt::Float64
-    t_end::Float64
-    limiter::Symbol
-    parent_retries::Int
-    wall_parent::Float64
-    wall_boundary::Float64
-end
 
 """
     prefetch_parent_step!(run::NestedRun, window; dt = nothing) -> run
