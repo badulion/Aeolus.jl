@@ -37,6 +37,8 @@
 #                                  :timestepper provider's stepper)
 #   limit_dt(c, case, dt)       -> the next step of a variable-step stepper, shortened
 #                                  if `c` needs it (the nest: land on the parent window, #265)
+#   end_run!(c, case)           -> called by run_case! after its last step (the nest waits
+#                                  for a parent step it started ahead, SC-c #403)
 #
 # Dynamics contract (#133), used only by the providers of the two
 # dynamics slots:
@@ -168,6 +170,15 @@ coupling makes the child's steps land on the end of the parent's step,
 #265). Default: `dt`. [`step_dt`](@ref) applies every enabled coupling's.
 """
 limit_dt(c::AbstractCoupling, case, dt) = dt
+"""
+    end_run!(c, case)
+
+Called by [`run_case!`](@ref) after its last step, before the output is
+closed: a coupling that runs work ahead of the child on its own task
+finishes it here (the `:nesting` coupling waits for a prefetched parent
+step, SC-c #403). Default: nothing.
+"""
+end_run!(c::AbstractCoupling, case) = nothing
 function build_core end
 variable_dt(::Type{<:AbstractCoupling}) = false
 next_dt(c::AbstractCoupling, case) = case.cfg.dt

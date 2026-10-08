@@ -16,7 +16,9 @@ time coupling: [`NestedRun`](@ref), the per-domain
 (the Berlin case, #265), [`begin_parent_step!`](@ref),
 [`subcycle_dt`](@ref) and [`end_parent_step!`](@ref), with each child
 step bracketed by [`begin_child_step!`](@ref) and [`end_child_step!`](@ref)
-in a two-way run (#267) — and the child's boundary conditions:
+in a two-way run (#267); a one-way parent's next step may run on its own
+task while the child steps ([`prefetch_parent_step!`](@ref),
+[`wait_parent_step!`](@ref), `step_nested!(run, n)`; SC-c #403) — and the child's boundary conditions:
 [`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
 [`NestBoundaryData`](@ref) (the nest parent as a two-snapshot
 [`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)),

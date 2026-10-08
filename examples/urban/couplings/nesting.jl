@@ -28,6 +28,15 @@
 #             `:column_tendency`) closes the window when the child reaches it
 #             (`Nesting.end_parent_step!`; one-way: clock and statistics;
 #             two-way, `mode = :two_way`: the feedback onto the parent).
+#   ahead     (SC-c, #403) one-way, under `run_case!`: when a window opens
+#             and the run will step past its end, the parent's step of the
+#             next window starts on its own task (`Nesting.prefetch_parent_step!`)
+#             and runs while the child steps through this window; the next
+#             `:nest_parent` takes it. Its step size is the one the
+#             sequential run picks there (`parent_dt` of the parent at the
+#             window end; a fixed child step: the whole number of child
+#             steps), and the result is bit-identical. `wall.parent` is then
+#             the time the child still waited for the parent.
 #   two-way   (#267) the child's field set is anterpolated onto the covered
 #             parent cells outside a buffer of `buffer` parent cells next to
 #             the open faces and above `z_anterp` (`:canopy`: the mean
@@ -121,6 +130,8 @@ mutable struct NestingCoupling <: AbstractCoupling
     k::Int                        # offline: the record the next window starts from
     set::Vector{Any}              # offline: the child fields of the field set's tracers, in order
     recorder::Any                 # online with cfg.child_boundaries: the NestBoundaryRecorder
+    ahead_step::Float64           # the child step a prefetched fixed-step window was sized for (NaN: none)
+    ahead_window::Float64         # that window's parent step
 end
 
 coupling_name(::Type{<:NestingCoupling}) = :nesting
@@ -191,7 +202,7 @@ function build(::Type{<:NestingCoupling}, case, o)
              error("nesting: parent_driver must be :aeolus, :profile, :offline or an AbstractBoundaryData, got $(repr(d))")
     return NestingCoupling(o.mode, o, driver, nest_parent_config(case.cfg), nothing, nothing, nothing, NaN,
                            Symbol[], Symbol[], 0, 0.0, 0.0, nothing, Dict{Symbol,Float64}(),
-                           nothing, nothing, 1, Any[], nothing)
+                           nothing, nothing, 1, Any[], nothing, NaN, NaN)
 end
 
 "Whether the nest's faces are fed by boundary data other than the Aeolus parent or its file (`parent_driver`)."
@@ -534,7 +545,7 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
     if c.window === nothing && offline(c)
         _open_offline_window!(c, case)
     elseif c.window === nothing
-        Δt_p = isnan(c.pending) ? _fixed_window(c, dt) : max(c.pending, dt)
+        Δt_p = _window_dt(c, dt)
         tw = time_ns()
         c.window = begin_parent_step!(c.run; dt = Δt_p)
         c.wall_parent += (time_ns() - tw) * 1e-9
@@ -544,6 +555,8 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
         c.recorder === nothing ||
             record_boundary!(c.recorder, c.window.t_child_end, c.window.Δt, c.run.data.b;
                              profiles = _target_profiles(c))
+        # the last reads of the parent of this window are done: its next step may start
+        _prefetch_parent!(c, case, dt)
     end
     w = c.window
     t + dt <= w.t_child_end + 1e-9 * w.Δt ||
@@ -553,6 +566,58 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
     # two-way: the child step's interface fluxes are booked between here and
     # :nest_feedback (the :scalar_advection slot, the :body_force entry)
     two_way(c) && begin_child_step!(c.run)
+    return nothing
+end
+
+# The parent step of the window that opens now, as the sequential run
+# picks it: `parent_dt` of the parent at the window start (`c.pending`, set
+# by `limit_dt` under a variable step), or a whole number of fixed child
+# steps. A prefetched step was sized by the same rule when it started
+# (the parent has moved on since), and `begin_parent_step!` checks the two
+# agree.
+function _window_dt(c::NestingCoupling, dt)
+    if c.run.ahead !== nothing && isnan(c.pending)
+        dt == c.ahead_step ||
+            error("nesting: the parent step of this window was prefetched for a fixed child step " *
+                  "of $(c.ahead_step) s; this step is $dt s")
+        return c.ahead_window
+    end
+    return isnan(c.pending) ? _fixed_window(c, dt) : max(c.pending, dt)
+end
+
+# SC-c (#403): start the parent's step of the next window on its own task,
+# when it is certain to be taken (one-way, the Aeolus parent, a run whose
+# loop goes past this window's end), sized as _window_dt will size it:
+# under a variable step limit_dt sets `pending` from the parent at the
+# window start and the child's step is never longer (subcycle_dt ≤ R), so
+# the window is `pending`; under a fixed step it is _fixed_window of the
+# fixed step.
+function _prefetch_parent!(c::NestingCoupling, case, dt)
+    two_way(c) && return nothing
+    Threads.nthreads() > 1 || return nothing
+    w = c.window
+    step_will_run(case.clock, w.t_child_end) || return nothing
+    ts = timestepper(case)
+    if ts !== nothing && variable_dt(typeof(ts))
+        c.pending = parent_dt(c.parent)
+        Δt_next = c.pending
+        c.ahead_step = NaN
+    else
+        Δt_next = _fixed_window(c, dt)
+        c.ahead_step = Float64(dt); c.ahead_window = Δt_next
+    end
+    prefetch_parent_step!(c.run, w; dt = Δt_next)
+    return nothing
+end
+
+"""
+    end_run!(c::NestingCoupling, case)
+
+Wait for a parent step prefetched for a window the run did not reach (a
+run stopped early by a blow-up): the parent is then one window ahead.
+"""
+function end_run!(c::NestingCoupling, case)
+    c.run isa NestedRun && wait_parent_step!(c.run)
     return nothing
 end
 
