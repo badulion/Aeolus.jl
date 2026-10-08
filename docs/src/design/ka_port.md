@@ -2848,24 +2848,29 @@ simulation, halos included, against the pre-fusion cores kept in
 
 | before (per substep) | after |
 | :-- | :-- |
-| `zero_storage!` ×4-5 (`memset`), `momentum_advect!` (3 launches, each reading u, v, w), `advect_centered!` θ (and qv), 4-5 `laplacian` into scratch, 4-5 `axpy!(t, ν, ∇²f)` | one write-only launch per tendency (`_b_tendency_u!`, `_v!`, `_w!`, `_scalar!`): `t = (0 − A) + ν∇²f`; the tendencies' halos zeroed by one halo-shell launch |
+| `zero_storage!` ×4-5 (`memset`), `momentum_advect!` (3 launches, each reading u, v, w), `advect_centered!` θ (and qv), 4-5 `laplacian` into scratch, 4-5 `axpy!(t, ν, ∇²f)` | write-only launches `t = (0 − A) + ν∇²f`: u, v, w in one (`_b_tendency_momentum!`, reading u, v, w once), θ and qv one each (`_b_tendency_scalar!`); the tendencies' halos zeroed by one halo-shell launch |
 | `divergence` into `div_buf`, then the solver's copy into its buffer | `_divergence_into!` writes ∇·u into the spectral solver's source buffer (`PressureSolvers.source_buffer`, `solve_source_buffer!`) |
 | `∂x/∂y/∂z(φ)` into `dφdx…` + three `axpy!(u, −1, dφdx)`; `p = φ/Δt` | one launch `_b_correct!`: `u − (φᵢ − φᵢ₋₁)/Δx` … and `p = φ/Δt` (`u + (−1)·d` is `u − d` exactly); an open face's gradient slab only, for its check |
 | RK3: after substeps 2 and 3, `combine_storage!` ×4-5 over the storage | the correction writes `c(u − ∇φ, uⁿ)`; θ (qv) `c(θ + Δt tθ, θⁿ)` in its predictor pass; the halos `c(u, uⁿ)` in one halo-shell launch |
 
-**One launch per tendency, not one for all.** A single launch writing all
-five tendencies reads u, v and w once instead of five times, but with
-five stores and some ten arrays per point the loop no longer vectorises.
-On 192 × 192 × 53 (moist, inviscid; the nest parent's size) the five
-tendencies took 18.9 ms the old way (`memset` + five read-modify-write
-launches), 39.2 ms as one launch and 14.8 ms as five write-only launches
-at one thread; at 12 threads 10.7, 6.1 and 6.8 ms. The first version of
-SC-d used the single launch, which made the flagship's parent 10 % slower
-at one thread (`parent_steps` 51.1 → 56.1 ms); the five launches keep
-nearly all of its gain at 12 threads and are faster than before at one.
-The correction pass (u, v, w and p in one launch) does not have this
-problem: fused 2.9 ms against 3.2 ms split at one thread, 1.5 against 1.9
-at 12.
+**How much to put in one launch.** A launch that writes all five
+tendencies reads u, v and w once, but with five stores and some ten
+arrays per point the loop stops vectorising. Measured, ms per call of the
+five tendencies (minimum of 8; 1 / 12 threads):
+
+| layout | viscous dry 256³ | moist inviscid stretched 192 × 192 × 53 | moist inviscid regular 192 × 192 × 53 |
+| :-- | --: | --: | --: |
+| before SC-d (`memset` + 5 read-modify-write launches) | — | 18.3 / 10.8 | 18.9 / 10.8 |
+| all five in one launch | 82.1 / 48.3 | 33.2 / 6.5 | 39.0 / 6.1 |
+| one launch per tendency | 108.8 / 65.6 | 14.6 / 6.7 | 14.7 / 7.0 |
+| **u, v, w in one launch, one per scalar** (kept) | 86.0 / 53.1 | 12.0 / 6.1 | 11.6 / 6.0 |
+
+The first version of SC-d used the single launch, which made the
+flagship's parent (the moist stretched case) 10 % slower at one thread
+(`parent_steps` 51.1 → 56.1 ms, minimum of 3); the kept layout is the
+fastest or within 10 % of it everywhere. The correction pass (u, v, w and
+p in one launch) does not have the problem: fused 2.9 ms against 3.2 ms
+split at one thread, 1.5 against 1.9 at 12 (regular 192 × 192 × 53).
 
 The *halo shell* (`Simulations._shell_map!`) covers what the old passes did
 outside the interior (the `memset` zeroed the tendencies' halos; the RK3

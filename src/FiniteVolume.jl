@@ -726,7 +726,7 @@ _znodes_for(g::RegularGrid, ::FaceZ)      = collect(Grids.znodes(g, FaceZ()))
 
 # The flux divergence ∂(uⱼuᵢ)/∂xⱼ of each component at one point: the
 # advection bodies subtract it from the tendency, the fused tendency body
-# bodies of the step cores (`_b_tendency_u!` &c., SC-d #404) start from it.
+# bodies of the step cores (`_b_tendency_momentum!`, SC-d #404) start from it.
 @inline function _mom_u_at(i, j, k, u, v, w, m)
     @inbounds begin
         uce = 0.5*(u[i,   j, k] + u[i+1, j, k])
@@ -1724,22 +1724,20 @@ end
 
 # The tendencies of a substage before the SGS, buoyancy and forcing terms,
 # each written once: t = 0 − ∂(uⱼuᵢ)/∂xⱼ (+ ν∇²uᵢ) for the three
-# components, t = 0 − ∂(uⱼϕ)/∂xⱼ (+ ν∇²ϕ) for θ and qv. One write-only
-# launch per tendency: `zero_storage!`, the advection's read-modify-write
-# and the Laplacian + axpy of the viscosity in one pass. (One launch for all
-# five, reading u, v, w once, measured 0.93× these at 12 threads but 2.1×
-# slower at one thread on 192 × 192 × 53: with five stores and ten loads per
-# point the loop no longer vectorises.)
-@inline function _b_tendency_u!(i, j, k, tu, u, v, w, m, ν)
-    @inbounds tu[i, j, k] = _visc(ν, zero(eltype(tu)) - _mom_u_at(i, j, k, u, v, w, m), i, j, k, u, m, FaceX())
-    return nothing
-end
-@inline function _b_tendency_v!(i, j, k, tv, u, v, w, m, ν)
-    @inbounds tv[i, j, k] = _visc(ν, zero(eltype(tv)) - _mom_v_at(i, j, k, u, v, w, m), i, j, k, v, m, FaceY())
-    return nothing
-end
-@inline function _b_tendency_w!(i, j, k, tw, u, v, w, m, ν)
-    @inbounds tw[i, j, k] = _visc(ν, zero(eltype(tw)) - _mom_w_at(i, j, k, u, v, w, m), i, j, k, w, m, FaceZ())
+# components in one launch (u, v, w read once), t = 0 − ∂(uⱼϕ)/∂xⱼ
+# (+ ν∇²ϕ) for θ and for qv in one launch each: `zero_storage!`, the
+# advection's read-modify-write and the Laplacian + axpy of the viscosity
+# in one pass. Measured (ms, 1 / 12 threads; ka_port.md, SC-d): all five tendencies in one launch, 82 / 48 on a viscous
+# 256³ box but 33 / 6.5 on the moist 192 × 192 × 53 parent (the loop
+# stops vectorising with five stores); one launch per tendency 109 / 66
+# and 15 / 6.7; this split 86 / 53 and 12 / 6.1.
+@inline function _b_tendency_momentum!(i, j, k, tu, tv, tw, u, v, w, m, ν)
+    z = zero(eltype(tu))
+    @inbounds begin
+        tu[i, j, k] = _visc(ν, z - _mom_u_at(i, j, k, u, v, w, m), i, j, k, u, m, FaceX())
+        tv[i, j, k] = _visc(ν, z - _mom_v_at(i, j, k, u, v, w, m), i, j, k, v, m, FaceY())
+        tw[i, j, k] = _visc(ν, z - _mom_w_at(i, j, k, u, v, w, m), i, j, k, w, m, FaceZ())
+    end
     return nothing
 end
 @inline function _b_tendency_scalar!(i, j, k, t, u, v, w, ϕ, m, ν)
@@ -1756,8 +1754,8 @@ _scalar_tendency!((t, ϕ)::Tuple{Field{CellCenter}, Field{CellCenter}}, I, u, v,
 #
 # Overwrite the interior of `tu, tv, tw` with `-∂(uⱼuᵢ)/∂xⱼ + ν∇²uᵢ` and,
 # for each scalar pair `s = (tϕ, ϕ)` (or `nothing`), `tϕ` with
-# `-∂(uⱼϕ)/∂xⱼ + ν∇²ϕ`; `ν = nothing` drops the diffusion. One write-only
-# launch per tendency, the same bits as zeroing the tendencies,
+# `-∂(uⱼϕ)/∂xⱼ + ν∇²ϕ`; `ν = nothing` drops the diffusion. Write-only
+# launches (momentum, each scalar), the same bits as zeroing the tendencies,
 # `_momentum_advect!`, `_advect_centered!` and adding `ν` times
 # `_laplacian!` (SC-d, #404). Halos of the tendencies are not written;
 # halos of `u, v, w` and the scalars must be filled.
@@ -1766,9 +1764,7 @@ function _fused_tendencies!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ}
                             ν, s1, s2, g::AbstractMesh)
     m = grid_metrics(g)
     I = interior(g)
-    _fv!(_b_tendency_u!, I, tu.data, u.data, v.data, w.data, m, ν)
-    _fv!(_b_tendency_v!, I, tv.data, u.data, v.data, w.data, m, ν)
-    _fv!(_b_tendency_w!, I, tw.data, u.data, v.data, w.data, m, ν)
+    _fv!(_b_tendency_momentum!, I, tu.data, tv.data, tw.data, u.data, v.data, w.data, m, ν)
     _scalar_tendency!(s1, I, u, v, w, m, ν)
     _scalar_tendency!(s2, I, u, v, w, m, ν)
     return nothing
