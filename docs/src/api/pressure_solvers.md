@@ -14,6 +14,14 @@ Aeolus.PressureSolvers.poisson_axis_bcs
 Aeolus.PressureSolvers.solver_stats
 ```
 
+A spectral solver's source buffer can be filled by the caller (the step
+cores write the divergence straight into it, SC-d #404):
+
+```@docs
+Aeolus.PressureSolvers.source_buffer
+Aeolus.PressureSolvers.solve_source_buffer!
+```
+
 ## Column-separable direct solver
 
 The FFT/DCT + tridiagonal solver behind `StretchedPoissonSolver` and the

@@ -52,6 +52,29 @@ of the step cores read it after every pressure solve (#336).
 """
 solver_stats(::AbstractPressureSolver) = (0, NaN)
 
+"""
+    source_buffer(solver) -> Union{Nothing, AbstractArray{T,3}}
+
+The array a spectral solver copies the source's interior into before it
+transforms it (`buf[i, j, k]` is the interior point `(i, j, k)`, the
+storage point `(i + Hx, j + Hy, k + Hz)`), or `nothing` for a solver
+without one. A caller that can compute the source straight into it (the
+divergence of the step cores, SC-d #404) does so and then calls
+[`solve_source_buffer!`](@ref): the same bits as `solve!` from a source
+field, without writing the field and copying it in (two passes over the
+domain per solve).
+"""
+source_buffer(::AbstractPressureSolver) = nothing
+
+"""
+    solve_source_buffer!(p, solver) -> p
+
+[`solve!`](@ref) from the source already in [`source_buffer`](@ref)`(solver)`
+(which the solve overwrites). Defined for the solvers whose
+`source_buffer` is not `nothing`.
+"""
+function solve_source_buffer! end
+
 # -------------------------------------------------------------------------
 # FFTPoissonSolver — triply-periodic direct solve
 # -------------------------------------------------------------------------
@@ -118,11 +141,17 @@ solver was constructed with. The mean of `source` is projected out; if
 your source has a large mean you have a compatibility issue, not a solver
 bug.
 """
+source_buffer(s::FFTPoissonSolver) = s.src_buffer
+
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::FFTPoissonSolver{T}) where {T}
+    copy_interior_in!(backend(solver.src_buffer), solver.src_buffer, source)   # interior → contiguous buffer
+    return solve_source_buffer!(p, solver)
+end
+
+function solve_source_buffer!(p::Field{CellCenter,T}, solver::FFTPoissonSolver{T}) where {T}
     b = backend(solver.src_buffer)
     buf, hat = solver.src_buffer, solver.hat_buffer
-    copy_interior_in!(b, buf, source)                      # interior → contiguous buffer
     apply_transform!(b, hat, solver.forward_plan, buf)     # forward transform
     # divide by eigenvalues (zero mode annihilated by inv_eigenvalues[1,1,1] = 0)
     scale_by!(b, hat, solver.inv_eigenvalues)
@@ -379,11 +408,17 @@ function poisson_axis_bcs(bcs::FieldBoundaryConditions)
             bc_z = pair("z", bcs.bottom, bcs.top))
 end
 
+source_buffer(s::CosineFFTPoissonSolver) = s.real_buf
+
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::CosineFFTPoissonSolver{T}) where {T}
+    copy_interior_in!(backend(solver.real_buf), solver.real_buf, source)
+    return solve_source_buffer!(p, solver)
+end
+
+function solve_source_buffer!(p::Field{CellCenter,T}, solver::CosineFFTPoissonSolver{T}) where {T}
     b = backend(solver.real_buf)
     cur, other = solver.real_buf, solver.real_buf2   # the data lives in `cur`
-    copy_interior_in!(b, cur, source)
 
     if solver.plan_dct_fwd !== nothing                     # DCT-II along the Neumann axes
         apply_transform!(b, other, solver.plan_dct_fwd, cur)
