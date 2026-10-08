@@ -384,15 +384,20 @@ end
     p0 = Aeolus.Operators.fftw_policy()
     Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
     try
-        # the online run, recording the child's boundaries at every parent step
+        # the online run, recording the child's boundaries at every parent step.
+        # The synthetic inflow turbulence (#268) is off: its perturbations are
+        # drawn from the running parent's statistics and are not part of the
+        # driver, so an offline child cannot replay them (it would add its own)
         t0 = time()
-        online = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, child_boundaries = drv))
+        nogen = Dict{Symbol,Any}(:inflow_turbulence => false)
+        online = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, child_boundaries = drv,
+                                               physics = nogen))
         BCD.run_case!(online)
         t_online = time() - t0
         nc = BCD.find_coupling(online, :nesting)
         st_on = berlin_state(online)
         # recording does not change the run: the same case without the recorder
-        plain = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing))
+        plain = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, physics = nogen))
         BCD.run_case!(plain)
         st_plain = berlin_state(plain)
         @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))

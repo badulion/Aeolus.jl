@@ -107,7 +107,11 @@ and the `NestedRun` `run` (built by `init!`), the open
 parent `window` (`begin_parent_step!`'s result, or `nothing`), the parent
 step `pending` that `limit_dt` picked for the next window, the tracer
 names of the field set (`from_parent`: carried by the parent; `inflow`:
-zero on inflow), and statistics.
+zero on inflow), statistics, and `window_hooks`: functions `f(c, case)`
+called whenever a parent window opens, after the parent's step and
+before its next one starts ahead on another task — the one point where
+another coupling may read the parent's fields (the synthetic inflow's
+statistics, `couplings/inflow_turbulence.jl`, #268).
 """
 mutable struct NestingCoupling <: AbstractCoupling
     mode::Symbol
@@ -132,6 +136,7 @@ mutable struct NestingCoupling <: AbstractCoupling
     recorder::Any                 # online with cfg.child_boundaries: the NestBoundaryRecorder
     ahead_step::Float64           # the child step a prefetched fixed-step window was sized for (NaN: none)
     ahead_window::Float64         # that window's parent step
+    window_hooks::Vector{Any}     # f(c, case) at every window opening, the parent at rest (#268)
 end
 
 coupling_name(::Type{<:NestingCoupling}) = :nesting
@@ -202,7 +207,7 @@ function build(::Type{<:NestingCoupling}, case, o)
              error("nesting: parent_driver must be :aeolus, :profile, :offline or an AbstractBoundaryData, got $(repr(d))")
     return NestingCoupling(o.mode, o, driver, nest_parent_config(case.cfg), nothing, nothing, nothing, NaN,
                            Symbol[], Symbol[], 0, 0.0, 0.0, nothing, Dict{Symbol,Float64}(),
-                           nothing, nothing, 1, Any[], nothing, NaN, NaN)
+                           nothing, nothing, 1, Any[], nothing, NaN, NaN, Any[])
 end
 
 "Whether the nest's faces are fed by boundary data other than the Aeolus parent or its file (`parent_driver`)."
@@ -555,6 +560,10 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
         c.recorder === nothing ||
             record_boundary!(c.recorder, c.window.t_child_end, c.window.Δt, c.run.data.b;
                              profiles = _target_profiles(c))
+        # what reads the parent between its steps (the inflow statistics, #268)
+        for f in c.window_hooks
+            f(c, case)
+        end
         # the last reads of the parent of this window are done: its next step may start
         _prefetch_parent!(c, case, dt)
     end
@@ -761,8 +770,10 @@ function smoke_check(c::NestingCoupling, case)
         A = 2 * (m.Lx + m.Ly) * m.Lz + m.Lx * m.Ly
         U = max(maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)), 1e-3)
         data = offline(c) ? c.feed.data : c.driver
+        # (wrapped by the synthetic inflow when it is installed, #268)
         return ["parent_driver: the nest faces carry the driver's data" =>
-                    all(st -> st.data === data, open_boundary_states(sim)),
+                    all(st -> st.data === data || (st.data isa InflowTurbulence && st.data.data === data),
+                        open_boundary_states(sim)),
                 "child: net boundary volume flux after the correction ≤ 1e-12 U A" =>
                     abs(open_boundary_ledger(sim).residual) <= 1e-12 * U * A]
     end
