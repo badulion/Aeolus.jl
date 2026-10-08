@@ -134,9 +134,9 @@ end
 # The two launches. One work item per thread and chunk: `n` parts of every
 # field, each launch weighted by the halo points it writes, so that the
 # backend's threshold and points-per-task rule see the real work. (Counting
-# a halo point as less than a stencil point, which it is when the field is
-# in cache, measured slower in the regime of a run, where the stencils
-# between two fills have evicted the field: SC-b in ka_port.md.)
+# two halo points as one, as a fill of a cached field would justify, gained
+# nothing in the flagship step, where the stencils between two fills have
+# evicted the field: section SC-b of ka_port.md.)
 function _fill_set_threaded!(b, fs, bcs, keys, n::Int)
     wxy = cld(sum(_xy_points, fs), n)
     wz  = cld(sum(_z_points, fs), n)
