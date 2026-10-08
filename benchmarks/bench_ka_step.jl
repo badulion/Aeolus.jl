@@ -78,7 +78,13 @@ function bench_kernels(N)
         ("axpy (interior)",      () -> L._axpy_interior!(tu, 1e-3, B, g), () -> S.axpy!(tu, 1e-3, B)),
         ("combine4 (interior)",  () -> L._combine4!(tu, 1.0, B, 0.2, C, 0.3, D, 0.1, u, g),
                                  () -> TI._combine4!(tu, 1.0, B, 0.2, C, 0.3, D, 0.1, u)),
-        ("RK3 combine (storage)", () -> L.rk3_combine2!(a, s0), () -> S.combine_storage!(S._Lin2r(0.75, 0.25), a, s0)),
+        # since SC-d (#404) the combination is the interior pass of the fused
+        # correction plus the halo shell; this row times the two as plain passes
+        ("RK3 combine (storage)", () -> L.rk3_combine2!(a, s0),
+                                  () -> (c = S._Lin2r(0.75, 0.25);
+                                         Aeolus.Backends.range_map!(Aeolus.Backends.backend(a), c, a,
+                                                                    Aeolus.Grids.interior(g), a, s0);
+                                         S._shell_map!(c, (a,), (s0,), g))),
         ("CFL maxima",           old_cfl, () -> TI._cfl_maxima(sim, f, true)),
         ("step guard",           old_guard, () -> TI.step_guard(sim)),
     )

@@ -266,15 +266,19 @@ _∂z!(out::Field{CellCenter}, w::Field{FaceZ}, g::AbstractMesh) =
 # The output must live at the same location as the input.
 # =========================================================================
 
-@inline function _b_laplacian!(i, j, k, o, f, m, loc)
+# ∇²f at one point (the body below, and the viscous term of the fused
+# tendency body of the step cores, SC-d #404)
+@inline function _lap_at(i, j, k, f, m, loc)
     @inbounds begin
         c = f[i, j, k]
-        o[i, j, k] = (f[i+1,j,k] - 2c + f[i-1,j,k]) * m.idx2 +
-                     (f[i,j+1,k] - 2c + f[i,j-1,k]) * m.idy2 +
-                     _lapz(m, loc, k, f[i,j,k-1], c, f[i,j,k+1])
+        r = (f[i+1,j,k] - 2c + f[i-1,j,k]) * m.idx2 +
+            (f[i,j+1,k] - 2c + f[i,j-1,k]) * m.idy2 +
+            _lapz(m, loc, k, f[i,j,k-1], c, f[i,j,k+1])
     end
-    return nothing
+    return r
 end
+@inline _b_laplacian!(i, j, k, o, f, m, loc) =
+    (@inbounds o[i, j, k] = _lap_at(i, j, k, f, m, loc); nothing)
 
 """
     _laplacian!(out::Field{L}, f::Field{L}, g) where {L}
@@ -720,7 +724,10 @@ _znodes_for(g::RegularGrid, ::FaceZ)      = collect(Grids.znodes(g, FaceZ()))
 # J. Comput. Phys. 143, 90; Vasilyev 2000, J. Comput. Phys. 157, 746, for
 # the non-uniform extension).
 
-@inline function _b_momentum_u!(i, j, k, tu, u, v, w, m)
+# The flux divergence ∂(uⱼuᵢ)/∂xⱼ of each component at one point: the
+# advection bodies subtract it from the tendency, the fused tendency body
+# of the step cores (`_b_tendencies!`, SC-d #404) starts from it.
+@inline function _mom_u_at(i, j, k, u, v, w, m)
     @inbounds begin
         uce = 0.5*(u[i,   j, k] + u[i+1, j, k])
         ucw = 0.5*(u[i-1, j, k] + u[i,   j, k])
@@ -738,12 +745,12 @@ _znodes_for(g::RegularGrid, ::FaceZ)      = collect(Grids.znodes(g, FaceZ()))
         uwb = 0.5*(u[i,   j, k-1] + u[i, j, k  ])
         d_wu_dz = (wut*uwt - wub*uwb) * _idz(m, k)
 
-        tu[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
+        r = d_uu_dx + d_vu_dy + d_wu_dz
     end
-    return nothing
+    return r
 end
 
-@inline function _b_momentum_v!(i, j, k, tv, u, v, w, m)
+@inline function _mom_v_at(i, j, k, u, v, w, m)
     @inbounds begin
         uve = 0.5*(u[i+1, j-1, k] + u[i+1, j, k])
         vue = 0.5*(v[i,   j,   k] + v[i+1, j, k])
@@ -761,12 +768,12 @@ end
         vwb = 0.5*(v[i, j,   k-1] + v[i, j, k  ])
         d_wv_dz = (wvt*vwt - wvb*vwb) * _idz(m, k)
 
-        tv[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
+        r = d_uv_dx + d_vv_dy + d_wv_dz
     end
-    return nothing
+    return r
 end
 
-@inline function _b_momentum_w!(i, j, k, tw, u, v, w, m)
+@inline function _mom_w_at(i, j, k, u, v, w, m)
     @inbounds begin
         uwe = _zflux(m, k, u[i+1, j, k-1], u[i+1, j, k])
         wue = 0.5*(w[i,   j, k  ] + w[i+1, j, k])
@@ -784,10 +791,17 @@ end
         wcb = 0.5*(w[i, j, k-1] + w[i, j, k  ])
         d_ww_dz = (wct*wct - wcb*wcb) * _idzf(m, k)
 
-        tw[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
+        r = d_uw_dx + d_vw_dy + d_ww_dz
     end
-    return nothing
+    return r
 end
+
+@inline _b_momentum_u!(i, j, k, tu, u, v, w, m) =
+    (@inbounds tu[i, j, k] -= _mom_u_at(i, j, k, u, v, w, m); nothing)
+@inline _b_momentum_v!(i, j, k, tv, u, v, w, m) =
+    (@inbounds tv[i, j, k] -= _mom_v_at(i, j, k, u, v, w, m); nothing)
+@inline _b_momentum_w!(i, j, k, tw, u, v, w, m) =
+    (@inbounds tw[i, j, k] -= _mom_w_at(i, j, k, u, v, w, m); nothing)
 
 """
     _momentum_advect!(tu, tv, tw, u, v, w, g)
@@ -1637,7 +1651,8 @@ end
 # fluxes on a stretched grid too; the face value is the arithmetic mean of
 # the two neighbours, which keeps Σ ϕ² ΔV invariant under a solenoidal flow.
 
-@inline function _b_advect_centered!(i, j, k, tend, u, v, w, d, m)
+# the flux divergence ∂(uⱼϕ)/∂xⱼ at one point
+@inline function _adv_centered_at(i, j, k, u, v, w, d, m)
     @inbounds begin
         uϕe = u[i+1,j,k] * 0.5 * (d[i,  j,k] + d[i+1,j,k])
         uϕw = u[i,  j,k] * 0.5 * (d[i-1,j,k] + d[i,  j,k])
@@ -1645,10 +1660,12 @@ end
         vϕs = v[i,j,  k] * 0.5 * (d[i,j-1,k] + d[i,j,  k])
         wϕt = w[i,j,k+1] * 0.5 * (d[i,j,k  ] + d[i,j,k+1])
         wϕb = w[i,j,k  ] * 0.5 * (d[i,j,k-1] + d[i,j,k  ])
-        tend[i,j,k] -= (uϕe - uϕw)*_idx(m, i) + (vϕn - vϕs)*_idy(m, j) + (wϕt - wϕb)*_idz(m, k)
+        r = (uϕe - uϕw)*_idx(m, i) + (vϕn - vϕs)*_idy(m, j) + (wϕt - wϕb)*_idz(m, k)
     end
-    return nothing
+    return r
 end
+@inline _b_advect_centered!(i, j, k, tend, u, v, w, d, m) =
+    (@inbounds tend[i,j,k] -= _adv_centered_at(i, j, k, u, v, w, d, m); nothing)
 
 """
     _advect_centered!(tend, u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, ϕ, g)
@@ -1685,6 +1702,151 @@ function _advect_upwind!(tend::Field{CellCenter},
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     _fv!(_b_advect_upwind!, interior(g), tend.data, u.data, v.data, w.data, ϕ.data, idx, idy, idz)
     return tend
+end
+
+# =========================================================================
+# Fused step-core kernels (SC-d, #404)
+# =========================================================================
+# The Boussinesq step cores (`Simulations._euler_projection!`) used to build
+# each substage from single-purpose passes: zero the tendencies, add the
+# momentum advection (three launches, each reading u, v and w), add the
+# scalar advection, write ∇²f into a scratch field and add ν∇²f with an
+# axpy; then ∂φ/∂x into a scratch field and an axpy for the projection.
+# These bodies do the same arithmetic, in the same order, in one pass per
+# group, so each field is streamed once (docs/src/design/ka_port.md,
+# "SC-d"). Every value is bit for bit the one of the separate passes
+# (test/ka_fusion.jl).
+
+# t + ν∇²f, the molecular viscosity / diffusion (`axpy!(t, ν, ∇²f)`); none
+# when the core has no viscosity
+@inline _visc(::Nothing, t, i, j, k, f, m, loc) = t
+@inline _visc(ν, t, i, j, k, f, m, loc) = t + ν * _lap_at(i, j, k, f, m, loc)
+
+# a scalar's tendency (t, ϕ): 0 − ∂(uⱼϕ)/∂xⱼ (+ ν∇²ϕ)
+@inline _scalar_tendency!(::Nothing, i, j, k, u, v, w, m, ν) = nothing
+@inline function _scalar_tendency!(s::Tuple, i, j, k, u, v, w, m, ν)
+    t, ϕ = s
+    @inbounds t[i, j, k] = _visc(ν, zero(eltype(t)) - _adv_centered_at(i, j, k, u, v, w, ϕ, m),
+                                 i, j, k, ϕ, m, CellCenter())
+    return nothing
+end
+
+# The tendencies of a substage before the SGS, buoyancy and forcing terms:
+# t = 0 − ∂(uⱼuᵢ)/∂xⱼ (+ ν∇²uᵢ) for the three components and the same with
+# the scalar advection for θ and qv: `zero_storage!`, `momentum_advect!`,
+# `advect_centered!` and the viscous axpys in one pass that reads u, v, w
+# once and writes every tendency once.
+@inline function _b_tendencies!(i, j, k, tu, tv, tw, u, v, w, m, ν, s1, s2)
+    z = zero(eltype(tu))
+    @inbounds begin
+        tu[i, j, k] = _visc(ν, z - _mom_u_at(i, j, k, u, v, w, m), i, j, k, u, m, FaceX())
+        tv[i, j, k] = _visc(ν, z - _mom_v_at(i, j, k, u, v, w, m), i, j, k, v, m, FaceY())
+        tw[i, j, k] = _visc(ν, z - _mom_w_at(i, j, k, u, v, w, m), i, j, k, w, m, FaceZ())
+    end
+    _scalar_tendency!(s1, i, j, k, u, v, w, m, ν)
+    _scalar_tendency!(s2, i, j, k, u, v, w, m, ν)
+    return nothing
+end
+
+_scalar_data(::Nothing) = nothing
+_scalar_data((t, ϕ)::Tuple{Field{CellCenter}, Field{CellCenter}}) = (t.data, ϕ.data)
+
+# _fused_tendencies!(tu, tv, tw, u, v, w, ν, s1, s2, g)
+#
+# Overwrite the interior of `tu, tv, tw` with `-∂(uⱼuᵢ)/∂xⱼ + ν∇²uᵢ` and,
+# for each scalar pair `s = (tϕ, ϕ)` (or `nothing`), `tϕ` with
+# `-∂(uⱼϕ)/∂xⱼ + ν∇²ϕ`; `ν = nothing` drops the diffusion. One launch,
+# the same bits as zeroing the tendencies, `_momentum_advect!`,
+# `_advect_centered!` and adding `ν` times `_laplacian!`
+# (SC-d, #404). Halos of the tendencies are not written; halos of
+# `u, v, w` and the scalars must be filled.
+function _fused_tendencies!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
+                            u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                            ν, s1, s2, g::AbstractMesh)
+    _fv!(_b_tendencies!, interior(g), tu.data, tv.data, tw.data, u.data, v.data, w.data,
+         grid_metrics(g), ν, _scalar_data(s1), _scalar_data(s2))
+    return nothing
+end
+
+# --- the projection's correction ------------------------------------------
+
+@inline _stage(::Nothing, x, s) = x
+@inline _stage(c, x, s) = c(x, s)
+@inline _point(::Nothing, i, j, k) = nothing
+@inline _point(a::AbstractArray, i, j, k) = @inbounds a[i, j, k]
+@inline _set_pressure!(::Nothing, pf, φc, i, j, k) = nothing
+@inline _set_pressure!(p, pf, φc, i, j, k) = (@inbounds p[i, j, k] = pf(φc); nothing)
+
+# u ← u − ∂φ/∂x (likewise v, w): `∂x(dφdx, φ)` and `axpy!(u, -1, dφdx)`
+# in one pass (u + (−1)·d is exactly u − d). With `p`, the pressure
+# p = pf(φ) (`pressure_from_potential!`) at the same point; with a stage
+# combination `c` and the step-start state `u0, v0, w0`, the combined
+# c(u − ∂φ/∂x, u0) (the RK3 combination after the projection).
+@inline function _b_correct!(i, j, k, u, v, w, φ, m, p, pf, c, u0, v0, w0)
+    @inbounds begin
+        φc = φ[i, j, k]
+        u[i, j, k] = _stage(c, u[i, j, k] - (φc - φ[i-1, j, k]) * _idx(m, i), _point(u0, i, j, k))
+        v[i, j, k] = _stage(c, v[i, j, k] - (φc - φ[i, j-1, k]) * _idy(m, j), _point(v0, i, j, k))
+        w[i, j, k] = _stage(c, w[i, j, k] - (φc - φ[i, j, k-1]) * _idzf(m, k), _point(w0, i, j, k))
+    end
+    _set_pressure!(p, pf, φc, i, j, k)
+    return nothing
+end
+
+# _correct_velocity!(u, v, w, φ, g; p = nothing, pf = nothing,
+# stage = nothing, u0 = nothing, v0 = nothing, w0 = nothing)
+#
+# The pressure correction `u ← u − ∇φ` over the interior, in one launch
+# (the centre → face gradients of `_∂x!` and their axpys, the same
+# bits). With `p` (an array) also `p = pf(φ)`, and with `stage` (a
+# callable `(x, snap) -> …`) the corrected value is combined with the
+# step-start arrays `u0, v0, w0` (SC-d, #404). Halos of `φ` must be filled.
+function _correct_velocity!(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                            φ::Field{CellCenter}, g::AbstractMesh;
+                            p = nothing, pf = nothing, stage = nothing,
+                            u0 = nothing, v0 = nothing, w0 = nothing)
+    _fv!(_b_correct!, interior(g), u.data, v.data, w.data, φ.data, grid_metrics(g),
+         p, pf, stage, u0, v0, w0)
+    return nothing
+end
+
+# The centre → face gradients of φ on the west (x), south (y) and bottom
+# (z) faces only (the interior slots H+1), where an open boundary's check
+# (`assert_open_face_correction`) reads them: the same values `_∂x!` &c.
+# write there.
+function _face_gradient_slabs!(dφdx::Field{FaceX}, dφdy::Field{FaceY}, dφdz::Field{FaceZ},
+                               φ::Field{CellCenter}, g::AbstractMesh,
+                               west::Bool, south::Bool, bottom::Bool)
+    ii, jj, kk = interior(g)
+    m = grid_metrics(g)
+    west   && _fv!(_b_∂x_cf!, (first(ii):first(ii), jj, kk), dφdx.data, φ.data, m)
+    south  && _fv!(_b_∂y_cf!, (ii, first(jj):first(jj), kk), dφdy.data, φ.data, m)
+    bottom && _fv!(_b_∂z_cf!, (ii, jj, first(kk):first(kk)), dφdz.data, φ.data, m)
+    return nothing
+end
+
+# ∇·u written straight into an interior-sized array (a spectral solver's
+# source buffer): buf[i, j, k] is the divergence at storage point
+# (i + oi, j + oj, k + ok), the bits of `_divergence!` then the copy-in.
+@inline _b_divergence_into!(i, j, k, buf, u, v, w, m, oi, oj, ok) =
+    (@inbounds buf[i, j, k] = _div_at(i + oi, j + oj, k + ok, u, v, w, m); nothing)
+
+# _divergence_into!(buf, u, v, w, g)
+#
+# The Arakawa-C divergence of `_divergence!` over the interior,
+# written into the interior-sized array `buf` (`buf[i, j, k]` ↔ storage
+# `(i + Hx, j + Hy, k + Hz)`): a spectral solver's source buffer
+# (`PressureSolvers.source_buffer`, SC-d #404). Halos of `u, v, w` must be
+# filled.
+function _divergence_into!(buf::AbstractArray{T,3}, u::Field{FaceX}, v::Field{FaceY},
+                           w::Field{FaceZ}, g::AbstractMesh) where {T}
+    ii, jj, kk = interior(g)
+    size(buf) == (length(ii), length(jj), length(kk)) ||
+        throw(DimensionMismatch("_divergence_into!: buffer $(size(buf)) ≠ interior $((length(ii), length(jj), length(kk)))"))
+    checkbounds(u.data, first(ii) - 1:last(ii) + 1, jj, kk)
+    _fv!(_b_divergence_into!, (1:length(ii), 1:length(jj), 1:length(kk)), buf,
+         u.data, v.data, w.data, grid_metrics(g), first(ii) - 1, first(jj) - 1, first(kk) - 1)
+    return buf
 end
 
 end # module
