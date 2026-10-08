@@ -48,6 +48,9 @@
 #                      advance_dynamics!(c, case, dt)   -> advance case.sim by dt, with the
 #                                                          hooks and case.step_kwargs
 #                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
+#                      stable_dt(c, case)               -> the longest step the provider's
+#                                                          limits allow now (variable_dt only;
+#                                                          an explicit dt of step_case! is checked against it)
 #
 # Keywords are never dropped: a combination of a core / time stepper with
 # a numerics provider whose keywords it does not take is declared with
@@ -168,6 +171,17 @@ limit_dt(c::AbstractCoupling, case, dt) = dt
 function build_core end
 variable_dt(::Type{<:AbstractCoupling}) = false
 next_dt(c::AbstractCoupling, case) = case.cfg.dt
+"""
+    stable_dt(c, case) -> dt
+
+The longest step (s) a variable-step `:timestepper` provider
+(`variable_dt`) allows from the current state: its stability limits
+(CFL, diffusion, buoyancy, ...) and `dt_max`, without the growth limit of
+[`next_dt`](@ref) and without side effects. [`step_case!`](@ref) rejects
+an explicit `dt` above it (#392). Default: `Inf` (a fixed-step provider
+takes the `dt` it is given).
+"""
+stable_dt(c::AbstractCoupling, case) = Inf
 advance_dynamics!(c::AbstractCoupling, case, dt) = dynamics_step!(case, dt)
 run_stage!(c::AbstractCoupling, case, ::Val{S}, dt) where {S} =
     error("coupling :$(coupling_name(typeof(c))) declares stage :$S but has no run_stage! method for it")
