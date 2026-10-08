@@ -167,6 +167,23 @@ function section_primitives()
         record!("primitives/interior_max[$lab]", interior_max(d, I3))
         record!("primitives/interior_all_finite[$lab]", interior_all_finite(d, I3))
     end
+    # set fills (SC-b, #402): u, v, w, θ in two launches, closed and open faces
+    G = Aeolus.Grids
+    for (lab, bcs) in (("periodic", FieldBoundaryConditions(:periodic)),
+                       ("walls", FieldBoundaryConditions(:periodic, :noflux, :wall)),
+                       ("open", open_boundary_conditions(mesh, ProfileBoundaryData(u = 1.0, v = 0.5, w = 0.0, θ = 300.0);
+                                                         normal_halo = :odd)))
+        fs = (Field(G.FaceX(), mesh), Field(G.FaceY(), mesh), Field(G.FaceZ(), mesh), Field(mesh))
+        foreach(f -> f.data .= randn(rng, size(f.data)), fs)
+        if lab == "open"
+            st = only(open_boundary_states(bcs)); st.bound[fs[4].data] = :θ
+            for q in st.planes; q.data .= randn(rng, size(q.data)); end
+        end
+        with_backend(() -> fill_halos!(fs, bcs), BACKEND)
+        for (n, f) in zip((:u, :v, :w, :θ), fs)
+            record!("primitives/fill_halos!(set, $lab).$n", f.data)
+        end
+    end
 end
 
 # --------------------------------------------------------------------------
