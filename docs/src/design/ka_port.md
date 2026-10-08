@@ -2521,7 +2521,9 @@ tests (23 on the two larger meshes, 10 on the N < H mesh), at 1, 2, 5 and
 more-chunks-than-planes work items and through the public method on the
 serial, default and zero-threshold backends; the
 thread-invariance worker hashes set fills (periodic, walls, open) at
-every thread count.
+every thread count. The full harness (every section, 1, 4, 12 and 24
+threads) on this branch merged with master of 2026-10-08: 3785 hashes per
+process, all identical to 1 thread; 21 of 21 checks pass (27 min).
 
 **Measured** (same machine and method as KA-o: `bench_ka_scaling.jl`,
 one process per thread count, 1-minute load below 4 at the start of every
