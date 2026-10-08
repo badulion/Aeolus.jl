@@ -438,11 +438,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
                             sgs_stress::Symbol = :laplacian,
                             t_bc = sim.t + Δt) where {T, C, F}
     # 1. Halo fill so all stencils see valid neighbours.
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)
-    sim.has_moisture && fill_halos!(sim.qv, passive_scalar_bcs(sim.θ_bcs))
+    fill_state_halos!(sim)
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
     # 2. Zero tendencies and add momentum + scalar advection.
@@ -544,9 +540,7 @@ end
 # two-way nest parent after the feedback (N-nest-e, #263).
 function _project_velocity!(sim::BoussinesqSimulation{T}) where {T}
     # 8. Divergence of predicted velocity.
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     divergence(sim.div_buf, sim.u, sim.v, sim.w)
 
     # 9. Solve ∇²φ = ∇·u*.
@@ -680,9 +674,7 @@ function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
     t0 = sim.t
     bc0 = open_boundary_snapshot(sim)      # nothing for closed boundaries
     if bc0 !== nothing                     # uⁿ carries its boundary state into the combinations
-        fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
-        fill_halos!(sim.θ, sim.θ_bcs)
-        sim.has_moisture && fill_halos!(sim.qv, sim.θ_bcs)
+        fill_state_halos!(sim, sim.θ_bcs)
     end
 
     # Save current state (into the workspace: no allocation per step, #295;
@@ -770,6 +762,25 @@ end
 @inline _abs_at(i, j, k, a) = @inbounds abs(a[i, j, k])
 
 """
+    fill_state_halos!(sim, qv_bcs = passive_scalar_bcs(sim.θ_bcs)) -> sim
+
+Fill the halos of the prognostic state of a [`BoussinesqSimulation`](@ref)
+— `u`, `v`, `w` with `sim.bcs`, `θ` with `sim.θ_bcs` and, with moisture,
+`qv` with `qv_bcs` — as one set ([`fill_halos!`](@ref)`(fields::Tuple, …)`):
+two threaded launches for the whole state (SC-b, #402), the same bits as
+filling the fields one after the other.
+"""
+function fill_state_halos!(sim, qv_bcs = passive_scalar_bcs(sim.θ_bcs))
+    b = sim.bcs
+    if sim.has_moisture
+        fill_halos!((sim.u, sim.v, sim.w, sim.θ, sim.qv), (b, b, b, sim.θ_bcs, qv_bcs))
+    else
+        fill_halos!((sim.u, sim.v, sim.w, sim.θ), (b, b, b, sim.θ_bcs))
+    end
+    return sim
+end
+
+"""
     max_divergence(sim) -> Float64
 
 Maximum `|∇·u|` over the interior cells. Should sit at floating-point
@@ -777,9 +788,7 @@ epsilon after the pressure projection (Chorin's method is exact on the
 discrete Laplacian).
 """
 function max_divergence(sim::BoussinesqSimulation)
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     divergence(sim.div_buf, sim.u, sim.v, sim.w)
     # max is exact: the same bits as `maximum(abs, interior_view(div_buf))`
     return range_max(Backends.backend(sim.div_buf.data), _abs_at, interior(sim.mesh), sim.div_buf.data)
