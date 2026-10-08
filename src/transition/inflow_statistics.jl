@@ -190,7 +190,10 @@ end
                              U_min = 0.1, levels = 1:Nz, lag_z = 16, c_k = 0.1)
 
 The inflow statistics of an Aeolus LES parent (any simulation with
-`u, v, w, νt, bcs` on a `RegularGrid`, e.g. a `BoussinesqSimulation`),
+`u, v, w, νt, bcs` on a `RegularGrid`, e.g. a `BoussinesqSimulation`, or
+on a `StretchedGrid`: the Berlin parent, #268, whose level heights and
+thicknesses then set the profiles, the strain's vertical differences and
+the vertical lags),
 implementing [`InflowStatistics`](@ref). Call
 [`update_inflow_statistics!`](@ref)`(src, Δt)` after every parent step
 (or at a cadence, with the elapsed `Δt`).
@@ -341,7 +344,8 @@ function ParentResolvedStatistics(parent; closure = nothing, face::Symbol = :wes
                                   c_len::Real = c_gap / 2, U_min::Real = 0.1,
                                   levels = nothing, lag_z::Integer = 16, c_k::Real = 0.1)
     g = mesh(parent.u)
-    g isa RegularGrid || throw(ArgumentError("ParentResolvedStatistics: the parent must be on a RegularGrid"))
+    (g isa RegularGrid || hasproperty(g, :dzc)) || throw(ArgumentError(
+        "ParentResolvedStatistics: the parent must be on a RegularGrid or a StretchedGrid"))
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     _face_perm(face)
     τ_avg > 0 || throw(ArgumentError("ParentResolvedStatistics: τ_avg must be > 0"))
@@ -383,7 +387,7 @@ function ParentResolvedStatistics(parent; closure = nothing, face::Symbol = :wes
         band[i, j] = kc < k <= r * kc * (1 + 1e-12)
     end
     r == 1 && (band .= false)
-    z = [g.z0 + (k - 0.5) * g.dz for k in lev]
+    z = [_level_z(g, k) for k in lev]
     tmp = zeros(Nx, Ny)
     plan = plan_rfft(tmp)
     iplan = plan_irfft(zeros(ComplexF64, Nx ÷ 2 + 1, Ny), Nx)
@@ -403,6 +407,17 @@ function ParentResolvedStatistics(parent; closure = nothing, face::Symbol = :wes
                                     [cos(2π * (j - 1) * r / Ny) for j in 1:Ny, r in 0:Ny÷2],
                                     _ProjectionLog())
 end
+
+# Height of the centre of interior level k and its thickness: uniform on a
+# RegularGrid; a StretchedGrid's own (its zc / dzc, storage-indexed). The
+# strain's vertical differences and the vertical lags take the level's
+# thickness as their spacing: exact in uniform layers (the Berlin parent's
+# below z_uniform, where its nest child lies), first order in the ratio
+# of neighbouring thicknesses above.
+_level_z(g::RegularGrid, k) = g.z0 + (k - 0.5) * g.dz
+_level_z(g, k) = g.zc[g.Hz+k]
+_level_dz(g::RegularGrid, k) = g.dz
+_level_dz(g, k) = g.dzc[g.Hz+k]
 
 # weight of the half-spectrum column i (kx = i - 1): 1 for kx = 0 and the Nyquist column
 _wx(i, Nx) = (i == 1 || (iseven(Nx) && i == Nx ÷ 2 + 1)) ? 1.0 : 2.0
@@ -440,7 +455,7 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
         f = sgs_fields(s.closure, p); f.νh, f.νv
     end
     ud, vd, wd = p.u.data, p.v.data, p.w.data
-    idx, idy, idz = 1 / g.dx, 1 / g.dy, 1 / g.dz
+    idx, idy = 1 / g.dx, 1 / g.dy
     cols = s.columns
     ncol = count(cols)
     lev = s.levels; k1 = first(lev); L = s.lag_z
@@ -529,7 +544,7 @@ function update_inflow_statistics!(s::ParentResolvedStatistics, Δt::Real)
                     Nb[3] += nb[i, j, ib]^2; Nb[4] += nb[i, j, it]^2
                     brw[1] += nb[i, j, ib]; brw[2] += nb[i, j, it]
                 end
-                S11, S22, S33, S12, S13, S23, _ = _strain_at(ud, vd, wd, I, J, K, idx, idy, idz)
+                S11, S22, S33, S12, S13, S23, _ = _strain_at(ud, vd, wd, I, J, K, idx, idy, 1 / _level_dz(g, kk))
                 e = s.e.data[I, J, K]
                 nh = νh.data[I, J, K]; nv = νv.data[I, J, K]
                 T11 = -2nh * S11; T22 = -2nh * S22; T33 = -2nv * S33
@@ -703,7 +718,8 @@ function _lengths(s::ParentResolvedStatistics; band::Bool = s.mode === :scale_ga
             v0 = V[c, l]; vm = V[c, l+m]
             ρ[m+1] = v0 > 0 && vm > 0 ? Cz[c, l, m+1] / sqrt(v0 * vm) : (m == 0 ? 1.0 : 0.0)
         end
-        lz = nm == 0 ? g.dz / 2 : _integral_scale(ρ, g.dz)
+        Δz = _level_dz(g, kk)
+        lz = nm == 0 ? Δz / 2 : _integral_scale(ρ, Δz)
         ls, ln = along_x ? (lx, ly) : (ly, lx)
         Ls[fc, l] = min(ls, cap); Lz[fc, l] = min(lz, cap); Ln[fc, l] = min(ln, cap)
     end

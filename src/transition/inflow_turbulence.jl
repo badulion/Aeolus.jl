@@ -317,6 +317,26 @@ function InflowTurbulence(run; generator = DigitalFilterGenerator,
     return it
 end
 
+"""
+    free_stream_generator(; U∞, nmodes = 200) -> generator
+
+The `generator` argument of [`InflowTurbulence`](@ref) for the
+random-mode provider (the FSD of N-inflow-d, #266): per face, a
+[`FreeStreamInflow`](@ref) of a [`FreeStreamDisturbance`](@ref) with
+`nmodes` modes whose single integral length is the face mean of the
+statistics' along-face streamwise length (``L_s`` of the normal
+component), swept through the face at `U∞` (m s⁻¹, Taylor), periodic
+along the face (its length ``n_sΔ_s``), seeded per face. The
+generator whitens its planes, so the intensity of the mode set (10 %)
+does not enter; the Lund amplitudes of the statistics give the
+variances. Unlike [`DigitalFilterGenerator`](@ref) it is isotropic with
+one length and a frozen field (its time scale is the sweep, not ``T``).
+"""
+free_stream_generator(; U∞::Real, nmodes::Integer = 200) =
+    (side; ns, nz, Δs, Δz, L_s, L_z, T, seed) -> FreeStreamInflow(
+        FreeStreamDisturbance(0.1, sum(@view L_s[1, :]) / nz, nmodes; seed = seed, U∞ = U∞,
+                              period_y = ns * Δs), ns, nz, Δs, Δz)
+
 Base.show(io::IO, it::InflowTurbulence) =
     print(io, "InflowTurbulence(", join((f.side for f in it.faces), ", "), "; u_min = ",
           it.u_min, " m/s, data = ", nameof(typeof(it.data)), ")")
@@ -370,11 +390,24 @@ function refresh_inflow_lengths!(it::InflowTurbulence, t::Real = it.sim.t)
     return it
 end
 
-# Fold the parent's elapsed time into every distinct statistics source.
-function _fold_statistics!(it::InflowTurbulence)
-    it.parent === nothing && return it
+"""
+    fold_inflow_statistics!(it::InflowTurbulence; interval = it.statistics_interval) -> Bool
+
+Fold the parent's time elapsed since the last fold into every distinct
+statistics source of `it` (`update_inflow_statistics!`), once the parent
+clock has advanced by at least `interval` seconds; returns whether it
+folded. The boundary refresh calls it with the constructor's
+`statistics_interval`. A nest that steps its parent on another task
+while the child steps (the parent step started ahead, SC-c #403) must
+not let the child's refresh read the parent mid-step: it builds the
+[`InflowTurbulence`](@ref) with `statistics_interval = Inf` and calls
+this, with its own interval, where the parent is at rest (the Berlin
+nest: when a parent window opens, before the next parent step starts).
+"""
+function fold_inflow_statistics!(it::InflowTurbulence; interval::Real = it.statistics_interval)
+    it.parent === nothing && return false
     tp = Float64(it.parent.t)
-    tp - it.t_stats >= it.statistics_interval || return it
+    tp - it.t_stats >= interval || return false
     Δ = tp - it.t_stats
     seen = IdDict{Any,Bool}()
     for f in it.faces
@@ -383,7 +416,7 @@ function _fold_statistics!(it::InflowTurbulence)
         update_inflow_statistics!(f.stats, Δ)
     end
     it.t_stats = tp
-    return it
+    return true
 end
 
 # The face-mean outward normal velocity of the data, per level.
@@ -556,7 +589,7 @@ function boundary_values!(planes::AbstractVector{<:OpenPlane}, it::InflowTurbule
     boundary_values!(planes, it.data, t)
     tt = Float64(t)
     m = mesh(it.sim.u)
-    _fold_statistics!(it)
+    fold_inflow_statistics!(it)
     tt - it.t_lengths >= it.length_interval && refresh_inflow_lengths!(it, tt)
     nps = [_normal_plane(planes, f) for f in it.faces]
     for (f, np) in zip(it.faces, nps)
@@ -635,6 +668,32 @@ fed the synthetic eddies before they have adjusted to the child's
 dynamics.
 """
 feedback_exclude_width(it::InflowTurbulence) = 2 * maximum(maximum(f.L_s) for f in it.faces)
+
+"""
+    exclude_inflow_feedback!(run::NestedRun, it::InflowTurbulence) -> exclude_width
+
+Give the two-way feedback of `run` the inflow band of `it` (N-inflow-e,
+#268): its [`TwoWayFeedback`](@ref) is replaced by a copy whose
+`exclude_width` is [`feedback_exclude_width`](@ref)`(it)` in parent
+cells, rounded up (``⌈2\\max L_s/Δx_p⌉``, `Δx_p` the smaller horizontal
+parent spacing), and never narrower than the one it had. The faces it
+excludes stay the feedback's `exclude_sides` (`:inflow` by default: the
+faces whose mean normal velocity points into the child at each
+feedback). Without the band the feedback restricts the synthetic eddies
+into the parent, whose prolongation returns them as boundary data (on
+the refine-3 test nest: child kinetic energy ×5.5 and parent ×3.2 in
+200 s; `docs/src/theory/transition.md`). A one-way run is returned
+unchanged (0).
+"""
+function exclude_inflow_feedback!(run::NestedRun, it::InflowTurbulence)
+    fb = run.twoway
+    fb === nothing && return 0
+    pm = run.nest.parent_mesh
+    w = max(fb.exclude_width, ceil(Int, feedback_exclude_width(it) / min(pm.dx, pm.dy) - 1e-9))
+    run.twoway = TwoWayFeedback(fb.buffer, fb.z_anterp, fb.τ, w, fb.exclude_sides, fb.reflux,
+                                fb.reproject, fb.tracer_fluxes, fb.theta_flux)
+    return w
+end
 
 # a snapshot of the numeric fields of a mutable statistics source (running sums)
 function _stats_state(src)
