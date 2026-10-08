@@ -12,6 +12,7 @@ Aeolus.Simulations.BoussinesqSimulation
 Aeolus.Simulations.run!
 Aeolus.Simulations.kinetic_energy
 Aeolus.Simulations.max_divergence
+Aeolus.Simulations.fill_state_halos!
 Aeolus.Simulations.max_νt
 Aeolus.Simulations.mean_θ_profile
 ```

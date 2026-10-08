@@ -1679,9 +1679,7 @@ function _project_mass_weighted!(sim::MassWeightedSimulation{S,T},
                                  Wf = _weight_f(sim.weighting, sim.ref)) where {S,T}
     m = sim.mesh
     # 8. weighted divergence of the predicted velocity
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     weighted_divergence!(sim.div_buf, sim.u, sim.v, sim.w, Wc, Wf, m; normalize = false)
 
     # 9. variable-coefficient Poisson solve: ∇·(W∇φ) = ∇·(W u*)
@@ -1726,10 +1724,7 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
     prepare_open_boundaries!(sim)          # no-op unless an open face is unfilled
 
     # 1. halos
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
-    fill_halos!(sim.θ, sim.θ_bcs)
+    fill_halos!((sim.u, sim.v, sim.w, sim.θ), (sim.bcs, sim.bcs, sim.bcs, sim.θ_bcs))
     mark_open_boundary_stage!(sim)         # radiating outflow: step-start layers (N-open-c)
 
     # 2. advection, weighted flux form
@@ -1856,9 +1851,7 @@ _max_abs_interior(sim) = range_max(Backends.backend(sim.div_buf.data), Simulatio
                                    interior(sim.mesh), sim.div_buf.data)
 
 function _fill_velocity_halos!(sim::MassWeightedSimulation)
-    fill_halos!(sim.u, sim.bcs)
-    fill_halos!(sim.v, sim.bcs)
-    fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     return sim
 end
 
@@ -2087,7 +2080,7 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
                      dt_prev = nothing, sgs = nothing, kwargs...) where {S,T}
     t_cfl = time_ns()
     m = sim.mesh
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     rate = _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, m)
     rec = sim.workspaces.rec
     if isnan(rate)

@@ -315,8 +315,7 @@ function interpolate_parent_state!(s::NestInterpState, psim::_NestSim,
                                    nest::NestedGrid; order::Int=3,
                                    region::Symbol=:all, limit_scalars::Symbol=:positive,
                                    limit_theta::Symbol=:none, limit_momentum::Symbol=:none)
-    fill_halos!(psim.u, psim.bcs); fill_halos!(psim.v, psim.bcs)
-    fill_halos!(psim.w, psim.bcs)
+    fill_halos!((psim.u, psim.v, psim.w), psim.bcs)
     meas = s.measure
     _interp_child!(s.u, psim.u, nest; order, region, measure=meas, limiter=limit_momentum)
     _interp_child!(s.v, psim.v, nest; order, region, measure=meas, limiter=limit_momentum)
