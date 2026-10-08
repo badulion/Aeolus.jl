@@ -28,6 +28,7 @@ using Printf
 using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml, diagnostics_path
+using Aeolus.Fields: interior_view
 using Logging
 
 isdefined(Main, :BerlinCase) ||
@@ -402,6 +403,48 @@ end
     ps = BCC.case_profiles(case)
     @test "turbulence_diag.Ri_g" in [p.name for p in ps]
     @test all(p -> length(Aeolus.RunLog.evaluate_profile(p)) == case.mesh.Nz, ps)
+end
+
+# #392: step_case!(case, cfg.dt) on the default case overrode the adaptive
+# step (2 s against a stable step of 0.09-0.47 s); the dynamics guard does
+# not test the CFL number, so the run amplified (|v| 7.8 -> 49 m/s) and
+# failed at step 16. A dt above the stepper's stable_dt is now rejected
+# before any stage runs. The 20-step default-case run is the "flagship"
+# part of examples/urban/berlin_checks.jl.
+@testset "Config berlin: step_case! rejects a dt above the adaptive stable step (#392)" begin
+    case = BCC.build_case(BCC.CaseConfig(:smoke))
+    for _ in 1:2
+        @test BCC.step_case!(case)
+    end
+    ts = BCC.timestepper(case)
+    @test BCC.variable_dt(typeof(ts))
+    s = ts.stats
+    lims = copy(s.limiters)
+    lim = BCC.stable_dt(ts, case)
+    # pure: asked twice, the same; nothing counted
+    @test BCC.stable_dt(ts, case) == lim && s.limiters == lims
+    @test ts.constraints.dt_min <= lim <= ts.constraints.dt_max
+    # the CFL / diffusive limit of the current flow
+    d = BCC.sgs_cfl_diagnostics(case, ts.constraints)
+    @test lim == clamp(d.dt_limiting, ts.constraints.dt_min, ts.constraints.dt_max)
+    # the stepper's own pick (growth limit, nest landing) never exceeds it
+    dt_ok = BCC.step_dt(case)
+    @test 0 < dt_ok <= lim
+    # rejected before any stage runs: clock, time and state unchanged
+    n0, t0, u0 = case.clock.n, case.sim.t, copy(interior_view(case.sim.u))
+    err = try
+        BCC.step_case!(case, 1.5lim); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("stable step", err.msg)
+    @test case.clock.n == n0 && case.sim.t == t0 && interior_view(case.sim.u) == u0
+    # an explicit dt within it is taken (the nest needs the stepper's own pick:
+    # it lands on the parent window): one piece, no retry, CFL ≤ C_advective
+    p0, r0 = s.pieces, s.retries
+    @test BCC.step_case!(case, dt_ok)
+    @test case.sim.t ≈ t0 + dt_ok && s.pieces == p0 + 1 && s.retries == r0
+    @test dt_ok * ts.rate <= ts.constraints.C_advective + 1e-9
 end
 
 @testset "Config berlin: aeolus run berlin_smoke.toml" begin

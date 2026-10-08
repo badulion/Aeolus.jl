@@ -21,6 +21,23 @@ $ julia --project=benchmarks benchmarks/bench_poisson.jl
 $ julia --project=benchmarks benchmarks/bench_step.jl
 ```
 
+## Multithreading scaling
+
+`bench_ka_scaling.jl` (KA-o, #308) times the KernelAbstractions port at
+a given thread count: the Berlin flagship with and without its nest
+parent (`timing_report` per entry, `step_dt` separately), the 256³ DNS
+per step, idealised memory- and compute-bound kernels at 64 × 64 × 32 and
+256³, and the launch overhead. It runs in the main project, one process
+per thread count:
+
+```bash
+$ julia -t 12 --project=. benchmarks/bench_ka_scaling.jl flagship 2 9
+$ AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_ka_scaling.jl kernels
+```
+
+The measured tables at 1/4/12/24 threads and their reading are in
+[the kernel port design page](design/ka_port.md), section "KA-o: the scaling report".
+
 ## Reference numbers
 
 Absolute numbers below are from the development machine, single-core,

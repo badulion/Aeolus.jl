@@ -322,8 +322,9 @@ Two choices differ from the fixture:
 - the run continues past the dissipation peak, where ``k_{max}η`` has
   its minimum.
 
-The record in the repository (seed 1, created 2026-10-05; regenerated
-after #205, see below) passed every DNS check:
+The record in the repository (seed 1; regenerated after #205 on
+2026-10-05 and re-captured after #400 on 2026-10-08, see below) passed
+every DNS check:
 
 | Check | 256³ record |
 | :-- | --: |
@@ -332,12 +333,15 @@ after #205, see below) passed every DNS check:
 | velocity-derivative skewness at the end | −0.506 |
 | discrete energy budget, max per step | 3.4·10⁻⁴ |
 | ε peak; end of run | ``t = 3.60``; ``t = 3.85`` (1264 RK3 steps) |
-| run time | 5671 s = 1.58 h of DNS on a single core, plus 195 s of statistics |
-| peak memory (max RSS, reported by the run; not stored in the TOML) | 9.8 GB |
+| run time | 1975 s = 33 min of DNS on 12 threads, plus 174 s of statistics |
+| peak memory (max RSS, reported by the run; not stored in the TOML) | 8.5 GB |
 | Parseval: ``\sum E\,Δk / K`` at the end (asserted to 10⁻¹⁰) | 1.000000 |
 
-The solver is single-threaded, so the run time is that of one core
-however many threads Julia is given.
+The run time is that of `julia -t 12` on the 24-core development machine
+(1.56 s per step on average). The solver and the per-step history (ε,
+the derivative skewness, the CFL maximum) are threaded and bit-identical
+at every thread count (the KernelAbstractions port, #291, and #400); the
+2026-10-05 record took 5671 s on one core, when both were serial.
 
 | Gaussian Δ | 4h (8.1η) | 8h (16.1η) | 16h (32.2η) | 32h (64.4η) |
 | :-- | --: | --: | --: | --: |
@@ -372,6 +376,25 @@ at most 1.1·10⁻³ (largest: Smagorinsky ``ρ(τ_{13})`` at 4h,
 That is an order of magnitude below the ±0.01 that different seeds give
 at 4h, so it is the effect of the initialiser change on one realisation,
 not a physical change from #205.
+
+**Re-capture after #400 (2026-10-08).** #400 moved the history sums (ε,
+and the two moments of the derivative skewness) from `sum` over
+broadcast temporaries, in Julia's pairwise order, to the canonical
+plane sums of the reduction primitives, which are threaded and
+thread-invariant. That moves ε and S in their last bits and nothing
+else: at 96³ (12 threads, FFTW `estimate`) ``t``, ``K``, every ``Δt`` and
+every field are identical, S is within 10 ulp and ε within 3 ulp of the
+old values. The record was re-captured with the new code (same seed,
+``ν`` and 1264 steps). Every recorded number agrees with the 2026-10-05
+one to a relative 6·10⁻¹³ or better, except three that are rounding of
+a small difference: `budget_err_max` (relative 1.3·10⁻⁷, absolute
+4·10⁻¹¹: it is ``ΔK`` over one step, a cancellation), and the two
+spectrum shells at the round-off floor (``k = 0``, ``E ≈ 6·10⁻³³``, and
+the corner shell ``k = 222``, ``E ≈ 10⁻³⁸``). The differences of the
+field statistics at 10⁻¹³ are not from #400, which does not touch the
+fields: they come from the canonical reductions the port put into the
+step cores since 2026-10-05, and from the FFTW `measure` plans, which
+are chosen per process (the run log states `bitwise_reproducible=false`).
 
 Two things the record does *not* test. The check `eps_plateau` (formerly
 `on_plateau`) is ``\mathrm{d}\ln ε/\mathrm{d}t < 0.25`` over the last 0.25
