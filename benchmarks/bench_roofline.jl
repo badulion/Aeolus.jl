@@ -19,8 +19,8 @@
 #   runs are paused).
 # dns: `step_rk3!` of the 256³ decaying-turbulence DNS
 #   (test/fixtures/dns_decay.jl, as in KA-o's `dns` mode). The per-step
-#   history of `dns_step!` is #400's and is not profiled; its time is
-#   printed for reference. Needs about 8 GB at 256³; run with
+#   history of `dns_step!` (on the reduction primitives since #400) is
+#   not profiled; with ROOFLINE_PROF=0 its time is printed for reference. Needs about 8 GB at 256³; run with
 #   AEOLUS_FFTW_PLANNER=estimate (#397).
 #
 # The profile. Every launch goes through one of three functions of
@@ -36,20 +36,33 @@
 # reachable from the body and its arguments (through tuples and structs, 3
 # levels deep) counted once, as min(its size, points × weight × element
 # size) (a launch over the interior streams the interior, not the halo).
-# Reads and writes count once each, no write-allocate, as STREAM counts.
-# It is a model: a stencil that misses cache reads more, a kernel that
+# An array counts once whether it is read, written or both (axpy's `y`
+# counts once, so an axpy is 2 arrays where STREAM's triad is 3): this is
+# the compulsory footprint, a lower bound on the traffic. It is a model: a stencil that misses cache reads more, a kernel that
 # reads only part of an array (a boundary row of a 3-D field) less.
 # Time outside the three functions (FFTW, BLAS, the remaining serial code,
 # allocation) is reported as "outside launches". A body launched over
 # 10⁶ points or more (the nest parent's 192 × 192 × 53 fields, the DNS) is
 # recorded apart, with the suffix `[≥1M]`: its arrays do not fit in L3.
 # ROOFLINE_PROF=0 times the plain step only (the pinning experiment).
+# The profiler's own time (naming the kernel, walking its arguments; most
+# of it compiling in the first recorded step) is measured and taken out of
+# the profiled step: of the mean over the steps (flagship) or of each step
+# before the minimum is taken (dns). The profiled step still runs 0-15 %
+# above the plain one (the profiler's work evicts cache), so the tables
+# quote the plain step of a ROOFLINE_PROF=0 run and the in-launch times of
+# a profiled one.
 #
-# merge: reads the KROW/ROW lines of several runs of one case (any number
-# of processes per thread count: per kernel the call with the smallest
-# µs/call is kept, the step and launch times are minima, the bandwidths
-# maxima) and prints the roofline table of ka_port.md, ranked by ms per
-# step at `ref_threads`, which also gives the bandwidth and the class.
+# merge: reads the KROW/ROW lines of several runs of one case, profiled
+# and plain (any number of processes per thread count: per kernel the call
+# with the smallest µs/call is kept, the step and launch times are minima,
+# the bandwidths maxima) and prints the roofline table of ka_port.md,
+# ranked by ms per step at `ref_threads`, with the class of each kernel
+# (`kclass`): serial (ran below the backend's threshold), bandwidth (its
+# bytes at the DRAM triad bandwidth take at least half its time), compute
+# (its one-thread time over the threads takes at least half), else
+# overhead (launch, synchronisation, imbalance). It also sums the launches
+# below and above 10⁶ points, serial and threaded.
 #
 # Every run prints its threads' CPU affinity, so a pinning setting
 # (JULIA_EXCLUSIVE=1, taskset) can be checked in the log.
@@ -63,18 +76,42 @@ using Printf
 # merge (no Aeolus needed)
 # ---------------------------------------------------------------------------
 
+# the class of a kernel at `ref` threads (see the header). The roof is the
+# DRAM triad bandwidth for every kernel: the 64³ child's fields would fit
+# in L3, but between two uses of a field the step touches more than L3
+# holds, and its threaded launches stream at about DRAM speed in all
+# (`merge` prints the sums). `excess` is the time per call that neither
+# the compulsory bytes at the DRAM roof nor the one-thread time over `ref`
+# threads explains (launch, synchronisation, imbalance, cache misses
+# beyond the compulsory traffic).
+function kclass(serial, us, us1, bytes, ref, bw)
+    t_bw = bytes / bw / 1e3              # µs at the DRAM roof
+    excess = us - max(t_bw, us1 / ref)
+    serial > 0.5 && return ("serial", excess)
+    t_bw >= 0.5us && return ("bandwidth", excess)
+    us1 / ref >= 0.5us && return ("compute", excess)
+    return ("overhead", excess)
+end
+
 function merge_logs(case, ref, files)
     k = Dict{Tuple{String,Int},NTuple{5,Float64}}()   # (name, nt) => calls, serial, us, bytes, points
     r = Dict{Tuple{String,Int},Float64}()
-    for f in files, l in eachline(f)
-        w = split(l)
-        isempty(w) && continue
-        if w[1] == "KROW" && w[2] == case
-            key, v = (w[4], parse(Int, w[3])), Tuple(parse.(Float64, w[5:9]))
-            (!haskey(k, key) || v[3] < k[key][3]) && (k[key] = v)
-        elseif w[1] == "ROW" && w[2] == case
-            key, v = (w[4], parse(Int, w[3])), parse(Float64, w[5])
-            r[key] = !haskey(r, key) ? v : startswith(w[4], "stream") ? max(r[key], v) : min(r[key], v)
+    for f in files
+        lines = readlines(f)
+        prof = any(l -> startswith(l, "KROW"), lines)
+        for l in lines
+            w = split(l)
+            isempty(w) && continue
+            if w[1] == "KROW" && w[2] == case
+                key, v = (w[4], parse(Int, w[3])), Tuple(parse.(Float64, w[5:9]))
+                (!haskey(k, key) || v[3] < k[key][3]) && (k[key] = v)
+            elseif w[1] == "ROW" && w[2] == case
+                # a profiled run's step (profiler's time taken out) is kept
+                # apart from the plain step of a ROOFLINE_PROF=0 run
+                name = prof && w[4] == "step" ? "step_prof" : String(w[4])
+                key, v = (name, parse(Int, w[3])), parse(Float64, w[5])
+                r[key] = !haskey(r, key) ? v : startswith(name, "stream") ? max(r[key], v) : min(r[key], v)
+            end
         end
     end
     nts = sort!(unique(last.(keys(r))))
@@ -84,38 +121,41 @@ function merge_logs(case, ref, files)
     println("case $case, bandwidth at -t $ref: DRAM triad $(round(bw; digits = 1)) GB/s, ",
             "L3 triad $(round(bwl3; digits = 1)) GB/s, empty threaded launch $(round(tl; digits = 2)) µs")
     for nt in nts
-        @printf("  -t %-2d step %9.2f ms, in launches %9.2f ms, outside launches %9.2f ms\n", nt,
-                get(r, ("step", nt), NaN), get(r, ("in_launches", nt), NaN),
-                get(r, ("step", nt), NaN) - get(r, ("in_launches", nt), NaN))
+        st = get(r, ("step", nt), NaN)
+        @printf("  -t %-2d step %9.2f ms (profiled %9.2f), in launches %9.2f ms, outside launches %9.2f ms\n", nt,
+                st, get(r, ("step_prof", nt), NaN), get(r, ("in_launches", nt), NaN),
+                st - get(r, ("in_launches", nt), NaN))
     end
     names = unique(first.(keys(k)))
     ms(n, nt) = haskey(k, (n, nt)) ? k[(n, nt)][1] * k[(n, nt)][3] / 1e3 : 0.0
     sort!(names; by = n -> -ms(n, ref))
     println()
-    println("| kernel | calls/step | serial | MB/call | µs/call 1 t | µs/call $ref t | speed-up | GB/s $ref t | % DRAM | class | ms/step $ref t |")
-    println("| :-- | --: | --: | --: | --: | --: | --: | --: | --: | :-- | --: |")
+    println("| kernel | calls/step | serial | MB/call | µs/call 1 t | µs/call $ref t | speed-up | GB/s $ref t | % DRAM | % L3 | excess µs | class | ms/step $ref t |")
+    println("| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-- | --: |")
     tot = sum(n -> ms(n, ref), names)
     cls = Dict{String,Int}()
     clsms = Dict{String,Float64}()
+    grp = Dict{String,NTuple{2,Float64}}()       # launches below / above 10⁶ points, threaded / serial: ms, GB per step
     for n in names
         haskey(k, (n, ref)) || continue
         c, s, us, b, p = k[(n, ref)]
         us1 = haskey(k, (n, 1)) ? k[(n, 1)][3] : NaN
         gbs = b / us / 1e3
-        class = s > 0.5 ? "serial" :
-                us < 5tl ? "overhead" :
-                gbs >= 0.5bw ? "bandwidth" :
-                us1 / us >= 0.5ref ? "compute" : "latency"
+        class, ex = kclass(s, us, us1, b, ref, bw)
+        big = (p >= 1_000_000 ? "≥1M points" : "<1M points") * (s > 0.5 ? ", serial" : ", threaded")
+        grp[big] = get(grp, big, (0.0, 0.0)) .+ (ms(n, ref), c * b / 1e9)
         cls[class] = get(cls, class, 0) + 1
         clsms[class] = get(clsms, class, 0.0) + ms(n, ref)
-        @printf("| `%s` | %.0f | %.0f %% | %.2f | %.1f | %.1f | %.2f× | %.1f | %.0f %% | %s | %.3f |\n",
-                n, c, 100s, b / 1e6, us1, us, us1 / us, gbs, 100gbs / bw, class, ms(n, ref))
+        @printf("| `%s` | %.3g | %.0f %% | %.2f | %.1f | %.1f | %.2f× | %.1f | %.0f %% | %.0f %% | %s | %s | %.3f |\n",
+                n, c, 100s, b / 1e6, us1, us, us1 / us, gbs, 100gbs / bw, 100gbs / bwl3,
+                class == "serial" ? "–" : @sprintf("%.0f", max(ex, 0.0)), class, ms(n, ref))
     end
     println()
     @printf("in launches at -t %d: %.2f ms/step over %d kernels\n", ref, tot, length(names))
-    gb = sum(n -> haskey(k, (n, ref)) ? k[(n, ref)][1] * k[(n, ref)][4] / 1e9 : 0.0, names)
-    @printf("bytes per step (model): %.2f GB; at the DRAM triad bandwidth that is %.1f ms\n",
-            gb, 1e3gb / bw)
+    for (g, (t, gb)) in sort!(collect(grp); by = first)
+        @printf("launches of %s: %.2f ms/step, %.3f GB/step (model): %.1f GB/s, %.0f %% of the DRAM triad\n",
+                g, t, gb, gb / t * 1e3, 100gb / t * 1e3 / bw)
+    end
     for (c, n) in sort!(collect(cls); by = first)
         @printf("  %-10s %3d kernels  %8.2f ms/step (%.0f %%)\n", c, n, clsms[c], 100clsms[c] / tot)
     end
@@ -319,17 +359,18 @@ function stream(case)
     row(case, "launch_empty", 1e6t)
 end
 
-function dump_stats(case, nsteps, tstep)
+function dump_stats(case, nsteps, tstep; step_overhead_ms = nothing)
     tin = 0.0
     for (n, s) in sort!(collect(STATS); by = x -> -x[2].ns)
         @printf("KROW %s %d %s %.4g %.4g %.6g %.6g %.6g\n", case, NT, n, s.calls / nsteps,
                 s.serial / s.calls, s.ns / s.calls / 1e3, s.bytes / s.calls, s.points / s.calls)
         tin += s.ns / 1e6 / nsteps
     end
-    # the profiler's own cost (naming, walking the arguments) is taken out
-    # of the step: `step` is the step without it
-    ov = OVERHEAD_NS[] / 1e6 / nsteps
-    tstep -= ov
+    # the profiler's own cost (naming, walking the arguments; most of it
+    # compiling in the first recorded step) is taken out of the step: `step`
+    # is the step without it. The DNS takes it out step by step already.
+    ov = something(step_overhead_ms, OVERHEAD_NS[] / 1e6 / nsteps)
+    step_overhead_ms === nothing && (tstep -= ov)
     PROF && row(case, "in_launches", tin)
     row(case, "gc", GC_NS[] / 1e6 / nsteps)
     PROF && row(case, "profiler_overhead", ov)
@@ -347,13 +388,13 @@ function bench_flagship(; nwarm = 2, nsteps = 9)
     BC = Main.BerlinCase
     case = BC.build_case(BC.CaseConfig(:summer; output_path = nothing))
     for _ in 1:nwarm
-        BC.step_case!(case, BC.step_dt(case)) || error("blowup in warm-up")
+        BC.step_case!(case) || error("blowup in warm-up")
     end
     t = 0.0
     RECORDING[] = true
     g0 = Base.gc_time_ns()
     for _ in 1:nsteps
-        t += @elapsed(BC.step_case!(case, BC.step_dt(case)) || error("blowup at step $(case.clock.n)"))
+        t += @elapsed(BC.step_case!(case) || error("blowup at step $(case.clock.n)"))
     end
     GC_NS[] = Base.gc_time_ns() - g0
     RECORDING[] = false
@@ -372,13 +413,19 @@ function bench_dns(N; nwarm = 1, nsteps = 3)
     t = Inf
     RECORDING[] = true
     g0 = Base.gc_time_ns()
+    ov = 0                     # the profiler's own time, taken out step by step
     for _ in 1:nsteps
-        t = min(t, @elapsed step_rk3!(sim, dt))
+        o0 = OVERHEAD_NS[]
+        ts = @elapsed step_rk3!(sim, dt)
+        if ts - (OVERHEAD_NS[] - o0) / 1e9 < t
+            t, ov = ts - (OVERHEAD_NS[] - o0) / 1e9, OVERHEAD_NS[] - o0
+        end
     end
     GC_NS[] = Base.gc_time_ns() - g0
     RECORDING[] = false
-    # minimum per step for the step; the kernel stats are means over all steps
-    dump_stats("dns$N", nsteps, 1e3t)
+    # minimum per step for the step (the profiler's time of that step taken
+    # out); the kernel stats are means over all steps
+    dump_stats("dns$N", nsteps, 1e3t; step_overhead_ms = ov / 1e6)
     if !PROF
         tf = minimum(@elapsed(Main.dns_step!(st; cfl = 0.5, t_end = 2.0, t_max = 6.0)) for _ in 1:nsteps)
         @printf("dns_step! (step_rk3! + history) min %.3f s\n", tf)
