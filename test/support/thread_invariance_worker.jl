@@ -29,7 +29,7 @@
 #               pressure-solver iteration counts per step;
 #   flagship    one step of the default CaseConfig() (the 64×64×32
 #               Alexanderplatz run), hashed the same way;
-#   nested      nested runs (KA-f, #297): one-way, two-way with a sponge,
+#   nested      nested runs (KA-f, #297): one-way (also with the parent prefetched, SC-c #403), two-way with a sponge,
 #               two-way with Orlanski outflow faces (16³ parent, 16³
 #               child at r = 2, 3 steps) and an anelastic two-way pair
 #               (4 steps): every field of parent and child.
@@ -258,6 +258,11 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
     variable = ts !== nothing && BC.variable_dt(typeof(ts))
     dts = Float64[]; iters = Int[]
     t_end = case.sim.t + nsteps * cfg.dt
+    # run_case!'s horizon (SC-c, #403): a one-way nest prefetches the parent's
+    # next window on its own task when Julia runs threaded, so -t 4 / -t 24
+    # against -t 1 is also the prefetched against the sequential parent
+    case.clock.t_stop = t_end
+    case.clock.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
     for n in 1:nsteps
         t0 = case.sim.t
         ok = variable ? BC.step_case!(case, BC.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
@@ -267,7 +272,11 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
         ok || break
         variable && t_end - case.sim.t <= 1e-9 * cfg.dt && break
     end
+    case.clock.t_stop = NaN
+    foreach(c -> BC.end_run!(c, case), case.couplings)
     record_sim!(label, case.sim)
+    nest = BC.find_coupling(case, :nesting)
+    nest !== nothing && nest.parent !== nothing && record_sim!("$label/nest_parent", nest.parent.sim)
     for t in case.tracers.list
         record!("$label/tracer.$(t.name)", t.field.data)
     end
@@ -352,6 +361,12 @@ function section_nested()
         record_sim!("nested[$label]/parent", run.parent)
         record_sim!("nested[$label]/child", run.child)
     end
+    # SC-c (#403): the one-way run with the parent's next step prefetched on
+    # its own task (step_nested!(run, n)): the same bits at every thread count
+    run = nested_boussinesq(:one_way)
+    step_nested!(run, 3; dt = 2e-3, concurrent = true)
+    record_sim!("nested[one_way_concurrent]/parent", run.parent)
+    record_sim!("nested[one_way_concurrent]/child", run.child)
 end
 
 # --------------------------------------------------------------------------
