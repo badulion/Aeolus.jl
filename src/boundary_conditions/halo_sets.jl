@@ -84,14 +84,14 @@ _xy_points(f::Field) = (s = size(f.data); g = f.mesh; 2g.Hx * s[2] * s[3] + 2g.H
 _z_points(f::Field) = (s = size(f.data); g = f.mesh; 2g.Hz * s[1] * s[2])
 
 # Work item `c` of `n`: planes (x, y phases) or rows (z phases) part `c` of
-# every field of the set, unrolled over the tuple (fields of different
-# locations and boundary conditions are different types).
+# every field of the set — a tuple unrolled (fields of different locations
+# and boundary conditions are different types), or a vector of fields that
+# share one set of boundary conditions (`keys === nothing`: each field is
+# its own key).
 @inline _xy_item!(c, fs, bcs, keys, n) = _xy_each!(c, n, fs, bcs, keys)
 @inline _z_item!(c, fs, bcs, keys, n) = _z_each!(c, n, fs, bcs, keys)
 
-@inline _xy_each!(c, n, ::Tuple{}, ::Tuple{}, ::Tuple{}) = nothing
-@inline function _xy_each!(c, n, fs::Tuple, bcs::Tuple, keys::Tuple)
-    f = first(fs); bc = first(bcs); key = first(keys)
+@inline function _xy_one!(c, n, f::Field, bc, key)
     d = f.data; g = f.mesh; loc = location(f)
     r = _part(size(d, 3), c, n)
     if !isempty(r)
@@ -99,33 +99,47 @@ _z_points(f::Field) = (s = size(f.data); g = f.mesh; 2g.Hz * s[1] * s[2])
         _fill_x!(cd, bc.west,  bc.east,  g.Hx, g.Nx, loc, key)
         _fill_y!(cd, bc.south, bc.north, g.Hy, g.Ny, loc, key)
     end
-    return _xy_each!(c, n, Base.tail(fs), Base.tail(bcs), Base.tail(keys))
+    return nothing
+end
+@inline function _z_one!(c, n, f::Field, bc, key)
+    d = f.data; g = f.mesh
+    r = _part(size(d, 2), c, n)
+    isempty(r) || _fill_z!(_Clip(d, 2, r), bc.bottom, bc.top, g.Hz, g.Nz, location(f), g, key)
+    return nothing
 end
 
+@inline _xy_each!(c, n, ::Tuple{}, ::Tuple{}, ::Tuple{}) = nothing
+@inline function _xy_each!(c, n, fs::Tuple, bcs::Tuple, keys::Tuple)
+    _xy_one!(c, n, first(fs), first(bcs), first(keys))
+    return _xy_each!(c, n, Base.tail(fs), Base.tail(bcs), Base.tail(keys))
+end
 @inline _z_each!(c, n, ::Tuple{}, ::Tuple{}, ::Tuple{}) = nothing
 @inline function _z_each!(c, n, fs::Tuple, bcs::Tuple, keys::Tuple)
-    f = first(fs); bc = first(bcs); key = first(keys)
-    d = f.data; g = f.mesh; loc = location(f)
-    r = _part(size(d, 2), c, n)
-    isempty(r) || _fill_z!(_Clip(d, 2, r), bc.bottom, bc.top, g.Hz, g.Nz, loc, g, key)
+    _z_one!(c, n, first(fs), first(bcs), first(keys))
     return _z_each!(c, n, Base.tail(fs), Base.tail(bcs), Base.tail(keys))
+end
+function _xy_each!(c, n, fs::AbstractVector, bc::FieldBoundaryConditions, ::Nothing)
+    for f in fs
+        _xy_one!(c, n, f, bc, f.data)
+    end
+    return nothing
+end
+function _z_each!(c, n, fs::AbstractVector, bc::FieldBoundaryConditions, ::Nothing)
+    for f in fs
+        _z_one!(c, n, f, bc, f.data)
+    end
+    return nothing
 end
 
 # The two launches. One work item per thread and chunk: `n` parts of every
-# field, each launch weighted by its work in stencil-point equivalents, so
-# that the backend's threshold and points-per-task rule see the real work.
-# A halo point is a copy (one read, one write, mostly contiguous): a fill of
-# u, v, w, θ at 64 × 64 × 32 writes 245 000 halo points in 47 µs at one
-# thread, 0.19 ns per point, cheaper than a stencil point. Counting two
-# halo points as one unit measured best over 1/2/4/8 (SC-b in ka_port.md):
-# one per unit started too many tasks for one field (a 64³ field 1.1-1.4×
-# slower than serially at 12-24 threads), four per unit too few for a set.
-const _HALO_POINTS_PER_UNIT = 2
-_halo_work(np) = cld(np, _HALO_POINTS_PER_UNIT)
-
-function _fill_set_threaded!(b, fs::Tuple, bcs::Tuple, keys::Tuple, n::Int)
-    wxy = cld(_halo_work(sum(_xy_points, fs)), n)
-    wz  = cld(_halo_work(sum(_z_points, fs)), n)
+# field, each launch weighted by the halo points it writes, so that the
+# backend's threshold and points-per-task rule see the real work. (Counting
+# a halo point as less than a stencil point, which it is when the field is
+# in cache, measured slower in the regime of a run, where the stencils
+# between two fills have evicted the field: SC-b in ka_port.md.)
+function _fill_set_threaded!(b, fs, bcs, keys, n::Int)
+    wxy = cld(sum(_xy_points, fs), n)
+    wz  = cld(sum(_z_points, fs), n)
     launch_weighted!(b, wxy, _xy_item!, (1:n,), fs, bcs, keys, n)
     launch_weighted!(b, wz,  _z_item!,  (1:n,), fs, bcs, keys, n)
     return fs
@@ -156,9 +170,8 @@ of every field, a chunk of k-planes per work item, then the z phases, a
 chunk of j-rows per work item (every x/y phase stays inside a plane and
 every z phase inside a column, so the axis order x, y, z of the edges and
 corners is kept). Below the backend's threshold (counted over the halo
-points of the whole set, two halo points per unit of work) and at one
-thread the fields are filled one after the other with the per-phase
-launches.
+points of the whole set) and at one thread the fields are filled one
+after the other with the per-phase launches.
 """
 function fill_halos!(fs::Tuple{Vararg{Field}}, bcs; keys::Tuple = map(f -> f.data, fs))
     n = length(fs)
@@ -168,10 +181,32 @@ function fill_halos!(fs::Tuple{Vararg{Field}}, bcs; keys::Tuple = map(f -> f.dat
         throw(ArgumentError("fill_halos!: $n fields, $(length(bt)) boundary conditions, $(length(keys)) keys"))
     b = Backends.backend(first(fs).data)
     np = sum(_xy_points, fs) + sum(_z_points, fs)
-    if b isa Backends.CPUBackend && !runs_serially(b, _halo_work(np))
+    if b isa Backends.CPUBackend && !runs_serially(b, np)
         _fill_set_threaded!(b, fs, bt, keys, Threads.nthreads())
     else
         _fill_set_serial!(fs, bt, keys)
+    end
+    return fs
+end
+
+"""
+    fill_halos!(fields::AbstractVector{<:Field}, bcs::FieldBoundaryConditions) -> fields
+
+The set fill for a vector of fields with one set of boundary conditions
+(the tracers of a run): each field is its own key, the result is that of
+`fill_halos!(f, bcs)` on each field in turn, bit for bit, and threaded
+the whole vector is the same two launches as a tuple.
+"""
+function fill_halos!(fs::AbstractVector{<:Field}, bcs::FieldBoundaryConditions)
+    isempty(fs) && return fs
+    b = Backends.backend(first(fs).data)
+    np = sum(_xy_points, fs) + sum(_z_points, fs)
+    if b isa Backends.CPUBackend && !runs_serially(b, np)
+        _fill_set_threaded!(b, fs, bcs, nothing, Threads.nthreads())
+    else
+        for f in fs
+            _fill_one!(f, bcs, f.data)
+        end
     end
     return fs
 end

@@ -360,6 +360,34 @@ end
             end
             @info "SC-b set fills, $mlab: $n BC cases × 4 locations bit-identical to the pre-port loops"
         end
+        # a vector of tracers with one set of boundary conditions (each field its own key)
+        for (mlab, m) in meshes
+            rng = Xoshiro(4021)
+            cases = Any[(lab, bcs, nothing) for (lab, bcs) in kh_closed_cases(m)]
+            m.Ny >= 3 && append!(cases, kh_open_cases(m, rng))
+            for (lab, bcs, st) in cases
+                qs = [Field(CellCenter(), m) for _ in 1:3]
+                # two tracers with boundary data, the third without (the mirror)
+                st === nothing || (st.bound[qs[1].data] = :θ; st.bound[qs[2].data] = :θ)
+                init = [randn(rng, size(q.data)) for q in qs]
+                ref = map(qs, init) do q, x
+                    r = Field(CellCenter(), m); r.data .= x
+                    LegacyHalos.legacy_fill!(r, bcs; key = q.data)
+                    kh_bits(r.data)
+                end
+                for nc in (1, 4, 3 + size(qs[1].data, 3))
+                    foreach((q, x) -> q.data .= x, qs, init)
+                    BCm._fill_set_threaded!(CPUBackend(), qs, bcs, nothing, nc)
+                    @test all(kh_bits(q.data) == r for (q, r) in zip(qs, ref))
+                end
+                for (_, b) in KH_BACKENDS
+                    foreach((q, x) -> q.data .= x, qs, init)
+                    with_backend(() -> fill_halos!(qs, bcs), b)
+                    @test all(kh_bits(q.data) == r for (q, r) in zip(qs, ref))
+                end
+            end
+        end
+        @test fill_halos!(Field[], FieldBoundaryConditions(:periodic)) == Field[]
         m = meshes[1][2]
         fs = (Field(FaceX(), m), Field(CellCenter(), m))
         bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
