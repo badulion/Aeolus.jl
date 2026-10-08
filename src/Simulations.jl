@@ -159,7 +159,7 @@ mutable struct BoussinesqSimulation{T,
     θ::Field{CellCenter, T, Array{T,3}, M}
     qv::Field{CellCenter, T, Array{T,3}, M}   # water vapor mixing ratio (Phase 11)
 
-    # tendencies (persistent buffers)
+    # tendencies (persistent buffers; unused by the hook-free core, SC-e)
     tu::Field{FaceX,      T, Array{T,3}, M}
     tv::Field{FaceY,      T, Array{T,3}, M}
     tw::Field{FaceZ,      T, Array{T,3}, M}
@@ -372,6 +372,14 @@ Two keywords swap numerical operators without changing the algorithm:
   * `eddy_viscosity! = nothing` — the pre-contract name of `sgs` for a
     function `f(νt, u, v, w)`; still accepted (it is wrapped in a
     `FunctionSGS`, `κt = νt/Prₜ`). Pass one of `sgs`, `eddy_viscosity!`.
+
+**The hook-free core** (SC-e, #405). When nothing adds to the tendencies
+between advection/diffusion and the predictor (the default momentum
+advection, no SGS closure, buoyancy, Coriolis, surface flux, sponge,
+hooks or open boundaries: a DNS), the tendencies and the predictor of u,
+v, w, θ (and qv) run as one cache-blocked sweep
+(`FiniteVolume.blocked_predictor!`) with the same bits. The tendency
+fields `sim.tu, tv, tw, tθ, tqv` are then neither written nor read.
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):

@@ -99,6 +99,20 @@ Aeolus.Operators.FiniteVolume.in_damping
 Aeolus.Operators.FiniteVolume._add_damping!
 ```
 
+## Blocked tendency + predictor sweep (SC-e)
+
+The hook-free Boussinesq core (a DNS: no SGS, buoyancy, Coriolis, flux,
+sponge, hooks or open boundaries) computes its tendencies and the
+predictor in one sweep per k-slab, with the bits of the separate passes
+(see [the KA port](../design/ka_port.md), "SC-e").
+
+```@docs
+Aeolus.Operators.FiniteVolume.blocked_predictor!
+Aeolus.Operators.FiniteVolume.SweepBuffers
+Aeolus.Operators.FiniteVolume.sweep_buffers
+Aeolus.Operators.FiniteVolume.sweep_slabs
+```
+
 ## LES analysis toolbox (Phase 54)
 
 Explicit filters, the isotropic energy spectrum and the isotropic
