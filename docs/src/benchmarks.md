@@ -38,6 +38,21 @@ $ AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_ka_scali
 The measured tables at 1/4/12/24 threads and their reading are in
 [the kernel port design page](design/ka_port.md), section "KA-o: the scaling report".
 
+`bench_roofline.jl` (SC-a, #401) profiles every launch of the flagship
+step and of the 256³ DNS step (calls, µs and compulsory bytes per call)
+against STREAM bandwidth measured in the same process, classifies each
+kernel as bandwidth-, compute- or overhead-bound or serial, and logs each
+thread's CPU so pinning settings (`JULIA_EXCLUSIVE=1`, `taskset`) can be
+compared; `merge` builds the table from several runs:
+
+```bash
+$ julia -t 12 --project=. benchmarks/bench_roofline.jl flagship 2 9 > f12.log
+$ julia --project=. benchmarks/bench_roofline.jl merge flagship 12 f1.log f12.log
+```
+
+Results, the pinning experiment and the ranked fusion targets:
+[the kernel port design page](design/ka_port.md), section "SC-a".
+
 ## Reference numbers
 
 Absolute numbers below are from the development machine, single-core,
