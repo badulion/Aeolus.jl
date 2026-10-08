@@ -26,11 +26,13 @@
 #               and the chemistry P/L/H and wet-deposition totals with the
 #               species fields they update;
 #   smoke       every run of the Berlin smoke matrix (test/support/
-#               smoke_matrix.jl), 12 steps: every field of the simulation,
+#               smoke_matrix.jl), 12 steps (a variable-step run: to
+#               12 dt, as run_case! runs it): every field of the simulation,
 #               every tracer, every Float64 array of the surface bus, the
 #               surface / water / air-heat ledgers, the dt sequence and the
 #               pressure-solver iteration counts per step;
-#   flagship    one step of the default CaseConfig() (the 64×64×32
+#   flagship    one dt (2 s: two adaptive steps, the second in the parent's
+#               prefetched window when threaded) of the default CaseConfig() (the 64×64×32
 #               Alexanderplatz run), hashed the same way;
 #   nested      nested runs (KA-f, #297): one-way (also with the parent prefetched, SC-c #403), two-way with a sponge,
 #               two-way with Orlanski outflow faces (16³ parent, 16³
@@ -275,25 +277,36 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
     variable = ts !== nothing && BC.variable_dt(typeof(ts))
     dts = Float64[]; iters = Int[]
     t_end = case.sim.t + nsteps * cfg.dt
-    # run_case!'s horizon (SC-c, #403): a one-way nest prefetches the parent's
-    # next window on its own task when Julia runs threaded, so -t 4 / -t 24
-    # against -t 1 is also the prefetched against the sequential parent
-    case.clock.t_stop = t_end
-    case.clock.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
-    for n in 1:nsteps
+    # run_case!'s loop and horizon (SC-c, #403): a one-way nest prefetches the
+    # parent's next window on its own task when Julia runs threaded, so -t 4 /
+    # -t 24 against -t 1 is also the prefetched against the sequential parent.
+    # The loop must stop where the horizon says (a variable-step run goes to
+    # t_end, as run_case! does, not nsteps steps): a prefetch is started only
+    # for a window the run will reach, and the parent hashed at the end is at
+    # the same window end with and without it.
+    clk = case.clock
+    clk.t_stop = t_end
+    clk.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
+    n = 0
+    while variable ? BC.step_will_run(clk, case.sim.t) : n < nsteps
+        n += 1
         t0 = case.sim.t
         ok = variable ? BC.step_case!(case, BC.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
                         BC.step_case!(case, cfg.dt)
         push!(dts, case.sim.t - t0)
         append!(iters, solver_iters(case.sim))
         ok || break
-        variable && t_end - case.sim.t <= 1e-9 * cfg.dt && break
     end
     case.clock.t_stop = NaN
     foreach(c -> BC.end_run!(c, case), case.couplings)
     record_sim!(label, case.sim)
     nest = BC.find_coupling(case, :nesting)
-    nest !== nothing && nest.parent !== nothing && record_sim!("$label/nest_parent", nest.parent.sim)
+    if nest !== nothing && nest.parent !== nothing
+        record_sim!("$label/nest_parent", nest.parent.sim)
+        # not hashed (0 at -t 1): that the threaded runs did prefetch
+        nest.run isa Aeolus.Nesting.NestedRun && nest.run.stats.prefetched > 0 &&
+            println(stderr, "  $label: $(nest.run.stats.prefetched) parent windows prefetched, $n steps")
+    end
     for t in case.tracers.list
         record!("$label/tracer.$(t.name)", t.field.data)
     end
