@@ -33,6 +33,7 @@
 
 using Aeolus
 using Aeolus.Fields: interior_view
+using Aeolus.Grids: interior
 using FFTW: fft, ifft, fftfreq
 using Printf
 import Random
@@ -43,17 +44,33 @@ const DNS_T_END = 2.0
 
 _dns_spectrum(k) = k^4 * exp(-2 * (k / DNS_KP)^2)
 
+# The per-step history runs on the deterministic reductions of KA-b (#296,
+# #400): every sum below is a canonical plane sum (`plane_reduce!`,
+# `interior_dot`) combined by `ordered_sum`, and the CFL speed a
+# `range_max`, so the history is threaded and bit-identical at every thread
+# count. Before #400 they were `sum` over broadcast temporaries and
+# `maximum(abs, …)`, serial; the sums now add in the canonical order, which
+# moves S and ε in their last bits (the max is exact: dt keeps its bits).
+
 # ε of the discrete viscous operator: −ν⟨u_i ∇²u_i⟩ (halos filled first).
 function _dns_epsilon(sim, lap)
     for f in (sim.u, sim.v, sim.w)
         fill_halos!(f, sim.bcs)
     end
+    I3 = interior(sim.mesh); b = backend(sim.u.data)
     s = 0.0
     for (f, l) in zip((sim.u, sim.v, sim.w), lap)
         laplacian(l, f)
-        s += sum(interior_view(f) .* interior_view(l))
+        s += interior_dot(b, f.data, l.data, I3)
     end
     return -sim.ν * s / length(interior_view(sim.u))
+end
+
+# (g², g³) of the forward difference g = (a[p + e_d] − a[p])/h at a point
+@inline function _dns_dudx_moments(i, j, k, a, di, dj, dk, h)
+    @inbounds g = (a[i + di, j + dj, k + dk] - a[i, j, k]) / h
+    g2 = g * g
+    return (g2, g2 * g)
 end
 
 """
@@ -61,17 +78,30 @@ end
 
 ``S = ⟨(∂_1u_1)^3⟩/⟨(∂_1u_1)^2⟩^{3/2}`` with the moments averaged over the
 three components ``∂_1u_1, ∂_2u_2, ∂_3u_3``, each the exact staggered
-difference at the cell centres (periodic).
+difference at the cell centres (periodic: the halos are filled first).
+Both moments of a component come from one threaded sweep
+(`plane_reduce!` with a tuple body, in the canonical order of KA-b), so
+`S` is the same at every thread count.
 """
 function velocity_derivative_skewness(sim)
+    I3 = interior(sim.mesh); b = backend(sim.u.data)
+    n = prod(length, I3)
+    p2 = zeros(length(I3[3])); p3 = zeros(length(I3[3]))
     num = 0.0; den = 0.0
     for (f, d, h) in ((sim.u, 1, sim.mesh.dx), (sim.v, 2, sim.mesh.dy), (sim.w, 3, sim.mesh.dz))
-        a = interior_view(f)
-        g = (circshift(a, ntuple(i -> i == d ? -1 : 0, 3)) .- a) ./ h
-        num += sum(g .^ 3) / length(g); den += sum(g .^ 2) / length(g)
+        fill_halos!(f, sim.bcs)
+        plane_reduce!((p2, p3), b, _dns_dudx_moments, I3, f.data,
+                      Int(d == 1), Int(d == 2), Int(d == 3), h)
+        num += ordered_sum(p3) / n; den += ordered_sum(p2) / n
     end
     return (num / 3) / (den / 3)^1.5
 end
+
+# max |u_i| over the interior, for the CFL step: one threaded sweep of the
+# three components; max is exact, so these are the bits of any serial max.
+@inline _dns_absmax3(i, j, k, u, v, w) = @inbounds (abs(u[i, j, k]), abs(v[i, j, k]), abs(w[i, j, k]))
+_dns_umax(sim) = max(range_max(backend(sim.u.data), _dns_absmax3, interior(sim.mesh),
+                               sim.u.data, sim.v.data, sim.w.data)...)
 
 """
     dns_start(; N = 48, seed = 1, ν = 0.018 (48/N)^{4/3}, spectrum = E(k) ∝ k⁴ e^{-2(k/1.5)²})
@@ -127,7 +157,7 @@ One projected SSP-RK3 step (`step_rk3!`, no SGS model) of the DNS state
 function dns_step!(st; cfl::Real = 0.5, t_end::Real = DNS_T_END, t_max::Real = 3t_end)
     sim = st.sim; mesh = st.mesh; (; t, K, ε, S, budget_err) = st.hist
     L = 2π
-    umax = maximum(f -> maximum(abs, interior_view(f)), (sim.u, sim.v, sim.w))
+    umax = _dns_umax(sim)
     dt = min(cfl * mesh.dx / umax, (sim.t < t_end - 1e-12 ? t_end : t_max) - sim.t)
     step_rk3!(sim, dt)
     push!(t, sim.t); push!(K, kinetic_energy(sim) / L^3); push!(ε, _dns_epsilon(sim, st.lap))
