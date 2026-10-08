@@ -160,7 +160,7 @@ it itself at the start of every parent-step window.
 function fill_nest_halos!(csim, s::NestInterpState)
     has_open_boundaries(csim) || return csim
     update_open_boundaries!(csim, csim.t, zero(csim.t))
-    fill_halos!(csim.u, csim.bcs); fill_halos!(csim.v, csim.bcs); fill_halos!(csim.w, csim.bcs)
+    fill_halos!((csim.u, csim.v, csim.w), csim.bcs)
     _foreach_scalar(s, nothing, csim) do _, _, cf, _
         fill_halos!(cf, csim.θ_bcs)
     end

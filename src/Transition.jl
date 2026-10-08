@@ -257,7 +257,7 @@ function turbulent_fraction(sim::BoussinesqSimulation; kwargs...)
 end
 
 function _fill_velocity_halos!(sim)
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
+    fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
     return sim
 end
 
