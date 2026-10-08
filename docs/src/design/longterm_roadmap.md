@@ -1614,12 +1614,14 @@ the σ-model in `Operators`; #172, #184, #180, #185, #195 / PRs #209,
 milestone pulled forward. None of it is an era phase. Parts of it are
 early halves of Phases 30, 67, 73 and 81, which point here.*
 
-**Status: all six blocks below are merged** (master `4b3a16b`,
+**Status: all seven blocks below are merged** (master `4b3a16b`,
 2026-10-08, after the KA-o scaling report #308 / PR #399 and FLAG-a
 #392 / PR #398). The fast tier on that master: **106,776 assertions in 135 jobs** (0 fail, 8 broken).
 The KA port epic #291 and the run-configuration epic #311 are closed;
-#246 and #293 stay open for the maintainer. The follow-up to KA-o is the
-scaling epic #406 (SC-a … SC-e, #400, #397), open.
+#246 and #293 stay open for the maintainer. The follow-up to KA-o, the
+scaling epic #406 (SC-a … SC-f), merged on 2026-10-09 (master
+`a3abdfc`; fast tier 108,084 assertions in 138 jobs, 0 fail, 8 broken);
+only the upstream FFTW crash #397 stays open.
 
 ### Nesting: hardening, hierarchies, siblings, non-aligned and stretched children ✅ SHIPPED
 
@@ -1798,11 +1800,10 @@ small to split (the 64³ flagship). Also open:
   flagship size: `launch_weighted!` weights by points, not cost.
 - Remaining for Phase 81: the GPU backend, GPU-resident FFT and
   multigrid, SoA surfaces.
-- Follow-up: the scaling epic #406 (roofline profile and thread
-  pinning, threaded halo fills, concurrent parent/child stepping, kernel
-  fusion, cache blocking, the DNS statistics on the reduction
-  primitives, the FFTW MEASURE crash #397) — move fewer bytes, launch
-  fewer and larger kernels; target flagship 3–4× at 12 threads.
+- Follow-up: the scaling epic #406, shipped (next block): 256³
+  `step_rk3!` 3.03× at 12 threads over its own 1 thread, `dns_step!`
+  2.25 → 0.573 s; flagship 2.02× (2.29× with the prefetched parent),
+  short of its 3–4× target.
 
 **Bugs the tests caught**:
 - A rejected adaptive step left the blown-up NaN `νt`/`κt` in the
@@ -1855,6 +1856,107 @@ small to split (the 64³ flagship). Also open:
   KA-l's dual-strain gather (Berlin e moves 4.6e-10 m² s⁻² after 12
   steps); and, in the merge train, the `input_dynamic` bitwise qv
   digests, which went stale after KA-m's fused e_s.
+
+### Multithreaded scaling beyond the KA port (epic #406) ✅ SHIPPED
+
+The follow-up to KA-o (#308): the stencils are bound by memory bandwidth
+and launch overhead, so move fewer bytes and launch fewer, larger
+kernels.
+
+**✅ SHIPPED** (SC-a #401 / PR #410, SC-b #402 / PR #409, SC-c #403 /
+PR #411, SC-d #404 / PR #412, SC-e #405 / PR #413, SC-f #400 / PR #408;
+design `docs/src/design/ka_port.md`, sections SC-a to SC-e; nesting
+`docs/src/theory/nesting_time.md`). What was built:
+- **Roofline profile and pinning (SC-a).** `benchmarks/bench_roofline.jl`
+  times every launch of a step and books its compulsory bytes against
+  STREAM: the 256³ DNS step was 98 % bandwidth-bound in its launches.
+  Pinning (`JULIA_EXCLUSIVE`, `taskset`, one CCD) is within 5 % of
+  unpinned at 12 threads and 18 % slower at 4: the launch setting stays
+  `julia -t 12`, no pinning.
+- **Threaded halo fills (SC-b).** `fill_halos!` of a field set (tuple or
+  vector) fills every field in one threaded launch per phase (x/y phases
+  by k-planes, z by j-rows). A set of 4 fields at 192×192×53, 12
+  threads: 458 → 156 µs.
+- **Concurrent parent and child (SC-c).** One-way nests prefetch the
+  parent's next window on its own task (`prefetch_parent_step!`,
+  `step_nested!(run, n; concurrent = true)`); the Berlin nest does so
+  under `run_case!`. Two-way nests and `:shared_min_dt` stay sequential
+  (the chain is serial). Bit-identical to sequential stepping.
+- **Kernel fusion (SC-d).** Tendencies written once (advection + ν∇²,
+  no memset or scratch), the divergence straight into the spectral and
+  column solvers' source buffer (`source_buffer`,
+  `solve_source_buffer!`), one correction pass that also writes p and
+  the RK3 combination. DNS bytes per step 29.1 → 14.9 GB, threaded
+  launches 107 → 55. Bit-identical to the pre-fusion cores.
+- **Temporal blocking (SC-e).** After SC-d every remaining kernel ran at
+  88–120 % of the DRAM triad, so spatial blocking had nothing to win.
+  `FiniteVolume.blocked_predictor!` sweeps the tendencies and the
+  predictor slab by slab, row by row, in cache, for the hook-free core
+  (the DNS): those kernels' compulsory bytes 7.92 → 2.26 GB per step.
+- **DNS statistics on the reduction primitives (SC-f, #400).** Skewness,
+  ε and the CFL maximum moved off serial broadcasts (0.661 + 0.223 +
+  0.161 s → 0.064 s per step at 12 threads).
+
+**Measured** (Ryzen 9 7900, 12 cores; each figure the minimum over 3
+processes started at 1-minute load < 4, from the PRs; base and new code
+run alternately):
+
+| | before the epic | after | speed-up |
+| :-- | --: | --: | --: |
+| 256³ `step_rk3!`, 1 thread | 2.13 s | 1.545 s | 1.38× |
+| 256³ `step_rk3!`, 12 threads | 1.16 s | 0.509 s | 2.28× |
+| 256³ `step_rk3!`, 12 t over 1 t of the same code | 1.83× | 3.03× | |
+| 256³ `dns_step!`, 12 threads | 2.25 s | 0.573 s | 3.93× |
+| 256³ DNS run, 1264 steps at 12 threads | 47 min | 12 min | |
+| Flagship `step_case!`, 12 threads, sequential parent | 92.1 ms | 81.1 ms | 1.14× |
+| Flagship, 12 threads, prefetched parent (SC-c) | 95.2 ms | 69.8 ms | 1.36× |
+| Flagship, 12 t over 1 t | 1.81× | 2.02× sequential, 2.29× prefetched | |
+
+Before: master `c2a579a5` (SC-b's base). After: SC-e's measurement
+(DNS, sequential flagship) and SC-c's (prefetched flagship, measured
+before SC-d and SC-e merged; the flagship cores do not take SC-e's
+blocked path, and SC-d moved the sequential 12-thread flagship
+83.5 → 76.6 ms). Prefetch and fusion together were not timed on one
+master: when the merge train finished the machine was running a 12-thread
+Berlin run (1-minute load ≈ 12). The DNS run time is 1264 × `dns_step!`.
+
+**Target missed**: the flagship's 3–4× at 12 threads. It reaches 2.0×
+(2.3× with the prefetched parent): its 64³ child and the nest exchange
+are small launches, and SGS, buoyancy and the hooks keep it off SC-e's
+blocked path. The DNS, which is one large hook-free core, reaches 3.0×.
+Next for the DNS: the FFTs of the three Poisson solves (about 0.29 s of
+the 0.51 s step, outside launches).
+
+**Bugs the tests caught**:
+- `NestedRun.ahead` was an `Any` field; the #329 typed-state test caught
+  it (SC-c).
+- `step_rk3!` allocated 272 bytes per step after the fusion (a mixed
+  Field/Array tuple in `interior_map!`); the allocation tests caught it,
+  now 16 bytes (SC-d).
+- Writing all five tendencies in one launch stopped vectorising (39.2
+  against 18.9 ms at 1 thread); the 1-thread gate caught it (SC-d).
+- The sweep's row loops, inlined, did not vectorise (2× slower at 1
+  thread); split into `@noinline` `@simd ivdep` functions (SC-e).
+
+**Expectations that were wrong**:
+- The thread-invariance worker stepped a variable-step case for nsteps
+  steps, not to its horizon, so threaded runs prefetched a parent window
+  the loop never reached (90 of 3825 hashes differed, parent only); the
+  harness loop was wrong, not the code (SC-c).
+- max|∇·u| ≈ 0 after an RK3 step from a non-solenoidal start: RK3
+  combines with the step-start state, so the result is solenoidal only
+  if that state is (SC-d's own new test, twice).
+- `ka_fusion` compared the tendency fields on the hook-free path, where
+  SC-e made them unused scratch; it now compares the state (SC-e).
+- No reference digest was re-captured for SC-b to SC-e: each is
+  bit-identical to the code it replaces (SC-f re-captured the 256³
+  record, whose S and ε moved in their last bits with the new summation
+  order).
+
+Open: #397 (FFTW MEASURE planning of a threaded 256³ c2r transform
+segfaults at 10–14 threads; upstream; workaround
+`AEOLUS_FFTW_PLANNER=estimate`, documented in
+`benchmarks/bench_ka_scaling.jl`).
 
 ### Direct anelastic pressure solver (#309) ✅ SHIPPED
 
@@ -2228,7 +2330,9 @@ min (1.43x; step_rk3! 1.87x); thread-invariant at 1/4/12/24 (3746
 hashes). The scaling targets of #308 (≥ 2.5× at 4 threads, ≥ 4× at 12)
 were **missed**: the stencils are memory-bound at the 50–75 GB/s DRAM
 bandwidth of that machine, while compute-bound kernels such as WENO-Z5
-reach 8.6×. The follow-up is the scaling epic #406 (open).
+reach 8.6×. The scaling epic #406 (shipped) took the 256³ DNS
+`step_rk3!` to 3.03× at 12 threads (0.509 s; `dns_step!` 2.25 → 0.573 s)
+and the flagship to 2.02× (2.29× with the parent prefetched).
 
 ### Phase 82 — Multi-GPU and heterogeneous execution
 Multi-GPU per node and multi-node GPU with CUDA-aware MPI, plus
