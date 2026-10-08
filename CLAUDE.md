@@ -160,9 +160,12 @@ than reimplementing it; binary (JLL) packages are allowed. Keep the
 dependency list short: every new dependency is justified in its PR —
 what it replaces, why it is worth it, and its load-time cost (`using
 Aeolus`, min of 3 fresh processes, before and after). Do not pin versions
-only to avoid a JLL. The existing in-package implementations (PNG,
+only to avoid a JLL. Today's non-stdlib dependencies (`Project.toml`):
+FFTW, KernelAbstractions, StaticArrays, NCDatasets and GRIBDatasets.
+The existing in-package implementations (PNG,
 Mie, error and Bessel functions) stay as they are, but may
-be replaced by a package in a dedicated PR. Details:
+be replaced by a package in a dedicated PR. (This replaced the old
+"no binary dependencies" rule on 2026-10-06.) Details:
 `docs/CONTRIBUTING.md`.
 
 **Report honestly.** If a test fails, say whether the *code* or the
@@ -179,9 +182,9 @@ weeks because nobody viewed the image at size.
 ## Layout
 
 ```
-src/            55 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl and other module tests;
-                run.jl = parallel runner, test_tags.toml = tiers
+src/            65 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
+test/           runtests.jl + era*_*.jl and other module tests, 102,026 fast-tier
+                assertions; run.jl = parallel runner, test_tags.toml = tiers
 examples/       worked cases; examples/urban/ is the flagship
 docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
