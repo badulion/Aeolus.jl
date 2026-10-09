@@ -5,7 +5,10 @@ every physics module in the stack. An example is a TOML config (plus its
 input drivers) under `examples/<tier>/configs/`, run with `aeolus run`;
 the `plot_<case>.jl` script beside it reads the finished run folder
 (`diagnostics.csv`, `diagnostics.nc`, `output/`) and writes its figures
-into the run's `output/` (EX-d, #441):
+into the run's `output/` (EX-d, #441). No example script builds or runs
+a model: the examples are configuration, and a `.jl` under `examples/`
+only reads a run's output files (enforced by
+`test/examples_config_only.jl`, EX-e #442):
 
 ```bash
 $ julia --project -m Aeolus run examples/<tier>/configs/<case>.toml

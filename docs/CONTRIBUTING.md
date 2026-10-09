@@ -466,6 +466,47 @@ moved into `src/` (EX-a, #438) they are `test/urban_checks.jl` (full
 tier), and every urban run writes its ledger closure to
 `output/results.toml`.
 
+### Examples are configuration
+
+The maintainer's rule (2026-10-09): "Make sure that all examples are
+composed of only toml configuration files and dynamic/static driver
+files, not any loose julia scripts, no wrappers. Analysis/plotting code
+is fine, but only on the output files. No simulation code is called from
+julia files."
+
+- **An example is a `configs/*.toml`** (a sweep is one too) plus the
+  input data it names: the static driver (geometry, land use, terrain,
+  obstacles), the dynamic driver (initial state, boundary planes,
+  forcing) and reference tables. It runs with
+  `julia --project -m Aeolus run <file>.toml`; `[run] model` selects
+  the run type.
+- **Model code and run assembly live in `src/`** as a run type
+  configured only through its schema (`Aeolus.UrbanCase`,
+  `Aeolus.StableBoundaryLayer`, `Aeolus.ValidationRuns`,
+  `Aeolus.RunDrivers`). If a case needs something the schema cannot
+  express, extend the schema or the input drivers; do not add a script.
+  Numbers a script used to compute by running the model become the run
+  type's diagnostics (`output/results.toml`, `diagnostics.nc`).
+- **Fetching and preprocessing are `aeolus preprocess <kind>`**
+  (`fetch-osm`, `fetch-landuse`, `fetch-sounding`, `fetch-era5`,
+  `static`, `dynamic`, …).
+- **A `.jl` in `examples/` only reads run output** (the run folder's
+  NetCDF, CSV and TOML files, plus input or reference data) and analyses
+  or plots it. It may import only the output-reading and pure analysis
+  names listed in `OUTPUT_API` of `test/examples_config_only.jl`, by
+  name, and calls no run, step or build function, no `eval` and no
+  external command. That fast-tier test parses every script and enforces
+  this with no per-file exemptions; it also runs `aeolus check` on every
+  shipped config. If a script needs another Aeolus name, the name must
+  read output or be a pure function of numbers; add it to `OUTPUT_API`
+  with that reason.
+- **Physics checks that used to run the model from a script** are module
+  tests in `test/`.
+
+In config files the key that names the run type is `[run] model`; in
+Aeolus, as in PALM, a *driver* is an input-data file. `[run] driver` is
+read as a deprecated alias (with a warning) for one release (EX-e, #442).
+
 ### Minimal dependencies
 
 The maintainer replaced the former "no binary dependencies" rule on

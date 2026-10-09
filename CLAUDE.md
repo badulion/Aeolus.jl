@@ -87,16 +87,21 @@ Every piece of physics is tested **in its own module's tests**, with small
 synthetic setups (analytic limits, conservation, published benchmarks) —
 not through the Berlin case. The Berlin (Alexanderplatz) run,
 `julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml`,
-is an **example** of the urban run type (`Aeolus.UrbanCase`, the `urban`
-driver, #438): couple new physics into it when that makes sense, but
-nothing requires it, and it has no test suite of its own (maintainer
+is an **example** of the urban run type (`Aeolus.UrbanCase`,
+`[run] model = "urban"`, #438): a TOML file plus its static and dynamic
+drivers, nothing else. Couple new physics into it when that makes sense,
+but nothing requires it, and it has no test suite of its own (maintainer
 decision, 2026-10-06; the `test/berlin_*.jl` files and the coverage lists
 are gone, #320).
 
 - Do not add Berlin tests; put new physics tests in module tests.
-- Examples are configuration (TOML, static and dynamic input drivers);
-  a `.jl` in `examples/` only analyses run output (maintainer rule,
-  2026-10-09, #438). Model code goes in `src/`.
+- Examples are configuration: `configs/*.toml` plus static and dynamic
+  input drivers, run with `julia --project -m Aeolus run <file>.toml`
+  (`[run] model` names the run type). A `.jl` in `examples/` only reads
+  and analyses run output; it calls no simulation code and is no wrapper
+  (maintainer rule, 2026-10-09). Model code and run assembly go in `src/`
+  as run types, fetching and preprocessing in `aeolus preprocess`.
+  `test/examples_config_only.jl` enforces this (no exemptions).
 - After changing the urban run type, run its end-to-end checks:
   `julia --project=. test/run.jl --only urban_run.jl,urban_checks.jl`
   (every coupling on, ledgers closed; the nest parent's smoke run and
@@ -191,7 +196,9 @@ weeks because nobody viewed the image at size.
 src/            65 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
 test/           runtests.jl + era*_*.jl and other module tests, 106,776 fast-tier
                 assertions; run.jl = parallel runner, test_tags.toml = tiers
-examples/       worked cases; examples/urban/ is the flagship
+examples/       worked cases as configuration: <dir>/configs/*.toml + input drivers
+                (static/dynamic), plus analysis scripts that read run output only;
+                examples/urban/ is the flagship
 docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
 ```

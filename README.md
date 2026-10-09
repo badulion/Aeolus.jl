@@ -225,7 +225,11 @@ code does not contain.
 | ERA5 driver vs Lindenberg sounding, θ / q<sub>v</sub> RMSE at 200–3000 m | `0.787 K` / `0.718 g/kg` | radiosonde, 2019-06-29 00 UTC |
 
 Plus the classical CFD cases — Taylor-Green vortex, decaying isotropic
-turbulence, channel flow, buoyant convection — in `examples/`.
+turbulence, channel flow, buoyant convection — in `examples/`. Every
+example is configuration: a TOML file plus its static and dynamic input
+drivers, run with `julia --project -m Aeolus run <file>.toml`. The
+Julia scripts beside the configs only read a finished run's output and
+plot or tabulate it.
 
 ---
 
