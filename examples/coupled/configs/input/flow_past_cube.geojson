@@ -1,0 +1,9 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature",
+      "geometry": { "type": "Polygon",
+                    "coordinates": [ [ [60.0, 30.0], [80.0, 30.0], [80.0, 50.0], [60.0, 50.0], [60.0, 30.0] ] ] },
+      "properties": { "height": 20.0, "class": "roof" } }
+  ]
+}

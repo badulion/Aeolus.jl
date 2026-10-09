@@ -1,0 +1,61 @@
+# Coupled example 04 — flow past a cube with a tracer wake (formerly
+# examples/coupled/04_flow_past_cube.jl). A 200 × 80 × 80 m channel on
+# 96 × 48 × 40 (periodic in x and y, free-slip walls in z, ν = 0.1,
+# Smagorinsky C_s = 0.15) with a uniform 3 m/s wind. The 20 m cube at
+# x = 60–80 m, y = 30–50 m is in the static driver input/flow_past_cube_static.nc
+# (made from input/flow_past_cube.geojson) and enters as an IBM penalty
+# (τ = 3 dt). A tracer is emitted behind the cube's leeward face at 17 m
+# and decays over 30 s; its wake shows the recirculation. 40 s.
+#
+#   julia --project -m Aeolus preprocess static examples/coupled/configs/flow_past_cube.toml   # (re)makes the static driver
+#   julia --project -m Aeolus run examples/coupled/configs/flow_past_cube.toml
+#   julia --project=. examples/coupled/plot_flow_past_cube.jl runs/<date>_flow_past_cube_<id>
+
+[run]
+driver = "simulation"
+name = "flow_past_cube"
+
+[grid]
+size = [96, 48, 40]
+extent = [200.0, 80.0, 80.0]
+
+[dynamics]
+nu = 0.1
+
+[boundaries]
+z = "free_slip"
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.15
+
+[initial]
+u = { kind = "constant", value = 3.0 }
+
+[obstacles]
+static = "input/flow_past_cube_static.nc"
+penalty_time = 3.0
+
+[preprocess]
+obstacles = "input/flow_past_cube.geojson"
+
+[tracer]
+enabled = true
+decay_time = 30.0
+# the leeward face: cells 39–40 in x, 19–30 in y, level 9 (z = 17 m)
+sources = { leeward = { x = [79.5, 83.5], y = [30.0, 50.0], z = [16.0, 18.0], rate = 1.0 } }
+
+[stepper]
+scheme = "euler"
+dt = 0.10416666666666667        # 0.15 Δx / 3 m/s
+end_time = 40.0
+
+[output]
+fields = ["u", "tracer"]
+cadence = 40.0
+
+[logging]
+diagnostics_cadence = 4.0
+
+[test]
+overrides = ["stepper.end_time=\"none\"", "stepper.nsteps=10"]

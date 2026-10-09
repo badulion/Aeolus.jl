@@ -1,44 +1,66 @@
 # Examples battery
 
 Aeolus ships a three-tier battery of examples that together exercise
-every physics module in the stack. All examples live under `examples/`
-and are runnable with
+every physics module in the stack. An example is a TOML config (plus its
+input drivers) under `examples/<tier>/configs/`, run with `aeolus run`;
+the `plot_<case>.jl` script beside it reads the finished run folder
+(`diagnostics.csv`, `diagnostics.nc`, `output/`) and writes its figures
+into the run's `output/` (EX-d, #441):
 
 ```bash
-$ julia --project=examples examples/<tier>/<name>.jl
+$ julia --project -m Aeolus run examples/<tier>/configs/<case>.toml
+$ julia --project=. examples/<tier>/plot_<case>.jl runs/<date>_<case>_<id>
 ```
 
-Outputs (SVG line plots + PPM heatmaps) land in
-`examples/urban/output/`.
-
 The plotting stack is pure Julia (no C-library dependencies) — see
-`examples/viz/plot_utils.jl`. Convert the `.ppm` files to `.png` with
+`examples/viz/plot_utils.jl` and the run-folder readers
+`examples/viz/run_output.jl`. Convert the `.ppm` files to `.png` with
 ImageMagick if you want to view them in most browsers:
 `convert file.ppm file.png`.
 
+Each config reproduces the script it replaced bit for bit
+(`test/config_run_drivers.jl`), except `coupled/dcbl_radiation_lsm`, see
+below. The couplings are sections of the `simulation` driver
+(`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
+`[obstacles]`; `aeolus options simulation`).
+
 ## Tier 1 — Kernel demos
 
-Seconds-to-run scripts, each highlighting one mechanism.
+Seconds-to-run cases, each highlighting one mechanism.
 
-| Script                           | Physics                                          |
-| :------------------------------- | :----------------------------------------------- |
-| `kernels/01_tgv_energy_decay.jl` | Taylor-Green vortex + analytic `exp(-6νt)` overlay |
-| `kernels/02_decaying_hit.jl`     | Random-init decaying isotropic turbulence         |
-| `kernels/03_channel_flow.jl`     | Wall-bounded channel + `⟨u⟩(z)` mean profile      |
-| `kernels/04_cloud_spinup.jl`     | Kessler warm-rain: `ql → qr → fallout`            |
-| `kernels/05_pollution_plume.jl`  | Point-source tracer with linear-decay chemistry   |
-| `kernels/06_particle_trail.jl`   | Lagrangian particles in a Taylor-Green vortex     |
+| Config (`kernels/configs/`) | Physics                                          |
+| :-------------------------- | :----------------------------------------------- |
+| `tgv_energy_decay.toml`     | Taylor-Green vortex + analytic `exp(-6νt)` overlay |
+| `decaying_hit.toml`         | Random-init decaying isotropic turbulence (`[initial] velocity_perturbation`) |
+| `channel_flow.toml`         | Wall-bounded channel + `⟨u⟩(z)` mean profile      |
+| `cloud_spinup.toml`         | Kessler warm-rain: `ql → qr → fallout` (the `column` driver) |
+| `pollution_plume.toml`      | Point-source tracer with linear-decay chemistry (`[tracer]`) |
+| `particle_trail.toml`       | Lagrangian particles in a Taylor-Green vortex (`[particles]`) |
+
+The tracer of `pollution_plume` and `flow_past_cube` is advected with
+centred differences and a forward-Euler step, as the scripts did; that
+scheme is dispersive, and the tracer slices show its 2Δx oscillations
+next to the sources (negative values included).
 
 ## Tier 2 — Coupled examples
 
 Combine several physics modules in one run.
 
-| Script                             | Combines                                             |
-| :--------------------------------- | :--------------------------------------------------- |
-| `coupled/01_dcbl_radiation_lsm.jl` | DCBL + radiative cooling + `SlabLand` (3 h)          |
-| `coupled/02_moist_convection.jl`   | Moist LES with initial cloud puff + Kessler          |
-| `coupled/03_heated_plume_rain.jl`  | Hot-patch surface flux → rising plume, θ' slices     |
-| `coupled/04_flow_past_cube.jl`     | Wall-mounted cube with IBM penalty + tracer wake     |
+| Config (`coupled/configs/`) | Combines                                             |
+| :-------------------------- | :--------------------------------------------------- |
+| `dcbl_radiation_lsm.toml`   | DCBL + radiative cooling + `SlabLand` (3 h; `[forcing]`, `[surface] model = "slab"`) |
+| `moist_convection.toml`     | Moist LES with initial cloud puff + Kessler (`[microphysics]`) |
+| `heated_plume.toml`         | Hot-patch surface flux → rising plume, θ' slices (`[surface] model = "flux_map"`) |
+| `flow_past_cube.toml`       | Wall-mounted cube with IBM penalty + tracer wake (the cube in the static driver `input/flow_past_cube_static.nc`, made by `aeolus preprocess static` from `input/flow_past_cube.geojson`) |
+
+`dcbl_radiation_lsm` differs from its script on purpose. The script set
+`sim.θ_flux_bottom` every step on a simulation built with a zero flux,
+whose surface-flux flag is frozen at construction, so the land never
+heated the air: its θ was bitwise that of a run without land (asserted in
+the test). The run type applies the flux; measured over the 3 h, the
+slab warms from 297 K to 315 K and heats the air with up to 128 W m⁻²,
+and the boundary layer (the height of the most negative heat flux) grows
+from 800 m to 1275 m.
 
 ## Tier 3 — Flagship urban simulation
 
