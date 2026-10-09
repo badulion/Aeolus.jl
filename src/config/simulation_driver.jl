@@ -21,7 +21,6 @@ module SimulationDriver
 using Random: Xoshiro, randn
 using ..Grids: RegularGrid, CellCenter
 using ..Fields: Field, set!, interior_view
-using ..Grids: CellCenter
 using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!
 using ..InputDrivers: InputDrivers, read_dynamic_driver, read_era5, write_era5_driver, check_planes,
@@ -47,8 +46,11 @@ export SimulationDriverType, SimulationRun, profile_value
 The `simulation` driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
 `[run] driver = "simulation"`. Its sections are `[grid]`, `[dynamics]`,
 `[boundaries]`, `[sgs]`, `[initial]`, `[stepper]`, `fields` in
-`[output]` and `[preprocess]`; `aeolus options simulation` prints them.
-Shipped configs: `examples/configs/`.
+`[output]` and `[preprocess]`, and the couplings around the step
+(EX-d, #441): `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
+`[particles]` and `[obstacles]` ([`SimCouplings`](@ref)); `aeolus
+options simulation` prints them. Shipped configs: `examples/configs/`,
+`examples/kernels/configs/`, `examples/coupled/configs/`.
 
 `[initial] dynamic` names a dynamic driver (CFG-g, #362): its initial
 profiles set u, v, θ, qv, and open lateral faces (`boundaries.x` or `y =
