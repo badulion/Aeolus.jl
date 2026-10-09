@@ -265,8 +265,11 @@ end
     # θ top: a name or a number
     @test BCC.CaseConfig(load_run_config(smoke; overrides = ["dynamics.theta_top=0.003"])).θ_top === 0.003
     @test occursin("theta_top", errtext(err("dynamics.theta_top=\"lid\"")))
-    # no checkpoint/restart for the Berlin case yet
-    @test occursin("no checkpoint/restart", errtext(err("checkpoint.every_steps=5")))
+    # checkpoints (#269): on with the Boussinesq core; the sound-proof cores have none
+    @test load_run_config(smoke; overrides = ["checkpoint.every_steps=5"]).checkpoint.every_steps == 5
+    e = err("checkpoint.every_steps=5", "physics.core=\"anelastic\"",
+            "physics.pressure_solver=\"density_weighted_direct\"", "physics.timestepper=\"fixed\"")
+    @test any(p -> p.key == "checkpoint.every_steps" && occursin("Boussinesq core", p.message), e.problems)
     # five independent problems are all reported
     e = err("physics.microphysics=\"p4\"", "grid.size=[16, 16]", "clock.dt=-1.0",
             "physics.options.nesting.parent.refinement=[2, 2]", "boundaries.lateral=\"closed\"")

@@ -20,15 +20,16 @@
 #      run.toml; the state fields, diagnostics.csv, results.toml and
 #      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
 # A configs/*.toml without a [test] table fails the suite with a message
-# naming the file. Resume: for the simulation and sbl drivers, a run
+# naming the file. Resume: for the simulation, sbl and berlin drivers, a run
 # interrupted after its middle checkpoint and resumed the way
 # `aeolus run <folder> --resume` does is bitwise the uninterrupted run
-# (Berlin resume is #269).
+# (the Berlin case's since #269).
 
 using Test
 using Aeolus
 using Aeolus.Config
 import Aeolus.Config as C
+import NCDatasets
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
@@ -205,4 +206,21 @@ end
     @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.case.nsteps == 20 && r.runs[2].obj.case.sim.t === r.runs[1].obj.case.sim.t
+    # berlin driver (#269): berlin_smoke.toml, nested, every coupling on, 24 s (15 adaptive
+    # steps), a checkpoint every 6 steps, interrupted after step 9 and resumed from step 6;
+    # the state of the child, every tracer, Ts and the nest parent bitwise, and the NetCDF
+    # output's record written after the checkpoint is rewritten to the same values
+    r = resume_check(joinpath(RT_EXAMPLES, "urban", "configs", "berlin_smoke.toml");
+                     nsteps = 12, stop = 9, every_steps = 6, nsteps_overrides = n -> ["clock.nsteps=$n"],
+                     overrides = ["output.netcdf=\"smoke.nc\"", "output.path=\"none\""])
+    @test r.fields_equal && isempty(r.fields_differing)
+    isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
+    @test r.statuses == ["interrupted", "completed"]
+    c1, c2 = r.runs[1].obj.case, r.runs[2].obj.case
+    @test c2.clock.n == c1.clock.n && c2.sim.t === c1.sim.t === 24.0 && c2.clock.nrecord == c1.clock.nrecord == 2
+    @test any(k -> startswith(String(k), "parent_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))
+    nc(case) = NCDatasets.NCDataset(case.cfg.output_path) do ds
+        Dict(k => Array(ds[k].var) for k in keys(ds))
+    end
+    @test c1.cfg.output_path != c2.cfg.output_path && isequal(nc(c1), nc(c2))
 end

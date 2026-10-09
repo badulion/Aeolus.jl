@@ -17,7 +17,8 @@
 
 using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Option, OpenTable,
                      Optional, OneOf, Path, section, option!, config_origin, config_schema, config_sources
-using Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir
+using Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir,
+                 resume!, maybe_checkpoint!
 using Dates: Date, year, month, day
 
 "Directory of the shipped Berlin configs (`extends = \"berlin_summer.toml\"` resolves here)."
@@ -819,9 +820,14 @@ function _berlin_checks(cfg::RunConfig)
     tt = cfg.dynamics.theta_top
     (tt isa Real || tt in (:initial_gradient, :noflux)) ||
         push!(e, ConfigError("dynamics.theta_top", "expected \"initial_gradient\", \"noflux\" or a gradient in K/m"))
-    (cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf) ||
+    # checkpoints (#269): the whole case is checkpointed with the core's
+    # fields, which `checkpoint!` takes from a Boussinesq core
+    ckon = !(cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf)
+    icore = findfirst(C -> slot(C) === :core, sel)
+    (ckon && icore !== nothing && provider(sel[icore]) !== :boussinesq) &&
         push!(e, ConfigError("checkpoint.every_steps",
-            "the Berlin case has no checkpoint/restart yet (the coupling state is not checkpointed); keep [checkpoint] off"))
+            "checkpoints of the Berlin case need the Boussinesq core (physics.core = \"boussinesq\"); " *
+            "the :$(provider(sel[icore])) core has none yet: keep [checkpoint] off"))
     return e
 end
 
@@ -829,7 +835,7 @@ const _BERLIN_CHECKS_DOC = """
 the selected couplings are compatible (the declared incompatibilities of `[physics]`, with their reasons)
 every cadence an enabled coupling needs is set, and a cadence a file sets is used by an enabled coupling
 `dynamics.theta_top` is `"initial_gradient"`, `"noflux"` or a gradient in K/m
-`[checkpoint]` stays off: the Berlin case has no checkpoint/restart yet (#269)"""
+`[checkpoint]` needs the Boussinesq core (the whole case is checkpointed with its fields, #269)"""
 
 Config.driver_checks(::BerlinDriver) = Any[_BERLIN_CHECKS_DOC => _berlin_checks]
 
@@ -1004,19 +1010,29 @@ end
 
 function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck::CheckpointSchedule;
                                  callback = nothing)
-    rf.session == 1 || error("the Berlin case cannot resume a run (no checkpoint/restart yet)")
     cc = CaseConfig(r.cfg; run_output = output_dir(rf))
     case = build_case(cc)
     r.case = case
     t_end = case.sim.t + cc.nsteps * cc.dt
+    # checkpoint / restart (#269): the whole case is a checkpoint component;
+    # a resumed session restores the newest checkpoint into the fresh build
+    comps = case_checkpoint_components(case)
+    resumed = resume!(ck, case.sim; components = comps,
+                      validate = (d, path) -> check_case_checkpoint(case, d, path)) !== nothing
+    n0 = case.clock.n
+    ckcb = (c, n) -> begin
+        maybe_checkpoint!(ck, case.sim; step = n, components = comps)
+        callback === nothing || callback(r, n)
+    end
     # the case's diagnostics: the core's, the frame's, the ledgers, the stage
     # timing and every coupling's (core/diagnostics.jl, #338); explicit rows,
     # one per case step (a case step may be several core steps; the step
     # record sums them, #336)
     with_monitor(case.sim; run = rf, t_end = t_end, cadence = r.cfg.logging.diagnostics_cadence,
                  diagnostics = case_diagnostics(case), profiles = case_profiles(case),
-                 attach = false) do m
-        run_case!(case; monitor = m, callback = callback === nothing ? nothing : (c, n) -> callback(r, n))
+                 attach = false, step0 = n0) do m
+        run_case!(case; nsteps = max(cc.nsteps - n0, 0), t_end, resume = resumed, monitor = m,
+                  callback = ckcb)
         check_blowup!(m.guard, case.sim; step = case.clock.n, force = true)
     end
     case.clock.blowup && error("the Berlin case blew up at step $(case.clock.n)")
