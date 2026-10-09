@@ -476,12 +476,12 @@ end
     @test occursin("era5_lindenberg_20190629_sfc.nc", d.attributes["era5_files"])
     @test d.init_time == "2019-06-29T00:00:00Z" && size(d.tables[:profile_theta].values) == (16, 13)
     # the config names the committed driver
-    @test load_run_config(E5_CFG).initial.dynamic == E5_DRIVER
+    @test load_run_config(E5_CFG).domain.dynamic_driver == E5_DRIVER          # the domain's (ONE-b)
     # the round trip, the driver hashed under [inputs]
     r = roundtrip_check(E5_CFG; nsteps = 20)
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
-    @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(E5_DRIVER)
+    @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(E5_DRIVER)
     run1 = r.runs[1].obj
     sim1 = Aeolus.SimulationDriver.simulation(run1)
     feed1 = only(run1.model.domains).drivers.boundary          # the domain's dynamic-driver feed (ONE-a)
@@ -508,8 +508,8 @@ end
     catch e
         e isa ConfigError || rethrow(); e
     end
-    e1 = err(["initial.dynamic=\"none\""])
-    @test e1 !== nothing && occursin("set initial.dynamic", sprint(showerror, e1))
+    e1 = err(["dynamic_driver=\"none\""])
+    @test e1 !== nothing && occursin("set the domain's dynamic_driver", sprint(showerror, e1))
     e2 = err(["initial.theta={kind=\"constant\", value=300.0}"])
     @test e2 !== nothing && occursin("give one of the two", sprint(showerror, e2))
     # the preprocessor's table left the model's config with the preprocessor
