@@ -165,11 +165,19 @@ Their variables, dimensions, units and attributes are listed on the
 
 | directory | configs |
 | :-- | :-- |
-| `examples/configs/` | `simulation`: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection` |
+| `examples/configs/` | `simulation`: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection`, `lindenberg_era5`; `advection`: `scalar_advection_2d` |
 | `examples/urban/configs/` | `urban` (in `src/`, `Aeolus.UrbanCase`): `berlin_summer` (every option written out), `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample`; `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
 | `examples/sbl/configs/` | `sbl` (in `src/`, `Aeolus.StableBoundaryLayer`): `gabls1`–`gabls4_exp3`, `cases99`, the channels, and the sweeps that replace the runner scripts (`*_closures`, `*_sweep`) |
 | `examples/validation/configs/` | the validation drivers (`neutral_abl`, `dycoms_rf01`, `dns256`, …) |
-| `examples/kernels/configs/` | `column`: `cloud_spinup` |
+| `examples/kernels/configs/` | `column`: `cloud_spinup`; `simulation`: `tgv_energy_decay`, `decaying_hit`, `channel_flow`, `pollution_plume`, `particle_trail` |
+| `examples/coupled/configs/` | `simulation` with its couplings: `dcbl_radiation_lsm`, `moist_convection`, `heated_plume`, `flow_past_cube` (`input/`: the cube's GeoJSON and static driver) |
+| `examples/sgs/configs/` | `cbl`: `cbl_tke`; `sgs_decay`: `rotating_stratified_decay`; `obstacle_channel`: `surface_mounted_cube`, `surface_mounted_cube_closures` (`input/`: the cube) |
+| `examples/nesting/configs/` | `cbl`: `cbl_inflow_statistics`; `inflow_fetch`: `inflow_fetch` |
+| `examples/transition/configs/` | `shear_layer`: `kelvin_helmholtz`; `flat_plate`: `flat_plate_t3a` |
+
+An example is these files only: the `.jl` files next to a `configs/`
+directory read a finished run folder and plot or tabulate it; none builds
+or steps a model (EX-d, #441).
 
 Each shipped config carries a `[test]` table with its smoke size:
 

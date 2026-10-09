@@ -15,6 +15,7 @@ import Aeolus.InputDrivers as AeolusInput
 
 "Every driver the option reference documents: the built-in ones (in src) and every example driver of `DRIVER_FILES`."
 reference_drivers() = sort!(unique!(vcat("common", "simulation", "sbl", "urban", "urban_parent",
+                                         Aeolus.RunDrivers.DRIVER_NAMES,
                                          collect(keys(AeolusConfig.DRIVER_FILES)))))
 
 const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))

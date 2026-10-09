@@ -297,10 +297,11 @@ Aeolus.main
 ## The `simulation` driver
 
 `[run] driver = "simulation"` is a bare run of one dynamical core on a
-box ([`Aeolus.SimulationDriver`](@ref)): what
+box ([`Aeolus.SimulationDriver`](@ref)): what the scripts
 `examples/taylor_green_vortex.jl`, `dry_convective_bl.jl` and
 `buoyant_convection.jl` used to build in code. Their configs are in
-`examples/configs/`, and the scripts are now three-line runners.
+`examples/configs/`; the scripts are gone (EX-d, #441). The run types of the
+other example cases are in [`Aeolus.RunDrivers`](@ref).
 
 ```toml
 [run]

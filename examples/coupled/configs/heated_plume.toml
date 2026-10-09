@@ -1,0 +1,57 @@
+# Coupled example 03 — a plume over a hot patch (formerly
+# examples/coupled/03_heated_plume_rain.jl; dry, no rain). 2000 × 2000 ×
+# 1500 m on 32³, free-slip walls in z, a sponge above 1200 m,
+# Smagorinsky-Lilly (C_s = 0.15). θ = 300 K to 1000 m, +5 K/km above,
+# 0.02 K noise. The floor heats the air with 0.02 K m/s, and with 0.3 K m/s
+# over the central 500 × 500 m patch; a thermal plume rises from it with
+# subsiding air around. 15 min.
+#
+#   julia --project -m Aeolus run examples/coupled/configs/heated_plume.toml
+#   julia --project=. examples/coupled/plot_heated_plume.jl runs/<date>_heated_plume_<id>
+
+[run]
+driver = "simulation"
+name = "heated_plume"
+seed = 2
+
+[grid]
+size = [32, 32, 32]
+extent = [2000.0, 2000.0, 1500.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.81
+sponge_alpha_max = 0.02
+sponge_z_start = 1200.0
+
+[boundaries]
+z = "free_slip"
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.15
+pr_t = 0.3333333333333333
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 1000.0, lapse = 0.005 }
+perturbation_amplitude = 0.02
+
+[surface]
+model = "flux_map"
+flux_background = 0.02
+flux_patches = { hot = { x = [750.0, 1250.0], y = [750.0, 1250.0], value = 0.3 } }
+
+[stepper]
+scheme = "euler"
+dt = 2.0
+end_time = 900.0
+
+[output]
+fields = ["theta"]
+cadence = 900.0
+
+[logging]
+diagnostics_cadence = 60.0
+
+[test]
+overrides = ["grid.size=[16,16,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]

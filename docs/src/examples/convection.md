@@ -5,7 +5,7 @@ advection + fractional-step projection + Smagorinsky-Lilly SGS +
 buoyancy + scalar transport, all coupled.
 
 Location: `examples/configs/buoyant_convection.toml` (the `simulation`
-driver; `examples/buoyant_convection.jl` is a three-line runner for it).
+driver).
 
 ```bash
 $ julia --project -m Aeolus run examples/configs/buoyant_convection.toml

@@ -186,8 +186,6 @@ const EXEMPT = Dict(
         "not a run: a-priori dynamic roughness of a cube height map under a prescribed log-law wind",
     "validation/dns256_generate.jl" =>
         "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
-    "poisson_manufactured.jl" => "not a run: manufactured-solution check of the Poisson solver",
-    "poisson_neumann_manufactured.jl" => "not a run: manufactured-solution check of the Neumann Poisson solver",
 )
 
 # Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
@@ -197,16 +195,7 @@ const OTHER_ISSUE_DIRS = Dict{String,String}()
 # The rest of #360's scope, migrated in later parts of the issue (it may be
 # split per directory). This list may only shrink: a file migrated to a
 # config must leave it (checked below).
-const PENDING_360 = Set([
-    "kernels/01_tgv_energy_decay.jl", "kernels/02_decaying_hit.jl", "kernels/03_channel_flow.jl",
-    "kernels/05_pollution_plume.jl", "kernels/06_particle_trail.jl",
-    "coupled/01_dcbl_radiation_lsm.jl", "coupled/02_moist_convection.jl", "coupled/03_heated_plume_rain.jl",
-    "coupled/04_flow_past_cube.jl",
-    "sgs/cbl_tke.jl", "sgs/rotating_stratified_decay.jl", "sgs/surface_mounted_cube.jl",
-    "transition/flat_plate_t3a.jl", "transition/kelvin_helmholtz.jl",
-    "nesting/cbl_inflow_statistics.jl", "nesting/inflow_fetch.jl",
-    "scalar_advection_2d.jl",
-])
+const PENDING_360 = Set{String}()
 
 function example_scripts()
     files = String[]
@@ -256,5 +245,5 @@ end
     # examples/validation/ is complete: every script there is configured, a driver or exempt
     val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
     @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 12        # the 3 bare runners of CFG-b, 8 validation scripts, kernels/04 (the urban wrapper is gone, EX-a #438)
+    @test nconfigured == 8         # the 8 validation scripts (the urban wrapper is gone, EX-a #438; the bare runners of CFG-b and kernels/04 are gone, EX-d #441)
 end

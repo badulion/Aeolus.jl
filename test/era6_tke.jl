@@ -14,7 +14,8 @@ using Random: Xoshiro
 using Statistics: mean
 using Printf
 
-include("tke_cbl_driver.jl")
+# the CBL harness is the `cbl` run type's tke_cbl (EX-d #441; formerly test/tke_cbl_driver.jl)
+using Aeolus.RunDrivers.CBLDriver: tke_cbl, tke_cbl_summary
 isdefined(@__MODULE__, :moist_adiabat_column!) ||
     include(joinpath(@__DIR__, "support", "moist_adiabat.jl"))
 

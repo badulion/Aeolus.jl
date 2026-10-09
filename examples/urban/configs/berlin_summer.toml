@@ -165,10 +165,11 @@ analysis_buffer = 140.0
 # radiosonde CSV of the initial θ(z), qv(z) and surface pressure; "none": the
 # idealised profile below
 sounding = "../data/lindenberg_10393_20190629.csv"
-# the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding
-# driver (--from-sounding), used instead of sounding; or, with
+# the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl,
+# `aeolusprep dynamic --from-sounding`), used instead of sounding; or, with
 # physics.options.nesting.parent_driver = "offline", the parent-made driver of
-# the nest faces (--from-parent); "none": no driver
+# the nest faces ([output] child_boundaries of the online run); "none": no
+# driver
 dynamic = "input/berlin_20190629_dynamic.nc"
 # idealised: θ at the ground [K]
 theta_surface = 293.0
