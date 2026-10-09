@@ -156,6 +156,9 @@ outflow = "dirichlet"
 boundary_frame = 3
 # relax θ over the sponge layer toward the boundary data's profile
 theta_relaxation = true
+# columns closer than this to a lateral open face are left out of the
+# diagnostics compared with observations (the inflow fetch, #268) [m]
+analysis_buffer = 140.0
 
 [initial]
 # The initial state: the sounding, or the idealised profile.
