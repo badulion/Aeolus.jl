@@ -80,7 +80,7 @@ cover laminar and wall-resolved flow ([transition](transition.md)).
 `LargeScaleForcing` ([theory](large_scale_forcing.md)) provides the
 geostrophic pressure gradient, nudging, advective tendencies, a surface-
 temperature series and subsidence for every case driver. A shared SBL
-driver (`examples/sbl/driver.jl`) runs GABLS1–4 and CASES-99
+run type (`Aeolus.StableBoundaryLayer`, `[run] driver = "sbl"`) runs GABLS1–4 and CASES-99
 ([theory](stable_boundary_layer.md)). The maximum sustainable heat flux
 (Van de Wiel et al. 2012) in `SurfaceExchange` predicts when the
 surface layer collapses. The `Transition` module measures the turbulent

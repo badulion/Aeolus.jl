@@ -191,12 +191,13 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Drivers that live under `examples/` (the Berlin, SBL and validation
-drivers) are not moved into `src/`: [`DRIVER_FILES`](@ref
+Drivers that live under `examples/` (the Berlin and validation drivers)
+are loaded on first use: [`DRIVER_FILES`](@ref
 Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
 package directory, and the first config that names one includes the file
-into a fresh module. CFG-d (#359) lists `sbl` (`examples/sbl/config_schema.jl`)
-and `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
+into a fresh module. The `sbl` run type moved into `src/` with EX-b (#439,
+[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md)) and is
+registered when the package loads. CFG-d (#359) lists `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
 fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
 (#360) are in the table below. `dns` and `dns_decay` run the same DNS
 (the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
@@ -429,9 +430,10 @@ Its options, the `[physics.options.<coupling>]` tables included: [Options: drive
 
 ## The `sbl` driver
 
-`[run] driver = "sbl"` (`examples/sbl/config_schema.jl`, CFG-d #359) runs
-the stable-boundary-layer cases of `examples/sbl/`. One driver covers four
-kinds, `[case] kind`:
+`[run] driver = "sbl"` (CFG-d #359; the module
+[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md) since EX-b
+#439) runs the stable-boundary-layer cases of `examples/sbl/configs/`. One
+driver covers four kinds, `[case] kind`:
 
 | kind | builds and runs | shipped configs |
 | :-- | :-- | :-- |
@@ -440,8 +442,8 @@ kinds, `[case] kind`:
 | `relaminarisation_channel` | `relam_spinup`, then `relam_run` | `relaminarisation` |
 | `collapse_channel` | the neutral half channel, then `collapse_run` | `collapse_channel` |
 
-The Julia builders of `examples/sbl/driver.jl` stay the implementation;
-the driver only turns the config into their arguments. Each shipped
+The Julia builders (`src/sbl/case.jl`) are the implementation; the
+driver (`src/sbl/driver.jl`) only turns the config into their arguments. Each shipped
 config gives fields bitwise equal to the builder call it replaced
 (`test/config_sbl.jl`). Case constants live in the TOML files; the case
 tables stay the CSVs of `examples/sbl/data/`, named by `[case] data` (a
@@ -472,9 +474,15 @@ resolve (naming the table, the file and its size). A run writes
 `diagnostics.csv`, `output/statistics.toml` (the averaged statistics or
 the channel result), `output/series.csv` (every `[averaging]
 series_interval`) and, with `[towers] below > 0`, `output/towers.csv` (the
-CASES-99 hockey stick bins). The scripts `gabls1.jl` … `gabls4.jl` run
-their config (`sbl_script_run`) and make the figures; the channel sweeps
-build their cases from the configs and share one spin-up.
+CASES-99 hockey stick bins). The comparisons the old runner scripts made
+are sweeps now (`gabls1_closures.toml`, `cases99_closures.toml`,
+`gabls3_closures.toml`, `gabls4_closures.toml`,
+`stratified_channel_sweep.toml`, `relaminarisation_sweep.toml`,
+`collapse_channel_sweep.toml`: one run folder per member, each channel
+member with its own spin-up), and the scripts `gabls1.jl` … `gabls4.jl`,
+`stratified_channel.jl`, `relaminarisation_channel.jl` and
+`collapse_channel.jl` only read the run folders and make the tables and
+figures (`julia --project examples/sbl/gabls1.jl runs/gabls1_*`).
 
 Its options, every key with type, default, units, range and doc: [Options: driver `sbl`](../reference/options/sbl.md) (generated from the schema; `aeolus options sbl` prints the same).
 

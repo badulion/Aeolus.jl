@@ -161,7 +161,7 @@ Their variables, dimensions, units and attributes are listed on the
 | :-- | :-- |
 | `examples/configs/` | `simulation`: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection` |
 | `examples/urban/configs/` | `berlin`: `berlin_summer` (every option written out), `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample`; `input/` holds their driver files |
-| `examples/sbl/configs/` | `sbl`: `gabls1`–`gabls4_exp3`, `cases99`, the channels |
+| `examples/sbl/configs/` | `sbl` (in `src/`, `Aeolus.StableBoundaryLayer`): `gabls1`–`gabls4_exp3`, `cases99`, the channels, and the sweeps that replace the runner scripts (`*_closures`, `*_sweep`) |
 | `examples/validation/configs/` | the validation drivers (`neutral_abl`, `dycoms_rf01`, `dns256`, …) |
 | `examples/kernels/configs/` | `column`: `cloud_spinup` |
 

@@ -230,7 +230,7 @@ surface descending from the 18 LT inversion (856.0 m, 1039.7 m and
 0.80 Δz before the halo fix of `sbl_surface!` in CFG-d, #359). The θ ledger closes to
 8.1 × 10⁻¹³ of the column content.
 
-At 48 × 48 × 80 (Δx = 50 m, Δz = 20 m, `examples/sbl/gabls2.jl`,
+At 48 × 48 × 80 (Δx = 50 m, Δz = 20 m, `configs/cases99_closures.toml` read by `examples/sbl/gabls2.jl`,
 Brown et al. 1994 closure, 16-54 h, 3607 s / 3691 s wall), the inversion
 at 06 LT 24 October is 842.1 m with subsidence and 1059.2 m without
 (−217.1 m). A passive surface leaving the 18 LT inversion (1033.8 m)
@@ -462,7 +462,7 @@ parent (N-parent-e). See [The Berlin case](../design/berlin_ledgers.md#The-θ-to
   N-parent-e), not to the nested Berlin child: the child takes its top
   and lateral θ and q from the parent, and nudging it as well would apply
   the large scale twice.
-* **GABLS2** (`examples/sbl/cases.jl`): `Subsidence` from 40 h.
+* **GABLS2** (`examples/sbl/configs/gabls2.toml`): `Subsidence` from 40 h.
 
 ### The Berlin case and the sponge
 
