@@ -49,7 +49,7 @@ export AbstractSolarPosition, MeeusPosition,
        clearness_index, diffuse_fraction_erbs, diffuse_fraction_reindl,
        partition_global_irradiance,
        cloud_optical_depth_column, cloud_shadow_transmittance!,
-       cloud_shadow_map, combined_shadow_transmittance!
+       cloud_shadow_map, combined_shadow_transmittance!, shade_direct_beam!
 
 # =========================================================================
 # Time
@@ -693,6 +693,27 @@ end
                              dx, dy, dz, Nx, Ny, Nz, Hx, Hy, Hz)
     @inbounds trans[i, j] = T(exp(-τ_slant))
     return nothing
+end
+
+"""
+    shade_direct_beam!(sw, removed, fdir, trans) -> sw
+
+Take the cloud shadow off the surface shortwave: in every column the
+direct-beam share `fdir` of the absorbed shortwave `sw` is attenuated by
+the slant-path cloud transmittance `trans` (from
+[`cloud_shadow_transmittance!`](@ref)), ``sw ← sw − sw f_{dir} (1 − T)``;
+`removed` receives what was taken off (W m⁻², ≥ 0 for `0 ≤ fdir, T ≤ 1`).
+The diffuse part is left as it is. Moved from the urban case's
+`cloud_shadow` coupling (ONE-e, #454).
+"""
+function shade_direct_beam!(sw::AbstractMatrix, removed::AbstractMatrix, fdir::AbstractMatrix,
+                            trans::AbstractMatrix)
+    @inbounds for I in eachindex(sw)
+        r = sw[I] * fdir[I] * (1 - trans[I])
+        removed[I] = r
+        sw[I] -= r
+    end
+    return sw
 end
 
 """

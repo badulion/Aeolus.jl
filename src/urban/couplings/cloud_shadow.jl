@@ -1,6 +1,8 @@
 # Cloud shadow: the 3-D slant-path direct-beam transmittance of the
 # resolved cloud and fog (SolarGeometry.cloud_shadow_transmittance!),
-# applied to the direct-beam share of the radiosity shortwave.
+# applied to the direct-beam share of the radiosity shortwave
+# (Radiosity.direct_absorbed_share!, SolarGeometry.shade_direct_beam!:
+# moved out of this file in ONE-e, #454).
 #
 # Replaces `apply_cloud_shadow!` (formerly in sw_modifiers.jl), which
 # took the vertical column integral of ql with an ad-hoc extinction of
@@ -105,33 +107,14 @@ function run_stage!(c::CloudShadow, case, ::Val{:radiation}, dt)
     c.cloud = any(>(0), τ)
     sp = solar_position_at(case.cfg, case.clock.hour)
     cloud_shadow_transmittance!(c.trans, τ, m, sun_direction_enu(sp); k_start = c.k_start)
-    _direct_share!(c.fdir, case)
-    @inbounds for I in eachindex(bus.sw)
-        r = bus.sw[I] * c.fdir[I] * (1 - c.trans[I])
-        c.removed[I] = r
-        bus.sw[I] -= r
-    end
+    direct_absorbed_share!(c.fdir, case.geom.scene, bus.swsol, case.geom.facet_col)
+    shade_direct_beam!(bus.sw, c.removed, c.fdir, c.trans)
     return nothing
 end
 
 @inline function _shadow_tau_cell!(i, j, k, τ, mask, Hx, Hy, Hz, fδ)
     @inbounds τ[i, j, k] = mask[Hx + i, Hy + j, Hz + k] ? 0.0 : max(τ[i, j, k], 0.0) * fδ
     return nothing
-end
-
-# Share of each column's absorbed shortwave that arrived as direct beam:
-# Σ A(1−α)E_dir / Σ A(1−α)Q over the column's facets.
-function _direct_share!(fdir, case)
-    scene, sw = case.geom.scene, case.bus.swsol
-    α = facet_albedos(scene)
-    A = facet_areas(scene)
-    num = zeros(size(fdir)); den = zeros(size(fdir))
-    @inbounds for (fi, (ci, cj)) in enumerate(case.geom.facet_col)
-        num[ci, cj] += A[fi] * (1 - α[fi]) * sw.direct[fi]
-        den[ci, cj] += A[fi] * sw.absorbed[fi]
-    end
-    @. fdir = ifelse(den > 0, num / den, 0.0)
-    return fdir
 end
 
 output_fields(c::CloudShadow, case) = OutputVariable[

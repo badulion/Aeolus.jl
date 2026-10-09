@@ -116,7 +116,7 @@ export Facet, facet_corners, facet_sample_points, facet_edges,
        material_albedo, material_emissivity,
        URBAN_STREET, URBAN_ROOF, URBAN_PARK, URBAN_WATER, URBAN_WALL,
        RadiosityScene, build_facets, build_scene, heightmap_from_solid_mask,
-       nfacets, facet_areas, facet_albedos, facet_emissivities,
+       nfacets, facet_areas, facet_albedos, facet_emissivities, direct_absorbed_share!,
        facet_temperatures, set_temperatures!, set_temperature!,
        ViewFactors, view_factors, exchange_area, view_factor_contour,
        sky_view_factor_raycast, sky_view_factors_raycast,
@@ -2053,6 +2053,29 @@ function solve_shortwave(s::RadiosityScene{T}, vf::ViewFactors{T}, sun;
 
     return ShortwaveSolution{T}(B, Q, absorbed, Edir, Edif, inter,
                                 tot_in, tot_abs, tot_esc, αeff)
+end
+
+"""
+    direct_absorbed_share!(fdir, scene, sol::ShortwaveSolution, facet_col) -> fdir
+
+The share of each ground column's absorbed shortwave that arrived as
+direct beam, ``Σ A_f (1 − α_f) E_{dir,f} / Σ A_f Q_{abs,f}`` over the
+facets `f` of the column (`facet_col[f] = (i, j)`), 0 where nothing was
+absorbed. What a cloud shadow on the beam
+(`SolarGeometry.shade_direct_beam!`) attenuates. Moved from the urban
+case's `cloud_shadow` coupling (ONE-e, #454).
+"""
+function direct_absorbed_share!(fdir::AbstractMatrix, s::RadiosityScene, sw::ShortwaveSolution,
+                                facet_col)
+    α = facet_albedos(s)
+    A = facet_areas(s)
+    num = zeros(size(fdir)); den = zeros(size(fdir))
+    @inbounds for (fi, (ci, cj)) in enumerate(facet_col)
+        num[ci, cj] += A[fi] * (1 - α[fi]) * sw.direct[fi]
+        den[ci, cj] += A[fi] * sw.absorbed[fi]
+    end
+    @. fdir = ifelse(den > 0, num / den, 0.0)
+    return fdir
 end
 
 """
