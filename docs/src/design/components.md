@@ -79,6 +79,21 @@ plain Smagorinsky closure is therefore the `:sgs` component's
 report the `sgs.nu_h_max`, `sgs.nu_v_max` and `sgs.kappa_h_max`
 diagnostics every other closure already reported.
 
+The couplings EX-d (#441) put around the `simulation` run type's step —
+`[forcing]` radiative cooling, the `[surface]` slab or flux map,
+`[microphysics]` Kessler, `[tracer]`, `[particles]` and `[obstacles]` —
+are one component of the domain for now,
+[`SimulationCouplings`](@ref Aeolus.SimulationDriver.SimulationCouplings),
+which runs each piece where it acted before the pipeline: the slab's
+flux of the step and the flux map in `:surface_flux`, the slab's floor
+flux in `:tendencies` (it used to set the core's `θ_flux_bottom`), the
+obstacles' IBM penalty in `:body_force`, and cooling, the slab's energy
+balance, Kessler, the tracer and the particles right after the core, in
+`:surface_update`. Splitting them into components of their own puts
+Kessler and the tracer in stage 5, before the core, as the design has
+them: a change of the splitting order, so of the results, which is left
+to the step that ports them.
+
 ## Bit identity
 
 Every `simulation`-config variant of `test/support/simulation_digests.jl`
@@ -88,7 +103,9 @@ Coriolis (also as the adaptive step's binding limit), the sponge, the top
 adaptive stepper: 28 runs at 16³ — reproduces the state digests captured
 on master `ead7b986` before the pipeline, bit for bit, and its
 `diagnostics.csv` byte for byte apart from those three new columns
-(`test/components_pipeline.jl`). The same file runs the components
+(`test/components_pipeline.jl`). So do the seven EX-d simulation configs
+with their couplings, plus RK3 runs of the obstacles and the slab, against
+digests captured on master `a22b57ba`. The same file runs the components
 against the core's built-in terms, bit for bit, on both cores and with
 Euler and RK3.
 
