@@ -244,10 +244,10 @@ run.
 the 6 km box (`examples/urban/plot_parent_surface.jl`). Red: the
 child's footprint.*
 
-**Land use.** `aeolus preprocess fetch-landuse` (formerly
+**Land use.** `aeolusprep fetch-landuse` (AeolusPrep.jl; formerly
 `data/fetch_berlin_landuse.jl`) queries Overpass for the
 6 km box around the anchor (buildings, parks and green land use, water;
-ways and multipolygon relations). It classifies them with the case's own
+ways and multipolygon relations). It classifies them with AeolusPrep's
 `load_city_osm` (one classifier: `osm_class`), and rasterises them with
 `surface_class_map` on the child's 15.625 m grid. It then writes, per
 parent cell, the class counts of its 2 × 2 child cells, λp, λf (mean

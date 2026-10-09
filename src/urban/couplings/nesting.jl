@@ -398,7 +398,7 @@ function _start_recorder!(c::NestingCoupling, case)
         attributes = Dict{String,Any}("nest_from_parent" => join(String.(c.from_parent), " "),
                                       "nest_inflow" => join(String.(c.inflow), " "),
                                       "nest_refinement" => collect(Int, c.pc.refinement)),
-        preprocessor = "aeolus preprocess dynamic --from-parent",
+        preprocessor = "aeolus run ([output] child_boundaries)",
         origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy)
     record_boundary!(c.recorder, sim.t, NaN, c.run.data.a; profiles = _target_profiles(c))
     return c
@@ -411,7 +411,7 @@ function _ensure_offline!(c::NestingCoupling, case)
     two_way(c) && error("nesting: parent_driver = :offline replays a one-way nest; mode = :two_way needs the parent")
     path = cfg.dynamic
     path === nothing && error("nesting: parent_driver = :offline reads the nest faces from [initial] dynamic, " *
-                              "which is \"none\" (write one with aeolus preprocess dynamic --from-parent)")
+                              "which is \"none\" (the online run writes one: [output] child_boundaries)")
     ox, oy = anchor_xy(cfg, m)
     d = read_dynamic_driver(path; mesh = m, origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy)
     src = get(d.attributes, "dynamic_source", "")

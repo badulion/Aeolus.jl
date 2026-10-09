@@ -145,7 +145,7 @@ sounding_time(s::Sounding, y::Integer, m::Integer, d::Integer, hour_utc::Real = 
     read_sounding(path; c = MoistThermodynamics.DEFAULT_CONSTANTS) -> Sounding
 
 Read a sounding CSV in the format written by
-`aeolus preprocess fetch-sounding`: comment lines start with
+AeolusPrep.jl's `aeolusprep fetch-sounding`: comment lines start with
 `#`; lines `#! key = value` carry `epoch` (`yyyy-mm-ddT00:00Z`) and
 `station_elevation_m`; then a header and one row per level with (at
 least) the columns `launch`, `t_s`, `p_Pa`, `gph_m`, `T_K`, `Td_K`,

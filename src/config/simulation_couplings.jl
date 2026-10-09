@@ -32,7 +32,7 @@ using ..Operators: advect_centered!, add_surface_flux!
 using ..Fields: location
 using ..BoundaryConditions: fill_halos!
 using ..Grids: xnodes, ynodes, znodes
-using ..InputDrivers: read_static_driver, write_static_driver, solid_and_classes, load_city_geojson
+using ..InputDrivers: read_static_driver, solid_and_classes
 import ..RunLog: diagnostics, profile_diagnostics
 using ..RunLog: Diagnostic, ProfileDiagnostic
 using ..Backends: plane_mean!
@@ -120,7 +120,7 @@ function _coupling_sections()
     end
     ob = section("obstacles"; doc = "Immersed obstacles.") do s
         option!(s, "static", Optional{Path};
-                doc = "a static driver (aeolus preprocess static, from preprocess.obstacles): its buildings are solid in every cell whose centre is at or below their height; hashed under [inputs]")
+                doc = "a static driver (AeolusPrep.jl: aeolusprep static --source <obstacles.geojson>): its buildings are solid in every cell whose centre is at or below their height; hashed under [inputs]")
         option!(s, "anchor", NTuple{2,Float64}; default = (0.0, 0.0), units = "degrees",
                 doc = "latitude, longitude of the domain's south-west corner (the static driver's anchor; checked, not used)")
         option!(s, "penalty_time", Float64; units = "1", default = 3.0, range = (0, Inf), open_lower = true,
@@ -454,34 +454,6 @@ function _coupling_fields(c::SimCouplings)
     c.particles === nothing ||
         push!(out, :particles => [x[d] for d in 1:3, x in positions(c.particles.ps)])
     return (; out...)
-end
-
-# ---------------------------------------------------------------------------
-# preprocess static: the obstacles' static driver from a GeoJSON
-# ---------------------------------------------------------------------------
-
-"""
-    preprocess_static(::SimulationDriverType, cfg; out = nothing, parent_out = nothing) -> Vector{String}
-
-`aeolus preprocess static <config.toml>` (EX-d, #441): rasterise the
-GeoJSON footprints of `[preprocess] obstacles` (`load_city_geojson`,
-mesh metres, a `height` per feature) on the run's grid and write the
-static driver `[obstacles] static` (or `out`), anchored at
-`[obstacles] anchor` on the domain's south-west corner, with the GeoJSON
-as its hashed source.
-"""
-function Config.preprocess_static(::SimulationDriverType, cfg::RunConfig; out = nothing, parent_out = nothing)
-    parent_out === nothing || throw(ArgumentError("the simulation driver has no nest parent (--parent-out)"))
-    src = cfg.preprocess.obstacles
-    src === nothing && throw(ConfigError("preprocess.obstacles", "the static preprocessor needs a GeoJSON of the obstacles"))
-    path = out !== nothing ? abspath(out) : cfg.obstacles.static
-    path === nothing && throw(ArgumentError("[obstacles] static is \"none\": pass --out file.nc"))
-    mesh = _mesh(cfg.grid)
-    mesh isa RegularGrid || throw(ConfigError("grid.stretching", "the obstacles need a uniform grid"))
-    lat, lon = cfg.obstacles.anchor
-    write_static_driver(path, load_city_geojson(src), mesh; origin_lat = lat, origin_lon = lon,
-                        origin_x = mesh.x0, origin_y = mesh.y0, source = src)
-    return [path]
 end
 
 # ---------------------------------------------------------------------------

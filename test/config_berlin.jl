@@ -142,7 +142,7 @@ end
     @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)   # the driver's output cadence
     @test c.name === :urban && c.physics == Dict() && c.options == Dict()
     # the generic run type points at no input data of an example (EX-a, #438)
-    @test c.osm_path === nothing && c.landuse === nothing && c.sounding === nothing && c.static === nothing
+    @test c.landuse === nothing && c.sounding === nothing && c.static === nothing
     p = BCC.ParentConfig(c)
     @test p.extent == (6000.0, 6000.0, 3000.0) && p.refinement == (2, 2, 4) && isnan(p.z_g)
     @test p.Q_surface isa BCC.ConstantForcing && p.Q_surface(3600.0) == 0.0

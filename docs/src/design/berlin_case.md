@@ -181,9 +181,9 @@ src/
                        CaseConfig(path), run_results (results.toml)
     parent_driver.jl   the `urban_parent` run driver: the nest parent alone, its tables
     registry.jl        AbstractCoupling, the contract, Cadence, register!, selection
-    geometry.jl        build_geometry: the static driver (or the OSM file in memory) → mask,
-                       classes, radiosity scene, view factors; the readers, classes and
-                       rasterisation are Aeolus.InputDrivers (src/preprocess/, CFG-f #361)
+    geometry.jl        build_geometry: the static driver → mask, classes, radiosity scene,
+                       view factors; the reader, classes and rasterisation are
+                       Aeolus.InputDrivers (src/input_drivers/, CFG-f #361)
     bus.jl             SurfaceBus (incl. the per-column surfaces), SurfaceParams, surface factories
     tracers.jl         tracer registry (ensure_tracer!)
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
@@ -195,11 +195,11 @@ src/
     diagnostics.jl     the case's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
   urban/couplings/     one file per coupling, each ending in register!(Type)
   urban/parent/        the nest parent: land-use surface, ParentConfig, the parent case
-  urban/preprocess.jl  aeolus preprocess fetch-osm, fetch-landuse, fetch-sounding, osm-sample
 examples/urban/
   configs/             berlin_summer.toml (every option), _winter, _smoke, _mitte_sample, _parent, _parent_coarse
-  configs/input/       the static and dynamic drivers (aeolus preprocess static / dynamic)
-  data/                the drivers' sources: OSM files, the parent land-use table, the sounding
+  configs/input/       the static and dynamic drivers (made by AeolusPrep.jl: aeolusprep static / dynamic)
+  data/                what a run may read in memory: the parent land-use table, the sounding
+                       (the OSM extracts are AeolusPrep's, ONE-h #457)
   alexanderplatz_animation.jl            renderer (reads the NetCDF only)
   alexanderplatz_surface_diagnostics.jl  per-class diurnal summary (NetCDF only)
   berlin_parent_figures.jl, berlin_parent_lindenberg_check.jl, plot_parent_surface.jl
@@ -433,7 +433,7 @@ Berlin-Brandenburg from 00 UTC on the 29th to 16 UTC on the 30th, and a
 Saturday; `case_weekday(cfg)` now feeds the weekday of `cfg.date` to the
 building schedules (they assumed the Thursday of 20 June 2024 before).
 
-**Data.** `aeolus preprocess fetch-sounding` (formerly
+**Data.** `aeolusprep fetch-sounding` (AeolusPrep.jl; formerly
 `examples/urban/data/fetch_lindenberg.jl`) downloads the IGRA2
 record of GMM00010393 from NOAA NCEI (public domain; Durre et al. 2018)
 and writes `lindenberg_10393_20190629.csv`: the 00/06/12/18 UTC launches
@@ -719,7 +719,7 @@ later issue.
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |
 | toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 |
-| OSM `&&`/`||` precedence; patches overwrite roofs | `src/preprocess/osm.jl`, `src/preprocess/city.jl` (moved by CFG-f #361, kept bit for bit) | #141 |
+| OSM `&&`/`||` precedence; patches overwrite roofs | AeolusPrep.jl `src/osm.jl` (ONE-h #457), `src/input_drivers/city.jl` (moved by CFG-f #361, kept bit for bit) | #141 |
 
 **Found during #126, fixed in #132: stale velocity halos in the scalar
 transport.**

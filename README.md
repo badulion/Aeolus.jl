@@ -41,8 +41,8 @@ building height · resolved vertical velocity at 30 m.</sub>
 - **106,776 assertions in the fast tier (135 jobs)**, run by CI on every
   pull request; the full tier adds the validation mini-simulations.
   104,000 lines of source, 72,000 lines of tests.
-- **Few dependencies** (FFTW, KernelAbstractions, StaticArrays, NCDatasets,
-  GRIBDatasets). PNG, Mie scattering, error and Bessel functions are
+- **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
+  NCDatasets). PNG, Mie scattering, error and Bessel functions are
   written in the package.
 - **Single-node CPU, multithreaded** through KernelAbstractions, with
   results bit-identical at every thread count. MPI and GPU are planned,
@@ -158,11 +158,11 @@ dry deposition · rain scavenging of HNO₃
 <tr><td><b>Configuration &amp; input</b></td><td>
 
 TOML run configuration with a schema, strict validation, `extends` and
-overrides, sweeps · `julia -m Aeolus run | check | resolve | options |
-preprocess` · NetCDF-4 static driver (buildings, surface classes, LAI)
-from OpenStreetMap / GeoJSON · NetCDF-4 dynamic driver (initial
-state, boundary planes, forcing) from a sounding, an Aeolus parent run
-or ERA5 (GRIB2 or NetCDF)
+overrides, sweeps · `julia -m Aeolus run | check | resolve | options` ·
+NetCDF-4 static driver (buildings, surface classes, LAI) and dynamic
+driver (initial state, boundary planes, forcing), written by the
+companion package AeolusPrep.jl from OpenStreetMap / GeoJSON, a
+sounding or ERA5 (GRIB2 or NetCDF), or by an Aeolus parent run
 
 </td></tr>
 <tr><td><b>Output &amp; logging</b></td><td>
@@ -239,7 +239,8 @@ Pkg.instantiate()
 
 Julia ≥ 1.10. Non-standard-library dependencies: **FFTW**,
 **KernelAbstractions** and **StaticArrays** (multithreading, #291),
-**NCDatasets** (NetCDF-4, #310) and **GRIBDatasets** (ERA5 input, #363).
+and **NCDatasets** (NetCDF-4, #310). The input preprocessors, and with
+them GRIBDatasets (ERA5 input), are in AeolusPrep.jl (#457).
 Start Julia with threads (`julia -t 12 …`) to use them; results do not
 depend on the thread count.
 
@@ -344,9 +345,11 @@ transport of the seven advected tracers (qv, ql and the five species;
 ### Run your own city
 
 ```bash
-# 1. Fetch a 1 km box from OpenStreetMap and preprocess it into the static driver
-julia --project -m Aeolus preprocess fetch-osm --box 52.518,13.402,52.526,13.418 --out examples/urban/data/alexanderplatz_real.osm
-julia --project -m Aeolus preprocess static examples/urban/configs/berlin_summer.toml
+# 1. In an AeolusPrep.jl checkout: fetch a 1 km box from OpenStreetMap and
+#    preprocess it into the static driver of the config
+julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
+julia --project -m AeolusPrep static ../Aeolus.jl/examples/urban/configs/berlin_summer.toml \
+    --source data/berlin/alexanderplatz_real.osm
 
 # 2. Simulate 24 hours — writes CF-1.8 NetCDF and the run's checks (results.toml)
 julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml

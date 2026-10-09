@@ -43,12 +43,13 @@ function generate_reference(dir::AbstractString = joinpath(@__DIR__, "src", "ref
     end
     pages = ("input_static.md" => ("Static input driver",
                  "The static driver holds what does not change during a run: terrain, land use, buildings, " *
-                 "trees, surfaces (CFG-f, #361). `aeolus preprocess static` writes it.",
+                 "trees, surfaces (CFG-f, #361). AeolusPrep.jl writes it (`aeolusprep static`).",
                  [(AeolusInput.STATIC_SCHEMA, "berlin_smoke_static.nc"),
                   (AeolusInput.STATIC_TILES_SCHEMA, "berlin_smoke_parent_static.nc")]),
              "input_dynamic.md" => ("Dynamic input driver",
                  "The dynamic driver holds what changes in time: initial profiles, large-scale forcing, " *
-                 "surface series and boundary data (CFG-g, #362). `aeolus preprocess dynamic` writes it.",
+                 "surface series and boundary data (CFG-g, #362). AeolusPrep.jl writes it (`aeolusprep dynamic`), " *
+                 "or an Aeolus parent run (`[output] child_boundaries`).",
                  [(AeolusInput.DYNAMIC_SCHEMA, "berlin_20190629_dynamic.nc")]))
     for (name, (title, intro, schemas)) in pages
         p = joinpath(dir, name)
