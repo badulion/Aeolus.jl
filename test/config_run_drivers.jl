@@ -660,3 +660,89 @@ end
         @test abs(res["mean_U_b"] - 1) < 0.02
     end
 end
+
+# ---------------------------------------------------------------------------
+# examples/transition/configs/: kelvin_helmholtz.toml (shear_layer) and
+# flat_plate_t3a.toml (flat_plate)
+# ---------------------------------------------------------------------------
+
+@testset "shear_layer: kelvin_helmholtz.toml is the old script, bit for bit; the seed grows" begin
+    Nx, Nz, tend = 16, 32, 12.0
+    # examples/transition/kelvin_helmholtz.jl before EX-d, verbatim but for the size, tend and the figures
+    δ, U, Re, J, αδ = 1.0, 1.0, 1000.0, 0.05, 0.4446
+    Lx = 2π * δ / αδ; dx = Lx / Nx; Lz = Nz * dx
+    mesh = RegularGrid(; size = (Nx, 1, Nz), extent = (Lx, dx, Lz),
+                       origin = (0.0, 0.0, -Lz / 2), halo = (2, 2, 2))
+    θ₀, g = 300.0, 9.81
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    sim = BoussinesqSimulation(mesh; ν = U * δ / Re, θ₀ = θ₀, g_accel = g, bcs = bcs)
+    Δθ = J * U^2 * θ₀ / (g * δ)
+    set!(sim.u, (x, y, z) -> U * tanh(z / δ))
+    set!(sim.θ, (x, y, z) -> θ₀ + Δθ * tanh(z / δ))
+    set!(sim.w, (x, y, z) -> 1e-4 * U * sin(αδ * x / δ) * exp(-(z / δ)^2))
+    zc = [mesh.z0 + (k - 0.5) * mesh.dz for k in 1:Nz]
+    layer = findall(z -> abs(z) < 4δ, zc)
+    dt = 0.6 * dx / U; nsteps = ceil(Int, tend / dt); dt = tend / nsteps
+    every = max(1, round(Int, 1.0 / dt))
+    ts, As, γm, Bs, Ps = Float64[], Float64[], Float64[], Float64[], Float64[]
+    for n in 1:nsteps
+        step_rk3!(sim, dt)
+        if n % every == 0 || n == nsteps
+            wi = interior_view(sim.w)
+            push!(ts, sim.t); push!(As, sqrt(sum(abs2, wi) / length(wi)))
+            γ = turbulent_fraction(sim)
+            push!(γm, sum(γ[layer]) / length(layer))
+            r = flux_richardson(sim)
+            push!(Bs, sum(r.B[layer])); push!(Ps, sum(r.P[layer]))
+        end
+    end
+    r = rd_run(joinpath(RD_EX, "transition", "configs", "kelvin_helmholtz.toml"),
+               ["grid.nx=$Nx", "grid.nz=$Nz", "stepper.end_time=$tend", "diagnostics.snapshots=[6.0]"])
+    @test rd_same_state(r, sim)
+    s = r.obj.records
+    @test s.ts == ts && s.As == As && s.γm == γm && s.Bs == Bs && s.Ps == Ps
+    # the physics: the seeded mode grows (the layer is unstable, J < 1/4),
+    # and the laminar layer has no turbulent fraction yet
+    @test As[end] > As[1] && all(iszero, γm)
+    ds = NCDataset(joinpath(r.folder.path, "output", "vorticity.nc"))
+    @test size(ds["omega_y"]) == (Nx, Nz, 1) && ds["t"][1] >= 6.0
+    close(ds)
+end
+
+@testset "flat_plate: flat_plate_t3a.toml is the old script, bit for bit (small grid)" begin
+    Nx, Ny, Nz, nsteps, navg = 96, 8, 16, 6, 3
+    # examples/transition/flat_plate_t3a.jl before EX-d, verbatim but for the size and the steps
+    Tu = 0.033; dt = 1.0
+    c = flat_plate_setup(; Re_δ0 = 300, Lx = 600, Ly = 36, H = 24, Nx = Nx, Ny = Ny, Nz = Nz,
+                         fringe_length = 80)
+    sim, g = c.sim, c.sim.mesh
+    fst = FreeStreamDisturbance(Tu, 10.0, 200; seed = 1, period_y = g.Ly,
+                                κ_max = 2π / (3 * max(g.dx, g.dy, g.dz)))
+    δ99 = blasius_solution().eta99 * sqrt(c.ν * c.x_in)
+    target = deepcopy(c.target)
+    update! = disturbance_fringe_update(fst, c.fringe, c.target;
+                                        damping = z -> Aeolus.Operators.smooth_step(z / (2δ99)))
+    force! = fringe_forcing(c.fringe, target; update! = update!)
+    set_blasius!(sim; x_le = c.x_le, x_min = c.x_in)
+    cf = zeros(g.Nx); ū = zeros(g.Nx, g.Nz); nacc = 0
+    for n in 1:nsteps
+        step_rk3!(sim, dt; body_force! = force!)
+        if n > nsteps - navg
+            nacc += 1
+            cf .+= skin_friction(sim; U_e = 1.0)
+            ū .+= dropdims(sum(interior_view(sim.u); dims = 2); dims = 2) ./ g.Ny
+        end
+    end
+    cf ./= nacc; ū ./= nacc
+    f = joinpath(RD_EX, "transition", "configs", "flat_plate_t3a.toml")
+    r = rd_run(f, config_test_table(f).overrides)
+    @test rd_same_state(r, sim)
+    @test r.obj.cf == cf && r.obj.ū == ū
+    res = rd_results(r)
+    # the physics at the inflow: the Blasius layer's skin friction, 0.664 Re_x^(-1/2);
+    # six steps are too few for transition (no onset on the plate)
+    p = res["plate"]
+    @test isnan(res["onset_re_theta"])
+    @test isapprox(p["cf"][3], p["cf_laminar"][3]; rtol = 0.15)
+    @test res["mayle"] ≈ 400 * 3.3^(-5 / 8)          # Mayle (1991): Re_θ,onset = 400 Tu^(-5/8), Tu in %
+end

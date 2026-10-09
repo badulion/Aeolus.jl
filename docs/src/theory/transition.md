@@ -205,7 +205,9 @@ complement within the fluid, and solid cells are never turbulent.
 `normalization = :volume` divides by the domain-mean ``|ω|`` instead.
 Use it when the levels of interest have very different vorticity levels.
 
-In the Kelvin–Helmholtz billow of `examples/transition/kelvin_helmholtz.jl`
+In the Kelvin–Helmholtz billow of `examples/transition/configs/kelvin_helmholtz.toml`
+(the `shear_layer` run type; the config reproduces the script it replaced
+bit for bit, figures included)
 (``J = 0.05``, ``Re = 1000``, free base state), ``γ`` of the layer
 ``|z| ≤ 4δ`` stays exactly 0 through the linear stage. It rises once the
 billow rolls up (0.78 at ``t = 60\,δ/U``, when ``A = 0.075U``) and peaks
@@ -427,7 +429,8 @@ Blasius comparison uses filtered ``c_f``. The grids of the 2-D laminar
 plate (``Δx = 2``) and of the T3A-like example (``Δx = 1.04``) are fine
 enough not to need it.
 
-The T3A-like example (`examples/transition/flat_plate_t3a.jl`, Tu = 3.3 %
+The T3A-like example (`examples/transition/configs/flat_plate_t3a.toml`, the
+`flat_plate` run type, bitwise the former script on a small grid; Tu = 3.3 %
 as in Roach & Brierley 1992) runs 576 × 64 × 96 cells on
 600 × 36 × 24 ``δ^*_0`` (``Re_x`` = 3.0e4 to 1.9e5; ``Δx = 1.04``,
 ``Δy = 0.56``, ``Δz = 0.25\,δ^*_0``, i.e. ``Δx^+ ≈ 17``, ``Δy^+ ≈ 9``,
@@ -1216,6 +1219,17 @@ development lengths (δ) to 10 % / 20 %:
 | DF (parent statistics and mean) | 1.08, 1.26, 1.36, 1.32, 1.26 | 0.85, 0.92, 0.98, 1.12, 1.15 | ∞ / ∞ (∞ / 5.1 against the parent) | ∞ / ∞ |
 | FSD (parent) | 0.63, 0.72, 0.93, 1.25, 1.26 | 0.62, 0.62, 0.62, 0.73, 0.95 | ∞ / 13.0 | ∞ / 12.5 |
 | DF-same (reference statistics and mean) | 0.59, 0.69, 0.81, 1.02, 1.02 | 0.58, 0.63, 0.69, 0.83, 0.96 | 6.6 / 12.3 | 6.0 / 11.9 |
+
+(Measured for #266. Re-run on 2026-10-09 (EX-d, #441), the config and the
+old script give the same bits on today's code, but not the bits of the
+table: the code has changed in its last bits since #266, and this flow is
+chaotic. The ratios
+move by at most 0.03 and the development lengths by at most 0.6δ: DF
+1.09, 1.27, 1.37, 1.32, 1.26 / 0.84, 0.90, 0.96, 1.11, 1.13, ∞ / ∞ (5.11
+against the parent); FSD 0.63, 0.72, 0.93, 1.26, 1.26 / 0.61, 0.61, 0.61,
+0.72, 0.94, ∞ / 13.25, ∞ / 12.89; DF-same 0.59, 0.70, 0.83, 1.00, 1.03 /
+0.59, 0.65, 0.72, 0.83, 0.93, 6.13 / 12.86, 6.03 / 11.73. The
+conclusions below hold for both.)
 
 ![TKE behind the inflow at 0.22δ](../assets/nesting/inflow_fetch_tke_z02.svg)
 ![−u'w' behind the inflow at 0.47δ](../assets/nesting/inflow_fetch_uw_z05.svg)
