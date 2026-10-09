@@ -179,7 +179,7 @@ largest parcel z_i of the records, the wall seconds per stage
 function parent_results(p; wall = NaN, failure = nothing)
     m, sim = p.mesh, p.sim
     dts = p.dt_hist
-    hb = heat_budget(p.heat)
+    hb = stage_budget(p.heat)
     big = maximum(abs, values(hb.terms); init = 0.0)
     out = Dict{String,Any}(
         "grid" => [m.Nx, m.Ny, m.Nz], "steps" => p.nsteps, "retries" => p.retries,
@@ -187,8 +187,8 @@ function parent_results(p; wall = NaN, failure = nothing)
         "dt_mean" => isempty(dts) ? NaN : sum(dts) / length(dts), "wall_s" => wall,
         "simulated_h" => sim.t / 3600,
         "finite" => all(isfinite, interior_view(sim.θ)) && (!p.pc.moisture || all(isfinite, interior_view(sim.qv))),
-        "heat" => _heat_wm2(hb), "heat_night" => _heat_wm2(heat_budget(p.heat; window = (20, 5))),
-        "heat_day" => _heat_wm2(heat_budget(p.heat; window = (10, 16))),
+        "heat" => _heat_wm2(hb), "heat_night" => _heat_wm2(stage_budget(p.heat; window = (20, 5))),
+        "heat_day" => _heat_wm2(stage_budget(p.heat; window = (10, 16))),
         "closure_rel" => big > 0 ? abs(hb.closure) / big : 0.0,
         "zi_parcel_max" => isempty(p.diag) ? NaN : maximum(r.zi_parcel for r in p.diag))
     for (k, v) in p.timing
@@ -208,7 +208,7 @@ function Aeolus.Simulations.run!(::UrbanParentDriver, r::UrbanParentRun, rf::Run
     finish(failure) = begin
         write_parent_tables(dir, p; failure = failure)
         Config.write_results(rf, parent_results(p; wall = time() - t0, failure = failure))
-        @info("parent air-heat ledger\n" * heat_report(p.heat; layers = (:column, (0.0, 100.0), (0.0, 1000.0))),
+        @info("parent air-heat ledger\n" * stage_report(p.heat; layers = (:column, (0.0, 100.0), (0.0, 1000.0))),
               subsystem = :urban, domain = current_domain(), event = :parent_ledger)
     end
     try

@@ -16,7 +16,7 @@
 #
 # The functions of case.jl are the implementation; this file only turns a
 # RunConfig into their arguments (no physics here) and writes the run's
-# output (statistics.toml, series.csv, towers.csv). Case constants live in
+# output (statistics.toml, the time series in output.nc, towers.csv). Case constants live in
 # examples/sbl/configs/*.toml; the case tables are the CSVs of
 # examples/sbl/data/ (`[case] data`, hashed under [inputs] of run.toml),
 # read by tables.jl. Named kinds (perturbations, surface-temperature
@@ -387,7 +387,7 @@ function Config.driver_sections(::SBLDriver)
         option!(s, "interval", Float64; units = "h/u_τ or H/u*", default = 0.5, range = (0, Inf), open_lower = true,
                 doc = "relaminarisation_channel, collapse_channel: model time between samples")
         option!(s, "series_interval", Float64; default = 0.0, range = (0, Inf), units = "s",
-                doc = "homogeneous: model time between the rows of output/series.csv; 0: no series")
+                doc = "homogeneous: model time between the samples of the time series (output/output.nc); 0: no series")
     end
     towers = section("towers"; doc = "Virtual towers (homogeneous; CASES-99 hockey stick, Sun et al. 2012).") do s
         option!(s, "below", Float64; default = 0.0, range = (0, Inf), units = "m",
@@ -827,7 +827,7 @@ end
 What the `sbl` driver builds: `case` (an `SBLCase` for the homogeneous
 kind, a `WallBoundedCase` for the channels), the resolved `cfg`, and,
 after the run, `stats` (`sbl_run!`'s statistics or the channel run's
-result), `series` (the rows of `output/series.csv`) and `towers`.
+result), `series` (the time series of `output/output.nc`, one NamedTuple per sample) and `towers`.
 """
 mutable struct SBLRun
     case::Any
@@ -873,6 +873,41 @@ function _sbl_series_row(c::SBLCase)
             h = sbl_bl_height(p.zf, p.τ), S_max = p.S[k], z_jet = p.z[k], θ_screen = scr.θ_screen,
             U_screen = scr.U_screen, T_s = surface_temperature(c.Ts, c.sim.t), z_inv = zinv,
             ls_heat = c.ls_heat_applied)
+end
+
+"""
+    SBL_SERIES
+
+The time series of a homogeneous SBL run (`[averaging] series_interval`),
+written by the one output writer (`Aeolus.Output`, ONE-c #452) as the
+time-series variables of `output/output.nc`: `(name, units, long name,
+field of the row)`.
+"""
+const SBL_SERIES = (("u_star", "m s-1", "surface friction velocity", :u_star),
+                    ("w_theta", "K m s-1", "surface kinematic heat flux, plane mean", :wθ),
+                    ("H", "W m-2", "surface sensible heat flux, plane mean", :H),
+                    ("h", "m", "boundary-layer height (the stress falls to 5 % of its surface value, / 0.95)", :h),
+                    ("S_max", "m s-1", "maximum of the plane-mean wind speed", :S_max),
+                    ("z_jet", "m", "height of the wind-speed maximum", :z_jet),
+                    ("theta_screen", "K", "screen-level (2 m) potential temperature", :θ_screen),
+                    ("U_screen", "m s-1", "10 m wind speed", :U_screen),
+                    ("T_s", "K", "surface temperature", :T_s),
+                    ("z_inv", "m", "inversion height (NaN for a domain of 300 m or less)", :z_inv),
+                    ("ls_heat", "K m", "the state-dependent large-scale forcings' integral of dtheta/dt dz dt", :ls_heat))
+
+"Write the series `rows` (NamedTuples of `_sbl_series_row`) with the one output writer."
+function _sbl_write_series(path, rows::Vector, mesh)
+    isempty(rows) && return nothing
+    x, y, z = cell_centres(mesh)
+    vars = [OutputVariable(n, u, ln, :scalar, r -> Float64(getfield(r, k))) for (n, u, ln, k) in SBL_SERIES]
+    w = OutputWriter(path; x = x, y = y, z = z, series = vars,
+                     attributes = Dict{String,Any}("title" => "Aeolus.jl stable boundary layer: time series"))
+    try
+        foreach(r -> write_series!(w, r, r.t), rows)
+    finally
+        close_output!(w)
+    end
+    return path
 end
 
 _sbl_in_hours(t, (h0, h1)) = (h = mod(t / 3600, 24); h0 <= h1 ? h0 <= h < h1 : (h >= h0 || h < h1))
@@ -959,7 +994,7 @@ function Simulations.run!(::SBLDriver, r::SBLRun, rf::RunFolder, ck::CheckpointS
                                final_checkpoint = ck_on)
         end
         r.towers = towers
-        _sbl_write_csv(joinpath(outdir, "series.csv"), series)
+        _sbl_write_series(joinpath(outdir, "output.nc"), series, c.sim.mesh)
         towers === nothing || _sbl_write_csv(joinpath(outdir, "towers.csv"), _sbl_towers_rows(towers))
     else
         c = r.case

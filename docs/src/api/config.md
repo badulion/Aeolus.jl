@@ -169,7 +169,8 @@ sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
 cases [`urban`](../reference/options/urban.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
-variables`); redeclaring a common option is an error.
+variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
+common option is an error.
 
 ## What runs a config
 
@@ -377,8 +378,16 @@ This config is, bit for bit, the simulation the script built before
     or `smagorinsky` closure.
   * The run writes `diagnostics.csv` (the run monitor, every
     `[logging] diagnostics_cadence`), checkpoints on `[checkpoint]`, and
-    the `[output] variables` every `[output] cadence` as
-    `output/fields_<step>.nc`.
+    the `[output] variables` with the one writer ([Output](output.md),
+    ONE-c #452) into `output/output.nc`. The 3-D fields, maps and profiles
+    are written every `[output] cadence`, and the time series (domain
+    means, budgets) every `series_cadence` (0: every step), either
+    `instant` or as the `mean` over the interval (`averaging`). The
+    variables come from the catalogues of the core and the enabled
+    components. The default set is `u`, `v`, `w`, `theta` and the domain
+    means of u, v, w, θ. A `budget_*` variable (`budget_energy`,
+    `budget_water`, `budget_momentum`, `budget_tracer`) switches on that
+    budget of the domain ([Budgets](budgets.md)) and writes its terms.
   * The domain's `dynamic_driver` names a dynamic driver: its profiles set the
     initial u, v, θ (and qv), replacing the `[initial]` tables. Lateral
     faces set to `"open"` (`boundaries.x`, `y`) take its boundary planes,
@@ -418,7 +427,7 @@ julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set phy
 There is no wrapper script (`alexanderplatz_diurnal.jl` was removed in
 #438). The environment variables `AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and
 `AEOLUS_OUTPUT_DT` are gone: use the file and `--set clock.nsteps=…`,
-`--set output.cadence=…`. A run writes its own checks (the ledgers'
+`--set output.cadence=…`. A run writes its own checks (the budgets'
 closure, the timing) to `output/results.toml`. The generic schema points
 at no data of the example: `[geometry] static` and `landuse` and
 `[initial] sounding` default to `"none"`.
@@ -427,8 +436,9 @@ The sections are `[grid]`, `[geometry]` (the site and the static
 drivers `static`, `parent_static` the ground is read from, CFG-f #361,
 see [Input drivers](input_drivers.md), made by AeolusPrep.jl, and the
 nest parent's land-use table `landuse`), `[clock]`, `[cadence]`,
-`[dynamics]`, `[boundaries]`, `[initial]`, `[ledger]`, `[output]`
-(`netcdf`, the file name; `path`, its directory: the summer file writes
+`[dynamics]`, `[boundaries]`, `[initial]`, `[budgets]` (`canopy_top`
+of the air-heat budget, ONE-c #452), `[output]` (`netcdf`, the file
+name, written by the one writer of [Output](output.md); `path`, its directory: the summer file writes
 `examples/urban/output/alexanderplatz.nc`, where the renderers read it;
 `"none"` is the run folder's `output/`) and `[run]` (`scenario`,
 `backend = "cpu"`, `serial`). Most of it is generated from the coupling
@@ -519,8 +529,9 @@ default, is an error (a silently ignored key is a bug), as are `f` and
 channel builders do not take, and a case-table reference that does not
 resolve (naming the table, the file and its size). A run writes
 `diagnostics.csv`, `output/statistics.toml` (the averaged statistics or
-the channel result), `output/series.csv` (every `[averaging]
-series_interval`) and, with `[towers] below > 0`, `output/towers.csv` (the
+the channel result), the time series (every `[averaging]
+series_interval`) in `output/output.nc` (the one writer, [Output](output.md))
+and, with `[towers] below > 0`, `output/towers.csv` (the
 CASES-99 hockey stick bins). The comparisons the old runner scripts made
 are sweeps now (`gabls1_closures.toml`, `cases99_closures.toml`,
 `gabls3_closures.toml`, `gabls4_closures.toml`,

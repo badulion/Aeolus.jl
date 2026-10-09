@@ -400,8 +400,8 @@ canonical order once, so later threaded kernels match it bit for bit.
 | `abl_diagnostics` | `_plane_means`, `resolved_tke_profile` | `plane_partials!`, `plane_reduce!` |
 | `Chemistry` | `apply_photochemistry!` P / L / H | `plane_reduce!` (fused update) |
 | `Chemistry` | `apply_wet_deposition!` | `plane_map!` (fused update, cell order per plane) |
-| Berlin `core/ledger.jl` | `ledger_water`, `ledger_water_split` (`level_sums`), `add_surface!` | `plane_partials!`; per-class ordered fold |
-| Berlin `core/air_heat.jl` | `air_heat_levels!` (fluid and solid sums) | `plane_reduce!` (tuple) |
+| Berlin `src/budgets/budgets.jl` | `ledger_water`, `ledger_water_split` (`level_sums`), `add_surface!` | `plane_partials!`; per-class ordered fold |
+| Berlin `src/budgets/meter.jl` | `air_heat_levels!` (fluid and solid sums) | `plane_reduce!` (tuple) |
 | Berlin `parent/case.jl` | `_level_sums!` (the parent's budget levels) | `plane_partials!` |
 | `scalar_advection` | `sgs_diffuse!` Σ\|q\|, Σ tendency, its water split | `plane_reduce!` (tuple) |
 | `aq_chem` | species totals; level air temperature | `interior_sum`; `plane_reduce!` (masked) |

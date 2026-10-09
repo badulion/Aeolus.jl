@@ -74,7 +74,7 @@ const CASE_FIELDS = (
     Ts0 = ("initial.ts0",), Ts_water_offset = ("initial.ts_water_offset",),
     T_soil0 = ("initial.t_soil0",), p_surface = ("initial.p_surface",),
     physics = ("physics.*",), options = ("physics.options",),
-    canopy_top = ("ledger.canopy_top",),
+    canopy_top = ("budgets.canopy_top",),
     output_path = ("output.path", "output.netcdf"), child_boundaries = ("output.child_boundaries",),
     backend = ("run.backend", "run.serial"))
 
@@ -729,7 +729,7 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "p_surface", Optional{Float64}; range = (0, Inf), open_lower = true, units = "Pa",
                 doc = "pressure at the ground; \"none\": from the sounding (101325 Pa for the idealised profile)")
     end
-    led = section("ledger"; doc = "The energy and water ledgers.") do s
+    led = section("budgets"; doc = "The budgets (Aeolus.BudgetSystem).") do s
         option!(s, "canopy_top", Float64; default = NaN, units = "m",
                 doc = "top of the :canopy layer of the air-heat budget; nan: the tallest roof")
     end
@@ -868,7 +868,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
                       ini.sounding, ini.dynamic, ini.theta_surface, ini.theta_inversion_z, ini.theta_lapse, ini.u0,
                       ini.qv0, ini.qv_scale, ini.ts0, ini.ts_water_offset, ini.t_soil0, ini.p_surface,
                       urban_physics(cfg), options,
-                      cfg.ledger.canopy_top,
+                      cfg.budgets.canopy_top,
                       out.netcdf === nothing ? nothing : joinpath(dir, out.netcdf), out.child_boundaries,
                       CPUBackend(; serial = r.serial))
 end
@@ -978,12 +978,12 @@ function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::
     res = run_results(case; θ_start = θ_start, wall = time() - t0, wall_first_step = t_first[] - t0,
                       simulated = case.sim.t - sim_t0, steps = case.clock.n - n0)
     Config.write_results(rf, res)
-    led = res["ledgers"]
-    @info("ledgers " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
+    led = res["budgets"]
+    @info("budgets " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
           event = :results, surface = led["surface_max_abs_closure"], water = led["water_residual"],
           air_heat = led["air_heat_closure"])
-    led["closed"] || @warn("the case's ledgers do not close within their tolerances (results.toml)",
-                           subsystem = :urban, domain = current_domain(), event = :ledgers_open)
+    led["closed"] || @warn("the case's budgets do not close within their tolerances (results.toml)",
+                           subsystem = :urban, domain = current_domain(), event = :budgets_open)
     return r
 end
 
@@ -991,7 +991,7 @@ end
 const RESULTS_LAYER = 100.0
 
 """
-    LEDGER_TOLERANCES
+    BUDGET_TOLERANCES
 
 What [`run_results`](@ref) calls a closed ledger: the surface-energy
 closure of every class below `surface` W m⁻² (mean over the run;
@@ -1000,7 +1000,7 @@ measured ≲ 3e-10 on the smoke runs), the water residual of the air below
 W m⁻² of ground (mean over the run), with nothing booked as
 `(:core, :unattributed)` or `(:output, :between_steps)` (#253).
 """
-const LEDGER_TOLERANCES = (surface = 1e-6, water = 1e-12, air_heat = 1e-10)
+const BUDGET_TOLERANCES = (surface = 1e-6, water = 1e-12, air_heat = 1e-10)
 
 """
     mean_θ_below(case, zmax) -> Float64
@@ -1033,11 +1033,11 @@ they were the by-hand checks of the Berlin example):
 
 * `finite`: every interior value of u, v, w, θ and every tracer, and the
   surface temperature, is finite;
-* `[ledgers]`: the surface-energy budget per class (`[ledgers.surface.<class>]`:
+* `[budgets]`: the surface-energy budget per class (`[budgets.surface.<class>]`:
   Rn, H, LE, G, dS and the closure, W m⁻², mean over the run), its
   largest |closure|, the water residual of the air (kg m⁻²), the
   air-heat closure (W m⁻² of ground), whether anything changed θ
-  unattributed, and `closed` against [`LEDGER_TOLERANCES`](@ref);
+  unattributed, and `closed` against [`BUDGET_TOLERANCES`](@ref);
 * `[air_heat]`: every term of the air-heat ledger of the whole column,
   `"<stage>.<name>"` in W m⁻² of ground (mean over the run; the nest's
   or open faces' boundary terms among them), and the storage;
@@ -1051,8 +1051,8 @@ they were the by-hand checks of the Berlin example):
 Reading the state only: computing it changes nothing.
 """
 function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, simulated = NaN, steps = 0)
-    l, sim, bus = case.ledger, case.sim, case.bus
-    tol = LEDGER_TOLERANCES
+    l, sim, bus = case.budgets, case.sim, case.bus
+    tol = BUDGET_TOLERANCES
     finite = all(f -> all(isfinite, interior_view(f)), (sim.u, sim.v, sim.w, sim.θ)) &&
              all(t -> all(isfinite, interior_view(t.field)), case.tracers.list) && all(isfinite, bus.Ts)
     rows = surface_budget(l)
@@ -1065,7 +1065,7 @@ function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, si
     heat = hb.elapsed > 0 ? hb.closure / hb.elapsed : 0.0
     unattributed = haskey(hb.terms, (:core, :unattributed)) || haskey(hb.terms, (:output, :between_steps))
     closed = smax < tol.surface && abs(w.residual) < tol.water && abs(heat) <= tol.air_heat && !unattributed
-    ledgers = Dict{String,Any}("surface" => surf, "surface_max_abs_closure" => smax,
+    budgets = Dict{String,Any}("surface" => surf, "surface_max_abs_closure" => smax,
                                "water_residual" => w.residual, "air_heat_closure" => heat,
                                "unattributed" => unattributed, "closed" => closed,
                                "tolerances" => Dict{String,Any}(string(k) => v for (k, v) in pairs(tol)))
@@ -1077,7 +1077,7 @@ function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, si
                               "wall_first_step_s" => wall_first_step, "wall_s_per_simulated_h" => rest)
     nest = find_coupling(case, :nesting)
     nest === nothing || nest.parent === nothing || (timing["wall_parent_s"] = nest.wall_parent)
-    out = Dict{String,Any}("finite" => finite, "ledgers" => ledgers, "air_heat" => air,
+    out = Dict{String,Any}("finite" => finite, "budgets" => budgets, "air_heat" => air,
                            "theta_mean_below_100m_start" => θ_start,
                            "theta_mean_below_100m_end" => mean_θ_below(case, RESULTS_LAYER),
                            "timing" => timing)

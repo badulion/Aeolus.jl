@@ -13,7 +13,7 @@
 # uncorrected, and with the Lilly cutoff, at 64³ (Δ = 6.25 m).
 #
 # This script only reads the run folders (output/statistics.toml and
-# output/series.csv): it compares h, u*, the surface heat flux and the
+# output/output.nc): it compares h, u*, the surface heat flux and the
 # low-level jet with the intercomparison ranges of
 # examples/sbl/data/gabls1_reference.csv and makes the figure.
 #

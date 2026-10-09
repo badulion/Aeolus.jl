@@ -24,7 +24,7 @@
 #   init!(c, case)              -> called once, after every coupling is built
 #   init_priority(::Type{C})    -> Int, init! order (lower first, default 0; ties: registry order)
 #   run_stage!(c, case, ::Val{S}, dt)
-#   output_fields(c, case)      -> Vector of OutputField, registered when the file is created
+#   output_fields(c, case)      -> Vector of OutputVariable, registered when the file is created
 #   budget!(c, case, ledger)    -> energy / water terms for the ledger
 #   diagnostics(c, case)        -> Vector{Diagnostic} (Aeolus.RunLog): the scalars c reports,
 #                                  in diagnostics.csv / .nc and in its log event of each output
@@ -136,7 +136,7 @@ other couplings initialise from them (e.g. the deposition's r_a from the
 first air cell's wind, which reads the face velocity at an edge column).
 """
 init_priority(::Type{<:AbstractCoupling}) = 0
-output_fields(c::AbstractCoupling, case) = OutputField[]
+output_fields(c::AbstractCoupling, case) = OutputVariable[]
 budget!(c::AbstractCoupling, case, ledger) = nothing
 smoke_variants(::Type{<:AbstractCoupling}) = ()
 smoke_check(c::AbstractCoupling, case) = Pair{String,Bool}[]

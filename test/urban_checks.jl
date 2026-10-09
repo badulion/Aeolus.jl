@@ -91,17 +91,17 @@ function berlin_smoke_checks()
                 end
                 @test failed == String[]
                 # the surface energy ledger closes per class
-                rows = BC.surface_budget(case.ledger)
+                rows = BC.surface_budget(case.budgets)
                 @test !isempty(rows)
                 for r in rows
                     @test abs(r.closure) < 1e-6          # W/m²; measured ≲ 3e-10
                 end
                 dom = rows[end]
                 # the water ledger closes
-                w = BC.water_budget(case.ledger)
+                w = BC.water_budget(case.budgets)
                 @test abs(w.residual) < 1e-12            # kg/m²; measured ≲ 3e-16
                 # the air-heat ledger closes (#253), nothing changed θ unattributed
-                hb = BC.heat_budget(case.ledger)
+                hb = BC.heat_budget(case.budgets)
                 @test hb.elapsed > 0
                 @test abs(hb.closure / hb.elapsed) <= 1e-10     # W/m²
                 @test !haskey(hb.terms, (:core, :unattributed))
@@ -118,7 +118,7 @@ function berlin_smoke_checks()
                                label, time() - t0, dom.Rn, dom.H, dom.LE, dom.G, dom.dS,
                                dom.closure, w.residual, hb.closure / hb.elapsed)
                 if irun == 1
-                    print(BC.ledger_report(case))
+                    print(BC.budget_report(case.budgets))
                     # midday sun: the surfaces gain radiative energy and warm
                     @test dom.Rn > 0 && dom.dS > 0
                     # the flux-form transport conserves water (#132)
@@ -340,7 +340,7 @@ function berlin_parent_checks()
         end
         @test all(isfinite, interior_view(p.sim.θ)) && all(isfinite, interior_view(p.sim.qv))
         @test minimum(interior_view(p.closure.e)) >= 0
-        hb = BC.heat_budget(p.heat)
+        hb = BC.stage_budget(p.heat)
         scale = maximum(abs, values(hb.terms))
         @test abs(hb.closure) <= 1e-10 * scale
         for key in ((:surface_flux, :tiles), (:column_tendency, :column_radiation),
@@ -350,7 +350,7 @@ function berlin_parent_checks()
         end
         @test hb.terms[(:surface_flux, :tiles)] ≈ p.sfc_mean[:delivered_H] rtol = 1e-10
         @test abs(hb.terms[(:dynamics, :transport)]) <= 1e-10 * scale
-        wb = BC.heat_budget(p.water)
+        wb = BC.stage_budget(p.water)
         wscale = maximum(abs, values(wb.terms))
         @test abs(wb.closure) <= 1e-10 * wscale
         @test wb.terms[(:surface_flux, :tiles)] ≈ p.sfc_mean[:delivered_E] rtol = 1e-10
@@ -378,7 +378,7 @@ function berlin_parent_checks()
             t = p.sim.t
             zf, fl = BC.parent_heat_flux(p)
             t >= 2 * 3600 && push!(ratios, minimum(fl) / Q(t))
-            hb = BC.heat_budget(p.heat)
+            hb = BC.stage_budget(p.heat)
             worst = max(worst, abs(hb.closure) / maximum(abs, values(hb.terms)))
             h = round(Int, t / 3600)
             isapprox(t, 3600h; atol = 1) && (zi[h] = BC.parent_zi(p))
@@ -393,8 +393,8 @@ function berlin_parent_checks()
         @info @sprintf("entrainment flux ratio (2-6 h mean of %d profiles): %.3f", length(ratios), R)
         @test -0.25 <= R <= -0.10       # measured -0.130
         @test worst < 1e-10             # measured 6.8e-16
-        hb = BC.heat_budget(p.heat)
-        below = BC.heat_budget(p.heat; layer = (0.0, zi[6]))
+        hb = BC.stage_budget(p.heat)
+        below = BC.stage_budget(p.heat; layer = (0.0, zi[6]))
         @test abs(get(below.terms, (:dynamics, :damping), 0.0)) < 0.01 * hb.terms[(:surface_flux, :prescribed)]
     end
 

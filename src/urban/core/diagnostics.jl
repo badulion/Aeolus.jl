@@ -105,9 +105,9 @@ function frame_diagnostics(case)
 end
 
 """
-    ledger_diagnostics(case) -> Vector{Diagnostic}
+    budget_diagnostics(case) -> Vector{Diagnostic}
 
-The ledgers, as means over the ledger's interval (the run so far):
+The budgets, as means over their interval (the run so far):
 
 * `surface.<class>.<term>` (W m⁻²) for every surface class present and
   the area-weighted `domain`, `term` ∈ `Rn`, `H`, `LE`, `G`, `dS` and
@@ -121,11 +121,11 @@ The ledgers, as means over the ledger's interval (the run so far):
 `NaN` before the first step. The closures are round-off when every
 coupling books what it moves; a growing one is a leak.
 """
-function ledger_diagnostics(case)
-    l = case.ledger
+function budget_diagnostics(case)
+    l = case.budgets
     rows = per_state(() -> surface_budget(l), case)
     heat = per_state(() -> heat_budget(l), case)
-    classes = [LEDGER_CLASS_NAMES[k] for k in 1:length(LEDGER_CLASS_NAMES)
+    classes = [SURFACE_CLASS_NAMES[k] for k in 1:length(SURFACE_CLASS_NAMES)
                if count(==(UInt8(k)), case.geom.sfc) > 0]
     push!(classes, "domain")
     function surface(name, term)
@@ -139,18 +139,18 @@ function ledger_diagnostics(case)
     ds = Diagnostic[]
     for name in classes, term in (:Rn, :H, :LE, :G, :dS, :closure)
         push!(ds, Diagnostic("surface.$name.$term", "W m-2", surface(name, term);
-                             description = "surface energy ledger, $name, mean over the run"))
+                             description = "surface energy budget, $name, mean over the run"))
     end
     perW(x) = (b = heat(); b.elapsed > 0 ? x(b) / b.elapsed : NaN)
     append!(ds, [
         Diagnostic("water.storage", "kg m-2", () -> l.nsteps == 0 ? NaN : water_budget(l).storage;
                    description = "change of the water in the air"),
         Diagnostic("water.residual", "kg m-2", () -> l.nsteps == 0 ? NaN : water_budget(l).residual;
-                   description = "water ledger: storage minus the booked sources"),
+                   description = "water budget: storage minus the booked sources"),
         Diagnostic("heat.storage", "W m-2", () -> perW(b -> b.storage);
                    description = "change of the heat of the air, whole column"),
         Diagnostic("heat.closure", "W m-2", () -> perW(b -> b.closure);
-                   description = "air-heat ledger: storage minus the attributed terms, whole column"),
+                   description = "air-heat budget: storage minus the attributed terms, whole column"),
     ])
     return ds
 end
@@ -159,11 +159,11 @@ end
     timing_keys(case) -> Vector{Tuple{Symbol,Symbol}}
 
 Every `(stage, entry)` the case times: each schedule entry, the dynamics
-`(:dynamics, :step!)` and the ledgers' own `(:ledger, :ledger)` and
-`(:ledger, :air_heat)`.
+`(:dynamics, :step!)` and the ledgers' own `(:budgets, :budgets)` and
+`(:budgets, :air_heat)`.
 """
 function timing_keys(case)
-    ks = Tuple{Symbol,Symbol}[(:dynamics, :step!), (:ledger, :ledger), (:ledger, :air_heat)]
+    ks = Tuple{Symbol,Symbol}[(:dynamics, :step!), (:budgets, :budgets), (:budgets, :air_heat)]
     for S in ALL_STAGES, e in get(case.schedule, S, ScheduleEntry[])
         k = (S, coupling_name(e.coupling))
         k in ks || push!(ks, k)
@@ -188,13 +188,13 @@ timing_diagnostics(case) = Diagnostic[
     diagnostics(case::Case, case) -> Vector{Diagnostic}
 
 The core's own diagnostics: [`frame_diagnostics`](@ref), the ledgers
-under `ledger.` ([`ledger_diagnostics`](@ref)), the stage timing
+under `budgets.` ([`budget_diagnostics`](@ref)), the stage timing
 ([`timing_diagnostics`](@ref)) and the closure the steps run under
 `sgs.` (the library's `diagnostics(closure, sim)`).
 """
 function diagnostics(case::Case, ::Case)
     ds = frame_diagnostics(case)
-    append!(ds, prefixed("ledger", ledger_diagnostics(case)))
+    append!(ds, prefixed("budgets", budget_diagnostics(case)))
     append!(ds, timing_diagnostics(case))
     sgs = get(case.step_kwargs, :sgs, nothing)
     sgs === nothing || append!(ds, prefixed("sgs", diagnostics(sgs, case.sim)))
@@ -303,17 +303,17 @@ The end-of-run events, `Info`, `subsystem = :urban`:
   (max − min of `Ts`, K) and `max_div` (s⁻¹);
 * `event = :timing`, one per stage entry, largest first: `stage`,
   `entry`, `seconds`, `ms_per_step`;
-* `event = :ledger`, `ledger = :surface`, one per class (and `domain`):
+* `event = :budget`, `budget = :surface`, one per class (and `domain`):
   `class`, `ncol`, `Rn`, `H`, `LE`, `G`, `dS`, `residual`, every extra
   surface term and `closure` (W m⁻²);
-* `event = :ledger`, `ledger = :water`: `storage`, every source and
+* `event = :budget`, `budget = :water`: `storage`, every source and
   `residual` (kg m⁻² of domain);
-* `event = :ledger`, `ledger = :heat`, one per layer (`column`, `canopy`,
+* `event = :budget`, `budget = :heat`, one per layer (`column`, `canopy`,
   `0-100m`): `storage` and `closure` (W m⁻²), `elapsed` (s); then one per
   attributed term, `term = "stage/entry"`, with its W m⁻² per layer.
 """
 function log_run_end(case; nsteps::Integer, t_wall::Real)
-    cfg, l = case.cfg, case.ledger
+    cfg, l = case.cfg, case.budgets
     out = cfg.output_path === nothing ? "" : cfg.output_path
     @info(isempty(out) ? "ran $nsteps steps in $(round(t_wall; digits = 1)) s (no output file)" :
                          "ran $nsteps steps in $(round(t_wall; digits = 1)) s, $(case.clock.nrecord) records",
@@ -330,34 +330,34 @@ function log_run_end(case; nsteps::Integer, t_wall::Real)
     end
     r4(x) = round(x; sigdigits = 4)
     for r in surface_budget(l)
-        @info("surface energy ledger: $(r.name)", subsystem = :urban, domain = current_domain(),
-              event = :ledger, ledger = :surface, class = r.name, ncol = r.ncol, Rn = r4(r.Rn),
+        @info("surface energy budget: $(r.name)", subsystem = :urban, domain = current_domain(),
+              event = :budget, budget = :surface, class = r.name, ncol = r.ncol, Rn = r4(r.Rn),
               H = r4(r.H), LE = r4(r.LE), G = r4(r.G), dS = r4(r.dS), residual = r4(r.residual),
               (t => r4(v) for (t, v) in sort!(collect(r.extras)))..., closure = r.closure)
     end
     if l.nsteps > 0
         w = water_budget(l)
-        @info("water ledger", subsystem = :urban, domain = current_domain(), event = :ledger,
-              ledger = :water, storage = w.storage, (t => v for (t, v) in sort!(collect(w.sources)))...,
+        @info("water budget", subsystem = :urban, domain = current_domain(), event = :budget,
+              budget = :water, storage = w.storage, (t => v for (t, v) in sort!(collect(w.sources)))...,
               residual = w.residual)
     end
-    hl = l.heat
+    hl = energy(l)
     if hl.meter !== nothing
         layers = Any[:column]
         isfinite(hl.canopy_top) && push!(layers, :canopy)
         push!(layers, (0.0, 100.0))
         lname(x) = x isa Symbol ? x : Symbol("z$(round(Int, x[1]))_$(round(Int, x[2]))m")
-        bs = [heat_budget(hl; layer = x) for x in layers]
+        bs = [stage_budget(hl; layer = x) for x in layers]
         el = bs[1].elapsed
         if el > 0
             for (x, b) in zip(layers, bs)
                 @info("air-heat ledger: $(lname(x))", subsystem = :urban, domain = current_domain(),
-                      event = :ledger, ledger = :heat, layer = lname(x), elapsed = el,
+                      event = :budget, budget = :heat, layer = lname(x), elapsed = el,
                       storage = r4(b.storage / el), closure = b.closure / el)
             end
-            for key in sort!(unique(vcat([collect(keys(b.terms)) for b in bs]...)); by = _heat_key_order)
+            for key in sort!(unique(vcat([collect(keys(b.terms)) for b in bs]...)); by = k -> report_order(hl, k))
                 @info("air-heat term $(key[1])/$(key[2])", subsystem = :urban,
-                      domain = current_domain(), event = :ledger, ledger = :heat_term,
+                      domain = current_domain(), event = :budget, budget = :heat_term,
                       term = "$(key[1])/$(key[2])",
                       (lname(x) => r4(get(b.terms, key, 0.0) / el) for (x, b) in zip(layers, bs))...)
             end

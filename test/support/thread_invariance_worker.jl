@@ -331,9 +331,9 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
         x = getfield(bus, n)
         x isa AbstractArray{Float64} && record!("$label/bus.$n", x)
     end
-    record_repr!("$label/ledger.surface", BC.surface_budget(case.ledger))
-    record_repr!("$label/ledger.water", BC.water_budget(case.ledger))
-    record_repr!("$label/ledger.air_heat", BC.heat_budget(case.ledger))
+    record_repr!("$label/ledger.surface", BC.surface_budget(case.budgets))
+    record_repr!("$label/ledger.water", BC.water_budget(case.budgets))
+    record_repr!("$label/ledger.air_heat", BC.heat_budget(case.budgets))
     record!("$label/dt", dts)
     record!("$label/solver_iterations", iters)
     return case

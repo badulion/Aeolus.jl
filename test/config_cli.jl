@@ -142,7 +142,8 @@ end
     for s in sch.sections, o in s.options          # every option of every section is listed
         @test occursin("\n  $(o.key) : ", out)
     end
-    @test occursin("variables : [string, …] = []", out)     # [output] extended by the model
+    # [output] extended by the model; its default set (ONE-c): u, v, w, theta and the domain means
+    @test occursin("variables : [string, …] = [\"u\", \"v\", \"w\", \"theta\", \"u_mean\"", out)
     @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("sbl", out) && occursin("urban", out)
     # the cross-field checks, in words (CFG-i, #364): after the sections, one line each
     @test occursin("\ncross-field checks:\n  - exactly one of `time.duration` and `time.nsteps`", out)

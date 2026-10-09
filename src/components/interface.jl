@@ -23,8 +23,9 @@ interface:
 | [`stages`](@ref)`(c)` | `()` | the [`Stage`](@ref)s it runs in |
 | [`run_stage!`](@ref)`(c, domain, Val(stage), dt)` | required per stage | the work; type-stable |
 | [`limit_dt`](@ref)`(c, domain)` | `nothing` | an explicit stability limit `(dt, label)` |
-| [`budget!`](@ref)`(c, domain, budgets)` | no terms | its terms in the shared budgets |
-| [`outputs`](@ref)`(c)` | `()` | its output catalogue |
+| [`budget!`](@ref)`(c, domain, budgets)` | no terms | the terms it reports in the shared budgets |
+| [`budget_fields`](@ref)`(c, q)`, [`solid_mask`](@ref)`(c)` | `()`, `nothing` | the fields of a measured quantity it carries, its obstacles |
+| [`outputs`](@ref)`(c)`, [`output_names`](@ref)`(C, opts)` | empty | its output catalogue |
 | [`checks`](@ref)`(c)` | `()` | the checks it publishes |
 | `checkpoint_state(c)`, `restore_checkpoint_state!(c, s)` | `nothing` (stateless) | everything a bit-identical restart needs ([`checkpoint_state`](@ref Aeolus.IO.checkpoint_state)) |
 
@@ -130,22 +131,29 @@ of the core and every component (`TimeIntegration.cfl_diagnostics`,
 limit_dt(::AbstractComponent, domain) = nothing
 
 """
-    budget!(c, domain::Domain, budgets) -> nothing
+    budget!(c, domain::Domain, budgets::Budgets) -> nothing
 
-Book `c`'s terms in the shared budgets (energy, water, mass, momentum,
-tracers). The budget system itself arrives with ONE-c (#452); the default books
-nothing.
+Book the terms `c` reports in the domain's shared budgets
+(`Aeolus.BudgetSystem`, ONE-c #452): its surface energy terms
+(`add_surface!`), the water it adds to the air from outside it
+(`add_water!`) and free-form terms (`add_term!`). The model calls it in
+stage 13 (`:budgets`) of every step with the domain's budgets on, after
+the step (`budgets.dt` is the step taken). What `c` does to the air in
+its stage entries needs no booking: the budgets measure every entry
+([`with_budgets`](@ref)). The default books nothing.
 """
 budget!(::AbstractComponent, domain, budgets) = nothing
 
 """
-    outputs(c) -> Tuple
+    outputs(c) -> Vector{OutputVariable}
 
-`c`'s output catalogue: the variables it can write (name, units,
-dimensions and how each is computed). The default is empty; the one
-writer that selects from the catalogues arrives with ONE-c (#452).
+`c`'s output catalogue: the `Aeolus.Output.OutputVariable`s it can write
+(name, units, dimensions and how each is computed), named exactly as
+[`output_names`](@ref) gives them for its type and options. `[output]
+variables` selects from the catalogues of the enabled components and the
+core ([`domain_catalogue`](@ref)). The default is empty.
 """
-outputs(::AbstractComponent) = ()
+outputs(::AbstractComponent) = OutputVariable[]
 
 """
     checks(c) -> Tuple

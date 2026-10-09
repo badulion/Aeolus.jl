@@ -151,9 +151,19 @@ function resume_check(config_path::AbstractString; nsteps::Integer = 20, stop::I
             runs = (full, res))
 end
 
-"A run output for comparison: the bytes, or for a `.toml` the parsed table without its `wall_time` keys."
+"""
+A run output for comparison: the bytes; for a `.toml` the parsed table
+without its `wall_time` keys; for a NetCDF file (`.nc`, the one writer's
+`output.nc`, ONE-c) every variable's values and attributes (an HDF5 file's
+bytes carry its own write history).
+"""
 function _output_content(p)
     isfile(p) || return nothing
+    if endswith(p, ".nc")
+        return Aeolus.NCIO.NCDataset(p) do ds
+            Dict(k => (Array(ds[k].var), Dict(ds[k].attrib)) for k in keys(ds))
+        end
+    end
     endswith(p, ".toml") || return read(p)
     strip_wall(d::AbstractDict) = Dict(k => strip_wall(v) for (k, v) in d if k != "wall_time")
     strip_wall(v) = v

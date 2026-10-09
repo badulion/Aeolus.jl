@@ -186,8 +186,8 @@ t_soil0 = 288.0
 # idealised profile) [Pa]
 p_surface = "none"
 
-[ledger]
-# The energy and water ledgers.
+[budgets]
+# The budgets (Aeolus.BudgetSystem).
 # top of the :canopy layer of the air-heat budget; nan: the tallest roof [m]
 canopy_top = nan
 

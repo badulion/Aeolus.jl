@@ -22,6 +22,7 @@ using Aeolus
 using Aeolus.Config
 using Aeolus.Fields: interior_view
 using Aeolus.IO: fnv1a64, read_run_toml
+using Aeolus.NCIO: NCDataset
 using Statistics: mean, std
 import TOML
 
@@ -319,11 +320,14 @@ end
     @test st["nsamples"] == res.obj.stats.nsamples > 0
     @test st["u_star"] == res.obj.stats.u_star && 0.1 < st["u_star"] < 0.6
     @test st["H0"] < 0                                         # the cooled surface takes heat
-    rows = readlines(joinpath(out, "series.csv"))
-    @test startswith(rows[1], "t,u_star,wθ,H,h,S_max,z_jet,")
-    ts = [parse(Float64, split(l, ",")[1]) for l in rows[2:end]]
-    # 0-600 s every 120 s: each row is the first step at or past 120 k s (steps of a few s)
+    # the time series, written by the one output writer (ONE-c): output.nc's time_series stream
+    ts, ustar = NCDataset(joinpath(out, "output.nc")) do nc
+        @test Set(s[1] for s in SBL_SERIES) ⊆ Set(keys(nc))
+        nc["time_series"].var[:], nc["u_star"].var[:]
+    end
+    # 0-600 s every 120 s: each sample is the first step at or past 120 k s (steps of a few s)
     @test length(ts) == 5 && all(120k - 1e-9 <= ts[k] < 120k + 10 for k in 1:5)
+    @test ts == [r.t for r in res.obj.series] && ustar == [r.u_star for r in res.obj.series]
     @test res.obj.case.sim.t ≈ 600.0
     # towers record only in their hours: GABLS2 starts at 16 LT
     cfg99 = load_est("cases99", ["grid.size=[8,8,32]", "stepper.end_time=\"none\"", "stepper.nsteps=6",
