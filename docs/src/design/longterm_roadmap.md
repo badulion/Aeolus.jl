@@ -1710,6 +1710,103 @@ feedback on a non-aligned child without a common-face conservation box
 (idealised cases only, Berlin runs paused). `AdaptiveMesh` keeps its own
 index-space proper-nesting check.
 
+### Nested Berlin: synthetic inflow on by default, checkpoint/restart ✅ SHIPPED
+
+**✅ SHIPPED** (#268 / PR #415, #269 / PR #416). What was built:
+- **Synthetic inflow on the Berlin nest (#268).** The `:inflow_turbulence`
+  addon puts `Transition.InflowTurbulence` on the child's lateral nest
+  faces, on by default: the digital filter (Xie & Castro 2008) by
+  default, FSD (`free_stream_generator`, now the single FSD factory) as
+  an option; statistics from the parent's resolved field by default
+  (`ParentResolvedStatistics`, which now accepts a `StretchedGrid`
+  parent, bit-identical to a `RegularGrid` on a uniform grid; SGS TKE
+  from each level's thickness), or parametrized. They are folded from a
+  new nest window hook (`fold_inflow_statistics!`). `budget!` books the
+  injected KE flux as `:inflow_ke`. Two-way feedback leaves out an
+  inflow band of 2 max L_s (`exclude_inflow_feedback!`). A new
+  `CaseConfig` field `[boundaries] analysis_buffer` (default 140 m, the
+  canopy-top estimate of the N-inflow-d fetch rule) and
+  `analysis_columns(case)` cut the columns near lateral faces out of the
+  observation-compared u* diagnostics.
+- **Checkpoint/restart of the nested Berlin case (#269).**
+  `Aeolus.IO.structural_state` / `restore_structural_state!` record and
+  refill the whole mutable state of an object graph, aliasing included.
+  `nest_state` / `restore_nest_state!` cover a whole `NestedRun`: both
+  domains with halos, closure memory, open-boundary buffers, the two
+  parent time levels and the window, step-size memory, flux registers,
+  statistics, boundary data and the inflow generator, with a parent step
+  running ahead settled first. The Berlin driver checkpoints the whole
+  case on the `[checkpoint]` schedule (on in `berlin_summer.toml`, every
+  1800 s of wall clock, 2 kept; Boussinesq core only) and `run!` resumes
+  the newest checkpoint into a fresh build, NetCDF output continuing at
+  the checkpoint's record (`nc_append_record!(...; at)`).
+
+**Measured**:
+- Idealised nest (`era6_inflow_nest_longrun.jl`, Hellsten-type CBL,
+  parent 100 m, r = 3, 2 h): one-way, resolved TKE within 200 m of the
+  upwind face at 50–150 m is 3.165 m²/s² with the generator against
+  2.278 without (+39 %). KE flux 0.786 W/m²; largest added mass flux
+  3.7e-17 of the mean-flow flux; child max|∇·u| 1.1e-16.
+- Two-way without the generator, against one-way: child KE ×1.04,
+  parent ×0.995, overlap θ −0.002 K (passes).
+- Berlin smoke (12 steps of 2 s, noon), every variant: added mass flux
+  1.3e-18 to 2.7e-18 of the mean-flow flux; KE flux 0.0007–0.0017 W/m²;
+  child heat ledger ≤ 7e-13 W/m², water ≤ 4.6e-16 kg/m².
+- Berlin flagship, 80 s of model time (coupling check, not a fetch
+  measurement): the generator adds +3.9 % TKE at canopy top within
+  200 m of the upwind face at 03:00 and +2.5 % at 12:00; 163 against
+  161 ms/step.
+- Nested restart (`nest_restart.jl`, TKE parent, Lagrangian-dynamic
+  child, r = 3, generator on, adaptive steps, checkpoint mid-window):
+  bitwise equal to the uninterrupted run in every field, closure memory,
+  open-boundary buffer, generator plane and clock, one-way, one-way with
+  the parent running ahead, and two-way, at 1 and 12 threads. Restoring
+  only the two simulations differs in 11, 16 and 28 of 30 items. Record
+  8.8–9.0 MiB, write 0.03–0.8 s, restore 0.03–1.1 s.
+- Berlin smoke resume (`config_roundtrip.jl`, every coupling on, 15
+  adaptive steps, checkpoint every 6, interrupted after step 9): state
+  bitwise equal, parent included, and all 51 NetCDF variables equal.
+  Flagship checkpoint 2754.5 MiB in 9.5 s (child alone 20.9 MiB,
+  0.02 s); a fresh process restored it and stayed bitwise for 30 child
+  steps.
+
+**Not validated: two-way nesting with the generator.** Measured
+unstable on the idealised nest over 2 h, against one-way with the
+generator: child KE ×12.4 (×11.8 in a second realisation), parent ×2.6
+(×2.4), overlap θ +0.26 K (+0.23 K). This fails #268's 1.5× / 0.2 K
+criteria and is recorded as `@test_broken` in
+`era6_inflow_nest_longrun.jl`. Cause runs point to the feedback loop
+through the parent statistics, not to the generator alone (frozen
+parent statistics: ×1.3 child, +0.23 K; band widened 3 → 6 parent
+cells: ×2.1, +0.30 K). Not tuned; it is input for the two-way campaign
+#331. The coupling warns when the generator runs with a two-way nest.
+
+**Bugs the tests caught**:
+- A shallow copy in the structural walk restored the run's own plane
+  arrays into the fresh build; `nest_restart.jl` caught it.
+- An example driver's types could not be deserialized: Serialization
+  looks a type up by its module path, so driver modules are now bound
+  in `Main`.
+
+**Expectations that were wrong**:
+- The inflow smoke check expected exactly zero perturbation on outflow
+  levels; the applied perturbation blends two knots in time, so a level
+  just turned to outflow keeps the older knot's share. The check is now
+  on the newest knot.
+- The config_berlin check for the anelastic core with checkpoints first
+  hit the adaptive-timestepper incompatibility and never ran its own
+  assertion; it now sets `timestepper = "fixed"`.
+- At merge, the smoke matrix's anelastic run inherited `[checkpoint]`
+  from `berlin_summer.toml` and was refused (correctly) by the config
+  check; the smoke matrix now turns checkpoints off on a non-Boussinesq
+  core.
+
+**Not built**: the Berlin fetch measurement (hours of model time on the
+nested child; long runs are paused), deferred to the #270 24 h
+validation, which should replace the 140 m `analysis_buffer` default.
+Checkpoints of the anelastic core; resume of `child_boundaries` runs
+(refused with a message).
+
 ### KernelAbstractions port for CPU multithreading (epic #291) ✅ SHIPPED
 
 Phase 81's port, pulled forward for single-node multithreading through
@@ -2071,7 +2168,8 @@ What was built:
   round-trip suite could cover it.
 
 **Not met / not built**: `config_roundtrip.jl` takes 154–176 s against
-the 120 s budget (first-call compilation); Berlin resume (#269);
+the 120 s budget (first-call compilation); Berlin resume (#269, since
+built: PR #416);
 vegetation, soil and water type rasters in the static driver; terrain
 (`zt` is written as 0).
 
