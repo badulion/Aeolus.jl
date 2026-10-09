@@ -4,7 +4,9 @@
 # walls / large window façades in the example's one-temperature-per-cell
 # surface scheme.
 #
-# Since Phase 49 (#27) this file holds NO glazing physics of its own. The
+# Since Phase 49 (#27) this file holds NO glazing physics of its own (the
+# pane heat capacity and the transmittance moved to UrbanSurface in ONE-e,
+# #454). The
 # optics (Fresnel + absorption, multi-pane inter-reflection, angular and
 # hemispherical averages), the pane heat capacity and the emissivity all
 # come from `Aeolus.UrbanSurface` — the same code as the production
@@ -77,8 +79,7 @@ case's glass surface (a `SlabLand`, #129) would absorb it into the cell. Remove 
 """
 function glass_surface_params(; glazing::Glazing = example_glazing())
     base = default_surface_params()
-    C_glass = sum(p -> p.material.density * p.material.specific_heat * p.thickness,
-                  glazing.panes)
+    C_glass = glazing_areal_heat_capacity(glazing)
     hem = glazing_optics_hemispherical(glazing)
     C_s  = vcat(base.C_s,        C_glass)
     alb  = vcat(base.albedo,     hem.R)
@@ -112,9 +113,7 @@ function apply_glass_sw_transmission!(loss::AbstractMatrix,
     size(loss) == size(sfc) == size(sw_arr) ||
         error("apply_glass_sw_transmission!: shape mismatch " *
               "loss=$(size(loss)) sfc=$(size(sfc)) sw=$(size(sw_arr))")
-    τ = cos_incidence === nothing || cos_incidence <= 0 ?
-        glazing_optics_hemispherical(glazing).T :
-        glazing_optics(glazing, acos(min(cos_incidence, 1.0))).T
+    τ = glazing_solar_transmittance(glazing; cos_incidence = cos_incidence)
     Nx, Ny = size(loss)
     @inbounds for j in 1:Ny, i in 1:Nx
         if sfc[i, j] == SURFACE_GLASS
