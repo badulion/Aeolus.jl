@@ -142,6 +142,16 @@ end
     @test info["levels"] == 2
     @test info["max_abs_difference"] ≈ 0.4 rtol = 1e-14
     @test_throws ArgumentError reference_check("t", ref, () -> [1.0]; variable = "theta_profile")
+    # gaps (ONE-g #456): a NaN reference value, and a height where the model
+    # profile is undefined (NaN: above the virtual towers), are skipped; a
+    # profile undefined everywhere fails
+    ref2 = ReferenceProfile([0.6, 1.0, 2.0, 2.4], [NaN, 1.5 + 0.3, 2.5 - 0.4, 0.0])
+    c = reference_check("t", ref2, () -> [1.0, 2.0, NaN]; variable = "theta_profile", z = zm)
+    val, info = c.evaluate(c.acc)
+    @test val ≈ 0.3 rtol = 1e-14 && info["levels"] == 1 && info["undefined_levels"] == 2
+    c = reference_check("t", ref2, () -> [NaN, NaN, NaN]; variable = "theta_profile", z = zm)
+    val, info = c.evaluate(c.acc)
+    @test isnan(val) && occursin("undefined", info["error"])
 end
 
 # ---------------------------------------------------------------------------

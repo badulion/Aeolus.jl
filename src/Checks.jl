@@ -478,7 +478,9 @@ the run. The error measure:
   * a scalar: the distance outside the band, `max(low − x, x − high, 0)`;
   * a profile: the RMS of model − reference at the reference heights in
     the model's column (the model profile interpolated linearly; a `NaN`
-    reference value is a gap in the data and is skipped).
+    reference value is a gap in the data and is skipped, and so is a height
+    where the model profile is undefined, `NaN`, such as above the
+    virtual towers; a profile undefined everywhere fails).
 
 `tolerance` (in the variable's `units`) is the default; it fails when
 no step ended in the window.
@@ -509,8 +511,10 @@ function reference_check(quantity::AbstractString, ref, value_of::Function; vari
             zm = collect(Float64, z)
             inside = [k for k in eachindex(zr) if zm[1] <= zr[k] <= zm[end] && !isnan(vr[k])]
             isempty(inside) && return NaN, merge(info, Dict{String,Any}("error" => "no reference height inside the model column"))
-            d = [_interp(zm, x, zr[k]) - vr[k] for k in inside]
-            info["levels"] = length(inside)
+            d = filter(isfinite, [_interp(zm, x, zr[k]) - vr[k] for k in inside])
+            isempty(d) && return NaN, merge(info, Dict{String,Any}("error" => "the model profile is undefined (NaN) at every reference height"))
+            info["levels"] = length(d)
+            info["undefined_levels"] = length(inside) - length(d)
             info["max_abs_difference"] = maximum(abs, d)
             return sqrt(sum(abs2, d) / length(d)), info
         end
