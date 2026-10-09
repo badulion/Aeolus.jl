@@ -1,6 +1,7 @@
 # P55-f (#191): GABLS1 (Beare et al. 2006, BLM 118, 247) on the shared SBL
-# driver, examples/sbl/driver.jl — reduced to 32³ at 12.5 m and the first
-# 1.25 h (the full 9 h, 64³ comparison is examples/sbl/gabls1.jl). The case
+# driver (the `sbl` run type, Aeolus.StableBoundaryLayer) — reduced to 32³
+# at 12.5 m and the first 1.25 h (the full 9 h, 64³ comparison is
+# examples/sbl/configs/gabls1_closures.toml, read by examples/sbl/gabls1.jl). The case
 # is built from examples/sbl/configs/gabls1.toml (the `sbl` run driver,
 # CFG-d #359).
 
@@ -8,7 +9,7 @@ using Test
 using Aeolus
 using Statistics: mean
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+using Aeolus.StableBoundaryLayer
 
 # Reduced CI run: 32³ (Δ = 12.5 m), 0-1.25 h, statistics over 1.0-1.25 h
 # (after the spin-up of the initial neutral layer: u* peaks at 0.43 m/s

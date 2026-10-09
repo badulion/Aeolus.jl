@@ -155,8 +155,8 @@ for the CLI's sake. The migrations of the example drivers (#311) add
 their entries here: `berlin` (the Berlin case, CFG-c #358).
 """
 const DRIVER_FILES = Dict{String,String}(
-    # CFG-d (#359): the stable-boundary-layer cases and the filtered-DNS record
-    "sbl" => "examples/sbl/config_schema.jl",
+    # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
+    # type in src since EX-b #439: Aeolus.StableBoundaryLayer)
     "dns" => "examples/validation/dns_apriori_driver.jl",
     # CFG-e (#360): the validation drivers and the remaining example scripts
     "channel" => "examples/validation/channel_driver.jl",

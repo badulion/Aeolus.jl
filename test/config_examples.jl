@@ -203,8 +203,9 @@ const EXEMPT = Dict(
     "urban/parent/surface.jl" => URBAN_LIB,
 )
 
-# Directories migrated by their own issues.
-const OTHER_ISSUE_DIRS = Dict("sbl/" => "#359 (CFG-d, SBL)")
+# Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
+# its runs are configs/*.toml of the `sbl` run type in src).
+const OTHER_ISSUE_DIRS = Dict{String,String}()
 
 # The rest of #360's scope, migrated in later parts of the issue (it may be
 # split per directory). This list may only shrink: a file migrated to a

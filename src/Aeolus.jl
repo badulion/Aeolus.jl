@@ -1175,6 +1175,11 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
        surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
        update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
 
+# EX-b (#439): the `sbl` run type (CFG-d #359), moved from examples/sbl/.
+# Included after the exports above: it builds on them (`using ..Aeolus`).
+# Not re-exported: `using Aeolus.StableBoundaryLayer`.
+include("StableBoundaryLayer.jl")
+
 # CFG-b (#357): the command line. `julia --project -m Aeolus <command> …`
 # (Julia ≥ 1.12) calls `Aeolus.main(ARGS)`; `bin/aeolus` does the same on
 # older Julia. The return value is the exit code.
