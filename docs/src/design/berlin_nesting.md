@@ -329,8 +329,10 @@ the mean inflow carries through the perturbed faces,
 diagnostics `inflow_ke_flux`, `inflow_ke` and `inflow_added_flux_max`
 report it. The added mass flux is zero by construction: `smoke_check`
 asserts it ≤ 1e-12 of the face's mean-flow flux on every face at every
-step, the booked term, a non-zero perturbation on an inflow face and an
-exactly zero one on every outflow level. Its smoke variants are the FSD
+step, the booked term, a non-zero perturbation on an inflow face and a
+newest knot that is exactly zero on every outflow level (the applied
+perturbation blends two knots in time, so a level that has just turned
+to outflow still carries the older knot's share). Its smoke variants are the FSD
 generator, the parametrized statistics (with both generators) and the
 parametrized statistics on the analytic `parent_driver = :profile` data;
 the nest's "two-way" variant runs it with the feedback.

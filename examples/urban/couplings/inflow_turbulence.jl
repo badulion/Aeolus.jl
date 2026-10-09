@@ -242,14 +242,19 @@ function smoke_check(c::InflowTurbulenceCoupling, case)
     end
     it = c.it
     it === nothing && return ["the generator was installed on the open faces" => false]
-    # per face: zero perturbation on every level the ramp leaves off
-    # (outflow), and a nonzero one on some inflow face
+    # per face: the newest knot is zero on every level its ramp left off
+    # (outflow), and the applied perturbation is nonzero on some inflow
+    # face (the applied one blends two knots linearly in time, so a level
+    # that just turned to outflow still carries the older knot's share)
     var_in = 0.0; off_zero = true
     for f in it.faces
         P = inflow_perturbation(it, f.side)
         for k in axes(P[1], 2)
-            v = sum(abs2, view(P[1], :, k)) + sum(abs2, view(P[2], :, k)) + sum(abs2, view(P[3], :, k))
-            f.ramp[k] > 0 ? (var_in += v) : (off_zero &= v == 0)
+            if f.ramp[k] > 0
+                var_in += sum(abs2, view(P[1], :, k)) + sum(abs2, view(P[2], :, k)) + sum(abs2, view(P[3], :, k))
+            else
+                off_zero &= all(c -> all(iszero, view(f.Lc[c], :, k)), 1:3)
+            end
         end
     end
     l = case.ledger
@@ -264,7 +269,7 @@ function smoke_check(c::InflowTurbulenceCoupling, case)
         "the injected KE flux is booked: ledger term :inflow_ke = ∫ flux dt > 0" =>
             get(l.terms, :inflow_ke, NaN) == c.ke && c.ke > 0,
         "nonzero perturbation variance on an inflow face" => var_in > 0,
-        "zero perturbation on every outflow level of every face" => off_zero]
+        "the newest perturbation knot is zero on every outflow level of every face" => off_zero]
     if run isa NestedRun && run.twoway !== nothing
         pm = run.nest.parent_mesh
         need = ceil(Int, feedback_exclude_width(it) / min(pm.dx, pm.dy) - 1e-9)
