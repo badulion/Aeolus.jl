@@ -54,6 +54,10 @@ function smoke_overrides(spec)
     for k in sort!(collect(keys(spec.physics)))
         push!(out, "physics.$k=" * BC.toml_literal(spec.physics[k]))
     end
+    # berlin_summer.toml turns [checkpoint] on, and only the Boussinesq
+    # core can be checkpointed (#269): a run on another core turns it off
+    core = get(spec.physics, :core, :boussinesq)
+    Symbol(core) === :boussinesq || push!(out, "checkpoint.every_seconds=" * BC.toml_literal(Inf))
     for c in sort!(collect(keys(spec.options))), (k, v) in pairs(spec.options[c])
         if c === :nesting && k === :parent
             for (pk, pv) in pairs(v)
