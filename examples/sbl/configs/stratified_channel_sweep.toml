@@ -1,0 +1,28 @@
+# The stratified channel at Re_τ = 180 against the DNS of García-Villalba
+# & del Álamo (2011) (P55-f, #191): Ri_τ ∈ {0 (passive θ), 18, 60}, the
+# dynamic Smagorinsky model without and with the Brown et al. (1994)
+# correction. stratified_channel_re180.toml (32 × 32 × 48, neutral
+# spin-up to 10 δ/u_τ, runs to 40, statistics from 20); one run folder per
+# member, each with its own spin-up (the spin-up does not depend on Ri_τ
+# or the closure, so every member starts from the same state).
+# examples/sbl/stratified_channel.jl prints U_b⁺, Nu and the
+# momentum-budget residual against the DNS and makes the figure.
+#
+#   julia --project -m Aeolus run examples/sbl/configs/stratified_channel_sweep.toml
+#   julia --project -m Aeolus run examples/sbl/configs/stratified_channel_sweep.toml --set grid.size=[24,16,32] --set stepper.end_time=16.0 --set case.spinup_time=6.0 --set averaging.from=10.0
+#   julia --project examples/sbl/stratified_channel.jl runs/stratified_channel_re180_*
+
+extends = "stratified_channel_re180.toml"
+
+[sweep]
+axis = [ { key = "case.richardson", values = [0.0, 18.0, 60.0] },
+         { key = "sgs.stability", values = ["none", "brown94"] } ]
+
+[test]
+overrides = [
+    "grid.size=[24,16,32]",
+    "case.spinup_time=0.1",
+    "stepper.end_time=0.15",
+    "averaging.from=0.1",
+]
+member = "60.0_none"

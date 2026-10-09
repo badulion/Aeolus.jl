@@ -3,75 +3,55 @@
 # description; Bosveld et al. 2014a,b; LES results: Basu, Holtslag &
 # Bosveld 2012), P58-d (#194)
 #
-# The run is examples/sbl/configs/gabls3.toml (the `sbl` run driver,
-# CFG-d #359; one run folder per closure): time-height geostrophic wind and
-# advective tendencies from LargeScaleForcing, the prescribed 0.25 m θ as a
-# SurfaceTemperatureSeries, MOST surface fluxes (SurfaceExchange) and
-# stress (WallModels.MOSTWallLaw), Smagorinsky C_s = 0.1 with the P55-e
-# stability correction (`brown94`) or without it (`none`). Dry (see
-# cases.jl).
+# The runs are the sweep examples/sbl/configs/gabls3_closures.toml (the
+# `sbl` run type; one run folder per closure): time-height geostrophic
+# wind and advective tendencies from LargeScaleForcing, the prescribed
+# 0.25 m θ as a SurfaceTemperatureSeries, MOST surface fluxes
+# (SurfaceExchange) and stress (WallModels.MOSTWallLaw), Smagorinsky
+# C_s = 0.1 with the P55-e stability correction (`brown94`) or without it
+# (`none`), 00-04 UTC (the published LES envelope is for 03-04 UTC), the
+# profiles averaged from 03 UTC. Dry (see the theory page).
 #
-# Runs 00 UTC -> T_END (default 04 UTC: the published LES envelope is for
-# 03-04 UTC), averages the profiles from 03 UTC to T_END and compares the
-# jet with the digitised ensemble (examples/sbl/data/gabls3_reference.csv,
-# gabls3_envelope.csv), then makes the figure.
+# This script only reads the run folders: it compares the jet with the
+# digitised ensemble (examples/sbl/data/gabls3_reference.csv,
+# gabls3_envelope.csv) and makes the figure.
 #
-#   NX=64 NZ=64 L=400 julia --project=. examples/sbl/gabls3.jl            # 6.25 m on 400 m
-#   NX=64 NZ=128 LX=200 L=400 julia --project=. examples/sbl/gabls3.jl    # 3.125 m on 200 x 200 x 400 m
-#   NX=128 NZ=128 L=800 julia --project=. examples/sbl/gabls3.jl          # the reference 800 m cube at 6.25 m
-#   CLOSURES=brown94 ... ; REUSE=1 ... (combine separately run closures)
-#   CLOSURES=brown94 RESUME=runs/<run folder> ...  (continue an interrupted run)
+#   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml    # 6.25 m on 400 m
+#   julia --project examples/sbl/gabls3.jl runs/gabls3_*
 #
 # writes examples/sbl/output/gabls3_<tag>.svg, _profiles.csv, _series.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "config_schema.jl"))
+include(joinpath(@__DIR__, "runs.jl"))
 include(joinpath(@__DIR__, "svgplot.jl"))
 using Printf
-using Serialization
+using Statistics: mean
 
-const NX = parse(Int, get(ENV, "NX", "64"))
-const NZ = parse(Int, get(ENV, "NZ", "64"))
-const LZ = parse(Float64, get(ENV, "L", "400"))
-const LX = parse(Float64, get(ENV, "LX", string(LZ)))
-const T_END = parse(Float64, get(ENV, "T_END", string(4 * 3600)))
-const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls3.jl <run folder>…")
+const NX, NZ = cfgval(RUNS[1], "grid.size")[[1, 3]]
+const LX, LZ = cfgval(RUNS[1], "grid.extent")[[1, 3]]
+const T_END = cfgval(RUNS[1], "stepper.end_time")
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
-const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
-const T_AVG = (3 * 3600.0, 4 * 3600.0)
+const OUTDIR = mkpath(SBL_OUT)
+const T_AVG = (cfgval(RUNS[1], "averaging.from"), T_END)
 
-function run_closure(stab)
-    r = sbl_script_run("gabls3"; overrides = ["grid.size=[$NX,$NX,$NZ]", "grid.extent=[$LX,$LX,$LZ]",
-                                              "sponge.z=$(0.75LZ)", "sgs.stability=\"$stab\"",
-                                              "stepper.end_time=$T_END", "averaging.from=$(T_AVG[1])"])
-    st = r.stats; c = r.case
+results = map(RUNS) do r
+    st = r.stats; stab = cfgval(r, "sgs.stability")
     series = [(t = s.t, u_star = s.u_star, wθ = s.wθ, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
                θ2 = s.θ_screen, U10 = s.U_screen, Ts = s.T_s) for s in r.series]      # every 300 s
     @printf("%-8s %s: 03-%02d UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
             stab, TAG, round(Int, T_END / 3600), st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet,
-            c.nsteps, c.wall_time)
-    return (stab = stab, st = st, series = series, nsteps = c.nsteps, wall = c.wall_time)
+            st.nsteps, st.wall_time)
+    (stab = stab, st = st, series = series)
 end
-
-function cached(stab)
-    path = joinpath(OUTDIR, "gabls3_$(TAG)_$(stab).jls")
-    if get(ENV, "REUSE", "0") == "1" && isfile(path)
-        println("$stab: cached $path")
-        return deserialize(path)
-    end
-    r = run_closure(stab)
-    serialize(path, r)
-    return r
-end
-results = [cached(s) for s in CLOSURES]
 
 # ---- jet against the digitised LES ensemble (03-04 UTC) ---------------------
-ref = sbl_read_csv(joinpath(SBL_DATA, "gabls3_reference.csv"))
-env = gabls3_envelope()
+ref = read_table(joinpath(SBL_DATA, "gabls3_reference.csv"))
+env = read_table(joinpath(SBL_DATA, "gabls3_envelope.csv"))
 col(name) = [r[findfirst(==(name), ref.columns)] for r in ref.rows]
 zr = col("z_m")
-jetlo, jethi = sbl_csv_value(env, "jet_height", "low"), sbl_csv_value(env, "jet_height", "high")
-spdlo, spdhi = sbl_csv_value(env, "jet_speed", "low"), sbl_csv_value(env, "jet_speed", "high")
+jetlo, jethi = table_value(env, "jet_height", "low"), table_value(env, "jet_height", "high")
+spdlo, spdhi = table_value(env, "jet_speed", "low"), table_value(env, "jet_speed", "high")
 function jet_refined(z, S)
     k = clamp(argmax(S), 2, length(S) - 1)
     a, b, d = S[k-1], S[k], S[k+1]
@@ -91,14 +71,14 @@ end
 
 # ---- CSV output ---------------------------------------------------------------
 open(joinpath(OUTDIR, "gabls3_$(TAG)_profiles.csv"), "w") do io
-    println(io, "# GABLS3 03-04 UTC mean profiles, Aeolus.jl SBL driver, $TAG (P58-d, #194). Model output, not reference data.")
+    println(io, "# GABLS3 03-04 UTC mean profiles, Aeolus.jl sbl run type, $TAG (P58-d, #194). Model output, not reference data.")
     println(io, "closure,z_m,U,V,speed,theta")
     for r in results, k in eachindex(r.st.z)
         @printf(io, "%s,%.3f,%.4f,%.4f,%.4f,%.4f\n", r.stab, r.st.z[k], r.st.U[k], r.st.V[k], r.st.S[k], r.st.θ[k])
     end
 end
 open(joinpath(OUTDIR, "gabls3_$(TAG)_series.csv"), "w") do io
-    println(io, "# GABLS3 time series (every 300 s), Aeolus.jl SBL driver, $TAG. Model output.")
+    println(io, "# GABLS3 time series (every 300 s), Aeolus.jl sbl run type, $TAG. Model output.")
     println(io, "closure,t_s,u_star,wtheta,H_Wm2,h_m,S_max,z_jet,theta_2m,U_10m,theta_0p25")
     for r in results, s in r.series
         @printf(io, "%s,%.0f,%.4f,%.5f,%.2f,%.1f,%.3f,%.1f,%.3f,%.3f,%.3f\n", r.stab, s.t, s.u_star, s.wθ,

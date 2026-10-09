@@ -4,69 +4,45 @@
 #
 # 400 m cube, U_g = 8 m/s, f = 1.39e-4 s⁻¹, z0 = 0.1 m, θ = 265 K to 100 m
 # then +0.01 K/m, surface cooled at 0.25 K/h, 9 h; statistics of hours 8-9.
-# Built on the shared SBL driver (examples/sbl/driver.jl): geostrophic
-# forcing from LargeScaleForcing, surface heat flux from SurfaceExchange,
-# surface stress from WallModels.MOSTWallLaw, SGS closure stability-
-# corrected by Operators.StabilityCorrected.
+# The runs are the sweep examples/sbl/configs/gabls1_closures.toml (the
+# `sbl` run type, Aeolus.StableBoundaryLayer: geostrophic forcing from
+# LargeScaleForcing, surface heat flux from SurfaceExchange, surface stress
+# from WallModels.MOSTWallLaw, SGS closure stability-corrected by
+# Operators.StabilityCorrected), one run folder per closure: Smagorinsky
+# C_s = 0.1 with the Brown et al. 1994 correction (the Berlin default),
+# uncorrected, and with the Lilly cutoff, at 64³ (Δ = 6.25 m).
 #
-# Runs examples/sbl/configs/gabls1.toml (the `sbl` run driver, CFG-d #359;
-# one run folder per closure under runs/) at N³ (default 64³, Δ = 6.25 m),
-# one run per closure in CLOSURES (default "brown94,none,lilly":
-# Smagorinsky C_s = 0.1 with the Brown et al. 1994 correction — the Berlin
-# default —, uncorrected, and with the Lilly cutoff), then compares h, u*,
-# the surface heat flux and the low-level jet with the intercomparison
-# ranges of examples/sbl/data/gabls1_reference.csv and makes the figure.
-# The same run without the figure: `julia -m Aeolus run
-# examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32]`.
+# This script only reads the run folders (output/statistics.toml and
+# output/series.csv): it compares h, u*, the surface heat flux and the
+# low-level jet with the intercomparison ranges of
+# examples/sbl/data/gabls1_reference.csv and makes the figure.
 #
-#   julia --project=. examples/sbl/gabls1.jl                    # 64³: hours
-#   N=32 julia --project=. examples/sbl/gabls1.jl               # 32³: ~10 min per closure
-#   N=32 CLOSURES=brown94 T_END=7200 julia --project=. examples/sbl/gabls1.jl
-#   CLOSURES=none julia … & CLOSURES=lilly julia … ; REUSE=1 julia …   # in parallel, then combine
-#   CLOSURES=brown94 RESUME=runs/<run folder> julia …            # continue an interrupted run
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml   # 64³: hours per closure
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml --set grid.size=[32,32,32]
+#   julia --project examples/sbl/gabls1.jl runs/gabls1_*                       # the table and the figure
 #
 # writes examples/sbl/output/gabls1_N<N>.svg and gabls1_N<N>_profiles.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "config_schema.jl"))
+include(joinpath(@__DIR__, "runs.jl"))
 using Printf
 
-const N = parse(Int, get(ENV, "N", "64"))
-const T_END = parse(Float64, get(ENV, "T_END", string(9 * 3600)))
-const T_AVG = T_END - 3600
-const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none,lilly"), ","))
-const REF = sbl_read_csv(joinpath(@__DIR__, "data", "gabls1_reference.csv"))
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls1.jl <run folder>…")
+const N = cfgval(RUNS[1], "grid.size")[1]
+const T_END = cfgval(RUNS[1], "stepper.end_time")
+const T_AVG = cfgval(RUNS[1], "averaging.from")
+const REF = read_table(joinpath(SBL_DATA, "gabls1_reference.csv"))
 
-function run_closure(stab)
-    r = sbl_script_run("gabls1"; overrides = ["grid.size=[$N,$N,$N]", "sgs.stability=\"$stab\"",
-                                              "stepper.end_time=$T_END", "averaging.from=$T_AVG"])
-    st = r.stats
+results = map(RUNS) do r
+    st = r.stats; stab = cfgval(r, "sgs.stability")
     @printf("%-8s N=%d: h = %5.1f m  u* = %.3f m/s  w'θ'0 = %.5f K m/s (H = %5.1f W/m²)  LLJ %.2f m/s at %3.0f m  L = %4.0f m  (%d steps, %.0f s)\n",
             stab, N, st.h, st.u_star, st.wθ0, st.H0, st.S_max, st.z_jet, st.L, st.nsteps, st.wall_time)
-    return (stab = stab, st = st, series = r.series)       # series: every 300 s (averaging.series_interval)
+    (stab = stab, st = st, series = r.series)              # series: every 300 s (averaging.series_interval)
 end
-
-# One result file per closure (examples/sbl/output/gabls1_N<N>_<closure>.jls),
-# so the closures can be run as separate processes and the table and figure
-# made from all of them: REUSE=1 loads a closure's result instead of running it.
-using Serialization
-const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
-function cached(stab)
-    path = joinpath(OUTDIR, "gabls1_N$(N)_$(stab).jls")
-    if get(ENV, "REUSE", "0") == "1" && isfile(path)
-        r = deserialize(path)
-        @printf("%-8s N=%d (cached): h = %5.1f m  u* = %.3f m/s  w'θ'0 = %.5f K m/s (H = %5.1f W/m²)  LLJ %.2f m/s at %3.0f m\n",
-                stab, N, r.st.h, r.st.u_star, r.st.wθ0, r.st.H0, r.st.S_max, r.st.z_jet)
-        return r
-    end
-    r = run_closure(stab)
-    serialize(path, r)
-    return r
-end
-results = [cached(s) for s in CLOSURES]
+outdir = mkpath(SBL_OUT)
 
 # ---- the comparison table -------------------------------------------------
-lo(k) = sbl_csv_value(REF, k, "low"); hi(k) = sbl_csv_value(REF, k, "high")
+lo(k) = table_value(REF, k, "low"); hi(k) = table_value(REF, k, "high")
 println("\nHours 8-9 against the intercomparison (Beare et al. 2006, via Basu & Porté-Agel 2006):")
 @printf("  ensemble: u* ∈ [%.3f, %.3f] m/s, w'θ'0 ∈ [%.4f, %.4f] K m/s (H ∈ [%.1f, %.1f] W/m²), h ≈ 200 m; LASD 64³: h = %.0f m, u* = %.3f\n",
         lo("u_star"), hi("u_star"), lo("surface_wtheta"), hi("surface_wtheta"),
@@ -78,9 +54,8 @@ for r in results
 end
 
 # ---- profiles CSV ------------------------------------------------------------
-outdir = OUTDIR
 open(joinpath(outdir, "gabls1_N$(N)_profiles.csv"), "w") do io
-    println(io, "# GABLS1 hours $(T_AVG/3600)-$(T_END/3600), Aeolus.jl SBL driver, $(N)^3 (P55-f, #191). Model output, not reference data.")
+    println(io, "# GABLS1 hours $(T_AVG/3600)-$(T_END/3600), Aeolus.jl sbl run type, $(N)^3 (P55-f, #191). Model output, not reference data.")
     println(io, "closure,z_m,U,V,speed,theta,tau_total")
     for r in results, k in eachindex(r.st.z)
         @printf(io, "%s,%.3f,%.4f,%.4f,%.4f,%.4f,%.6f\n", r.stab, r.st.z[k], r.st.U[k], r.st.V[k],

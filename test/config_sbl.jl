@@ -1,6 +1,7 @@
 # The `sbl` run driver (CFG-d, #359): the stable-boundary-layer cases of
-# examples/sbl/ configured from TOML (examples/sbl/config_schema.jl,
-# examples/sbl/configs/*.toml).
+# examples/sbl/ configured from TOML (Aeolus.StableBoundaryLayer, in src
+# since EX-b #439; examples/sbl/configs/*.toml, the sweeps that replace the
+# runner scripts included).
 #
 # Acceptance tests of the issue covered here:
 #   * bit-identical to the pre-#359 code: each shipped config at its test
@@ -98,15 +99,60 @@ const SBL_TEST = Dict(
     "collapse_channel" => ["grid.size=[16,16,32]", "case.spinup_time=0.3", "stepper.end_time=0.3"])
 const SBL_HOMOGENEOUS = ("gabls1", "gabls2", "cases99", "gabls3", "gabls4_exp3")
 
+# The sweeps that replace the runner scripts (EX-b, #439): file => (the config
+# it extends, the member labels)
+const SBL_SWEEPS = Dict(
+    "gabls1_closures" => ("gabls1", ["brown94", "none", "lilly"]),
+    "cases99_closures" => ("cases99", ["brown94", "none"]),
+    "gabls3_closures" => ("gabls3", ["brown94", "none"]),
+    "gabls4_closures" => ("gabls4_exp3", ["brown94", "none"]),
+    "stratified_channel_sweep" => ("stratified_channel_re180",
+        ["0.0_none", "0.0_brown94", "18.0_none", "18.0_brown94", "60.0_none", "60.0_brown94"]),
+    "relaminarisation_sweep" => ("relaminarisation",
+        vcat(["re180_$h" for h in ("0.3", "0.6", "1.0", "1.5", "2.0")], ["re360_$h" for h in ("0.3", "0.6", "1.0", "1.5", "2.0")])),
+    "collapse_channel_sweep" => ("collapse_channel", ["0.0", "0.0159", "0.0636", "0.25", "0.5", "1.0", "2.0"]))
+
 @testset "sbl driver: every shipped config loads and is listed" begin
-    names = sort!([splitext(f)[1] for f in readdir(SBLCFG) if endswith(f, ".toml")])
+    all_names = sort!([splitext(f)[1] for f in readdir(SBLCFG) if endswith(f, ".toml")])
+    names = filter(n -> !haskey(SBL_SWEEPS, n), all_names)
     @test names == sort!(collect(keys(SBL_TEST)))
+    @test sort!(setdiff(all_names, names)) == sort!(collect(keys(SBL_SWEEPS)))
     for n in names
         cfg = load_run_config(sblcfg(n))
         @test cfg.run.driver == "sbl"
         @test load_run_config(cfg_text_file(cfg)) == cfg              # the canonical form reloads
     end
     @test sblcfg("gabls1") in shipped_configs()
+    # the sweeps: one run per member, each the extended config with the swept
+    # keys set (the closures, Ri_τ, h/L, the cooling), nothing else changed
+    for (n, (base, labels)) in SBL_SWEEPS
+        runs = load_sweep(sblcfg(n))
+        @test [m.label for (m, _) in runs] == labels
+        b = load_run_config(sblcfg(base))
+        for (m, c) in runs
+            @test c.run.driver == "sbl" && c.run.name == "$(b.run.name)_$(m.label)"
+            @test c.case.kind === b.case.kind
+            # every member validates; the swept keys are the ones that differ
+            # from the base, plus the grid of the sweeps that resize it
+            diff = String[]
+            for s in ("case", "sgs", "grid", "sponge", "stepper", "averaging"),
+                k in keys(getfield(getproperty(b, Symbol(s)), :values))
+                isequal(c["$s.$k"], b["$s.$k"]) || push!(diff, "$s.$k")
+            end
+            @test issubset(diff, ["sgs.stability", "case.richardson", "case.h_over_l", "case.re_tau",
+                                  "case.heat_flux_fraction", "grid.size", "grid.extent", "sponge.z"])
+        end
+    end
+    # the swept values: the runs of the old scripts' defaults
+    st = [c for (_, c) in load_sweep(sblcfg("stratified_channel_sweep"))]
+    @test [(c.case.richardson, c.sgs.stability) for c in st] ==
+          [(0.0, :none), (0.0, :brown94), (18.0, :none), (18.0, :brown94), (60.0, :none), (60.0, :brown94)]
+    rl = [c for (_, c) in load_sweep(sblcfg("relaminarisation_sweep"))]
+    @test [(c.case.re_tau, c.grid.size) for c in rl] == vcat(fill((180.0, (32, 32, 32)), 5), fill((360.0, (48, 48, 48)), 5))
+    g3 = last(first(load_sweep(sblcfg("gabls3_closures"))))
+    @test g3.grid.size == (64, 64, 64) && g3.grid.extent == (400.0, 400.0, 400.0) && g3.sponge.z == 300.0
+    g4 = last(first(load_sweep(sblcfg("gabls4_closures"))))
+    @test g4.grid.size == (64, 64, 48) && g4.grid.extent == (128.0, 128.0, 96.0) && g4.sponge.z == 72.0
     # the case table is an input: hashed under [inputs] of run.toml
     inp = config_inputs(load_run_config(sblcfg("gabls3")))
     @test only(values(inp))["path"] == normpath(joinpath(SBLCFG, "..", "data", "gabls3_case.csv"))
