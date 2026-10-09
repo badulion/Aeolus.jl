@@ -1,40 +1,27 @@
 # =========================================================================
-# The `sbl` run driver (CFG-d, #359): the stable-boundary-layer cases of
-# examples/sbl/ configured from TOML (`[run] driver = "sbl"`).
+# The `sbl` run type (CFG-d, #359; in src since EX-b, #439): the
+# stable-boundary-layer cases configured from TOML (`[run] driver = "sbl"`).
 #
-#   julia -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32]
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32]
 #
 # One driver, four kinds (`[case] kind`):
 #
 #   homogeneous               the periodic SBL LES of `sbl_case`
-#                             (driver.jl): GABLS1-4, CASES-99
+#                             (case.jl): GABLS1-4, CASES-99
 #   stratified_channel        `stratified_channel_run` (García-Villalba &
 #                             del Álamo 2011)
 #   relaminarisation_channel  `relam_spinup` + `relam_run` (P59-e)
 #   collapse_channel          `collapse_run` on the flux-cooled half
 #                             channel (P58-e)
 #
-# The Julia functions of driver.jl stay the implementation; this file only
-# turns a RunConfig into their arguments (no physics here). Case constants
-# live in examples/sbl/configs/*.toml; the case tables stay the CSVs of
+# The functions of case.jl are the implementation; this file only turns a
+# RunConfig into their arguments (no physics here) and writes the run's
+# output (statistics.toml, series.csv, towers.csv). Case constants live in
+# examples/sbl/configs/*.toml; the case tables are the CSVs of
 # examples/sbl/data/ (`[case] data`, hashed under [inputs] of run.toml),
-# read by cases.jl. Named kinds (perturbations, surface-temperature
+# read by tables.jl. Named kinds (perturbations, surface-temperature
 # formulas, profile shapes) are added in code, never in TOML.
-#
-# Loaded by Aeolus.Config on first use of the driver name (DRIVER_FILES),
-# or included directly (tests, the runner scripts): either way it calls
-# register_driver!(SBLDriver()).
 # =========================================================================
-
-include(joinpath(@__DIR__, "cases.jl"))
-
-using Aeolus.Config
-using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf,
-                     Optional, Path, section, option!, register_driver!, config_schema
-using Aeolus.IO: IO, RunFolder, CheckpointSchedule, with_monitor, monitor!, output_dir
-using Aeolus.Simulations: Simulations
-using Aeolus.InputDrivers: read_dynamic_driver, dynamic_forcing, forcing_dynamic_inputs, write_dynamic_driver
-import TOML
 
 """
     SBLDriver()
@@ -44,7 +31,8 @@ its sections; shipped configs are in `examples/sbl/configs/`.
 """
 struct SBLDriver <: AbstractRunDriver end
 
-const SBL_CONFIG_DIR = joinpath(@__DIR__, "configs")
+"The shipped `sbl` configs: `examples/sbl/configs/` of the package."
+const SBL_CONFIG_DIR = normpath(joinpath(@__DIR__, "..", "..", "examples", "sbl", "configs"))
 
 Config.driver_name(::SBLDriver) = "sbl"
 Config.config_dir(::SBLDriver) = SBL_CONFIG_DIR
@@ -817,7 +805,7 @@ function sbl_channel_run(cfg::RunConfig, case, spinup; callback = nothing, check
     sc = collapse_heat_flux_scales(cfg.grid.size; z0 = cfg.case.z0, θ_ref = cfg.case.theta_ref)
     r = collapse_run(case, spinup; T_end = T_end, average_from = cfg.averaging.from,
                      sample = cfg.averaging.interval, U0 = sc.U0, callback = callback)
-    return merge(r, (; Q_wall = sc.Q_wall, Q_bulk = sc.Q_bulk, case = case))
+    return merge(r, (; Q_wall = sc.Q_wall, Q_bulk = sc.Q_bulk, U0 = sc.U0, case = case))
 end
 
 """
@@ -860,20 +848,6 @@ function sbl_config(path::AbstractString; overrides = String[])
     return load_run_config(p; overrides = overrides)
 end
 
-"""
-    sbl_script_run(name; overrides = String[], resume = get(ENV, "RESUME", nothing)) -> SBLRun
-
-Run the `sbl` config `name` (a path or a shipped config, [`sbl_config`](@ref))
-with `overrides` as `aeolus run` does (`run_config`: a run folder under
-`[run] root`) and return what the driver built and ran: `case`, `stats`,
-`series`, `towers`. The runner scripts of examples/sbl/ call it, then make
-their figures. `resume` (or `RESUME=<run folder>`) continues an
-interrupted run from its newest checkpoint.
-"""
-function sbl_script_run(name::AbstractString; overrides = String[], resume = get(ENV, "RESUME", nothing))
-    return Config.run_config(sbl_config(name; overrides = overrides); resume = resume).obj
-end
-
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
@@ -902,7 +876,7 @@ function _sbl_write_csv(path, rows::Vector)
 end
 
 # every bin with a sample; V_s is the hockey-stick fit to the bins of at
-# least 20 samples (examples/sbl/gabls2.jl), NaN with fewer than 4 of them
+# least 20 samples (sbl_hockey_threshold), NaN with fewer than 4 of them
 function _sbl_towers_rows(T::SBLTowers)
     rows = NamedTuple[]
     for l in eachindex(T.ks)
@@ -987,6 +961,9 @@ function Simulations.run!(::SBLDriver, r::SBLRun, rf::RunFolder, ck::CheckpointS
             r.stats = sbl_channel_run(cfg, c, spin; callback = cb,
                                       checkpoint = ck_on ? ck : nothing)
         end
+        # the neutral state the cooling starts from (statistics.toml: spinup_*)
+        cfg.case.kind === :relaminarisation_channel &&
+            (r.stats = merge(r.stats, (; spinup = (tke = spin.tke, τ_wall = spin.τ_wall, Ub = spin.Ub))))
     end
     r.stats === nothing || _sbl_write_stats(joinpath(outdir, "statistics.toml"), r.stats)
     @info "sbl run finished" subsystem = :run kind = cfg.case.kind nsteps = r.case.nsteps t = r.case.sim.t

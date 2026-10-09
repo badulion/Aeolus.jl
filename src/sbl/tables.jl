@@ -1,17 +1,19 @@
 # =========================================================================
-# Readers of the observed stable-boundary-layer cases — P58-d (#194),
-# CFG-d (#359)
+# The case tables of the observed stable-boundary-layer cases — P58-d
+# (#194), CFG-d (#359), EX-b (#439)
 #
 #   GABLS2 / CASES-99  (Kansas, 22-24 Oct 1999)   examples/sbl/configs/gabls2.toml, cases99.toml
 #   GABLS3             (Cabauw, 00-09 UTC 2 Jul 2006)   configs/gabls3.toml
 #   GABLS4 stage 3     (Dome C, 11 Dec 2009, experiment 3 from 10 UTC)   configs/gabls4_exp3.toml
 #
-# The cases are configs of the `sbl` run driver (examples/sbl/config_schema.jl):
-# every case constant lives in its TOML file, which points to the case
-# table under examples/sbl/data/ (provenance in every CSV header). This
-# file only reads those tables and the reference data, and holds the one
-# case formula a table cannot carry (the GABLS2 surface temperature, the
-# `gabls2` surface-temperature kind); it adds no physics.
+# The cases are configs of the `sbl` run type: every case constant lives
+# in its TOML file, which points to the case table under
+# examples/sbl/data/ (provenance in every CSV header). This file only
+# reads those tables (`[case] data`), and holds the one case formula a
+# table cannot carry (the GABLS2 surface temperature, the `gabls2`
+# surface-temperature kind) and the residual-layer inversion height of
+# the series output; it adds no physics. The reference data (envelopes,
+# observations) are read by the analysis scripts of examples/sbl/.
 #
 # All the runs are dry: the Boussinesq core's SSP-RK3 (`step_rk3!`) does
 # not advance `qv` and the SGS closures do not diffuse it, so the GABLS3
@@ -19,9 +21,6 @@
 # column) is not carried. Stated as an exception on the theory page.
 # =========================================================================
 
-include(joinpath(@__DIR__, "driver.jl"))
-
-const SBL_DATA = joinpath(@__DIR__, "data")
 const SBL_OMEGA = 7.2921e-5                    # Earth's rotation rate (s⁻¹)
 
 "`2Ω sin(latitude)` (s⁻¹)."
@@ -30,7 +29,7 @@ sbl_coriolis(lat_deg) = 2 * SBL_OMEGA * sind(lat_deg)
 """
     sbl_case_tables(path) -> Dict{String, Matrix{Float64}}
 
-Read a case CSV of `examples/sbl/data/` whose first column names the
+Read a case CSV (`examples/sbl/data/`) whose first column names the
 table of each row (`wind`, `thermo`, `surface`, …): returns the numeric
 columns of each table as a matrix (empty fields dropped from the right).
 """
@@ -51,41 +50,6 @@ function _sbl_interp(x, y, xq)
     i = searchsortedlast(x, xq)
     return y[i] + (y[i+1] - y[i]) * (xq - x[i]) / (x[i+1] - x[i])
 end
-
-# =========================================================================
-# GABLS3 (Basu 2008 case description; Bosveld et al. 2014a,b)
-# =========================================================================
-
-"""
-    gabls3_data() -> NamedTuple
-
-The GABLS3 LES case tables (`examples/sbl/data/gabls3_case.csv`): initial
-`wind` (z, u, v), `thermo` (z, p, θ, q), the 0.25 m `surface` series
-(t, p, θ, q), the surface `geostrophic` wind (t, U_g, V_g) and the
-`advection` tendencies (t, u, v, θ, q above 200 m), times in s from
-00 UTC 2 July 2006.
-"""
-function gabls3_data()
-    T = sbl_case_tables(joinpath(SBL_DATA, "gabls3_case.csv"))
-    return (wind = T["wind"], thermo = T["thermo"], surface = T["surface"],
-            geostrophic = T["geostrophic"], advection = T["advection"])
-end
-
-"""
-    gabls3_envelope() -> table
-
-The digitised LES-ensemble envelope at 03-04 UTC
-(`examples/sbl/data/gabls3_envelope.csv`; read values with
-`sbl_csv_value(tab, "jet_height", "low")`).
-"""
-gabls3_envelope() = sbl_read_csv(joinpath(SBL_DATA, "gabls3_envelope.csv"))
-
-# =========================================================================
-# GABLS4 stage 3, experiment 3 (Couvreux et al. 2020)
-# =========================================================================
-
-"The GABLS4 Table 4 values with each run's Table 2 grid and the envelopes (`examples/sbl/data/gabls4_reference.csv`)."
-gabls4_reference() = sbl_read_csv(joinpath(SBL_DATA, "gabls4_reference.csv"))
 
 # =========================================================================
 # GABLS2 / CASES-99 (Svensson et al. 2011; see the CSV header on provenance)
@@ -128,13 +92,4 @@ function sbl_inversion_height(z, θ; z_min = 300.0)
     a, b, c = G[k-1], G[k], G[k+1]
     den = a - 2b + c
     return den == 0 ? zf[k] : zf[k] + 0.5 * (a - c) / den * dz
-end
-
-"The GABLS2 reference values (`examples/sbl/data/gabls2_reference.csv`)."
-gabls2_reference() = sbl_read_csv(joinpath(SBL_DATA, "gabls2_reference.csv"))
-
-"The Sun et al. (2012) threshold wind speeds (`examples/sbl/data/cases99_sun2012_threshold.csv`)."
-function sun2012_threshold()
-    t = sbl_read_csv(joinpath(SBL_DATA, "cases99_sun2012_threshold.csv"))
-    return (z = [r[1] for r in t.rows], V_s = [r[2] for r in t.rows], header = t.header)
 end

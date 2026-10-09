@@ -24,7 +24,8 @@ using Aeolus.IO: fnv1a64, read_run_toml
 using Statistics: mean, std
 import TOML
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+using Aeolus.StableBoundaryLayer
+isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
 const SBLCFG = normpath(joinpath(@__DIR__, "..", "examples", "sbl", "configs"))

@@ -485,17 +485,17 @@ struct CkKilled <: Exception end
 end
 
 @testset "driver hook: sbl_run! interrupted and resumed" begin
-    isdefined(Main, :sbl_run!) || Base.include(Main, joinpath(@__DIR__, "..", "examples", "sbl", "driver.jl"))
-    mk() = Main.sbl_case(; N = (8, 8, 8), base = LagrangianDynamicSmagorinsky(
+    SBL = Aeolus.StableBoundaryLayer
+    mk() = SBL.sbl_case(; N = (8, 8, 8), base = LagrangianDynamicSmagorinsky(
                 RegularGrid(; size = (8, 8, 8), extent = (400.0, 400.0, 400.0))))
     T = 300.0
-    ref = mk(); st_ref = Main.sbl_run!(ref, T; average_from = 100.0, sample_every = 2)
+    ref = mk(); st_ref = SBL.sbl_run!(ref, T; average_from = 100.0, sample_every = 2)
     dir = mktempdir()
     run_part(kill_at) = begin
         ck = CheckpointSchedule(dir; every_steps = 3, keep = 1)
         c = mk()
         st = try
-            Main.sbl_run!(c, T; average_from = 100.0, sample_every = 2, checkpoint = ck,
+            SBL.sbl_run!(c, T; average_from = 100.0, sample_every = 2, checkpoint = ck,
                           callback = c -> c.nsteps == kill_at && throw(CkKilled()))
         catch e
             e isa CkKilled || rethrow(); nothing
