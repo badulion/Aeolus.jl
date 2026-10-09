@@ -60,6 +60,25 @@ function copy_driver(src, dst; skip = String[], attrs = Dict{String,Any}())
     return dst
 end
 
+"""
+    three_buildings() -> UrbanCity
+
+Three hand-written buildings and a park in mesh metres (what
+test/data/input_static/three_buildings.geojson held before the GeoJSON
+reader moved to AeolusPrep.jl, ONE-h #457): a 40 × 20 m block of 20 m, a
+30 × 30 m block of 30 m, an L of 15 m with a 10 × 10 m courtyard (two
+rings, each followed by a `NaN` vertex) and a 40 × 50 m park.
+"""
+function three_buildings()
+    ring(v...) = NTuple{2,Float64}[Float64.(p) for p in v]
+    L = vcat(ring((10, 50), (60, 50), (60, 70), (30, 70), (30, 100), (10, 100), (10, 50)), [(NaN, NaN)],
+             ring((15, 75), (25, 75), (25, 85), (15, 85), (15, 75)), [(NaN, NaN)])
+    return UrbanCity([Building(ring((10, 10), (50, 10), (50, 30), (10, 30), (10, 10)), 20.0),
+                      Building(ring((70, 10), (100, 10), (100, 40), (70, 40), (70, 10)), 30.0),
+                      Building(L, 15.0)],
+                     [Building(ring((70, 60), (110, 60), (110, 110), (70, 110), (70, 60)), 0.0, SURFACE_PARK)])
+end
+
 geo_mesh(L, dx) = RegularGrid(; size = (round(Int, L / dx), round(Int, L / dx), 4), extent = (L, L, 40.0),
                               halo = (3, 3, 3))
 const ANCHOR = (origin_lat = 52.5, origin_lon = 13.4, origin_x = 0.0, origin_y = 0.0)
@@ -369,3 +388,32 @@ end
     @test rc == 2
 end
 
+
+@testset "InputDrivers: the source is recorded per package (ONE-h, #457)" begin
+    ref = Aeolus.InputDrivers._source_ref
+    root = mktempdir()
+    mk(p, name) = (mkpath(p); name === nothing || write(joinpath(p, "Project.toml"), "name = \"$name\"\n"); p)
+    model = mk(joinpath(root, "Model.jl"), "Model")
+    prep = mk(joinpath(root, "deep", "Prep.jl"), "Prep")
+    mk(joinpath(model, "docs"), nothing)                        # a Project.toml without a name is not a package
+    src_here = joinpath(model, "examples", "data", "s.csv"); mkpath(dirname(src_here)); write(src_here, "x")
+    src_prep = joinpath(prep, "data", "berlin", "a.osm"); mkpath(dirname(src_prep)); write(src_prep, "x")
+    out = joinpath(model, "examples", "configs", "input", "d.nc")
+    # the same package: relative to the driver's directory, as before
+    @test ref(src_here, out) == "../../data/s.csv"
+    # another package: its name and the path in it, wherever it is checked out
+    @test ref(src_prep, out) == "Prep:data/berlin/a.osm"
+    @test ref(src_prep, joinpath(model, "docs", "d.nc")) == "Prep:data/berlin/a.osm"
+    # outside any package: absolute
+    loose = joinpath(root, "loose.osm"); write(loose, "x")
+    @test ref(loose, out) == loose
+    # a source in another package is not resolved here (no stale check)
+    p = tempname() * ".nc"
+    write_static_driver(p, static_inputs(three_buildings(), geo_mesh(120.0, 5.0); ANCHOR...); source = src_prep, preprocessor = "test")
+    NCDataset(p) do ds
+        @test ds.attrib["source"] == "Prep:data/berlin/a.osm" && ds.attrib["preprocessor"] == "test"
+        @test Aeolus.InputDrivers.source_path(p, ds) === nothing
+    end
+    @test isempty(check_driver(p, STATIC_SCHEMA))
+    rm(p)
+end

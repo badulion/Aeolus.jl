@@ -38,7 +38,7 @@ function NestBoundaryRecorder(path::AbstractString, planes, mesh; init_time::Abs
                               fields::AbstractDict = Dict{Symbol,Array{Float64,3}}(),
                               profiles = Symbol[], attributes::AbstractDict = Dict{String,Any}(),
                               inputs::Union{Nothing,DynamicInputs} = nothing,
-                              source::AbstractString = "", preprocessor::AbstractString = "aeolus preprocess dynamic",
+                              source::AbstractString = "", preprocessor::AbstractString = "",
                               origin_lat = NaN, origin_lon = NaN, origin_x = NaN, origin_y = NaN)
     inputs === nothing || (init_time = inputs.init_time)
     extra = inputs === nothing ? Dict{String,Any}() : copy(inputs.attributes)
