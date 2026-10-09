@@ -44,15 +44,13 @@ using ..Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..Aeolus.IBM: SolidMask, mark_solid!
 # the ground: surface classes, footprints and the static driver (CFG-f, #361)
 using ..Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL,
-                           Building, UrbanCity, polygon_bbox, point_in_polygon, latlon_to_meters,
-                           rasterize_city, static_inputs,
-                           solid_and_classes, surface_class_map, tag_building_adjacent!,
-                           StaticInputs, StaticTiles, read_static_driver, write_static_driver,
-                           read_static_tiles, write_static_tiles,
-                           DynamicInputs, read_dynamic_driver, write_dynamic_driver, sounding_dynamic_inputs,
+                           Building, UrbanCity, polygon_bbox, point_in_polygon, rasterize_city,
+                           solid_and_classes, tag_building_adjacent!,
+                           StaticInputs, StaticTiles, read_static_driver, read_static_tiles,
+                           DynamicInputs, read_dynamic_driver, sounding_dynamic_inputs,
                            init_time_string, init_day_seconds, surface_pressure_at, shift_table, file_fnv1a64,
                            FileBoundaryFeed, feed_window!, feed_steady!, check_planes, check_coverage,
-                           NestBoundaryRecorder, record_boundary!, plane_snapshot
+                           NestBoundaryRecorder, record_boundary!
 using ..Aeolus.StretchedGrids: surface_refined_faces
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics

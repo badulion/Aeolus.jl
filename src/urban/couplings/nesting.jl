@@ -411,7 +411,7 @@ function _ensure_offline!(c::NestingCoupling, case)
     two_way(c) && error("nesting: parent_driver = :offline replays a one-way nest; mode = :two_way needs the parent")
     path = cfg.dynamic
     path === nothing && error("nesting: parent_driver = :offline reads the nest faces from [initial] dynamic, " *
-                              "which is \"none\" (write one with aeolus preprocess dynamic --from-parent)")
+                              "which is \"none\" (the online run writes one: [output] child_boundaries)")
     ox, oy = anchor_xy(cfg, m)
     d = read_dynamic_driver(path; mesh = m, origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy)
     src = get(d.attributes, "dynamic_source", "")

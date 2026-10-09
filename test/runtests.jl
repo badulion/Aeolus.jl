@@ -863,9 +863,9 @@ using Aeolus.Fields: set!, interior_view
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
-    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent, preprocessors
+    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
-    include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
+    include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
     include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays bit for bit; resume

@@ -707,9 +707,9 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "sounding", Optional{Path};
                 doc = "radiosonde CSV of the initial θ(z), qv(z) and surface pressure; \"none\": the idealised profile below")
         option!(s, "dynamic", Optional{Path};
-                doc = "the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding driver (--from-sounding), " *
+                doc = "the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl, `aeolusprep dynamic --from-sounding`), " *
                       "used instead of sounding; or, with physics.options.nesting.parent_driver = \"offline\", the " *
-                      "parent-made driver of the nest faces (--from-parent); \"none\": no driver")
+                      "parent-made driver of the nest faces ([output] child_boundaries of the online run); \"none\": no driver")
         option!(s, "theta_surface", Float64; default = 293.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "idealised: θ at the ground")
         option!(s, "theta_inversion_z", Float64; default = 100.0, range = (0, Inf), units = "m",
@@ -738,8 +738,8 @@ function Config.driver_sections(::UrbanDriver)
                 doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ under aeolus run, else output/ in the working directory); \"none\": no NetCDF")
         option!(s, "child_boundaries", Optional{Path}; input = false,
                 doc = "with the online nest: write the child's boundary slabs at every parent step, the 3-D initial wind " *
-                      "and the parent's mean profiles to this dynamic driver (CFG-g #362, `aeolus preprocess dynamic " *
-                      "--from-parent`; the file of an offline child); \"none\": not written")
+                      "and the parent's mean profiles to this dynamic driver (CFG-g #362; the file of an offline child); " *
+                      "\"none\": not written")
     end
     sp = slot_providers()
     phys = section("physics"; doc = "Which couplings run: a provider per exclusive slot, on/off per addon.") do s
@@ -934,68 +934,13 @@ function Config.build(::UrbanDriver, cfg::RunConfig)
                                "or set it to \"none\" to read [geometry] landuse in memory"))
     end
     if cc.dynamic !== nothing && !isfile(cc.dynamic)
-        how = nest_offline(cc) ? "--from-parent <the online config, with [output] child_boundaries = this file>" :
-                                 "--from-sounding $src"
-        throw(ConfigError("initial.dynamic", "the dynamic driver $(cc.dynamic) does not exist; generate it with\n" *
-                                             "  julia --project -m Aeolus preprocess dynamic $how\n" *
+        how = nest_offline(cc) ?
+              "run the online config with [output] child_boundaries = this file:\n  julia --project -m Aeolus run <the online config>" :
+              "make it with AeolusPrep.jl:\n  julia --project -m AeolusPrep dynamic --from-sounding $src"
+        throw(ConfigError("initial.dynamic", "the dynamic driver $(cc.dynamic) does not exist; $how\n" *
                                              "or set it to \"none\" to read [initial] sounding in memory"))
     end
     return UrbanRun(cfg, nothing)
-end
-
-"""
-    preprocess_dynamic(::UrbanDriver, cfg; from, out = nothing, child = nothing) -> Vector{String}
-
-`aeolus preprocess dynamic --from-sounding <config.toml>`: write the
-sounding driver (`[initial] dynamic`, or `out`) of the case from
-`[initial] sounding` ([`case_dynamic_inputs`](@ref): the height-time
-tables, times since the case start, and the ground pressure), the CSV
-hashed; for an open, non-nested case (`boundaries.lateral = "open"`,
-`physics.nesting = false`) also the steady boundary planes of its
-[`case_boundary_data`](@ref) (one `time_bc` record). `--from-parent`: run the online nested case of `cfg` for its
-`[clock] nsteps` with the child's boundary slabs recorded at every parent
-step (`[output] child_boundaries`, or `out`): the parent-made driver an
-offline child (`parent_driver = "offline"`, `[initial] dynamic` = this
-file) replays. The nest parent is a section of the child's config
-(`[physics.options.nesting.parent]`), so there is no separate `child`.
-"""
-function Config.preprocess_dynamic(::UrbanDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
-    cc = CaseConfig(cfg)
-    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
-    if from === :sounding
-        path = out !== nothing ? abspath(out) : cc.dynamic
-        path === nothing && throw(ArgumentError("[initial] dynamic is \"none\": pass --out file.nc"))
-        cc.sounding === nothing && throw(ArgumentError("[initial] sounding is \"none\": there is no sounding to preprocess"))
-        ox, oy = anchor_xy(cc, mesh)
-        d = case_dynamic_inputs(cc)
-        kw = (; source = cc.sounding, preprocessor = "aeolus preprocess dynamic --from-sounding",
-              origin_lat = cc.lat0, origin_lon = cc.lon0, origin_x = ox, origin_y = oy)
-        if !case_nested(cc) && cc.lateral === :open
-            # the open case: also its steady planes, the ProfileBoundaryData of
-            # case_boundary_data on the faces (from the CSV in memory: the file
-            # being written is not read)
-            cc0 = deepcopy(cc); cc0.dynamic = nothing
-            st = only(open_boundary_states(case_boundary_conditions(cc0, mesh).bcs))
-            Aeolus.BoundaryConditions.boundary_values!(st.planes, st.data, 0.0)
-            record_boundary!(NestBoundaryRecorder(path, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
-                             plane_snapshot(st.planes, mesh))
-        else
-            write_dynamic_driver(path, d; dx = mesh.dx, dy = mesh.dy, kw...)
-        end
-        return [path]
-    end
-    from === :parent || throw(ArgumentError("preprocess_dynamic: from = :$from; use :sounding or :parent"))
-    child === nothing || throw(ArgumentError("the nest's parent is the [physics.options.nesting.parent] " *
-                                             "section of the child's config: give the child config alone, without --child"))
-    case_nested(cc) || throw(ArgumentError("--from-parent: the case is not nested (physics.nesting = false)"))
-    nest_offline(cc) && throw(ArgumentError("--from-parent: the case replays its parent (parent_driver = \"offline\"); " *
-                                            "give the online config"))
-    path = out !== nothing ? abspath(out) : cc.child_boundaries
-    path === nothing && throw(ArgumentError("[output] child_boundaries is \"none\": pass --out file.nc"))
-    cc.child_boundaries = path
-    cc.output_path = nothing
-    run_case!(build_case(cc))
-    return [path]
 end
 
 function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::CheckpointSchedule;

@@ -22,8 +22,6 @@ usage: aeolus <command> [arguments]
   options [driver] [section] [--markdown]
         Print the option reference of a driver (all sections and the cross-field
         checks, or one section); --markdown: as the tables of the docs.
-  preprocess <kind> [arguments]
-        Run a registered preprocessor (no kind: list them).
   help
         Print this message.
 
@@ -80,98 +78,6 @@ end
 
 _one_positional(pos, what) = length(pos) == 1 ? pos[1] :
     throw(UsageError(isempty(pos) ? "missing $what" : "expected one $what, got $(length(pos)): $(join(pos, " "))"))
-
-# ---------------------------------------------------------------------------
-# preprocessors
-# ---------------------------------------------------------------------------
-
-const _PREPROCESSORS = Dict{String,Tuple{Any,String}}()
-
-"""
-    register_preprocessor!(kind, f, usage) -> kind
-
-Register a preprocessor for `aeolus preprocess <kind> args…`:
-`f(args::Vector{String})` does the work and returns an exit code (an
-`Integer`; `nothing` counts as 0); `usage` is the one-line synopsis that
-`aeolus preprocess` lists. A [`ConfigError`](@ref) or an `ArgumentError`
-it throws exits with code 2, any other error with 1.
-"""
-function register_preprocessor!(kind::AbstractString, f, usage::AbstractString)
-    _PREPROCESSORS[String(kind)] = (f, String(usage))
-    return String(kind)
-end
-
-"""
-`aeolus preprocess static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...`:
-load the run config and write its static driver(s) with the driver's
-[`preprocess_static`](@ref) (CFG-f, #361); prints the files written.
-"""
-function _preprocess_static(args)
-    pos, sets, opts, _ = _parse_args(args, ("set", "out", "parent-out"), ())
-    path = _one_positional(pos, "config file")
-    cfg = load_run_config(path; overrides = sets)
-    d = run_driver(cfg.run.driver)
-    files = Base.invokelatest(preprocess_static, d, cfg; out = get(opts, "out", nothing),
-                              parent_out = get(opts, "parent-out", nothing))
-    for f in files
-        println("wrote ", f)
-    end
-    return 0
-end
-"""
-`aeolus preprocess dynamic (--from-sounding | --from-parent) <config.toml> [--child <child config>]
-[--out file.nc] [--set key=value]...`: load the run config and write its dynamic driver with the
-driver's [`preprocess_dynamic`](@ref) (CFG-g, #362): from the sounding or case tables the config
-names (`--from-sounding`), or by running the config's nest parent with the child's boundary slabs
-recorded at every parent step (`--from-parent`; `--child` names the child config when it is not
-the same file); prints the files written.
-
-`aeolus preprocess dynamic --from-era5 <files…> --config <config.toml> [--box deg] [--out file.nc]
-[--set key=value]...` (CFG-h, #363): the dynamic driver of the run from ERA5 files (GRIB2 or
-NetCDF; the config's `[preprocess.era5]` table gives the site, levels and outputs, `--box` the
-half-width in degrees of the centred differences).
-"""
-function _preprocess_dynamic(args)
-    pos, sets, opts, fl = _parse_args(args, ("set", "out", "child", "config", "box"),
-                                      ("from-sounding", "from-parent", "from-era5"))
-    length(fl) == 1 || throw(UsageError("give one of --from-sounding, --from-parent, --from-era5"))
-    from = "from-sounding" in fl ? :sounding : "from-parent" in fl ? :parent : :era5
-    if from === :era5
-        isempty(pos) && throw(UsageError("--from-era5: give the ERA5 files"))
-        haskey(opts, "config") || throw(UsageError("--from-era5: give the run config with --config"))
-        haskey(opts, "child") && throw(UsageError("--from-era5 takes no --child"))
-        box = haskey(opts, "box") ? tryparse(Float64, opts["box"]) : nothing
-        haskey(opts, "box") && box === nothing && throw(UsageError("--box: expected a number, got $(opts["box"])"))
-        cfg = load_run_config(opts["config"]; overrides = sets)
-        d = run_driver(cfg.run.driver)
-        Base.invokelatest(hasmethod, preprocess_dynamic, Tuple{typeof(d),typeof(cfg)}, (:files,)) ||
-            throw(ArgumentError("the driver \"$(cfg.run.driver)\" has no ERA5 preprocessor"))
-        files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
-                                  files = abspath.(pos), box = box)
-        foreach(f -> println("wrote ", f), files)
-        return 0
-    end
-    (haskey(opts, "config") || haskey(opts, "box")) && throw(UsageError("--config and --box go with --from-era5"))
-    path = _one_positional(pos, "config file")
-    cfg = load_run_config(path; overrides = sets)
-    d = run_driver(cfg.run.driver)
-    child = haskey(opts, "child") ? load_run_config(opts["child"]; overrides = sets) : nothing
-    files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
-                              child = child)
-    for f in files
-        println("wrote ", f)
-    end
-    return 0
-end
-register_preprocessor!("dynamic", _preprocess_dynamic,
-                       "dynamic (--from-sounding | --from-parent) <config.toml> [--child <config.toml>] " *
-                       "[--out file.nc] [--set key=value]...  write the run's dynamic input driver;\n" *
-                       "    dynamic --from-era5 <files...> --config <config.toml> [--box deg] [--out file.nc] " *
-                       "[--set key=value]...  the same from ERA5 (GRIB2 or NetCDF)")
-
-register_preprocessor!("static", _preprocess_static,
-                       "static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...  " *
-                       "write the run's static input driver(s)")
 
 # ---------------------------------------------------------------------------
 # the option reference
@@ -423,24 +329,6 @@ function _cmd_options(args, io, err)
     return 0
 end
 
-function _cmd_preprocess(args, io, err)
-    if isempty(args)
-        println(io, "preprocessors:")
-        isempty(_PREPROCESSORS) && println(io, "  (none registered)")
-        for k in sort!(collect(keys(_PREPROCESSORS)))
-            println(io, "  ", k, "  ", _PREPROCESSORS[k][2])
-        end
-        return 0
-    end
-    kind = String(args[1])
-    haskey(_PREPROCESSORS, kind) ||
-        throw(UsageError("unknown preprocessor \"$kind\"" * _suggest(kind, keys(_PREPROCESSORS)) *
-                         "; registered: " * (isempty(_PREPROCESSORS) ? "none" :
-                                             join(sort!(collect(keys(_PREPROCESSORS))), ", "))))
-    r = _PREPROCESSORS[kind][1](String[a for a in args[2:end]])
-    return r === nothing ? 0 : Int(r)
-end
-
 function _cmd_run(args, io, err)
     pos, sets, opts, fl = _parse_args(args, ("set", "root", "member"), ("resume", "allow-uncommitted"))
     path = _one_positional(pos, "config file, run.toml or run folder")
@@ -479,13 +367,14 @@ function _cmd_run(args, io, err)
 end
 
 const _COMMANDS = Dict("run" => _cmd_run, "check" => _cmd_check, "resolve" => _cmd_resolve,
-                       "options" => _cmd_options, "preprocess" => _cmd_preprocess)
+                       "options" => _cmd_options)
 
 """
     main(args::Vector{String}; io = stdout, err = stderr) -> Cint
 
-The `aeolus` command line: `run`, `check`, `resolve`, `options`,
-`preprocess` and `help` (see the Run configuration page). Called as
+The `aeolus` command line: `run`, `check`, `resolve`, `options` and
+`help` (see the Run configuration page). Input drivers are made by
+AeolusPrep.jl (`julia --project -m AeolusPrep …`; ONE-h, #457). Called as
 `julia --project -m Aeolus <command> …` (Julia ≥ 1.12, through
 `Aeolus.main`) or `bin/aeolus <command> …`. Returns the exit code: 0 on
 success, 1 when the run failed (its session is recorded as `failed`),
@@ -511,9 +400,6 @@ function main(args::AbstractVector{<:AbstractString}; io::Base.IO = stdout, err:
             println(err, sprint(showerror, e), "\n(aeolus help: the commands and their options)")
             return Cint(2)
         elseif e isa ConfigError || e isa IO.UncommittedCodeError
-            println(err, sprint(showerror, e))
-            return Cint(2)
-        elseif e isa ArgumentError && cmd == "preprocess"
             println(err, sprint(showerror, e))
             return Cint(2)
         end

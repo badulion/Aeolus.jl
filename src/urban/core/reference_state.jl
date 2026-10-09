@@ -84,7 +84,7 @@ the domain top), times since the case start
 ([`case_init_time`](@ref)), with the ground pressure the launch-site
 pressure at the start reduced hypsometrically from the launch site
 (`sounding.elevation`, 112 m) to `cfg.elevation` (34 m)
-([`surface_pressure_at`](@ref)). What `aeolus preprocess dynamic
+([`surface_pressure_at`](@ref)). What AeolusPrep.jl's `aeolusprep dynamic
 --from-sounding` writes, and what a case reading the CSV uses in memory.
 """
 function case_dynamic_inputs(cfg::CaseConfig)
@@ -134,7 +134,7 @@ function _case_sounding(d::DynamicInputs, src, it, elevation)
     get(d.attributes, "dynamic_source", "") == "sounding" ||
         error("$src is not a sounding driver (dynamic_source = $(repr(get(d.attributes, "dynamic_source", "")))): " *
               "[initial] dynamic of a case without the offline nest is the sounding's " *
-              "(aeolus preprocess dynamic --from-sounding)")
+              "(AeolusPrep.jl: aeolusprep dynamic --from-sounding)")
     isempty(d.init_time) && error("the sounding driver $src has no init_time")
     for k in (:profile_theta, :profile_qv, :profile_u, :profile_v, :profile_p)
         haskey(d.tables, k) || error("the sounding driver $src has no ls_$k")

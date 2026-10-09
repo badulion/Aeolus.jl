@@ -277,7 +277,7 @@ function Config.driver_sections(::SBLDriver)
         option!(s, "data", Optional{Path};
                 doc = "the case table (a CSV of examples/sbl/data/ with a table name in its first column) that table references read; \"none\": no table")
         option!(s, "dynamic", Optional{Path};
-                doc = "homogeneous: a dynamic driver (CFG-g #362, `aeolus preprocess dynamic --from-sounding`) whose " *
+                doc = "homogeneous: a dynamic driver (CFG-g #362; AeolusPrep.jl, `aeolusprep dynamic --from-sounding`) whose " *
                       "tables replace the config's: geostrophic wind, advective tendencies, subsidence, nudging and " *
                       "the surface θ series, each when the driver holds it; \"none\": the config's own")
         option!(s, "richardson", Float64; units = "1", default = 0.0, range = (0, Inf),
@@ -505,8 +505,8 @@ function _sbl_checks(cfg)
     end
     dd = cfg.case.dynamic
     dd === nothing || isfile(dd) ||
-        push!(e, ConfigError("case.dynamic", "the dynamic driver $dd does not exist; generate it with\n" *
-                             "  julia --project -m Aeolus preprocess dynamic --from-sounding <this config> --out $dd"))
+        push!(e, ConfigError("case.dynamic", "the dynamic driver $dd does not exist; make it with AeolusPrep.jl:\n" *
+                             "  julia --project -m AeolusPrep dynamic --from-sounding <this config> --out $dd"))
     if d !== nothing && !isfile(d)
         push!(e, ConfigError("case.data", "the case table $d does not exist"))
     elseif !isempty(refs) && d === nothing
@@ -529,7 +529,7 @@ a key of a section that `case.kind` does not use must keep its default (it would
 homogeneous: exactly one of `stepper.end_time` and `stepper.nsteps`, exactly one of `forcing.f` and `forcing.latitude`; `sgs.closure` is `smagorinsky`, `vreman`, `sigma` or `amd`
 channels: run to `stepper.end_time` with the builder's closure (`stratified_channel`: `dynamic_smagorinsky` with `brown94` or no stability correction; `relaminarisation_channel`: `sigma`; `collapse_channel`: `smagorinsky`, laplacian stress) and `sgs.stability = "brown94"`
 checkpoints only for `homogeneous` and `relaminarisation_channel`
-`case.dynamic`, when given, exists (the message prints the `aeolus preprocess dynamic` command)
+`case.dynamic`, when given, exists (the message prints the `aeolusprep dynamic` command that makes it)
 `case.data` exists, and every table and column a forcing, surface or initial option refers to is in it"""
 
 Config.driver_checks(::SBLDriver) = Any[_SBL_CHECKS_DOC => _sbl_checks]
@@ -688,35 +688,31 @@ function sbl_forcing(cfg::RunConfig)
 end
 
 """
-    preprocess_dynamic(::SBLDriver, cfg; from = :sounding, out = nothing) -> Vector{String}
+    sbl_dynamic_inputs(cfg::RunConfig) -> DynamicInputs
 
-`aeolus preprocess dynamic --from-sounding <sbl config>`: the case-table
-preprocessor of the homogeneous SBL cases (GABLS2-4, CASES-99): the
-config's table quantities ([`sbl_forcing`](@ref) without a driver: the
-geostrophic wind, advective tendencies, subsidence, nudging, the surface
-θ series) as a dynamic driver at `case.dynamic` (or `out`), times since
-the run start `initial.t_start`, the case table hashed. Numbers and
-formulas stay in the config. `init_time` is empty: the configs carry no
-calendar date.
+The contents of the case-table driver of a homogeneous SBL run (GABLS2-4,
+CASES-99): the config's table quantities ([`sbl_forcing`](@ref) without a
+driver: the geostrophic wind, advective tendencies, subsidence, nudging,
+the surface θ series), times since the run start `initial.t_start`.
+Numbers and formulas stay in the config; `init_time` is empty (the
+configs carry no calendar date). What a run reading `case.dynamic` gets
+back, table for table; AeolusPrep.jl writes it (`aeolusprep dynamic
+--from-sounding`, ONE-h #457). An `ArgumentError` for a channel case or a
+config with no tables.
 """
-function Config.preprocess_dynamic(::SBLDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
-    from === :sounding || throw(ArgumentError("the sbl driver has the case-table preprocessor only (--from-sounding)"))
-    cfg.case.kind === :homogeneous || throw(ArgumentError("--from-sounding: case.kind = $(cfg.case.kind) has no forcing tables"))
-    path = out !== nothing ? abspath(out) : cfg.case.dynamic
-    path === nothing && throw(ArgumentError("[case] dynamic is \"none\": pass --out file.nc"))
+function sbl_dynamic_inputs(cfg::RunConfig)
+    cfg.case.kind === :homogeneous ||
+        throw(ArgumentError("case.kind = $(cfg.case.kind) has no forcing tables (only homogeneous cases do)"))
     F = sbl_forcing(with_case_dynamic(cfg, nothing))
     sfc = haskey(F.surface, :T_s) ? (t = F.surface.T_s.t, temperature = F.surface.T_s.T_s, pressure = nothing) : nothing
     d = forcing_dynamic_inputs(; U_g = F.U_g, V_g = F.V_g, extra = F.extra, surface = sfc,
                                t_start = cfg.initial.t_start)
     isempty(d.tables) && d.surface === nothing &&
-        throw(ArgumentError("--from-sounding: the config has no forcing tables (only numbers and formulas)"))
-    lat = cfg.forcing.latitude === nothing ? NaN : cfg.forcing.latitude
-    write_dynamic_driver(path, d; source = something(cfg.case.data, ""), origin_lat = lat,
-                         preprocessor = "aeolus preprocess dynamic --from-sounding")
-    return [path]
+        throw(ArgumentError("the config has no forcing tables (only numbers and formulas)"))
+    return d
 end
 
-# `cfg` with case.dynamic replaced (the preprocessor reads the config's own tables)
+# `cfg` with case.dynamic replaced (sbl_dynamic_inputs reads the config's own tables)
 with_case_dynamic(cfg::RunConfig, path) = path === cfg.case.dynamic ? cfg : with(cfg, "case.dynamic" => path)
 
 """

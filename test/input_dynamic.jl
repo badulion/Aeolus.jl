@@ -1,7 +1,10 @@
 # The dynamic driver (CFG-g, #362): Aeolus.InputDrivers — the initial
 # state, the boundary planes over time (FileBoundaryData, FileBoundaryFeed),
-# the large-scale and surface forcing; the sounding / case-table and the
-# Aeolus-parent preprocessors.
+# the large-scale and surface forcing; sounding, case-table and
+# Aeolus-parent drivers. The preprocessors that write the sounding and
+# case-table drivers are AeolusPrep.jl's since ONE-h (#457); the tests here
+# write them with the same Aeolus functions (`write_sounding_driver`,
+# `write_case_table_driver` below) and check what a run reads.
 #
 # Acceptance tests of the issue covered here:
 #   * the time blend is exact for data linear in t (u = 1 + 0.01 t at
@@ -25,7 +28,8 @@
 #     driver its online parent wrote (`[output] child_boundaries`), is
 #     bitwise the online one-way child, in a round trip with the driver
 #     hashed under [inputs];
-#   * the committed summer sounding driver is reproducible.
+#   * the committed summer sounding driver is valid and holds the master
+#     ground pressure (AeolusPrep.jl reproduces it, its test/recipes.jl).
 
 using Test
 using TOML
@@ -53,6 +57,40 @@ const ID_DATA = joinpath(@__DIR__, "data", "input_dynamic")
 const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
 const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.csv"))
+
+"""
+    write_sounding_driver(cfg::RunConfig, out) -> out
+
+The sounding driver of the urban run `cfg` at `out`, as AeolusPrep.jl's
+`aeolusprep dynamic --from-sounding` writes it (from the same Aeolus
+functions): `UrbanCase.case_dynamic_inputs`, and for an open, non-nested
+run the steady planes of its profile boundary data in one record.
+"""
+function write_sounding_driver(cfg, out)
+    cc = BCD.CaseConfig(cfg)
+    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
+    ox, oy = BCD.anchor_xy(cc, mesh)
+    d = BCD.case_dynamic_inputs(cc)
+    kw = (; source = cc.sounding, preprocessor = "test/input_dynamic.jl", origin_lat = cc.lat0, origin_lon = cc.lon0,
+          origin_x = ox, origin_y = oy)
+    if !BCD.case_nested(cc) && cc.lateral === :open
+        cc0 = deepcopy(cc); cc0.dynamic = nothing
+        st = only(open_boundary_states(BCD.case_boundary_conditions(cc0, mesh).bcs))
+        boundary_values!(st.planes, st.data, 0.0)
+        record_boundary!(NestBoundaryRecorder(out, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
+                         plane_snapshot(st.planes, mesh))
+    else
+        write_dynamic_driver(out, d; dx = mesh.dx, dy = mesh.dy, kw...)
+    end
+    return out
+end
+
+"The case-table driver of the sbl run `cfg` at `out` (`sbl_dynamic_inputs`, as `aeolusprep dynamic --from-sounding` writes it)."
+function write_case_table_driver(cfg, out)
+    lat = cfg.forcing.latitude === nothing ? NaN : cfg.forcing.latitude
+    return write_dynamic_driver(out, sbl_dynamic_inputs(cfg); source = something(cfg.case.data, ""), origin_lat = lat,
+                                preprocessor = "test/input_dynamic.jl")
+end
 
 # A synthetic boundary snapshot: every field has the value `val` everywhere.
 struct ConstSnapshot
@@ -233,7 +271,7 @@ end
     ov = ["grid.size=[16,16,48]", "grid.extent=[400.0,400.0,400.0]", "sponge.z=300.0"]
     cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "sbl", "configs", "gabls3.toml"); overrides = vcat(ov, est))
     out = joinpath(dir, "gabls3_dynamic.nc")
-    @test Config.preprocess_dynamic(SBLDriver(), cfg; from = :sounding, out = out) == [out]
+    @test write_case_table_driver(cfg, out) == out
     @test isempty(check_driver(out, DYNAMIC_SCHEMA))
     d = read_dynamic_driver(out; planes = false)
     @test sort!(collect(keys(d.tables))) == [:theta_adv, :u_adv, :u_g, :v_adv, :v_g]
@@ -297,61 +335,37 @@ end
                    M["summer_p_surface"], M["summer_zi"], M["summer_zi_max"])
 end
 
-@testset "InputDrivers dynamic: the committed summer sounding driver is reproducible" begin
-    dyn_content(path) = NCDataset(path) do ds
-        (Dict(k => Array(ds[k].var[ntuple(_ -> Colon(), ndims(ds[k]))...]) for k in keys(ds) if ndims(ds[k]) > 0),
-         Dict(k => v for (k, v) in ds.attrib if !(k in VOLATILE_ATTRIBUTES)))
+@testset "InputDrivers dynamic: the committed summer sounding driver" begin
+    cc = BCD.CaseConfig(berlin_toml("summer"))
+    @test filesize(cc.dynamic) <= 2 * 1024^2
+    @test isempty(check_driver(cc.dynamic, DYNAMIC_SCHEMA))
+    NCDataset(cc.dynamic) do ds
+        @test ds["init_p_surface"].var[] == ID_MASTER["summer_p_surface"]
     end
-    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_summer.toml"))
-    cc = BCD.CaseConfig(cfg)
-    out = joinpath(berlin_configs_dir(), "input", "_repro_dynamic.nc")
-    try
-        @test Config.preprocess_dynamic(BCD.UrbanDriver(), cfg; from = :sounding, out = out) == [out]
-        @test filesize(cc.dynamic) <= 2 * 1024^2
-        @test isempty(check_driver(cc.dynamic, DYNAMIC_SCHEMA))
-        vn, an = dyn_content(out); vo, ao = dyn_content(cc.dynamic)
-        @test keys(vn) == keys(vo) && all(k -> isequal(vn[k], vo[k]), keys(vn))
-        @test an == ao
-        NCDataset(cc.dynamic) do ds
-            @test ds["init_p_surface"].var[] == ID_MASTER["summer_p_surface"]
-        end
-    finally
-        rm(out; force = true)
-    end
+    # a driver written now from the CSV holds the committed tables, value for value
+    out = joinpath(mktempdir(), "summer.nc")
+    write_sounding_driver(load_run_config(berlin_toml("summer")), out)
+    a, b = read_dynamic_driver(out; planes = false), read_dynamic_driver(cc.dynamic; planes = false)
+    @test keys(a.tables) == keys(b.tables) && all(k -> isequal(a.tables[k].values, b.tables[k].values), keys(a.tables))
+    @test a.init_time == b.init_time && a.p_surface == b.p_surface
 end
 
-@testset "InputDrivers dynamic: aeolus preprocess dynamic" begin
+@testset "InputDrivers dynamic: a missing driver is a config error naming the command that makes it" begin
     dir = mktempdir()
-    out = joinpath(dir, "smoke_sounding.nc")
-    rc = redirect_stdout(devnull) do
-        Aeolus.main(["preprocess", "dynamic", "--from-sounding", ID_SMOKE, "--set", "initial.sounding=\"$ID_CSV\"",
-                     "--out", out])
-    end
-    @test rc == 0 && isfile(out)
-    d = read_dynamic_driver(out; planes = false)
-    # a source in the Aeolus package written outside it: recorded as Aeolus:<path> (ONE-h, #457)
-    @test d.init_time == "2019-06-29T10:00:00Z" &&
-          d.attributes["source"] == "Aeolus:examples/urban/data/lindenberg_10393_20190629.csv"
-    lf = joinpath(dir, "list.txt")
-    open(lf, "w") do io
-        redirect_stdout(() -> Aeolus.main(["preprocess"]), io)
-    end
-    @test occursin("dynamic (--from-sounding | --from-parent)", read(lf, String))
-    rc = redirect_stderr(devnull) do
-        Aeolus.main(["preprocess", "dynamic", ID_SMOKE])
-    end
-    @test rc == 2
-    # a missing driver is a config error with the command that makes it
     msg = errmsg(() -> Config.build(BCD.UrbanDriver(),
                                     load_run_config(ID_SMOKE; overrides = ["initial.dynamic=\"$(joinpath(dir, "none.nc"))\""])))
-    @test occursin("preprocess dynamic --from-sounding", msg)
+    @test occursin("AeolusPrep dynamic --from-sounding $ID_SMOKE", msg)
+    # the offline nest: the online run writes it
+    msg = errmsg(() -> Config.build(BCD.UrbanDriver(),
+                                    load_run_config(ID_SMOKE; overrides = ["initial.dynamic=\"$(joinpath(dir, "none.nc"))\"",
+                                                                           "physics.options.nesting.parent_driver=\"offline\""])))
+    @test occursin("child_boundaries", msg)
 end
 
 @testset "InputDrivers dynamic: the smoke case from a sounding driver = the CSV path (12 steps, round trip)" begin
     dir = mktempdir()
     out = joinpath(dir, "smoke_sounding.nc")
-    Config.preprocess_dynamic(BCD.UrbanDriver(), load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\""]);
-                              from = :sounding, out = out)
+    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\""]), out)
     r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
                         overrides = ["initial.dynamic=\"$out\""])
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
@@ -439,7 +453,7 @@ end
     dir = mktempdir()
     out = joinpath(dir, "smoke_open.nc")
     ov = ["initial.sounding=\"$ID_CSV\"", "physics.nesting=false", "boundaries.lateral=\"open\""]
-    Config.preprocess_dynamic(BCD.UrbanDriver(), load_run_config(ID_SMOKE; overrides = ov); from = :sounding, out = out)
+    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ov), out)
     m = RegularGrid(; size = (16, 16, 16), extent = (250.0, 250.0, 100.0), halo = (3, 3, 3))
     d = read_dynamic_driver(out; mesh = m)
     @test d.boundary !== nothing && length(d.boundary.time) == 1 && haskey(d.tables, :profile_theta)
