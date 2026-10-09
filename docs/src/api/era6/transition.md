@@ -94,7 +94,9 @@ A nest whose parent steps ahead on its own task (the Berlin nest,
 N-inflow-e #268) builds `InflowTurbulence(run; statistics_interval = Inf)`
 and folds the parent statistics with `fold_inflow_statistics!` where the
 parent is at rest; `exclude_inflow_feedback!(run, it)` gives a two-way
-feedback the inflow band of `feedback_exclude_width(it)`;
+feedback the inflow band of `feedback_exclude_width(it)`; its
+`synthetic_normal_velocity(it, side, t)` is the normal perturbation a
+two-way feedback leaves out of the parent's interface faces (#418);
 `free_stream_generator(; U∞)` is the FSD `generator` argument.
 `ParentResolvedStatistics` also takes a `StretchedGrid` parent.
 

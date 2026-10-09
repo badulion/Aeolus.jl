@@ -194,8 +194,11 @@ spacing raised to one spacing (shorter scales are not representable).
 generator` for another [`AbstractInflowGenerator`](@ref).
 [`generator_state`](@ref) / [`restore_generator_state!`](@ref) snapshot
 and restore everything the next perturbations depend on (bit-identical
-continuation). Two-way runs: the feedback should skip a frame of
-[`feedback_exclude_width`](@ref) next to the open faces.
+continuation). Two-way runs: the interface flux correction leaves the
+normal perturbation out of the parent's interface faces
+([`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity), #418),
+and the feedback can skip a frame of [`feedback_exclude_width`](@ref)
+next to the open faces ([`exclude_inflow_feedback!`](@ref)).
 
 References: Lund, T. S., Wu, X. & Squires, K. D. (1998), *J. Comput.
 Phys.* 140, 233-258. Xie, Z.-T. & Castro, I. P. (2008), *Flow Turbul.
@@ -704,11 +707,16 @@ cells, rounded up (``⌈2\\max L_s/Δx_p⌉``, `Δx_p` the smaller horizontal
 parent spacing), and never narrower than the one it had. The faces it
 excludes stay the feedback's `exclude_sides` (`:inflow` by default: the
 faces whose mean normal velocity points into the child at each
-feedback). Without the band the feedback restricts the synthetic eddies
-into the parent, whose prolongation returns them as boundary data (on
-the refine-3 test nest: child kinetic energy ×5.5 and parent ×3.2 in
-200 s; `docs/src/theory/transition.md`). A one-way run is returned
-unchanged (0).
+feedback). A one-way run is returned unchanged (0).
+
+The band was introduced against a feedback loop measured on the refine-3
+test nest (child kinetic energy ×5.5 and parent ×3.2 in 200 s). The path
+of that loop was the interface flux correction, which since #418 leaves
+the synthetic part out
+([`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity)).
+With that, the band no longer measurably matters on the test nests: on
+the 100 s nest the child's kinetic energy is ×0.988 of one-way without
+it and ×0.995 with it (`docs/src/theory/transition.md`).
 """
 function exclude_inflow_feedback!(run::NestedRun, it::InflowTurbulence)
     fb = run.twoway
