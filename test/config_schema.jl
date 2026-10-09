@@ -180,7 +180,7 @@ end
         end
     end
     nfail = 0; nnan = 0
-    for name in ("cfgtest",)
+    for name in ("cfgtest", "common")
         schema = Aeolus.Config.driver_schema(name)
         rng = Xoshiro(356 + length(name))
         dir = mktempdir()
