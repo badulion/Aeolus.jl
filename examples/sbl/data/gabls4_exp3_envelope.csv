@@ -1,0 +1,9 @@
+# GABLS4 stage 3, experiment 3 (1 m LES): the envelope of the six LES of Couvreux et al. (2020), Table 4, one-hour
+#   averages at 17 UTC 11 Dec 2009, for the in-model checks of examples/sbl/configs/gabls4_exp3.toml
+#   ([checks.reference]). Derived from gabls4_reference.csv (its header gives the source): the rows envelope_low and
+#   envelope_high (exp3_1m), one quantity per row. No new values.
+quantity,low,high,unit,source
+bl_height,14.5,19.5,m,Couvreux et al. 2020 Table 4 (exp3)
+obukhov_length,6.5,9.9,m,Couvreux et al. 2020 Table 4 (exp3)
+u_star,0.08,0.12,m s-1,Couvreux et al. 2020 Table 4 (exp3)
+surface_heat_flux,-13.5,-5.3,W m-2,Couvreux et al. 2020 Table 4 (exp3)
