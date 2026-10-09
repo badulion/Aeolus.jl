@@ -8,9 +8,9 @@
 # area fraction:
 #
 #   * fractions — from `data/berlin_landuse_6km.csv` (the OSM extract of
-#     `aeolus preprocess fetch-landuse`: the child's classifier and
+#     AeolusPrep.jl's `aeolusprep fetch-landuse`: the child's classifier and
 #     rasteriser on the child's grid, coarse-grained; cropped and
-#     coarsened to the parent grid by `aeolus preprocess static`, which
+#     coarsened to the parent grid by `aeolusprep static`, which
 #     writes them to the parent's static driver, CFG-f #361), and, under the
 #     child's footprint, from coarse-graining the child's own class map,
 #     so parent and child agree exactly there;
@@ -67,8 +67,8 @@ struct ParentLanduse
 end
 
 read_parent_landuse(::Nothing) =
-    error("[preprocess] landuse is \"none\": the tiled parent surface needs a land-use table " *
-          "(`aeolus preprocess fetch-landuse`) or [geometry] parent_static")
+    error("[geometry] landuse is \"none\": the tiled parent surface needs a land-use table " *
+          "(AeolusPrep.jl: `aeolusprep fetch-landuse`) or [geometry] parent_static")
 
 """
     read_parent_landuse(path) -> ParentLanduse

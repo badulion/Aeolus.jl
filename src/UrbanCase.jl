@@ -42,10 +42,10 @@ using ..Aeolus.Radiation: apply_radiative_cooling!
 using ..Aeolus.Operators: advect_centered!
 using ..Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..Aeolus.IBM: SolidMask, mark_solid!
-# the ground: surface classes, footprints, readers and the static driver (CFG-f, #361)
+# the ground: surface classes, footprints and the static driver (CFG-f, #361)
 using ..Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL,
                            Building, UrbanCity, polygon_bbox, point_in_polygon, latlon_to_meters,
-                           load_city_osm, osm_class, load_city_geojson, rasterize_city, static_inputs,
+                           rasterize_city, static_inputs,
                            solid_and_classes, surface_class_map, tag_building_adjacent!,
                            StaticInputs, StaticTiles, read_static_driver, write_static_driver,
                            read_static_tiles, write_static_tiles,
@@ -85,9 +85,6 @@ include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / r
 # built from the registry, so it comes last
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
-# the `aeolus preprocess` subcommands of its input data (fetch-osm, fetch-landuse,
-# fetch-sounding, osm-sample; EX-a #438)
-include(joinpath(@__DIR__, "urban", "preprocess.jl"))
 
 export CaseConfig, UrbanDriver, UrbanParentDriver, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,

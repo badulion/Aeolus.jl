@@ -2,11 +2,10 @@
 # into the solid mask, the surface-class map and the radiosity scene with
 # its view factors.
 #
-# The ground comes from the static driver (CFG-f, #361:
-# `[geometry] static`, written by `aeolus preprocess static`), or, with
-# `static = "none"`, from preprocessing the OSM file of `[preprocess]` in
-# memory. The readers, the surface classes and the rasterisation are
-# `Aeolus.InputDrivers` (src/preprocess/), the one copy.
+# The ground comes from the static driver (CFG-f, #361: `[geometry]
+# static`, written by AeolusPrep.jl, `aeolusprep static`; ONE-h #457). The
+# reader, the surface classes and the rasterisation are `Aeolus.InputDrivers`,
+# the one copy.
 
 # ---------------------------------------------------------------------------
 # The Berlin-case geometry
@@ -47,49 +46,20 @@ end
 anchor_xy(cfg, mesh) = (mesh.Lx / 2 - cfg.offset[1], mesh.Ly / 2 - cfg.offset[2])
 
 """
-    urban_static_inputs(cfg, mesh) -> StaticInputs
-
-The ground of the case from its source, in memory: `cfg.osm_path`, an
-OpenStreetMap XML file projected about `cfg.lat0/lon0`
-(`InputDrivers.load_city_osm`; buildings lower than `cfg.min_height`
-dropped), or a GeoJSON file (`.geojson`, `InputDrivers.load_city_geojson`)
-whose coordinates are metres in the mesh frame; rasterised on `mesh`
-with `cfg.park_lai` on park cells. What `aeolus preprocess static`
-writes to the static driver.
-"""
-function urban_static_inputs(cfg, mesh)
-    src = cfg.osm_path
-    src === nothing &&
-        error("[preprocess] osm_path is \"none\" and [geometry] static is \"none\": the case has no ground source")
-    isfile(src) ||
-        error("Missing $src (an OpenStreetMap file: `julia --project -m Aeolus preprocess fetch-osm`).")
-    ox, oy = anchor_xy(cfg, mesh)
-    city = if endswith(lowercase(src), ".geojson")
-        c = load_city_geojson(src)
-        filter!(b -> b.height >= cfg.min_height, c.buildings)
-        c
-    else
-        load_city_osm(src; lat0 = cfg.lat0, lon0 = cfg.lon0, x_shift = ox, y_shift = oy,
-                      min_height = cfg.min_height)
-    end
-    return static_inputs(city, mesh; origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy,
-                         class_lai = Dict(SURFACE_PARK => cfg.park_lai))
-end
-
-"""
     case_static_inputs(cfg, mesh) -> StaticInputs
 
-The case's ground: read from the static driver `cfg.static` (checked to
+The case's ground, read from the static driver `cfg.static` (checked to
 be on `mesh` with the anchor where `cfg` puts it, see
-`InputDrivers.read_static_driver`), or, with `cfg.static === nothing`,
-[`urban_static_inputs`](@ref) in memory.
+`InputDrivers.read_static_driver`). A case without one is an error: the
+model never reads OpenStreetMap or GeoJSON itself (ONE-h, #457).
 """
 function case_static_inputs(cfg, mesh)
-    cfg.static === nothing && return urban_static_inputs(cfg, mesh)
+    cfg.static === nothing &&
+        error("[geometry] static is \"none\": the case has no ground. Make its static driver with AeolusPrep.jl:\n" *
+              "  julia --project -m AeolusPrep static <the config.toml> --source <file.osm | file.geojson> --out <file.nc>")
     isfile(cfg.static) ||
-        error("Missing the static driver $(cfg.static). Generate it with\n" *
-              "  julia --project -m Aeolus preprocess static <the config.toml naming it>\n" *
-              "or set [geometry] static = \"none\" to preprocess $(cfg.osm_path) in memory.")
+        error("Missing the static driver $(cfg.static). Make it with AeolusPrep.jl:\n" *
+              "  julia --project -m AeolusPrep static <the config.toml naming it> --source <file.osm | file.geojson>")
     ox, oy = anchor_xy(cfg, mesh)
     return read_static_driver(cfg.static; mesh = mesh, origin_lat = cfg.lat0, origin_lon = cfg.lon0,
                               origin_x = ox, origin_y = oy)
@@ -98,8 +68,8 @@ end
 """
     build_geometry(cfg, mesh) -> Geometry
 
-The ground of the case ([`case_static_inputs`](@ref): the static driver,
-or the OSM file preprocessed in memory) as the solid mask and the
+The ground of the case ([`case_static_inputs`](@ref): the static driver)
+as the solid mask and the
 surface-class map on `mesh`, building-adjacent cells tagged
 `SURFACE_WALL` (`InputDrivers.solid_and_classes`); then the radiosity
 scene and its view factors (the geometry is static, so this happens

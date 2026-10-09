@@ -2,8 +2,8 @@
     InputDrivers
 
 Aeolus's own input drivers (CFG-f, #361): NetCDF-4 files that hold what a
-run reads from outside the model, so that a run reads its geometry from
-one file instead of re-parsing OpenStreetMap at every start.
+run reads from outside the model. A run reads its geometry, initial state
+and forcing from them, never from OpenStreetMap, GIS or reanalysis files.
 
 * **Conventions** (`input_drivers/conventions.jl`, shared with the
   dynamic driver of CFG-g): the global attributes every driver carries
@@ -68,8 +68,7 @@ export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_d
        format_reference, ncdump_header,
        DRIVER_ATTRIBUTES, DRIVER_SCHEMA_VERSION, file_fnv1a64,
        SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL, SURFACE_CLASSES,
-       Building, UrbanCity, polygon_bbox, point_in_polygon, load_city_osm, osm_class,
-       load_city_geojson, rasterize_city, static_inputs, solid_and_classes,
+       Building, UrbanCity, polygon_bbox, point_in_polygon, rasterize_city, static_inputs, solid_and_classes,
        surface_class_map, tag_building_adjacent!,
        STATIC_SCHEMA, STATIC_TILES_SCHEMA, StaticInputs, StaticTiles,
        write_static_driver, read_static_driver, write_static_tiles, read_static_tiles,
@@ -81,8 +80,6 @@ export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_d
 
 include("input_drivers/conventions.jl")
 include("input_drivers/city.jl")
-include("preprocess/osm.jl")
-include("preprocess/geojson.jl")
 include("input_drivers/static.jl")
 include("input_drivers/dynamic.jl")
 include("input_drivers/sounding.jl")

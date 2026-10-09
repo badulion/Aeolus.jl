@@ -34,7 +34,7 @@ every_seconds = inf
 keep = 2
 
 [geometry]
-# the land use from [preprocess] landuse in memory: any refinement
+# the land use from [geometry] landuse in memory: any refinement
 parent_static = "none"
 
 [physics.options.nesting.parent]
