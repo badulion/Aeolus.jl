@@ -446,15 +446,16 @@ _data_window(d::WindowedBoundaryData) = d.Δt > 0 ? (d.t0, d.Δt) : nothing
 # The applied perturbation is linear in time between two knots,
 # (t_prev, Lp) and (t_gen, Lc); τ is not clamped inside a window (a stage
 # time beyond its end extrapolates, as the data does).
-function _knot_value!(out, f::_InflowFace, s::Float64; clamp_τ::Bool)
+# `comps` picks the face-frame components (1 normal, 2 along, 3 vertical).
+function _knot_value!(out, f::_InflowFace, s::Float64; clamp_τ::Bool, comps = 1:3)
     if f.t_gen > f.t_prev
         τ = (s - f.t_prev) / (f.t_gen - f.t_prev)
         clamp_τ && (τ = clamp(τ, 0.0, 1.0))
-        for c in 1:3
+        for c in comps
             out[c] .= (1 - τ) .* f.Lp[c] .+ τ .* f.Lc[c]
         end
     else
-        for c in 1:3
+        for c in comps
             copyto!(out[c], f.Lc[c])
         end
     end
@@ -656,6 +657,30 @@ function inflow_perturbation(it::InflowTurbulence, side::Symbol)
         f.side === side && return f.P
     end
     throw(ArgumentError("inflow_perturbation: no perturbed face :$side"))
+end
+
+"""
+    synthetic_normal_velocity(it::InflowTurbulence, side, t) -> plane or nothing
+
+The normal perturbation (`ns × nz`, grid sign: the ``u`` of a west/east
+face, the ``v`` of a south/north face) the face `side` carries at time `t`,
+on the knot curve the boundary refresh follows (linear in the data's
+window). The contract of
+[`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity):
+a two-way [`NestedRun`](@ref)'s interface flux correction gives the parent
+the child's flux minus this plane, so the parent's interface faces never
+receive the synthetic eddies (#418). A face without perturbations
+delegates to the wrapped data.
+"""
+function synthetic_normal_velocity(it::InflowTurbulence, side::Symbol, t::Real)
+    for f in it.faces
+        f.side === side || continue
+        P = zeros(f.ns, f.nz)
+        _knot_value!((P,), f, Float64(t); clamp_τ = _data_window(it.data) === nothing, comps = 1:1)
+        inner = synthetic_normal_velocity(it.data, side, t)
+        return inner === nothing ? P : P .+ inner
+    end
+    return synthetic_normal_velocity(it.data, side, t)
 end
 
 """

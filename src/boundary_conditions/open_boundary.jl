@@ -191,6 +191,26 @@ Fill the open-boundary buffers `planes` from `data` at time `t`; see
 """
 function boundary_values! end
 
+"""
+    synthetic_normal_velocity(data::AbstractBoundaryData, side::Symbol, t) -> plane or nothing
+
+The part of the boundary-normal velocity that `data` writes on the open
+face `side` at time `t` without it being a field of its source: synthetic
+turbulence superposed on the source's values (`Transition.InflowTurbulence`).
+An `n₁ × n₂` matrix over the face's interior cells in the order of the
+two tangential axes (``y, z`` on a west/east face, ``x, z`` on a
+south/north face, ``x, y`` on the bottom/top), in the sign of the grid
+component (``u``, ``v`` or ``w``); `nothing` (the default) when every
+value is source data.
+
+A two-way nest's interface flux correction (`Nesting.TwoWayFeedback`)
+gives the parent the child's interface flux **minus** this part: the
+synthetic eddies are the child's own sub-filter turbulence, not a flux
+of the parent, and fed into the parent's interface faces they return in
+the next window's boundary data and accumulate (#418).
+"""
+synthetic_normal_velocity(data, side::Symbol, t) = nothing
+
 # -------------------------------------------------------------------------
 # Two snapshots blended in time: the one windowed boundary-data helper
 # (#329, item 8). The nest parent (Nesting.NestBoundaryData) is one

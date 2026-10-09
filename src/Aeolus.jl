@@ -1144,6 +1144,8 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        assert_open_face_correction, open_intermediate_velocity!
 # #329 — the two-snapshot (windowed) boundary data: nest parents, mesoscale (#58).
 export WindowedBoundaryData, snapshot_values, window_fraction, blend_window!
+# #418 — the synthetic part of an open face's normal velocity (kept out of the nest feedback)
+export synthetic_normal_velocity
 # N-open-c (#260) — convective / Orlanski radiation outflow on open faces.
 export RadiationPlane, OUTFLOW_MODES, has_radiating_outflow, rewind_open_boundaries!,
        mark_open_boundary_stage!
