@@ -863,7 +863,8 @@ using Aeolus.Fields: set!, interior_view
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
     include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal
-    include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
+    include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, kernels/cloud_spinup
+    include("examples_config_only.jl") # EX-e (#442): examples are configuration; no script runs simulation code
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent, preprocessors

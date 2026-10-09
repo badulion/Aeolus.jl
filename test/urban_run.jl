@@ -16,8 +16,8 @@
 #     the IGRA2 parser turns synthetic records into a sounding CSV that
 #     read_sounding reads back, and the parent land-use table of an OSM
 #     extract is self-consistent;
-#   * the examples policy: no script under examples/urban builds or runs the
-#     model (only TOML configs, input data and analysis of output files).
+# The examples policy (no example script builds or runs a model) is
+# test/examples_config_only.jl for every example directory.
 
 using Test
 using TOML
@@ -206,33 +206,4 @@ end
     @test maximum(pl.hmax) <= 90.0 + 1e-9 && maximum(pl.hmax) >= 10.0   # the sample's heights (10–90 m)
     @test all(pl.λf .>= 0)
     @test any(>(0), pl.counts[:, :, 3]) && any(>(0), pl.counts[:, :, 4])   # the park and the water
-end
-
-# ---------------------------------------------------------------------------
-# examples/urban holds configuration, input data and analysis only
-# ---------------------------------------------------------------------------
-
-@testset "examples/urban: configs, input data and analysis of output files only" begin
-    ex = joinpath(pkgdir(Aeolus), "examples", "urban")
-    jl = String[]
-    for (dir, _, fs) in walkdir(ex), f in fs
-        endswith(f, ".jl") && push!(jl, joinpath(dir, f))
-    end
-    # the model is never built or run from a script
-    forbidden = r"UrbanCase|BerlinCase|build_case|run_case!|step_case!|build_parent|run_parent!|step_parent!|CaseConfig|\brun_config\b|Aeolus\.main|load_run_config\([^)]*\)\s*\|>\s*run"
-    offenders = String[]
-    for f in jl, (i, l) in enumerate(readlines(f))
-        startswith(lstrip(l), "#") && continue
-        occursin(forbidden, l) && push!(offenders, "$(relpath(f, ex)):$i: $(strip(l))")
-    end
-    @test isempty(offenders)
-    isempty(offenders) || @info "examples/urban scripts that build or run the model" offenders
-    # every config validates; every script is analysis of output
-    for f in readdir(joinpath(ex, "configs"); join = true)
-        endswith(f, ".toml") || continue
-        @test load_run_config(f).run.driver in ("urban", "urban_parent")
-    end
-    @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
-                                  "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl",
-                                  "plot_parent_surface.jl"]
 end

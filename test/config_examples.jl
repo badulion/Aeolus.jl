@@ -4,9 +4,8 @@
 #   * sweeps: a [sweep] table expands into override sets in a fixed order,
 #     one run folder per member, each member validated (the neutral_abl
 #     3 closures × 2 resolutions is in config_examples_validation.jl);
-#   * coverage: every examples/**/*.jl that calls a step!/run!/sbl_run!/
-#     run_case! entry point has a configs/*.toml file or a reasoned entry
-#     in EXEMPT below.
+# That no example script builds or runs a model (the examples are
+# configuration, EX-e #442) is test/examples_config_only.jl.
 # The per-directory bit-identity and round-trip tests are in
 # config_examples_*.jl.
 
@@ -161,87 +160,4 @@ end
 @testset "round trip from run.toml (kernels: cloud_spinup.toml), bit-identical" begin
     r = roundtrip_check(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
     @test r.fields_equal && r.config_equal && r.results_equal
-end
-
-# ---------------------------------------------------------------------------
-# coverage: every example that integrates the equations runs from a config
-# ---------------------------------------------------------------------------
-
-# A script integrates the equations if it calls a stepping entry point.
-const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|sbl_run!|run_case!)\("
-# A script is configured if it runs a shipped configs/*.toml through
-# run_configs or the aeolus command line.
-const CONFIG_RUN = r"(run_configs|Aeolus\.main)\("
-const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
-
-# Files that call an entry point (or look like runs) but are not runs of
-# their own, each with its reason. Paths relative to examples/.
-const EXEMPT = Dict(
-)
-
-# Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
-# its runs are configs/*.toml of the `sbl` run type in src).
-const OTHER_ISSUE_DIRS = Dict{String,String}()
-
-# The rest of #360's scope, migrated in later parts of the issue (it may be
-# split per directory). This list may only shrink: a file migrated to a
-# config must leave it (checked below).
-const PENDING_360 = Set{String}()
-
-function example_scripts()
-    files = String[]
-    for (dir, _, fs) in walkdir(EX_DIR), f in fs
-        endswith(f, ".jl") && push!(files, relpath(joinpath(dir, f), EX_DIR))
-    end
-    return sort!(replace.(files, '\\' => '/'))
-end
-
-"The configs a script runs, as absolute paths (empty if it runs none)."
-function script_configs(rel)
-    src = read(joinpath(EX_DIR, rel), String)
-    occursin(CONFIG_RUN, src) || return String[]
-    return [joinpath(dirname(joinpath(EX_DIR, rel)), "configs", m[1]) for m in eachmatch(CONFIG_REF, src)]
-end
-
-@testset "coverage: every example that integrates the equations has a config or a reasoned exemption" begin
-    drivers = Set(relpath(joinpath(pkgdir(Aeolus), p), EX_DIR) for p in values(Aeolus.Config.DRIVER_FILES))
-    missing_ = String[]
-    nconfigured = 0
-    for rel in example_scripts()
-        rel in drivers && continue                        # a run driver (registers itself)
-        any(startswith(rel, d) for d in keys(OTHER_ISSUE_DIRS)) && continue
-        cfgs = script_configs(rel)
-        if !isempty(cfgs)
-            nconfigured += 1
-            # each config the script names exists and validates (every member of a sweep)
-            for c in cfgs
-                @test isfile(c)
-                @test !isempty(load_sweep(c))
-            end
-            @test !(rel in PENDING_360)                    # migrated: leaves the pending list
-            @test !haskey(EXEMPT, rel)
-            # and the script parses no ARGS / ENV of its own (they go to run_configs)
-            src = read(joinpath(EX_DIR, rel), String)
-            @test !occursin(r"ARGS\[|parse\([^)]*ARGS|ENV\[|get\(ENV", src)
-        elseif occursin(ENTRY_POINT, read(joinpath(EX_DIR, rel), String))
-            haskey(EXEMPT, rel) || rel in PENDING_360 || push!(missing_, rel)
-        end
-    end
-    @test isempty(missing_)
-    isempty(missing_) || @info "examples that integrate the equations with neither a config nor an exemption" missing_
-    # no stale entries: every exemption and pending file exists
-    @test all(isfile(joinpath(EX_DIR, p)) for p in keys(EXEMPT))
-    @test all(isfile(joinpath(EX_DIR, p)) for p in PENDING_360)
-    @test all(!isempty(r) for r in values(EXEMPT))
-    # examples/validation/ is configuration only (EX-c, #440): its cases are configs/*.toml of
-    # the run types in src/ (Aeolus.ValidationRuns), and every script there only reads run
-    # output: no stepping entry point, no run_configs / run_config / aeolus main, no harness
-    val = [r for r in example_scripts() if startswith(r, "validation/")]
-    @test length(val) >= 10
-    for r in val
-        src = read(joinpath(EX_DIR, r), String)
-        @test !occursin(ENTRY_POINT, src)
-        @test !occursin(r"run_configs?\(|Aeolus\.main\(|using Aeolus\.ValidationRuns|_les\(|_benchmark\(|dns_decay\(", src)
-    end
-    @test nconfigured == 0         # no script runs a config: the bare runners, kernels/04 and the urban wrapper are gone (EX-a, EX-d)
 end
