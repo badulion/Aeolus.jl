@@ -1,8 +1,9 @@
 # Components and the stage pipeline
 
 Status: **built in ONE-a (#450)**, the first step of the single-model
-epic. The target is [One model](single_model.md); this page says what the
-code does today, and where it still differs from the target.
+epic, with the configuration schema of ONE-b (#451). The target is
+[One model](single_model.md); this page says what the code does today,
+and where it still differs from the target.
 
 ## What a step does
 
@@ -55,23 +56,30 @@ on a retry.
 
 ## The core's components
 
-| component | slot | section (today) | stage | delegates to |
+| component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | — | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` | called by the core in stage 6 | the closure of `Components.build_closure` |
-| [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[dynamics] f_coriolis` | `:tendencies` | `Operators.add_coriolis!` |
-| [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[boundaries] theta_flux_*` | `:tendencies` | `Operators.add_surface_flux!` |
-| [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[dynamics] sponge_*` | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
+| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability` | called by the core in stage 6 | the closure of `Components.build_closure` |
+| [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` | `:tendencies` | `Operators.add_coriolis!` |
+| [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
+| [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start` | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
 
 Every domain has an `:advection` provider; `[sgs] closure = "none"`
-enables no `:sgs` component. The sections are those of the `simulation`
-run type: each component's [`schema`](@ref Aeolus.Components.schema) is
-the option list the run type's section is assembled from
-([`add_options!`](@ref Aeolus.Components.add_options!)), so the option
-reference pages are unchanged. The schema step of the epic (ONE-b, #451) gives
-each component its own section.
+enables no `:sgs` component. Each component has its own per-domain
+section of the model's configuration, generated from its
+[`schema`](@ref Aeolus.Components.schema)
+([`COMPONENTS`](@ref Aeolus.SimulationDriver.COMPONENTS), ONE-b #451), and
+is switched on by it ([`enabled`](@ref Aeolus.Components.enabled)`(C,
+opts)`, from the options alone). Before anything is built, the enabled
+component types of every domain are checked
+([`component_problems`](@ref Aeolus.Components.component_problems)): at
+most one per slot, an `:advection` provider, and each component's
+`requires` and `incompatible`, every problem keyed by the section it
+concerns; [`validate_components`](@ref Aeolus.Components.validate_components)
+adds the stage rules for the built instances. The schema, the domains and
+the bare-config dry LES are on [Run configuration](run_configuration.md).
 
-The `simulation` run type builds its core with the dynamics only
+The model builds its core with the dynamics only
 (viscosity, buoyancy, moisture, boundary conditions) and hands SGS,
 advection, Coriolis, the sponge and the θ fluxes to these components. The
 plain Smagorinsky closure is therefore the `:sgs` component's
@@ -79,7 +87,7 @@ plain Smagorinsky closure is therefore the `:sgs` component's
 report the `sgs.nu_h_max`, `sgs.nu_v_max` and `sgs.kappa_h_max`
 diagnostics every other closure already reported.
 
-The couplings EX-d (#441) put around the `simulation` run type's step —
+The couplings EX-d (#441) put around the model's step —
 `[forcing]` radiative cooling, the `[surface]` slab or flux map,
 `[microphysics]` Kessler, `[tracer]`, `[particles]` and `[obstacles]` —
 are one component of the domain for now,
@@ -96,7 +104,7 @@ to the step that ports them.
 
 ## Bit identity
 
-Every `simulation`-config variant of `test/support/simulation_digests.jl`
+Every model-config variant of `test/support/simulation_digests.jl`
 — the four shipped configs plus overrides switching on each SGS closure,
 Coriolis (also as the adaptive step's binding limit), the sponge, the top
 θ flux, moisture, a stretched grid, the anelastic core, RK3 and the
@@ -107,7 +115,10 @@ on master `ead7b986` before the pipeline, bit for bit, and its
 with their couplings, plus RK3 runs of the obstacles and the slab, against
 digests captured on master `a22b57ba`. The same file runs the components
 against the core's built-in terms, bit for bit, on both cores and with
-Euler and RK3.
+Euler and RK3. The schema of ONE-b (#451) renamed the keys of every
+config (`[time]`, the component sections) and changed defaults; the
+shipped configs state the old defaults they relied on, and the digests
+are reproduced unchanged.
 
 ## Where the code still differs from the target
 

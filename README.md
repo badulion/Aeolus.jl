@@ -157,8 +157,8 @@ dry deposition · rain scavenging of HNO₃
 </td></tr>
 <tr><td><b>Configuration &amp; input</b></td><td>
 
-TOML run configuration with a schema, strict validation, `extends` and
-overrides, sweeps · `julia -m Aeolus run | check | resolve | options |
+TOML run configuration with a schema, strict validation, self-contained
+files and overrides, sweeps · `julia -m Aeolus run | check | resolve | options |
 preprocess` · NetCDF-4 static driver (buildings, surface classes, LAI)
 from OpenStreetMap / GeoJSON · NetCDF-4 dynamic driver (initial
 state, boundary planes, forcing) from a sounding, an Aeolus parent run
@@ -356,7 +356,7 @@ julia --project=. examples/urban/alexanderplatz_animation.jl
 ```
 
 Nothing in the simulation is tuned to Alexanderplatz — the run type
-(`Aeolus.UrbanCase`, `[run] driver = "urban"`) runs any city given as a
+(`Aeolus.UrbanCase`, `[run] legacy = "urban"`) runs any city given as a
 TOML file plus its static and dynamic input drivers. Output is a single `.nc` file carrying the full 3-D
 state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, the NO / NO₂ / O₃ / VOC /
 HNO₃ species and the other tracers, the moist buoyancy `b_moist`) plus

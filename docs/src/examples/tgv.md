@@ -4,8 +4,8 @@ The canonical benchmark for incompressible LES cores. The initial
 condition is analytically divergence-free, and (in the linearized
 limit) the kinetic energy decays as `exp(-6νt)`.
 
-Location: `examples/configs/taylor_green_vortex.toml` (the
-`simulation` driver).
+Location: `examples/configs/taylor_green_vortex.toml` (the model's
+config, schema 2).
 
 ```bash
 $ julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml

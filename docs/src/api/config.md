@@ -1,11 +1,12 @@
 # Run configuration
 
-`Aeolus.Config` (CFG-a, #356) is how a run is configured: a TOML file,
-checked against a declarative schema, resolved into an immutable typed
+`Aeolus.Config` (CFG-a, #356; schema version 2, ONE-b #451) is how a run
+is configured: one self-contained TOML file, checked against a declarative
+schema (the model's, or a legacy case's), resolved into an immutable typed
 [`RunConfig`](@ref Aeolus.Config.RunConfig), and stored in `run.toml` in a
 canonical form from which the run can be rebuilt. The loader, the
-`aeolus` command line and its `--set` (CFG-b, #357) and the drivers'
-option tables all build on it.
+`aeolus` command line and its `--set` (CFG-b, #357) and the option tables
+all build on it. The guide is [Run configuration](../design/run_configuration.md).
 
 ```bash
 julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml   # Julia ≥ 1.12
@@ -15,13 +16,15 @@ bin/aeolus run examples/configs/taylor_green_vortex.toml                  # any 
 ## Quick reference
 
 ```toml
-# case.toml
-extends = "base.toml"          # next to this file, else in the driver's config directory
+# case.toml: the model (no [run] legacy)
+schema_version = 2
 
 [run]
-driver = "common"
 name   = "cbl"
 seed   = 42
+
+[surface_theta_flux]
+bottom = 0.24
 
 [fftw]
 planner = "measure"
@@ -49,18 +52,24 @@ end
 cfg3 = load_run_config("runs/2026-10-06_cbl_1a2b3c4d")   # == cfg
 ```
 
-## Files, `extends` and overrides
+## Files, domains and overrides
 
-A configuration file may start from another with `extends = "base.toml"`.
-The base is looked up next to the extending file first, then in the
-config directory the driver registered ([`register_driver!`](@ref
-Aeolus.Config.register_driver!)). Chains are followed up to 8 links deep;
-a cycle, a missing file or a deeper chain is an error naming the files.
+A configuration file is self-contained: there is no `extends` (refused,
+like `schema_version = 1` and `[run] driver`, with what changed). The
+schema is the model's ([`MODEL`](@ref Aeolus.Config.MODEL)), or a legacy
+case's when `[run] legacy = "<case>"` names one ([`legacy_cases`](@ref
+Aeolus.Config.legacy_cases)). The model's per-domain sections
+([`is_domain_section`](@ref Aeolus.Config.is_domain_section)) are resolved
+for every domain: the run-level values, replaced key by key by a
+`[[domain]]` block's `[domain.<section>]` tables
+([`config_domains`](@ref Aeolus.Config.config_domains),
+[`DomainConfig`](@ref Aeolus.Config.DomainConfig),
+[`domain_view`](@ref Aeolus.Config.domain_view)); with one domain,
+`cfg.grid` is that domain's section.
 
-Merging is key by key for tables; arrays and scalars replace (a child's
-`levels = [1.0]` replaces the base's whole array). `overrides` are
-`"dotted.key=<TOML value>"` strings applied last, so precedence is
-**base < child < override**. Strings are quoted: `run.name="x"`.
+`overrides` are `"dotted.key=<TOML value>"` strings applied last
+(**file < override**); an override of a per-domain key applies to every
+domain, over the blocks. Strings are quoted: `run.name="x"`.
 
 [`load_run_config`](@ref Aeolus.Config.load_run_config) also reads a run
 folder or its `run.toml`: then the record's `[config]` is used.
@@ -124,7 +133,7 @@ Every driver's schema starts with these:
 
 | section | options |
 | :-- | :-- |
-| `[run]` | `driver` (default and only value: the driver's name), `name`, `seed = 0`, `root = "runs"`, `allow_uncommitted` |
+| `[run]` | `name` (the model: `"aeolus"`), `seed = 0`, `root = "runs"`, `allow_uncommitted`; a legacy case's also `legacy` (default and only value: its name) |
 | `[fftw]` | `planner` (`estimate`, `measure`, `patient`, `exhaustive`), `threads` (`"none"`: one per Julia thread), `wisdom` |
 | `[logging]` | `console_level`, `file_level = "debug"`, `flush_interval = 5.0` s, `diagnostics_cadence = 60.0` s |
 | `[checkpoint]` | `every_steps = 0` (off), `every_seconds = inf` (off), `keep = 2`, `prefix = "checkpoint"` |
@@ -136,9 +145,10 @@ Every driver's schema starts with these:
 from `load_config`) take their missing keys from the same schema
 defaults.
 
-## Drivers
+## Schemas: the model and the legacy cases
 
-A driver registers its sections, cross-field checks and config directory:
+A schema registers its sections and cross-field checks (the model also
+its per-domain sections, `domain_sections`):
 
 ```julia
 using Aeolus.Config
@@ -149,24 +159,29 @@ grid = section("grid"; doc = "the mesh") do s
     option!(s, "extent", NTuple{3,Float64}; default = (3200.0, 3200.0, 1600.0),
             range = (0, Inf), open_lower = true, units = "m", doc = "domain size")
 end
-schema = register_driver!("cbl"; sections = [grid], config_dir = joinpath(@__DIR__, "config"))
+schema = register_driver!("cbl"; sections = [grid])
 check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
        [ConfigError("grid.size", "more vertical than horizontal cells")] : ConfigError[])
 ```
 
-`[run] driver = "cbl"` then selects this schema; the driver `"common"`
-(the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`urban`](../reference/options/urban.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
-like a common one adds its options to it (the `simulation` driver's
-`[output] fields`); redeclaring a common option is an error.
+`[run] legacy = "cbl"` then selects this schema; `"common"` (the common
+sections only) is always registered. The options are in the generated
+reference: [the model](../reference/options/model.md), and of the legacy
+cases [`urban`](../reference/options/urban.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+like a common one adds its options to it (the model's `[output]
+variables`); redeclaring a common option is an error.
 
-## Run drivers
+## What runs a config
 
-A schema says what a config may contain; a **run driver**
-([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)) also says
-how to build and run it. A driver type implements `driver_name`,
-`driver_sections`, `driver_checks` (optional), `config_dir` (optional),
+A schema says what a config may contain; an
+[`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver) also says how
+to build and run it: the model's (`Aeolus.SimulationDriver.SimulationDriverType`)
+or a legacy case's. A type implements `driver_name`, `driver_sections`,
+`driver_checks` (optional), `domain_sections` (optional, the model's),
 `build(d, cfg)`, `run!(d, obj, rf, ck; callback)` and `state_fields(obj)`,
-and is registered with `register_driver!(D())`:
+and is registered with `register_driver!(D())`
+([`run_driver`](@ref Aeolus.Config.run_driver)`(cfg)` finds it,
+[`config_case`](@ref Aeolus.Config.config_case) names it):
 
 ```julia
 using Aeolus, Aeolus.Config
@@ -191,8 +206,8 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Drivers that live under `examples/` (the Berlin and validation drivers)
-are loaded on first use: [`DRIVER_FILES`](@ref
+Legacy cases that live under `examples/` (the validation drivers) are
+loaded on first use: [`DRIVER_FILES`](@ref
 Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
 package directory, and the first config that names one includes the file
 into a fresh module. The `sbl` run type moved into `src/` with EX-b (#439,
@@ -204,9 +219,9 @@ fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
 record and its resolution refusal. The Berlin case's driver is no longer
 an example file: it is the package's urban run type, `urban` (below; EX-a #438).
 
-### The example drivers (CFG-e, #360)
+### The example legacy cases (CFG-e, #360)
 
-| driver | file | builds and runs | configs |
+| `[run] legacy` | file | builds and runs | configs |
 | :-- | :-- | :-- | :-- |
 | `channel` | `examples/validation/channel_driver.jl` | `half_channel_case` / `channel_case`, `run_channel!` (wall-modelled channel LES) | `validation/configs/neutral_abl.toml`, `log_layer_mismatch.toml` |
 | `column` | `examples/validation/column_driver.jl` | `[column] case`: `dycoms_rf01` (RF01 column + longwave solve), `parisfog_2011` (the RadiationFog column), `droplet_parcel` (spectral broadening, `run_broadening_case`), `kessler_box` (Kessler microphysics, no dynamics) | `validation/configs/dycoms_rf01.toml`, `parisfog_2011.toml`, `spectral_broadening.toml`, `kernels/configs/cloud_spinup.toml` |
@@ -247,7 +262,7 @@ folder whose `run.toml` records the member's overrides and no `[sweep]`,
 so it replays as a single run:
 
 ```toml
-extends = "base.toml"
+# … the case's sections …
 
 [[sweep.member]]
 label = "no_feedback"
@@ -276,7 +291,7 @@ label).
 | `run <run-folder> --resume` | continues that run: same run ID, a new session, from its newest checkpoint (`--set` is refused) |
 | `check <config> [--set k=v]…` | validates and prints every problem |
 | `resolve <config> [--set k=v]…` | prints the canonical resolved TOML |
-| `options [driver] [section]` | prints the option reference, generated from the schema |
+| `options [legacy-case] [section]` | prints the option reference of the model (or of a legacy case), generated from the schema |
 | `preprocess <kind> …` | a registered preprocessor ([`register_preprocessor!`](@ref Aeolus.Config.register_preprocessor!)) |
 
 Exit codes: **0** success; **1** the run failed (blowup or error; its
@@ -292,18 +307,22 @@ returns the exit code.
 Aeolus.main
 ```
 
-## The `simulation` driver
+## The model
 
-`[run] driver = "simulation"` is a bare run of one dynamical core on a
-box ([`Aeolus.SimulationDriver`](@ref)): what the scripts
-`examples/taylor_green_vortex.jl`, `dry_convective_bl.jl` and
-`buoyant_convection.jl` used to build in code. Their configs are in
-`examples/configs/`; the scripts are gone (EX-d, #441). The run types of the
-other example cases are in [`Aeolus.RunDrivers`](@ref).
+A config without `[run] legacy` runs the model
+([`Aeolus.SimulationDriver`](@ref)): a [`Model`](@ref
+Aeolus.Components.Model) of the Boussinesq or the anelastic core on a box
+with its components. A bare config is a minimal dry LES (32³ on 3.2 km ×
+3.2 km × 1.6 km, free-slip z walls, θ₀ = 300 K, Smagorinsky, adaptive
+RK3, one hour). The configs of `examples/configs/`, `examples/kernels/`
+and `examples/coupled/` replace the scripts that built these runs in code
+(EX-d, #441). The run types of the other example cases are legacy cases
+in [`Aeolus.RunDrivers`](@ref).
 
 ```toml
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "taylor_green_vortex"
 
 [grid]
@@ -312,14 +331,22 @@ extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
 
 [dynamics]
 nu = 0.01
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
+
+[sgs]
+closure = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[stepper]
-dt = 0.07853981633974483        # shortened to end_time / ceil(end_time / dt) = 2/26
-end_time = 2.0
+[time]
+scheme = "euler"
+dt = 0.07853981633974483        # shortened to duration / ceil(duration / dt) = 2/26
+duration = 2.0
 ```
 
 This config is, bit for bit, the simulation the script built before
@@ -328,12 +355,13 @@ This config is, bit for bit, the simulation the script built before
   * The run is a [`Model`](@ref Aeolus.Components.Model) of one domain
     stepped through the stage pipeline (ONE-a, #450; see
     [Components and the stage pipeline](@ref)): the core carries the
-    dynamics, and the `:advection` and `:sgs` slots, the Coriolis term
-    (`[dynamics] f_coriolis`), the sponge (`sponge_*`) and the prescribed θ
-    fluxes (`[boundaries] theta_flux_*`) are its components.
-  * `[stepper]`: `dt` or `cfl` (adaptive, `step_adaptive!`, with a finite
-    `dt_max`), and `end_time` or `nsteps`. `euler` is `step!`, `rk3`
-    `step_rk3!`.
+    dynamics, and its components have one section each, generated from
+    their schemas ([`COMPONENTS`](@ref Aeolus.SimulationDriver.COMPONENTS)):
+    `[advection]`, `[sgs]`, `[coriolis]` (`f`), `[sponge]` (`alpha_max`,
+    `z_start`) and `[surface_theta_flux]` (`bottom`, `top`).
+  * `[time]`: `dt` a fixed step or `"adaptive"` (`step_adaptive!` with
+    `cfl` and `dt_max`), and `duration` or `nsteps`. `euler` is `step!`,
+    `rk3` `step_rk3!`.
   * `[sgs]` selects the closure object of the `:sgs` component
     (`Components.build_closure`); `closure = "none"` enables no SGS
     component.
@@ -346,9 +374,9 @@ This config is, bit for bit, the simulation the script built before
     closure.
   * The run writes `diagnostics.csv` (the run monitor, every
     `[logging] diagnostics_cadence`), checkpoints on `[checkpoint]`, and
-    the `[output] fields` every `[output] cadence` as
+    the `[output] variables` every `[output] cadence` as
     `output/fields_<step>.nc`.
-  * `[initial] dynamic` names a dynamic driver: its profiles set the
+  * The domain's `dynamic_driver` names a dynamic driver: its profiles set the
     initial u, v, θ (and qv), replacing the `[initial]` tables. Lateral
     faces set to `"open"` (`boundaries.x`, `y`) take its boundary planes,
     blended linearly in time (boussinesq core, uniform grid, z walls, no
@@ -357,11 +385,11 @@ This config is, bit for bit, the simulation the script built before
     of `[preprocess.era5]` ([Input drivers](input_drivers.md), CFG-h
     #363); `examples/configs/lindenberg_era5.toml` is the example.
 
-Its options, every key with type, default, units, range and doc: [Options: driver `simulation`](../reference/options/simulation.md) (generated from the schema; `aeolus options simulation` prints the same).
+Its options, every key with type, default, units, range and doc: [Options: the model](../reference/options/model.md) (generated from the schema; `aeolus options` prints the same).
 
-## The `urban` driver
+## The `urban` legacy case
 
-`[run] driver = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
+`[run] legacy = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
 (`src/urban/core/config_schema.jl`; CFG-c #358 as the `berlin` example
 driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 `urban_parent` runs the nest parent of the same config alone. The Berlin
@@ -369,12 +397,14 @@ driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 
 | file | what |
 | :-- | :-- |
-| `berlin_summer.toml` | the flagship, **every option written out**: the reference copy |
-| `berlin_winter.toml` | `extends = "berlin_summer.toml"`: 15 January 2024, idealised cold profile |
-| `berlin_smoke.toml` | `extends` summer: 16³ window at noon, small nest parent, 12 steps, no NetCDF |
-| `berlin_mitte_sample.toml` | `extends` summer: the synthetic OSM sample |
-| `berlin_parent.toml` | `extends` summer, `driver = "urban_parent"`: the 6 km nest parent alone, 24 h |
-| `berlin_parent_coarse.toml` | `extends` the parent file: the coarse 24 × 24 × 38 parent (the Lindenberg checks) |
+| `berlin_summer.toml` | the flagship, **every option written out** |
+| `berlin_winter.toml` | 15 January 2024, idealised cold profile (summer's file with 11 keys changed) |
+| `berlin_smoke.toml` | 16³ window at noon, small nest parent, 12 steps, no NetCDF |
+| `berlin_mitte_sample.toml` | the synthetic OSM sample |
+| `berlin_parent.toml` | `legacy = "urban_parent"`: the 6 km nest parent alone, 24 h |
+| `berlin_parent_coarse.toml` | the coarse 24 × 24 × 38 parent (the Lindenberg checks) |
+
+Each file is complete (no `extends`, ONE-b #451).
 
 ```bash
 julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
@@ -441,11 +471,11 @@ run 12 steps gives state bitwise equal to the Julia-built smoke case and
 passes the round trip with the nest on. The Berlin case has no
 checkpoint/restart yet, so `[checkpoint]` must stay off.
 
-Its options, the `[physics.options.<coupling>]` tables included: [Options: driver `urban`](../reference/options/urban.md).
+Its options, the `[physics.options.<coupling>]` tables included: [Options: legacy case `urban`](../reference/options/urban.md).
 
-## The `sbl` driver
+## The `sbl` legacy case
 
-`[run] driver = "sbl"` (CFG-d #359; the module
+`[run] legacy = "sbl"` (CFG-d #359; the module
 [`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md) since EX-b
 #439) runs the stable-boundary-layer cases of `examples/sbl/configs/`. One
 driver covers four kinds, `[case] kind`:
@@ -499,11 +529,11 @@ member with its own spin-up), and the scripts `gabls1.jl` … `gabls4.jl`,
 `collapse_channel.jl` only read the run folders and make the tables and
 figures (`julia --project examples/sbl/gabls1.jl runs/gabls1_*`).
 
-Its options, every key with type, default, units, range and doc: [Options: driver `sbl`](../reference/options/sbl.md) (generated from the schema; `aeolus options sbl` prints the same).
+Its options, every key with type, default, units, range and doc: [Options: legacy case `sbl`](../reference/options/sbl.md) (generated from the schema; `aeolus options sbl` prints the same).
 
-## The `dns` driver
+## The `dns` legacy case
 
-`[run] driver = "dns"` (`examples/validation/dns_apriori_driver.jl`) is the
+`[run] legacy = "dns"` (`examples/validation/dns_apriori_driver.jl`) is the
 decaying-turbulence DNS of the filtered-DNS fixture
 (`test/fixtures/dns_decay.jl`) and its a-priori record
 (`test/fixtures/dns_apriori.jl`). `examples/validation/configs/dns256.toml`
@@ -518,7 +548,7 @@ over the run, the skewness band, the energy budget, monotone decay, past
 the dissipation peak) fails, names the measured k_max η, and leaves its
 record at `<out>.failed` only.
 
-Its options, every key with type, default, units, range and doc: [Options: driver `dns`](../reference/options/dns.md) (generated from the schema; `aeolus options dns` prints the same).
+Its options, every key with type, default, units, range and doc: [Options: legacy case `dns`](../reference/options/dns.md) (generated from the schema; `aeolus options dns` prints the same).
 
 ## The bit-identical round trip
 
@@ -534,8 +564,9 @@ same thread count.
 ## The canonical form and `run.toml`
 
 [`write_config`](@ref Aeolus.Config.write_config) writes every option,
-defaults included, keys sorted, `schema_version = 1` at the top, no
-`extends`, paths absolute and floats in Julia's shortest round-trip
+defaults included, keys sorted, `schema_version = 2` at the top, the
+model's per-domain sections under every `[[domain]]` (`[domain.grid]`,
+`[domain.sgs]`, …), paths absolute and floats in Julia's shortest round-trip
 representation (`inf`, `-inf`, `nan` for the specials). Writing a loaded
 canonical file again gives the same bytes; `0.1`, `5e-324`, `-0.0`,
 `±Inf` and `NaN` keep their bits. [`config_hash`](@ref
@@ -546,9 +577,9 @@ Aeolus.Config.config_hash) is the `fnv1a64` of this text.
 | key | contents |
 | :-- | :-- |
 | `[config]` | the canonical resolved table |
-| `config_schema_version`, `config_hash` | `1`, 16 hex digits |
-| `config_sources` | `files` (the extends chain, leaf first), `overrides`, and the keys set by `with` |
-| `[inputs]` | every input `Path` option: `path` and its `fnv1a64` content hash |
+| `config_schema_version`, `config_hash` | `2`, 16 hex digits |
+| `config_sources` | `files` (the config file), `overrides`, and the keys set by `with` |
+| `[inputs]` | every input `Path` option: `path` and its `fnv1a64` content hash (a domain's as `domain.<id>.<key>`) |
 | `replayable`, `nonreplayable_keys` | `false` and the keys if `with` set a value TOML cannot hold (a closure) |
 
 `load_run_config(folder)` returns a config equal to the one the run
