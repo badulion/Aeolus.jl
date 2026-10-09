@@ -85,6 +85,9 @@ include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / r
 # built from the registry, so it comes last
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
+# the `aeolus preprocess` subcommands of its input data (fetch-osm, fetch-landuse,
+# fetch-sounding, osm-sample; EX-a #438)
+include(joinpath(@__DIR__, "urban", "preprocess.jl"))
 
 export CaseConfig, UrbanDriver, UrbanParentDriver, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
