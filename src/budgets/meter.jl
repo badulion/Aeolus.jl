@@ -48,7 +48,7 @@ function; for the mass of water or of a tracer (kg m⁻²) `π̄ = 1` and
 
 The second form, the meter of the heat of the air, takes ρ̄, π̄ and cp
 from the fields `ρ̄`, `π̄`, `cp` of a reference state (an urban
-`CaseReference`, or [`reference_profiles`](@ref)) and `W` from the core
+`CaseReference`, or the anelastic base state) and `W` from the core
 (`Aeolus.Anelastic.constraint_weights` for a sound-proof core).
 
 Level thickness: `mesh.dz` on a `RegularGrid`, the cell thickness
