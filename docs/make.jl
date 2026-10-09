@@ -141,6 +141,7 @@ makedocs(
             "Components"           => "api/components.md",
             "Budgets"              => "api/budgets.md",
             "Output"               => "api/output.md",
+            "Checks"               => "api/checks.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
             "Example run types"    => "api/run_drivers.md",

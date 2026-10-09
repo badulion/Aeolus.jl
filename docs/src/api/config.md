@@ -296,7 +296,9 @@ label).
 
 Exit codes: **0** success; **1** the run failed (blowup or error; its
 session is recorded as `failed`); **2** a usage or configuration error,
-raised before anything is written. `--root` and `--allow-uncommitted`
+raised before anything is written; **3** the run completed but a required
+check of `[checks]` failed (its session is recorded as `failed`;
+`output/results.toml` says which, [Checks](checks.md), ONE-d #453). `--root` and `--allow-uncommitted`
 change where and whether the run starts, not its recorded config.
 The input drivers a run reads are made by the companion package
 AeolusPrep.jl (`julia --project -m AeolusPrep …`, ONE-h #457; see
@@ -388,6 +390,14 @@ This config is, bit for bit, the simulation the script built before
     means of u, v, w, θ. A `budget_*` variable (`budget_energy`,
     `budget_water`, `budget_momentum`, `budget_tracer`) switches on that
     budget of the domain ([Budgets](budgets.md)) and writes its terms.
+  * `[checks]` enables the checks the core and the components publish,
+    each `name = {required, tolerance}`: the sanity check `finite`, the
+    budget closures `energy_closure`, `water_closure`,
+    `momentum_closure` and `tracer_closure` (which turn their budgets on),
+    and the reference comparisons `[checks.reference.<quantity>]` against
+    `reference_file`. The run writes `output/results.toml` and ends with
+    exit code 3 when a required check failed ([Checks](checks.md), ONE-d
+    #453). Every shipped model config enables at least `finite`.
   * The domain's `dynamic_driver` names a dynamic driver: its profiles set the
     initial u, v, θ (and qv), replacing the `[initial]` tables. Lateral
     faces set to `"open"` (`boundaries.x`, `y`) take its boundary planes,
