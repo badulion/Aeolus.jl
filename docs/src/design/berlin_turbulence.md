@@ -82,16 +82,17 @@ issue. Cost per evaluation of the whole addon: 0.28–0.55 ms on the smoke
 grid and 7.0 ms on the flagship grid (3.6 ms before #180), once per
 output record.
 
-### Inflow fetch (#266): stated exception
+### Inflow fetch (#266) and the inflow generator (#268)
 
 N-inflow-d measures the development length behind a synthetic inflow on
 the periodic half channel (`examples/nesting/inflow_fetch.jl`, theory:
 [Development length behind the inflow](../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d))).
-It adds diagnostics (`FetchStatistics`, `development_length`) and a
-benchmark builder option (`half_channel_case(; inflow, lateral)`), no physics the
-Berlin run could execute: the Berlin domain is laterally periodic, and
-the Berlin child's fetch (day and night) is measured in N-inflow-e
-(#268), where the nested case exists. No Berlin list changed.
+Its diagnostics (`FetchStatistics`, `development_length`) are not coupled;
+the generator itself is, on the nested child's lateral faces: the addon
+`:inflow_turbulence` (N-inflow-e, #268, [nesting page](berlin_nesting.md#Synthetic-inflow-turbulence-(#268))).
+The Berlin child's fetch, day and night, is measured with the 24 h
+validation (#270); until then the analysis buffer of the observation
+diagnostics is an estimate (140 m).
 
 ### Flat-plate transition (#185): stated exception
 
@@ -99,8 +100,9 @@ The spatially developing boundary layer of P59-d (fringe region,
 `FreeStreamBoundary` top, Blasius inflow, `FreeStreamDisturbance`) is not
 coupled: the Berlin domain is laterally periodic with geostrophic forcing
 and has no inflow direction, so a fringe and an inflow generator have no
-place in it. Inflow boundaries arrive with nesting / ERA5 driving
-(Phase 68). Transition stays coupled through `turbulence_diag` above. The
+place in it. Inflow boundaries arrived with nesting (#265), and the
+inflow generator is coupled there (#268, above). Transition stays coupled
+through `turbulence_diag` above. The
 one shared piece that does run in every Berlin step is the damping
 profile: the Rayleigh sponge (`sponge_α_max` = 0.05 s⁻¹ from 75 m in
 `:smoke`) now takes its rate from `Operators.DampingProfile`, the
