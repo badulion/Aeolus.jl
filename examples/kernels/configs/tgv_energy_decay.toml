@@ -9,12 +9,24 @@
 #
 # The plot reads ke_mean from the run's diagnostics.csv.
 
-extends = "../../configs/taylor_green_vortex.toml"
-
 [run]
+driver = "simulation"
 name = "tgv_energy_decay"
 
+[grid]
+size = [32, 32, 32]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[dynamics]
+nu = 0.01
+
+[initial]
+u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+
 [stepper]
+scheme = "euler"
+dt = 0.07853981633974483        # 0.4 dx / U₀ (the viscous limit 0.4 dx²/2ν is larger)
 end_time = 4.0                  # 51 steps of 4/51
 
 [logging]

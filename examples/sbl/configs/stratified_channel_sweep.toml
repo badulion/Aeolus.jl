@@ -12,7 +12,29 @@
 #   julia --project -m Aeolus run examples/sbl/configs/stratified_channel_sweep.toml --set grid.size=[24,16,32] --set stepper.end_time=16.0 --set case.spinup_time=6.0 --set averaging.from=10.0
 #   julia --project examples/sbl/stratified_channel.jl runs/stratified_channel_re180_*
 
-extends = "stratified_channel_re180.toml"
+[run]
+driver = "sbl"
+name = "stratified_channel_re180"
+seed = 1
+
+[case]
+kind = "stratified_channel"
+richardson = 18.0
+spinup_time = 10.0
+
+[grid]
+size = [32, 32, 48]
+
+[sgs]
+closure = "dynamic_smagorinsky"
+stability = "brown94"
+stress = "symmetric"
+
+[stepper]
+end_time = 40.0
+
+[averaging]
+from = 20.0
 
 [sweep]
 axis = [ { key = "case.richardson", values = [0.0, 18.0, 60.0] },

@@ -1,8 +1,9 @@
 # Berlin (Alexanderplatz), summer: the flagship run of the `urban` driver
 # (the urban run type Aeolus.UrbanCase; CFG-c #358, EX-a #438). Every option
-# of the Berlin case is written out here; this file is the reference copy,
-# and the other scenarios (berlin_winter.toml, berlin_smoke.toml,
-# berlin_mitte_sample.toml) extend it with their differences only.
+# of the Berlin case is written out here. The other scenarios
+# (berlin_winter.toml, berlin_smoke.toml, berlin_mitte_sample.toml,
+# berlin_parent.toml) are complete files of their own (no extends, ONE-b
+# #451): a change that must reach them is made in each file.
 #
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800

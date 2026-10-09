@@ -10,7 +10,33 @@
 #   julia --project -m Aeolus run examples/sbl/configs/collapse_channel_sweep.toml
 #   julia --project examples/sbl/collapse_channel.jl runs/collapse_channel_*
 
-extends = "collapse_channel.toml"
+[run]
+driver = "sbl"
+name = "collapse_channel"
+seed = 1
+
+[case]
+kind = "collapse_channel"
+heat_flux_fraction = 0.5
+z0 = 1e-4
+theta_ref = 300.0
+spinup_time = 10.0
+
+[grid]
+size = [16, 16, 32]
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+stress = "laplacian"
+
+[stepper]
+end_time = 20.0
+
+[averaging]
+from = 15.0
+interval = 1.0
 
 [sweep]
 axis = [ { key = "case.heat_flux_fraction", values = [0.0, 0.0159, 0.0636, 0.25, 0.5, 1.0, 2.0] } ]

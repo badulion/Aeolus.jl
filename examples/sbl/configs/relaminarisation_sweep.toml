@@ -11,7 +11,30 @@
 #   julia --project -m Aeolus run examples/sbl/configs/relaminarisation_sweep.toml --member re180_2.0
 #   julia --project examples/sbl/relaminarisation_channel.jl runs/relaminarisation_*
 
-extends = "relaminarisation.toml"
+[run]
+driver = "sbl"
+name = "relaminarisation"
+seed = 1
+
+[case]
+kind = "relaminarisation_channel"
+re_tau = 180.0
+h_over_l = 1.0
+spinup_time = 10.0
+
+[grid]
+size = [32, 32, 32]
+
+[sgs]
+closure = "sigma"
+stability = "brown94"
+stress = "symmetric"
+
+[stepper]
+end_time = 20.0
+
+[averaging]
+interval = 0.5
 
 [sweep]
 axis = [ { key = "case.h_over_l", values = [0.3, 0.6, 1.0, 1.5, 2.0] } ]
