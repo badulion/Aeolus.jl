@@ -207,9 +207,7 @@ const OTHER_ISSUE_DIRS = Dict("sbl/" => "#359 (CFG-d, SBL)")
 # The rest of #360's scope, migrated in later parts of the issue (it may be
 # split per directory). This list may only shrink: a file migrated to a
 # config must leave it (checked below).
-const PENDING_360 = Set([
-    "sgs/rotating_stratified_decay.jl",
-])
+const PENDING_360 = Set{String}()
 
 function example_scripts()
     files = String[]

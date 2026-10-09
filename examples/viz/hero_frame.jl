@@ -1,4 +1,6 @@
 # Render a single still from an Aeolus NetCDF output file, for the README.
+# Output analysis only: it reads the file the urban run writes and runs no
+# simulation code.
 #
 # A 48-frame APNG of a full diurnal cycle is ~75 MB — far too heavy for a
 # repository front page — so the hero image is one well-chosen time level
@@ -20,7 +22,7 @@ const NCPATH = length(ARGS) >= 1 ? ARGS[1] :
     joinpath(@__DIR__, "..", "urban", "output", "alexanderplatz.nc")
 isfile(NCPATH) || error("""
     No output at $NCPATH — run the simulation first:
-        julia --project=. examples/urban/alexanderplatz_diurnal.jl
+        julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
     """)
 
 ncf   = NCDataset(NCPATH)

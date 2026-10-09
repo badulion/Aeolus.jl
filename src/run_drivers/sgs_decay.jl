@@ -1,51 +1,92 @@
-# A-posteriori-in-time validation of the SGS closures against filtered
-# DNS (Era VI, P56-e, #192). Included by test/era6_sgs_validation.jl and
-# examples/sgs/rotating_stratified_decay.jl.
-#
-# The method ("a priori in time"). One DNS of decaying isotropic
-# turbulence (the P56-c fixture, test/fixtures/dns_decay.jl: 2π box,
-# ν ∝ N^{-4/3}, spun up from a fixed seed to t₀ = 2) is continued from t₀
-# in three ways:
-#
-#   :isotropic   unchanged;
-#   :rotating    f-plane rotation f = u'/(Ro L), Ro = 0.2;
-#   :stratified  a uniform background stratification N = u'/(Fr L),
-#                Fr = 0.3 (Riley, Metcalfe & Weissman 1981),
-#
-# with u' and the integral scale L measured at t₀. At t₀ and at the save
-# times the DNS velocity is filtered with the Gaussian of width Δ = rh
-# (r = 4) and resampled onto the r-times-coarser grid by Fourier
-# truncation (`coarse_grain`), which is how an LES on that grid sees the
-# filtered DNS; the exact subfilter stress τᵢⱼ = (uᵢuⱼ)‾ − ūᵢūⱼ
-# (`subfilter_stress!`, P56-c) and the subfilter heat flux are sampled at
-# the coarse centres by the 2×2×2 mean (`centre_sample`), which keeps τ
-# positive semi-definite. Each LES starts from the filtered DNS at t₀ — e and τᵢⱼ
-# from the exact subfilter stress (`initialize_tke!`,
-# `initialize_reynolds_stress!`) — runs with the same ν, f and N, and is
-# compared with the filtered DNS later on.
-#
-# Stratification in a periodic box. θ = θ₀ + Γz + θ′ with Γ = N²θ₀/g;
-# the simulations carry θ₀ + θ′ (periodic), and the background enters as
-# the body force −Γw on θ′ (`background_advection`). The buoyancy is
-# then g θ′/θ₀ and the discrete exchange with −Γw is exact (the face
-# average of θ in the w equation and the centre average of w in the θ
-# equation are adjoint). The SGS closures need the full θ (N², the
-# heat flux −K∇θ): `BackgroundGradient` hands them a view of the
-# simulation whose θ is θ₀ + Γ(z − z_mid) + θ′, with halos continued
-# across the periodic boundary with the jump ΓL_z.
+"""
+    Aeolus.RunDrivers.SGSDecayDriver
 
-using Aeolus
-using Aeolus.Fields: interior_view
-using Aeolus.Grids: Location
-import Aeolus.BoundaryConditions
-import Aeolus.Operators: sgs_coefficients!, sgs_fields, add_sgs_momentum!, add_sgs_scalar!,
-                         advance_sgs!, sgs_state, restore_sgs_state!, sgs_explicit_stress,
-                         sgs_scalar_tensor, _fill_sgs_halos!
-using Aeolus.Operators: AbstractSGSClosure, SGSFields
+The `sgs_decay` run driver (EX-d, #441): the SGS closures against
+filtered DNS of decaying turbulence under rotation and stratification —
+Era VI, P56-e (#192); formerly `examples/sgs/rotating_stratified_decay.jl`
+and the fixture `test/fixtures/sgs_validation.jl` (which
+`test/era6_sgs_validation.jl` runs at 48³).
+
+The method ("a priori in time"). One DNS of decaying isotropic
+turbulence (the P56-c fixture `dns_decay` of the `dns_decay` run type: 2π
+box, ν ∝ N^{-4/3}, spun up from a fixed seed to t₀ = 2) is continued from
+t₀ in up to four ways:
+
+  :isotropic             unchanged;
+  :rotating              f-plane rotation f = u'/(Ro L), Ro = 0.2;
+  :stratified            a uniform background stratification N = u'/(Fr L),
+                         Fr = 0.3 (Riley, Metcalfe & Weissman 1981);
+  :rotating_stratified   both,
+
+with u' and the integral scale L measured at t₀. At t₀ and at the save
+times the DNS velocity is filtered with the Gaussian of width Δ = rh
+(r = 4) and resampled onto the r-times-coarser grid by Fourier
+truncation (`coarse_grain`), which is how an LES on that grid sees the
+filtered DNS; the exact subfilter stress τᵢⱼ = (uᵢuⱼ)‾ − ūᵢūⱼ
+(`subfilter_stress!`, P56-c) and the subfilter heat flux are sampled at
+the coarse centres by the 2×2×2 mean ([`centre_sample`](@ref)), which keeps τ
+positive semi-definite. Each LES starts from the filtered DNS at t₀ — e
+and τᵢⱼ from the exact subfilter stress (`initialize_tke!`,
+`initialize_reynolds_stress!`) — runs with the same ν, f and N, and is
+compared with the filtered DNS later on.
+
+Stratification in a periodic box. θ = θ₀ + Γz + θ′ with Γ = N²θ₀/g;
+the simulations carry θ₀ + θ′ (periodic), and the background enters as
+the body force −Γw on θ′ ([`background_advection`](@ref)). The buoyancy is
+then g θ′/θ₀ and the discrete exchange with −Γw is exact (the face
+average of θ in the w equation and the centre average of w in the θ
+equation are adjoint). The SGS closures need the full θ (N², the
+heat flux −K∇θ): [`BackgroundGradient`](@ref) hands them a view of the
+simulation whose θ is θ₀ + Γ(z − z_mid) + θ′, with halos continued
+across the periodic boundary with the jump ΓL_z.
+
+`results.toml`: the base state (Re_λ, u′, L, T, f, N), and per case the
+DNS decay, per closure the resolved-KE error at t₀ + 2T, e, II and
+⟨τ₃₃⟩/⟨τ₁₁⟩, the mean SGS heat flux, and the series of the figure.
+Config: `examples/sgs/configs/rotating_stratified_decay.toml`.
+"""
+module SGSDecayDriver
+
+using ...Grids: RegularGrid, CellCenter, Location
+using ...Fields: Field, interior_view
+using ...BoundaryConditions: FieldBoundaryConditions, fill_halos!
+import ...BoundaryConditions
+using ...Simulations: BoussinesqSimulation, step_rk3!, kinetic_energy
+import ...Simulations
+import ...Operators
+import ...Operators: sgs_coefficients!, sgs_fields, add_sgs_momentum!, add_sgs_scalar!,
+                     advance_sgs!, sgs_state, restore_sgs_state!, sgs_explicit_stress,
+                     sgs_scalar_tensor, _fill_sgs_halos!
+using ...Operators: AbstractSGSClosure, SGSFields, StaticSmagorinsky, DynamicSmagorinsky, divergence, ∂x, ∂y, ∂z,
+                    isotropic_energy_spectrum, gaussian_filter!, SymmetricTensorField, subfilter_stress!,
+                    lumley_invariants, filtered_strain, eddy_viscosity_stress!
+import ...PressureSolvers
+using ...PrognosticSGS: TKEClosure, ReynoldsStressClosure, initialize_tke!, initialize_reynolds_stress!
+using ...IO: RunFolder, CheckpointSchedule
+using ...Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, section, option!,
+                 register_driver!, write_results, no_checkpoints, run_driver
+
+export SGSDecayDriverType, SGSDecayRun, validation_base, run_dns_case, run_les, filtered_snapshot,
+       centre_sample, BackgroundGradient, LinearJumpPeriodic, background_advection, les_closure, les_stress,
+       les_heat_flux, case_params, vmean
+
+"The arithmetic mean (of `f` over) `x`."
 vmean(x) = sum(x) / length(x)
 vmean(f, x) = sum(f, x) / length(x)
 
-isdefined(@__MODULE__, :dns_decay) || include(joinpath(@__DIR__, "dns_decay.jl"))
+# The DNS fixture of P56-c lives with the `dns_decay` run type: its
+# example driver (examples/validation/dns_driver.jl, which includes
+# test/fixtures/dns_decay.jl) or, after EX-c (#440), Aeolus.ValidationRuns.
+# Found at run time either way.
+function _dns()
+    A = parentmodule(parentmodule(@__MODULE__))
+    isdefined(A, :ValidationRuns) && return getfield(A, :ValidationRuns)
+    return parentmodule(typeof(run_driver("dns_decay")))
+end
+# (the bindings of a module loaded at run time are read in the latest world)
+_dns_fn(name::Symbol) = Base.invokelatest(getfield, _dns(), name)
+_dns_decay(; kw...) = Base.invokelatest(_dns_fn(:dns_decay); kw...)
+_coarse_grain(f, r) = Base.invokelatest(_dns_fn(:coarse_grain), f, r)
 
 const VAL_RO = 0.2
 const VAL_FR = 0.3
@@ -82,7 +123,7 @@ function BoundaryConditions._fill_z!(d, b::LinearJumpPeriodic, ::LinearJumpPerio
 end
 
 # Periodic for the operators that ask (the tensor diffusion's wall faces).
-Aeolus.Operators.bounded_directions(::FieldBoundaryConditions{<:Any, <:Any, <:Any, <:Any, <:LinearJumpPeriodic}) =
+Operators.bounded_directions(::FieldBoundaryConditions{<:Any, <:Any, <:Any, <:Any, <:LinearJumpPeriodic}) =
     (false, false, false)
 
 # The simulation as the closures see it: every property of `sim`, except
@@ -193,7 +234,7 @@ Spin up the P56-c DNS to `t0` and derive the continuation parameters:
 and `Γ = N²θ₀/g`.
 """
 function validation_base(; N::Integer = 48, t0::Real = VAL_T0, seed::Integer = 1)
-    d = dns_decay(; N = N, t_end = t0, seed = seed)
+    d = _dns_decay(; N = N, t_end = t0, seed = seed)
     up, L = integral_scale(d.sim)
     T = L / up
     f = up / (VAL_RO * L)
@@ -234,14 +275,14 @@ function filtered_snapshot(sim, r::Integer, Γ)
     out = map((sim.u, sim.v, sim.w, sim.θ)) do f
         ff = _field_like(f, g)
         gaussian_filter!(ff, f, Δ)
-        coarse_grain(ff, r)
+        _coarse_grain(ff, r)
     end
     τf = SymmetricTensorField(g)
     subfilter_stress!(τf, sim.u, sim.v, sim.w, filt)
     cg = a -> centre_sample(a, r)
     Nc = size(out[4])
     τ = SymmetricTensorField{Float64}(Nc...)
-    for (dst, src) in zip(Aeolus.Operators.components(τ), Aeolus.Operators.components(τf))
+    for (dst, src) in zip(Operators.components(τ), Operators.components(τf))
         dst .= cg(src)
     end
     # subfilter heat flux of θ′ (the background part has zero mean, file header)
@@ -336,7 +377,7 @@ function _project!(sim)
         fill_halos!(f, sim.bcs)
     end
     divergence(sim.div_buf, sim.u, sim.v, sim.w)
-    Aeolus.PressureSolvers.solve!(sim.φ, sim.div_buf, sim.solver)
+    PressureSolvers.solve!(sim.φ, sim.div_buf, sim.solver)
     fill_halos!(sim.φ, sim.bcs)
     ∂x(sim.dφdx, sim.φ); ∂y(sim.dφdy, sim.φ); ∂z(sim.dφdz, sim.φ)
     interior_view(sim.u) .-= interior_view(sim.dφdx)
@@ -393,8 +434,8 @@ function les_stress(c, sim)
     if ci isa ReynoldsStressClosure
         return SymmetricTensorField((Array(ci.τ[m].data[ii...]) for m in 1:6)...)
     end
-    f = Aeolus.Operators.compute_sgs!(c, sim)
-    uc = map(Aeolus.Operators._to_center_periodic, (sim.u, sim.v, sim.w))
+    f = Operators.compute_sgs!(c, sim)
+    uc = map(Operators._to_center_periodic, (sim.u, sim.v, sim.w))
     U = ntuple(m -> (F = Field(CellCenter(), g); interior_view(F) .= uc[m]; F), 3)
     S = filtered_strain(U...)
     τ = SymmetricTensorField(g)
@@ -415,7 +456,7 @@ Daly–Harlow tensor of the Reynolds-stress closure), with the full θ.
 """
 function les_heat_flux(c::BackgroundGradient, sim)
     v = _view(c, sim)
-    f = Aeolus.Operators.compute_sgs!(c, sim)
+    f = Operators.compute_sgs!(c, sim)
     g = sim.mesh
     θ = v.θ.data
     H = (g.Hx, g.Hy, g.Hz)
@@ -486,3 +527,135 @@ function run_les(base, dnsrun, model::Symbol; r::Integer = 4, cfl::Real = 0.4)
     end
     return (; model, sim, closure = c, K, e, νt, II, III, r33, hw, τs, wall)
 end
+
+# ---------------------------------------------------------------------------
+# the run driver
+# ---------------------------------------------------------------------------
+
+"""
+    SGSDecayDriverType()
+
+The `sgs_decay` driver: `[run] driver = "sgs_decay"`. Sections `[dns]`
+(the spin-up and the continuations) and `[les]` (the closures);
+`aeolus options sgs_decay` prints them.
+"""
+struct SGSDecayDriverType <: AbstractRunDriver end
+
+Config.driver_name(::SGSDecayDriverType) = "sgs_decay"
+Config.config_dir(::SGSDecayDriverType) = normpath(joinpath(@__DIR__, "..", "..", "examples", "sgs", "configs"))
+
+const _CASES = ["isotropic", "rotating", "stratified", "rotating_stratified"]
+const _MODELS = ["smagorinsky", "dynamic", "tke", "rsm"]
+
+function Config.driver_sections(::SGSDecayDriverType)
+    dns = section("dns"; doc = "The DNS: the P56-c spin-up to t₀ and its continuations.") do s
+        option!(s, "n", Int; default = 96, range = (8, 4096), doc = "DNS cells per side (ν ∝ n^{-4/3}); the LES has n/r")
+        option!(s, "t0", Float64; default = VAL_T0, range = (0, Inf), open_lower = true, units = "1",
+                doc = "end of the spin-up t₀")
+        option!(s, "seed", Int; default = 1, range = (0, typemax(Int)), doc = "seed of the initial field")
+        option!(s, "cases", Vector{String}; default = copy(_CASES), allowed = _CASES,
+                doc = "the continuations (Ro = $(VAL_RO), Fr = $(VAL_FR))")
+        option!(s, "turnovers", Float64; units = "1", default = 2.0, range = (0, Inf), open_lower = true,
+                doc = "length of each continuation, in turnovers T = L/u′")
+        option!(s, "nsave", Int; default = 16, range = (1, 10000), doc = "filtered snapshots after t₀ (equally spaced)")
+        option!(s, "r", Int; default = 4, range = (2, 64), doc = "filter width Δ = r h and the coarsening (even)")
+        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
+                doc = "advective Courant number of the continuations")
+    end
+    les = section("les"; doc = "The LES from the filtered DNS.") do s
+        option!(s, "models", Vector{String}; default = copy(_MODELS), allowed = _MODELS,
+                doc = "smagorinsky (C_s = 0.17), dynamic (Germano–Lilly, plane averaged), tke (Deardorff, e from the exact τ), rsm (Reynolds stress, τ exact)")
+        option!(s, "cfl", Float64; units = "1", default = 0.4, range = (0, Inf), open_lower = true,
+                doc = "advective Courant number of the LES")
+    end
+    return Section[dns, les]
+end
+
+function _checks(cfg)
+    e = no_checkpoints(cfg)
+    d = cfg.dns
+    iseven(d.r) || push!(e, ConfigError("dns.r", "the coarsening r must be even (centre_sample)"))
+    d.n % d.r == 0 || push!(e, ConfigError("dns.n", "n must be a multiple of r"))
+    isempty(d.cases) && push!(e, ConfigError("dns.cases", "no case"))
+    return e
+end
+Config.driver_checks(::SGSDecayDriverType) = Any[
+    """`[checkpoint]` stays off (the run is one call)
+    `dns.r` even, `dns.n` a multiple of it; at least one case""" => _checks]
+
+"""
+    SGSDecayRun
+
+What the `sgs_decay` driver builds and runs: the resolved `cfg`, the
+`base` of [`validation_base`](@ref), the DNS continuations `dns` (case =>
+[`run_dns_case`](@ref)) and the LES `les` ((case, model) => [`run_les`](@ref)).
+"""
+mutable struct SGSDecayRun
+    cfg::RunConfig
+    base::Any
+    dns::Dict{Symbol,Any}
+    les::Dict{Tuple{Symbol,Symbol},Any}
+end
+
+Config.build(::SGSDecayDriverType, cfg::RunConfig) =
+    SGSDecayRun(cfg, nothing, Dict{Symbol,Any}(), Dict{Tuple{Symbol,Symbol},Any}())
+
+_nan(x) = x === nothing ? NaN : x
+
+function Simulations.run!(::SGSDecayDriverType, r::SGSDecayRun, rf::RunFolder, ::CheckpointSchedule;
+                          callback = nothing)
+    d = r.cfg.dns; models = Symbol.(r.cfg.les.models)
+    t_base = @elapsed (r.base = base = validation_base(; N = d.n, t0 = d.t0, seed = d.seed))
+    @info "sgs_decay: DNS spin-up" N = d.n seconds = round(t_base; digits = 1) Re_λ = base.Re_λ u′ = base.up L = base.L T = base.T
+    out = Dict{String,Any}("base" => Dict{String,Any}(
+        "re_lambda" => base.Re_λ, "u_prime" => base.up, "L" => base.L, "T" => base.T, "f" => base.f,
+        "N_bv" => base.Nbv, "nu" => base.ν, "spinup_wall_seconds" => t_base))
+    cases = Dict{String,Any}()
+    for (n, cs) in enumerate(d.cases)
+        c = Symbol(cs)
+        dn = r.dns[c] = run_dns_case(base, c; nturn = d.turnovers, nsave = d.nsave, r = d.r, cfl = d.cfl)
+        @info "sgs_decay: DNS continuation" case = c seconds = round(dn.wall; digits = 1) K_ratio = dn.K[end] / dn.K[1]
+        rec = Dict{String,Any}(
+            "dns_K_ratio" => dn.K[end] / dn.K[1], "dns_wall_seconds" => dn.wall, "t_over_T" => dn.tsave ./ base.T,
+            "dns_K" => [s.K for s in dn.snaps], "dns_e" => [s.e_sgs for s in dn.snaps],
+            "dns_II" => [s.II_mean for s in dn.snaps], "dns_III" => [s.III_mean for s in dn.snaps],
+            "dns_r33_mean" => vmean([s.r33 for s in dn.snaps[2:end]]),
+            "dns_hw_mean" => vmean([s.hw_mean for s in dn.snaps[2:end]]))
+        ms = Dict{String,Any}()
+        for m in models
+            l = r.les[(c, m)] = run_les(base, dn, m; r = d.r, cfl = r.cfg.les.cfl)
+            ms[String(m)] = Dict{String,Any}(
+                "ke_error_percent" => 100 * (l.K[end] / dn.snaps[end].K - 1), "e_end" => l.e[end],
+                "II_end" => m in (:tke, :rsm) ? l.II[end] : NaN, "r33_mean" => m in (:tke, :rsm) ? vmean(l.r33[2:end]) : NaN,
+                "hw_mean" => vmean(l.hw[2:end]), "wall_seconds" => l.wall,
+                "K" => l.K, "e" => l.e, "II" => l.II, "III" => l.III)
+        end
+        rec["models"] = ms
+        cases[cs] = rec
+        callback === nothing || callback(r, n)
+    end
+    out["cases"] = cases
+    write_results(rf, out)
+    return r
+end
+
+"""
+    state_fields(r::SGSDecayRun) -> NamedTuple
+
+The resolved kinetic energy of every DNS continuation (per step) and of
+every LES (per snapshot).
+"""
+function Config.state_fields(r::SGSDecayRun)
+    out = Pair{Symbol,Any}[]
+    for (c, dn) in sort!(collect(r.dns); by = first)
+        push!(out, Symbol("dns_K_", c) => dn.K)
+    end
+    for ((c, m), l) in sort!(collect(r.les); by = first)
+        push!(out, Symbol("les_K_", c, "_", m) => l.K)
+    end
+    return (; out...)
+end
+
+register_driver!(SGSDecayDriverType())
+
+end # module

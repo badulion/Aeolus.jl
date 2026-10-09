@@ -1,7 +1,7 @@
 # Era VI, Phase 56 (P56-e, #192): the TKE (P56-b) and Reynolds-stress
 # (P56-d) SGS closures against filtered DNS, with Smagorinsky and dynamic
 # Smagorinsky as baselines. The method and the fixtures are in
-# test/fixtures/sgs_validation.jl: one 48³ DNS of decaying isotropic
+# the sgs_decay run type (formerly test/fixtures/sgs_validation.jl): one 48³ DNS of decaying isotropic
 # turbulence (the P56-c fixture, Re_λ = 32 at t₀ = 2) continued for two
 # turnovers T = L/u′ as is, with rotation (Ro = 0.2) and with a background
 # stratification (Fr = 0.3); every LES (Δ = 4h on 12³) starts from the
@@ -58,7 +58,11 @@ using Test
 using Printf
 using Aeolus
 
-include(joinpath(@__DIR__, "fixtures", "sgs_validation.jl"))
+# the fixture is the sgs_decay run type's (EX-d #441; formerly test/fixtures/sgs_validation.jl)
+using Aeolus.Fields: interior_view
+using Aeolus.RunDrivers.SGSDecayDriver
+using Aeolus.RunDrivers.SGSDecayDriver: VAL_RO, VAL_FR
+import Aeolus.Operators: advance_sgs!
 
 _pcorr(a, b) = (m = isfinite.(a) .& isfinite.(b); x = a[m] .- vmean(a[m]); y = b[m] .- vmean(b[m]);
                 sum(x .* y) / sqrt(sum(abs2, x) * sum(abs2, y)))

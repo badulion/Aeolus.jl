@@ -492,9 +492,11 @@ Further tests:
 The TKE closure and the Reynolds-stress closure are compared *a priori in
 time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
 Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
-not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`;
+not in this branch's stack). Fixture: the `sgs_decay` run type
+([`Aeolus.RunDrivers.SGSDecayDriver`](@ref), formerly `test/fixtures/sgs_validation.jl`);
 CI test: `test/era6_sgs_validation.jl`; example at 96³:
-`examples/sgs/rotating_stratified_decay.jl`; a wall-bounded case:
+`examples/sgs/configs/rotating_stratified_decay.toml` (tables and figure:
+`examples/sgs/plot_rotating_stratified_decay.jl`); a wall-bounded case:
 `examples/sgs/configs/surface_mounted_cube_closures.toml` (below).
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
@@ -615,7 +617,7 @@ and 60–83 s per continuation, LES 0.4–5 s):
   stress), so both closures are outside 2×. At this Re the DNS flux
   spends more of the run counter-gradient.
 
-The figure the example writes (`examples/sgs/output/rotating_stratified_decay_96.svg`)
+The figure the example writes (`rotating_stratified_decay_96.svg` in the run folder's `output/`)
 has one row per case. The panels are the resolved KE, the SGS energy,
 and the Lumley-triangle trajectory ``(ξ, η) = ((III/6)^{1/3}, (II/6)^{1/2})``
 of the mean invariants. The exact stress sits close to the axisymmetric

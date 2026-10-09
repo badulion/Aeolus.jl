@@ -746,3 +746,27 @@ end
     @test isapprox(p["cf"][3], p["cf_laminar"][3]; rtol = 0.15)
     @test res["mayle"] ≈ 400 * 3.3^(-5 / 8)          # Mayle (1991): Re_θ,onset = 400 Tu^(-5/8), Tu in %
 end
+
+# ---------------------------------------------------------------------------
+# examples/sgs/configs/rotating_stratified_decay.toml (the sgs_decay driver;
+# its fixture, formerly test/fixtures/sgs_validation.jl, is validated by the
+# full-tier test/era6_sgs_validation.jl)
+# ---------------------------------------------------------------------------
+
+using Aeolus.RunDrivers.SGSDecayDriver: validation_base, run_dns_case, run_les
+
+@testset "sgs_decay: the config runs the fixture; the stratified continuation loses K + PE" begin
+    f = joinpath(RD_EX, "sgs", "configs", "rotating_stratified_decay.toml")
+    r = rd_run(f, config_test_table(f).overrides)
+    base = validation_base(; N = 16, t0 = 0.2)
+    d = run_dns_case(base, :stratified; nturn = 0.2, nsave = 2)
+    dn = r.obj.dns[:stratified]
+    @test dn.K == d.K && [s.K for s in dn.snaps] == [s.K for s in d.snaps]
+    @test r.obj.les[(:stratified, :tke)].K == run_les(base, d, :tke).K
+    # the physics: the continuation's kinetic plus potential energy only
+    # decays (the exchange with the background is exact, viscosity removes)
+    E = dn.K .+ dn.PE
+    @test all(diff(E) .< 0) && all(>=(0), dn.PE)
+    res = rd_results(r)["cases"]["stratified"]
+    @test res["dns_K_ratio"] < 1 && Set(keys(res["models"])) == Set(["smagorinsky", "dynamic", "tke", "rsm"])
+end
