@@ -65,7 +65,8 @@ using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             Periodic, NoFlux, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
-                            assert_open_face_correction, mark_open_boundary_stage!
+                            assert_open_face_correction, mark_open_boundary_stage!,
+                            has_open_boundaries
 import ..BoundaryConditions: boundary_flux_weights
 using ..Operators
 using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
@@ -81,7 +82,7 @@ using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
 import ..PressureSolvers: solve!, poisson_axis_bcs, solver_stats
 import ..TimeSteppers: step!
-import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile
+import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile, step_rk3!
 
 using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!,
                      StepWorkspaces, axpy!, pressure_from_potential!, zero_storage!,
@@ -92,6 +93,8 @@ using ..TurbulenceStability: buoyancy_frequency_squared   # the one N² (P58-a)
 using ..Operators: sgs_fields
 using ..TimeIntegration: CFLConstraints, _max_advective_rate, _workspace_snapshot,
                          _snapshot_pairs
+import ..TimeIntegration: step_adaptive!, step_guard
+using ..TimeIntegration: _step_adaptive!, _max_abs
 import ..TimeIntegration: adaptive_dt, StateSnapshot, save_state!, restore_state!,
                           state_snapshot, _all_finite
 using ..IO: allfinite                    # the one finiteness check (#346)
@@ -1726,7 +1729,8 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
                               post_predictor!::Union{Nothing,Function} = nothing,
                               sgs = nothing,
                               eddy_viscosity! = nothing,
-                              sgs_stress::Symbol = :laplacian) where {S,T}
+                              sgs_stress::Symbol = :laplacian,
+                              commit::Bool = true) where {S,T}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     _check_sgs_stress(sgs_stress)
@@ -1799,6 +1803,76 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
     # 12. pressure-like diagnostic and clock
     pressure_from_potential!(sim.p, sim.φ, Δt)
     sim.t += Δt
+    commit && closure !== nothing && advance_sgs!(closure, sim, Δt)   # once per step (not per RK3 substage)
+    return sim
+end
+
+# -------------------------------------------------------------------------
+# SSP-RK3 (ONE-j, #460)
+# -------------------------------------------------------------------------
+
+"""
+    step_rk3!(sim::MassWeightedSimulation, dt; sgs = nothing, eddy_viscosity! = nothing,
+              body_force! = nothing, post_predictor! = nothing, sgs_stress = :laplacian)
+
+One Shu-Osher SSP-RK3 step of a sound-proof core, as
+[`step_rk3!`](@ref Aeolus.Simulations.step_rk3!) of the Boussinesq core:
+three forward-Euler substages of `dt` (each the fractional step of
+[`step_anelastic!`](@ref) with its `W`-weighted projection), combined as
+
+```
+u⁽¹⁾ = E(uⁿ),  u⁽²⁾ = ¾ uⁿ + ¼ E(u⁽¹⁾),  uⁿ⁺¹ = ⅓ uⁿ + ⅔ E(u⁽²⁾)
+```
+
+for `u, v, w, θ`. Each combination is of fields that satisfy
+`∇·(W u) = 0`, so the step does too, to the projection's tolerance; it is
+third-order accurate in time. The hooks run inside every substage, the
+SGS coefficients are formed from every substage state and the closure's
+memory is committed once, after the third substage. The pressure `p` is
+that of the last substage. Closed boundaries only: open faces (whose
+boundary buffers would have to be combined with the fields) are refused.
+"""
+function step_rk3!(sim::MassWeightedSimulation{S,T}, dt::Real; kwargs...) where {S,T}
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    try
+        _mass_weighted_rk3!(sim, T(dt); kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    return _step_end!(rec, sim, T(dt), outer)
+end
+
+# the step-start copies of u, v, w, θ, kept in the simulation's workspaces
+function _mw_rk3_workspace(sim::MassWeightedSimulation)
+    w = sim.workspaces
+    w.rk3 === nothing &&
+        (w.rk3 = map(f -> storage_like(f.data), (u = sim.u, v = sim.v, w = sim.w, θ = sim.θ)))
+    return w.rk3
+end
+
+function _mass_weighted_rk3!(sim::MassWeightedSimulation{S,T}, Δt::T;
+                             sgs = nothing, eddy_viscosity! = nothing,
+                             body_force!::Union{Nothing,Function} = nothing,
+                             post_predictor!::Union{Nothing,Function} = nothing,
+                             sgs_stress::Symbol = :laplacian) where {S,T}
+    has_open_boundaries(sim) &&
+        throw(ArgumentError("step_rk3!: the sound-proof SSP-RK3 step takes closed lateral " *
+                            "boundaries; step an open box with step!"))
+    closure = _active_sgs(sim, sgs, eddy_viscosity!)
+    t0 = sim.t
+    ws = _mw_rk3_workspace(sim)
+    fs = (u = sim.u, v = sim.v, w = sim.w, θ = sim.θ)
+    foreach((a, f) -> copy_storage!(a, f.data), ws, fs)
+    kw = (; sgs = closure, body_force! = body_force!, post_predictor! = post_predictor!,
+          sgs_stress = sgs_stress, commit = false)
+    _mass_weighted_step!(sim, Δt; kw...)                              # u⁽¹⁾
+    _mass_weighted_step!(sim, Δt; kw...)
+    foreach((a, f) -> (f.data .= 0.75 .* a .+ 0.25 .* f.data), ws, fs)  # u⁽²⁾
+    _mass_weighted_step!(sim, Δt; kw...)
+    third = one(T) / 3; two3 = 2 * third
+    foreach((a, f) -> (f.data .= third .* a .+ two3 .* f.data), ws, fs) # uⁿ⁺¹
+    sim.t = t0 + Δt
     closure === nothing || advance_sgs!(closure, sim, Δt)   # once per step
     return sim
 end
@@ -2085,15 +2159,17 @@ advective limit `C_advective / max_cell Σ|uᵢ|/Δxᵢ` (the per-cell rate of
 the Boussinesq [`cfl_diagnostics`](@ref Aeolus.TimeIntegration.cfl_diagnostics)),
 the diffusive limit `C_diffusive Δ²_harm / (ν + max(νt, κt))` with the SGS
 coefficients recomputed (pure `compute_sgs!`) from the current state, the
-buoyancy limit `C_buoyancy / N` from the horizontal-mean θ profile, and
-the Coriolis limit `C_coriolis / |f|`. Then, as for the Boussinesq core,
+buoyancy limit `C_buoyancy / N` from the horizontal-mean θ profile, the
+Coriolis limit `C_coriolis / |f|`, and the explicit `limits` of a model's
+components (`(dt, label)` pairs or `nothing`, ONE-j #460; compared right
+after the Coriolis limit, as on the Boussinesq core). Then, as for the Boussinesq core,
 limited to `growth_max · dt_prev` and clamped to `[dt_min, dt_max]`; a
 non-finite state collapses to `dt_min`. The other keywords of the
 Boussinesq method (`scheme`, `sgs_stress`, `diagnostics`) are accepted and
 ignored, so a driver can pass the same keywords to either core.
 """
 function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
-                     dt_prev = nothing, sgs = nothing, kwargs...) where {S,T}
+                     dt_prev = nothing, sgs = nothing, limits = (), kwargs...) where {S,T}
     t_cfl = time_ns()
     m = sim.mesh
     fill_halos!((sim.u, sim.v, sim.w), sim.bcs)
@@ -2134,6 +2210,11 @@ function adaptive_dt(sim::MassWeightedSimulation{S,T}, c::CFLConstraints;
     end
     if sim.has_coriolis && sim.f_coriolis != 0 && c.C_coriolis / abs(sim.f_coriolis) < dt
         dt = c.C_coriolis / abs(sim.f_coriolis); limiter = :coriolis
+    end
+    for l in limits                                    # the components' limits
+        l === nothing && continue
+        d_l = T(first(l))
+        d_l < dt && (dt = d_l; limiter = last(l)::Symbol)
     end
     rec.wall_cfl += _wall(t_cfl)
     isnan(dt) && return c.dt_min
@@ -2177,6 +2258,48 @@ function restore_state!(sim::MassWeightedSimulation, snap::StateSnapshot)
 end
 
 state_snapshot(sim::MassWeightedSimulation) = _workspace_snapshot(sim)
+
+"""
+    step_guard(sim::MassWeightedSimulation) -> (; finite, divergence, speed)
+
+The post-step checks of `step_adaptive!` on a sound-proof core (ONE-j,
+#460): `finite` (every value of `u, v, w, θ, p`), `divergence` the residual
+of the core's own constraint (`constraint_residual`: `max |(1/W)
+∇·(W u)|`, s⁻¹, at the projection's tolerance after a good step — the plain
+`∇·u` is not zero here by design) and `speed = max(|u|, |v|, |w|)`.
+"""
+function step_guard(sim::MassWeightedSimulation)
+    fin = _all_finite(sim)
+    div = constraint_residual(sim)
+    spd = max(_max_abs(sim.u), _max_abs(sim.v), _max_abs(sim.w))
+    return (finite = fin, divergence = div, speed = spd)
+end
+
+"""
+    step_adaptive!(sim::MassWeightedSimulation, constraints; kwargs...) -> (sim, dt_used, n_retries)
+
+The adaptive step of the Boussinesq core
+([`step_adaptive!`](@ref Aeolus.TimeIntegration.step_adaptive!), same
+keywords) on a sound-proof core (ONE-j, #460): the step from this core's
+[`adaptive_dt`](@ref), the snapshot of `u, v, w, p, θ, νt, κt` and the
+closure's memory, the step (`step!`, or `stepper`), the
+[`step_guard`](@ref) on the core's own constraint, and a retry with half
+the step when it fails. `scheme = ARK2()` (the IMEX step) is the Boussinesq
+core's only.
+"""
+function step_adaptive!(sim::MassWeightedSimulation, constraints::CFLConstraints; kwargs...)
+    get(kwargs, :scheme, nothing) === nothing ||
+        throw(ArgumentError("step_adaptive!: the IMEX schemes step the Boussinesq core only"))
+    rec = sim.workspaces.rec
+    outer = _step_begin!(rec, sim)
+    res = try
+        _step_adaptive!(sim, constraints; kwargs...)
+    catch
+        _step_abort!(rec); rethrow()
+    end
+    _step_end!(rec, sim, res[2], outer; retries = res[3])
+    return res
+end
 
 _all_finite(sim::MassWeightedSimulation) =
     allfinite(interior_view(sim.u)) && allfinite(interior_view(sim.v)) &&
