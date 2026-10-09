@@ -341,9 +341,10 @@ This config is, bit for bit, the simulation the script built before
     cores have one coefficient (Prandtl number 1), so there is no separate
     `kappa`.
   * Combinations a core cannot run are config errors: the anelastic core
-    needs z walls, `theta0 > 0`, a fixed `dt` with `euler`, a uniform grid
-    and no checkpoints; a stretched grid takes the `none` or `smagorinsky`
-    closure.
+    needs z walls, `theta0 > 0`, no moisture and a uniform grid (it takes
+    `euler` and `rk3`, a fixed or adaptive `dt` and checkpoints like the
+    Boussinesq core since ONE-j, #460); a stretched grid takes the `none`
+    or `smagorinsky` closure.
   * The run writes `diagnostics.csv` (the run monitor, every
     `[logging] diagnostics_cadence`), checkpoints on `[checkpoint]`, and
     the `[output] fields` every `[output] cadence` as

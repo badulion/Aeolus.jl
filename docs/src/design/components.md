@@ -109,10 +109,12 @@ infrastructure around them:
 
 The components are thin adapters, so their port is a question of the
 physics module they call. On the anelastic core the SGS fluxes (`SGS`)
-and the prescribed surface fluxes (`SurfaceThetaFlux`) are in the
-`ρ̄`-weighted flux form of its advection (`Operators.flux_weights`; see
-[Sound-proof cores](../theory/anelastic.md)): `Σ ρ̄ θ ΔV` changes only by
-the surface fluxes, to round-off, and the SGS terms conserve `Σ ρ̄ uᵢ ΔV`.
+are in the `ρ̄`-weighted flux form of its advection
+(`Operators.flux_weights`; see [Sound-proof cores](../theory/anelastic.md)),
+and so is the prescribed surface flux (`SurfaceThetaFlux`) as it was (the
+base state's wall faces carry the adjacent cell's weight): `Σ ρ̄ θ ΔV`
+changes only by the surface fluxes, to round-off, and the SGS terms
+conserve `Σ ρ̄ uᵢ ΔV`.
 `CentredAdvection` is the core's own advection (`weighted_momentum_advect!`
 on the anelastic core); `Coriolis` and `Sponge` act on the velocity and are
 the same on both cores.
@@ -125,7 +127,9 @@ with every scheme; after 30 min the anelastic mixed layer has warmed more
 than the Boussinesq one by the column-mass ratio `ρ̄_bot h / ∫₀ʰ ρ̄ dz`
 within a factor of 1.5. The anelastic digests of the `simulation` variants
 (`simulation_digests_anelastic.toml`) were re-captured on ONE-j: the
-weighted fluxes changed them, which `test/components_pipeline.jl` asserts.
+weighted SGS fluxes changed those with a closure, which
+`test/components_pipeline.jl` asserts; the variant without one kept
+master's digests bit for bit.
 
 ## Bit identity
 

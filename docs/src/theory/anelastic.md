@@ -40,9 +40,9 @@ in the same form. With ``W ≡ 1`` each weighted kernel is the Boussinesq
 kernel bit for bit (`test/components_both_cores.jl`); the Boussinesq core
 calls them with no weights.
 
-Since ONE-j (#460) the sound-proof cores use this form for:
+Since ONE-j (#460) the sound-proof cores use this form for every flux:
 
-* **the SGS stress and scalar flux** — the Laplacian and the stress
+* **the SGS stress and scalar flux** (new in ONE-j) — the Laplacian and the stress
   (`sgs_stress = :symmetric`) forms of every eddy-viscosity closure and of
   the diagonal (anisotropic) closures: `Operators.flux_weights(sim)`
   hands the core's weights to `add_sgs_momentum!` and `add_sgs_scalar!`.
@@ -50,16 +50,17 @@ Since ONE-j (#460) the sound-proof cores use this form for:
   tensor, the Reynolds-stress closure) has no weighted form, and a
   sound-proof core refuses it (`Operators.sgs_weighted_form`);
 * **a prescribed kinematic surface flux** ``F`` (`θ_flux_bottom`,
-  `θ_flux_top`, the `SurfaceThetaFlux` component): the flux through a wall
-  face carries the mass ``W_f`` of that face, so the first level gains
-  ``(W_f/W_c)\,F/Δz`` and
-  ``\frac{d}{dt}\sum W θ\,ΔV = (W_{f,\mathrm{bot}} F_\mathrm{bot} - W_{f,\mathrm{top}} F_\mathrm{top})\,A``.
+  `θ_flux_top`, the `SurfaceThetaFlux` component), unchanged: the
+  weighted form ``(W_f/W_c)\,F/Δz`` is the Boussinesq ``F/Δz``, because the
+  wall faces of a `ReferenceState` carry the weight of the adjacent cell
+  (``W_f = W_c`` there, as its halo fill does). So
+  ``\frac{d}{dt}\sum W θ\,ΔV = (W_\mathrm{bot} F_\mathrm{bot} - W_\mathrm{top} F_\mathrm{top})\,A``.
 
 The molecular term ``ν∇^2`` stays unweighted: its ``O(∂_z \ln \bar ρ)``
 correction is negligible at molecular ``ν``.
 
-Before ONE-j the SGS fluxes and the surface flux were in the Boussinesq form
-on the sound-proof cores. In the dry convective boundary layer of
+Before ONE-j the SGS fluxes were in the Boussinesq form on the sound-proof
+cores. In the dry convective boundary layer of
 `examples/configs/dry_convective_bl.toml` (32³, 30 min, anelastic,
 isentropic 300 K base state) the ``\bar ρ``-weighted θ budget then missed
 the surface input by ``1.4 × 10^{-3}`` of it; in the weighted form it

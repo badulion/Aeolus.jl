@@ -1,0 +1,81 @@
+# fnv1a64 digests of state_fields and the clock of the anelastic variants of
+# test/support/simulation_digests.jl at 16³ (capture_anelastic_digests.jl, ONE-j #460).
+commit = "edf04857c5867e9ef97b698d15678d9ad0c3ca78"
+threads = 1
+
+[digests.dcbl_anelastic]
+diagnostics_csv = "33f2e256de1603f7"
+p = "b1932e3469dd9d6c"
+t = "a8031c3227732f3b"
+u = "08b2a2dcdb8f0d99"
+v = "c395f9f7df8cfc89"
+w = "6ced25621a3963e1"
+"θ" = "8429749c78e58237"
+"κt" = "9009bf7deb92bfe9"
+"νt" = "bb96476d2aabb99b"
+
+[digests.dcbl_anelastic_adaptive]
+diagnostics_csv = "b24a693fb8a8bd75"
+p = "3322c5caead2323c"
+t = "a994203228c7e421"
+u = "375095c4c7323b3b"
+v = "dd64d6e2cd6d874e"
+w = "a62a81ae14532828"
+"θ" = "4690cd64d638d13b"
+"κt" = "63f4c53d467151c8"
+"νt" = "b6ad75c4e2fc80ac"
+
+[digests.dcbl_anelastic_cor]
+diagnostics_csv = "363c7ffbc18767b0"
+p = "a4163034f8d6b869"
+t = "a8031c3227732f3b"
+u = "4a8b81f9b1d41749"
+v = "a89126e41b65455c"
+w = "b1f76a7ea2d1d744"
+"θ" = "b8e6d446ab42cee7"
+"κt" = "eef19e85b5400d67"
+"νt" = "27a18608c77374fd"
+
+[digests.dcbl_anelastic_none]
+diagnostics_csv = "9895bffa6882d049"
+p = "49b12683e7d4b54c"
+t = "a8031c3227732f3b"
+u = "66c5dd2a0ca75165"
+v = "c75ce829711ea164"
+w = "167c989c56b5cbd0"
+"θ" = "8e2aa5ccbe7c3297"
+"κt" = "dd14fcc6528cab25"
+"νt" = "dd14fcc6528cab25"
+
+[digests.dcbl_anelastic_rk3]
+diagnostics_csv = "d8854d75d46aa6de"
+p = "b5a312bbf86bdb72"
+t = "a8031c3227732f3b"
+u = "219b36a7a1dcc51f"
+v = "6f8ba9a150f060b1"
+w = "bb5eaf3aad5aa958"
+"θ" = "1976164045bc9b68"
+"κt" = "0caa310dfe9167ab"
+"νt" = "a29fc05cc3ffcff0"
+
+[digests.dcbl_anelastic_rk3_adaptive_cor]
+diagnostics_csv = "b2ef9e331313945c"
+p = "5c01b4ba603177db"
+t = "a8031c3227732f3b"
+u = "b3c3e6155e64169f"
+v = "83184b087a15df6b"
+w = "bf1313c1896e0c86"
+"θ" = "ca406fb3d30b8606"
+"κt" = "3107bf3d59f714c2"
+"νt" = "011562d9040aed85"
+
+[digests.dcbl_anelastic_vreman]
+diagnostics_csv = "33f2e256de1603f7"
+p = "f3129aa950ac2b82"
+t = "a8031c3227732f3b"
+u = "db2653f4b5fec74c"
+v = "6cd4f3416a688d8c"
+w = "01130c1ae0e003a0"
+"θ" = "917d075790f7463c"
+"κt" = "45bb756e63967c85"
+"νt" = "33f88915f4e47cd5"
