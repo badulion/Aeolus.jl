@@ -311,15 +311,15 @@ function book_boundary_heat!(case, h::Real)
     J = ob.rate .* h; Jc = ob.crate .* h
     ob.total += sum(J); ob.ctotal += sum(Jc)
     ob.lateral += ob.rlat * h; ob.top += ob.rtop * h
-    hl = case.ledger.heat
+    hl = energy(case.budgets)
     if hl.active
-        add_heat!(hl, :boundary_heat, J)
-        add_heat!(hl, :mass_correction, Jc)
+        book!(hl, :boundary_heat, J)
+        book!(hl, :mass_correction, Jc)
     end
     if ob.damping !== nothing
         Jr = ob.relax .* h
         ob.rtotal += sum(Jr)
-        hl.active && add_heat!(hl, :relaxation, Jr)
+        hl.active && book!(hl, :relaxation, Jr)
     end
     return case
 end

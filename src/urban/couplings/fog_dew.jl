@@ -173,8 +173,8 @@ function smoke_check(c::FogDew, case)
             "dew latent heat has the sign of the deposition" =>
                 all(I -> c.H_dew[I] * Δdew[I] >= 0, eachindex(Δdew)),
             "H_dew = L_v(Ts) · deposition rate (rel. 1e-9)" =>
-                all(I -> abs(c.H_dew[I] - Aeolus.MoistThermodynamics.latent_heat_vapor(case.ledger.Ts_start[I]) *
-                                          Δdew[I] / case.ledger.dt) <=
+                all(I -> abs(c.H_dew[I] - Aeolus.MoistThermodynamics.latent_heat_vapor(case.budgets.Ts_start[I]) *
+                                          Δdew[I] / case.budgets.dt) <=
                          1e-9 * abs(c.H_dew[I]) + 1e-12, eachindex(Δdew))]
 end
 

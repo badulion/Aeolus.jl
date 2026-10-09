@@ -841,19 +841,19 @@ end
 function output_fields(c::SurfaceExchangeMOST, case)
     bus = case.bus
     masked(x) = [bus.surface[I] === nothing ? NaN : x[I] for I in eachindex(IndexCartesian(), x)]
-    return OutputField[
-        OutputField("H_sfc", "W m-2", "surface sensible heat flux (upward), last surface step",
+    return OutputVariable[
+        OutputVariable("H_sfc", "W m-2", "surface sensible heat flux (upward), last surface step",
                     :xy, cs -> masked(bus.H)),
-        OutputField("LE_sfc", "W m-2", "surface latent heat flux (upward), last surface step",
+        OutputVariable("LE_sfc", "W m-2", "surface latent heat flux (upward), last surface step",
                     :xy, cs -> masked(bus.LE)),
-        OutputField("u_star", "m s-1", "surface friction velocity", :xy, cs -> masked(bus.u_star)),
-        OutputField("H_max_sfc", "W m-2", "maximum sustainable heat flux (Van de Wiel et al. 2012), last surface step",
+        OutputVariable("u_star", "m s-1", "surface friction velocity", :xy, cs -> masked(bus.u_star)),
+        OutputVariable("H_max_sfc", "W m-2", "maximum sustainable heat flux (Van de Wiel et al. 2012), last surface step",
                     :xy, cs -> masked(c.H_max)),
-        OutputField("mshf_ratio", "1", "downward surface buoyancy flux / maximum sustainable heat flux (<0: unstable)",
+        OutputVariable("mshf_ratio", "1", "downward surface buoyancy flux / maximum sustainable heat flux (<0: unstable)",
                     :xy, cs -> masked(c.mshf_ratio)),
-        OutputField("mshf_beyond", "1", "1 where z_ref/L is beyond the MSHF point (very stable, collapsed branch)",
+        OutputVariable("mshf_beyond", "1", "1 where z_ref/L is beyond the MSHF point (very stable, collapsed branch)",
                     :xy, cs -> masked(Float64.(c.mshf_beyond))),
-        OutputField("beta_sfc", "1", "surface moisture availability",
+        OutputVariable("beta_sfc", "1", "surface moisture availability",
                     :xy, cs -> [s === nothing ? NaN : moisture_availability(s) for s in bus.surface])]
 end
 

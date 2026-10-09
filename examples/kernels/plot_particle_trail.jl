@@ -12,7 +12,7 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-Lx, Ly, _ = recorded_config(folder)["grid"]["extent"]
+Lx, Ly, _ = recorded_domain(folder)["grid"]["extent"]
 rows = [parse.(Float64, split(l, ',')) for l in readlines(joinpath(folder, "output", "particles.csv"))[2:end]]
 ids = sort(unique(r[3] for r in rows))
 unwrap(v, L) = (u = copy(v); for i in 2:length(u); u[i] = u[i-1] + (v[i] - v[i-1]) - L * round((v[i] - v[i-1]) / L); end; u)

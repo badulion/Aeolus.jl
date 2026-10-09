@@ -400,14 +400,14 @@ function _aq_surface_layer(c::AQChem, f)
 end
 
 function output_fields(c::AQChem, case)
-    fs = OutputField[]
+    fs = OutputVariable[]
     for s in AQ_SPECIES
         f = getfield(c, s)
-        push!(fs, OutputField("$(s)_sfc", "ppb", "$s mixing ratio in the first air cell", :xy,
+        push!(fs, OutputVariable("$(s)_sfc", "ppb", "$s mixing ratio in the first air cell", :xy,
                               _ -> _aq_surface_layer(c, f)))
     end
-    push!(fs, OutputField("vd_O3", "m s-1", "O3 dry deposition velocity", :xy, _ -> c.v_d[:O3]))
-    push!(fs, OutputField("r_a", "s m-1", "aerodynamic resistance, surface to first air cell", :xy,
+    push!(fs, OutputVariable("vd_O3", "m s-1", "O3 dry deposition velocity", :xy, _ -> c.v_d[:O3]))
+    push!(fs, OutputVariable("r_a", "s m-1", "aerodynamic resistance, surface to first air cell", :xy,
                           _ -> min.(c.r_a, 1e6)))
     return fs
 end

@@ -10,9 +10,9 @@ Stable boundary layer theory page; the shipped configs are in
     julia --project -m Aeolus run examples/sbl/configs/gabls1.toml
 
 A run writes `output/statistics.toml` (the averaged profiles and scalars),
-`output/series.csv` (`[averaging] series_interval`) and
-`output/towers.csv` (`[towers]`) into its run folder; the scripts of
-`examples/sbl/` only read those.
+the time series (`[averaging] series_interval`) in `output/output.nc` (the
+one output writer, `Aeolus.Output`) and `output/towers.csv` (`[towers]`)
+into its run folder; the scripts of `examples/sbl/` only read those.
 """
 module StableBoundaryLayer
 
@@ -38,16 +38,18 @@ using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Open
                 Optional, Path, section, option!, register_driver!, config_schema
 using ..IO: IO, RunFolder, CheckpointSchedule, with_monitor, monitor!, output_dir
 using ..Simulations: Simulations
+using ..BudgetSystem: Budgets, MomentumBudget, book_momentum!, book_surface_momentum!, momentum_closure
+using ..Output: OutputVariable, OutputWriter, cell_centres, write_series!, close_output!
 using ..InputDrivers: read_dynamic_driver, dynamic_forcing, forcing_dynamic_inputs, write_dynamic_driver
 using Random
 using Statistics: mean
 import TOML
 
-export SBLDriver, SBLRun, SBL_CONFIG_DIR, SBL_KINDS, sbl_build, sbl_config, sbl_dynamic_inputs, write_sbl_driver,
+export SBLDriver, SBLRun, SBL_CONFIG_DIR, SBL_KINDS, SBL_SERIES, sbl_build, sbl_config, sbl_dynamic_inputs, write_sbl_driver,
        # the case builders and their step (case.jl)
        SBLCase, SBL_GABLS1_STABILITY, sbl_case, sbl_surface!, sbl_dt, sbl_step!, sbl_run!,
        sbl_column_heat, sbl_profiles, sbl_bl_height, sbl_read_csv, sbl_csv_value,
-       SBLMomentumBudget, sbl_budget_start!, sbl_budget, sbl_screen,
+       sbl_budget_start!, sbl_budget, sbl_screen,
        SBLTowers, sbl_towers, sbl_towers_sample!, sbl_towers_bins, sbl_hockey_threshold,
        stratified_channel_case, stratified_channel_spinup, stratified_channel_run,
        SBL_RELAM_θ₀, relam_heat_flux, relam_case, relam_perturb!, relam_spinup, relam_run,

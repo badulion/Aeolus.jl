@@ -43,12 +43,12 @@ end
     rec = read_run_toml(run)
     @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["legacy"] == "urban"
     res = TOML.parsefile(joinpath(run, "output", "results.toml"))
-    led = res["ledgers"]
+    led = res["budgets"]
     @test res["finite"] === true
     @test led["closed"] === true
-    @test led["surface_max_abs_closure"] < UC.LEDGER_TOLERANCES.surface
-    @test abs(led["water_residual"]) < UC.LEDGER_TOLERANCES.water
-    @test abs(led["air_heat_closure"]) <= UC.LEDGER_TOLERANCES.air_heat
+    @test led["surface_max_abs_closure"] < UC.BUDGET_TOLERANCES.surface
+    @test abs(led["water_residual"]) < UC.BUDGET_TOLERANCES.water
+    @test abs(led["air_heat_closure"]) <= UC.BUDGET_TOLERANCES.air_heat
     # local noon in June: the ground gains net radiation, the roofs and the
     # street are in the ledger, the pond and the park too
     dom = led["surface"]["domain"]
@@ -86,7 +86,7 @@ end
     d0 = Dict(k => digest(v) for (k, v) in pairs(UC.case_state(case)))
     r = UC.run_results(case)
     @test Dict(k => digest(v) for (k, v) in pairs(UC.case_state(case))) == d0
-    @test r["ledgers"]["closed"] === true
+    @test r["budgets"]["closed"] === true
 end
 
 @testset "urban_parent: the nest parent alone, its tables and results" begin

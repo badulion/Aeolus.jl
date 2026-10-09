@@ -1,4 +1,5 @@
-# NetCDF output driven by the registry.
+# NetCDF output driven by the registry, written by the one writer of the
+# model (`Aeolus.Output`, ONE-c #452).
 #
 # Full 3-D model state in NetCDF-4 through `src/NCIO.jl` (NCDatasets, #310)
 # — the format every tool in the field reads (ncview, xarray, Paraview,
@@ -9,50 +10,45 @@
 # The variables are: the core ones (coordinates, time, hour, solar
 # elevation, static geometry, u v w θ p), every tracer registered with
 # `output = true`, the bus fields Ts / sw_in / lw_in, and whatever the
-# enabled couplings return from `output_fields`. The renderers
+# enabled couplings return from `output_fields` (their catalogues of
+# `OutputVariable`s). The renderers
 # (`alexanderplatz_animation.jl`, `alexanderplatz_surface_diagnostics.jl`)
 # read the file by variable name.
 
-"""
-    OutputField(name, units, long_name, dims, getter)
-
-One output variable a coupling contributes: `dims` is `:xyz` (3-D, per
-record), `:xy` (2-D, per record) or `:z` (a vertical profile, per record);
-`getter(case)` returns the interior-sized array to write.
-"""
-struct OutputField
-    name::String
-    units::String
-    long_name::String
-    dims::Symbol
-    getter::Function
-end
-
-"Open NetCDF state of a case."
+"Open NetCDF output of a case: the one writer of `Aeolus.Output` (ONE-c, #452)."
 mutable struct CaseOutput
-    ncf::Any
-    fields::Vector{OutputField}
+    writer::OutputWriter
 end
 
 function core_output_fields(case)
     iv(f) = interior_view(f)
-    fs = OutputField[
-        OutputField("u",     "m s-1",  "eastward wind",           :xyz, c -> iv(c.sim.u)),
-        OutputField("v",     "m s-1",  "northward wind",          :xyz, c -> iv(c.sim.v)),
-        OutputField("w",     "m s-1",  "upward wind",             :xyz, c -> iv(c.sim.w)),
-        OutputField("theta", "K",      "potential temperature",   :xyz, c -> iv(c.sim.θ)),
-        OutputField("p",     "m2 s-2", "kinematic pressure",      :xyz, c -> iv(c.sim.p))]
+    fs = OutputVariable[
+        OutputVariable("hour", "h", "local hour of day", :scalar, c -> Float64(c.clock.hour)),
+        OutputVariable("solar_elevation", "degree", "solar elevation angle", :scalar,
+                       c -> Float64(c.clock.sun.elevation)),
+        OutputVariable("u",     "m s-1",  "eastward wind",           :xyz, c -> iv(c.sim.u)),
+        OutputVariable("v",     "m s-1",  "northward wind",          :xyz, c -> iv(c.sim.v)),
+        OutputVariable("w",     "m s-1",  "upward wind",             :xyz, c -> iv(c.sim.w)),
+        OutputVariable("theta", "K",      "potential temperature",   :xyz, c -> iv(c.sim.θ)),
+        OutputVariable("p",     "m2 s-2", "kinematic pressure",      :xyz, c -> iv(c.sim.p))]
     for t in case.tracers
         t.output || continue
         f = t.field
-        push!(fs, OutputField(string(t.name), t.units, t.long_name, :xyz, c -> iv(f)))
+        push!(fs, OutputVariable(string(t.name), t.units, t.long_name, :xyz, c -> iv(f)))
     end
-    append!(fs, OutputField[
-        OutputField("Ts",    "K",     "surface temperature",                 :xy, c -> c.bus.Ts),
-        OutputField("sw_in", "W m-2", "shortwave irradiance at the surface", :xy, c -> c.bus.sw),
-        OutputField("lw_in", "W m-2", "downwelling longwave at the surface", :xy, c -> c.bus.lw)])
+    append!(fs, OutputVariable[
+        OutputVariable("Ts",    "K",     "surface temperature",                 :xy, c -> c.bus.Ts),
+        OutputVariable("sw_in", "W m-2", "shortwave irradiance at the surface", :xy, c -> c.bus.sw),
+        OutputVariable("lw_in", "W m-2", "downwelling longwave at the surface", :xy, c -> c.bus.lw)])
     return fs
 end
+
+"The static geometry the output file carries (written once)."
+static_output_fields(case) = OutputVariable[
+    OutputVariable("sky_view_factor", "1", "sky view factor, area-weighted per column", :xy, c -> c.geom.svf),
+    OutputVariable("building_height", "m", "building height", :xy, c -> building_height(c.geom, c.mesh)),
+    OutputVariable("surface_class", "1", "surface class (1 street 2 roof 3 park 4 water 5 wall 6 glass)", :xy,
+                   c -> c.geom.sfc)]
 
 """
     case_start_utc(cfg) -> DateTime
@@ -66,73 +62,29 @@ case_start_utc(cfg) = DateTime(cfg.date...) +
 """
     open_output!(case; resume = false)
 
-Create `cfg.output_path`, define the core, tracer, bus and coupling
-variables, and write the coordinates and the static geometry. With
-`resume = true` and the file present (a run resumed from a checkpoint,
-#269), reopen it instead: the records continue at the checkpoint's
-`clock.nrecord + 1`, over any its interrupted session wrote after it.
+Create `cfg.output_path` with the one writer of `Aeolus.Output`: the
+core, tracer, bus and coupling variables per record, the coordinates and
+the static geometry. With `resume = true` and the file present (a run
+resumed from a checkpoint, #269), reopen it instead: the records continue
+at the checkpoint's `clock.nrecord + 1`, over any its interrupted session
+wrote after it.
 """
 function open_output!(case; resume::Bool = false)
-    cfg, mesh, geom = case.cfg, case.mesh, case.geom
-    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
-    if resume && isfile(cfg.output_path)
-        ncf = Aeolus.NCIO.NCDataset(cfg.output_path, "a")
-        case.output = CaseOutput(ncf, _output_fields(case))
-        return case
-    end
-    mkpath(dirname(cfg.output_path))
-    ncf = nc_create(cfg.output_path; attributes = Dict(
+    cfg, mesh = case.cfg, case.mesh
+    x, y, z = cell_centres(mesh)
+    attrs = Dict{String,Any}(
         "title"       => "Aeolus.jl urban LES — $(cfg.name)",
         "institution" => "Aeolus.jl",
         "source"      => "Boussinesq LES, cut-cell IBM, Era III radiation",
         "comment"     => @sprintf("scenario %s from %05.2f local on %d-%02d-%02d",
                                   cfg.scenario, cfg.start_h, cfg.date...),
         "couplings"   => join(string.(coupling_name.(case.couplings)), " "),
-        "references"  => "src/UrbanCase.jl"))
-
-    ncf.dim["x"] = Nx; ncf.dim["y"] = Ny; ncf.dim["z"] = Nz
-    ncf.dim["time"] = Inf                     # unlimited record dimension
-    for (d, L) in (("x", mesh.Lx), ("y", mesh.Ly), ("z", mesh.Lz))
-        nc_defvar!(ncf, d, Float32, (d,);
-                   attributes = Dict("units" => "m", "axis" => uppercase(d),
-                                     "long_name" => "$d cell centre"))
-    end
-    nc_defvar!(ncf, "time", Float64, ("time",);
-               attributes = Dict("units" => cf_time_units(case_start_utc(cfg)),
-                                 "axis" => "T", "long_name" => "simulation time"))
-    nc_defvar!(ncf, "hour", Float64, ("time",);
-               attributes = Dict("units" => "h", "long_name" => "local hour of day"))
-    nc_defvar!(ncf, "solar_elevation", Float64, ("time",);
-               attributes = Dict("units" => "degree", "long_name" => "solar elevation angle"))
-    nc_defvar!(ncf, "sky_view_factor", Float32, ("x", "y");
-               attributes = Dict("units" => "1",
-                   "long_name" => "sky view factor, area-weighted per column"))
-    nc_defvar!(ncf, "building_height", Float32, ("x", "y");
-               attributes = Dict("units" => "m", "long_name" => "building height"))
-    nc_defvar!(ncf, "surface_class", Float32, ("x", "y");
-               attributes = Dict("units" => "1",
-                   "long_name" => "surface class (1 street 2 roof 3 park 4 water 5 wall 6 glass)"))
-
-    fields = _output_fields(case)
-    names = [f.name for f in fields]
-    allunique(names) || error("duplicate output variable names: $(names)")
-    for f in fields
-        dims = f.dims === :xyz ? ("x", "y", "z", "time") :
-               f.dims === :xy  ? ("x", "y", "time") :
-               f.dims === :z   ? ("z", "time") :
-               error("output field $(f.name): dims must be :xyz, :xy or :z")
-        nc_defvar!(ncf, f.name, Float32, dims;
-                   attributes = Dict("units" => f.units, "long_name" => f.long_name,
-                                     "coordinates" => f.dims === :xyz ? "x y z" :
-                                                      f.dims === :z ? "z" : "x y"))
-    end
-    ncf["x"][:] = Float32[(i - 0.5) * mesh.dx for i in 1:Nx]
-    ncf["y"][:] = Float32[(j - 0.5) * mesh.dy for j in 1:Ny]
-    ncf["z"][:] = Float32[(k - 0.5) * mesh.dz for k in 1:Nz]
-    ncf["sky_view_factor"][:, :] = Float32.(geom.svf)
-    ncf["building_height"][:, :] = Float32.(building_height(geom, mesh))
-    ncf["surface_class"][:, :] = Float32.(geom.sfc)
-    case.output = CaseOutput(ncf, fields)
+        "references"  => "src/UrbanCase.jl")
+    w = OutputWriter(cfg.output_path; x = x, y = y, z = z, records = _output_fields(case),
+                     statics = static_output_fields(case), ctx = case,
+                     time_units = cf_time_units(case_start_utc(cfg)), attributes = attrs,
+                     resume_at = resume ? case.clock.nrecord + 1 : nothing)
+    case.output = CaseOutput(w)
     return case
 end
 
@@ -142,13 +94,13 @@ function _output_fields(case)
     for c in case.couplings
         append!(fields, output_fields(c, case))
     end
-    return fields
+    return check_catalogue(fields)
 end
 
 "Close the NetCDF file if one is open."
 function close_output!(case)
     case.output === nothing && return case
-    close(case.output.ncf)
+    Output.close_output!(case.output.writer)
     case.output = nothing
     return case
 end
@@ -163,16 +115,7 @@ diagnostics, as structured `Info` events).
 function write_output!(case)
     clk, sim = case.clock, case.sim
     clk.nrecord += 1
-    if case.output !== nothing
-        rec = Dict{String,Any}(
-            "time"            => [Float64(sim.t)],
-            "hour"            => [Float64(clk.hour)],
-            "solar_elevation" => [Float64(clk.sun.elevation)])
-        for f in case.output.fields
-            rec[f.name] = Float32.(f.getter(case))
-        end
-        nc_append_record!(case.output.ncf, rec; at = clk.nrecord)
-    end
+    case.output === nothing || write_record!(case.output.writer, case, sim.t; at = clk.nrecord)
     log_frame(case)
     return case
 end

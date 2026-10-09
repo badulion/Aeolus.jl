@@ -158,6 +158,95 @@ config (`[time]`, the component sections) and changed defaults; the
 shipped configs state the old defaults they relied on, and the digests
 are reproduced unchanged.
 
+## Budgets: the stage-context measurement
+
+A domain measures its budgets only when they are switched on
+(`Components.with_budgets`, which a run does when `[output] variables`
+selects a `budget_*` variable). With the budgets off the pipeline is the
+plain loop above: nothing is measured, and the hook-free fast path holds.
+With them on, every stage entry is an attribution context of every
+measured quantity. This is the mechanism of the urban case's air-heat
+ledger (#253), which is now `Aeolus.BudgetSystem.StageBudget` (ONE-c,
+#452):
+
+| quantity | measured | weight per level |
+| :-- | :-- | :-- |
+| `:energy` | θ: the heat of the air ``Σ ρ̄ c_p Π̄ θ ΔV / A`` (J m⁻²) | ``ρ̄ c_p Π̄ Δz / (N_x N_y)`` |
+| `:water` | qv and the water the components carry (ql, qr) | ``ρ̄ Δz / (N_x N_y)`` |
+| `:momentum_x`, `:momentum_y` | u, v | ``ρ̄ Δz / (N_x N_y)`` |
+| `:tracer` | the components' tracer | ``ρ̄ Δz / (N_x N_y)`` |
+
+ρ̄, Π̄ and c_p are the anelastic base state. On the Boussinesq core they
+are its constant density ``ρ_0 = p_{ref} / (R_d θ_0)`` with ``Π̄ = 1``,
+because the Boussinesq transport conserves ``Σ θ``. Solid cells (the
+obstacles) are not air.
+
+- **Outside the core** (stages 1–5 and 11–13), the budget measures the
+  quantity when a component's entry opens and when it closes, and books
+  the difference under `(stage, component)`.
+- **Inside the core** (stages 6–8), a component adds to the core's
+  *tendencies*, and the predictor applies them. The entry is therefore
+  measured on the tendency array and scaled by the substage's weight
+  times Δt (1 for Euler; 1/6, 1/6, 2/3 for the SSP-RK3 substages). A
+  `:post_predictor` entry changes the predicted state, so it is measured
+  on the state and scaled by the weight.
+- **The core step** is one context (`:dynamics`). Whatever the core does
+  beyond the components inside it is split into `(:dynamics, :transport)`
+  (what the transport conserves; over the whole column it is the
+  numerics' residual) and `(:dynamics, :redistribution)` (what moved
+  between levels of different weight). Exchange with solid cells is
+  booked as `(:dynamics, :solid_exchange)`.
+- **Retries.** An adaptive step can reject an attempt and retry it with
+  half the step. What the in-core entries booked is held by the dynamics'
+  context until the step is taken. The domain notices a retry when the
+  first in-core hook runs again at the step's start time, and drops that
+  booking.
+- **Closure.** Every change is attributed, so each budget closes by
+  construction: `storage − Σ terms` is round-off. A change outside every
+  context is booked as `(:core, :unattributed)`.
+
+After the stages of 11–12 and `:budgets` (13) have run, each component's
+`budget!(c, domain, budgets)` books the terms it *reports*: surface energy
+per class, water from outside the air, free-form terms. The step then
+closes and `:checks` and `:output` run.
+
+Measured (`test/budgets_output.jl`, 6 × 5 × 8 box):
+
+- The prescribed θ fluxes are attributed to `(:tendencies,
+  :surface_theta_flux)` as ``ρ_0 c_p (F_{bottom} − F_{top}) t`` to rtol
+  1e-12. This holds with Euler, RK3 and the adaptive RK3 step.
+- Coriolis is the whole change of a uniform flow's momentum (rtol 1e-12).
+- The sponge's momentum term is zero below `z_start`.
+- An adaptive step whose first attempt throws books its in-core heating
+  once.
+- Every closure is below 1e-12 of the largest term.
+- The state is bit for bit the same with the budgets on or off.
+
+## Output: catalogues and the one writer
+
+Every component publishes an output catalogue (`outputs(c)`: a list of
+`Aeolus.Output.OutputVariable`s, named as `output_names(C, opts)` declares
+for its type). The core publishes `Components.CORE_OUTPUTS`:
+
+- u, v, w, p, θ, qv as 3-D fields;
+- the horizontal-mean profiles;
+- the domain means as time series;
+- the `budget_*` groups.
+
+`[output] variables` selects from the catalogues of the core and the
+enabled components. The configuration is checked against the declared
+names, so selecting a variable whose component is off is an error. The
+default is `u`, `v`, `w`, `theta` and the time series of the domain
+means.
+
+One writer, `Aeolus.Output.OutputWriter`, writes the selection into one
+NetCDF-4 file. Records (3-D, maps, profiles) go out every `cadence`, and
+the time series every `series_cadence`. Each value is either the value at
+the record or its mean over the record's interval (`averaging`). The
+urban case and the SBL run type write through the same writer: the urban
+couplings' `output_fields` are catalogues of `OutputVariable`s, and the
+SBL time series are the time-series stream of `output/output.nc`.
+
 ## Where the code still differs from the target
 
 * The low-level cores keep their keyword interface — `f_coriolis`,
@@ -171,10 +260,18 @@ are reproduced unchanged.
 * The urban run type and the SBL run type still select their SGS closures
   themselves; their `[sgs]`/`:sgs` paths become the `:sgs` component when
   they are ported.
-* `budget!`, `outputs` and `checks` are part of the interface with empty
-  defaults: the shared budgets and the catalogue-selected output are
-  ONE-c (#452), the `[checks]`/`results.toml` machinery ONE-d (#453).
+* `budget!` and `outputs` are part of the interface with empty
+  defaults (the shared budgets and the catalogue-selected output, ONE-c
+  #452); `checks` likewise, the `[checks]`/`results.toml` machinery is
+  ONE-d (#453). The budget closure becomes one of its checks.
+* The urban couplings and the SBL run type report into the one
+  `Budgets` and write through the one writer, but they are still run
+  types of their own. Their budgets keep their own step hooks (the urban
+  `budgets_begin_step!`/`budgets_end_step!`, the SBL substage evaluation
+  of the momentum terms) until ONE-e (#454) and ONE-g (#456) port them to
+  components, which deliver every component they port on both cores. The
+  particle tracks of the model's couplings (`particles.csv`) are
+  Lagrangian rows, not a gridded catalogue variable, and stay a file of
+  their own.
 * The urban and SBL run types still refuse the anelastic core's
-  checkpoints and adaptive step in their own config checks; they become
-  components in ONE-e (#454) and ONE-g (#456), which deliver every
-  component they port on both cores.
+  checkpoints and adaptive step in their own config checks.

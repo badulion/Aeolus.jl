@@ -114,7 +114,7 @@ function book_top_flux!(case, h::Real)
     tf === nothing && return case
     J = tf.rate * h
     tf.total += J
-    hl = case.ledger.heat
-    hl.active && add_heat!(hl, :top_flux, J; k = case.mesh.Nz)
+    hl = energy(case.budgets)
+    hl.active && book!(hl, :top_flux, J; k = case.mesh.Nz)
     return case
 end

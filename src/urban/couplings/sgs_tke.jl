@@ -149,7 +149,7 @@ end
 
 # e is the registered tracer :e (written already); II of the implied stress
 output_fields(c::SGSTKE, case) =
-    [OutputField("II_sgs", "1",
+    [OutputVariable("II_sgs", "1",
                  "second invariant of the anisotropy of the implied SGS stress 2/3 e I - 2 nu_t S (0 in solids)",
                  :xyz, cs -> replace(lumley_invariants(first(tke_model_stress(c, cs)))[1], NaN => 0.0))]
 

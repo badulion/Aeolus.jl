@@ -47,7 +47,8 @@ cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktemp
     @test enabled_components(cfg) == Any[CentredAdvection, SGS]
     @test only(config_domains(cfg)).domain.id == "main"
     @test cfg.domain.static_driver === nothing && cfg.domain.dynamic_driver === nothing
-    @test isempty(cfg.output.variables)
+    # the default output set (ONE-c): u, v, w, theta and the time series of the domain means
+    @test cfg.output.variables == ["u", "v", "w", "theta", "u_mean", "v_mean", "w_mean", "theta_mean"]
     # a fluid at rest stays at rest, bit for bit, at the adaptive limit dt_max
     rest = load_run_config(IOBuffer(""); overrides = ["grid.size=[16,16,16]", "time.duration=60.0",
                                                      "fftw.planner=\"estimate\""])

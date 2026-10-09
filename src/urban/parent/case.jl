@@ -29,7 +29,7 @@
 #   radiation   the child's column radiation (`column_radiation!` on the
 #               parent's mean column, `stitched_column`), the sun of the
 #               child's clock (`solar_position_at`);
-#   ledgers     two `AirHeatLedger`s (#253): the heat of the air
+#   ledgers     two `StageBudget`s (#253): the heat of the air
 #               ``Σ ρ̄ c_p Π̄ θ ΔV / A`` and the water of the air
 #               ``Σ ρ̄ q_v ΔV / A`` (the same meter with Π̄ = c_p = 1). Every
 #               change is attributed: the surface and radiation stages by
@@ -45,7 +45,7 @@ A built Berlin parent run: `pc` ([`ParentConfig`](@ref)), `mesh`, `sim`
 [`CaseReference`](@ref)), `closure` (the SGS closure or `nothing`),
 `forcing` (named tuple of the large-scale forcings), `surface` (the
 [`ParentSurface`](@ref) or `nothing`), `rad` (the `ColumnRadiation` state
-or `nothing`), the ledgers `heat` and `water` ([`AirHeatLedger`](@ref)),
+or `nothing`), the ledgers `heat` and `water` ([`StageBudget`](@ref)),
 `top` (the [`TopHeatFlux`](@ref) or `nothing`), the time-stepping state,
 the surface-flux state, the sounding time `t0` of the start and `diag`,
 the diagnostics recorded every `output_period`.
@@ -60,8 +60,8 @@ mutable struct ParentCase{M, S, C}
     surface::Any
     child::Any
     rad::Any
-    heat::AirHeatLedger
-    water::AirHeatLedger
+    heat::StageBudget
+    water::StageBudget
     top::Union{Nothing,TopHeatFlux}
     constraints::CFLConstraints{Float64}
     dt_prev::Float64
@@ -431,10 +431,10 @@ function build_parent(pc::ParentConfig; child = nothing)
     rad = pc.radiation ? column_radiation_solver(Nz, ref.p_surface) : nothing
 
     # ledgers: heat of the air, water of the air
-    hm = AirHeatMeter(mesh, ref.ρ̄, ref.π̄, ref.cp)
-    wm = AirHeatMeter(mesh, ref.ρ̄, ones(Nz), 1.0)
-    heat = heat_start!(AirHeatLedger(), hm; canopy_top = 100.0)
-    water = heat_start!(AirHeatLedger(), wm; canopy_top = 100.0)
+    hm = LevelMeter(mesh, ref.ρ̄, ref.π̄, ref.cp)
+    wm = LevelMeter(mesh, ref.ρ̄, ones(Nz), 1.0)
+    heat = budget_start!(StageBudget(; order = ALL_STAGES), hm; canopy_top = 100.0)
+    water = budget_start!(StageBudget(; order = ALL_STAGES), wm; canopy_top = 100.0)
     top = θtop isa FluxBC ? TopHeatFlux(Float64(θtop.f), ref.ρ̄[Nz] * ref.cp * ref.π̄[Nz], 0.0, 0.0) : nothing
 
     o = default_options(AdaptiveStep)
@@ -799,15 +799,15 @@ function _book_forcings!(p::ParentCase, h::Real)
     F, L = p.forcing, p.lev
     for name in (:nudging, :subsidence, :damping)
         getproperty(F, name) === nothing && continue
-        add_heat!(p.heat, name, p.wθ .* L[Symbol(:acc_θ, name)] .* h)
+        book!(p.heat, name, p.wθ .* L[Symbol(:acc_θ, name)] .* h)
         if p.pc.moisture && name !== :damping
-            add_heat!(p.water, name, p.wq .* L[Symbol(:acc_q, name)] .* h)
+            book!(p.water, name, p.wq .* L[Symbol(:acc_q, name)] .* h)
         end
     end
     if p.top !== nothing
         J = p.top_acc[] * h
         p.top.total += J
-        add_heat!(p.heat, :top_flux, J; k = p.mesh.Nz)
+        book!(p.heat, :top_flux, J; k = p.mesh.Nz)
     end
     return p
 end
@@ -853,16 +853,16 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     tw = time_ns()
     dt = Float64(dt)
     θ, q = sim.θ, (pc.moisture ? sim.qv : sim.θ)
-    heat_begin_step!(p.heat, θ, hour)
-    pc.moisture && heat_begin_step!(p.water, q, hour)
+    budget_begin_step!(p.heat, θ, hour)
+    pc.moisture && budget_begin_step!(p.water, q, hour)
 
     # surface
     t1 = time_ns()
-    heat_open!(p.heat, :surface_flux, pc.surface, θ)
-    pc.moisture && heat_open!(p.water, :surface_flux, pc.surface, q)
+    budget_open!(p.heat, :surface_flux, pc.surface, θ)
+    pc.moisture && budget_open!(p.water, :surface_flux, pc.surface, q)
     parent_surface_stage!(p, dt)
-    heat_close!(p.heat, θ)
-    pc.moisture && heat_close!(p.water, q)
+    budget_close!(p.heat, θ)
+    pc.moisture && budget_close!(p.water, q)
     p.timing[:surface] = get(p.timing, :surface, 0.0) + (time_ns() - t1) * 1e-9
 
     # radiation
@@ -872,17 +872,17 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
             parent_radiation!(p)
             p.t_rad = (floor(t / pc.radiation_period + 1e-9) + 1) * pc.radiation_period
         end
-        heat_open!(p.heat, :column_tendency, :column_radiation, θ)
+        budget_open!(p.heat, :column_tendency, :column_radiation, θ)
         Aeolus.Radiation.apply_radiative_cooling!(sim.θ, p.rad.heat .* dt ./ p.ref.π̄)
-        heat_close!(p.heat, θ)
+        budget_close!(p.heat, θ)
         p.rad.dt_applied = dt
         p.timing[:radiation] = get(p.timing, :radiation, 0.0) + (time_ns() - t1) * 1e-9
     end
 
     # dynamics
     t1 = time_ns()
-    heat_open!(p.heat, :dynamics, :core, θ; split = true)
-    pc.moisture && heat_open!(p.water, :dynamics, :core, q; split = true)
+    budget_open!(p.heat, :dynamics, :core, θ; split = true)
+    pc.moisture && budget_open!(p.water, :dynamics, :core, q; split = true)
     bf = body_force! === nothing ? (s, Δt) -> _parent_body_force!(p, s, Δt) :
          (s, Δt) -> (_parent_body_force!(p, s, Δt);
                      body_force!(s, Δt, _stage_weight(p, p.stage[])); s)
@@ -904,12 +904,12 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
         remaining -= used; nret += r; npieces += 1
         piece_min = min(piece_min, used); prev = used
     end
-    heat_close!(p.heat, θ)
-    pc.moisture && heat_close!(p.water, q)
+    budget_close!(p.heat, θ)
+    pc.moisture && budget_close!(p.water, q)
     p.timing[:dynamics] = get(p.timing, :dynamics, 0.0) + (time_ns() - t1) * 1e-9
 
-    heat_end_step!(p.heat, θ, dt)
-    pc.moisture && heat_end_step!(p.water, q, dt)
+    budget_end_step!(p.heat, θ, dt)
+    pc.moisture && budget_end_step!(p.water, q, dt)
     p.dt_prev = nret == 0 && npieces == 1 ? dt : piece_min
     p.retries += nret
     p.nsteps += 1
@@ -933,8 +933,8 @@ dt statistics and the wall time.
 """
 function parent_record!(p::ParentCase)
     sim = p.sim
-    hb = heat_budget(p.heat)
-    wb = p.pc.moisture ? heat_budget(p.water) : nothing
+    hb = stage_budget(p.heat)
+    wb = p.pc.moisture ? stage_budget(p.water) : nothing
     r = (t = sim.t, hour = hour_of_day(p.pc.child, sim.t),
          zi = parent_zi(p), zi_parcel = parent_zi(p; method = :parcel),
          θ = plane_mean(sim.θ), qv = p.pc.moisture ? plane_mean(sim.qv) : Float64[],

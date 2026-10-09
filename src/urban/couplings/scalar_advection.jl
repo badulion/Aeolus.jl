@@ -250,7 +250,7 @@ function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, �
     tot > 0 && (d.resid[] = max(d.resid[], abs(dt * dtot) / tot))
     qi .+= dt .* tend
     if water
-        flat, redis = ledger_water_split_levels(case, St, Wk === nothing ? nothing : collect(Wk))
+        flat, redis = water_split_levels(case.budgets, case.mesh, St, Wk === nothing ? nothing : collect(Wk))
         d.dW[] += dt * flat; d.dWρ[] += dt * redis
     end
     return q
@@ -351,7 +351,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
     for t in case.tracers
         t.advect || continue
         q = t.field
-        iswater = t.name in case.ledger.water_tracers
+        iswater = t.name in case.budgets.water_tracers
         limited = t.positive && c.positivity
         fill!(c.tend.data, 0)
         # the two-way nest's flux registers (#267): what this update moves
@@ -379,7 +379,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
             @inbounds for k in 1:Nz
                 ob.S[k] = -dt * ob.lev[k] / Vc
             end
-            fb, rb = ledger_water_split_levels(case, ob.S, wt === nothing ? nothing : wt.W)
+            fb, rb = water_split_levels(case.budgets, case.mesh, ob.S, wt === nothing ? nothing : wt.W)
             c.dWb[] += fb + rb
         end
         tend = view(c.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
@@ -387,7 +387,7 @@ function run_stage!(c::ScalarAdvection, case, ::Val{:transport}, dt)
         wt === nothing || (tend .*= reshape(wt.s, 1, 1, :))
         interior_view(q) .+= dt .* tend
         if iswater
-            flat, redis = ledger_water_split(case, tend, wt === nothing ? nothing : wt.W)
+            flat, redis = water_split(case.budgets, case.mesh, tend, wt === nothing ? nothing : wt.W)
             # the open faces' share is booked as :boundary (#262)
             c.dW[] += dt * flat - fb; c.dWρ[] += dt * redis - rb
         end
@@ -428,8 +428,8 @@ function budget!(c::ScalarAdvection, case, l)
 end
 
 function smoke_check(c::ScalarAdvection, case)
-    W = sum(t -> ledger_water(case, interior_view(t.field)),
-            (t for t in case.tracers.list if t.name in case.ledger.water_tracers))
+    W = sum(t -> water_content(case.budgets, case.mesh, interior_view(t.field)),
+            (t for t in case.tracers.list if t.name in case.budgets.water_tracers))
     return ["advected positive tracers ≥ 0 (limiter, to round-off)" =>
                 all(t -> !(t.advect && t.positive && c.positivity) ||
                          minimum(interior_view(t.field)) >= -1e-15, case.tracers.list),

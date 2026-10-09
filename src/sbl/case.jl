@@ -53,7 +53,7 @@
 #   * #248: the θ budget books the state-dependent large-scale forcings
 #     (`Subsidence`, `ProfileNudging`) from their `tendency_integrals`,
 #     weighted by the SSP-RK3 stage weights (`ls_heat_applied`);
-#   * diagnostics: the mean-momentum budget (`SBLMomentumBudget`), screen-
+#   * diagnostics: the mean-momentum budget (`BudgetSystem.MomentumBudget`), screen-
 #     level 2 m θ and 10 m wind from the package ψ functions (`sbl_screen`),
 #     tower samples of V_TKE (`Transition.turbulence_velocity_scale`) against
 #     the wind speed and the hockey-stick threshold fit (`sbl_hockey_threshold`).
@@ -106,7 +106,7 @@ mutable struct SBLCase
     ls_heat_applied::Float64          # ∫∫ (∂θ/∂t) dz dt of the state-dependent forcings (Subsidence, ProfileNudging; K m)
     nsteps::Int
     wall_time::Float64
-    budget::Any                       # nothing, or an SBLMomentumBudget fed in every substage
+    budget::Union{Nothing,Budgets}    # nothing, or the Budgets whose MomentumBudget is fed in every substage
     t_surf::Float64                   # the time of the last surface-layer solve (s)
 end
 
@@ -305,7 +305,7 @@ function sbl_step!(c::SBLCase, dt::Real)
         fstage[] += 1
         wst = _SBL_RK3_WEIGHTS[mod1(fstage[], 3)]
         # the momentum budget sees the built-in tendencies of this substage
-        c.budget === nothing || _sbl_budget_stage!(c.budget, c, sim, wst * dt, t0, dt)
+        c.budget === nothing || _sbl_budget_stage!(c.budget.momentum, c, sim, wst * dt, t0, dt)
         apply_forcing!(sim, c.forcing, t0, dt)
         # the state-dependent forcings (subsidence, nudging) depend on the
         # substage state: book each substage's ∫(∂θ/∂t) dV with its RK3 weight
@@ -331,10 +331,9 @@ function sbl_step!(c::SBLCase, dt::Real)
         F = apply_wall_stress!(sim, wm, Δt; side = :bottom)
         τx[] += w * (-F.Fx) / A
         τy[] += w * (-F.Fy) / A
-        if c.budget !== nothing           # the surface stress enters level 1
-            c.budget.wall_u -= w * dt * (-F.Fx) / A / m.dz
-            c.budget.wall_v -= w * dt * (-F.Fy) / A / m.dz
-        end
+        c.budget === nothing ||           # the surface stress enters level 1
+            book_surface_momentum!(c.budget.momentum, -(w * dt * (-F.Fx) / A / m.dz),
+                                   -(w * dt * (-F.Fy) / A / m.dz))
         return nothing
     end
     tw = time()
@@ -563,10 +562,12 @@ end
 # =========================================================================
 
 """
-    SBLMomentumBudget
+    sbl_budget_start!(c) -> Budgets
 
-The plane-mean momentum budget of an SBL run over a window, per level
-`k` (cell centres), for `U` and `V`:
+Start the mean-momentum budget of `c` at the current state: a
+[`Budgets`](@ref Aeolus.BudgetSystem.Budgets) whose `momentum` is a
+[`MomentumBudget`](@ref Aeolus.BudgetSystem.MomentumBudget) of the plane-mean
+momentum per level `k` (cell centres), for `U` and `V`:
 
 ```math
 ΔU_k = \\int \\Big[\\underbrace{\\frac{τ_{k+1} - τ_k}{Δz}}_{\\text{turb}}
@@ -577,27 +578,29 @@ The plane-mean momentum budget of an SBL run over a window, per level
 
 with ``τ`` the total (resolved ``-⟨uw⟩`` + SGS ``ν_v ∂u/∂z``) downward
 momentum flux of `Operators.total_stress_profile` on the interior faces
-and the applied wall-model stress on the surface face (`wall_u`, booked
-into level 1 by the wall-model hook). Every term is
-integrated exactly in time: it is evaluated in each SSP-RK3 substage from
-the substage state (the same state the dynamics use) and weighted with the
-scheme's weights 1/6, 1/6, 2/3 (the forcing tables with their exact step
-means). The plane-mean pressure gradient vanishes (periodic `x, y`).
-`turb_model_u` is the core's own advection + SGS tendency (the built-in
+and the applied wall-model stress on the surface face (booked into level 1
+of `turb` by the wall-model hook). Every term is integrated exactly in
+time: it is evaluated in each SSP-RK3 substage from the substage state
+(the same state the dynamics use) and weighted with the scheme's weights
+1/6, 1/6, 2/3 (the forcing tables with their exact step means). The
+plane-mean pressure gradient vanishes (periodic `x, y`). The diagnostic
+`turb_model` is the core's own advection + SGS tendency (the built-in
 tendency minus Coriolis and sponge), for comparison with the diagnosed
-flux divergence. Start it with [`sbl_budget_start!`](@ref); read it with
-[`sbl_budget`](@ref).
+flux divergence. Every later [`sbl_step!`](@ref) adds to it until
+`c.budget = nothing`; read it with [`sbl_budget`](@ref).
 """
-mutable struct SBLMomentumBudget
-    U0::Vector{Float64}; V0::Vector{Float64}; t0::Float64
-    turb_u::Vector{Float64}; turb_v::Vector{Float64}
-    cor_u::Vector{Float64};  cor_v::Vector{Float64}
-    pg_u::Vector{Float64};   pg_v::Vector{Float64}
-    adv_u::Vector{Float64};  adv_v::Vector{Float64}
-    sponge_u::Vector{Float64}; sponge_v::Vector{Float64}
-    turb_model_u::Vector{Float64}; turb_model_v::Vector{Float64}
-    wall_u::Float64; wall_v::Float64     # ∫ -τ_wall/Δz dt into level 1
+function sbl_budget_start!(c::SBLCase)
+    m = c.sim.mesh
+    b = Budgets(; bins = 1)
+    b.momentum = MomentumBudget(_sbl_plane_mean(c.sim.u, m), _sbl_plane_mean(c.sim.v, m), c.sim.t;
+                                terms = SBL_MOMENTUM_TERMS, diagnostics = (:turb_model,),
+                                surface_term = :turb)
+    c.budget = b
+    return b
 end
+
+"The closure terms of the SBL momentum budget, in the order they are summed."
+const SBL_MOMENTUM_TERMS = (:turb, :cor, :pg, :adv, :sponge)
 
 # plane means of a FaceX/FaceY/CellCenter field's interior, per level
 function _sbl_plane_mean(f, m)
@@ -608,20 +611,7 @@ function _sbl_plane_mean(f, m)
     return out ./ (m.Nx * m.Ny)
 end
 
-"""
-    sbl_budget_start!(c) -> SBLMomentumBudget
-
-Start the mean-momentum budget of `c` at the current state; every later
-[`sbl_step!`](@ref) adds to it until `c.budget = nothing`.
-"""
-function sbl_budget_start!(c::SBLCase)
-    m = c.sim.mesh; z() = zeros(m.Nz)
-    c.budget = SBLMomentumBudget(_sbl_plane_mean(c.sim.u, m), _sbl_plane_mean(c.sim.v, m), c.sim.t,
-                                 z(), z(), z(), z(), z(), z(), z(), z(), z(), z(), z(), z(), 0.0, 0.0)
-    return c.budget
-end
-
-function _sbl_budget_stage!(b::SBLMomentumBudget, c::SBLCase, sim, wdt, t0, dt)
+function _sbl_budget_stage!(b::MomentumBudget, c::SBLCase, sim, wdt, t0, dt)
     m = sim.mesh
     ū = _sbl_plane_mean(sim.u, m); v̄ = _sbl_plane_mean(sim.v, m)
     tū = _sbl_plane_mean(sim.tu, m); tv̄ = _sbl_plane_mean(sim.tv, m)
@@ -635,16 +625,14 @@ function _sbl_budget_stage!(b::SBLMomentumBudget, c::SBLCase, sim, wdt, t0, dt)
         # interior faces only (k + 1 ≤ Nz); the surface face is the wall stress (wall!)
         τu_hi = k < m.Nz ? px.total[k+1] : 0.0; τu_lo = k > 1 ? px.total[k] : 0.0
         τv_hi = k < m.Nz ? py.total[k+1] : 0.0; τv_lo = k > 1 ? py.total[k] : 0.0
-        b.turb_u[k] += wdt * (τu_hi - τu_lo) / m.dz
-        b.turb_v[k] += wdt * (τv_hi - τv_lo) / m.dz
-        b.cor_u[k] += wdt * f * v̄[k]
-        b.cor_v[k] -= wdt * f * ū[k]
-        b.pg_u[k] -= wdt * f * forcing_mean(c.V_g, z, t0, t0 + dt)
-        b.pg_v[k] += wdt * f * forcing_mean(c.U_g, z, t0, t0 + dt)
+        book_momentum!(b, :turb, k, wdt * (τu_hi - τu_lo) / m.dz, wdt * (τv_hi - τv_lo) / m.dz)
+        book_momentum!(b, :cor, k, wdt * f * v̄[k], -(wdt * f * ū[k]))
+        book_momentum!(b, :pg, k, -(wdt * f * forcing_mean(c.V_g, z, t0, t0 + dt)),
+                       wdt * f * forcing_mean(c.U_g, z, t0, t0 + dt))
         for F in c.forcing
             F isa AdvectiveTendencies || continue
-            F.u === nothing || (b.adv_u[k] += wdt * forcing_mean(F.u, z, t0, t0 + dt))
-            F.v === nothing || (b.adv_v[k] += wdt * forcing_mean(F.v, z, t0, t0 + dt))
+            F.u === nothing || book_momentum!(b, :adv, k, wdt * forcing_mean(F.u, z, t0, t0 + dt), 0.0)
+            F.v === nothing || book_momentum!(b, :adv, k, 0.0, wdt * forcing_mean(F.v, z, t0, t0 + dt))
         end
         α = 0.0
         if sim.has_sponge && z >= z_s
@@ -652,11 +640,10 @@ function _sbl_budget_stage!(b::SBLMomentumBudget, c::SBLCase, sim, wdt, t0, dt)
         end
         ut, vt = c.sponge_target === :mean ? (ū[k], v̄[k]) :
                  (forcing_mean(c.U_g, z, t0, t0 + dt), forcing_mean(c.V_g, z, t0, t0 + dt))
-        b.sponge_u[k] -= wdt * α * (ū[k] - ut)
-        b.sponge_v[k] -= wdt * α * (v̄[k] - vt)
+        book_momentum!(b, :sponge, k, -(wdt * α * (ū[k] - ut)), -(wdt * α * (v̄[k] - vt)))
         # the core's built-in tendency (advection + SGS + Coriolis - α u) minus Coriolis and its sponge
-        b.turb_model_u[k] += wdt * (tū[k] - f * v̄[k] + α * ū[k])
-        b.turb_model_v[k] += wdt * (tv̄[k] + f * ū[k] + α * v̄[k])
+        book_momentum!(b, :turb_model, k, wdt * (tū[k] - f * v̄[k] + α * ū[k]),
+                       wdt * (tv̄[k] + f * ū[k] + α * v̄[k]))
     end
     return b
 end
@@ -665,33 +652,26 @@ end
     sbl_budget(c; z_max = Inf) -> NamedTuple
 
 The momentum budget accumulated since [`sbl_budget_start!`](@ref) on the
-levels below `z_max`: the change `ΔU`, `ΔV` of the plane means, each term
-(`turb`, `cor`, `pg`, `adv`, `sponge`, the `_u`/`_v` vectors of
-[`SBLMomentumBudget`](@ref)), the residual `res_u = ΔU - Σ terms` (and
-`res_v`), the largest term magnitude `largest` and `rel = max|res| /
-largest`; `model_turb_mismatch` is the largest difference between the
-diagnosed flux divergence and the core's own advection + SGS tendency,
-relative to `largest`.
+levels below `z_max` ([`momentum_closure`](@ref Aeolus.BudgetSystem.momentum_closure)):
+the change `ΔU`, `ΔV` of the plane means, each term (`turb`, `cor`, `pg`,
+`adv`, `sponge`, as `_u`/`_v` vectors; the surface stress is in level 1 of
+`turb`), the residual `res_u = ΔU - Σ terms` (and `res_v`), the largest
+term magnitude `largest` and `rel = max|res| / largest`;
+`model_turb_mismatch` is the largest difference between the diagnosed
+flux divergence and the core's own advection + SGS tendency, relative to
+`largest`.
 """
 function sbl_budget(c::SBLCase; z_max = Inf)
-    b = c.budget; m = c.sim.mesh
+    b = c.budget.momentum; m = c.sim.mesh
     ks = [k for k in 1:m.Nz if m.z0 + (k - 0.5) * m.dz <= z_max]
-    ΔU = _sbl_plane_mean(c.sim.u, m) .- b.U0
-    ΔV = _sbl_plane_mean(c.sim.v, m) .- b.V0
-    tu = copy(b.turb_u); tv = copy(b.turb_v)
-    tu[1] += b.wall_u; tv[1] += b.wall_v                     # the surface stress enters level 1
-    ru = ΔU .- (tu .+ b.cor_u .+ b.pg_u .+ b.adv_u .+ b.sponge_u)
-    rv = ΔV .- (tv .+ b.cor_v .+ b.pg_v .+ b.adv_v .+ b.sponge_v)
-    terms = (tu, b.cor_u, b.pg_u, b.adv_u, b.sponge_u, tv, b.cor_v, b.pg_v, b.adv_v, b.sponge_v)
-    largest = maximum(maximum(abs, t[ks]) for t in terms)
-    res = max(maximum(abs, ru[ks]), maximum(abs, rv[ks]))
+    r = momentum_closure(b, _sbl_plane_mean(c.sim.u, m), _sbl_plane_mean(c.sim.v, m); ks = ks)
     # the core's built-in tendency has no wall term (the wall model acts after the predictor)
-    mism = max(maximum(abs, (b.turb_model_u .- b.turb_u)[ks]), maximum(abs, (b.turb_model_v .- b.turb_v)[ks]))
-    return (z = [m.z0 + (k - 0.5) * m.dz for k in ks], ΔU = ΔU[ks], ΔV = ΔV[ks],
-            turb_u = tu[ks], cor_u = b.cor_u[ks], pg_u = b.pg_u[ks], adv_u = b.adv_u[ks],
-            sponge_u = b.sponge_u[ks], turb_v = tv[ks], cor_v = b.cor_v[ks], pg_v = b.pg_v[ks],
-            adv_v = b.adv_v[ks], sponge_v = b.sponge_v[ks], res_u = ru[ks], res_v = rv[ks],
-            largest = largest, rel = res / largest, model_turb_mismatch = mism / largest,
+    mism = max(maximum(abs, (b.u[:turb_model] .- b.u[:turb])[ks]), maximum(abs, (b.v[:turb_model] .- b.v[:turb])[ks]))
+    return (z = [m.z0 + (k - 0.5) * m.dz for k in ks], ΔU = r.ΔU, ΔV = r.ΔV,
+            turb_u = r.u[:turb], cor_u = r.u[:cor], pg_u = r.u[:pg], adv_u = r.u[:adv],
+            sponge_u = r.u[:sponge], turb_v = r.v[:turb], cor_v = r.v[:cor], pg_v = r.v[:pg],
+            adv_v = r.v[:adv], sponge_v = r.v[:sponge], res_u = r.res_u, res_v = r.res_v,
+            largest = r.largest, rel = r.rel, model_turb_mismatch = mism / r.largest,
             duration = c.sim.t - b.t0)
 end
 

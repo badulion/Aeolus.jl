@@ -19,8 +19,9 @@ julia --project examples/sbl/gabls1.jl runs/gabls1_*                        # re
 ```
 
 A run writes into its run folder `output/statistics.toml` (the averaged
-profiles and scalars, or the channel result), `output/series.csv` (every
-`[averaging] series_interval`) and, with `[towers] below > 0`,
+profiles and scalars, or the channel result), the time series (every
+`[averaging] series_interval`) in `output/output.nc`, written by the one
+output writer ([Output](../output.md), ONE-c #452), and, with `[towers] below > 0`,
 `output/towers.csv` (the CASES-99 hockey-stick bins). The scripts of
 `examples/sbl/` only read those files. The physics, the configuration and
 the validation are on [Stable boundary layer](../../theory/stable_boundary_layer.md);

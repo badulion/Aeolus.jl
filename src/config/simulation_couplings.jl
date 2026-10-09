@@ -36,6 +36,7 @@ using ..InputDrivers: read_static_driver, solid_and_classes
 import ..RunLog: diagnostics, profile_diagnostics
 using ..RunLog: Diagnostic, ProfileDiagnostic
 using ..Backends: plane_mean!
+using ..Output: OutputVariable
 
 # ---------------------------------------------------------------------------
 # schema
@@ -171,10 +172,6 @@ function _coupling_checks(cfg)
     end
     !isempty(cfg.initial.ql) && cfg.microphysics.scheme === :none &&
         push!(e, ConfigError("initial.ql", "cloud water needs microphysics.scheme = \"kessler\""))
-    for (f, need) in (("ql", cfg.microphysics.scheme !== :none), ("qr", cfg.microphysics.scheme !== :none),
-                      ("tracer", cfg.tracer.enabled))
-        f in cfg.output.variables && !need && push!(e, ConfigError("output.variables", "$f is written only when it is carried"))
-    end
     (!cfg.tracer.enabled && (!isempty(cfg.tracer.sources) || cfg.tracer.decay_time != Inf)) &&
         push!(e, ConfigError("tracer.enabled", "[tracer] sources or decay_time are set but the tracer is off"))
     if cfg.particles.count > 0
@@ -196,7 +193,7 @@ end
 const _COUPLING_CHECKS_DOC = """
 a run with a coupling on ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles]) has `[checkpoint]` off, the boussinesq core, a fixed `time.dt`, a uniform grid and no open faces
 a key of `[surface]` that belongs to a model `surface.model` does not select keeps its default; a surface model needs z walls and `surface_theta_flux.bottom = 0`; the slab needs `surface.theta_ref` or `dynamics.theta0`
-Kessler microphysics needs `dynamics.moisture` and z walls; `initial.ql` needs it; the `ql`, `qr`, `tracer` output fields need what they write
+Kessler microphysics needs `dynamics.moisture` and z walls; `initial.ql` needs it
 `[tracer]` sources or a decay time need `tracer.enabled`; particles need a triply periodic box"""
 
 # ---------------------------------------------------------------------------
@@ -515,6 +512,36 @@ function Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_update}
     c.step[] += 1
     return _after_step!(c.c, d.state, dt, c.step[])
 end
+
+# ONE-c (#452): the couplings' output catalogue and the fields they add to
+# the measured budgets (the water of the air, the tracer), and their obstacles
+"""
+    _coupling_outputs(cfg) -> Vector{String}
+
+The output variables the couplings of `cfg` publish (the catalogue of
+[`SimulationCouplings`](@ref)): `ql`, `qr` with Kessler microphysics,
+`tracer` with the tracer.
+"""
+_coupling_outputs(cfg) = vcat(cfg.microphysics.scheme !== :none ? ["ql", "qr"] : String[],
+                              cfg.tracer.enabled ? ["tracer"] : String[])
+
+function Components.outputs(c::SimulationCouplings)
+    vs = OutputVariable[]
+    w = c.c.water
+    if w !== nothing
+        push!(vs, OutputVariable("ql", "kg kg-1", "cloud water mixing ratio (Kessler)", :xyz, _ -> interior_view(w.ql)))
+        push!(vs, OutputVariable("qr", "kg kg-1", "rain water mixing ratio (Kessler)", :xyz, _ -> interior_view(w.qr)))
+    end
+    t = c.c.tracer
+    t === nothing ||
+        push!(vs, OutputVariable("tracer", "1", "passive tracer mixing ratio", :xyz, _ -> interior_view(t.c)))
+    return vs
+end
+
+Components.budget_fields(c::SimulationCouplings, q::Symbol) =
+    q === :water && c.c.water !== nothing ? (c.c.water.ql, c.c.water.qr) :
+    q === :tracer && c.c.tracer !== nothing ? (c.c.tracer.c,) : ()
+Components.solid_mask(c::SimulationCouplings) = c.c.solid === nothing ? nothing : c.c.solid.mask
 
 const _NO_COUPLINGS = SimCouplings(0.0, nothing, nothing, nothing, nothing, nothing, nothing, 0.0)
 

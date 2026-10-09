@@ -19,18 +19,22 @@ One domain of a [`Model`](@ref):
     every step;
   * `components` — its components, validated ([`validate_components`](@ref))
     and stored as a concretely typed tuple in the fixed order of
-    [`order_components`](@ref), so dispatch on them is static.
+    [`order_components`](@ref), so dispatch on them is static;
+  * `budgets` — `nothing` (the default: no measurement), or the
+    [`DomainBudgets`](@ref) of [`with_budgets`](@ref).
 
 `Domain(d::Domain; components)` is `d` with other components (how a run
-type builds them: [`build_components`](@ref) needs the domain).
+type builds them: [`build_components`](@ref) needs the domain), and its
+budgets off.
 """
-struct Domain{S, C<:Tuple, D<:NamedTuple, F}
+struct Domain{S, C<:Tuple, D<:NamedTuple, F, B}
     id::String
     state::S
     scheme::Symbol
     cfl::F
     drivers::D
     components::C
+    budgets::B
 end
 
 function Domain(state; id::AbstractString = "main", scheme::Symbol = :euler, cfl = nothing,
@@ -40,7 +44,7 @@ function Domain(state; id::AbstractString = "main", scheme::Symbol = :euler, cfl
     scheme in (:euler, :rk3) || throw(ArgumentError("Domain: scheme is :euler or :rk3, got :$scheme"))
     cfl === nothing || cfl isa CFLConstraints || throw(ArgumentError("Domain: cfl is nothing or a CFLConstraints"))
     validate && validate_components(components)
-    return Domain(String(id), state, scheme, cfl, drivers, order_components(components))
+    return Domain(String(id), state, scheme, cfl, drivers, order_components(components), nothing)
 end
 Domain(d::Domain; components) =
     Domain(d.state; id = d.id, scheme = d.scheme, cfl = d.cfl, drivers = d.drivers, components = components)
@@ -109,7 +113,8 @@ struct _ForceHook{D} <: Function
     d::D
 end
 @inline (h::_ForceHook)(sim, Δt) =
-    (cs = h.d.components; _run_in_core(cs, h.d, Val(:tendencies), Δt);
+    (cs = h.d.components; _count_substage!(h.d.budgets, sim);
+     _run_in_core(cs, h.d, Val(:tendencies), Δt);
      _run_in_core(cs, h.d, Val(:body_force), Δt); nothing)
 struct _PostHook{D} <: Function
     d::D
@@ -123,13 +128,14 @@ _any_attached(cs, stages) = any(c -> any(s -> attaches(c, s), stages), cs)
 
 The keywords of the core step that run stages 6–8: `body_force!` and
 `post_predictor!` (`nothing` where no component attaches, which keeps the
-core's hook-free fast path), `sgs` (the `:sgs` component's closure) and,
-for the Boussinesq Euler step, `momentum_advection` (the `:advection`
-component's operator).
+core's hook-free fast path; with the budgets on the body-force hook is
+always there, it counts the substages), `sgs` (the `:sgs` component's
+closure) and, for the Boussinesq Euler step, `momentum_advection` (the
+`:advection` component's operator).
 """
 function core_hooks(d::Domain)
     cs = d.components
-    bf = _any_attached(cs, (:tendencies, :body_force)) ? _ForceHook(d) : nothing
+    bf = d.budgets !== nothing || _any_attached(cs, (:tendencies, :body_force)) ? _ForceHook(d) : nothing
     pp = _any_attached(cs, (:post_predictor,)) ? _PostHook(d) : nothing
     return (; body_force! = bf, post_predictor! = pp, sgs = sgs_closure(d))
 end
@@ -181,9 +187,24 @@ function step!(d::Domain, dt::Real)
     d.cfl === nothing || throw(ArgumentError("step!: the domain $(d.id) steps adaptively (step_adaptive!)"))
     sync_drivers!(d)
     t0 = clock(d)
+    _budgets_begin!(d.budgets, d)
     _run_stages!(d, PRE_CORE, dt, t0, t0 + dt)
+    _dynamics_open!(d.budgets, d)
     _core_step!(d.state, d, dt)
-    _run_stages!(d, POST_CORE, dt, t0, clock(d))
+    _dynamics_close!(d.budgets, d)
+    _post_core!(d, dt, t0)
+    return d
+end
+
+# stages 11-13: the budgets close after :budgets, before :checks and :output
+function _post_core!(d::Domain, dt, t0)
+    if d.budgets === nothing
+        _run_stages!(d, POST_CORE, dt, t0, clock(d))
+    else
+        _run_stages!(d, _POST_CORE_BUDGETS, dt, t0, clock(d))
+        _budgets_end!(d.budgets, d, dt)
+        _run_stages!(d, _POST_BUDGETS, dt, t0, clock(d))
+    end
     return d
 end
 step!(m::Model, dt::Real) = (foreach(d -> step!(d, dt), m.domains); m)
@@ -217,12 +238,15 @@ function step_adaptive!(d::Domain; dt_prev = nothing, t_end = nothing)
     dt = adaptive_dt(sim, c; dt_prev = dt_prev, sgs = closure, limits = component_limits(d))
     t_end === nothing || (dt = min(dt, t_end - sim.t))
     t0 = clock(d)
+    _budgets_begin!(d.budgets, d)
     _run_stages!(d, PRE_CORE, dt, t0, t0 + dt)
     h = core_hooks(d)
     stepper = d.scheme === :rk3 ? ((s, Δ; kw...) -> step_rk3!(s, Δ; kw..., sgs = closure)) : nothing
+    _dynamics_open!(d.budgets, d)
     res = step_adaptive!(sim, c; dt = dt, sgs = closure, stepper = stepper,
                                          body_force! = h.body_force!, post_predictor! = h.post_predictor!)
-    _run_stages!(d, POST_CORE, res[2], t0, clock(d))
+    _dynamics_close!(d.budgets, d)
+    _post_core!(d, res[2], t0)
     return res
 end
 step_adaptive!(m::Model; kw...) = step_adaptive!(only(m.domains); kw...)
@@ -234,8 +258,12 @@ step_adaptive!(m::Model; kw...) = step_adaptive!(only(m.domains); kw...)
 """
     checkpoint_components(d::Domain) -> NamedTuple
 
-`component_name => component` of every component of `d`: what a
-checkpoint stores through `checkpoint_state` (IO's component contract)
-and a restart restores.
+`component_name => component` of every component of `d` (and `budgets`,
+the [`DomainBudgets`](@ref), when they are on): what a checkpoint stores
+through `checkpoint_state` (IO's component contract) and a restart
+restores.
 """
-checkpoint_components(d::Domain) = NamedTuple{map(component_name, d.components)}(d.components)
+function checkpoint_components(d::Domain)
+    cs = NamedTuple{map(component_name, d.components)}(d.components)
+    return d.budgets === nothing ? cs : merge(cs, (; budgets = d.budgets))
+end
