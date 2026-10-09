@@ -179,7 +179,7 @@ open reviews that cite it.
 
 ## 4. The flagship example
 
-`examples/urban/alexanderplatz_diurnal.jl` still runs the slab surface
+The flagship run (`examples/urban/configs/berlin_summer.toml`) still runs the slab surface
 scheme, which has no building interior. Its anthropogenic heat now
 comes from one city-mean `BuildingZone`. The zone takes the scene's
 total volume, footprint and wall area, the DOE medium-office schedules,

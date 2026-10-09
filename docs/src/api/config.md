@@ -155,7 +155,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 ```
 
 `[run] driver = "cbl"` then selects this schema; the driver `"common"`
-(the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`berlin`](../reference/options/berlin.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
+(the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`urban`](../reference/options/urban.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
 like a common one adds its options to it (the `simulation` driver's
 `[output] fields`); redeclaring a common option is an error.
 
@@ -200,7 +200,8 @@ and `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
 fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
 (#360) are in the table below. `dns` and `dns_decay` run the same DNS
 (the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
-record and its resolution refusal. `berlin` is the Berlin case (`examples/urban/BerlinCase.jl`, CFG-c #358).
+record and its resolution refusal. The Berlin case's driver is no longer
+an example file: it is the package's urban run type, `urban` (below; EX-a #438).
 
 ### The example drivers (CFG-e, #360)
 
@@ -350,11 +351,13 @@ This config is, bit for bit, the simulation the script built before
 
 Its options, every key with type, default, units, range and doc: [Options: driver `simulation`](../reference/options/simulation.md) (generated from the schema; `aeolus options simulation` prints the same).
 
-## The `berlin` driver
+## The `urban` driver
 
-`[run] driver = "berlin"` is the Berlin (Alexanderplatz) case
-(`examples/urban/core/config_schema.jl`, CFG-c #358). The scenarios are
-shipped base files in `examples/urban/configs/`:
+`[run] driver = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
+(`src/urban/core/config_schema.jl`; CFG-c #358 as the `berlin` example
+driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
+`urban_parent` runs the nest parent of the same config alone. The Berlin
+(Alexanderplatz) case is shipped as files in `examples/urban/configs/`:
 
 | file | what |
 | :-- | :-- |
@@ -362,22 +365,27 @@ shipped base files in `examples/urban/configs/`:
 | `berlin_winter.toml` | `extends = "berlin_summer.toml"`: 15 January 2024, idealised cold profile |
 | `berlin_smoke.toml` | `extends` summer: 16³ window at noon, small nest parent, 12 steps, no NetCDF |
 | `berlin_mitte_sample.toml` | `extends` summer: the synthetic OSM sample |
+| `berlin_parent.toml` | `extends` summer, `driver = "urban_parent"`: the 6 km nest parent alone, 24 h |
+| `berlin_parent_coarse.toml` | `extends` the parent file: the coarse 24 × 24 × 38 parent (the Lindenberg checks) |
 
 ```bash
 julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
 julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
 ```
 
-`examples/urban/alexanderplatz_diurnal.jl` is a three-line wrapper of the
-first (extra arguments are passed on). The environment variables
-`AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and `AEOLUS_OUTPUT_DT` are gone: use
-the file and `--set clock.nsteps=…`, `--set output.cadence=…`.
+There is no wrapper script (`alexanderplatz_diurnal.jl` was removed in
+#438). The environment variables `AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and
+`AEOLUS_OUTPUT_DT` are gone: use the file and `--set clock.nsteps=…`,
+`--set output.cadence=…`. A run writes its own checks (the ledgers'
+closure, the timing) to `output/results.toml`. The generic schema points
+at no data of the example: `[preprocess] osm_path` and `landuse` and
+`[initial] sounding` default to `"none"`.
 
 The sections are `[grid]`, `[geometry]` (the site and the static
 drivers `static`, `parent_static` the ground is read from, CFG-f #361,
 see [Input drivers](input_drivers.md)), `[preprocess]` (the drivers'
 sources: `osm_path`, `min_height`, `park_lai`, `landuse`; `julia
---project -m Aeolus preprocess static berlin_<s>.toml` writes the
+--project -m Aeolus preprocess static <config>.toml` writes the
 drivers from them), `[clock]`, `[cadence]`,
 `[dynamics]`, `[boundaries]`, `[initial]`, `[ledger]`, `[output]`
 (`netcdf`, the file name; `path`, its directory: the summer file writes
@@ -425,7 +433,7 @@ run 12 steps gives state bitwise equal to the Julia-built smoke case and
 passes the round trip with the nest on. The Berlin case has no
 checkpoint/restart yet, so `[checkpoint]` must stay off.
 
-Its options, the `[physics.options.<coupling>]` tables included: [Options: driver `berlin`](../reference/options/berlin.md).
+Its options, the `[physics.options.<coupling>]` tables included: [Options: driver `urban`](../reference/options/urban.md).
 
 ## The `sbl` driver
 

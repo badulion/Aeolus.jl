@@ -41,7 +41,7 @@ const NCPATH = get(ENV, "AEOLUS_NC", joinpath(OUT, "alexanderplatz.nc"))
 isfile(NCPATH) || error("""
     No output file at $NCPATH.
     Run the simulation first:
-        julia --project=. examples/urban/alexanderplatz_diurnal.jl
+        julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
     """)
 
 ncf   = NCDataset(NCPATH)

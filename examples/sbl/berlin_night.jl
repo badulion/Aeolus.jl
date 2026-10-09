@@ -2,7 +2,7 @@
 # The nocturnal boundary layer of the Berlin (Alexanderplatz) 24 h run,
 # next to GABLS3 — P58-d (#194), validation only
 #
-# Reads the NetCDF of examples/urban/alexanderplatz_diurnal.jl (it does not
+# Reads the NetCDF of examples/urban/configs/berlin_summer.toml (it does not
 # integrate anything) and, for every record of the night (solar elevation
 # below 0), forms fluid-cell plane means per level (cells above the
 # building height of their column) and reports

@@ -1327,7 +1327,7 @@ That expectation is wrong for solid-body rotation, which has no strain,
 so Smagorinsky is zero there too. The test asserts that.
 
 **Berlin.** The `:sgs` slot's provider `:sigma`
-(`examples/urban/couplings/sgs_sigma.jl`) is off by default; flipping
+(`src/urban/couplings/sgs_sigma.jl`) is off by default; flipping
 the default (`:tke` since #182) is the maintainer's call. Like every
 eddy-viscosity provider it runs the stress-form momentum divergence
 (option `stress`, #175). After 100 steps of the `:smoke` window, the mean

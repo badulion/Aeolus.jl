@@ -460,9 +460,11 @@ indirectly. The maintainer dropped the rule, and #320 moved every check
 of `src/` physics from `test/berlin_*.jl` into the owning module's tests
 (synthetic setups, same quantitative targets) and deleted those files.
 The end-to-end runs of the example (every coupling on, ledgers closed;
-the nest parent's smoke run and its idealised validations) are now
-`examples/urban/berlin_checks.jl`, run by hand after changing the
-example.
+the nest parent's smoke run and its idealised validations) became
+`examples/urban/berlin_checks.jl`, run by hand; since the urban run type
+moved into `src/` (EX-a, #438) they are `test/urban_checks.jl` (full
+tier), and every urban run writes its ledger closure to
+`output/results.toml`.
 
 ### Minimal dependencies
 
