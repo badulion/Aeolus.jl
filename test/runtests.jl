@@ -862,7 +862,9 @@ using Aeolus.Fields: set!, interior_view
     include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
-    include("config_berlin.jl")       # CFG-c (#358): berlin driver, scenarios from TOML, bitwise vs Julia-built, round trip
+    include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
+    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent, preprocessors
+    include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
     include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
     include("preprocess_era5.jl")     # CFG-h (#363): ERA5 preprocessor (GRIB2/NetCDF) of the dynamic driver, open simulation box

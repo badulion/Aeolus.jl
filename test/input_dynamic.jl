@@ -43,17 +43,16 @@ using Aeolus.NCIO: NCDataset
 using Aeolus.IO: read_run_toml
 import NCDatasets
 
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-const BCD = Main.BerlinCase
+const BCD = Aeolus.UrbanCase
+include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 using Aeolus.StableBoundaryLayer
 
 const ID_DATA = joinpath(@__DIR__, "data", "input_dynamic")
 const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
-const ID_SMOKE = joinpath(BCD.CONFIG_DIR, "berlin_smoke.toml")
-const ID_CSV = normpath(joinpath(BCD.DATA_DIR, "lindenberg_10393_20190629.csv"))
+const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
+const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.csv"))
 
 # A synthetic boundary snapshot: every field has the value `val` everywhere.
 struct ConstSnapshot
@@ -180,20 +179,20 @@ end
     @test occursin("covers storage indices", msg)
     @test occursin("read it with the run's mesh", errmsg(() -> read_dynamic_driver(p)))
     # a static driver is not a dynamic one
-    st = joinpath(BCD.CONFIG_DIR, "input", "berlin_smoke_static.nc")
+    st = joinpath(berlin_configs_dir(), "input", "berlin_smoke_static.nc")
     @test occursin("aeolus_driver = \"static\", expected \"dynamic\"", errmsg(() -> read_dynamic_driver(st)))
     # a case starting at another time than the sounding driver (08 instead
     # of 06 CEST): the same series with the axis moved and the ground
     # pressure at its own start, bitwise the CSV read in memory
-    a = BCD.case_sounding(BCD.CaseConfig(:summer; start_h = 8.0))
-    b = BCD.case_sounding(BCD.CaseConfig(:summer; start_h = 8.0, dynamic = nothing))
+    a = BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"); start_h = 8.0))
+    b = BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"); start_h = 8.0, dynamic = nothing))
     @test a.inputs.init_time == "2019-06-29T04:00:00Z" && b.inputs.init_time == "2019-06-29T06:00:00Z"
     @test a.t0 == b.t0 == 6 * 3600.0 && isequal(a.p_surface, b.p_surface) && a.times == b.times
     @test all(k -> (x = getproperty(a.profiles, k); y = getproperty(b.profiles, k);
                     x.z == y.z && x.t == y.t && isequal(x.values, y.values)), (:θ, :qv, :u, :v, :p))
-    @test a.p_surface != BCD.case_sounding(BCD.CaseConfig(:summer)).p_surface
+    @test a.p_surface != BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"))).p_surface
     # the parent-made driver offered as the initial state of a case without the offline nest
-    msg = errmsg(() -> BCD.case_sounding(BCD.CaseConfig(:summer; dynamic = p)))
+    msg = errmsg(() -> BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"); dynamic = p)))
     @test occursin("not a sounding driver", msg)
 end
 
@@ -285,10 +284,10 @@ end
             "summer_zi" => BCD.initial_inversion_height(cfg), "summer_zi_max" => BCD.sounding_zi_max(cfg),
             "summer_ug" => digest([Ug(z, t) for (z, t) in tz]), "summer_vg" => digest([Vg(z, t) for (z, t) in tz]))
     end
-    file = BCD.CaseConfig(:summer)
-    @test file.dynamic == joinpath(BCD.CONFIG_DIR, "input", "berlin_20190629_dynamic.nc")
+    file = BCD.CaseConfig(berlin_toml("summer"))
+    @test file.dynamic == joinpath(berlin_configs_dir(), "input", "berlin_20190629_dynamic.nc")
     @test BCD.case_sounding(file).inputs.attributes["dynamic_source"] == "sounding"
-    for (label, cfg) in (("sounding driver", file), ("CSV in memory", BCD.CaseConfig(:summer; dynamic = nothing)))
+    for (label, cfg) in (("sounding driver", file), ("CSV in memory", BCD.CaseConfig(berlin_toml("summer"); dynamic = nothing)))
         got = initial_digests(cfg)
         bad = sort!([k for (k, v) in got if !isequal(M[k], v)])
         isempty(bad) || @info "initial state from the $label differs from master" bad
@@ -303,11 +302,11 @@ end
         (Dict(k => Array(ds[k].var[ntuple(_ -> Colon(), ndims(ds[k]))...]) for k in keys(ds) if ndims(ds[k]) > 0),
          Dict(k => v for (k, v) in ds.attrib if !(k in VOLATILE_ATTRIBUTES)))
     end
-    cfg = load_run_config(joinpath(BCD.CONFIG_DIR, "berlin_summer.toml"))
+    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_summer.toml"))
     cc = BCD.CaseConfig(cfg)
-    out = joinpath(BCD.CONFIG_DIR, "input", "_repro_dynamic.nc")
+    out = joinpath(berlin_configs_dir(), "input", "_repro_dynamic.nc")
     try
-        @test Config.preprocess_dynamic(BCD.BerlinDriver(), cfg; from = :sounding, out = out) == [out]
+        @test Config.preprocess_dynamic(BCD.UrbanDriver(), cfg; from = :sounding, out = out) == [out]
         @test filesize(cc.dynamic) <= 2 * 1024^2
         @test isempty(check_driver(cc.dynamic, DYNAMIC_SCHEMA))
         vn, an = dyn_content(out); vo, ao = dyn_content(cc.dynamic)
@@ -341,7 +340,7 @@ end
     end
     @test rc == 2
     # a missing driver is a config error with the command that makes it
-    msg = errmsg(() -> Config.build(BCD.BerlinDriver(),
+    msg = errmsg(() -> Config.build(BCD.UrbanDriver(),
                                     load_run_config(ID_SMOKE; overrides = ["initial.dynamic=\"$(joinpath(dir, "none.nc"))\""])))
     @test occursin("preprocess dynamic --from-sounding", msg)
 end
@@ -349,7 +348,7 @@ end
 @testset "InputDrivers dynamic: the smoke case from a sounding driver = the CSV path (12 steps, round trip)" begin
     dir = mktempdir()
     out = joinpath(dir, "smoke_sounding.nc")
-    Config.preprocess_dynamic(BCD.BerlinDriver(), load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\""]);
+    Config.preprocess_dynamic(BCD.UrbanDriver(), load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\""]);
                               from = :sounding, out = out)
     r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
                         overrides = ["initial.dynamic=\"$out\""])
@@ -390,14 +389,14 @@ end
         # driver, so an offline child cannot replay them (it would add its own)
         t0 = time()
         nogen = Dict{Symbol,Any}(:inflow_turbulence => false)
-        online = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, child_boundaries = drv,
+        online = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); output_path = nothing, child_boundaries = drv,
                                                physics = nogen))
         BCD.run_case!(online)
         t_online = time() - t0
         nc = BCD.find_coupling(online, :nesting)
         st_on = berlin_state(online)
         # recording does not change the run: the same case without the recorder
-        plain = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, physics = nogen))
+        plain = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); output_path = nothing, physics = nogen))
         BCD.run_case!(plain)
         st_plain = berlin_state(plain)
         @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
@@ -438,12 +437,12 @@ end
     dir = mktempdir()
     out = joinpath(dir, "smoke_open.nc")
     ov = ["initial.sounding=\"$ID_CSV\"", "physics.nesting=false", "boundaries.lateral=\"open\""]
-    Config.preprocess_dynamic(BCD.BerlinDriver(), load_run_config(ID_SMOKE; overrides = ov); from = :sounding, out = out)
+    Config.preprocess_dynamic(BCD.UrbanDriver(), load_run_config(ID_SMOKE; overrides = ov); from = :sounding, out = out)
     m = RegularGrid(; size = (16, 16, 16), extent = (250.0, 250.0, 100.0), halo = (3, 3, 3))
     d = read_dynamic_driver(out; mesh = m)
     @test d.boundary !== nothing && length(d.boundary.time) == 1 && haskey(d.tables, :profile_theta)
     @test d.attributes["dynamic_source"] == "sounding"
-    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(:smoke; output_path = nothing, physics = Dict{Symbol,Any}(:nesting => false),
+    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); output_path = nothing, physics = Dict{Symbol,Any}(:nesting => false),
                                                   lateral = :open, sounding = ID_CSV, dynamic = dyn));
                 BCD.run_case!(c); c)
     a, b = run(nothing), run(out)

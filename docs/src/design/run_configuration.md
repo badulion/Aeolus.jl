@@ -23,7 +23,7 @@ it came from.
 extends = "berlin_summer.toml"   # optional: start from another file
 
 [run]
-driver = "berlin"                # selects the schema: simulation, berlin, sbl, dns, column, …
+driver = "urban"                 # selects the schema: simulation, urban, sbl, dns, column, …
 name   = "smoke"
 seed   = 0
 
@@ -53,7 +53,8 @@ The common sections (`[run]`, `[fftw]`, `[logging]`, `[checkpoint]`,
 | driver | what it runs | options |
 | :-- | :-- | :-- |
 | `simulation` | a bare dynamical core on a box (TGV, dry CBL, buoyant convection) | [simulation](../reference/options/simulation.md) |
-| `berlin` | the Berlin (Alexanderplatz) case with every coupling and the nest | [berlin](../reference/options/berlin.md) |
+| `urban` | the urban LES run type (`Aeolus.UrbanCase`): the Berlin (Alexanderplatz) case with every coupling and the nest is its example | [urban](../reference/options/urban.md) |
+| `urban_parent` | the nest parent of an urban case alone (same schema) | [urban_parent](../reference/options/urban_parent.md) |
 | `sbl` | GABLS1–4, CASES-99 and the stratified channels | [sbl](../reference/options/sbl.md) |
 | `dns` | the decaying DNS with its a-priori record | [dns](../reference/options/dns.md) |
 | `column` | the single-column validation cases (DYCOMS RF01, ParisFog, parcel, Kessler box) | [column](../reference/options/column.md) |
@@ -85,7 +86,7 @@ julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml --set gr
 julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
 julia --project -m Aeolus check my_case.toml --set stepper.nsteps=10      # validate only
 julia --project -m Aeolus resolve my_case.toml                            # print the canonical TOML
-julia --project -m Aeolus options berlin physics                          # the option reference
+julia --project -m Aeolus options urban physics                           # the option reference
 ```
 
 `bin/aeolus` is the same command on any Julia version (`-m` needs Julia ≥
@@ -149,7 +150,7 @@ The static driver (terrain, buildings, land use, trees, surfaces) is
 written from `[preprocess]` and read from `[geometry] static`. The dynamic
 driver (initial profiles, large-scale forcing, surface series, boundary
 planes from a parent run) is written from a sounding, a case table or a
-recording parent, and is read from `[case] dynamic` (sbl) or `[initial] dynamic` (berlin).
+recording parent, and is read from `[case] dynamic` (sbl) or `[initial] dynamic` (urban).
 Their variables, dimensions, units and attributes are listed on the
 [static](../reference/input_static.md) and
 [dynamic](../reference/input_dynamic.md) pages; the API is
@@ -160,7 +161,7 @@ Their variables, dimensions, units and attributes are listed on the
 | directory | configs |
 | :-- | :-- |
 | `examples/configs/` | `simulation`: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection` |
-| `examples/urban/configs/` | `berlin`: `berlin_summer` (every option written out), `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample`; `input/` holds their driver files |
+| `examples/urban/configs/` | `urban` (in `src/`, `Aeolus.UrbanCase`): `berlin_summer` (every option written out), `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample`; `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
 | `examples/sbl/configs/` | `sbl` (in `src/`, `Aeolus.StableBoundaryLayer`): `gabls1`–`gabls4_exp3`, `cases99`, the channels, and the sweeps that replace the runner scripts (`*_closures`, `*_sweep`) |
 | `examples/validation/configs/` | the validation drivers (`neutral_abl`, `dycoms_rf01`, `dns256`, …) |
 | `examples/kernels/configs/` | `column`: `cloud_spinup` |

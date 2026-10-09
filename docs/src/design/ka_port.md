@@ -423,7 +423,7 @@ Left as they are, with the reason:
 * **Reports, smoke checks and one-off diagnostics** (`bubble_top_height`,
   `θ_variance`, the SGS reports, `laminar_reference_νt`): not on the step
   path; serial and thread-invariant.
-* `examples/urban/couplings/nesting.jl`'s `_covered_profile!`: left for
+* `src/urban/couplings/nesting.jl`'s `_covered_profile!`: left for
   the in-flight Berlin nesting work (#330 / #267), to avoid a conflict.
 
 **One-time bit changes against master (70d9f83).** Every ported sum

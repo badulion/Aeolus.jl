@@ -217,7 +217,7 @@ function _step_case!(case, dt::Real)
     # :sanity (coupling guards first, then the core finiteness check)
     run_entries!(case, :sanity, dt, n, t_old, t_new)
     if clk.blowup || any(!isfinite, interior_view(sim.u)) || any(!isfinite, case.bus.Ts)
-        @error("blowup at step $n", subsystem = :berlin, domain = current_domain(),
+        @error("blowup at step $n", subsystem = :urban, domain = current_domain(),
                event = :blowup, step = n)
         clk.blowup = true
         return false
@@ -246,7 +246,7 @@ Open the output (unless `cfg.output_path === nothing`), run `nsteps`
 steps (stopping early on a blow-up), close the output and log the
 summary: the run's start (`event = :run_start`) and
 [`log_run_end`](@ref) (the run, the stage timing and the ledgers), all
-structured `Info` events (`subsystem = :berlin`). With a `monitor` (an
+structured `Info` events (`subsystem = :urban`). With a `monitor` (an
 `Aeolus.IO.RunMonitor`, the `berlin` run driver's) every step runs under
 it (`monitored_step!`: the diagnostics row with the step's dt, its
 [`step_limiter`](@ref) and retries, the progress line, the blowup guard);
@@ -278,7 +278,7 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
     variable = ts !== nothing && variable_dt(typeof(ts))
     @info(variable ? "run: $(nsteps * cfg.dt) s with a variable step (:$(provider(typeof(ts))))" :
                      "run: $nsteps steps of $(cfg.dt) s",
-          subsystem = :berlin, domain = current_domain(), event = :run_start,
+          subsystem = :urban, domain = current_domain(), event = :run_start,
           nsteps, t_end = Float64(t_end),
           dt = cfg.dt, variable_dt = variable,
           records = floor(Int, nsteps * cfg.dt / P))

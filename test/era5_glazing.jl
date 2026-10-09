@@ -496,11 +496,9 @@ window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
         end
         @info "WindowFacet steady state vs steady formulas\n" * join(rows, "\n")
     end
-    @testset "examples/urban/couplings/glass.jl delegates to UrbanSurface" begin
+    @testset "src/urban/couplings/glass.jl delegates to UrbanSurface" begin
         # The Berlin case's glass class carries no numbers of its own.
-        isdefined(Main, :BerlinCase) ||
-            Base.include(Main, joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-        ex = getfield(Main, :BerlinCase)
+        ex = Aeolus.UrbanCase
         g = Base.invokelatest(getfield(ex, :example_glazing))
         params = Base.invokelatest(getfield(ex, :glass_surface_params))
         h = glazing_optics_hemispherical(g)

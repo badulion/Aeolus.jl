@@ -1,27 +1,20 @@
-# By-hand checks of the Berlin example: the end-to-end runs that used to be
-# test/berlin_smoke.jl, test/berlin_parent_smoke.jl and checks 1-3 of
-# test/berlin_parent.jl. The Berlin case is an example and has no test
-# suite of its own (maintainer decision, 2026-10-06; #320): the physics it
-# couples is tested in the module tests, with synthetic setups. This file
-# is run by hand after changing the example:
+# The end-to-end checks of the urban run type (EX-a, #438) on the Berlin
+# configurations: formerly the by-hand examples/urban/berlin_checks.jl
+# (#320), before that test/berlin_smoke.jl, test/berlin_parent_smoke.jl
+# and checks 1-3 of test/berlin_parent.jl. Full tier (test_tags.toml):
 #
-#     julia --project=. examples/urban/berlin_checks.jl            # all
-#     julia --project=. examples/urban/berlin_checks.jl smoke      # child smoke matrix only
-#     julia --project=. examples/urban/berlin_checks.jl parent     # parent smoke + validation only
-#     julia --project=. examples/urban/berlin_checks.jl flagship   # the default case, 20 steps
-#
-#   flagship  the default case (CaseConfig(), 64³) for 20 adaptive steps,
-#           past step 16 where step_case!(case, cfg.dt) failed (#392): no
-#           retry, CFL ≤ C_advective, |u_i| < 20 m/s, θ within 2 K of its
-#           initial range; the forced 2 s step is rejected;
-#   smoke   every coupling of the Berlin case in a short window of the real
-#           OSM scene (examples/urban/configs/berlin_smoke.toml: 16³,
-#           250 m × 250 m × 100 m, 12 steps of 2 s), in every configuration
-#           the registry knows about (test/support/smoke_matrix.jl, shared
-#           with the thread-invariance harness): a finite state, every
-#           coupling's own `smoke_check`s, and the surface-energy, water
-#           and air-heat ledgers closed (49 runs, 6494 coupling checks,
-#           204 s measured on 2026-10-07);
+#   flagship  the Berlin summer case (64³, 1 km × 1 km × 400 m, nested) for
+#           20 adaptive steps, past step 16 where step_case!(case, cfg.dt)
+#           failed (#392): no retry, CFL ≤ C_advective, |u_i| < 20 m/s, θ
+#           within 2 K of its initial range; the forced 2 s step is rejected;
+#   smoke   every coupling of the run type in a short window of the real OSM
+#           scene (examples/urban/configs/berlin_smoke.toml: 16³, 250 m ×
+#           250 m × 100 m, 12 steps of 2 s), in every configuration the
+#           registry knows about (test/support/smoke_matrix.jl, shared with
+#           the thread-invariance harness): a finite state, every coupling's
+#           own `smoke_check`s, and the surface-energy, water and air-heat
+#           ledgers closed (49 runs, 6494 coupling checks, 204 s measured on
+#           2026-10-07);
 #   parent  the nest parent with every forcing on for 12 steps, heat and
 #           water ledgers closed (#259); encroachment of a CBL under
 #           Q(t) = 0.15 sin(πt/D) into Γ = 3 K/km (Tennekes 1973; Stull 1988
@@ -31,11 +24,11 @@
 #           footprint against the child's surfaces, 24 h offline (#249:
 #           class fractions, the no-unresolved-buildings control equal to
 #           the child to round-off, the Macdonald mosaic within its
-#           margins, energy closure per tile). Both parts: 897 assertions,
-#           6 min 53 s (2026-10-07, one process, other suites alongside).
+#           margins, energy closure per tile).
 #
-# The 24 h Lindenberg checks of the parent are
-# examples/urban/berlin_parent_lindenberg_check.jl. Numbers measured when
+# The 24 h Lindenberg checks of the parent are an analysis of a run of
+# examples/urban/configs/berlin_parent_coarse.toml
+# (examples/urban/berlin_parent_lindenberg_check.jl). Numbers measured when
 # these were tests are quoted next to the assertions.
 
 using Test
@@ -46,14 +39,22 @@ using Logging
 using Random: Xoshiro
 using Aeolus.SurfaceTiles: last_tile_fluxes, parameter_aggregate, mosaic_fractions
 
-isdefined(Main, :BerlinCase) || include(joinpath(@__DIR__, "BerlinCase.jl"))
-const BC = Main.BerlinCase
-
+const BC = Aeolus.UrbanCase
+include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 # smoke_matrix(registry) and seed_fog!(case, rng), shared with the
 # thread-invariance harness (KA-a, #294)
-include(joinpath(@__DIR__, "..", "..", "test", "support", "smoke_matrix.jl"))
+include(joinpath(@__DIR__, "support", "smoke_matrix.jl"))
 
-const WHAT = isempty(ARGS) ? ("flagship", "smoke", "parent") : Tuple(ARGS)
+"""
+    berlin_default(; kw...) -> CaseConfig
+
+The Berlin summer case with its ground, parent land use and sounding read
+from their sources in memory (no static or dynamic driver: bit for bit
+the same, test/input_static.jl, test/input_dynamic.jl), so that a parent
+of any refinement can be built; no NetCDF output.
+"""
+berlin_default(; kw...) = BC.CaseConfig(berlin_toml("summer"); static = nothing, parent_static = nothing,
+                                        dynamic = nothing, output_path = nothing, kw...)
 
 allfinite(x) = all(isfinite, x)
 
@@ -142,7 +143,7 @@ function run_chunks!(f, p, hours)
 end
 
 idealised_parent(; kw...) =
-    BC.ParentConfig(BC.CaseConfig(; output_path = nothing, sounding = nothing, kw...);
+    BC.ParentConfig(berlin_default(; sounding = nothing, kw...);
                     extent = (4000.0, 4000.0, 3000.0), refinement = (8, 8, 4),
                     surface = :prescribed, radiation = false, geostrophic = false,
                     nudging_τ = Inf, divergence = 0.0, u_init = 0.0, output_period = 900.0)
@@ -199,9 +200,9 @@ end
 "parent surface: the tiled mosaic over the child's footprint against the child (#249)."
 function berlin_parent_surface_checks()
   @testset "Berlin parent surface (#249)" begin
-    PCFG = BC.CaseConfig(; output_path = nothing)
+    PCFG = berlin_default()
     PCASE = BC.build_case(PCFG)
-    PL = BC.read_parent_landuse()
+    PL = BC.read_parent_landuse(PCFG.landuse)
     PFP = BC.child_footprint(PL, PCFG)
 
     @testset "Parent class fractions" begin
@@ -326,7 +327,7 @@ end
 "parent: the parent smoke run and the idealised validations."
 function berlin_parent_checks()
     @testset "Berlin parent smoke: every forcing, 12 steps, ledgers close (#259)" begin
-        child = BC.CaseConfig(; output_path = nothing)
+        child = berlin_default()
         child.start_h = 10.0                       # sun up, convective
         # subsidence is off by default (divergence = 0, #312): on here at D = 3e-6 s⁻¹
         p = BC.build_parent(BC.ParentConfig(child; refinement = (16, 16, 8), divergence = 3e-6))
@@ -396,7 +397,7 @@ function berlin_parent_checks()
     end
 
     @testset "parent: Wangara Day 33 against MYNN (#259)" begin
-        rows = [split(l, ',') for l in readlines(joinpath(@__DIR__, "..", "sbl", "data", "wangara_day33.csv"))
+        rows = [split(l, ',') for l in readlines(joinpath(pkgdir(Aeolus), "examples", "sbl", "data", "wangara_day33.csv"))
                 if !startswith(l, "#") && !startswith(l, "table")]
         prof = [parse.(Float64, r[2:end]) for r in rows if r[1] == "profile"]
         ref = Dict(round(Int, parse(Float64, r[2])) => parse(Float64, r[3]) for r in rows if r[1] == "zi")
@@ -432,7 +433,7 @@ function berlin_parent_checks()
 end
 
 """
-flagship: the default case, `CaseConfig()` (64³, 1 km × 1 km × 400 m,
+flagship: the Berlin summer case (64³, 1 km × 1 km × 400 m,
 every default coupling, the nest on), for `FLAGSHIP_STEPS` steps of the
 adaptive stepper (#392). `step_case!(case, cfg.dt)` used to force 2 s steps
 against a stable step that fell to 0.09 s: the guard passed them, |v|
@@ -443,7 +444,7 @@ const FLAGSHIP_STEPS = 20
 
 function berlin_flagship_checks()
     @testset "Berlin flagship: default case past step 16 (#392)" begin
-        cfg = BC.CaseConfig(; output_path = nothing)
+        cfg = berlin_default()
         case = BC.build_case(cfg)
         sim = case.sim
         θ0 = extrema(interior_view(sim.θ))
@@ -474,9 +475,9 @@ function berlin_flagship_checks()
     end
 end
 
-@testset "Berlin example checks" begin
-    "flagship" in WHAT && berlin_flagship_checks()
-    "smoke" in WHAT && berlin_smoke_checks()
-    "parent" in WHAT && berlin_parent_checks()
-    "parent" in WHAT && berlin_parent_surface_checks()
+@testset "urban run type: end-to-end checks on the Berlin configs" begin
+    berlin_flagship_checks()
+    berlin_smoke_checks()
+    berlin_parent_checks()
+    berlin_parent_surface_checks()
 end

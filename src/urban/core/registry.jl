@@ -188,7 +188,7 @@ next_dt(c::AbstractCoupling, case) = case.cfg.dt
 The longest step (s) a variable-step `:timestepper` provider
 (`variable_dt`) allows from the current state: its stability limits
 (CFL, diffusion, buoyancy, ...) and `dt_max`, without the growth limit of
-[`next_dt`](@ref) and without side effects. [`step_case!`](@ref) rejects
+`next_dt` and without side effects. [`step_case!`](@ref) rejects
 an explicit `dt` above it (#392). Default: `Inf` (a fixed-step provider
 takes the `dt` it is given).
 """

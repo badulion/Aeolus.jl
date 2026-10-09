@@ -1,9 +1,9 @@
-# The Berlin smoke run matrix and its moist seeding, shared by the
-# by-hand checks of the example (examples/urban/berlin_checks.jl; the
-# Berlin test suite was removed in #320) and the thread-invariance harness
-# (test/thread_invariance.jl, KA-a #294), which hashes the same runs at
-# 1, 4 and 24 threads. The includer defines `BC = Main.BerlinCase` and
-# loads Aeolus, `interior_view` and `Random.Xoshiro`.
+# The smoke run matrix of the urban run type and its moist seeding, shared
+# by the urban run-type tests (test/urban_run.jl, EX-a #438; formerly the
+# by-hand examples/urban/berlin_checks.jl) and the thread-invariance
+# harness (test/thread_invariance.jl, KA-a #294), which hashes the same
+# runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.UrbanCase`
+# and loads Aeolus, `interior_view` and `Random.Xoshiro`.
 #
 # Every run is examples/urban/configs/berlin_smoke.toml with `--set`
 # overrides (CFG-c, #358): `smoke_specs` derives what each run changes
@@ -12,9 +12,10 @@
 
 using Aeolus: load_run_config
 using TOML
+include(joinpath(@__DIR__, "berlin_configs.jl"))
 
 "The shipped smoke config every run starts from."
-const SMOKE_TOML = joinpath(BC.CONFIG_DIR, "berlin_smoke.toml")
+const SMOKE_TOML = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 
 """
     file_overrides(path) -> Vector{String}
@@ -77,7 +78,7 @@ end
 
 "The `CaseConfig` of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
 smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec),
-                                                   schema = BC.berlin_schema()))
+                                                   schema = BC.urban_schema()))
 
 """
     smoke_matrix(registry = BC.REGISTRY) -> Vector{Pair{String,CaseConfig}}
@@ -163,11 +164,11 @@ function smoke_specs(registry = BC.REGISTRY)
     end
     runs = [mk("summer, everything on"),
             # the winter scenario's differences (berlin_winter.toml) over the smoke run
-            mk("winter, everything on"; extra = file_overrides(joinpath(BC.CONFIG_DIR, "berlin_winter.toml"))),
+            mk("winter, everything on"; extra = file_overrides(joinpath(berlin_configs_dir(), "berlin_winter.toml"))),
             # the observed initial state of the flagship (#247): the smoke
             # scenario's idealised profile replaced by the summer default
             # sounding (Lindenberg, 29 June 2019, interpolated to noon)
-            mk("summer sounding, everything on"; sounding = BC.CaseConfig(:summer).sounding)]
+            mk("summer sounding, everything on"; sounding = BC.CaseConfig(berlin_toml("summer")).sounding)]
     for C in registry
         (BC.slot(C) === :addon || BC.is_default(C)) && continue
         push!(runs, mk("$(BC.slot(C)) = $(BC.provider(C))";

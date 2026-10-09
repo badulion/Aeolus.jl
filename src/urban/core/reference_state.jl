@@ -177,8 +177,8 @@ The initial potential temperature of the case, the one definition:
 integrates the reference state from it (so the nesting parent, which
 uses the same reference, follows).
 
-* Default — the observed sounding (Lindenberg, WMO 10393, 29/30 June
-  2019; the sounding driver `cfg.dynamic` or the CSV `cfg.sounding`,
+* With a sounding — the observed profiles (the Berlin case: Lindenberg,
+  WMO 10393, 29/30 June 2019; the sounding driver `cfg.dynamic` or the CSV `cfg.sounding`,
   [`case_sounding`](@ref)) at the case start [`case_start_time`](@ref):
   `forcing_value(θ_table, z, t₀)` of `sounding_profiles`, linear in
   height between the reported levels and linear in time between the two

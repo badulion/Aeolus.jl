@@ -47,19 +47,31 @@ end
 anchor_xy(cfg, mesh) = (mesh.Lx / 2 - cfg.offset[1], mesh.Ly / 2 - cfg.offset[2])
 
 """
-    berlin_static_inputs(cfg, mesh) -> StaticInputs
+    urban_static_inputs(cfg, mesh) -> StaticInputs
 
-The ground of the case from its source, in memory: the OSM file
-`cfg.osm_path` projected about `cfg.lat0/lon0` (buildings lower than
-`cfg.min_height` dropped), rasterised on `mesh` with `cfg.park_lai` on
-park cells. What `aeolus preprocess static` writes to the static driver.
+The ground of the case from its source, in memory: `cfg.osm_path`, an
+OpenStreetMap XML file projected about `cfg.lat0/lon0`
+(`InputDrivers.load_city_osm`; buildings lower than `cfg.min_height`
+dropped), or a GeoJSON file (`.geojson`, `InputDrivers.load_city_geojson`)
+whose coordinates are metres in the mesh frame; rasterised on `mesh`
+with `cfg.park_lai` on park cells. What `aeolus preprocess static`
+writes to the static driver.
 """
-function berlin_static_inputs(cfg, mesh)
-    isfile(cfg.osm_path) ||
-        error("Missing $(cfg.osm_path). Run examples/urban/data/fetch_alexanderplatz.jl first.")
+function urban_static_inputs(cfg, mesh)
+    src = cfg.osm_path
+    src === nothing &&
+        error("[preprocess] osm_path is \"none\" and [geometry] static is \"none\": the case has no ground source")
+    isfile(src) ||
+        error("Missing $src (an OpenStreetMap file: `julia --project -m Aeolus preprocess fetch-osm`).")
     ox, oy = anchor_xy(cfg, mesh)
-    city = load_city_osm(cfg.osm_path; lat0 = cfg.lat0, lon0 = cfg.lon0, x_shift = ox, y_shift = oy,
-                         min_height = cfg.min_height)
+    city = if endswith(lowercase(src), ".geojson")
+        c = load_city_geojson(src)
+        filter!(b -> b.height >= cfg.min_height, c.buildings)
+        c
+    else
+        load_city_osm(src; lat0 = cfg.lat0, lon0 = cfg.lon0, x_shift = ox, y_shift = oy,
+                      min_height = cfg.min_height)
+    end
     return static_inputs(city, mesh; origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy,
                          class_lai = Dict(SURFACE_PARK => cfg.park_lai))
 end
@@ -70,10 +82,10 @@ end
 The case's ground: read from the static driver `cfg.static` (checked to
 be on `mesh` with the anchor where `cfg` puts it, see
 `InputDrivers.read_static_driver`), or, with `cfg.static === nothing`,
-[`berlin_static_inputs`](@ref) in memory.
+[`urban_static_inputs`](@ref) in memory.
 """
 function case_static_inputs(cfg, mesh)
-    cfg.static === nothing && return berlin_static_inputs(cfg, mesh)
+    cfg.static === nothing && return urban_static_inputs(cfg, mesh)
     isfile(cfg.static) ||
         error("Missing the static driver $(cfg.static). Generate it with\n" *
               "  julia --project -m Aeolus preprocess static <the config.toml naming it>\n" *
@@ -93,14 +105,14 @@ surface-class map on `mesh`, building-adjacent cells tagged
 scene and its view factors (the geometry is static, so this happens
 once). For an open case (`lateral_open`) the columns within
 `cfg.boundary_frame` cells of the open faces are kept free of buildings
-(#262). The Berlin case has no terrain: a driver with `zt ≠ 0` is an
+(#262). The urban case has no terrain: a driver with `zt ≠ 0` is an
 error.
 """
 function build_geometry(cfg, mesh)
     st = case_static_inputs(cfg, mesh)
     all(iszero, st.zt) ||
         error("the static driver $(cfg.static) has terrain (zt from $(minimum(st.zt)) to $(maximum(st.zt)) m); " *
-              "the Berlin case has none")
+              "the urban case has none")
     w_f = lateral_open(cfg) ? cfg.boundary_frame : 0
     sm, sfc = solid_and_classes(st, mesh; tag_walls = true, frame = (w_f, w_f), bcs = case_scalar_bcs(cfg))
 
@@ -115,7 +127,7 @@ function build_geometry(cfg, mesh)
     vfac  = view_factors(scene)
     facet_col = Tuple{Int,Int}[f.col for f in scene.facets]
     svf = aggregate_to_grid(scene, vfac).svf
-    @debug("radiosity scene", subsystem = :berlin, domain = current_domain(),
+    @debug("radiosity scene", subsystem = :urban, domain = current_domain(),
            event = :radiosity_scene, facets = nfacets(scene), wall = round(time() - t_svf; digits = 2),
            reciprocity = reciprocity_error(vfac), closure = closure_error(vfac),
            svf_min = minimum(svf), svf_mean = mean(svf), svf_max = maximum(svf))

@@ -1,0 +1,25 @@
+# The Berlin nest parent alone on the coarse grid (24 × 24 × 38, Δx = 250 m,
+# refinement [16, 16, 8], stretched): 24 h, 06 to 06 LT, 29/30 June 2019
+# (~6 min wall). The run of the Lindenberg checks of the parent
+# validation (N-parent-e #259, checks 4 and 6; EX-a #438):
+#
+#   julia --project -m Aeolus run examples/urban/configs/berlin_parent_coarse.toml
+#   julia --project examples/urban/berlin_parent_lindenberg_check.jl <run folder>
+#
+# The check reads the run folder's output/ (parent.csv, parent_theta.csv,
+# results.toml) and the sounding CSV; it runs nothing.
+
+schema_version = 1
+extends = "berlin_parent.toml"
+
+[run]
+name = "parent_coarse"
+
+[physics.options.nesting.parent]
+refinement = [16, 16, 8]
+
+[test]
+overrides = [
+    "physics.options.nesting.parent.hours=0.05",
+    "physics.options.nesting.parent.output_period=60.0",
+]

@@ -9,15 +9,18 @@ from, how it is validated, and what it costs. The nest itself — one-way
 boundary data, two-way feedback, the parent as default of the Berlin run
 — is N-berlin-nest (#265).
 
-Code: `examples/urban/parent/config.jl` (`ParentConfig`),
-`examples/urban/parent/case.jl` (`build_parent`, `step_parent!`,
-`run_parent!`), the surface `examples/urban/parent/surface.jl` (#249),
-the example `examples/urban/berlin_parent_diurnal.jl` (figures:
-`berlin_parent_figures.jl`), the by-hand checks
-`examples/urban/berlin_checks.jl parent` (the smoke run, checks 1–3 and
-the parent surface; `test/berlin_parent.jl`, `test/berlin_parent_smoke.jl`
-and `test/berlin_parent_surface.jl` until #320) and the 24 h check
-`examples/urban/berlin_parent_lindenberg_check.jl`.
+Code: `src/urban/parent/config.jl` (`ParentConfig`),
+`src/urban/parent/case.jl` (`build_parent`, `step_parent!`,
+`run_parent!`), the surface `src/urban/parent/surface.jl` (#249),
+the run `examples/urban/configs/berlin_parent.toml` (the `urban_parent`
+driver, `src/urban/core/parent_driver.jl`, #438; figures from its output:
+`examples/urban/berlin_parent_figures.jl <run folder>`), the checks
+`test/urban_checks.jl` (the smoke run, checks 1–3 and the parent surface;
+`test/berlin_parent.jl`, `test/berlin_parent_smoke.jl` and
+`test/berlin_parent_surface.jl` until #320, the by-hand
+`examples/urban/berlin_checks.jl parent` until #438) and the 24 h check
+`examples/urban/berlin_parent_lindenberg_check.jl <run folder>`, an
+analysis of a run of `berlin_parent_coarse.toml`.
 
 ## Grid
 
@@ -127,9 +130,10 @@ this issue the closure is at round-off (≤ 1e-15 of the largest term).
 
 ## Validation (reduced resolution, measured)
 
-Checks 1–3 are `examples/urban/berlin_checks.jl parent` (idealised, 6–7
-simulated hours; run by hand since #320 removed the Berlin test suite,
-before which they were `test/berlin_parent.jl`). Check 5 never used the
+Checks 1–3 are in `test/urban_checks.jl` (idealised, 6–7 simulated
+hours; full tier since #438, run by hand in `examples/urban/berlin_checks.jl`
+after #320 removed the Berlin test suite, before which they were
+`test/berlin_parent.jl`). Check 5 never used the
 parent case, only the two cores and the TKE closure: it is the module
 test `test/era2_anelastic_cbl.jl`. Checks 4 and 6 need a 24 h simulation
 and were moved out of the suite to
@@ -174,7 +178,7 @@ s⁻¹, before the default became D = 0.
 6. **Robustness.** The coarse 24 h run of check 4: no NaN, no retry, 11 140 steps, dt
    mean 7.8 s (≤ 10 s, the cap; the shortest steps land on output times).
 
-The parent smoke run (`examples/urban/berlin_checks.jl parent`;
+The parent smoke run (`test/urban_checks.jl`;
 `test/berlin_parent_smoke.jl` until #320): 12 steps with every parent forcing on,
 heat and water closures at round-off, the surface term equal to the
 delivered sources.
@@ -233,7 +237,8 @@ D (#315) are open.
 
 The fallback grid (96 × 96 × 60, Δx = 62.5 m, Δz = 50 m), D = 0, every
 other forcing on, 06:00 LT 29 June to 06:00 LT 30 June 2019:
-`julia --project=. examples/urban/berlin_parent_diurnal.jl fallback`.
+`julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml --set physics.options.nesting.parent.refinement=[4,4,8] --set 'physics.options.nesting.parent.vertical="uniform"'`
+(until #438 `examples/urban/berlin_parent_diurnal.jl fallback`).
 It completed in 7598 s wall (19 299 steps, dt 0.03–10 s, no retry).
 The 24 h run on the default grid, and with it the final validation of
 the parent, is deferred to #315.

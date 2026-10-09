@@ -3,7 +3,7 @@
 # unvalidated until the stability campaign #331).
 #
 #   parent    the deep diurnal Aeolus run of N-parent-e (#259,
-#             examples/urban/parent/): Boussinesq on a StretchedGrid, the
+#             src/urban/parent/): Boussinesq on a StretchedGrid, the
 #             tiled urban surface (SurfaceTiles), column radiation, the
 #             geostrophic pressure gradient, θ/qv nudging, θ damping, the
 #             fixed-gradient θ top and the TKE closure — its own hooks,
@@ -117,7 +117,7 @@ mutable struct NestingCoupling <: AbstractCoupling
     mode::Symbol
     opts::Any                     # the coupling's options (the two-way keywords)
     driver::Any                   # :aeolus, or the AbstractBoundaryData that replaces the parent
-    pc::Any                       # ParentConfig (examples/urban/parent/config.jl)
+    pc::Any                       # ParentConfig (src/urban/parent/config.jl)
     parent::Any                   # ParentCase (built by init!)
     run::Any                      # Nesting.NestedRun, or nothing
     window::Any                   # the open parent window, or nothing

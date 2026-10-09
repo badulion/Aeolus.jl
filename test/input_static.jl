@@ -30,9 +30,8 @@ using Aeolus.Grids: xnodes, znodes
 using Aeolus.NCIO: NCDataset
 import NCDatasets
 
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-const BCI = Main.BerlinCase
+const BCI = Aeolus.UrbanCase
+include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 
 const IS_DATA = joinpath(@__DIR__, "data", "input_static")
@@ -258,18 +257,18 @@ end
 
 @testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's, bit for bit" begin
     # smoke: from the committed static driver
-    cs = BCI.CaseConfig(:smoke)
+    cs = BCI.CaseConfig(berlin_toml("smoke"))
     @test endswith(cs.static, "configs/input/berlin_smoke_static.nc")
     @test geom_digests_equal("smoke", BCI.build_geometry(cs, meshof(cs)))
     # the in-memory path (static = none), nested (frame) and periodic (no frame, wrapped walls)
-    for (label, c) in ("mitte_sample" => BCI.CaseConfig(:mitte_sample; size = (32, 32, 16), static = nothing),
-                       "mitte_periodic" => BCI.CaseConfig(:mitte_sample; size = (32, 32, 16), static = nothing,
+    for (label, c) in ("mitte_sample" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16), static = nothing),
+                       "mitte_periodic" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16), static = nothing,
                                                           lateral = :periodic,
                                                           physics = Dict{Symbol,Any}(:nesting => false)))
         @test geom_digests_equal(label, BCI.build_geometry(c, meshof(c)))
     end
     # summer, 64 × 64 × 64: masks, classes and heightmap at setup
-    c = BCI.CaseConfig(:summer)
+    c = BCI.CaseConfig(berlin_toml("summer"))
     mesh = meshof(c)
     st = BCI.case_static_inputs(c, mesh)
     @test !isempty(st.attributes)                        # read from the file
@@ -279,11 +278,11 @@ end
     @test digest(Aeolus.Radiosity.heightmap_from_solid_mask(sm)) == d["heightmap"]
     @test length(st.city.buildings) == d["buildings"] && length(st.city.patches) == d["patches"]
     # the file and the in-memory path give the same inputs
-    mem = BCI.berlin_static_inputs(c, mesh)
+    mem = BCI.urban_static_inputs(c, mesh)
     @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
     # the nest parents' land use, from their static drivers and in memory
     for s in (:smoke, :summer)
-        pc = BCI.nest_parent_config(BCI.CaseConfig(s))
+        pc = BCI.nest_parent_config(BCI.CaseConfig(berlin_toml(s)))
         pm = BCI.parent_mesh(pc)
         d = IS_DIGESTS["parent_$s"]
         for pl in (BCI.parent_landuse(pc, pm), BCI.parent_landuse_source(pc, pm))
@@ -293,25 +292,25 @@ end
         end
     end
     # the round trip hashes the static drivers under [inputs]
-    inp = config_inputs(load_run_config(joinpath(BCI.CONFIG_DIR, "berlin_smoke.toml")))
+    inp = config_inputs(load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml")))
     @test inp["geometry.static"]["fnv1a64"] == content_hash(cs.static)
     @test inp["geometry.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
     # a grid the file was not made for is refused, naming both grids and the command
     e = try
-        BCI.build_geometry(BCI.CaseConfig(:smoke; size = (8, 8, 16)), meshof(BCI.CaseConfig(:smoke; size = (8, 8, 16))))
+        BCI.build_geometry(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16)), meshof(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16))))
         nothing
     catch err
         sprint(showerror, err)
     end
     @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolus preprocess static", e)
     # a missing driver: a config error before any run folder, with the exact command
-    cfg = load_run_config(joinpath(BCI.CONFIG_DIR, "berlin_smoke.toml"); overrides = ["geometry.static=\"nope.nc\""])
+    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["geometry.static=\"nope.nc\""])
     e = try
-        Aeolus.Config.build(BCI.BerlinDriver(), cfg); nothing
+        Aeolus.Config.build(BCI.UrbanDriver(), cfg); nothing
     catch err
         err
     end
-    @test e isa ConfigError && occursin("preprocess static $(joinpath(BCI.CONFIG_DIR, "berlin_smoke.toml"))", sprint(showerror, e))
+    @test e isa ConfigError && occursin("preprocess static $(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))", sprint(showerror, e))
 end
 
 "The data variables of a driver (name => raw array) and its global attributes but the volatile ones."
@@ -326,12 +325,12 @@ end
 @testset "InputDrivers: the committed Berlin static drivers are reproducible" begin
     dir = mktempdir()
     for s in ("summer", "smoke", "mitte_sample")
-        toml = joinpath(BCI.CONFIG_DIR, "berlin_$s.toml")
+        toml = joinpath(berlin_configs_dir(), "berlin_$s.toml")
         cfg = load_run_config(toml)
         cc = BCI.CaseConfig(cfg)
-        out, pout = joinpath(BCI.CONFIG_DIR, "input", "_repro_$(s).nc"), joinpath(BCI.CONFIG_DIR, "input", "_repro_$(s)_parent.nc")
+        out, pout = joinpath(berlin_configs_dir(), "input", "_repro_$(s).nc"), joinpath(berlin_configs_dir(), "input", "_repro_$(s)_parent.nc")
         try
-            files = Aeolus.Config.preprocess_static(BCI.BerlinDriver(), cfg; out = out, parent_out = pout)
+            files = Aeolus.Config.preprocess_static(BCI.UrbanDriver(), cfg; out = out, parent_out = pout)
             @test files == [out, pout]
             for (new, old) in ((out, cc.static), (pout, cc.parent_static))
                 @test filesize(old) <= 2 * 1024^2                 # committed: 2 MB or smaller
@@ -353,7 +352,7 @@ end
     @test occursin("static <config.toml>", String(take!(io)))
     dir = mktempdir()
     out, pout = joinpath(dir, "c.nc"), joinpath(dir, "p.nc")
-    toml = joinpath(BCI.CONFIG_DIR, "berlin_smoke.toml")
+    toml = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
     rc = redirect_stdout(devnull) do
         Aeolus.Config.main(["preprocess", "static", toml, "--out", out, "--parent-out", pout]; io = io, err = err)
     end
@@ -361,8 +360,8 @@ end
     @test isempty(check_driver(out, STATIC_SCHEMA)) && isempty(check_driver(pout, STATIC_TILES_SCHEMA))
     NCDataset(out) do ds
         # the source is recorded absolute outside the checkout, with its hash
-        @test ds.attrib["source"] == BCI.CaseConfig(:smoke).osm_path
-        @test ds.attrib["source_fnv1a64"] == file_fnv1a64(BCI.CaseConfig(:smoke).osm_path)
+        @test ds.attrib["source"] == BCI.CaseConfig(berlin_toml("smoke")).osm_path
+        @test ds.attrib["source_fnv1a64"] == file_fnv1a64(BCI.CaseConfig(berlin_toml("smoke")).osm_path)
         @test ds.attrib["preprocessor"] == "aeolus preprocess static"
     end
     # a config whose static is "none" needs --out

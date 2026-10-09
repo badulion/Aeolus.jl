@@ -14,16 +14,14 @@
 using Aeolus, Printf, LinearAlgebra
 using Aeolus.UrbanSurface, Aeolus.SurfaceExchange, Aeolus.Radiosity
 using Aeolus.SolarGeometry: BirdClearSky, clear_sky_irradiance
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-const BC = Main.BerlinCase
+const BC = Aeolus.UrbanCase
 const US = Aeolus.UrbanSurface
 
 ws  = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 1
 nth = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 BLAS.set_num_threads(nth)
 
-cfg  = BC.CaseConfig(; wall_subdivisions = ws)
+cfg  = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); wall_subdivisions = ws)
 mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
 geom = BC.build_geometry(cfg, mesh)
 sc, vf = geom.scene, geom.vfac

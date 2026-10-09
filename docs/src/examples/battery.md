@@ -168,13 +168,13 @@ with:
 ## Animated multi-field playback
 
 `examples/urban/alexanderplatz_animation.jl` is a **pure renderer**. It
-runs no physics at all: it reads the frame files written by
-`alexanderplatz_diurnal.jl` into `output/frames/` and stitches an
+runs no physics at all: it reads the NetCDF output of the flagship run
+(`examples/urban/configs/berlin_summer.toml`) and stitches an
 8-panel mosaic into a **single self-contained APNG** that plays in any
 modern browser (Chrome, Firefox, Safari) or in macOS Preview.
 
 ```bash
-$ julia --project=. examples/urban/alexanderplatz_diurnal.jl   # ~20 min
+$ julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set output.cadence=600
 $ julia --project=. examples/urban/alexanderplatz_animation.jl # ~1.5 s
 ```
 
@@ -259,12 +259,11 @@ public entry points you can compose:
 
 ## Real Berlin — Alexanderplatz OSM run
 
-`examples/urban/alexanderplatz_diurnal.jl` is **the** simulation — the
-only script in `examples/urban` that integrates the equations. Since
-#126 it is a few lines over the `BerlinCase` module
-(`examples/urban/BerlinCase.jl`): `build_case(CaseConfig(:alexanderplatz))`
-then `run_case!`, with every physics coupling in its own file under
-`examples/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
+`examples/urban/configs/berlin_summer.toml` is **the** simulation, run by
+`julia --project -m Aeolus run`: no script in `examples/urban` integrates
+the equations (#438). The run type is `Aeolus.UrbanCase` (the `urban`
+driver; `src/UrbanCase.jl`), with every physics coupling in its own file
+under `src/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
 describes the registry, the stage loop and how to add a coupling.
 Its configuration is `examples/urban/configs/berlin_summer.toml`;
 `--set clock.nsteps=…` sets the number of steps and `--set output.cadence=…`
@@ -274,7 +273,8 @@ download of a 1 km × 1 km box around Alexanderplatz, Berlin
 (52.518–52.526 N, 13.402–13.418 E). To (re-)fetch:
 
 ```bash
-$ julia --project=examples examples/urban/data/fetch_alexanderplatz.jl
+$ julia --project -m Aeolus preprocess fetch-osm --box 52.518,13.402,52.526,13.418 --out examples/urban/data/alexanderplatz_real.osm
+$ julia --project -m Aeolus preprocess static examples/urban/configs/berlin_summer.toml
 ```
 
 (Uses the public `overpass-api.de/api/interpreter` endpoint. Retry if
@@ -441,6 +441,6 @@ equirectangular projection anchored at `(lat0, lon0)`; `x_shift` /
 short buildings for stability tuning.
 
 The bundled `data/sample_berlin_mitte.osm` was produced by
-`data/generate_osm_sample.jl` — a plausible European perimeter-block
+`aeolus preprocess osm-sample --lat0 52.5220 --lon0 13.4100` — a plausible European perimeter-block
 neighbourhood at Alexanderplatz coordinates. Genuine Overpass-API
 downloads are consumed by the same parser.

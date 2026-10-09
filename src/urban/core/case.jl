@@ -153,7 +153,7 @@ couplings `cfg` enables (see [`selected_couplings`](@ref)): each is
 constructed with `build(C, case, opts)`, then every `init!` runs
 (in `init_priority` order, then registry order: the nest first), and
 finally the stage schedule is assembled. The setup summary (buildings,
-surface classes, couplings) is a `Debug` record (`subsystem = :berlin`).
+surface classes, couplings) is a `Debug` record (`subsystem = :urban`).
 """
 function build_case(cfg::CaseConfig)
     # The run's compute backend (KA-a, #294): the default for every field
@@ -229,7 +229,7 @@ function build_case(cfg::CaseConfig)
     build_schedule!(case)
 
     sfc = geom.sfc
-    @debug("$(cfg.name): built", subsystem = :berlin, domain = current_domain(), event = :built,
+    @debug("$(cfg.name): built", subsystem = :urban, domain = current_domain(), event = :built,
            case = cfg.name, grid = (case.mesh.Nx, case.mesh.Ny, case.mesh.Nz),
            buildings = length(geom.city.buildings), solid = count(geom.sm.mask),
            wall = count(==(SURFACE_WALL), sfc), glass = count(==(UInt8(6)), sfc),

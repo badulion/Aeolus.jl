@@ -51,6 +51,12 @@ weight = "heavy"
 seconds = 225
 reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
 
+["urban_checks.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 700
+reason = "end-to-end runs of the urban run type on the Berlin configs (49-run smoke matrix, 20-step 64^3 flagship, parent encroachment/Wangara/24 h tiled-surface runs; formerly the by-hand examples/urban/berlin_checks.jl); the run type stays fast in urban_run.jl, config_berlin.jl"
+
 ["era6_gabls2.jl"]
 tier = "full"
 weight = "heavy"

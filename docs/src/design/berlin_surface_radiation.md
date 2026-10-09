@@ -231,7 +231,7 @@ magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
 The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent
 with Δx = 31.25 m and Δz = 25 m. At that resolution the buildings are
 not resolved: the parent sees Berlin as a heterogeneous surface. Its
-surface is `examples/urban/parent/surface.jl`, a tiled mosaic
+surface is `src/urban/parent/surface.jl`, a tiled mosaic
 (`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. The
 parent case (N-parent-e, #259; [The Berlin parent](berlin_parent.md))
 couples it to the 3-D parent run under the parent's own air and radiation;
@@ -241,10 +241,11 @@ run.
 ![Berlin parent surface](../assets/berlin/parent_surface.svg)
 
 *Class fractions, the 250 m morphometry λp, and Macdonald z0 and d of
-the 6 km box (`examples/urban/parent/plot_parent_surface.jl`). Red: the
+the 6 km box (`examples/urban/plot_parent_surface.jl`). Red: the
 child's footprint.*
 
-**Land use.** `data/fetch_berlin_landuse.jl` queries Overpass for the
+**Land use.** `aeolus preprocess fetch-landuse` (formerly
+`data/fetch_berlin_landuse.jl`) queries Overpass for the
 6 km box around the anchor (buildings, parks and green land use, water;
 ways and multipolygon relations). It classifies them with the case's own
 `load_city_osm` (one classifier: `osm_class`), and rasterises them with
@@ -287,7 +288,7 @@ decoupled (bulk Ri ≈ 1.8, LE = 0.7 W m⁻² at 13:00). With
 `blending = MasonBlendingHeight(L)` etc., a column is a `BlendedMosaic`
 forced once at z_k − d̄.
 
-**Measured** (`examples/urban/berlin_checks.jl parent`, before #320
+**Measured** (`test/urban_checks.jl`, by hand in `examples/urban/berlin_checks.jl parent` before #438, before #320
 `test/berlin_parent_surface.jl`; synthetic clear-sky
 forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
 T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s; as
@@ -319,7 +320,7 @@ few per cent. LE also depends on when each soil reaches its dry limit:
 the child's street and park soils dry about an hour earlier, so LE at
 13:00 differs by 21 %.
 
-At 13:00 in the offline run (`parent/parent_surface_diurnal.jl`):
+At 13:00 in the offline run (`parent/parent_surface_diurnal.jl`, a demonstration removed in #438; the same columns are covered by the footprint checks of `test/urban_checks.jl`):
 
 | column | built-tile z0, d | Rn | H | LE | G |
 | :-- | :-- | --: | --: | --: | --: |

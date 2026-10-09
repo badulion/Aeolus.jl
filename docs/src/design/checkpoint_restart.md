@@ -222,7 +222,7 @@ parent and the 18 × 18 × 12 child.
 
 ## The Berlin case
 
-The `berlin` driver checkpoints the whole case (#269):
+The `urban` driver (formerly `berlin`, #438) checkpoints the whole case (#269):
 `checkpoint_state(case)` is its structural state, a component of the
 checkpoint `[checkpoint]` schedules in the run folder. It covers the
 child core and its open-boundary buffers, every coupling's state (soil
@@ -237,6 +237,12 @@ the case state (a nested case would cold-start its parent and the
 couplings), checkpoints with a sound-proof core (`checkpoint!` takes the
 Boussinesq core's fields; a config error), and resuming a run that
 records the child's boundary driver (`[output] child_boundaries`).
+Run folders of the old `berlin` example driver (before #438) cannot be
+resumed: their `run.toml` names a driver that no longer exists, and their
+checkpoints hold the case's types under the example's module
+(`Main.AeolusDriver_berlin`), which Serialization cannot map to
+`Aeolus.UrbanCase`; start such a run again from its config with
+`driver = "urban"`.
 `test/config_roundtrip.jl` resumes `berlin_smoke.toml` (nested, every
 coupling on) interrupted after its middle checkpoint and compares it
 with the uninterrupted run bit for bit, its NetCDF output included.

@@ -1,16 +1,16 @@
 # Figures of the Berlin parent run (N-parent-e, #259), drawn from the tables
-# that examples/urban/berlin_parent_diurnal.jl writes:
+# the `urban_parent` driver writes into a run folder's output/ (EX-a #438):
 #
-#     examples/urban/output/berlin_parent_<tag>.csv        (z_i, ledger terms)
-#     examples/urban/output/berlin_parent_<tag>_theta.csv  (θ profiles)
+#     <run folder>/output/parent.csv        (z_i, ledger terms)
+#     <run folder>/output/parent_theta.csv  (θ profiles)
 #
 #   docs/src/assets/berlin/parent_theta_zi.svg  θ(z, t) with z_i(t)
 #   docs/src/assets/berlin/parent_ledger.svg    the air-heat ledger terms
 #
-# The diurnal example calls `parent_figures(tag)` at the end of a completed
-# D = 0 run; run on its own it redraws the figures from saved tables:
+# Run the parent first, then draw (reads the tables only, runs nothing):
 #
-#     julia --project=. examples/urban/berlin_parent_figures.jl fallback
+#     julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml
+#     julia --project examples/urban/berlin_parent_figures.jl <run folder> ["label"]
 
 using Aeolus, Printf
 isdefined(Main, :write_png) || include(joinpath(@__DIR__, "..", "viz", "apng.jl"))
@@ -38,21 +38,21 @@ function _b64(data::Vector{UInt8})
 end
 
 """
-    parent_figures(tag; outdir, assets, label)
+    parent_figures(run; assets, label)
 
 Draw `parent_theta_zi.svg` and `parent_ledger.svg` into `assets` from
-`berlin_parent_<tag>.csv` and `berlin_parent_<tag>_theta.csv` in `outdir`.
+`parent.csv` and `parent_theta.csv` in the run folder `run`'s `output/`.
 `label` (e.g. "96 × 96 × 60, D = 0") goes into the titles.
 """
-function parent_figures(tag; outdir = joinpath(@__DIR__, "output"),
-                        assets = joinpath(@__DIR__, "..", "..", "docs", "src", "assets", "berlin"),
-                        label = tag)
-    hd, rows = _read_table(joinpath(outdir, "berlin_parent_$tag.csv"))
+function parent_figures(run; assets = joinpath(@__DIR__, "..", "..", "docs", "src", "assets", "berlin"),
+                        label = basename(rstrip(run, '/')))
+    outdir = joinpath(run, "output")
+    hd, rows = _read_table(joinpath(outdir, "parent.csv"))
     col(name) = [r[findfirst(==(name), hd)] for r in rows]
     th = col("t_s") ./ 3600
     hours = th[end]
     zi, zip_ = col("zi_min_flux_m"), col("zi_parcel_m")
-    thd, trows = _read_table(joinpath(outdir, "berlin_parent_$(tag)_theta.csv"))
+    thd, trows = _read_table(joinpath(outdir, "parent_theta.csv"))
     zc = [parse(Float64, s[2:end]) for s in thd[2:end]]
     θrows = [r[2:end] for r in trows]
     length(θrows) == length(th) || error("the θ table and the ledger table have different outputs")
@@ -131,6 +131,6 @@ function parent_figures(tag; outdir = joinpath(@__DIR__, "output"),
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    tag = length(ARGS) >= 1 ? ARGS[1] : "default"
-    parent_figures(tag; label = length(ARGS) >= 2 ? ARGS[2] : tag)
+    length(ARGS) >= 1 || error("usage: berlin_parent_figures.jl <run folder> [label]")
+    parent_figures(ARGS[1]; label = length(ARGS) >= 2 ? ARGS[2] : basename(rstrip(ARGS[1], '/')))
 end

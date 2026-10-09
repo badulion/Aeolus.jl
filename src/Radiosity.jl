@@ -410,7 +410,7 @@ One planar rectangular radiating patch.
 
 Walls are attributed to the **open** column they face, not to the building
 column they belong to. That matches `tag_building_adjacent!` in
-`examples/urban/core/geometry.jl`, which tags the street cell next to a
+`src/urban/core/geometry.jl`, which tags the street cell next to a
 building as `SURFACE_WALL` precisely so a 2-D surface scheme can carry the
 wall's heat load.
 

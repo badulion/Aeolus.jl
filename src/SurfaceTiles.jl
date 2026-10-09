@@ -627,7 +627,7 @@ values for **staggered** arrays (``A = 4.43``, ``β = 1.0``, ``C_D =
 
 The wind profile above the array is ``u = (u_*/κ) \\ln((z - d)/z_0)``:
 a Monin–Obukhov reference height must be measured from ``d`` (see the
-Berlin parent surface, `examples/urban/parent/surface.jl`). This is the
+Berlin parent surface, `src/urban/parent/surface.jl`). This is the
 one implementation of the relation in Aeolus; `WallModels`' dynamic
 roughness cites it rather than carrying a copy.
 

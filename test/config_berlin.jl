@@ -1,5 +1,6 @@
-# The `berlin` run driver (CFG-c, #358): the Berlin case configured from
-# TOML (examples/urban/core/config_schema.jl, examples/urban/configs/).
+# The Berlin case configured from TOML (CFG-c, #358): the `urban` run
+# driver (src/urban/core/config_schema.jl, EX-a #438) and the configs of
+# examples/urban/configs/.
 #
 # Acceptance tests of the issue covered here:
 #   * field for field: CaseConfig(load_run_config("berlin_<s>.toml")) equals
@@ -31,14 +32,12 @@ using Aeolus.IO: read_run_toml, diagnostics_path
 using Aeolus.Fields: interior_view
 using Logging
 
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-const BCC = Main.BerlinCase
+const BCC = Aeolus.UrbanCase
+include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
 const BERLIN_FIXTURE = TOML.parsefile(joinpath(@__DIR__, "data", "config_berlin", "fixture.toml"))
-berlin_toml(s) = joinpath(BCC.CONFIG_DIR, "berlin_$s.toml")
 
 "The ConfigError `f()` throws (fails the test if it does not throw one)."
 function berlin_error(f)
@@ -83,24 +82,19 @@ as_toml(x) = TOML.parse(sprint(TOML.print, x))
         isempty(d_case) && isempty(d_par) || @info "berlin_$s.toml differs from the fixture" d_case d_par
         @test isempty(d_case)
         @test isempty(d_par)
-        # the scenario wrapper loads the same file
-        @test isempty(table_diff(as_toml(normalise(BCC.CaseConfig(Symbol(s)))), as_toml(normalise(cc))))
+        # CaseConfig(path) loads the same file
+        @test isempty(table_diff(as_toml(normalise(BCC.CaseConfig(berlin_toml(s)))), as_toml(normalise(cc))))
     end
-    # the alias keeps its own name; everything else is the summer case
-    a, su = BCC.CaseConfig(:alexanderplatz), BCC.CaseConfig(:summer)
-    @test a.name === :alexanderplatz && su.name === :summer
-    a.name = :summer
-    @test isempty(table_diff(as_toml(normalise(a)), as_toml(normalise(su))))
     # winter is a minimal diff of the summer file (extends), resolved by bare name
     w = load_run_config(berlin_toml("winter"))
     @test config_sources(w)["files"] == [berlin_toml("winter"), berlin_toml("summer")]
     @test config_origin(w, "grid.size") == berlin_toml("summer")
     @test config_origin(w, "clock.date") == berlin_toml("winter")
-    @test_throws ErrorException BCC.CaseConfig(:autumn)
+    @test_throws ConfigError BCC.CaseConfig(berlin_toml("autumn"))
 end
 
 @testset "Config berlin: one source of truth for the defaults" begin
-    sch = BCC.berlin_schema()
+    sch = BCC.urban_schema()
     # every CaseConfig field is made of schema options, each used once
     @test collect(keys(BCC.CASE_FIELDS)) == collect(fieldnames(BCC.CaseConfig))
     used = String[]
@@ -146,7 +140,9 @@ end
     dflt = BCC.default_run_config()
     @test c.size == dflt.grid.size && c.ν === dflt.dynamics.nu && c.θ_top === :initial_gradient
     @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)   # the driver's output cadence
-    @test c.name === :alexanderplatz && c.physics == Dict() && c.options == Dict()
+    @test c.name === :urban && c.physics == Dict() && c.options == Dict()
+    # the generic run type points at no input data of an example (EX-a, #438)
+    @test c.osm_path === nothing && c.landuse === nothing && c.sounding === nothing && c.static === nothing
     p = BCC.ParentConfig(c)
     @test p.extent == (6000.0, 6000.0, 3000.0) && p.refinement == (2, 2, 4) && isnan(p.z_g)
     @test p.Q_surface isa BCC.ConstantForcing && p.Q_surface(3600.0) == 0.0
@@ -156,20 +152,20 @@ end
     @test_throws ArgumentError BCC.ParentConfig(c; refinment = (2, 2, 2))
     # Julia kwargs on a scenario merge options per coupling over the file's
     # (the smoke file's nest parent survives)
-    sm = BCC.CaseConfig(:smoke; options = Dict(:pollutant => (tau = 60.0,)))
+    sm = BCC.CaseConfig(berlin_toml("smoke"); options = Dict(:pollutant => (tau = 60.0,)))
     @test sm.options[:pollutant] == (tau = 60.0,)
     @test sm.options[:nesting].parent.refinement == (4, 4, 8)
 end
 
 @testset "Config berlin: the analysis buffer of the observation diagnostics (#268)" begin
     @test BCC.CaseConfig().analysis_buffer == BCC.ANALYSIS_BUFFER_DEFAULT == 140.0
-    sm = BCC.CaseConfig(:smoke)
+    sm = BCC.CaseConfig(berlin_toml("smoke"))
     m = RegularGrid(; size = sm.size, extent = sm.extent, halo = sm.halo)
     A = BCC.analysis_columns(sm, m)            # 31.25 m = 2 cells of 15.6 m from each nest face
     @test sm.analysis_buffer == 31.25 && size(A) == (16, 16) && count(A) == 12 * 12
     @test all(A[3:14, 3:14]) && !any(A[1:2, :]) && !any(A[:, 15:16])
     # the periodic box has no inflow face: every column counts
-    pb = BCC.CaseConfig(:smoke; physics = Dict{Symbol,Any}(:nesting => false))
+    pb = BCC.CaseConfig(berlin_toml("smoke"); physics = Dict{Symbol,Any}(:nesting => false))
     @test all(BCC.analysis_columns(pb, m))
 end
 
@@ -221,7 +217,7 @@ end
     @test_throws ArgumentError BCC.toml_form(f)
     # [output]: netcdf in path; "none" → no file; the run folder's output/ under run_config
     c = BCC.CaseConfig(load_run_config(berlin_toml("summer")))
-    @test c.output_path == normpath(joinpath(BCC.URBAN_DIR, "output", "alexanderplatz.nc"))
+    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "..", "output", "alexanderplatz.nc"))
     c = BCC.CaseConfig(load_run_config(berlin_toml("summer"); overrides = ["output.path=\"none\""]); run_output = "/tmp/x")
     @test c.output_path == "/tmp/x/alexanderplatz.nc"
     @test ld().output_path === nothing
@@ -305,7 +301,7 @@ end
     # steps to get there), completed, every step a diagnostics row
     rec = read_run_toml(r.runs[1].folder.path)
     @test case.sim.t == 24.0 && !case.clock.blowup
-    @test rec["config"]["run"]["driver"] == "berlin" && rec["replayable"] == true
+    @test rec["config"]["run"]["driver"] == "urban" && rec["replayable"] == true
     @test length(readlines(diagnostics_path(r.runs[1].folder))) == case.clock.n + 1   # header + a row per step
     # the ledgers close to the smoke test's tolerances
     rows = BCC.surface_budget(case.ledger)
@@ -374,7 +370,7 @@ end
     with_logger(tl) do
         BCC.run_case!(case)
     end
-    recs = filter(r -> get(r.kwargs, :subsystem, nothing) === :berlin, tl.logs)
+    recs = filter(r -> get(r.kwargs, :subsystem, nothing) === :urban, tl.logs)
     ev(e) = filter(r -> get(r.kwargs, :event, nothing) === e, recs)
     # no diagnostic source failed (a failing one logs a warning and gives NaN)
     @test isempty(filter(r -> r.level >= Logging.Warn, tl.logs))
@@ -425,9 +421,9 @@ end
 # not test the CFL number, so the run amplified (|v| 7.8 -> 49 m/s) and
 # failed at step 16. A dt above the stepper's stable_dt is now rejected
 # before any stage runs. The 20-step default-case run is the "flagship"
-# part of examples/urban/berlin_checks.jl.
+# part of test/urban_checks.jl.
 @testset "Config berlin: step_case! rejects a dt above the adaptive stable step (#392)" begin
-    case = BCC.build_case(BCC.CaseConfig(:smoke))
+    case = BCC.build_case(BCC.CaseConfig(berlin_toml("smoke")))
     for _ in 1:2
         @test BCC.step_case!(case)
     end
@@ -474,6 +470,23 @@ end
     rec = read_run_toml(only(runs))
     @test rec["session"][end]["status"] == "completed"
     @test rec["config"]["clock"]["nsteps"] == 2 && rec["config"]["run"]["name"] == "smoke"
+    @test rec["config"]["run"]["driver"] == "urban"
+    # the run type's own checks (EX-a, #438): results.toml in the run folder,
+    # the ledgers closed within LEDGER_TOLERANCES, the state finite
+    res = TOML.parsefile(joinpath(only(runs), "output", "results.toml"))
+    led = res["ledgers"]
+    @test res["finite"] === true && led["closed"] === true && led["unattributed"] === false
+    @test led["surface_max_abs_closure"] < BCC.LEDGER_TOLERANCES.surface
+    @test abs(led["water_residual"]) < BCC.LEDGER_TOLERANCES.water
+    @test abs(led["air_heat_closure"]) <= BCC.LEDGER_TOLERANCES.air_heat
+    @test haskey(led["surface"], "domain") && led["surface"]["domain"]["Rn"] > 0     # local noon: net gain
+    @test res["timing"]["simulated_s"] ≈ 4.0          # nsteps × dt (the adaptive stepper picks the steps)
+    # the idealised profile: θ 293 K at the ground, an inversion at 60 m (berlin_smoke.toml)
+    @test 292.0 < res["theta_mean_below_100m_start"] < 294.0
+    @test abs(res["theta_mean_below_100m_end"] - res["theta_mean_below_100m_start"]) < 0.5
+    # the air-heat terms are W/m² of ground: the storage equals their sum to the closure
+    air = res["air_heat"]
+    @test abs(air["storage"] - sum(v for (k, v) in air if k != "storage") - led["air_heat_closure"]) < 1e-9
     # a config error exits 2 before anything is written
     root2 = mktempdir()
     rc = redirect_stderr(devnull) do
@@ -482,11 +495,10 @@ end
     @test rc == 2 && isempty(readdir(root2))
 end
 
-@testset "Config berlin: a fresh process loads the berlin driver on first use" begin
-    # BerlinCase.jl is included while the config is being loaded, so its
-    # validators and checks are newer than the loader's world (the
-    # invokelatest calls in Aeolus.Config); without them `aeolus check`
-    # failed with a world-age MethodError in a fresh process
+@testset "Config berlin: aeolus check in a fresh process" begin
+    # The urban driver's validators and checks run in a fresh process (when
+    # the driver was an example file, included while the config was being
+    # loaded, `aeolus check` failed there with a world-age MethodError)
     root = pkgdir(Aeolus)
     aeolus(args...) = VERSION >= v"1.12" ?
         `$(Base.julia_cmd()) --startup-file=no --project=$root -m Aeolus $args` :

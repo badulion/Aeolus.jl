@@ -1,27 +1,28 @@
-# CaseConfig — everything that defines one Berlin run.
+# CaseConfig — everything that defines one urban run.
 #
 # A config is plain data: grid, geometry window, clock, dynamics
 # parameters, initial state, cadences (in SECONDS, never in steps, so the
 # schedule survives a change of dt or an adaptive stepper) and the
 # `physics` / `options` dictionaries the coupling registry reads to decide
 # which couplings run and how. Its defaults and its TOML form are the
-# `berlin` run-configuration schema (core/config_schema.jl, CFG-c #358);
-# the scenarios are the shipped TOML files in examples/urban/configs/.
+# `urban` run-configuration schema (core/config_schema.jl, CFG-c #358);
+# the Berlin case is the TOML files in examples/urban/configs/.
 
 """
     CaseConfig(; kwargs...)
-    CaseConfig(scenario::Symbol; kwargs...)
+    CaseConfig(path::AbstractString; overrides = String[], kwargs...)
     CaseConfig(cfg::RunConfig; run_output = nothing)
 
-Configuration of a Berlin (Alexanderplatz) case, the struct
-[`build_case`](@ref) consumes. Its defaults are those of the `berlin`
+Configuration of an urban case (the `urban` run driver), the struct
+[`build_case`](@ref) consumes. Its defaults are those of the `urban`
 run-configuration schema (`core/config_schema.jl`, CFG-c #358; `aeolus
-options berlin` lists them with the TOML key of every field): the first
-form is the all-defaults config with `kwargs` set on top. The second
-loads the shipped scenario file `examples/urban/configs/berlin_<scenario>.toml`
-(see [`SCENARIO_FILES`](@ref)) and then applies `kwargs` (`physics` and
-`options` merge per coupling over the file's). The third converts a
-loaded [`RunConfig`](@ref Aeolus.Config.RunConfig) of the `berlin` driver.
+options urban` lists them with the TOML key of every field): the first
+form is the all-defaults config with `kwargs` set on top (it has no
+ground source: set `osm_path` or `static`). The second loads a run
+configuration file (the Berlin case: `examples/urban/configs/berlin_*.toml`)
+and then applies `kwargs` (`physics` and `options` merge per coupling
+over the file's). The third converts a loaded
+[`RunConfig`](@ref Aeolus.Config.RunConfig) of the `urban` driver.
 
 Groups of fields:
 
@@ -42,7 +43,7 @@ Groups of fields:
 * **preprocess** — what the static drivers are made from: `osm_path`
   (the OpenStreetMap file), `min_height` (buildings lower than this are
   dropped), `park_lai` (leaf-area index of park cells), `landuse` (the
-  parent's land-use table, `data/berlin_landuse_6km.csv`);
+  parent's land-use table, `aeolus preprocess fetch-landuse`);
 * **clock** — `date = (y, m, d)`, `start_h` (local hour at t = 0), `utc_offset` (h, local − UTC), `dt`
   (s), `nsteps`;
 * **cadences** — `cadence::Dict{Symbol,Float64}`, periods in seconds.
@@ -79,9 +80,10 @@ Groups of fields:
   diagnostics compared with observations ([`analysis_columns`](@ref)),
   where the inflow turbulence is still developing (#268);
 * **initial state** — `sounding`: the radiosonde CSV the initial θ(z),
-  qv(z) and surface pressure come from (default: the Lindenberg WMO 10393
-  launches of 29/30 June 2019, `data/lindenberg_10393_20190629.csv`,
-  interpolated in time to the case start; see
+  qv(z) and surface pressure come from (default `nothing`; the Berlin
+  case: the Lindenberg WMO 10393 launches of 29/30 June 2019,
+  `examples/urban/data/lindenberg_10393_20190629.csv`), interpolated in
+  time to the case start; see
   [`initial_θ`](@ref) and `core/reference_state.jl`); `utc_offset` (h,
   local clock = UTC + `utc_offset`; 2 = CEST) places the case start on
   the sounding's UTC time axis. `sounding = nothing` selects the
@@ -110,7 +112,7 @@ Groups of fields:
   takes the tallest roof of the scene;
 * **output** — `output_path` (`nothing` disables NetCDF output; in TOML
   `[output] netcdf`, the file name, in `[output] path`, a directory: the
-  run folder's `output/` under `aeolus run`, else `examples/urban/output/`);
+  run folder's `output/` under `aeolus run`, else `output/` in the working directory);
   `child_boundaries` (`nothing`: off) — with the online nest, the dynamic
   driver the run writes the child's boundary slabs to at every parent
   step (CFG-g, #362, `aeolus preprocess dynamic --from-parent`), the file
@@ -119,7 +121,7 @@ Groups of fields:
   in TOML `[logging]`): the setup summary is `Debug`, the run's start,
   output frames (with each coupling's diagnostics) and the end-of-run
   events (run, stage timing, ledgers) are `Info`, a blowup is an
-  `Error`, all structured (`subsystem = :berlin`, `event = …`, the
+  `Error`, all structured (`subsystem = :urban`, `event = …`, the
   values as key-values; core/diagnostics.jl, #338);
 * **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
   compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
@@ -144,10 +146,10 @@ mutable struct CaseConfig
     elevation::Float64
     wall_subdivisions::Int
     # the static drivers' sources (CFG-f, #361)
-    osm_path::String
+    osm_path::Union{Nothing,String}
     min_height::Float64
     park_lai::Float64
-    landuse::String
+    landuse::Union{Nothing,String}
     # clock
     date::NTuple{3,Int}               # 2019-06-29: clear-sky heat-wave day (#247)
     utc_offset::Float64               # local = UTC + 2 h (CEST)

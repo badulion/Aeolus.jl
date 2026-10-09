@@ -468,7 +468,7 @@ function init!(c::SurfaceExchangeMOST, case)
                end
                @sprintf("Surfaces: %s; every %.0f s",
                         join(("$v $k" for (k, v) in sort!(collect(kinds))), ", "), c.P)
-           end, subsystem = :berlin, domain = current_domain(), coupling = :surface_exchange)
+           end, subsystem = :urban, domain = current_domain(), coupling = :surface_exchange)
     return nothing
 end
 
