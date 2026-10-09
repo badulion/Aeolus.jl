@@ -67,6 +67,22 @@ const SD_VARIANTS = [
     "lindenberg_open_rk3"  => ("lindenberg_era5", [sd_steps(6)]),
 ]
 
+# The anelastic variants: new physics in ONE-j (#460) — the SGS and surface
+# fluxes in the ρ̄-weighted flux form, SSP-RK3 and the adaptive step on the
+# anelastic core. Their digests are captured on the ONE-j branch
+# (simulation_digests_anelastic.toml, capture_anelastic_digests.jl): the
+# four of SD_VARIANTS, whose master digests the weighting changed, and these.
+const SD_ANELASTIC_VARIANTS = [
+    "dcbl_anelastic_rk3"      => ("dry_convective_bl", [sd_steps(6), "dynamics.core=\"anelastic\"",
+                                                        "time.scheme=\"rk3\""]),
+    "dcbl_anelastic_adaptive" => ("dry_convective_bl", vcat([sd_steps(8), "dynamics.core=\"anelastic\""], SD_ADAPTIVE)),
+    "dcbl_anelastic_rk3_adaptive_cor" => ("dry_convective_bl", vcat([sd_steps(6), "dynamics.core=\"anelastic\"",
+                                                        "time.scheme=\"rk3\"", "coriolis.f=1.0e-4", SD_WIND,
+                                                        "sgs.closure=\"dynamic_smagorinsky\""], SD_ADAPTIVE)),
+]
+"Whether a variant runs the anelastic core (its digests are ONE-j's, not master's)."
+sd_anelastic(label) = occursin("anelastic", label)
+
 # The simulation configs EX-d (#441) added with their couplings around the
 # step ([forcing], [surface], [microphysics], [tracer], [particles],
 # [obstacles]): `label => (config path under examples/, overrides)`, at
@@ -128,14 +144,15 @@ sd_digest(a) = string(fnv1a64(collect(reinterpret(UInt8, vec(collect(a))))); bas
 """
     simulation_digests(; inputs = Dict(), only = nothing) -> Dict{String,Dict{String,String}}
 
-Run every variant of `SD_VARIANTS` (or those in `only`) and return
+Run every variant of `variants` (default `SD_VARIANTS`; or those in `only`) and return
 `label => (field => digest)`, the fields of `state_fields` plus `t`.
 `inputs` maps a config name to extra overrides (the made dynamic driver of
 `lindenberg_era5`).
 """
-function simulation_digests(; inputs = Dict{String,Vector{String}}(), only = nothing)
+function simulation_digests(; inputs = Dict{String,Vector{String}}(), only = nothing,
+                            variants = SD_VARIANTS)
     out = Dict{String,Dict{String,String}}()
-    for (label, (name, ovr)) in SD_VARIANTS
+    for (label, (name, ovr)) in variants
         only === nothing || label in only || continue
         cfg = load_run_config(joinpath(SD_CONFIGS, name * ".toml");
                               overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))

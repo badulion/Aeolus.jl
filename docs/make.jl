@@ -48,6 +48,7 @@ makedocs(
             "LES filtering & closure"     => "theory/les_filtering.md",
             "Staggered discretization"    => "theory/staggered_grid.md",
             "Fractional-step projection"  => "theory/fractional_step.md",
+            "Sound-proof cores: the weighted flux form" => "theory/anelastic.md",
             "Smagorinsky-Lilly SGS"       => "theory/sgs.md",
             "Discrete Poisson & FFT"      => "theory/poisson.md",
             "Grid nesting: conservative staggered prolongation" => "theory/nesting.md",

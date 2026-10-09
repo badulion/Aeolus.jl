@@ -10,11 +10,13 @@ is on [I/O, checkpoints and restart](../api/io.md).
 ## What a step reads
 
 A checkpoint must hold everything the next step reads, not only the
-prognostic fields. For the Boussinesq cores that is:
+prognostic fields. For the Boussinesq cores that is (the sound-proof
+cores, since ONE-j #460, the same without `qv`, plus their base state):
 
 | state | where it lives | how it is checkpointed |
 | :---- | :------------- | :--------------------- |
 | `u, v, w, p, θ, qv` **with halos**, the clock | the simulation | `checkpoint_fields(sim)`, full storage arrays |
+| the base state `θ̄`, `ρ̄` (sound-proof cores) | `sim.ref` | `checkpoint_reference(sim)`: recorded and compared on restart like the run parameters, not restored (a restart onto another base state is refused) |
 | last eddy coefficients `νt, κt` | the simulation | stored too: a driver's dt choice (`sbl_dt`, `channel_dt`) reads them before the closure recomputes them |
 | SGS closure memory: TKE ``e``, Lagrangian / LASD ``I_{LM}, I_{MM}, I_{QN}, I_{NN}`` and the pathline velocities, the six Reynolds stresses, booked statistics, commit cadence | the closure | the closure contract's `sgs_state` / `restore_sgs_state!` (#167), whose snapshots are now required to be self-contained |
 | wall-model memory: the input filter state (P57-b), the TBLE columns and dynamic κ (P57-c), the per-column laws, the dynamic roughness α and z0 | `MatchingInput`, `TBLEWallModel`, `WallModel`, `DynamicRoughness` | `checkpoint_state` methods in `src/wall_models/checkpoint.jl` |
@@ -234,8 +236,9 @@ original end time; the NetCDF output is reopened and continues at the
 checkpoint's record (a record the interrupted session wrote after the
 checkpoint is rewritten). Refused, with the reason: a checkpoint without
 the case state (a nested case would cold-start its parent and the
-couplings), checkpoints with a sound-proof core (`checkpoint!` takes the
-Boussinesq core's fields; a config error), and resuming a run that
+couplings), checkpoints with a sound-proof core (the urban run type's own config
+check; `checkpoint!` takes the sound-proof cores since ONE-j #460, and the
+urban couplings become components on both cores in ONE-e #454), and resuming a run that
 records the child's boundary driver (`[output] child_boundaries`).
 Run folders of the old `berlin` example driver (before #438) cannot be
 resumed: their `run.toml` names a driver that no longer exists, and their

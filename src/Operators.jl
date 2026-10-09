@@ -39,7 +39,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
-       sgs_tke!                 # N-inflow-b (#258)
+       sgs_tke!,                # N-inflow-b (#258)
+       flux_weights, sgs_weighted_form    # ONE-j (#460)
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
@@ -193,18 +194,40 @@ the center. Halos of `u, v, w` must be filled.
 compute_smagorinsky_νt!(νt, u, v, w, C_s) = _compute_smagorinsky_νt!(νt, u, v, w, C_s, mesh(u))
 
 """
-    add_eddy_viscosity_u!(tu, u, νt)
-    add_eddy_viscosity_v!(tv, v, νt)
-    add_eddy_viscosity_w!(tw, w, νt)
+    add_eddy_viscosity_u!(tu, u, νt; weights = nothing)
+    add_eddy_viscosity_v!(tv, v, νt; weights = nothing)
+    add_eddy_viscosity_w!(tw, w, νt; weights = nothing)
 
 Add the conservative eddy-viscosity tendency `∂/∂xⱼ(νₜ ∂uᵢ/∂xⱼ)` to the
 face-centered momentum tendencies. `νt` is interpolated from cell centers
 to the flux face (edges for off-diagonal fluxes).
-"""
-add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 
-@doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_v!(tv, v, νt) = _add_eddy_viscosity_v!(tv, v, νt, mesh(v))
-@doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_w!(tw, w, νt) = _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
+`weights = (Wc, Wf)` is the sound-proof form `(1/W) ∂ⱼ(W νₜ ∂uᵢ/∂xⱼ)`, with
+a cell weight `Wc[k]` and a bottom-z-face weight `Wf[k]` per storage level
+(`Anelastic.constraint_weights`, ONE-j #460): only the vertical fluxes are
+weighted (`W` depends on z), and `Σ W uᵢ ΔV` is conserved instead of
+`Σ uᵢ ΔV`. `nothing` (default) is the unweighted operator, bit for bit.
+"""
+function add_eddy_viscosity_u!(tu, u, νt; weights = nothing)
+    weights === nothing && return _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
+    return _add_eddy_viscosity_u!(tu, u, νt, mesh(u), _level_weights(u, weights)...)
+end
+@doc (@doc add_eddy_viscosity_u!) function add_eddy_viscosity_v!(tv, v, νt; weights = nothing)
+    weights === nothing && return _add_eddy_viscosity_v!(tv, v, νt, mesh(v))
+    return _add_eddy_viscosity_v!(tv, v, νt, mesh(v), _level_weights(v, weights)...)
+end
+@doc (@doc add_eddy_viscosity_u!) function add_eddy_viscosity_w!(tw, w, νt; weights = nothing)
+    weights === nothing && return _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
+    return _add_eddy_viscosity_w!(tw, w, νt, mesh(w), _level_weights(w, weights)...)
+end
+
+# the per-storage-level weights (Wc, Wf) of a sound-proof operator, checked
+function _level_weights(f, (wc, wf))
+    n = size(f.data, 3)
+    (length(wc) >= n && length(wf) >= n) ||
+        throw(DimensionMismatch("weights: need Wc and Wf per storage level ($n), got $(length(wc)), $(length(wf))"))
+    return wc, wf
+end
 
 """
     add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
@@ -281,6 +304,11 @@ end
 Inject prescribed diffusive fluxes at the bottom (`F_bot`) and top
 (`F_top`) walls of the domain into the cell-centered scalar tendency.
 Sign convention: `F_bot > 0` means flux into the domain from below.
+
+On a sound-proof core this is also the `W`-weighted flux form
+`(W_f/W_c) F/Δz`: the wall faces of a `ReferenceState` carry the weight of
+the adjacent cell (`W_f = W_c` there), so `Σ W ϕ ΔV` changes by
+`(W_bot F_bot − W_top F_top) A` exactly.
 """
 add_surface_flux!(tϕ, F_bot, F_top) = _add_surface_flux!(tϕ, F_bot, F_top, mesh(tϕ))
 
