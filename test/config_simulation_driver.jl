@@ -233,7 +233,8 @@ end
     @test sim isa AnelasticSimulation
     @test Aeolus.Anelastic.max_anelastic_divergence(sim) < 1e-12
     @test maximum(interior_view(sim.θ)) > 300.0          # heated from below
-    @test keys(state_fields(res.obj)) == (:u, :v, :w, :p, :θ)
+    # the checkpoint fields, as on the Boussinesq core but without qv (ONE-j, #460: νt, κt added)
+    @test keys(state_fields(res.obj)) == (:u, :v, :w, :p, :θ, :νt, :κt)
     # stretched grid: cells cluster at the bottom, the run stays divergence-free
     cfg = sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "grid.stretching=\"tanh\"",
                                            "grid.stretching_parameter=1.5"])

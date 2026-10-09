@@ -43,6 +43,7 @@ const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
     @test Set(keys(ref)) == Set(first.(SD_VARIANTS))
     inputs = sd_made_inputs()
     for (label, (name, ovr)) in SD_VARIANTS
+        sd_anelastic(label) && continue      # new physics in ONE-j (#460): see the next testset
         cfg = load_run_config(joinpath(SD_CONFIGS, name * ".toml");
                               overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))
         r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
@@ -60,6 +61,30 @@ const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
             rows = [join(split(l, ',')[keep], ',') for l in rows]
         end
         @test (label, sd_digest(codeunits(join(rows, "\n")))) == (label, ref[label]["diagnostics_csv"])
+    end
+end
+
+@testset "the anelastic variants: ONE-j's digests, not master's (the weighted fluxes are new physics)" begin
+    # ONE-j (#460) put the anelastic core's SGS fluxes in the ρ̄-weighted
+    # flux form: the three anelastic variants of SD_VARIANTS with an SGS
+    # closure left master's digests (asserted), the one without
+    # (dcbl_anelastic_none) kept them bit for bit; all reproduce those
+    # captured on the ONE-j branch, as do the new anelastic RK3 / adaptive
+    # variants
+    an = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_digests_anelastic.toml"))
+    labels = vcat([l for (l, _) in SD_VARIANTS if sd_anelastic(l)], first.(SD_ANELASTIC_VARIANTS))
+    @test length(labels) == 7 && Set(keys(an["digests"])) == Set(labels)
+    got = simulation_digests(; variants = vcat([v for v in SD_VARIANTS if sd_anelastic(first(v))],
+                                               SD_ANELASTIC_VARIANTS))
+    for l in labels
+        @test (l, got[l]) == (l, an["digests"][l])
+        haskey(CP_DIGESTS["digests"], l) || continue
+        master = CP_DIGESTS["digests"][l]
+        if l == "dcbl_anelastic_none"
+            @test all(k -> got[l][k] == master[k], ("u", "v", "w", "p", "θ", "t", "diagnostics_csv"))
+        else
+            @test (l, got[l]["θ"] != master["θ"]) == (l, true)
+        end
     end
 end
 
@@ -178,7 +203,7 @@ const CP_SGS = (closure = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :n
 end
 
 @testset "pipeline: one Euler step runs every stage once, RK3 the core stages three times" begin
-    for (core_, scheme) in ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler))
+    for (core_, scheme) in ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler), (:anelastic, :rk3))
         rec = CPRecorder()
         d = cp_domain(cp_core(core_; ν = 1.0), extra = (rec,); scheme = scheme)
         step!(Model(d), 0.5)
@@ -233,7 +258,11 @@ end
     e = err(() -> CPC.validate_components((adv, CPRecorder(), CPRecorder())))
     @test any(p -> occursin("two components named", p.message), e.problems)
     @test_throws ArgumentError Model((cp_domain(cp_core(:boussinesq)), cp_domain(cp_core(:boussinesq))))
-    @test_throws ArgumentError Domain(cp_core(:anelastic); scheme = :rk3, components = (adv,))
+    # both schemes and the adaptive step on both cores (ONE-j, #460; the
+    # anelastic core was Euler with a fixed dt before)
+    @test Domain(cp_core(:anelastic); scheme = :rk3, components = (adv,)).scheme === :rk3
+    @test Domain(cp_core(:anelastic); cfl = Aeolus.TimeIntegration.CFLConstraints(), components = (adv,)).cfl !== nothing
+    @test_throws ArgumentError Domain(cp_core(:anelastic); scheme = :ab2, components = (adv,))
 end
 
 @testset "pipeline: the hook-free fast path when nothing attaches to stages 6-10" begin
@@ -258,7 +287,7 @@ end
 end
 
 @testset "components = the core's built-in terms, bit for bit ($c, $sch)" for (c, sch) in
-        ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler))
+        ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler), (:anelastic, :rk3))
     # the built-in path: the core's own Coriolis, θ fluxes, sponge and Smagorinsky
     ref = cp_state!(cp_core(c; ν = 0.5, f_coriolis = CP_COR.f, C_s = 0.17,
                             θ_flux_bottom = CP_BND.bottom, θ_flux_top = CP_BND.top,
@@ -301,9 +330,10 @@ end
     @test all(x -> isapprox(x, real(w); rtol = 1e-12), interior_view(sim.u))
     @test all(x -> isapprox(x, imag(w); rtol = 1e-12, atol = 1e-12), interior_view(sim.v))
     @test angle(complex(interior_view(sim.u)[1], interior_view(sim.v)[1])) ≈ -n * atan(f * Δt)
-    if c === :boussinesq
+    begin
         # SSP-RK3 over one inertial period 2π/f: back to (U0, 0), amplitude
-        # error O((fΔt)⁴) per step (the scheme's |R(iz)|² = 1 − z⁴/12 + z⁶/36)
+        # error O((fΔt)⁴) per step (the scheme's |R(iz)|² = 1 − z⁴/12 + z⁶/36);
+        # on both cores (the anelastic SSP-RK3 is ONE-j's, #460)
         sim = cp_core(c); set!(sim.u, (x, y, z) -> U0)
         d = cp_domain(sim, Coriolis => (; f = f); scheme = :rk3)
         m = 126; Δ = 2π / f / m
@@ -314,13 +344,13 @@ end
         z = f * Δ
         @test hypot(u, v) / U0 ≈ (1 - z^4 / 12 + z^6 / 36)^(m / 2) rtol = 1e-10
         @test abs(atan(v, u)) < 1e-3
-        @info "Coriolis RK3, one inertial period in $m steps (fΔt = $(round(z; sigdigits = 3))): " *
+        @info "Coriolis RK3 ($c), one inertial period in $m steps (fΔt = $(round(z; sigdigits = 3))): " *
               "|u|/U0 = $(hypot(u, v) / U0), phase error $(atan(v, u)) rad"
     end
-    # the adaptive limit
-    dc = cp_domain(cp_core(:boussinesq), Coriolis => (; f = -4.0e-3))
+    # the adaptive limit (on both cores: the anelastic adaptive step is ONE-j's)
+    dc = cp_domain(cp_core(c), Coriolis => (; f = -4.0e-3))
     @test CPC.limit_dt(only(filter(x -> x isa Coriolis, collect(dc.components))), dc) === nothing  # fixed step
-    da = Domain(cp_core(:boussinesq); cfl = Aeolus.TimeIntegration.CFLConstraints(; C_advective = 0.5, dt_max = 1e3),
+    da = Domain(cp_core(c); cfl = Aeolus.TimeIntegration.CFLConstraints(; C_advective = 0.5, dt_max = 1e3),
                 components = (CentredAdvection(), Coriolis(-4.0e-3)))
     @test CPC.limit_dt(da.components[2], da) == (0.5 / 4.0e-3, :coriolis)
     res = CPC.step_adaptive!(Model(da))
@@ -328,9 +358,13 @@ end
     @test Aeolus.Simulations.step_record(da.state).limiter === :coriolis
 end
 
-@testset "SurfaceThetaFlux: the domain-mean θ changes by (F_bottom − F_top) t / Lz ($c)" for c in (:boussinesq, :anelastic)
+@testset "SurfaceThetaFlux: Σ W θ ΔV changes by (W_bot F_bottom − W_top F_top) A t ($c)" for c in (:boussinesq, :anelastic)
     # at rest: only the fluxes act; the anelastic core is buoyant (θ̄ is its
-    # reference), so it takes one step from rest, the Boussinesq one ten
+    # reference), so it takes one step from rest, the Boussinesq one ten.
+    # W = 1 on the Boussinesq core: the domain-mean θ changes by
+    # (F_bottom − F_top) t / Lz. On the anelastic core W = ρ̄ (ONE-j, #460),
+    # and the wall faces carry the weight of the adjacent cell, so F/Δz is
+    # the weighted flux form
     sim = cp_core(c); c === :boussinesq && set!(sim.θ, (x, y, z) -> 300.0)
     θ0 = copy(interior_view(sim.θ))
     d = cp_domain(sim, SurfaceThetaFlux => CP_BND)
@@ -338,9 +372,13 @@ end
     for _ in 1:n
         step!(d, 5.0)
     end
-    # the mean of the change (the difference of two means of θ ≈ 300 K loses
+    H = CP_MESH.Hz
+    Wc, Wf = c === :boussinesq ? (ones(8 + 2H), ones(9 + 2H)) : Aeolus.Anelastic.constraint_weights(sim)
+    # the sum of the change (the difference of two sums of θ ≈ 300 K loses
     # five digits to cancellation)
-    @test isapprox(sum(interior_view(sim.θ) .- θ0) / 8^3, (CP_BND.bottom - CP_BND.top) * 5.0n / 400.0; rtol = 1e-10)
+    dθ = interior_view(sim.θ) .- θ0
+    got = sum(Wc[H+k] * sum(dθ[:, :, k]) for k in 1:8) * 50.0 / 8^2         # Σ W δθ Δz per column
+    @test isapprox(got, (Wf[H+1] * CP_BND.bottom - Wf[H+9] * CP_BND.top) * 5.0n; rtol = 1e-10)
     θ = interior_view(sim.θ)
     @test θ[:, :, 1] != θ[:, :, 4] && θ[:, :, 8] != θ[:, :, 4]   # through the bottom and the top levels
     @test !CPC.enabled(SurfaceThetaFlux, (bottom = 0.0, top = 0.0))
@@ -397,9 +435,10 @@ end
     @test bc((; closure = :none)) === nothing
 end
 
-@testset "checkpoint round trip: a restart through the components is the uninterrupted run" begin
-    # the Lagrangian dynamic closure carries memory (its averaged LM, MM)
-    mk() = (s = cp_state!(cp_core(:boussinesq; ν = 0.5, θ₀ = 300.0));
+@testset "checkpoint round trip: a restart through the components is the uninterrupted run ($c)" for c in (:boussinesq, :anelastic)
+    # the Lagrangian dynamic closure carries memory (its averaged LM, MM);
+    # on both cores (the anelastic checkpoint is ONE-j's, #460)
+    mk() = (s = cp_state!(cp_core(c; ν = 0.5, (c === :boussinesq ? (; θ₀ = 300.0) : (;))...));
             d0 = Domain(s; validate = false);
             Domain(d0; components = (CentredAdvection(), SGS(LagrangianDynamicSmagorinsky(CP_MESH)),
                                      CPC.build_components((Coriolis => CP_COR, Sponge => CP_SPO), d0)...)))
@@ -413,7 +452,7 @@ end
     for _ in 1:3; step!(d2, 2.0); end
     @test cp_bits(d2.state) == cp_bits(d.state)
     # a restart into another closure is refused
-    d3 = Domain(Domain(cp_core(:boussinesq; ν = 0.5, θ₀ = 300.0); validate = false);
+    d3 = Domain(Domain(cp_core(c; ν = 0.5, (c === :boussinesq ? (; θ₀ = 300.0) : (;))...); validate = false);
                 components = (CentredAdvection(), SGS(StaticSmagorinsky(0.17)), Coriolis(1e-3), Sponge(0.02, 250.0, (u = 0, v = 0, w = 0))))
     @test_throws ArgumentError restart!(d3.state, path; components = CPC.checkpoint_components(d3))
 end

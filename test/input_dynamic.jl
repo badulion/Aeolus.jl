@@ -502,7 +502,7 @@ end
                    sim1.t, extrema(pu.data)..., extrema(Aeolus.Fields.interior_view(sim1.u))...)
 end
 
-@testset "ERA5 driver: the simulation driver's config checks" begin
+@testset "ERA5 driver: the model's config checks" begin
     err(ov) = try
         Config.build(Aeolus.SimulationDriver.SimulationDriverType(), load_run_config(E5_CFG; overrides = ov)); nothing
     catch e
