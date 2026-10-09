@@ -273,18 +273,20 @@ end
     @test isapprox(out["rk3"], out["euler"]; rtol = 0.2)               # the same flow, to O(dt)
 end
 
-@testset "the model: output files at the cadence" begin
+@testset "the model: one output file, records at the cadence (ONE-c)" begin
     cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "output.variables=[\"u\", \"theta\"]",
                                            "output.cadence=10.0"])
     res = sim_run(cfg)
     dir = joinpath(res.folder.path, "output")
-    @test readdir(dir) == ["fields_00000000$(n).nc" for n in (0, 2, 4, 6)]    # dt = 5 s
-    NCDataset(joinpath(dir, "fields_000000006.nc")) do nc
-        @test only(nc.attrib["t"]) == 30.0
-        @test nc["theta"][:, :, :] == Float32.(interior_view(simulation(res.obj).θ))
-        @test nc["u"][:, :, :] == Float32.(interior_view(simulation(res.obj).u))
+    @test readdir(dir) == ["output.nc"]
+    NCDataset(joinpath(dir, "output.nc")) do nc
+        @test nc["time"].var[:] == [0.0, 10.0, 20.0, 30.0]                   # dt = 5 s
+        @test isempty(nc["time_series"].var[:])                              # no scalar selected
+        @test nc["theta"].var[:, :, :, 4] == Float32.(interior_view(simulation(res.obj).θ))
+        @test nc["u"].var[:, :, :, 4] == Float32.(interior_view(simulation(res.obj).u))
+        @test !haskey(nc, "w")
     end
-    # no fields: no output folder
-    res = sim_run(sim_cfg("dry_convective_bl", 2, ["grid.size=[16,16,16]"]))
-    @test !isdir(joinpath(res.folder.path, "output"))
+    # no variables: no output file
+    res = sim_run(sim_cfg("dry_convective_bl", 2, ["grid.size=[16,16,16]", "output.variables=[]"]))
+    @test !isfile(joinpath(res.folder.path, "output", "output.nc"))
 end

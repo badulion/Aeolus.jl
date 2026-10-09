@@ -35,7 +35,8 @@ using ..Components: Components, Domain, Model, CentredAdvection, SGS, Coriolis, 
                     build_components, checkpoint_components, sgs_closure, step_adaptive!, component_problems
 using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previous_dt, resume!,
             maybe_checkpoint!, with_monitor, monitored_step!, check_blowup!, output_dir
-using ..NCIO: nc_create, nc_defvar!
+using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
+                close_output!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
                 Path, section, option!, register_driver!, config_domains, MODEL
 
@@ -195,8 +196,6 @@ end
 # the schema
 # ---------------------------------------------------------------------------
 
-const _OUTPUT_FIELDS = ["u", "v", "w", "p", "theta", "qv", "ql", "qr", "tracer"]
-
 "The per-domain sections of the model: the domain's own keys, its grid, core, boundaries, initial state and components."
 const DOMAIN_SECTIONS = vcat(["domain", "grid", "dynamics", "boundaries", "initial"],
                              [Components.section(C) for C in COMPONENTS],
@@ -280,8 +279,16 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "nsteps", Optional{Int}; range = (0, typemax(Int)), doc = "steps to run (with duration = \"none\")")
     end
     out = section("output"; doc = "") do s
-        option!(s, "variables", Vector{String}; default = String[], allowed = _OUTPUT_FIELDS,
-                doc = "fields written to output/fields_<step>.nc every cadence (cell-index arrays, Float32); [] : none")
+        option!(s, "variables", Vector{String}; default = collect(String, Components.DEFAULT_OUTPUTS),
+                doc = "the variables written, from the output catalogues of the core and the enabled components " *
+                      "(ONE-c: 3-D fields, profiles and surface maps every cadence, time series every series_cadence; " *
+                      "the core's: " * join(Components.CORE_OUTPUTS, ", ") * "; the components': ql, qr, tracer); [] : none")
+        option!(s, "averaging", Symbol; default = :instant, allowed = [:instant, :mean],
+                doc = "instant: the values at each record; mean: the time mean over the interval since the previous record")
+        option!(s, "series_cadence", Float64; default = 60.0, range = (0, Inf), units = "s",
+                doc = "simulated time between the samples of the time series (the scalar variables); 0: every step")
+        option!(s, "netcdf", String; default = "output.nc",
+                doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ by default)")
     end
     # one key per published check, `name = {required, tolerance}`: no
     # component publishes a check yet (ONE-d, #453), so the section is empty
@@ -358,8 +365,13 @@ function _cross_checks(cfg)
         push!(e, ConfigError("sponge.z_start", "the sponge starts below the top (grid.extent[3] = $(g.extent[3]) m), got $(sp.z_start) m"))
     (!d.moisture && !isempty(cfg.initial.qv)) &&
         push!(e, ConfigError("initial.qv", "a qv profile needs dynamics.moisture = true"))
-    ("qv" in cfg.output.variables && !d.moisture) &&
-        push!(e, ConfigError("output.variables", "qv is written only with dynamics.moisture = true"))
+    # the [output] selection against the catalogues of the core and the enabled components (ONE-c)
+    for p in Components.output_problems(cfg.output.variables,
+                                        [C => cfg[Components.section(C)] for C in enabled_components(cfg)];
+                                        moisture = d.moisture, theta0 = d.theta0, core = d.core,
+                                        published = _coupling_outputs(cfg))
+        push!(e, ConfigError("output.variables", p))
+    end
     for (k, p) in (("u", cfg.initial.u), ("v", cfg.initial.v))
         (get(p, "kind", "") == "taylor_green" && (b.x !== :periodic || b.y !== :periodic)) &&
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
@@ -381,7 +393,8 @@ the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture, `time.sche
 on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability` is `none`
 `sgs.stability` wraps `smagorinsky`, `dynamic_smagorinsky`, `vreman` or `sigma` only
 `sponge.z_start` lies below the top
-an `initial.qv` profile and the `qv` output variable need `dynamics.moisture = true`
+an `initial.qv` profile needs `dynamics.moisture = true`
+every `output.variables` entry is in the catalogue of the core or of an enabled component (`Components.output_problems`): the `qv` ones and `budget_water` need moisture, `ql`, `qr` Kessler, `tracer` and `budget_tracer` the tracer, `budget_energy` on the boussinesq core `dynamics.theta0` > 0
 a Taylor-Green initial `u` or `v` needs periodic x and y
 the enabled components hold at most one component per slot and an `:advection` provider, and meet each other's `requires` and `incompatible` (`Components.component_problems`)"""
 
@@ -477,7 +490,10 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
     scheme = _adaptive(cfg) ? :adaptive : t.scheme
-    return SimulationRun(Model(Domain(d0; components = comps)), StepperState(scheme), cfg)
+    # the budgets the [output] selection measures (ONE-c): off unless selected
+    qs = unique!(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())])
+    dom = Components.with_budgets(Domain(d0; components = comps), qs)
+    return SimulationRun(Model(dom), StepperState(scheme), cfg)
 end
 
 # The initial profiles of a dynamic driver (linear in z, constant beyond
@@ -561,28 +577,23 @@ _take_step!(r::SimulationRun, dt) = (step!(r.model, dt); (simulation(r), Float64
 _adaptive_step!(r::SimulationRun, t_end) =
     step_adaptive!(r.model; dt_prev = previous_dt(r.stepper), t_end = t_end)
 
-# output: the selected fields every `cadence` simulated seconds
-const _FIELD_OF = Dict("u" => :u, "v" => :v, "w" => :w, "p" => :p, "theta" => :θ, "qv" => :qv)
-
-function _write_output(r::SimulationRun, dir, step)
-    sim = simulation(r); m = sim.mesh
-    path = joinpath(dir, string("fields_", lpad(step, 9, '0'), ".nc"))
-    nc = nc_create(path; attributes = Dict("t" => Float64(sim.t), "step" => Int32(step),
-                                           "note" => "cell-index arrays: face fields at their own staggered positions"))
-    try
-        nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
-        c = sim_couplings(r)
-        for f in r.cfg.output.variables
-            v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
-            src = f == "ql" ? c.water.ql : f == "qr" ? c.water.qr : f == "tracer" ? c.tracer.c :
-                  getproperty(sim, _FIELD_OF[f])
-            v[:, :, :] = Float32.(Array(interior_view(src)))
-        end
-    finally
-        close(nc)
-    end
-    return path
+# output: the one writer (Aeolus.Output, ONE-c) of the variables
+# `[output]` selects from the domain's catalogue
+function _output_writer(r::SimulationRun, rf, resume_t)
+    cfg = r.cfg; o = cfg.output; dom = _domain(r)
+    vars = select_variables(Components.domain_catalogue(dom), o.variables)
+    dir = o.path === nothing ? output_dir(rf) : mkpath(o.path)
+    x, y, z = cell_centres(dom.state.mesh)
+    return OutputWriter(joinpath(dir, o.netcdf); x = x, y = y, z = z,
+                        records = filter(v -> v.dims !== :scalar, vars), series = filter(v -> v.dims === :scalar, vars),
+                        ctx = dom, averaging = o.averaging, resume_time = resume_t,
+                        attributes = Dict{String,Any}("title" => "Aeolus.jl — $(cfg.run.name)",
+                                                      "source" => "the Aeolus model, domain $(dom.id)",
+                                                      "components" => join(string.(map(Components.component_name, dom.components)), " ")))
 end
+
+# the next output time after `t` of a stream with cadence `c` (0: every step)
+_next_out(t, c) = c == 0 ? t : (floor(t / c * (1 + 1e-9)) + 1) * c
 
 function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolder,
                           ck::CheckpointSchedule; callback = nothing)
@@ -597,10 +608,20 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
     feed = get(dom.drivers, :boundary, nothing)
     (feed === nothing || t_end === nothing) || check_coverage(feed, sim.t, t_end)
-    outdir = isempty(cfg.output.variables) ? nothing :
-             cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path)
-    cadence = cfg.output.cadence
-    next_out = outdir === nothing ? Inf : (n == 0 ? 0.0 : (floor(sim.t / cadence) + 1) * cadence)
+    w = _output_writer(r, rf, n == 0 ? nothing : sim.t)
+    o = cfg.output; mean = o.averaging === :mean
+    # instant: a record at the start, then every cadence; mean: the first
+    # record is the mean of the first cadence
+    next_rec = n == 0 && !mean ? 0.0 : _next_out(sim.t, o.cadence)
+    next_ser = n == 0 && !mean ? 0.0 : _next_out(sim.t, o.series_cadence)
+    function write_due!()
+        if sim.t >= next_rec * (1 - 1e-9)
+            write_record!(w, dom, sim.t); next_rec = _next_out(sim.t, o.cadence)
+        end
+        if o.series_cadence == 0 || sim.t >= next_ser * (1 - 1e-9)
+            write_series!(w, dom, sim.t); next_ser = _next_out(sim.t, o.series_cadence)
+        end
+    end
     done() = n >= nmax || (adaptive && st.duration !== nothing && sim.t >= st.duration * (1 - 1e-12))
     cpl = sim_couplings(r)
     n == 0 && _record_initial!(cpl, sim)
@@ -610,21 +631,21 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     with_monitor(sim; run = rf, components = mon, t_end = t_end,
                  cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
-        if outdir !== nothing && sim.t >= next_out * (1 - 1e-9)
-            _write_output(r, outdir, n); next_out += cadence
-        end
-        while !done()
-            n += 1
-            _, dt, retries = monitored_step!(m, sim; step = n) do
-                adaptive ? _adaptive_step!(r, st.duration) : _take_step!(r, dt_fixed)
+        try
+            mean || n > 0 || write_due!()
+            while !done()
+                n += 1
+                _, dt, retries = monitored_step!(m, sim; step = n) do
+                    adaptive ? _adaptive_step!(r, st.duration) : _take_step!(r, dt_fixed)
+                end
+                record_step!(r.stepper, dt; retries = retries)
+                accumulate_output!(w, dom, dt)
+                write_due!()
+                maybe_checkpoint!(ck, sim; step = n, components = comps, stepper = r.stepper)
+                callback === nothing || callback(r, n)
             end
-            record_step!(r.stepper, dt; retries = retries)
-            if outdir !== nothing && sim.t >= next_out * (1 - 1e-9)
-                _write_output(r, outdir, n)
-                next_out = (floor(sim.t / cadence * (1 + 1e-9)) + 1) * cadence
-            end
-            maybe_checkpoint!(ck, sim; step = n, components = comps, stepper = r.stepper)
-            callback === nothing || callback(r, n)
+        finally
+            close_output!(w)
         end
         # the guard checks on its cadence; a run never ends `completed` with
         # non-finite fields between two checks
