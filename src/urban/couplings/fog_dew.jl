@@ -15,8 +15,9 @@
 # The physics lives in `src/RadiationFog.jl` (one source of truth, with
 # MoistThermodynamics saturation and latent heats): air-side fog is an
 # enthalpy-conserving saturation adjustment into `ql`, and dew is an
-# implicit bulk exchange whose latent heat goes to the SURFACE. This file
-# only adapts the case's fields to it.
+# implicit bulk exchange whose latent heat goes to the SURFACE
+# (`dew_exchange_columns!`, moved there from this file in ONE-e #454).
+# This file only adapts the case's fields to it.
 #
 # Pressure and density come from the case's hydrostatic reference state
 # (core/reference_state.jl, #131): fog is adjusted at p̄_k (T = θ Π̄_k),
@@ -35,57 +36,12 @@
 # count the same deposition twice.
 
 """
-    apply_fog_dew!(θ, qv, ql, q_dew, Ts, dt; p = 1.01325e5, p_sfc, dz, ρ = 1.0,
-                   C_e = 1e-3, U = 3.0, τ_fog = 0.0,
-                   fog_levels = axes(θ, 3))
-        -> H_dew (W m⁻², 2-D)
-
-Dew onto the surface, then fog in the air.
-
-  * **Dew** — `Aeolus.RadiationFog.dew_exchange!` on the lowest layer of
-    `qv`: vapour is deposited into the 2-D reservoir `q_dew` (kg m⁻²)
-    while `q_v > q_s(T_s)`, and re-evaporated from it when the surface
-    warms. The latent heat is **returned** as `H_dew` (positive = heating
-    the surface); the caller adds it to the surface energy budget. The
-    air temperature is not touched by dew.
-  * **Fog** — `Aeolus.RadiationFog.fog_adjust!` on `θ`, `qv`, `ql` in
-    `fog_levels`: enthalpy-conserving saturation adjustment (relaxed over
-    `τ_fog` if > 0), condensing into and evaporating from `ql`.
-
-`p` is the pressure for fog, a scalar or a per-level vector; `p_sfc`
-(default: `p`, or its first entry) the surface pressure for dew, and `ρ`
-the density of the lowest air layer. Both steps are unconditionally stable in `dt`
-and cannot overshoot saturation.
-"""
-function apply_fog_dew!(θ::AbstractArray{<:Real,3}, qv::AbstractArray{<:Real,3},
-                        ql::AbstractArray{<:Real,3}, q_dew::AbstractMatrix,
-                        Ts::AbstractMatrix, dt::Real;
-                        p = 1.01325e5, p_sfc = (p isa AbstractVector ? first(p) : p),
-                        dz::Real, ρ::Real = 1.0,
-                        C_e::Real = 1e-3, U::Real = 3.0,
-                        τ_fog::Real = 0.0, fog_levels = axes(θ, 3))
-    H = Aeolus.RadiationFog.dew_exchange!(qv, q_dew, Ts, p_sfc, dt;
-                                          dz = dz, ρ = ρ, C_e = C_e, U = U)
-    Aeolus.RadiationFog.fog_adjust!(θ, qv, ql, p, dt; τ = τ_fog,
-                                    levels = fog_levels)
-    return H
-end
-
-function apply_fog_dew!(θ::Field, qv::Field, ql::Field, q_dew::AbstractMatrix,
-                        Ts::AbstractMatrix, dt::Real; dz::Real = θ.mesh.dz,
-                        kwargs...)
-    return apply_fog_dew!(interior_view(θ), interior_view(qv),
-                          interior_view(ql), q_dew, Ts, dt; dz = dz, kwargs...)
-end
-
-"""
     FogDew
 
 Additive coupling: every step in `:fog_dew`, dew (`RadiationFog.dew_exchange!`)
 between the first air cell of each `bus.dew_mask` column (`bus.k_air`)
 and the dew reservoir `bus.dew` at the surface temperature `bus.Ts`, then
-fog (`RadiationFog.fog_adjust!`) on θ, qv, ql — the two steps of
-[`apply_fog_dew!`](@ref). The dew's latent heat warms the surface
+fog (`RadiationFog.fog_adjust!`) on θ, qv, ql. The dew's latent heat warms the surface
 (`bus.sensible -= H_dew`, delivered by the surface exchange). Fog is
 adjusted at the reference pressure `p̄_k`, dew at the `p̄_k` and `ρ̄_k` of
 its air cell (`case.ref`).
@@ -114,43 +70,12 @@ function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
     # stage's 8.5 ms/step on the flagship; the rest is the fog adjustment);
     # the arithmetic per column is the same, bit for bit:
     # the vapour increment is still applied as qv += (q + Δqv) − q.
-    dew_pass!(c.H_dew, qv, bus, case.ref.p̄, case.ref.ρ̄, case.mesh.dz, dt)
+    Aeolus.RadiationFog.dew_exchange_columns!(c.H_dew, qv, bus.dew, bus.Ts, bus.dew_mask, bus.k_air,
+                                              case.ref.p̄, case.ref.ρ̄, case.mesh.dz, dt)
     # fog: saturation adjustment in the air
     Aeolus.RadiationFog.fog_adjust!(interior_view(case.sim.θ), qv,
                                     interior_view(tracer(case, :ql)), ref_pressure(case), dt)
     @. bus.sensible -= c.H_dew
-    return nothing
-end
-
-# The dew pass (a function barrier: `qv` comes untyped from the tracer
-# registry). H_dew is overwritten: 0 where no dew forms or evaporates.
-# One work item per column (KA-m, #301): a column reads and writes only
-# its own air cell, dew reservoir and H_dew, so the columns run in
-# parallel and give the serial bits at any thread count.
-function dew_pass!(H_dew, qv, bus, p̄, ρ̄, dz, dt)
-    Nx, Ny = size(H_dew)
-    foreach_column!(Aeolus.Backends.backend(H_dew), _dew_column!, (1:Nx, 1:Ny), H_dew, qv,
-                    bus.dew_mask, bus.k_air, bus.Ts, bus.dew, p̄, ρ̄, dz, dt; weight = DEW_WEIGHT)
-    return H_dew
-end
-
-# the work of one dew column in grid-point equivalents (one saturation
-# humidity and a few divisions: about the cost of 16 pointwise updates)
-const DEW_WEIGHT = 16
-
-@inline function _dew_column!(i, j, H_dew, qv, dew_mask, k_air, Ts, dew, p̄, ρ̄, dz, dt)
-    @inbounds begin
-        H_dew[i, j] = 0.0
-        dew_mask[i, j] || return nothing
-        k = k_air[i, j]
-        q = qv[i, j, k]
-        r = Aeolus.RadiationFog.dew_deposition(q, Ts[i, j], p̄[k], dt;
-                                               dz = dz, ρ = ρ̄[k], dew = dew[i, j])
-        r.mass == 0 && return nothing
-        qv[i, j, k] += (q + r.Δqv) - q
-        dew[i, j] = max(dew[i, j] + r.mass, 0.0)
-        H_dew[i, j] = r.surface_heat / dt
-    end
     return nothing
 end
 
