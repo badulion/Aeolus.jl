@@ -27,6 +27,7 @@ export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
 # #245: full-state checkpoints (io/checkpoint.jl)
 export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint_state!,
        fieldwise_checkpoint_state, restore_fieldwise!, checkpoint_fields,
+       can_checkpoint, checkpoint_reference,
        StepperState, record_step!, previous_dt,
        CheckpointSchedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path,

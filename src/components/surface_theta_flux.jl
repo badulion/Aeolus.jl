@@ -8,7 +8,10 @@ top of the box (`[boundaries] theta_flux_bottom`, `theta_flux_top`; both
 `0` enable no component): `Operators.add_surface_flux!` adds `F/Δz` to
 the θ tendency of the first and last level, in stage 6 (`:tendencies`).
 In flux form the domain-integrated θ changes by `(F_bottom − F_top) A` per
-unit time, exactly.
+unit time, exactly. On a sound-proof core the same tendency is the
+`W`-weighted flux form (the wall faces of its base state carry the weight
+of the adjacent cell): `Σ W θ ΔV` changes by `(W_bot F_bottom − W_top
+F_top) A`, `W = ρ̄` on the anelastic core (ONE-j, #460).
 """
 struct SurfaceThetaFlux <: AbstractComponent
     bottom::Float64

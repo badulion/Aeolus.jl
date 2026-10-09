@@ -1,7 +1,7 @@
 # Components and the stage pipeline
 
 Status: **built in ONE-a (#450)**, the first step of the single-model
-epic. The target is [One model](single_model.md); this page says what the
+epic; on both dynamical cores since ONE-j (#460). The target is [One model](single_model.md); this page says what the
 code does today, and where it still differs from the target.
 
 ## What a step does
@@ -16,8 +16,8 @@ Aeolus.Components.Model) (one today; nesting by domains is ONE-f, #455). For one
    [`PIPELINE`](@ref Aeolus.Components.PIPELINE) order: `:clock`,
    `:nest_sync`, `:radiation`, `:sw_modifiers`, `:surface_flux`,
    `:sources`, `:chemistry`, `:microphysics`, `:tracers`;
-3. the core steps — `step!` (Euler) or `step_rk3!` (SSP-RK3) of the
-   Boussinesq core, `step!` of the anelastic core — and calls the
+3. the core steps — `step!` (Euler) or `step_rk3!` (SSP-RK3), on either
+   core — and calls the
    components of stages 6–8 from inside every (sub)step:
 
    | stage | where the core calls it |
@@ -94,6 +94,43 @@ Kessler and the tracer in stage 5, before the core, as the design has
 them: a change of the splitting order, so of the results, which is left
 to the step that ports them.
 
+## Both cores (ONE-j, #460)
+
+Every component supports both dynamical cores, and so does the
+infrastructure around them:
+
+| | Boussinesq | anelastic (and pseudo-incompressible) |
+| :-- | :-- | :-- |
+| schemes (`Domain` `scheme`) | `:euler`, `:rk3` | `:euler`, `:rk3` (SSP-RK3 with the weighted projection per substage) |
+| adaptive step (`cfl`) | `TimeIntegration.step_adaptive!` | the same driver: the core's `adaptive_dt` with the components' limits, its snapshot, and a guard on `∇·(ρ̄u)` |
+| checkpoint / restart | `IO.checkpoint!`, `IO.restart!` | the same, with `u, v, w, p, θ, νt, κt` and the base state (a restart onto another is refused) |
+| blowup guard | crash checkpoint of the last good state | the same |
+| `state_fields` of a `simulation` run | the checkpoint fields | the checkpoint fields |
+
+The components are thin adapters, so their port is a question of the
+physics module they call. On the anelastic core the SGS fluxes (`SGS`)
+are in the `ρ̄`-weighted flux form of its advection
+(`Operators.flux_weights`; see [Sound-proof cores](../theory/anelastic.md)),
+and so is the prescribed surface flux (`SurfaceThetaFlux`) as it was (the
+base state's wall faces carry the adjacent cell's weight): `Σ ρ̄ θ ΔV`
+changes only by the surface fluxes, to round-off, and the SGS terms
+conserve `Σ ρ̄ uᵢ ΔV`.
+`CentredAdvection` is the core's own advection (`weighted_momentum_advect!`
+on the anelastic core); `Coriolis` and `Sponge` act on the velocity and are
+the same on both cores.
+
+`test/components_both_cores.jl` runs the contracts of every component on
+both cores and both schemes, the checkpoint round trip on both cores with
+Euler, RK3 and the adaptive step, and a dry CBL on both cores. Its numbers
+(16³, the DCBL config): the θ budget closes to below `1e-11` on both cores
+with every scheme; after 30 min the anelastic mixed layer has warmed more
+than the Boussinesq one by the column-mass ratio `ρ̄_bot h / ∫₀ʰ ρ̄ dz`
+within a factor of 1.5. The anelastic digests of the `simulation` variants
+(`simulation_digests_anelastic.toml`) were re-captured on ONE-j: the
+weighted SGS fluxes changed those with a closure, which
+`test/components_pipeline.jl` asserts; the variant without one kept
+master's digests bit for bit.
+
 ## Bit identity
 
 Every `simulation`-config variant of `test/support/simulation_digests.jl`
@@ -125,7 +162,7 @@ Euler and RK3.
 * `budget!`, `outputs` and `checks` are part of the interface with empty
   defaults: the shared budgets and the catalogue-selected output are
   ONE-c (#452), the `[checks]`/`results.toml` machinery ONE-d (#453).
-* The anelastic core has no checkpoints yet (`IO.checkpoint!` takes a
-  Boussinesq core): the components support both cores, and their
-  checkpoint state is core-independent, but an anelastic restart is
-  ONE-j (#460).
+* The urban and SBL run types still refuse the anelastic core's
+  checkpoints and adaptive step in their own config checks; they become
+  components in ONE-e (#454) and ONE-g (#456), which deliver every
+  component they port on both cores.

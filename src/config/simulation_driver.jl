@@ -236,7 +236,7 @@ function Config.driver_sections(::SimulationDriverType)
     end
     stp = section("stepper"; doc = "Time stepping. Give dt or cfl, and end_time or nsteps.") do s
         option!(s, "scheme", Symbol; default = :euler, allowed = [:euler, :rk3],
-                doc = "euler (step!, the forward-Euler projection) or rk3 (step_rk3!, SSP-RK3); anelastic: euler")
+                doc = "euler (step!, the forward-Euler projection) or rk3 (step_rk3!, SSP-RK3), on either core")
         option!(s, "dt", Optional{Float64}; range = (0, Inf), open_lower = true, units = "s",
                 doc = "fixed step; with end_time it is shortened to end_time / ceil(end_time / dt)")
         option!(s, "cfl", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
@@ -289,11 +289,7 @@ function _cross_checks(cfg)
         b.z === :periodic && push!(e, ConfigError("boundaries.z", "the anelastic core needs z walls"))
         d.theta0 > 0 || push!(e, ConfigError("dynamics.theta0", "the anelastic core needs theta0 > 0 (its base state's θ)"))
         d.moisture && push!(e, ConfigError("dynamics.moisture", "the anelastic core has no qv"))
-        st.scheme === :euler || push!(e, ConfigError("stepper.scheme", "the anelastic core steps with euler"))
-        st.cfl === nothing || push!(e, ConfigError("stepper.cfl", "the anelastic core takes a fixed dt"))
         g.stretching === :uniform || push!(e, ConfigError("grid.stretching", "the anelastic core needs a uniform grid"))
-        (cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf) ||
-            push!(e, ConfigError("checkpoint.every_steps", "checkpoints need core = boussinesq"))
     end
     if g.stretching !== :uniform
         s.closure in (:none, :smagorinsky) ||
@@ -319,7 +315,7 @@ const _CROSS_CHECKS_DOC = """
 exactly one of `stepper.dt` and `stepper.cfl`, and exactly one of `stepper.end_time` and `stepper.nsteps`
 an adaptive step (`stepper.cfl`) needs a finite `stepper.dt_max`
 `noslip` is a z-wall condition: not for `boundaries.x`, `boundaries.y`
-the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture, `stepper.scheme = "euler"`, a fixed `stepper.dt`, a uniform grid and no checkpoints
+the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture and a uniform grid
 on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability` is `none`
 `sgs.stability` wraps `smagorinsky`, `dynamic_smagorinsky`, `vreman` or `sigma` only
 an `initial.qv` profile and the `qv` output field need `dynamics.moisture = true`
@@ -577,17 +573,14 @@ end
 """
     state_fields(r::SimulationRun) -> NamedTuple
 
-The prognostic arrays with their halos: `u, v, w, p, θ` (and, for the
-Boussinesq core, `qv` and the eddy coefficients `νt, κt` of the last
-step, as a checkpoint stores them), and those of the couplings: the slab
-temperature `T_s`, `ql`, `qr`, `tracer` and the particle positions
-(`particles`, 3 × n).
+The prognostic arrays with their halos, as a checkpoint stores them
+(`IO.checkpoint_fields`): `u, v, w, p, θ`, the eddy coefficients `νt, κt`
+of the last step and, on the Boussinesq core, `qv`; and those of the
+couplings: the slab temperature `T_s`, `ql`, `qr`, `tracer` and the
+particle positions (`particles`, 3 × n).
 """
-function Config.state_fields(r::SimulationRun)
-    s = simulation(r)
-    s isa BoussinesqSimulation && return merge(map(f -> f.data, IO.checkpoint_fields(s)), _coupling_fields(sim_couplings(r)))
-    return (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data, θ = s.θ.data)
-end
+Config.state_fields(r::SimulationRun) =
+    merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)))
 
 register_driver!(SimulationDriverType())
 
