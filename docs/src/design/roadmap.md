@@ -76,7 +76,7 @@ boundary and have a coherent, useful system.
 
 ### Phase 8 — DCBL example + diagnostics *(shipped)*
 
-  * `examples/dry_convective_bl.jl`: Sullivan & Patton-flavoured DCBL
+  * `examples/dry_convective_bl.jl` (now `examples/configs/dry_convective_bl.toml`): Sullivan & Patton-flavoured DCBL
     setup (walls + surface flux + capping inversion + sponge + SGS).
   * `horizontal_mean`, `horizontal_variance`, `resolved_flux_wθ`
     diagnostics on `BoussinesqSimulation`.

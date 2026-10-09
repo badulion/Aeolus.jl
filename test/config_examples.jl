@@ -188,8 +188,6 @@ const EXEMPT = Dict(
         "not a run: a-priori dynamic roughness of a cube height map under a prescribed log-law wind",
     "validation/dns256_generate.jl" =>
         "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
-    "poisson_manufactured.jl" => "not a run: manufactured-solution check of the Poisson solver",
-    "poisson_neumann_manufactured.jl" => "not a run: manufactured-solution check of the Neumann Poisson solver",
     "urban/berlin_checks.jl" =>
         "not a run: by-hand end-to-end checks of the Berlin example (the smoke matrix over configs/berlin_smoke.toml, the parent validations; #320)",
     "urban/core/bus.jl" => URBAN_LIB,
@@ -217,7 +215,6 @@ const PENDING_360 = Set([
     "sgs/cbl_tke.jl", "sgs/rotating_stratified_decay.jl", "sgs/surface_mounted_cube.jl",
     "transition/flat_plate_t3a.jl", "transition/kelvin_helmholtz.jl",
     "nesting/cbl_inflow_statistics.jl", "nesting/inflow_fetch.jl",
-    "scalar_advection_2d.jl",
 ])
 
 function example_scripts()
@@ -268,5 +265,5 @@ end
     # examples/validation/ is complete: every script there is configured, a driver or exempt
     val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
     @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 13        # the 3 bare runners of CFG-b, 8 validation scripts, kernels/04, urban/alexanderplatz_diurnal (CFG-c)
+    @test nconfigured == 10        # 8 validation scripts, kernels/04, urban/alexanderplatz_diurnal (CFG-c); the 3 bare runners of CFG-b are gone (EX-d)
 end
