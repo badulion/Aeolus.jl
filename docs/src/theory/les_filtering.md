@@ -192,7 +192,7 @@ by point. The tools live in `Aeolus.Operators` (API in
   ``C_s^2 = ⟨Π⟩/(Δ^2⟨|\bar S|^3⟩)``.
 
 **The filtered-DNS fixture.** The reference field is decaying isotropic
-turbulence that Aeolus computes itself (`test/fixtures/dns_decay.jl`).
+turbulence that Aeolus computes itself (`dns_decay`, `src/validation_runs/dns.jl`).
 An external database would need binary I/O and a download, so the
 fixture is generated in-package instead. Set-up:
 
@@ -295,18 +295,20 @@ coarse-grained by Fourier truncation) the dynamic ``C_s`` is 0.116 at 4h
 (+24 %; 0.133, +33 %, at 48³), because the coarse second-order strain
 underestimates ``|\bar S|``.
 
-**The example** (`examples/validation/apriori_sgs.jl`, the same 96³
-fixture) writes the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` is
+**The example** (`examples/validation/configs/apriori_sgs.toml`, the same
+96³ fixture through the `dns` run type; `examples/validation/apriori_sgs.jl`
+formats its record) writes the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` is
 0.20, 0.22 and 0.24. The dissipation-matched ``C_s`` is 0.094, 0.097
 and 0.111. The dynamic ``C_s`` on the DNS grid is +6 %, +3 % and −14 %
 from it, and on the LES grid +24 % and +47 % (4h, 8h).
 
 **The offline 256³ record.** The 96³ fixture is the CI reference. A
 256³ run of the same fixture is made once, offline, by the `dns` run
-driver: `julia -m Aeolus run examples/validation/configs/dns256.toml`,
-or `examples/validation/dns256_generate.jl`, which runs that config and
-prints the table (or by the suite with `AEOLUS_DNS256=1`; see
-[Run configuration](../api/config.md#The-dns-driver)). It writes `test/fixtures/dns256_apriori.toml`: the
+driver: `julia -m Aeolus run examples/validation/configs/dns256.toml`
+(`apriori_sgs.jl runs dns256` prints its table; or by the suite with `AEOLUS_DNS256=1`; see
+[Run configuration](../api/config.md#The-dns-driver)). With `--set
+'apriori.out="test/fixtures/dns256_apriori.toml"'` it writes the record the
+suite reads: the
 DNS checks, ``Re_λ``, ``k_{max}η``, skewness, energy budget, the energy
 spectrum, and per Gaussian width 4h, 8h, 16h and 32h the per-component
 correlations, ``ρ_Π`` and ``⟨Π⟩`` ratio of the Smagorinsky, Bardina and

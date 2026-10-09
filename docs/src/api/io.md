@@ -65,7 +65,7 @@ end
 ```
 
 `run_channel!` (WallModels) and the SBL driver's `sbl_run!` take the
-schedule as their `checkpoint` keyword; `dns256_generate.jl`, the
+schedule as their `checkpoint` keyword; the `dns` run type (`dns256.toml`), the
 relaminarisation driver and `gabls1`–`gabls4.jl` use it by default
 ([`driver_checkpoints`](@ref): every 30 min of wall clock,
 `AEOLUS_CHECKPOINT=0` / `_EVERY` / `_SECONDS` / `_KEEP` override).

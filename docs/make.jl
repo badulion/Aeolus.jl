@@ -20,7 +20,7 @@ makedocs(
                 Aeolus.Grids, Aeolus.Fields, Aeolus.BoundaryConditions,
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations,
-                Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers],
+                Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers, Aeolus.ValidationRuns],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -135,6 +135,7 @@ makedocs(
             "Simulations"          => "api/simulations.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
+            "Validation run types" => "api/validation_runs.md",
             "Input drivers"        => "api/input_drivers.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",

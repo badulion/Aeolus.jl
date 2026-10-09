@@ -186,7 +186,8 @@ representations: ``\sigma_{r^2}`` is at round-off level
 
 ## Worked example
 
-`examples/validation/spectral_broadening.jl` runs both cases, prints the
+`examples/validation/configs/spectral_broadening.toml` runs both cases
+(`aeolus run`); `examples/validation/spectral_broadening.jl` reads the runs, prints the
 tables above and writes two SVG figures to `examples/validation/output/`:
 ``\varepsilon(t)`` in the ascending parcel, and ``\sigma_{r^2}(t)`` on
 log-log axes against the OU curve and ``t^{1/2}``.
