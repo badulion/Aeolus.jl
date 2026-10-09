@@ -26,7 +26,7 @@ schema(::Type{Coriolis}) =
                        doc = "the latitude φ instead of f: f = 2Ω sin φ (Ω = 7.2921e-5 s⁻¹); \"none\": f")
     end
 "The Coriolis parameter of resolved `[coriolis]` options: `f`, or `2Ω sin φ` of `latitude`."
-coriolis_f(opts) = opts.latitude === nothing ? Float64(opts.f) : coriolis_parameter(opts.latitude)
+coriolis_f(opts) = (lat = option(opts, :latitude, nothing); lat === nothing ? Float64(opts.f) : coriolis_parameter(lat))
 enabled(::Type{Coriolis}, opts) = coriolis_f(opts) != 0
 build(::Type{Coriolis}, opts, domain) = Coriolis(coriolis_f(opts))
 stages(::Coriolis) = (Stage(:tendencies),)

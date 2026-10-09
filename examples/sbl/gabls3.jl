@@ -4,7 +4,7 @@
 # Bosveld 2012), P58-d (#194)
 #
 # The runs are the sweep examples/sbl/configs/gabls3_closures.toml (the
-# `sbl` run type; one run folder per closure): time-height geostrophic
+# model; one run folder per closure): time-height geostrophic
 # wind and advective tendencies from LargeScaleForcing, the prescribed
 # 0.25 m θ as a SurfaceTemperatureSeries, MOST surface fluxes
 # (SurfaceExchange) and stress (WallModels.MOSTWallLaw), Smagorinsky
@@ -17,7 +17,7 @@
 # gabls3_envelope.csv) and makes the figure.
 #
 #   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml    # 6.25 m on 400 m
-#   julia --project examples/sbl/gabls3.jl runs/gabls3_*
+#   julia --project examples/sbl/gabls3.jl runs/*gabls3*
 #
 # writes examples/sbl/output/gabls3_<tag>.svg, _profiles.csv, _series.csv
 # =========================================================================
@@ -27,18 +27,18 @@ include(joinpath(@__DIR__, "svgplot.jl"))
 using Printf
 using Statistics: mean
 
-const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls3.jl <run folder>…")
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls3.jl <run folder>…"; last = 3600.0)
 const NX, NZ = cfgval(RUNS[1], "grid.size")[[1, 3]]
 const LX, LZ = cfgval(RUNS[1], "grid.extent")[[1, 3]]
-const T_END = cfgval(RUNS[1], "stepper.end_time")
+const T_END = run_end(RUNS[1])
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
 const OUTDIR = mkpath(SBL_OUT)
-const T_AVG = (cfgval(RUNS[1], "averaging.from"), T_END)
+const T_AVG = (run_end(RUNS[1]) - 3600.0, T_END)
 
 results = map(RUNS) do r
     st = r.stats; stab = cfgval(r, "sgs.stability")
     series = [(t = s.t, u_star = s.u_star, wθ = s.wθ, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
-               θ2 = s.theta_screen, U10 = s.U_screen, Ts = s.T_s) for s in r.series]      # every 300 s
+               θ2 = s.θ_screen, U10 = s.U_screen, Ts = s.T_s) for s in r.series]      # every 300 s
     @printf("%-8s %s: 03-%02d UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
             stab, TAG, round(Int, T_END / 3600), st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet,
             st.nsteps, st.wall_time)
@@ -71,14 +71,14 @@ end
 
 # ---- CSV output ---------------------------------------------------------------
 open(joinpath(OUTDIR, "gabls3_$(TAG)_profiles.csv"), "w") do io
-    println(io, "# GABLS3 03-04 UTC mean profiles, Aeolus.jl sbl run type, $TAG (P58-d, #194). Model output, not reference data.")
+    println(io, "# GABLS3 03-04 UTC mean profiles, Aeolus.jl model, $TAG (P58-d, #194). Model output, not reference data.")
     println(io, "closure,z_m,U,V,speed,theta")
     for r in results, k in eachindex(r.st.z)
         @printf(io, "%s,%.3f,%.4f,%.4f,%.4f,%.4f\n", r.stab, r.st.z[k], r.st.U[k], r.st.V[k], r.st.S[k], r.st.θ[k])
     end
 end
 open(joinpath(OUTDIR, "gabls3_$(TAG)_series.csv"), "w") do io
-    println(io, "# GABLS3 time series (every 300 s), Aeolus.jl sbl run type, $TAG. Model output.")
+    println(io, "# GABLS3 time series (every 300 s), Aeolus.jl model, $TAG. Model output.")
     println(io, "closure,t_s,u_star,wtheta,H_Wm2,h_m,S_max,z_jet,theta_2m,U_10m,theta_0p25")
     for r in results, s in r.series
         @printf(io, "%s,%.0f,%.4f,%.5f,%.2f,%.1f,%.3f,%.1f,%.3f,%.3f,%.3f\n", r.stab, s.t, s.u_star, s.wθ,

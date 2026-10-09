@@ -1,12 +1,12 @@
 # The dynamic driver (CFG-g, #362): Aeolus.InputDrivers — the initial
 # state, the boundary planes over time (FileBoundaryData, FileBoundaryFeed),
 # the large-scale and surface forcing; sounding, case-table and
-# Aeolus-parent drivers. The preprocessors that write the sounding and
-# case-table drivers are AeolusPrep.jl's since ONE-h (#457); they call
-# Aeolus's writers (`UrbanCase.write_sounding_driver`,
-# `StableBoundaryLayer.write_sbl_driver`), which the tests here call too
-# (`write_sounding_driver`, `write_case_table_driver` below), and check what
-# a run reads.
+# Aeolus-parent drivers. The preprocessors that write the sounding drivers
+# are AeolusPrep.jl's since ONE-h (#457); they call Aeolus's writer
+# (`UrbanCase.write_sounding_driver`), which the tests here call too
+# (`write_sounding_driver` below), and check what a run reads. The
+# case-table drivers of the SBL configs are committed
+# (examples/sbl/configs/input/, ONE-g #456).
 #
 # Acceptance tests of the issue covered here:
 #   * the time blend is exact for data linear in t (u = 1 + 0.01 t at
@@ -17,9 +17,11 @@
 #   * errors: a face missing for an open side, a time_bc that does not
 #     cover the run (both intervals printed), a grid mismatch; a case
 #     starting at another time reads the sounding driver bitwise as the CSV;
-#   * the forcing tables of GABLS3 read from its driver are the ForcingTables
-#     built from gabls3_case.csv, bit for bit, and GABLS3 run 50 steps from
-#     the file is bitwise the CSV path (and the pre-#359 digests);
+#   * the committed case-table drivers of the SBL configs hold the case
+#     tables' forcing (GABLS3: the geostrophic wind and the advective
+#     tendencies of gabls3_case.csv; GABLS2: the subsidence and the case's
+#     surface-temperature formula), and the model reading them runs, its
+#     driver hashed under [inputs], in a bitwise round trip;
 #   * the initial state from the sounding driver (θ(z), qv(z), p_surface,
 #     the reference state, the parent's geostrophic wind and z_i) is
 #     bitwise the CSV path on master (digests captured on master,
@@ -53,7 +55,7 @@ const BCD = Aeolus.UrbanCase
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
-using Aeolus.StableBoundaryLayer
+isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
 
 const ID_DATA = joinpath(@__DIR__, "data", "input_dynamic")
 const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
@@ -63,8 +65,6 @@ const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.c
 "The sounding driver of the urban run `cfg` at `out` (`UrbanCase.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
 write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.CaseConfig(cfg), out; preprocessor = "test/input_dynamic.jl")
 
-"The case-table driver of the sbl run `cfg` at `out` (`StableBoundaryLayer.write_sbl_driver`, what `aeolusprep dynamic --from-sounding` calls)."
-write_case_table_driver(cfg, out) = write_sbl_driver(cfg, out; preprocessor = "test/input_dynamic.jl")
 
 # A synthetic boundary snapshot: every field has the value `val` everywhere.
 struct ConstSnapshot
@@ -239,41 +239,47 @@ end
     @test_throws Exception read_dynamic_driver(p3)
 end
 
-@testset "InputDrivers dynamic: GABLS3 forcing from its driver" begin
-    dir = mktempdir()
-    est = ["fftw.planner=\"estimate\""]
-    ov = ["grid.size=[16,16,48]", "grid.extent=[400.0,400.0,400.0]", "sponge.z=300.0"]
-    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "sbl", "configs", "gabls3.toml"); overrides = vcat(ov, est))
-    out = joinpath(dir, "gabls3_dynamic.nc")
-    @test write_case_table_driver(cfg, out) == out
-    @test isempty(check_driver(out, DYNAMIC_SCHEMA))
-    d = read_dynamic_driver(out; planes = false)
-    @test sort!(collect(keys(d.tables))) == [:theta_adv, :u_adv, :u_g, :v_adv, :v_g]
-    @test d.attributes["dynamic_source"] == "case_table" && d.init_time == ""
-    a = sbl_forcing(cfg)                                            # the CSV path
-    b = sbl_forcing(with(cfg, "case.dynamic" => out))               # the driver
-    same(x::ForcingTable, y::ForcingTable) = x.z == y.z && x.t == y.t && isequal(x.values, y.values)
-    @test same(a.U_g, b.U_g) && same(a.V_g, b.V_g)
-    A, B = only(a.extra), only(b.extra)
-    @test A isa AdvectiveTendencies && B isa AdvectiveTendencies
-    @test same(A.θ, B.θ) && same(A.u, B.u) && same(A.v, B.v) && A.q === B.q === nothing
-    @test a.surface.T_s.t == b.surface.T_s.t && a.surface.T_s.T_s == b.surface.T_s.T_s
-    # 50 steps from the file, bitwise the CSV path and the pre-#359 builders
-    ref = Dict("u" => "65331d3fb5e04caa", "v" => "e95dee427de2378d", "w" => "5e1de8f10c1e8fab",
-               "p" => "19c322cceb048273", "θ" => "59734570be6010d9")
-    steps = ["stepper.end_time=\"none\"", "stepper.nsteps=50"]
-    dig(sim) = Dict(k => digest(Aeolus.Fields.interior_view(getproperty(sim, s)))
-                    for (k, s) in (("u", :u), ("v", :v), ("w", :w), ("p", :p), ("θ", :θ)))
-    runs = map((String[], ["case.dynamic=\"$out\""])) do extra
-        c = load_run_config(joinpath(@__DIR__, "..", "examples", "sbl", "configs", "gabls3.toml");
-                            overrides = vcat(ov, est, steps, extra))
-        run_config(c; root = mktempdir(), console = false, repo = mktempdir())
+@testset "InputDrivers dynamic: the committed SBL case-table drivers" begin
+    drv(n) = joinpath(SBL_CONFIGS, "input", n)
+    keys_of = Dict("gabls2_dynamic.nc" => [:w_subs], "gabls3_dynamic.nc" => [:theta_adv, :u_adv, :u_g, :v_adv, :v_g],
+                   "gabls4_exp3_dynamic.nc" => Symbol[])
+    for (n, ks) in keys_of
+        @test isempty(check_driver(drv(n), DYNAMIC_SCHEMA))
+        d = read_dynamic_driver(drv(n); planes = false)
+        @test sort!(collect(keys(d.tables))) == ks
+        @test d.attributes["dynamic_source"] == "case_table" && d.init_time == "" && d.profiles === nothing
+        @test d.surface !== nothing && length(d.surface.t) > 1
     end
-    @test dig(runs[1].obj.case.sim) == ref
-    @test dig(runs[2].obj.case.sim) == dig(runs[1].obj.case.sim)
-    @test runs[2].obj.case.nsteps == 50
-    inp = read_run_toml(runs[2].folder.path)["inputs"]
-    @test inp["case.dynamic"]["path"] == out && inp["case.dynamic"]["fnv1a64"] == content_hash(out)
+    # GABLS3: the tables are the case table's columns (times since 00 UTC 2 July = the run start)
+    g = gabls3_data()
+    F = dynamic_forcing(read_dynamic_driver(drv("gabls3_dynamic.nc"); planes = false))
+    for r in 1:size(g.geostrophic, 1)
+        t = g.geostrophic[r, 1]
+        @test forcing_value(F.U_g, 0.0, t) == g.geostrophic[r, 2] && forcing_value(F.V_g, 0.0, t) == g.geostrophic[r, 3]
+        @test forcing_value(F.U_g, 2000.0, t) == -2.0 && forcing_value(F.V_g, 2000.0, t) == 2.0
+    end
+    A = only(F.extra)
+    @test A isa AdvectiveTendencies && A.q === nothing
+    for r in 1:size(g.advection, 1)
+        t = g.advection[r, 1]
+        @test forcing_value(A.u, 300.0, t) == g.advection[r, 2] && forcing_value(A.θ, 300.0, t) == g.advection[r, 4]
+        @test forcing_value(A.u, 0.0, t) == 0.0
+    end
+    # GABLS2: the subsidence from 40 h local (24 h after the 16 LT start) and
+    # the case's surface-temperature formula, as θ with p_s = 972 hPa
+    d2 = read_dynamic_driver(drv("gabls2_dynamic.nc"); planes = false)
+    S = only(dynamic_forcing(d2; t0 = 57600.0).extra)
+    @test S isa Subsidence && S.fields == (:θ,) && S.form === :mean_gradient
+    @test forcing_value(S.w_s, 500.0, 143999.0) == 0.0 && forcing_value(S.w_s, 500.0, 150000.0) ≈ -0.0025
+    @test d2.surface.temperature ≈ [(gabls2_surface_temperature_C((t + 57600) / 3600) + 273.15) * (1e5 / 97200)^0.286
+                                    for t in d2.surface.t] rtol = 1e-14
+    # the model reading the GABLS3 driver: a bitwise round trip, the driver hashed under [inputs]
+    r = roundtrip_check(joinpath(SBL_CONFIGS, "gabls3.toml"); nsteps = 20,
+                        overrides = ["grid.size=[16,16,48]", "grid.extent=[400.0,400.0,400.0]", "sponge.z_start=300.0",
+                                     "checks.reference={}", "checks.reference_file=\"none\""])
+    @test r.fields_equal && r.config_equal
+    inp = read_run_toml(r.runs[1].folder.path)["inputs"]
+    @test inp["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv("gabls3_dynamic.nc"))
 end
 
 @testset "InputDrivers dynamic: the Berlin initial state from the sounding driver = the CSV path on master" begin

@@ -55,10 +55,11 @@ function build(::Type{<:Sponge}, opts, domain)
     opts.z_start < z_top ||
         throw(ArgumentError("Sponge: z_start = $(opts.z_start) m is not below the top ($z_top m)"))
     α, z0 = opts.alpha_max, Float64(opts.z_start)
-    opts.target === :rest && return Sponge(α, z0, Simulations._sponge_target(nothing, s.mesh, s.bcs, true))
+    kind = option(opts, :target, :rest)
+    kind === :rest && return Sponge(α, z0, Simulations._sponge_target(nothing, s.mesh, s.bcs, true))
     nz = grid(domain).Nz
     ut = zeros(nz); vt = zeros(nz)
-    return Sponge(α, z0, (u = ut, v = vt, w = 0), opts.target, ut, vt)
+    return Sponge(α, z0, (u = ut, v = vt, w = 0), kind, ut, vt)
 end
 stages(::Sponge) = (Stage(:body_force),)
 

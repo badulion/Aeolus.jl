@@ -69,7 +69,7 @@ function build_closure(s, mesh)
     return StabilityCorrected(base, mesh; scheme = scheme)
 end
 
-build(::Type{<:SGS}, opts, domain) = SGS(build_closure(opts, grid(domain)), opts.stress)
+build(::Type{<:SGS}, opts, domain) = SGS(build_closure(opts, grid(domain)), option(opts, :stress, :laplacian))
 
 # the closure's memory, under its type's name (a restart into another closure is refused)
 checkpoint_state(c::SGS) = (closure = string(nameof(typeof(c.closure))), state = checkpoint_state(c.closure))

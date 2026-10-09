@@ -68,7 +68,7 @@ function build(::Type{<:LargeScale}, opts, domain)
         throw(ConfigError("large_scale_forcing", "reads the domain's dynamic driver, which the domain has not (set dynamic_driver)"))
     F = dyn === nothing ? nothing : dynamic_forcing(dyn; t0 = clock(domain))
     function quantity(k)
-        v = opts[k]
+        v = getproperty(opts, Symbol(k))
         v === :driver || return Float64(v)
         q = getproperty(F, Symbol(uppercase(k[1:1]) * k[2:end]))
         q === nothing && throw(ConfigError("large_scale_forcing.$k", "the dynamic driver has no ls_$k table"))
