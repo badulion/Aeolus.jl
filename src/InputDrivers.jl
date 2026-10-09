@@ -26,22 +26,26 @@ one file instead of re-parsing OpenStreetMap at every start.
   [`write_dynamic_driver`](@ref)); the planes feed the open boundaries as
   [`FileBoundaryData`](@ref), read two records at a time by a
   [`FileBoundaryFeed`](@ref).
-* **Preprocessors** (`preprocess/`): the OpenStreetMap and GeoJSON
-  readers ([`load_city_osm`](@ref), [`load_city_geojson`](@ref)) that
-  make an [`UrbanCity`](@ref), and its rasterisation on a grid
-  ([`static_inputs`](@ref), [`solid_and_classes`](@ref)). They are the
-  one copy of this code: the Berlin case (`examples/urban/`) uses them.
-  The sounding and case-table preprocessor of the dynamic driver
-  ([`sounding_dynamic_inputs`](@ref), [`forcing_dynamic_inputs`](@ref))
-  and the Aeolus-parent one, an in-run writer
-  ([`NestBoundaryRecorder`](@ref)). The ERA5 preprocessor (CFG-h, #363):
-  ERA5 on pressure or model levels, GRIB2 or NetCDF ([`read_era5`](@ref)),
-  as initial profiles, boundary planes and large-scale and surface forcing
-  ([`era5_dynamic_inputs`](@ref), [`write_era5_driver`](@ref)).
+* **The city** (`input_drivers/city.jl`): the footprints a static
+  driver stores ([`UrbanCity`](@ref), [`Building`](@ref)), the surface
+  classes, and their rasterisation on a grid ([`rasterize_city`](@ref),
+  [`static_inputs`](@ref), [`solid_and_classes`](@ref)), which a run uses
+  as well as the writer.
+* **A sounding or a case's tables as dynamic inputs**
+  (`input_drivers/sounding.jl`: [`sounding_dynamic_inputs`](@ref),
+  [`forcing_dynamic_inputs`](@ref)), what a run reading its CSV builds in
+  memory and what a sounding driver holds, and the in-run writer of a
+  parent's child boundaries (`input_drivers/recorder.jl`:
+  [`NestBoundaryRecorder`](@ref)).
+
+Everything that **creates** a driver from outside data (OpenStreetMap and
+GeoJSON, land-use classification, soundings, ERA5/GRIB, downloads) is the
+separate package AeolusPrep.jl (ONE-h, #457), which depends on Aeolus for
+these schemas and writers.
 
 A file whose grid differs from the run's is an error naming both grids:
 there is no resampling inside the model; the preprocessor is re-run for
-another grid (`aeolus preprocess static <config.toml>`).
+another grid (`aeolusprep static <config.toml>`).
 
 There is no PALM (PIDS) compatibility goal: the variable names are
 Aeolus's own, short `snake_case` with CF attributes.
@@ -49,16 +53,13 @@ Aeolus's own, short `snake_case` with CF attributes.
 module InputDrivers
 
 using Dates: Dates, now, UTC
-using Printf: @sprintf
 using ..Grids: xnodes, ynodes, znodes, CellCenter
 using ..IBM: SolidMask
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index, WindowedBoundaryData
 import ..BoundaryConditions: snapshot_values
 import NCDatasets
-import GRIBDatasets
 using ..NCIO: NCDataset, nc_create, nc_defvar!, nc_append_record!
-using ..MoistThermodynamics: DEFAULT_CONSTANTS, exner_function, virtual_temperature, PhasePartition,
-                             potential_temperature, air_density
+using ..MoistThermodynamics: DEFAULT_CONSTANTS, exner_function, virtual_temperature, PhasePartition
 using ..LargeScaleForcing: ForcingTable, forcing_value, Sounding, sounding_profiles, AdvectiveTendencies,
                            Subsidence, ProfileNudging
 using ..IO: fnv1a64, git_state
@@ -76,9 +77,7 @@ export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_d
        FileSnapshot, SlabArray, FileBoundaryData, FileBoundaryFeed, feed_window!, feed_steady!,
        advance_feed!, feed_coverage, check_coverage, check_planes, shift_table,
        dynamic_forcing, init_time_string, init_day_seconds, surface_pressure_at,
-       sounding_dynamic_inputs, forcing_dynamic_inputs, NestBoundaryRecorder, record_boundary!, plane_snapshot,
-       ERA5Data, ERA5_OUTPUTS, read_era5, era5_model_level_heights, era5_vertical, era5_subsidence,
-       coriolis_parameter, era5_columns, era5_times, era5_dynamic_inputs, era5_planes!, write_era5_driver
+       sounding_dynamic_inputs, forcing_dynamic_inputs, NestBoundaryRecorder, record_boundary!, plane_snapshot
 
 include("input_drivers/conventions.jl")
 include("input_drivers/city.jl")
@@ -88,6 +87,5 @@ include("input_drivers/static.jl")
 include("input_drivers/dynamic.jl")
 include("input_drivers/sounding.jl")
 include("input_drivers/recorder.jl")
-include("preprocess/era5.jl")
 
 end # module

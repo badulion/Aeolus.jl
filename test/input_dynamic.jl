@@ -329,7 +329,9 @@ end
     end
     @test rc == 0 && isfile(out)
     d = read_dynamic_driver(out; planes = false)
-    @test d.init_time == "2019-06-29T10:00:00Z" && d.attributes["source"] == ID_CSV
+    # a source in the Aeolus package written outside it: recorded as Aeolus:<path> (ONE-h, #457)
+    @test d.init_time == "2019-06-29T10:00:00Z" &&
+          d.attributes["source"] == "Aeolus:examples/urban/data/lindenberg_10393_20190629.csv"
     lf = joinpath(dir, "list.txt")
     open(lf, "w") do io
         redirect_stdout(() -> Aeolus.main(["preprocess"]), io)
@@ -452,4 +454,76 @@ end
     bad = [k for k in keys(sa) if !isequal(sa[k], sb[k])]
     isempty(bad) || @info "open case from the driver's planes differs from the profile data" bad
     @test isempty(bad) && b.clock.n == a.clock.n
+end
+
+# ---------------------------------------------------------------------------
+# the open simulation box over Lindenberg from its committed ERA5 driver
+# (CFG-h, #363). The ERA5 preprocessor and its analytic tests are in
+# AeolusPrep.jl since ONE-h (#457); what stays here is what the model does
+# with the file it reads.
+# ---------------------------------------------------------------------------
+
+const E5_CFG = joinpath(pkgdir(Aeolus), "examples", "configs", "lindenberg_era5.toml")
+const E5_DRIVER = joinpath(pkgdir(Aeolus), "examples", "configs", "input", "lindenberg_era5_dynamic.nc")
+
+@testset "meters_to_latlon inverts latlon_to_meters" begin
+    lat0, lon0 = 52.2085, 14.118
+    for (la, lo) in ((52.6, 13.4), (51.3, 15.9), (52.21, 14.12))
+        x, y = latlon_to_meters(la, lo, lat0, lon0)
+        la2, lo2 = meters_to_latlon(x, y, lat0, lon0)
+        @test abs(la2 - la) < 1e-12 && abs(lo2 - lo) < 1e-12
+    end
+    # 1 km north is 1000/R radians of latitude
+    @test meters_to_latlon(0.0, 1000.0, lat0, lon0)[1] - lat0 ≈ rad2deg(1000.0 / 6_371_000.0) rtol = 1e-9
+end
+
+@testset "ERA5 driver: the open simulation box (16³, 20 steps, round trip)" begin
+    @test filesize(E5_DRIVER) <= 2 * 1024^2                 # committed: 2 MB or smaller
+    @test isempty(check_driver(E5_DRIVER, DYNAMIC_SCHEMA))
+    d = read_dynamic_driver(E5_DRIVER; planes = false)
+    @test d.attributes["dynamic_source"] == "era5" && d.attributes["origin_lat"] == 52.2085
+    @test occursin("era5_lindenberg_20190629_sfc.nc", d.attributes["era5_files"])
+    @test d.init_time == "2019-06-29T00:00:00Z" && size(d.tables[:profile_theta].values) == (16, 13)
+    # the config names the committed driver
+    @test load_run_config(E5_CFG).initial.dynamic == E5_DRIVER
+    # the round trip, the driver hashed under [inputs]
+    r = roundtrip_check(E5_CFG; nsteps = 20)
+    @test r.fields_equal && r.diagnostics_equal && r.config_equal
+    rec = read_run_toml(r.runs[1].folder.path)
+    @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(E5_DRIVER)
+    run1 = r.runs[1].obj
+    @test run1.feed isa FileBoundaryFeed && run1.sim.t == 40.0 && run1.feed.data.t0 == 0.0
+    # the initial state is the ERA5 profile at the domain centre
+    b0 = Config.build(Aeolus.SimulationDriver.SimulationDriverType(), load_run_config(E5_CFG))
+    θ0 = Aeolus.Fields.interior_view(b0.sim.θ)
+    @test θ0[3, 5, :] == d.profiles.theta && θ0[1, 1, :] == d.profiles.theta
+    # after 20 steps the open faces hold the ERA5 planes blended at t = 40 s
+    st = only(open_boundary_states(run1.sim.bcs))
+    pu = only(p for p in st.planes if p.name === :θ && p.side === :west)
+    f = read_dynamic_driver(E5_DRIVER; mesh = run1.sim.mesh).boundary
+    A = snapshot_values(f.data.a, :θ); B = snapshot_values(f.data.b, :θ)
+    τ = 40.0 / 3600.0
+    want = [(1 - τ) * A[i, j, k] + τ * B[i, j, k] for i in pu.irange, j in pu.jrange, k in pu.krange]
+    @test maximum(abs.(pu.data .- want)) < 1e-12
+    @info @sprintf("open ERA5 box over Lindenberg: 20 steps to t = %.0f s, bitwise in the round trip; θ at the west face %.2f-%.2f K, u in the box %.2f-%.2f m/s",
+                   run1.sim.t, extrema(pu.data)..., extrema(Aeolus.Fields.interior_view(run1.sim.u))...)
+end
+
+@testset "ERA5 driver: the simulation driver's config checks" begin
+    err(ov) = try
+        Config.build(Aeolus.SimulationDriver.SimulationDriverType(), load_run_config(E5_CFG; overrides = ov)); nothing
+    catch e
+        e isa ConfigError || rethrow(); e
+    end
+    e1 = err(["initial.dynamic=\"none\""])
+    @test e1 !== nothing && occursin("set initial.dynamic", sprint(showerror, e1))
+    e2 = err(["initial.theta={kind=\"constant\", value=300.0}"])
+    @test e2 !== nothing && occursin("give one of the two", sprint(showerror, e2))
+    # the preprocessor's table left the model's config with the preprocessor
+    e3 = try
+        load_run_config(E5_CFG; overrides = ["preprocess.era5={lat=52.2, lon=14.1}"]); nothing
+    catch e
+        e isa ConfigError || rethrow(); e
+    end
+    @test e3 !== nothing && occursin("preprocess", sprint(showerror, e3))
 end

@@ -866,8 +866,7 @@ using Aeolus.Fields: set!, interior_view
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent, preprocessors
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
     include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
-    include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
-    include("preprocess_era5.jl")     # CFG-h (#363): ERA5 preprocessor (GRIB2/NetCDF) of the dynamic driver, open simulation box
+    include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
     include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays bit for bit; resume
 
