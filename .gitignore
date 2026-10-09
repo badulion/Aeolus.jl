@@ -28,7 +28,7 @@ output/
 # Agent worktrees (one per issue)
 .worktrees/
 
-# Raw OSM extracts (`aeolus preprocess fetch-landuse`; not committed)
+# Raw OSM extracts (AeolusPrep.jl `aeolusprep fetch-landuse`; not committed)
 examples/urban/data/raw/
 
 # Parallel test runner: per-run logs and measured timings (test/run.jl)

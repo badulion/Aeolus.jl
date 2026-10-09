@@ -41,8 +41,8 @@ building height · resolved vertical velocity at 30 m.</sub>
 - **106,776 assertions in the fast tier (135 jobs)**, run by CI on every
   pull request; the full tier adds the validation mini-simulations.
   104,000 lines of source, 72,000 lines of tests.
-- **Few dependencies** (FFTW, KernelAbstractions, StaticArrays, NCDatasets,
-  GRIBDatasets). PNG, Mie scattering, error and Bessel functions are
+- **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
+  NCDatasets). PNG, Mie scattering, error and Bessel functions are
   written in the package.
 - **Single-node CPU, multithreaded** through KernelAbstractions, with
   results bit-identical at every thread count. MPI and GPU are planned,
@@ -239,7 +239,8 @@ Pkg.instantiate()
 
 Julia ≥ 1.10. Non-standard-library dependencies: **FFTW**,
 **KernelAbstractions** and **StaticArrays** (multithreading, #291),
-**NCDatasets** (NetCDF-4, #310) and **GRIBDatasets** (ERA5 input, #363).
+and **NCDatasets** (NetCDF-4, #310). The input preprocessors, and with
+them GRIBDatasets (ERA5 input), are in AeolusPrep.jl (#457).
 Start Julia with threads (`julia -t 12 …`) to use them; results do not
 depend on the thread count.
 
