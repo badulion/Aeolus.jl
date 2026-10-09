@@ -350,3 +350,82 @@ end
     e3 = err(["preprocess.era5={lon=14.1}"])
     @test e3 !== nothing && occursin("lat: required", sprint(showerror, e3))
 end
+
+# ---------------------------------------------------------------------------
+# aeolus preprocess fetch-era5 (EX-e, #442; formerly examples/data/fetch_era5.jl).
+# No network: the requests are checked against the provenance the committed
+# Lindenberg sample recorded when it was fetched.
+# ---------------------------------------------------------------------------
+
+"The top-level `\"key\":value` pairs of a flat JSON object (values: strings, numbers, arrays of them)."
+json_pairs(s) = Dict(m[1] => m[2] for m in eachmatch(r"\"(\w+)\":(\[[^\]]*\]|\"[^\"]*\"|[^,}]+)", s))
+
+@testset "fetch-era5: the requests reproduce the committed Lindenberg sample's CDS requests" begin
+    reqs = era5_requests(52.21, 14.12, Date(2019, 6, 29), 0, 12; half = 1.0)
+    @test [r[3] for r in reqs] == ["pl", "sfc"]
+    data = joinpath(pkgdir(Aeolus), "examples", "data")
+    for (ds, req, suf) in reqs
+        rec = NCDatasets.NCDataset(joinpath(data, "era5_lindenberg_20190629_$suf.nc")) do f
+            (dataset = f.attrib["cds_dataset"], request = f.attrib["cds_request"])
+        end
+        @test rec.dataset == ds
+        # the same keys and values (key order is the Dict's, not part of the request)
+        @test json_pairs(cds_json(req)) == json_pairs(rec.request)
+        @test haskey(Aeolus.InputDrivers.CDS_ATTRIBUTION, ds)
+    end
+    pl = reqs[1][2]
+    # the box: N, W, S, E around the site; 13 hourly times; 16 levels 1000-500 hPa
+    @test pl["area"] == [53.21, 13.12, 51.21, 15.12]
+    @test pl["time"] == [@sprintf("%02d:00", h) for h in 0:12]
+    @test parse.(Int, ERA5_PL_LEVELS) == sort(parse.(Int, ERA5_PL_LEVELS)) &&
+          extrema(parse.(Int, ERA5_PL_LEVELS)) == (500, 1000)
+    # the pressure levels carry what the ERA5 preprocessor reads (T, q, u, v, ω, Φ)
+    @test Set(pl["variable"]) == Set(["temperature", "specific_humidity", "u_component_of_wind",
+                                      "v_component_of_wind", "vertical_velocity", "geopotential"])
+    @test_throws ArgumentError era5_requests(52.0, 14.0, Date(2019, 6, 29), 12, 3)
+    @test_throws ArgumentError era5_requests(52.0, 14.0, Date(2019, 6, 29), 0, 3; half = 0)
+end
+
+@testset "fetch-era5: credentials, JSON, provenance stamp, command line" begin
+    dir = mktempdir()
+    rc = joinpath(dir, "cdsapirc")
+    write(rc, "url: https://example.invalid/api\nkey: abc-123\n")
+    @test cds_credentials(rc) == ("https://example.invalid/api", "abc-123")
+    write(rc, "key:   tok \n")
+    @test cds_credentials(rc) == (CDS_API, "tok")
+    write(rc, "url: x\n")
+    @test_throws ArgumentError cds_credentials(rc)
+    @test_throws ArgumentError cds_credentials(joinpath(dir, "missing"))
+    @test cds_json(Dict("a" => ["x\"y", 1.5])) == "{\"a\":[\"x\\\"y\",1.5]}"
+    # the stamp: provenance in the global attributes, the data untouched
+    nc = joinpath(dir, "s.nc")
+    NCDatasets.NCDataset(nc, "c") do f
+        NCDatasets.defDim(f, "n", 3)
+        v = NCDatasets.defVar(f, "x", Float64, ("n",)); v[:] = [1.0, 2.0, 3.0]
+    end
+    req = era5_requests(10.0, 20.0, Date(2020, 1, 2), 5, 6)[2][2]
+    cds_stamp!(nc, "reanalysis-era5-single-levels", req)
+    NCDatasets.NCDataset(nc) do f
+        @test f.attrib["cds_dataset"] == "reanalysis-era5-single-levels"
+        @test json_pairs(f.attrib["cds_request"]) == json_pairs(cds_json(req))
+        @test occursin("doi:10.24381/cds.adbb2d47", f.attrib["attribution"])
+        @test startswith(f.attrib["fetched_by"], "aeolus preprocess fetch-era5 on ")
+        @test f["x"][:] == [1.0, 2.0, 3.0]
+    end
+    # the command line: parsed arguments, and bad ones exit with code 2 before any download
+    a = era5_fetch_args(["--site", "52.21,14.12", "--date", "2019-06-29", "--hours", "0-12", "--out", dir,
+                         "--name", "era5_lindenberg_20190629"])
+    @test a == (52.21, 14.12, Date(2019, 6, 29), 0, 12, abspath(dir), 1.0, "era5_lindenberg_20190629")
+    @test era5_fetch_args(["--site=1,2", "--date=2020-01-01", "--hours=3-3", "--out", dir, "--box", "0.5"])[7] == 0.5
+    for bad in (["--date", "2019-06-29", "--hours", "0-12", "--out", dir],                       # no --site
+                ["--site", "52", "--date", "2019-06-29", "--hours", "0-12", "--out", dir],
+                ["--site", "52,14", "--date", "29.06.2019", "--hours", "0-12", "--out", dir],
+                ["--site", "52,14", "--date", "2019-06-29", "--hours", "12-3", "--out", dir],
+                ["--site", "52,14", "--date", "2019-06-29", "--hours", "0-12", "--out", dir, "--box", "-1"])
+        @test_throws ArgumentError era5_fetch_args(bad)
+        @test Aeolus.main(["preprocess", "fetch-era5", bad...]; io = IOBuffer(), err = IOBuffer()) == 2
+    end
+    out = IOBuffer()
+    Aeolus.main(["preprocess"]; io = out, err = out)
+    @test occursin("fetch-era5 --site lat,lon", String(take!(out)))
+end

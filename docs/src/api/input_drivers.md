@@ -264,10 +264,19 @@ a 16³ open box over Lindenberg; the file is hashed under `[inputs]` of
 is real ERA5 around Lindenberg (52.21 N, 14.12 E, ±1°), 2019-06-29
 00–12 UTC, 16 pressure levels 1000–500 hPa, with its CDS request and the
 Copernicus licence and attribution in the global attributes.
-`examples/data/fetch_era5.jl` re-creates it, or fetches another site and
-day, through the CDS API with `Downloads` and the user's `~/.cdsapirc`
-(a free CDS account and the ERA5 licence accepted once); the tests never
-call it. Attribution: Hersbach et al. (2023), ERA5 hourly data on
+`aeolus preprocess fetch-era5` re-creates it, or fetches another site
+and day, through the CDS API with `Downloads` and the user's
+`~/.cdsapirc` (a free CDS account and the ERA5 licence accepted once;
+[`fetch_era5`](@ref Aeolus.InputDrivers.fetch_era5), EX-e #442):
+
+```
+julia --project -m Aeolus preprocess fetch-era5 --site 52.21,14.12 --date 2019-06-29 \
+    --hours 0-12 --box 1 --out examples/data --name era5_lindenberg_20190629
+```
+
+The tests never reach the network: they check that
+[`era5_requests`](@ref Aeolus.InputDrivers.era5_requests) gives the
+request the sample recorded (`cds_request`). Attribution: Hersbach et al. (2023), ERA5 hourly data on
 pressure levels / single levels, C3S CDS, doi:10.24381/cds.bd0915c6,
 doi:10.24381/cds.adbb2d47.
 

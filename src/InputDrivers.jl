@@ -62,6 +62,7 @@ using ..MoistThermodynamics: DEFAULT_CONSTANTS, exner_function, virtual_temperat
 using ..LargeScaleForcing: ForcingTable, forcing_value, Sounding, sounding_profiles, AdvectiveTendencies,
                            Subsidence, ProfileNudging
 using ..IO: fnv1a64, git_state
+import ..Config
 
 export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_driver, schema_markdown,
        format_reference, ncdump_header,
@@ -78,7 +79,9 @@ export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_d
        dynamic_forcing, init_time_string, init_day_seconds, surface_pressure_at,
        sounding_dynamic_inputs, forcing_dynamic_inputs, NestBoundaryRecorder, record_boundary!, plane_snapshot,
        ERA5Data, ERA5_OUTPUTS, read_era5, era5_model_level_heights, era5_vertical, era5_subsidence,
-       coriolis_parameter, era5_columns, era5_times, era5_dynamic_inputs, era5_planes!, write_era5_driver
+       coriolis_parameter, era5_columns, era5_times, era5_dynamic_inputs, era5_planes!, write_era5_driver,
+       era5_requests, fetch_era5, cds_credentials, cds_retrieve, cds_stamp!, cds_json, era5_fetch_args,
+       CDS_API, ERA5_PL_LEVELS
 
 include("input_drivers/conventions.jl")
 include("preprocess/city.jl")
@@ -89,5 +92,6 @@ include("input_drivers/dynamic.jl")
 include("preprocess/sounding.jl")
 include("preprocess/parent.jl")
 include("preprocess/era5.jl")
+include("preprocess/era5_fetch.jl")   # aeolus preprocess fetch-era5 (EX-e, #442)
 
 end # module

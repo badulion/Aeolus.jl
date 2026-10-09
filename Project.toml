@@ -5,6 +5,7 @@ authors = ["Andrzej Dulny <andrzej.dulny@protonmail.com>"]
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 GRIBDatasets = "82be9cdb-ee19-4151-bdb3-b400788d9abc"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
