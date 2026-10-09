@@ -90,7 +90,7 @@ end
     dir = mktempdir()
     p = cfg_file("""
         [run]
-        driver = "cfgtest"
+        legacy = "cfgtest"
         [grid]
         size = [32, 16, 8]
         extent = [1000, 500.5, 250.0]      # an integer is taken as a float
@@ -126,13 +126,12 @@ end
     @test config_origin(cfg, "clock.nsteps") == "default"
     # canonical text: every option, sorted keys, "none", absolute paths
     t = write_config(cfg)
-    @test startswith(t, "schema_version = 1\n\n[checkpoint]\n")
+    @test startswith(t, "schema_version = 2\n\n[checkpoint]\n")
     @test occursin("\n[clock]\nadaptive = true\ndt = 0.5\ndt_max = \"none\"\nnsteps = 10\n", t)
     @test occursin("extent = [1000.0, 500.5, 250.0]\n", t)
     @test occursin("start_time = 07:32:00.5\n", t)
     @test occursin("terrain = \"$(normpath(joinpath(dir, "data", "dem.tif")))\"", t)
     @test occursin("\n[physics.couplings.wall]\nz0 = 0.1\n", t)
-    @test !occursin("extends", t)
     @test config_hash(cfg) == Aeolus.IO.fnv1a64(t)
 end
 
@@ -143,7 +142,7 @@ end
         option!(s, "nu", OneOf(Float64, Symbol); default = :scaled, allowed = [:scaled], range = (0, Inf),
                 open_lower = true, doc = "a number or \"scaled\"")
     end])
-    load(text) = load_run_config(cfg_file("[run]\ndriver = \"cfgtest_oneof\"\n[forcing]\n" * text))
+    load(text) = load_run_config(cfg_file("[run]\nlegacy = \"cfgtest_oneof\"\n[forcing]\n" * text))
     @test load("").forcing.u_g === 8.0 && load("").forcing.nu === :scaled
     @test load("u_g = 3").forcing.u_g === 3.0                     # an integer is a float
     cfg = load("u_g = {z = [0.0, 10.0]}\nnu = 1e-4")
@@ -161,16 +160,27 @@ end
     @test occursin("float | table", option_reference("cfgtest_oneof"))
 end
 
+"Every shipped config: examples/**/configs/*.toml."
+function cfg_shipped()
+    ex = normpath(joinpath(@__DIR__, "..", "examples"))
+    return sort!([joinpath(r, f) for (r, _, fs) in walkdir(ex) for f in fs
+                  if endswith(f, ".toml") && basename(r) == "configs"])
+end
+
 @testset "Config: canonical fixed point (shipped + 200 random configs per schema)" begin
-    # shipped configs: every .toml in a registered driver's config directory
-    # (every member of a sweep: the sbl configs are registered at load since EX-b #439)
-    for f in shipped_configs(), (_, cfg) in load_sweep(f)
-        t1 = write_config(cfg)
-        t2 = write_config(load_run_config(IOBuffer(t1)))
-        @test t1 == t2
+    # shipped configs: every examples/**/configs/*.toml, every member of a sweep
+    shipped = cfg_shipped()
+    @test length(shipped) >= 50
+    for f in shipped
+        runs = cd(() -> load_sweep(f), dirname(f))
+        for (_, cfg) in runs
+            t1 = write_config(cfg)
+            t2 = write_config(load_run_config(IOBuffer(t1)))
+            @test t1 == t2
+        end
     end
     nfail = 0; nnan = 0
-    for name in ("cfgtest", "common")
+    for name in ("cfgtest",)
         schema = Aeolus.Config.driver_schema(name)
         rng = Xoshiro(356 + length(name))
         dir = mktempdir()
@@ -198,7 +208,7 @@ end
             (floatmax(), "1.7976931348623157e308"), (Inf, "inf"), (-Inf, "-inf"),
             (NaN, "nan"), (-0.0, "-0.0")]
     for (x, lit) in vals
-        p = cfg_file("[run]\ndriver = \"cfgtest\"\n[clock]\ndt = $lit\n")
+        p = cfg_file("[run]\nlegacy = \"cfgtest\"\n[clock]\ndt = $lit\n")
         cfg = load_run_config(p)
         @test reinterpret(UInt64, cfg.clock.dt) == reinterpret(UInt64, x)
         cfg2 = load_run_config(IOBuffer(write_config(cfg)))
@@ -211,7 +221,7 @@ end
 end
 
 @testset "Config: strict errors name key, file and constraint" begin
-    base = "[run]\ndriver = \"cfgtest\"\n"
+    base = "[run]\nlegacy = \"cfgtest\"\n"
     # unknown key, with a suggestion (Damerau–Levenshtein ≤ 2)
     p = cfg_file(base * "[grid]\nsise = [8, 8, 8]\n")
     e = cfg_error(() -> load_run_config(p))
@@ -254,11 +264,11 @@ end
     m = sprint(showerror, cfg_error(() -> load_run_config(p)))
     @test occursin("clock.adaptive", m) && occursin("needs adaptive = false", m)
     # a newer schema_version is refused, naming the supported one
-    m = sprint(showerror, cfg_error(() -> load_run_config(cfg_file("schema_version = 2\n" * base))))
-    @test occursin("schema_version = 2", m) && occursin("schema_version = 1", m)
-    # an unknown driver, with a suggestion
-    m = sprint(showerror, cfg_error(() -> load_run_config(cfg_file("[run]\ndriver = \"cfgtst\"\n"))))
-    @test occursin("unknown driver \"cfgtst\"", m) && occursin("did you mean \"cfgtest\"", m)
+    m = sprint(showerror, cfg_error(() -> load_run_config(cfg_file("schema_version = 3\n" * base))))
+    @test occursin("schema_version = 3", m) && occursin("schema_version = 2", m)
+    # an unknown legacy case, with a suggestion
+    m = sprint(showerror, cfg_error(() -> load_run_config(cfg_file("[run]\nlegacy = \"cfgtst\"\n"))))
+    @test occursin("unknown legacy case \"cfgtst\"", m) && occursin("did you mean \"cfgtest\"", m)
     # five independent errors are reported together
     p = cfg_file(base * """
         [grid]
@@ -294,7 +304,7 @@ end
 end
 
 @testset "Config: with, the Julia escape hatch" begin
-    cfg = load_run_config(cfg_file("[run]\ndriver = \"cfgtest\"\n"))
+    cfg = load_run_config(cfg_file("[run]\nlegacy = \"cfgtest\"\n"))
     c2 = with(cfg, "clock.nsteps" => 12, "grid.size" => [8, 8, 4], "clock.scheme" => :ab2,
               "clock.dt_max" => 2, "physics.terrain" => "dem.tif")
     @test c2.clock.nsteps == 12 && cfg.clock.nsteps == 10          # cfg is unchanged
@@ -356,7 +366,7 @@ end
         option!(s, "theta", OneOf(Symbol, Float64); default = :initial_gradient,
                 allowed = [:initial_gradient, :noflux], range = (-1, 1))
     end], defaults = ("output.cadence" => 1800.0, "run.name" => "alexanderplatz"))
-    ld(t) = load_run_config(cfg_file("[run]\ndriver = \"eithertest\"\n" * t))
+    ld(t) = load_run_config(cfg_file("[run]\nlegacy = \"eithertest\"\n" * t))
     @test ld("").top.theta === :initial_gradient
     @test ld("[top]\ntheta = \"noflux\"\n").top.theta === :noflux
     @test ld("[top]\ntheta = 0.003\n").top.theta === 0.003
@@ -370,7 +380,7 @@ end
     # the driver's own defaults replace the common ones; type and range stay
     cfg = ld("")
     @test cfg.output.cadence == 1800.0 && cfg.run.name == "alexanderplatz"
-    @test load_run_config(cfg_file("[run]\nname = \"e\"\n")).output.cadence == 3600.0   # common: unchanged
+    @test load_run_config(cfg_file("[run]\nname = \"e\"\n")).output.cadence == 3600.0   # the model's: unchanged
     @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.cadence" => -1.0))
     @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.nope" => 1.0))
 end

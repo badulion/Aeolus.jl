@@ -1,4 +1,5 @@
-# The `simulation` driver and the bit-identical round trip (CFG-b, #357):
+# The model's run from a config and the bit-identical round trip (CFG-b,
+# #357; the schema-2 sections, ONE-b #451):
 # src/config/simulation_driver.jl, src/config/drivers.jl,
 # test/config_roundtrip_harness.jl.
 #
@@ -46,7 +47,7 @@ function sim_error(f)
     error("expected a ConfigError")
 end
 
-@testset "simulation driver: round trip from run.toml is bit-identical (16³, 20 steps)" begin
+@testset "the model: round trip from run.toml is bit-identical (16³, 20 steps)" begin
     for name in ("taylor_green_vortex", "dry_convective_bl", "buoyant_convection")
         r = roundtrip_check(cfgs(name); nsteps = 20, overrides = ["grid.size=[16,16,16]"])
         @test r.fields_equal
@@ -64,7 +65,7 @@ end
     end
 end
 
-@testset "simulation driver: the TGV config is the hand-built TGV, bit for bit (32³, 50 steps)" begin
+@testset "the model: the TGV config is the hand-built TGV, bit for bit (32³, 50 steps)" begin
     # The simulation examples/taylor_green_vortex.jl built in code before it
     # became a config, captured verbatim (its dt rule: min of the convective
     # and viscous limits, shortened to T_final / ceil(T_final / dt)).
@@ -88,11 +89,11 @@ end
     end
     # the config: its own dt rule gives the same 26 steps of 2/26 ...
     cfg0 = load_run_config(cfgs("taylor_green_vortex"))
-    @test SimulationDriver._fixed_steps(cfg0.stepper) == (dt, nsteps)
+    @test SimulationDriver._fixed_steps(cfg0.time) == (dt, nsteps)
     # ... and run for 50 steps of that dt it is the same simulation
     cfg = load_run_config(cfgs("taylor_green_vortex");
-                          overrides = ["stepper.end_time=\"none\"", "stepper.nsteps=50",
-                                       "stepper.dt=$(repr(dt))", "fftw.planner=\"estimate\""])
+                          overrides = ["time.duration=\"none\"", "time.nsteps=50",
+                                       "time.dt=$(repr(dt))", "fftw.planner=\"estimate\""])
     res = sim_run(cfg)
     s = state_fields(res.obj)
     for (k, f) in pairs((u = sim.u, v = sim.v, w = sim.w, p = sim.p, θ = sim.θ))
@@ -101,12 +102,12 @@ end
     @test simulation(res.obj).t === sim.t
 end
 
-@testset "simulation driver: TGV kinetic energy decays at 2νk² (t ∈ [0, 0.1])" begin
+@testset "the model: TGV kinetic energy decays at 2νk² (t ∈ [0, 0.1])" begin
     # For the single Taylor-Green mode, |k|² = 3 and the initial dissipation
     # is exactly 2ν|k|² KE; the nonlinear transfer is O(t²), so over
     # t = 0.1 KE(t) = KE₀ exp(−2ν|k|² t) up to the discretisation (the
     # discrete Laplacian's eigenvalue is 3 (1 − dx²/12 + …) at 32³).
-    cfg = sim_cfg("taylor_green_vortex", 10, ["stepper.dt=0.01"])
+    cfg = sim_cfg("taylor_green_vortex", 10, ["time.dt=0.01"])
     ke0 = kinetic_energy(simulation(Config.build(SIMD, cfg)))
     res = sim_run(cfg)
     sim = simulation(res.obj)
@@ -119,11 +120,11 @@ end
     @test maximum(abs, [max_divergence(sim)]) < 1e-10
 end
 
-@testset "simulation driver: resume from the step-10 checkpoint is bitwise the 20-step run" begin
+@testset "the model: resume from the step-10 checkpoint is bitwise the 20-step run" begin
     for (name, extra) in (("dry_convective_bl", ["grid.size=[16,16,16]"]),
                           # adaptive dt: the restored stepper state limits the first dt's growth
-                          ("taylor_green_vortex", ["grid.size=[16,16,16]", "stepper.dt=\"none\"",
-                                                   "stepper.cfl=0.3", "stepper.dt_max=1.0"]))
+                          ("taylor_green_vortex", ["grid.size=[16,16,16]", "time.dt=\"adaptive\"",
+                                                   "time.cfl=0.3", "time.dt_max=1.0"]))
         cfg = sim_cfg(name, 20, vcat(extra, "checkpoint.every_steps=10"))
         full = sim_run(cfg)
         root = mktempdir()
@@ -147,7 +148,7 @@ end
     end
 end
 
-@testset "simulation driver: the surface heat flux closes the θ budget" begin
+@testset "the model: the surface heat flux closes the θ budget" begin
     # Free-slip walls, no flux through the top, the sponge damps velocity
     # only: the domain-mean θ rises by Q t / Lz exactly (flux form).
     cfg = sim_cfg("dry_convective_bl", 12, ["grid.size=[16,16,16]"])
@@ -162,7 +163,7 @@ end
     @test maximum(abs, interior_view(sim.w)) > 1e-3
 end
 
-@testset "simulation driver: initial profiles and the perturbation" begin
+@testset "the model: initial profiles and the perturbation" begin
     tbl = Dict{String,Any}("kind" => "table", "z" => [0.0, 100.0, 300.0], "values" => [1.0, 3.0, 2.0])
     @test profile_value(tbl, -5.0) == 1.0 && profile_value(tbl, 50.0) == 2.0
     @test profile_value(tbl, 200.0) == 2.5 && profile_value(tbl, 1e4) == 2.0
@@ -190,14 +191,19 @@ end
     @test interior_view(s3.u)[3, 5, 8] ≈ 2.0 * (7.5 / 32)              # 32³ on the unit box
 end
 
-@testset "simulation driver: cross-field checks and profile validation" begin
-    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex"); overrides = ["stepper.cfl=0.5"]))
-    @test any(p -> p.key == "stepper.dt" && occursin("exactly one", p.message), e.problems)
-    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex"); overrides = ["stepper.nsteps=5"]))
-    @test any(p -> p.key == "stepper.end_time", e.problems)
-    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex");
-                                        overrides = ["stepper.dt=\"none\"", "stepper.cfl=0.5"]))
-    @test any(p -> p.key == "stepper.dt_max", e.problems)
+@testset "the model: cross-field checks and profile validation" begin
+    # cfl and dt_max belong to adaptive steps: with a fixed dt they would be ignored
+    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex"); overrides = ["time.cfl=0.3"]))
+    @test any(p -> p.key == "time.cfl" && occursin("would be ignored", p.message), e.problems)
+    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex"); overrides = ["time.dt_max=2.0"]))
+    @test any(p -> p.key == "time.dt_max" && occursin("adaptive", p.message), e.problems)
+    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex"); overrides = ["time.nsteps=5"]))
+    @test any(p -> p.key == "time.duration" && occursin("exactly one", p.message), e.problems)
+    e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex"); overrides = ["time.dt=\"fixed\""]))
+    @test any(p -> p.key == "time.dt", e.problems)
+    # the sponge starts below the top
+    e = sim_error(() -> load_run_config(cfgs("dry_convective_bl"); overrides = ["sponge.z_start=1600.0"]))
+    @test any(p -> p.key == "sponge.z_start" && occursin("below the top", p.message), e.problems)
     e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex");
                                         overrides = ["dynamics.core=\"anelastic\"", "boundaries.x=\"noslip\""]))
     keys_ = [p.key for p in e.problems]
@@ -218,7 +224,7 @@ end
     @test any(p -> p.key == "initial.theta" && occursin("lengths", p.message), e.problems)
 end
 
-@testset "simulation driver: anelastic core, stretched grid, closures, schemes" begin
+@testset "the model: anelastic core, stretched grid, closures, schemes" begin
     # anelastic: θ starts at the isentropic base state, ∇·(ρ̄u) stays at round-off
     cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "dynamics.core=\"anelastic\"",
                                            "initial.theta={}"])
@@ -249,7 +255,7 @@ end
     # 0.005 s⁻¹ shear) Brown et al. (1994) switch the vertical mixing off
     # beyond Ri_c = 1/4, while the horizontal coefficient stays on
     stable = ["grid.size=[16,16,16]", "initial.theta={kind=\"mixed_layer_lapse\", value=300.0, z_i=0.0, lapse=0.01}",
-              "initial.u={kind=\"table\", z=[0.0, 1600.0], values=[0.0, 8.0]}", "boundaries.theta_flux_bottom=0.0",
+              "initial.u={kind=\"table\", z=[0.0, 1600.0], values=[0.0, 8.0]}", "surface_theta_flux.bottom=0.0",
               "sgs.stability=\"brown_et_al_1994\""]
     rs = sim_run(sim_cfg("dry_convective_bl", 3, stable)).obj
     Ri = interior_view(clo(rs).Ri); νv = interior_view(clo(rs).νv)
@@ -259,7 +265,7 @@ end
     # schemes: rk3 is another trajectory than euler, both divergence-free
     out = Dict{String,Any}()
     for sch in ("euler", "rk3")
-        res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "stepper.scheme=\"$sch\""]))
+        res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "time.scheme=\"$sch\""]))
         @test max_divergence(simulation(res.obj)) < 1e-10
         out[sch] = copy(interior_view(simulation(res.obj).w))
     end
@@ -267,8 +273,8 @@ end
     @test isapprox(out["rk3"], out["euler"]; rtol = 0.2)               # the same flow, to O(dt)
 end
 
-@testset "simulation driver: output files at the cadence" begin
-    cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "output.fields=[\"u\", \"theta\"]",
+@testset "the model: output files at the cadence" begin
+    cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "output.variables=[\"u\", \"theta\"]",
                                            "output.cadence=10.0"])
     res = sim_run(cfg)
     dir = joinpath(res.folder.path, "output")

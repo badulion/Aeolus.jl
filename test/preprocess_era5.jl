@@ -314,16 +314,16 @@ end
     end
     @test rc2 == 2
     # the round trip, the driver hashed under [inputs]
-    r = roundtrip_check(E5_CFG; nsteps = 20, overrides = ["initial.dynamic=\"$out\""])
+    r = roundtrip_check(E5_CFG; nsteps = 20, overrides = ["dynamic_driver=\"$out\""])
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
-    @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(out)
+    @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(out)
     run1 = r.runs[1].obj
     sim1 = Aeolus.SimulationDriver.simulation(run1)
     feed1 = only(run1.model.domains).drivers.boundary          # the domain's dynamic-driver feed (ONE-a)
     @test feed1 isa FileBoundaryFeed && sim1.t == 40.0 && feed1.data.t0 == 0.0
     # the initial state is the ERA5 profile at the domain centre
-    cfg0 = load_run_config(E5_CFG; overrides = ["initial.dynamic=\"$out\""])
+    cfg0 = load_run_config(E5_CFG; overrides = ["dynamic_driver=\"$out\""])
     b0 = Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg0)
     θ0 = interior_view(Aeolus.SimulationDriver.simulation(b0).θ)
     @test θ0[3, 5, :] == d.profiles.theta && θ0[1, 1, :] == d.profiles.theta
@@ -339,14 +339,14 @@ end
                    sim1.t, extrema(pu.data)..., extrema(interior_view(sim1.u))...)
 end
 
-@testset "ERA5: the simulation driver's config checks" begin
+@testset "ERA5: the model's config checks" begin
     err(ov) = try
         Config.build(Aeolus.SimulationDriver.SimulationDriverType(), load_run_config(E5_CFG; overrides = ov)); nothing
     catch e
         e isa ConfigError || rethrow(); e
     end
-    e1 = err(["initial.dynamic=\"none\""])
-    @test e1 !== nothing && occursin("set initial.dynamic", sprint(showerror, e1))
+    e1 = err(["dynamic_driver=\"none\""])
+    @test e1 !== nothing && occursin("set the domain's dynamic_driver", sprint(showerror, e1))
     e2 = err(["initial.theta={kind=\"constant\", value=300.0}"])
     @test e2 !== nothing && occursin("give one of the two", sprint(showerror, e2))
     e3 = err(["preprocess.era5={lon=14.1}"])
