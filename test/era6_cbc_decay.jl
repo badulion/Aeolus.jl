@@ -31,8 +31,8 @@
 # With the spectrum of the face values the start is exact in the energy
 # the solver carries, and the errors above are the corrected ones.
 #
-# What remains (resolution sweep, dynamic, 3 seeds; examples/validation/
-# cbc_decay.jl and sgs.md): K98/K42 +13.2 / +7.5 / +1.8 / −4.9 % and
+# What remains (resolution sweep, dynamic, 3 seeds; the former
+# examples/validation/cbc_decay.jl and sgs.md): K98/K42 +13.2 / +7.5 / +1.8 / −4.9 % and
 # K171/K42 −3.6 / −9.5 / −13.9 / −17.6 % at N = 32 / 40 / 48 / 64. The
 # 32³ station-98 excess is the coarse grid: k_c = 1.8 cm⁻¹ is only 3.6×
 # the station-42 peak and energy piles up at the cut-off (E(k_c)/CBC 1.64,

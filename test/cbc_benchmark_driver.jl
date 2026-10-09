@@ -1,7 +1,9 @@
 # Comte-Bellot & Corrsin (1971) decaying grid turbulence: the shared LES
 # benchmark harness of Era VI (P54-c, #168).
 #
-# Included by test/era6_cbc_decay.jl and examples/validation/cbc_decay.jl.
+# Included by test/era6_cbc_decay.jl. (The examples/validation/cbc_decay
+# example and its run type went with ONE-g #456: an evolve-and-rescale
+# spin-up averaged over seeds is not one model run.)
 # A closure is benchmarked with one call, `cbc_benchmark(closure; N)`, so
 # later closures (LASD, AMD/Vreman, σ, TKE) add one line each to the test.
 #

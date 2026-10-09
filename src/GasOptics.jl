@@ -161,8 +161,9 @@ const T_REF = 296.0         # K
 # opacity into the line term instead — as an earlier version of this file
 # did, with k ≈ 0.3 — reproduces one atmosphere's broadband flux and then
 # fails badly on any column with different humidity. It cost ~27 W/m² of
-# spurious downwelling in the DYCOMS-II RF01 case; see
-# examples/validation/dycoms_rf01_radiation.jl.
+# spurious downwelling in the DYCOMS-II RF01 case (the former
+# examples/validation/dycoms_rf01_radiation.jl, a column case removed by
+# ONE-g, #456).
 const _LW_H2O = [
     MalkmusParams(180.0, 0.30, 0.5),  MalkmusParams(120.0, 0.30, 0.5),
     MalkmusParams( 45.0, 0.28, 0.5),  MalkmusParams(  2.0, 0.25, 0.5),
@@ -589,7 +590,7 @@ _molar_mass(g::Symbol) =
 # large and a continuum ~15x too weak. The US Standard Atmosphere surface
 # flux came out fine; the DYCOMS-II RF01 cloud-top flux was wrong by 54%,
 # because that case has a dry 4 kg/m² column where the two terms no
-# longer trade off. See examples/validation/dycoms_rf01_radiation.jl.
+# longer trade off (the former examples/validation/dycoms_rf01_radiation.jl).
 #
 # The form below is Roberts, Selby & Biberman (1976), which remains the
 # standard simple parameterisation and is calibrated against measurement:

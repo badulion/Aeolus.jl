@@ -10,7 +10,7 @@
 What builds and runs a [`RunConfig`](@ref) into a run folder: the model
 (`Aeolus.SimulationDriver.SimulationDriverType`, registered as
 [`MODEL`](@ref)), or a **legacy case** — an assembly not yet ported to
-components (the urban, SBL, validation and example run types), selected by
+components (the urban, the validation and the example run types), selected by
 `[run] legacy = "<name>"` and removed by the later steps of the
 single-model epic. A type `D` implements
 
@@ -123,14 +123,10 @@ directory. The file is included into a fresh module and must call
 `berlin` entry, is part of the package since EX-a #438: `Aeolus.UrbanCase`.)
 """
 const DRIVER_FILES = Dict{String,String}(
-    # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
-    # type in src since EX-b #439: Aeolus.StableBoundaryLayer)
-    "dns" => "examples/validation/dns_apriori_driver.jl",
-    # CFG-e (#360): the validation drivers and the remaining example scripts
-    "channel" => "examples/validation/channel_driver.jl",
-    "cbc_decay" => "examples/validation/cbc_driver.jl",
-    "patchy_surface" => "examples/validation/patchy_surface_driver.jl",
-    "column" => "examples/validation/column_driver.jl",
+    # CFG-e (#360): the decaying-turbulence DNS of P56-c, which the `sgs_decay`
+    # run type builds on. (ONE-g #456: the SBL cases are configurations of the
+    # model; the channel, column, filtered-DNS record, CBC and patchy-surface
+    # validation run types are gone with their cases.)
     "dns_decay" => "examples/validation/dns_driver.jl",
 )
 

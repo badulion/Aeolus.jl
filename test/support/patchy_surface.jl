@@ -21,8 +21,9 @@
 #                 surface with the area-mean skin temperature.
 #
 # This file only defines functions (prefix `patchy_`); it is included by
-# `examples/validation/patchy_surface_les.jl` and by
-# `test/era5_heterogeneous_surface.jl`.
+# `test/era5_heterogeneous_surface.jl`. (A test harness that runs its own
+# LES, moved from examples/validation/ by ONE-g, #456: the example becomes
+# a configuration once the model has a heterogeneous-surface component.)
 # =========================================================================
 
 using Aeolus

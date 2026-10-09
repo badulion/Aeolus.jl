@@ -1,5 +1,6 @@
 # Published within-canopy profiles used by test/era5_canopy_profiles.jl
-# and examples/validation/canopy_profiles.jl (issue #25).
+# (issue #25; the column example examples/validation/canopy_profiles.jl
+# went with the single-column cases, ONE-g #456).
 #
 # None of the source papers tabulates its profiles; every number below was
 # read from a published figure. How:
