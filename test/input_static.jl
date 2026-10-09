@@ -311,6 +311,13 @@ end
         for (f, sch) in ((cc.static, STATIC_SCHEMA), (cc.parent_static, STATIC_TILES_SCHEMA))
             @test filesize(f) <= 2 * 1024^2                 # committed: 2 MB or smaller
             @test isempty(check_driver(f, sch))
+            # made by AeolusPrep (ONE-h, #457): the OSM source in its package, the
+            # land-use table in Aeolus (relative, hashed: a changed table makes it stale)
+            NCDataset(f) do ds
+                @test ds.attrib["preprocessor"] == "aeolusprep static"
+                @test sch === STATIC_SCHEMA ? startswith(ds.attrib["source"], "AeolusPrep:data/berlin/") :
+                                              ds.attrib["source"] == "../../data/berlin_landuse_6km.csv"
+            end
         end
     end
     smoke = joinpath(berlin_configs_dir(), "input", "berlin_mitte_sample_smoke_static.nc")
