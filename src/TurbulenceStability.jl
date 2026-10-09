@@ -307,7 +307,7 @@ Height of the top of the boundary layer from a profile sampled at the
 strictly increasing heights `z` (m). The one ``z_i`` diagnostic of the
 package: it is applied identically to radiosonde profiles
 (`LargeScaleForcing.sounding_profiles`) and to LES output (the CBL
-harness `test/tke_cbl_driver.jl`, the nesting epic #246).
+harness `RunDrivers.CBLDriver.tke_cbl`, the nesting epic #246).
 
 `method`:
 

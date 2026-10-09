@@ -110,11 +110,8 @@ Aeolus.jl/
 ├── README.md                 short summary + roadmap
 ├── src/                      module sources (see above)
 ├── test/runtests.jl          37 unit tests
-├── examples/                 runnable examples
-│   ├── scalar_advection_2d.jl
-│   ├── poisson_manufactured.jl
-│   ├── taylor_green_vortex.jl
-│   └── buoyant_convection.jl
+├── examples/                 example cases: TOML configs + input drivers
+│   └── configs/              (aeolus run <file>.toml; plotting scripts read the output)
 ├── benchmarks/               BenchmarkTools.jl scripts
 │   ├── bench_operators.jl
 │   ├── bench_poisson.jl

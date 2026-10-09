@@ -1,0 +1,67 @@
+# Surface-mounted cube in a channel: the reattachment length behind the
+# cube for the Smagorinsky, TKE and Reynolds-stress SGS closures — Era VI,
+# P56-e (#192; formerly examples/sgs/surface_mounted_cube.jl).
+#
+# Martinuzzi & Tropea (1993), cube of height H in a channel of height 2H at
+# Re_H = U_b H/ν = 40 000: the mean flow separates at the cube's leading
+# edges and reattaches on the floor behind it at x_R/H = 1.612 (from the
+# rear face, on the centre line); ahead of the cube the horseshoe vortex
+# separates the floor flow x_F/H = 1.04 upstream of the front face.
+#
+# A box 10H × 6H × 2H at 16 cells per H, periodic in x and y, the cube at
+# x = 3H–4H, centred in y (the static driver input/surface_mounted_cube_static.nc,
+# made from input/surface_mounted_cube.geojson); the floor is one solid cell
+# layer below z = 0 and the lid a free-slip wall at z = 2H (the channel's
+# upper wall as a symmetry plane). Direct-forcing IBM after every RK3
+# predictor, a PI-controlled body force holding U_b = 1, CFL 0.4; the
+# statistics over 30 H/U after a 30 H/U spin-up. This file is the
+# Smagorinsky run (C_s = 0.1, the wall-bounded value; about 18 min on one
+# core); surface_mounted_cube_closures.toml sweeps the three closures.
+#
+#   julia --project -m Aeolus run examples/sgs/configs/surface_mounted_cube.toml
+#   julia --project=. examples/sgs/plot_surface_mounted_cube.jl runs/<date>_surface_mounted_cube_*
+#
+# Remake the static driver after changing the grid:
+#   julia --project -m Aeolus preprocess static examples/sgs/configs/surface_mounted_cube.toml
+
+[run]
+driver = "obstacle_channel"
+name = "surface_mounted_cube"
+seed = 1993
+
+# FFTW's default MEASURE planner picks its plans by timing them, so two runs
+# of this config could take different plans and, the flow being chaotic,
+# end at different x_R (measured: Smagorinsky 1.83 and 1.91, TKE 1.64 and
+# 1.54, from two MEASURE runs of the same code). ESTIMATE plans the same in
+# every process: a rerun reproduces the run bit for bit.
+[fftw]
+planner = "estimate"
+
+[grid]
+cells_per_h = 16
+extent = [10.0, 6.0, 2.0]
+
+[flow]
+re_h = 40000.0
+kp = 2.0
+ki = 0.5
+noise = 0.1
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+
+[obstacles]
+static = "input/surface_mounted_cube_static.nc"
+floor_cells = 1
+
+[preprocess]
+obstacles = "input/surface_mounted_cube.geojson"
+
+[stepper]
+cfl = 0.4
+t_spin = 30.0
+t_avg = 30.0
+
+[test]
+overrides = ["stepper.t_spin=0.03", "stepper.t_avg=0.03"]

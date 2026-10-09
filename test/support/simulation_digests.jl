@@ -104,10 +104,22 @@ function exd_digests(; examples = normpath(joinpath(@__DIR__, "..", "..", "examp
         s = Base.invokelatest(state_fields, r.obj)
         d = Dict{String,String}(string(k) => sd_digest(v) for (k, v) in pairs(s))
         d["t"] = sd_digest([Base.invokelatest(sd_clock, r.obj)])
-        d["diagnostics_csv"] = sd_digest(codeunits(join(sd_diagnostics(r.folder), "\n")))
+        rows = sd_diagnostics(r.folder)
+        d["diagnostics_csv"] = sd_digest(codeunits(join(rows, "\n")))
+        # the rows without the `sgs.*` columns, and whether the closure is the
+        # plain Smagorinsky (the core's built-in C_s before ONE-a, #450)
+        d["diagnostics_csv_without_sgs"] = sd_digest(codeunits(join(sd_drop_sgs(rows), "\n")))
+        d["plain_smagorinsky"] = string(r.obj.cfg.sgs.closure === :smagorinsky && r.obj.cfg.sgs.stability === :none)
         out[label] = d
     end
     return out
+end
+
+"`rows` of a diagnostics.csv without its `sgs.*` columns."
+function sd_drop_sgs(rows)
+    isempty(rows) && return rows
+    keep = findall(h -> !startswith(h, "sgs."), split(rows[1], ','))
+    return [join(split(l, ',')[keep], ',') for l in rows]
 end
 
 "fnv1a64 of the bytes of an array, as 16 hex digits."

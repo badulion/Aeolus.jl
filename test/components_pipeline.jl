@@ -63,6 +63,30 @@ const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
     end
 end
 
+@testset "pipeline acceptance: the EX-d simulation configs and their couplings reproduce master's digests ($(length(SD_EXD_VARIANTS)) runs)" begin
+    exd = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_digests_exd.toml"))
+    @test exd["commit"] == "a22b57babafc96bc15e4a2ca56ebb225c9bdd5f5"
+    ref = exd["digests"]
+    @test Set(keys(ref)) == Set(first.(SD_EXD_VARIANTS))
+    got = exd_digests()
+    for (label, d) in sort!(collect(got); by = first)
+        for (k, v) in ref[label]
+            k == "diagnostics_csv" && continue
+            @test (label, k, d[k]) == (label, k, v)
+        end
+        # the plain Smagorinsky runs gain the three sgs.* columns; the rest is master's bytes
+        key = d["plain_smagorinsky"] == "true" ? "diagnostics_csv_without_sgs" : "diagnostics_csv"
+        @test (label, d[key]) == (label, ref[label]["diagnostics_csv"])
+    end
+    # the couplings are one component of the domain, attached where they acted before
+    cfg = load_run_config(joinpath(SD_CONFIGS, "..", "coupled", "configs", "flow_past_cube.toml");
+                          overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\""))
+    r = cd(() -> Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg),
+           joinpath(SD_CONFIGS, "..", "coupled", "configs"))
+    c = only(x for x in only(r.model.domains).components if x isa Aeolus.SimulationDriver.SimulationCouplings)
+    @test map(st -> st.name, CPC.stages(c)) == (:surface_flux, :body_force, :surface_update)
+end
+
 # ---------------------------------------------------------------------------
 # test components
 # ---------------------------------------------------------------------------

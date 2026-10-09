@@ -95,6 +95,8 @@ include("Components.jl")     # the component interface, Domain/Model and the sta
 # CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
 # so after them; the driver contract and the CLI are in Config).
 include("config/simulation_driver.jl")
+# EX-d (#441): the run types of the example cases (configured from TOML only).
+include("RunDrivers.jl")
 
 using .RunLog
 using .Grids

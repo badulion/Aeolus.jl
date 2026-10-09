@@ -18,7 +18,7 @@ module SimulationDriver
 # Anelastic, TimeIntegration, StretchedGrids), which are included after
 # Aeolus.Config; included at the end of Aeolus.jl.
 
-using Random: Xoshiro
+using Random: Xoshiro, randn
 using ..Grids: RegularGrid, CellCenter
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
@@ -45,8 +45,11 @@ export SimulationDriverType, SimulationRun, simulation, profile_value
 The `simulation` driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
 `[run] driver = "simulation"`. Its sections are `[grid]`, `[dynamics]`,
 `[boundaries]`, `[sgs]`, `[initial]`, `[stepper]`, `fields` in
-`[output]` and `[preprocess]`; `aeolus options simulation` prints them.
-Shipped configs: `examples/configs/`.
+`[output]` and `[preprocess]`, and the couplings around the step
+(EX-d, #441): `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
+`[particles]` and `[obstacles]` ([`SimCouplings`](@ref)); `aeolus
+options simulation` prints them. Shipped configs: `examples/configs/`,
+`examples/kernels/configs/`, `examples/coupled/configs/`.
 
 `[initial] dynamic` names a dynamic driver (CFG-g, #362): its initial
 profiles set u, v, θ, qv, and open lateral faces (`boundaries.x` or `y =
@@ -63,6 +66,11 @@ const CONFIG_DIR = normpath(joinpath(@__DIR__, "..", "..", "examples", "configs"
 Config.driver_name(::SimulationDriverType) = "simulation"
 Config.config_dir(::SimulationDriverType) = CONFIG_DIR
 
+_isnum(x) = x isa Real && !(x isa Bool)
+
+# the couplings around the core's step (EX-d, #441)
+include("simulation_couplings.jl")
+
 # ---------------------------------------------------------------------------
 # initial profiles
 # ---------------------------------------------------------------------------
@@ -70,17 +78,21 @@ Config.config_dir(::SimulationDriverType) = CONFIG_DIR
 const _PROFILE_KEYS = Dict("constant" => ["value"],
                            "mixed_layer_lapse" => ["value", "z_i", "lapse"],
                            "table" => ["z", "values"],
-                           "taylor_green" => ["amplitude", "k"])
+                           "exponential" => ["value", "scale_height"],
+                           "taylor_green" => ["amplitude", "k"],
+                           "box" => ["value", "x", "y", "z"])
 
-_isnum(x) = x isa Real && !(x isa Bool)
+# the profile kinds of each variable: the vertical ones for all, the
+# Taylor–Green field for u and v, a box for the cloud water (EX-d, #441)
+_profile_kinds(var) = sort!(vcat(["constant", "exponential", "mixed_layer_lapse", "table"],
+                                var in ("u", "v") ? ["taylor_green"] : String[], var == "ql" ? ["box"] : String[]))
 
 "The validator of the profile table of variable `var` (an empty table: the default profile)."
 function _profile_validator(var::String)
     return function (t)
         isempty(t) && return String[]
         kind = get(t, "kind", nothing)
-        kinds = var in ("u", "v") ? sort!(collect(keys(_PROFILE_KEYS))) :
-                filter!(!=("taylor_green"), sort!(collect(keys(_PROFILE_KEYS))))
+        kinds = _profile_kinds(var)
         kind in kinds || return ["kind: expected one of " * join(repr.(kinds), ", ") *
                                  ", got $(repr(kind))"]
         want = _PROFILE_KEYS[kind]
@@ -94,6 +106,9 @@ function _profile_validator(var::String)
             if kind == "table"
                 (v isa AbstractVector && !isempty(v) && all(_isnum, v)) ||
                     push!(probs, "$k: expected a non-empty array of numbers")
+            elseif kind == "box" && k != "value"
+                (v isa AbstractVector && length(v) == 2 && all(_isnum, v) && v[1] < v[2]) ||
+                    push!(probs, "$k: expected [lower, upper] with lower < upper (m)")
             else
                 _isnum(v) && isfinite(v) || push!(probs, "$k: expected a finite number, got $(repr(v))")
             end
@@ -103,8 +118,24 @@ function _profile_validator(var::String)
                 push!(probs, "z and values have different lengths ($(length(t["z"])) and $(length(t["values"])))")
             issorted(t["z"]; lt = <=) || push!(probs, "z: expected strictly increasing heights")
         end
+        kind == "exponential" && isempty(probs) && !(t["scale_height"] > 0) &&
+            push!(probs, "scale_height: expected a positive height (m)")
         return probs
     end
+end
+
+"The validator of `[initial] velocity_perturbation` (an empty table: none)."
+function _velocity_noise_validator(t)
+    isempty(t) && return String[]
+    probs = String[]
+    for k in sort!(collect(keys(t)))
+        k in ("kind", "amplitude") || push!(probs, "$k: unknown key (keys: kind, amplitude)")
+    end
+    get(t, "kind", nothing) in ("uniform", "normal") ||
+        push!(probs, "kind: expected \"uniform\" or \"normal\", got $(repr(get(t, "kind", nothing)))")
+    a = get(t, "amplitude", nothing)
+    (_isnum(a) && isfinite(a) && a >= 0) || push!(probs, "amplitude: required, a finite number ≥ 0 (m s⁻¹)")
+    return probs
 end
 
 """
@@ -117,7 +148,8 @@ The value at height `z` of a vertical profile of `[initial]`:
     `value + lapse (z − z_i)` above (a capping inversion; with `z_i` at the
     ground, a linear profile);
   * `{kind = "table", z = […], values = […]}`: linear interpolation,
-    constant beyond the ends.
+    constant beyond the ends;
+  * `{kind = "exponential", value, scale_height}`: `value exp(−z/scale_height)`.
 """
 function profile_value(p::AbstractDict, z::Real)
     kind = p["kind"]
@@ -133,6 +165,8 @@ function profile_value(p::AbstractDict, z::Real)
         i = searchsortedlast(zs, z)
         w = (z - zs[i]) / (zs[i+1] - zs[i])
         return (1 - w) * vs[i] + w * vs[i+1]
+    elseif kind == "exponential"
+        return Float64(p["value"]) * exp(-z / Float64(p["scale_height"]))
     end
     throw(ArgumentError("profile_value: kind $(repr(kind)) is not a vertical profile"))
 end
@@ -141,7 +175,7 @@ end
 # the schema
 # ---------------------------------------------------------------------------
 
-const _OUTPUT_FIELDS = ["u", "v", "w", "p", "theta", "qv"]
+const _OUTPUT_FIELDS = ["u", "v", "w", "p", "theta", "qv", "ql", "qr", "tracer"]
 
 function Config.driver_sections(::SimulationDriverType)
     grid = section("grid"; doc = "The box and its mesh.") do s
@@ -189,6 +223,13 @@ function Config.driver_sections(::SimulationDriverType)
                           (v in ("u", "v") ? ", or {kind = \"taylor_green\", amplitude, k} (u = A sin kx cos ky cos kz, v = -A cos kx sin ky cos kz)" : "") *
                           "; {} (the default): $d")
         end
+        option!(s, "ql", OpenTable(_profile_validator("ql")),
+                doc = "initial cloud water (microphysics.scheme = \"kessler\"): a vertical profile as for theta, or " *
+                      "{kind = \"box\", value, x = [x₀, x₁], y = [y₀, y₁], z = [z₀, z₁]} (value strictly inside the box, 0 outside); {}: 0")
+        option!(s, "velocity_perturbation", OpenTable(_velocity_noise_validator),
+                doc = "noise added to u, v and w (in that order, after the θ noise, from the same Xoshiro([run] seed)): " *
+                      "{kind = \"uniform\", amplitude} (uniform in [-a/2, a/2], one draw per cell) or " *
+                      "{kind = \"normal\", amplitude} (a × standard normal, one randn array per field); {}: none")
         option!(s, "dynamic", Optional{Path};
                 doc = "a dynamic driver (CFG-g, #362; aeolus preprocess dynamic --from-era5): its initial profiles set u, v, theta (and qv) — not together with the tables above — and open faces take its boundary planes; hashed under [inputs]")
         option!(s, "perturbation_amplitude", Float64; default = 0.0, range = (0, Inf), units = "K",
@@ -213,11 +254,13 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "fields", Vector{String}; default = String[], allowed = _OUTPUT_FIELDS,
                 doc = "fields written to output/fields_<step>.nc every cadence (cell-index arrays, Float32); [] : none")
     end
-    pre = section("preprocess"; doc = "Inputs of the preprocessors (aeolus preprocess dynamic).") do s
+    pre = section("preprocess"; doc = "Inputs of the preprocessors (aeolus preprocess dynamic, static).") do s
+        option!(s, "obstacles", Optional{Path};
+                doc = "a GeoJSON FeatureCollection of obstacle footprints in mesh metres with a `height` each: aeolus preprocess static writes obstacles.static from it (EX-d, #441)")
         option!(s, "era5", OpenTable(_era5_validator),
                 doc = "ERA5 (--from-era5, CFG-h #363): {lat, lon (degrees, the domain centre; required), box = 0.5 (degrees, the half-width of the centred differences of the geostrophic wind and the advective tendencies), levels = \"pressure\" | \"model\", outputs = [\"profiles\", \"planes\", \"large_scale\", \"geostrophic\", \"subsidence\", \"advection\", \"surface\"] (the default: all)}")
     end
-    return Section[grid, dyn, bnd, sgs, ini, stp, out, pre]
+    return Section[grid, dyn, bnd, sgs, ini, stp, out, pre, _coupling_sections()...]
 end
 
 const _ERA5_KEYS = ("lat", "lon", "box", "levels", "outputs")
@@ -303,6 +346,7 @@ function _cross_checks(cfg)
         (get(p, "kind", "") == "taylor_green" && (b.x !== :periodic || b.y !== :periodic)) &&
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
     end
+    append!(e, _coupling_checks(cfg))
     return e
 end
 
@@ -316,7 +360,7 @@ on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability`
 an `initial.qv` profile and the `qv` output field need `dynamics.moisture = true`
 a Taylor-Green initial `u` or `v` needs periodic x and y"""
 
-Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC => _cross_checks]
+Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC => _cross_checks]
 
 # ---------------------------------------------------------------------------
 # build
@@ -332,7 +376,10 @@ Aeolus.Components.Model) of one [`Domain`](@ref Aeolus.Components.Domain)
 components (the `:advection` and `:sgs` slots, Coriolis, the sponge, the
 surface θ flux) and its drivers (`boundary`, the
 [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed) of the
-open faces); `stepper` (a [`StepperState`](@ref)) and the resolved `cfg`.
+open faces); the EX-d couplings ([`SimCouplings`](@ref): `[forcing]`,
+`[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]`,
+#441) are its [`SimulationCouplings`](@ref) component when any is on;
+`stepper` (a [`StepperState`](@ref)) and the resolved `cfg`.
 """
 struct SimulationRun{M<:Model}
     model::M
@@ -392,14 +439,17 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
     else
         BoussinesqSimulation(mesh; θ₀ = d.theta0, moisture = d.moisture, kw...)
     end
+    couplings = _couplings(cfg, mesh)
     _initialise!(sim, cfg)
     dyn === nothing || _initialise_dynamic!(sim, dyn, cfg)
+    couplings.water === nothing || isempty(cfg.initial.ql) || _set_profile!(couplings.water.ql, cfg.initial.ql, :ql)
     st = cfg.stepper
     cfl = st.cfl === nothing ? nothing : CFLConstraints(; C_advective = st.cfl, dt_max = st.dt_max)
     d0 = Domain(sim; id = "main", scheme = st.scheme, cfl = cfl, validate = false,
                 drivers = feed === nothing ? (;) : (; boundary = feed))
     comps = build_components((CentredAdvection => nothing, SGS => s, Coriolis => d, Sponge => d,
                               SurfaceThetaFlux => b), d0)
+    _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
     scheme = st.cfl === nothing ? st.scheme : :adaptive
     return SimulationRun(Model(Domain(d0; components = comps)), StepperState(scheme), cfg)
 end
@@ -423,6 +473,9 @@ function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
         A = Float64(p["amplitude"]); k = Float64(p["k"])
         comp === :u ? set!(f, (x, y, z) -> A * (sin(k * x) * cos(k * y) * cos(k * z))) :
                       set!(f, (x, y, z) -> A * (-cos(k * x) * sin(k * y) * cos(k * z)))
+    elseif get(p, "kind", "") == "box"
+        v = Float64(p["value"]); bx = Float64.(p["x"]); by = Float64.(p["y"]); bz = Float64.(p["z"])
+        set!(f, (x, y, z) -> (bx[1] < x < bx[2] && by[1] < y < by[2] && bz[1] < z < bz[2]) ? v : 0.0)
     else
         set!(f, (x, y, z) -> profile_value(p, z))
     end
@@ -440,11 +493,25 @@ function _initialise!(sim, cfg)
     end                                  # anelastic: the constructor set θ = θ̄(z)
     isempty(ini.qv) || _set_profile!(sim.qv, ini.qv, :qv)
     a = ini.perturbation_amplitude
+    rng = Xoshiro(cfg.run.seed)
     if a > 0
-        rng = Xoshiro(cfg.run.seed); depth = ini.perturbation_depth
+        depth = ini.perturbation_depth
         noise = Field(CellCenter(), sim.mesh)
         set!(noise, (x, y, z) -> z < depth ? a * (rand(rng) - 0.5) : 0.0)
         interior_view(sim.θ) .+= interior_view(noise)
+    end
+    vp = ini.velocity_perturbation
+    if !isempty(vp)
+        A = Float64(vp["amplitude"]); uniform = vp["kind"] == "uniform"
+        for f in (sim.u, sim.v, sim.w)          # one field at a time, in this order
+            if uniform                          # one draw per cell, in set!'s order
+                noise = Field(location(f), sim.mesh)
+                set!(noise, (x, y, z) -> A * (rand(rng) - 0.5))
+                interior_view(f) .+= interior_view(noise)
+            else                                # one array of normals per field (randn's bulk stream)
+                interior_view(f) .+= A .* randn(rng, size(interior_view(f))...)
+            end
+        end
     end
     return sim
 end
@@ -478,9 +545,12 @@ function _write_output(r::SimulationRun, dir, step)
                                            "note" => "cell-index arrays: face fields at their own staggered positions"))
     try
         nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
+        c = sim_couplings(r)
         for f in r.cfg.output.fields
             v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
-            v[:, :, :] = Float32.(Array(interior_view(getproperty(sim, _FIELD_OF[f]))))
+            src = f == "ql" ? c.water.ql : f == "qr" ? c.water.qr : f == "tracer" ? c.tracer.c :
+                  getproperty(sim, _FIELD_OF[f])
+            v[:, :, :] = Float32.(Array(interior_view(src)))
         end
     finally
         close(nc)
@@ -506,9 +576,12 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     cadence = cfg.output.cadence
     next_out = outdir === nothing ? Inf : (n == 0 ? 0.0 : (floor(sim.t / cadence) + 1) * cadence)
     done() = n >= nmax || (adaptive && st.end_time !== nothing && sim.t >= st.end_time * (1 - 1e-12))
+    cpl = sim_couplings(r)
+    n == 0 && _record_initial!(cpl, sim)
     # attached (#336): the step cores report every step; monitored_step!
     # turns a step that throws into a diagnosed blowup
-    with_monitor(sim; run = rf, components = closure === nothing ? (;) : (; sgs = closure), t_end = t_end,
+    mon = merge(closure === nothing ? (;) : (; sgs = closure), _coupling_components(cpl))
+    with_monitor(sim; run = rf, components = mon, t_end = t_end,
                  cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
         if outdir !== nothing && sim.t >= next_out * (1 - 1e-9)
@@ -531,6 +604,8 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
         # non-finite fields between two checks
         check_blowup!(m.guard, sim; step = n, force = true)
     end
+    _write_tracks(cpl, cpl.particles === nothing ? nothing :
+                               cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path))
     return r
 end
 
@@ -539,11 +614,13 @@ end
 
 The prognostic arrays with their halos: `u, v, w, p, θ` (and, for the
 Boussinesq core, `qv` and the eddy coefficients `νt, κt` of the last
-step, as a checkpoint stores them).
+step, as a checkpoint stores them), and those of the couplings: the slab
+temperature `T_s`, `ql`, `qr`, `tracer` and the particle positions
+(`particles`, 3 × n).
 """
 function Config.state_fields(r::SimulationRun)
     s = simulation(r)
-    s isa BoussinesqSimulation && return map(f -> f.data, IO.checkpoint_fields(s))
+    s isa BoussinesqSimulation && return merge(map(f -> f.data, IO.checkpoint_fields(s)), _coupling_fields(sim_couplings(r)))
     return (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data, θ = s.θ.data)
 end
 
