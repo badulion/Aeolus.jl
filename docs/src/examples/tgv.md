@@ -5,12 +5,10 @@ condition is analytically divergence-free, and (in the linearized
 limit) the kinetic energy decays as `exp(-6νt)`.
 
 Location: `examples/configs/taylor_green_vortex.toml` (the
-`simulation` driver; `examples/taylor_green_vortex.jl` is a three-line
-runner for it).
+`simulation` driver).
 
 ```bash
 $ julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
-$ julia --project=. examples/taylor_green_vortex.jl          # the same
 ```
 
 The run writes a run folder `runs/<date>_taylor_green_vortex_<id>/`

@@ -44,11 +44,15 @@ tiers, the runner's options and measured times.
 ## Running examples
 
 ```bash
-$ julia --project=. examples/taylor_green_vortex.jl
-$ julia --project=. examples/buoyant_convection.jl
-$ julia --project=. examples/poisson_manufactured.jl
-$ julia --project=. examples/scalar_advection_2d.jl
+$ julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
+$ julia --project -m Aeolus run examples/configs/buoyant_convection.toml
+$ julia --project -m Aeolus run examples/configs/scalar_advection_2d.toml
 ```
+
+An example is a TOML file (and its input drivers) run by `aeolus run`; the
+`.jl` files beside some of them only read the run folder's output and plot
+it. The manufactured-solution checks of the Poisson solvers are tests
+(`test/runtests.jl`).
 
 ## Building the docs
 

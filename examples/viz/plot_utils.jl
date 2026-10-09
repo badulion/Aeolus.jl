@@ -180,3 +180,45 @@ function save_multiline(path::AbstractString, xs::AbstractVector,
     end
     return path
 end
+
+"""
+    save_paths(path, xs_list, ys_list; xlabel, ylabel, title, width = 560, height = 560,
+               xlim = nothing, ylim = nothing)
+
+Save several x–y paths (trajectories), each with its own `xs`, to one SVG
+with equal axis scales.
+"""
+function save_paths(path::AbstractString, xs_list::AbstractVector, ys_list::AbstractVector;
+                    xlabel::AbstractString = "", ylabel::AbstractString = "", title::AbstractString = "",
+                    width::Int = 560, height::Int = 560, xlim = nothing, ylim = nothing)
+    pad_l, pad_r, pad_t, pad_b = 60, 20, 40, 50
+    pw = width - pad_l - pad_r; ph = height - pad_t - pad_b
+    x0, x1 = xlim === nothing ? extrema(reduce(vcat, xs_list)) : xlim
+    y0, y1 = ylim === nothing ? extrema(reduce(vcat, ys_list)) : ylim
+    s = min(pw / (x1 - x0), ph / (y1 - y0))
+    X(x) = pad_l + (x - x0) * s
+    Y(y) = pad_t + ph - (y - y0) * s
+    colors = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16"]
+    open(path, "w") do io
+        println(io, """<?xml version="1.0" encoding="UTF-8"?>""")
+        println(io, """<svg xmlns="http://www.w3.org/2000/svg" width="$width" height="$height" font-family="sans-serif">""")
+        println(io, """<rect width="100%" height="100%" fill="white"/>""")
+        println(io, """<rect x="$(X(x0))" y="$(Y(y1))" width="$(X(x1) - X(x0))" height="$(Y(y0) - Y(y1))" fill="none" stroke="#333"/>""")
+        for k in 0:4
+            xv = x0 + k * (x1 - x0) / 4; yv = y0 + k * (y1 - y0) / 4
+            println(io, """<text x="$(X(xv))" y="$(Y(y0) + 18)" font-size="10" text-anchor="middle" fill="#333">$(round(xv; digits = 2))</text>""")
+            println(io, """<text x="$(X(x0) - 6)" y="$(Y(yv) + 4)" font-size="10" text-anchor="end" fill="#333">$(round(yv; digits = 2))</text>""")
+        end
+        isempty(xlabel) || println(io, """<text x="$((X(x0) + X(x1)) / 2)" y="$(Y(y0) + 38)" font-size="12" text-anchor="middle" fill="#333">$xlabel</text>""")
+        isempty(ylabel) || println(io, """<text x="15" y="$((Y(y0) + Y(y1)) / 2)" font-size="12" text-anchor="middle" fill="#333" transform="rotate(-90 15,$((Y(y0) + Y(y1)) / 2))">$ylabel</text>""")
+        isempty(title) || println(io, """<text x="$(width / 2)" y="24" font-size="16" text-anchor="middle" fill="#111" font-weight="bold">$title</text>""")
+        for (li, (xs, ys)) in enumerate(zip(xs_list, ys_list))
+            col = colors[mod1(li, length(colors))]
+            pts = join(("$(X(x)),$(Y(y))" for (x, y) in zip(xs, ys)), " ")
+            println(io, """<polyline fill="none" stroke="$col" stroke-width="1.4" points="$pts"/>""")
+            println(io, """<circle cx="$(X(xs[1]))" cy="$(Y(ys[1]))" r="2.5" fill="$col"/>""")
+        end
+        println(io, "</svg>")
+    end
+    return path
+end

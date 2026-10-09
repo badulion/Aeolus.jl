@@ -246,7 +246,7 @@ mask is not supported on a stretched grid.
 | 500 RK3 steps of decaying turbulence (halo 2 / stratified with walls) | ``e ≥ 0``, ``ν_t ≥ 0``, ``κ_t ≥ ν_t`` throughout; 0 clips |
 | rejected adaptive step (first try committed, then rejected) | ``e``, ``u``, ``θ`` bitwise a direct ``Δt/2`` step |
 
-**Convective boundary layer** (`test/tke_cbl_driver.jl`): free convection
+**Convective boundary layer** ([`tke_cbl`](@ref Aeolus.RunDrivers.CBLDriver.tke_cbl), the `cbl` run type): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above
 ``z_{i0}``, periodic laterally, sponge in the top quarter, SSP-RK3 at the
 CFL step.
@@ -255,7 +255,7 @@ CFL step.
 | :-- | --: | --: | --: | --: | --: |
 | 24³, Δ = 50 m, 1 h (CI) | 900 m | −0.157 | 0.203 | 75 m (0.08 ``z_i``) | 0.50 ``w_*^2`` at 0.31 ``z_i`` |
 | 24³ with the ``κ d_{wall}`` cap | 850 m | −0.083 | 0.308 | 125 m (0.15 ``z_i``) | 0.34 ``w_*^2`` at 0.38 ``z_i`` |
-| 64³, 50 × 50 × 25 m, 2 h (`examples/sgs/cbl_tke.jl`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
+| 64³, 50 × 50 × 25 m, 2 h (`examples/sgs/configs/cbl_tke.toml`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
 
 Lenschow, Wyngaard & Pennell (1980): ``σ_w^2/w_*^2 = 1.8(z/z_i)^{2/3}(1 − 0.8z/z_i)^2``,
 maximum 0.466 at ``z/z_i = 0.31``; the 64³ run is 0.035 RMS from it over
@@ -492,10 +492,12 @@ Further tests:
 The TKE closure and the Reynolds-stress closure are compared *a priori in
 time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
 Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
-not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`;
+not in this branch's stack). Fixture: the `sgs_decay` run type
+([`Aeolus.RunDrivers.SGSDecayDriver`](@ref), formerly `test/fixtures/sgs_validation.jl`);
 CI test: `test/era6_sgs_validation.jl`; example at 96³:
-`examples/sgs/rotating_stratified_decay.jl`; a wall-bounded case:
-`examples/sgs/surface_mounted_cube.jl` (below).
+`examples/sgs/configs/rotating_stratified_decay.toml` (tables and figure:
+`examples/sgs/plot_rotating_stratified_decay.jl`); a wall-bounded case:
+`examples/sgs/configs/surface_mounted_cube_closures.toml` (below).
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
 spun up from a fixed seed to ``t_0 = 2``; see
@@ -598,6 +600,15 @@ them as `@test_broken`, with the numbers.
 | Reynolds stress | −22.0 % | +1.4 % | −0.8 % | +5.7 % |
 | DNS ``K(t_0+2T)/K(t_0)`` | 0.373 | 0.461 | 0.295 | 0.382 |
 
+(Measured for #192. Re-run on 2026-10-09 as the config, EX-d #441: the old
+script on today's code prints the same tables to every digit, and both
+differ from the table above in the last digit, from changes to the code
+since: DNS ``K`` ratios 0.375, 0.463, 0.296, 0.384; TKE −13.7 % (isotropic),
++5.6 % (rotating + stratified); Reynolds stress −21.9 %, +1.5 %, −0.7 %
+(isotropic, rotating, stratified); ``u' = 0.866``, ``L = 1.205``,
+``T = 1.392``; the stratified mean SGS heat flux −0.087 (DNS), −0.375
+(TKE), −0.362 (Reynolds stress). Every other entry is unchanged.)
+
 At 96³ (``u' = 0.864``, ``L = 1.208``, ``T = 1.398``; DNS 68 s spin-up
 and 60–83 s per continuation, LES 0.4–5 s):
 
@@ -615,7 +626,7 @@ and 60–83 s per continuation, LES 0.4–5 s):
   stress), so both closures are outside 2×. At this Re the DNS flux
   spends more of the run counter-gradient.
 
-The figure the example writes (`examples/sgs/output/rotating_stratified_decay_96.svg`)
+The figure the example writes (`rotating_stratified_decay_96.svg` in the run folder's `output/`)
 has one row per case. The panels are the resolved KE, the SGS energy,
 and the Lumley-triangle trajectory ``(ξ, η) = ((III/6)^{1/3}, (II/6)^{1/2})``
 of the mean invariants. The exact stress sits close to the axisymmetric
@@ -626,7 +637,11 @@ stress starts much closer to the isotropic corner.
 
 ### Surface-mounted cube (example)
 
-`examples/sgs/surface_mounted_cube.jl` compares the three closures on
+`examples/sgs/configs/surface_mounted_cube_closures.toml` (the
+`obstacle_channel` run type, a sweep over the closures; the cube is the
+static driver `input/surface_mounted_cube_static.nc`, and
+`examples/sgs/plot_surface_mounted_cube.jl` draws the figure from the run
+folders) compares the three closures on
 the wall-bounded case of Martinuzzi & Tropea (1993): a cube of height
 ``H`` in a channel of height ``2H`` at ``\mathrm{Re}_H = 40\,000``, where
 the mean flow reattaches behind the cube at ``x_R/H = 1.612`` (from the
@@ -656,19 +671,41 @@ TKE and Reynolds stress with the wall cap ``κ d`` from
 The runs shared a heavily loaded machine, so the costs are rough; the
 Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
 
-* All three closures place the reattachment 11–22 % too far
-  downstream. TKE is closest and the Reynolds-stress closure furthest.
-  The differential stress model does not improve the recirculation length
-  at this resolution.
-* The front separation is far too short under every closure (0.2–0.5 H
-  against 1.04 H). At 16 cells per ``H`` the floor boundary layer
+**Re-run as the config (EX-d, #441, 2026-10-09).** The table above is
+not reproducible: FFTW's default MEASURE planner chooses its plans by
+timing them, so two processes can take different plans, and the flow is
+chaotic. Two MEASURE runs of the same code (the config and the old script)
+gave ``x_R/H`` = 1.83 and 1.91 (Smagorinsky) and 1.64 and 1.54 (TKE),
+and 1.90 for one Reynolds-stress run. The config therefore plans with
+ESTIMATE (`[fftw] planner = "estimate"`), and a rerun is bitwise the run
+(two Smagorinsky runs: identical floor profiles):
+
+| ESTIMATE, one run each | ``x_R/H`` | ``x_F/H`` | steps | wall time | s/step |
+| :-- | --: | --: | --: | --: | --: |
+| Smagorinsky (``C_s = 0.1``) | 1.88 (+16 %) | 0.49 | 4429 | 575 s | 0.13 |
+| TKE | 1.46 (−9 %) | 0.38 | 4242 | 602 s | 0.14 |
+| Reynolds stress | 1.95 (+21 %) | 0.33 | 4559 | 1813 s | 0.40 |
+
+(Four runs at once on 24 cores.) Over all runs ``x_R/H`` spans 1.82–1.91
+for Smagorinsky, 1.46–1.80 for TKE and 1.90–1.97 for Reynolds stress.
+
+* The 30 ``H/U_b`` average does not pin ``x_R`` down: runs that differ
+  only in the last bits of the pressure solve spread by up to 0.34 ``H``
+  (TKE). Smagorinsky and the Reynolds-stress closure put the reattachment
+  13–22 % too far downstream in every run; TKE lands on either side of
+  the measurement (−9 % to +12 %). The ranking of the closures quoted
+  before ("TKE closest, the Reynolds-stress closure furthest") is within
+  this spread for TKE. The differential stress model does not improve the
+  recirculation length at this resolution.
+* The front separation is far too short under every closure (0.17–0.52 H
+  over all runs, against 1.04 H). At 16 cells per ``H`` the floor boundary layer
   approaching the cube is resolved by a few cells with no wall model, so
   the horseshoe vortex is too weak and too close to the cube.
 * The P57-d facade wall model (#179) that the issue asks for is not in
   this branch's stack (PR #211 is open), so the cube walls are no-slip
   with the SGS stress as the only wall treatment. With that model the
   comparison should be repeated. The 30 ``H/U_b`` average is short;
-  the curves in `examples/sgs/output/surface_mounted_cube_16.svg` are not
+  the curves in `surface_mounted_cube_16.svg` (in the first run folder's `output/`) are not
   yet smooth behind ``x = 6H``.
 
 ## Berlin coupling

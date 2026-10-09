@@ -94,6 +94,8 @@ include("InputDrivers.jl")   # static (CFG-f, #361) and dynamic (CFG-g, #362) dr
 # CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
 # so after them; the driver contract and the CLI are in Config).
 include("config/simulation_driver.jl")
+# EX-d (#441): the run types of the example cases (configured from TOML only).
+include("RunDrivers.jl")
 
 using .RunLog
 using .Grids

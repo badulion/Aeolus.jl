@@ -401,7 +401,7 @@ diagnostic exposes it; it does not fix it.
 `boundary_layer_height(z, profile; method)` is the only ``z_i``
 diagnostic in the package (#247). It is applied in the same way to
 radiosonde profiles (`LargeScaleForcing.sounding_profiles`) and to LES
-output: the CBL harness `test/tke_cbl_driver.jl` delegates to it, and
+output: the CBL harness (`tke_cbl` of the `cbl` run type, formerly `test/tke_cbl_driver.jl`) delegates to it, and
 so do the diagnostics of the nesting epic (#246). It offers four
 methods, following the review of Seibert et al. (2000):
 

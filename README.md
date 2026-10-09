@@ -287,8 +287,8 @@ doing its job. Run the full test suite with `Pkg.test()`, or a worked case
 directly:
 
 ```bash
-julia --project=. examples/taylor_green_vortex.jl
-julia --project=. examples/buoyant_convection.jl
+julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
+julia --project -m Aeolus run examples/configs/buoyant_convection.toml
 ```
 
 ---

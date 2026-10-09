@@ -181,13 +181,14 @@ using Aeolus.Fields: set!, interior_view
         @test 3.5 < r2 < 4.5
     end
 
-    @testset "FFTPoissonSolver on a manufactured mode" begin
+    # (64³: formerly examples/poisson_manufactured.jl, a solver check, not an example; EX-d #441)
+    @testset "FFTPoissonSolver on a manufactured mode, $(N)³" for N in (32, 64)
         # φ(x,y,z) = sin(2π x/Lx) cos(2π y/Ly) sin(2π z/Lz)
         # The *discrete* Laplacian of this mode has eigenvalue λ_h; if we
         # form source = L_h φ (via our laplacian!) and solve, we recover φ
         # to machine precision.
         L = 1.0
-        g = RegularGrid(; size=(32, 32, 32), extent=(L, L, L), halo=(1,1,1))
+        g = RegularGrid(; size=(N, N, N), extent=(L, L, L), halo=(1,1,1))
         φ = Field(CellCenter(), g); source = Field(CellCenter(), g); p = Field(CellCenter(), g)
         set!(φ, (x,y,z) -> sin(2π*x) * cos(2π*y) * sin(2π*z))
         fill_halos!(φ, FieldBoundaryConditions(:periodic))
@@ -202,13 +203,14 @@ using Aeolus.Fields: set!, interior_view
         @test err < 1e-10
     end
 
-    @testset "CosineFFTPoissonSolver on a Neumann-BC manufactured mode" begin
+    # (64³, n = 3: formerly examples/poisson_neumann_manufactured.jl; EX-d #441)
+    @testset "CosineFFTPoissonSolver on a Neumann-BC manufactured mode, $(N)³, n = $n" for (N, n) in ((32, 2), (64, 3))
         # Domain [0, Lx] × [0, Ly] × [0, Lz]. Periodic in x, y; Neumann in z.
         # φ = cos(2π x / Lx) * cos(2π y / Ly) * cos(π n z / Lz)
-        # satisfies ∂φ/∂z = 0 at z = 0 and z = Lz for any integer n.
+        # satisfies ∂φ/∂z = 0 at z = 0 and z = Lz for any integer n
+        # (n: the z-mode index).
         Lx = Ly = Lz = 1.0
-        g = RegularGrid(; size=(32,32,32), extent=(Lx,Ly,Lz), halo=(1,1,1))
-        n = 2       # z-mode index
+        g = RegularGrid(; size=(N,N,N), extent=(Lx,Ly,Lz), halo=(1,1,1))
         φ = Field(CellCenter(), g); source = Field(CellCenter(), g); p = Field(CellCenter(), g)
         set!(φ, (x,y,z) -> cos(2π*x/Lx) * cos(2π*y/Ly) * cos(π*n*z/Lz))
 
@@ -857,6 +859,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
+    include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
     include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal

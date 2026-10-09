@@ -1,0 +1,61 @@
+# ERCOFTAC T3A-like bypass transition — Era VI, Phase 59 (P59-d, #185;
+# formerly examples/transition/flat_plate_t3a.jl). A spatially developing
+# zero-pressure-gradient flat-plate boundary layer under free-stream
+# turbulence of Tu = 3.3 % (the T3A level of Roach & Brierley 1992), in
+# units of the inflow displacement thickness δ*₀ and U∞ = 1, Re_δ*₀ = 300
+# (Re_x = 3.0e4 at the inflow):
+#
+#   * an x-periodic box 600 × 36 × 24 δ*₀, 576 × 64 × 96 cells
+#     (Δx = 1.04, Δy = 0.56, Δz = 0.25 δ*₀; coarser grids over-predict the
+#     turbulent c_f, see docs/src/theory/transition.md); the plate spans
+#     Re_x = 3.0e4 → 1.9e5, the last 80 δ*₀ are the fringe that relaxes the
+#     outflow to the Blasius inflow and carries the free-stream turbulence in;
+#   * a no-slip plate, a free-stream top, RK3 at dt = 1 δ*₀/U, no SGS model
+#     (a coarse DNS);
+#   * free-stream turbulence: 200 random Fourier modes, von Kármán spectrum,
+#     L11 = 10 δ*₀, kept out of the inflow layer below 2 δ₉₉ in the fringe;
+#   * 1500 steps (2.5 flow-through times); statistics over the last 600.
+#
+# About 2.2 h on 8 threads (5.4 s per step):
+#
+#   JULIA_NUM_THREADS=8 julia --project -m Aeolus run examples/transition/configs/flat_plate_t3a.toml
+#   julia --project=. examples/transition/plot_flat_plate_t3a.jl runs/<date>_flat_plate_t3a_<id>
+#
+# results.toml: the onset (x, Re_x, Re_θ against Mayle 1991 and Abu-Ghannam
+# & Shaw 1980), the downstream c_f against 0.0576 Re_x^(-1/5), the shape
+# factor and the free-stream Tu, and the plate profiles.
+
+[run]
+driver = "flat_plate"
+name = "flat_plate_t3a"
+
+[plate]
+re_delta0 = 300.0
+length = 600.0
+width = 36.0
+height = 24.0
+fringe_length = 80.0
+plate_margin = 20.0
+
+[grid]
+size = [576, 64, 96]
+
+[disturbance]
+tu = 0.033
+length_scale = 10.0
+modes = 200
+seed = 1
+kappa_cells = 3.0
+damping_height = 2.0
+
+[stepper]
+dt = 1.0
+nsteps = 1500
+average_steps = 600
+
+[analysis]
+edge_fraction = 0.995
+downstream_re_x = 1.2e5
+
+[test]
+overrides = ["grid.size=[96,8,16]", "stepper.nsteps=6", "stepper.average_steps=3"]

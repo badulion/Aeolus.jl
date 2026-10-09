@@ -5,10 +5,13 @@ but for channel-type BCs — periodic in `x, y`, Neumann in `z` — using
 the [`CosineFFTPoissonSolver`](@ref
 Aeolus.PressureSolvers.CosineFFTPoissonSolver).
 
-Location: `examples/poisson_neumann_manufactured.jl`.
+Location: the testset "CosineFFTPoissonSolver on a Neumann-BC
+manufactured mode" of `test/runtests.jl` (64³, `n = 3`; formerly
+`examples/poisson_neumann_manufactured.jl` — a solver check, not an
+example, so it moved to the tests in EX-d, #441).
 
 ```bash
-$ julia --project=. examples/poisson_neumann_manufactured.jl
+$ julia --project=. test/run.jl --only runtests.jl
 ```
 
 ## Setup
@@ -21,6 +24,9 @@ The `cos(π n z/Lz)` factor satisfies `∂φ/∂z = 0` at `z = 0` and
 `z = Lz` for any integer `n`. `64³` grid over the unit cube, `n = 3`.
 
 ## Expected output
+
+The test asserts an error below 1e-10; measured (2026-10-09, the same
+code the script ran):
 
 ```text
 N = 64³   z-mode n = 3

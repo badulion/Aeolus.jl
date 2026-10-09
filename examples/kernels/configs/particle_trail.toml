@@ -1,0 +1,29 @@
+# Kernel demo 06 — Lagrangian particles in a Taylor–Green vortex (formerly
+# examples/kernels/06_particle_trail.jl): 24 particles seeded uniformly in
+# the plane z = π of the TGV of examples/configs/taylor_green_vortex.toml,
+# advanced with the flow (trilinear velocity, forward Euler) for 100 steps
+# of 0.05. Their positions go to output/particles.csv every step.
+#
+#   julia --project -m Aeolus run examples/kernels/configs/particle_trail.toml
+#   julia --project=. examples/kernels/plot_particle_trail.jl runs/<date>_particle_trail_<id>
+
+extends = "../../configs/taylor_green_vortex.toml"
+
+[run]
+name = "particle_trail"
+
+[stepper]
+dt = 0.05
+end_time = "none"
+nsteps = 100
+
+[particles]
+count = 24
+seed = 7
+z = [3.141592653589793, 3.141592653589793]   # the plane z = π (L/2)
+
+[logging]
+diagnostics_cadence = 1.0
+
+[test]
+overrides = ["grid.size=[16,16,16]", "stepper.nsteps=10"]
