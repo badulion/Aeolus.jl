@@ -860,6 +860,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_load.jl")         # CFG-a (#356): one file + overrides, extends/schema 1 refused, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): the model from a config, bitwise round trip, resume, TGV
     include("components_pipeline.jl")  # ONE-a (#450): component interface, stage pipeline, master digests through Model
+    include("budgets_output.jl")       # ONE-c (#452): the one budget system and the one output writer
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
