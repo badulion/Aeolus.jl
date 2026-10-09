@@ -16,13 +16,19 @@
 # except the surface flux, which is set (slab) or applied (flux_map) before
 # it. None of them is checkpointed: a run with a coupling on has
 # [checkpoint] off (a cross check).
+#
+# In the stage pipeline (ONE-a, #450) they are one component of the
+# domain, `SimulationCouplings` (at the end of this file), which runs these
+# pieces at the same places of the step: before the core in :surface_flux,
+# the slab's floor flux in :tendencies, the obstacles' penalty in
+# :body_force, and the rest right after the core in :surface_update.
 
 using ..IBM: SolidMask, add_ibm_penalty!
 using ..Radiation: SlabLand, step_land!, surface_temperature, apply_radiative_cooling!
 using ..Microphysics: apply_kessler_step!
 using ..Chemistry: apply_linear_chemistry!
 using ..Particles: ParticleSet, add_particles!, advance_particles!, positions
-using ..Operators: advect_centered!
+using ..Operators: advect_centered!, add_surface_flux!
 using ..Fields: location
 using ..BoundaryConditions: fill_halos!
 using ..Grids: xnodes, ynodes, znodes
@@ -324,13 +330,12 @@ end
 # the step
 # ---------------------------------------------------------------------------
 
-"What runs before the core's step: the slab's flux of the step, or the flux map's increment of the first level."
+"What runs before the core's step: the slab's flux of the step (applied in the core, `:tendencies`), or the flux map's increment of the first level."
 function _before_step!(c::SimCouplings, sim, dt)
     if c.slab !== nothing
         s = c.slab
         s.sw = max(0.0, s.sw_peak * sin(π * sim.t / s.sw_duration))
         s.Q = (surface_temperature(s.land) - s.θref) * s.c
-        sim.θ_flux_bottom = s.Q
     end
     if c.flux_map !== nothing
         m = sim.mesh; Q = c.flux_map; θ = sim.θ.data
@@ -341,11 +346,6 @@ function _before_step!(c::SimCouplings, sim, dt)
     return nothing
 end
 
-"The body force of the obstacles (`nothing`: none)."
-_body_force(c::SimCouplings) = c.solid === nothing ? nothing :
-    (let sm = c.solid, k = c.penalty_time
-         (s, Δt) -> add_ibm_penalty!(s, sm; τ = k * Δt)
-     end)
 
 "What runs after the core's step, in the order of the file header."
 function _after_step!(c::SimCouplings, sim, dt, step)
@@ -482,4 +482,76 @@ function Config.preprocess_static(::SimulationDriverType, cfg::RunConfig; out = 
     write_static_driver(path, load_city_geojson(src), mesh; origin_lat = lat, origin_lon = lon,
                         origin_x = mesh.x0, origin_y = mesh.y0, source = src)
     return [path]
+end
+
+# ---------------------------------------------------------------------------
+# the couplings in the stage pipeline (ONE-a, #450)
+# ---------------------------------------------------------------------------
+
+"""
+    SimulationCouplings(c::SimCouplings)
+
+The EX-d couplings of a `simulation` run ([`SimCouplings`](@ref): the
+sections `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
+`[particles]`, `[obstacles]`) as one component of its domain (ONE-a,
+#450), run at the places of the step they had around the core before the
+pipeline, so the runs are bit for bit those of #441:
+
+  * `:surface_flux` — the slab's flux of the step, the flux map's
+    increment of the first level (`_before_step!`);
+  * `:tendencies` — the slab's kinematic θ flux through the floor
+    (`Operators.add_surface_flux!`, the core's operator);
+  * `:body_force` — the obstacles' IBM penalty (`IBM.add_ibm_penalty!`);
+  * `:surface_update` — right after the core: radiative cooling, the
+    slab's energy balance, Kessler, the tracer and the particles, in that
+    order (`_after_step!`).
+
+The microphysics, tracer and particles therefore run after the core, not
+in stage 5 as the design places them; that is a change of the splitting
+order, made when they become components of their own.
+"""
+struct SimulationCouplings{S<:Tuple} <: Components.AbstractComponent
+    c::SimCouplings
+    st::S
+    step::Base.RefValue{Int}            # the step count of the particles' record cadence
+end
+function SimulationCouplings(c::SimCouplings)
+    st = (Components.Stage(:surface_flux),
+          (c.slab === nothing ? () : (Components.Stage(:tendencies),))...,
+          (c.solid === nothing ? () : (Components.Stage(:body_force),))...,
+          Components.Stage(:surface_update))
+    return SimulationCouplings(c, st, Ref(0))
+end
+
+Components.component_name(::Type{<:SimulationCouplings}) = :couplings
+Components.section(::Type{<:SimulationCouplings}) = "surface"
+Components.stages(c::SimulationCouplings) = c.st
+
+Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_flux}, dt) = _before_step!(c.c, d.state, dt)
+function Components.run_stage!(c::SimulationCouplings, d, ::Val{:tendencies}, dt)
+    add_surface_flux!(d.state.tθ, c.c.slab.Q, 0.0)
+    return nothing
+end
+function Components.run_stage!(c::SimulationCouplings, d, ::Val{:body_force}, dt)
+    add_ibm_penalty!(d.state, c.c.solid; τ = c.c.penalty_time * dt)
+    return nothing
+end
+function Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_update}, dt)
+    c.step[] += 1
+    return _after_step!(c.c, d.state, dt, c.step[])
+end
+
+const _NO_COUPLINGS = SimCouplings(0.0, nothing, nothing, nothing, nothing, nothing, nothing, 0.0)
+
+"""
+    sim_couplings(r::SimulationRun) -> SimCouplings
+
+The couplings of a `simulation` run: those of its domain's
+[`SimulationCouplings`](@ref) component, or none (every coupling `nothing`).
+"""
+function sim_couplings(r)
+    for c in _domain(r).components
+        c isa SimulationCouplings && return c.c
+    end
+    return _NO_COUPLINGS
 end

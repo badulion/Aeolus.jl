@@ -319,22 +319,24 @@ end
     rec = read_run_toml(r.runs[1].folder.path)
     @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(out)
     run1 = r.runs[1].obj
-    @test run1.feed isa FileBoundaryFeed && run1.sim.t == 40.0 && run1.feed.data.t0 == 0.0
+    sim1 = Aeolus.SimulationDriver.simulation(run1)
+    feed1 = only(run1.model.domains).drivers.boundary          # the domain's dynamic-driver feed (ONE-a)
+    @test feed1 isa FileBoundaryFeed && sim1.t == 40.0 && feed1.data.t0 == 0.0
     # the initial state is the ERA5 profile at the domain centre
     cfg0 = load_run_config(E5_CFG; overrides = ["initial.dynamic=\"$out\""])
     b0 = Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg0)
-    θ0 = interior_view(b0.sim.θ)
+    θ0 = interior_view(Aeolus.SimulationDriver.simulation(b0).θ)
     @test θ0[3, 5, :] == d.profiles.theta && θ0[1, 1, :] == d.profiles.theta
     # after 20 steps the open faces hold the ERA5 planes blended at t = 40 s
-    st = only(open_boundary_states(run1.sim.bcs))
+    st = only(open_boundary_states(sim1.bcs))
     pu = only(p for p in st.planes if p.name === :θ && p.side === :west)
-    f = read_dynamic_driver(out; mesh = run1.sim.mesh).boundary
+    f = read_dynamic_driver(out; mesh = sim1.mesh).boundary
     A = Aeolus.BoundaryConditions.snapshot_values(f.data.a, :θ); B = Aeolus.BoundaryConditions.snapshot_values(f.data.b, :θ)
     τ = 40.0 / 3600.0
     want = [(1 - τ) * A[i, j, k] + τ * B[i, j, k] for i in pu.irange, j in pu.jrange, k in pu.krange]
     @test maximum(abs.(pu.data .- want)) < 1e-12
     @info @sprintf("open ERA5 box over Lindenberg: 20 steps to t = %.0f s, bitwise in the round trip; θ at the west face %.2f-%.2f K, u in the box %.2f-%.2f m/s",
-                   run1.sim.t, extrema(pu.data)..., extrema(interior_view(run1.sim.u))...)
+                   sim1.t, extrema(pu.data)..., extrema(interior_view(sim1.u))...)
 end
 
 @testset "ERA5: the simulation driver's config checks" begin

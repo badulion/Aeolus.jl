@@ -90,6 +90,7 @@ include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, adve
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 include("InputDrivers.jl")   # static (CFG-f, #361) and dynamic (CFG-g, #362) drivers; needs IBM, NCIO, IO, LargeScaleForcing
+include("Components.jl")     # the component interface, Domain/Model and the stage pipeline (ONE-a, #450)
 
 # CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
 # so after them; the driver contract and the CLI are in Config).
@@ -166,6 +167,7 @@ using .Transition                  # Phase 59 transition diagnostics (#180)
 using .WallModels                  # Phase 57 (#169)
 using .LargeScaleForcing           # Era VI, Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
+using .Components                  # ONE-a (#450): Model, Domain, the stage pipeline
 
 # LOG-c (#335): the diagnostics registry's methods for the library's
 # components (simulations, closures, wall models, nesting); needs them all.
@@ -1176,6 +1178,10 @@ export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 export SubfilterHeight, subfilter_height, DynamicRoughness,
        surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
        update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
+
+# ONE-a (#450): the single model, a Model of Domains stepped through the
+# fixed stage pipeline (the component interface: Aeolus.Components).
+export Model, Domain
 
 # EX-a (#438): the urban LES run type (the `urban` run driver; the Berlin
 # case is examples/urban/configs/). A submodule, not exported: its names

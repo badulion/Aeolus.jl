@@ -859,6 +859,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
     include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
+    include("components_pipeline.jl")  # ONE-a (#450): component interface, stage pipeline, master digests through Model
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip

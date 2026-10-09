@@ -24,21 +24,20 @@ using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!
 using ..InputDrivers: InputDrivers, read_dynamic_driver, read_era5, write_era5_driver, check_planes,
-                      check_coverage, advance_feed!, FileBoundaryFeed, ERA5_OUTPUTS
-using ..Simulations: Simulations, BoussinesqSimulation, step!, step_rk3!
-using ..TimeIntegration: CFLConstraints, adaptive_dt, step_adaptive!
+                      check_coverage, ERA5_OUTPUTS
+using ..Simulations: Simulations, BoussinesqSimulation, step!
+using ..TimeIntegration: CFLConstraints
 using ..StretchedGrids: StretchedGrid
 using ..Anelastic: AnelasticSimulation, MassWeightedSimulation, isentropic_reference
-using ..Operators: StaticSmagorinsky, DynamicSmagorinsky, VremanClosure, SigmaModel, AMDClosure,
-                   StabilityCorrected
-using ..TurbulenceStability: BrownEtAl1994, LillyCutoff, ShortTail, LongTail
+using ..Components: Components, Domain, Model, CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux,
+                    add_options!, build_components, checkpoint_components, sgs_closure, step_adaptive!
 using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previous_dt, resume!,
             maybe_checkpoint!, with_monitor, monitored_step!, check_blowup!, output_dir
 using ..NCIO: nc_create, nc_defvar!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, Optional,
                 Path, section, option!, register_driver!
 
-export SimulationDriverType, SimulationRun, profile_value
+export SimulationDriverType, SimulationRun, simulation, profile_value
 
 """
     SimulationDriverType()
@@ -201,13 +200,10 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "reference potential temperature of the buoyancy; 0 turns buoyancy off (boussinesq); anelastic: the base state's θ (> 0)")
         option!(s, "g", Float64; default = 9.81, range = (0, Inf), units = "m s^-2",
                 doc = "gravitational acceleration")
-        option!(s, "f_coriolis", Float64; default = 0.0, units = "s^-1", doc = "Coriolis parameter")
+        add_options!(s, Coriolis)                    # f_coriolis
         option!(s, "moisture", Bool; default = false,
                 doc = "carry the water-vapour mixing ratio qv (boussinesq only)")
-        option!(s, "sponge_alpha_max", Float64; default = 0.0, range = (0, Inf), units = "s^-1",
-                doc = "Rayleigh-damping rate at the top; 0: no sponge")
-        option!(s, "sponge_z_start", Optional{Float64}; units = "m",
-                doc = "height where the sponge starts; \"none\": the top (no sponge)")
+        add_options!(s, Sponge)                      # sponge_alpha_max, sponge_z_start
     end
     bnd = section("boundaries"; doc = "Boundary conditions per axis.") do s
         for ax in ("x", "y", "z")
@@ -216,23 +212,9 @@ function Config.driver_sections(::SimulationDriverType)
                     doc = "the $ax faces: periodic, free_slip (impermeable, stress free) or noslip (z only); θ and qv have no flux through a wall, except the prescribed θ fluxes" *
                           (ax == "z" ? "" : "; open: the boundary planes of initial.dynamic, blended linearly in time (boussinesq, uniform grid, z walls)"))
         end
-        option!(s, "theta_flux_bottom", Float64; default = 0.0, units = "K m s^-1",
-                doc = "prescribed kinematic θ flux w'θ' through the bottom (z walls)")
-        option!(s, "theta_flux_top", Float64; default = 0.0, units = "K m s^-1",
-                doc = "prescribed kinematic θ flux through the top (z walls)")
+        add_options!(s, SurfaceThetaFlux)            # theta_flux_bottom, theta_flux_top
     end
-    sgs = section("sgs"; doc = "The subgrid-scale closure.") do s
-        option!(s, "closure", Symbol; default = :none,
-                allowed = [:none, :smagorinsky, :dynamic_smagorinsky, :vreman, :sigma, :amd],
-                doc = "none, smagorinsky (Smagorinsky-Lilly), dynamic_smagorinsky (Germano-Lilly, plane averaged), vreman, sigma (Nicoud et al. 2011), amd (anisotropic minimum dissipation)")
-        option!(s, "c_s", Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,
-                doc = "the closure's coefficient; \"none\": its default (smagorinsky 0.17, vreman 0.17, sigma 1.35, amd 0.3); not used by dynamic_smagorinsky")
-        option!(s, "pr_t", Float64; units = "1", default = 1 / 3, range = (0, Inf), open_lower = true,
-                doc = "turbulent Prandtl number")
-        option!(s, "stability", Symbol; default = :none,
-                allowed = [:none, :brown_et_al_1994, :lilly_cutoff, :short_tail, :long_tail],
-                doc = "Richardson-number stability correction of the eddy viscosity (StabilityCorrected); none: off")
-    end
+    sgs = Components.schema(SGS)
     ini = section("initial"; doc = "The initial state.") do s
         for (v, d) in (("u", "0"), ("v", "0"), ("theta", "theta0 (anelastic: the base state)"), ("qv", "0"))
             option!(s, v, OpenTable(_profile_validator(v)),
@@ -387,23 +369,27 @@ Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _C
 """
     SimulationRun
 
-What the `simulation` driver builds: `sim` (a `BoussinesqSimulation` or
-an `AnelasticSimulation`), `closure` (the SGS closure passed to the
-steps; `nothing` for none or the built-in Smagorinsky), `stepper` (a
-[`StepperState`](@ref)), the resolved `cfg`, and `feed`, the
+What the `simulation` driver builds: `model`, a [`Model`](@ref
+Aeolus.Components.Model) of one [`Domain`](@ref Aeolus.Components.Domain)
+(ONE-a, #450) — the core (a `BoussinesqSimulation` or an
+`AnelasticSimulation`, [`simulation`](@ref)), its time scheme, its
+components (the `:advection` and `:sgs` slots, Coriolis, the sponge, the
+surface θ flux) and its drivers (`boundary`, the
 [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed) of the
-open faces (`nothing`: none), and `couplings`, the [`SimCouplings`](@ref)
-of `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`
-and `[obstacles]` (EX-d, #441).
+open faces); the EX-d couplings ([`SimCouplings`](@ref): `[forcing]`,
+`[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]`,
+#441) are its [`SimulationCouplings`](@ref) component when any is on;
+`stepper` (a [`StepperState`](@ref)) and the resolved `cfg`.
 """
-struct SimulationRun
-    sim::Any
-    closure::Any
+struct SimulationRun{M<:Model}
+    model::M
     stepper::StepperState
     cfg::RunConfig
-    feed::Union{Nothing,FileBoundaryFeed}
-    couplings::Any
 end
+
+"The core of a `simulation` run: the `BoussinesqSimulation` or `AnelasticSimulation` of its one domain."
+simulation(r::SimulationRun) = only(Components.domains(r.model)).state
+_domain(r::SimulationRun) = only(Components.domains(r.model))
 
 function _mesh(g)
     if g.stretching === :uniform
@@ -415,21 +401,6 @@ end
 
 _bc(s::Symbol) = s === :free_slip ? :wall : s
 _scalar_bc(s::Symbol) = s === :periodic ? :periodic : :noflux
-
-function _closure(s, mesh)
-    s.closure === :none && return nothing
-    cs = s.c_s; pr = s.pr_t
-    base = s.closure === :smagorinsky ? StaticSmagorinsky(something(cs, 0.17); Pr_t = pr) :
-           s.closure === :dynamic_smagorinsky ? DynamicSmagorinsky(mesh; Pr_t = pr) :
-           s.closure === :vreman ? VremanClosure(something(cs, 0.17); Pr_t = pr) :
-           s.closure === :sigma ? SigmaModel(something(cs, 1.35); Pr_t = pr) :
-           AMDClosure(; C = something(cs, 0.3), Pr_t = pr)
-    s.stability === :none && return base
-    scheme = s.stability === :brown_et_al_1994 ? BrownEtAl1994() :
-             s.stability === :lilly_cutoff ? LillyCutoff() :
-             s.stability === :short_tail ? ShortTail() : LongTail()
-    return StabilityCorrected(base, mesh; scheme = scheme)
-end
 
 # The open box of `cfg` (an open lateral axis): the faces' planes, data set later.
 function _open_bcs(cfg, mesh)
@@ -460,30 +431,27 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
         bcs = FieldBoundaryConditions(_bc(b.x), _bc(b.y), _bc(b.z))
         θ_bcs = FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y), _scalar_bc(b.z))
     end
-    # the plain Smagorinsky closure is the simulation's built-in one (C_s ≠ 0),
-    # bit for bit StaticSmagorinsky(C_s) (Simulations.step!)
-    builtin = s.closure === :smagorinsky && s.stability === :none
-    C_s = builtin ? something(s.c_s, 0.17) : 0.0
-    closure = builtin ? nothing : _closure(s, mesh)
-    z_top = mesh.z0 + mesh.Lz
-    kw = (; ν = d.nu, g_accel = d.g, f_coriolis = d.f_coriolis, C_s = C_s, Pr_t = s.pr_t,
-          θ_flux_bottom = b.theta_flux_bottom, θ_flux_top = b.theta_flux_top,
-          sponge_α_max = d.sponge_alpha_max, sponge_z_start = something(d.sponge_z_start, z_top),
-          bcs = bcs, θ_bcs = θ_bcs)
+    # the core carries the dynamics only: SGS, advection, Coriolis, the
+    # surface θ flux and the sponge are its domain's components (ONE-a)
+    kw = (; ν = d.nu, g_accel = d.g, Pr_t = s.pr_t, bcs = bcs, θ_bcs = θ_bcs)
     sim = if d.core === :anelastic
         AnelasticSimulation(mesh; ref = isentropic_reference(mesh; θ_const = d.theta0, g_accel = d.g), kw...)
     else
         BoussinesqSimulation(mesh; θ₀ = d.theta0, moisture = d.moisture, kw...)
     end
     couplings = _couplings(cfg, mesh)
-    # the slab sets the floor's flux every step: the core must apply it even
-    # when it is 0 at construction (the flag is frozen there)
-    couplings.slab === nothing || (sim.has_surface_flux = true)
     _initialise!(sim, cfg)
     dyn === nothing || _initialise_dynamic!(sim, dyn, cfg)
     couplings.water === nothing || isempty(cfg.initial.ql) || _set_profile!(couplings.water.ql, cfg.initial.ql, :ql)
-    scheme = cfg.stepper.cfl === nothing ? cfg.stepper.scheme : :adaptive
-    return SimulationRun(sim, closure, StepperState(scheme), cfg, feed, couplings)
+    st = cfg.stepper
+    cfl = st.cfl === nothing ? nothing : CFLConstraints(; C_advective = st.cfl, dt_max = st.dt_max)
+    d0 = Domain(sim; id = "main", scheme = st.scheme, cfl = cfl, validate = false,
+                drivers = feed === nothing ? (;) : (; boundary = feed))
+    comps = build_components((CentredAdvection => nothing, SGS => s, Coriolis => d, Sponge => d,
+                              SurfaceThetaFlux => b), d0)
+    _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
+    scheme = st.cfl === nothing ? st.scheme : :adaptive
+    return SimulationRun(Model(Domain(d0; components = comps)), StepperState(scheme), cfg)
 end
 
 # The initial profiles of a dynamic driver (linear in z, constant beyond
@@ -561,45 +529,23 @@ function _fixed_steps(st)
     return st.dt, st.nsteps
 end
 
-# The open faces' window: the boundary records around the step's start
-# (the blend extrapolates linearly over the rest of a step that crosses a
-# record).
-_advance!(r::SimulationRun) = (r.feed === nothing || advance_feed!(r.feed, r.sim.t); r)
-
-function _take_step!(r::SimulationRun, dt, step = 0)
-    _advance!(r)
-    sim = r.sim; sgs = r.closure; scheme = r.cfg.stepper.scheme; c = r.couplings
-    _before_step!(c, sim, dt)
-    bf = _body_force(c)
-    if bf === nothing
-        scheme === :rk3 ? step_rk3!(sim, dt; sgs = sgs) : step!(sim, dt; sgs = sgs)
-    else
-        scheme === :rk3 ? step_rk3!(sim, dt; sgs = sgs, body_force! = bf) : step!(sim, dt; sgs = sgs, body_force! = bf)
-    end
-    _after_step!(c, sim, dt, step)
-    return (sim, Float64(dt), 0)
-end
-
-function _adaptive_step!(r::SimulationRun, c::CFLConstraints, t_end)
-    _advance!(r)
-    sim = r.sim; sgs = r.closure; scheme = r.cfg.stepper.scheme
-    dt = adaptive_dt(sim, c; dt_prev = previous_dt(r.stepper), sgs = sgs)
-    t_end === nothing || (dt = min(dt, t_end - sim.t))
-    stepper = scheme === :rk3 ? ((s, h; kw...) -> step_rk3!(s, h; kw..., sgs = sgs)) : nothing
-    return step_adaptive!(sim, c; dt = dt, sgs = sgs, stepper = stepper)
-end
+# One step of the model through the stage pipeline (Components): a fixed
+# dt, or the adaptive pick landing on `t_end`.
+_take_step!(r::SimulationRun, dt) = (step!(r.model, dt); (simulation(r), Float64(dt), 0))
+_adaptive_step!(r::SimulationRun, t_end) =
+    step_adaptive!(r.model; dt_prev = previous_dt(r.stepper), t_end = t_end)
 
 # output: the selected fields every `cadence` simulated seconds
 const _FIELD_OF = Dict("u" => :u, "v" => :v, "w" => :w, "p" => :p, "theta" => :θ, "qv" => :qv)
 
 function _write_output(r::SimulationRun, dir, step)
-    sim = r.sim; m = sim.mesh
+    sim = simulation(r); m = sim.mesh
     path = joinpath(dir, string("fields_", lpad(step, 9, '0'), ".nc"))
     nc = nc_create(path; attributes = Dict("t" => Float64(sim.t), "step" => Int32(step),
                                            "note" => "cell-index arrays: face fields at their own staggered positions"))
     try
         nc.dim["x"] = m.Nx; nc.dim["y"] = m.Ny; nc.dim["z"] = m.Nz
-        c = r.couplings
+        c = sim_couplings(r)
         for f in r.cfg.output.fields
             v = nc_defvar!(nc, f, Float32, ("x", "y", "z"))
             src = f == "ql" ? c.water.ql : f == "qr" ? c.water.qr : f == "tracer" ? c.tracer.c :
@@ -614,27 +560,29 @@ end
 
 function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolder,
                           ck::CheckpointSchedule; callback = nothing)
-    sim = r.sim; cfg = r.cfg; st = cfg.stepper
-    resume!(ck, sim; sgs = r.closure, stepper = r.stepper)
+    sim = simulation(r); cfg = r.cfg; st = cfg.stepper
+    dom = _domain(r); comps = checkpoint_components(dom); closure = sgs_closure(dom)
+    resume!(ck, sim; components = comps, stepper = r.stepper)
     n = ck.last_step
     adaptive = st.cfl !== nothing
     dt_fixed, nfix = adaptive ? (NaN, typemax(Int)) : _fixed_steps(st)
     nmax = adaptive ? something(st.nsteps, typemax(Int)) : nfix
     t_end = adaptive ? st.end_time : sim.t + (nmax - n) * dt_fixed      # for the progress line
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
-    (r.feed === nothing || t_end === nothing) || check_coverage(r.feed, sim.t, t_end)
-    c = adaptive ? CFLConstraints(; C_advective = st.cfl, dt_max = st.dt_max) : nothing
+    feed = get(dom.drivers, :boundary, nothing)
+    (feed === nothing || t_end === nothing) || check_coverage(feed, sim.t, t_end)
     outdir = isempty(cfg.output.fields) ? nothing :
              cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path)
     cadence = cfg.output.cadence
     next_out = outdir === nothing ? Inf : (n == 0 ? 0.0 : (floor(sim.t / cadence) + 1) * cadence)
     done() = n >= nmax || (adaptive && st.end_time !== nothing && sim.t >= st.end_time * (1 - 1e-12))
-    comps = merge(r.closure === nothing ? (;) : (; sgs = r.closure), _coupling_components(r.couplings))
-    n == 0 && _record_initial!(r.couplings, sim)
+    cpl = sim_couplings(r)
+    n == 0 && _record_initial!(cpl, sim)
     # attached (#336): the step cores report every step; monitored_step!
     # turns a step that throws into a diagnosed blowup
-    with_monitor(sim; run = rf, components = comps, t_end = t_end,
-                 cadence = cfg.logging.diagnostics_cadence, sgs = r.closure,
+    mon = merge(closure === nothing ? (;) : (; sgs = closure), _coupling_components(cpl))
+    with_monitor(sim; run = rf, components = mon, t_end = t_end,
+                 cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
         if outdir !== nothing && sim.t >= next_out * (1 - 1e-9)
             _write_output(r, outdir, n); next_out += cadence
@@ -642,21 +590,21 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
         while !done()
             n += 1
             _, dt, retries = monitored_step!(m, sim; step = n) do
-                adaptive ? _adaptive_step!(r, c, st.end_time) : _take_step!(r, dt_fixed, n)
+                adaptive ? _adaptive_step!(r, st.end_time) : _take_step!(r, dt_fixed)
             end
             record_step!(r.stepper, dt; retries = retries)
             if outdir !== nothing && sim.t >= next_out * (1 - 1e-9)
                 _write_output(r, outdir, n)
                 next_out = (floor(sim.t / cadence * (1 + 1e-9)) + 1) * cadence
             end
-            maybe_checkpoint!(ck, sim; step = n, sgs = r.closure, stepper = r.stepper)
+            maybe_checkpoint!(ck, sim; step = n, components = comps, stepper = r.stepper)
             callback === nothing || callback(r, n)
         end
         # the guard checks on its cadence; a run never ends `completed` with
         # non-finite fields between two checks
         check_blowup!(m.guard, sim; step = n, force = true)
     end
-    _write_tracks(r.couplings, r.couplings.particles === nothing ? nothing :
+    _write_tracks(cpl, cpl.particles === nothing ? nothing :
                                cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path))
     return r
 end
@@ -671,8 +619,8 @@ temperature `T_s`, `ql`, `qr`, `tracer` and the particle positions
 (`particles`, 3 × n).
 """
 function Config.state_fields(r::SimulationRun)
-    s = r.sim
-    s isa BoussinesqSimulation && return merge(map(f -> f.data, IO.checkpoint_fields(s)), _coupling_fields(r.couplings))
+    s = simulation(r)
+    s isa BoussinesqSimulation && return merge(map(f -> f.data, IO.checkpoint_fields(s)), _coupling_fields(sim_couplings(r)))
     return (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data, θ = s.θ.data)
 end
 

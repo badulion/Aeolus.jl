@@ -315,12 +315,21 @@ tendencies `sim.tu, sim.tv, sim.tw`, with the profile `sim.sponge_α_max`,
 the zero target of a closed top is `add_sponge!`'s own default, so a
 closed run is unchanged bit for bit.
 """
-function add_velocity_sponge!(sim)
+add_velocity_sponge!(sim) =
+    add_velocity_sponge!(sim, sim.sponge_α_max, sim.sponge_z_start, sim.sponge_target)
+
+"""
+    add_velocity_sponge!(sim, α_max, z_start, target) -> sim
+
+The same sponge with the profile and targets given: the one implementation
+behind the core's built-in sponge and the `Sponge` component of the stage
+pipeline ([`Aeolus.Components.Sponge`](@ref), ONE-a #450).
+"""
+function add_velocity_sponge!(sim, α_max, z_start, tg::NamedTuple)
     z_top = sim.mesh.z0 + sim.mesh.Lz
-    tg = sim.sponge_target
-    add_sponge!(sim.tu, sim.u, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = tg.u)
-    add_sponge!(sim.tv, sim.v, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = tg.v)
-    add_sponge!(sim.tw, sim.w, sim.sponge_α_max, sim.sponge_z_start, z_top; f_ref = tg.w)
+    add_sponge!(sim.tu, sim.u, α_max, z_start, z_top; f_ref = tg.u)
+    add_sponge!(sim.tv, sim.v, α_max, z_start, z_top; f_ref = tg.v)
+    add_sponge!(sim.tw, sim.w, α_max, z_start, z_top; f_ref = tg.w)
     return sim
 end
 
