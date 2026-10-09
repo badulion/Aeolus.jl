@@ -282,7 +282,7 @@ end
     @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
     # the nest parents' land use, from their static drivers and in memory
     for s in (:smoke, :summer)
-        pc = BCI.nest_parent_config(BCI.CaseConfig(s))
+        pc = BCI.nest_parent_config(BCI.CaseConfig(berlin_toml(s)))
         pm = BCI.parent_mesh(pc)
         d = IS_DIGESTS["parent_$s"]
         for pl in (BCI.parent_landuse(pc, pm), BCI.parent_landuse_source(pc, pm))

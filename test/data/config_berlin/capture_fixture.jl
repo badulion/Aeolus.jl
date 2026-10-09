@@ -22,7 +22,7 @@ include(joinpath(@__DIR__, "..", "..", "support", "berlin_fixture.jl"))
 
 out = Dict{String,Any}("commit" => readchomp(`git -C $(@__DIR__) rev-parse HEAD`))
 for s in (:summer, :winter, :smoke, :mitte_sample)
-    cfg = BC.CaseConfig(s)
+    cfg = BC.CaseConfig(berlin_toml(s))
     out[string(s)] = Dict{String,Any}("case" => normalise(cfg), "parent" => normalise(BC.nest_parent_config(cfg)))
 end
 Aeolus.Operators.set_fftw_policy!(; planner = :estimate)

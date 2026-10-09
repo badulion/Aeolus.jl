@@ -45,9 +45,9 @@ let cfg = BC.CaseConfig(berlin_toml("summer")), mesh = meshof(cfg)
                                      "buildings" => length(city.buildings), "patches" => length(city.patches))
 end
 for s in (:smoke, :summer)
-    pc = BC.nest_parent_config(BC.CaseConfig(s))
+    pc = BC.nest_parent_config(BC.CaseConfig(berlin_toml(s)))
     Nx = BC.parent_size(pc)[1]
-    pl = BC.crop_landuse(BC.read_parent_landuse(), pc)
+    pl = BC.crop_landuse(BC.read_parent_landuse(pc.child.landuse), pc)
     pl = BC.coarsen_landuse(pl, pl.nx ÷ Nx)
     out["parent_" * string(s)] = Dict{String,Any}("counts" => digest(pl.counts), "lambda_f" => digest(pl.λf),
         "h_mean" => digest(pl.hmean), "h_max" => digest(pl.hmax), "nx" => pl.nx, "ny" => pl.ny,

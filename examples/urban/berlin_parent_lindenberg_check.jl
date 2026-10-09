@@ -42,7 +42,11 @@ col(name) = [r[findfirst(==(name), hd)] for r in rows]
 thd, trows = read_table(joinpath(OUT, "parent_theta.csv"))
 const ZC = [parse(Float64, s[2:end]) for s in thd[2:end]]
 hours_lt = col("hour_LT")
-rec(h) = findfirst(x -> isapprox(x, h; atol = 1e-6), hours_lt)
+function rec(h)
+    i = findfirst(x -> isapprox(x, h; atol = 1e-6), hours_lt)
+    i === nothing && error("$RUN has no record at $h LT: the checks need the 24 h run of berlin_parent_coarse.toml")
+    return i
+end
 θprof(i) = trows[i][2:end]
 θat(θ, h) = (k = searchsortedlast(ZC, h); θ[k] + (θ[k+1] - θ[k]) * (h - ZC[k]) / (ZC[k+1] - ZC[k]))
 
