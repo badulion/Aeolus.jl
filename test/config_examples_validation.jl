@@ -13,6 +13,7 @@
 using Test
 using Aeolus
 using Aeolus.Config
+import TOML
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
@@ -244,4 +245,156 @@ using Aeolus.ValidationRuns     # cbc_benchmark, patchy_les / patchy_run!, dns_d
     @test all(haskey(rec["filter"]["4h"], m) for m in ("smagorinsky", "bardina", "gradient"))
     # the Bardina model correlates better with the exact stress than Smagorinsky (Liu, Meneveau & Katz 1994)
     @test rec["filter"]["4h"]["bardina"]["rho_Pi"] > rec["filter"]["4h"]["smagorinsky"]["rho_Pi"]
+end
+
+# ---------------------------------------------------------------------------
+# EX-c (#440): the numbers the example scripts computed by running the model
+# are diagnostics of the run types now; the scripts only read them
+# ---------------------------------------------------------------------------
+
+"The `results.toml` of a run."
+val_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
+
+@testset "channel: [spectra] is the spectrum the neutral_abl script sampled, bit for bit" begin
+    # neutral_abl.jl before EX-c: a run_configs callback summing streamwise_spectrum every 10th
+    # step of the statistics window at the cells round(f N + 1/2), f = 0.06, 0.1, 0.25, 0.5
+    ovr = ["channel.size=[16,16,16]", "stepper.end_time=0.6"]
+    acc = Ref{Any}(nothing); n = Ref(0)
+    legacy = function (r, step)
+        st = r.cfg.stepper
+        (r.case.sim.t >= st.average_from_fraction * st.end_time && step % 10 == 0) || return
+        sp = streamwise_spectrum(r.case.sim.u, unique(clamp.(round.(Int, (0.06, 0.1, 0.25, 0.5) .* 16 .+ 0.5), 1, 16)))
+        acc[] === nothing ? (acc[] = copy(sp.E11)) : (acc[] .+= sp.E11); n[] += 1
+    end
+    r0 = val_run("neutral_abl", "smagorinsky_32x32x32", vcat(ovr, "spectra.levels=[]"); callback = legacy)
+    r = val_run("neutral_abl", "smagorinsky_32x32x32", ovr)
+    @test r.obj.cfg.spectra.levels == [0.06, 0.1, 0.25, 0.5] && r.obj.cfg.spectra.every == 10
+    @test n[] >= 2 && r.obj.spectra.nsamples[] == n[]
+    @test r.obj.spectra.levels == [1, 2, 4, 8] == spectrum_levels([0.06, 0.1, 0.25, 0.5], 16)
+    sp = val_results(r)["spectra"]
+    @test all(bitwise_equal(Float64.(sp["E11"][m]), acc[][:, m] ./ n[]) for m in 1:4)
+    # sampling does not touch the flow: the fields are those of the run without spectra
+    @test fields_bitwise(state_fields(r.obj), state_fields(r0.obj))
+    # Parseval: each sample's spectrum integrates to the variance of u′ on its plane, so the
+    # average does too, to the variance averaged over the samples (one-sided, Δk1 = 2π/L_x)
+    Δk = sp["k1"][2] - sp["k1"][1]
+    @test all(sum(e) * Δk > 0 for e in sp["E11"])
+    @test sp["z_over_depth"] == [(k - 0.5) / 16 for k in (1, 2, 4, 8)]
+end
+
+@testset "cbc_decay: the run records CBC's table 3 and its interpolant" begin
+    r = val_run("cbc_decay", "smagorinsky", ["grid.n=16", "benchmark.seeds=[1]", "benchmark.spinup=1"])
+    ref = val_results(r)["reference"]
+    k, E, _ = cbc_table()
+    @test Float64.(ref["k_table"]) == k
+    @test isequal(Float64.(ref["E_table_98"]), E[:, 2])
+    kk = Float64.(ref["k_curve"])
+    @test length(kk) == 200 && issorted(kk) && kk[1] ≈ r.obj.result.k[2] / 1.3 && kk[end] ≈ 2.2 * r.obj.result.k[9]
+    # the interpolant passes through the table and decays: E(98) < E(42) at every k (decaying turbulence)
+    @test all(Float64.(ref["E_curve_98"]) .< Float64.(ref["E_curve_42"]))
+    @test val_results(r)["nseeds"] == 1
+end
+
+@testset "column: dycoms_rf01, parisfog_2011 and the parcels record what their scripts derive" begin
+    r = val_run("dycoms_rf01", nothing)
+    res = val_results(r); s = r.obj.state
+    @test bitwise_equal(Float64.(res["rho"]), s.col.ρ) && bitwise_equal(Float64.(res["dz"]), s.col.dz)
+    # the liquid water path the script reports, from the recorded ρ, ql, dz: RF01 observed 45-60 g/m²
+    lwp = sum(Float64.(res["rho"]) .* Float64.(res["ql"]) .* Float64.(res["dz"])) * 1000
+    @test 30 < lwp < 120
+    r = val_run("parisfog_2011", "reference", ["fog_sounding.duration=1800.0"])
+    res = val_results(r)
+    H = r.obj.state.history
+    @test length(res["C_LW"]) == length(H) && isequal(Float64.(res["lw_net_top"]), [h.lw_net_top for h in H])
+    @test res["t_max_lwp_utc_hour"] == fog_life_cycle(H).t_max_lwp
+    # the stationary parcel: the OU width is 0 at t = 0 and grows like t^{1/2} once t ≫ τ
+    r = val_run("spectral_broadening", "stationary_bulk", ["parcel.t_end=200.0"])
+    res = val_results(r); t = Float64.(res["t"]); ou = Float64.(res["sigma_r2_ou"])
+    @test ou[1] == 0 && issorted(ou)
+    w = t .>= 10 * r.obj.cfg.parcel.tau
+    p = fit_power_law(t[w], ou[w])[1]
+    @test 0.45 < p < 0.55
+    @test bitwise_equal(Float64.(res["T"]), r.obj.state.T)
+end
+
+# canopy_profiles.jl before EX-c (the script's own wind / temperature, verbatim)
+function legacy_canopy_wind(p, h; C_d, ztop, N = 400, β = 0.3)
+    zf = collect(range(0, ztop; length = N + 1))
+    lad = layer_leaf_area_density(p, zf)
+    l_c = harman_finnigan_mixing_length(β, C_d, leaf_area_index(p) / h)
+    sol = solve_canopy_wind_column(zf, lad; C_d = C_d, u_top = 5.0, bottom = :no_slip,
+                                   l_mix = z -> canopy_mixing_length(z; h = h, l_c = l_c))
+    return (; sol, lad, zf, l_c, d = canopy_displacement_height(sol, lad; C_d = C_d))
+end
+
+@testset "plant_canopy: canopy_profiles.toml is the old script's canopies, bit for bit" begin
+    include(joinpath(@__DIR__, "data", "canopy_profiles.jl"))
+    OBS = Base.invokelatest(canopy_profile_observations)
+    runs = Dict(m.label => c for (m, c) in load_sweep(vcfg("canopy_profiles")))
+    @test sort(collect(keys(runs))) == sort(["wind_tunnel", "wind_tunnel_cd_1.2", "chats_leaves", "chats_noleaves",
+                                             "hyytiala", "hyytiala_day", "hyytiala_night"])
+    # the config's canopies are the data file's (one source: the digitised profiles)
+    for (lab, ds) in (("chats_leaves", OBS.chats_leaves), ("chats_noleaves", OBS.chats_noleaves))
+        c = runs[lab].canopy
+        @test c.h == ds.h && c.lad_z == ds.pad_z && c.lad_values == ds.pad_ah && c.lad_units === :ah
+    end
+    for lab in ("hyytiala", "hyytiala_day", "hyytiala_night")
+        c = runs[lab].canopy
+        @test c.h == OBS.hyytiala.h && c.c_d == OBS.hyytiala.C_d && c.lad_z == OBS.hyytiala.lad_z &&
+              c.lad_values == OBS.hyytiala.lad
+    end
+    wt = OBS.wind_tunnel
+    @test runs["wind_tunnel"].canopy.ah == wt.ah && runs["wind_tunnel"].canopy.c_d == wt.C_d &&
+          runs["wind_tunnel_cd_1.2"].canopy.c_d == wt.C_d_alt
+    # the runs equal the old in-script solves
+    hy = OBS.hyytiala
+    for (lab, legacy) in (("wind_tunnel", () -> legacy_canopy_wind(UniformLAD(wt.ah, wt.h), wt.h; C_d = wt.C_d, ztop = 2wt.h)),
+                          ("chats_leaves", () -> (ds = OBS.chats_leaves;
+                                                  legacy_canopy_wind(TabulatedLAD(ds.pad_z .* ds.h, ds.pad_ah ./ ds.h), ds.h;
+                                                                     C_d = 0.2, ztop = 2.9ds.h))),
+                          ("hyytiala", () -> legacy_canopy_wind(TabulatedLAD(hy.lad_z .* hy.h, hy.lad), hy.h;
+                                                                C_d = hy.C_d, ztop = 1.47hy.h)))
+        m = legacy()
+        r = val_run("canopy_profiles", lab)
+        @test bitwise_equal(r.obj.profile.sol.u, m.sol.u) && r.obj.profile.d === m.d
+        res = val_results(r)
+        # physics: the wind grows with height through the canopy, and d lies inside it
+        @test issorted(Float64.(res["u"])) && 0 < res["d"] < r.obj.cfg.canopy.h
+    end
+    # day: leaves warmer than the air above (unstable, ΔT > 0 inside); night: colder (ΔT < 0)
+    day = val_results(val_run("canopy_profiles", "hyytiala_day"))
+    night = val_results(val_run("canopy_profiles", "hyytiala_night"))
+    zd = Float64.(day["z"]); i = argmin(abs.(zd .- 8.4))
+    @test day["dT"][i] > 0.1 && night["dT"][i] < -0.5
+    # a key of the temperature mode in a wind run is refused
+    e = try load_sweep(vcfg("canopy_profiles"); member = "hyytiala", overrides = ["canopy_energy.rh=0.9"]) catch err; err end
+    @test e isa ConfigError && occursin("canopy_energy.rh", sprint(showerror, e))
+end
+
+@testset "dynamic_roughness: dynamic_roughness_cubes.toml is the old script's table, bit for bit" begin
+    # dynamic_roughness_cubes.jl before EX-c, the row Δ = h/2, C_d = 1 (20 cubes per row, 16 points per h)
+    hf = staggered_cube_heights(20, 16)
+    @test sum(hf .> 0) / length(hf) == 0.25                              # λ_p of the staggered array
+    st = subfilter_height(hf, 8; dx = 0.5, dy = 0.5)
+    dr = DynamicRoughness(st; z0_floor = 1e-4, C_d = 1.0)
+    uc = fill(5.0, 80, 80); vc = zeros(80, 80)
+    update_dynamic_roughness!(dr, uc, vc, 2.0)
+    D = roughness_surface_drag(dr, uc, vc, 2.0)
+    r = val_run("dynamic_roughness_cubes", "d0.5_cd1")
+    x = r.obj.result
+    @test x.alpha === dr.α && x.ustar_over_u === sqrt(D.total) / 5.0
+    mac = Aeolus.SurfaceTiles.macdonald_roughness(0.25, 0.25, 1.0)
+    @test x.d_mac === mac.d && x.z0_mac === mac.z0
+    # the numbers of docs/src/theory/wall_models.md (example 3): α = 2.26, ⟨z0⟩/h = 0.53,
+    # z0_eff/h = 0.71 with the Macdonald displacement, 5.8× Macdonald's 0.123
+    @test x.converged
+    @test x.alpha ≈ 2.26 rtol = 0.01
+    @test x.z0_mean ≈ 0.53 rtol = 0.02
+    @test x.z0_eff_dmac ≈ 0.71 rtol = 0.02
+    @test x.ratio_mac ≈ 5.8 rtol = 0.02
+    @test x.z0_mac ≈ 0.123 rtol = 0.01
+    @test 0 < x.form_fraction < 1                                         # resolved form drag is part of τ
+    # at Δ = h no α balances the resolved drag of the cube walls (no root)
+    @test !val_run("dynamic_roughness_cubes", "d1_cd1").obj.result.converged
+    @test length(load_sweep(vcfg("dynamic_roughness_cubes"))) == 5
 end

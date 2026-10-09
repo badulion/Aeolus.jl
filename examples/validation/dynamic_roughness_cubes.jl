@@ -31,65 +31,28 @@
 #     sources; it was NOT checked against the paper's own table (no
 #     access). Treat the Cheng & Castro ratio accordingly.
 #
-#   julia --project=. examples/validation/dynamic_roughness_cubes.jl   # ~10 s
-# Output: a table on stdout (no files).
+#   julia --project -m Aeolus run examples/validation/configs/dynamic_roughness_cubes.toml   # ~10 s
+#   julia --project examples/validation/dynamic_roughness_cubes.jl [runs-root]
+# The runs are the `dynamic_roughness` run type; this script reads their
+# output/results.toml. Output: a table on stdout (no files).
 # =========================================================================
 
-using Aeolus
 using Printf
-using Statistics
+include(joinpath(@__DIR__, "read_runs.jl"))
 
-const κ = Aeolus.SurfaceExchange.von_karman()
-
-# Macdonald et al. (1998), staggered array: the one implementation is
-# `SurfaceTiles.macdonald_roughness` (defaults A = 4.43, β = 1.0, C_D = 1.2,
-# κ = 0.4 are the staggered-array constants quoted in the header).
-using Aeolus.SurfaceTiles: macdonald_roughness
 const CHENG_CASTRO_2002 = (d_h = 0.83, z0_h = 0.053)     # see the header: unverified
 
-# Height map of the staggered array: ncube cubes per row, npc fine points
-# per cube side, offset (in fine points) so that LES cells cut the cubes.
-function cube_array(ncube, npc; h = 1.0, offset = npc ÷ 4)
-    Nf = 2ncube * npc
-    hf = zeros(Nf, Nf)
-    for row in 0:ncube-1, col in 0:ncube-1
-        x0 = col * 2npc + (isodd(row) ? npc : 0) + offset
-        y0 = row * 2npc + offset
-        for b in 1:npc, a in 1:npc
-            hf[mod1(x0 + a, Nf), mod1(y0 + b, Nf)] = h
-        end
-    end
-    return hf
-end
-
-h = 1.0
-ncube, npc = 20, 16
-hf = cube_array(ncube, npc; h = h)
-λp = mean(hf .> 0)
-Lf = 2ncube * h                      # side of the periodic tile
-mac = macdonald_roughness(λp, λp, 1.0)   # h = 1: d and z0 are d/h and z0/h
-dMac, z0Mac = mac.d, mac.z0
+runs = member_runs(runs_root(), validation_config("dynamic_roughness_cubes"))
+r1 = runs[1][2]
+h = r1.cfg["cubes"]["h"]
 @printf("Staggered cubes: λp = λf = %.3f (measured from the map); Macdonald 1998: d/h = %.3f, z0/h = %.4f; Cheng & Castro 2002: d/h = %.2f, z0/h = %.3f\n",
-        λp, dMac, z0Mac, CHENG_CASTRO_2002.d_h, CHENG_CASTRO_2002.z0_h)
-
-z_ref = 2.0 * h                      # wind height above the base
-U = 5.0
+        r1.res["lambda_p"], r1.res["d_mac"] / h, r1.res["z0_mac"] / h, CHENG_CASTRO_2002.d_h, CHENG_CASTRO_2002.z0_h)
 @printf("\n%-5s %-8s %8s %8s %10s %10s %10s %12s %12s %10s %10s\n", "C_d", "Δ/h", "α", "conv", "⟨z0⟩/h", "form/τ",
         "u*/U", "z0eff/h d=0", "z0eff/h dMac", "÷Mac", "÷C&C")
-for (Δh, C_d) in ((0.5, 1.0), (1.0, 1.0), (2.0, 1.0), (0.5, 0.25), (0.5, 4.0))
-    r = round(Int, Δh * npc)
-    N = size(hf, 1) ÷ r
-    dx = Lf / N
-    st = subfilter_height(hf, r; dx = dx, dy = dx)
-    dr = DynamicRoughness(st; z0_floor = 1e-4 * h, C_d = C_d)
-    uc = fill(U, N, N); vc = zeros(N, N)
-    update_dynamic_roughness!(dr, uc, vc, z_ref)
-    D = roughness_surface_drag(dr, uc, vc, z_ref)
-    us = sqrt(D.total)
-    z0e0 = z_ref * exp(-κ * U / us)
-    # with a displacement the same u* holds at the wind height z_ref − d
-    z0ed = (z_ref - dMac * h) * exp(-κ * U / us)
+for (_, r) in runs
+    x = r.res; g = r.cfg["roughness"]
     @printf("%-5.2f %-8.1f %8.4f %8s %10.4f %10.3f %10.4f %12.4f %12.4f %10.2f %10.2f\n",
-            C_d, Δh, dr.α, string(dr.converged), mean(dr.z0) / h, D.form / D.total, us / U,
-            z0e0 / h, z0ed / h, z0ed / (z0Mac * h), z0ed / (CHENG_CASTRO_2002.z0_h * h))
+            g["c_d"], g["delta_over_h"], x["alpha"], string(x["converged"]), x["z0_mean"] / h, x["form_fraction"],
+            x["ustar_over_u"], x["z0_eff_d0"] / h, x["z0_eff_dmac"] / h, x["ratio_mac"],
+            x["z0_eff_dmac"] / (CHENG_CASTRO_2002.z0_h * h))
 end

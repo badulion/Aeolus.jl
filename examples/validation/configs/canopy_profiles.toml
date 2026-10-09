@@ -1,0 +1,74 @@
+# Within-canopy wind and temperature profiles — Phase 48 (#25)
+#
+# The 1-D PlantCanopy column (the `plant_canopy` run type) for three
+# published canopies, compared with their profiles by
+# examples/validation/canopy_profiles.jl:
+#
+#   * wind tunnel, waving-wheat model canopy (Brunet, Finnigan & Raupach
+#     1994, BLM 70, 95-132), as re-plotted by Huang, Cassiani & Albertson
+#     (2008, AMS extended abstract 2.2, Fig. 2), with the tunnel's C_d and
+#     Patton's (1997) 1.2;
+#   * CHATS walnut orchard with and without leaves (Patton et al. 2011,
+#     BAMS 92, 593-611; Dupont & Patton 2012, AFM 157, 11-29), near-neutral;
+#   * Scots pine forest, Hyytiälä (Launiainen et al. 2007, Tellus 59B,
+#     919-936): U/u* (near-neutral) and the day / night in-canopy air
+#     temperature from the coupled leaf-energy-balance + scalar column.
+#
+# Nothing is fitted: C_d and the leaf-area profiles are the published ones
+# (C_d = 0.2, the PlantCanopy default, for CHATS, for which none is
+# published), the mixing length is Harman & Finnigan's with β = 0.3. The
+# canopy heights, a·h, C_d and the leaf-area tables are those of
+# test/data/canopy_profiles.jl, where their digitisation is documented
+# (test/config_examples_validation.jl checks that the two agree).
+#
+#   julia --project -m Aeolus run examples/validation/configs/canopy_profiles.toml
+#   julia --project examples/validation/canopy_profiles.jl [runs-root]     # the figure
+
+[run]
+driver = "plant_canopy"
+name = "canopy_profiles"
+
+[canopy]
+beta = 0.3
+u_top = 5.0
+layers = 400
+
+[[sweep.member]]
+label = "wind_tunnel"
+canopy = { lad = "uniform", h = 0.047, ah = 0.4995, c_d = 0.675, ztop_over_h = 2.0 }
+
+[[sweep.member]]
+label = "wind_tunnel_cd_1.2"
+canopy = { lad = "uniform", h = 0.047, ah = 0.4995, c_d = 1.2, ztop_over_h = 2.0 }
+
+[[sweep.member]]
+label = "chats_leaves"
+canopy = { lad = "table", h = 10.0, c_d = 0.2, ztop_over_h = 2.9, lad_units = "ah", lad_z = [0.0, 0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0], lad_values = [0.28, 0.28, 0.51, 2.44, 1.67, 3.19, 3.13, 3.23, 4.29, 5.46, 3.58, 0.0] }
+
+[[sweep.member]]
+label = "chats_noleaves"
+canopy = { lad = "table", h = 10.0, c_d = 0.2, ztop_over_h = 2.9, lad_units = "ah", lad_z = [0.0, 0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0], lad_values = [0.28, 0.28, 0.31, 0.35, 1.05, 1.51, 0.54, 0.72, 1.38, 0.55, 0.97, 0.0] }
+
+# Hyytiälä: one-sided needle-area density, m² m⁻³ (half the all-sided values of Fig. 1)
+[[sweep.member]]
+label = "hyytiala"
+canopy = { lad = "table", h = 15.0, c_d = 0.15, ztop_over_h = 1.47, lad_units = "m2_m3", lad_z = [0.0, 0.4002, 0.4067, 0.4135, 0.4203, 0.4268, 0.4336, 0.4401, 0.48, 0.5534, 0.7001, 0.8536, 0.927, 1.0], lad_values = [0.0, 0.0, 0.0023, 0.0099, 0.02235, 0.0394, 0.0604, 0.0848, 0.28945, 0.6995, 0.74835, 0.1984, 0.0394, 0.0] }
+
+# day: u* = 0.4 m/s, 20 °C, 50 % RH, sun at cos z = 0.78 (600 + 120 W/m²), open stomata
+[[sweep.member]]
+label = "hyytiala_day"
+canopy = { mode = "temperature", lad = "table", h = 15.0, c_d = 0.15, ztop = 16.8, layers = 84, lad_units = "m2_m3", lad_z = [0.0, 0.4002, 0.4067, 0.4135, 0.4203, 0.4268, 0.4336, 0.4401, 0.48, 0.5534, 0.7001, 0.8536, 0.927, 1.0], lad_values = [0.0, 0.0, 0.0023, 0.0099, 0.02235, 0.0394, 0.0604, 0.0848, 0.28945, 0.6995, 0.74835, 0.1984, 0.0394, 0.0] }
+canopy_energy = { u_star = 0.4, t_ref = 293.15, rh = 0.5, cos_zenith = 0.78, sw_direct = 600.0, sw_diffuse = 120.0, lw_down = 330.0, g_s = 0.1 }
+
+# night: u* = 0.1 m/s, 12 °C, 80 % RH, net longwave loss 90 W/m² (lw_down = σ 285.15⁴ − 90), closed stomata
+[[sweep.member]]
+label = "hyytiala_night"
+canopy = { mode = "temperature", lad = "table", h = 15.0, c_d = 0.15, ztop = 16.8, layers = 84, lad_units = "m2_m3", lad_z = [0.0, 0.4002, 0.4067, 0.4135, 0.4203, 0.4268, 0.4336, 0.4401, 0.48, 0.5534, 0.7001, 0.8536, 0.927, 1.0], lad_values = [0.0, 0.0, 0.0023, 0.0099, 0.02235, 0.0394, 0.0604, 0.0848, 0.28945, 0.6995, 0.74835, 0.1984, 0.0394, 0.0] }
+canopy_energy = { u_star = 0.1, t_ref = 285.15, rh = 0.8, cos_zenith = 0.0, sw_direct = 0.0, sw_diffuse = 0.0, lw_down = 284.8911949667137, g_s = 0.005 }
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = []                  # already a smoke run (one steady solve)
+member = "hyytiala_day"

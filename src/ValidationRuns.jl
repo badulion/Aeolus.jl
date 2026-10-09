@@ -18,6 +18,8 @@ a-priori record of the `dns` run type). The scripts left in
 | `column` | single-column and box cases with no 3-D dynamics, by `[column] case`: `dycoms_rf01`, `parisfog_2011`, `kessler_box`, `droplet_parcel` |
 | `cbc_decay` | the Comte-Bellot & Corrsin (1971) decay benchmark ([`cbc_benchmark`](@ref)) |
 | `patchy_surface` | the convective boundary layer over hot and cool strips ([`patchy_les`](@ref), [`patchy_run!`](@ref)) |
+| `plant_canopy` | the steady 1-D canopy column of `PlantCanopy`: wind, or the in-canopy temperature of the leaf energy balance ([`canopy_wind_profile`](@ref), [`canopy_temperature_profile`](@ref)) |
+| `dynamic_roughness` | the a-priori dynamic roughness of a staggered cube array ([`cube_array_roughness`](@ref)) |
 | `dns` | the decaying-turbulence DNS of the filtered-DNS fixture ([`dns_decay`](@ref)) and its a-priori record ([`dns_apriori_finish`](@ref)) |
 
 The harnesses these run types are built on (the CBC benchmark, the DNS
@@ -49,6 +51,8 @@ include("validation_runs/cbc.jl")
 include("validation_runs/dns.jl")
 include("validation_runs/channel.jl")
 include("validation_runs/rf01.jl")
+include("validation_runs/canopy.jl")
+include("validation_runs/roughness.jl")
 include("validation_runs/column.jl")
 include("validation_runs/patchy_surface.jl")
 
@@ -65,6 +69,9 @@ export DNS_KP, DNS_NU48, DNS_T_END, velocity_derivative_skewness, dns_start, dns
 export ChannelDriver, spectrum_levels
 # the column cases
 export ColumnDriver, RF01_DEFAULTS, rf01_column, rf01_radiation, parcel_ou_sigma_r2
+# the plant canopy column (Phase 48) and the dynamic roughness of a cube array (P57-e)
+export PlantCanopyDriver, canopy_wind_profile, canopy_temperature_profile, canopy_lad,
+       DynamicRoughnessDriver, staggered_cube_heights, cube_array_roughness
 # the patchy-surface LES (Phase 53, #43)
 export PatchSkin, PatchyLES, patchy_strip_classes, patchy_les, patchy_forcing, patchy_column_fluxes!,
        patchy_step!, patchy_heat_content, patchy_zi, patchy_wstar, patchy_sample, patchy_run!,
