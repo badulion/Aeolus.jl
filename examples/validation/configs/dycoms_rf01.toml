@@ -7,8 +7,8 @@
 # the net flux the intercomparison prescribes:
 #   F_rad(z) = F0 exp(-Q(z, ztop)) + F1 exp(-Q(0, z)), F0 = 70, F1 = 22 W/m², κ = 85 m²/kg.
 #
-#   julia --project=. examples/validation/dycoms_rf01_radiation.jl
 #   julia --project -m Aeolus run examples/validation/configs/dycoms_rf01.toml
+#   julia --project examples/validation/dycoms_rf01_radiation.jl [runs-root]    # the report
 
 [run]
 driver = "column"

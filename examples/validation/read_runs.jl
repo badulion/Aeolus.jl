@@ -8,6 +8,7 @@
 # "runs", the root `aeolus run` writes to).
 
 using Aeolus.IO: latest_run, read_run_toml
+using Aeolus.Config: sweep_members
 import TOML
 
 "The root of the runs: the script's first argument, else `runs/`."
@@ -40,4 +41,32 @@ run_results(folder::AbstractString, name::AbstractString = "results.toml") =
 function load_run(root::AbstractString, name::AbstractString; file::AbstractString = "results.toml")
     f = run_folder(root, name)
     return (res = run_results(f, file), cfg = run_config_table(f), folder = f)
+end
+
+"The shipped config `examples/validation/configs/<name>.toml`."
+validation_config(name::AbstractString) = joinpath(@__DIR__, "configs", name * ".toml")
+
+"""
+    member_runs(root, config) -> Vector{Pair{String,NamedTuple}}
+
+`label => load_run(root, "<run name>_<label>")` for every member of the
+sweep of the config file `config`, in the sweep's order (one entry,
+label `""`, for a config without a sweep). Members that have not been
+run are left out with a warning.
+"""
+function member_runs(root::AbstractString, config::AbstractString; file::AbstractString = "results.toml")
+    name = TOML.parsefile(config)["run"]["name"]
+    ms = sweep_members(config)
+    labels = ms === nothing ? [""] : [m.label for m in ms]
+    out = Pair{String,Any}[]
+    for l in labels
+        run = isempty(l) ? name : name * "_" * l
+        if latest_run(root, run) === nothing
+            @warn "no run \"$run\" under $(abspath(root)) (run its member: aeolus run $(relpath(config)) --member $l)"
+            continue
+        end
+        push!(out, l => load_run(root, run; file))
+    end
+    isempty(out) && error("no member of $(relpath(config)) has been run under $(abspath(root))")
+    return out
 end

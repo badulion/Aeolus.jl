@@ -3,7 +3,7 @@
 # exp(-2 (k/1.5)²), u' = 1, the projected SSP-RK3 of step_rk3! (2nd-order
 # energy-conserving centred advection, no SGS model, CFL 0.5), run to
 # t = 2 and on to 0.25 past the dissipation peak (capped at t = 6), then
-# Gaussian filtered at Δ = 4h, 8h, 16h, 32h (test/fixtures/dns_apriori.jl).
+# Gaussian filtered at Δ = 4h, 8h, 16h, 32h (Aeolus.ValidationRuns).
 #
 # ν = 1.035 · 0.018 (48/N)^{4/3} ("scaled"; 2.00e-3 at 256³): the
 # fixture's scaling, which holds k_max η roughly fixed, with a 3.5 %

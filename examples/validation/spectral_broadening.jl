@@ -26,21 +26,32 @@
 #
 # The runs (the parcels of 1. and 2., each with the superdroplet reference
 # and the bulk scheme) are the sweep examples/validation/configs/
-# spectral_broadening.toml (driver "column", case "droplet_parcel").
+# spectral_broadening.toml (the `column` run type, case "droplet_parcel");
+# each records its history and the Ornstein–Uhlenbeck σ_{r²}(t). This
+# script reads their output/results.toml.
 #
-# Run:  julia --project=. examples/validation/spectral_broadening.jl [--set key=value]
+#   julia --project -m Aeolus run examples/validation/configs/spectral_broadening.toml
+#   julia --project examples/validation/spectral_broadening.jl [runs-root]
 # Writes two SVGs to examples/validation/output/ (gitignored).
 # =========================================================================
 
-using Aeolus, Printf
+using Printf
+include(joinpath(@__DIR__, "read_runs.jl"))
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
 outdir = joinpath(@__DIR__, "output")
 mkpath(outdir)
 
-runs = run_configs(joinpath(@__DIR__, "configs", "spectral_broadening.toml"), ARGS)
-H = Dict(chop(r.obj.cfg.run.name; head = length("spectral_broadening_"), tail = 0) => r.obj.state for r in runs)
-cfg_of = Dict(chop(r.obj.cfg.run.name; head = length("spectral_broadening_"), tail = 0) => r.obj.cfg for r in runs)
+runs = member_runs(runs_root(), validation_config("spectral_broadening"))
+H = Dict(l => (; t = Float64.(r.res["t"]), ε = Float64.(r.res["epsilon"]), σ_r2 = Float64.(r.res["sigma_r2"]),
+               ou = Float64.(r.res["sigma_r2_ou"])) for (l, r) in runs)
+cfg_of = Dict(l => r.cfg for (l, r) in runs)
+
+"Least-squares exponent of y ∝ t^p in log-log space."
+function power_law_exponent(t, y)
+    x = log.(t); z = log.(y); x̄ = sum(x) / length(x); z̄ = sum(z) / length(z)
+    return sum((x .- x̄) .* (z .- z̄)) / sum((x .- x̄) .^ 2)
+end
 
 # --- 1. ascending parcel ---------------------------------------------------
 println("Ascending parcel, w = 0.5 m/s, τ = 5 s, n_sd = 8000")
@@ -62,20 +73,17 @@ save_multiline(joinpath(outdir, "broadening_parcel_eps.svg"), t_axis, series, la
                title = "Ascending parcel: dispersion vs sigma_S", width = 720, height = 440)
 
 # --- 2. stationary fluctuations: the t^{1/2} law ---------------------------
-pc = cfg_of["stationary_superdroplet"].parcel
-τ, σ = pc.tau, pc.sigma_s
-case = (; p0 = pc.p0)
+pc = cfg_of["stationary_superdroplet"]["parcel"]
+τ, σ = pc["tau"], pc["sigma_s"]
 Hs = H["stationary_superdroplet"]
 Hb = H["stationary_bulk"]
-G = 1 / (Aeolus.Superdroplet.fk_thermal(Hb.T[end]) +
-         Aeolus.Superdroplet.fd_vapor(Hb.T[end], case.p0))
 t = Hs.t[2:end]
-ou = [2G * sqrt(supersaturation_integral_variance(σ, τ, x)) for x in t]
+ou = Hb.ou[2:end]                                   # the OU curve at the bulk run's final temperature
 half = ou[end] .* sqrt.(t ./ t[end])                 # pure t^{1/2}, matched at 600 s
 w = t .>= 10τ
-p_sd = fit_power_law(t[w], Hs.σ_r2[2:end][w])[1]
-p_b  = fit_power_law(t[w], Hb.σ_r2[2:end][w])[1]
-p_ou = fit_power_law(t[w], ou[w])[1]
+p_sd = power_law_exponent(t[w], Hs.σ_r2[2:end][w])
+p_b  = power_law_exponent(t[w], Hb.σ_r2[2:end][w])
+p_ou = power_law_exponent(t[w], ou[w])
 @printf("\nStationary S' (σ_S = %.1f %%, τ = %g s): σ_r² ∝ t^p for t ≥ %g s\n", 100σ, τ, 10τ)
 @printf("  p = %.4f (superdroplet), %.4f (bulk), %.4f (OU analytic), 0.5 (DNS law)\n",
         p_sd, p_b, p_ou)

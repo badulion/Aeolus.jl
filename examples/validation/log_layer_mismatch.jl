@@ -18,36 +18,35 @@
 # over T_f.
 #
 # The fifteen runs are the sweep examples/validation/configs/
-# log_layer_mismatch.toml (driver "channel"); this script runs them and
-# prints the tables.
+# log_layer_mismatch.toml (the `channel` run type); this script reads
+# their output/results.toml and prints the tables.
 #
-#   julia --project=. examples/validation/log_layer_mismatch.jl     # ~3 min
-#   julia --project=. examples/validation/log_layer_mismatch.jl --set stepper.end_time=8.0
+#   julia --project -m Aeolus run examples/validation/configs/log_layer_mismatch.toml   # ~3 min
+#   julia --project examples/validation/log_layer_mismatch.jl [runs-root]
 #
-# Output: tables on stdout (and one run folder per member).
+# Output: tables on stdout.
 # =========================================================================
 
-using Aeolus
 using Printf
-
+include(joinpath(@__DIR__, "read_runs.jl"))
+# the reference data (Lee & Moser 2015 U_b⁺, Dean's correlation): numbers, not a model
 include(joinpath(@__DIR__, "..", "..", "test", "data", "lee_moser_2015.jl"))
 
-runs = Dict(r.obj.cfg.run.name => r.obj
-            for r in run_configs(joinpath(@__DIR__, "configs", "log_layer_mismatch.toml"), ARGS))
+runs = Dict(member_runs(runs_root(), validation_config("log_layer_mismatch")))
 
 function result(label)
-    r = runs["log_layer_mismatch_" * label]; st = r.stats
-    sel = findall(z -> 0.1 < z < 0.3, st.zf)
-    return (Ub = sum(st.U) / length(st.U), Φ1 = st.phi_m[1],
-            Φmax = maximum(abs.(st.phi_m[sel] .- 1)), τ = st.τ_wall, t = st.wall_time,
-            cfg = r.cfg)
+    r = runs[label]; st = r.res
+    zf = Float64.(st["zf"]); phi = Float64.(st["phi_m"]); U = Float64.(st["U"])
+    sel = findall(z -> 0.1 < z < 0.3, zf)
+    return (Ub = sum(U) / length(U), Φ1 = phi[1], Φmax = maximum(abs.(phi[sel] .- 1)),
+            τ = st["tau_wall"], t = st["wall_time"], cfg = r.cfg)
 end
 
 pct(x, r) = 100 * (x / r - 1)
 
-a0 = result("re182_first"); N = a0.cfg.channel.size; T_END = a0.cfg.stepper.end_time
-T_AVG = T_END - a0.cfg.stepper.average_from_fraction * T_END
-println("Bulk velocity, $(N[1])×$(N[2])×$(N[3]), StaticSmagorinsky($(a0.cfg.sgs.c_s)), averaged over ",
+a0 = result("re182_first"); N = a0.cfg["channel"]["size"]; T_END = a0.cfg["stepper"]["end_time"]
+T_AVG = T_END - a0.cfg["stepper"]["average_from_fraction"] * T_END
+println("Bulk velocity, $(N[1])×$(N[2])×$(N[3]), StaticSmagorinsky($(a0.cfg["sgs"]["c_s"])), averaged over ",
         "$(T_END - T_AVG)-$(T_END) δ/u_τ")
 @printf("%8s %8s %8s | %-26s | %-26s | %s\n", "Re_τ", "LM U_b⁺", "Dean", "first cell: U_b⁺ (err LM)",
         "h_wm=3Δz + T_f: U_b⁺ (err)", "Φ_m(Δz) first / fix; max|Φ_m−1| 0.1-0.3δ first / fix")

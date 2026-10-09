@@ -239,7 +239,9 @@ The `cbc_decay` run type: `[run] driver = "cbc_decay"`, the
 Comte-Bellot & Corrsin (1971) decay of [`cbc_benchmark`](@ref) for one
 closure (`[sgs] closure`), averaged over `[benchmark] seeds`. It writes
 the LES spectra at the three stations, the TKE ratios and the spectral
-errors to `output/results.toml`. Config:
+errors, and CBC's table 3 with its interpolant over the wavenumber range of the run
+([`cbc_reference`](@ref), the reference the example figure draws) to
+`output/results.toml`. Config:
 `examples/validation/configs/cbc_decay.toml`.
 """
 struct CBCDriver <: AbstractRunDriver end
@@ -299,9 +301,32 @@ function Simulations.run!(::CBCDriver, r::CBCRun, rf::RunFolder, ::CheckpointSch
     write_results(rf, Dict("K_ratio" => collect(s.K_ratio), "K_ratio_ref" => collect(s.K_ratio_ref),
                            "rms_log_err" => collect(s.rms_log_err), "E_kc_ratio" => collect(s.E_kc_ratio),
                            "k" => s.k, "E_42" => s.E_les[1], "E_98" => s.E_les[2], "E_171" => s.E_les[3],
-                           "nsteps" => s.nsteps, "wall_time" => s.wall))
+                           "nsteps" => s.nsteps, "nseeds" => s.nseeds, "wall_time" => s.wall,
+                           "reference" => cbc_reference(s.k, s.N)))
     callback === nothing || callback(r, s.nsteps)
     return r
+end
+
+"""
+    cbc_reference(k, N; npoints = 200) -> Dict
+
+The CBC reference a run of the `cbc_decay` run type records next to its
+spectra: table 3 (`k_table`, `E_table_42`, `E_table_98`, `E_table_171`;
+`NaN` where the table has no value) and its interpolant
+[`cbc_spectrum`](@ref) at `npoints` log-spaced wavenumbers from the
+first LES shell ÷ 1.3 to 2.2 k_c (`k_curve`, `E_curve_<station>`): the
+range the example figure draws.
+"""
+function cbc_reference(k, N; npoints::Integer = 200)
+    k_tab, E_tab, _ = cbc_table()
+    kmin, kmax = k[2] / 1.3, 2.2 * k[N ÷ 2 + 1]
+    kk = exp.(range(log(kmin), log(kmax), length = npoints))
+    d = Dict{String,Any}("k_table" => k_tab, "k_curve" => collect(kk))
+    for (s, st) in enumerate(CBC_STATIONS)
+        d["E_table_$st"] = E_tab[:, s]
+        d["E_curve_$st"] = cbc_spectrum(s).(kk)
+    end
+    return d
 end
 
 "The averaged LES spectra at the three stations (the run's result)."

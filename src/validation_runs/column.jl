@@ -178,7 +178,7 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
         s = r.state
         write_results(rf, Dict("z_lev" => s.z_lev, "z_lay" => s.z_lay, "F_up_all" => s.Fup_all,
                                "F_up_clear" => s.Fup_clear, "F_spec" => s.Fspec, "heating_K_per_day" => s.Kday,
-                               "ql" => s.col.ql))
+                               "ql" => s.col.ql, "rho" => s.col.ρ, "dz" => s.col.dz, "n_fine" => s.nf))
     elseif r.case === :parisfog_2011
         col = r.state
         Aeolus.RadiationFog.run!(col, cfg.fog_sounding.duration)
@@ -188,9 +188,11 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
               max_lwp = lc.max_lwp, max_top = lc.max_top)
         H = col.history
         write_results(rf, Dict("onset_utc_hour" => lc.onset, "dissipation_utc_hour" => lc.dissipation,
-                               "max_lwp" => lc.max_lwp, "max_top" => lc.max_top,
+                               "max_lwp" => lc.max_lwp, "max_top" => lc.max_top, "t_max_lwp_utc_hour" => lc.t_max_lwp,
                                "utc_hour" => [h.utc_hour for h in H], "lwp" => [h.lwp for h in H],
-                               "fog_top" => [h.fog_top for h in H], "lw_net_sfc" => [h.lw_net_sfc for h in H]))
+                               "fog_top" => [h.fog_top for h in H], "lw_net_sfc" => [h.lw_net_sfc for h in H],
+                               "lw_net_top" => [h.lw_net_top for h in H], "lw_fog" => [h.lw_fog for h in H],
+                               "lw_top_cooling" => [h.lw_top_cooling for h in H], "C_LW" => [h.C_LW for h in H]))
     elseif r.case === :kessler_box
         s = r.state
         push!(r.snapshots, (t = 0.0, ql = hmean_profile(s.ql), qr = hmean_profile(s.qr)))
@@ -210,11 +212,27 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
         r.state = run_broadening_case(case; model = cfg.parcel.model)
         h = r.state
         nsteps = length(h.t) - 1
-        write_results(rf, Dict("t" => h.t, "epsilon" => h.ε, "sigma_r2" => h.σ_r2, "S" => h.S,
-                               "mean_radius" => h.mean_radius))
+        write_results(rf, Dict("t" => h.t, "epsilon" => h.ε, "sigma_r2" => h.σ_r2, "S" => h.S, "T" => h.T,
+                               "mean_radius" => h.mean_radius, "sigma_r2_ou" => parcel_ou_sigma_r2(h, case)))
     end
     callback === nothing || callback(r, nsteps)
     return r
+end
+
+"""
+    parcel_ou_sigma_r2(h, case) -> Vector
+
+The width ``σ_{r^2}(t) = 2G\\,\\sqrt{\\mathrm{Var}\\int_0^t S'\\,dt'}`` that
+Ornstein–Uhlenbeck supersaturation fluctuations (`supersaturation_integral_variance`,
+σ_S and τ of the [`BroadeningCase`](@ref) `case`) give a monodisperse
+population, at the times of the parcel history `h`, with the growth
+factor ``G = 1/(F_k + F_d)`` at the final temperature and `case.p0`: the
+analytic curve the stationary spectral-broadening case is compared with
+(Sardina et al. 2015, PRL 115, 184501).
+"""
+function parcel_ou_sigma_r2(h, case)
+    G = 1 / (Aeolus.Superdroplet.fk_thermal(h.T[end]) + Aeolus.Superdroplet.fd_vapor(h.T[end], case.p0))
+    return [2G * sqrt(supersaturation_integral_variance(case.σ_S, case.τ, t)) for t in h.t]
 end
 
 function Config.state_fields(r::ColumnRun)

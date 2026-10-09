@@ -14,7 +14,7 @@ a-priori record of the `dns` run type). The scripts left in
 
 | driver | what it builds and runs |
 | :-- | :-- |
-| `channel` | the wall-modelled channel LES of `WallModels` (`half_channel_case` / `channel_case`, `run_channel!`) |
+| `channel` | the wall-modelled channel LES of `WallModels` (`half_channel_case` / `channel_case`, `run_channel!`), with the streamwise spectra averaged over the statistics window |
 | `column` | single-column and box cases with no 3-D dynamics, by `[column] case`: `dycoms_rf01`, `parisfog_2011`, `kessler_box`, `droplet_parcel` |
 | `cbc_decay` | the Comte-Bellot & Corrsin (1971) decay benchmark ([`cbc_benchmark`](@ref)) |
 | `patchy_surface` | the convective boundary layer over hot and cool strips ([`patchy_les`](@ref), [`patchy_run!`](@ref)) |
@@ -54,6 +54,7 @@ include("validation_runs/patchy_surface.jl")
 
 # the CBC benchmark (P54-c, #168)
 export CBC_M, CBC_U0, CBC_NU, CBC_STATIONS, CBC_LBOX, cbc_table, cbc_spectrum, cbc_benchmark, cbc_summary,
+       cbc_reference,
        CBCDriver
 # the filtered-DNS fixture and its a-priori record (P56-c, #178)
 export DNS_KP, DNS_NU48, DNS_T_END, velocity_derivative_skewness, dns_start, dns_running, dns_step!,
@@ -61,9 +62,9 @@ export DNS_KP, DNS_NU48, DNS_T_END, velocity_derivative_skewness, dns_start, dns
        clark_gradient_stress, dns_checks, apriori_statistics, dns_apriori_record, write_dns_apriori,
        read_dns_apriori, ADVISORY_CHECKS, dns_apriori_finish, DNSDriver, dns_kwargs, dns_config
 # the channel LES (P54-d, P57-b)
-export ChannelDriver
+export ChannelDriver, spectrum_levels
 # the column cases
-export ColumnDriver, RF01_DEFAULTS, rf01_column, rf01_radiation
+export ColumnDriver, RF01_DEFAULTS, rf01_column, rf01_radiation, parcel_ou_sigma_r2
 # the patchy-surface LES (Phase 53, #43)
 export PatchSkin, PatchyLES, patchy_strip_classes, patchy_les, patchy_forcing, patchy_column_fluxes!,
        patchy_step!, patchy_heat_content, patchy_zi, patchy_wstar, patchy_sample, patchy_run!,

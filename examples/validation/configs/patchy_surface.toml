@@ -3,8 +3,9 @@
 # A convective boundary layer over strips of hot (310 K) and cool (300 K)
 # ground, 50 % each, z0 = 0.1 m, z0h = z0/10, initial mixed layer 300 K to
 # 600 m capped by 6 K/km. Every surface column computes its own
-# Monin–Obukhov fluxes through the SurfaceExchange contract
-# (examples/validation/patchy_surface/driver.jl). Thirteen runs:
+# Monin–Obukhov fluxes through the SurfaceExchange contract (the
+# `patchy_surface` run type, src/validation_runs/patchy_surface.jl).
+# Thirteen runs:
 #
 #  A_*  50 m resolution, 3.2 × 1.6 × 1.6 km, 2 h (statistics over the
 #       second hour): resolved strips (λ = 0.8 and 3.2 km), the tiled
@@ -15,8 +16,9 @@
 #       λ = 0.8 … 12.8 km, i.e. λ/z_i ≈ 0.8 … 11 (Patton, Sullivan & Moeng
 #       2005), and the uniform surface.
 #
-#   julia --project=. examples/validation/patchy_surface_les.jl          # all, then tables and figures
-#   julia --project -m Aeolus run examples/validation/configs/patchy_surface.toml --member A_tiled
+#   julia --project -m Aeolus run examples/validation/configs/patchy_surface.toml                    # all
+#   julia --project -m Aeolus run examples/validation/configs/patchy_surface.toml --member A_tiled   # one
+#   julia --project examples/validation/patchy_surface_les.jl [runs-root]     # tables and figures
 #
 # The runs are independent: start one process per member (--member) to
 # run them in parallel.
