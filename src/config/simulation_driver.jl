@@ -35,6 +35,9 @@ using ..Components: Components, Domain, Model, CentredAdvection, SGS, Coriolis, 
                     build_components, checkpoint_components, sgs_closure, step_adaptive!, component_problems
 using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previous_dt, resume!,
             maybe_checkpoint!, with_monitor, monitored_step!, check_blowup!, output_dir
+using ..RunLog: current_domain
+using ..Checks: Checks, CheckRunner, enabled_checks, sample_checks!, evaluate_checks, stopped_checks,
+                results_table, required_failures, advisory_failures, ChecksFailed, read_reference
 using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
                 close_output!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
@@ -203,6 +206,27 @@ const DOMAIN_SECTIONS = vcat(["domain", "grid", "dynamics", "boundaries", "initi
 
 Config.domain_sections(::SimulationDriverType) = DOMAIN_SECTIONS
 
+"The names of every check the model can publish: the core's and those of the component types of [`COMPONENTS`](@ref)."
+check_names_all() = vcat(collect(String, Components.CORE_CHECKS), String[n for C in COMPONENTS for n in Components.check_names(C)])
+
+const _CHECK_DOCS = merge(
+    Dict(n => "the closure of the $(join(v.qs, " and ")) budget, (|closure| + |unattributed|) / elapsed " *
+              "($(v.units); default tolerance $(v.tolerance)); turns the budget on (as $(v.output) does, same requirements)"
+         for (n, v) in Components.CLOSURE_CHECKS),
+    Dict("finite" => "the sanity check: the number of non-finite interior values of the prognostic fields at the " *
+                     "end (default tolerance 0); a run that blows up records it failed"),
+    Dict(n => "a check of [$(Components.section(C))]" for C in COMPONENTS for n in Components.check_names(C)))
+
+function _reference_validator(t)
+    probs = String[]
+    for q in sort!(collect(keys(t)))
+        for p in Checks.reference_entry_problems(t[q])
+            push!(probs, "$q.$p")
+        end
+    end
+    return probs
+end
+
 function Config.driver_sections(::SimulationDriverType)
     dom = section("domain"; doc = "A domain: its id and its input drivers (CFG-f/g).") do s
         option!(s, "id", String; default = "main", doc = "the domain's name (unique; a config without [[domain]] has one, \"main\")")
@@ -290,10 +314,26 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "netcdf", String; default = "output.nc",
                 doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ by default)")
     end
-    # one key per published check, `name = {required, tolerance}`: no
-    # component publishes a check yet (ONE-d, #453), so the section is empty
-    chk = section(_ -> nothing, "checks";
-                  doc = "The checks the enabled components publish, `name = {required, tolerance}` (ONE-d, #453); none is published yet.")
+    # one key per published check, `name = {required, tolerance}`, and the
+    # reference comparisons (ONE-d, #453)
+    chk = section("checks"; doc = "The checks the core and the enabled components publish, each enabled as " *
+                                  "`name = {required, tolerance}`, and the reference comparisons against " *
+                                  "`reference_file` (ONE-d, #453). The run writes their results to " *
+                                  "results.toml; a failed required check ends `aeolus run` with exit code 3.") do s
+        for n in check_names_all()
+            option!(s, n, OpenTable(Checks.check_entry_problems); doc = _CHECK_DOCS[n])
+        end
+        option!(s, "reference_file", Optional{Path};
+                doc = "the reference data of [checks.reference] (Checks.read_reference): a CSV of " *
+                      "quantity,low,high (or quantity,value) rows, or of z and one column per profile; or a NetCDF file; hashed under [inputs]")
+        option!(s, "reference", OpenTable(_reference_validator);
+                doc = "the reference comparisons, `<quantity> = {required, tolerance, variable, window}`: the output " *
+                      "variable `variable` (default: the quantity's name; a time-series scalar or a profile) against the " *
+                      "quantity of reference_file — at the end of the run, or its time mean over the steps ending in " *
+                      "`window = [t0, t1]` (s). A scalar fails outside the reference band [low, high] widened by " *
+                      "`tolerance` (default 0); a profile when the RMS difference at the reference heights exceeds it. " *
+                      "Results as check reference_<quantity>")
+    end
     comps = Section[Components.schema(C) for C in COMPONENTS]
     return Section[tim, out, chk, dom, grid, dyn, bnd, ini, comps..., _coupling_sections()...]
 end
@@ -372,11 +412,58 @@ function _cross_checks(cfg)
         (get(p, "kind", "") == "taylor_green" && (b.x !== :periodic || b.y !== :periodic)) &&
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
     end
+    append!(e, _checks_problems(cfg))
     # slots, requirements, incompatibilities of the enabled components (ONE-b)
     for p in component_problems(enabled_components(cfg))
         push!(e, ConfigError(p.key, p.message))
     end
     append!(e, _coupling_checks(cfg))
+    return e
+end
+
+"The values of the resolved `[checks]` table."
+_checks_table(cfg) = getfield(cfg.checks, :values)
+
+"The published checks (not the reference comparisons) `[checks]` enables."
+_published_enabled(cfg) = sort!([k for (k, v) in _checks_table(cfg) if k != "reference" && v isa AbstractDict && !isempty(v)])
+
+# the [checks] against the published checks and the reference data (ONE-d)
+function _checks_problems(cfg)
+    e = ConfigError[]
+    d = cfg.dynamics; c = cfg.checks
+    tops = [C => cfg[Components.section(C)] for C in enabled_components(cfg)]
+    for (n, p) in Components.check_problems(_published_enabled(cfg), tops;
+                                            moisture = d.moisture, theta0 = d.theta0, core = d.core,
+                                            published = _coupling_outputs(cfg))
+        push!(e, ConfigError("checks.$n", p))
+    end
+    ref = c.reference
+    if isempty(ref)
+        c.reference_file === nothing ||
+            push!(e, ConfigError("checks.reference_file", "no [checks.reference] comparison reads it; add one or remove the file"))
+        return e
+    end
+    if c.reference_file === nothing
+        push!(e, ConfigError("checks.reference", "the reference comparisons need checks.reference_file"))
+        return e
+    end
+    data = try
+        read_reference(c.reference_file)
+    catch err
+        err isa ArgumentError || rethrow()
+        push!(e, ConfigError("checks.reference_file", sprint(showerror, err)))
+        return e
+    end
+    for q in sort!(collect(keys(ref)))
+        haskey(data, q) || push!(e, ConfigError("checks.reference.$q", "$(c.reference_file) has no quantity $q " *
+                                                                       "(it has: $(join(sort!(collect(keys(data))), ", ")))"))
+        var = get(ref[q], "variable", q)
+        for p in Components.output_problems([var], tops;
+                                            moisture = d.moisture, theta0 = d.theta0, core = d.core,
+                                            published = _coupling_outputs(cfg))
+            push!(e, ConfigError("checks.reference.$q", "variable " * p))
+        end
+    end
     return e
 end
 
@@ -392,7 +479,9 @@ on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability`
 an `initial.qv` profile needs `dynamics.moisture = true`
 every `output.variables` entry is in the catalogue of the core or of an enabled component (`Components.output_problems`): the `qv` ones and `budget_water` need moisture, `ql`, `qr` Kessler, `tracer` and `budget_tracer` the tracer, `budget_energy` on the boussinesq core `dynamics.theta0` > 0
 a Taylor-Green initial `u` or `v` needs periodic x and y
-the enabled components hold at most one component per slot and an `:advection` provider, and meet each other's `requires` and `incompatible` (`Components.component_problems`)"""
+the enabled components hold at most one component per slot and an `:advection` provider, and meet each other's `requires` and `incompatible` (`Components.component_problems`)
+every `[checks]` entry is published by the core or an enabled component (`Components.check_problems`): a closure check has the requirements of its `budget_*` output
+`[checks.reference]` comparisons need `checks.reference_file`, which must hold each quantity, and their variables are in the output catalogue; a `reference_file` without comparisons is an error"""
 
 Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC => _cross_checks]
 
@@ -486,8 +575,10 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
     scheme = _adaptive(cfg) ? :adaptive : t.scheme
-    # the budgets the [output] selection measures (ONE-c): off unless selected
-    qs = unique!(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())])
+    # the budgets the [output] selection measures (ONE-c): off unless selected,
+    # and the closure checks [checks] enables (ONE-d)
+    qs = unique!(vcat(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())],
+                      Components.check_budgets(_published_enabled(cfg))))
     dom = Components.with_budgets(Domain(d0; components = comps), qs)
     return SimulationRun(Model(dom), StepperState(scheme), cfg)
 end
@@ -595,6 +686,8 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                           ck::CheckpointSchedule; callback = nothing)
     sim = simulation(r); cfg = r.cfg; st = cfg.time
     dom = _domain(r); comps = checkpoint_components(dom); closure = sgs_closure(dom)
+    checks = _check_runner(r)                      # nothing without [checks] (ONE-d)
+    checks === nothing || (comps = merge(comps, (; checks = checks)))
     resume!(ck, sim; components = comps, stepper = r.stepper)
     n = ck.last_step
     adaptive = _adaptive(cfg)
@@ -624,6 +717,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     # attached (#336): the step cores report every step; monitored_step!
     # turns a step that throws into a diagnosed blowup
     mon = merge(closure === nothing ? (;) : (; sgs = closure), _coupling_components(cpl))
+    try
     with_monitor(sim; run = rf, components = mon, t_end = t_end,
                  cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
@@ -635,6 +729,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                     adaptive ? _adaptive_step!(r, st.duration) : _take_step!(r, dt_fixed)
                 end
                 record_step!(r.stepper, dt; retries = retries)
+                checks === nothing || sample_checks!(checks, sim.t, dt)     # stage 13: :checks, then :output
                 accumulate_output!(w, dom, dt)
                 write_due!()
                 maybe_checkpoint!(ck, sim; step = n, components = comps, stepper = r.stepper)
@@ -647,9 +742,45 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
         # non-finite fields between two checks
         check_blowup!(m.guard, sim; step = n, force = true)
     end
+    catch err
+        # a run that stops (a blow-up) records its failed sanity check
+        (checks === nothing || err isa InterruptException) ||
+            _write_checks(rf, cfg, stopped_checks(checks, err; step = n, t = sim.t))
+        rethrow()
+    end
     _write_tracks(cpl, cpl.particles === nothing ? nothing :
                                cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path))
+    checks === nothing || _finish_checks(rf, cfg, evaluate_checks(checks))
     return r
+end
+
+# the enabled checks of a run: the domain's published checks and the
+# reference comparisons that [checks] enables, or nothing (ONE-d)
+function _check_runner(r::SimulationRun)
+    cfg = r.cfg; c = cfg.checks; dom = _domain(r)
+    settings = enabled_checks(_checks_table(cfg))
+    isempty(settings) && return nothing
+    cs = Components.domain_checks(dom)
+    isempty(c.reference) ||
+        append!(cs, Components.reference_checks(dom, read_reference(c.reference_file), c.reference))
+    return CheckRunner(cs, settings)
+end
+
+_write_checks(rf, cfg, results) = Config.write_results(rf, results_table(results); dir = cfg.output.path)
+
+# results.toml; an advisory failure warns, a required one ends the run (exit code 3)
+function _finish_checks(rf, cfg, results)
+    path = _write_checks(rf, cfg, results)
+    for x in results
+        @info("check $(x.name) $(x.passed ? "passed" : "FAILED")", subsystem = :checks, domain = current_domain(),
+              event = :check, required = x.required, value = x.value, tolerance = x.tolerance, units = x.units)
+    end
+    adv = advisory_failures(results)
+    isempty(adv) || @warn("advisory checks failed: $(join((x.name for x in adv), ", ")) ($path)",
+                          subsystem = :checks, domain = current_domain(), event = :checks_failed)
+    req = required_failures(results)
+    isempty(req) || throw(ChecksFailed(req))
+    return results
 end
 
 """

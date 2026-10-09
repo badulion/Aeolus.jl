@@ -418,7 +418,7 @@ end
         @test Aeolus.Components.schema(T) isa Aeolus.Config.Section
         @test Aeolus.Components.schema(T).name == CPC.section(T)
         @test all(s -> s isa Stage, CPC.stages(comp))
-        @test isempty(CPC.outputs(comp)) && CPC.checks(comp) == ()
+        @test isempty(CPC.outputs(comp)) && isempty(CPC.checks(comp)) && CPC.check_names(typeof(comp)) == ()
         @test CPC.budget!(comp, d, nothing) === nothing
         # stateless or not, the checkpoint state restores into the component
         @test restore_checkpoint_state!(comp, checkpoint_state(comp)) === comp
