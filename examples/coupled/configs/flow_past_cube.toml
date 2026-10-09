@@ -12,7 +12,7 @@
 #   julia --project=. examples/coupled/plot_flow_past_cube.jl runs/<date>_flow_past_cube_<id>
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "flow_past_cube"
 
 [grid]

@@ -115,8 +115,8 @@ end
     end
     # a config without [test] fails, naming the file
     dir = mkpath(joinpath(mktempdir(), "examples", "new", "configs"))
-    write(joinpath(dir, "fresh.toml"), "[run]\ndriver = \"common\"\n")
-    write(joinpath(dir, "tested.toml"), "[run]\ndriver = \"common\"\n\n[test]\noverrides = []\n")
+    write(joinpath(dir, "fresh.toml"), "[run]\nmodel = \"common\"\n")
+    write(joinpath(dir, "tested.toml"), "[run]\nmodel = \"common\"\n\n[test]\noverrides = []\n")
     files = shipped_config_files(dirname(dirname(dir)))
     @test length(files) == 2
     e = try
@@ -126,7 +126,7 @@ end
     end
     @test e isa ErrorException && occursin(joinpath(dir, "fresh.toml"), e.msg) && !occursin("tested.toml", e.msg)
     # [test] is checked for shape and stays out of the resolved config
-    write(joinpath(dir, "bad.toml"), "[run]\ndriver = \"common\"\n\n[test]\noverride = []\nmember = 0\n")
+    write(joinpath(dir, "bad.toml"), "[run]\nmodel = \"common\"\n\n[test]\noverride = []\nmember = 0\n")
     e = try
         load_run_config(joinpath(dir, "bad.toml")); nothing
     catch err
@@ -135,7 +135,7 @@ end
     @test e isa ConfigError && Set(p.key for p in e.problems) == Set(["test.override", "test.member"])
     cfg = load_run_config(joinpath(dir, "tested.toml"))
     @test !occursin("[test]", config_text(cfg))
-    @test config_hash(cfg) == config_hash(load_run_config(IOBuffer("[run]\ndriver = \"common\"\n")))
+    @test config_hash(cfg) == config_hash(load_run_config(IOBuffer("[run]\nmodel = \"common\"\n")))
 end
 
 const RT_PLAN = smoke_plan(RT_FILES)

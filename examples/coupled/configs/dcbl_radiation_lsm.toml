@@ -17,7 +17,7 @@
 # #441; test/config_run_drivers.jl).
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "dcbl_radiation_lsm"
 seed = 1
 

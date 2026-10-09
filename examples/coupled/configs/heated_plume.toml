@@ -10,7 +10,7 @@
 #   julia --project=. examples/coupled/plot_heated_plume.jl runs/<date>_heated_plume_<id>
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "heated_plume"
 seed = 2
 

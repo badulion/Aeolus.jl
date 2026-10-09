@@ -31,7 +31,7 @@ export AdvectionDriverType, AdvectionRun
 """
     AdvectionDriverType()
 
-The `advection` driver: `[run] driver = "advection"`. Sections `[grid]`,
+The `advection` driver: `[run] model = "advection"`. Sections `[grid]`,
 `[flow]` (the prescribed velocity), `[scalar]` (the initial scalar),
 `[advection]` (the kernel), `[stepper]` and `[diagnostics]`; `aeolus
 options advection` prints them.

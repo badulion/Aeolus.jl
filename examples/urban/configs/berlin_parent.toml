@@ -25,7 +25,7 @@ schema_version = 1
 extends = "berlin_summer.toml"
 
 [run]
-driver = "urban_parent"
+model = "urban_parent"
 name = "parent"
 
 [checkpoint]

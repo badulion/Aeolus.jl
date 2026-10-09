@@ -21,7 +21,7 @@
 #   julia --project examples/validation/neutral_abl.jl [runs-root]    # the tables and the figure
 
 [run]
-driver = "channel"
+model = "channel"
 name = "neutral_abl"
 seed = 1
 

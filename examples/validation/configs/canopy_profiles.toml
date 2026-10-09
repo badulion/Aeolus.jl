@@ -25,7 +25,7 @@
 #   julia --project examples/validation/canopy_profiles.jl [runs-root]     # the figure
 
 [run]
-driver = "plant_canopy"
+model = "plant_canopy"
 name = "canopy_profiles"
 
 [canopy]

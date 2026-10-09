@@ -7,7 +7,7 @@
 #   julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "taylor_green_vortex"
 
 [grid]

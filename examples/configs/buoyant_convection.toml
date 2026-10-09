@@ -7,7 +7,7 @@
 #   julia --project -m Aeolus run examples/configs/buoyant_convection.toml
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "buoyant_convection"
 seed = 1
 

@@ -28,7 +28,7 @@ schema_version = 1
 
 [run]
 # What runs and where its folder goes.
-driver = "urban"
+model = "urban"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "summer"
 # the seed of the run's random numbers

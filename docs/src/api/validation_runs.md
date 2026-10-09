@@ -15,7 +15,7 @@ tables or draw the figures; they take the root of the runs as their
 argument (default `runs/`) and use the newest run of each case
 (`examples/validation/read_runs.jl`). No script builds or steps a model.
 
-| `[run] driver` | config(s) | script reading its output |
+| `[run] model` | config(s) | script reading its output |
 | :-- | :-- | :-- |
 | `channel` | `neutral_abl.toml`, `log_layer_mismatch.toml` | `neutral_abl.jl`, `log_layer_mismatch.jl` |
 | `column` | `dycoms_rf01.toml`, `parisfog_2011.toml`, `spectral_broadening.toml` (and `examples/kernels/configs/cloud_spinup.toml`) | `dycoms_rf01_radiation.jl`, `parisfog_2011_radiation_fog.jl`, `spectral_broadening.jl` |

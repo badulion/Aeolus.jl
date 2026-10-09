@@ -13,7 +13,7 @@
 # is table = "exp1", t_start = 0.
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "gabls4_exp3"
 seed = 1
 

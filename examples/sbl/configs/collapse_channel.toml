@@ -13,7 +13,7 @@
 # sweeps heat_flux_fraction.
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "collapse_channel"
 seed = 1
 

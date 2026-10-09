@@ -15,7 +15,7 @@
 #   julia --project examples/validation/dynamic_roughness_cubes.jl [runs-root]    # the table
 
 [run]
-driver = "dynamic_roughness"
+model = "dynamic_roughness"
 name = "dynamic_roughness_cubes"
 
 [cubes]

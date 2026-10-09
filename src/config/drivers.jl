@@ -9,7 +9,7 @@
 A driver: a kind of run that can be built from a [`RunConfig`](@ref) and
 run into a run folder. A driver type `D` implements
 
-  * `driver_name(::D) -> String`: the `[run] driver` value that selects it;
+  * `driver_name(::D) -> String`: the `[run] model` value that selects it;
   * `driver_sections(::D) -> Vector{Section}`: its sections, on top of the
     common ones (a section named like a common one adds options to it);
   * `driver_checks(::D)`: cross-field checks, `"what it checks" => f` pairs
@@ -35,7 +35,7 @@ abstract type AbstractRunDriver end
 """
     driver_name(d::AbstractRunDriver) -> String
 
-The `[run] driver` value that selects the driver `d`.
+The `[run] model` value that selects the driver `d`.
 """
 function driver_name end
 
@@ -184,7 +184,7 @@ end
 function _ensure_driver(name::AbstractString)
     (haskey(_DRIVERS, name) || !haskey(DRIVER_FILES, name)) && return nothing
     path = joinpath(_PKG_DIR, DRIVER_FILES[name])
-    isfile(path) || throw(ConfigError("run.driver", "the driver \"$name\" is listed in " *
+    isfile(path) || throw(ConfigError("run.model", "the driver \"$name\" is listed in " *
                                       "DRIVER_FILES but $path does not exist"))
     sym = Symbol("AeolusDriver_", name)
     m = Module(sym)
@@ -197,7 +197,7 @@ function _ensure_driver(name::AbstractString)
     Core.eval(m, :(eval(x) = Core.eval($m, x)))
     Base.include(m, path)
     haskey(_DRIVERS, name) ||
-        throw(ConfigError("run.driver", "$path did not register the driver \"$name\""))
+        throw(ConfigError("run.model", "$path did not register the driver \"$name\""))
     return nothing
 end
 
@@ -212,7 +212,7 @@ function run_driver(name::AbstractString)
     _ensure_driver(name)
     haskey(_RUN_DRIVERS, name) && return _RUN_DRIVERS[name]
     runnable = sort!(vcat(collect(keys(_RUN_DRIVERS)), collect(keys(DRIVER_FILES))))
-    throw(ConfigError("run.driver", (haskey(_DRIVERS, name) ?
+    throw(ConfigError("run.model", (haskey(_DRIVERS, name) ?
         "the driver \"$name\" has a schema but cannot be run" :
         "unknown driver \"$name\"" * _suggest(name, runnable)) *
         "; runnable drivers: " * join(repr.(unique!(runnable)), ", ")))
@@ -251,13 +251,13 @@ Run the configuration `cfg`: the Julia API behind `aeolus run`. The chain:
 
 `root` and `allow_uncommitted` override `[run]` without changing the
 config (so the recorded config stays the one given). The driver is
-`cfg.run.driver` ([`run_driver`](@ref)).
+`cfg.run.model` ([`run_driver`](@ref)).
 """
 function run_config(cfg::RunConfig; root = nothing, resume = nothing,
                     allow_uncommitted::Union{Nothing,Bool} = nothing,
                     console = stderr, repo::AbstractString = IO.aeolus_source_dir(),
                     callback = nothing)
-    d = run_driver(cfg.run.driver)
+    d = run_driver(cfg.run.model)
     apply_fftw_config!(cfg)
     obj = nothing
     rf = IO.start_run(cfg; root = root, resume = resume, allow_uncommitted = allow_uncommitted,
@@ -317,7 +317,7 @@ function no_checkpoints(cfg)
     c = cfg.checkpoint
     (c.every_steps == 0 && c.every_seconds == Inf) && return ConfigError[]
     return [ConfigError("checkpoint.every_steps",
-                        "the \"$(cfg.run.driver)\" driver runs to the end in one call and writes no checkpoints; " *
+                        "the \"$(cfg.run.model)\" driver runs to the end in one call and writes no checkpoints; " *
                         "leave [checkpoint] off")]
 end
 

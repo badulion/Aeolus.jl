@@ -10,7 +10,7 @@
 schema_version = 1
 
 [run]
-driver = "urban"
+model = "urban"
 name = "small_city"
 
 [output]

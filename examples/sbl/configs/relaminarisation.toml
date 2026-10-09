@@ -13,7 +13,7 @@
 # switch-on value at the end. 32³ at Re_τ = 180; 48³ at 360.
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "relaminarisation"
 seed = 1
 

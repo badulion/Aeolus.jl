@@ -1,6 +1,6 @@
 # =========================================================================
 # The `sbl` run type (CFG-d, #359; in src since EX-b, #439): the
-# stable-boundary-layer cases configured from TOML (`[run] driver = "sbl"`).
+# stable-boundary-layer cases configured from TOML (`[run] model = "sbl"`).
 #
 #   julia --project -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32]
 #
@@ -26,7 +26,7 @@
 """
     SBLDriver()
 
-The `sbl` run driver: `[run] driver = "sbl"`. `aeolus options sbl` prints
+The `sbl` run driver: `[run] model = "sbl"`. `aeolus options sbl` prints
 its sections; shipped configs are in `examples/sbl/configs/`.
 """
 struct SBLDriver <: AbstractRunDriver end

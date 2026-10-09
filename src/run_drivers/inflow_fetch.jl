@@ -197,7 +197,7 @@ nearest_level(z::AbstractVector, h::Real) = findmin(abs.(z .- h))[2]
 """
     InflowFetchDriverType()
 
-The `inflow_fetch` driver: `[run] driver = "inflow_fetch"`. Sections
+The `inflow_fetch` driver: `[run] model = "inflow_fetch"`. Sections
 `[channel]` (the half channel), `[precursor]` (the statistics source and
 the times of both precursors), `[reference]` (the child-grid
 reference) and `[child]` (the open runs and what is measured on them).

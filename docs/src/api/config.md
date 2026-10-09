@@ -19,7 +19,7 @@ bin/aeolus run examples/configs/taylor_green_vortex.toml                  # any 
 extends = "base.toml"          # next to this file, else in the driver's config directory
 
 [run]
-driver = "common"
+model = "common"
 name   = "cbl"
 seed   = 42
 
@@ -124,7 +124,7 @@ Every driver's schema starts with these:
 
 | section | options |
 | :-- | :-- |
-| `[run]` | `driver` (default and only value: the driver's name), `name`, `seed = 0`, `root = "runs"`, `allow_uncommitted` |
+| `[run]` | `model` (default and only value: the run type's name; `driver` is its deprecated alias, EX-e #442), `name`, `seed = 0`, `root = "runs"`, `allow_uncommitted` |
 | `[fftw]` | `planner` (`estimate`, `measure`, `patient`, `exhaustive`), `threads` (`"none"`: one per Julia thread), `wisdom` |
 | `[logging]` | `console_level`, `file_level = "debug"`, `flush_interval = 5.0` s, `diagnostics_cadence = 60.0` s |
 | `[checkpoint]` | `every_steps = 0` (off), `every_seconds = inf` (off), `keep = 2`, `prefix = "checkpoint"` |
@@ -154,7 +154,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
        [ConfigError("grid.size", "more vertical than horizontal cells")] : ConfigError[])
 ```
 
-`[run] driver = "cbl"` then selects this schema; the driver `"common"`
+`[run] model = "cbl"` then selects this schema; the driver `"common"`
 (the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`urban`](../reference/options/urban.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
 like a common one adds its options to it (the `simulation` driver's
 `[output] fields`); redeclaring a common option is an error.
@@ -287,7 +287,7 @@ Aeolus.main
 
 ## The `simulation` driver
 
-`[run] driver = "simulation"` is a bare run of one dynamical core on a
+`[run] model = "simulation"` is a bare run of one dynamical core on a
 box ([`Aeolus.SimulationDriver`](@ref)): what the scripts
 `examples/taylor_green_vortex.jl`, `dry_convective_bl.jl` and
 `buoyant_convection.jl` used to build in code. Their configs are in
@@ -296,7 +296,7 @@ other example cases are in [`Aeolus.RunDrivers`](@ref).
 
 ```toml
 [run]
-driver = "simulation"
+model = "simulation"
 name = "taylor_green_vortex"
 
 [grid]
@@ -348,7 +348,7 @@ Its options, every key with type, default, units, range and doc: [Options: drive
 
 ## The `urban` driver
 
-`[run] driver = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
+`[run] model = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
 (`src/urban/core/config_schema.jl`; CFG-c #358 as the `berlin` example
 driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 `urban_parent` runs the nest parent of the same config alone. The Berlin
@@ -360,7 +360,7 @@ driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 | `berlin_winter.toml` | `extends = "berlin_summer.toml"`: 15 January 2024, idealised cold profile |
 | `berlin_smoke.toml` | `extends` summer: 16³ window at noon, small nest parent, 12 steps, no NetCDF |
 | `berlin_mitte_sample.toml` | `extends` summer: the synthetic OSM sample |
-| `berlin_parent.toml` | `extends` summer, `driver = "urban_parent"`: the 6 km nest parent alone, 24 h |
+| `berlin_parent.toml` | `extends` summer, `model = "urban_parent"`: the 6 km nest parent alone, 24 h |
 | `berlin_parent_coarse.toml` | `extends` the parent file: the coarse 24 × 24 × 38 parent (the Lindenberg checks) |
 
 ```bash
@@ -432,7 +432,7 @@ Its options, the `[physics.options.<coupling>]` tables included: [Options: drive
 
 ## The `sbl` driver
 
-`[run] driver = "sbl"` (CFG-d #359; the module
+`[run] model = "sbl"` (CFG-d #359; the module
 [`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md) since EX-b
 #439) runs the stable-boundary-layer cases of `examples/sbl/configs/`. One
 driver covers four kinds, `[case] kind`:
@@ -490,7 +490,7 @@ Its options, every key with type, default, units, range and doc: [Options: drive
 
 ## The `dns` driver
 
-`[run] driver = "dns"` ([`DNSDriver`](@ref Aeolus.ValidationRuns.DNSDriver),
+`[run] model = "dns"` ([`DNSDriver`](@ref Aeolus.ValidationRuns.DNSDriver),
 `src/validation_runs/dns.jl`) is the decaying-turbulence DNS of the
 filtered-DNS fixture ([`dns_decay`](@ref Aeolus.ValidationRuns.dns_decay))
 and its a-priori record. `examples/validation/configs/dns256.toml`

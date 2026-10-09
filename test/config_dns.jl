@@ -27,7 +27,7 @@ dns_run(cfg; kw...) = run_config(cfg; root = mktempdir(), console = false, repo 
 
 @testset "dns driver: the shipped config" begin
     cfg = load_run_config(DNSCFG)
-    @test cfg.run.driver == "dns" && cfg.grid.n == 256 && cfg.fluid.nu === :scaled
+    @test cfg.run.model == "dns" && cfg.grid.n == 256 && cfg.fluid.nu === :scaled
     @test DNSCFG in shipped_configs()
     # "scaled" is the offline generator's ν: 1.035 · 0.018 (48/256)^{4/3} = 2.00e-3
     k = dns_kwargs(cfg)

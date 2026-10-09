@@ -24,7 +24,7 @@
 # run them in parallel.
 
 [run]
-driver = "patchy_surface"
+model = "patchy_surface"
 name = "patchy_surface"
 seed = 1
 

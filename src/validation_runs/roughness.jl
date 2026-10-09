@@ -77,7 +77,7 @@ end
 """
     DynamicRoughnessDriver()
 
-The `dynamic_roughness` run type: `[run] driver = "dynamic_roughness"`,
+The `dynamic_roughness` run type: `[run] model = "dynamic_roughness"`,
 the a-priori dynamic roughness of [`cube_array_roughness`](@ref) for the
 staggered cube array of [`staggered_cube_heights`](@ref) (`[cubes]`) seen
 by an LES grid of spacing `[roughness] delta_over_h` h. Its numbers go to

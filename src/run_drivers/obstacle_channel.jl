@@ -51,7 +51,7 @@ export ObstacleChannelDriverType, ObstacleChannelRun, reattachment
 """
     ObstacleChannelDriverType()
 
-The `obstacle_channel` driver: `[run] driver = "obstacle_channel"`.
+The `obstacle_channel` driver: `[run] model = "obstacle_channel"`.
 Sections `[grid]`, `[flow]`, `[sgs]`, `[obstacles]`, `[stepper]` and
 `[preprocess]`; `aeolus options obstacle_channel` prints them.
 """

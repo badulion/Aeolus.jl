@@ -158,7 +158,7 @@ tke_cbl_summary(r) =
 """
     CBLDriverType()
 
-The `cbl` driver: `[run] driver = "cbl"`. Sections `[grid]`, `[cbl]`
+The `cbl` driver: `[run] model = "cbl"`. Sections `[grid]`, `[cbl]`
 (the case and the averaging) and `[inflow_statistics]` (the parent's
 boundary statistics, off by default); `[run] seed` seeds the initial θ
 noise. `aeolus options cbl` prints them.

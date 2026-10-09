@@ -13,7 +13,7 @@
 #   julia --project -m Aeolus run examples/configs/lindenberg_era5.toml
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "lindenberg_era5"
 seed = 1
 

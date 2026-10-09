@@ -41,7 +41,7 @@ cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo
     mkpath(joinpath(dir, "base"))
     write(joinpath(dir, "base", "base.toml"), """
         [run]
-        driver = "cfgtest"
+        model = "cfgtest"
         name = "base"
         [grid]
         size = [64, 64, 32]
@@ -93,7 +93,7 @@ cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo
         "inputs" => Any[], "profile" => "linear",
         "couplings" => Dict{String,Any}("wall" => Dict{String,Any}("z0" => 0.5, "kind" => "log"),
                                         "canopy" => Dict{String,Any}("lai" => 3.0)))
-    @test t["run"]["name"] == "child" && t["run"]["driver"] == "cfgtest"
+    @test t["run"]["name"] == "child" && t["run"]["model"] == "cfgtest"
     @test !haskey(t, "extends") && t["schema_version"] == 1
     # where each value came from
     @test config_origin(cfg, "clock.nsteps") == "--set"
@@ -116,15 +116,46 @@ cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo
     m = sprint(showerror, e)
     @test occursin("(--set)", m) && occursin("strings are quoted", m) && occursin("did you mean \"nsteps\"", m)
     # the extends chain also resolves through a run folder-less IOBuffer (base dir = pwd)
-    @test load_run_config(IOBuffer("[run]\ndriver = \"cfgtest\"\n[clock]\nnsteps = 5\n")).clock.nsteps == 5
+    @test load_run_config(IOBuffer("[run]\nmodel = \"cfgtest\"\n[clock]\nnsteps = 5\n")).clock.nsteps == 5
+end
+
+@testset "Config: [run] driver is the deprecated alias of [run] model (EX-e, #442)" begin
+    dir = mktempdir()
+    new = joinpath(dir, "new.toml"); old = joinpath(dir, "old.toml")
+    write(new, "[run]\nmodel = \"cfgtest\"\nname = \"alias\"\n[clock]\nnsteps = 9\n")
+    write(old, "[run]\ndriver = \"cfgtest\"\nname = \"alias\"\n[clock]\nnsteps = 9\n")
+    cfg = load_run_config(new)
+    @test cfg.run.model == "cfgtest" && occursin("model = \"cfgtest\"", config_text(cfg))
+    @test !occursin("driver", config_text(cfg))
+    # the old key selects the same schema and resolves to the same config, with a warning
+    cold = @test_logs (:warn, r"`\[run\] driver` is deprecated") match_mode = :any load_run_config(old)
+    @test cold == cfg && config_hash(cold) == config_hash(cfg)
+    # through extends (the base names the run type with the old key), and as an override
+    write(joinpath(dir, "child.toml"), "extends = \"old.toml\"\n[clock]\nnsteps = 3\n")
+    @test load_run_config(joinpath(dir, "child.toml")).run.model == "cfgtest"
+    @test load_run_config(IOBuffer("[clock]\nnsteps = 1\n"); overrides = ["run.driver=\"cfgtest\""]).run.model == "cfgtest"
+    # both keys at once, in a file or as overrides, are an error naming the key
+    write(joinpath(dir, "both.toml"), "[run]\nmodel = \"cfgtest\"\ndriver = \"cfgtest\"\n")
+    e = cfgl_error(() -> load_run_config(joinpath(dir, "both.toml")))
+    @test only(e.problems).key == "run.driver" && occursin("deprecated alias", sprint(showerror, e))
+    e = cfgl_error(() -> load_run_config(new; overrides = ["run.driver=\"cfgtest\"", "run.model=\"cfgtest\""]))
+    @test any(p -> p.key == "run.model", e.problems)
+    # a run folder written before the rename (its [config] says driver) still loads
+    rf = cfgl_start(cfg)
+    finish_run!(rf)
+    rt = joinpath(rf.path, "run.toml")
+    rec = TOML.parsefile(rt)
+    rec["config"]["run"]["driver"] = pop!(rec["config"]["run"], "model")
+    open(io -> TOML.print(io, rec), rt, "w")
+    @test load_run_config(rf.path) == cfg
 end
 
 @testset "Config: extends lookup, cycles, missing files, depth" begin
     # not next to the extending file: the driver's config directory
-    write(joinpath(CFGT_DIR, "cfgt_base.toml"), "[run]\ndriver = \"cfgtest\"\n[clock]\nnsteps = 42\n")
+    write(joinpath(CFGT_DIR, "cfgt_base.toml"), "[run]\nmodel = \"cfgtest\"\n[clock]\nnsteps = 42\n")
     dir = mktempdir()
     p = joinpath(dir, "case.toml")
-    write(p, "extends = \"cfgt_base.toml\"\n[run]\ndriver = \"cfgtest\"\n")
+    write(p, "extends = \"cfgt_base.toml\"\n[run]\nmodel = \"cfgtest\"\n")
     cfg = load_run_config(p)
     @test cfg.clock.nsteps == 42
     @test config_sources(cfg)["files"][2] == joinpath(CFGT_DIR, "cfgt_base.toml")
@@ -132,7 +163,7 @@ end
     write(p, "extends = \"cfgt_base.toml\"\n")
     @test load_run_config(p).clock.nsteps == 42
     # a file next to the extending one wins over the driver directory
-    write(joinpath(dir, "cfgt_base.toml"), "[run]\ndriver = \"cfgtest\"\n[clock]\nnsteps = 7\n")
+    write(joinpath(dir, "cfgt_base.toml"), "[run]\nmodel = \"cfgtest\"\n[clock]\nnsteps = 7\n")
     @test load_run_config(p).clock.nsteps == 7
     # the shipped-config fixed point covers files in driver directories
     @test joinpath(CFGT_DIR, "cfgt_base.toml") in shipped_configs()
@@ -151,7 +182,7 @@ end
           occursin(joinpath(dir, "m.toml"), m)
     # depth: 8 extends links are accepted, 9 are not
     for n in 0:9
-        write(joinpath(dir, "d$n.toml"), n == 9 ? "[clock]\nnsteps = 9\n[run]\ndriver = \"cfgtest\"\n" :
+        write(joinpath(dir, "d$n.toml"), n == 9 ? "[clock]\nnsteps = 9\n[run]\nmodel = \"cfgtest\"\n" :
                                           "extends = \"d$(n + 1).toml\"\n")
     end
     @test load_run_config(joinpath(dir, "d1.toml")).clock.nsteps == 9            # 8 links
@@ -170,7 +201,7 @@ end
     p = joinpath(dir, "case.toml")
     write(p, """
         [run]
-        driver = "cfgtest"
+        model = "cfgtest"
         name = "cfgrun"
         seed = 7
         [clock]
@@ -235,7 +266,7 @@ end
     input = joinpath(dir, "terrain.dat"); write(input, "elevation 34.0\n")
     extra = joinpath(dir, "extra.nc"); write(extra, "x")
     p = joinpath(dir, "case.toml")
-    write(p, "[run]\ndriver = \"cfgtest\"\n[physics]\nterrain = \"terrain.dat\"\ninputs = [\"extra.nc\"]\n")
+    write(p, "[run]\nmodel = \"cfgtest\"\n[physics]\nterrain = \"terrain.dat\"\ninputs = [\"extra.nc\"]\n")
     cfg = load_run_config(p)
     root = mktempdir()
     rf = cfgl_start(cfg; root = root); finish_run!(rf)
@@ -263,7 +294,7 @@ end
 end
 
 @testset "Config: a closure makes the run not replayable" begin
-    cfg = with(load_run_config(IOBuffer("[run]\ndriver = \"cfgtest\"\nname = \"jl\"\n")),
+    cfg = with(load_run_config(IOBuffer("[run]\nmodel = \"cfgtest\"\nname = \"jl\"\n")),
                "physics.profile" => z -> 300.0 + 0.003z)
     rf = cfgl_start(cfg); finish_run!(rf)
     rec = read_run_toml(rf.path)

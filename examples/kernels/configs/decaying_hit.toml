@@ -8,7 +8,7 @@
 #   julia --project=. examples/kernels/plot_decaying_hit.jl runs/<date>_decaying_hit_<id>
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "decaying_hit"
 seed = 42
 

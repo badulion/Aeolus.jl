@@ -3,7 +3,7 @@
 
 Run types of the example cases (EX-d, #441): each is a run driver
 ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)) selected by
-`[run] driver` and configured only through its schema, so an example is a
+`[run] model` and configured only through its schema, so an example is a
 TOML file (plus its input drivers), run with
 
     julia --project -m Aeolus run examples/<dir>/configs/<case>.toml
@@ -41,7 +41,7 @@ include("run_drivers/shear_layer.jl")
 include("run_drivers/flat_plate.jl")
 include("run_drivers/sgs_decay.jl")
 
-"The `[run] driver` names of the run types in this module."
+"The `[run] model` names of the run types in this module."
 const DRIVER_NAMES = ["advection", "cbl", "inflow_fetch", "obstacle_channel", "shear_layer", "flat_plate", "sgs_decay"]
 
 end # module

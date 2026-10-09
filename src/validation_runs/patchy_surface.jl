@@ -431,7 +431,7 @@ patchy_amplitude(x) = sqrt(sum(abs2, x .- sum(x) / length(x)) / length(x))
 """
     PatchySurfaceDriver()
 
-The `patchy_surface` run type: `[run] driver = "patchy_surface"`, the
+The `patchy_surface` run type: `[run] model = "patchy_surface"`, the
 convective boundary layer over hot and cool strips of
 [`patchy_les`](@ref), run with [`patchy_run!`](@ref); its statistics (the
 resolved and tiled surface fluxes, z_i, w*, the phase averages, the mean

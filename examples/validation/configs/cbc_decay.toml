@@ -13,7 +13,7 @@
 #   julia --project examples/validation/cbc_decay.jl [runs-root]                         # the figure
 
 [run]
-driver = "cbc_decay"
+model = "cbc_decay"
 name = "cbc_decay"
 
 [grid]

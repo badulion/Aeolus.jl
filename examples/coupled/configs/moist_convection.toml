@@ -11,7 +11,7 @@
 #   julia --project=. examples/coupled/plot_moist_convection.jl runs/<date>_moist_convection_<id>
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "moist_convection"
 seed = 3
 

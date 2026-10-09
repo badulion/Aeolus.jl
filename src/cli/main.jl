@@ -110,7 +110,7 @@ function _preprocess_static(args)
     pos, sets, opts, _ = _parse_args(args, ("set", "out", "parent-out"), ())
     path = _one_positional(pos, "config file")
     cfg = load_run_config(path; overrides = sets)
-    d = run_driver(cfg.run.driver)
+    d = run_driver(cfg.run.model)
     files = Base.invokelatest(preprocess_static, d, cfg; out = get(opts, "out", nothing),
                               parent_out = get(opts, "parent-out", nothing))
     for f in files
@@ -143,9 +143,9 @@ function _preprocess_dynamic(args)
         box = haskey(opts, "box") ? tryparse(Float64, opts["box"]) : nothing
         haskey(opts, "box") && box === nothing && throw(UsageError("--box: expected a number, got $(opts["box"])"))
         cfg = load_run_config(opts["config"]; overrides = sets)
-        d = run_driver(cfg.run.driver)
+        d = run_driver(cfg.run.model)
         Base.invokelatest(hasmethod, preprocess_dynamic, Tuple{typeof(d),typeof(cfg)}, (:files,)) ||
-            throw(ArgumentError("the driver \"$(cfg.run.driver)\" has no ERA5 preprocessor"))
+            throw(ArgumentError("the driver \"$(cfg.run.model)\" has no ERA5 preprocessor"))
         files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
                                   files = abspath.(pos), box = box)
         foreach(f -> println("wrote ", f), files)
@@ -154,7 +154,7 @@ function _preprocess_dynamic(args)
     (haskey(opts, "config") || haskey(opts, "box")) && throw(UsageError("--config and --box go with --from-era5"))
     path = _one_positional(pos, "config file")
     cfg = load_run_config(path; overrides = sets)
-    d = run_driver(cfg.run.driver)
+    d = run_driver(cfg.run.model)
     child = haskey(opts, "child") ? load_run_config(opts["child"]; overrides = sets) : nothing
     files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
                               child = child)
@@ -395,7 +395,7 @@ function _cmd_check(args, io, err)
     path = _one_positional(pos, "config file")
     for (m, cfg) in load_sweep(path; overrides = sets)
         println(io, "ok: ", path, isempty(m.label) ? "" : " member $(m.index) ($(m.label))",
-                " (driver \"", config_schema(cfg).name, "\", config_hash ", config_hash_string(cfg), ")")
+                " (model \"", config_schema(cfg).name, "\", config_hash ", config_hash_string(cfg), ")")
     end
     return 0
 end
@@ -460,7 +460,7 @@ function _cmd_run(args, io, err)
     runs = resume ? [SweepMember(1, "", String[]) => load_run_config(folder; overrides = sets)] :
                     load_sweep(path; overrides = sets, member = _member_arg(opts))
     for (_, cfg) in runs
-        run_driver(cfg.run.driver)                 # an unknown driver is a config error
+        run_driver(cfg.run.model)                 # an unknown driver is a config error
     end
     for (m, cfg) in runs
         local res

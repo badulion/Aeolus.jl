@@ -14,7 +14,7 @@
 # 90, 140 δ/U.
 
 [run]
-driver = "shear_layer"
+model = "shear_layer"
 name = "kelvin_helmholtz"
 
 [layer]

@@ -119,7 +119,7 @@ end
 """
     PlantCanopyDriver()
 
-The `plant_canopy` run type: `[run] driver = "plant_canopy"`, the steady
+The `plant_canopy` run type: `[run] model = "plant_canopy"`, the steady
 1-D canopy column of [`canopy_wind_profile`](@ref) (`[canopy] mode =
 "wind"`) or [`canopy_temperature_profile`](@ref) (`"temperature"`) for a
 canopy of uniform or tabulated leaf-area density ([`canopy_lad`](@ref)).

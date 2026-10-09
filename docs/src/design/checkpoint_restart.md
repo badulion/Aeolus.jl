@@ -242,7 +242,7 @@ resumed: their `run.toml` names a driver that no longer exists, and their
 checkpoints hold the case's types under the example's module
 (`Main.AeolusDriver_berlin`), which Serialization cannot map to
 `Aeolus.UrbanCase`; start such a run again from its config with
-`driver = "urban"`.
+`model = "urban"`.
 `test/config_roundtrip.jl` resumes `berlin_smoke.toml` (nested, every
 coupling on) interrupted after its middle checkpoint and compares it
 with the uninterrupted run bit for bit, its NetCDF output included.

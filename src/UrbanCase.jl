@@ -6,7 +6,7 @@
 # physics wired in through a registry of couplings. Selected by
 #
 #   [run]
-#   driver = "urban"
+#   model = "urban"
 #
 # and configured only through its schema (`aeolus options urban`). The
 # Berlin (Alexanderplatz) case is one configuration of it:

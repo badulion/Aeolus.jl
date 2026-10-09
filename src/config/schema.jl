@@ -267,7 +267,7 @@ The schema of a driver `name`: the common sections every run has
 Configuration page) followed by the driver's `sections`. A driver
 section named like a common one adds its options to that section (the
 `simulation` driver's `[output] fields`); an option already in the common
-section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
+section, or a driver section declared twice, is an `ArgumentError`. `[run] model`
 defaults to, and must equal, `name`. `checks` are cross-field checks
 ([`check!`](@ref)): functions, or `"what it checks, in words" => f`
 pairs, whose text goes into the option reference ([`option_reference`](@ref)).
@@ -360,7 +360,7 @@ const _DRIVERS = Dict{String,DriverEntry}()
     register_driver!(name; sections = Section[], checks = Function[],
                      config_dir = nothing, defaults = ()) -> ConfigSchema
 
-Register the configuration schema of the driver `name` (`[run] driver =
+Register the configuration schema of the driver `name` (`[run] model =
 "name"` selects it). `config_dir` is where `extends = "base.toml"` looks
 when the file is not next to the extending one; `defaults` are the
 driver's own defaults of common options ([`ConfigSchema`](@ref)). Registering a name again
@@ -382,7 +382,7 @@ loading an example driver listed in [`DRIVER_FILES`](@ref) on first use.
 """
 function driver_schema(name::AbstractString)
     _ensure_driver(name)              # an example driver is loaded on first use (CFG-b)
-    haskey(_DRIVERS, name) || throw(ConfigError("run.driver",
+    haskey(_DRIVERS, name) || throw(ConfigError("run.model",
         "unknown driver \"$name\"" * _suggest(name, collect(keys(_DRIVERS))) *
         "; registered drivers: " * join(sort!(repr.(collect(keys(_DRIVERS)))), ", ")))
     return _DRIVERS[name].schema

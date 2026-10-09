@@ -14,9 +14,10 @@ end
 const _LOG_LEVELS = ("debug", "info", "warn", "error", "off")
 
 """
-The common sections, `[run]` with its `driver` pinned to `driver`:
+The common sections, `[run]` with its `model` pinned to `driver` (the
+run type; `driver` is accepted as its deprecated alias, EX-e #442):
 
-  * `[run]`: `driver`, `name`, `seed`, `root = "runs"`, `allow_uncommitted`
+  * `[run]`: `model`, `name`, `seed`, `root = "runs"`, `allow_uncommitted`
     (default: `AEOLUS_ALLOW_UNCOMMITTED == "1"`, else `false`);
   * `[fftw]`: `planner` (default `AEOLUS_FFTW_PLANNER`, else `measure`),
     `threads` (default `AEOLUS_FFTW_THREADS`, else `"none"`: automatic,
@@ -28,8 +29,9 @@ The common sections, `[run]` with its `driver` pinned to `driver`:
 """
 function _common_sections(driver::String)
     run = section("run"; doc = "What runs and where its folder goes.") do s
-        option!(s, "driver", String; default = driver, allowed = [driver],
-                doc = "the driver whose schema validates this config")
+        option!(s, "model", String; default = driver, allowed = [driver],
+                doc = "the run type (model) that runs this config and whose schema validates it; " *
+                      "the deprecated alias `driver` is still read")
         option!(s, "name", String; default = driver,
                 doc = "the case name: part of the run folder name runs/<date>_<name>_<id>")
         option!(s, "seed", Int; default = 0, range = (0, typemax(Int)),

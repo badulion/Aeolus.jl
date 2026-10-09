@@ -39,7 +39,7 @@ export ShearLayerDriverType, ShearLayerRun
 """
     ShearLayerDriverType()
 
-The `shear_layer` driver: `[run] driver = "shear_layer"`. Sections
+The `shear_layer` driver: `[run] model = "shear_layer"`. Sections
 `[layer]`, `[grid]`, `[stepper]` and `[diagnostics]`; `aeolus options
 shear_layer` prints them.
 """

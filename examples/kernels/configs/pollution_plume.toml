@@ -9,7 +9,7 @@
 #   julia --project=. examples/kernels/plot_pollution_plume.jl runs/<date>_pollution_plume_<id>
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "pollution_plume"
 
 [grid]

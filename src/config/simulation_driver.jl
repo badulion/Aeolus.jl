@@ -2,7 +2,7 @@
     Aeolus.SimulationDriver
 
 The `simulation` run driver (CFG-b, #357): a bare run of the Boussinesq
-or the anelastic core on a box, configured from TOML (`[run] driver =
+or the anelastic core on a box, configured from TOML (`[run] model =
 "simulation"`). See [`SimulationDriverType`](@ref) and the Run
 configuration page; shipped configs are in `examples/configs/`.
 """
@@ -44,7 +44,7 @@ export SimulationDriverType, SimulationRun, profile_value
     SimulationDriverType()
 
 The `simulation` driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
-`[run] driver = "simulation"`. Its sections are `[grid]`, `[dynamics]`,
+`[run] model = "simulation"`. Its sections are `[grid]`, `[dynamics]`,
 `[boundaries]`, `[sgs]`, `[initial]`, `[stepper]`, `fields` in
 `[output]` and `[preprocess]`, and the couplings around the step
 (EX-d, #441): `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,

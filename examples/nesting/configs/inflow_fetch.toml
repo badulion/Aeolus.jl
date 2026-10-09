@@ -24,7 +24,7 @@
 # x = 1, 3, 5, 10, 14δ, the bulk ratio and the extra pressure gradient.
 
 [run]
-driver = "inflow_fetch"
+model = "inflow_fetch"
 name = "inflow_fetch"
 
 [channel]

@@ -28,7 +28,7 @@
 # core, 9.81 GB, on 2026-10-05 before the KernelAbstractions port).
 
 [run]
-driver = "dns"
+model = "dns"
 name = "dns256"
 seed = 1
 

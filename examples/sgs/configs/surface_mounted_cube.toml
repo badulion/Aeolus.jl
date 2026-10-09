@@ -25,7 +25,7 @@
 #   julia --project -m Aeolus preprocess static examples/sgs/configs/surface_mounted_cube.toml
 
 [run]
-driver = "obstacle_channel"
+model = "obstacle_channel"
 name = "surface_mounted_cube"
 seed = 1993
 

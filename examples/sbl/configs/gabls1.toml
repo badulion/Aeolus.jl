@@ -12,7 +12,7 @@
 #   julia -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32] --set sgs.stability=\"none\"
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "gabls1"
 seed = 1
 

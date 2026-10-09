@@ -46,7 +46,7 @@ end
     @test rc == 0
     run = only(readdir(root; join = true))
     rec = read_run_toml(run)
-    @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["driver"] == "urban"
+    @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["model"] == "urban"
     res = TOML.parsefile(joinpath(run, "output", "results.toml"))
     led = res["ledgers"]
     @test res["finite"] === true
@@ -106,7 +106,7 @@ end
     toml = berlin_toml("parent")
     tt = Aeolus.Config.config_test_table(toml)
     cfg = load_run_config(toml; overrides = tt.overrides)
-    @test cfg.run.driver == "urban_parent"
+    @test cfg.run.model == "urban_parent"
     r = run_config(cfg; root = mktempdir(), console = devnull, allow_uncommitted = true)
     out = joinpath(r.folder.path, "output")
     res = TOML.parsefile(joinpath(out, "results.toml"))

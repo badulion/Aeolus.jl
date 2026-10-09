@@ -22,6 +22,24 @@ function _parse_toml_file(path::AbstractString)
 end
 
 """
+    _dealias_model!(d, file) -> d
+
+`[run] driver` is the deprecated name of `[run] model` (EX-e, #442: in
+Aeolus, as in PALM, a *driver* is an input-data file; the run type is the
+model). Rename it in the table `d` read from `file`, with a deprecation
+warning; both keys at once are an error. Accepted for one release.
+"""
+function _dealias_model!(d::AbstractDict, file)
+    r = get(d, "run", nothing)
+    (r isa AbstractDict && haskey(r, "driver")) || return d
+    haskey(r, "model") &&
+        throw(ConfigError("run.driver", "give only `model`: `driver` is its deprecated alias"; file = file))
+    r["model"] = pop!(r, "driver")
+    @warn "`[run] driver` is deprecated, write `[run] model` (EX-e #442)" file maxlog = 1 _id = Symbol(file)
+    return d
+end
+
+"""
     load_run_config(path; overrides = String[], schema = nothing,
                     allow_changed_inputs = false) -> RunConfig
     load_run_config(io::Base.IO; …)
@@ -42,10 +60,11 @@ arrays and scalars replace. `overrides` are `"dotted.key=<TOML value>"`
 strings (`"clock.nsteps=12"`, `"grid.size=[16,16,16]"`, `"run.name=\\"x\\""`),
 applied last: precedence is base < child < override.
 
-The schema is `schema`, or that of the driver named by `[run] driver`
-(default `"common"`). Unknown keys, wrong types, values out of range or
-outside `allowed`, tuples of the wrong length and failed cross-field
-checks are all collected and thrown as one `ConfigError`.
+The schema is `schema`, or that of the run type named by `[run] model`
+(default `"common"`; `[run] driver` is its deprecated alias). Unknown
+keys, wrong types, values out of range or outside `allowed`, tuples of
+the wrong length and failed cross-field checks are all collected and
+thrown as one `ConfigError`.
 """
 function load_run_config(path::AbstractString; overrides = String[], schema = nothing,
                          allow_changed_inputs::Bool = false)
@@ -81,7 +100,7 @@ end
 
 function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sweep::Symbol = :error)
     ovr, oprobs = _parse_overrides(overrides)
-    files = String[leaf]; dicts = Dict{String,Any}[_drop_test!(deepcopy(leafdict), leaf)]
+    files = String[leaf]; dicts = Dict{String,Any}[_dealias_model!(_drop_test!(deepcopy(leafdict), leaf), leaf)]
     seen = Set{String}([_real(leaf)])
     while true
         cur = files[end]; d = dicts[end]
@@ -98,7 +117,7 @@ function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sw
         r in seen && throw(ConfigError("extends", "extends cycle: " * join(vcat(files, next), " -> ");
                                        file = cur))
         push!(seen, r)
-        push!(files, next); push!(dicts, _drop_test!(_parse_toml_file(next), next))
+        push!(files, next); push!(dicts, _dealias_model!(_drop_test!(_parse_toml_file(next), next), next))
     end
     raw = Dict{String,Any}(); origins = Dict{String,String}()
     for i in length(files):-1:1                     # root first, the leaf last
@@ -178,11 +197,11 @@ end
 function _driver_hint(ovr, dicts, schema)
     schema === nothing || return schema.name
     for (k, v) in ovr
-        k == "run.driver" && v isa AbstractString && return String(v)
+        k == "run.model" && v isa AbstractString && return String(v)
     end
     for d in dicts
         r = get(d, "run", nothing)
-        r isa AbstractDict && get(r, "driver", nothing) isa AbstractString && return String(r["driver"])
+        r isa AbstractDict && get(r, "model", nothing) isa AbstractString && return String(r["model"])
     end
     return nothing
 end
@@ -209,7 +228,7 @@ function _find_extends(ext::String, cur::String, hint)
     length(hits) == 1 && return hits[1]
     length(hits) > 1 &&
         throw(ConfigError("extends", "\"$ext\" is ambiguous: found in " * join(hits, ", ") *
-                          "; set [run] driver to pick one"; file = cur))
+                          "; set [run] model to pick one"; file = cur))
     throw(ConfigError("extends", "extends file \"$ext\" not found (looked at " * join(looked, ", ") * ")";
                       file = cur))
 end
@@ -266,8 +285,14 @@ function _parse_overrides(overrides)
                 "the value \"$val\" is not a TOML value (strings are quoted: $key=\"$val\")"))
             continue
         end
+        if key == "run.driver"                      # the deprecated alias of run.model (EX-e, #442)
+            @warn "the override run.driver is deprecated, write run.model (EX-e #442)" maxlog = 1
+            key = "run.model"
+        end
         push!(out, String(key) => r["v"])
     end
+    count(p -> p.first == "run.model", out) > 1 &&
+        push!(probs, ConfigProblem("run.model", OVERRIDE_ORIGIN, "set more than once (run.driver is its deprecated alias)"))
     return out, probs
 end
 
@@ -309,9 +334,9 @@ _base_dir(origin) = (origin == OVERRIDE_ORIGIN || origin == WITH_ORIGIN || origi
 function _pick_schema(raw, schema, leaf)
     schema === nothing || return schema
     r = get(raw, "run", nothing)
-    name = r isa AbstractDict ? get(r, "driver", "common") : "common"
+    name = r isa AbstractDict ? get(r, "model", "common") : "common"
     name isa AbstractString ||
-        throw(ConfigError("run.driver", "expected a string, got $(_show_raw(name))"; file = leaf))
+        throw(ConfigError("run.model", "expected a string, got $(_show_raw(name))"; file = leaf))
     try
         return driver_schema(String(name))
     catch e
@@ -430,7 +455,7 @@ function _load_record(rt::String, overrides, schema, allow_changed_inputs::Bool;
                           "(no config_schema_version)"; file = rt))
     allow_changed_inputs || _check_inputs(get(rec, "inputs", Dict{String,Any}()), rt)
     ovr, oprobs = _parse_overrides(overrides)
-    raw = deepcopy(Dict{String,Any}(cfgt)); origins = Dict{String,String}()
+    raw = _dealias_model!(deepcopy(Dict{String,Any}(cfgt)), rt); origins = Dict{String,String}()
     _merge!(Dict{String,Any}(), origins, raw, rt, "")
     _apply_overrides!(raw, origins, ovr, oprobs)
     sources = Dict{String,Any}("files" => String[rt], "overrides" => String[overrides...])

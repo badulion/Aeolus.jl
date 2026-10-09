@@ -15,7 +15,7 @@
 #   julia --project examples/validation/apriori_sgs.jl [runs]        # the correlation tables
 
 [run]
-driver = "dns"
+model = "dns"
 name = "apriori_sgs"
 seed = 1
 

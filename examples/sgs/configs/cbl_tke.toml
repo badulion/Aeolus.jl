@@ -18,7 +18,7 @@
 # SGS-fraction numbers, and the averaged profiles.
 
 [run]
-driver = "cbl"
+model = "cbl"
 name = "cbl_tke"
 seed = 1
 

@@ -537,7 +537,7 @@ end
 """
     DNSDriver()
 
-The `dns` run type: `[run] driver = "dns"`, the decaying-turbulence DNS
+The `dns` run type: `[run] model = "dns"`, the decaying-turbulence DNS
 of [`dns_decay`](@ref) (`dns_start`, then `dns_step!` while
 `dns_running`) and, after it, the a-priori record of
 [`dns_apriori_finish`](@ref) at the `[apriori] widths`. Shipped config:

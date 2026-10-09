@@ -16,7 +16,7 @@
 #   julia --project examples/validation/log_layer_mismatch.jl [runs-root]   # the tables
 
 [run]
-driver = "channel"
+model = "channel"
 name = "log_layer_mismatch"
 seed = 1
 

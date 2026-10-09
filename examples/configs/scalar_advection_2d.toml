@@ -12,7 +12,7 @@
 # steps), peak_x, peak_y.
 
 [run]
-driver = "advection"
+model = "advection"
 name = "scalar_advection_2d"
 
 [grid]

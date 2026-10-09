@@ -19,13 +19,13 @@ the Lindenberg sounding) and the source data in `examples/urban/data/`.
 
 ## Run drivers
 
-| `[run] driver` | what runs | output (run folder) |
+| `[run] model` | what runs | output (run folder) |
 | :-- | :-- | :-- |
 | `urban` ([`UrbanDriver`](@ref Aeolus.UrbanCase.UrbanDriver)) | the case: `build_case` + `run_case!` under the run monitor, checkpointed | `diagnostics.csv`, the NetCDF output (`[output] netcdf`), `output/results.toml` ([`run_results`](@ref Aeolus.UrbanCase.run_results)) |
 | `urban_parent` ([`UrbanParentDriver`](@ref Aeolus.UrbanCase.UrbanParentDriver)) | the case's nest parent alone, for `[physics.options.nesting.parent] hours` | `output/parent.csv`, `parent_theta.csv`, `parent_surface.nc`, `results.toml` ([`parent_results`](@ref Aeolus.UrbanCase.parent_results)) |
 
 Both read the same schema (`aeolus options urban`): an `urban_parent`
-config may `extends` an urban case and change only `[run] driver` (and
+config may `extends` an urban case and change only `[run] model` (and
 turn `[checkpoint]` off). From Julia, `CaseConfig(path)` loads a config
 file into the struct `build_case` consumes.
 

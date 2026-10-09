@@ -18,7 +18,7 @@
 #       --set grid.extent=[400.0,400.0,400.0] --set sponge.z=300.0
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "gabls3"
 seed = 1
 

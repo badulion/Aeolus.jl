@@ -235,7 +235,7 @@ end
 """
     CBCDriver()
 
-The `cbc_decay` run type: `[run] driver = "cbc_decay"`, the
+The `cbc_decay` run type: `[run] model = "cbc_decay"`, the
 Comte-Bellot & Corrsin (1971) decay of [`cbc_benchmark`](@ref) for one
 closure (`[sgs] closure`), averaged over `[benchmark] seeds`. It writes
 the LES spectra at the three stations, the TKE ratios and the spectral

@@ -20,7 +20,7 @@
 """
     ColumnDriver()
 
-The `column` run type: `[run] driver = "column"`, the single-column and
+The `column` run type: `[run] model = "column"`, the single-column and
 box cases with no 3-D dynamics, selected by `[column] case` (see the
 option reference). Each case writes its numbers to
 `output/results.toml`. Configs: `examples/validation/configs/`

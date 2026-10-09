@@ -14,7 +14,7 @@
 #   julia --project examples/validation/spectral_broadening.jl [runs-root]   # tables + figures
 
 [run]
-driver = "column"
+model = "column"
 name = "spectral_broadening"
 
 [column]

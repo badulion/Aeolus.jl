@@ -111,7 +111,7 @@ function cfgt_random_raw(rng, schema)
     for s in schema.sections
         t = Dict{String,Any}()
         for o in s.options
-            o.key == "driver" && (t[o.key] = schema.name; continue)
+            o.key == "model" && (t[o.key] = schema.name; continue)
             rand(rng) < 0.25 && continue
             t[o.key] = cfgt_rand_value(rng, o.type, o)
         end

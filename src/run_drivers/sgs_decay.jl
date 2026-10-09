@@ -529,7 +529,7 @@ end
 """
     SGSDecayDriverType()
 
-The `sgs_decay` driver: `[run] driver = "sgs_decay"`. Sections `[dns]`
+The `sgs_decay` driver: `[run] model = "sgs_decay"`. Sections `[dns]`
 (the spin-up and the continuations) and `[les]` (the closures);
 `aeolus options sgs_decay` prints them.
 """

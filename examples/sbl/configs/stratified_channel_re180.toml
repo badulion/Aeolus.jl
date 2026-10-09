@@ -12,7 +12,7 @@
 # DNS: examples/sbl/data/stratified_channel_gv11_re180.csv.
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "stratified_channel_re180"
 seed = 1
 

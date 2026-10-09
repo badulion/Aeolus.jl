@@ -37,7 +37,7 @@ cli_file(text) = (p = joinpath(mktempdir(), "c.toml"); write(p, text); p)
     @test rc == 0 && occursin("ok", out) && occursin("simulation", out)
     bad = cli_file("""
         [run]
-        driver = "simulation"
+        model = "simulation"
         [grid]
         size = [16, 16]
         [stepper]
@@ -112,7 +112,7 @@ end
                  ["run", TGV, "--resume", "--root", root2],                  # not a run folder
                  ["run", folder, "--resume", "--set", "stepper.nsteps=8"],   # --set with --resume
                  ["run", TGV, "--set", "grid.size=[0,8,8]", "--root", root2],
-                 ["run", TGV, "--set", "run.driver=\"common\"", "--root", root2],
+                 ["run", TGV, "--set", "run.model=\"common\"", "--root", root2],
                  ["check"], ["check", "/nonexistent/c.toml"], ["options", "nodriver"],
                  ["options", "simulation", "nosection"], ["preprocess", "nokind"])
         rc, _, err = cli(args...)
@@ -195,7 +195,7 @@ end
     Config.DRIVER_FILES["cfgtest_toy"] = drv            # absolute: joinpath keeps it
     try
         @test !("cfgtest_toy" in registered_drivers())
-        p = cli_file("[run]\ndriver = \"cfgtest_toy\"\n[toy]\nsteps = 5\n")
+        p = cli_file("[run]\nmodel = \"cfgtest_toy\"\n[toy]\nsteps = 5\n")
         cfg = load_run_config(p)                        # the schema lookup loads the file
         @test "cfgtest_toy" in registered_drivers()
         @test cfg.toy.steps == 5
@@ -203,7 +203,7 @@ end
         @test Base.invokelatest(state_fields, res.obj).x == [32.0]   # defined after this testset compiled
         # a listed file that registers nothing is a config error
         Config.DRIVER_FILES["cfgtest_none"] = cli_file("x = 1")
-        e = try load_run_config(cli_file("[run]\ndriver = \"cfgtest_none\"\n")); catch err; err; end
+        e = try load_run_config(cli_file("[run]\nmodel = \"cfgtest_none\"\n")); catch err; err; end
         @test e isa ConfigError && occursin("did not register", sprint(showerror, e))
         # "common" has a schema but no driver
         @test_throws ConfigError run_driver("common")

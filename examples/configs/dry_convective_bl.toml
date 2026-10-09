@@ -9,7 +9,7 @@
 #   julia --project -m Aeolus run examples/configs/dry_convective_bl.toml
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "dry_convective_bl"
 seed = 1
 

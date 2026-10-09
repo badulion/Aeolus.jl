@@ -3,7 +3,7 @@
 
 The run types of the validation cases (EX-c, #440): each is an
 [`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver) selected by
-`[run] driver` and configured only through its schema, so a validation
+`[run] model` and configured only through its schema, so a validation
 case is a TOML file (`examples/validation/configs/`) run with
 
     julia --project -m Aeolus run examples/validation/configs/<case>.toml

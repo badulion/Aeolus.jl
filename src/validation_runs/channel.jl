@@ -16,7 +16,7 @@
 """
     ChannelDriver()
 
-The `channel` run type: `[run] driver = "channel"`, the wall-modelled
+The `channel` run type: `[run] model = "channel"`, the wall-modelled
 channel LES of `WallModels` (`[channel] kind`: the neutral half channel
 or the smooth-wall plane channel), run with `run_channel!`; its averaged
 profiles (and, with `[spectra] levels`, the streamwise spectra) go to

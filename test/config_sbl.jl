@@ -119,7 +119,7 @@ const SBL_SWEEPS = Dict(
     @test sort!(setdiff(all_names, names)) == sort!(collect(keys(SBL_SWEEPS)))
     for n in names
         cfg = load_run_config(sblcfg(n))
-        @test cfg.run.driver == "sbl"
+        @test cfg.run.model == "sbl"
         @test load_run_config(cfg_text_file(cfg)) == cfg              # the canonical form reloads
     end
     @test sblcfg("gabls1") in shipped_configs()
@@ -130,7 +130,7 @@ const SBL_SWEEPS = Dict(
         @test [m.label for (m, _) in runs] == labels
         b = load_run_config(sblcfg(base))
         for (m, c) in runs
-            @test c.run.driver == "sbl" && c.run.name == "$(b.run.name)_$(m.label)"
+            @test c.run.model == "sbl" && c.run.name == "$(b.run.name)_$(m.label)"
             @test c.case.kind === b.case.kind
             # every member validates; the swept keys are the ones that differ
             # from the base, plus the grid of the sweeps that resize it

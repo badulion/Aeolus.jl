@@ -230,7 +230,7 @@ using Aeolus.ValidationRuns     # cbc_benchmark, patchy_les / patchy_run!, dns_d
     # the `dns` run type (nu_margin = 1, past_peak = 0) runs it, with the a-priori record
     d = dns_decay(; N = 16, t_end = 0.3)
     r = val_run("apriori_sgs", nothing, ["grid.n=16", "stepper.end_time=0.3", "apriori.widths=[4,8]"])
-    @test r.obj.cfg.run.driver == "dns"
+    @test r.obj.cfg.run.model == "dns"
     @test r.obj.summary.nsteps == d.nsteps >= 5
     @test r.obj.summary.ν === d.ν
     s = d.sim

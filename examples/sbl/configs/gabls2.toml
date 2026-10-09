@@ -13,7 +13,7 @@
 # the step means integrate it exactly; #248). Dry.
 
 [run]
-driver = "sbl"
+model = "sbl"
 name = "gabls2"
 seed = 1
 

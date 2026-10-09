@@ -13,8 +13,10 @@ the NetCDF input files are specified in
 
 ## TOML layout
 
-A config file names its driver in `[run]` and then sets options section by
-section. A key that is not set takes the schema default. A key the schema
+A config file names its run type, the model, in `[run] model` and then
+sets options section by section. (`[run] driver` is the deprecated name of
+the key, read with a warning for one release, EX-e #442: in Aeolus, as in
+PALM, a *driver* is an input-data file, the static and dynamic drivers.) A key that is not set takes the schema default. A key the schema
 does not know is an error, and so is a value of the wrong type or outside
 its range; every problem is reported together, naming the key and the file
 it came from.
@@ -23,7 +25,7 @@ it came from.
 extends = "berlin_summer.toml"   # optional: start from another file
 
 [run]
-driver = "urban"                 # selects the schema: simulation, urban, sbl, dns, column, …
+model  = "urban"                # selects the schema: simulation, urban, sbl, dns, column, …
 name   = "smoke"
 seed   = 0
 

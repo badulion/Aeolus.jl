@@ -9,7 +9,7 @@
 #   julia --project examples/validation/parisfog_2011_radiation_fog.jl [runs-root]   # life cycle + figures
 
 [run]
-driver = "column"
+model = "column"
 name = "parisfog_2011"
 
 [column]

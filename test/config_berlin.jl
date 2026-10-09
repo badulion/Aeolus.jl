@@ -109,7 +109,7 @@ end
         end
     end
     @test allunique(used)
-    common = Set(["run.driver", "run.seed", "run.root", "run.allow_uncommitted", "logging.console_level", "logging.file_level",
+    common = Set(["run.model", "run.seed", "run.root", "run.allow_uncommitted", "logging.console_level", "logging.file_level",
                   "logging.flush_interval", "logging.diagnostics_cadence"])
     case_opts = ["$(s.name).$(o.key)" for s in sch.sections for o in s.options
                  if !(s.name in ("fftw", "checkpoint")) && !("$(s.name).$(o.key)" in common)]
@@ -301,7 +301,7 @@ end
     # steps to get there), completed, every step a diagnostics row
     rec = read_run_toml(r.runs[1].folder.path)
     @test case.sim.t == 24.0 && !case.clock.blowup
-    @test rec["config"]["run"]["driver"] == "urban" && rec["replayable"] == true
+    @test rec["config"]["run"]["model"] == "urban" && rec["replayable"] == true
     @test length(readlines(diagnostics_path(r.runs[1].folder))) == case.clock.n + 1   # header + a row per step
     # the ledgers close to the smoke test's tolerances
     rows = BCC.surface_budget(case.ledger)
@@ -470,7 +470,7 @@ end
     rec = read_run_toml(only(runs))
     @test rec["session"][end]["status"] == "completed"
     @test rec["config"]["clock"]["nsteps"] == 2 && rec["config"]["run"]["name"] == "smoke"
-    @test rec["config"]["run"]["driver"] == "urban"
+    @test rec["config"]["run"]["model"] == "urban"
     # the run type's own checks (EX-a, #438): results.toml in the run folder,
     # the ledgers closed within LEDGER_TOLERANCES, the state finite
     res = TOML.parsefile(joinpath(only(runs), "output", "results.toml"))

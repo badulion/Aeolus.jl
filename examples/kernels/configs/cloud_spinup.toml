@@ -9,7 +9,7 @@
 #   julia --project -m Aeolus run examples/kernels/configs/cloud_spinup.toml
 
 [run]
-driver = "column"
+model = "column"
 name = "cloud_spinup"
 
 [column]

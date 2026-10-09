@@ -17,7 +17,7 @@
 # the resolved-KE error at t₀ + 2T, e, II, ⟨τ₃₃⟩/⟨τ₁₁⟩ and the SGS heat flux.
 
 [run]
-driver = "sgs_decay"
+model = "sgs_decay"
 name = "rotating_stratified_decay"
 
 [dns]

@@ -26,7 +26,7 @@
 # factor and the free-stream Tu, and the plate profiles.
 
 [run]
-driver = "flat_plate"
+model = "flat_plate"
 name = "flat_plate_t3a"
 
 [plate]

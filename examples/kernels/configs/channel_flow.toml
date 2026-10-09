@@ -10,7 +10,7 @@
 # The plot reads the u profile of the run's diagnostics.nc.
 
 [run]
-driver = "simulation"
+model = "simulation"
 name = "channel_flow"
 seed = 1
 

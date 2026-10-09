@@ -44,7 +44,7 @@ export FlatPlateDriverType, FlatPlateRun
 """
     FlatPlateDriverType()
 
-The `flat_plate` driver: `[run] driver = "flat_plate"`. Sections
+The `flat_plate` driver: `[run] model = "flat_plate"`. Sections
 `[plate]`, `[grid]`, `[disturbance]`, `[stepper]` and `[analysis]`;
 `aeolus options flat_plate` prints them.
 """

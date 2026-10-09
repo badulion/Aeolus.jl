@@ -11,7 +11,7 @@
 #   julia --project examples/validation/dycoms_rf01_radiation.jl [runs-root]    # the report
 
 [run]
-driver = "column"
+model = "column"
 name = "dycoms_rf01"
 
 [column]
