@@ -199,20 +199,25 @@ therefore cannot silently read different data.
 ## The preprocessors
 
 Geometry and forcing come from NetCDF-4 driver files with Aeolus's own
-schemas, written by preprocessors from the run config:
+schemas. They are written by the companion package AeolusPrep.jl (ONE-h,
+#457), which reads the run's grid from its config; Aeolus keeps the
+readers and the schemas:
 
 ```bash
-julia --project -m Aeolus preprocess static  examples/urban/configs/berlin_summer.toml      # OSM/GeoJSON → static driver
-julia --project -m Aeolus preprocess dynamic --from-sounding examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
-julia --project -m Aeolus preprocess dynamic --from-parent  examples/urban/configs/berlin_smoke.toml --out child.nc
+# in an AeolusPrep.jl checkout
+julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
+# the parent-made driver of an offline nest is model output
+julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
 ```
 
 The static driver (terrain, buildings, land use, trees, surfaces) is
-written from `[preprocess]` and read from `[geometry] static`. The dynamic
-driver (initial profiles, large-scale forcing, surface series, boundary
-planes from a parent run) is written from a sounding, a case table, ERA5
-or a recording parent, and is read from the domain's `dynamic_driver`
-(the model), `[case] dynamic` (sbl) or `[initial] dynamic` (urban).
+written from OpenStreetMap or GeoJSON and read from `[geometry] static`.
+The dynamic driver (initial profiles, large-scale forcing, surface
+series, boundary planes) is written from a sounding, a case table or
+ERA5, or by a recording parent run, and is read from the domain's
+`dynamic_driver` (the model), `[case] dynamic` (sbl) or `[initial]
+dynamic` (urban).
 Their variables, dimensions, units and attributes are listed on the
 [static](../reference/input_static.md) and
 [dynamic](../reference/input_dynamic.md) pages; the API is
@@ -261,7 +266,7 @@ naming the file.
 | WRF | `namelist.input` | WPS writes `wrfinput` and `wrfbdy` |
 | MicroHH | `.ini` file | `input.nc` |
 | Oceananigans | a Julia script | built in Julia |
-| Aeolus | TOML, schema-checked, with a Julia escape hatch; the resolved file is the run record | NetCDF-4 static and dynamic drivers with Aeolus's own schemas, made by `aeolus preprocess` |
+| Aeolus | TOML, schema-checked, with a Julia escape hatch; the resolved file is the run record | NetCDF-4 static and dynamic drivers with Aeolus's own schemas, made by AeolusPrep.jl |
 
 The design follows PALM's split between a namelist and preprocessed driver
 files, without aiming at PALM compatibility. What it adds is that the

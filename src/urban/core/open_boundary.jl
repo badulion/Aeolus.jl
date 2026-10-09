@@ -148,8 +148,8 @@ function case_boundary_conditions(cfg::CaseConfig, mesh)
 end
 
 # The open case's faces from the steady planes of its sounding driver
-# (CFG-g, #362: `aeolus preprocess dynamic --from-sounding` of an open
-# config writes them), when the driver has planes. The sponge and θ
+# (CFG-g, #362: `aeolusprep dynamic --from-sounding` of an open
+# config writes them, AeolusPrep.jl), when the driver has planes. The sponge and θ
 # relaxation keep the profile data's targets.
 function _open_planes_from_driver!(b, cfg::CaseConfig, mesh)
     path = initial_driver(cfg)

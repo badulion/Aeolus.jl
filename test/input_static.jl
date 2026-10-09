@@ -1,30 +1,32 @@
 # The static driver (CFG-f, #361): Aeolus.InputDrivers — the conventions,
-# the schema check, the OSM/GeoJSON preprocessors and the Berlin case
-# reading its ground from one file.
+# the schema check, the rasterisation and the Berlin case reading its
+# ground from one file. The OpenStreetMap and GeoJSON readers that make
+# the drivers, and the check that every committed driver is reproduced,
+# are AeolusPrep.jl's (ONE-h, #457).
 #
 # Acceptance tests of the issue covered here:
 #   * geometry is recovered: three hand-written buildings of known size
 #     rasterised at dx = 5 m give the exact cell counts, at dx = 7 m an
 #     area within one cell perimeter; the class code table round-trips;
-#   * polygons round-trip exactly (both OSM files, city.geojson);
+#   * polygons round-trip exactly (three_buildings, the Berlin drivers' cities);
 #   * errors: grid mismatch (both grids named), a missing variable, a
 #     wrong schema version, a stale source;
 #   * bit-identical to the OSM-direct path: the Berlin smoke geometry from
 #     its static driver (masks, classes, heightmap, view factors) and the
 #     summer rasterisation equal the digests captured before the switch
-#     (test/data/input_static/digests.toml), and so do the in-memory path
-#     and the nest parent's land use; the 12-step smoke state is checked
+#     (test/data/input_static/digests.toml), and so do the Mitte sample at
+#     32 × 32 × 16 (its polygons rasterised there; nested and periodic) and
+#     the nest parent's land use; the 12-step smoke state is checked
 #     against the same capture in test/config_berlin.jl (berlin_smoke.toml
 #     now runs from its static driver), as is the round trip, whose
 #     [inputs] now list the static drivers (asserted here);
-#   * generated files are reproducible: re-running the preprocessor gives
-#     the committed files' data variables byte for byte.
+#   * a committed driver's rasters are its own polygons rasterised.
 
 using Test
 using TOML
 using Aeolus
 using Aeolus.InputDrivers
-using Aeolus.InputDrivers: check_grid, VOLATILE_ATTRIBUTES
+using Aeolus.InputDrivers: check_grid
 using Aeolus.Config
 using Aeolus.Grids: xnodes, znodes
 using Aeolus.NCIO: NCDataset
@@ -36,7 +38,6 @@ include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 
 const IS_DATA = joinpath(@__DIR__, "data", "input_static")
 const IS_DIGESTS = TOML.parsefile(joinpath(IS_DATA, "digests.toml"))
-const URBAN_DATA = joinpath(@__DIR__, "..", "examples", "urban", "data")
 
 "A copy of the driver `src` at `dst` without the variables `skip`, with global attributes `attrs` changed."
 function copy_driver(src, dst; skip = String[], attrs = Dict{String,Any}())
@@ -60,12 +61,32 @@ function copy_driver(src, dst; skip = String[], attrs = Dict{String,Any}())
     return dst
 end
 
+"""
+    three_buildings() -> UrbanCity
+
+Three hand-written buildings and a park in mesh metres (what
+test/data/input_static/three_buildings.geojson held before the GeoJSON
+reader moved to AeolusPrep.jl, ONE-h #457): a 40 × 20 m block of 20 m, a
+30 × 30 m block of 30 m, an L of 15 m with a 10 × 10 m courtyard (two
+rings, each followed by a `NaN` vertex) and a 40 × 50 m park.
+"""
+function three_buildings()
+    ring(v...) = NTuple{2,Float64}[Float64.(p) for p in v]
+    L = vcat(ring((10, 50), (60, 50), (60, 70), (30, 70), (30, 100), (10, 100), (10, 50)), [(NaN, NaN)],
+             ring((15, 75), (25, 75), (25, 85), (15, 85), (15, 75)), [(NaN, NaN)])
+    return UrbanCity([Building(ring((10, 10), (50, 10), (50, 30), (10, 30), (10, 10)), 20.0),
+                      Building(ring((70, 10), (100, 10), (100, 40), (70, 40), (70, 10)), 30.0),
+                      Building(L, 15.0)],
+                     [Building(ring((70, 60), (110, 60), (110, 110), (70, 110), (70, 60)), 0.0, SURFACE_PARK)])
+end
+
+meshof(cfg) = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
 geo_mesh(L, dx) = RegularGrid(; size = (round(Int, L / dx), round(Int, L / dx), 4), extent = (L, L, 40.0),
                               halo = (3, 3, 3))
 const ANCHOR = (origin_lat = 52.5, origin_lon = 13.4, origin_x = 0.0, origin_y = 0.0)
 
 @testset "InputDrivers: geometry of three known buildings is recovered" begin
-    city = load_city_geojson(joinpath(IS_DATA, "three_buildings.geojson"))
+    city = three_buildings()
     @test length(city.buildings) == 3 && length(city.patches) == 1
     # the L-shape with a courtyard: two rings, each closed and NaN-terminated
     L = city.buildings[3].polygon
@@ -117,13 +138,11 @@ end
 
 @testset "InputDrivers: polygons round-trip exactly" begin
     m = geo_mesh(160.0, 10.0)
-    for (label, city) in (
-            "alexanderplatz_real.osm" => load_city_osm(joinpath(URBAN_DATA, "alexanderplatz_real.osm");
-                                                       lat0 = 52.522, lon0 = 13.41, x_shift = 500, y_shift = 500),
-            "sample_berlin_mitte.osm" => load_city_osm(joinpath(URBAN_DATA, "sample_berlin_mitte.osm");
-                                                       lat0 = 52.522, lon0 = 13.41, x_shift = 500, y_shift = 500),
-            "city.geojson" => load_city_geojson(joinpath(URBAN_DATA, "city.geojson")),
-            "three_buildings.geojson" => load_city_geojson(joinpath(IS_DATA, "three_buildings.geojson")))
+    # the cities of the committed Berlin drivers (OpenStreetMap, NaN-separated rings and the
+    # OSM attributes: levels, roof shapes, materials) and the hand-written one
+    berlin(s) = (c = BCI.CaseConfig(berlin_toml(s)); BCI.case_static_inputs(c, meshof(c)).city)
+    for (label, city) in ("summer" => berlin("summer"), "mitte_sample" => berlin("mitte_sample"),
+                          "three_buildings" => three_buildings())
         p = tempname() * ".nc"
         write_static_driver(p, city, m; ANCHOR...)
         back = read_static_driver(p; mesh = m, ANCHOR...).city
@@ -135,17 +154,16 @@ end
               sum(b -> count(v -> isnan(v[1]), b.polygon), city.buildings)
         rm(p)
     end
-    # the OSM attributes are kept (alexanderplatz_real.osm has levels, roof shapes, materials)
-    c = load_city_osm(joinpath(URBAN_DATA, "alexanderplatz_real.osm"); lat0 = 52.522, lon0 = 13.41)
+    c = berlin("summer")
     @test count(b -> !isnan(b.levels), c.buildings) > 0
     @test count(b -> !isempty(b.roof), c.buildings) > 0
 end
 
 @testset "InputDrivers: errors" begin
-    city = load_city_geojson(joinpath(IS_DATA, "three_buildings.geojson"))
+    city = three_buildings()
     m = geo_mesh(120.0, 5.0)
     src = tempname() * ".geojson"
-    cp(joinpath(IS_DATA, "three_buildings.geojson"), src)
+    write(src, "{\"type\": \"FeatureCollection\", \"features\": []}\n")   # any source file: its hash
     p = tempname() * ".nc"
     write_static_driver(p, city, m; ANCHOR..., source = src)
     @test isempty(check_driver(p, STATIC_SCHEMA))
@@ -196,55 +214,10 @@ end
     @test occursin("| `surface_class` | x, y | `UInt8` |", md) && count(==('\n'), md) == length(STATIC_SCHEMA.variables) + 2
 end
 
-# Moved from test/berlin_parent_surface.jl (#320); the preprocessor is
-# src/preprocess/osm.jl (multipolygon relations, #249).
-@testset "InputDrivers: OSM multipolygon relations — rings joined, holes kept" begin
-    # A 100 m water square (outer ring split over two ways, one reversed)
-    # with a 40 m island (inner ring), around the anchor; a park way.
-    lat0, lon0 = 52.5, 13.4
-    R = 6_371_000.0
-    dlat(y) = lat0 + rad2deg(y / R)
-    dlon(x) = lon0 + rad2deg(x / (R * cosd(lat0)))
-    pts = Dict(1 => (-50, -50), 2 => (50, -50), 3 => (50, 50), 4 => (-50, 50),
-               5 => (-20, -20), 6 => (20, -20), 7 => (20, 20), 8 => (-20, 20),
-               9 => (60, 60), 10 => (90, 60), 11 => (90, 90))
-    nodes = join(("<node id=\"$k\" lat=\"$(dlat(y))\" lon=\"$(dlon(x))\"/>" for (k, (x, y)) in pts), "\n")
-    nd(ids) = join(("<nd ref=\"$i\"/>" for i in ids), "")
-    xml = """<?xml version="1.0"?><osm>
-    $nodes
-    <way id="100">$(nd([1, 2, 3]))</way>
-    <way id="101">$(nd([1, 4, 3]))</way>
-    <way id="102">$(nd([5, 6, 7, 8, 5]))</way>
-    <way id="103">$(nd([9, 10, 11, 9]))<tag k="leisure" v="park"/></way>
-    <relation id="200"><member type="way" ref="100" role="outer"/><member type="way" ref="101" role="outer"/><member type="way" ref="102" role="inner"/><tag k="type" v="multipolygon"/><tag k="natural" v="water"/></relation>
-    <relation id="201"><member type="way" ref="102" role="outer"/><tag k="type" v="route"/><tag k="natural" v="water"/></relation>
-    </osm>"""
-    path = tempname() * ".osm"
-    write(path, xml)
-    city = load_city_osm(path; lat0 = lat0, lon0 = lon0, x_shift = 100, y_shift = 100)
-    rm(path)
-    @test length(city.patches) == 2                    # the park way + one multipolygon (the route is ignored)
-    water = only(filter(p -> p.class == SURFACE_WATER, city.patches))
-    @test count(p -> isnan(p[1]), water.polygon) == 2  # two closed rings, NaN-terminated
-    mesh = RegularGrid(; size = (20, 20, 1), extent = (200.0, 200.0, 6.25))
-    sm, sfc = surface_class_map(city, mesh; tag_walls = false)
-    xc(i) = (i - 0.5) * 10 - 100                        # cell centre relative to the anchor
-    inwater(x, y) = max(abs(x), abs(y)) < 50 && max(abs(x), abs(y)) > 20
-    @test all(sfc[i, j] == (inwater(xc(i), xc(j)) ? SURFACE_WATER :
-                            (60 < xc(i) < 90 && 60 < xc(j) < xc(i) ? SURFACE_PARK : SURFACE_STREET))
-              for i in 1:20, j in 1:20 if !(60 < xc(i) < 90 && abs(xc(j) - xc(i)) < 6))
-    @test sfc[10, 10] == SURFACE_STREET                 # the island is a hole
-    @test count(==(SURFACE_WATER), sfc) == 100 - 16     # 10×10 cells of 10 m minus the 4×4 island
-    @test polygon_bbox(water.polygon) == polygon_bbox(filter(p -> !isnan(p[1]), water.polygon))
-    # a file without relations (the Alexanderplatz extract) takes the way-only path
-    @test !occursin("<relation", read(joinpath(URBAN_DATA, "alexanderplatz_real.osm"), String))
-end
-
 # ---------------------------------------------------------------------------
 # the Berlin case
 # ---------------------------------------------------------------------------
 
-meshof(cfg) = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
 function geom_digests_equal(label, g)
     d = IS_DIGESTS[label]
     got = Dict("mask" => digest(g.sm.mask), "sfc" => digest(g.sfc), "heightmap" => digest(g.heightmap),
@@ -260,12 +233,21 @@ end
     cs = BCI.CaseConfig(berlin_toml("smoke"))
     @test endswith(cs.static, "configs/input/berlin_smoke_static.nc")
     @test geom_digests_equal("smoke", BCI.build_geometry(cs, meshof(cs)))
-    # the in-memory path (static = none), nested (frame) and periodic (no frame, wrapped walls)
-    for (label, c) in ("mitte_sample" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16), static = nothing),
-                       "mitte_periodic" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16), static = nothing,
+    # the Mitte sample at 32 × 32 × 16, nested (frame) and periodic (no frame, wrapped
+    # walls): its committed driver's polygons rasterised on that grid give the
+    # digests the OSM file did in memory (before ONE-h, #457)
+    full = BCI.CaseConfig(berlin_toml("mitte_sample"))
+    mitte = BCI.case_static_inputs(full, meshof(full)).city
+    for (label, c) in ("mitte_sample" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16)),
+                       "mitte_periodic" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16),
                                                           lateral = :periodic,
                                                           physics = Dict{Symbol,Any}(:nesting => false)))
-        @test geom_digests_equal(label, BCI.build_geometry(c, meshof(c)))
+        m = meshof(c)
+        ox, oy = BCI.anchor_xy(c, m)
+        c.static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0, origin_lon = c.lon0,
+                                       origin_x = ox, origin_y = oy)
+        @test geom_digests_equal(label, BCI.build_geometry(c, m))
+        rm(c.static)
     end
     # summer, 64 × 64 × 64: masks, classes and heightmap at setup
     c = BCI.CaseConfig(berlin_toml("summer"))
@@ -277,8 +259,10 @@ end
     @test digest(sm.mask) == d["mask"] && digest(sfc) == d["sfc"]
     @test digest(Aeolus.Radiosity.heightmap_from_solid_mask(sm)) == d["heightmap"]
     @test length(st.city.buildings) == d["buildings"] && length(st.city.patches) == d["patches"]
-    # the file and the in-memory path give the same inputs
-    mem = BCI.urban_static_inputs(c, mesh)
+    # the file's rasters are its own polygons rasterised (park LAI 2.5, the summer source's)
+    ox, oy = BCI.anchor_xy(c, mesh)
+    mem = static_inputs(st.city, mesh; origin_lat = c.lat0, origin_lon = c.lon0, origin_x = ox, origin_y = oy,
+                        class_lai = Dict(SURFACE_PARK => 2.5))
     @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
     # the nest parents' land use, from their static drivers and in memory
     for s in (:smoke, :summer)
@@ -302,7 +286,7 @@ end
     catch err
         sprint(showerror, err)
     end
-    @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolus preprocess static", e)
+    @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolusprep static", e)
     # a missing driver: a config error before any run folder, with the exact command
     cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["geometry.static=\"nope.nc\""])
     e = try
@@ -310,62 +294,61 @@ end
     catch err
         err
     end
-    @test e isa ConfigError && occursin("preprocess static $(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))", sprint(showerror, e))
-end
-
-"The data variables of a driver (name => raw array) and its global attributes but the volatile ones."
-function driver_content(path)
-    NCDataset(path) do ds
-        vars = Dict(name => ds[name].var[ntuple(_ -> Colon(), ndims(ds[name]))...] for name in keys(ds))
-        attrs = Dict(k => v for (k, v) in ds.attrib if !(k in VOLATILE_ATTRIBUTES))
-        (vars, attrs)
+    @test e isa ConfigError && occursin("AeolusPrep static $(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))", sprint(showerror, e))
+    # no static driver at all: no ground, an error naming AeolusPrep, not a flat city
+    e = try
+        BCI.build_geometry(BCI.CaseConfig(berlin_toml("smoke"); static = nothing), meshof(cs)); nothing
+    catch err
+        sprint(showerror, err)
     end
+    @test e !== nothing && occursin("static is \"none\"", e) && occursin("AeolusPrep", e)
 end
 
-@testset "InputDrivers: the committed Berlin static drivers are reproducible" begin
-    dir = mktempdir()
+@testset "InputDrivers: the committed Berlin static drivers" begin
+    # AeolusPrep.jl reproduces them (its test/recipes.jl); here: small, valid
     for s in ("summer", "smoke", "mitte_sample")
-        toml = joinpath(berlin_configs_dir(), "berlin_$s.toml")
-        cfg = load_run_config(toml)
-        cc = BCI.CaseConfig(cfg)
-        out, pout = joinpath(berlin_configs_dir(), "input", "_repro_$(s).nc"), joinpath(berlin_configs_dir(), "input", "_repro_$(s)_parent.nc")
-        try
-            files = Aeolus.Config.preprocess_static(BCI.UrbanDriver(), cfg; out = out, parent_out = pout)
-            @test files == [out, pout]
-            for (new, old) in ((out, cc.static), (pout, cc.parent_static))
-                @test filesize(old) <= 2 * 1024^2                 # committed: 2 MB or smaller
-                @test isempty(check_driver(old, occursin("parent", old) ? STATIC_TILES_SCHEMA : STATIC_SCHEMA))
-                vn, an = driver_content(new); vo, ao = driver_content(old)
-                @test keys(vn) == keys(vo)
-                @test all(k -> isequal(vn[k], vo[k]), keys(vn))   # byte for byte (NaN separators included)
-                @test an == ao                                     # same source, same hash
+        cc = BCI.CaseConfig(berlin_toml(s))
+        for (f, sch) in ((cc.static, STATIC_SCHEMA), (cc.parent_static, STATIC_TILES_SCHEMA))
+            @test filesize(f) <= 2 * 1024^2                 # committed: 2 MB or smaller
+            @test isempty(check_driver(f, sch))
+            # made by AeolusPrep (ONE-h, #457): the OSM source in its package, the
+            # land-use table in Aeolus (relative, hashed: a changed table makes it stale)
+            NCDataset(f) do ds
+                @test ds.attrib["preprocessor"] == "aeolusprep static"
+                @test sch === STATIC_SCHEMA ? startswith(ds.attrib["source"], "AeolusPrep:data/berlin/") :
+                                              ds.attrib["source"] == "../../data/berlin_landuse_6km.csv"
             end
-        finally
-            rm(out; force = true); rm(pout; force = true)
         end
     end
+    smoke = joinpath(berlin_configs_dir(), "input", "berlin_mitte_sample_smoke_static.nc")
+    @test filesize(smoke) <= 2 * 1024^2 && isempty(check_driver(smoke, STATIC_SCHEMA))
 end
 
-@testset "InputDrivers: aeolus preprocess static (the CLI)" begin
-    io, err = IOBuffer(), IOBuffer()
-    @test Aeolus.Config.main(["preprocess"]; io = io, err = err) == 0
-    @test occursin("static <config.toml>", String(take!(io)))
-    dir = mktempdir()
-    out, pout = joinpath(dir, "c.nc"), joinpath(dir, "p.nc")
-    toml = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
-    rc = redirect_stdout(devnull) do
-        Aeolus.Config.main(["preprocess", "static", toml, "--out", out, "--parent-out", pout]; io = io, err = err)
+@testset "InputDrivers: the source is recorded per package (ONE-h, #457)" begin
+    ref = Aeolus.InputDrivers._source_ref
+    root = mktempdir()
+    mk(p, name) = (mkpath(p); name === nothing || write(joinpath(p, "Project.toml"), "name = \"$name\"\n"); p)
+    model = mk(joinpath(root, "Model.jl"), "Model")
+    prep = mk(joinpath(root, "deep", "Prep.jl"), "Prep")
+    mk(joinpath(model, "docs"), nothing)                        # a Project.toml without a name is not a package
+    src_here = joinpath(model, "examples", "data", "s.csv"); mkpath(dirname(src_here)); write(src_here, "x")
+    src_prep = joinpath(prep, "data", "berlin", "a.osm"); mkpath(dirname(src_prep)); write(src_prep, "x")
+    out = joinpath(model, "examples", "configs", "input", "d.nc")
+    # the same package: relative to the driver's directory, as before
+    @test ref(src_here, out) == "../../data/s.csv"
+    # another package: its name and the path in it, wherever it is checked out
+    @test ref(src_prep, out) == "Prep:data/berlin/a.osm"
+    @test ref(src_prep, joinpath(model, "docs", "d.nc")) == "Prep:data/berlin/a.osm"
+    # outside any package: absolute
+    loose = joinpath(root, "loose.osm"); write(loose, "x")
+    @test ref(loose, out) == loose
+    # a source in another package is not resolved here (no stale check)
+    p = tempname() * ".nc"
+    write_static_driver(p, static_inputs(three_buildings(), geo_mesh(120.0, 5.0); ANCHOR...); source = src_prep, preprocessor = "test")
+    NCDataset(p) do ds
+        @test ds.attrib["source"] == "Prep:data/berlin/a.osm" && ds.attrib["preprocessor"] == "test"
+        @test Aeolus.InputDrivers.source_path(p, ds) === nothing
     end
-    @test rc == 0 && isfile(out) && isfile(pout)
-    @test isempty(check_driver(out, STATIC_SCHEMA)) && isempty(check_driver(pout, STATIC_TILES_SCHEMA))
-    NCDataset(out) do ds
-        # the source is recorded absolute outside the checkout, with its hash
-        @test ds.attrib["source"] == BCI.CaseConfig(berlin_toml("smoke")).osm_path
-        @test ds.attrib["source_fnv1a64"] == file_fnv1a64(BCI.CaseConfig(berlin_toml("smoke")).osm_path)
-        @test ds.attrib["preprocessor"] == "aeolus preprocess static"
-    end
-    # a config whose static is "none" needs --out
-    rc = Aeolus.Config.main(["preprocess", "static", toml, "--set", "geometry.static=\"none\""]; io = io, err = err)
-    @test rc == 2
+    @test isempty(check_driver(p, STATIC_SCHEMA))
+    rm(p)
 end
-

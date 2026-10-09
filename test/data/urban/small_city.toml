@@ -1,11 +1,11 @@
 # A small synthetic city for the urban run-type tests (test/urban_run.jl,
 # EX-a #438): 200 m × 200 m × 100 m on 16 × 16 × 16 cells (12.5 m × 6.25 m),
 # periodic sides (no nest), at local noon on the default date, the idealised
-# initial profile (an inversion at 60 m). The ground: small_city.geojson in
-# mesh metres — a 40 m and a 20 m building (a 5 m shed below the 8 m
-# minimum height is dropped), a park and a pond — read in memory (no
-# static driver). Everything else is the urban driver's defaults: every
-# default coupling.
+# initial profile (an inversion at 60 m). The ground: its static driver
+# (input/small_city_static.nc), which AeolusPrep.jl makes from its
+# small_city.geojson in mesh metres — a 40 m and a 20 m building (a 5 m
+# shed below the 8 m minimum height is dropped), a park and a pond.
+# Everything else is the urban driver's defaults: every default coupling.
 
 schema_version = 2
 
@@ -21,8 +21,8 @@ netcdf = "none"
 size = [16, 16, 16]
 extent = [200.0, 200.0, 100.0]
 
-[preprocess]
-osm_path = "small_city.geojson"
+[geometry]
+static = "input/small_city_static.nc"
 
 [clock]
 start_h = 12.0

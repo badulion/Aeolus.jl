@@ -50,8 +50,8 @@ export RunConfig, ConfigSection, DomainConfig, ConfigError, ConfigProblem, load_
        damerau_levenshtein, CONFIG_SCHEMA_VERSION,
        checkpoint_schedule, apply_fftw_config!,
        AbstractRunDriver, driver_name, driver_sections, driver_checks, driver_defaults, domain_sections, build,
-       state_fields, preprocess_static, preprocess_dynamic, run_driver, run_config, RunResult, DRIVER_FILES,
-       register_preprocessor!, option_reference, reference_sections, undocumented_keys, reference_option,
+       state_fields, run_driver, run_config, RunResult, DRIVER_FILES,
+       option_reference, reference_sections, undocumented_keys, reference_option,
        write_results, no_checkpoints,
        kwdef_section, kwdef_value, field_key, selected_case_sections,
        SweepMember, sweep_members, load_sweep, run_configs, config_test_table

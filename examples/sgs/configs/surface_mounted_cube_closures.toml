@@ -41,9 +41,6 @@ c_s = 0.1
 static = "input/surface_mounted_cube_static.nc"
 floor_cells = 1
 
-[preprocess]
-obstacles = "input/surface_mounted_cube.geojson"
-
 [stepper]
 cfl = 0.4
 t_spin = 30.0

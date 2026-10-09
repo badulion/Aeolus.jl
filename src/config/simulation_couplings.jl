@@ -32,7 +32,7 @@ using ..Operators: advect_centered!, add_surface_flux!
 using ..Fields: location
 using ..BoundaryConditions: fill_halos!
 using ..Grids: xnodes, ynodes, znodes
-using ..InputDrivers: read_static_driver, write_static_driver, solid_and_classes, load_city_geojson
+using ..InputDrivers: read_static_driver, solid_and_classes
 import ..RunLog: diagnostics, profile_diagnostics
 using ..RunLog: Diagnostic, ProfileDiagnostic
 using ..Backends: plane_mean!
@@ -120,7 +120,7 @@ function _coupling_sections()
     end
     ob = section("obstacles"; doc = "Immersed obstacles from the domain's static driver.") do s
         option!(s, "enabled", Bool; default = false,
-                doc = "the buildings of the domain's static_driver (aeolus preprocess static, from preprocess.obstacles) are solid in every cell whose centre is at or below their height")
+                doc = "the buildings of the domain's static_driver (AeolusPrep.jl: aeolusprep static --source <obstacles.geojson>) are solid in every cell whose centre is at or below their height")
         option!(s, "anchor", NTuple{2,Float64}; default = (0.0, 0.0), units = "degrees",
                 doc = "latitude, longitude of the domain's south-west corner (the static driver's anchor; checked, not used)")
         option!(s, "penalty_time", Float64; units = "1", default = 3.0, range = (0, Inf), open_lower = true,
@@ -188,7 +188,7 @@ function _coupling_checks(cfg)
     if cfg.obstacles.enabled
         cfg.dynamics.core === :boussinesq || push!(e, ConfigError("obstacles.enabled", "obstacles need the boussinesq core"))
         cfg.domain.static_driver === nothing &&
-            push!(e, ConfigError("obstacles.enabled", "obstacles come from the domain's static_driver: set it (aeolus preprocess static)"))
+            push!(e, ConfigError("obstacles.enabled", "obstacles come from the domain's static_driver: set it (AeolusPrep.jl: aeolusprep static)"))
     end
     return e
 end
@@ -457,35 +457,6 @@ function _coupling_fields(c::SimCouplings)
     c.particles === nothing ||
         push!(out, :particles => [x[d] for d in 1:3, x in positions(c.particles.ps)])
     return (; out...)
-end
-
-# ---------------------------------------------------------------------------
-# preprocess static: the obstacles' static driver from a GeoJSON
-# ---------------------------------------------------------------------------
-
-"""
-    preprocess_static(::SimulationDriverType, cfg; out = nothing, parent_out = nothing) -> Vector{String}
-
-`aeolus preprocess static <config.toml>` (EX-d, #441): rasterise the
-GeoJSON footprints of `[preprocess] obstacles` (`load_city_geojson`,
-mesh metres, a `height` per feature) on the run's grid and write the
-static driver at the domain's `static_driver` (or `out`), anchored at
-`[obstacles] anchor` on the domain's south-west corner, with the GeoJSON
-as its hashed source.
-"""
-function Config.preprocess_static(::SimulationDriverType, cfg::RunConfig; out = nothing, parent_out = nothing)
-    parent_out === nothing || throw(ArgumentError("the model has no nest parent (--parent-out)"))
-    src = cfg.preprocess.obstacles
-    src === nothing && throw(ConfigError("preprocess.obstacles", "the static preprocessor needs a GeoJSON of the obstacles"))
-    length(config_domains(cfg)) == 1 || throw(ArgumentError("aeolus preprocess static writes the static driver of a single-domain config"))
-    path = out !== nothing ? abspath(out) : cfg.domain.static_driver
-    path === nothing && throw(ArgumentError("the domain's static_driver is \"none\": pass --out file.nc"))
-    mesh = _mesh(cfg.grid)
-    mesh isa RegularGrid || throw(ConfigError("grid.stretching", "the obstacles need a uniform grid"))
-    lat, lon = cfg.obstacles.anchor
-    write_static_driver(path, load_city_geojson(src), mesh; origin_lat = lat, origin_lon = lon,
-                        origin_x = mesh.x0, origin_y = mesh.y0, source = src)
-    return [path]
 end
 
 # ---------------------------------------------------------------------------

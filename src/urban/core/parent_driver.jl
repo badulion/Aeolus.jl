@@ -59,8 +59,8 @@ function Config.build(::UrbanParentDriver, cfg::RunConfig)
     f = cc.parent_static
     if f !== nothing && !isfile(f)
         src = first(config_sources(cfg)["files"])
-        throw(ConfigError("geometry.parent_static", "the static driver $f does not exist; generate it with\n" *
-                                                    "  julia --project -m Aeolus preprocess static $src"))
+        throw(ConfigError("geometry.parent_static", "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
+                                                    "  julia --project -m AeolusPrep static $src --source <file.osm>"))
     end
     return UrbanParentRun(cfg, build_parent(nest_parent_config(cc)))
 end

@@ -163,14 +163,12 @@ end
 # the clock of a run: `sim.t` of a `SimulationRun` before ONE-a, its `Model`'s after
 sd_clock(obj) = hasproperty(obj, :sim) ? obj.sim.t : Aeolus.Components.clock(obj.model)
 
-"The dynamic driver of `lindenberg_era5`, made from the committed ERA5 sample (as test/config_roundtrip.jl does)."
-function sd_made_inputs()
-    dir = mktempdir(); out = joinpath(dir, "lindenberg_era5_dynamic.nc")
-    cfg = joinpath(SD_CONFIGS, "lindenberg_era5.toml")
-    era5 = [normpath(joinpath(SD_CONFIGS, "..", "data", "era5_lindenberg_20190629_$x.nc")) for x in ("pl", "sfc")]
-    rc = redirect_stdout(devnull) do
-        Aeolus.main(["preprocess", "dynamic", "--from-era5", era5..., "--config", cfg, "--out", out])
-    end
-    rc == 0 || error("could not preprocess the ERA5 dynamic driver of $cfg")
-    return Dict("lindenberg_era5" => ["dynamic_driver=\"$out\""])
-end
+"""
+    sd_made_inputs() -> Dict
+
+Extra overrides of made input drivers. Since ONE-h (#457) `lindenberg_era5`
+reads its committed dynamic driver (`input/lindenberg_era5_dynamic.nc`,
+written by AeolusPrep, data variables bitwise those `aeolus preprocess`
+wrote when the digests were captured), so there are none.
+"""
+sd_made_inputs() = Dict{String,Vector{String}}()

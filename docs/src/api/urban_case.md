@@ -51,32 +51,41 @@ run whose ledgers do not close logs a warning; the run itself is not
 failed. These are what the by-hand `examples/urban/berlin_checks.jl` and
 `berlin_nest_check.jl` used to compute by running the model themselves.
 
-## Input data: `aeolus preprocess`
+## Input data: AeolusPrep.jl
 
-| subcommand | writes | was |
-| :-- | :-- | :-- |
-| `static <config.toml>` | the static driver(s) of the case (CFG-f, #361) | |
-| `dynamic --from-sounding <config.toml>` | the dynamic driver (CFG-g, #362) | |
-| `fetch-osm --box S,W,N,E --out file.osm` | OpenStreetMap buildings, parks and water of the box (Overpass API) | `data/fetch_alexanderplatz.jl` |
-| `fetch-landuse <config.toml>` | the nest parent's land-use table ([`write_parent_landuse`](@ref Aeolus.UrbanCase.write_parent_landuse)) | `data/fetch_berlin_landuse.jl` |
-| `fetch-sounding --station ID --launches … --elevation m --out file.csv` | IGRA2 radiosonde launches as a sounding CSV ([`igra_sounding_csv`](@ref Aeolus.UrbanCase.igra_sounding_csv)) | `data/fetch_lindenberg.jl` |
-| `osm-sample --lat0 --lon0 --out file.osm` | a synthetic OSM city ([`synthetic_osm`](@ref Aeolus.UrbanCase.synthetic_osm)) | `data/generate_osm_sample.jl` |
+The case reads its ground, its nest parent's land-use tiles and its
+sounding from input drivers (`examples/urban/configs/input/`). They, and
+the sources they are made from, are made by the companion package
+AeolusPrep.jl (ONE-h, #457; [Input drivers](input_drivers.md)):
+
+| `aeolusprep` command | writes |
+| :-- | :-- |
+| `static <config.toml> --source <file.osm \| file.geojson>` | the static driver(s) of the case (CFG-f, #361), with the nest parent's tiles from `[geometry] landuse` |
+| `dynamic --from-sounding <config.toml>` | the sounding driver (CFG-g, #362) |
+| `fetch-osm --box S,W,N,E --out file.osm` | OpenStreetMap buildings, parks and water of the box (Overpass API) |
+| `fetch-landuse <config.toml>` | the nest parent's land-use table that [`read_parent_landuse`](@ref Aeolus.UrbanCase.read_parent_landuse) reads |
+| `fetch-sounding --station ID --launches … --elevation m --out file.csv` | IGRA2 radiosonde launches as the sounding CSV that `read_sounding` reads |
+| `osm-sample --lat0 --lon0 --out file.osm` | a synthetic OSM city |
 
 The Berlin data were made with
 
 ```bash
-julia --project -m Aeolus preprocess fetch-osm --box 52.518,13.402,52.526,13.418 --out examples/urban/data/alexanderplatz_real.osm
-julia --project -m Aeolus preprocess fetch-landuse examples/urban/configs/berlin_summer.toml
-julia --project -m Aeolus preprocess fetch-sounding --station GMM00010393 --elevation 112 \
+# in an AeolusPrep.jl checkout, <aeolus> the Aeolus checkout
+julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
+julia --project -m AeolusPrep fetch-landuse <aeolus>/examples/urban/configs/berlin_summer.toml --min-height 8
+julia --project -m AeolusPrep fetch-sounding --station GMM00010393 --elevation 112 \
     --launches 2019-06-29T00,2019-06-29T06,2019-06-29T12,2019-06-29T18,2019-06-30T00,2019-06-30T06 \
-    --out examples/urban/data/lindenberg_10393_20190629.csv
-julia --project -m Aeolus preprocess osm-sample --lat0 52.5220 --lon0 13.4100 --out examples/urban/data/sample_berlin_mitte.osm
+    --out <aeolus>/examples/urban/data/lindenberg_10393_20190629.csv
+julia --project -m AeolusPrep osm-sample --lat0 52.5220 --lon0 13.4100 --out data/berlin/sample_berlin_mitte.osm
+julia --project -m AeolusPrep regenerate <aeolus>      # every committed driver (recipes.toml)
 ```
 
-`osm-sample` reproduces the committed `sample_berlin_mitte.osm` byte for
-byte (`test/urban_run.jl`). `[preprocess] osm_path` may also name a
-GeoJSON file (`.geojson`, coordinates in metres in the mesh frame), as the
-synthetic city of the tests does.
+The OpenStreetMap extracts stay in AeolusPrep (`data/berlin/`); the
+land-use table and the sounding CSV, which a run may read in memory
+(`parent_static = "none"`, `dynamic = "none"`), stay in
+`examples/urban/data/`. `--source` may also name a GeoJSON file
+(`.geojson`, coordinates in metres in the mesh frame), as the synthetic
+city of the tests does.
 
 ## Analysis of the output
 

@@ -43,8 +43,7 @@ cadence = 1800.0
 netcdf = "alexanderplatz.nc"
 # with the online nest: write the child's boundary slabs at every parent step,
 # the 3-D initial wind and the parent's mean profiles to this dynamic driver
-# (CFG-g #362, `aeolus preprocess dynamic --from-parent`; the file of an
-# offline child); "none": not written
+# (CFG-g #362; the file of an offline child); "none": not written
 child_boundaries = "none"
 
 [grid]
@@ -59,12 +58,15 @@ halo = [3, 3, 3]
 
 [geometry]
 # The ground (static drivers) and the site.
-# the static driver of the child (CFG-f #361; `aeolus preprocess static` writes
-# it); "none": rasterise [preprocess] osm_path in memory
+# the static driver of the child (CFG-f #361; AeolusPrep.jl writes it,
+# `aeolusprep static`, from data/berlin/alexanderplatz_real.osm, buildings of
+# 8 m and more, park LAI 2.5)
 static = "input/berlin_summer_static.nc"
-# the static driver (land-use tiles) of the nest parent; "none": from
-# [preprocess] landuse in memory
+# the static driver (land-use tiles) of the nest parent; "none": from landuse
+# in memory
 parent_static = "input/berlin_summer_parent_static.nc"
+# the nest parent's land-use table (`aeolusprep fetch-landuse`)
+landuse = "../data/berlin_landuse_6km.csv"
 # latitude of the OSM projection's anchor (and of the solar position) [degree]
 lat0 = 52.522
 # longitude of the anchor [degree]
@@ -75,19 +77,6 @@ offset = [0.0, 0.0]
 elevation = 34.0
 # wall facets per cell face of the radiosity scene
 wall_subdivisions = 1
-
-[preprocess]
-# The sources of the static drivers: `julia --project -m Aeolus preprocess
-# static berlin_summer.toml` writes [geometry] static and parent_static from
-# them (or, with static = "none", they are read in memory at every start).
-# the OpenStreetMap file of the buildings, parks and water
-osm_path = "../data/alexanderplatz_real.osm"
-# buildings lower than this are dropped [m]
-min_height = 8.0
-# leaf-area index of park cells
-park_lai = 2.5
-# the nest parent's land-use table (`aeolus preprocess fetch-landuse`)
-landuse = "../data/berlin_landuse_6km.csv"
 
 [clock]
 # Date, start and steps.
@@ -157,10 +146,11 @@ analysis_buffer = 140.0
 # radiosonde CSV of the initial θ(z), qv(z) and surface pressure; "none": the
 # idealised profile below
 sounding = "none"         # the idealised profile
-# the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding
-# driver (--from-sounding), used instead of sounding; or, with
+# the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl,
+# `aeolusprep dynamic --from-sounding`), used instead of sounding; or, with
 # physics.options.nesting.parent_driver = "offline", the parent-made driver of
-# the nest faces (--from-parent); "none": no driver
+# the nest faces ([output] child_boundaries of the online run); "none": no
+# driver
 dynamic = "none"
 # idealised: θ at the ground [K]
 theta_surface = 271.0

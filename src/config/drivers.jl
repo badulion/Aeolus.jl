@@ -92,42 +92,6 @@ compares.
 """
 function state_fields end
 
-"""
-    preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
-        -> Vector{String}
-
-Write the static input driver(s) of the run `cfg` (CFG-f, #361:
-`Aeolus.InputDrivers`) from the sources its config names, and return the
-paths written. `out` replaces the path the config gives the run's own
-driver, `parent_out` that of a nest parent's. `aeolus preprocess static
-<config.toml> [--out file.nc] [--parent-out file.nc]` calls it. The
-default: the driver has no static preprocessor (an `ArgumentError`).
-"""
-preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing) =
-    throw(ArgumentError("the driver \"$(driver_name(d))\" has no static preprocessor"))
-
-"""
-    preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from, out = nothing, child = nothing)
-        -> Vector{String}
-
-Write the dynamic input driver of the run `cfg` (CFG-g, #362:
-`Aeolus.InputDrivers`) and return the paths written: `from = :sounding`
-from the sounding or case tables the config names, `from = :parent` by
-running the config's nest parent with the child's boundary slabs recorded
-at every parent step (`child`, a `RunConfig`, when the child is not `cfg`
-itself). `out` replaces the path the config gives the driver. `aeolus
-preprocess dynamic (--from-sounding | --from-parent) <config.toml>` calls
-it. The default: the driver has no dynamic preprocessor (an
-`ArgumentError`).
-
-`from = :era5` (CFG-h, #363; `aeolus preprocess dynamic --from-era5
-<files…> --config <config.toml> [--box deg]`) passes two more keywords,
-`files` (the ERA5 files) and `box` (degrees, or `nothing`: the config's);
-a driver with an ERA5 preprocessor accepts them (the model).
-"""
-preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing) =
-    throw(ArgumentError("the driver \"$(driver_name(d))\" has no dynamic preprocessor"))
-
 # Simulations.run!(::AbstractRunDriver, obj, rf, ck; callback) is the
 # contract's run method (it adds a method to the generic run!).
 
