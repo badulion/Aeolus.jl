@@ -63,7 +63,7 @@ using Printf, Random
 const MODE = get(ARGS, 1, "launch")
 # loaded at top level, before the functions that use them run (world age)
 MODE in ("flagship", "child", "launches") && include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
-MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
+MODE == "dns" && @eval using Aeolus.ValidationRuns     # the DNS fixture (src/validation_runs/dns.jl)
 
 const NT = Threads.nthreads()
 const PREFETCH = get(ENV, "AEOLUS_BENCH_PREFETCH", "0") == "1"
@@ -219,9 +219,9 @@ function bench_dns(N; nwarm = 1, nsteps = 3)
     for _ in 1:nsteps
         push!(t_rk3, @elapsed step_rk3!(sim, dt))
     end
-    # the per-step history dns_step! adds to step_rk3! (test/fixtures/dns_decay.jl)
+    # the per-step history dns_step! adds to step_rk3! (Aeolus.ValidationRuns)
     t_ke = tmin(() -> kinetic_energy(sim), 2; warm = 1)
-    t_eps = tmin(() -> Main._dns_epsilon(sim, st.lap), 2; warm = 1)
+    t_eps = tmin(() -> Main.ValidationRuns._dns_epsilon(sim, st.lap), 2; warm = 1)
     t_sk = tmin(() -> Main.velocity_derivative_skewness(sim), 2; warm = 1)
     @printf("  history: kinetic_energy %.3f s, ε %.3f s, skewness %.3f s\n", t_ke, t_eps, t_sk)
     row("dns$N", "kinetic_energy", t_ke, "s")

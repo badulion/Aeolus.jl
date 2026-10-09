@@ -10,19 +10,22 @@
 # filters) and its own statistics; repeating that in the simulation driver
 # would be a second copy of the physics.
 #
-# Loaded on first use through Aeolus.Config.DRIVER_FILES. Configs:
+# Moved from examples/validation/channel_driver.jl (EX-c #440). Configs:
 # examples/validation/configs/neutral_abl.toml, log_layer_mismatch.toml.
 
-using Aeolus
-using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Optional,
-                     section, option!, register_driver!, write_results
-using Aeolus.IO: RunFolder, CheckpointSchedule
-import Aeolus.Simulations
+"""
+    ChannelDriver()
 
+The `channel` run type: `[run] driver = "channel"`, the wall-modelled
+channel LES of `WallModels` (`[channel] kind`: the neutral half channel
+or the smooth-wall plane channel), run with `run_channel!`; its averaged
+profiles go to `output/results.toml`. Configs:
+`examples/validation/configs/neutral_abl.toml`, `log_layer_mismatch.toml`.
+"""
 struct ChannelDriver <: AbstractRunDriver end
 
 Config.driver_name(::ChannelDriver) = "channel"
-Config.config_dir(::ChannelDriver) = joinpath(@__DIR__, "configs")
+Config.config_dir(::ChannelDriver) = VALIDATION_CONFIG_DIR
 
 function Config.driver_sections(::ChannelDriver)
     ch = section("channel"; doc = "The wall-bounded case (Aeolus.WallModels).") do s
@@ -75,7 +78,7 @@ function Config.driver_sections(::ChannelDriver)
     return Section[ch, wm, sgs, st]
 end
 
-function _checks(cfg)
+function _channel_checks(cfg)
     e = ConfigError[]
     c = cfg.channel; w = cfg.wall_model
     if c.kind === :half
@@ -88,7 +91,7 @@ function _checks(cfg)
 end
 Config.driver_checks(::ChannelDriver) = Any[
     """the half channel (`channel.kind = "half"`) has one wall (`channel.walls = "both"`) and no smooth-wall `spalding` law
-    `wall_model.t_f` needs the temporal filter (`wall_model.filter = "temporal"` or `"both"`)""" => _checks]
+    `wall_model.t_f` needs the temporal filter (`wall_model.filter = "temporal"` or `"both"`)""" => _channel_checks]
 
 """
     ChannelRun
@@ -102,7 +105,7 @@ mutable struct ChannelRun
     cfg::RunConfig
 end
 
-function _closure(cfg)
+function _channel_closure(cfg)
     s = cfg.sgs; c = cfg.channel
     s.closure === :smagorinsky && return StaticSmagorinsky(s.c_s)
     ext = c.kind === :half ? (2π, 2π, 1.0) : (2π, π, 2.0)
@@ -111,7 +114,7 @@ function _closure(cfg)
     return LagrangianDynamicSmagorinsky(g; scale_dependent = s.closure === :lasd)
 end
 
-function _law(cfg)
+function _channel_law(cfg)
     w = cfg.wall_model; c = cfg.channel
     w.law === :spalding && return SpaldingLaw()
     w.law === :rough_log && return RoughLogLaw(c.z0_over_h)
@@ -120,11 +123,11 @@ end
 
 function Config.build(::ChannelDriver, cfg::RunConfig)
     c = cfg.channel; w = cfg.wall_model
-    kw = (; N = c.size, closure = _closure(cfg), h_wm = w.h_wm, h_wm_cells = w.h_wm_cells,
+    kw = (; N = c.size, closure = _channel_closure(cfg), h_wm = w.h_wm, h_wm_cells = w.h_wm_cells,
           filter = w.filter, T_f = w.t_f, noise = c.noise, seed = cfg.run.seed, stepper = c.stepper)
     case = c.kind === :half ?
-        half_channel_case(; kw..., wall_law = _law(cfg), z0_over_H = c.z0_over_h) :
-        channel_case(; kw..., Re_τ = c.re_tau, wall_law = _law(cfg), walls = c.walls)
+        half_channel_case(; kw..., wall_law = _channel_law(cfg), z0_over_H = c.z0_over_h) :
+        channel_case(; kw..., Re_τ = c.re_tau, wall_law = _channel_law(cfg), walls = c.walls)
     return ChannelRun(case, nothing, cfg)
 end
 

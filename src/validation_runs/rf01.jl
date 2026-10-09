@@ -1,12 +1,10 @@
 # DYCOMS-II RF01 single column (Stevens et al. 2005): the sounding, the
 # saturation adjustment, the column for the longwave solve and the
-# intercomparison's prescribed flux. Shared by the `column` driver
-# (examples/validation/column_driver.jl, case = "dycoms_rf01") and, through
-# it, examples/validation/dycoms_rf01_radiation.jl. Moved here from that
-# script (CFG-e, #360); the constants are the fields of `p`
-# (RF01_DEFAULTS, or the [dycoms_rf01] section of a config).
-
-using Aeolus
+# intercomparison's prescribed flux: the `dycoms_rf01` case of the
+# `column` run type (examples/validation/configs/dycoms_rf01.toml). Moved
+# from examples/validation/dycoms_rf01/rf01.jl (EX-c #440); the constants
+# are the fields of `p` (RF01_DEFAULTS, or the [dycoms_rf01] section of a
+# config).
 
 const CP    = 1004.6      # J/kg/K
 const RD    = 287.05      # J/kg/K
@@ -39,6 +37,8 @@ esat(T) = 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65))
 qsat(T, p) = (eps = RD / RV; e = esat(T); eps * e / max(p - (1 - eps) * e, 1.0))
 
 """
+    saturation_adjust(thl, qt, p) -> (T, ql)
+
 Saturation adjustment: given liquid-water potential temperature `thl`,
 total water `qt` and pressure `p`, return `(T, ql)`.
 
@@ -79,6 +79,8 @@ function saturation_adjust(thl, qt, p)
 end
 
 """
+    rf01_column(p = RF01_DEFAULTS; dz_fine, z_les, n_coarse, z_top) -> (col, z_lay, z_lev, nf)
+
 Build the RF01 column: a finely resolved boundary layer from the surface
 to `z_les`, then a coarser standard-atmosphere extension to `z_top` so
 the longwave solve sees a real top-of-atmosphere rather than a lid at
@@ -173,6 +175,8 @@ function rf01_column(p = RF01_DEFAULTS; dz_fine = p.dz_fine, z_les = p.z_les,
 end
 
 """
+    prescribed_flux(col, z_lev, p = RF01_DEFAULTS) -> Vector
+
 The DYCOMS-II prescribed net longwave flux, radiation terms only
 (the subsidence-warming term is excluded — it is not radiation).
 """

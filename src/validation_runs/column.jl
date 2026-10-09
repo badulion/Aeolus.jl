@@ -3,7 +3,7 @@
 #
 #   dycoms_rf01    the DYCOMS-II RF01 column and its longwave solve (gas +
 #                  cloud optics, two-stream), against the intercomparison's
-#                  prescribed flux (examples/validation/dycoms_rf01/rf01.jl);
+#                  prescribed flux (rf01.jl);
 #   parisfog_2011  the 1-D RadiationFog column of ParisFog, 14-15 Nov 2011
 #                  (parisfog_2011_column, run! of Aeolus.RadiationFog);
 #   kessler_box    Kessler microphysics in a small box with no dynamics
@@ -12,24 +12,24 @@
 #                  broadening validation (run_broadening_case, Era IV P45).
 #
 # Each case has its own section; a key set in the section of a case that is
-# not selected is an error. Loaded on first use (Aeolus.Config.DRIVER_FILES).
+# not selected is an error. Moved from examples/validation/column_driver.jl
+# (EX-c #440).
 # Configs: examples/validation/configs/{dycoms_rf01, parisfog_2011,
 # spectral_broadening}.toml, examples/kernels/configs/cloud_spinup.toml.
 
-using Aeolus
-using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable,
-                     section, option!, register_driver!, write_results, no_checkpoints,
-                     kwdef_section, kwdef_value, selected_case_sections
-using Aeolus.Fields: set!, interior_view
-using Aeolus.IO: RunFolder, CheckpointSchedule
-import Aeolus.Simulations
+"""
+    ColumnDriver()
 
-include(joinpath(@__DIR__, "dycoms_rf01", "rf01.jl"))
-
+The `column` run type: `[run] driver = "column"`, the single-column and
+box cases with no 3-D dynamics, selected by `[column] case` (see the
+option reference). Each case writes its numbers to
+`output/results.toml`. Configs: `examples/validation/configs/`
+(`dycoms_rf01`, `parisfog_2011`, `spectral_broadening`, …).
+"""
 struct ColumnDriver <: AbstractRunDriver end
 
 Config.driver_name(::ColumnDriver) = "column"
-Config.config_dir(::ColumnDriver) = joinpath(@__DIR__, "configs")
+Config.config_dir(::ColumnDriver) = VALIDATION_CONFIG_DIR
 
 const _CASE_SECTIONS = ("dycoms_rf01" => "dycoms_rf01", "parisfog_2011" => "fog",
                         "kessler_box" => "kessler_box", "droplet_parcel" => "parcel")
@@ -67,8 +67,8 @@ const _PARCEL_DOCS = Dict(
     :w => ("updraught", "m s^-1"), :σ_S => ("sub-grid supersaturation spread", "1"),
     :τ => ("Lagrangian correlation time of the fluctuations", "s"), :t_end => ("duration", "s"),
     :dt => ("output and coupling step", "s"), :seed => ("initial radii and fluctuation noise", ""))
-_docs(d) = Dict(k => v[1] for (k, v) in d)
-_units(d) = Dict(k => v[2] for (k, v) in d if !isempty(v[2]))
+_col_docs(d) = Dict(k => v[1] for (k, v) in d)
+_col_units(d) = Dict(k => v[2] for (k, v) in d if !isempty(v[2]))
 
 function Config.driver_sections(::ColumnDriver)
     col = section("column"; doc = "Which column case runs.") do s
@@ -83,7 +83,7 @@ function Config.driver_sections(::ColumnDriver)
         option!(s, "ngpt_per_band", Int; default = 4, range = (1, 64), doc = "g-points per longwave band")
         option!(s, "sfc_emissivity", Float64; units = "1", default = 0.98, range = (0, 1), doc = "surface emissivity")
     end
-    fog = kwdef_section("fog", FogColumnSettings; docs = _docs(_FOG_DOCS), units = _units(_FOG_DOCS),
+    fog = kwdef_section("fog", FogColumnSettings; docs = _col_docs(_FOG_DOCS), units = _col_units(_FOG_DOCS),
                         doc = "ParisFog 2011: the RadiationFog column settings (FogColumnSettings; keys are its fields, β → beta, λ → lambda).")
     snd = section("fog_sounding"; doc = "ParisFog 2011: the initial sounding (parisfog_2011_column).") do s
         option!(s, "h", Float64; default = 1000.0, range = (0, Inf), open_lower = true, units = "m", doc = "column depth")
@@ -106,14 +106,14 @@ function Config.driver_sections(::ColumnDriver)
         option!(s, "dt", Vector{Float64}; default = [60.0, 60.0, 120.0, 120.0, 120.0], range = (0, Inf),
                 open_lower = true, units = "s", doc = "the steps, one microphysics step each")
     end
-    pc = kwdef_section("parcel", BroadeningCase; docs = _docs(_PARCEL_DOCS), units = _units(_PARCEL_DOCS),
+    pc = kwdef_section("parcel", BroadeningCase; docs = _col_docs(_PARCEL_DOCS), units = _col_units(_PARCEL_DOCS),
                        doc = "The parcel of the spectral-broadening validation (BroadeningCase; σ_S → sigma_s, τ → tau, ε0 → epsilon0).")
     option!(pc, "model", Symbol; default = :superdroplet, allowed = [:superdroplet, :bulk],
             doc = "superdroplet (per-droplet stochastic supersaturation, the reference) or bulk (the moment closure)")
     return Section[col, rf01, fog, snd, kb, pc]
 end
 
-function _checks(cfg)
+function _column_checks(cfg)
     e = no_checkpoints(cfg)
     append!(e, selected_case_sections(cfg, "column.case", (_CASE_SECTIONS..., "parisfog_2011" => "fog_sounding")))
     kb = cfg.kessler_box
@@ -124,7 +124,7 @@ end
 Config.driver_checks(::ColumnDriver) = Any[
     """`[checkpoint]` stays off: a column case runs to the end in one call
     a key of the section of a case that `column.case` does not select must keep its default (it would be ignored)
-    `kessler_box.cloud_layer` is [bottom, top] with bottom < top""" => _checks]
+    `kessler_box.cloud_layer` is [bottom, top] with bottom < top""" => _column_checks]
 
 """
     ColumnRun

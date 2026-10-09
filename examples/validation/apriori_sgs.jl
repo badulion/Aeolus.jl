@@ -23,7 +23,7 @@
 using Aeolus
 using Aeolus.Fields: interior_view
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_apriori.jl"))   # + dns_decay.jl
+using Aeolus.ValidationRuns
 
 d = only(run_configs(joinpath(@__DIR__, "configs", "apriori_sgs.toml"), ARGS)).obj.result
 N = d.mesh.Nx

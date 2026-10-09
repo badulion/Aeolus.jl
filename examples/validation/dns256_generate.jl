@@ -75,7 +75,7 @@
 using Aeolus
 using Aeolus.Config: run_config, with
 using Printf
-include(joinpath(@__DIR__, "dns_apriori_driver.jl"))
+using Aeolus.ValidationRuns
 
 const FIXTURE = normpath(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns256_apriori.toml"))
 

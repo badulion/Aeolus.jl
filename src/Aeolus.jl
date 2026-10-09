@@ -1175,6 +1175,12 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
        surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
        update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
 
+# EX-c (#440): the run types of the validation cases (channel, column,
+# cbc_decay, patchy_surface, dns). Included after every export: the
+# module uses the package's public API as `using Aeolus` does.
+include("ValidationRuns.jl")
+Config.snapshot_package_drivers!()
+
 # CFG-b (#357): the command line. `julia --project -m Aeolus <command> …`
 # (Julia ≥ 1.12) calls `Aeolus.main(ARGS)`; `bin/aeolus` does the same on
 # older Julia. The return value is the exit code.

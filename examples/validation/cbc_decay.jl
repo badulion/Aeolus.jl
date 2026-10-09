@@ -21,7 +21,7 @@
 
 using Aeolus
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "cbc_benchmark_driver.jl"))   # cbc_table, cbc_spectrum, cbc_summary
+using Aeolus.ValidationRuns      # cbc_table, cbc_spectrum, cbc_summary
 
 runs = run_configs(joinpath(@__DIR__, "configs", "cbc_decay.toml"), ARGS)
 res = Dict{Symbol,Any}(r.obj.cfg.sgs.closure => r.obj.result for r in runs)

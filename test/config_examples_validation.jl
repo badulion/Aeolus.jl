@@ -193,11 +193,7 @@ end
 # cbc_decay, patchy_surface, dns_decay
 # ---------------------------------------------------------------------------
 
-# (guarded: the serial runtests.jl includes these files from other tests too)
-isdefined(@__MODULE__, :cbc_benchmark) || include(joinpath(@__DIR__, "cbc_benchmark_driver.jl"))
-isdefined(@__MODULE__, :patchy_les) ||
-    include(joinpath(@__DIR__, "..", "examples", "validation", "patchy_surface", "driver.jl"))
-isdefined(@__MODULE__, :dns_decay) || include(joinpath(@__DIR__, "fixtures", "dns_decay.jl"))
+using Aeolus.ValidationRuns     # cbc_benchmark, patchy_les / patchy_run!, dns_decay (EX-c #440)
 
 @testset "cbc_decay, patchy_surface, dns_decay drivers equal the old in-code runs, bit for bit" begin
     # cbc_decay.jl before CFG-e: cbc_benchmark(closure; N) for closure in (dynamic, smagorinsky, none)

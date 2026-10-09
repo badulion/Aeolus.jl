@@ -4,8 +4,8 @@
 # cool ground (prescribed skin temperature, Monin–Obukhov fluxes per
 # column through the SurfaceExchange contract) against the SurfaceTiles
 # aggregation of the same two surfaces. The driver is
-# examples/validation/patchy_surface/driver.jl; the full-resolution runs
-# and the λ/z_i sweep are in examples/validation/patchy_surface_les.jl.
+# Aeolus.ValidationRuns (src/validation_runs/patchy_surface.jl); the full-resolution runs
+# and the λ/z_i sweep are examples/validation/configs/patchy_surface.toml.
 #
 # What is checked against what:
 #   * discrete conservation of the coupling (column heat content against
@@ -30,7 +30,7 @@
 using Test, Printf
 using Aeolus
 
-include(joinpath(@__DIR__, "..", "examples", "validation", "patchy_surface", "driver.jl"))
+using Aeolus.ValidationRuns     # patchy_les, patchy_run!, … (src/validation_runs/patchy_surface.jl)
 
 # Coarse version of the example's setup: 100 m cells, 3.2 × 1.6 × 1.6 km.
 const HS_GRID = (Nx = 32, Ny = 16, Nz = 16, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0)

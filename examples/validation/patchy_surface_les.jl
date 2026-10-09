@@ -41,7 +41,7 @@
 
 using Printf
 using Aeolus
-include(joinpath(@__DIR__, "patchy_surface", "driver.jl"))       # patchy_amplitude
+using Aeolus.ValidationRuns      # patchy_amplitude
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
 const OUT = joinpath(@__DIR__, "..", "..", "output", "patchy_surface")

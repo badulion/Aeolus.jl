@@ -120,9 +120,9 @@ using Aeolus.Fields: interior_view
 using Printf
 using LinearAlgebra: eigvals, Symmetric
 
-# the `dns` run driver (CFG-d, #359); it includes fixtures/dns_apriori.jl,
-# which includes dns_decay.jl
-include(joinpath(@__DIR__, "..", "examples", "validation", "dns_apriori_driver.jl"))
+# the DNS fixture, its a-priori record and the `dns` run type (CFG-d, #359):
+# Aeolus.ValidationRuns (src/validation_runs/dns.jl, EX-c #440)
+using Aeolus.ValidationRuns
 using Aeolus.Config: run_config
 "A run of the `dns` driver's dns256.toml with `overrides`, quietly, into a fresh root."
 dns_apriori_run(overrides) = run_config(dns_config(; overrides = vcat(overrides, "fftw.planner=\"estimate\""));
@@ -213,13 +213,13 @@ end
         end
         @test velocity_derivative_skewness(s) ≈ (num / 3) / (den / 3)^1.5 rtol = 1e-12
         lap = (Field(FaceX(), s.mesh), Field(FaceY(), s.mesh), Field(FaceZ(), s.mesh))
-        ε = _dns_epsilon(s, lap)
+        ε = ValidationRuns._dns_epsilon(s, lap)
         g2 = sum(sum(abs2, fwd(interior_view(f), dir, hs[dir])) for f in (s.u, s.v, s.w), dir in 1:3) / n
         @test ε ≈ s.ν * g2 rtol = 1e-10
         @test ε == d.ε[end]                                         # the recorded history value
-        @test _dns_umax(s) === maximum(f -> maximum(abs, interior_view(f)), (s.u, s.v, s.w))
+        @test ValidationRuns._dns_umax(s) === maximum(f -> maximum(abs, interior_view(f)), (s.u, s.v, s.w))
         ser, thr = CPUBackend(serial = true), CPUBackend(threshold = 0)
-        for q in (velocity_derivative_skewness, x -> _dns_epsilon(x, lap), _dns_umax)
+        for q in (velocity_derivative_skewness, x -> ValidationRuns._dns_epsilon(x, lap), ValidationRuns._dns_umax)
             @test with_backend(() -> q(s), ser) === with_backend(() -> q(s), thr)
         end
     end
@@ -280,7 +280,7 @@ end
         for (name, filt) in (("box 3", (o, f) -> box_filter!(o, f, 3)), ("Gaussian 4h", res[4].filt))
             τ0 = SymmetricTensorField(g); τ1 = SymmetricTensorField(g)
             subfilter_stress!(τ0, sim.u, sim.v, sim.w, filt)
-            us = map((f, c) -> (s = _field_like(f); s.data .= f.data .+ c; s), (sim.u, sim.v, sim.w), U)
+            us = map((f, c) -> (s = ValidationRuns._field_like(f); s.data .= f.data .+ c; s), (sim.u, sim.v, sim.w), U)
             subfilter_stress!(τ1, us..., filt)
             err = maximum(maximum(abs, a .- b) for (a, b) in zip(Aeolus.Operators.components(τ0), Aeolus.Operators.components(τ1)))
             @info @sprintf("    %-12s max |τ(u+U) − τ(u)| = %.1e (max τ₁₁ %.2e)", name, err, maximum(τ0.xx))

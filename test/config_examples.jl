@@ -179,9 +179,6 @@ const URBAN_LIB = "library of the berlin driver (examples/urban/BerlinCase.jl; c
 # Files that call an entry point (or look like runs) but are not runs of
 # their own, each with its reason. Paths relative to examples/.
 const EXEMPT = Dict(
-    "validation/patchy_surface/driver.jl" =>
-        "library: patchy_les / patchy_run!, included by the patchy_surface driver and test/era5_heterogeneous_surface.jl",
-    "validation/dycoms_rf01/rf01.jl" => "library: the RF01 column and solve, included by the column driver",
     "validation/canopy_profiles.jl" =>
         "not a run: steady 1-D canopy wind / scalar boundary-value solves against published profiles",
     "validation/dynamic_roughness_cubes.jl" =>
