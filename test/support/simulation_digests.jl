@@ -105,8 +105,8 @@ function sd_diagnostics(folder)
     return [join(split(l, ',')[keep], ',') for l in lines]
 end
 
-# the clock of a run object: a `SimulationRun` (`sim.t`) before ONE-a, a `Model` after
-sd_clock(obj) = hasproperty(obj, :sim) ? obj.sim.t : Aeolus.Components.clock(obj)
+# the clock of a run: `sim.t` of a `SimulationRun` before ONE-a, its `Model`'s after
+sd_clock(obj) = hasproperty(obj, :sim) ? obj.sim.t : Aeolus.Components.clock(obj.model)
 
 "The dynamic driver of `lindenberg_era5`, made from the committed ERA5 sample (as test/config_roundtrip.jl does)."
 function sd_made_inputs()

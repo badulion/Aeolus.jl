@@ -105,7 +105,7 @@ end
     res = run_configs(p, args; console = false, repo = mktempdir())
     @test length(res) == 2
     @test res[1].folder.path != res[2].folder.path
-    @test [r.obj.sim.ν for r in res] == [0.01, 0.02]
+    @test [Aeolus.SimulationDriver.simulation(r.obj).ν for r in res] == [0.01, 0.02]
     @test all(r.obj.stepper.step == 3 for r in res)
     rec = read_run_toml(res[2].folder.path)
     @test !haskey(rec["config"], "sweep")
