@@ -862,6 +862,7 @@ using Aeolus.Fields: set!, interior_view
     include("components_pipeline.jl")  # ONE-a (#450): component interface, stage pipeline, master digests through Model
     include("budgets_output.jl")       # ONE-c (#452): the one budget system and the one output writer
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
+    include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip

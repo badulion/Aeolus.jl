@@ -11,9 +11,9 @@ One domain of a [`Model`](@ref):
     `AnelasticSimulation` ([`core`](@ref)); its clock is `state.t`
     ([`clock`](@ref));
   * `scheme` — the core's time scheme, `:euler` (`step!`) or `:rk3`
-    (`step_rk3!`, Boussinesq);
+    (`step_rk3!`, SSP-RK3), on either core (ONE-j, #460);
   * `cfl` — `nothing` for a fixed step, or the `CFLConstraints` of an
-    adaptive one (`step_adaptive!(domain)`);
+    adaptive one (`step_adaptive!(domain)`), on either core;
   * `drivers` — its input drivers: `boundary`, the
     `FileBoundaryFeed` of open lateral faces, advanced at the start of
     every step;
@@ -42,11 +42,7 @@ function Domain(state; id::AbstractString = "main", scheme::Symbol = :euler, cfl
     state isa Union{BoussinesqSimulation,MassWeightedSimulation} ||
         throw(ArgumentError("Domain: the core is a BoussinesqSimulation or an AnelasticSimulation, got $(typeof(state))"))
     scheme in (:euler, :rk3) || throw(ArgumentError("Domain: scheme is :euler or :rk3, got :$scheme"))
-    scheme === :rk3 && state isa MassWeightedSimulation &&
-        throw(ArgumentError("Domain: the anelastic core steps with :euler"))
     cfl === nothing || cfl isa CFLConstraints || throw(ArgumentError("Domain: cfl is nothing or a CFLConstraints"))
-    cfl !== nothing && state isa MassWeightedSimulation &&
-        throw(ArgumentError("Domain: the anelastic core takes a fixed dt (cfl = nothing)"))
     validate && validate_components(components)
     return Domain(String(id), state, scheme, cfl, drivers, order_components(components), nothing)
 end
@@ -173,7 +169,10 @@ function _core_step!(sim::BoussinesqSimulation, d::Domain, dt)
     end
     return sim
 end
-_core_step!(sim::MassWeightedSimulation, d::Domain, dt) = (step!(sim, dt; core_hooks(d)...); sim)
+function _core_step!(sim::MassWeightedSimulation, d::Domain, dt)
+    d.scheme === :rk3 ? step_rk3!(sim, dt; core_hooks(d)...) : step!(sim, dt; core_hooks(d)...)
+    return sim
+end
 
 """
     step!(d::Domain, dt) -> d

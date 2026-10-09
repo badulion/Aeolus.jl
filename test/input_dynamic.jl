@@ -476,7 +476,7 @@ end
     @test occursin("era5_lindenberg_20190629_sfc.nc", d.attributes["era5_files"])
     @test d.init_time == "2019-06-29T00:00:00Z" && size(d.tables[:profile_theta].values) == (16, 13)
     # the config names the committed driver
-    @test load_run_config(E5_CFG).domain.dynamic_driver == E5_DRIVER          # the domain's (ONE-b)
+    @test load_run_config(E5_CFG).domain.dynamic_driver == E5_DRIVER
     # the round trip, the driver hashed under [inputs]
     r = roundtrip_check(E5_CFG; nsteps = 20)
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
@@ -502,7 +502,7 @@ end
                    sim1.t, extrema(pu.data)..., extrema(Aeolus.Fields.interior_view(sim1.u))...)
 end
 
-@testset "ERA5 driver: the simulation driver's config checks" begin
+@testset "ERA5 driver: the model's config checks" begin
     err(ov) = try
         Config.build(Aeolus.SimulationDriver.SimulationDriverType(), load_run_config(E5_CFG; overrides = ov)); nothing
     catch e

@@ -966,7 +966,7 @@ end
 # two z-faces Δz_c, and the flux difference is divided by the height of
 # the control volume (Δz_c for u, v; Δz_f for w).
 
-@inline function _b_eddy_u!(i, j, k, tu, u, n, m)
+@inline function _b_eddy_u!(i, j, k, tu, u, n, m, wc, wf)
     @inbounds begin
         idx = _idx(m, i); idy = _idy(m, j)
         fxE = n[i  ,j,k] * (u[i+1,j,k] - u[i  ,j,k]) * idx
@@ -986,12 +986,12 @@ end
         fzT = νt_eT * (u[i,j,k+1] - u[i,j,k  ]) * _idzf(m, k+1)
         fzB = νt_eB * (u[i,j,k  ] - u[i,j,k-1]) * _idzf(m, k)
 
-        tu[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + (fzT - fzB)*_idz(m, k)
+        tu[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + _vertical_divergence(fzT, fzB, _idz(m, k), wc, wf, k)
     end
     return nothing
 end
 
-@inline function _b_eddy_v!(i, j, k, tv, v, n, m)
+@inline function _b_eddy_v!(i, j, k, tv, v, n, m, wc, wf)
     @inbounds begin
         idx = _idx(m, i); idy = _idy(m, j)
         fyN = n[i,j  ,k] * (v[i,j+1,k] - v[i,j  ,k]) * idy
@@ -1011,12 +1011,12 @@ end
         fzT = νt_eT * (v[i,j,k+1] - v[i,j,k  ]) * _idzf(m, k+1)
         fzB = νt_eB * (v[i,j,k  ] - v[i,j,k-1]) * _idzf(m, k)
 
-        tv[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + (fzT - fzB)*_idz(m, k)
+        tv[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + _vertical_divergence(fzT, fzB, _idz(m, k), wc, wf, k)
     end
     return nothing
 end
 
-@inline function _b_eddy_w!(i, j, k, tw, w, n, m)
+@inline function _b_eddy_w!(i, j, k, tw, w, n, m, wc, wf)
     @inbounds begin
         idx = _idx(m, i); idy = _idy(m, j)
         fzT = n[i,j,k  ] * (w[i,j,k+1] - w[i,j,k  ]) * _idz(m, k)
@@ -1036,7 +1036,7 @@ end
         fyN = νt_eN * (w[i,j+1,k] - w[i,j  ,k]) * idy
         fyS = νt_eS * (w[i,j,  k] - w[i,j-1,k]) * idy
 
-        tw[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + (fzT - fzB)*_idzf(m, k)
+        tw[i,j,k] += (fxE - fxW)*idx + (fyN - fyS)*idy + _vertical_divergence_w(fzT, fzB, _idzf(m, k), wc, wf, k)
     end
     return nothing
 end
@@ -1052,22 +1052,31 @@ between two centres uses `Δz_f`, between two z-faces `Δz_c`, and the flux
 difference is divided by the control-volume height (`Δz_c` for u, v;
 `Δz_f` for w): conservative on a stretched grid, the uniform stencil on a
 `RegularGrid`.
+
+`wc, wf` (default `nothing`, the unweighted operator bit for bit) are the
+per-level weights of a sound-proof core (`Anelastic.constraint_weights`:
+`W = ρ̄` or `ρ̄θ̄` at the cell centres and the bottom z faces, ONE-j #460):
+the vertical part becomes `(1/W) ∂z(W νₜ ∂z uᵢ)` — for u, v the fluxes on
+the z faces weighted by `wf`, divided by `wc[k]`; for w the fluxes at the
+centres weighted by `wc`, divided by `wf[k]` — so `Σ W uᵢ ΔV` is conserved
+(the flux form of the weighted momentum advection). The horizontal parts
+are unchanged: `W` depends on z only.
 """
 function _add_eddy_viscosity_u!(tu::Field{FaceX}, u::Field{FaceX},
-                                 νt::Field{CellCenter}, g::AbstractMesh)
-    _fv!(_b_eddy_u!, interior(g), tu.data, u.data, νt.data, grid_metrics(g))
+                                 νt::Field{CellCenter}, g::AbstractMesh, wc = nothing, wf = nothing)
+    _fv!(_b_eddy_u!, interior(g), tu.data, u.data, νt.data, grid_metrics(g), wc, wf)
     return tu
 end
 
 function _add_eddy_viscosity_v!(tv::Field{FaceY}, v::Field{FaceY},
-                                 νt::Field{CellCenter}, g::AbstractMesh)
-    _fv!(_b_eddy_v!, interior(g), tv.data, v.data, νt.data, grid_metrics(g))
+                                 νt::Field{CellCenter}, g::AbstractMesh, wc = nothing, wf = nothing)
+    _fv!(_b_eddy_v!, interior(g), tv.data, v.data, νt.data, grid_metrics(g), wc, wf)
     return tv
 end
 
 function _add_eddy_viscosity_w!(tw::Field{FaceZ}, w::Field{FaceZ},
-                                 νt::Field{CellCenter}, g::AbstractMesh)
-    _fv!(_b_eddy_w!, interior(g), tw.data, w.data, νt.data, grid_metrics(g))
+                                 νt::Field{CellCenter}, g::AbstractMesh, wc = nothing, wf = nothing)
+    _fv!(_b_eddy_w!, interior(g), tw.data, w.data, νt.data, grid_metrics(g), wc, wf)
     return tw
 end
 # --- stress-form SGS momentum divergence (Era VI, P55-b, #175) -----------
@@ -1121,7 +1130,7 @@ Base.@propagate_inbounds _τ23_w(v, w, nv, i, j, k, idy, idz, a, b) =
 
 # The stress form has no vertically stretched stencil yet (#151 covers the
 # Laplacian form only): refuse it by name instead of a MethodError.
-_add_sgs_stress_divergence!(tu, tv, tw, u, v, w, nh, nv, a, b, g::AbstractMesh) =
+_add_sgs_stress_divergence!(tu, tv, tw, u, v, w, nh, nv, a, b, g::AbstractMesh, wc = nothing, wf = nothing) =
     throw(ArgumentError("sgs_stress = :symmetric (the SGS stress form) is implemented " *
                         "on a RegularGrid only, not on a $(nameof(typeof(g))); use " *
                         "sgs_stress = :laplacian"))
@@ -1130,23 +1139,24 @@ _add_sgs_stress_divergence!(tu, tv, tw, u, v, w, nh, nv, a, b, g::AbstractMesh) 
 # −∂τᵢⱼ/∂xⱼ into (tu, tv, tw), with the stresses formed on the fly from
 # (u, v, w) and the cell-centred (νh, νv) arrays (halos filled), part (a, b).
 # One launch: the body writes the three tendencies at its own point.
-@inline function _b_sgs_stress_div!(i, j, k, tud, tvd, twd, ud, vd, wd, nh, nv, idx, idy, idz, A, B)
+@inline function _b_sgs_stress_div!(i, j, k, tud, tvd, twd, ud, vd, wd, nh, nv, idx, idy, idz, A, B, wc, wf)
     @inbounds begin
         tud[i,j,k] += -((_τ11(ud, nh, i, j, k, idx, A, B) - _τ11(ud, nh, i-1, j, k, idx, A, B)) * idx +
                         (_τ12_u(ud, vd, nh, i, j+1, k, idx, idy, A, B) -
                          _τ12_u(ud, vd, nh, i, j, k, idx, idy, A, B)) * idy +
-                        (_τ13_u(ud, wd, nv, i, j, k+1, idx, idz, A, B) -
-                         _τ13_u(ud, wd, nv, i, j, k, idx, idz, A, B)) * idz)
+                        _vertical_divergence(_τ13_u(ud, wd, nv, i, j, k+1, idx, idz, A, B),
+                                             _τ13_u(ud, wd, nv, i, j, k, idx, idz, A, B), idz, wc, wf, k))
         tvd[i,j,k] += -((_τ12_v(ud, vd, nh, i+1, j, k, idx, idy, A, B) -
                          _τ12_v(ud, vd, nh, i, j, k, idx, idy, A, B)) * idx +
                         (_τ22(vd, nh, i, j, k, idy, A, B) - _τ22(vd, nh, i, j-1, k, idy, A, B)) * idy +
-                        (_τ23_v(vd, wd, nv, i, j, k+1, idy, idz, A, B) -
-                         _τ23_v(vd, wd, nv, i, j, k, idy, idz, A, B)) * idz)
+                        _vertical_divergence(_τ23_v(vd, wd, nv, i, j, k+1, idy, idz, A, B),
+                                             _τ23_v(vd, wd, nv, i, j, k, idy, idz, A, B), idz, wc, wf, k))
         twd[i,j,k] += -((_τ13_w(ud, wd, nv, i+1, j, k, idx, idz, A, B) -
                          _τ13_w(ud, wd, nv, i, j, k, idx, idz, A, B)) * idx +
                         (_τ23_w(vd, wd, nv, i, j+1, k, idy, idz, A, B) -
                          _τ23_w(vd, wd, nv, i, j, k, idy, idz, A, B)) * idy +
-                        (_τ33(wd, nv, i, j, k, idz, A, B) - _τ33(wd, nv, i, j, k-1, idz, A, B)) * idz)
+                        _vertical_divergence_w(_τ33(wd, nv, i, j, k, idz, A, B),
+                                               _τ33(wd, nv, i, j, k-1, idz, A, B), idz, wc, wf, k))
     end
     return nothing
 end
@@ -1154,11 +1164,11 @@ end
 function _add_sgs_stress_divergence!(tu::Field{FaceX}, tv::Field{FaceY}, tw::Field{FaceZ},
                                      u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                                      nh::AbstractArray{<:Real,3}, nv::AbstractArray{<:Real,3},
-                                     a::Real, b::Real, g::RegularGrid)
+                                     a::Real, b::Real, g::RegularGrid, wc = nothing, wf = nothing)
     T = eltype(tu.data)
     idx = 1 / g.dx; idy = 1 / g.dy; idz = 1 / g.dz
     _fv!(_b_sgs_stress_div!, interior(g), tu.data, tv.data, tw.data, u.data, v.data, w.data,
-         nh, nv, idx, idy, idz, T(a), T(b))
+         nh, nv, idx, idy, idz, T(a), T(b), wc, wf)
     return nothing
 end
 
@@ -1534,6 +1544,10 @@ end
 @inline _open(::Type{T}, mask, i, j, k) where {T} = T(!mask[i,j,k])
 @inline _vertical_divergence(fzT, fzB, idz, ::Nothing, ::Nothing, k) = (fzT - fzB) * idz
 @inline _vertical_divergence(fzT, fzB, idz, wc, wf, k) = (wf[k+1] * fzT - wf[k] * fzB) * idz / wc[k]
+# the same for a w-located tendency: its vertical fluxes sit at the cell
+# centres k (top) and k-1 (bottom), its control volume around face k
+@inline _vertical_divergence_w(fzT, fzB, idz, ::Nothing, ::Nothing, k) = (fzT - fzB) * idz
+@inline _vertical_divergence_w(fzT, fzB, idz, wc, wf, k) = (wc[k] * fzT - wc[k-1] * fzB) * idz / wf[k]
 # =========================================================================
 # WENO-5 scalar advection (Phase 10) — staggered.
 # =========================================================================
