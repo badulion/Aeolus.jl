@@ -48,6 +48,36 @@ start-of-step state at the mid-step surface temperature; the heat flux is
 held over the step (the RK3 weights sum to one), so exactly
 ``⟨w'θ'_0⟩Δt`` enters the column.
 
+### The comparisons as in-model checks
+
+Each configuration compares itself with its reference data in
+`[checks.reference]` (advisory: `results.toml` and the run log say
+passed or FAILED, the run completes). Reduced runs on the model (ONE-g,
+#456; one realisation each, the configs with `--set grid.size=…`):
+
+| case (grid) | quantity, window | model | reference band | check |
+| :-- | :-- | --: | :-- | :-- |
+| GABLS1 (32³, 12.5 m) | ``u_*``, hours 8–9 | 0.303 m s⁻¹ | 0.245–0.283 | fails (0.020 above) |
+| | ``w'θ'_0`` | −0.0149 K m s⁻¹ | −0.0148 to −0.0094 | fails (1.2·10⁻⁴ outside) |
+| | ``H`` | −19.5 W m⁻² | −19.3 to −12.3 | fails (0.2 outside) |
+| GABLS3 (32³ on 400 m, 12.5 m) | jet height, 03–04 UTC | 117.9 m | 100–130 | passes |
+| | jet speed | 7.55 m s⁻¹ | 7.8–9.3 | fails (0.25 below) |
+| GABLS4 exp. 3 (32³ on 128 m, 4 m) | ``u_*``, 16:30–17:30 | 0.089 m s⁻¹ | 0.08–0.12 | passes |
+| | ``H`` | −10.5 W m⁻² | −13.5 to −5.3 | passes |
+| | ``h`` | 36.4 m | 14.5–19.5 | fails |
+| | ``L`` | 4.2 m | 6.5–9.9 | fails |
+| CASES-99 (24×24×48, 100 m / 33 m) | hockey-stick ``V_s(z)``, two nights | RMS 0.69 m s⁻¹ (3 levels) | Sun et al. (2012) Fig. 3a, tolerance 1 m s⁻¹ | passes |
+
+The coarse grids are on the strong side as before: the `sbl` run type gave
+``u_* = 0.304``, ``w'θ'_0 = -0.0153``, ``H = -19.9`` at 32³ for GABLS1
+(below), and at 2 m for GABLS4 ``h = 30.7`` m, ``L = 4.6`` m; the
+resolution, not the port, puts them outside the bands (the GABLS1 64³ runs
+of the run type were inside the heat-flux band and at the upper end of the
+``u_*`` band, below). The GABLS3 jet speed checked here
+is the mean of the instantaneous maxima of the plane-mean wind over the
+window, a little below the maximum of the window-mean profile that the
+analysis script and the reduced CI test report.
+
 ## GABLS1
 
 The first GEWEX stable-boundary-layer LES intercomparison (Beare et al.

@@ -399,7 +399,7 @@ bc_warm!(sim) = (sim isa BoussinesqSimulation && set!(sim.θ, (x, y, z) -> 300.0
     # and the wall stress slows the first-level wind
     sim = bc_warm!(bc_core(core))
     set!(sim.u, (x, y, z) -> 5.0)
-    d = bc_with(sim, SurfaceLayer => bc_sl_opts(298.0); scheme = sch)
+    d = bc_with(sim, SurfaceLayer => bc_sl_opts(280.0); scheme = sch)
     sl = only(c for c in d.components if c isa SurfaceLayer)
     Wc, Wf = bc_weights(sim)
     θ0 = copy(interior_view(sim.θ)); u0 = copy(interior_view(sim.u))
@@ -410,7 +410,9 @@ bc_warm!(sim) = (sim isa BoussinesqSimulation && set!(sim.θ, (x, y, z) -> 300.0
     end
     dθ = interior_view(sim.θ) .- θ0
     got = sum(Wc[H+k] * sum(dθ[:, :, k]) for k in 1:BC_MESH.Nz) * dx * dy * dz
-    @test applied < 0 && isapprox(got, applied; rtol = 1e-9)
+    # round-off: δθ ≈ 3e-6 K is the difference of two θ ≈ 300 K, so each
+    # cell's δθ carries ~300 ε / 3e-6 ≈ 2e-8 of relative error
+    @test applied < 0 && isapprox(got, applied; rtol = 1e-6)
     @test maximum(abs, dθ[:, :, 2:end]) < 1e-11
     @test all(<(0), sl.wθ) && all(>(0), sl.ustar) && all(>(0), sl.Lob)        # stable: heat down, L > 0
     @test mean(interior_view(sim.u)[:, :, 1]) < 5.0 && maximum(abs, interior_view(sim.u)[:, :, 2:end] .- 5.0) < 1e-12
@@ -447,6 +449,9 @@ end
 function bc_sbl_domain(core; scheme = :euler, cfl = nothing)
     sim = bc_state!(bc_core(core; ν = 0.2))
     set!(sim.u, (x, y, z) -> 5.0 + 0.3 * sin(2π * x / 800))
+    # a solenoidal start: SSP-RK3 carries a third of the step-start state into
+    # the next one, and the adaptive step's guard checks the constraint
+    core === :boussinesq ? Aeolus.TimeIntegration._project!(sim, 1.0) : Aeolus.Anelastic._project_mass_weighted!(sim)
     d0 = Domain(sim; scheme = scheme, cfl = cfl, validate = false)
     comps = (CentredAdvection(), SGS(StabilityCorrected(StaticSmagorinsky(0.1), BC_MESH), :symmetric),
              BCC.build_components((Coriolis => (; f = 1e-3), LargeScale => BC_LSF,
