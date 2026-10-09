@@ -177,15 +177,6 @@ const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
 # Files that call an entry point (or look like runs) but are not runs of
 # their own, each with its reason. Paths relative to examples/.
 const EXEMPT = Dict(
-    "validation/patchy_surface/driver.jl" =>
-        "library: patchy_les / patchy_run!, included by the patchy_surface driver and test/era5_heterogeneous_surface.jl",
-    "validation/dycoms_rf01/rf01.jl" => "library: the RF01 column and solve, included by the column driver",
-    "validation/canopy_profiles.jl" =>
-        "not a run: steady 1-D canopy wind / scalar boundary-value solves against published profiles",
-    "validation/dynamic_roughness_cubes.jl" =>
-        "not a run: a-priori dynamic roughness of a cube height map under a prescribed log-law wind",
-    "validation/dns256_generate.jl" =>
-        "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
     "poisson_manufactured.jl" => "not a run: manufactured-solution check of the Poisson solver",
     "poisson_neumann_manufactured.jl" => "not a run: manufactured-solution check of the Neumann Poisson solver",
 )
@@ -253,8 +244,15 @@ end
     @test all(isfile(joinpath(EX_DIR, p)) for p in keys(EXEMPT))
     @test all(isfile(joinpath(EX_DIR, p)) for p in PENDING_360)
     @test all(!isempty(r) for r in values(EXEMPT))
-    # examples/validation/ is complete: every script there is configured, a driver or exempt
-    val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
-    @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 12        # the 3 bare runners of CFG-b, 8 validation scripts, kernels/04 (the urban wrapper is gone, EX-a #438)
+    # examples/validation/ is configuration only (EX-c, #440): its cases are configs/*.toml of
+    # the run types in src/ (Aeolus.ValidationRuns), and every script there only reads run
+    # output: no stepping entry point, no run_configs / run_config / aeolus main, no harness
+    val = [r for r in example_scripts() if startswith(r, "validation/")]
+    @test length(val) >= 10
+    for r in val
+        src = read(joinpath(EX_DIR, r), String)
+        @test !occursin(ENTRY_POINT, src)
+        @test !occursin(r"run_configs?\(|Aeolus\.main\(|using Aeolus\.ValidationRuns|_les\(|_benchmark\(|dns_decay\(", src)
+    end
+    @test nconfigured == 4         # the 3 bare runners of CFG-b, kernels/04 (the urban wrapper is gone, EX-a #438)
 end

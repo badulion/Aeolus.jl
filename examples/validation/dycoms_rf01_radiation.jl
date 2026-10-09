@@ -41,30 +41,35 @@
 # arrived at empirically.
 #
 # The column and the solve are examples/validation/configs/dycoms_rf01.toml
-# (driver "column", case "dycoms_rf01"; the code is in
-# examples/validation/dycoms_rf01/rf01.jl). This script runs it and prints
-# the report.
+# (the `column` run type, case "dycoms_rf01"; src/validation_runs/rf01.jl).
+# This script reads its output/results.toml and prints the report.
 #
-# Run:  julia --project=. examples/validation/dycoms_rf01_radiation.jl [--set key=value]
+#   julia --project -m Aeolus run examples/validation/configs/dycoms_rf01.toml
+#   julia --project examples/validation/dycoms_rf01_radiation.jl [runs-root]
 # =========================================================================
 
 using Printf
-using Aeolus
+include(joinpath(@__DIR__, "read_runs.jl"))
 
 # =========================================================================
 function main(args = ARGS)
-    run = only(run_configs(joinpath(@__DIR__, "configs", "dycoms_rf01.toml"), args)).obj
-    (; col, z_lay, z_lev, nf, Fup_all, Fup_clear, Fspec, Kday) = run.state
-    ZI = run.cfg.dycoms_rf01.zi
-    nz = length(col.ql)
+    run = load_run(runs_root(args), "dycoms_rf01")
+    r = run.res
+    v(k) = Float64.(r[k])
+    z_lay, z_lev, Fup_all, Fup_clear, Fspec, Kday = v("z_lay"), v("z_lev"), v("F_up_all"), v("F_up_clear"),
+                                                    v("F_spec"), v("heating_K_per_day")
+    ql, ρ, dz = v("ql"), v("rho"), v("dz")
+    nf = r["n_fine"]
+    ZI = run.cfg["dycoms_rf01"]["zi"]
+    nz = length(ql)
 
     # --- cloud diagnostics -----------------------------------------------
-    lwp = sum(col.ρ[k] * col.ql[k] * col.dz[k] for k in 1:nz) * 1000  # g/m2
-    cloudy = findall(>(1e-6), col.ql)
+    lwp = sum(ρ[k] * ql[k] * dz[k] for k in 1:nz) * 1000  # g/m2
+    cloudy = findall(>(1e-6), ql)
     isempty(cloudy) && error("no cloud formed — the saturation adjustment is broken")
     zb = z_lev[first(cloudy)]
     zt = z_lev[last(cloudy) + 1]
-    qlmax = maximum(col.ql) * 1000
+    qlmax = maximum(ql) * 1000
 
     println("="^70)
     println("DYCOMS-II RF01 — cloud-top radiative cooling")
@@ -117,7 +122,7 @@ function main(args = ARGS)
     @printf("  %8s %8s %10s %10s %10s\n", "z (m)", "ql g/kg", "F_up", "F_spec", "K/day")
     for k in max(1, kt - 14):min(nz, kt + 3)
         @printf("  %8.0f %8.3f %10.2f %10.2f %10.1f\n",
-                z_lay[k], col.ql[k]*1000, Fup_all[k], Fspec[k], Kday[k])
+                z_lay[k], ql[k]*1000, Fup_all[k], Fspec[k], Kday[k])
     end
 
     # --- verdict ----------------------------------------------------------

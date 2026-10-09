@@ -1,8 +1,8 @@
 # Era VI, Phase 54 (P54-c, #168): decaying grid turbulence of
 # Comte-Bellot & Corrsin (1971), the LES benchmark of Era VI.
 #
-# Set-up and harness: test/cbc_benchmark_driver.jl (`cbc_benchmark`).
-# Reference: CBC table 3 (test/data/cbc1971_table3.txt). CBC is a wind-
+# Set-up and harness: `cbc_benchmark` (Aeolus.ValidationRuns, src/validation_runs/cbc.jl).
+# Reference: CBC table 3 (src/data/cbc1971_table3.txt). CBC is a wind-
 # tunnel experiment, not DNS; the LES is compared with the measured
 # spectra filtered to the grid cut-off.
 #
@@ -103,7 +103,7 @@ using Test
 using Aeolus
 using Printf
 
-include("cbc_benchmark_driver.jl")
+using Aeolus.ValidationRuns     # cbc_benchmark, cbc_table, cbc_spectrum, cbc_summary (EX-c #440)
 
 @testset "Era VI — Comte-Bellot–Corrsin decay (P54-c, #168)" begin
 

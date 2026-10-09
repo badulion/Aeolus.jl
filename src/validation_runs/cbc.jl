@@ -1,7 +1,10 @@
-# Comte-Bellot & Corrsin (1971) decaying grid turbulence: the shared LES
-# benchmark harness of Era VI (P54-c, #168).
+# The Comte-Bellot & Corrsin (1971) decay: the benchmark harness of
+# Era VI (P54-c, #168) and its run type `cbc_decay` (CFG-e #360; moved
+# from test/cbc_benchmark_driver.jl and examples/validation/cbc_driver.jl,
+# EX-c #440).
 #
-# Included by test/era6_cbc_decay.jl and examples/validation/cbc_decay.jl.
+# Used by test/era6_cbc_decay.jl and the `cbc_decay` run type below
+# (examples/validation/configs/cbc_decay.toml).
 # A closure is benchmarked with one call, `cbc_benchmark(closure; N)`, so
 # later closures (LASD, AMD/Vreman, σ, TKE) add one line each to the test.
 #
@@ -20,11 +23,6 @@
 # Σ_n E_CBC(nΔk) Δk over the shells the grid resolves (n ≤ N/2), the same
 # shell sum the spectrum diagnostic forms for the LES.
 
-using Aeolus
-using Aeolus.Fields: interior_view
-using Printf
-import Random
-
 const CBC_M = 0.0508                  # grid mesh [m]
 const CBC_U0 = 10.0                   # mean speed [m/s]
 const CBC_NU = 1.5e-5                 # air [m²/s]
@@ -39,7 +37,7 @@ Table 3 of Comte-Bellot & Corrsin (1971) in SI units: `k` [rad m⁻¹],
 `NaN` where the table has no value), and the streamwise r.m.s. velocity
 of their table 4 [m s⁻¹].
 """
-function cbc_table(path = joinpath(@__DIR__, "data", "cbc1971_table3.txt"))
+function cbc_table(path = joinpath(@__DIR__, "..", "data", "cbc1971_table3.txt"))
     rows = [parse.(Float64, split(l)) for l in eachline(path) if !startswith(l, "#") && !isempty(strip(l))]
     A = reduce(vcat, permutedims.(rows))
     k = A[:, 1] .* 100                     # cm⁻¹ → m⁻¹
@@ -217,8 +215,121 @@ function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
     return (; k, E, nsteps)
 end
 
+"""
+    cbc_summary(name, r) -> String
+
+One line of the benchmark result `r` ([`cbc_benchmark`](@ref)) of the
+closure `name`: the TKE ratios against CBC, the spectral errors, steps
+and wall time.
+"""
 function cbc_summary(name, r)
     @sprintf("%-12s N=%d×%d  K98/K42 %.3f (CBC %.3f, %+.1f%%)  K171/K42 %.3f (CBC %.3f, %+.1f%%)  rms log10 E %.3f / %.3f  E(kc)/CBC %.2f / %.2f  %d steps %.1f s",
              name, r.N, r.nseeds, r.K_ratio[1], r.K_ratio_ref[1], 100r.K_err[1], r.K_ratio[2], r.K_ratio_ref[2], 100r.K_err[2],
              r.rms_log_err..., r.E_kc_ratio..., r.nsteps, r.wall)
 end
+
+# ---------------------------------------------------------------------------
+# the `cbc_decay` run type
+# ---------------------------------------------------------------------------
+
+"""
+    CBCDriver()
+
+The `cbc_decay` run type: `[run] driver = "cbc_decay"`, the
+Comte-Bellot & Corrsin (1971) decay of [`cbc_benchmark`](@ref) for one
+closure (`[sgs] closure`), averaged over `[benchmark] seeds`. It writes
+the LES spectra at the three stations, the TKE ratios and the spectral
+errors, and CBC's table 3 with its interpolant over the wavenumber range of the run
+([`cbc_reference`](@ref), the reference the example figure draws) to
+`output/results.toml`. Config:
+`examples/validation/configs/cbc_decay.toml`.
+"""
+struct CBCDriver <: AbstractRunDriver end
+
+Config.driver_name(::CBCDriver) = "cbc_decay"
+Config.config_dir(::CBCDriver) = VALIDATION_CONFIG_DIR
+
+const _CBC_CLOSURES = [:none, :smagorinsky, :dynamic, :lagrangian, :lasd, :tke, :amd, :vreman, :sigma]
+
+function Config.driver_sections(::CBCDriver)
+    g = section("grid"; doc = "The periodic box of side 11 M (M = 5.08 cm).") do s
+        option!(s, "n", Int; default = 32, range = (8, 1024), doc = "cells per side (N³)")
+    end
+    sgs = section("sgs"; doc = "The subgrid closure.") do s
+        option!(s, "closure", Symbol; default = :dynamic, allowed = _CBC_CLOSURES,
+                doc = "none (molecular ν only), smagorinsky (C_s = 0.17), dynamic (plane-averaged Germano-Lilly), " *
+                      "lagrangian / lasd (Lagrangian dynamic, scale invariant / dependent), tke (Deardorff-Moeng), " *
+                      "amd (C = 0.3), vreman (0.17), sigma (1.35)")
+    end
+    b = section("benchmark"; doc = "The realisations and the spin-up (cbc_benchmark).") do s
+        option!(s, "seeds", Vector{Int}; default = [1, 2, 3], range = (0, typemax(Int)),
+                doc = "one realisation per seed of the random initial field; the spectra are averaged")
+        option!(s, "spinup", Int; default = 2, range = (0, 100),
+                doc = "evolve-and-rescale cycles before tU0/M = 42 (Rogallo 1981)")
+        option!(s, "t_spin", Optional{Float64}; range = (0, Inf), open_lower = true, units = "s",
+                doc = "length of one spin-up cycle; \"none\": the 42 → 98 interval, (98 − 42) M/U0")
+        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
+                doc = "advective Courant number of the step")
+    end
+    return Section[g, sgs, b]
+end
+
+function _cbc_checks(cfg)
+    e = no_checkpoints(cfg)
+    isempty(cfg.benchmark.seeds) && push!(e, ConfigError("benchmark.seeds", "give at least one seed"))
+    return e
+end
+Config.driver_checks(::CBCDriver) = Any[
+    """`[checkpoint]` stays off: the benchmark runs to the end in one call
+    `benchmark.seeds` has at least one seed""" => _cbc_checks]
+
+"What the `cbc_decay` driver builds and runs: `result` (the NamedTuple of `cbc_benchmark`) and `cfg`."
+mutable struct CBCRun
+    result::Any
+    cfg::RunConfig
+end
+
+Config.build(::CBCDriver, cfg::RunConfig) = CBCRun(nothing, cfg)
+
+function Simulations.run!(::CBCDriver, r::CBCRun, rf::RunFolder, ::CheckpointSchedule; callback = nothing)
+    b = r.cfg.benchmark
+    kw = b.t_spin === nothing ? (;) : (; t_spin = b.t_spin)
+    r.result = cbc_benchmark(r.cfg.sgs.closure; N = r.cfg.grid.n, cfl = b.cfl, seeds = b.seeds,
+                             spinup = b.spinup, kw...)
+    s = r.result
+    @info(cbc_summary(String(r.cfg.sgs.closure), s), subsystem = :run)
+    write_results(rf, Dict("K_ratio" => collect(s.K_ratio), "K_ratio_ref" => collect(s.K_ratio_ref),
+                           "rms_log_err" => collect(s.rms_log_err), "E_kc_ratio" => collect(s.E_kc_ratio),
+                           "k" => s.k, "E_42" => s.E_les[1], "E_98" => s.E_les[2], "E_171" => s.E_les[3],
+                           "nsteps" => s.nsteps, "nseeds" => s.nseeds, "wall_time" => s.wall,
+                           "reference" => cbc_reference(s.k, s.N)))
+    callback === nothing || callback(r, s.nsteps)
+    return r
+end
+
+"""
+    cbc_reference(k, N; npoints = 200) -> Dict
+
+The CBC reference a run of the `cbc_decay` run type records next to its
+spectra: table 3 (`k_table`, `E_table_42`, `E_table_98`, `E_table_171`;
+`NaN` where the table has no value) and its interpolant
+[`cbc_spectrum`](@ref) at `npoints` log-spaced wavenumbers from the
+first LES shell ÷ 1.3 to 2.2 k_c (`k_curve`, `E_curve_<station>`): the
+range the example figure draws.
+"""
+function cbc_reference(k, N; npoints::Integer = 200)
+    k_tab, E_tab, _ = cbc_table()
+    kmin, kmax = k[2] / 1.3, 2.2 * k[N ÷ 2 + 1]
+    kk = exp.(range(log(kmin), log(kmax), length = npoints))
+    d = Dict{String,Any}("k_table" => k_tab, "k_curve" => collect(kk))
+    for (s, st) in enumerate(CBC_STATIONS)
+        d["E_table_$st"] = E_tab[:, s]
+        d["E_curve_$st"] = cbc_spectrum(s).(kk)
+    end
+    return d
+end
+
+"The averaged LES spectra at the three stations (the run's result)."
+Config.state_fields(r::CBCRun) = (E_42 = r.result.E_les[1], E_98 = r.result.E_les[2], E_171 = r.result.E_les[3])
+
+register_driver!(CBCDriver())

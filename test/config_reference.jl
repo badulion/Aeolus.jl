@@ -20,7 +20,7 @@ import Aeolus.Config as C
 import NCDatasets
 import Markdown
 
-const REF_DRIVERS = sort!(unique!(vcat("common", "simulation", collect(keys(C.DRIVER_FILES)))))
+const REF_DRIVERS = sort!(unique!(vcat("common", C.package_drivers(), collect(keys(C.DRIVER_FILES)))))
 const REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))
 
 "The keys of the table rows of a Markdown option reference, per `[table]` heading."

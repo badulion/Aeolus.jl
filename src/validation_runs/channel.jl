@@ -10,19 +10,23 @@
 # filters) and its own statistics; repeating that in the simulation driver
 # would be a second copy of the physics.
 #
-# Loaded on first use through Aeolus.Config.DRIVER_FILES. Configs:
+# Moved from examples/validation/channel_driver.jl (EX-c #440). Configs:
 # examples/validation/configs/neutral_abl.toml, log_layer_mismatch.toml.
 
-using Aeolus
-using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Optional,
-                     section, option!, register_driver!, write_results
-using Aeolus.IO: RunFolder, CheckpointSchedule
-import Aeolus.Simulations
+"""
+    ChannelDriver()
 
+The `channel` run type: `[run] driver = "channel"`, the wall-modelled
+channel LES of `WallModels` (`[channel] kind`: the neutral half channel
+or the smooth-wall plane channel), run with `run_channel!`; its averaged
+profiles (and, with `[spectra] levels`, the streamwise spectra) go to
+`output/results.toml`. Configs:
+`examples/validation/configs/neutral_abl.toml`, `log_layer_mismatch.toml`.
+"""
 struct ChannelDriver <: AbstractRunDriver end
 
 Config.driver_name(::ChannelDriver) = "channel"
-Config.config_dir(::ChannelDriver) = joinpath(@__DIR__, "configs")
+Config.config_dir(::ChannelDriver) = VALIDATION_CONFIG_DIR
 
 function Config.driver_sections(::ChannelDriver)
     ch = section("channel"; doc = "The wall-bounded case (Aeolus.WallModels).") do s
@@ -72,10 +76,25 @@ function Config.driver_sections(::ChannelDriver)
         option!(s, "dt", Optional{Float64}; units = "H/u* or δ/u_τ", range = (0, Inf), open_lower = true,
                 doc = "a fixed step instead of the adaptive one")
     end
-    return Section[ch, wm, sgs, st]
+    sp = section("spectra"; doc = "Streamwise spectra E11(k1) of u, averaged over the statistics window (streamwise_spectrum).") do s
+        option!(s, "levels", Vector{Float64}; units = "1", default = Float64[], range = (0, 1),
+                doc = "heights as fractions of the domain depth; each is the cell round(f Nz + 1/2) (clamped to 1 … Nz, duplicates dropped); [] : no spectra")
+        option!(s, "every", Int; default = 10, range = (1, typemax(Int)),
+                doc = "sample every this many steps (by the step count) from the start of the statistics window")
+    end
+    return Section[ch, wm, sgs, st, sp]
 end
 
-function _checks(cfg)
+"""
+    spectrum_levels(fractions, Nz) -> Vector{Int}
+
+The cells of the heights `fractions` (of the domain depth) on `Nz` cells:
+`round(f Nz + 1/2)` clamped to `1:Nz`, duplicates dropped (the levels of
+the `[spectra]` section of the `channel` run type).
+"""
+spectrum_levels(fractions, Nz::Integer) = unique(clamp.(round.(Int, fractions .* Nz .+ 0.5), 1, Nz))
+
+function _channel_checks(cfg)
     e = ConfigError[]
     c = cfg.channel; w = cfg.wall_model
     if c.kind === :half
@@ -88,21 +107,24 @@ function _checks(cfg)
 end
 Config.driver_checks(::ChannelDriver) = Any[
     """the half channel (`channel.kind = "half"`) has one wall (`channel.walls = "both"`) and no smooth-wall `spalding` law
-    `wall_model.t_f` needs the temporal filter (`wall_model.filter = "temporal"` or `"both"`)""" => _checks]
+    `wall_model.t_f` needs the temporal filter (`wall_model.filter = "temporal"` or `"both"`)""" => _channel_checks]
 
 """
     ChannelRun
 
 What the `channel` driver builds: `case` (a `WallBoundedCase`), `stats`
-(the averages `run_channel!` returns, after the run) and `cfg`.
+(the averages `run_channel!` returns, after the run), `spectra` (the
+`[spectra]` average: `k1`, `levels`, `E11` (one column per level) and
+`nsamples`, or `nothing`) and `cfg`.
 """
 mutable struct ChannelRun
     case::Any
     stats::Any
+    spectra::Any
     cfg::RunConfig
 end
 
-function _closure(cfg)
+function _channel_closure(cfg)
     s = cfg.sgs; c = cfg.channel
     s.closure === :smagorinsky && return StaticSmagorinsky(s.c_s)
     ext = c.kind === :half ? (2π, 2π, 1.0) : (2π, π, 2.0)
@@ -111,7 +133,7 @@ function _closure(cfg)
     return LagrangianDynamicSmagorinsky(g; scale_dependent = s.closure === :lasd)
 end
 
-function _law(cfg)
+function _channel_law(cfg)
     w = cfg.wall_model; c = cfg.channel
     w.law === :spalding && return SpaldingLaw()
     w.law === :rough_log && return RoughLogLaw(c.z0_over_h)
@@ -120,29 +142,50 @@ end
 
 function Config.build(::ChannelDriver, cfg::RunConfig)
     c = cfg.channel; w = cfg.wall_model
-    kw = (; N = c.size, closure = _closure(cfg), h_wm = w.h_wm, h_wm_cells = w.h_wm_cells,
+    kw = (; N = c.size, closure = _channel_closure(cfg), h_wm = w.h_wm, h_wm_cells = w.h_wm_cells,
           filter = w.filter, T_f = w.t_f, noise = c.noise, seed = cfg.run.seed, stepper = c.stepper)
     case = c.kind === :half ?
-        half_channel_case(; kw..., wall_law = _law(cfg), z0_over_H = c.z0_over_h) :
-        channel_case(; kw..., Re_τ = c.re_tau, wall_law = _law(cfg), walls = c.walls)
-    return ChannelRun(case, nothing, cfg)
+        half_channel_case(; kw..., wall_law = _channel_law(cfg), z0_over_H = c.z0_over_h) :
+        channel_case(; kw..., Re_τ = c.re_tau, wall_law = _channel_law(cfg), walls = c.walls)
+    return ChannelRun(case, nothing, nothing, cfg)
 end
 
 function Simulations.run!(::ChannelDriver, r::ChannelRun, rf::RunFolder, ck::CheckpointSchedule;
                           callback = nothing)
-    st = r.cfg.stepper
-    cb = callback === nothing ? nothing : (case -> callback(r, case.nsteps))
-    r.stats = run_channel!(r.case, st.end_time; dt = st.dt, cfl = st.cfl,
-                           average_from = st.average_from_fraction * st.end_time,
+    st = r.cfg.stepper; t_avg = st.average_from_fraction * st.end_time
+    levels = spectrum_levels(r.cfg.spectra.levels, r.case.sim.mesh.Nz)
+    every = r.cfg.spectra.every
+    sample = isempty(levels) ? nothing : function (case)
+        (case.sim.t >= t_avg && case.nsteps % every == 0) || return
+        sp = streamwise_spectrum(case.sim.u, levels)
+        if r.spectra === nothing
+            r.spectra = (k1 = sp.k1, levels = levels, E11 = zero(sp.E11), nsamples = Ref(0))
+        end
+        r.spectra.E11 .+= sp.E11; r.spectra.nsamples[] += 1
+    end
+    cb = callback === nothing && sample === nothing ? nothing :
+         function (case)
+             sample === nothing || sample(case)
+             callback === nothing || callback(r, case.nsteps)
+         end
+    r.stats = run_channel!(r.case, st.end_time; dt = st.dt, cfl = st.cfl, average_from = t_avg,
                            callback = cb, checkpoint = ck)
     s = r.stats
     if s.nsamples > 0
         @info("channel statistics", subsystem = :run, nsteps = s.nsteps, nsamples = s.nsamples,
               τ_wall = s.τ_wall)
-        write_results(rf, Dict("nsteps" => s.nsteps, "nsamples" => s.nsamples, "tau_wall" => s.τ_wall,
+        res = Dict{String,Any}("nsteps" => s.nsteps, "nsamples" => s.nsamples, "tau_wall" => s.τ_wall,
                                "tau_wall_bottom" => s.τ_wall_bottom, "tau_wall_top" => s.τ_wall_top,
                                "zc" => s.zc, "U" => s.U, "zf" => s.zf, "phi_m" => s.phi_m,
-                               "wall_time" => s.wall_time))
+                               "wall_time" => s.wall_time)
+        sp = r.spectra
+        if sp !== nothing
+            n = sp.nsamples[]; Nz = r.case.sim.mesh.Nz
+            res["spectra"] = Dict{String,Any}("k1" => sp.k1, "levels" => sp.levels, "nsamples" => n,
+                                              "z_over_depth" => [(k - 0.5) / Nz for k in sp.levels],
+                                              "E11" => [sp.E11[:, m] ./ n for m in axes(sp.E11, 2)])
+        end
+        write_results(rf, res)
     end
     return r
 end

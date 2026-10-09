@@ -1115,7 +1115,7 @@ In the Berlin case both are providers of the
 The Era VI benchmark for SGS closures (Phase 54) is the wind-tunnel decay
 of Comte-Bellot & Corrsin (1971, CBC): grid mesh ``M = 5.08`` cm, mean
 speed ``U_0 = 10`` m/s, spectra measured at ``tU_0/M = 42, 98, 171``
-(their table 3, in `test/data/cbc1971_table3.txt`; the tabulated spectra
+(their table 3, in `src/data/cbc1971_table3.txt`; the tabulated spectra
 integrate to ``\tfrac32 u'^2`` of their table 4 within 4.2, 1.3 and
 0.3 %). Following Meneveau, Lund & Cabot (1996) and Kang, Chester &
 Meneveau (2003) the flow is simulated in a frame moving with ``U_0``: a
@@ -1126,11 +1126,11 @@ then two cycles of evolve-and-[`rescale`](@ref Aeolus.Operators.rescale_to_spect
 so the cascade is established), run to the later stations with SSP-RK3.
 The LES is compared with CBC *filtered to the grid cut-off*: TKE is the
 shell sum over ``k ≤ k_c = (N/2)Δk``. CBC is an experiment, not DNS; the
-harness (`cbc_benchmark(closure; N)` in `test/cbc_benchmark_driver.jl`)
+harness (`cbc_benchmark(closure; N)`, `src/validation_runs/cbc.jl`)
 accepts any spectrum function, so a tabulated DNS spectrum can replace it.
 
 Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
-`examples/validation/cbc_decay.jl` at 64³):
+`examples/validation/configs/cbc_decay.toml` at 64³):
 
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
 | :-- | :-- | --: | --: | --: | --: |

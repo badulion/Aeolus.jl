@@ -3,7 +3,7 @@
 #
 #   dycoms_rf01    the DYCOMS-II RF01 column and its longwave solve (gas +
 #                  cloud optics, two-stream), against the intercomparison's
-#                  prescribed flux (examples/validation/dycoms_rf01/rf01.jl);
+#                  prescribed flux (rf01.jl);
 #   parisfog_2011  the 1-D RadiationFog column of ParisFog, 14-15 Nov 2011
 #                  (parisfog_2011_column, run! of Aeolus.RadiationFog);
 #   kessler_box    Kessler microphysics in a small box with no dynamics
@@ -12,24 +12,24 @@
 #                  broadening validation (run_broadening_case, Era IV P45).
 #
 # Each case has its own section; a key set in the section of a case that is
-# not selected is an error. Loaded on first use (Aeolus.Config.DRIVER_FILES).
+# not selected is an error. Moved from examples/validation/column_driver.jl
+# (EX-c #440).
 # Configs: examples/validation/configs/{dycoms_rf01, parisfog_2011,
 # spectral_broadening}.toml, examples/kernels/configs/cloud_spinup.toml.
 
-using Aeolus
-using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable,
-                     section, option!, register_driver!, write_results, no_checkpoints,
-                     kwdef_section, kwdef_value, selected_case_sections
-using Aeolus.Fields: set!, interior_view
-using Aeolus.IO: RunFolder, CheckpointSchedule
-import Aeolus.Simulations
+"""
+    ColumnDriver()
 
-include(joinpath(@__DIR__, "dycoms_rf01", "rf01.jl"))
-
+The `column` run type: `[run] driver = "column"`, the single-column and
+box cases with no 3-D dynamics, selected by `[column] case` (see the
+option reference). Each case writes its numbers to
+`output/results.toml`. Configs: `examples/validation/configs/`
+(`dycoms_rf01`, `parisfog_2011`, `spectral_broadening`, …).
+"""
 struct ColumnDriver <: AbstractRunDriver end
 
 Config.driver_name(::ColumnDriver) = "column"
-Config.config_dir(::ColumnDriver) = joinpath(@__DIR__, "configs")
+Config.config_dir(::ColumnDriver) = VALIDATION_CONFIG_DIR
 
 const _CASE_SECTIONS = ("dycoms_rf01" => "dycoms_rf01", "parisfog_2011" => "fog",
                         "kessler_box" => "kessler_box", "droplet_parcel" => "parcel")
@@ -67,8 +67,8 @@ const _PARCEL_DOCS = Dict(
     :w => ("updraught", "m s^-1"), :σ_S => ("sub-grid supersaturation spread", "1"),
     :τ => ("Lagrangian correlation time of the fluctuations", "s"), :t_end => ("duration", "s"),
     :dt => ("output and coupling step", "s"), :seed => ("initial radii and fluctuation noise", ""))
-_docs(d) = Dict(k => v[1] for (k, v) in d)
-_units(d) = Dict(k => v[2] for (k, v) in d if !isempty(v[2]))
+_col_docs(d) = Dict(k => v[1] for (k, v) in d)
+_col_units(d) = Dict(k => v[2] for (k, v) in d if !isempty(v[2]))
 
 function Config.driver_sections(::ColumnDriver)
     col = section("column"; doc = "Which column case runs.") do s
@@ -83,7 +83,7 @@ function Config.driver_sections(::ColumnDriver)
         option!(s, "ngpt_per_band", Int; default = 4, range = (1, 64), doc = "g-points per longwave band")
         option!(s, "sfc_emissivity", Float64; units = "1", default = 0.98, range = (0, 1), doc = "surface emissivity")
     end
-    fog = kwdef_section("fog", FogColumnSettings; docs = _docs(_FOG_DOCS), units = _units(_FOG_DOCS),
+    fog = kwdef_section("fog", FogColumnSettings; docs = _col_docs(_FOG_DOCS), units = _col_units(_FOG_DOCS),
                         doc = "ParisFog 2011: the RadiationFog column settings (FogColumnSettings; keys are its fields, β → beta, λ → lambda).")
     snd = section("fog_sounding"; doc = "ParisFog 2011: the initial sounding (parisfog_2011_column).") do s
         option!(s, "h", Float64; default = 1000.0, range = (0, Inf), open_lower = true, units = "m", doc = "column depth")
@@ -106,14 +106,14 @@ function Config.driver_sections(::ColumnDriver)
         option!(s, "dt", Vector{Float64}; default = [60.0, 60.0, 120.0, 120.0, 120.0], range = (0, Inf),
                 open_lower = true, units = "s", doc = "the steps, one microphysics step each")
     end
-    pc = kwdef_section("parcel", BroadeningCase; docs = _docs(_PARCEL_DOCS), units = _units(_PARCEL_DOCS),
+    pc = kwdef_section("parcel", BroadeningCase; docs = _col_docs(_PARCEL_DOCS), units = _col_units(_PARCEL_DOCS),
                        doc = "The parcel of the spectral-broadening validation (BroadeningCase; σ_S → sigma_s, τ → tau, ε0 → epsilon0).")
     option!(pc, "model", Symbol; default = :superdroplet, allowed = [:superdroplet, :bulk],
             doc = "superdroplet (per-droplet stochastic supersaturation, the reference) or bulk (the moment closure)")
     return Section[col, rf01, fog, snd, kb, pc]
 end
 
-function _checks(cfg)
+function _column_checks(cfg)
     e = no_checkpoints(cfg)
     append!(e, selected_case_sections(cfg, "column.case", (_CASE_SECTIONS..., "parisfog_2011" => "fog_sounding")))
     kb = cfg.kessler_box
@@ -124,7 +124,7 @@ end
 Config.driver_checks(::ColumnDriver) = Any[
     """`[checkpoint]` stays off: a column case runs to the end in one call
     a key of the section of a case that `column.case` does not select must keep its default (it would be ignored)
-    `kessler_box.cloud_layer` is [bottom, top] with bottom < top""" => _checks]
+    `kessler_box.cloud_layer` is [bottom, top] with bottom < top""" => _column_checks]
 
 """
     ColumnRun
@@ -178,7 +178,7 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
         s = r.state
         write_results(rf, Dict("z_lev" => s.z_lev, "z_lay" => s.z_lay, "F_up_all" => s.Fup_all,
                                "F_up_clear" => s.Fup_clear, "F_spec" => s.Fspec, "heating_K_per_day" => s.Kday,
-                               "ql" => s.col.ql))
+                               "ql" => s.col.ql, "rho" => s.col.ρ, "dz" => s.col.dz, "n_fine" => s.nf))
     elseif r.case === :parisfog_2011
         col = r.state
         Aeolus.RadiationFog.run!(col, cfg.fog_sounding.duration)
@@ -188,9 +188,11 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
               max_lwp = lc.max_lwp, max_top = lc.max_top)
         H = col.history
         write_results(rf, Dict("onset_utc_hour" => lc.onset, "dissipation_utc_hour" => lc.dissipation,
-                               "max_lwp" => lc.max_lwp, "max_top" => lc.max_top,
+                               "max_lwp" => lc.max_lwp, "max_top" => lc.max_top, "t_max_lwp_utc_hour" => lc.t_max_lwp,
                                "utc_hour" => [h.utc_hour for h in H], "lwp" => [h.lwp for h in H],
-                               "fog_top" => [h.fog_top for h in H], "lw_net_sfc" => [h.lw_net_sfc for h in H]))
+                               "fog_top" => [h.fog_top for h in H], "lw_net_sfc" => [h.lw_net_sfc for h in H],
+                               "lw_net_top" => [h.lw_net_top for h in H], "lw_fog" => [h.lw_fog for h in H],
+                               "lw_top_cooling" => [h.lw_top_cooling for h in H], "C_LW" => [h.C_LW for h in H]))
     elseif r.case === :kessler_box
         s = r.state
         push!(r.snapshots, (t = 0.0, ql = hmean_profile(s.ql), qr = hmean_profile(s.qr)))
@@ -210,11 +212,27 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
         r.state = run_broadening_case(case; model = cfg.parcel.model)
         h = r.state
         nsteps = length(h.t) - 1
-        write_results(rf, Dict("t" => h.t, "epsilon" => h.ε, "sigma_r2" => h.σ_r2, "S" => h.S,
-                               "mean_radius" => h.mean_radius))
+        write_results(rf, Dict("t" => h.t, "epsilon" => h.ε, "sigma_r2" => h.σ_r2, "S" => h.S, "T" => h.T,
+                               "mean_radius" => h.mean_radius, "sigma_r2_ou" => parcel_ou_sigma_r2(h, case)))
     end
     callback === nothing || callback(r, nsteps)
     return r
+end
+
+"""
+    parcel_ou_sigma_r2(h, case) -> Vector
+
+The width ``σ_{r^2}(t) = 2G\\,\\sqrt{\\mathrm{Var}\\int_0^t S'\\,dt'}`` that
+Ornstein–Uhlenbeck supersaturation fluctuations (`supersaturation_integral_variance`,
+σ_S and τ of the [`BroadeningCase`](@ref) `case`) give a monodisperse
+population, at the times of the parcel history `h`, with the growth
+factor ``G = 1/(F_k + F_d)`` at the final temperature and `case.p0`: the
+analytic curve the stationary spectral-broadening case is compared with
+(Sardina et al. 2015, PRL 115, 184501).
+"""
+function parcel_ou_sigma_r2(h, case)
+    G = 1 / (Aeolus.Superdroplet.fk_thermal(h.T[end]) + Aeolus.Superdroplet.fd_vapor(h.T[end], case.p0))
+    return [2G * sqrt(supersaturation_integral_variance(case.σ_S, case.τ, t)) for t in h.t]
 end
 
 function Config.state_fields(r::ColumnRun)

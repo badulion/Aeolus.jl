@@ -163,7 +163,7 @@ Their variables, dimensions, units and attributes are listed on the
 | `examples/configs/` | `simulation`: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection` |
 | `examples/urban/configs/` | `urban` (in `src/`, `Aeolus.UrbanCase`): `berlin_summer` (every option written out), `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample`; `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
 | `examples/sbl/configs/` | `sbl` (in `src/`, `Aeolus.StableBoundaryLayer`): `gabls1`–`gabls4_exp3`, `cases99`, the channels, and the sweeps that replace the runner scripts (`*_closures`, `*_sweep`) |
-| `examples/validation/configs/` | the validation drivers (`neutral_abl`, `dycoms_rf01`, `dns256`, …) |
+| `examples/validation/configs/` | the validation run types of `Aeolus.ValidationRuns` (`channel`, `column`, `cbc_decay`, `patchy_surface`, `dns`, `plant_canopy`, `dynamic_roughness`): `neutral_abl`, `dycoms_rf01`, `dns256`, `canopy_profiles`, … |
 | `examples/kernels/configs/` | `column`: `cloud_spinup` |
 
 Each shipped config carries a `[test]` table with its smoke size:

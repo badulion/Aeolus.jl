@@ -503,7 +503,8 @@ column coupled to the surface. That leaves no decoupled residual layer
 in which an inertial oscillation could run. To resolve the jet, the
 domain would need to be deeper than the nocturnal boundary layer.
 * **Patchy-surface validation driver**
-  (`examples/validation/patchy_surface/driver.jl`): it now delegates its
+  (then `examples/validation/patchy_surface/driver.jl`, now the `patchy_surface`
+  run type in `src/validation_runs/patchy_surface.jl`): it now delegates its
   ``+fU_g`` to `GeostrophicPressureGradient`. After 60 steps of the
   ``U_g = 5`` m/s, ``f = 10^{-4}`` setup, the state is unchanged bit for
   bit, and `test/era5_heterogeneous_surface.jl` prints identical numbers.

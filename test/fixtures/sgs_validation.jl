@@ -3,7 +3,7 @@
 # examples/sgs/rotating_stratified_decay.jl.
 #
 # The method ("a priori in time"). One DNS of decaying isotropic
-# turbulence (the P56-c fixture, test/fixtures/dns_decay.jl: 2π box,
+# turbulence (the P56-c fixture, Aeolus.ValidationRuns.dns_decay: 2π box,
 # ν ∝ N^{-4/3}, spun up from a fixed seed to t₀ = 2) is continued from t₀
 # in three ways:
 #
@@ -45,7 +45,7 @@ using Aeolus.Operators: AbstractSGSClosure, SGSFields
 vmean(x) = sum(x) / length(x)
 vmean(f, x) = sum(f, x) / length(x)
 
-isdefined(@__MODULE__, :dns_decay) || include(joinpath(@__DIR__, "dns_decay.jl"))
+using Aeolus.ValidationRuns
 
 const VAL_RO = 0.2
 const VAL_FR = 0.3

@@ -5,7 +5,8 @@
 # reference, the droplets transparent to radiation (no droplet-radiative
 # feedback), and the sun switched off.
 #
-#   julia --project=. examples/validation/parisfog_2011_radiation_fog.jl
+#   julia --project -m Aeolus run examples/validation/configs/parisfog_2011.toml
+#   julia --project examples/validation/parisfog_2011_radiation_fog.jl [runs-root]   # life cycle + figures
 
 [run]
 driver = "column"

@@ -79,13 +79,13 @@ keeps the newest K, and `resume!` restores the newest one at start. The
 two shared run loops, `run_channel!` and `sbl_run!`, take it as a keyword
 and also write a final checkpoint, so re-running a finished phase is
 instant and a multi-phase script (GABLS3) uses one prefix per phase. The
-long drivers (`dns256_generate.jl`, the relaminarisation sweep,
+long drivers (the `dns256.toml` run; the relaminarisation sweep,
 `gabls1`–`gabls4.jl`) create one per run by default and delete it once the
 result is cached.
 
 Measured by killing the scripts mid-run and starting them again: GABLS1
 at 8³ to 12 h, killed after step 5000 of 7758 — profiles, u* and the u*(t)
-series identical to an uninterrupted run; `dns256_generate.jl` at 32³,
+series identical to an uninterrupted run; `dns256_generate.jl` (now `aeolus run dns256.toml --resume`) at 32³,
 resumed at step 60 of 70 — the TOML record identical except its timestamp
 and wall time. At 256³ one checkpoint is ≈ 1.15 GB (eight fields with
 halos).

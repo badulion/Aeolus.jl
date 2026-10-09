@@ -4,8 +4,9 @@
 # Phase 53 (#43). A convective boundary layer over strips of hot
 # (310 K) and cool (300 K) ground, 50 % each, z0 = 0.1 m, z0h = z0/10,
 # initial mixed layer 300 K to 600 m. Every surface column computes its
-# own Monin–Obukhov fluxes through the SurfaceExchange contract (see
-# patchy_surface/driver.jl). Two sets of runs:
+# own Monin–Obukhov fluxes through the SurfaceExchange contract (the
+# `patchy_surface` run type, src/validation_runs/patchy_surface.jl). Two
+# sets of runs:
 #
 #  A. 50 m resolution, 3.2 × 1.6 × 1.6 km, 2 h (average over the second):
 #     resolved strips (λ = 0.8 and 3.2 km), an LES with the tiled mosaic
@@ -17,13 +18,13 @@
 #     organised-motion comparison with Patton, Sullivan & Moeng (2005).
 #
 # The thirteen runs are the sweep examples/validation/configs/
-# patchy_surface.toml (driver "patchy_surface",
-# examples/validation/patchy_surface_driver.jl). This script runs them one
-# after the other (one process per member, `--member A_tiled`, runs them
-# in parallel), prints the tables and writes SVG figures to
-# output/patchy_surface/:
+# patchy_surface.toml (run them one after the other, or one process per
+# member, `--member A_tiled`, in parallel). This script reads their
+# output/results.toml, prints the tables and writes SVG figures to
+# examples/validation/output/patchy_surface/:
 #
-#   julia --project=. examples/validation/patchy_surface_les.jl
+#   julia --project -m Aeolus run examples/validation/configs/patchy_surface.toml
+#   julia --project examples/validation/patchy_surface_les.jl [runs-root]
 #
 # References
 #   Patton, E. G., Sullivan, P. P. & Moeng, C.-H. (2005). The influence of
@@ -40,11 +41,13 @@
 # =========================================================================
 
 using Printf
-using Aeolus
-include(joinpath(@__DIR__, "patchy_surface", "driver.jl"))       # patchy_amplitude
+include(joinpath(@__DIR__, "read_runs.jl"))
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
-const OUT = joinpath(@__DIR__, "..", "..", "output", "patchy_surface")
+const OUT = joinpath(@__DIR__, "output", "patchy_surface")
+
+"Root-mean-square about the mean of a phase-averaged profile."
+patchy_amplitude(x) = sqrt(sum(abs2, x .- sum(x) / length(x)) / length(x))
 mkpath(OUT)
 
 # member label => the name the tables print
@@ -58,14 +61,20 @@ A_cases = [("A_uniform", "uniform 305 K (= parameter aggregate)"),
 B_λ = [800.0, 1600.0, 3200.0, 6400.0, 12800.0]
 B_cases = [[("B_strips_$(Int(λ))", "sweep λ = $(Int(λ)) m") for λ in B_λ]; ("B_uniform", "sweep uniform 305 K")]
 
-runs = run_configs(joinpath(@__DIR__, "configs", "patchy_surface.toml"), ARGS)
-label(r) = chop(r.obj.cfg.run.name; head = length("patchy_surface_"), tail = 0)
+runs = member_runs(runs_root(), validation_config("patchy_surface"))
 name_of = Dict(vcat(A_cases, B_cases))
-res = Dict(name_of[label(r)] => r.obj.result for r in runs)
-cfgs = Dict(name_of[label(r)] => (λ = r.obj.cfg.surface.wavelength, T_hot = r.obj.cfg.surface.t_hot,
-                                  T_cool = r.obj.cfg.surface.t_cool, mode = r.obj.cfg.surface.mode)
-            for r in runs)
-B_grid = (Lz = runs[end].obj.cfg.grid.extent[3], Nz = runs[end].obj.cfg.grid.size[3])
+"The results of a run as a NamedTuple (vectors as Float64 vectors; wθ_p and θ_profile under their Julia names)."
+function as_result(d)
+    ren = Dict("wtheta_p" => :wθ_p, "theta_profile" => :θ_profile)
+    ks = [get(ren, k, Symbol(k)) for k in keys(d)]
+    vs = [v isa AbstractVector ? Float64.(v) : v for v in values(d)]
+    return NamedTuple{Tuple(ks)}(Tuple(vs))
+end
+res = Dict(name_of[l] => as_result(r.res) for (l, r) in runs)
+cfgs = Dict(name_of[l] => (λ = r.cfg["surface"]["wavelength"], T_hot = r.cfg["surface"]["t_hot"],
+                           T_cool = r.cfg["surface"]["t_cool"], mode = Symbol(r.cfg["surface"]["mode"]))
+            for (l, r) in runs)
+B_grid = (Lz = runs[end][2].cfg["grid"]["extent"][3], Nz = runs[end][2].cfg["grid"]["size"][3])
 A_cases = [(n, nothing) for (_, n) in A_cases]
 rel(a, b) = 100 * (a - b) / b
 Au(r) = patchy_amplitude(r.u_p) / r.wstar

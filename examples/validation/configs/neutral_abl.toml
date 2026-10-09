@@ -12,9 +12,13 @@
 #                the P57-b 2Δ input filter of the wall model
 #   lasi         the scale-invariant Lagrangian model, same filter
 #
-#   julia --project=. examples/validation/neutral_abl.jl          # all six, then the figure
+# The streamwise spectra E11(k1) at z/H ≈ 0.06, 0.1, 0.25, 0.5 are averaged
+# over the statistics window, every 10th step ([spectra]).
+#
+#   julia --project -m Aeolus run examples/validation/configs/neutral_abl.toml           # all six
 #   julia --project -m Aeolus run examples/validation/configs/neutral_abl.toml --member 3
 #   … --set stepper.end_time=20.0      (any key; applies to every member)
+#   julia --project examples/validation/neutral_abl.jl [runs-root]    # the tables and the figure
 
 [run]
 driver = "channel"
@@ -31,6 +35,10 @@ c_s = 0.1
 [stepper]
 end_time = 50.0
 average_from_fraction = 0.6
+
+[spectra]
+levels = [0.06, 0.1, 0.25, 0.5]
+every = 10
 
 [[sweep.member]]
 label = "smagorinsky"

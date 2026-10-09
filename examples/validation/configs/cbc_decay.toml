@@ -5,11 +5,12 @@
 # tU0/M = 42 and compared with the measured spectra at 98 and 171. Three
 # runs: the dynamic Smagorinsky model, static Smagorinsky (C_s = 0.17) and
 # no model, each averaged over three seeds. The harness and the data are
-# shared with the CI test (32³): test/cbc_benchmark_driver.jl,
-# test/data/cbc1971_table3.txt, test/era6_cbc_decay.jl.
+# shared with the CI test (32³): cbc_benchmark (src/validation_runs/cbc.jl),
+# src/data/cbc1971_table3.txt, test/era6_cbc_decay.jl.
 #
-#   julia --project=. examples/validation/cbc_decay.jl              # the three runs and the figure
-#   julia --project=. examples/validation/cbc_decay.jl --set grid.n=32
+#   julia --project -m Aeolus run examples/validation/configs/cbc_decay.toml            # the three runs
+#   julia --project -m Aeolus run examples/validation/configs/cbc_decay.toml --set grid.n=32
+#   julia --project examples/validation/cbc_decay.jl [runs-root]                         # the figure
 
 [run]
 driver = "cbc_decay"

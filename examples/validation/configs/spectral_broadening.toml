@@ -10,7 +10,8 @@
 #                 n_sd = 4000;
 # each with the superdroplet reference (sd) and the bulk scheme (bulk).
 #
-#   julia --project=. examples/validation/spectral_broadening.jl
+#   julia --project -m Aeolus run examples/validation/configs/spectral_broadening.toml
+#   julia --project examples/validation/spectral_broadening.jl [runs-root]   # tables + figures
 
 [run]
 driver = "column"

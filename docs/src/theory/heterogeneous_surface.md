@@ -28,7 +28,8 @@ construction. Here each column's flux depends on its own first-level
 air through Monin–Obukhov similarity, as in a coupled land surface
 (Patton et al. 2005).
 
-The driver is `examples/validation/patchy_surface/driver.jl`. It is a
+The LES is the `patchy_surface` run type (`src/validation_runs/patchy_surface.jl`,
+`examples/validation/configs/patchy_surface.toml`). It is a
 Boussinesq LES with Smagorinsky SGS and SSP-RK3 with one projection per
 stage. Every surface column is a `SurfaceExchange.AbstractSurface`, and
 its fluxes come from the contract's `turbulent_fluxes`. The heat flux

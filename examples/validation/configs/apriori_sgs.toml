@@ -1,24 +1,39 @@
 # A-priori SGS-stress analysis on filtered DNS — Phase 56 (P56-c, #178)
 #
-# The decaying isotropic DNS the a-priori analysis filters: the fixture of
-# the CI test (test/fixtures/dns_decay.jl) at 96³, ν = 0.018 (48/N)^(4/3),
-# to t = 2. examples/validation/apriori_sgs.jl runs it and writes the
-# correlation tables.
+# The decaying isotropic DNS of the CI fixture (dns_decay, Aeolus.ValidationRuns)
+# at 96³: E(k) ∝ k⁴ exp(-2 (k/1.5)²), u' = 1, ν = 0.018 (48/N)^(4/3)
+# (nu_margin = 1: the fixture's own viscosity), to t = 2. After the run the
+# `dns` run type filters the final field with Gaussians of width 4h, 8h and
+# 16h and records, per width, the exact subfilter stress against the
+# Smagorinsky (dissipation-matched C_s), Bardina and Clark gradient models
+# and the dynamic C_s on the DNS and the LES grid, in output/dns_apriori.toml.
+# t = 2 is before the dissipation peak at 96³, so the generator's DNS checks
+# are recorded, not required.
 #
-#   julia --project=. examples/validation/apriori_sgs.jl
-#   julia --project=. examples/validation/apriori_sgs.jl --set grid.n=48
+#   julia --project -m Aeolus run examples/validation/configs/apriori_sgs.toml
+#   julia --project -m Aeolus run examples/validation/configs/apriori_sgs.toml --set grid.n=48
+#   julia --project examples/validation/apriori_sgs.jl [runs]        # the correlation tables
 
 [run]
-driver = "dns_decay"
+driver = "dns"
 name = "apriori_sgs"
 seed = 1
 
 [grid]
 n = 96
 
-[dns]
-end_time = 2.0
+[fluid]
+nu = "scaled"
+nu_margin = 1.0
+
+[stepper]
 cfl = 0.5
+end_time = 2.0
+past_peak = 0.0
+
+[apriori]
+widths = [4, 8, 16]
+require_checks = false
 
 # The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
 # CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
@@ -26,5 +41,6 @@ cfl = 0.5
 [test]
 overrides = [
     "grid.n=16",
-    "dns.end_time=0.3",
+    "stepper.end_time=0.3",
+    "apriori.widths=[4]",
 ]

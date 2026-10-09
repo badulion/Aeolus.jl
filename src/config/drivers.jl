@@ -150,24 +150,35 @@ end
 Drivers that live under `examples/`, loaded the first time a config names
 them: `name => path` relative to the package directory. The file is
 included into a fresh module and must call [`register_driver!`](@ref)
-for `name`. Physics stays in `examples/`; nothing is moved into `src/`
-for the CLI's sake. The migrations of the example drivers (#311) add
-their entries here. (The urban run type, formerly the `berlin` entry, is
-part of the package since EX-a #438: `Aeolus.UrbanCase`.)
+for `name`. The examples-are-configuration issues move these drivers into
+`src/` as run types (EX-a #438: `Aeolus.UrbanCase`; EX-b #439:
+`Aeolus.StableBoundaryLayer`; EX-c #440: `Aeolus.ValidationRuns`); an
+entry leaves this list when its driver does.
 """
 const DRIVER_FILES = Dict{String,String}(
-    # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
-    # type in src since EX-b #439: Aeolus.StableBoundaryLayer)
-    "dns" => "examples/validation/dns_apriori_driver.jl",
-    # CFG-e (#360): the validation drivers and the remaining example scripts
-    "channel" => "examples/validation/channel_driver.jl",
-    "cbc_decay" => "examples/validation/cbc_driver.jl",
-    "patchy_surface" => "examples/validation/patchy_surface_driver.jl",
-    "column" => "examples/validation/column_driver.jl",
-    "dns_decay" => "examples/validation/dns_driver.jl",
 )
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
+
+const _PACKAGE_DRIVERS = String[]
+
+"""
+    package_drivers() -> Vector{String}
+
+The runnable drivers defined in `src/` (the `simulation` driver and the
+run types of `Aeolus.ValidationRuns`, …): the ones registered when the
+package was loaded, sorted. With `"common"` and the keys of
+[`DRIVER_FILES`](@ref) they are every driver the option reference
+documents.
+"""
+package_drivers() = copy(_PACKAGE_DRIVERS)
+
+"Record the drivers registered so far as the package's own (called once, at the end of `Aeolus.jl`)."
+function snapshot_package_drivers!()
+    empty!(_PACKAGE_DRIVERS)
+    append!(_PACKAGE_DRIVERS, sort!(collect(keys(_RUN_DRIVERS))))
+    return _PACKAGE_DRIVERS
+end
 
 "Load the example driver `name` from [`DRIVER_FILES`](@ref) if it is listed and not yet registered."
 function _ensure_driver(name::AbstractString)

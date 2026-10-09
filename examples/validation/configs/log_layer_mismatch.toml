@@ -11,8 +11,9 @@
 #   static_* / dynamic_*    the closures at Re_τ = 1000
 #   tf<T_f>                 the time-filter scale at Re_τ = 1000 with the fix
 #
-#   julia --project=. examples/validation/log_layer_mismatch.jl        # ~3 min
-#   julia --project=. examples/validation/log_layer_mismatch.jl --set stepper.end_time=8.0
+#   julia --project -m Aeolus run examples/validation/configs/log_layer_mismatch.toml   # ~3 min
+#   … --set stepper.end_time=8.0
+#   julia --project examples/validation/log_layer_mismatch.jl [runs-root]   # the tables
 
 [run]
 driver = "channel"

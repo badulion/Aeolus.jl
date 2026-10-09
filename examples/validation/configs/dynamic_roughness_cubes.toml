@@ -1,0 +1,56 @@
+# Dynamic roughness of a staggered cube array (P57-e, #190) — example 3
+#
+# A staggered array of cubes of side h at plan-area density λ_p = 0.25
+# (cubes on a 2h × 2h lattice, alternate rows shifted by h; frontal area
+# density λ_f = λ_p = 0.25), described as a height map on a 16-points-per-h
+# fine grid, seen by LES grids of spacing Δ = h/2, h and 2h. The cubes are
+# then partially resolved: the relief the grid keeps exerts the
+# surface-gradient drag of Anderson & Meneveau (2011), the rest enters
+# z0 = α σ_Δ with the dynamic α of `DynamicRoughness` (spectral test filter
+# at 2Δ, z0_floor = 1e-4 h), under a uniform wind at z_ref = 2h (the
+# `dynamic_roughness` run type). Five runs: Δ = h/2, h, 2h at C_d = 1, and
+# C_d = 0.25 and 4 at Δ = h/2.
+#
+#   julia --project -m Aeolus run examples/validation/configs/dynamic_roughness_cubes.toml   # ~10 s
+#   julia --project examples/validation/dynamic_roughness_cubes.jl [runs-root]    # the table
+
+[run]
+driver = "dynamic_roughness"
+name = "dynamic_roughness_cubes"
+
+[cubes]
+h = 1.0
+per_row = 20
+points_per_side = 16
+
+[roughness]
+z_ref_over_h = 2.0
+wind = 5.0
+z0_floor_over_h = 1e-4
+
+[[sweep.member]]
+label = "d0.5_cd1"
+roughness = { delta_over_h = 0.5, c_d = 1.0 }
+
+[[sweep.member]]
+label = "d1_cd1"
+roughness = { delta_over_h = 1.0, c_d = 1.0 }
+
+[[sweep.member]]
+label = "d2_cd1"
+roughness = { delta_over_h = 2.0, c_d = 1.0 }
+
+[[sweep.member]]
+label = "d0.5_cd0.25"
+roughness = { delta_over_h = 0.5, c_d = 0.25 }
+
+[[sweep.member]]
+label = "d0.5_cd4"
+roughness = { delta_over_h = 0.5, c_d = 4.0 }
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = ["cubes.per_row=4"]
+member = "d0.5_cd1"

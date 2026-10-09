@@ -6,38 +6,43 @@
 # tU0/M = 42 and compared with the measured spectra at 98 and 171, for the
 # dynamic Smagorinsky model, static Smagorinsky (C_s = 0.17) and no model.
 # The harness and the data are shared with the CI test (32³):
-# test/cbc_benchmark_driver.jl, test/data/cbc1971_table3.txt,
+# cbc_benchmark (src/validation_runs/cbc.jl), src/data/cbc1971_table3.txt,
 # test/era6_cbc_decay.jl.
 #
 # The three runs are the sweep examples/validation/configs/cbc_decay.toml
-# (driver "cbc_decay", examples/validation/cbc_driver.jl); this script runs
-# them and draws the figure.
+# (the `cbc_decay` run type, Aeolus.ValidationRuns); this script reads their
+# output/results.toml (the LES spectra and CBC's table 3 with its
+# interpolant) and draws the figure.
 #
-#   julia --project=. examples/validation/cbc_decay.jl
-#   julia --project=. examples/validation/cbc_decay.jl --set grid.n=32
+#   julia --project -m Aeolus run examples/validation/configs/cbc_decay.toml
+#   julia --project examples/validation/cbc_decay.jl [runs-root]
 #
 # writes examples/validation/output/cbc_decay_<N>.svg
 # =========================================================================
 
-using Aeolus
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "cbc_benchmark_driver.jl"))   # cbc_table, cbc_spectrum, cbc_summary
+include(joinpath(@__DIR__, "read_runs.jl"))
 
-runs = run_configs(joinpath(@__DIR__, "configs", "cbc_decay.toml"), ARGS)
-res = Dict{Symbol,Any}(r.obj.cfg.sgs.closure => r.obj.result for r in runs)
-for r in runs
-    println(cbc_summary(String(r.obj.cfg.sgs.closure), r.obj.result))
+runs = member_runs(runs_root(), validation_config("cbc_decay"))
+res = Dict{Symbol,Any}(Symbol(r.cfg["sgs"]["closure"]) => r.res for (_, r) in runs)
+for (_, r) in runs
+    x = r.res
+    @printf("%-12s N=%d×%d  K98/K42 %.3f (CBC %.3f)  K171/K42 %.3f (CBC %.3f)  rms log10 E %.3f / %.3f  E(kc)/CBC %.2f / %.2f  %d steps %.1f s\n",
+            r.cfg["sgs"]["closure"], r.cfg["grid"]["n"], x["nseeds"], x["K_ratio"][1], x["K_ratio_ref"][1],
+            x["K_ratio"][2], x["K_ratio_ref"][2], x["rms_log_err"]..., x["E_kc_ratio"]..., x["nsteps"], x["wall_time"])
 end
-N = runs[1].obj.cfg.grid.n
+N = runs[1][2].cfg["grid"]["n"]
 
 # --- figure: E(k) at the three stations, log-log --------------------------
 function write_figure(path, res, N)
     W, H = 760, 560
     l, r, t, b = 80, 200, 30, 60
     r0 = res[:dynamic]
-    kc = r0.k[N ÷ 2 + 1]
-    kmin, kmax = r0.k[2] / 1.3, 2.2 * kc
-    k_tab, E_tab, _ = cbc_table()
+    k = Float64.(r0["k"]); ref = r0["reference"]
+    kc = k[N ÷ 2 + 1]
+    kmin, kmax = k[2] / 1.3, 2.2 * kc
+    k_tab = Float64.(ref["k_table"])
+    E_tab = hcat((Float64.(ref["E_table_$st"]) for st in (42, 98, 171))...)
     Emin, Emax = 1e-7, 1e-2
     X(k) = l + (W - l - r) * (log10(k) - log10(kmin)) / (log10(kmax) - log10(kmin))
     Y(E) = t + (H - t - b) * (1 - (log10(E) - log10(Emin)) / (log10(Emax) - log10(Emin)))
@@ -64,23 +69,24 @@ function write_figure(path, res, N)
     println(io, """<line x1="$xc" y1="$t" x2="$xc" y2="$(H - b)" stroke="#888" stroke-dasharray="4,4"/>""")
     println(io, """<text x="$(xc + 4)" y="$(t + 14)" fill="#555">k_c</text>""")
     # CBC table 3 (points) and its interpolant (thin line)
-    for s in 1:3
-        kk = exp.(range(log(kmin), log(kmax), length = 200))
-        pts = join(("$(round(X(k), digits=1)),$(round(Y(cbc_spectrum(s)(k)), digits=1))"
-                    for k in kk if Emin < cbc_spectrum(s)(k) < Emax), " ")
+    kk = Float64.(ref["k_curve"])
+    for (s, st) in enumerate((42, 98, 171))
+        Ec = Float64.(ref["E_curve_$st"])
+        pts = join(("$(round(X(q), digits=1)),$(round(Y(e), digits=1))"
+                    for (q, e) in zip(kk, Ec) if Emin < e < Emax), " ")
         println(io, """<polyline points="$pts" fill="none" stroke="$(shade[s])" stroke-width="1" stroke-opacity="0.45"/>""")
-        for (k, E) in zip(k_tab, E_tab[:, s])
-            (isnan(E) || !(kmin <= k <= kmax)) && continue
-            println(io, """<circle cx="$(X(k))" cy="$(Y(E))" r="4" fill="white" stroke="$(shade[s])" stroke-width="1.5"/>""")
+        for (q, E) in zip(k_tab, E_tab[:, s])
+            (isnan(E) || !(kmin <= q <= kmax)) && continue
+            println(io, """<circle cx="$(X(q))" cy="$(Y(E))" r="4" fill="white" stroke="$(shade[s])" stroke-width="1.5"/>""")
         end
     end
     # LES spectra: dynamic (solid), Smagorinsky (dashed), no model (dotted)
     style = Dict(:dynamic => "", :smagorinsky => "stroke-dasharray=\"7,4\"", :none => "stroke-dasharray=\"1.5,3\"")
     for c in (:dynamic, :smagorinsky, :none), s in 1:3
-        rr = res[c]
+        rr = res[c]; Es = Float64.(rr[("E_42", "E_98", "E_171")[s]])
         (c != :dynamic && s == 1) && continue           # identical start
-        pts = join(("$(round(X(rr.k[n+1]), digits=1)),$(round(Y(rr.E_les[s][n+1]), digits=1))"
-                    for n in 1:N÷2 if Emin < rr.E_les[s][n+1] < Emax), " ")
+        pts = join(("$(round(X(k[n+1]), digits=1)),$(round(Y(Es[n+1]), digits=1))"
+                    for n in 1:N÷2 if Emin < Es[n+1] < Emax), " ")
         println(io, """<polyline points="$pts" fill="none" stroke="$(shade[s])" stroke-width="2" $(style[c])/>""")
     end
     # legend
@@ -100,7 +106,7 @@ function write_figure(path, res, N)
     println(io, """<circle cx="$(lx + 15)" cy="$y" r="4" fill="white" stroke="black" stroke-width="1.5"/>""")
     println(io, """<line x1="$lx" y1="$y" x2="$(lx + 30)" y2="$y" stroke="black" stroke-width="1" stroke-opacity="0.45"/>""")
     println(io, """<text x="$(lx + 36)" y="$(y + 4)">CBC 1971, table 3</text>""")
-    println(io, """<text x="$lx" y="$(y + 30)" font-size="11">$(N)³, box 11M, $(r0.nseeds) seeds</text>""")
+    println(io, """<text x="$lx" y="$(y + 30)" font-size="11">$(N)³, box 11M, $(r0["nseeds"]) seeds</text>""")
     println(io, "</svg>")
     mkpath(dirname(path))
     write(path, String(take!(io)))

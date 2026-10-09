@@ -17,57 +17,57 @@
 # Three runs from 23:20 UTC: the reference, the same with the droplets
 # made transparent to radiation (no droplet-radiative feedback), and the
 # same with the sun switched off — the sweep
-# examples/validation/configs/parisfog_2011.toml (driver "column", case
-# "parisfog_2011"). Writes SVG time series to output/.
+# examples/validation/configs/parisfog_2011.toml (the `column` run type,
+# case "parisfog_2011"). This script reads the runs' output/results.toml
+# (the fog diagnostics every fog.dt_out) and writes SVG time series to
+# examples/validation/output/.
 #
-#   julia --project=. examples/validation/parisfog_2011_radiation_fog.jl [--set key=value]
+#   julia --project -m Aeolus run examples/validation/configs/parisfog_2011.toml
+#   julia --project examples/validation/parisfog_2011_radiation_fog.jl [runs-root]
 # =========================================================================
 
-using Aeolus
 using Printf
+include(joinpath(@__DIR__, "read_runs.jl"))
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 
-names = Dict("reference" => "reference", "no_feedback" => "no feedback", "no_sun" => "no sun")
-cols = [(names[chop(r.obj.cfg.run.name; head = length("parisfog_2011_"), tail = 0)], r.obj.state)
-        for r in run_configs(joinpath(@__DIR__, "configs", "parisfog_2011.toml"), ARGS)]
+labels = Dict("reference" => "reference", "no_feedback" => "no feedback", "no_sun" => "no sun")
+cols = [(labels[l], r.res) for (l, r) in member_runs(runs_root(), validation_config("parisfog_2011"))]
+series(c, k) = Float64.(c[k])
 
 sunrise = 24 + 6 + 59 / 60
 println("ParisFog 2011 — observed: fog at ground 02:30 UTC, max LWP ≈ 70 g/m² at 07:30,")
 println("top ≤ 300 m, ground clear ≈ 10:00 UTC (sunrise 06:59 UTC).")
-for (name, col) in cols
-    lc = fog_life_cycle(col.history)
+for (name, c) in cols
     hh(x) = isnan(x) ? "   —   " : @sprintf("%02d:%02d", floor(Int, mod(x, 24)), round(Int, 60 * (x - floor(x))) % 60)
     @printf("%-12s onset %s  ground clear %s  max LWP %6.1f g/m² at %s  max top %5.0f m\n",
-            name, hh(lc.onset), hh(lc.dissipation), lc.max_lwp, hh(lc.t_max_lwp), lc.max_top)
+            name, hh(c["onset_utc_hour"]), hh(c["dissipation_utc_hour"]), c["max_lwp"], hh(c["t_max_lwp_utc_hour"]),
+            c["max_top"])
 end
 
 # Radiative budget of the opaque night-time fog (LWP > 30 g/m²)
-H = cols[1][2].history
-op = filter(h -> h.lwp > 30 && h.utc_hour < sunrise, H)
+H = cols[1][2]
+op = findall(i -> H["lwp"][i] > 30 && H["utc_hour"][i] < sunrise, eachindex(H["lwp"]))
 if !isempty(op)
     mean(x) = sum(x) / length(x)
     @printf("opaque fog (%d samples): sfc net LW %.1f W/m², net LW at fog top %.1f W/m², fog LW loss %.1f W/m²\n",
-            length(op), mean([h.lw_net_sfc for h in op]), mean([h.lw_net_top for h in op]),
-            mean([h.lw_fog for h in op]))
+            length(op), mean(series(H, "lw_net_sfc")[op]), mean(series(H, "lw_net_top")[op]),
+            mean(series(H, "lw_fog")[op]))
     @printf("  fog-top LW cooling %.0f K/day, C_LW %.1f g m⁻² h⁻¹ (Wærsted et al.: 40–70)\n",
-            mean([h.lw_top_cooling for h in op]), mean([h.C_LW for h in op]))
+            mean(series(H, "lw_top_cooling")[op]), mean(series(H, "C_LW")[op]))
 end
 
-outdir = joinpath(pwd(), "output"); mkpath(outdir)
-t = [h.utc_hour - 24 for h in H]          # hours of 15 Nov (negative before midnight)
+outdir = joinpath(@__DIR__, "output"); mkpath(outdir)
+t = series(H, "utc_hour") .- 24          # hours of 15 Nov (negative before midnight)
 save_multiline(joinpath(outdir, "parisfog_lwp.svg"), t,
-               [[h.lwp for h in c.history] for (_, c) in cols],
-               [n for (n, _) in cols];
+               [series(c, "lwp") for (_, c) in cols], [n for (n, _) in cols];
                xlabel = "hours UTC, 15 Nov 2011", ylabel = "fog liquid water path (g/m²)",
                title = "ParisFog 2011: droplet-radiative feedback")
 save_multiline(joinpath(outdir, "parisfog_fog_top.svg"), t,
-               [[h.fog_top for h in c.history] for (_, c) in cols],
-               [n for (n, _) in cols];
+               [series(c, "fog_top") for (_, c) in cols], [n for (n, _) in cols];
                xlabel = "hours UTC, 15 Nov 2011", ylabel = "fog top height (m)",
                title = "ParisFog 2011: fog top")
 save_multiline(joinpath(outdir, "parisfog_surface_lw.svg"), t,
-               [[h.lw_net_sfc for h in c.history] for (_, c) in cols],
-               [n for (n, _) in cols];
+               [series(c, "lw_net_sfc") for (_, c) in cols], [n for (n, _) in cols];
                xlabel = "hours UTC, 15 Nov 2011", ylabel = "net longwave at the ground (W/m²)",
                title = "ParisFog 2011: surface net longwave")
 println("wrote ", outdir, "/parisfog_{lwp,fog_top,surface_lw}.svg")

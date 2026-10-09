@@ -162,8 +162,9 @@ end
 end
 
 @testset "Config: canonical fixed point (shipped + 200 random configs per schema)" begin
-    # shipped configs: every .toml in a registered driver's config directory
-    # (every member of a sweep: the sbl configs are registered at load since EX-b #439)
+    # shipped configs: every .toml in a registered driver's config directory, every member
+    # of a sweep (the validation run types are registered at load since EX-c #440, so
+    # their sweeps are shipped configs here)
     for f in shipped_configs(), (_, cfg) in load_sweep(f)
         t1 = write_config(cfg)
         t2 = write_config(load_run_config(IOBuffer(t1)))

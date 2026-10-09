@@ -191,52 +191,45 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Drivers that live under `examples/` (the Berlin and validation drivers)
-are loaded on first use: [`DRIVER_FILES`](@ref
-Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
-package directory, and the first config that names one includes the file
-into a fresh module. The `sbl` run type moved into `src/` with EX-b (#439,
-[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md)) and is
-registered when the package loads. CFG-d (#359) lists `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
-fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
-(#360) are in the table below. `dns` and `dns_decay` run the same DNS
-(the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
-record and its resolution refusal. The Berlin case's driver is no longer
-an example file: it is the package's urban run type, `urban` (below; EX-a #438).
+The run types of the examples live in `src/` and are registered when the
+package loads: the urban LES (`urban`, `urban_parent`; EX-a #438,
+[`Aeolus.UrbanCase`](urban_case.md)), the stable boundary layers (`sbl`;
+EX-b #439, [`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md))
+and the validation cases (below; EX-c #440). The drivers defined in
+`src/` are [`package_drivers()`](@ref Aeolus.Config.package_drivers).
+[`DRIVER_FILES`](@ref Aeolus.Config.DRIVER_FILES) maps the names of
+drivers that still live under `examples/` to files relative to the
+package directory; the first config that names one includes the file
+into a fresh module.
 
-### The example drivers (CFG-e, #360)
+### The validation run types (EX-c, #440)
 
-| driver | file | builds and runs | configs |
-| :-- | :-- | :-- | :-- |
-| `channel` | `examples/validation/channel_driver.jl` | `half_channel_case` / `channel_case`, `run_channel!` (wall-modelled channel LES) | `validation/configs/neutral_abl.toml`, `log_layer_mismatch.toml` |
-| `column` | `examples/validation/column_driver.jl` | `[column] case`: `dycoms_rf01` (RF01 column + longwave solve), `parisfog_2011` (the RadiationFog column), `droplet_parcel` (spectral broadening, `run_broadening_case`), `kessler_box` (Kessler microphysics, no dynamics) | `validation/configs/dycoms_rf01.toml`, `parisfog_2011.toml`, `spectral_broadening.toml`, `kernels/configs/cloud_spinup.toml` |
-| `cbc_decay` | `examples/validation/cbc_driver.jl` | `cbc_benchmark` (Comte-Bellot & Corrsin decay, spin-up and seeds) | `validation/configs/cbc_decay.toml` |
-| `patchy_surface` | `examples/validation/patchy_surface_driver.jl` | `patchy_les` / `patchy_run!` (CBL over hot and cool strips) | `validation/configs/patchy_surface.toml` |
-| `dns_decay` | `examples/validation/dns_driver.jl` | `dns_decay` (the decaying DNS the a-priori analysis filters) | `validation/configs/apriori_sgs.toml` |
+The validation drivers of CFG-d and CFG-e (#360) are run types in `src/`,
+[`Aeolus.ValidationRuns`](validation_runs.md): `channel`, `column`,
+`cbc_decay`, `patchy_surface`, `dns`, and the new `plant_canopy` and
+`dynamic_roughness`. Their configs are `examples/validation/configs/`
+(`column` also runs `kernels/configs/cloud_spinup.toml`); the scripts of
+`examples/validation/` only read the runs' output.
 
-Each example script is now "run the config(s), then analyse or plot":
-`run_configs(path, ARGS)` takes the script's command line (`--set`,
-`--member`, `--root`, `--allow-uncommitted`) and returns one
-[`RunResult`](@ref Aeolus.Config.RunResult) per run. A driver gets a new
-section only where the case has structure of its own; a driver with a
-`case` switch keeps one section per case and refuses a key set in the
-section of a case that is not selected
+A driver gets a new section only where the case has structure of its
+own; a driver with a `case` switch keeps one section per case and refuses
+a key set in the section of a case that is not selected
 ([`selected_case_sections`](@ref Aeolus.Config.selected_case_sections)).
 A section whose options are the fields of a keyword struct is made with
 [`kwdef_section`](@ref Aeolus.Config.kwdef_section) (the struct's
 defaults are the schema's: `FogColumnSettings` is `[fog]`,
 `BroadeningCase` is `[parcel]`) and read back with
-[`kwdef_value`](@ref Aeolus.Config.kwdef_value).
+[`kwdef_value`](@ref Aeolus.Config.kwdef_value). Example scripts that are
+not yet configuration run their configs with `run_configs(path, ARGS)`
+(`--set`, `--member`, `--root`, `--allow-uncommitted`), one
+[`RunResult`](@ref Aeolus.Config.RunResult) per run.
 
 Not runs, so without a config (`EXEMPT` in `test/config_examples.jl`,
-each with its reason): `validation/canopy_profiles.jl` (steady 1-D
-boundary-value solves), `validation/dynamic_roughness_cubes.jl`
-(a-priori roughness of a height map), `validation/dns256_generate.jl`
-(the offline fixture generator), the Poisson manufactured-solution
-checks, and the library files the drivers include. The same test lists
-every example that calls a stepping entry point and requires a config or
-an exemption; the scripts of #360's later parts are listed there until
-they move.
+each with its reason): the Poisson manufactured-solution checks and the
+library files the drivers include. The same test lists every example
+that calls a stepping entry point and requires a config or an
+exemption, and checks that every script in `examples/validation/` only
+reads run output.
 
 ## Sweeps
 
@@ -496,10 +489,10 @@ Its options, every key with type, default, units, range and doc: [Options: drive
 
 ## The `dns` driver
 
-`[run] driver = "dns"` (`examples/validation/dns_apriori_driver.jl`) is the
-decaying-turbulence DNS of the filtered-DNS fixture
-(`test/fixtures/dns_decay.jl`) and its a-priori record
-(`test/fixtures/dns_apriori.jl`). `examples/validation/configs/dns256.toml`
+`[run] driver = "dns"` ([`DNSDriver`](@ref Aeolus.ValidationRuns.DNSDriver),
+`src/validation_runs/dns.jl`) is the decaying-turbulence DNS of the
+filtered-DNS fixture ([`dns_decay`](@ref Aeolus.ValidationRuns.dns_decay))
+and its a-priori record. `examples/validation/configs/dns256.toml`
 is the offline 256³ run; `--set grid.n=32` runs the pipeline in seconds.
 `[fluid] nu = "scaled"` is the fixture's ν = 0.018 (48/N)^{4/3} times
 `nu_margin` (1.035, the generator's margin), so the file holds no

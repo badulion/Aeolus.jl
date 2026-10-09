@@ -18,7 +18,7 @@
 #   `nsteps` timed steps (at most 11 steps in all: #392, and long Berlin
 #   runs are paused).
 # dns: `step_rk3!` of the 256³ decaying-turbulence DNS
-#   (test/fixtures/dns_decay.jl, as in KA-o's `dns` mode). The per-step
+#   (Aeolus.ValidationRuns, as in KA-o's `dns` mode). The per-step
 #   history of `dns_step!` (on the reduction primitives since #400) is
 #   not profiled; with ROOFLINE_PROF=0 its time is printed for reference. Needs about 8 GB at 256³; run with
 #   AEOLUS_FFTW_PLANNER=estimate (#397).
@@ -381,7 +381,7 @@ end
 
 # ---------------------------------------------------------------------------
 
-MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
+MODE == "dns" && @eval using Aeolus.ValidationRuns     # the DNS fixture (src/validation_runs/dns.jl)
 
 function bench_flagship(; nwarm = 2, nsteps = 9)
     BC = Aeolus.UrbanCase

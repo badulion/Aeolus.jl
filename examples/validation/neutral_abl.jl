@@ -8,10 +8,10 @@
 # function. Built with `half_channel_case` (WallModels); Φ_m and E11 are
 # Operators' `phi_m_profile` and `streamwise_spectrum`.
 #
-# The runs are examples/validation/configs/neutral_abl.toml (driver
-# "channel", examples/validation/channel_driver.jl): a sweep of three
-# closures × two resolutions, each run for 50 H/u* and averaged over the
-# last 40 %. This script runs the sweep, then writes a two-panel figure:
+# The runs are examples/validation/configs/neutral_abl.toml (the `channel`
+# run type, Aeolus.ValidationRuns): a sweep of three closures × two
+# resolutions, each run for 50 H/u* and averaged over the last 40 %. This
+# script reads their output and writes a two-panel figure:
 #   (a) Φ_m(z/H) — the Smagorinsky overshoot near the wall (Mason & Thomson
 #       1992, JFM 242, 51; Porté-Agel et al. 2000 Fig. 7) and the
 #       scale-dependent Lagrangian model (LASD, Bou-Zeid et al. 2005;
@@ -41,18 +41,16 @@
 # Smagorinsky at 32³) instead of showing -5/3. Cost: LASD 544 s at 32³,
 # 3338 s at 48³ (loaded machine), Smagorinsky 199 s at 32³.
 #
-#   julia --project=. examples/validation/neutral_abl.jl                  # the six runs
-#   julia --project=. examples/validation/neutral_abl.jl --member lasd_32x32x32 \
-#         --set stepper.end_time=20.0                                      # one, shorter
+#   julia --project -m Aeolus run examples/validation/configs/neutral_abl.toml     # the six runs
+#   julia --project examples/validation/neutral_abl.jl [runs-root]                 # tables + figure
 #
-# writes examples/validation/output/neutral_abl.svg (and one run folder per
-# member under runs/)
+# This script only reads the runs' output/results.toml (Φ_m, ⟨τ_w⟩ and the
+# spectra the `channel` run type averages, [spectra] of the config) and
+# writes examples/validation/output/neutral_abl.svg.
 # =========================================================================
 
-using Aeolus
 using Printf
-
-const CONFIG = joinpath(@__DIR__, "configs", "neutral_abl.toml")
+include(joinpath(@__DIR__, "read_runs.jl"))
 
 "Least-squares slope of log E against log k over k ∈ [klo, khi]."
 function fit_slope(k, E, klo, khi)
@@ -62,43 +60,28 @@ function fit_slope(k, E, klo, khi)
     return sum((x .- xm) .* (y .- ym)) / sum((x .- xm) .^ 2), count(m)
 end
 
-levels_of(N) = unique(clamp.(round.(Int, (0.06, 0.1, 0.25, 0.5) .* N .+ 0.5), 1, N))
-
-# the spectra: every 10th step from the averaging start on, per run
-spectra = IdDict{Any,Any}()
-function sample_spectrum(r, step)
-    st = r.cfg.stepper
-    (r.case.sim.t >= st.average_from_fraction * st.end_time && step % 10 == 0) || return
-    sp = streamwise_spectrum(r.case.sim.u, levels_of(r.cfg.channel.size[1]))
-    acc = get!(() -> (E = zero(sp.E11), n = Ref(0)), spectra, r)
-    acc.E .+= sp.E11; acc.n[] += 1
-end
-
-runs = run_configs(CONFIG, ARGS; callback = sample_spectrum)
-
-function summarise(res)
-    r = res.obj; st = r.stats; N = r.cfg.channel.size[1]; name = r.cfg.sgs.closure
-    T_END = r.cfg.stepper.end_time; T_AVG = r.cfg.stepper.average_from_fraction * T_END
-    levels = levels_of(N)
-    k1 = streamwise_spectrum(r.case.sim.u, levels).k1
+function summarise(res, cfg)
+    st = cfg["stepper"]; N = cfg["channel"]["size"][1]; name = Symbol(cfg["sgs"]["closure"])
+    T_END = st["end_time"]; T_AVG = st["average_from_fraction"] * T_END
+    zf = Float64.(res["zf"]); phi = Float64.(res["phi_m"])
     @printf("%s, N = %d: %d steps, %.0f s; ⟨τ_w⟩ = %.3f u*² over %.0f-%.0f H/u*\n",
-            name, N, st.nsteps, st.wall_time, st.τ_wall, T_AVG, T_END)
+            name, N, res["nsteps"], res["wall_time"], res["tau_wall"], T_AVG, T_END)
     @printf("   Φ_m at z/H = %s\n", join((@sprintf("%.3f:%.2f", z, p) for (z, p) in
-                                          zip(st.zf[1:min(8, end)], st.phi_m[1:min(8, end)])), "  "))
+                                          zip(zf[1:min(8, end)], phi[1:min(8, end)])), "  "))
     @printf("   max Φ_m below z = 0.3H: %.3f; Φ_m over 0.05 ≤ z/H ≤ 0.3 in [%.3f, %.3f]\n",
-            maximum(st.phi_m[st.zf .<= 0.3]), extrema(st.phi_m[0.05 .<= st.zf .<= 0.3])...)
-    acc = spectra[r]
-    E = acc.E ./ acc.n[]
-    zl = [(k - 0.5) / N for k in levels]
+            maximum(phi[zf .<= 0.3]), extrema(phi[0.05 .<= zf .<= 0.3])...)
+    sp = res["spectra"]
+    k1 = Float64.(sp["k1"]); E = reduce(hcat, [Float64.(e) for e in sp["E11"]]); zl = Float64.(sp["z_over_depth"])
     for (m, z) in enumerate(zl)
         lo, hi = z < 0.2 ? (1.0, 6.0) : (4.0, N / 3)
         sl, npts = fit_slope(k1, E[:, m], lo, hi)
-        @printf("   E11 slope at z/H = %.3f over k1 H ∈ [%.0f, %.1f] (%d points): %.2f\n", z, lo, hi, npts, sl)
+        @printf("   E11 slope at z/H = %.3f over k1 H ∈ [%.0f, %.1f] (%d points, %d samples): %.2f\n",
+                z, lo, hi, npts, sp["nsamples"], sl)
     end
-    return (; N, name, st, k1, E, zl, T_AVG, T_END, C_S = r.cfg.sgs.c_s)
+    return (; N, name, st = (zf = zf, phi_m = phi), k1, E, zl, T_AVG, T_END, C_S = cfg["sgs"]["c_s"])
 end
 
-results = [summarise(res) for res in runs]
+results = [summarise(r.res, r.cfg) for (_, r) in member_runs(runs_root(), validation_config("neutral_abl"))]
 
 # ---- the figure ----------------------------------------------------------
 function write_figure(path, results)

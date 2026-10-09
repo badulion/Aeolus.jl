@@ -2435,7 +2435,7 @@ written, so it ignores halos and caches):
 * The 256³ DNS step (`step_rk3!`, centred advection, no SGS) is made of
   the memory-bound rows plus the FFT solve, hence 1.8-1.9×. Its
   `dns_step!` adds a per-step history in the fixture code
-  (`test/fixtures/dns_decay.jl`) that is not ported: the velocity
+  (then `test/fixtures/dns_decay.jl`, now `src/validation_runs/dns.jl`) that is not ported: the velocity
   derivative skewness (`circshift` and broadcasts, 0.66-0.68 s at every
   thread count) and ε (0.20-0.24 s). That is 0.88 s of the 2.29 s step at
   12 threads, and the reason the DNS run ends at 48 min. With both on the
