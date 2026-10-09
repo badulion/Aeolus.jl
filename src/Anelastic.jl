@@ -98,6 +98,7 @@ using ..TimeIntegration: _step_adaptive!, _max_abs
 import ..TimeIntegration: adaptive_dt, StateSnapshot, save_state!, restore_state!,
                           state_snapshot, _all_finite
 using ..IO: allfinite                    # the one finiteness check (#346)
+import ..IO: checkpoint_fields, checkpoint_reference
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
@@ -2305,5 +2306,14 @@ _all_finite(sim::MassWeightedSimulation) =
     allfinite(interior_view(sim.u)) && allfinite(interior_view(sim.v)) &&
     allfinite(interior_view(sim.w)) && allfinite(interior_view(sim.θ)) &&
     allfinite(interior_view(sim.p))
+
+# Checkpoints (ONE-j, #460): the prognostic fields with their halos and the
+# eddy coefficients of the last evaluation (no qv), and the base state as
+# the prescribed reference a restart must match.
+checkpoint_fields(sim::MassWeightedSimulation) =
+    (u = sim.u, v = sim.v, w = sim.w, p = sim.p, θ = sim.θ, νt = sim.νt, κt = sim.κt)
+checkpoint_reference(sim::MassWeightedSimulation) =
+    (weighting = string(nameof(typeof(sim.weighting))), θ̄ = copy(sim.ref.θ̄), ρ̄ = copy(sim.ref.ρ̄),
+     θ̄_f = copy(sim.ref.θ̄_f), ρ̄_f = copy(sim.ref.ρ̄_f))
 
 end # module

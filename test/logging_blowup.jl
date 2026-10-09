@@ -200,21 +200,49 @@ end
     @test err isa BlowupError && err.checkpoint == "" && err.checkpoint_step == 1
     @test occursin("no crash checkpoint was written", sprint(showerror, err))
 
+    # a core checkpoint! does not cover (a stand-in with the prognostic fields only)
     m = RegularGrid(; size = (6, 6, 6), extent = (600.0, 600.0, 600.0), halo = (3, 3, 3))
     asim = AnelasticSimulation(m; ref = isothermal_reference(m; T_surf = 300.0),
                                bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    @test keys(blowup_fields(asim)) == (:u, :v, :w, :p, :θ)
-    g2 = BlowupGuard(asim; dir = mktempdir())
-    check_blowup!(g2, asim; step = 1)
+    other = (u = asim.u, v = asim.v, w = asim.w, p = asim.p, θ = asim.θ, mesh = m, t = 0.0)
+    @test !Aeolus.IO.can_checkpoint(other)
+    @test keys(blowup_fields(other)) == (:u, :v, :w, :p, :θ)
+    g2 = BlowupGuard(other; dir = mktempdir())
+    check_blowup!(g2, other; step = 1)
     @test g2.good === nothing
     asim.w.data[5, 5, 5] = -Inf
     lg = Test.TestLogger(; min_level = Logging.Warn)
     err2 = with_logger(lg) do
-        try; check_blowup!(g2, asim; step = 2, force = true); catch e; e; end
+        try; check_blowup!(g2, other; step = 2, force = true); catch e; e; end
     end
     @test err2 isa BlowupError && err2.checkpoint == "" && [f.name for f in err2.fields] == [:w]
-    @test occursin("does not cover a MassWeightedSimulation", lg.logs[end].message)
+    @test occursin("does not cover a NamedTuple", lg.logs[end].message)
     @test isempty(readdir(g2.dir))
+end
+
+@testset "the anelastic core: the last good state is its crash checkpoint (ONE-j, #460)" begin
+    # before ONE-j checkpoint! took the Boussinesq core only and an anelastic
+    # blowup was diagnosed without a checkpoint
+    m = RegularGrid(; size = (6, 6, 6), extent = (600.0, 600.0, 600.0), halo = (3, 3, 3))
+    mk() = AnelasticSimulation(m; ref = isothermal_reference(m; T_surf = 300.0),
+                               bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    asim = mk()
+    interior_view(asim.u) .= 0.3
+    step!(asim, 1.0)
+    @test keys(blowup_fields(asim)) == (:u, :v, :w, :p, :θ, :νt, :κt)
+    g2 = BlowupGuard(asim; dir = mktempdir())
+    check_blowup!(g2, asim; step = 1)
+    @test g2.good !== nothing
+    good = copy(asim.u.data)
+    asim.w.data[5, 5, 5] = -Inf
+    err2 = with_logger(NullLogger()) do
+        try; check_blowup!(g2, asim; step = 2, force = true); catch e; e; end
+    end
+    @test err2 isa BlowupError && err2.checkpoint != "" && err2.checkpoint_step == 1
+    @test [f.name for f in err2.fields] == [:w]
+    fresh = mk()
+    restart!(fresh, err2.checkpoint)
+    @test fresh.u.data == good && fresh.t == 1.0 && all(isfinite, fresh.w.data)
 end
 
 @testset "run monitor in a run folder: CSV, progress, crash/, failed session" begin

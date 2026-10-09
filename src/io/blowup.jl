@@ -42,12 +42,13 @@ Base.show(io::Base.IO, f::NonFiniteField) =
 """
     blowup_fields(sim) -> NamedTuple of Fields
 
-The fields the blowup check inspects: for a `BoussinesqSimulation`
-its [`checkpoint_fields`](@ref) (`u, v, w, p, θ, qv, νt, κt`); for any
-other simulation those of `u, v, w, p, θ, qv` it has.
+The fields the blowup check inspects: for a checkpointable core
+([`can_checkpoint`](@ref): the Boussinesq and the sound-proof cores) its
+[`checkpoint_fields`](@ref) (`u, v, w, p, θ`, `qv` on the Boussinesq core,
+`νt, κt`); for any other simulation those of `u, v, w, p, θ, qv` it has.
 """
-blowup_fields(sim::BoussinesqSimulation) = checkpoint_fields(sim)
 function blowup_fields(sim)
+    can_checkpoint(sim) && return checkpoint_fields(sim)
     names = Tuple(n for n in (:u, :v, :w, :p, :θ, :qv) if hasproperty(sim, n) &&
                   getproperty(sim, n) isa Field)
     return NamedTuple{names}(map(n -> getproperty(sim, n), names))
@@ -227,10 +228,8 @@ end
 crash_checkpoint_path(g::BlowupGuard, step::Integer) =
     joinpath(g.dir, string(g.prefix, "_", lpad(step, 9, '0'), ".jls"))
 
-_can_checkpoint(sim) = sim isa BoussinesqSimulation
-
 function _payload(g::BlowupGuard, sim, step)
-    _can_checkpoint(sim) || return nothing
+    can_checkpoint(sim) || return nothing
     return checkpoint_payload(sim; sgs = g.sgs, components = g.components,
                               stepper = g.stepper, rng = g.rng,
                               extra = Dict{Symbol,Any}(:step => step))
@@ -243,7 +242,7 @@ Keep the current state of `sim` as the last good state (without
 checking it; [`check_blowup!`](@ref) calls this after a passing check).
 """
 function snapshot_good!(g::BlowupGuard, sim; step::Integer)
-    _can_checkpoint(sim) || return g
+    can_checkpoint(sim) || return g
     # the field copies reuse the buffers of the previous snapshot
     g.good = checkpoint_payload(sim; sgs = g.sgs, components = g.components,
                                 stepper = g.stepper, rng = g.rng,
@@ -316,7 +315,7 @@ function blowup!(g::BlowupGuard, sim; step::Integer, fields = nonfinite_fields(s
     dom = current_domain()
     # 1. the crash checkpoint: the current state if it is still finite, else the last good one
     payload = nothing; cstep = -1
-    if isempty(fields) && _can_checkpoint(sim)
+    if isempty(fields) && can_checkpoint(sim)
         payload = _payload(g, sim, step); cstep = step
     elseif g.good !== nothing
         payload = g.good; cstep = g.good_step
@@ -353,7 +352,7 @@ function blowup!(g::BlowupGuard, sim; step::Integer, fields = nonfinite_fields(s
           cause === nothing ? "blowup declared" : "the step threw " * string(nameof(typeof(cause)))
     ckmsg = !isempty(path) ? "crash checkpoint of step $cstep written" :
             g.dir === nothing ? "no crash checkpoint (no directory given)" :
-            !_can_checkpoint(sim) ? "no crash checkpoint (checkpoint! does not cover a $(nameof(typeof(sim))))" :
+            !can_checkpoint(sim) ? "no crash checkpoint (checkpoint! does not cover a $(nameof(typeof(sim))))" :
             "no crash checkpoint (no good state was recorded)"
     msg = "blowup at step $step, t = $t s: $why; $ckmsg"
     # the cause without its backtrace: with_run logs the BlowupError with one
