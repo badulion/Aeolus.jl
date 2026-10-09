@@ -254,16 +254,52 @@ prognostic `u, v, w, p, θ, qv` and the eddy coefficients of the last
 evaluation `νt, κt` (a step's CFL estimate or a driver's dt choice may read
 them before the closure recomputes them). Tendencies and scratch buffers
 are rewritten before they are read in every step and are not stored.
+
+A dynamical core is checkpointable when it has a method
+([`can_checkpoint`](@ref)): the Boussinesq core here, the sound-proof
+(anelastic, pseudo-incompressible) cores in `Anelastic` — `u, v, w, p, θ,
+νt, κt`, they carry no `qv` (ONE-j, #460).
 """
 checkpoint_fields(sim::BoussinesqSimulation) =
     (u = sim.u, v = sim.v, w = sim.w, p = sim.p, θ = sim.θ, qv = sim.qv,
      νt = sim.νt, κt = sim.κt)
+
+"""
+    can_checkpoint(sim) -> Bool
+
+Whether [`checkpoint!`](@ref) / [`restart!`](@ref) take the dynamical core
+`sim`: it has a [`checkpoint_fields`](@ref) method (the Boussinesq and the
+sound-proof cores).
+"""
+can_checkpoint(sim) = hasmethod(checkpoint_fields, Tuple{typeof(sim)})
+
+_require_checkpoint(sim) =
+    can_checkpoint(sim) ||
+        throw(ArgumentError("checkpoint: a $(nameof(typeof(sim))) has no checkpoint_fields method " *
+                            "(the checkpointable cores: BoussinesqSimulation, the sound-proof cores)"))
+
+"""
+    checkpoint_reference(sim) -> record or nothing
+
+The prescribed state of a core that is not prognostic but that its steps
+read, recorded in a checkpoint and compared on restart like the scalar
+parameters: `nothing` for the Boussinesq core; the base state of a
+sound-proof core (its weighting, `θ̄`, `ρ̄` at the centres and the faces,
+methods in `Anelastic`). A restart onto another base state is a
+different experiment and is refused (or warned with `allow_mismatch`).
+"""
+checkpoint_reference(sim) = nothing
 
 # dz: the uniform spacing, or a StretchedGrid's cell thicknesses (it has no
 # `dz` field; a stretched run's checkpoint failed on it before CFG-b, #357)
 _mesh_record(m) = (Nx = m.Nx, Ny = m.Ny, Nz = m.Nz, Hx = m.Hx, Hy = m.Hy, Hz = m.Hz,
                    Lx = m.Lx, Ly = m.Ly, Lz = m.Lz, dx = m.dx, dy = m.dy,
                    dz = hasfield(typeof(m), :dz) ? m.dz : copy(m.dzc))
+
+# a base-state record in an error message: its weighting and θ̄, ρ̄ at the bottom and the top
+_short_reference(::Nothing) = "none"
+_short_reference(r) = string(r.weighting, " (θ̄ ", first(r.θ̄), " → ", last(r.θ̄), " K, ρ̄ ",
+                             first(r.ρ̄), " → ", last(r.ρ̄), " kg m⁻³)")
 
 # the run's scalar parameters (numbers and flags of the simulation struct)
 _parameters(sim) = Dict{Symbol,Any}(n => getfield(sim, n) for n in fieldnames(typeof(sim))
@@ -305,7 +341,7 @@ write never leaves a truncated checkpoint under `path`. The format is
 Julia's `Serialization`: portable across machines with the same Julia
 version (recorded; a mismatch warns on restart).
 """
-function checkpoint!(sim::BoussinesqSimulation, path::AbstractString;
+function checkpoint!(sim, path::AbstractString;
                      sgs = nothing, components = (;), stepper = nothing,
                      rng = nothing, extra::AbstractDict = Dict{Symbol,Any}())
     return write_checkpoint(path, checkpoint_payload(sim; sgs, components, stepper, rng, extra))
@@ -323,10 +359,11 @@ this way and writes it as the crash checkpoint. `buffers`, the `:fields`
 of an earlier payload of the same simulation, are reused for the field
 copies (no allocation); they then belong to the new payload.
 """
-function checkpoint_payload(sim::BoussinesqSimulation;
+function checkpoint_payload(sim;
                             sgs = nothing, components = (;), stepper = nothing,
                             rng = nothing, extra::AbstractDict = Dict{Symbol,Any}(),
                             buffers::Union{Nothing,AbstractDict} = nothing)
+    _require_checkpoint(sim)
     closure = sgs === nothing ? nothing : sgs_closure(sgs)
     comps = _component_dict(components)
     fields = Dict{Symbol,Any}()
@@ -345,6 +382,7 @@ function checkpoint_payload(sim::BoussinesqSimulation;
         :t              => sim.t,
         :fields         => fields,
         :parameters     => _parameters(sim),
+        :reference      => checkpoint_reference(sim),
         :closure_type   => closure === nothing ? "" : string(nameof(typeof(closure))),
         :closure        => checkpoint_state(closure),
         :components     => Dict{Symbol,Any}(k => (type = string(nameof(typeof(v))),
@@ -424,7 +462,7 @@ change, e.g. a new sponge); the differences are then logged with `@warn`.
 Refuses unversioned snapshots (see [`read_checkpoint`](@ref)). To read the
 checkpoint's `extra` or provenance, use [`read_checkpoint`](@ref).
 """
-function restart!(sim::BoussinesqSimulation, path::AbstractString;
+function restart!(sim, path::AbstractString;
                   sgs = nothing, components = (;), stepper = nothing, rng = nothing,
                   allow_mismatch::Bool = false)
     restore_checkpoint!(sim, read_checkpoint(path); sgs, components, stepper, rng, path,
@@ -433,9 +471,10 @@ function restart!(sim::BoussinesqSimulation, path::AbstractString;
 end
 
 # The restoring half of restart!, on an already read payload.
-function restore_checkpoint!(sim::BoussinesqSimulation, d::AbstractDict;
+function restore_checkpoint!(sim, d::AbstractDict;
                              sgs = nothing, components = (;), stepper = nothing,
                              rng = nothing, path = "checkpoint", allow_mismatch::Bool = false)
+    _require_checkpoint(sim)
     d[:julia_version] == string(VERSION) ||
         @warn("restart!: $path was written by Julia $(d[:julia_version]), this is $(VERSION)",
               subsystem = :checkpoint, domain = current_domain(), path,
@@ -448,10 +487,14 @@ function restore_checkpoint!(sim::BoussinesqSimulation, d::AbstractDict;
         throw(ArgumentError("restart!: domain mismatch: file $((fm.Lx, fm.Ly, fm.Lz)) vs. sim $((m.Lx, m.Ly, m.Lz))"))
     d[:sim_type] == string(nameof(typeof(sim))) ||
         throw(ArgumentError("restart!: checkpoint of a $(d[:sim_type]), restoring into a $(nameof(typeof(sim)))"))
-    p = _parameters(sim)
-    diff = sort!([k for (k, v) in d[:parameters] if haskey(p, k) && !isequal(p[k], v)])
+    p = _parameters(sim); fp = copy(d[:parameters])
+    # the prescribed base state (a sound-proof core's θ̄, ρ̄): the same rule
+    ref = checkpoint_reference(sim); fref = get(d, :reference, nothing)
+    isequal(ref, fref) ||
+        (p[:reference] = _short_reference(ref); fp[:reference] = _short_reference(fref))
+    diff = sort!([k for (k, v) in fp if haskey(p, k) && !isequal(p[k], v)])
     if !isempty(diff)
-        list = join(("$k = $(p[k]) (checkpoint: $(d[:parameters][k]))" for k in diff), ", ")
+        list = join(("$k = $(p[k]) (checkpoint: $(fp[k]))" for k in diff), ", ")
         allow_mismatch ||
             throw(ArgumentError("restart!: run parameters differ from the checkpointed run in " *
                                 "$path: $list. Build the simulation with the checkpoint's " *

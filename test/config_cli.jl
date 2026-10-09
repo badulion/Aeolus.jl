@@ -1,4 +1,4 @@
-# The aeolus command line and the driver registry (CFG-b, #357):
+# The aeolus command line and the schema registry (CFG-b, #357; ONE-b, #451):
 # src/cli/main.jl, src/config/drivers.jl, bin/aeolus, Aeolus.main.
 #
 # Acceptance tests of the issue covered here (in-process, through
@@ -20,8 +20,8 @@ using Aeolus.IO: read_run_toml
 
 const CLI_CFGS = joinpath(pkgdir(Aeolus), "examples", "configs")
 const TGV = joinpath(CLI_CFGS, "taylor_green_vortex.toml")
-const SMALL = ["--set", "grid.size=[8,8,8]", "--set", "stepper.end_time=\"none\"",
-               "--set", "stepper.nsteps=4", "--set", "fftw.planner=\"estimate\""]
+const SMALL = ["--set", "grid.size=[8,8,8]", "--set", "time.duration=\"none\"",
+               "--set", "time.nsteps=4", "--set", "fftw.planner=\"estimate\""]
 
 "Run `Aeolus.main(args)` in-process: (exit code, stdout text, stderr text)."
 function cli(args...)
@@ -34,33 +34,33 @@ cli_file(text) = (p = joinpath(mktempdir(), "c.toml"); write(p, text); p)
 
 @testset "aeolus check / resolve" begin
     rc, out, _ = cli("check", TGV)
-    @test rc == 0 && occursin("ok", out) && occursin("simulation", out)
+    @test rc == 0 && occursin("ok", out) && occursin("the model", out)
     bad = cli_file("""
-        [run]
-        driver = "simulation"
+        schema_version = 2
         [grid]
         size = [16, 16]
-        [stepper]
+        [time]
         dt = 0.1
-        end_time = 1.0
+        duration = 1.0
         shceme = "euler"
         """)
     rc, out, err = cli("check", bad)
     @test rc == 2
     @test occursin("grid.size", err) && occursin("3 integers", err)
-    @test occursin("stepper.shceme", err) && occursin("did you mean \"scheme\"", err)
+    @test occursin("time.shceme", err) && occursin("did you mean \"scheme\"", err)
     @test occursin(bad, err)
     @test isempty(out)
     # a bad override is a config error too
-    rc, _, err = cli("check", TGV, "--set", "stepper.dt=-1.0")
-    @test rc == 2 && occursin("stepper.dt", err)
+    rc, _, err = cli("check", TGV, "--set", "time.dt=-1.0")
+    @test rc == 2 && occursin("time.dt", err)
     # resolve: the canonical text, which loads back to the same config
     rc, out, _ = cli("resolve", TGV, "--set", "grid.size=[16,16,16]")
     @test rc == 0
     cfg = load_run_config(IOBuffer(out))
     @test cfg == load_run_config(TGV; overrides = ["grid.size=[16,16,16]"])
     @test cfg.grid.size == (16, 16, 16)
-    @test startswith(out, "schema_version = 1")
+    @test startswith(out, "schema_version = 2")
+    @test occursin("\n[[domain]]\n", out) && occursin("\n[domain.grid]\n", out)
 end
 
 @testset "aeolus run, run --resume, run from run.toml" begin
@@ -75,7 +75,7 @@ end
     end
     @test countlines(joinpath(folder, "diagnostics.csv")) == 5          # header + 4 steps
     rec = read_run_toml(folder)
-    @test rec["config"]["stepper"]["nsteps"] == 4
+    @test rec["config"]["time"]["nsteps"] == 4
     @test rec["config"]["run"]["root"] == "runs"         # --root is not part of the config
     @test occursin("run started", read(joinpath(folder, "run.log"), String))
     # --resume continues that run: the same ID, a second session
@@ -100,7 +100,7 @@ end
     root = mktempdir()
     # a step far beyond the stability limit: the fields are NaN by step 11 and the
     # blowup guard stops the run (after 4 steps they are still finite, |u| ~ 5e10)
-    rc, _, err = cli("run", TGV, SMALL..., "--set", "stepper.dt=50.0", "--set", "stepper.nsteps=20", "--root", root,
+    rc, _, err = cli("run", TGV, SMALL..., "--set", "time.dt=50.0", "--set", "time.nsteps=20", "--root", root,
                      "--allow-uncommitted")
     @test rc == 1
     @test occursin("run failed", err) && occursin("blew up", err)
@@ -110,11 +110,13 @@ end
     root2 = mktempdir()
     for args in (["bogus"], ["run"], ["run", TGV, "--frobnicate", "--root", root2],
                  ["run", TGV, "--resume", "--root", root2],                  # not a run folder
-                 ["run", folder, "--resume", "--set", "stepper.nsteps=8"],   # --set with --resume
+                 ["run", folder, "--resume", "--set", "time.nsteps=8"],      # --set with --resume
                  ["run", TGV, "--set", "grid.size=[0,8,8]", "--root", root2],
-                 ["run", TGV, "--set", "run.driver=\"common\"", "--root", root2],
-                 ["check"], ["check", "/nonexistent/c.toml"], ["options", "nodriver"],
-                 ["options", "simulation", "nosection"], ["preprocess", "nokind"])
+                 ["run", TGV, "--set", "run.driver=\"simulation\"", "--root", root2],   # removed (ONE-b)
+                 ["run", TGV, "--set", "run.legacy=\"nocase\"", "--root", root2],
+                 ["check"], ["check", "/nonexistent/c.toml"], ["options", "nosection"],
+                 ["options", "nocase", "grid"], ["options", "sbl", "nosection"],
+                 ["preprocess", "static", TGV])                               # AeolusPrep.jl's since ONE-h (#457)
         rc, _, err = cli(args...)
         @test rc == 2
         @test !isempty(err)
@@ -127,53 +129,40 @@ end
 end
 
 @testset "aeolus options: the reference generated from the schema" begin
-    rc, out, _ = cli("options", "simulation", "grid")
+    rc, out, _ = cli("options", "grid")                  # a section of the model
     @test rc == 0
-    @test occursin("[grid]", out) && !occursin("[stepper]", out)
+    @test occursin("[grid]", out) && !occursin("[time]", out)
     @test occursin("size : [3 × integer] = [32, 32, 32]", out)
-    @test occursin("extent : [3 × float] = [1.0, 1.0, 1.0]  [m]", out)
-    rc, out, _ = cli("options", "simulation")
-    sch = Config.driver_schema("simulation")
+    @test occursin("extent : [3 × float] = [3200.0, 3200.0, 1600.0]  [m]", out)
+    @test occursin("Per domain", out)                    # a per-domain section says so
+    rc, out, _ = cli("options")
+    @test rc == 0
+    sch = Config.driver_schema()
+    @test sch.name == "model"
     for s in sch.sections, o in s.options          # every option of every section is listed
         @test occursin("\n  $(o.key) : ", out)
     end
-    @test occursin("fields : [string, …] = []", out)        # [output] extended by the driver
-    rc, out, _ = cli("options")
-    @test rc == 0 && occursin("registered drivers: ", out) && occursin("simulation", out)
+    @test occursin("variables : [string, …] = []", out)     # [output] extended by the model
+    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("sbl", out) && occursin("urban", out)
     # the cross-field checks, in words (CFG-i, #364): after the sections, one line each
-    rc, out, _ = cli("options", "simulation")
-    @test occursin("\ncross-field checks:\n  - exactly one of `stepper.dt` and `stepper.cfl`", out)
-    rc, out1, _ = cli("options", "simulation", "grid")
+    @test occursin("\ncross-field checks:\n  - exactly one of `time.duration` and `time.nsteps`", out)
+    rc, out1, _ = cli("options", "grid")
     @test !occursin("cross-field checks", out1)          # one section: no checks
+    # a legacy case, and one of its sections
+    rc, out, _ = cli("options", "sbl", "stepper")
+    @test rc == 0 && occursin("[stepper]", out) && occursin("the legacy case \"sbl\"", out)
     # --markdown: the docs' tables, the same text option_reference(...; format = :markdown) gives
-    rc, md, _ = cli("options", "simulation", "--markdown")
-    @test rc == 0 && md == option_reference("simulation"; format = :markdown)
+    rc, md, _ = cli("options", "--markdown")
+    @test rc == 0 && startswith(md, option_reference(; format = :markdown))
+    md = option_reference(; format = :markdown)
     @test occursin("\n## `[grid]`\n", md) && occursin("\n## Cross-field checks\n", md)
-    @test occursin("| `extent` | [3 × float] | `[1.0, 1.0, 1.0]` | `m` | (0, Inf] |", md)
+    @test occursin("| `extent` | [3 × float] | `[3200.0, 3200.0, 1600.0]` | `m` | (0, Inf] |", md)
     # `|` inside a cell is escaped, so a row keeps its six cells
-    @test occursin("| `cfl` | float \\| \"none\" | `\"none\"` | `1` |", md)
-    @test_throws ArgumentError option_reference("simulation"; format = :html)
+    @test occursin("| `dt` | float \\| string | `\"adaptive\"` | `s` |", md)
+    @test_throws ArgumentError option_reference(; format = :html)
 end
 
-@testset "aeolus preprocess: registered preprocessors" begin
-    seen = String[]
-    register_preprocessor!("cfgtest_echo", args -> (append!(seen, args); 0), "cfgtest_echo <words…>")
-    register_preprocessor!("cfgtest_fail", args -> throw(ArgumentError("bad input file")), "cfgtest_fail")
-    try
-        rc, out, _ = cli("preprocess")
-        @test rc == 0 && occursin("cfgtest_echo <words…>", out)
-        @test cli("preprocess", "cfgtest_echo", "a", "b")[1] == 0
-        @test seen == ["a", "b"]
-        rc, _, err = cli("preprocess", "cfgtest_fail")
-        @test rc == 2 && occursin("bad input file", err)
-        rc, _, err = cli("preprocess", "cfgtest_ech")
-        @test rc == 2 && occursin("did you mean \"cfgtest_echo\"", err)
-    finally
-        delete!(Config._PREPROCESSORS, "cfgtest_echo"); delete!(Config._PREPROCESSORS, "cfgtest_fail")
-    end
-end
-
-@testset "example drivers are loaded on first use (DRIVER_FILES)" begin
+@testset "example legacy cases are loaded on first use (DRIVER_FILES)" begin
     dir = mktempdir()
     drv = joinpath(dir, "toy_driver.jl")
     write(drv, """
@@ -195,7 +184,7 @@ end
     Config.DRIVER_FILES["cfgtest_toy"] = drv            # absolute: joinpath keeps it
     try
         @test !("cfgtest_toy" in registered_drivers())
-        p = cli_file("[run]\ndriver = \"cfgtest_toy\"\n[toy]\nsteps = 5\n")
+        p = cli_file("[run]\nlegacy = \"cfgtest_toy\"\n[toy]\nsteps = 5\n")
         cfg = load_run_config(p)                        # the schema lookup loads the file
         @test "cfgtest_toy" in registered_drivers()
         @test cfg.toy.steps == 5
@@ -203,9 +192,9 @@ end
         @test Base.invokelatest(state_fields, res.obj).x == [32.0]   # defined after this testset compiled
         # a listed file that registers nothing is a config error
         Config.DRIVER_FILES["cfgtest_none"] = cli_file("x = 1")
-        e = try load_run_config(cli_file("[run]\ndriver = \"cfgtest_none\"\n")); catch err; err; end
+        e = try load_run_config(cli_file("[run]\nlegacy = \"cfgtest_none\"\n")); catch err; err; end
         @test e isa ConfigError && occursin("did not register", sprint(showerror, e))
-        # "common" has a schema but no driver
+        # "common" has a schema but nothing runs it
         @test_throws ConfigError run_driver("common")
     finally
         delete!(Config.DRIVER_FILES, "cfgtest_toy"); delete!(Config.DRIVER_FILES, "cfgtest_none")

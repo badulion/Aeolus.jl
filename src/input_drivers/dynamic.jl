@@ -472,7 +472,7 @@ and `init_time`. `mesh` (needed with 3-D fields) gives the `x`, `y`, `z`
 coordinates and `dx`, `dy`.
 """
 function write_dynamic_driver(path::AbstractString, d::DynamicInputs; mesh = nothing, source::AbstractString = "",
-                              preprocessor::AbstractString = "aeolus preprocess dynamic",
+                              preprocessor::AbstractString = "",
                               origin_lat = NaN, origin_lon = NaN, origin_x = NaN, origin_y = NaN,
                               dx = NaN, dy = NaN)
     ds = _create_dynamic(path, d.init_time, d.attributes; mesh, source, preprocessor, origin_lat, origin_lon,

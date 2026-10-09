@@ -9,8 +9,9 @@
 #   julia --project -m Aeolus run examples/coupled/configs/heated_plume.toml
 #   julia --project=. examples/coupled/plot_heated_plume.jl runs/<date>_heated_plume_<id>
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "heated_plume"
 seed = 2
 
@@ -21,8 +22,6 @@ extent = [2000.0, 2000.0, 1500.0]
 [dynamics]
 theta0 = 300.0
 g = 9.81
-sponge_alpha_max = 0.02
-sponge_z_start = 1200.0
 
 [boundaries]
 z = "free_slip"
@@ -31,6 +30,10 @@ z = "free_slip"
 closure = "smagorinsky"
 c_s = 0.15
 pr_t = 0.3333333333333333
+
+[sponge]
+alpha_max = 0.02
+z_start = 1200.0
 
 [initial]
 theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 1000.0, lapse = 0.005 }
@@ -41,17 +44,17 @@ model = "flux_map"
 flux_background = 0.02
 flux_patches = { hot = { x = [750.0, 1250.0], y = [750.0, 1250.0], value = 0.3 } }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 2.0
-end_time = 900.0
+duration = 900.0
 
 [output]
-fields = ["theta"]
+variables = ["theta"]
 cadence = 900.0
 
 [logging]
 diagnostics_cadence = 60.0
 
 [test]
-overrides = ["grid.size=[16,16,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]

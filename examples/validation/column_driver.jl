@@ -29,7 +29,6 @@ include(joinpath(@__DIR__, "dycoms_rf01", "rf01.jl"))
 struct ColumnDriver <: AbstractRunDriver end
 
 Config.driver_name(::ColumnDriver) = "column"
-Config.config_dir(::ColumnDriver) = joinpath(@__DIR__, "configs")
 
 const _CASE_SECTIONS = ("dycoms_rf01" => "dycoms_rf01", "parisfog_2011" => "fog",
                         "kessler_box" => "kessler_box", "droplet_parcel" => "parcel")

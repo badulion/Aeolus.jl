@@ -1,10 +1,12 @@
-# Config loader: extends, overrides, run.toml, inputs, common sections
-# (CFG-a, #356): src/config/{load,run_record,common}.jl.
+# Config loader: one self-contained file, overrides, run.toml, inputs,
+# common sections (CFG-a, #356; schema 2, ONE-b #451):
+# src/config/{load,run_record,common}.jl.
 #
-# Acceptance tests of the issue covered here:
-#   * merge semantics: a 3-level extends chain plus 2 overrides gives the
-#     resolved table written out literally below; base < child < override;
-#   * extends cycles and missing extends files are ConfigErrors;
+# Acceptance tests covered here:
+#   * a file plus 2 overrides gives the resolved table written out literally
+#     below; file < override; an override table replaces;
+#   * `extends` and schema_version 1 are refused with what changed (ONE-b:
+#     every config is self-contained);
 #   * run.toml: a run started with a RunConfig stores [config] such that
 #     load_run_config(folder) == cfg with an equal config_hash, also after
 #     a restart (test/logging_run_folder.jl covers the toml_value callers,
@@ -36,50 +38,32 @@ end
 cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo = mktempdir(),
                                    console = false, kw...)
 
-@testset "Config: 3-level extends chain + 2 overrides" begin
+@testset "Config: one file + 2 overrides" begin
     dir = mktempdir()
     mkpath(joinpath(dir, "base"))
-    write(joinpath(dir, "base", "base.toml"), """
-        [run]
-        driver = "cfgtest"
-        name = "base"
-        [grid]
-        size = [64, 64, 32]
-        stretch = 1.1
-        levels = [0.0, 5.0, 10.0]
-        [clock]
-        nsteps = 100
-        dt = 1.0
-        [physics]
-        label = "base"
-        tags = ["a", "b"]
-        terrain = "dem.tif"           # relative to base/
-        [physics.couplings.wall]
-        z0 = 0.1
-        kind = "log"
-        """)
-    write(joinpath(dir, "mid.toml"), """
-        extends = "base/base.toml"
-        [grid]
-        stretch = 1.2
-        levels = [1.0]                # arrays replace, they do not merge
-        [clock]
-        dt = 0.5
-        [physics]
-        tags = ["c"]
-        [physics.couplings.wall]
-        z0 = 0.5                      # tables merge key by key
-        [physics.couplings.canopy]
-        lai = 3.0
-        """)
     child = joinpath(dir, "child.toml")
     write(child, """
-        extends = "mid.toml"
+        schema_version = 2
         [run]
+        legacy = "cfgtest"
         name = "child"
+        [grid]
+        size = [64, 64, 32]
+        stretch = 1.2
+        levels = [1.0]
         [clock]
         nsteps = 200
+        dt = 0.5
         scheme = "ab2"
+        [physics]
+        label = "base"
+        tags = ["c"]
+        terrain = "base/dem.tif"      # relative to this file
+        [physics.couplings.wall]
+        z0 = 0.5
+        kind = "log"
+        [physics.couplings.canopy]
+        lai = 3.0
         """)
     cfg = load_run_config(child; overrides = ["clock.nsteps=300", "grid.size=[16,16,8]"])
     t = to_toml(cfg)
@@ -93,18 +77,15 @@ cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo
         "inputs" => Any[], "profile" => "linear",
         "couplings" => Dict{String,Any}("wall" => Dict{String,Any}("z0" => 0.5, "kind" => "log"),
                                         "canopy" => Dict{String,Any}("lai" => 3.0)))
-    @test t["run"]["name"] == "child" && t["run"]["driver"] == "cfgtest"
-    @test !haskey(t, "extends") && t["schema_version"] == 1
+    @test t["run"]["name"] == "child" && t["run"]["legacy"] == "cfgtest"
+    @test t["schema_version"] == 2 && !haskey(t, "domain")      # a legacy case has no domains
     # where each value came from
     @test config_origin(cfg, "clock.nsteps") == "--set"
     @test config_origin(cfg, "clock.scheme") == child
-    @test config_origin(cfg, "clock.dt") == joinpath(dir, "mid.toml")
-    @test config_origin(cfg, "physics.label") == joinpath(dir, "base", "base.toml")
-    @test config_sources(cfg)["files"] == [child, joinpath(dir, "mid.toml"), joinpath(dir, "base", "base.toml")]
+    @test config_origin(cfg, "clock.adaptive") == "default"
+    @test config_sources(cfg)["files"] == [child]
     @test config_sources(cfg)["overrides"] == ["clock.nsteps=300", "grid.size=[16,16,8]"]
-    # precedence base < child < override, one key at a time
-    @test load_run_config(child).clock.nsteps == 200
-    @test load_run_config(joinpath(dir, "mid.toml")).clock.nsteps == 100
+    @test load_run_config(child).clock.nsteps == 200              # file < override
     # an override with a table value, and one with a string
     c2 = load_run_config(child; overrides = ["physics.couplings.wall={z0=2.0}", "run.name=\"x y\""])
     @test c2.physics.couplings["wall"] == Dict("z0" => 2.0)          # an override table replaces
@@ -115,51 +96,34 @@ cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo
     @test length(e.problems) == 4
     m = sprint(showerror, e)
     @test occursin("(--set)", m) && occursin("strings are quoted", m) && occursin("did you mean \"nsteps\"", m)
-    # the extends chain also resolves through a run folder-less IOBuffer (base dir = pwd)
-    @test load_run_config(IOBuffer("[run]\ndriver = \"cfgtest\"\n[clock]\nnsteps = 5\n")).clock.nsteps == 5
+    # an IOBuffer (base dir = pwd)
+    @test load_run_config(IOBuffer("[run]\nlegacy = \"cfgtest\"\n[clock]\nnsteps = 5\n")).clock.nsteps == 5
 end
 
-@testset "Config: extends lookup, cycles, missing files, depth" begin
-    # not next to the extending file: the driver's config directory
-    write(joinpath(CFGT_DIR, "cfgt_base.toml"), "[run]\ndriver = \"cfgtest\"\n[clock]\nnsteps = 42\n")
+@testset "Config: extends, schema_version 1 and [run] driver are refused (ONE-b)" begin
     dir = mktempdir()
+    write(joinpath(dir, "base.toml"), "[run]\nlegacy = \"cfgtest\"\n[clock]\nnsteps = 42\n")
     p = joinpath(dir, "case.toml")
-    write(p, "extends = \"cfgt_base.toml\"\n[run]\ndriver = \"cfgtest\"\n")
-    cfg = load_run_config(p)
-    @test cfg.clock.nsteps == 42
-    @test config_sources(cfg)["files"][2] == joinpath(CFGT_DIR, "cfgt_base.toml")
-    # without a driver in the file: every registered config directory is searched
-    write(p, "extends = \"cfgt_base.toml\"\n")
-    @test load_run_config(p).clock.nsteps == 42
-    # a file next to the extending one wins over the driver directory
-    write(joinpath(dir, "cfgt_base.toml"), "[run]\ndriver = \"cfgtest\"\n[clock]\nnsteps = 7\n")
-    @test load_run_config(p).clock.nsteps == 7
-    # the shipped-config fixed point covers files in driver directories
-    @test joinpath(CFGT_DIR, "cfgt_base.toml") in shipped_configs()
-    # a cycle
-    write(joinpath(dir, "a.toml"), "extends = \"b.toml\"\n")
-    write(joinpath(dir, "b.toml"), "extends = \"a.toml\"\n")
-    m = sprint(showerror, cfgl_error(() -> load_run_config(joinpath(dir, "a.toml"))))
-    @test occursin("extends cycle", m) && occursin("a.toml -> ", m) && occursin("b.toml", m)
-    # self-extension is a cycle too
-    write(joinpath(dir, "self.toml"), "extends = \"self.toml\"\n")
-    @test_throws ConfigError load_run_config(joinpath(dir, "self.toml"))
-    # a missing file, named with where it was looked for
-    write(joinpath(dir, "m.toml"), "extends = \"nowhere.toml\"\n")
-    m = sprint(showerror, cfgl_error(() -> load_run_config(joinpath(dir, "m.toml"))))
-    @test occursin("extends", m) && occursin("nowhere.toml", m) && occursin("not found", m) &&
-          occursin(joinpath(dir, "m.toml"), m)
-    # depth: 8 extends links are accepted, 9 are not
-    for n in 0:9
-        write(joinpath(dir, "d$n.toml"), n == 9 ? "[clock]\nnsteps = 9\n[run]\ndriver = \"cfgtest\"\n" :
-                                          "extends = \"d$(n + 1).toml\"\n")
+    write(p, "extends = \"base.toml\"\n[run]\nlegacy = \"cfgtest\"\n")
+    e = cfgl_error(() -> load_run_config(p))
+    @test only(e.problems).key == "extends" && only(e.problems).file == p
+    @test occursin("self-contained", sprint(showerror, e)) && occursin("base.toml", sprint(showerror, e))
+    # a schema-1 file: refused with what changed, whatever else it holds
+    write(p, "schema_version = 1\n[run]\ndriver = \"cfgtest\"\n")
+    m = sprint(showerror, cfgl_error(() -> load_run_config(p)))
+    @test occursin("schema_version = 1 is no longer read", m) && occursin("[run] legacy", m)
+    # [run] driver: an unknown key with the reason, also without a version
+    for t in ("[run]\ndriver = \"cfgtest\"\n", "schema_version = 2\n[run]\ndriver = \"simulation\"\n")
+        e = cfgl_error(() -> load_run_config(IOBuffer(t)))
+        @test only(e.problems).key == "run.driver"
+        @test occursin("removed in schema_version 2", only(e.problems).message)
     end
-    @test load_run_config(joinpath(dir, "d1.toml")).clock.nsteps == 9            # 8 links
-    m = sprint(showerror, cfgl_error(() -> load_run_config(joinpath(dir, "d0.toml"))))   # 9 links
-    @test occursin("deeper than 8", m)
-    # extends must be a string
-    write(joinpath(dir, "bad.toml"), "extends = 3\n")
-    @test_throws ConfigError load_run_config(joinpath(dir, "bad.toml"))
+    # a newer version, a non-integer version
+    @test occursin("newer", sprint(showerror, cfgl_error(() -> load_run_config(IOBuffer("schema_version = 3\n")))))
+    @test_throws ConfigError load_run_config(IOBuffer("schema_version = \"2\"\n"))
+    # an unknown legacy case, with a suggestion
+    m = sprint(showerror, cfgl_error(() -> load_run_config(IOBuffer("[run]\nlegacy = \"cfgtets\"\n"))))
+    @test occursin("unknown legacy case \"cfgtets\"", m) && occursin("did you mean \"cfgtest\"", m)
     # a missing configuration file
     @test_throws ConfigError load_run_config(joinpath(dir, "absent.toml"))
 end
@@ -170,7 +134,7 @@ end
     p = joinpath(dir, "case.toml")
     write(p, """
         [run]
-        driver = "cfgtest"
+        legacy = "cfgtest"
         name = "cfgrun"
         seed = 7
         [clock]
@@ -188,7 +152,7 @@ end
     @test startswith(basename(rf.path), Libc.strftime("%Y-%m-%d", time()) * "_cfgrun_")
     rec = read_run_toml(rf.path)
     @test rec["config"] == to_toml(cfg)
-    @test rec["config_schema_version"] == 1
+    @test rec["config_schema_version"] == 2
     @test rec["config_hash"] == string(config_hash(cfg); base = 16, pad = 16)
     @test rec["config_sources"]["files"] == [p] && rec["config_sources"]["overrides"] == ["clock.nsteps=12"]
     @test rec["replayable"] === true && !haskey(rec, "nonreplayable_keys")
@@ -235,7 +199,7 @@ end
     input = joinpath(dir, "terrain.dat"); write(input, "elevation 34.0\n")
     extra = joinpath(dir, "extra.nc"); write(extra, "x")
     p = joinpath(dir, "case.toml")
-    write(p, "[run]\ndriver = \"cfgtest\"\n[physics]\nterrain = \"terrain.dat\"\ninputs = [\"extra.nc\"]\n")
+    write(p, "[run]\nlegacy = \"cfgtest\"\n[physics]\nterrain = \"terrain.dat\"\ninputs = [\"extra.nc\"]\n")
     cfg = load_run_config(p)
     root = mktempdir()
     rf = cfgl_start(cfg; root = root); finish_run!(rf)
@@ -263,7 +227,7 @@ end
 end
 
 @testset "Config: a closure makes the run not replayable" begin
-    cfg = with(load_run_config(IOBuffer("[run]\ndriver = \"cfgtest\"\nname = \"jl\"\n")),
+    cfg = with(load_run_config(IOBuffer("[run]\nlegacy = \"cfgtest\"\nname = \"jl\"\n")),
                "physics.profile" => z -> 300.0 + 0.003z)
     rf = cfgl_start(cfg); finish_run!(rf)
     rec = read_run_toml(rf.path)
@@ -300,7 +264,7 @@ end
         @test pc == pd && pc.planner === :estimate && pc.threads == 1
         # defaults: an empty Dict and an empty RunConfig give the same schedule
         cd(mktempdir()) do
-            empty = load_run_config(IOBuffer("[fftw]\nplanner = \"estimate\"\n"))
+            empty = load_run_config(IOBuffer("[fftw]\nplanner = \"estimate\"\n"))     # the model
             @test fields(checkpoint_schedule(empty)) == fields(checkpoint_schedule(Dict{String,Any}()))
             @test fields(checkpoint_schedule(empty))[2:5] == ("checkpoint", 0, Inf, 2)
         end

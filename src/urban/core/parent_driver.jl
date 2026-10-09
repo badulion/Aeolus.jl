@@ -3,7 +3,7 @@
 # (the parent is `[physics.options.nesting.parent]` of the case's config):
 #
 #   [run]
-#   driver = "urban_parent"
+#   legacy = "urban_parent"
 #
 # It runs the parent for `hours` and writes its record tables and its
 # results (the air-heat ledger by window, z_i, the dt history) into the
@@ -17,8 +17,8 @@
 The `urban_parent` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
 the nest parent of an urban case alone ([`build_parent`](@ref) of
 [`nest_parent_config`](@ref)), run for its `hours` with
-[`run_parent!`](@ref). Same schema as the `urban` driver (a config may
-`extends` an urban case and change only `[run] driver`), with
+[`run_parent!`](@ref). Same schema as the `urban` driver (a parent config
+is an urban case's file with `[run] legacy = "urban_parent"`), with
 `[checkpoint]` off (the parent runs to the end in one call). Writes, into
 the run folder's `output/` ([`write_parent_tables`](@ref),
 [`parent_results`](@ref)):
@@ -59,8 +59,8 @@ function Config.build(::UrbanParentDriver, cfg::RunConfig)
     f = cc.parent_static
     if f !== nothing && !isfile(f)
         src = first(config_sources(cfg)["files"])
-        throw(ConfigError("geometry.parent_static", "the static driver $f does not exist; generate it with\n" *
-                                                    "  julia --project -m Aeolus preprocess static $src"))
+        throw(ConfigError("geometry.parent_static", "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
+                                                    "  julia --project -m AeolusPrep static $src --source <file.osm>"))
     end
     return UrbanParentRun(cfg, build_parent(nest_parent_config(cc)))
 end

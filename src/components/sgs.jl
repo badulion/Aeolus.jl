@@ -9,7 +9,7 @@ runs inside stage 6 (its coefficients from the substage state into
 `sim.νt`/`sim.κt`, its momentum and scalar tendencies, and its memory
 committed once per step, `advance_sgs!`). The closures are those of
 `Operators`; this component only selects and builds one from the `[sgs]`
-section ([`schema`](@ref)): `closure` (`smagorinsky`,
+section ([`schema`](@ref)): `closure` (`smagorinsky`, the default,
 `dynamic_smagorinsky`, `vreman`, `sigma`, `amd`), its coefficient `c_s`,
 `pr_t`, and the Richardson-number `stability` correction
 (`StabilityCorrected`). `closure = "none"` enables no component (no SGS
@@ -22,11 +22,11 @@ end
 component_name(::Type{<:SGS}) = :sgs
 section(::Type{<:SGS}) = "sgs"
 slot(::Type{<:SGS}) = :sgs
-enabled(::Type{<:SGS}, opts, domain) = opts.closure !== :none
+enabled(::Type{<:SGS}, opts) = opts.closure !== :none
 
 function schema(::Type{<:SGS})
     return Config.section("sgs"; doc = "The subgrid-scale closure.") do s
-        Config.option!(s, "closure", Symbol; default = :none,
+        Config.option!(s, "closure", Symbol; default = :smagorinsky,
                        allowed = [:none, :smagorinsky, :dynamic_smagorinsky, :vreman, :sigma, :amd],
                        doc = "none, smagorinsky (Smagorinsky-Lilly), dynamic_smagorinsky (Germano-Lilly, plane averaged), vreman, sigma (Nicoud et al. 2011), amd (anisotropic minimum dissipation)")
         Config.option!(s, "c_s", Config.Optional{Float64}; units = "1", range = (0, Inf), open_lower = true,

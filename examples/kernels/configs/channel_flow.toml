@@ -9,8 +9,9 @@
 #
 # The plot reads the u profile of the run's diagnostics.nc.
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "channel_flow"
 seed = 1
 
@@ -20,6 +21,7 @@ extent = [1.0, 1.0, 1.0]
 
 [dynamics]
 nu = 0.0005
+theta0 = 0.0                    # no buoyancy
 
 [boundaries]
 z = "free_slip"
@@ -33,13 +35,13 @@ pr_t = 0.3333333333333333
 u = { kind = "constant", value = 1.0 }
 velocity_perturbation = { kind = "uniform", amplitude = 0.05 }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.015625                   # min(0.3 Δx / 1.2, 0.4 Δz² / 2ν)
-end_time = 2.0
+duration = 2.0
 
 [logging]
 diagnostics_cadence = 0.5
 
 [test]
-overrides = ["stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["time.duration=\"none\"", "time.nsteps=10"]

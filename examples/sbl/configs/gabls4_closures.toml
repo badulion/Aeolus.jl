@@ -9,14 +9,63 @@
 #   julia --project -m Aeolus run examples/sbl/configs/gabls4_closures.toml --set grid.size=[64,64,64] --set grid.extent=[64.0,64.0,64.0] --set sponge.z=48.0   # 1 m
 #   julia --project examples/sbl/gabls4.jl runs/gabls4_exp3_*
 
-extends = "gabls4_exp3.toml"
+schema_version = 2
+
+[run]
+legacy = "sbl"
+name = "gabls4_exp3"
+seed = 1
+
+[case]
+kind = "homogeneous"
+data = "../data/gabls4_case.csv"
 
 [grid]
 size = [64, 64, 48]
 extent = [128.0, 128.0, 96.0]
 
+[dynamics]
+theta0 = 275.0
+
+[forcing]
+latitude = -75.10
+u_g = 1.25
+v_g = 4.5
+
+[surface]
+z0m = 1e-3
+z0h = 1e-4
+temperature = {kind = "series", table = "surface", time_column = 1, column = 2, p_sfc = 65100.0, exponent = 0.286}
+stability = {family = "businger_dyer_log_linear", beta_m = 4.8, beta_h = 7.8}
+rho_cp = 957.6626330727378     # 65100/(287.05 × 238) × 1005
+
+[initial]
+theta = {kind = "table", table = "exp3", column = 2}
+u = {kind = "table", table = "exp3", column = 3}
+v = {kind = "table", table = "exp3", column = 4}
+perturbation = {kind = "uniform", amplitude = [0.1, 0.1, 0.1], depth = 50.0}
+t_start = 36000.0              # 10 UTC
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+
 [sponge]
 z = 72.0                       # 0.75 Lz
+alpha = 0.01
+
+[stepper]
+end_time = 63000.0             # 17:30 UTC
+
+[averaging]
+from = 59400.0                 # 16:30-17:30 UTC (Table 4)
+sample_every = 10
+series_interval = 300.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
+keep = 2
 
 [sweep]
 axis = [ { key = "sgs.stability", values = ["brown94", "none"] } ]

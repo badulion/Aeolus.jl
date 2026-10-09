@@ -20,9 +20,9 @@ ImageMagick if you want to view them in most browsers:
 
 Each config reproduces the script it replaced bit for bit
 (`test/config_run_drivers.jl`), except `coupled/dcbl_radiation_lsm`, see
-below. The couplings are sections of the `simulation` driver
+below. The couplings are sections of the model's config
 (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
-`[obstacles]`; `aeolus options simulation`).
+`[obstacles]`; `aeolus options`).
 
 ## Tier 1 — Kernel demos
 
@@ -51,7 +51,7 @@ Combine several physics modules in one run.
 | `dcbl_radiation_lsm.toml`   | DCBL + radiative cooling + `SlabLand` (3 h; `[forcing]`, `[surface] model = "slab"`) |
 | `moist_convection.toml`     | Moist LES with initial cloud puff + Kessler (`[microphysics]`) |
 | `heated_plume.toml`         | Hot-patch surface flux → rising plume, θ' slices (`[surface] model = "flux_map"`) |
-| `flow_past_cube.toml`       | Wall-mounted cube with IBM penalty + tracer wake (the cube in the static driver `input/flow_past_cube_static.nc`, made by `aeolus preprocess static` from `input/flow_past_cube.geojson`) |
+| `flow_past_cube.toml`       | Wall-mounted cube with IBM penalty + tracer wake (the cube in the static driver `input/flow_past_cube_static.nc`, made by AeolusPrep.jl, `aeolusprep static`, from its `data/obstacles/flow_past_cube.geojson`) |
 
 `dcbl_radiation_lsm` differs from its script on purpose. The script set
 `sim.θ_flux_bottom` every step on a simulation built with a zero flux,
@@ -80,7 +80,7 @@ showcase over a real-format OSM city.
 **Setup**
 - 1000 × 1000 × 200 m domain, 64 × 64 × 32 grid (dx ≈ 15.6 m)
 - **Real-format OSM** city geometry loaded from
-  `data/sample_berlin_mitte.osm` — Berlin-Mitte-style perimeter block
+  `data/sample_berlin_mitte.osm` (now AeolusPrep.jl's `data/berlin/`) — Berlin-Mitte-style perimeter block
   housing + several taller commercial buildings, at real geographic
   coordinates (52.522 N, 13.410 E). The OSM XML parser reads the same
   format as an Overpass-API download; the sample is bundled so the
@@ -290,13 +290,15 @@ describes the registry, the stage loop and how to add a coupling.
 Its configuration is `examples/urban/configs/berlin_summer.toml`;
 `--set clock.nsteps=…` sets the number of steps and `--set output.cadence=…`
 the seconds between NetCDF records. It runs
-the full physics against `data/alexanderplatz_real.osm` — an actual Overpass-API
+the full physics against the static driver made from `alexanderplatz_real.osm`
+(AeolusPrep.jl's `data/berlin/`) — an actual Overpass-API
 download of a 1 km × 1 km box around Alexanderplatz, Berlin
 (52.518–52.526 N, 13.402–13.418 E). To (re-)fetch:
 
 ```bash
-$ julia --project -m Aeolus preprocess fetch-osm --box 52.518,13.402,52.526,13.418 --out examples/urban/data/alexanderplatz_real.osm
-$ julia --project -m Aeolus preprocess static examples/urban/configs/berlin_summer.toml
+# in an AeolusPrep.jl checkout
+$ julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
+$ julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
 ```
 
 (Uses the public `overpass-api.de/api/interpreter` endpoint. Retry if
@@ -436,17 +438,17 @@ The minimal schema is:
 
 Coordinates are meters relative to the mesh origin. Recognised `class`
 values: `roof`, `street`, `park`, `water`. See
-`examples/urban/data/city.geojson` for a working example, and
-`src/preprocess/geojson.jl` for the loader and `src/preprocess/city.jl`
-for the rasteriser (`src/preprocess/osm.jl` for OSM XML), all in
-`Aeolus.InputDrivers`. A polygon with holes (a courtyard) lists its
-rings after the outer one. `aeolus preprocess static <config.toml>`
-writes the rasterised city to a static driver (NetCDF-4) that the run
-then reads (see the [input drivers](../api/input_drivers.md) page).
+AeolusPrep.jl's `data/berlin/city.geojson` for a working example, and its
+`src/geojson.jl` for the loader (`src/osm.jl` for OSM XML); the
+rasteriser is Aeolus's `src/input_drivers/city.jl`
+(`Aeolus.InputDrivers`). A polygon with holes (a courtyard) lists its
+rings after the outer one. `aeolusprep static <config.toml> --source
+city.geojson` writes the rasterised city to a static driver (NetCDF-4)
+that the run then reads (see the [input drivers](../api/input_drivers.md) page).
 
 ### OSM XML
 
-The `load_city_osm(path; lat0, lon0, x_shift, y_shift, min_height,
+AeolusPrep's `load_city_osm(path; lat0, lon0, x_shift, y_shift, min_height,
 default_height)` function reads a subset of standard OSM XML:
 
   * `<node id lat lon />` for coordinates,
@@ -463,6 +465,6 @@ equirectangular projection anchored at `(lat0, lon0)`; `x_shift` /
 short buildings for stability tuning.
 
 The bundled `data/sample_berlin_mitte.osm` was produced by
-`aeolus preprocess osm-sample --lat0 52.5220 --lon0 13.4100` — a plausible European perimeter-block
+`aeolusprep osm-sample --lat0 52.5220 --lon0 13.4100` — a plausible European perimeter-block
 neighbourhood at Alexanderplatz coordinates. Genuine Overpass-API
 downloads are consumed by the same parser.

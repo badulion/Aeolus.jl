@@ -4,8 +4,8 @@ End-to-end exercise of the full Phase 1a system: staggered momentum
 advection + fractional-step projection + Smagorinsky-Lilly SGS +
 buoyancy + scalar transport, all coupled.
 
-Location: `examples/configs/buoyant_convection.toml` (the `simulation`
-driver).
+Location: `examples/configs/buoyant_convection.toml` (the model's
+config, schema 2).
 
 ```bash
 $ julia --project -m Aeolus run examples/configs/buoyant_convection.toml

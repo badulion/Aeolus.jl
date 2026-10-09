@@ -7,8 +7,10 @@
 #
 #   julia --project=. examples/validation/parisfog_2011_radiation_fog.jl
 
+schema_version = 2
+
 [run]
-driver = "column"
+legacy = "column"
 name = "parisfog_2011"
 
 [column]

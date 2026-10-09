@@ -18,7 +18,7 @@ Configuration of an urban case (the `urban` run driver), the struct
 run-configuration schema (`core/config_schema.jl`, CFG-c #358; `aeolus
 options urban` lists them with the TOML key of every field): the first
 form is the all-defaults config with `kwargs` set on top (it has no
-ground source: set `osm_path` or `static`). The second loads a run
+ground: set `static`). The second loads a run
 configuration file (the Berlin case: `examples/urban/configs/berlin_*.toml`)
 and then applies `kwargs` (`physics` and `options` merge per coupling
 over the file's). The third converts a loaded
@@ -32,18 +32,14 @@ Groups of fields:
   so that the Fernsehturm (368 m) fits and the child top sits in the
   parent's uniform 25 m layers;
 * **geometry** — `static`, the static driver the ground is read from
-  (CFG-f #361, `aeolus preprocess static` writes it; `nothing`: the
-  `preprocess` source is rasterised in memory instead), `parent_static`,
-  the nest parent's (its land-use tiles; `nothing`: from `landuse` in
-  memory), the anchor `lat0`/`lon0` of the OSM projection, `offset` (m,
-  the window centre relative to the anchor), `elevation` (m above sea
-  level, for the solar position), `wall_subdivisions` of the radiosity
-  scene. A driver whose grid or anchor differs from the case's is an
-  error (no resampling);
-* **preprocess** — what the static drivers are made from: `osm_path`
-  (the OpenStreetMap file), `min_height` (buildings lower than this are
-  dropped), `park_lai` (leaf-area index of park cells), `landuse` (the
-  parent's land-use table, `aeolus preprocess fetch-landuse`);
+  (CFG-f #361; AeolusPrep.jl writes it from OpenStreetMap or GeoJSON,
+  ONE-h #457), `parent_static`, the nest parent's (its land-use tiles;
+  `nothing`: from `landuse` in memory), `landuse`, the parent's land-use
+  table (`aeolusprep fetch-landuse` writes it), the anchor `lat0`/`lon0`
+  of the projection, `offset` (m, the window centre relative to the
+  anchor), `elevation` (m above sea level, for the solar position),
+  `wall_subdivisions` of the radiosity scene. A driver whose grid or
+  anchor differs from the case's is an error (no resampling);
 * **clock** — `date = (y, m, d)`, `start_h` (local hour at t = 0), `utc_offset` (h, local − UTC), `dt`
   (s), `nsteps`;
 * **cadences** — `cadence::Dict{Symbol,Float64}`, periods in seconds.
@@ -94,11 +90,12 @@ Groups of fields:
   used only then. `p_surface` (Pa at the ground; `nothing` = from the
   sounding, 101325 Pa for the idealised profile; see
   [`case_surface_pressure`](@ref)). `dynamic`: the dynamic driver
-  (CFG-g, #362; `aeolus preprocess dynamic` writes it; `nothing`, the
-  default: none) — a sounding driver (`--from-sounding`), which then
+  (CFG-g, #362; `nothing`, the default: none) — a sounding driver
+  (AeolusPrep.jl, `aeolusprep dynamic --from-sounding`), which then
   replaces `sounding` (the same tables, read from one file), or, with the
   offline nest (`options[:nesting].parent_driver = :offline`), the
-  parent-made driver of the nest faces (`--from-parent`); see
+  parent-made driver of the nest faces (`child_boundaries` of the
+  online run); see
   [`case_sounding`](@ref). `u0`, `Ts0` and `Ts_water_offset`
   (surface temperature, water `Ts0 + offset`), `T_soil0`;
 * **physics** — `physics::Dict{Symbol,Any}`: for an exclusive slot,
@@ -115,8 +112,8 @@ Groups of fields:
   run folder's `output/` under `aeolus run`, else `output/` in the working directory);
   `child_boundaries` (`nothing`: off) — with the online nest, the dynamic
   driver the run writes the child's boundary slabs to at every parent
-  step (CFG-g, #362, `aeolus preprocess dynamic --from-parent`), the file
-  an offline child reads;
+  step (CFG-g, #362), the file an offline child reads (`aeolus run` of
+  the online config writes it);
   what is printed is decided by the installed logger and its level (#347,
   in TOML `[logging]`): the setup summary is `Debug`, the run's start,
   output frames (with each coupling's diagnostics) and the end-of-run
@@ -145,11 +142,7 @@ mutable struct CaseConfig
     offset::NTuple{2,Float64}
     elevation::Float64
     wall_subdivisions::Int
-    # the static drivers' sources (CFG-f, #361)
-    osm_path::Union{Nothing,String}
-    min_height::Float64
-    park_lai::Float64
-    landuse::Union{Nothing,String}
+    landuse::Union{Nothing,String}    # the nest parent's land-use table (#249)
     # clock
     date::NTuple{3,Int}               # 2019-06-29: clear-sky heat-wave day (#247)
     utc_offset::Float64               # local = UTC + 2 h (CEST)

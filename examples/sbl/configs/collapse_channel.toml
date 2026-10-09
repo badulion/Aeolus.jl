@@ -12,8 +12,10 @@
 # averaging.interval from averaging.from. examples/sbl/collapse_channel.jl
 # sweeps heat_flux_fraction.
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "collapse_channel"
 seed = 1
 

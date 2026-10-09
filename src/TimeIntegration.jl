@@ -811,7 +811,10 @@ function step_adaptive!(sim::BoussinesqSimulation, constraints::CFLConstraints; 
     return res
 end
 
-function _step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstraints;
+# The driver of every core (ONE-j, #460): the Boussinesq one here, the
+# sound-proof ones through their methods of `adaptive_dt`, the snapshot and
+# `step_guard` (Anelastic).
+function _step_adaptive!(sim, constraints::CFLConstraints;
                          dt = nothing,
                          dt_prev = nothing,
                          body_force!::Union{Nothing,Function} = nothing,
@@ -825,8 +828,8 @@ function _step_adaptive!(sim::BoussinesqSimulation{T}, constraints::CFLConstrain
                          divergence_tol::Real = 1e-6,
                          max_velocity::Real = Inf,
                          sgs = nothing,
-                         sgs_stress::Symbol = :laplacian) where {T}
-
+                         sgs_stress::Symbol = :laplacian)
+    T = eltype(sim.u.data)
     closure = sgs_closure(sgs)
     Δt = dt === nothing ? adaptive_dt(sim, constraints; dt_prev = dt_prev, scheme = scheme,
                                       sgs = closure, sgs_stress = sgs_stress) : T(dt)

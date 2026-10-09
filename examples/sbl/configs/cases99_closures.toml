@@ -10,7 +10,69 @@
 #   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml --set 'forcing.subsidence={}'   # without subsidence
 #   julia --project examples/sbl/gabls2.jl runs/cases99_*
 
-extends = "cases99.toml"
+schema_version = 2
+
+[run]
+legacy = "sbl"
+name = "cases99"
+seed = 1
+
+[case]
+kind = "homogeneous"
+data = "../data/gabls2_case.csv"
+
+[grid]
+size = [64, 64, 128]           # 37.5 m / 12.5 m
+extent = [2400.0, 2400.0, 1600.0]
+
+[dynamics]
+theta0 = 288.0
+
+[forcing]
+u_g = 3.0
+v_g = -9.0
+f = 8.8983571e-5
+
+[forcing.subsidence]
+w = {kind = "table", z = [0.0, 1000.0], t = [144000.0, 144001.0], levels = [{values = [0.0, 0.0]}, {values = [0.0, -0.005]}]}
+fields = ["theta"]
+form = "mean_gradient"
+
+[surface]
+z0m = 0.03
+z0h = 0.003
+temperature = {kind = "gabls2", p_sfc = 97200.0, exponent = 0.286, sample_every = 60.0, until = 230400.0}
+stability = {family = "businger_dyer_log_linear", beta = 5.0}
+rho_cp = 1194.0703526801676    # 97200/(287.05 × 285) × 1005
+
+[initial]
+theta = {kind = "table", table = "theta", column = 2}
+perturbation = {kind = "uniform", amplitude = [0.5, 0.5, 0.1], depth = 200.0}
+t_start = 57600.0              # 16 LT 22 Oct (s after 00 LT)
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+
+[sponge]
+z = 1200.0                     # 0.75 Lz
+alpha = 0.01
+
+[stepper]
+end_time = 230400.0            # 64 h local: 00 LT 25 Oct
+
+[averaging]
+series_interval = 600.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
+keep = 2
+
+[towers]
+below = 60.0
+window = 300.0
+hours = [18.0, 6.0]
 
 [sweep]
 axis = [ { key = "sgs.stability", values = ["brown94", "none"] } ]

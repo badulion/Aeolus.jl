@@ -8,7 +8,7 @@ using Random
 
 if !isdefined(@__MODULE__, :CFGT_DIR)
 
-const CFGT_DIR = mktempdir()        # the cfgtest driver's config directory
+const CFGT_DIR = mktempdir()        # where the tests write cfgtest configs
 
 function cfgt_sections()
     grid = section("grid"; doc = "the mesh") do s
@@ -45,7 +45,7 @@ end
 cfgt_check(cfg) = cfg.clock.scheme === :imex && cfg.clock.adaptive ?
     [ConfigError("clock.adaptive", "scheme = \"imex\" needs adaptive = false")] : ConfigError[]
 
-register_driver!("cfgtest"; sections = cfgt_sections(), checks = [cfgt_check], config_dir = CFGT_DIR)
+register_driver!("cfgtest"; sections = cfgt_sections(), checks = [cfgt_check])
 
 # ---------------------------------------------------------------------------
 # random raw configs
@@ -111,7 +111,7 @@ function cfgt_random_raw(rng, schema)
     for s in schema.sections
         t = Dict{String,Any}()
         for o in s.options
-            o.key == "driver" && (t[o.key] = schema.name; continue)
+            o.key == "legacy" && (t[o.key] = schema.name; continue)
             rand(rng) < 0.25 && continue
             t[o.key] = cfgt_rand_value(rng, o.type, o)
         end

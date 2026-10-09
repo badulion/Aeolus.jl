@@ -16,7 +16,7 @@ interface:
 | :-- | :-- | :-- |
 | [`component_name`](@ref)`(C)` | required | its name, the key of its checkpoint state and its order within a stage |
 | [`section`](@ref)`(C)`, [`schema`](@ref)`(C)` | required | its TOML section and option schema |
-| [`enabled`](@ref)`(C, opts, domain)` | `true` | whether the resolved section switches it on |
+| [`enabled`](@ref)`(C, opts)` | `true` | whether the resolved section switches it on |
 | [`slot`](@ref)`(C)` | `nothing` | an exclusive slot (`SLOTS`), or `nothing` for an additive component |
 | [`requires`](@ref)`(C)`, [`incompatible`](@ref)`(C)` | `()` | component types it needs or excludes |
 | [`build`](@ref)`(C, opts, domain)` | required | the instance, with its fields and work arrays |
@@ -56,33 +56,19 @@ section(c::AbstractComponent) = section(typeof(c))
 
 The option schema of `C`: a [`Config.Section`](@ref Aeolus.Config.Section)
 named [`section`](@ref)`(C)` with the component's own options (types,
-units, defaults, docs). A run type's section is assembled from the
-schemas of the components it configures ([`add_options!`](@ref)).
+units, defaults, docs). The model's configuration schema has one
+per-domain section per component, generated from these (ONE-b, #451).
 """
 function schema end
 
 """
-    add_options!(s::Config.Section, ::Type{C}) -> s
+    enabled(::Type{C}, opts) -> Bool
 
-Append the options of [`schema`](@ref)`(C)` to the section `s` (a run
-type's section that holds `C`'s options among others).
+Whether the resolved options `opts` of `C`'s section switch `C` on
+(default `true`). It depends on the options only, so the configuration is
+validated ([`component_problems`](@ref)) before anything is built.
 """
-function add_options!(s::Section, ::Type{C}) where {C<:AbstractComponent}
-    for o in schema(C).options
-        any(x -> x.key == o.key, s.options) &&
-            throw(ArgumentError("add_options!: [$(s.name)] already has an option $(o.key)"))
-        push!(s.options, o)
-    end
-    return s
-end
-
-"""
-    enabled(::Type{C}, opts, domain) -> Bool
-
-Whether the resolved options `opts` of `C`'s section switch `C` on in
-`domain` (default `true`).
-"""
-enabled(::Type{<:AbstractComponent}, opts, domain) = true
+enabled(::Type{<:AbstractComponent}, opts) = true
 
 """
     slot(::Type{C}) -> Union{Nothing,Symbol}

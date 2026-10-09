@@ -10,7 +10,7 @@
 #
 # A box 10H × 6H × 2H at 16 cells per H, periodic in x and y, the cube at
 # x = 3H–4H, centred in y (the static driver input/surface_mounted_cube_static.nc,
-# made from input/surface_mounted_cube.geojson); the floor is one solid cell
+# made by AeolusPrep.jl from its data/obstacles/surface_mounted_cube.geojson); the floor is one solid cell
 # layer below z = 0 and the lid a free-slip wall at z = 2H (the channel's
 # upper wall as a symmetry plane). Direct-forcing IBM after every RK3
 # predictor, a PI-controlled body force holding U_b = 1, CFL 0.4; the
@@ -21,11 +21,14 @@
 #   julia --project -m Aeolus run examples/sgs/configs/surface_mounted_cube.toml
 #   julia --project=. examples/sgs/plot_surface_mounted_cube.jl runs/<date>_surface_mounted_cube_*
 #
-# Remake the static driver after changing the grid:
-#   julia --project -m Aeolus preprocess static examples/sgs/configs/surface_mounted_cube.toml
+# Remake the static driver after changing the grid (in AeolusPrep.jl):
+#   julia --project -m AeolusPrep static <aeolus>/examples/sgs/configs/surface_mounted_cube.toml \
+#       --source data/obstacles/surface_mounted_cube.geojson
+
+schema_version = 2
 
 [run]
-driver = "obstacle_channel"
+legacy = "obstacle_channel"
 name = "surface_mounted_cube"
 seed = 1993
 
@@ -54,9 +57,6 @@ c_s = 0.1
 [obstacles]
 static = "input/surface_mounted_cube_static.nc"
 floor_cells = 1
-
-[preprocess]
-obstacles = "input/surface_mounted_cube.geojson"
 
 [stepper]
 cfl = 0.4

@@ -1,8 +1,9 @@
 # Berlin (Alexanderplatz), summer: the flagship run of the `urban` driver
 # (the urban run type Aeolus.UrbanCase; CFG-c #358, EX-a #438). Every option
-# of the Berlin case is written out here; this file is the reference copy,
-# and the other scenarios (berlin_winter.toml, berlin_smoke.toml,
-# berlin_mitte_sample.toml) extend it with their differences only.
+# of the Berlin case is written out here. The other scenarios
+# (berlin_winter.toml, berlin_smoke.toml, berlin_mitte_sample.toml,
+# berlin_parent.toml) are complete files of their own (no extends, ONE-b
+# #451): a change that must reach them is made in each file.
 #
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
@@ -12,8 +13,10 @@
 # of #259 (refinement (2, 2, 4), [physics.options.nesting.parent], #265),
 # 29 June 2019 (a clear day of the late-June 2019 heat wave, #247) from 06:00
 # CEST, 24 h at dt = 2 s, initialised from the Lindenberg sounding (its
-# dynamic driver, input/berlin_20190629_dynamic.nc: `julia --project -m Aeolus
-# preprocess dynamic --from-sounding berlin_summer.toml` writes it from the CSV).
+# dynamic driver, input/berlin_20190629_dynamic.nc, which AeolusPrep.jl writes
+# from the CSV: `julia --project -m AeolusPrep dynamic --from-sounding
+# berlin_summer.toml`). The static drivers of input/ are AeolusPrep's too,
+# made from its OpenStreetMap extracts (its recipes.toml lists every file).
 #
 # Left at their defaults (environment variables fill some of them, see the
 # Run configuration page): [fftw], [logging], [run] root and
@@ -24,11 +27,11 @@
 # Relative paths are relative to this file. `aeolus options urban` lists
 # every option with its type, units and default.
 
-schema_version = 1
+schema_version = 2
 
 [run]
 # What runs and where its folder goes.
-driver = "urban"
+legacy = "urban"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "summer"
 # the seed of the run's random numbers
@@ -60,8 +63,7 @@ cadence = 1800.0
 netcdf = "alexanderplatz.nc"
 # with the online nest: write the child's boundary slabs at every parent step,
 # the 3-D initial wind and the parent's mean profiles to this dynamic driver
-# (CFG-g #362, `aeolus preprocess dynamic --from-parent`; the file of an
-# offline child); "none": not written
+# (CFG-g #362; the file of an offline child); "none": not written
 child_boundaries = "none"
 
 [grid]
@@ -76,12 +78,15 @@ halo = [3, 3, 3]
 
 [geometry]
 # The ground (static drivers) and the site.
-# the static driver of the child (CFG-f #361; `aeolus preprocess static` writes
-# it); "none": rasterise [preprocess] osm_path in memory
+# the static driver of the child (CFG-f #361; AeolusPrep.jl writes it,
+# `aeolusprep static`, from data/berlin/alexanderplatz_real.osm, buildings of
+# 8 m and more, park LAI 2.5)
 static = "input/berlin_summer_static.nc"
-# the static driver (land-use tiles) of the nest parent; "none": from
-# [preprocess] landuse in memory
+# the static driver (land-use tiles) of the nest parent; "none": from landuse
+# in memory
 parent_static = "input/berlin_summer_parent_static.nc"
+# the nest parent's land-use table (`aeolusprep fetch-landuse`)
+landuse = "../data/berlin_landuse_6km.csv"
 # latitude of the OSM projection's anchor (and of the solar position) [degree]
 lat0 = 52.522
 # longitude of the anchor [degree]
@@ -92,19 +97,6 @@ offset = [0.0, 0.0]
 elevation = 34.0
 # wall facets per cell face of the radiosity scene
 wall_subdivisions = 1
-
-[preprocess]
-# The sources of the static drivers: `julia --project -m Aeolus preprocess
-# static berlin_summer.toml` writes [geometry] static and parent_static from
-# them (or, with static = "none", they are read in memory at every start).
-# the OpenStreetMap file of the buildings, parks and water
-osm_path = "../data/alexanderplatz_real.osm"
-# buildings lower than this are dropped [m]
-min_height = 8.0
-# leaf-area index of park cells
-park_lai = 2.5
-# the nest parent's land-use table (`aeolus preprocess fetch-landuse`)
-landuse = "../data/berlin_landuse_6km.csv"
 
 [clock]
 # Date, start and steps.
@@ -174,10 +166,11 @@ analysis_buffer = 140.0
 # radiosonde CSV of the initial θ(z), qv(z) and surface pressure; "none": the
 # idealised profile below
 sounding = "../data/lindenberg_10393_20190629.csv"
-# the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding
-# driver (--from-sounding), used instead of sounding; or, with
+# the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl,
+# `aeolusprep dynamic --from-sounding`), used instead of sounding; or, with
 # physics.options.nesting.parent_driver = "offline", the parent-made driver of
-# the nest faces (--from-parent); "none": no driver
+# the nest faces ([output] child_boundaries of the online run); "none": no
+# driver
 dynamic = "input/berlin_20190629_dynamic.nc"
 # idealised: θ at the ground [K]
 theta_surface = 293.0

@@ -857,9 +857,11 @@ using Aeolus.Fields: set!, interior_view
     include("logging_diagnostics_nc.jl")  # #337: diagnostics.nc (profiles, NetCDF-4, provenance attributes)
     include("logging_step_diagnostics.jl")  # #336: per-step diagnostics in the step cores, attached monitor
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
-    include("config_load.jl")         # CFG-a (#356): extends/overrides, run.toml [config], inputs, common sections
-    include("config_simulation_driver.jl")  # CFG-b (#357): simulation driver, bitwise round trip, resume, TGV
+    include("config_load.jl")         # CFG-a (#356): one file + overrides, extends/schema 1 refused, run.toml [config], inputs, common sections
+    include("config_simulation_driver.jl")  # CFG-b (#357): the model from a config, bitwise round trip, resume, TGV
     include("components_pipeline.jl")  # ONE-a (#450): component interface, stage pipeline, master digests through Model
+    include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
+    include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
@@ -867,11 +869,10 @@ using Aeolus.Fields: set!, interior_view
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
     include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
-    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent, preprocessors
+    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
-    include("input_static.jl")        # CFG-f (#361): static driver, OSM/GeoJSON preprocessors, Berlin ground from one file
-    include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table and parent preprocessors, offline nest
-    include("preprocess_era5.jl")     # CFG-h (#363): ERA5 preprocessor (GRIB2/NetCDF) of the dynamic driver, open simulation box
+    include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
+    include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
     include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays bit for bit; resume
 

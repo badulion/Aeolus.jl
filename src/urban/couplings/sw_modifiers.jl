@@ -47,7 +47,7 @@ end
     SWModifiers
 
 Additive coupling: tree shade ([`apply_tree_shade!`](@ref), park columns,
-LAI `cfg.park_lai`, option `k_leaf`), every step, on the irradiance of
+LAI the static driver's `lai`, option `k_leaf`), every step, on the irradiance of
 the last radiation update.
 
 `sw_base` holds that irradiance. The coupling detects a new radiation

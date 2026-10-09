@@ -8,8 +8,10 @@
 #   julia --project=. examples/kernels/04_cloud_spinup.jl
 #   julia --project -m Aeolus run examples/kernels/configs/cloud_spinup.toml
 
+schema_version = 2
+
 [run]
-driver = "column"
+legacy = "column"
 name = "cloud_spinup"
 
 [column]

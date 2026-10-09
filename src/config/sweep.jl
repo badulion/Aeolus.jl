@@ -120,16 +120,15 @@ end
 """
     sweep_members(path; overrides = String[]) -> Union{Nothing,Vector{SweepMember}}
 
-The members of the sweep defined by the config file `path` (its own
-`[sweep]` or one inherited through `extends`), or `nothing` when it
-defines none.
+The members of the sweep defined by the config file `path` (its
+`[sweep]`), or `nothing` when it defines none.
 """
 function sweep_members(path::AbstractString; overrides = String[])
     p = abspath(path)
     (isfile(p) && !isdir(p)) || return nothing
     d = _parse_toml_file(p)
     (haskey(d, "run_id") && get(d, "config", nothing) isa AbstractDict) && return nothing
-    sw = _load_chain(p, d, overrides, nothing; sweep = :table)
+    sw = _load_file(p, d, overrides, nothing; sweep = :table)
     sw isa AbstractDict || return nothing
     return sweep_members(sw, p)
 end
@@ -173,7 +172,7 @@ end
 
 function _load_member(path, ovr)
     p = abspath(path)
-    return _load_chain(p, _parse_toml_file(p), ovr, nothing; sweep = :ignore)
+    return _load_file(p, _parse_toml_file(p), ovr, nothing; sweep = :ignore)
 end
 
 _member_arg(opts) = haskey(opts, "member") ? something(tryparse(Int, opts["member"]), opts["member"]) : nothing

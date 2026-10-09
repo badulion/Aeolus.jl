@@ -19,11 +19,15 @@ holds:
 * `origin_x`, `origin_y` (m) — where the anchor lies in the run's mesh
   coordinates (the `x`, `y` of the file);
 * `dx`, `dy` (m) — the horizontal spacing of the run's grid;
-* `source` — the file the driver was made from, relative to the driver's
-  own directory when it lies under it, else absolute;
+* `source` — the file the driver was made from: relative to the driver's
+  own directory when both lie in the same Julia package (a source in
+  Aeolus, such as a sounding CSV); `"<Package>:<path in it>"` when the
+  source lies in another package (an OpenStreetMap file of AeolusPrep.jl:
+  `"AeolusPrep:data/berlin/alexanderplatz_real.osm"`), so the attribute
+  does not depend on where the packages are checked out; else absolute;
 * `source_fnv1a64` — the FNV-1a hash of that file (16 hex digits): a
   driver whose source has since changed is reported as stale;
-* `preprocessor` — what wrote it (e.g. `"aeolus preprocess static"`);
+* `preprocessor` — what wrote it (e.g. `"aeolusprep static"`);
 * `aeolus_commit` — the git commit of the writing Aeolus (`""` outside a
   checkout).
 
@@ -45,9 +49,9 @@ const _ATTRIBUTE_DOCS = Dict(
     "origin_y" => "y of the anchor in the run's mesh coordinates (m)",
     "dx" => "horizontal spacing of the run's grid in x (m)",
     "dy" => "horizontal spacing of the run's grid in y (m)",
-    "source" => "the file the driver was made from (relative to the driver's directory when under it)",
+    "source" => "the file the driver was made from (relative to the driver's directory in the same package, `<Package>:<path>` in another one)",
     "source_fnv1a64" => "FNV-1a hash of that file, 16 hex digits (a changed source makes the driver stale)",
-    "preprocessor" => "what wrote the file (e.g. `\"aeolus preprocess static\"`)",
+    "preprocessor" => "what wrote the file (e.g. `\"aeolusprep static\"`)",
     "aeolus_commit" => "git commit of the writing Aeolus (`\"\"` outside a checkout)")
 
 const _EARTH_R = 6_371_000.0
@@ -150,12 +154,16 @@ _attr(ds, k, default = nothing) = haskey(ds.attrib, k) ? ds.attrib[k] : default
     source_path(path, ds) -> String or nothing
 
 The source file a driver at `path` names in its `source` attribute
-(resolved against the driver's directory), or `nothing` if it names none.
+(resolved against the driver's directory), or `nothing` if it names none
+or names it in another package (`"<Package>:<path>"`, a source that is
+not here to be checked).
 """
 function source_path(path::AbstractString, ds)
     s = _attr(ds, "source", "")
     isempty(s) && return nothing
-    return isabspath(s) ? s : normpath(joinpath(dirname(abspath(path)), s))
+    isabspath(s) && return s
+    occursin(r"^[A-Za-z_][A-Za-z0-9_]*:", s) && return nothing
+    return normpath(joinpath(dirname(abspath(path)), s))
 end
 
 """
@@ -360,8 +368,9 @@ end
 
 The global attributes of a driver ([`DRIVER_ATTRIBUTES`](@ref)) about to
 be written to `out`: `source` is recorded relative to `out`'s directory
-when it lies under the same tree (else absolute) with its hash, the
-commit is the writing checkout's.
+when both lie in the same package, as `"<Package>:<path in it>"` when it
+lies in another one, else absolute, with its hash; the commit is the
+writing checkout's.
 """
 function driver_attributes(kind, form; origin_lat, origin_lon, origin_x, origin_y, dx, dy,
                            source::AbstractString = "", out::AbstractString = "",
@@ -385,17 +394,32 @@ function driver_attributes(kind, form; origin_lat, origin_lon, origin_x, origin_
         "date_created" => Dates.format(now(UTC), "yyyy-mm-ddTHH:MM:SSZ"))
 end
 
-# `source` relative to the directory of `out` when the two share a
-# directory below the top level (a source in the same checkout), else absolute
-function _source_ref(source, out)
-    s, o = abspath(source), dirname(abspath(out))
-    isempty(out) && return s
-    a, b = splitpath(s), splitpath(o)
-    n = 0
-    while n < min(length(a), length(b)) && a[n+1] == b[n+1]
-        n += 1
+# The root and name of the Julia package holding `path`: the nearest
+# directory above it with a Project.toml that has a `name`; `nothing` if none.
+function _package_of(path)
+    d = dirname(abspath(path))
+    while true
+        pt = joinpath(d, "Project.toml")
+        if isfile(pt)
+            m = match(r"(?m)^name\s*=\s*\"([^\"]+)\"", read(pt, String))
+            m === nothing || return (root = d, name = String(m.captures[1]))
+        end
+        p = dirname(d)
+        p == d && return nothing
+        d = p
     end
-    return n >= 3 ? relpath(s, o) : s
+end
+
+# `source` as recorded for a driver written to `out`: relative to the
+# directory of `out` when both lie in the same package, `"<Package>:<path>"`
+# when the source lies in another package, else absolute
+function _source_ref(source, out)
+    s = abspath(source)
+    isempty(out) && return s
+    ps, po = _package_of(s), _package_of(out)
+    ps === nothing && return s
+    po !== nothing && ps.root == po.root && return relpath(s, dirname(abspath(out)))
+    return ps.name * ":" * join(splitpath(relpath(s, ps.root)), "/")
 end
 
 "The attributes that change on every write (a reproduced file differs only in these)."
@@ -441,5 +465,5 @@ function check_grid(path, ds, mesh; origin_lat, origin_lon, origin_x, origin_y)
     show_(g) = "$(g.Nx) × $(g.Ny) cells of $(g.dx) × $(g.dy) m, first centre ($(g.x), $(g.y)) m, " *
                "anchor ($(g.origin_lat)°, $(g.origin_lon)°) at ($(g.origin_x), $(g.origin_y)) m"
     error("the input driver $path is not on the run's grid (no resampling: re-run the preprocessor " *
-          "for this grid, `aeolus preprocess static <config.toml>`):\n  file: $(show_(file))\n  run:  $(show_(run))")
+          "for this grid with AeolusPrep.jl, `aeolusprep static <config.toml>`):\n  file: $(show_(file))\n  run:  $(show_(run))")
 end

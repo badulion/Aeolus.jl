@@ -25,7 +25,7 @@ using Dates: Date, year, month, day
     UrbanDriver()
 
 The `urban` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
-`[run] driver = "urban"`. `build` makes the [`CaseConfig`](@ref) of the
+`[run] legacy = "urban"`. `build` makes the [`CaseConfig`](@ref) of the
 config and [`build_case`](@ref)s it; `run!` runs it with
 [`run_case!`](@ref) under the run monitor (the diagnostics CSV, the
 blowup guard), writing the NetCDF output into the run folder's `output/`
@@ -57,8 +57,7 @@ const CASE_FIELDS = (
     static = ("geometry.static",), parent_static = ("geometry.parent_static",),
     lat0 = ("geometry.lat0",), lon0 = ("geometry.lon0",), offset = ("geometry.offset",),
     elevation = ("geometry.elevation",), wall_subdivisions = ("geometry.wall_subdivisions",),
-    osm_path = ("preprocess.osm_path",), min_height = ("preprocess.min_height",),
-    park_lai = ("preprocess.park_lai",), landuse = ("preprocess.landuse",),
+    landuse = ("geometry.landuse",),
     date = ("clock.date",), utc_offset = ("clock.utc_offset",), start_h = ("clock.start_h",),
     dt = ("clock.dt",), nsteps = ("clock.nsteps",),
     cadence = ("cadence.*", "output.cadence"),
@@ -630,10 +629,13 @@ function Config.driver_sections(::UrbanDriver)
     end
     geo = section("geometry"; doc = "The ground (static drivers) and the site.") do s
         option!(s, "static", Optional{Path};
-                doc = "the static driver of the child (CFG-f #361; `aeolus preprocess static` writes it); " *
-                      "\"none\": rasterise [preprocess] osm_path in memory")
+                doc = "the static driver of the child (CFG-f #361; AeolusPrep.jl writes it, `aeolusprep static`); " *
+                      "\"none\": no ground (a case cannot be built)")
         option!(s, "parent_static", Optional{Path};
-                doc = "the static driver (land-use tiles) of the nest parent; \"none\": from [preprocess] landuse in memory")
+                doc = "the static driver (land-use tiles) of the nest parent; \"none\": from landuse in memory")
+        option!(s, "landuse", Optional{Path};
+                doc = "the nest parent's land-use table (`aeolusprep fetch-landuse` writes it); \"none\": no table " *
+                      "(a tiled parent surface then needs parent_static)")
         option!(s, "lat0", Float64; default = 52.5220, range = (-90, 90), units = "degree",
                 doc = "latitude of the OSM projection's anchor (and of the solar position)")
         option!(s, "lon0", Float64; default = 13.4100, range = (-180, 180), units = "degree",
@@ -643,18 +645,6 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "elevation", Float64; default = 34.0, units = "m", doc = "height above sea level")
         option!(s, "wall_subdivisions", Int; default = 1, range = (1, 64),
                 doc = "wall facets per cell face of the radiosity scene")
-    end
-    pre = section("preprocess"; doc = "The sources of the static drivers (`aeolus preprocess static`, or in memory with static = \"none\").") do s
-        option!(s, "osm_path", Optional{Path};
-                doc = "the source of the buildings, parks and water: an OpenStreetMap XML file (projected about " *
-                      "[geometry] lat0/lon0), or a GeoJSON file in metres in the mesh frame (`.geojson`); " *
-                      "\"none\": no source (a static driver is then required)")
-        option!(s, "min_height", Float64; default = 8.0, range = (0, Inf), units = "m",
-                doc = "buildings lower than this are dropped")
-        option!(s, "park_lai", Float64; units = "m2 m-2", default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
-        option!(s, "landuse", Optional{Path};
-                doc = "the nest parent's land-use table (`aeolus preprocess fetch-landuse`); \"none\": no table " *
-                      "(a tiled parent surface then needs [geometry] parent_static)")
     end
     clock = section("clock"; doc = "Date, start and steps.") do s
         option!(s, "date", Date; default = Date(2019, 6, 29),
@@ -717,9 +707,9 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "sounding", Optional{Path};
                 doc = "radiosonde CSV of the initial θ(z), qv(z) and surface pressure; \"none\": the idealised profile below")
         option!(s, "dynamic", Optional{Path};
-                doc = "the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding driver (--from-sounding), " *
+                doc = "the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl, `aeolusprep dynamic --from-sounding`), " *
                       "used instead of sounding; or, with physics.options.nesting.parent_driver = \"offline\", the " *
-                      "parent-made driver of the nest faces (--from-parent); \"none\": no driver")
+                      "parent-made driver of the nest faces ([output] child_boundaries of the online run); \"none\": no driver")
         option!(s, "theta_surface", Float64; default = 293.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "idealised: θ at the ground")
         option!(s, "theta_inversion_z", Float64; default = 100.0, range = (0, Inf), units = "m",
@@ -748,8 +738,8 @@ function Config.driver_sections(::UrbanDriver)
                 doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ under aeolus run, else output/ in the working directory); \"none\": no NetCDF")
         option!(s, "child_boundaries", Optional{Path}; input = false,
                 doc = "with the online nest: write the child's boundary slabs at every parent step, the 3-D initial wind " *
-                      "and the parent's mean profiles to this dynamic driver (CFG-g #362, `aeolus preprocess dynamic " *
-                      "--from-parent`; the file of an offline child); \"none\": not written")
+                      "and the parent's mean profiles to this dynamic driver (CFG-g #362; the file of an offline child); " *
+                      "\"none\": not written")
     end
     sp = slot_providers()
     phys = section("physics"; doc = "Which couplings run: a provider per exclusive slot, on/off per addon.") do s
@@ -768,7 +758,7 @@ function Config.driver_sections(::UrbanDriver)
                       "(the keys are closed, a value has its default's type); " *
                       "[physics.options.nesting.parent] is the parent's schema")
     end
-    return Section[run, grid, geo, pre, clock, cad, dyn, bnd, ini, led, out, phys]
+    return Section[run, grid, geo, clock, cad, dyn, bnd, ini, led, out, phys]
 end
 
 """
@@ -850,7 +840,7 @@ The schema of the `urban` driver (registered when Aeolus is loaded).
 urban_schema() = _URBAN_SCHEMA[]
 
 "The all-defaults `RunConfig` of the `urban` driver (environment variables fill their defaults)."
-default_run_config() = load_run_config(IOBuffer("[run]\ndriver = \"urban\"\n"); schema = urban_schema())
+default_run_config() = load_run_config(IOBuffer("[run]\nlegacy = \"urban\"\n"); schema = urban_schema())
 
 # ---------------------------------------------------------------------------
 # RunConfig → CaseConfig
@@ -861,7 +851,6 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
         throw(ArgumentError("CaseConfig: the config is for the driver \"$(config_schema(cfg).name)\", not \"urban\""))
     r, g, geo, c, dyn, b, ini, out = cfg.run, cfg.grid, cfg.geometry, cfg.clock, cfg.dynamics,
                                       cfg.boundaries, cfg.initial, cfg.output
-    pre = cfg.preprocess
     cad = Dict{Symbol,Float64}(Symbol(k) => cfg.cadence[k] for k in propertynames(cfg.cadence) .|> String
                                if cfg.cadence[k] !== nothing)
     cad[:output] = out.cadence
@@ -871,7 +860,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
     d = c.date
     return CaseConfig(Symbol(r.name), r.scenario, g.size, g.extent, g.halo,
                       geo.static, geo.parent_static, geo.lat0, geo.lon0, geo.offset, geo.elevation,
-                      geo.wall_subdivisions, pre.osm_path, pre.min_height, pre.park_lai, pre.landuse,
+                      geo.wall_subdivisions, geo.landuse,
                       (year(d), month(d), day(d)), c.utc_offset, c.start_h, c.dt, c.nsteps, cad,
                       dyn.nu, dyn.theta0, dyn.g, dyn.f_coriolis, dyn.c_s, dyn.pr_t, dyn.sgs_stability,
                       dyn.sponge_alpha_max, dyn.sponge_frac, dyn.theta_top,
@@ -937,104 +926,21 @@ function Config.build(::UrbanDriver, cfg::RunConfig)
     src = first(config_sources(cfg)["files"])
     for (f, key) in ((cc.static, "geometry.static"), (cc.parent_static, "geometry.parent_static"))
         (f === nothing || isfile(f)) && continue
-        throw(ConfigError(key, "the static driver $f does not exist; generate it with\n" *
-                               "  julia --project -m Aeolus preprocess static $src\n" *
-                               "or set it to \"none\" to preprocess the source in memory"))
+        throw(ConfigError(key, key == "geometry.static" ?
+                               "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
+                               "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>" :
+                               "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
+                               "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>\n" *
+                               "or set it to \"none\" to read [geometry] landuse in memory"))
     end
     if cc.dynamic !== nothing && !isfile(cc.dynamic)
-        how = nest_offline(cc) ? "--from-parent <the online config, with [output] child_boundaries = this file>" :
-                                 "--from-sounding $src"
-        throw(ConfigError("initial.dynamic", "the dynamic driver $(cc.dynamic) does not exist; generate it with\n" *
-                                             "  julia --project -m Aeolus preprocess dynamic $how\n" *
+        how = nest_offline(cc) ?
+              "run the online config with [output] child_boundaries = this file:\n  julia --project -m Aeolus run <the online config>" :
+              "make it with AeolusPrep.jl:\n  julia --project -m AeolusPrep dynamic --from-sounding $src"
+        throw(ConfigError("initial.dynamic", "the dynamic driver $(cc.dynamic) does not exist; $how\n" *
                                              "or set it to \"none\" to read [initial] sounding in memory"))
     end
     return UrbanRun(cfg, nothing)
-end
-
-"""
-    preprocess_static(::UrbanDriver, cfg; out = nothing, parent_out = nothing) -> Vector{String}
-
-`aeolus preprocess static <config.toml>`: write the child's static
-driver (`[geometry] static`, or `out`) from `[preprocess] osm_path`
-([`urban_static_inputs`](@ref)) and, for a nested case with a tiled
-parent surface, the parent's (`[geometry] parent_static`, or
-`parent_out`) from `[preprocess] landuse`
-([`parent_landuse_source`](@ref)), each with its source hashed.
-"""
-function Config.preprocess_static(::UrbanDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
-    cc = CaseConfig(cfg)
-    files = String[]
-    child = out !== nothing ? abspath(out) : cc.static
-    child === nothing && throw(ArgumentError("[geometry] static is \"none\": pass --out file.nc"))
-    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
-    write_static_driver(child, urban_static_inputs(cc, mesh); source = cc.osm_path)
-    push!(files, child)
-    if case_nested(cc)
-        pc = nest_parent_config(cc)
-        ppath = parent_out !== nothing ? abspath(parent_out) : cc.parent_static
-        if pc.surface === :tiles && ppath !== nothing
-            pmesh = parent_mesh(pc)
-            write_static_tiles(ppath, parent_static_tiles(parent_landuse_source(pc, pmesh), pc, pmesh);
-                               source = cc.landuse)
-            push!(files, ppath)
-        end
-    end
-    return files
-end
-
-"""
-    preprocess_dynamic(::UrbanDriver, cfg; from, out = nothing, child = nothing) -> Vector{String}
-
-`aeolus preprocess dynamic --from-sounding <config.toml>`: write the
-sounding driver (`[initial] dynamic`, or `out`) of the case from
-`[initial] sounding` ([`case_dynamic_inputs`](@ref): the height-time
-tables, times since the case start, and the ground pressure), the CSV
-hashed; for an open, non-nested case (`boundaries.lateral = "open"`,
-`physics.nesting = false`) also the steady boundary planes of its
-[`case_boundary_data`](@ref) (one `time_bc` record). `--from-parent`: run the online nested case of `cfg` for its
-`[clock] nsteps` with the child's boundary slabs recorded at every parent
-step (`[output] child_boundaries`, or `out`): the parent-made driver an
-offline child (`parent_driver = "offline"`, `[initial] dynamic` = this
-file) replays. The nest parent is a section of the child's config
-(`[physics.options.nesting.parent]`), so there is no separate `child`.
-"""
-function Config.preprocess_dynamic(::UrbanDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
-    cc = CaseConfig(cfg)
-    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
-    if from === :sounding
-        path = out !== nothing ? abspath(out) : cc.dynamic
-        path === nothing && throw(ArgumentError("[initial] dynamic is \"none\": pass --out file.nc"))
-        cc.sounding === nothing && throw(ArgumentError("[initial] sounding is \"none\": there is no sounding to preprocess"))
-        ox, oy = anchor_xy(cc, mesh)
-        d = case_dynamic_inputs(cc)
-        kw = (; source = cc.sounding, preprocessor = "aeolus preprocess dynamic --from-sounding",
-              origin_lat = cc.lat0, origin_lon = cc.lon0, origin_x = ox, origin_y = oy)
-        if !case_nested(cc) && cc.lateral === :open
-            # the open case: also its steady planes, the ProfileBoundaryData of
-            # case_boundary_data on the faces (from the CSV in memory: the file
-            # being written is not read)
-            cc0 = deepcopy(cc); cc0.dynamic = nothing
-            st = only(open_boundary_states(case_boundary_conditions(cc0, mesh).bcs))
-            Aeolus.BoundaryConditions.boundary_values!(st.planes, st.data, 0.0)
-            record_boundary!(NestBoundaryRecorder(path, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
-                             plane_snapshot(st.planes, mesh))
-        else
-            write_dynamic_driver(path, d; dx = mesh.dx, dy = mesh.dy, kw...)
-        end
-        return [path]
-    end
-    from === :parent || throw(ArgumentError("preprocess_dynamic: from = :$from; use :sounding or :parent"))
-    child === nothing || throw(ArgumentError("the nest's parent is the [physics.options.nesting.parent] " *
-                                             "section of the child's config: give the child config alone, without --child"))
-    case_nested(cc) || throw(ArgumentError("--from-parent: the case is not nested (physics.nesting = false)"))
-    nest_offline(cc) && throw(ArgumentError("--from-parent: the case replays its parent (parent_driver = \"offline\"); " *
-                                            "give the online config"))
-    path = out !== nothing ? abspath(out) : cc.child_boundaries
-    path === nothing && throw(ArgumentError("[output] child_boundaries is \"none\": pass --out file.nc"))
-    cc.child_boundaries = path
-    cc.output_path = nothing
-    run_case!(build_case(cc))
-    return [path]
 end
 
 function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::CheckpointSchedule;

@@ -260,34 +260,53 @@ function option!(s::Section, key::AbstractString, T; default = NoDefault(),
 end
 
 """
-    ConfigSchema(name; sections = Section[], checks = Function[], defaults = ())
+    ConfigSchema(name; sections = Section[], checks = Function[], defaults = (),
+                 domain_sections = String[])
 
-The schema of a driver `name`: the common sections every run has
-(`[run]`, `[fftw]`, `[logging]`, `[checkpoint]`, `[output]`; see the
-Configuration page) followed by the driver's `sections`. A driver
-section named like a common one adds its options to that section (the
-`simulation` driver's `[output] fields`); an option already in the common
-section, or a driver section declared twice, is an `ArgumentError`. `[run] driver`
-defaults to, and must equal, `name`. `checks` are cross-field checks
-([`check!`](@ref)): functions, or `"what it checks, in words" => f`
-pairs, whose text goes into the option reference ([`option_reference`](@ref)).
-`defaults` (`"section.key" => value` pairs) give a
-common option this driver's own default (the Berlin case's `[output]
-cadence` of 1800 s); its type and constraints stay the common ones.
+The schema of the model (`name = "model"`) or of a legacy case `name`: the
+common sections every run has (`[run]`, `[fftw]`, `[logging]`,
+`[checkpoint]`, `[output]`; see the Configuration page) followed by
+`sections`. A section named like a common one adds its options to that
+section (the model's `[output] variables`); an option already in the common
+section, or a section declared twice, is an `ArgumentError`. A legacy
+case's `[run] legacy` defaults to, and must equal, `name`. `checks` are
+cross-field checks ([`check!`](@ref)): functions, or `"what it checks, in
+words" => f` pairs, whose text goes into the option reference
+([`option_reference`](@ref)). `defaults` (`"section.key" => value` pairs)
+give a common option this schema's own default (the Berlin case's
+`[output] cadence` of 1800 s); its type and constraints stay the common
+ones.
+
+`domain_sections` names the **per-domain** sections (ONE-b, #451): the
+model's grid, core and component sections, plus `"domain"`, the domain's
+own keys (`id`, `static_driver`, `dynamic_driver`). Run-level values of
+these sections apply to every domain; a `[[domain]]` block, with
+`[domain.<section>]` tables, replaces keys for its domain. A schema without
+domain sections (a legacy case) has no `[[domain]]`.
 """
 struct ConfigSchema
     name::String
     sections::Vector{Section}
     checks::Vector{Pair{String,Any}}
-    ConfigSchema(name::String, sections::Vector{Section}, checks) =
-        new(name, sections, Pair{String,Any}[_check_entry(c) for c in checks])
+    domain_sections::Vector{String}
+    function ConfigSchema(name::String, sections::Vector{Section}, checks, domain_sections = String[])
+        names = [s.name for s in sections]
+        for d in domain_sections
+            d in names || throw(ArgumentError("schema \"$name\": the domain section [$d] is not a section"))
+        end
+        return new(name, sections, Pair{String,Any}[_check_entry(c) for c in checks], String[domain_sections...])
+    end
 end
 
 "A cross-field check as `description => f` (a bare function has the description `\"\"`)."
 _check_entry(c::Pair) = String(first(c)) => last(c)
 _check_entry(f) = "" => f
 
-function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[], defaults = ())
+"Whether `s` (a section name) is per-domain in `sch`."
+is_domain_section(sch::ConfigSchema, s::AbstractString) = s in sch.domain_sections
+
+function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[], defaults = (),
+                      domain_sections = String[])
     all_s = _common_sections(String(name))
     ncommon = length(all_s)
     defaults isa Pair && (defaults = (defaults,))
@@ -322,7 +341,7 @@ function ConfigSchema(name::AbstractString; sections = Section[], checks = Any[]
             throw(ArgumentError("schema \"$name\": section [$(s.name)] is declared twice"))
         end
     end
-    return ConfigSchema(String(name), all_s, Any[checks...])
+    return ConfigSchema(String(name), all_s, Any[checks...], String[domain_sections...])
 end
 
 """
@@ -346,71 +365,65 @@ _option(s::Section, key) =
     (i = findfirst(o -> o.key == key, s.options); i === nothing ? nothing : s.options[i])
 
 # ---------------------------------------------------------------------------
-# the driver registry
+# the schema registry: the model and the legacy cases
 # ---------------------------------------------------------------------------
 
-struct DriverEntry
-    schema::ConfigSchema
-    config_dir::Union{Nothing,String}
-end
+"""The name the model's schema is registered under (ONE-b, #451)."""
+const MODEL = "model"
 
-const _DRIVERS = Dict{String,DriverEntry}()
+const _DRIVERS = Dict{String,ConfigSchema}()
 
 """
-    register_driver!(name; sections = Section[], checks = Function[],
-                     config_dir = nothing, defaults = ()) -> ConfigSchema
+    register_driver!(name; sections = Section[], checks = Function[], defaults = (),
+                     domain_sections = String[]) -> ConfigSchema
 
-Register the configuration schema of the driver `name` (`[run] driver =
-"name"` selects it). `config_dir` is where `extends = "base.toml"` looks
-when the file is not next to the extending one; `defaults` are the
-driver's own defaults of common options ([`ConfigSchema`](@ref)). Registering a name again
-replaces it. The driver `"common"` (the common sections only) is always
-registered.
+Register a configuration schema ([`ConfigSchema`](@ref)): the model's
+(`name = "model"`, [`MODEL`](@ref)), which a config without `[run] legacy`
+selects, or that of a **legacy case** `name`, which `[run] legacy =
+"name"` selects (an assembly not yet ported to components: the urban,
+SBL, validation and example run types, removed by the later steps of the
+single-model epic). Registering a name again replaces it. `"common"` (the
+common sections only) is always registered.
 """
-function register_driver!(name::AbstractString; sections = Section[], checks = Any[],
-                          config_dir = nothing, defaults = ())
-    schema = ConfigSchema(name; sections = sections, checks = checks, defaults = defaults)
-    _DRIVERS[String(name)] = DriverEntry(schema, config_dir === nothing ? nothing : abspath(config_dir))
+function register_driver!(name::AbstractString; sections = Section[], checks = Any[], defaults = (),
+                          domain_sections = String[])
+    schema = ConfigSchema(name; sections = sections, checks = checks, defaults = defaults,
+                          domain_sections = domain_sections)
+    _DRIVERS[String(name)] = schema
     return schema
 end
 
 """
-    driver_schema(name) -> ConfigSchema
+    driver_schema(name = "model") -> ConfigSchema
 
-The schema registered for the driver `name` ([`register_driver!`](@ref)),
-loading an example driver listed in [`DRIVER_FILES`](@ref) on first use.
+The schema registered as `name` ([`register_driver!`](@ref)): the model's,
+or a legacy case's (an example case listed in [`DRIVER_FILES`](@ref) is
+loaded on first use).
 """
-function driver_schema(name::AbstractString)
-    _ensure_driver(name)              # an example driver is loaded on first use (CFG-b)
-    haskey(_DRIVERS, name) || throw(ConfigError("run.driver",
-        "unknown driver \"$name\"" * _suggest(name, collect(keys(_DRIVERS))) *
-        "; registered drivers: " * join(sort!(repr.(collect(keys(_DRIVERS)))), ", ")))
-    return _DRIVERS[name].schema
+function driver_schema(name::AbstractString = MODEL)
+    _ensure_driver(name)              # an example case is loaded on first use (CFG-b)
+    haskey(_DRIVERS, name) || throw(ConfigError("run.legacy",
+        "unknown legacy case \"$name\"" * _suggest(name, legacy_cases()) *
+        "; legacy cases: " * join(repr.(legacy_cases()), ", ")))
+    return _DRIVERS[name]
 end
 
 """
     registered_drivers() -> Vector{String}
 
-The names of the registered drivers, sorted.
+The names of the registered schemas (the model's, `"common"` and the legacy
+cases'), sorted.
 """
 registered_drivers() = sort!(collect(keys(_DRIVERS)))
 
 """
-    shipped_configs() -> Vector{String}
+    legacy_cases() -> Vector{String}
 
-Every `.toml` file in the registered drivers' config directories.
+The legacy cases `[run] legacy` may name: the registered ones and those of
+[`DRIVER_FILES`](@ref), sorted.
 """
-function shipped_configs()
-    out = String[]
-    for e in values(_DRIVERS)
-        d = e.config_dir
-        (d === nothing || !isdir(d)) && continue
-        for (root, _, files) in walkdir(d), f in files
-            endswith(f, ".toml") && push!(out, joinpath(root, f))
-        end
-    end
-    return sort!(unique!(out))
-end
+legacy_cases() = sort!(unique!(vcat(filter(n -> !(n in (MODEL, "common")), collect(keys(_DRIVERS))),
+                                    collect(keys(DRIVER_FILES)))))
 
 # ---------------------------------------------------------------------------
 # value checks
