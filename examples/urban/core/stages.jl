@@ -239,7 +239,8 @@ shorter than `2dt` (so the run does not end on a sliver of a step).
 last_step_dt(dt, remaining) = remaining <= dt ? remaining : remaining < 2dt ? remaining / 2 : dt
 
 """
-    run_case!(case; nsteps = case.cfg.nsteps, monitor = nothing, callback = nothing) -> case
+    run_case!(case; nsteps = case.cfg.nsteps, monitor = nothing, callback = nothing,
+              t_end = case.sim.t + nsteps * case.cfg.dt, resume = false) -> case
 
 Open the output (unless `cfg.output_path === nothing`), run `nsteps`
 steps (stopping early on a blow-up), close the output and log the
@@ -261,17 +262,24 @@ a `callback` must not read it (the child is the case's own); after
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
 `:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
 each step takes `step_dt(case)`, the last one shortened to land on it.
+
+A run resumed from a checkpoint (#269) passes the remaining `nsteps`,
+the original run's end `t_end` (the horizon the nest's parent steps
+ahead to, so the resumed run starts them exactly where the uninterrupted
+run did) and `resume = true` (the NetCDF output is reopened, not
+recreated).
 """
-function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, callback = nothing)
+function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, callback = nothing,
+                   t_end::Real = case.sim.t + nsteps * case.cfg.dt, resume::Bool = false)
     cfg = case.cfg
-    cfg.output_path === nothing || open_output!(case)
+    cfg.output_path === nothing || open_output!(case; resume)
     P = cadence_period(cfg, :output)
     ts = timestepper(case)
     variable = ts !== nothing && variable_dt(typeof(ts))
     @info(variable ? "run: $(nsteps * cfg.dt) s with a variable step (:$(provider(typeof(ts))))" :
                      "run: $nsteps steps of $(cfg.dt) s",
           subsystem = :berlin, domain = current_domain(), event = :run_start,
-          nsteps, t_end = case.sim.t + nsteps * cfg.dt,
+          nsteps, t_end = Float64(t_end),
           dt = cfg.dt, variable_dt = variable,
           records = floor(Int, nsteps * cfg.dt / P))
     case.clock.t_wall0 = time()
@@ -293,7 +301,7 @@ function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, c
     # the horizon: a step starts at t exactly when t_stop - t > stop_margin
     # (the fixed loop's steps start on multiples of dt, so half a step is margin)
     clk = case.clock
-    clk.t_stop = case.sim.t + nsteps * cfg.dt
+    clk.t_stop = Float64(t_end)
     clk.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
     try
         if variable

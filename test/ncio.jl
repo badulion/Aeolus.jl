@@ -111,6 +111,13 @@ import NCDatasets
         @test ds.dim["time"] == 0                      # nothing written by a refused record
         nc_append_record!(ds, Dict("a" => Float32[1, 2], "b" => Float32[3, 4]))
         @test ds.dim["time"] == 1
+        # `at`: a resumed run rewrites from its checkpoint's record on (#269)
+        nc_append_record!(ds, Dict("a" => Float32[5, 6], "b" => Float32[7, 8]))
+        nc_append_record!(ds, Dict("a" => Float32[9, 9], "b" => Float32[9, 9]); at = 2)
+        @test ds.dim["time"] == 2 && ds["a"].var[:, 2] == Float32[9, 9] && ds["b"].var[:, 1] == Float32[3, 4]
+        nc_append_record!(ds, Dict("a" => Float32[0, 1], "b" => Float32[2, 3]); at = 3)
+        @test ds.dim["time"] == 3
+        @test_throws ErrorException nc_append_record!(ds, Dict("a" => Float32[0, 1], "b" => Float32[2, 3]); at = 5)
         close(ds)
         # the record dimension must be the last one
         ds = nc_create(joinpath(dir, "bad2.nc"))

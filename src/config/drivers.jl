@@ -176,7 +176,12 @@ function _ensure_driver(name::AbstractString)
     path = joinpath(_PKG_DIR, DRIVER_FILES[name])
     isfile(path) || throw(ConfigError("run.driver", "the driver \"$name\" is listed in " *
                                       "DRIVER_FILES but $path does not exist"))
-    m = Module(Symbol("AeolusDriver_", name))
+    sym = Symbol("AeolusDriver_", name)
+    m = Module(sym)
+    # bound in Main, where its name says it is: Serialization finds a type
+    # by its module path, and a checkpoint holds the driver's own types
+    # (the Berlin case's structural state, #269)
+    isdefined(Main, sym) || Core.eval(Main, :(const $sym = $m))
     # what `module` defines for its body: include (relative to the file) and eval
     Core.eval(m, :(include(p::AbstractString) = Base.include($m, p)))
     Core.eval(m, :(eval(x) = Core.eval($m, x)))

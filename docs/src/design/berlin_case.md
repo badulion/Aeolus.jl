@@ -395,8 +395,11 @@ modifier added later belongs in the same pattern. Before #128 the tree
 shade and the cloud shadow multiplied `bus.sw` in place, so they
 compounded between radiation updates.
 
-Checkpointing the case's own state is #269 / #134; the hook is described
-in [Checkpoint / restart](checkpoint_restart.md#The-Berlin-case).
+The case is checkpointed whole (#269): `checkpoint_state(case)` is the
+structural state of the built case (every coupling's state included, so
+a new coupling needs no checkpoint method of its own), restored into a
+fresh build by `aeolus run <folder> --resume`; see
+[Checkpoint / restart](checkpoint_restart.md#The-Berlin-case).
 
 ## Initial state: the Lindenberg sounding (#247)
 

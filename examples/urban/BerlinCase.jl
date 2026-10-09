@@ -75,6 +75,7 @@ end
 include(joinpath(@__DIR__, "parent", "surface.jl"))
 include(joinpath(@__DIR__, "parent", "config.jl"))
 include(joinpath(@__DIR__, "parent", "case.jl"))
+include(joinpath(@__DIR__, "core", "restart.jl"))      # checkpoint / restart of the case (#269)
 
 # The `berlin` run driver and its configuration schema (CFG-c, #358):
 # built from the registry, so it comes last

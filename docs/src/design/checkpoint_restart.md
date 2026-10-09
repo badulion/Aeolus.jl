@@ -143,11 +143,126 @@ machine-specific; `ESTIMATE` is not guaranteed to pick the same codelets
 on a different CPU), and across thread counts (a threaded plan is a
 different problem).
 
+## Composite runs: the structural state (#269)
+
+A nested run or the Berlin case holds state in dozens of objects: two
+simulations with their open-boundary buffers and closures, the parent
+field set prolongated at both ends of the current parent step, the window
+and the step-size memory, flux registers, an inflow generator with its
+RNG, soil and building columns, ledgers, caches. A `checkpoint_state`
+method per object would have to be kept complete by hand, and a missing
+one cold-starts that piece silently. Such runs are instead checkpointed
+with **`structural_state(x)`**: a walk of the whole object graph of `x`
+that records every array (copied), every field of every struct and every
+`Dict` / `IdDict` entry, with the aliasing between them.
+`restore_structural_state!(x, s)` walks a freshly built graph of the same
+construction alongside the record:
+
+* arrays and mutable structs are refilled **in place**, so everything that
+  shares them (fields, hooks, views, bound open-boundary planes) still
+  does;
+* a place whose fresh value differs in type or identity takes a rebuilt
+  object (a buffer allocated lazily during the run, an inflow plane added
+  later) or the object the record maps there (members swapped during the
+  run: the nest's two parent time levels and its spare state rotate);
+* `IdDict` entries are restored last, so their keys are the objects at
+  their own places (the open boundaries bind field arrays by identity);
+* **opaque** objects are not state and keep the fresh build's: pointers
+  and anything holding one (FFTW plans), tasks, locks, conditions, `IO`
+  and NetCDF handles, and what `checkpoint_opaque` declares (the Berlin
+  case's output file);
+* a `const` field that differs, or an opaque object that would have to be
+  rebuilt, is an `ArgumentError` naming its path.
+
+Four hooks (`structural_save_begin` / `_end`, `structural_restore_begin`
+/ `_end`) adapt the walk for a type whose live form is not the form to
+record. The nested run uses them for a parent step running ahead on
+another task (SC-c, #403): it is waited for, recorded as plain values and
+detached, and rebuilt on restore with an already finished task, so the
+restored run takes it as the sequential one does.
+
+The record holds every reachable array, static ones too (meshes, masks,
+metric terms, scratch), so it is larger than the prognostic fields. It is
+used where completeness matters more than size: `nest_state`
+(`Aeolus.Nesting`) and the Berlin case.
+
+A bug the nested test caught: arrays whose element type is stored inline
+were first copied whole. An immutable struct with array fields (an
+`OpenPlane`) is stored inline too, so the copy held references to the
+run's own plane arrays, and the restore put those into the fresh build,
+breaking the identity between the open boundary's plane dictionary and its
+state. The child's halos then read stale planes and the nested child
+diverged in its first step after the restart. Only `isbits` element types
+are copied now; the rest are walked.
+
+## Nested runs
+
+`nest_state(run; window)` / `restore_nest_state!(run, s)` (#269) are the
+structural state of a `NestedRun` with a header (format, version, feedback
+mode, sync, mesh sizes), checked on restore: a snapshot without a nest
+state, of another feedback mode or other meshes is refused with an
+`ArgumentError`. `window` is the open parent-step window of a caller that
+drives the child itself, so a run can be checkpointed between two child
+steps of a parent step. As a `checkpoint!` component
+(`components = (nest = run,)`) the run is checkpointed at a window
+boundary.
+
+`test/nest_restart.jl` drives a parent (16 × 16 × 8, TKE closure) and a
+child (refinement 3, Lagrangian-dynamic closure, inflow generator with
+parent-resolved statistics) the way the Berlin case does, adaptive in
+both domains, 20 child steps (4 parent windows) against 10 + 10 with the
+checkpoint written to disk mid-window and restored into a freshly built
+run: every field of both domains with halos, both closures' memory, both
+parent time levels, the child's open-boundary buffers, the generator's
+planes and the clocks are **bit-identical**, one-way, one-way with the
+parent step running ahead, and two-way, at 1 and at 12 threads. Restoring
+only the two simulations (IO's `checkpoint!` / `restart!` with their
+closures) is shown to differ. The record is 9.0 MiB for the 16 × 16 × 8
+parent and the 18 × 18 × 12 child.
+
 ## The Berlin case
 
-The Berlin case's own state — soil columns, building zones, tracers,
-the surface bus, radiation caches, the stage clock — is not checkpointed
-yet; that is #269 / #134.
+The `berlin` driver checkpoints the whole case (#269):
+`checkpoint_state(case)` is its structural state, a component of the
+checkpoint `[checkpoint]` schedules in the run folder. It covers the
+child core and its open-boundary buffers, every coupling's state (soil
+and building columns, the surface bus, tracers, ledgers, radiation and
+chemistry), the clock and, with the online nest, the parent case and the
+nested run. `aeolus run <folder> --resume` builds the case from the
+recorded config, restores the newest checkpoint into it and runs to the
+original end time; the NetCDF output is reopened and continues at the
+checkpoint's record (a record the interrupted session wrote after the
+checkpoint is rewritten). Refused, with the reason: a checkpoint without
+the case state (a nested case would cold-start its parent and the
+couplings), checkpoints with a sound-proof core (`checkpoint!` takes the
+Boussinesq core's fields; a config error), and resuming a run that
+records the child's boundary driver (`[output] child_boundaries`).
+`test/config_roundtrip.jl` resumes `berlin_smoke.toml` (nested, every
+coupling on) interrupted after its middle checkpoint and compares it
+with the uninterrupted run bit for bit, its NetCDF output included.
+
+Measured on the flagship (`berlin_summer.toml`: the 64 × 64 × 64 child in
+the 6 km × 6 km × 3 km parent, every coupling on), after 20 child steps:
+
+| checkpoint | size | write |
+| :-- | --: | --: |
+| the child core alone (`checkpoint!(case.sim, path)`) | 20.9 MiB | 0.02 s |
+| the whole case (`components = (case = case,)`) | 2754.5 MiB | 9.5 s |
+
+The structural walk itself takes 4.0 s (2.88 million objects, 2628 MiB of
+arrays); the rest is serialisation. The record holds every array the case
+reaches, static ones included, and the nest parent's arrays dominate
+(the parent alone takes ≈ 1.5 GB in memory). Writing it raises the peak
+memory from 4.7 to 8.2 GB (the record is built in memory before it is
+written). A fresh process built the case (39 s), restored the checkpoint
+(30.6 s, compilation included) and continued 30 child steps (to t = 6 s)
+bitwise equal to the uninterrupted run in all 22 arrays of `case_state`
+(child, tracers, Ts, parent). At the default cadence of one checkpoint per
+30 min of wall clock that is 0.5 % of the run's wall time. Leaving the
+static arrays out of the record (masks, metric terms, view factors,
+scratch) would make it smaller; it is not done here because which arrays
+are static is a property of each coupling, which the walk is meant not to
+need.
 The hook is the generic above: one `checkpoint_state` /
 `restore_checkpoint_state!` method per coupling state, collected as the
 `components` of `checkpoint!` (the dynamical core, closure and wall

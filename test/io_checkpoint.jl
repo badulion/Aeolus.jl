@@ -94,6 +94,27 @@ end
 ck_bytes(x) = (io = IOBuffer(); serialize(io, x); take!(io))
 ck_same(a, b) = ck_bytes(a) == ck_bytes(b)
 
+# The structural state of an object graph (#269): what the nested run and
+# the Berlin case are checkpointed with.
+mutable struct _SSNode
+    a::Vector{Float64}
+    b::Vector{Float64}                     # shares `a` in the run, not in a fresh build
+    lazy::Union{Nothing,Vector{Float64}}   # allocated during the run
+    planes::Vector{NamedTuple{(:name, :data), Tuple{Symbol, Vector{Float64}}}}  # inline structs with references
+    bound::IdDict{Any,Symbol}              # binds arrays by identity
+    d::Dict{Symbol,Any}
+    lock::ReentrantLock                    # not state
+    rng::Xoshiro
+    n::Int
+    const tag::Symbol
+end
+function _ss_node()
+    x = [1.0, 2.0]
+    _SSNode(x, copy(x), nothing, [(name = :u, data = x)], IdDict{Any,Symbol}(), Dict{Symbol,Any}(),
+            ReentrantLock(), Xoshiro(5), 0, :node)
+end
+
+
 @testset "Checkpoint / restart (#245)" begin
 
 @testset "bitwise restart: $name × $scheme" for name in keys(CK_CLOSURES), scheme in CK_SCHEMES
@@ -289,6 +310,34 @@ end
 # ---------------------------------------------------------------------------
 # Periodic checkpoints with automatic resume (the long drivers' helper)
 # ---------------------------------------------------------------------------
+@testset "structural state: aliasing, lazy members, identity maps, opaque objects" begin
+    r = _ss_node()
+    r.b = r.a                                  # aliasing made during the run
+    r.a .= (3.0, 4.0); r.lazy = [9.0]
+    push!(r.planes, (name = :v, data = [5.0]))
+    r.bound[r.a] = :a; r.bound[r.planes[2].data] = :v
+    r.d[:k] = [7.0]; r.d[:j] = 1
+    rand(r.rng); r.n = 4
+    s = structural_state(r)
+    @test s isa StructuralState && s.objects > 0
+    s = deserialize(seekstart((io = IOBuffer(); serialize(io, s); io)))   # self-contained
+    f = _ss_node(); lk = f.lock
+    restore_structural_state!(f, s)
+    @test f.a == [3.0, 4.0] && f.b === f.a                       # aliasing restored
+    @test f.lazy == [9.0] && f.n == 4 && f.d[:k] == [7.0] && f.d[:j] == 1
+    @test f.planes[1].data === f.a && f.planes[2].data == [5.0] # not the record's arrays
+    @test f.planes[2].data !== s.root.fields[4].elems[2].fields[2].a
+    @test f.bound[f.a] === :a && f.bound[f.planes[2].data] === :v && length(f.bound) == 2
+    @test f.lock === lk                                          # opaque: kept
+    @test rand(f.rng) == rand(copy(r.rng))                       # RNG state
+    # refusals: another root type; a const field that differs
+    @test_throws ArgumentError restore_structural_state!(Ref(1), s)
+    g = _SSNode([0.0, 0.0], [0.0, 0.0], nothing, [(name = :u, data = [0.0, 0.0])], IdDict{Any,Symbol}(),
+                Dict{Symbol,Any}(), ReentrantLock(), Xoshiro(5), 0, :other)
+    err = try restore_structural_state!(g, s); nothing catch e; e end
+    @test err isa ArgumentError && occursin(".tag", sprint(showerror, err))
+end
+
 @testset "CheckpointSchedule: keep-K, resume, wisdom" begin
     dir = mktempdir()
     function run!(stop_at; nsteps = 10)

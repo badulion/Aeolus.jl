@@ -55,7 +55,9 @@ module Nesting
 # canopy restriction, relaxation and inflow exclusion, re-projection;
 # N-nest-e #263), nesting/nested_run.jl (NestedRun:
 # per-domain advance closures, subcycling under adaptive steppers,
-# temporal interpolation of the boundary data, step_nested!; N-nest-c #257).
+# temporal interpolation of the boundary data, step_nested!; N-nest-c #257),
+# nesting/restart.jl (nest_state / restore_nest_state!: checkpoint / restart
+# of a nested run, N-berlin-restart #269).
 
 using Printf: @sprintf
 using ..Grids
@@ -116,7 +118,8 @@ export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        begin_child_step!, end_child_step!,
        NestHierarchy, add_nest!, nest_domain, nest_link, proper_nesting_violations,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
-       anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights
+       anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights,
+       nest_state, restore_nest_state!, NEST_STATE_VERSION
 
 "Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
 const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
@@ -136,5 +139,6 @@ include("nesting/domain_advance.jl")
 include("nesting/feedback.jl")
 include("nesting/nested_run.jl")
 include("nesting/hierarchy.jl")
+include("nesting/restart.jl")
 
 end # module

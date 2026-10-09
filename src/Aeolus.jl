@@ -247,6 +247,9 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        CheckpointSchedule, checkpoint_schedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path, apply_fftw_config!,
        driver_checkpoints, finish_checkpoints!
+# #269: the structural state of an object graph (nested runs, composite cases)
+export StructuralState, structural_state, restore_structural_state!, checkpoint_opaque,
+       structural_save_begin, structural_save_end, structural_restore_begin, structural_restore_end
 # CFG-a (#356): run configuration (schema building: Aeolus.Config)
 export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, config_text,
        config_hash, register_driver!
@@ -388,6 +391,7 @@ export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        NestHierarchy, add_nest!, nest_domain, nest_link, proper_nesting_violations,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
        anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights,
+       nest_state, restore_nest_state!, NEST_STATE_VERSION,
        RefinementBlock, AMRHierarchy, amr_hierarchy,
        refinement_criterion_gradient, refinement_criterion_vorticity,
        refinement_criterion_richardson, combine_criteria,

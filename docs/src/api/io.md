@@ -38,6 +38,17 @@ checkpoint!(case.sim, path; components = (case = case,))
 restart!(case2.sim, path; components = (case = case2,))
 ```
 
+A run whose state is spread over many objects — a nested run, the Berlin
+case — is checkpointed as its [`structural_state`](@ref): the whole object
+graph, restored in place into a run built the same way (#269; the design
+is on [Checkpoint / restart](../design/checkpoint_restart.md)):
+
+```julia
+s = structural_state(run)                  # self-contained, serialisable
+restore_structural_state!(run2, s)         # run2 built as run was
+checkpoint!(child, path; components = (nest = nested_run,))   # nest_state, a component
+```
+
 A long driver hands its run loop a [`CheckpointSchedule`](@ref): built
 **before** the simulation (it loads the folder's FFTW wisdom), resumed
 after it, checked after every step:

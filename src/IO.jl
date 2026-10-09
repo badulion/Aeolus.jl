@@ -31,6 +31,9 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        CheckpointSchedule, resume!, maybe_checkpoint!, checkpoint_due,
        latest_checkpoint, checkpoint_path, wisdom_path,
        driver_checkpoints, finish_checkpoints!
+# #269: the structural state of an object graph (io/structural_state.jl)
+export StructuralState, structural_state, restore_structural_state!, checkpoint_opaque,
+       structural_save_begin, structural_save_end, structural_restore_begin, structural_restore_end
 # #335: blowup guard and run monitor (io/blowup.jl, io/run_monitor.jl)
 export checkpoint_payload, write_checkpoint,
        BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
@@ -99,6 +102,8 @@ end
 # Full-state, versioned checkpoint / restart (#245): checkpoint!, restart!,
 # the checkpoint_state component generic, StepperState, CheckpointSchedule.
 include("io/checkpoint.jl")
+# The structural state of a whole object graph (#269): nested runs, the Berlin case.
+include("io/structural_state.jl")
 
 # Run folder and provenance (#334): runs/<date>_<case>_<runID>/ with run.log,
 # run.toml, diagnostics, output and checkpoints; the dirty-tree policy.

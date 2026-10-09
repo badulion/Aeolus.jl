@@ -64,14 +64,22 @@ case_start_utc(cfg) = DateTime(cfg.date...) +
                       Millisecond(round(Int, (cfg.start_h - cfg.utc_offset) * 3.6e6))
 
 """
-    open_output!(case)
+    open_output!(case; resume = false)
 
 Create `cfg.output_path`, define the core, tracer, bus and coupling
-variables, and write the coordinates and the static geometry.
+variables, and write the coordinates and the static geometry. With
+`resume = true` and the file present (a run resumed from a checkpoint,
+#269), reopen it instead: the records continue at the checkpoint's
+`clock.nrecord + 1`, over any its interrupted session wrote after it.
 """
-function open_output!(case)
+function open_output!(case; resume::Bool = false)
     cfg, mesh, geom = case.cfg, case.mesh, case.geom
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    if resume && isfile(cfg.output_path)
+        ncf = Aeolus.NCIO.NCDataset(cfg.output_path, "a")
+        case.output = CaseOutput(ncf, _output_fields(case))
+        return case
+    end
     mkpath(dirname(cfg.output_path))
     ncf = nc_create(cfg.output_path; attributes = Dict(
         "title"       => "Aeolus.jl LES — Alexanderplatz, Berlin",
@@ -105,10 +113,7 @@ function open_output!(case)
                attributes = Dict("units" => "1",
                    "long_name" => "surface class (1 street 2 roof 3 park 4 water 5 wall 6 glass)"))
 
-    fields = core_output_fields(case)
-    for c in case.couplings
-        append!(fields, output_fields(c, case))
-    end
+    fields = _output_fields(case)
     names = [f.name for f in fields]
     allunique(names) || error("duplicate output variable names: $(names)")
     for f in fields
@@ -129,6 +134,15 @@ function open_output!(case)
     ncf["surface_class"][:, :] = Float32.(geom.sfc)
     case.output = CaseOutput(ncf, fields)
     return case
+end
+
+# the record variables: the core's, then every coupling's
+function _output_fields(case)
+    fields = core_output_fields(case)
+    for c in case.couplings
+        append!(fields, output_fields(c, case))
+    end
+    return fields
 end
 
 "Close the NetCDF file if one is open."
@@ -157,7 +171,7 @@ function write_output!(case)
         for f in case.output.fields
             rec[f.name] = Float32.(f.getter(case))
         end
-        nc_append_record!(case.output.ncf, rec)
+        nc_append_record!(case.output.ncf, rec; at = clk.nrecord)
     end
     log_frame(case)
     return case

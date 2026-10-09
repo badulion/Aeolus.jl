@@ -16,8 +16,11 @@
 # preprocess dynamic --from-sounding berlin_summer.toml` writes it from the CSV).
 #
 # Left at their defaults (environment variables fill some of them, see the
-# Run configuration page): [fftw], [logging], [checkpoint] (the Berlin case
-# has no restart yet: it must stay off), [run] root and allow_uncommitted.
+# Run configuration page): [fftw], [logging], [run] root and
+# allow_uncommitted. [checkpoint] is on: the whole case (the child, every
+# coupling, the nest parent and the nested run) every 30 min of wall clock,
+# the newest 2 kept; `aeolus run <folder> --resume` continues bit for bit
+# (#269).
 # Relative paths are relative to this file. `aeolus options berlin` lists
 # every option with its type, units and default.
 
@@ -37,6 +40,12 @@ scenario = "summer"
 backend = "cpu"
 # CPUBackend(serial = true): the single-task reference
 serial = false
+
+[checkpoint]
+# Periodic checkpoints of the whole case (#269), in the run folder's
+# checkpoints/; a resumed run (`--resume`) restores the newest.
+every_seconds = 1800.0
+keep = 2
 
 [output]
 # Output files.
