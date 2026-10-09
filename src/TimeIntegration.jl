@@ -228,7 +228,7 @@ end
 """
     cfl_diagnostics(sim, constraints = CFLConstraints(); sgs = nothing,
                     update_νt = true, sgs_active = <closure present>,
-                    sgs_stress = :laplacian)
+                    sgs_stress = :laplacian, limits = ())
 
 Report the time-step limit imposed by *each* process separately. Returns a
 `NamedTuple`:
@@ -240,8 +240,10 @@ Report the time-step limit imposed by *each* process separately. Returns a
 | `dt_buoy`           | `C_buoyancy / N` from the resolved mean θ profile               |
 | `dt_cor`            | `C_coriolis / |f|`                                             |
 | `dt_sgs`            | SGS-only limit `C_diffusive Δ²_harm / max(νt_cfl, κt_max)`      |
-| `dt_limiting`       | `min` of the five                                              |
-| `limiter`           | `:advective`, `:diffusive`, `:buoyancy`, `:coriolis` or `:sgs`  |
+| `dt_limits`         | the smallest of `limits` (`Inf` for none)                      |
+| `limits_limiter`    | its label (`:none` for none)                                   |
+| `dt_limiting`       | `min` of the five and `limits`                                 |
+| `limiter`           | `:advective`, `:diffusive`, `:buoyancy`, `:coriolis`, `:sgs` or the label of a limit |
 | `advective_rate`    | `max_cell Σ|uᵢ|/Δxᵢ` (so the CFL number is `dt · rate`)         |
 | `N`                 | Brunt–Väisälä frequency (0 when buoyancy is off)                |
 | `νt_max`            | maximum SGS eddy viscosity                                     |
@@ -270,6 +272,13 @@ The SGS limit uses the larger of the momentum viscosity `νt_cfl` and the eddy
 diffusivity, each as stored: for a Prandtl-number closure `κt = νt/Prₜ`,
 for a closure with its own κ (Era VI) whatever it computed.
 
+`limits` are the explicit limits of a model's components (ONE-a, #450:
+[`limit_dt`](@ref Aeolus.Components.limit_dt), e.g. the Coriolis
+component's `C_coriolis/|f|`), a tuple of `(dt, label)` pairs or `nothing`
+(no limit). They are compared right after the core's own Coriolis limit,
+in their order, so a component that carries the Coriolis term gives the
+pick and the limiter of the core's built-in Coriolis term, bit for bit.
+
 Ties are broken in the table order above, so a pure-molecular run where
 `dt_diff == dt_sgs` reports `:diffusive`.
 
@@ -283,7 +292,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
                          sgs = nothing,
                          update_νt::Bool = true,
                          sgs_active::Union{Nothing,Bool} = nothing,
-                         sgs_stress::Symbol = :laplacian) where {T}
+                         sgs_stress::Symbol = :laplacian, limits = ()) where {T}
     m = sim.mesh
     INF = T(Inf)
     t_cfl = time_ns()
@@ -339,6 +348,13 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     if dt_diff < dt_limiting; dt_limiting = dt_diff; limiter = :diffusive; end
     if dt_buoy < dt_limiting; dt_limiting = dt_buoy; limiter = :buoyancy;  end
     if dt_cor  < dt_limiting; dt_limiting = dt_cor;  limiter = :coriolis;  end
+    dt_lim = INF; lim_label = :none                # the components' limits (ONE-a, #450)
+    for l in limits
+        l === nothing && continue
+        d_l = T(first(l))
+        d_l < dt_lim && (dt_lim = d_l; lim_label = last(l)::Symbol)
+        if d_l < dt_limiting; dt_limiting = d_l; limiter = last(l)::Symbol; end
+    end
     if dt_sgs  < dt_limiting; dt_limiting = dt_sgs;  limiter = :sgs;       end
 
     # the pick of this state, for the step record of the step it is used for (#336)
@@ -347,7 +363,7 @@ function cfl_diagnostics(sim::BoussinesqSimulation{T},
     rec.wall_cfl += _wall(t_cfl)
 
     return (dt_adv = dt_adv, dt_diff = dt_diff, dt_buoy = dt_buoy,
-            dt_cor = dt_cor, dt_sgs = dt_sgs,
+            dt_cor = dt_cor, dt_sgs = dt_sgs, dt_limits = dt_lim, limits_limiter = lim_label,
             dt_limiting = dt_limiting, limiter = limiter,
             advective_rate = rate, N = N, νt_max = νt_max, κt_max = κt_max,
             νt_cfl = νt_cfl, ν_total = ν_total)
@@ -393,7 +409,7 @@ end
 
 """
     adaptive_dt(sim, constraints; dt_prev = nothing, diagnostics = nothing,
-                scheme = nothing, sgs = nothing, sgs_stress = :laplacian)
+                scheme = nothing, sgs = nothing, sgs_stress = :laplacian, limits = ())
 
 The time step to take next: the smallest per-process limit from
 [`cfl_diagnostics`](@ref) — or, when `scheme` is an [`IMEXScheme`](@ref),
@@ -410,15 +426,18 @@ A non-finite limit (which only happens if the state already contains
 a usable number rather than propagating the `NaN`. Pass `diagnostics` to
 reuse a `cfl_diagnostics` result instead of recomputing it; `sgs` is the
 closure the step will run and `sgs_stress` the form of its momentum
-divergence (see [`cfl_diagnostics`](@ref)). The step and its limiter
+divergence (see [`cfl_diagnostics`](@ref)); `limits` are a model's
+component limits (`(dt, label)` pairs, see [`cfl_diagnostics`](@ref)),
+which bind before the growth limit and the clamp. The step and its limiter
 (`:growth`, `:dt_max`, `:dt_min` when a clamp binds) are noted in the
 simulation's [`StepRecord`](@ref Aeolus.Simulations.StepRecord) (#336).
 """
 function adaptive_dt(sim::BoussinesqSimulation{T}, c::CFLConstraints;
                      dt_prev = nothing, diagnostics = nothing,
                      scheme = nothing, sgs = nothing,
-                     sgs_stress::Symbol = :laplacian) where {T}
-    d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs, sgs_stress = sgs_stress) :
+                     sgs_stress::Symbol = :laplacian, limits = ()) where {T}
+    d  = diagnostics === nothing ? cfl_diagnostics(sim, c; sgs = sgs, sgs_stress = sgs_stress,
+                                                   limits = limits) :
                                    diagnostics
     dt, limiter = scheme isa IMEXScheme ? _explicit_limit(d, scheme) : (d.dt_limiting, d.limiter)
     isnan(dt) && return c.dt_min
@@ -2008,6 +2027,7 @@ function _explicit_limit(d, scheme::IMEXScheme)
     limiter = :advective
     if d.dt_buoy < dt; dt = d.dt_buoy; limiter = :buoyancy; end
     if d.dt_cor  < dt; dt = d.dt_cor;  limiter = :coriolis; end
+    if d.dt_limits < dt; dt = d.dt_limits; limiter = d.limits_limiter; end   # explicit components
     return (dt * oftype(dt, explicit_cfl_factor(scheme)), limiter)
 end
 
