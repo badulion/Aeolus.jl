@@ -112,18 +112,18 @@ sections involved.
 
 The run types not yet ported to components keep their own schemas until
 the epic step that ports them: the urban case (`urban`, `urban_parent`;
-ONE-e #454, ONE-f #455), `sbl` and the validation drivers (ONE-g #456), and
-the example run types (ONE-i #458). A config selects one with `[run]
+ONE-e #454, ONE-f #455) and the example run types (ONE-i #458). The SBL
+cases are configurations of the model since ONE-g (#456); the channel,
+single-column and DNS a-priori validation cases are gone (maintainer
+decisions of 2026-10-09). A config selects a legacy case with `[run]
 legacy = "<case>"`; it has no domains.
 
 | `[run] legacy` | what it runs | options |
 | :-- | :-- | :-- |
 | `urban` | the urban LES run type (`Aeolus.UrbanCase`): the Berlin (Alexanderplatz) case with every coupling and the nest is its example | [urban](../reference/options/urban.md) |
 | `urban_parent` | the nest parent of an urban case alone (same schema) | [urban_parent](../reference/options/urban_parent.md) |
-| `sbl` | GABLS1–4, CASES-99 and the stratified channels | [sbl](../reference/options/sbl.md) |
-| `dns` | the decaying DNS with its a-priori record | [dns](../reference/options/dns.md) |
-| `column` | the single-column validation cases (DYCOMS RF01, ParisFog, parcel, Kessler box) | [column](../reference/options/column.md) |
-| `channel`, `cbc_decay`, `patchy_surface`, `dns_decay` | the other validation drivers | [channel](../reference/options/channel.md), [cbc_decay](../reference/options/cbc_decay.md), [patchy_surface](../reference/options/patchy_surface.md), [dns_decay](../reference/options/dns_decay.md) |
+| `column` | the Kessler box of the kernel demo (no dynamics) | [column](../reference/options/column.md) |
+| `dns_decay` | the decaying DNS of P56-c that `sgs_decay` starts from | [dns_decay](../reference/options/dns_decay.md) |
 | `advection`, `cbl`, `inflow_fetch`, `obstacle_channel`, `shear_layer`, `flat_plate`, `sgs_decay` | the example run types of `Aeolus.RunDrivers` | `aeolus options <case>` |
 
 ## No inheritance
@@ -185,7 +185,7 @@ run is recorded with `replayable = false` and the keys in
 A replay from `run.toml` is bit-identical to the original under the
 `ESTIMATE` FFTW planner and the same thread count (#245). `--resume`
 refuses `--set`, because a resumed run must be the run it continues. For
-the model and the `sbl` and `urban` legacy cases a run interrupted and
+the model (the SBL configurations among its runs) and the `urban` legacy case a run interrupted and
 resumed is bitwise equal to the uninterrupted run (`test/config_roundtrip.jl`).
 
 ## The `[inputs]` hash check
@@ -207,7 +207,6 @@ readers and the schemas:
 ```bash
 # in an AeolusPrep.jl checkout
 julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
-julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
 # the parent-made driver of an offline nest is model output
 julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
 ```
@@ -217,8 +216,9 @@ written from OpenStreetMap or GeoJSON and read from `[geometry] static`.
 The dynamic driver (initial profiles, large-scale forcing, surface
 series, boundary planes) is written from a sounding, a case table or
 ERA5, or by a recording parent run, and is read from the domain's
-`dynamic_driver` (the model), `[case] dynamic` (sbl) or `[initial]
-dynamic` (urban).
+`dynamic_driver` (the model; its large-scale tables by
+`[large_scale_forcing]`, its surface series by `[surface_layer]`) or
+`[initial] dynamic` (urban).
 Their variables, dimensions, units and attributes are listed on the
 [static](../reference/input_static.md) and
 [dynamic](../reference/input_dynamic.md) pages; the API is
@@ -230,8 +230,8 @@ Their variables, dimensions, units and attributes are listed on the
 | :-- | :-- |
 | `examples/configs/` | the model: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection`, `lindenberg_era5`; `advection`: `scalar_advection_2d` |
 | `examples/urban/configs/` | `urban` (in `src/`, `Aeolus.UrbanCase`): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
-| `examples/sbl/configs/` | `sbl` (in `src/`, `Aeolus.StableBoundaryLayer`): `gabls1`–`gabls4_exp3`, `cases99`, the channels, and the sweeps that replace the runner scripts (`*_closures`, `*_sweep`) |
-| `examples/validation/configs/` | the validation drivers (`neutral_abl`, `dycoms_rf01`, `dns256`, …) |
+| `examples/sbl/configs/` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps (`input/`: the case-table dynamic drivers) |
+| `examples/dns_vs_les/configs/` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence |
 | `examples/kernels/configs/` | `column`: `cloud_spinup`; the model: `tgv_energy_decay`, `decaying_hit`, `channel_flow`, `pollution_plume`, `particle_trail` |
 | `examples/coupled/configs/` | the model with the EX-d couplings: `dcbl_radiation_lsm`, `moist_convection`, `heated_plume`, `flow_past_cube` (`input/`: the cube's GeoJSON and static driver) |
 | `examples/sgs/configs/` | `cbl`: `cbl_tke`; `sgs_decay`: `rotating_stratified_decay`; `obstacle_channel`: `surface_mounted_cube`, `surface_mounted_cube_closures` (`input/`: the cube) |

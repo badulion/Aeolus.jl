@@ -186,8 +186,8 @@ representations: ``\sigma_{r^2}`` is at round-off level
 
 ## Worked example
 
-`examples/validation/spectral_broadening.jl` runs both cases, prints the
-tables above and writes two SVG figures to `examples/validation/output/`:
+The former `examples/validation/spectral_broadening.jl` (a parcel case,
+(removed by ONE-g, #456)) ran both cases, printed the tables above and wrote two SVG figures:
 ``\varepsilon(t)`` in the ascending parcel, and ``\sigma_{r^2}(t)`` on
 log-log axes against the OU curve and ``t^{1/2}``.
 

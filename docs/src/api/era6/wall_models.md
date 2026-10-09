@@ -60,9 +60,11 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   [Wall models → Dynamic roughness](../../theory/wall_models.md).
 - **Wall-resolved, stratified channel** (P55-f, #191):
   `channel_case(bottom_bc = :noslip, θ_walls = (θ_b, θ_t))` with
-  `stratified_channel_walls(Ri_τ)` and `channel_richardson(case)`; the
-  validation against the DNS of García-Villalba & del Álamo (2011) is in
-  [Stable boundary layers](../../theory/stable_boundary_layer.md).
+  `stratified_channel_walls(Ri_τ)` and `channel_richardson(case)`; its
+  validation against the DNS of García-Villalba & del Álamo (2011), made
+  with the former `sbl` run type, is recorded in
+  [Stable boundary layers](../../theory/stable_boundary_layer.md) (the
+  channel cases were removed by ONE-g, #456).
 - **Flux-cooled half channel** (P58-e, #193): `half_channel_case(surface_heat_flux = Q)`
   with `MOSTFluxWallLaw`, the flux-prescribed Monin–Obukhov wall law
   that exerts no stress beyond the maximum sustainable heat flux

@@ -6,7 +6,7 @@ the urban case's NetCDF file and the SBL run type's `series.csv`.
 
 Every component publishes an **output catalogue**, a list of
 [`OutputVariable`](@ref Aeolus.Output.OutputVariable)s. Each variable has
-a name, units, dimensions (`:xyz`, `:xy`, `:z`, `:scalar`) and a getter.
+a name, units, dimensions (`:xyz`, `:xy`, `:z`, `:k` — a spectrum over the shell wavenumbers —, `:scalar`) and a getter.
 The model's catalogue is the core's variables plus every enabled
 component's ([`domain_catalogue`](@ref Aeolus.Components.domain_catalogue)),
 and `[output] variables` selects from it. Selecting a variable that no

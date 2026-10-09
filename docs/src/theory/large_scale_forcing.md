@@ -227,7 +227,8 @@ sensitivity run without it), and the SBL driver books it in its θ ledger. In th
 (the largest ``∂⟨θ⟩/∂z`` above 300 m) at 06 LT 24 October is 851.7 m
 with subsidence and 1038.7 m without (−187.0 m), 0.74 Δz above a passive
 surface descending from the 18 LT inversion (856.0 m, 1039.7 m and
-0.80 Δz before the halo fix of `sbl_surface!` in CFG-d, #359). The θ ledger closes to
+0.80 Δz before the halo fix of the former `sbl_surface!` in CFG-d, #359;
+on the model, ONE-g #456, 0.88 Δz). The θ ledger closes to
 8.1 × 10⁻¹³ of the column content.
 
 At 48 × 48 × 80 (Δx = 50 m, Δz = 20 m, `configs/cases99_closures.toml` read by `examples/sbl/gabls2.jl`,
@@ -503,7 +504,7 @@ column coupled to the surface. That leaves no decoupled residual layer
 in which an inertial oscillation could run. To resolve the jet, the
 domain would need to be deeper than the nocturnal boundary layer.
 * **Patchy-surface validation driver**
-  (`examples/validation/patchy_surface/driver.jl`): it now delegates its
+  (now `test/support/patchy_surface.jl`): it now delegates its
   ``+fU_g`` to `GeostrophicPressureGradient`. After 60 steps of the
   ``U_g = 5`` m/s, ``f = 10^{-4}`` setup, the state is unchanged bit for
   bit, and `test/era5_heterogeneous_surface.jl` prints identical numbers.

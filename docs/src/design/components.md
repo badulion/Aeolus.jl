@@ -60,10 +60,18 @@ on a retry.
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
 | [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability` | called by the core in stage 6 | the closure of `Components.build_closure` |
-| [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` | `:tendencies` | `Operators.add_coriolis!` |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability`, `stress` | called by the core in stage 6 | the closure of `Components.build_closure` |
+| [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` or `latitude` | `:tendencies` | `Operators.add_coriolis!` |
 | [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
-| [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start` | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
+| [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start`, `target` (`rest`, `geostrophic`, `mean`) | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
+
+The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
+
+| component | slot | section | stage | delegates to |
+| :-- | :-- | :-- | :-- | :-- |
+| [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables) | `:clock` (the step start), `:body_force` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``) |
+| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface_layer]` `enabled`, `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
+| [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
 Every domain has an `:advection` provider; `[sgs] closure = "none"`
 enables no `:sgs` component. Each component has its own per-domain
@@ -242,10 +250,11 @@ means.
 One writer, `Aeolus.Output.OutputWriter`, writes the selection into one
 NetCDF-4 file. Records (3-D, maps, profiles) go out every `cadence`, and
 the time series every `series_cadence`. Each value is either the value at
-the record or its mean over the record's interval (`averaging`). The
-urban case and the SBL run type write through the same writer: the urban
-couplings' `output_fields` are catalogues of `OutputVariable`s, and the
-SBL time series are the time-series stream of `output/output.nc`.
+the record or its mean over the record's interval (`averaging`). A
+spectrum (dimension `k`, the shell wavenumbers) is a record too: the
+core's `energy_spectrum` (ONE-g #456, with `kinetic_energy`, `dissipation`
+and `dissipation_sgs`). The urban case writes through the same writer:
+the urban couplings' `output_fields` are catalogues of `OutputVariable`s.
 
 ## Checks
 
@@ -272,31 +281,30 @@ check before the error propagates. See [Checks](../api/checks.md).
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the
-  steps — because the urban and SBL run types, the nesting drivers and
+  steps — because the urban run type, the nesting drivers and
   many module tests still assemble the core by hand. A `Model` passes
   these keywords; the run types that still use them directly move to
   components in the later steps of the epic (urban couplings ONE-e #454,
-  nesting ONE-f #455, SBL ONE-g #456), after which the keywords go.
-* The urban run type and the SBL run type still select their SGS closures
-  themselves; their `[sgs]`/`:sgs` paths become the `:sgs` component when
-  they are ported.
+  nesting ONE-f #455), after which the keywords go. (The SBL run type is
+  gone: its cases are configurations of the model, ONE-g #456.)
+* The urban run type still selects its SGS closures itself; its
+  `:sgs` path becomes the `:sgs` component when it is ported.
 * `budget!` and `outputs` are part of the interface with empty
   defaults (the shared budgets and the catalogue-selected output, ONE-c
   #452); `checks` likewise, the `[checks]`/`results.toml` machinery is
   ONE-d (#453). The budget closure becomes one of its checks.
-* The urban couplings' `smoke_check`s, the urban run type's own
-  `results.toml` closure verdict (`run_results`) and the SBL reference
-  comparisons (the plotting scripts of `examples/sbl/`) are not checks
-  yet: they move to `checks(c)` and `[checks.reference]` when ONE-e (#454)
-  and ONE-g (#456) port those run types to components.
-* The urban couplings and the SBL run type report into the one
-  `Budgets` and write through the one writer, but they are still run
-  types of their own. Their budgets keep their own step hooks (the urban
-  `budgets_begin_step!`/`budgets_end_step!`, the SBL substage evaluation
-  of the momentum terms) until ONE-e (#454) and ONE-g (#456) port them to
-  components, which deliver every component they port on both cores. The
-  particle tracks of the model's couplings (`particles.csv`) are
-  Lagrangian rows, not a gridded catalogue variable, and stay a file of
-  their own.
-* The urban and SBL run types still refuse the anelastic core's
-  checkpoints and adaptive step in their own config checks.
+* The urban couplings' `smoke_check`s and the urban run type's own
+  `results.toml` closure verdict (`run_results`) are not checks yet: they
+  move to `checks(c)` when ONE-e (#454) ports that run type to
+  components. (The SBL reference comparisons are `[checks.reference]` of
+  the SBL configurations since ONE-g, #456.)
+* The urban couplings report into the one `Budgets` and write through the
+  one writer, but they are still a run type of their own. Their budgets
+  keep their own step hooks (`budgets_begin_step!`/`budgets_end_step!`)
+  until ONE-e (#454) ports them to components. The particle tracks of the
+  model's couplings (`particles.csv`) are Lagrangian rows, not a gridded
+  catalogue variable, and stay a file of their own; so are the CASES-99
+  tower bins, of which the model writes the fitted threshold profile only
+  (`tower_threshold`).
+* The urban run type still refuses the anelastic core's checkpoints and
+  adaptive step in its own config checks.

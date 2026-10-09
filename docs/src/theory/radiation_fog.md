@@ -138,7 +138,7 @@ Mazoyer et al. found to matter most for their LES, are absent. Onset and
 depth are therefore compared to the observations as a life cycle, not
 fitted to them.
 
-Measured (`examples/validation/parisfog_2011_radiation_fog.jl`):
+Measured (the former `examples/validation/parisfog_2011_radiation_fog.jl`, a single-column case (removed by ONE-g, #456)):
 
 | | model | observed |
 | :-- | :-- | :-- |

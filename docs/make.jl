@@ -21,7 +21,7 @@ makedocs(
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations, Aeolus.Components,
                 Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
-                Aeolus.UrbanCase, Aeolus.StableBoundaryLayer, Aeolus.RunDrivers],
+                Aeolus.UrbanCase, Aeolus.RunDrivers],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -101,7 +101,7 @@ makedocs(
             "Wall models"                 => "theory/wall_models.md",
             "Large-scale forcing"         => "theory/large_scale_forcing.md",
             "Prognostic SGS TKE and Reynolds stress" => "theory/sgs_tke.md",
-            "Stable BLs: GABLS1-4, CASES-99, channel" => "theory/stable_boundary_layer.md",
+            "Stable BLs: GABLS1-4, CASES-99" => "theory/stable_boundary_layer.md",
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
@@ -206,7 +206,6 @@ makedocs(
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
                 "Transition"                   => "api/era6/transition.md",
                 "WallModels"                   => "api/era6/wall_models.md",
-                "StableBoundaryLayer (sbl)"    => "api/era6/stable_boundary_layer.md",
             ],
         ],
         "Examples" => [

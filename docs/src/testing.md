@@ -23,9 +23,9 @@ AEOLUS_TEST_TIER=full julia --project=. test/runtests.jl
 | `fast` (default) | `AEOLUS_TEST_TIER` unset or `fast` | every file except those tagged `tier = "full"` |
 | `full` | `AEOLUS_TEST_TIER=full` | every file of the include list |
 
-The full-only files are validation mini-simulations: the GABLS1 and
-GABLS3 LES, the stratified and log-layer channels, the flat plate, the
-Kelvin–Helmholtz growth rates, turbulence collapse, the scale-dependent
+The full-only files are validation mini-simulations: the GABLS1-3 LES
+(configurations of the model), the log-layer channels, the flat plate, the
+Kelvin–Helmholtz growth rates, the scale-dependent
 Lagrangian model's channel runs, the Comte-Bellot–Corrsin benchmark, the
 SGS closures against filtered DNS, the BUBBLE / CAPITOUL campaigns and
 the patchy-surface LES. Each has a one-line reason in
@@ -64,7 +64,7 @@ Tag a file in `test/test_tags.toml` only when
 tier = "full"
 weight = "heavy"
 seconds = 113
-reason = "GABLS3 4 h LES on the SBL driver; LargeScaleForcing and wall models stay fast in ..."
+reason = "GABLS3 4 h LES on the model (gabls3.toml); LargeScaleForcing and wall models stay fast in ..."
 ```
 
 ## The parallel runner
