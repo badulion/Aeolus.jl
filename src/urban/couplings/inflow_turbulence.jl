@@ -250,7 +250,7 @@ function smoke_check(c::InflowTurbulenceCoupling, case)
             end
         end
     end
-    l = case.ledger
+    l = case.budgets
     checks = [
         "the open faces' data is the generator (wrapping the nest's or driver's data)" =>
             all(st -> st.data === it, open_boundary_states(sim)),

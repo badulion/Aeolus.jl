@@ -41,7 +41,7 @@ A built case: `cfg`, `mesh`, `sim` (the dynamical core: a
 `BoussinesqSimulation`, or the `MassWeightedSimulation` of the `:core`
 slot's anelastic / pseudo-incompressible provider), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
-([`TracerRegistry`](@ref)), `ledger`, the hydrostatic reference state
+([`TracerRegistry`](@ref)), `budgets` ([`Budgets`](@ref Aeolus.BudgetSystem.Budgets)), the hydrostatic reference state
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
 NetCDF `output` (or `nothing`), the composed
@@ -58,7 +58,7 @@ mutable struct Case{M, S, G<:Geometry}
     geom::G
     bus::SurfaceBus
     tracers::TracerRegistry
-    ledger::Ledger
+    budgets::Budgets
     ref::CaseReference
     couplings::Vector{AbstractCoupling}
     schedule::Dict{Symbol,Vector{ScheduleEntry}}
@@ -184,11 +184,11 @@ function build_case(cfg::CaseConfig)
     Ts0, ΔTw = cfg.Ts0, cfg.Ts_water_offset
     @. bus.Ts = Ts0 + ΔTw * (geom.sfc == SURFACE_WATER)
 
-    ledger = Ledger()
-    ledger.ρ = copy(ref.ρ̄)
+    budgets = Budgets(; order = ALL_STAGES)
+    budgets.ρ = copy(ref.ρ̄)
 
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0)
-    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), ledger, ref,
+    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
                 AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
                 nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
                 top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))

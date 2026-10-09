@@ -52,6 +52,10 @@ using ..Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE
                            FileBoundaryFeed, feed_window!, feed_steady!, check_planes, check_coverage,
                            NestBoundaryRecorder, record_boundary!, plane_snapshot, write_dynamic_driver
 using ..Aeolus.StretchedGrids: surface_refined_faces
+# the budgets (ONE-c, #452): the case books into the core's Budgets
+using ..Aeolus.BudgetSystem
+# the one output writer (ONE-c, #452): the case and its couplings publish catalogues
+using ..Aeolus.Output: Output, OutputVariable, OutputWriter, check_catalogue, cell_centres, write_record!
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics
 using Printf
@@ -60,7 +64,7 @@ using Statistics: mean
 import Random
 
 for f in ("config", "registry", "geometry", "bus",
-          "tracers", "air_heat", "air_heat_ledger", "ledger", "reference_state", "top_boundary",
+          "tracers", "budgets", "reference_state", "top_boundary",
           "open_boundary",
           "output", "case", "stages", "diagnostics")
     include(joinpath(@__DIR__, "urban", "core", f * ".jl"))
@@ -88,8 +92,7 @@ export CaseConfig, UrbanDriver, UrbanParentDriver, run_results, parent_results, 
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,
-       Ledger, ledger_report, surface_budget, water_budget, heat_budget, add_heat!,
-       AirHeatMeter, air_heat, register_surface_factory!,
+       register_surface_factory!,
        SurfaceSite, class_surface, class_roughness,
        ParentLanduse, read_parent_landuse, child_footprint, parent_fractions,
        parent_morphometry, parent_forcing_level, ParentColumn, ParentSurface,

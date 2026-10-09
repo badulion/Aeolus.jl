@@ -288,25 +288,25 @@ run_stage!(c::TurbulenceDiag, case, ::Val{:output}, dt) =
     (turbulence_diagnostics!(c, case); nothing)
 
 output_fields(c::TurbulenceDiag, case) = [
-    OutputField("N2_mean", "s-2",
+    OutputVariable("N2_mean", "s-2",
                 "fluid-cell plane mean of the squared buoyancy frequency of theta_v",
                 :z, cs -> turbulence_diagnostics!(c, cs).N2),
-    OutputField("Ri_g_mean", "1",
+    OutputVariable("Ri_g_mean", "1",
                 "gradient Richardson number of the plane means, <N2>/<|S|2>",
                 :z, cs -> turbulence_diagnostics!(c, cs).Ri),
-    OutputField("f_m_mean", "1",
+    OutputVariable("f_m_mean", "1",
                 "fluid-cell plane mean of the momentum stability factor f_m(Ri_g)",
                 :z, cs -> turbulence_diagnostics!(c, cs).fm),
-    OutputField("gamma_turb", "1",
+    OutputVariable("gamma_turb", "1",
                 "turbulent fraction of the fluid cells (vorticity-fluctuation indicator)",
                 :z, cs -> turbulence_diagnostics!(c, cs).γ),
-    OutputField("Ri_supercritical_fraction", "1",
+    OutputVariable("Ri_supercritical_fraction", "1",
                 "fraction of the fluid cells with Ri_g > 1/4",
                 :z, cs -> turbulence_diagnostics!(c, cs).Rsup),
-    OutputField("Re_grid", "1",
+    OutputVariable("Re_grid", "1",
                 "grid Reynolds number |U_h| Delta / (nu + <nu_t>)",
                 :z, cs -> turbulence_diagnostics!(c, cs).Re_grid),
-    OutputField("relam_fraction", "1",
+    OutputVariable("relam_fraction", "1",
                 "fraction of the Ri_g > 1/4 fluid cells that are gamma-laminar with nu_t/nu < 1e-2",
                 :z, cs -> turbulence_diagnostics!(c, cs).relam)]
 

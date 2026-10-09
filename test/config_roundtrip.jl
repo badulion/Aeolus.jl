@@ -174,8 +174,12 @@ end
     # the model: buoyant_convection at 16³, 20 steps (dry_convective_bl and the
     # adaptive TGV resume in config_simulation_driver.jl)
     r = resume_check(joinpath(RT_EXAMPLES, "configs", "buoyant_convection.toml");
-                     overrides = ["grid.size=[16,16,16]"])
+                     overrides = ["grid.size=[16,16,16]", "output.series_cadence=0.0", "output.cadence=0.2"],
+                     outputs = ["output.nc"])
     @test r.fields_equal && isempty(r.fields_differing)
+    # the one writer's file (ONE-c): the resumed run continues it after the checkpoint,
+    # over what the interrupted session wrote after it, to the same records and series
+    @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.stepper.step == 20 && Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
     # sbl legacy case: cases99 (GABLS2 with towers and series) at 16 × 16 × 32, 20 steps; the
@@ -183,7 +187,7 @@ end
     r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");
                      overrides = ["grid.size=[16,16,32]", "towers.hours=[0.0,24.0]", "towers.window=30.0",
                                   "averaging.series_interval=60.0"], nsteps_overrides = sbl_nsteps,
-                     outputs = ["towers.csv", "series.csv", "statistics.toml"])
+                     outputs = ["towers.csv", "output.nc", "statistics.toml"])
     @test r.fields_equal && isempty(r.fields_differing)
     @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]

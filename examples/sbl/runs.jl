@@ -6,7 +6,7 @@
 #
 #   run.toml                  the resolved config ([config])
 #   output/statistics.toml    the averaged profiles and scalars
-#   output/series.csv         the time series ([averaging] series_interval)
+#   output/output.nc          the time series ([averaging] series_interval)
 #   output/towers.csv         the tower bins ([towers])
 #
 # and the reference data of examples/sbl/data/.
@@ -14,7 +14,8 @@
 
 using TOML
 # The CSV readers are the run type's own (one copy, in src/sbl/case.jl).
-using Aeolus.StableBoundaryLayer: sbl_read_csv, sbl_csv_value
+using Aeolus.StableBoundaryLayer: sbl_read_csv, sbl_csv_value, SBL_SERIES
+using Aeolus.NCIO: NCDataset
 
 const SBL_DATA = joinpath(@__DIR__, "data")
 const SBL_OUT = joinpath(@__DIR__, "output")
@@ -25,6 +26,23 @@ function csv_rows(path)
     t = sbl_read_csv(path)
     names = Tuple(Symbol.(t.columns))
     return [NamedTuple{names}(Tuple(r)) for r in t.rows]
+end
+
+"""
+    series_rows(path) -> Vector{NamedTuple}
+
+The time series of an `sbl` run's `output.nc` as one NamedTuple per
+sample, keyed `t` (s) and the variables of `SBL_SERIES` (`u_star`,
+`w_theta`, `H`, `h`, `S_max`, `z_jet`, `theta_screen`, `U_screen`, `T_s`,
+`z_inv`, `ls_heat`); empty if there is no file.
+"""
+function series_rows(path)
+    isfile(path) || return NamedTuple[]
+    return NCDataset(path) do ds
+        names = (:t, (Symbol(s[1]) for s in SBL_SERIES)...)
+        cols = [ds["time_series"].var[:], (ds[s[1]].var[:] for s in SBL_SERIES)...]
+        [NamedTuple{names}(Tuple(c[i] for c in cols)) for i in eachindex(cols[1])]
+    end
 end
 
 """
@@ -44,7 +62,7 @@ function sbl_run(folder::AbstractString)
     st = TOML.parsefile(sp)
     stats = NamedTuple{Tuple(Symbol.(keys(st)))}(Tuple(values(st)))
     return (path = folder, name = get(get(cfg, "run", Dict()), "name", basename(folder)), config = cfg,
-            stats = stats, series = csv_rows(joinpath(out, "series.csv")),
+            stats = stats, series = series_rows(joinpath(out, "output.nc")),
             towers = csv_rows(joinpath(out, "towers.csv")))
 end
 

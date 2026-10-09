@@ -11,7 +11,7 @@
 # (16 LT 23 Oct, LargeScaleForcing.Subsidence, #248; `--set
 # 'forcing.subsidence={}'` for the runs without it). The residual-layer
 # inversion height (sbl_inversion_height) is recorded with the series
-# (output/series.csv, every 600 s). Virtual towers in every column record
+# (output/output.nc, every 600 s). Virtual towers in every column record
 # 5-min means and variances below 60 m during the two nights (18-06 LT, as
 # Sun et al. 2012); V_TKE (Transition's turbulence_velocity_scale,
 # resolved + SGS energy) is binned against the wind speed per level
@@ -56,7 +56,7 @@ results = map(RUNS) do r
     # the series rows in the script's units: 2 m and surface temperatures in °C
     toC(θ) = θ * (P_SFC / 1e5)^EXPONENT - 273.15
     series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet, z_inv = s.z_inv,
-               ls_heat = s.ls_heat, T2 = toC(s.θ_screen), U10 = s.U_screen, Ts = toC(s.T_s)) for s in r.series]
+               ls_heat = s.ls_heat, T2 = toC(s.theta_screen), U10 = s.U_screen, Ts = toC(s.T_s)) for s in r.series]
     zs = unique([t.z for t in r.towers])
     @printf("%-8s %s: %d steps, %.0f s, %d tower samples\n", stab, TAG, r.stats.nsteps, r.stats.wall_time,
             isempty(r.towers) ? 0 : round(Int, sum(t.n for t in r.towers)))
