@@ -22,7 +22,6 @@ include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_decay.jl"))
 struct DNSDecayDriver <: AbstractRunDriver end
 
 Config.driver_name(::DNSDecayDriver) = "dns_decay"
-Config.config_dir(::DNSDecayDriver) = joinpath(@__DIR__, "configs")
 
 function Config.driver_sections(::DNSDecayDriver)
     g = section("grid"; doc = "The periodic box of side 2π.") do s

@@ -6,21 +6,21 @@
 # own smoke size, a `[test]` table:
 #
 #   [test]
-#   overrides = ["grid.size=[16,16,16]", "stepper.nsteps=10"]
+#   overrides = ["grid.size=[16,16,16]", "time.nsteps=10"]
 #   member = "lasd_32x32x32"          # a sweep: the member replayed (default: the first)
 #
 # For each file:
 #   1. it validates (every member of a sweep), with and without its overrides;
 #   2. `resolve` is a fixed point: the canonical text of the resolved config
 #      is byte-identical after a reload;
-#   3. every key it holds appears in its driver's generated option reference
+#   3. every key it holds appears in its schema's generated option reference
 #      (the Markdown the docs build writes), the [physics.options] coupling
 #      tables of the Berlin case included;
 #   4. it replays: run at its smoke size, then re-run from the first run's
 #      run.toml; the state fields, diagnostics.csv, results.toml and
 #      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
 # A configs/*.toml without a [test] table fails the suite with a message
-# naming the file. Resume: for the simulation, sbl and urban drivers, a run
+# naming the file. Resume: for the model and the sbl and urban legacy cases, a run
 # interrupted after its middle checkpoint and resumed the way
 # `aeolus run <folder> --resume` does is bitwise the uninterrupted run
 # (the Berlin case's since #269).
@@ -67,11 +67,11 @@ include(joinpath(@__DIR__, "..", "docs", "generate_reference.jl"))
 const RT_REFERENCE = mktempdir()
 const RT_PAGES = generate_reference(RT_REFERENCE)
 
-"The `[section]` keys of the option reference page the docs build writes for `driver`, per table."
+"The `[section]` keys of the option reference page the docs build writes for the schema `driver`, per table."
 function reference_rows(driver)
     rows = Dict{String,Set{String}}(); cur = nothing
     page = joinpath(RT_REFERENCE, "options", driver * ".md")
-    isfile(page) || error("the docs build writes no option reference for the driver \"$driver\"")
+    isfile(page) || error("the docs build writes no option reference for the schema \"$driver\"")
     for l in eachline(page)
         m = match(r"^#+ `\[(.+)\]`$", l)
         if m !== nothing
@@ -85,10 +85,10 @@ end
 
 const RT_FILES = shipped_config_files()
 
-@testset "round-trip coverage: the docs build writes a reference page per driver and the input pages" begin
+@testset "round-trip coverage: the docs build writes a reference page per schema and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["simulation", "urban", "urban_parent", "sbl", "dns", "column"], reference_drivers())
+    @test issubset(["model", "urban", "urban_parent", "sbl", "dns", "column"], reference_drivers())
     # every option page is the schema's generated Markdown, verbatim after its header
     for d in reference_drivers()
         @test endswith(read(joinpath(RT_REFERENCE, "options", d * ".md"), String),
@@ -109,14 +109,10 @@ end
     @test joinpath(RT_EXAMPLES, "configs", "taylor_green_vortex.toml") in RT_FILES
     plan = smoke_plan(RT_FILES)
     @test length(plan) == length(RT_FILES)
-    # every config directory a driver registers is inside the glob
-    for d in C.registered_drivers(), f in shipped_configs()
-        @test f in RT_FILES
-    end
     # a config without [test] fails, naming the file
     dir = mkpath(joinpath(mktempdir(), "examples", "new", "configs"))
-    write(joinpath(dir, "fresh.toml"), "[run]\ndriver = \"common\"\n")
-    write(joinpath(dir, "tested.toml"), "[run]\ndriver = \"common\"\n\n[test]\noverrides = []\n")
+    write(joinpath(dir, "fresh.toml"), "[run]\nname = \"fresh\"\n")
+    write(joinpath(dir, "tested.toml"), "[run]\nname = \"fresh\"\n\n[test]\noverrides = []\n")
     files = shipped_config_files(dirname(dirname(dir)))
     @test length(files) == 2
     e = try
@@ -126,7 +122,7 @@ end
     end
     @test e isa ErrorException && occursin(joinpath(dir, "fresh.toml"), e.msg) && !occursin("tested.toml", e.msg)
     # [test] is checked for shape and stays out of the resolved config
-    write(joinpath(dir, "bad.toml"), "[run]\ndriver = \"common\"\n\n[test]\noverride = []\nmember = 0\n")
+    write(joinpath(dir, "bad.toml"), "[run]\nname = \"fresh\"\n\n[test]\noverride = []\nmember = 0\n")
     e = try
         load_run_config(joinpath(dir, "bad.toml")); nothing
     catch err
@@ -135,7 +131,7 @@ end
     @test e isa ConfigError && Set(p.key for p in e.problems) == Set(["test.override", "test.member"])
     cfg = load_run_config(joinpath(dir, "tested.toml"))
     @test !occursin("[test]", config_text(cfg))
-    @test config_hash(cfg) == config_hash(load_run_config(IOBuffer("[run]\ndriver = \"common\"\n")))
+    @test config_hash(cfg) == config_hash(load_run_config(IOBuffer("[run]\nname = \"fresh\"\n")))
 end
 
 const RT_PLAN = smoke_plan(RT_FILES)
@@ -150,7 +146,7 @@ const RT_MADE_INPUTS = let dir = mktempdir(), out = joinpath(dir, "lindenberg_er
         Aeolus.main(["preprocess", "dynamic", "--from-era5", era5..., "--config", cfg, "--out", out])
     end
     rc == 0 || error("could not preprocess the ERA5 dynamic driver of $cfg")
-    Dict(cfg => ["initial.dynamic=\"$out\""])
+    Dict(cfg => ["dynamic_driver=\"$out\""])
 end
 
 @testset "round-trip coverage: $(relpath(f, RT_EXAMPLES))" for (f, t0) in RT_PLAN
@@ -189,24 +185,24 @@ end
 end
 
 @testset "resume: interrupted after the middle checkpoint, resumed, bitwise the uninterrupted run" begin
-    # simulation driver: buoyant_convection at 16³, 20 steps (dry_convective_bl and the
+    # the model: buoyant_convection at 16³, 20 steps (dry_convective_bl and the
     # adaptive TGV resume in config_simulation_driver.jl)
     r = resume_check(joinpath(RT_EXAMPLES, "configs", "buoyant_convection.toml");
                      overrides = ["grid.size=[16,16,16]"])
     @test r.fields_equal && isempty(r.fields_differing)
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.stepper.step == 20 && Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
-    # sbl driver: cases99 (GABLS2 with towers and series) at 16 × 16 × 32, 20 steps; the
+    # sbl legacy case: cases99 (GABLS2 with towers and series) at 16 × 16 × 32, 20 steps; the
     # towers and the series are restored from the checkpoint too
     r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");
                      overrides = ["grid.size=[16,16,32]", "towers.hours=[0.0,24.0]", "towers.window=30.0",
-                                  "averaging.series_interval=60.0"],
+                                  "averaging.series_interval=60.0"], nsteps_overrides = sbl_nsteps,
                      outputs = ["towers.csv", "series.csv", "statistics.toml"])
     @test r.fields_equal && isempty(r.fields_differing)
     @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.case.nsteps == 20 && r.runs[2].obj.case.sim.t === r.runs[1].obj.case.sim.t
-    # urban driver (#269): berlin_smoke.toml, nested, every coupling on, 24 s (15 adaptive
+    # urban legacy case (#269): berlin_smoke.toml, nested, every coupling on, 24 s (15 adaptive
     # steps), a checkpoint every 6 steps, interrupted after step 9 and resumed from step 6;
     # the state of the child, every tracer, Ts and the nest parent bitwise, and the NetCDF
     # output's record written after the checkpoint is rewritten to the same values

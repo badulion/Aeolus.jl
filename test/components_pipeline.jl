@@ -157,8 +157,9 @@ end
 
 cp_bits(sim) = [reinterpret(UInt64, vec(copy(f.data))) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]
 
-const CP_DYN = (f_coriolis = 1.0e-3, sponge_alpha_max = 0.02, sponge_z_start = 250.0)
-const CP_BND = (theta_flux_bottom = 0.1, theta_flux_top = -0.03)
+const CP_COR = (; f = 1.0e-3)                                  # [coriolis]
+const CP_SPO = (alpha_max = 0.02, z_start = 250.0)             # [sponge]
+const CP_BND = (bottom = 0.1, top = -0.03)                     # [surface_theta_flux]
 const CP_SGS = (closure = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :none)
 
 # ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ end
           CPSlotted{:advection,:z_adv}(), CPSlotted{:surface,:b_surf}())
     @test map(CPC.component_name, CPC.order_components(cs)) == (:z_adv, :a_sgs, :b_surf, :alpha, :zeta)
     # the domain's tuple is concretely typed and ordered
-    d = cp_domain(cp_core(:boussinesq), Sponge => CP_DYN, Coriolis => CP_DYN, SGS => CP_SGS,
+    d = cp_domain(cp_core(:boussinesq), Sponge => CP_SPO, Coriolis => CP_COR, SGS => CP_SGS,
                   SurfaceThetaFlux => CP_BND)
     @test map(CPC.component_name, d.components) == (:advection, :sgs, :coriolis, :sponge, :surface_theta_flux)
     @test isconcretetype(typeof(d.components))
@@ -222,8 +223,8 @@ end
     @test any(p -> p.key == "advection", e.problems)                     # no :advection provider
     e = err(() -> CPC.validate_components((adv, CPNeedsCoriolis(), Sponge(0.1, 1.0, (u = 0, v = 0, w = 0)))))
     msgs = [p.message for p in e.problems]
-    @test any(m -> occursin("requires Coriolis ([dynamics])", m), msgs)
-    @test any(m -> occursin("incompatible with sponge ([dynamics])", m), msgs)
+    @test any(m -> occursin("requires Coriolis ([coriolis])", m), msgs)
+    @test any(m -> occursin("incompatible with sponge ([sponge])", m), msgs)
     @test CPC.validate_components((adv, CPNeedsCoriolis(), Coriolis(1e-4))) === nothing
     e = err(() -> CPC.validate_components((adv, CPRecorder((Stage(:projection),)))))
     @test any(p -> occursin(":projection", p.message), e.problems)
@@ -246,7 +247,7 @@ end
     @test sim.workspaces.sweep !== nothing
     # a stage-6 component turns it off; a stage-11 one does not
     sim = cp_core(:boussinesq; ν = 1.0); cp_state!(sim)
-    d = cp_domain(sim, Coriolis => CP_DYN)
+    d = cp_domain(sim, Coriolis => CP_COR)
     @test CPC.core_hooks(d).body_force! !== nothing
     step!(d, 0.1)
     @test sim.workspaces.sweep === nothing
@@ -259,12 +260,12 @@ end
 @testset "components = the core's built-in terms, bit for bit ($c, $sch)" for (c, sch) in
         ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler))
     # the built-in path: the core's own Coriolis, θ fluxes, sponge and Smagorinsky
-    ref = cp_state!(cp_core(c; ν = 0.5, f_coriolis = CP_DYN.f_coriolis, C_s = 0.17,
-                            θ_flux_bottom = CP_BND.theta_flux_bottom, θ_flux_top = CP_BND.theta_flux_top,
-                            sponge_α_max = CP_DYN.sponge_alpha_max, sponge_z_start = CP_DYN.sponge_z_start,
+    ref = cp_state!(cp_core(c; ν = 0.5, f_coriolis = CP_COR.f, C_s = 0.17,
+                            θ_flux_bottom = CP_BND.bottom, θ_flux_top = CP_BND.top,
+                            sponge_α_max = CP_SPO.alpha_max, sponge_z_start = CP_SPO.z_start,
                             (c === :boussinesq ? (; θ₀ = 300.0) : (;))...))
     sim = cp_state!(cp_core(c; ν = 0.5, (c === :boussinesq ? (; θ₀ = 300.0) : (;))...))
-    d = cp_domain(sim, SGS => CP_SGS, Coriolis => CP_DYN, Sponge => CP_DYN, SurfaceThetaFlux => CP_BND;
+    d = cp_domain(sim, SGS => CP_SGS, Coriolis => CP_COR, Sponge => CP_SPO, SurfaceThetaFlux => CP_BND;
                   scheme = sch)
     @test Aeolus.Components.core(d) === c
     for _ in 1:4
@@ -292,7 +293,7 @@ end
     # √(1 + (fΔt)²) per step); the projection of a uniform field is zero
     f = 1.0e-3; Δt = 50.0; n = 40; U0 = 3.0
     sim = cp_core(c); set!(sim.u, (x, y, z) -> U0)
-    d = cp_domain(sim, Coriolis => (; f_coriolis = f))
+    d = cp_domain(sim, Coriolis => (; f = f))
     for _ in 1:n
         step!(d, Δt)
     end
@@ -304,7 +305,7 @@ end
         # SSP-RK3 over one inertial period 2π/f: back to (U0, 0), amplitude
         # error O((fΔt)⁴) per step (the scheme's |R(iz)|² = 1 − z⁴/12 + z⁶/36)
         sim = cp_core(c); set!(sim.u, (x, y, z) -> U0)
-        d = cp_domain(sim, Coriolis => (; f_coriolis = f); scheme = :rk3)
+        d = cp_domain(sim, Coriolis => (; f = f); scheme = :rk3)
         m = 126; Δ = 2π / f / m
         for _ in 1:m
             step!(d, Δ)
@@ -317,7 +318,7 @@ end
               "|u|/U0 = $(hypot(u, v) / U0), phase error $(atan(v, u)) rad"
     end
     # the adaptive limit
-    dc = cp_domain(cp_core(:boussinesq), Coriolis => (; f_coriolis = -4.0e-3))
+    dc = cp_domain(cp_core(:boussinesq), Coriolis => (; f = -4.0e-3))
     @test CPC.limit_dt(only(filter(x -> x isa Coriolis, collect(dc.components))), dc) === nothing  # fixed step
     da = Domain(cp_core(:boussinesq); cfl = Aeolus.TimeIntegration.CFLConstraints(; C_advective = 0.5, dt_max = 1e3),
                 components = (CentredAdvection(), Coriolis(-4.0e-3)))
@@ -339,37 +340,40 @@ end
     end
     # the mean of the change (the difference of two means of θ ≈ 300 K loses
     # five digits to cancellation)
-    @test isapprox(sum(interior_view(sim.θ) .- θ0) / 8^3, (CP_BND.theta_flux_bottom - CP_BND.theta_flux_top) * 5.0n / 400.0; rtol = 1e-10)
+    @test isapprox(sum(interior_view(sim.θ) .- θ0) / 8^3, (CP_BND.bottom - CP_BND.top) * 5.0n / 400.0; rtol = 1e-10)
     θ = interior_view(sim.θ)
     @test θ[:, :, 1] != θ[:, :, 4] && θ[:, :, 8] != θ[:, :, 4]   # through the bottom and the top levels
-    @test !CPC.enabled(SurfaceThetaFlux, (theta_flux_bottom = 0.0, theta_flux_top = 0.0), d)
+    @test !CPC.enabled(SurfaceThetaFlux, (bottom = 0.0, top = 0.0))
+    @test CPC.enabled(SurfaceThetaFlux, (bottom = 0.0, top = -0.01))
 end
 
 @testset "Sponge: u decays as (1 − α(z)Δt)ⁿ above z_start, nothing below ($c)" for c in (:boussinesq, :anelastic)
     U0 = 2.0; Δt = 5.0; n = 12
     sim = cp_core(c); set!(sim.u, (x, y, z) -> U0)
-    d = cp_domain(sim, Sponge => CP_DYN)
+    d = cp_domain(sim, Sponge => CP_SPO)
     for _ in 1:n
         step!(d, Δt)
     end
     zs = damping_coordinates(CP_MESH, FaceX())
-    p = sponge_profile(CP_DYN.sponge_alpha_max, CP_DYN.sponge_z_start, 400.0)
+    p = sponge_profile(CP_SPO.alpha_max, CP_SPO.z_start, 400.0)
     u = interior_view(sim.u)
     for k in 1:8
         expected = U0 * (1 - Δt * damping_rate(p, zs[k]))^n
         @test all(x -> isapprox(x, expected; rtol = 1e-12), u[:, :, k])
     end
-    @test all(==(U0), u[:, :, findall(<(CP_DYN.sponge_z_start), zs)])
+    @test all(==(U0), u[:, :, findall(<(CP_SPO.z_start), zs)])
     @test u[1, 1, 8] < 0.6U0                                     # the top level: α ≈ α_max
-    # the sponge is off when z_start is at or above the top, or α = 0
-    @test !CPC.enabled(Sponge, (sponge_alpha_max = 0.02, sponge_z_start = 400.0), d)
-    @test !CPC.enabled(Sponge, (sponge_alpha_max = 0.0, sponge_z_start = 100.0), d)
-    @test !CPC.enabled(Sponge, (sponge_alpha_max = 0.02, sponge_z_start = nothing), d)
+    # the sponge is off when α = 0 or z_start is "none"; a z_start at or above
+    # the top is refused (the model's configuration reports it, ONE-b)
+    @test !CPC.enabled(Sponge, (alpha_max = 0.0, z_start = 100.0))
+    @test !CPC.enabled(Sponge, (alpha_max = 0.02, z_start = nothing))
+    @test CPC.enabled(Sponge, (alpha_max = 0.02, z_start = 400.0))
+    @test_throws ArgumentError CPC.build(Sponge, (alpha_max = 0.02, z_start = 400.0), d)
 end
 
 @testset "component contracts ($c)" for c in (:boussinesq, :anelastic)
     sim = cp_state!(cp_core(c; ν = 0.5))
-    d = cp_domain(sim, SGS => CP_SGS, Coriolis => CP_DYN, Sponge => CP_DYN, SurfaceThetaFlux => CP_BND)
+    d = cp_domain(sim, SGS => CP_SGS, Coriolis => CP_COR, Sponge => CP_SPO, SurfaceThetaFlux => CP_BND)
     for comp in d.components
         T = typeof(comp)
         @test CPC.section(T) isa String && !isempty(CPC.section(T))
@@ -398,7 +402,7 @@ end
     mk() = (s = cp_state!(cp_core(:boussinesq; ν = 0.5, θ₀ = 300.0));
             d0 = Domain(s; validate = false);
             Domain(d0; components = (CentredAdvection(), SGS(LagrangianDynamicSmagorinsky(CP_MESH)),
-                                     CPC.build_components((Coriolis => CP_DYN, Sponge => CP_DYN), d0)...)))
+                                     CPC.build_components((Coriolis => CP_COR, Sponge => CP_SPO), d0)...)))
     d = mk()
     for _ in 1:3; step!(d, 2.0); end
     path = joinpath(mktempdir(), "ck.jls")

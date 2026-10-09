@@ -20,8 +20,10 @@
 # `julia -t 12` plus 174 s of statistics, max RSS 8.53 GB (5671 s on one
 # core, 9.81 GB, on 2026-10-05 before the KernelAbstractions port).
 
+schema_version = 2
+
 [run]
-driver = "dns"
+legacy = "dns"
 name = "dns256"
 seed = 1
 

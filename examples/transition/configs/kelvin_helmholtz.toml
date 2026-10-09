@@ -13,8 +13,10 @@
 # flux Richardson number, the series; output/vorticity.nc: ω_y at t = 60,
 # 90, 140 δ/U.
 
+schema_version = 2
+
 [run]
-driver = "shear_layer"
+legacy = "shear_layer"
 name = "kelvin_helmholtz"
 
 [layer]

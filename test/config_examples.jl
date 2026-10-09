@@ -20,6 +20,9 @@ const TGV_CFG = joinpath(EX_DIR, "configs", "taylor_green_vortex.toml")
 
 ex_file(text) = (p = joinpath(mktempdir(), "sweep.toml"); write(p, text); p)
 
+"The TGV config's text without its [test] table, then `extra` (no extends: ONE-b, #451)."
+tgv_with(extra) = first(split(read(TGV_CFG, String), "\n[test]")) * "\n" * extra
+
 function ex_error(f)
     try
         f()
@@ -31,12 +34,11 @@ function ex_error(f)
 end
 
 @testset "sweeps: expansion order, labels, run names, precedence" begin
-    p = ex_file("""
-        extends = $(repr(TGV_CFG))
+    p = ex_file(tgv_with("""
         [sweep]
         axis = [ { key = "sgs.closure", values = ["none", "vreman", "amd"] },
                  { key = "grid.size", values = [[8, 8, 8], [16, 16, 16]] } ]
-        """)
+        """))
     ms = sweep_members(p)
     @test length(ms) == 6
     # first axis outermost, the last fastest: the order of `for a in A for b in B`
@@ -63,8 +65,7 @@ end
 end
 
 @testset "sweeps: explicit members, validation of each member" begin
-    p = ex_file("""
-        extends = $(repr(TGV_CFG))
+    p = ex_file(tgv_with("""
         [[sweep.member]]
         label = "viscous"
         dynamics = { nu = 0.02 }
@@ -72,18 +73,17 @@ end
         sgs.closure = "vreman"
         sgs.c_s = 0.2
         [sweep]
-        axis = [ { key = "stepper.scheme", values = ["euler", "rk3"] } ]
-        """)
+        axis = [ { key = "time.scheme", values = ["euler", "rk3"] } ]
+        """))
     runs = load_sweep(p)
     @test [m.label for (m, _) in runs] == ["viscous_euler", "viscous_rk3", "2_euler", "2_rk3"]
     @test [c.dynamics.nu for (_, c) in runs] == [0.02, 0.02, 0.01, 0.01]
-    @test runs[3][2].sgs.c_s == 0.2 && runs[3][2].stepper.scheme === :euler
+    @test runs[3][2].sgs.c_s == 0.2 && runs[3][2].time.scheme === :euler
     # a member that is invalid is reported with its key
-    bad = ex_file("""
-        extends = $(repr(TGV_CFG))
+    bad = ex_file(tgv_with("""
         [[sweep.member]]
         sgs = { closure = "smagorinksy" }
-        """)
+        """))
     e = ex_error(() -> load_sweep(bad))
     @test occursin("sgs.closure", sprint(showerror, e)) && occursin("smagorinsky", sprint(showerror, e))
     # malformed sweep tables
@@ -94,13 +94,12 @@ end
 end
 
 @testset "sweeps: aeolus run runs every member into its own folder; a member replays alone" begin
-    p = ex_file("""
-        extends = $(repr(TGV_CFG))
+    p = ex_file(tgv_with("""
         [sweep]
         axis = [ { key = "dynamics.nu", values = [0.01, 0.02] } ]
-        """)
+        """))
     root = mktempdir()
-    args = ["--set", "grid.size=[8,8,8]", "--set", "stepper.end_time=\"none\"", "--set", "stepper.nsteps=3",
+    args = ["--set", "grid.size=[8,8,8]", "--set", "time.duration=\"none\"", "--set", "time.nsteps=3",
             "--set", "fftw.planner=\"estimate\"", "--root", root]
     res = run_configs(p, args; console = false, repo = mktempdir())
     @test length(res) == 2

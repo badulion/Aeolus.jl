@@ -98,19 +98,19 @@ with no wrapper script (#438). The run folder (`runs/<date>_<name>_<id>/`)
 holds `run.toml`, the log, `diagnostics.csv` and `output/results.toml`
 (the run's own checks: the ledgers' closure, the timing); the NetCDF
 output still goes to `examples/urban/output/alexanderplatz.nc` (`[output]
-path`). See [the `urban` driver](../api/config.md#The-urban-driver) for
+path`). See [the `urban` legacy case](../api/config.md#The-urban-legacy-case) for
 the schema; `CaseConfig(path)` in Julia loads the same file.
 
 ### Configuring with TOML
 
-A variant of a scenario is a file that `extends` it and sets only what
-differs, or a `--set` on the command line:
+A variant of a scenario is a complete copy of its file with the keys that
+differ changed (there is no `extends`: every config is self-contained,
+ONE-b #451), or a `--set` on the command line:
 
 ```toml
-# my_berlin.toml
-extends = "berlin_summer.toml"     # found next to this file, else in examples/urban/configs/
-
+# my_berlin.toml: a copy of berlin_summer.toml, with
 [run]
+legacy = "urban"
 name = "summer_no_traffic_nox"
 
 [physics]

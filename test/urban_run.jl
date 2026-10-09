@@ -46,7 +46,7 @@ end
     @test rc == 0
     run = only(readdir(root; join = true))
     rec = read_run_toml(run)
-    @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["driver"] == "urban"
+    @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["legacy"] == "urban"
     res = TOML.parsefile(joinpath(run, "output", "results.toml"))
     led = res["ledgers"]
     @test res["finite"] === true
@@ -106,7 +106,7 @@ end
     toml = berlin_toml("parent")
     tt = Aeolus.Config.config_test_table(toml)
     cfg = load_run_config(toml; overrides = tt.overrides)
-    @test cfg.run.driver == "urban_parent"
+    @test cfg.run.legacy == "urban_parent"
     r = run_config(cfg; root = mktempdir(), console = devnull, allow_uncommitted = true)
     out = joinpath(r.folder.path, "output")
     res = TOML.parsefile(joinpath(out, "results.toml"))
@@ -230,7 +230,7 @@ end
     # every config validates; every script is analysis of output
     for f in readdir(joinpath(ex, "configs"); join = true)
         endswith(f, ".toml") || continue
-        @test load_run_config(f).run.driver in ("urban", "urban_parent")
+        @test load_run_config(f).run.legacy in ("urban", "urban_parent")
     end
     @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
                                   "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl",

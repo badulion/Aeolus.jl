@@ -1,6 +1,6 @@
 # The `sbl` run type — StableBoundaryLayer
 
-`Aeolus.StableBoundaryLayer` is the `sbl` run type (`[run] driver =
+`Aeolus.StableBoundaryLayer` is the `sbl` run type (`[run] legacy =
 "sbl"`): the stable-boundary-layer cases of Era VI, configured from TOML
 only. It was the example driver `examples/sbl/` (CFG-d, #359) and moved
 into `src/` with EX-b (#439): examples are configuration plus analysis of

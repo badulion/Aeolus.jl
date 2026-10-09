@@ -20,9 +20,9 @@ ImageMagick if you want to view them in most browsers:
 
 Each config reproduces the script it replaced bit for bit
 (`test/config_run_drivers.jl`), except `coupled/dcbl_radiation_lsm`, see
-below. The couplings are sections of the `simulation` driver
+below. The couplings are sections of the model's config
 (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
-`[obstacles]`; `aeolus options simulation`).
+`[obstacles]`; `aeolus options`).
 
 ## Tier 1 — Kernel demos
 

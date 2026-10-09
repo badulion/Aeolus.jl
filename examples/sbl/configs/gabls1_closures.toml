@@ -11,7 +11,63 @@
 #   julia --project -m Aeolus run --resume runs/<run folder>                                     # continue one
 #   julia --project examples/sbl/gabls1.jl runs/gabls1_*                                         # table and figure
 
-extends = "gabls1.toml"
+schema_version = 2
+
+[run]
+legacy = "sbl"
+name = "gabls1"
+seed = 1
+
+[case]
+kind = "homogeneous"
+
+[grid]
+size = [64, 64, 64]
+extent = [400.0, 400.0, 400.0]
+
+[dynamics]
+theta0 = 263.5                 # Boussinesq reference temperature of the buoyancy
+
+[forcing]
+u_g = 8.0
+v_g = 0.0
+f = 1.39e-4
+
+[surface]
+z0m = 0.1
+z0h = 0.1
+temperature = {kind = "cooling_rate", initial = 265.0, rate_per_hour = 0.25}
+stability = {family = "businger_dyer_log_linear", beta_m = 4.8, beta_h = 7.8}
+rho_cp = 1306.5                # 1.3 kg m-3 x 1005 J kg-1 K-1 near 263 K
+
+[initial]
+theta = {kind = "mixed_layer_lapse", value = 265.0, z_i = 100.0, lapse = 0.01}
+perturbation = {kind = "theta_uniform", amplitude = 0.1, depth = 50.0}
+t_start = 0.0
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"          # Brown et al. (1994): the Berlin default
+stress = "symmetric"
+
+[sponge]
+z = 300.0
+alpha = 0.01
+target = "geostrophic"
+
+[stepper]
+cfl = 1.2
+end_time = 32400.0             # 9 h
+
+[averaging]
+from = 28800.0                 # hours 8-9
+sample_every = 10
+series_interval = 300.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
+keep = 2
 
 [sweep]
 axis = [ { key = "sgs.stability", values = ["brown94", "none", "lilly"] } ]

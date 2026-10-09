@@ -21,7 +21,6 @@ include(joinpath(@__DIR__, "patchy_surface", "driver.jl"))
 struct PatchySurfaceDriver <: AbstractRunDriver end
 
 Config.driver_name(::PatchySurfaceDriver) = "patchy_surface"
-Config.config_dir(::PatchySurfaceDriver) = joinpath(@__DIR__, "configs")
 
 function Config.driver_sections(::PatchySurfaceDriver)
     g = section("grid"; doc = "The box: periodic in x and y, a lid with a sponge in the top quarter.") do s

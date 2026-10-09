@@ -9,11 +9,11 @@ DocMeta.setdocmeta!(Aeolus, :DocTestSetup, :(using Aeolus); recursive=true)
 # not list directly.
 push!(LOAD_PATH, normpath(joinpath(@__DIR__, "..")))
 
-# The option reference of every driver and the input-format specifications,
+# The option reference of the model and of every legacy case, and the input-format specifications,
 # generated from the schemas into docs/src/reference/ (CFG-i, #364; not committed).
 include(joinpath(@__DIR__, "generate_reference.jl"))
 generate_reference()
-const OPTION_PAGES = ["`$d`" => "reference/options/$d.md" for d in reference_drivers()]
+const OPTION_PAGES = [(d == "model" ? "the model" : "legacy `$d`") => "reference/options/$d.md" for d in reference_drivers()]
 
 makedocs(
     modules  = [Aeolus,

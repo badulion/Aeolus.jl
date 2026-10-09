@@ -108,47 +108,62 @@ order_components(cs) =
     Tuple(sort!(collect(Any, cs); by = c -> (_slot_rank(slot(c)), string(component_name(c)))))
 
 """
-    validate_components(components)
+    component_problems(types) -> Vector{ConfigProblem}
 
-Throw a [`ComponentError`](@ref) listing every problem of a domain's
-components: two in one slot, an unknown slot, a duplicate name, a missing
-requirement, an incompatible pair, a stage no component may attach to
-(`:open_boundaries`, `:projection`), a cadence on a stage inside the core,
-or a domain without a provider of the `:advection` slot.
+The problems of a set of enabled component types (one domain's), keyed
+by the section of the component each concerns: two in one slot, an
+unknown slot, a duplicate name, a missing requirement ([`requires`](@ref)),
+an incompatible pair ([`incompatible`](@ref)), or no provider of the
+`:advection` slot. Type-level, so the configuration is checked against it
+before anything is built (ONE-b, #451); [`validate_components`](@ref)
+adds the instances' stage rules.
 """
-function validate_components(cs)
+function component_problems(types)
     probs = ConfigProblem[]
-    p(c, msg) = push!(probs, ConfigProblem(section(c), "", msg))
-    types = map(typeof, collect(Any, cs))
+    p(C, msg) = push!(probs, ConfigProblem(section(C), "", msg))
     names = Dict{Symbol,Any}(); slots = Dict{Symbol,Any}()
-    for c in cs
-        n = component_name(c)
-        haskey(names, n) && p(c, "two components named :$n")
-        names[n] = c
-        s = slot(c)
+    for C in types
+        n = component_name(C)
+        haskey(names, n) && p(C, "two components named :$n")
+        names[n] = C
+        s = slot(C)
         if s !== nothing
-            s in SLOTS || p(c, "unknown slot :$s (the slots: $(join(SLOTS, ", ")))")
+            s in SLOTS || p(C, "unknown slot :$s (the slots: $(join(SLOTS, ", ")))")
             haskey(slots, s) &&
-                p(c, "the :$s slot holds one component; [$(section(slots[s]))] ($(component_name(slots[s]))) " *
-                     "and [$(section(c))] ($n) are both enabled")
-            slots[s] = c
+                p(C, "the :$s slot holds one component; [$(section(slots[s]))] ($(component_name(slots[s]))) " *
+                     "and [$(section(C))] ($n) are both enabled")
+            slots[s] = C
         end
-        for R in requires(typeof(c))
-            any(T -> T <: R, types) || p(c, "$n requires $(nameof(R)) ([$(section(R))]), which is not enabled")
+        for R in requires(C)
+            any(T -> T <: R, types) || p(C, "$n requires $(nameof(R)) ([$(section(R))]), which is not enabled")
         end
-        for X in incompatible(typeof(c)), d in cs
-            typeof(d) <: X &&
-                p(c, "$n is incompatible with $(component_name(d)) ([$(section(d))]); enable one of them")
-        end
-        for st in stages(c)
-            st.name in (:open_boundaries, :projection) &&
-                p(c, "$n attaches to :$(st.name), a core operation no component attaches to")
-            st.name in IN_CORE && st.every != 0 &&
-                p(c, "$n: stage :$(st.name) runs inside the core step and takes no cadence (every = $(st.every))")
+        for X in incompatible(C), D in types
+            D <: X && p(C, "$n is incompatible with $(component_name(D)) ([$(section(D))]); enable one of them")
         end
     end
     haskey(slots, :advection) ||
         push!(probs, ConfigProblem("advection", "", "a domain needs a provider of the :advection slot"))
+    return probs
+end
+
+"""
+    validate_components(components)
+
+Throw a [`ComponentError`](@ref) listing every problem of a domain's
+components: those of their types ([`component_problems`](@ref): slots,
+names, requirements, incompatibilities, the `:advection` provider), a
+stage no component may attach to (`:open_boundaries`, `:projection`), or
+a cadence on a stage inside the core.
+"""
+function validate_components(cs)
+    probs = component_problems(Any[typeof(c) for c in cs])
+    for c in cs, st in stages(c)
+        n = component_name(c)
+        st.name in (:open_boundaries, :projection) &&
+            push!(probs, ConfigProblem(section(c), "", "$n attaches to :$(st.name), a core operation no component attaches to"))
+        st.name in IN_CORE && st.every != 0 &&
+            push!(probs, ConfigProblem(section(c), "", "$n: stage :$(st.name) runs inside the core step and takes no cadence (every = $(st.every))"))
+    end
     isempty(probs) || throw(ComponentError(probs))
     return nothing
 end

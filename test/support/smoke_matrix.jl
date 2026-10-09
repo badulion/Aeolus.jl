@@ -18,27 +18,29 @@ include(joinpath(@__DIR__, "berlin_configs.jl"))
 const SMOKE_TOML = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 
 """
-    file_overrides(path) -> Vector{String}
+    file_overrides(path, base) -> Vector{String}
 
-The values a scenario file sets (its tables flattened to `--set`
-overrides; `extends`, `schema_version`, `[run] name` and the file's
-`[test]` table, which is not configuration, left out): the
-differences of `berlin_winter.toml` applied to the smoke run.
+The values the scenario file `path` sets differently from the file `base`
+(both flattened to `--set` overrides; `schema_version`, `[run] name` and
+the `[test]` table, which is not configuration, left out): the
+differences of `berlin_winter.toml` from `berlin_summer.toml`, applied to
+the smoke run. (Every scenario file is complete since ONE-b #451; the
+difference was the winter file's own text when it extended the summer one.)
 """
-function file_overrides(path)
-    d = TOML.parsefile(path)
-    out = String[]
-    function walk(t, prefix)
-        for k in sort!(collect(keys(t)))
-            key = isempty(prefix) ? k : prefix * "." * k
-            key in ("extends", "schema_version", "run.name", "test") && continue
-            v = t[k]
-            v isa AbstractDict ? walk(v, key) :
-                push!(out, key * "=" * Aeolus.Config._emit_value(Aeolus.Config._toml_out(v)))
-        end
+function _flat_toml!(out, t, prefix)
+    for k in keys(t)
+        key = isempty(prefix) ? k : prefix * "." * k
+        key in ("schema_version", "run.name", "test") && continue
+        t[k] isa AbstractDict ? _flat_toml!(out, t[k], key) : (out[key] = t[k])
     end
-    walk(d, "")
     return out
+end
+
+function file_overrides(path, base)
+    f = _flat_toml!(Dict{String,Any}(), TOML.parsefile(path), "")
+    b = _flat_toml!(Dict{String,Any}(), TOML.parsefile(base), "")
+    return [k * "=" * Aeolus.Config._emit_value(Aeolus.Config._toml_out(f[k]))
+            for k in sort!(collect(keys(f))) if !isequal(get(b, k, nothing), f[k])]
 end
 
 """
@@ -164,7 +166,7 @@ function smoke_specs(registry = BC.REGISTRY)
     end
     runs = [mk("summer, everything on"),
             # the winter scenario's differences (berlin_winter.toml) over the smoke run
-            mk("winter, everything on"; extra = file_overrides(joinpath(berlin_configs_dir(), "berlin_winter.toml"))),
+            mk("winter, everything on"; extra = file_overrides(berlin_toml("winter"), berlin_toml("summer"))),
             # the observed initial state of the flagship (#247): the smoke
             # scenario's idealised profile replaced by the summer default
             # sounding (Lindenberg, 29 June 2019, interpolated to noon)

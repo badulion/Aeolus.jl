@@ -1,0 +1,207 @@
+# The one config schema (ONE-b, #451): src/config/{schema,load,resolve}.jl,
+# src/config/simulation_driver.jl, src/components/{interface,pipeline}.jl.
+#
+#   * a bare config is a minimal dry LES: the defaults resolve to it, the
+#     advection and the Smagorinsky SGS are its only components, and it runs:
+#     a fluid at rest stays at rest bit for bit at the adaptive limit dt_max;
+#     perturbed, θ is conserved between its no-flux walls, the SGS acts and
+#     ∇·u stays at round-off;
+#   * the component sections are generated from the component schemas;
+#   * [[domain]]: run-level values apply to every domain, a [domain.<section>]
+#     table replaces keys for its domain, --set applies over the blocks; the
+#     resolved config lists every component's options per domain and reloads
+#     to itself; a single-domain config may write its domain keys at the top
+#     level, which resolves to the same config as one [[domain]] block;
+#   * validation: per-domain problems and cross-field checks keyed by
+#     domain[i], duplicate ids, unknown block keys, [checks], slots,
+#     requirements and incompatibilities named by their sections;
+#   * the model runs one domain until nesting by domains (ONE-f, #455).
+
+using Test
+using Aeolus
+using Aeolus.Config
+using Aeolus.Components
+const CMC = Aeolus.Components
+using Aeolus.SimulationDriver: SimulationDriverType, COMPONENTS, DOMAIN_SECTIONS, enabled_components, simulation
+using Aeolus.Fields: interior_view
+using Aeolus.Simulations: max_divergence, kinetic_energy
+
+cm_error(f) = try
+    f(); error("expected a ConfigError")
+catch e
+    e isa ConfigError ? e : rethrow()
+end
+cm_file(text) = (p = joinpath(mktempdir(), "c.toml"); write(p, text); p)
+cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
+
+@testset "a bare config is a minimal dry LES" begin
+    cfg = load_run_config(IOBuffer(""))
+    @test Config.config_case(cfg) == "model" && cfg.run.name == "aeolus"
+    @test cfg.grid.size == (32, 32, 32) && cfg.grid.extent == (3200.0, 3200.0, 1600.0)
+    @test cfg.dynamics.core === :boussinesq && cfg.dynamics.theta0 == 300.0 && !cfg.dynamics.moisture
+    @test (cfg.boundaries.x, cfg.boundaries.y, cfg.boundaries.z) == (:periodic, :periodic, :free_slip)
+    @test cfg.sgs.closure === :smagorinsky
+    @test cfg.time.scheme === :rk3 && cfg.time.dt === :adaptive && cfg.time.cfl == 0.5 &&
+          cfg.time.dt_max == 10.0 && cfg.time.duration == 3600.0 && cfg.time.nsteps === nothing
+    # the components: the advection and the SGS, nothing else until a section enables it
+    @test enabled_components(cfg) == Any[CentredAdvection, SGS]
+    @test only(config_domains(cfg)).domain.id == "main"
+    @test cfg.domain.static_driver === nothing && cfg.domain.dynamic_driver === nothing
+    @test isempty(cfg.output.variables)
+    # a fluid at rest stays at rest, bit for bit, at the adaptive limit dt_max
+    rest = load_run_config(IOBuffer(""); overrides = ["grid.size=[16,16,16]", "time.duration=60.0",
+                                                     "fftw.planner=\"estimate\""])
+    r = cm_run(rest)
+    sim = simulation(r.obj)
+    @test sim.t == 60.0 && r.obj.stepper.step == 6                       # 6 steps of dt_max = 10 s
+    @test all(iszero, interior_view(sim.u)) && all(iszero, interior_view(sim.v)) &&
+          all(iszero, interior_view(sim.w))
+    @test all(==(300.0), interior_view(sim.θ))
+    @test only(r.obj.model.domains).scheme === :rk3
+    # perturbed: θ is conserved between the no-flux walls, the SGS acts, ∇·u at round-off
+    pert = load_run_config(IOBuffer("""
+        [initial]
+        perturbation_amplitude = 0.5
+        """); overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10",
+                           "fftw.planner=\"estimate\""])
+    b = Config.build(SimulationDriverType(), pert)
+    θ0 = sum(interior_view(simulation(b).θ))
+    r = cm_run(pert)
+    sim = simulation(r.obj)
+    @test r.obj.stepper.step == 10 && sim.t == 100.0                     # slow motion: dt_max binds
+    @test isapprox(sum(interior_view(sim.θ)), θ0; rtol = 1e-12)
+    @test maximum(interior_view(sim.νt)) > 0
+    @test max_divergence(sim) < 1e-10
+    @test isfinite(kinetic_energy(sim)) && kinetic_energy(sim) > 0
+    @info "bare config, perturbed: 10 adaptive RK3 steps to t = $(round(sim.t; sigdigits = 4)) s, " *
+          "Σθ relative change $(sum(interior_view(sim.θ)) / θ0 - 1), max νt $(maximum(interior_view(sim.νt))) m²/s"
+end
+
+@testset "the component sections are generated from the component schemas" begin
+    sch = driver_schema()
+    for C in COMPONENTS
+        s = only(x for x in sch.sections if x.name == CMC.section(C))
+        @test [(o.key, o.default) for o in s.options] == [(o.key, o.default) for o in CMC.schema(C).options]
+        @test is_domain_section(sch, s.name)
+    end
+    @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux"]
+    @test Set(sch.domain_sections) == Set(DOMAIN_SECTIONS)
+    # run-level sections: the common ones and time, output, checks, preprocess
+    @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==
+          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "checks", "preprocess"])
+    # a component is enabled by its own section
+    cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sponge]\nalpha_max = 0.01\nz_start = 1200.0\n[sgs]\nclosure = \"none\"\n"))
+    @test enabled_components(cfg) == Any[CentredAdvection, Coriolis, Sponge]
+    d = only(Config.build(SimulationDriverType(), cfg).model.domains)
+    @test map(CMC.component_name, d.components) == (:advection, :coriolis, :sponge)
+end
+
+const CM_TWO = """
+    schema_version = 2
+    [sgs]
+    closure = "vreman"
+    [grid]
+    size = [8, 8, 8]
+    [[domain]]
+    id = "outer"
+    [[domain]]
+    id = "inner"
+    [domain.sgs]
+    closure = "amd"
+    [domain.grid]
+    extent = [400.0, 400.0, 200.0]
+    """
+
+@testset "[[domain]]: run-level values, per-domain overrides, the resolved config" begin
+    p = cm_file(CM_TWO)
+    cfg = load_run_config(p)
+    ds = config_domains(cfg)
+    @test [d.domain.id for d in ds] == ["outer", "inner"]
+    @test [d.sgs.closure for d in ds] == [:vreman, :amd]                      # the block replaces a key
+    @test [d.grid.size for d in ds] == [(8, 8, 8), (8, 8, 8)]                 # the run-level value, both
+    @test [d.grid.extent for d in ds] == [(3200.0, 3200.0, 1600.0), (400.0, 400.0, 200.0)]
+    @test config_origin(cfg, "domain[2].sgs.closure") == p && config_origin(cfg, "domain[1].grid.extent") == "default"
+    # per-domain sections are reached through the domains
+    @test_throws ArgumentError cfg.grid
+    @test domain_view(cfg, 2).sgs.closure === :amd && domain_view(cfg, 2).time == cfg.time
+    # --set applies to every domain, over the blocks
+    c2 = load_run_config(p; overrides = ["sgs.closure=\"sigma\""])
+    @test [d.sgs.closure for d in config_domains(c2)] == [:sigma, :sigma]
+    @test [d.sgs.closure for d in config_domains(with(cfg, "sgs.closure" => :none))] == [:none, :none]
+    # the resolved config lists every component's options, per domain, and reloads to itself
+    t = config_text(cfg)
+    @test count("\n[[domain]]\n", t) == 2
+    for s in DOMAIN_SECTIONS
+        s == "domain" && continue
+        @test count("\n[domain.$s]\n", t) == 2
+    end
+    @test occursin("\n[[domain]]\nid = \"inner\"\nstatic_driver = \"none\"\n", replace(t, "dynamic_driver = \"none\"\n" => ""))
+    @test !occursin("\n[sgs]\n", t) && !occursin("\n[grid]\n", t)            # only per domain
+    c3 = load_run_config(IOBuffer(t))
+    @test c3 == cfg && config_text(c3) == t
+    @test [d.sgs.closure for d in config_domains(c3)] == [:vreman, :amd]
+    # a run record keeps it: replayed from run.toml, the same config
+    rf = start_run(cfg; root = mktempdir(), repo = mktempdir(), console = false); finish_run!(rf)
+    @test load_run_config(rf.path) == cfg
+    # the model runs one domain until nesting by domains (ONE-f, #455)
+    e = cm_error(() -> Config.build(SimulationDriverType(), cfg))
+    @test only(e.problems).key == "domain" && occursin("ONE-f", only(e.problems).message)
+end
+
+@testset "[[domain]]: one block is the top-level form" begin
+    top = load_run_config(IOBuffer("dynamic_driver = \"d.nc\"\n[sgs]\nclosure = \"amd\"\n"))
+    one = load_run_config(IOBuffer("[[domain]]\nid = \"main\"\ndynamic_driver = \"d.nc\"\n[domain.sgs]\nclosure = \"amd\"\n"))
+    @test config_text(top) == config_text(one)
+    @test top.domain.dynamic_driver == joinpath(pwd(), "d.nc")
+    # the domain's input drivers are hashed under [inputs] per domain
+    dir = mktempdir(); f = joinpath(dir, "s.nc"); write(f, "static")
+    cfg = load_run_config(cm_file("static_driver = \"$f\"\n"))
+    @test Config.config_inputs(cfg) == Dict("domain.main.static_driver" => Dict("path" => f, "fnv1a64" => content_hash(f)))
+end
+
+@testset "validation: per domain, with the sections named" begin
+    # a block's own bad value, under domain[i]; a run-level bad value once, under its key
+    e = cm_error(() -> load_run_config(IOBuffer(CM_TWO * "[domain.time]\nscheme = \"rk3\"\n")))
+    @test any(p -> p.key == "domain[2].time" && occursin("unknown table [domain.time]", p.message), e.problems)
+    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "closure = \"amd\"" => "closure = \"amd2\""))))
+    @test only(e.problems).key == "domain[2].sgs.closure"
+    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "closure = \"vreman\"" => "closure = \"vreman2\""))))
+    @test only(e.problems).key == "sgs.closure"                                # reported once
+    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "id = \"inner\"" => "id = \"outer\""))))
+    @test only(e.problems).key == "domain" && occursin("\"outer\" is given 2 times", only(e.problems).message)
+    e = cm_error(() -> load_run_config(IOBuffer("domain = 3\n")))
+    @test occursin("[[domain]] blocks", only(e.problems).message)
+    # a cross-field check sees one domain: the sponge starts below the top of *that* domain
+    e = cm_error(() -> load_run_config(IOBuffer(CM_TWO * "[domain.sponge]\nalpha_max = 0.01\nz_start = 300.0\n")))
+    @test only(e.problems).key == "domain[2].sponge.z_start" && occursin("below the top", only(e.problems).message)
+    # [checks]: no component publishes a check yet (ONE-d, #453)
+    e = cm_error(() -> load_run_config(IOBuffer("[checks]\nenergy_closure = { required = true }\n")))
+    @test only(e.problems).key == "checks.energy_closure"
+    # the obstacles come from the domain's static driver
+    e = cm_error(() -> load_run_config(IOBuffer("[obstacles]\nenabled = true\n")))
+    @test any(p -> p.key == "obstacles.enabled" && occursin("static_driver", p.message), e.problems)
+end
+
+# test components for the slot, requirement and incompatibility rules
+struct CMHeavySGS <: AbstractComponent end
+CMC.component_name(::Type{CMHeavySGS}) = :heavy_sgs
+CMC.section(::Type{CMHeavySGS}) = "heavy_sgs"
+CMC.slot(::Type{CMHeavySGS}) = :sgs
+struct CMNeedsSponge <: AbstractComponent end
+CMC.component_name(::Type{CMNeedsSponge}) = :needs_sponge
+CMC.section(::Type{CMNeedsSponge}) = "needs_sponge"
+CMC.requires(::Type{CMNeedsSponge}) = (Sponge,)
+CMC.incompatible(::Type{CMNeedsSponge}) = (Coriolis,)
+
+@testset "slots, requirements and incompatibilities, before anything is built" begin
+    msg(ps) = Dict(p.key => p.message for p in ps)
+    @test isempty(CMC.component_problems(Any[CentredAdvection, SGS, Coriolis, Sponge]))
+    m = msg(CMC.component_problems(Any[CentredAdvection, SGS, CMHeavySGS]))
+    @test occursin("the :sgs slot holds one component; [sgs] (sgs) and [heavy_sgs] (heavy_sgs) are both enabled", m["heavy_sgs"])
+    ps = CMC.component_problems(Any[CentredAdvection, CMNeedsSponge, Coriolis])
+    @test any(p -> occursin("requires Sponge ([sponge]), which is not enabled", p.message), ps)
+    @test any(p -> occursin("incompatible with coriolis ([coriolis])", p.message), ps)
+    @test any(p -> p.key == "advection", CMC.component_problems(Any[SGS]))       # no :advection provider
+    # the same rules hold for built components (validate_components adds the stage rules)
+    @test_throws ConfigError CMC.validate_components((CentredAdvection(), CMHeavySGS(), SGS(Aeolus.Operators.StaticSmagorinsky(0.17))))
+end
