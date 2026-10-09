@@ -70,6 +70,15 @@ The GABLS1 surface-layer functions, the package's
 """
 const SBL_GABLS1_STABILITY = BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)
 
+"""
+    SBLCase
+
+The homogeneous SBL LES built by [`sbl_case`](@ref): the simulation
+`sim`, its SGS closure, the large-scale forcing, the surface temperature
+series `Ts` and stability functions `sf`, the per-column surface-layer
+state (wall laws, ``w'θ'_0``, ``u_*``, ``L``), the heat ledgers and the
+step counters. Advanced by [`sbl_step!`](@ref) / [`sbl_run!`](@ref).
+"""
 mutable struct SBLCase
     sim::Any
     closure::Any
@@ -957,6 +966,7 @@ end
 # one). The `relaminarisation_channel` kind of the `sbl` run type.
 # =========================================================================
 
+"The reference temperature θ₀ (= g in wall units, g/θ₀ = 1) of the relaminarisation channel."
 const SBL_RELAM_θ₀ = 1000.0
 
 """
@@ -998,6 +1008,14 @@ end
 # trip the 32³ open channel: from noise = 3 the σ and dynamic-Smagorinsky
 # runs relaminarise (⟨τ_w⟩ → 0.44 u_τ² by 5 h/u_τ, measured), from this
 # perturbation they reach ⟨τ_w⟩ = 0.9-1.0 u_τ² (P59-e).
+"""
+    relam_perturb!(c; amp = 2, kp = 3, seed = 1) -> c
+
+Add to the open channel `c` a smooth solenoidal random velocity
+perturbation (`isotropic_random_field!`, ``E ∝ k^4 e^{-2(k/k_p)^2}``,
+``k_p`` = `kp`·2π/h) of rms `amp`·u_τ in u, damped to the wall over
+z⁺ ≈ 10: the trip of the neutral spin-up (`relam_spinup`).
+"""
 function relam_perturb!(c; amp = 2.0, kp = 3.0, seed = 1)
     s = c.sim; g = s.mesh
     tmp = BoussinesqSimulation(RegularGrid(; size = (g.Nx, g.Ny, g.Nz), extent = (g.Lx, g.Ly, g.Lz));

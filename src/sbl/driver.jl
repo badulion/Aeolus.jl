@@ -37,6 +37,7 @@ const SBL_CONFIG_DIR = normpath(joinpath(@__DIR__, "..", "..", "examples", "sbl"
 Config.driver_name(::SBLDriver) = "sbl"
 Config.config_dir(::SBLDriver) = SBL_CONFIG_DIR
 
+"The `[case] kind`s of the `sbl` run type."
 const SBL_KINDS = [:homogeneous, :stratified_channel, :relaminarisation_channel, :collapse_channel]
 
 # ---------------------------------------------------------------------------

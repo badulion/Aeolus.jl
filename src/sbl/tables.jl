@@ -21,7 +21,8 @@
 # column) is not carried. Stated as an exception on the theory page.
 # =========================================================================
 
-const SBL_OMEGA = 7.2921e-5                    # Earth's rotation rate (s⁻¹)
+"Earth's rotation rate Ω (s⁻¹) of [`sbl_coriolis`](@ref)."
+const SBL_OMEGA = 7.2921e-5
 
 "`2Ω sin(latitude)` (s⁻¹)."
 sbl_coriolis(lat_deg) = 2 * SBL_OMEGA * sind(lat_deg)
