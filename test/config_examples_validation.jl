@@ -259,12 +259,19 @@ val_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"
     # neutral_abl.jl before EX-c: a run_configs callback summing streamwise_spectrum every 10th
     # step of the statistics window at the cells round(f N + 1/2), f = 0.06, 0.1, 0.25, 0.5
     ovr = ["channel.size=[16,16,16]", "stepper.end_time=0.6"]
-    acc = Ref{Any}(nothing); n = Ref(0)
+    acc = Ref{Any}(nothing); n = Ref(0); var = zeros(4)
     legacy = function (r, step)
         st = r.cfg.stepper
         (r.case.sim.t >= st.average_from_fraction * st.end_time && step % 10 == 0) || return
-        sp = streamwise_spectrum(r.case.sim.u, unique(clamp.(round.(Int, (0.06, 0.1, 0.25, 0.5) .* 16 .+ 0.5), 1, 16)))
+        lv = unique(clamp.(round.(Int, (0.06, 0.1, 0.25, 0.5) .* 16 .+ 0.5), 1, 16))
+        sp = streamwise_spectrum(r.case.sim.u, lv)
         acc[] === nothing ? (acc[] = copy(sp.E11)) : (acc[] .+= sp.E11); n[] += 1
+        # the plane variance of u′ (line means removed), computed directly, for the Parseval check
+        u = Aeolus.Fields.interior_view(r.case.sim.u)
+        for (m, k) in enumerate(lv)
+            pl = u[:, :, k]
+            var[m] += sum(abs2, pl .- sum(pl; dims = 1) ./ size(pl, 1)) / length(pl)
+        end
     end
     r0 = val_run("neutral_abl", "smagorinsky_32x32x32", vcat(ovr, "spectra.levels=[]"); callback = legacy)
     r = val_run("neutral_abl", "smagorinsky_32x32x32", ovr)
@@ -278,7 +285,8 @@ val_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"
     # Parseval: each sample's spectrum integrates to the variance of u′ on its plane, so the
     # average does too, to the variance averaged over the samples (one-sided, Δk1 = 2π/L_x)
     Δk = sp["k1"][2] - sp["k1"][1]
-    @test all(sum(e) * Δk > 0 for e in sp["E11"])
+    @test all(isapprox(sum(sp["E11"][m]) * Δk, var[m] / n[]; rtol = 1e-10) for m in 1:4)
+    @test all(var .> 0)
     @test sp["z_over_depth"] == [(k - 0.5) / 16 for k in (1, 2, 4, 8)]
 end
 
