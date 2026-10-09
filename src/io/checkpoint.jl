@@ -69,12 +69,15 @@ Methods shipped:
 | `NamedTuple`, `Tuple` | element-wise |
 | `WallModels`: `MatchingInput`, `WallModel`, `TBLEWallModel`, `DynamicRoughness`, `WallBoundedCase` | see `src/wall_models/checkpoint.jl` |
 
+| [`StructuralState`](@ref) | itself |
+| a `NestedRun` | [`nest_state`](@ref Aeolus.Nesting.nest_state) (#269) |
+
 Anything else throws a `MethodError`-like `ArgumentError` naming the type:
 add the two methods for it (for a mutable struct,
-[`fieldwise_checkpoint_state`](@ref) does the work). The **Berlin case**'s
-own state (soil, buildings, tracers, surface bus, radiation) is not covered
-yet (#269 / #134): its hook is exactly this pair, one method per coupling
-state, collected as the `components` of [`checkpoint!`](@ref).
+[`fieldwise_checkpoint_state`](@ref) does the work). A composite run whose
+state is spread over many objects (a nested run, the Berlin case, #269)
+defines them as its [`structural_state`](@ref): the whole object graph,
+so no piece of it can be left out.
 """
 checkpoint_state(x) =
     throw(ArgumentError("checkpoint_state: no method for $(typeof(x)); add " *
@@ -588,17 +591,21 @@ _fftw_line() = (p = fftw_policy();
 
 """
     resume!(ck::CheckpointSchedule, sim; sgs, components, stepper, rng,
-            allow_mismatch = false) -> payload or nothing
+            allow_mismatch = false, validate = nothing) -> payload or nothing
 
 Run start for a [`CheckpointSchedule`](@ref): write the FFTW wisdom to
 `dir/fftw_wisdom` if there is none yet (the plans of `sim` exist now), then
 restore the newest checkpoint of `dir` if there is one ([`restart!`](@ref),
 same keywords) and return its payload (with `:extra` and `:path`), or
 return `nothing` for a fresh start. The schedule's step counter continues
-from the checkpoint's `stepper.step` (or its `:step` extra).
+from the checkpoint's `stepper.step` (or its `:step` extra). `validate`,
+a function `(payload, path)`, is called on the checkpoint read before
+anything is restored: a driver's own refusal with its own words (the
+Berlin case refuses a checkpoint without its case state, #269).
 """
 function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
-                 stepper = nothing, rng = nothing, allow_mismatch::Bool = false)
+                 stepper = nothing, rng = nothing, allow_mismatch::Bool = false,
+                 validate = nothing)
     ck.wisdom && !isfile(wisdom_path(ck)) && save_fftw_wisdom(wisdom_path(ck))
     path = latest_checkpoint(ck)
     if path === nothing
@@ -609,6 +616,7 @@ function resume!(ck::CheckpointSchedule, sim; sgs = nothing, components = (;),
         return nothing
     end
     d = read_checkpoint(path)
+    validate === nothing || validate(d, path)
     restore_checkpoint!(sim, d; sgs, components, stepper, rng, path, allow_mismatch)
     ck.last_step = stepper === nothing ? get(d[:extra], :step, 0) : stepper.step
     ck.last_wall = time()

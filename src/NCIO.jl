@@ -137,7 +137,7 @@ end
 
 """
     nc_append_record!(ds, data::AbstractDict; dim = <the unlimited dimension>,
-                      count = 1, sync = true)
+                      count = 1, sync = true, at = nothing)
 
 Append one record (or `count` records) along the unlimited dimension `dim`.
 `data` maps variable name (`String` or `Symbol`) to the array of the
@@ -152,10 +152,14 @@ is flushed with `sync` (`sync = false` leaves that to a later call).
 
 `dim` may be left out when the file has one unlimited dimension; a file
 with several (NetCDF-4 allows that, `diagnostics.nc` has two) names it.
+
+`at` writes the records from record `at` on instead of after the last one
+(`at ≤` the current length + 1): a run resumed from a checkpoint rewrites
+the records its interrupted session wrote after that checkpoint (#269).
 """
 function nc_append_record!(ds::NCDataset, data::AbstractDict;
                            dim::Union{Nothing,AbstractString} = nothing, count::Integer = 1,
-                           sync::Bool = true)
+                           sync::Bool = true, at::Union{Nothing,Integer} = nothing)
     unl = unlimited(ds.dim)
     if dim === nothing
         length(unl) == 1 ||
@@ -167,6 +171,10 @@ function nc_append_record!(ds::NCDataset, data::AbstractDict;
     end
     count >= 1 || error("nc_append_record!: count must be ≥ 1, got $count")
     n0 = Int(ds.dim[udim])
+    if at !== nothing
+        1 <= at <= n0 + 1 || error("nc_append_record!: at = $at, the file has $n0 record(s)")
+        n0 = Int(at) - 1
+    end
     rng = n0+1:n0+count
     # check the whole record before writing any of it, so a bad call does
     # not leave a partial record behind
