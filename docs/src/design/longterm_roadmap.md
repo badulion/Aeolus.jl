@@ -1770,16 +1770,30 @@ index-space proper-nesting check.
   0.02 s); a fresh process restored it and stayed bitwise for 30 child
   steps.
 
-**Not validated: two-way nesting with the generator.** Measured
-unstable on the idealised nest over 2 h, against one-way with the
-generator: child KE ×12.4 (×11.8 in a second realisation), parent ×2.6
-(×2.4), overlap θ +0.26 K (+0.23 K). This fails #268's 1.5× / 0.2 K
-criteria and is recorded as `@test_broken` in
-`era6_inflow_nest_longrun.jl`. Cause runs point to the feedback loop
-through the parent statistics, not to the generator alone (frozen
-parent statistics: ×1.3 child, +0.23 K; band widened 3 → 6 parent
-cells: ×2.1, +0.30 K). Not tuned; it is input for the two-way campaign
-#331. The coupling warns when the generator runs with a two-way nest.
+**Two-way nesting with the generator: stable since #418 / PR #419.**
+#268 measured it unstable on the idealised nest over 2 h, against
+one-way with the generator: child KE ×12.4 (×11.8 in a second
+realisation), parent ×2.6 (×2.4), overlap θ +0.26 K (+0.23 K). The
+cause was a loop through the two-way interface flux correction: it set
+each parent interface face to the child's flux, which included the
+synthetic perturbation, so the next window's boundary data carried the
+perturbation back and the parent statistics measured the grown eddies.
+PR #419 subtracts the synthetic normal velocity (a new contract generic
+`synthetic_normal_velocity(data, side, t)` in BoundaryConditions,
+implemented by `InflowTurbulence`) from the child's open faces for the
+correction and its ledger; runs without a synthetic part stay
+bit-identical. Measured, two-way against one-way with the generator,
+2 h sheared CBL, r = 3: child KE ×0.937 / ×1.091, parent ×1.015 /
+×1.020, overlap θ −0.0031 / −0.0085 K (seeds 1 / 2), within #268's
+1.5× / 0.2 K criteria. The former `@test_broken` in
+`era6_inflow_nest_longrun.jl` are real tests for both realisations
+(18/18 pass). Decaying refine-3 nest, 2 h: child ×0.985, parent
+×0.999, θ +0.0009 K (×2.26, ×1.21, +0.31 K before). Composite θ ledger
+drift ≤ 3.5e-14 per parent step; interface imbalance before the
+correction 1.2e-16 (1.4e-2 before). Footprint-excluded parent
+statistics were measured and dropped (child ×1.76 alone, no gain on top
+of the fix). The coupling's two-way warning is removed; the Berlin
+two-way nest itself stays unvalidated (#331).
 
 **Bugs the tests caught**:
 - A shallow copy in the structural walk restored the run's own plane
