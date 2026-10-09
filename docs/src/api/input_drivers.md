@@ -3,26 +3,44 @@
 `Aeolus.InputDrivers` (CFG-f, #361) holds Aeolus's own **input drivers**:
 NetCDF-4 files with what a run reads from outside the model. The first is
 the **static driver**: terrain, buildings, surface classes and leaf area
-on the run's own horizontal grid, plus the building and patch polygons,
-so a run reads its geometry from one file instead of re-parsing
-OpenStreetMap at every start. The OSM and GeoJSON readers are its
-preprocessors. The second is the **dynamic driver** (CFG-g, #362): the
-initial state, the boundary planes of the open faces over time, and the
-large-scale and surface forcing; its preprocessors are a sounding /
-case-table reader and an Aeolus parent run. There is no PALM (PIDS)
-compatibility goal: the names are Aeolus's own, with CF attributes.
+on the run's own horizontal grid, plus the building and patch polygons.
+The second is the **dynamic driver** (CFG-g, #362): the initial state, the
+boundary planes of the open faces over time, and the large-scale and
+surface forcing. There is no PALM (PIDS) compatibility goal: the names
+are Aeolus's own, with CF attributes.
+
+## Who writes a driver
+
+Aeolus keeps the **readers, the writers and the format schemas** (this
+module). Everything that **creates** a driver from outside data is the
+separate package [AeolusPrep.jl](https://github.com/badulion/AeolusPrep.jl)
+(ONE-h, #457; the single-model design, [One model](../design/single_model.md)): OpenStreetMap
+and GeoJSON footprints, the nest parent's land-use classification,
+soundings and case tables, ERA5 (GRIB2 or NetCDF), and the downloads of
+those sources. It depends on Aeolus for the writers, so a file is written
+by the code that defines and checks its format, and the model itself
+never reads OpenStreetMap, GIS or reanalysis files (and does not depend
+on GRIBDatasets).
 
 ```bash
-julia --project -m Aeolus preprocess static examples/urban/configs/berlin_summer.toml
-julia --project -m Aeolus preprocess static my_case.toml --out input/my_static.nc
+# in an AeolusPrep.jl checkout
+julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml \
+      --source data/berlin/alexanderplatz_real.osm --min-height 8 --park-lai 2.5
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
+julia --project -m AeolusPrep dynamic --from-era5 data/era5/era5_lindenberg_20190629_*.nc \
+      --config <aeolus>/examples/configs/lindenberg_era5.toml --lat 52.2085 --lon 14.118
+julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed driver, reproduced?
 ```
 
-`aeolus preprocess static` loads the run config and calls its driver's
-[`preprocess_static`](@ref Aeolus.Config.preprocess_static), which reads
-the grid and the sources from the config and writes the file(s). The
-`urban` driver writes `[geometry] static` (from `[preprocess]
-osm_path`, `min_height`, `park_lai`) and, for the nest, `[geometry]
-parent_static` (from `[preprocess] landuse`).
+`aeolusprep static` reads the run's grid and anchor from the Aeolus
+config and the source and its options (`--source`, `--min-height`,
+`--park-lai`) from the command line; for a nested urban run it also writes
+`[geometry] parent_static` from `[geometry] landuse`. Every driver
+committed to Aeolus (`examples/**/input/`, `test/data/**/input/`) is listed
+with its command and options in AeolusPrep's `recipes.toml`, and its tests
+regenerate each one: every data variable bit for bit, every global
+attribute but `date_created` and `aeolus_commit` equal. The parent-made
+driver of an offline nest is model output, not a preprocessor (below).
 
 ## Conventions
 
@@ -34,13 +52,17 @@ mesh coordinates (`origin_x`, `origin_y`), `projection =
 "equirectangular"` ([`latlon_to_meters`](@ref Aeolus.InputDrivers.latlon_to_meters),
 the one implementation; sub-metre over the ≤ 5 km of an LES domain), the
 grid spacing `dx`, `dy`, and the provenance: `source` (relative to the
-driver's directory), `source_fnv1a64`, `preprocessor`, `aeolus_commit`
-and `date_created`. Variables have CF `units`, `long_name` and, where CF
+driver's directory when the source lies in the same package; in another
+package `"<Package>:<path in it>"`, e.g.
+`"AeolusPrep:data/berlin/alexanderplatz_real.osm"`, which does not depend
+on where the packages are checked out), `source_fnv1a64`, `preprocessor`
+(e.g. `"aeolusprep static"`), `aeolus_commit` and `date_created`. Variables have CF `units`, `long_name` and, where CF
 has one, `standard_name`.
 
 **No resampling.** [`read_static_driver`](@ref Aeolus.InputDrivers.read_static_driver)
 errors, naming both grids, if the file's `x`, `y`, `dx`, `dy` or anchor
-differ from the run's. The preprocessor is re-run for another grid.
+differ from the run's. The preprocessor is re-run for another grid
+(`aeolusprep static`).
 
 **Checks.** A [`DriverSchema`](@ref Aeolus.InputDrivers.DriverSchema) is
 a declarative table of variables (name, dims, type, units, required,
@@ -99,13 +121,12 @@ the source's provenance lines.
 ## The dynamic driver
 
 ```bash
-julia --project -m Aeolus preprocess dynamic --from-sounding examples/urban/configs/berlin_summer.toml
-julia --project -m Aeolus preprocess dynamic --from-sounding examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
-julia --project -m Aeolus preprocess dynamic --from-parent examples/urban/configs/berlin_smoke.toml --out child.nc
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
+julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
 ```
 
-`aeolus preprocess dynamic` calls the driver's
-[`preprocess_dynamic`](@ref Aeolus.Config.preprocess_dynamic). One schema,
+One schema,
 `aeolus_driver = "dynamic"`, `aeolus_form = "standard"`, covers three
 groups; each is optional, and [`read_dynamic_driver`](@ref Aeolus.InputDrivers.read_dynamic_driver)
 checks that what a file holds is consistent:
@@ -122,7 +143,7 @@ calendar date, the SBL configs), with CF `units = "seconds since …"`.
 **Initial state.** Profiles over `init_z`,
 or 3-D fields on the run grid (`init_u3d`, …: the interior cells in
 storage order, u at the cell's west face, v at its south face, w at its
-bottom face), and `init_p_surface`. The ERA5 preprocessor (below) fills
+bottom face), and `init_p_surface`. An ERA5 driver (below) fills
 the `init_*` profiles and the surface series, and the `simulation`
 driver's `[initial] dynamic` reads the profiles; no case reads the
 surface series yet. A sounding driver has no `init_*` profiles: the Berlin case reads its
@@ -171,25 +192,28 @@ storage indices (another grid or halo), a run interval the records do not
 cover ([`check_coverage`](@ref Aeolus.InputDrivers.check_coverage), both
 intervals printed) and a file on another grid are errors.
 
-### The sounding and case-table preprocessor
+### Sounding and case-table drivers
 
 [`sounding_dynamic_inputs`](@ref Aeolus.InputDrivers.sounding_dynamic_inputs)
-writes a radiosonde sounding's height-time tables (`ls_profile_theta`,
+holds a radiosonde sounding's height-time tables (`ls_profile_theta`,
 `_qv`, `_u`, `_v`, `_p`, the union of the launches' level heights up to
 the table top) on the "seconds since init_time" axis and the ground
 pressure reduced from the launch site ([`surface_pressure_at`](@ref Aeolus.InputDrivers.surface_pressure_at)).
 [`forcing_dynamic_inputs`](@ref Aeolus.InputDrivers.forcing_dynamic_inputs)
-writes the `ForcingTable`s of a case's forcing (GABLS, CASES-99); a
-number or a formula stays in the case's config. The `sbl` driver's
+holds the `ForcingTable`s of a case's forcing (GABLS, CASES-99,
+[`sbl_dynamic_inputs`](@ref Aeolus.StableBoundaryLayer.sbl_dynamic_inputs)
+of an `sbl` config); a number or a formula stays in the case's config. A
+run that reads its CSV builds the same `DynamicInputs` in memory;
+AeolusPrep writes them to the file (`aeolusprep dynamic --from-sounding`). The `sbl` driver's
 `[case] dynamic` replaces the config's geostrophic wind, extra forcings
 and surface θ series by those the driver holds (its initial profiles,
 which carry formula rules below the lowest table level, stay in
 `[initial]`); GABLS3 run 50 steps from its driver is bitwise the CSV path.
 
-### The Aeolus-parent preprocessor
+### The parent-made driver
 
 [`NestBoundaryRecorder`](@ref Aeolus.InputDrivers.NestBoundaryRecorder)
-is an in-run writer: at every parent step it appends one record, the
+is an in-run writer (model output: `[output] child_boundaries`): at every parent step it appends one record, the
 values every child plane reads from the prolongated parent state
 (exactly the points `blend_window!` reads online), the parent time, the
 step the parent took (`time_bc_step`) and the parent's mean profiles over
@@ -198,94 +222,34 @@ parent step, rather than extracting from 3-D output at output cadence, is
 what makes the offline child bitwise the online one: both blend the same
 Float64 snapshots over the same windows.
 
-### The ERA5 preprocessor
+### ERA5 drivers
 
-```bash
-julia --project -m Aeolus preprocess dynamic --from-era5 \
-    examples/data/era5_lindenberg_20190629_pl.nc examples/data/era5_lindenberg_20190629_sfc.nc \
-    --config examples/configs/lindenberg_era5.toml [--box 0.5] [--out file.nc]
-```
-
-CFG-h (#363), shared with Era VIII #57. [`read_era5`](@ref Aeolus.InputDrivers.read_era5)
-reads ERA5 as the CDS delivers it, GRIB2 (GRIBDatasets) or NetCDF
-(NCDatasets), told apart by the file's first bytes: `t`, `q`, `u`, `v`,
-`w` (ω, Pa s⁻¹) and `z` (geopotential) on pressure or model levels, and
-`sp` (or `lnsp`), `skt`, `t2m` and the orography `z` from the single
-levels, possibly spread over several files that share one lat/lon grid
-and one time axis. [`era5_dynamic_inputs`](@ref Aeolus.InputDrivers.era5_dynamic_inputs)
-and [`write_era5_driver`](@ref Aeolus.InputDrivers.write_era5_driver) turn
-it into the dynamic driver:
-
-1. **Heights.** Pressure levels: `z = Φ/g₀`, g₀ = 9.80665 m s⁻² (the
-   `MoistThermodynamics` `grav`), above the ERA5 orography at the site.
-   Model levels: the IFS L137 half-level pressures `a + b p_s` and
-   hydrostatic integration with the virtual temperature
-   ([`era5_model_level_heights`](@ref Aeolus.InputDrivers.era5_model_level_heights),
-   IFS Cy41r2 Part III eqs. 2.20–2.23).
-2. **θ and qv.** `potential_temperature(T, p)` of `MoistThermodynamics`
-   (one source of truth); qv is ERA5's specific humidity.
-3. **Horizontal.** Bilinear on the regular lat/lon grid: at the domain
-   centre for the profiles and tables, and at every boundary-plane point
-   for the planes, mapped to lat/lon by [`meters_to_latlon`](@ref Aeolus.InputDrivers.meters_to_latlon),
-   the inverse of the CFG-f [`latlon_to_meters`](@ref Aeolus.InputDrivers.latlon_to_meters).
-4. **Vertical.** Linear in z ([`era5_vertical`](@ref Aeolus.InputDrivers.era5_vertical);
-   pressure linear in ln p); the lowest level's value below it; a run
-   top above the ERA5 top is an error naming both heights.
-5. **Geostrophic wind** from centred differences of Φ over the ±`box`
-   points (default ±0.5°): `u_g = −(1/f) ∂Φ/∂y`, `v_g = (1/f) ∂Φ/∂x`
-   (pressure levels only).
-6. **Subsidence** `w = −ω/(ρ g₀)`, ρ the moist-air density
-   ([`era5_subsidence`](@ref Aeolus.InputDrivers.era5_subsidence)).
-7. **Advective tendencies** `−u·∇θ`, `−u·∇qv`, centred over the same box.
-8. **Times.** The ERA5 valid times in seconds since `init_time` (the
-   first time by default), hourly as delivered: the model interpolates in
-   time (`ForcingTable`, `blend_window!`).
-
-The outputs (`[preprocess.era5] outputs`, all by default) are the
-`init_*` profiles and `init_p_surface`, the boundary planes of the run's
-open faces (one `time_bc` record per ERA5 time), the `ls_profile_*`
-tables, `ls_u_g`/`ls_v_g`, `ls_w_subs`, `ls_theta_adv`/`ls_qv_adv` and the
-surface series (`sfc_pressure`, and `sfc_temperature`, the skin
-temperature as a potential temperature). Every file read is listed with
-its FNV-1a hash in the global attribute `era5_files`.
+AeolusPrep's ERA5 preprocessor (CFG-h #363, shared with Era VIII #57)
+reads ERA5 as the CDS delivers it, GRIB2 or NetCDF, on pressure or model
+levels, and writes the `init_*` profiles and `init_p_surface`, the
+boundary planes of the run's open faces (one `time_bc` record per ERA5
+time), the `ls_profile_*` tables, `ls_u_g`/`ls_v_g` (centred differences of
+Φ over ±`box`), `ls_w_subs` (from ω), `ls_theta_adv`/`ls_qv_adv` and the
+surface series; heights `Φ/g₀` above the ERA5 orography, θ from
+`MoistThermodynamics.potential_temperature`, bilinear in lat/lon about
+the anchor ([`meters_to_latlon`](@ref Aeolus.InputDrivers.meters_to_latlon),
+the inverse of [`latlon_to_meters`](@ref Aeolus.InputDrivers.latlon_to_meters)),
+linear in z. Every ERA5 file is listed with its FNV-1a hash in the
+global attribute `era5_files`. Its tests (analytic hydrostatic
+atmosphere, GRIB2 = NetCDF bit for bit, the Lindenberg sample against the
+Lindenberg sounding: θ RMSE 0.787 K, qv RMSE 0.718 g/kg over 200–3000 m)
+moved with it.
 
 **The `simulation` driver** takes such a driver as `[initial] dynamic`:
 its profiles set the initial u, v, θ (and qv), and lateral faces set to
 `boundaries.x`/`y = "open"` take its boundary planes through a
 [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed), blended
 linearly in time (boussinesq core, uniform grid, z walls).
-`[preprocess.era5]` gives the site (`lat`, `lon`, the domain centre),
-`box`, `levels` and `outputs`. `examples/configs/lindenberg_era5.toml` is
-a 16³ open box over Lindenberg; the file is hashed under `[inputs]` of
-`run.toml`, and 20 steps round-trip bit for bit
-(`test/preprocess_era5.jl`).
-
-**Data.** `examples/data/era5_lindenberg_20190629_{pl,sfc}.nc` (310 KB)
-is real ERA5 around Lindenberg (52.21 N, 14.12 E, ±1°), 2019-06-29
-00–12 UTC, 16 pressure levels 1000–500 hPa, with its CDS request and the
-Copernicus licence and attribution in the global attributes.
-`examples/data/fetch_era5.jl` re-creates it, or fetches another site and
-day, through the CDS API with `Downloads` and the user's `~/.cdsapirc`
-(a free CDS account and the ERA5 licence accepted once); the tests never
-call it. Attribution: Hersbach et al. (2023), ERA5 hourly data on
-pressure levels / single levels, C3S CDS, doi:10.24381/cds.bd0915c6,
-doi:10.24381/cds.adbb2d47.
-
-**Measured** (`test/preprocess_era5.jl`). On an analytic isothermal
-(280 K) hydrostatic atmosphere with every field linear in x and y,
-written in-test as NetCDF, the largest relative errors are: level
-heights against `(R T/g₀) ln(p₀/p)` 2.2e-16 (bound 1e-9), θ against
-`T (p₀/p)^κ` 1.9e-16 (1e-12), the geostrophic wind against the
-prescribed Φ gradient 1.2e-13 (1e-10), `−u·∇θ` 2.3e-14 (1e-10); the
-boundary planes match the analytic u to 8.9e-15 m/s. The subsidence is
-exact at a grid node (2.1e-16) but not between nodes (7.4e-8): w is a
-product of T and q, which are linear, so it is not bilinear. The same fields as GRIB2 (98 KB, packed as
-64-bit IEEE floats, `test/data/era5/make_grib_fixture.jl`) give the same
-driver bit for bit (10 tables, 25 boundary slabs). Against the
-Lindenberg radiosonde of 00 UTC 29 June 2019 over 200–3000 m above the
-ground, the ERA5 sample has a θ RMSE of 0.787 K (bias −0.503 K) and a
-qv RMSE of 0.718 g/kg (bias +0.192 g/kg) — within the 1.5 K and
-1.5 g/kg the issue expected.
+`examples/configs/lindenberg_era5.toml` is a 16³ open box over
+Lindenberg reading the committed `input/lindenberg_era5_dynamic.nc`
+(1.4 MB; ERA5 of 2019-06-29 00–12 UTC at 52.2085 N, 14.118 E); the file is
+hashed under `[inputs]` of `run.toml`, and 20 steps round-trip bit for bit
+(`test/input_dynamic.jl`).
 
 ## The Berlin case
 
@@ -295,24 +259,28 @@ under `[inputs]` of `run.toml`); the generated files are committed in
 `examples/urban/configs/input/` (all of them together 790 KB; each is
 under the 2 MB limit for committed drivers) with their source hashes.
 A missing file is a configuration error before any run folder is made,
-and it prints the exact `aeolus preprocess static <config>` command.
-`static = "none"` preprocesses `[preprocess] osm_path` in memory with the
-same functions, the way to run a grid no file was made for (Julia callers
-that change `size`, `extent` or `offset` pass `static = nothing`, and
-`parent_static = nothing` for a different parent box).
+and it prints the `aeolusprep static <config>` command that makes it.
+There is no in-memory ground: a grid no file was made for needs its
+driver made first (`aeolusprep static <config> --set grid.size=…
+--out …`); `parent_static = "none"` still reads `[geometry] landuse` in
+memory for a different parent box. The Mitte sample at the smoke size of
+its `[test]` overrides and the synthetic city of `test/urban_run.jl` have
+committed drivers of their own.
 
 Reading the driver is bit for bit the OSM-direct path it replaced
 (`test/input_static.jl`, against digests captured before the switch: the
 smoke case's solid mask, surface classes, heightmap and view factors, the
 summer rasterisation, the nest parents' land use, and the 12-step smoke
-state in `test/config_berlin.jl`). The two known defects of the OSM
-reader (the `&&`/`||` precedence of the node parser; patches drawn over
-roofs) are kept and documented; fixing them is #141's.
+state in `test/config_berlin.jl`); the Mitte sample at 32 × 32 × 16 is
+its driver's polygons rasterised there. The two known defects of the OSM
+reader (the `&&`/`||` precedence of the node parser, now in AeolusPrep;
+patches drawn over roofs, the rasterisation here) are kept and
+documented; fixing them is #141's.
 
 The dynamic driver (CFG-g, #362): `[initial] dynamic` names it.
 
 * **Sounding.** `berlin_summer.toml` reads its initial state from
-  `input/berlin_20190629_dynamic.nc` (`aeolus preprocess dynamic
+  `input/berlin_20190629_dynamic.nc` (`aeolusprep dynamic
   --from-sounding`, from the Lindenberg CSV, which stays as
   `[initial] sounding`, the driver's hashed source). The tables are the
   ones the CSV path builds, so the initial θ(z), qv(z), ground pressure
@@ -326,8 +294,7 @@ The dynamic driver (CFG-g, #362): `[initial] dynamic` names it.
   The smoke and winter scenarios keep the idealised profile
   (`sounding = dynamic = "none"`).
 * **Offline nest.** An online run with `[output] child_boundaries =
-  "<file>"` (or `aeolus preprocess dynamic --from-parent <config>`, which
-  runs the config's online nested case for its steps) writes the parent's
+  "<file>"` writes the parent's
   windows, the child's boundary slabs, its initial wind and the parent's
   mean profiles. A child run with `[initial] dynamic = "<file>"` and
   `[physics.options.nesting] parent_driver = "offline"` replays them

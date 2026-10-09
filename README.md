@@ -158,11 +158,11 @@ dry deposition · rain scavenging of HNO₃
 <tr><td><b>Configuration &amp; input</b></td><td>
 
 TOML run configuration with a schema, strict validation, `extends` and
-overrides, sweeps · `julia -m Aeolus run | check | resolve | options |
-preprocess` · NetCDF-4 static driver (buildings, surface classes, LAI)
-from OpenStreetMap / GeoJSON · NetCDF-4 dynamic driver (initial
-state, boundary planes, forcing) from a sounding, an Aeolus parent run
-or ERA5 (GRIB2 or NetCDF)
+overrides, sweeps · `julia -m Aeolus run | check | resolve | options` ·
+NetCDF-4 static driver (buildings, surface classes, LAI) and dynamic
+driver (initial state, boundary planes, forcing), written by the
+companion package AeolusPrep.jl from OpenStreetMap / GeoJSON, a
+sounding or ERA5 (GRIB2 or NetCDF), or by an Aeolus parent run
 
 </td></tr>
 <tr><td><b>Output &amp; logging</b></td><td>
@@ -344,9 +344,11 @@ transport of the seven advected tracers (qv, ql and the five species;
 ### Run your own city
 
 ```bash
-# 1. Fetch a 1 km box from OpenStreetMap and preprocess it into the static driver
-julia --project -m Aeolus preprocess fetch-osm --box 52.518,13.402,52.526,13.418 --out examples/urban/data/alexanderplatz_real.osm
-julia --project -m Aeolus preprocess static examples/urban/configs/berlin_summer.toml
+# 1. In an AeolusPrep.jl checkout: fetch a 1 km box from OpenStreetMap and
+#    preprocess it into the static driver of the config
+julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
+julia --project -m AeolusPrep static ../Aeolus.jl/examples/urban/configs/berlin_summer.toml \
+    --source data/berlin/alexanderplatz_real.osm
 
 # 2. Simulate 24 hours — writes CF-1.8 NetCDF and the run's checks (results.toml)
 julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml

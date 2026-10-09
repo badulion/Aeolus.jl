@@ -289,8 +289,8 @@ wall law (P57-a) or a surface step.
 ## Radiosonde soundings
 
 `Sounding` holds the launches of one station. `read_sounding(path)`
-reads one from the CSV that `aeolus preprocess fetch-sounding` writes
-(`Aeolus.UrbanCase.igra_sounding_csv`), and `sounding_profiles(s; z_top)` converts it to θ, ``q_v``, u,
+reads one from the CSV that AeolusPrep.jl's `aeolusprep fetch-sounding`
+writes (its `igra_sounding_csv`), and `sounding_profiles(s; z_top)` converts it to θ, ``q_v``, u,
 v and p `ForcingTable`s on heights above the launch site and launch
 times in seconds from an epoch (`sounding_time`). These tables are the
 form that initial states, nudging targets and boundary data take
