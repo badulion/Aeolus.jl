@@ -72,6 +72,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
        SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length,
+       kinematic_heat_flux, similarity_theta, similarity_wind,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
@@ -425,6 +426,38 @@ obukhov_length(u_star::Real, θv_star::Real, θv_ref::Real;
 # in terms of ζ = z_m/L so that ζ = 0 is exactly neutral.
 _Φm(sf, ζ, z_m, z0m) = log(z_m / z0m) - psi_m(sf, ζ) + psi_m(sf, ζ * z0m / z_m)
 _Φh(sf, ζ, z_m, z, z0) = log(z / z0) - psi_h(sf, ζ * z / z_m) + psi_h(sf, ζ * z0 / z_m)
+
+"""
+    kinematic_heat_flux(sol::SurfaceLayerSolution) -> w'θ'₀
+
+The kinematic surface heat flux ``w'θ'_0 = -u_* θ_*`` (K m s⁻¹, upward
+positive) of a Monin–Obukhov solution.
+"""
+kinematic_heat_flux(sol::SurfaceLayerSolution) = -sol.u_star * sol.θ_star
+
+"""
+    similarity_theta(sf, z; θ_s, θ_star, L, z0h, c = DEFAULT_SURFACE_CONSTANTS) -> θ(z)
+    similarity_wind(sf, z; u_star, L, z0m, c = DEFAULT_SURFACE_CONSTANTS) -> U(z)
+
+The Monin–Obukhov profiles below the first model level (screen-level
+2 m temperature, 10 m wind) from the scales of a surface-layer solution,
+with the stability-corrected log terms of [`solve_surface_layer`](@ref):
+
+```math
+θ(z) = θ_s + \\frac{θ_*}{κ}\\Big[\\ln\\frac{z}{z_{0h}} - ψ_h\\Big(\\frac{z}{L}\\Big) + ψ_h\\Big(\\frac{z_{0h}}{L}\\Big)\\Big],
+\\qquad
+U(z) = \\frac{u_*}{κ}\\Big[\\ln\\frac{z}{z_{0m}} - ψ_m\\Big(\\frac{z}{L}\\Big) + ψ_m\\Big(\\frac{z_{0m}}{L}\\Big)\\Big].
+```
+
+Reference: Stull (1988), *An Introduction to Boundary Layer Meteorology*, §9.7.
+"""
+similarity_theta(sf::AbstractStabilityFunctions, z::Real; θ_s::Real, θ_star::Real, L::Real, z0h::Real,
+                 c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    θ_s + θ_star / c.κ * _Φh(sf, z / L, z, z, z0h)
+"See [`similarity_theta`](@ref)."
+similarity_wind(sf::AbstractStabilityFunctions, z::Real; u_star::Real, L::Real, z0m::Real,
+                c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
+    u_star / c.κ * _Φm(sf, z / L, z, z0m)
 
 """
     solve_surface_layer(sf = BusingerDyerBeljaarsHoltslag();

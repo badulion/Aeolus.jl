@@ -21,7 +21,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        advect_centered!, advect_upwind!,
        interpolate_to_face!, interpolate_to_center!,
        momentum_advect!,
-       add_buoyancy!, add_coriolis!,
+       add_buoyancy!, add_coriolis!, coriolis_parameter, EARTH_ROTATION_RATE,
        compute_smagorinsky_νt!,
        compute_dynamic_smagorinsky_νt!, DynamicSmagorinskyWorkspace,
        add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
@@ -176,6 +176,17 @@ and `-f u` to `tv` (with `u` interpolated to `v`'s face). 4-point
 horizontal averaging preserves symmetry.
 """
 add_coriolis!(tu, tv, u, v, f)    = _add_coriolis!(tu, tv, u, v, f, mesh(u))
+
+"The Earth's rotation rate Ω (rad s⁻¹; the sidereal day, IERS)."
+const EARTH_ROTATION_RATE = 7.2921e-5
+
+"""
+    coriolis_parameter(latitude) -> f
+
+The Coriolis parameter `f = 2Ω sin φ` (s⁻¹) at the latitude `φ` in degrees
+([`EARTH_ROTATION_RATE`](@ref)); negative in the southern hemisphere.
+"""
+coriolis_parameter(latitude::Real) = 2 * EARTH_ROTATION_RATE * sind(latitude)
 
 """
     compute_smagorinsky_νt!(νt, u, v, w, C_s)

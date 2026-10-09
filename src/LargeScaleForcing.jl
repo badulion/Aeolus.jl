@@ -500,7 +500,10 @@ or a `Tuple` of them) over the step `[t, t + Δt]` to the tendency fields
 of `sim`. Call it from the `body_force!` hook of `step!`, e.g.
 `step!(sim, dt; body_force! = (s, Δt) -> apply_forcing!(s, F, s.t, Δt))`.
 `sim` is duck-typed on `mesh`, `u`, `v`, `tu`, `tv`, `tθ` and
-`f_coriolis`, so any dynamical core of the package works.
+`f_coriolis`, so any dynamical core of the package works. The
+[`GeostrophicPressureGradient`](@ref) takes the keyword `f` (default
+`sim.f_coriolis`): the Coriolis parameter of a model whose Coriolis term
+is a component of the stage pipeline rather than the core's.
 
 For [`AdvectiveTendencies`](@ref) the humidity tendency goes to the
 keyword `tq` (a cell-centred field; default `sim.tqv` when the
@@ -516,11 +519,10 @@ function apply_forcing!(sim, F::Tuple, t, Δt; kw...)
     return sim
 end
 
-function apply_forcing!(sim, F::GeostrophicPressureGradient, t, Δt; kw...)
+function apply_forcing!(sim, F::GeostrophicPressureGradient, t, Δt; f = sim.f_coriolis, kw...)
     m = sim.mesh
     tu, tv = sim.tu.data, sim.tv.data
     T = eltype(tu)
-    f = sim.f_coriolis
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
     t1 = t + Δt

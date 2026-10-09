@@ -371,7 +371,8 @@ The reference data of a file, by quantity name. Two formats:
     `value` column) gives a [`ReferenceValue`](@ref) per row (other
     columns, such as `unit` and `source`, are ignored; the format of
     `examples/sbl/data/*_reference.csv`); a header whose first column is
-    `z` gives a [`ReferenceProfile`](@ref) per other column;
+    `z` (or `z_m`, heights in m) gives a [`ReferenceProfile`](@ref) per
+    other column, named by its (lowercased) header;
   * **NetCDF** (`.nc`): a variable with one value (or attributes
     `low` and `high`) is a `ReferenceValue`; a one-dimensional variable
     along `z`, with the coordinate variable `z`, a `ReferenceProfile`.
@@ -401,7 +402,7 @@ function _read_reference_csv(path)
             lo <= hi || throw(ArgumentError("reference file $path: $q: low $lo > high $hi"))
             out[q] = ReferenceValue(lo, hi)
         end
-    elseif head[1] == "z"
+    elseif head[1] in ("z", "z_m")
         z = [num(r[1], "z") for r in rows]
         issorted(z; lt = <=) || throw(ArgumentError("reference file $path: z must increase strictly"))
         for (j, q) in enumerate(head)
@@ -410,7 +411,7 @@ function _read_reference_csv(path)
         end
     else
         throw(ArgumentError("reference file $path: the header needs a quantity column (scalar references) " *
-                            "or z as its first column (profiles)"))
+                            "or z (z_m) as its first column (profiles)"))
     end
     return out
 end
@@ -476,7 +477,8 @@ the run. The error measure:
 
   * a scalar: the distance outside the band, `max(low − x, x − high, 0)`;
   * a profile: the RMS of model − reference at the reference heights in
-    the model's column (the model profile interpolated linearly).
+    the model's column (the model profile interpolated linearly; a `NaN`
+    reference value is a gap in the data and is skipped).
 
 `tolerance` (in the variable's `units`) is the default; it fails when
 no step ended in the window.
@@ -505,7 +507,7 @@ function reference_check(quantity::AbstractString, ref, value_of::Function; vari
         if profile
             zr, vr = ref.z, ref.values
             zm = collect(Float64, z)
-            inside = [k for k in eachindex(zr) if zm[1] <= zr[k] <= zm[end]]
+            inside = [k for k in eachindex(zr) if zm[1] <= zr[k] <= zm[end] && !isnan(vr[k])]
             isempty(inside) && return NaN, merge(info, Dict{String,Any}("error" => "no reference height inside the model column"))
             d = [_interp(zm, x, zr[k]) - vr[k] for k in inside]
             info["levels"] = length(inside)

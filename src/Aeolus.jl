@@ -235,6 +235,8 @@ export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # P58-e (#193): resolved TKE profile (turbulence-collapse runs)
 export resolved_tke_profile
+# ONE-g (#456): the stable-boundary-layer diagnostics, the Coriolis parameter
+export total_heat_flux_profile, stress_bl_height, inversion_height, coriolis_parameter, EARTH_ROTATION_RATE
 # #245: the FFTW planning policy
 export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 export RK3, step!
@@ -769,7 +771,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
        SurfaceLayerSolution, solve_surface_layer,
-       bulk_richardson, obukhov_length,
+       bulk_richardson, obukhov_length, kinematic_heat_flux, similarity_theta, similarity_wind,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
@@ -1071,6 +1073,8 @@ export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        grid_reynolds_number
 # P59-e (#195): relaminarisation criteria (L is SurfaceExchange.obukhov_length)
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
+# ONE-g (#456): virtual towers and the hockey stick of the SBL (Sun et al. 2012)
+export TowerSampler, tower_sampler, sample_towers!, tower_bins, hockey_stick_threshold, tower_thresholds
 
 # P59-d (#185) — spatially developing flat-plate boundary layer: Blasius,
 # fringe region, free-stream disturbances, BL integral diagnostics.

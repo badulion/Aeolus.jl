@@ -17,6 +17,9 @@
 export phi_m_profile, total_stress_profile, streamwise_spectrum
 # P58-e (#193): the resolved TKE profile of the collapse runs
 export resolved_tke_profile
+# ONE-g (#456): the stable-boundary-layer diagnostics of the SBL cases (moved
+# from the `sbl` run type: P55-f #191, P58-d #194)
+export total_heat_flux_profile, stress_bl_height, inversion_height
 
 # plane means of the interior of a field, one per level k = 1..Nz, in the
 # canonical (thread-invariant) order of `Backends.plane_partials!` (KA-b, #296)
@@ -280,4 +283,90 @@ function resolved_tke_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ})
         e .+= s2 ./ (2n)
     end
     return e
+end
+
+"""
+    total_heat_flux_profile(w, θ, κ; surface = 0) -> (z, resolved, sgs, total)
+
+The plane-mean vertical kinematic flux of `θ` (K m s⁻¹, positive upward)
+at the `Nz + 1` w-faces ``z = (k-1)Δz``: on the interior faces the
+resolved ``⟨w θ_f⟩`` (``θ`` averaged in z to the face) plus the SGS
+``-⟨κ_f ∂θ/∂z⟩`` (``κ`` averaged in z), the stencils of the centred
+scalar advection and the eddy-diffusion z-flux; the surface face holds
+the flux `surface` (a prescribed or modelled surface flux, which the
+solver injects as a tendency), the top face zero (no flux through a
+wall). Pass a closure's vertical diffusivity (`f.κv`) for an
+anisotropic closure. The halos of `w`, `θ`, `κ` must be filled.
+"""
+function total_heat_flux_profile(w::Field{FaceZ}, θ::Field{CellCenter}, κ::Field{CellCenter};
+                                 surface::Real = 0)
+    g = mesh(θ)
+    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
+    T = eltype(θ.data)
+    wd, θd, κd = w.data, θ.data, κ.data
+    idz = 1 / g.dz
+    res = zeros(T, Nz + 1); sgs = zeros(T, Nz + 1)
+    @inbounds for k in 2:Nz
+        K = Hz + k
+        sr = zero(T); ss = zero(T)
+        for j in 1:Ny, i in 1:Nx
+            I, J = Hx + i, Hy + j
+            sr += wd[I, J, K] * (θd[I, J, K] + θd[I, J, K-1]) / 2
+            ss -= (κd[I, J, K] + κd[I, J, K-1]) / 2 * (θd[I, J, K] - θd[I, J, K-1]) * idz
+        end
+        res[k] = sr / (Nx * Ny); sgs[k] = ss / (Nx * Ny)
+    end
+    total = res .+ sgs
+    total[1] = surface
+    z = T[(k - 1) * g.dz for k in 1:Nz+1]
+    return (z = z, resolved = res, sgs = sgs, total = total)
+end
+
+"""
+    stress_bl_height(zf, τ; fraction = 0.05) -> h (m)
+
+The height of a stable boundary layer from its stress profile (Kosović &
+Curry 2000; Beare et al. 2006, GABLS1): the height where the mean total
+stress magnitude `τ` (at the faces `zf`, `τ[1]` at the surface) first
+falls to `fraction` (5 %) of its surface value, divided by 0.95, the
+GABLS1 convention (linear interpolation between faces); `zf[end]/0.95`
+when it never falls that far.
+
+References: Kosović, B. & Curry, J. A. (2000), J. Atmos. Sci. 57,
+1052–1068; Beare, R. J. et al. (2006), Boundary-Layer Meteorol. 118,
+247–272.
+"""
+function stress_bl_height(zf, τ; fraction::Real = 0.05)
+    τ0 = τ[1]
+    for k in 2:length(τ)
+        if τ[k] <= fraction * τ0
+            z = zf[k-1] + (fraction * τ0 - τ[k-1]) / (τ[k] - τ[k-1]) * (zf[k] - zf[k-1])
+            return z / 0.95
+        end
+    end
+    return zf[end] / 0.95
+end
+
+"""
+    inversion_height(z, θ; z_min = 300) -> m
+
+The height of the capping inversion of a plane-mean profile `θ` at
+uniformly spaced cell centres `z`: the face of the largest ``∂⟨θ⟩/∂z``
+above `z_min`, refined by the parabola through that gradient and its two
+neighbours. With `z_min` above a nocturnal surface inversion it is the
+top of the residual layer of the previous day's mixed layer, which
+large-scale subsidence lowers (GABLS2). `NaN` when no face lies above
+`z_min`.
+"""
+function inversion_height(z, θ; z_min::Real = 300.0)
+    dz = z[2] - z[1]
+    zf = [(z[k] + z[k+1]) / 2 for k in 1:length(z)-1]
+    G = diff(θ) ./ dz
+    ks = [k for k in eachindex(zf) if zf[k] >= z_min]
+    isempty(ks) && return NaN
+    k = ks[argmax(G[ks])]
+    (k == 1 || k == length(G)) && return zf[k]
+    a, b, c = G[k-1], G[k], G[k+1]
+    den = a - 2b + c
+    return den == 0 ? zf[k] : zf[k] + 0.5 * (a - c) / den * dz
 end
