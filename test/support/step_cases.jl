@@ -60,7 +60,7 @@ function run_cases(; N = (64, 64, 32))
     c = CFLConstraints(dt_max = 1.0)
     d = cfl_diagnostics(s, c)
     for k in keys(d)
-        k === :limiter || record!("cfl/$k", Float64(getfield(d, k)))
+        getfield(d, k) isa Symbol || record!("cfl/$k", Float64(getfield(d, k)))   # not the limiter labels
     end
     for _ in 1:4
         _, dt, nr = step_adaptive!(s, c; dt_prev = dt)

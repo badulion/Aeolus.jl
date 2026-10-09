@@ -20,12 +20,10 @@ The core's own pieces are the first components: [`CentredAdvection`](@ref)
 """
 module Components
 
-using ..Grids: AbstractMesh
 using ..Operators: Operators, momentum_advect!, add_coriolis!, add_surface_flux!,
                    AbstractSGSClosure, StaticSmagorinsky, DynamicSmagorinsky, VremanClosure,
                    SigmaModel, AMDClosure, StabilityCorrected
 using ..TurbulenceStability: BrownEtAl1994, LillyCutoff, ShortTail, LongTail
-using ..BoundaryConditions: BoundaryConditions
 using ..Simulations: Simulations, BoussinesqSimulation, step_rk3!, add_velocity_sponge!
 using ..Anelastic: MassWeightedSimulation
 using ..TimeIntegration: TimeIntegration, CFLConstraints, adaptive_dt
