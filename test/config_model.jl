@@ -175,9 +175,9 @@ end
     # a cross-field check sees one domain: the sponge starts below the top of *that* domain
     e = cm_error(() -> load_run_config(IOBuffer(CM_TWO * "[domain.sponge]\nalpha_max = 0.01\nz_start = 300.0\n")))
     @test only(e.problems).key == "domain[2].sponge.z_start" && occursin("below the top", only(e.problems).message)
-    # [checks]: no component publishes a check yet (ONE-d, #453)
-    e = cm_error(() -> load_run_config(IOBuffer("[checks]\nenergy_closure = { required = true }\n")))
-    @test only(e.problems).key == "checks.energy_closure"
+    # [checks]: a check nobody publishes (ONE-d, #453; test/checks.jl has the rest)
+    e = cm_error(() -> load_run_config(IOBuffer("[checks]\nenergy_closures = { required = true }\n")))
+    @test only(e.problems).key == "checks.energy_closures" && occursin("did you mean", only(e.problems).message)
     # the obstacles come from the domain's static driver
     e = cm_error(() -> load_run_config(IOBuffer("[obstacles]\nenabled = true\n")))
     @test any(p -> p.key == "obstacles.enabled" && occursin("static_driver", p.message), e.problems)

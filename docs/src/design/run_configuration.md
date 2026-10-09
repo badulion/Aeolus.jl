@@ -153,7 +153,8 @@ julia --project -m Aeolus options urban physics                           # a le
 An override of a per-domain section's key applies to every domain, over
 the `[[domain]]` blocks. `bin/aeolus` is the same command on any Julia
 version (`-m` needs Julia ≥ 1.12). Exit code 0 is success, 1 a failed run, 2 a usage or configuration
-error raised before anything is written. A file with a `[sweep]` table
+error raised before anything is written, 3 a failed required check of
+`[checks]` (ONE-d, #453). A file with a `[sweep]` table
 expands into one run per member; `--member k` picks one.
 
 ## The Julia escape hatch and `replayable`
