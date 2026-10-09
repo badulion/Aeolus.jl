@@ -51,14 +51,13 @@ export ObstacleChannelDriverType, ObstacleChannelRun, reattachment
 """
     ObstacleChannelDriverType()
 
-The `obstacle_channel` driver: `[run] driver = "obstacle_channel"`.
+The `obstacle_channel` driver: `[run] legacy = "obstacle_channel"`.
 Sections `[grid]`, `[flow]`, `[sgs]`, `[obstacles]` and `[stepper]`;
 `aeolus options obstacle_channel` prints them.
 """
 struct ObstacleChannelDriverType <: AbstractRunDriver end
 
 Config.driver_name(::ObstacleChannelDriverType) = "obstacle_channel"
-Config.config_dir(::ObstacleChannelDriverType) = normpath(joinpath(@__DIR__, "..", "..", "examples", "sgs", "configs"))
 
 function Config.driver_sections(::ObstacleChannelDriverType)
     grid = section("grid"; doc = "The channel, in units of its height H.") do s

@@ -11,8 +11,10 @@
 #   julia --project=. examples/validation/cbc_decay.jl              # the three runs and the figure
 #   julia --project=. examples/validation/cbc_decay.jl --set grid.n=32
 
+schema_version = 2
+
 [run]
-driver = "cbc_decay"
+legacy = "cbc_decay"
 name = "cbc_decay"
 
 [grid]

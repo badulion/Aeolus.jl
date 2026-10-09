@@ -1,4 +1,4 @@
-# The couplings of the `simulation` driver (EX-d, #441): what the example
+# The couplings of the model (EX-d, #441): what the example
 # scripts of examples/kernels/ and examples/coupled/ did around the
 # dynamical core's step, as configuration. Included into module
 # SimulationDriver (src/config/simulation_driver.jl).
@@ -10,7 +10,7 @@
 #   [microphysics]  Kessler warm rain on cloud and rain water (kessler)
 #   [tracer]        a passive tracer with box sources and first-order decay
 #   [particles]     Lagrangian particles, their trajectories written to CSV
-#   [obstacles]     immersed obstacles from a static driver (IBM penalty)
+#   [obstacles]     immersed obstacles from the domain's static driver (IBM penalty)
 #
 # Each runs after the step of the core, in the order of the list above,
 # except the surface flux, which is set (slab) or applied (flux_map) before
@@ -71,7 +71,7 @@ function _coupling_sections()
     end
     sfc = section("surface"; doc = "The lower boundary's heat source.") do s
         option!(s, "model", Symbol; default = :none, allowed = [:none, :slab, :flux_map],
-                doc = "none (boundaries.theta_flux_bottom only); slab (a SlabLand whose sensible flux is the θ flux of the floor, " *
+                doc = "none (surface_theta_flux.bottom only); slab (a SlabLand whose sensible flux is the θ flux of the floor, " *
                       "H = exchange_velocity (T_s − θ_ref)); flux_map (the θ flux of flux_patches over flux_background, " *
                       "added to the first level as Q dt/Δz before each step)")
         option!(s, "temperature", Float64; default = 297.0, range = (0, Inf), open_lower = true, units = "K",
@@ -118,9 +118,9 @@ function _coupling_sections()
         option!(s, "record_every", Int; default = 1, range = (1, typemax(Int)),
                 doc = "positions written to output/particles.csv every this many steps")
     end
-    ob = section("obstacles"; doc = "Immersed obstacles.") do s
-        option!(s, "static", Optional{Path};
-                doc = "a static driver (AeolusPrep.jl: aeolusprep static --source <obstacles.geojson>): its buildings are solid in every cell whose centre is at or below their height; hashed under [inputs]")
+    ob = section("obstacles"; doc = "Immersed obstacles from the domain's static driver.") do s
+        option!(s, "enabled", Bool; default = false,
+                doc = "the buildings of the domain's static_driver (AeolusPrep.jl: aeolusprep static --source <obstacles.geojson>) are solid in every cell whose centre is at or below their height")
         option!(s, "anchor", NTuple{2,Float64}; default = (0.0, 0.0), units = "degrees",
                 doc = "latitude, longitude of the domain's south-west corner (the static driver's anchor; checked, not used)")
         option!(s, "penalty_time", Float64; units = "1", default = 3.0, range = (0, Inf), open_lower = true,
@@ -134,10 +134,10 @@ const _SLAB_KEYS = ("temperature", "heat_capacity", "albedo", "exchange_velocity
                     "sw_peak", "sw_duration", "lw_down")
 const _FLUX_MAP_KEYS = ("flux_background", "flux_patches")
 
-"Whether any coupling of the simulation driver is on."
+"Whether any coupling of the model is on."
 _any_coupling(cfg) = cfg.forcing.radiative_cooling != 0 || cfg.surface.model !== :none ||
                      cfg.microphysics.scheme !== :none || cfg.tracer.enabled || cfg.particles.count > 0 ||
-                     cfg.obstacles.static !== nothing
+                     cfg.obstacles.enabled
 
 function _coupling_checks(cfg)
     e = ConfigError[]
@@ -146,7 +146,7 @@ function _coupling_checks(cfg)
         (cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf) ||
             push!(e, ConfigError("checkpoint.every_steps", "the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles]) are not checkpointed: leave [checkpoint] off"))
         d.core === :boussinesq || push!(e, ConfigError("dynamics.core", "the couplings run with the boussinesq core"))
-        cfg.stepper.cfl === nothing || push!(e, ConfigError("stepper.cfl", "the couplings take a fixed stepper.dt"))
+        _adaptive(cfg) && push!(e, ConfigError("time.dt", "the couplings take a fixed time.dt"))
         cfg.grid.stretching === :uniform || push!(e, ConfigError("grid.stretching", "the couplings need a uniform grid"))
         (b.x === :open || b.y === :open) && push!(e, ConfigError("boundaries.x", "the couplings run in a closed box (no open faces)"))
     end
@@ -160,8 +160,8 @@ function _coupling_checks(cfg)
     end
     if s.model !== :none
         b.z === :periodic && push!(e, ConfigError("surface.model", "a surface model needs z walls"))
-        (b.theta_flux_bottom == 0) ||
-            push!(e, ConfigError("boundaries.theta_flux_bottom", "the surface model sets the floor's θ flux: leave theta_flux_bottom at 0"))
+        (cfg.surface_theta_flux.bottom == 0) ||
+            push!(e, ConfigError("surface_theta_flux.bottom", "the surface model sets the floor's θ flux: leave surface_theta_flux.bottom at 0"))
     end
     s.model === :slab && s.theta_ref === nothing && d.theta0 == 0 &&
         push!(e, ConfigError("surface.theta_ref", "the slab's bulk flux needs a reference θ: set theta_ref or dynamics.theta0"))
@@ -173,7 +173,7 @@ function _coupling_checks(cfg)
         push!(e, ConfigError("initial.ql", "cloud water needs microphysics.scheme = \"kessler\""))
     for (f, need) in (("ql", cfg.microphysics.scheme !== :none), ("qr", cfg.microphysics.scheme !== :none),
                       ("tracer", cfg.tracer.enabled))
-        f in cfg.output.fields && !need && push!(e, ConfigError("output.fields", "$f is written only when it is carried"))
+        f in cfg.output.variables && !need && push!(e, ConfigError("output.variables", "$f is written only when it is carried"))
     end
     (!cfg.tracer.enabled && (!isempty(cfg.tracer.sources) || cfg.tracer.decay_time != Inf)) &&
         push!(e, ConfigError("tracer.enabled", "[tracer] sources or decay_time are set but the tracer is off"))
@@ -185,14 +185,17 @@ function _coupling_checks(cfg)
         r = cfg.particles[ax]
         r === nothing || r[1] <= r[2] || push!(e, ConfigError("particles.$ax", "expected [lower, upper] with lower ≤ upper"))
     end
-    cfg.obstacles.static !== nothing && cfg.dynamics.core !== :boussinesq &&
-        push!(e, ConfigError("obstacles.static", "obstacles need the boussinesq core"))
+    if cfg.obstacles.enabled
+        cfg.dynamics.core === :boussinesq || push!(e, ConfigError("obstacles.enabled", "obstacles need the boussinesq core"))
+        cfg.domain.static_driver === nothing &&
+            push!(e, ConfigError("obstacles.enabled", "obstacles come from the domain's static_driver: set it (AeolusPrep.jl: aeolusprep static)"))
+    end
     return e
 end
 
 const _COUPLING_CHECKS_DOC = """
-a run with a coupling on ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles]) has `[checkpoint]` off, the boussinesq core, a fixed `stepper.dt`, a uniform grid and no open faces
-a key of `[surface]` that belongs to a model `surface.model` does not select keeps its default; a surface model needs z walls and `boundaries.theta_flux_bottom = 0`; the slab needs `surface.theta_ref` or `dynamics.theta0`
+a run with a coupling on ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles]) has `[checkpoint]` off, the boussinesq core, a fixed `time.dt`, a uniform grid and no open faces
+a key of `[surface]` that belongs to a model `surface.model` does not select keeps its default; a surface model needs z walls and `surface_theta_flux.bottom = 0`; the slab needs `surface.theta_ref` or `dynamics.theta0`
 Kessler microphysics needs `dynamics.moisture` and z walls; `initial.ql` needs it; the `ql`, `qr`, `tracer` output fields need what they write
 `[tracer]` sources or a decay time need `tracer.enabled`; particles need a triply periodic box"""
 
@@ -306,7 +309,7 @@ end
 "The `SolidMask` of the static driver `path` on `mesh`: buildings solid up to their height."
 function _static_solid(cfg, mesh)
     lat, lon = cfg.obstacles.anchor
-    st = read_static_driver(cfg.obstacles.static; mesh = mesh, origin_lat = lat, origin_lon = lon,
+    st = read_static_driver(cfg.domain.static_driver; mesh = mesh, origin_lat = lat, origin_lon = lon,
                             origin_x = mesh.x0, origin_y = mesh.y0)
     sm, _ = solid_and_classes(st, mesh; tag_walls = false)
     return sm
@@ -322,7 +325,7 @@ function _couplings(cfg, mesh)
     return SimCouplings(cfg.forcing.radiative_cooling, slab, s.model === :flux_map ? _flux_map(cfg, mesh) : nothing,
                         water, cfg.tracer.enabled ? _tracer(cfg, mesh) : nothing,
                         cfg.particles.count > 0 ? _particles(cfg, mesh) : nothing,
-                        cfg.obstacles.static === nothing ? nothing : _static_solid(cfg, mesh),
+                        cfg.obstacles.enabled ? _static_solid(cfg, mesh) : nothing,
                         cfg.obstacles.penalty_time)
 end
 

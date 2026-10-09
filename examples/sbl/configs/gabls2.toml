@@ -12,8 +12,10 @@
 # (w_s = -0.005 z/1000 m/s below 1 km, -0.005 above; a 1 s linear ramp so
 # the step means integrate it exactly; #248). Dry.
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "gabls2"
 seed = 1
 

@@ -306,7 +306,7 @@ from it, and on the LES grid +24 % and +47 % (4h, 8h).
 driver: `julia -m Aeolus run examples/validation/configs/dns256.toml`,
 or `examples/validation/dns256_generate.jl`, which runs that config and
 prints the table (or by the suite with `AEOLUS_DNS256=1`; see
-[Run configuration](../api/config.md#The-dns-driver)). It writes `test/fixtures/dns256_apriori.toml`: the
+[Run configuration](../api/config.md#The-dns-legacy-case)). It writes `test/fixtures/dns256_apriori.toml`: the
 DNS checks, ``Re_λ``, ``k_{max}η``, skewness, energy budget, the energy
 spectrum, and per Gaussian width 4h, 8h, 16h and 32h the per-component
 correlations, ``ρ_Π`` and ``⟨Π⟩`` ratio of the Smagorinsky, Bardina and

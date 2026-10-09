@@ -17,8 +17,10 @@
 # results.toml: z_i, w*, the σ_w² maximum and its height, the heat-flux and
 # SGS-fraction numbers, and the averaged profiles.
 
+schema_version = 2
+
 [run]
-driver = "cbl"
+legacy = "cbl"
 name = "cbl_tke"
 seed = 1
 

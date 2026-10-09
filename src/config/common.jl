@@ -14,10 +14,12 @@ end
 const _LOG_LEVELS = ("debug", "info", "warn", "error", "off")
 
 """
-The common sections, `[run]` with its `driver` pinned to `driver`:
+The common sections of the schema `driver` (the model's, `"common"` or a
+legacy case's):
 
-  * `[run]`: `driver`, `name`, `seed`, `root = "runs"`, `allow_uncommitted`
-    (default: `AEOLUS_ALLOW_UNCOMMITTED == "1"`, else `false`);
+  * `[run]`: `name`, `seed`, `root = "runs"`, `allow_uncommitted`
+    (default: `AEOLUS_ALLOW_UNCOMMITTED == "1"`, else `false`), and for a
+    legacy case `legacy`, pinned to its name;
   * `[fftw]`: `planner` (default `AEOLUS_FFTW_PLANNER`, else `measure`),
     `threads` (default `AEOLUS_FFTW_THREADS`, else `"none"`: automatic,
     one per Julia thread), `wisdom` (a file to import before planning);
@@ -27,10 +29,11 @@ The common sections, `[run]` with its `driver` pinned to `driver`:
   * `[output]`: `path` (`"none"`: the run folder's `output/`), `cadence`.
 """
 function _common_sections(driver::String)
+    legacy = !(driver in (MODEL, "common"))
     run = section("run"; doc = "What runs and where its folder goes.") do s
-        option!(s, "driver", String; default = driver, allowed = [driver],
-                doc = "the driver whose schema validates this config")
-        option!(s, "name", String; default = driver,
+        legacy && option!(s, "legacy", String; default = driver, allowed = [driver],
+                          doc = "the legacy case this config runs: an assembly not yet ported to components (removed by the later steps of the single-model epic); a config without it runs the model")
+        option!(s, "name", String; default = legacy ? driver : "aeolus",
                 doc = "the case name: part of the run folder name runs/<date>_<name>_<id>")
         option!(s, "seed", Int; default = 0, range = (0, typemax(Int)),
                 doc = "the seed of the run's random numbers")

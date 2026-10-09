@@ -16,8 +16,10 @@
 #   julia --project -m Aeolus run examples/validation/configs/neutral_abl.toml --member 3
 #   … --set stepper.end_time=20.0      (any key; applies to every member)
 
+schema_version = 2
+
 [run]
-driver = "channel"
+legacy = "channel"
 name = "neutral_abl"
 seed = 1
 

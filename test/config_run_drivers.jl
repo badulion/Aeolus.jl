@@ -120,7 +120,7 @@ end
         step!(sim, dt)
     end
     r = rd_run(joinpath(RD_KER, "tgv_energy_decay.toml"),
-               ["grid.size=[$N,$N,$N]", "stepper.dt=$(repr(min(0.4dx, 0.4dx^2 / (2ν))))", "stepper.end_time=$T_end"])
+               ["grid.size=[$N,$N,$N]", "time.dt=$(repr(min(0.4dx, 0.4dx^2 / (2ν))))", "time.duration=$T_end"])
     @test rd_same_state(r, sim)
     # the physics: over t = 1 the decay is the linear viscous one, KE₀ e^(−6νt),
     # to 1 % (measured +0.6 % at 16³: the discrete Laplacian's smaller
@@ -151,7 +151,7 @@ end
         push!(kes, kinetic_energy(sim))
     end
     r = rd_run(joinpath(RD_KER, "decaying_hit.toml"),
-               ["grid.size=[$N,$N,$N]", "stepper.dt=$(repr(0.3 * dx))", "stepper.end_time=$T_end"])
+               ["grid.size=[$N,$N,$N]", "time.dt=$(repr(0.3 * dx))", "time.duration=$T_end"])
     @test rd_same_state(r, sim)
     # the physics: after the first projection the energy only decays
     @test issorted(kes[2:end]; rev = true) && kes[end] < 0.9kes[2]
@@ -175,8 +175,8 @@ end
         step!(sim, dt)
     end
     r = rd_run(joinpath(RD_KER, "channel_flow.toml"),
-               ["grid.size=[$Nx,$Ny,$Nz]", "stepper.dt=$(repr(min(0.3dx / 1.2, 0.4dz^2 / (2ν))))",
-                "stepper.end_time=$T_end"])
+               ["grid.size=[$Nx,$Ny,$Nz]", "time.dt=$(repr(min(0.3dx / 1.2, 0.4dz^2 / (2ν))))",
+                "time.duration=$T_end"])
     @test rd_same_state(r, sim)
     # the physics: the free-slip walls are impermeable, the mean flow is kept
     w = rd_sim(r.obj).w.data; H = mesh.Hz
@@ -213,7 +213,7 @@ end
         interior_view(c) .+= dt .* view(tc.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
         step!(sim, dt)
     end
-    r = rd_run(joinpath(RD_KER, "pollution_plume.toml"), ["stepper.end_time=$T_end"])
+    r = rd_run(joinpath(RD_KER, "pollution_plume.toml"), ["time.duration=$T_end"])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     @test bitwise_equal(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
@@ -248,7 +248,7 @@ end
         fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
         advance_particles!(ps, sim, dt)
     end
-    r = rd_run(joinpath(RD_KER, "particle_trail.toml"), ["grid.size=[$N,$N,$N]", "stepper.nsteps=$nsteps"])
+    r = rd_run(joinpath(RD_KER, "particle_trail.toml"), ["grid.size=[$N,$N,$N]", "time.nsteps=$nsteps"])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     @test f.particles == [x[d] for d in 1:3, x in positions(ps)]
@@ -320,7 +320,7 @@ end
     @test interior_view(fixed.θ) != interior_view(old.θ)
     # the config is the script with the flux applied
     r = rd_run(joinpath(RD_CPL, "dcbl_radiation_lsm.toml"),
-               ["grid.size=[$N,$N,$N]", "stepper.end_time=\"none\"", "stepper.nsteps=$nsteps"])
+               ["grid.size=[$N,$N,$N]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test rd_same_state(r, fixed)
     f = Base.invokelatest(state_fields, r.obj)
     @test f.T_s == [land.T]
@@ -375,7 +375,7 @@ end
         apply_kessler_step!(sim.qv, ql, qr, dt; Vt=:spectrum)
     end
     r = rd_run(joinpath(RD_CPL, "moist_convection.toml"),
-               ["grid.size=[$Nx,$Ny,$Nz]", "stepper.end_time=\"none\"", "stepper.nsteps=$nsteps"])
+               ["grid.size=[$Nx,$Ny,$Nz]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test 0.8 * Lz == 1920.0                     # the config's sponge_z_start is the script's 0.8 Lz
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
@@ -418,7 +418,7 @@ end
         step!(sim, dt)
     end
     r = rd_run(joinpath(RD_CPL, "heated_plume.toml"),
-               ["grid.size=[$N,$N,$N]", "stepper.end_time=\"none\"", "stepper.nsteps=$nsteps"])
+               ["grid.size=[$N,$N,$N]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test 0.8 * Lz == 1200.0
     @test rd_same_state(r, sim)
     # the physics: the patch puts 15 times the flux of its surroundings into
@@ -468,7 +468,7 @@ end
         end
         interior_view(c) .+= dt .* view(tc.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     end
-    r = rd_run(joinpath(RD_CPL, "flow_past_cube.toml"), ["stepper.end_time=\"none\"", "stepper.nsteps=$nsteps"])
+    r = rd_run(joinpath(RD_CPL, "flow_past_cube.toml"), ["time.duration=\"none\"", "time.nsteps=$nsteps"])
     # the static driver's cube is the script's cube, cell for cell
     @test rd_couplings(r.obj).solid.mask == sm.mask
     @test sort(rd_couplings(r.obj).tracer.sources) ==
@@ -487,10 +487,10 @@ end
     # AeolusPrep.jl writes it from its GeoJSON (ONE-h, #457; its recipes reproduce it)
     cfg = load_run_config(joinpath(RD_CPL, "flow_past_cube.toml"))
     mesh = RegularGrid(; size = cfg.grid.size, extent = cfg.grid.extent, halo = cfg.grid.halo)
-    st = Aeolus.InputDrivers.read_static_driver(cfg.obstacles.static; mesh = mesh, origin_lat = 0.0,
+    st = Aeolus.InputDrivers.read_static_driver(cfg.domain.static_driver; mesh = mesh, origin_lat = 0.0,
                                                 origin_lon = 0.0, origin_x = 0.0, origin_y = 0.0)
     @test count(>(0), st.building_height) == 9 * 12 && maximum(st.building_height) == 20.0
-    @test isempty(Aeolus.InputDrivers.check_driver(cfg.obstacles.static, Aeolus.InputDrivers.STATIC_SCHEMA))
+    @test isempty(Aeolus.InputDrivers.check_driver(cfg.domain.static_driver, Aeolus.InputDrivers.STATIC_SCHEMA))
 end
 
 # ---------------------------------------------------------------------------

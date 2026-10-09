@@ -7,8 +7,9 @@
 #   julia --project -m Aeolus run examples/kernels/configs/decaying_hit.toml
 #   julia --project=. examples/kernels/plot_decaying_hit.jl runs/<date>_decaying_hit_<id>
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "decaying_hit"
 seed = 42
 
@@ -18,6 +19,10 @@ extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
 
 [dynamics]
 nu = 0.005
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
 
 [sgs]
 closure = "smagorinsky"
@@ -26,13 +31,13 @@ c_s = 0.17
 [initial]
 velocity_perturbation = { kind = "normal", amplitude = 0.3 }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.05890486225480862        # 0.3 Δx / 1 m/s
-end_time = 6.0
+duration = 6.0
 
 [logging]
 diagnostics_cadence = 0.05      # a row every step
 
 [test]
-overrides = ["grid.size=[16,16,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]

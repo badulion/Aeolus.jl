@@ -12,8 +12,10 @@
 #
 #   julia --project=. examples/validation/spectral_broadening.jl
 
+schema_version = 2
+
 [run]
-driver = "column"
+legacy = "column"
 name = "spectral_broadening"
 
 [column]

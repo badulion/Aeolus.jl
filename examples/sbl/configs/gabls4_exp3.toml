@@ -12,8 +12,10 @@
 # 128 m cube is 2 m. Experiment 1 (from 00 UTC, z0m = 1e-2, z0h = 1e-3 m)
 # is table = "exp1", t_start = 0.
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "gabls4_exp3"
 seed = 1
 

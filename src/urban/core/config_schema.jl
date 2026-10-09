@@ -25,7 +25,7 @@ using Dates: Date, year, month, day
     UrbanDriver()
 
 The `urban` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
-`[run] driver = "urban"`. `build` makes the [`CaseConfig`](@ref) of the
+`[run] legacy = "urban"`. `build` makes the [`CaseConfig`](@ref) of the
 config and [`build_case`](@ref)s it; `run!` runs it with
 [`run_case!`](@ref) under the run monitor (the diagnostics CSV, the
 blowup guard), writing the NetCDF output into the run folder's `output/`
@@ -840,7 +840,7 @@ The schema of the `urban` driver (registered when Aeolus is loaded).
 urban_schema() = _URBAN_SCHEMA[]
 
 "The all-defaults `RunConfig` of the `urban` driver (environment variables fill their defaults)."
-default_run_config() = load_run_config(IOBuffer("[run]\ndriver = \"urban\"\n"); schema = urban_schema())
+default_run_config() = load_run_config(IOBuffer("[run]\nlegacy = \"urban\"\n"); schema = urban_schema())
 
 # ---------------------------------------------------------------------------
 # RunConfig → CaseConfig

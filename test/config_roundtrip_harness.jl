@@ -52,8 +52,10 @@ function _results_text(rf)
     return join(filter(l -> !occursin("wall", l), readlines(p)), "\n")
 end
 
-"The `[stepper]` overrides of the simulation driver for a run of `n` steps."
-simulation_nsteps(n) = ["stepper.end_time=\"none\"", "stepper.nsteps=$n"]
+"The `[time]` overrides of the model for a run of `n` steps."
+simulation_nsteps(n) = ["time.duration=\"none\"", "time.nsteps=$n"]
+"The `[stepper]` overrides of the `sbl` legacy case for a run of `n` steps."
+sbl_nsteps(n) = ["stepper.end_time=\"none\"", "stepper.nsteps=$n"]
 
 """
     roundtrip_check(config_path; nsteps = nothing, overrides = String[],

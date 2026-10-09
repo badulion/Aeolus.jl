@@ -4,8 +4,8 @@
     SurfaceThetaFlux(bottom, top)
 
 Prescribed kinematic θ fluxes `w'θ'` (K m s⁻¹) through the bottom and the
-top of the box (`[boundaries] theta_flux_bottom`, `theta_flux_top`; both
-`0` enable no component): `Operators.add_surface_flux!` adds `F/Δz` to
+top of the box (`[surface_theta_flux] bottom`, `top`; both `0` enable no
+component): `Operators.add_surface_flux!` adds `F/Δz` to
 the θ tendency of the first and last level, in stage 6 (`:tendencies`).
 In flux form the domain-integrated θ changes by `(F_bottom − F_top) A` per
 unit time, exactly. On a sound-proof core the same tendency is the
@@ -19,16 +19,16 @@ struct SurfaceThetaFlux <: AbstractComponent
 end
 
 component_name(::Type{SurfaceThetaFlux}) = :surface_theta_flux
-section(::Type{SurfaceThetaFlux}) = "boundaries"
+section(::Type{SurfaceThetaFlux}) = "surface_theta_flux"
 schema(::Type{SurfaceThetaFlux}) =
-    Config.section("boundaries") do s
-        Config.option!(s, "theta_flux_bottom", Float64; default = 0.0, units = "K m s^-1",
-                       doc = "prescribed kinematic θ flux w'θ' through the bottom (z walls)")
-        Config.option!(s, "theta_flux_top", Float64; default = 0.0, units = "K m s^-1",
-                       doc = "prescribed kinematic θ flux through the top (z walls)")
+    Config.section("surface_theta_flux"; doc = "Prescribed kinematic θ fluxes through the bottom and the top (z walls).") do s
+        Config.option!(s, "bottom", Float64; default = 0.0, units = "K m s^-1",
+                       doc = "prescribed kinematic θ flux w'θ' through the bottom; 0: none")
+        Config.option!(s, "top", Float64; default = 0.0, units = "K m s^-1",
+                       doc = "prescribed kinematic θ flux through the top; 0: none")
     end
-enabled(::Type{SurfaceThetaFlux}, opts, domain) = opts.theta_flux_bottom != 0 || opts.theta_flux_top != 0
-build(::Type{SurfaceThetaFlux}, opts, domain) = SurfaceThetaFlux(opts.theta_flux_bottom, opts.theta_flux_top)
+enabled(::Type{SurfaceThetaFlux}, opts) = opts.bottom != 0 || opts.top != 0
+build(::Type{SurfaceThetaFlux}, opts, domain) = SurfaceThetaFlux(opts.bottom, opts.top)
 stages(::SurfaceThetaFlux) = (Stage(:tendencies),)
 
 function run_stage!(c::SurfaceThetaFlux, d, ::Val{:tendencies}, dt)

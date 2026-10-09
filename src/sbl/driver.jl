@@ -1,6 +1,6 @@
 # =========================================================================
 # The `sbl` run type (CFG-d, #359; in src since EX-b, #439): the
-# stable-boundary-layer cases configured from TOML (`[run] driver = "sbl"`).
+# stable-boundary-layer cases configured from TOML (`[run] legacy = "sbl"`).
 #
 #   julia --project -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32]
 #
@@ -26,7 +26,7 @@
 """
     SBLDriver()
 
-The `sbl` run driver: `[run] driver = "sbl"`. `aeolus options sbl` prints
+The `sbl` run driver: `[run] legacy = "sbl"`. `aeolus options sbl` prints
 its sections; shipped configs are in `examples/sbl/configs/`.
 """
 struct SBLDriver <: AbstractRunDriver end
@@ -35,7 +35,6 @@ struct SBLDriver <: AbstractRunDriver end
 const SBL_CONFIG_DIR = normpath(joinpath(@__DIR__, "..", "..", "examples", "sbl", "configs"))
 
 Config.driver_name(::SBLDriver) = "sbl"
-Config.config_dir(::SBLDriver) = SBL_CONFIG_DIR
 
 "The `[case] kind`s of the `sbl` run type."
 const SBL_KINDS = [:homogeneous, :stratified_channel, :relaminarisation_channel, :collapse_channel]

@@ -141,8 +141,8 @@ end
 
 const BC_CFG = joinpath(pkgdir(Aeolus), "examples", "configs", "dry_convective_bl.toml")
 bc_cbl_cfg(core, n; extra = String[]) =
-    load_run_config(BC_CFG; overrides = vcat(["grid.size=[16,16,16]", "stepper.end_time=\"none\"",
-                                              "stepper.nsteps=$n", "fftw.planner=\"estimate\""],
+    load_run_config(BC_CFG; overrides = vcat(["grid.size=[16,16,16]", "time.duration=\"none\"",
+                                              "time.nsteps=$n", "fftw.planner=\"estimate\""],
                                              core === :anelastic ? ["dynamics.core=\"anelastic\""] : String[], extra))
 bc_run(cfg; kw...) = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir(), kw...)
 
@@ -161,8 +161,8 @@ end
 
 @testset "dry CBL on both cores: the θ budget closes to round-off (euler, rk3, adaptive)" begin
     for core in (:boussinesq, :anelastic),
-        (sch, extra) in (("euler", String[]), ("rk3", ["stepper.scheme=\"rk3\""]),
-                         ("adaptive", ["stepper.dt=\"none\"", "stepper.cfl=0.3", "stepper.dt_max=5.0"]))
+        (sch, extra) in (("euler", String[]), ("rk3", ["time.scheme=\"rk3\""]),
+                         ("adaptive", ["time.dt=\"adaptive\"", "time.cfl=0.3", "time.dt_max=5.0"]))
         b = bc_budget(core, 12; extra = extra)
         err = (b.got - b.expected) / b.expected
         @info @sprintf("DCBL 16³, %s %s, t = %.1f s: Σ W δθ ΔV = %.12e, W_bot F t A = %.12e (relative %.1e)",
@@ -260,9 +260,9 @@ function bc_domain(core; scheme = :euler, cfl = nothing)
     sim = bc_state!(bc_core(core; ν = 0.2))
     d0 = Domain(sim; scheme = scheme, cfl = cfl, validate = false)
     comps = (CentredAdvection(), SGS(LagrangianDynamicSmagorinsky(BC_MESH)),
-             BCC.build_components((Coriolis => (; f_coriolis = 1e-3),
-                                   Sponge => (sponge_alpha_max = 0.01, sponge_z_start = 3000.0),
-                                   SurfaceThetaFlux => (theta_flux_bottom = 0.1, theta_flux_top = 0.0)), d0)...)
+             BCC.build_components((Coriolis => (; f = 1e-3),
+                                   Sponge => (alpha_max = 0.01, z_start = 3000.0),
+                                   SurfaceThetaFlux => (bottom = 0.1, top = 0.0)), d0)...)
     return Domain(d0; components = comps)
 end
 bc_div(s) = s isa BoussinesqSimulation ? max_divergence(s) : max_anelastic_divergence(s)
@@ -295,8 +295,8 @@ end
 
 @testset "the simulation run type: an anelastic run resumes bitwise from its checkpoint ($label)" for
         (label, extra) in (("euler", String[]),
-                           ("rk3 adaptive", ["stepper.scheme=\"rk3\"", "stepper.dt=\"none\"", "stepper.cfl=0.3",
-                                             "stepper.dt_max=5.0"]))
+                           ("rk3 adaptive", ["time.scheme=\"rk3\"", "time.dt=\"adaptive\"", "time.cfl=0.3",
+                                             "time.dt_max=5.0"]))
     # checkpoints of the anelastic core were refused by the config before ONE-j
     cfg = bc_cbl_cfg(:anelastic, 20; extra = vcat(extra, "checkpoint.every_steps=10"))
     full = bc_run(cfg)
@@ -334,9 +334,9 @@ end
     # (Coriolis keeps the horizontal kinetic energy to the scheme's
     # amplification; the sponge only damps; the surface flux closes Σ W θ)
     for (comp, check) in (
-            (Coriolis => (; f_coriolis = 1e-3), (a, b, s) -> abs(b.ke / a.ke - 1) < (sch === :rk3 ? 1e-9 : 2e-4)),
-            (Sponge => (sponge_alpha_max = 0.01, sponge_z_start = 2000.0), (a, b, s) -> b.ke < a.ke),
-            (SurfaceThetaFlux => (theta_flux_bottom = 0.1, theta_flux_top = -0.02),
+            (Coriolis => (; f = 1e-3), (a, b, s) -> abs(b.ke / a.ke - 1) < (sch === :rk3 ? 1e-9 : 2e-4)),
+            (Sponge => (alpha_max = 0.01, z_start = 2000.0), (a, b, s) -> b.ke < a.ke),
+            (SurfaceThetaFlux => (bottom = 0.1, top = -0.02),
              # Σ W δθ over the 64 columns: (W_bot F_bot − W_top F_top) t / Δz each
              (a, b, s) -> isapprox(sum(bc_weights(s)[1][BC_MESH.Hz+k] * sum(b.θ[:, :, k] .- a.θ[:, :, k]) for k in 1:16),
                                    (bc_weights(s)[2][BC_MESH.Hz+1] * 0.1 -

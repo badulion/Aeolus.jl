@@ -5,7 +5,8 @@
 # the schemas, the one source of truth, and are not committed
 # (docs/src/reference/ is gitignored).
 #
-#   docs/src/reference/options/<driver>.md   Aeolus.Config.option_reference, one per driver
+#   docs/src/reference/options/model.md     Aeolus.Config.option_reference of the model
+#   docs/src/reference/options/<case>.md    the same, one per legacy case
 #   docs/src/reference/input_static.md       InputDrivers.format_reference, static forms
 #   docs/src/reference/input_dynamic.md      InputDrivers.format_reference, dynamic form
 
@@ -13,8 +14,11 @@ using Aeolus
 import Aeolus.Config as AeolusConfig
 import Aeolus.InputDrivers as AeolusInput
 
-"Every driver the option reference documents: the built-in ones (in src) and every example driver of `DRIVER_FILES`."
-reference_drivers() = sort!(unique!(vcat("common", "simulation", "sbl", "urban", "urban_parent",
+"""
+Every schema the option reference documents: the model's (`"model"`) and
+every legacy case's, the built-in ones (in src) and those of `DRIVER_FILES`.
+"""
+reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "sbl", "urban", "urban_parent",
                                          Aeolus.RunDrivers.DRIVER_NAMES,
                                          collect(keys(AeolusConfig.DRIVER_FILES)))))
 
@@ -23,7 +27,8 @@ const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "confi
 """
     generate_reference(dir = joinpath(@__DIR__, "src", "reference")) -> Vector{String}
 
-Write the option reference of every driver to `dir/options/<driver>.md` and
+Write the option reference of the model and of every legacy case to
+`dir/options/<name>.md` and
 the input-format specifications to `dir/input_static.md` and
 `dir/input_dynamic.md`; return the written paths. Each example driver
 schema shows the header of a shipped driver file (`ncdump -h`).
@@ -34,8 +39,9 @@ function generate_reference(dir::AbstractString = joinpath(@__DIR__, "src", "ref
     for d in reference_drivers()
         p = joinpath(odir, d * ".md")
         open(p, "w") do io
-            println(io, "# Options: driver `", d, "`\n")
-            println(io, "Every key a config file of this driver may hold is a row here. The guide is ",
+            println(io, d == AeolusConfig.MODEL ? "# Options: the model\n" : "# Options: legacy case `$d`\n")
+            println(io, "Every key a config file ", d == AeolusConfig.MODEL ? "of the model" :
+                        "of this legacy case (`[run] legacy = \"$d\"`)", " may hold is a row here. The guide is ",
                     "[Run configuration](../../design/run_configuration.md).\n")
             print(io, AeolusConfig.option_reference(d; format = :markdown))
         end

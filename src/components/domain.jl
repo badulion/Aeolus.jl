@@ -53,7 +53,7 @@ type and the resolved options of its section, on `domain`
 ([`enabled`](@ref), [`build`](@ref)).
 """
 build_components(specs, domain::Domain) =
-    Tuple(build(C, opts, domain) for (C, opts) in specs if enabled(C, opts, domain))
+    Tuple(build(C, opts, domain) for (C, opts) in specs if enabled(C, opts))
 
 "The dynamical core of a domain: `:boussinesq` or `:anelastic`."
 core(d::Domain) = d.state isa BoussinesqSimulation ? :boussinesq : :anelastic

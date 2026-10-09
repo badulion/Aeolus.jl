@@ -14,8 +14,10 @@
 #       --config <Aeolus>/examples/configs/lindenberg_era5.toml --lat 52.2085 --lon 14.118
 #   julia --project -m Aeolus run examples/configs/lindenberg_era5.toml
 
+schema_version = 2
+dynamic_driver = "input/lindenberg_era5_dynamic.nc"
+
 [run]
-driver = "simulation"
 name = "lindenberg_era5"
 seed = 1
 
@@ -38,18 +40,17 @@ closure = "smagorinsky"
 c_s = 0.17
 
 [initial]
-dynamic = "input/lindenberg_era5_dynamic.nc"
 
-[stepper]
+[time]
 scheme = "rk3"
 dt = 2.0
-end_time = 600.0
+duration = 600.0
 
 [logging]
 diagnostics_cadence = 60.0
 
 [test]
 overrides = [
-    "stepper.end_time=\"none\"",
-    "stepper.nsteps=10",
+    "time.duration=\"none\"",
+    "time.nsteps=10",
 ]

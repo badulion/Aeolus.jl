@@ -8,8 +8,9 @@
 #   julia --project -m Aeolus run examples/kernels/configs/pollution_plume.toml
 #   julia --project=. examples/kernels/plot_pollution_plume.jl runs/<date>_pollution_plume_<id>
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "pollution_plume"
 
 [grid]
@@ -18,6 +19,10 @@ extent = [200.0, 150.0, 100.0]
 
 [dynamics]
 nu = 0.001
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
 
 [sgs]
 closure = "smagorinsky"
@@ -32,17 +37,17 @@ decay_time = 60.0
 # the cell (6, 24, 4): centre (17.2, 73.4, 43.75) m
 sources = { stack = { x = [16.0, 18.0], y = [72.0, 75.0], z = [40.0, 45.0], rate = 1.0 } }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.1875                     # 0.3 Δx / 5 m/s
-end_time = 30.0
+duration = 30.0
 
 [output]
-fields = ["tracer"]
+variables = ["tracer"]
 cadence = 30.0
 
 [logging]
 diagnostics_cadence = 3.0
 
 [test]
-overrides = ["stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["time.duration=\"none\"", "time.nsteps=10"]

@@ -11,8 +11,10 @@
 # results.toml in the run folder's output/: t, mass, max (every nsteps ÷ 8
 # steps), peak_x, peak_y.
 
+schema_version = 2
+
 [run]
-driver = "advection"
+legacy = "advection"
 name = "scalar_advection_2d"
 
 [grid]

@@ -7,10 +7,10 @@
 # shed below the 8 m minimum height is dropped), a park and a pond.
 # Everything else is the urban driver's defaults: every default coupling.
 
-schema_version = 1
+schema_version = 2
 
 [run]
-driver = "urban"
+legacy = "urban"
 name = "small_city"
 
 [output]
