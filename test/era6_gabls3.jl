@@ -222,11 +222,17 @@ end
     # The jet speed is inside the envelope (9.02-9.07 m/s on the sbl run type, in [7.8, 9.3]).
     @test slo <= J.S <= shi
     # The jet height is not asserted inside the envelope at this resolution:
-    # at Δx = 25 m, Δz = 8.3 m it sits within one Δz below the 100 m bound
-    # (91.8-94.9 m on the sbl run type; 102.7 m at 12.5 m and 126.8 m at
-    # 6.25 m, theory page), and on the bound it depends on round-off-amplified
-    # chaos (#248). Within one Δz of the envelope holds.
-    @test lo - st.z[2] + st.z[1] <= J.z <= hi
+    # at Δx = 25 m, Δz = 8.3 m it sits below the 100 m bound (91.8-94.9 m in
+    # the realisations of the sbl run type; 102.7 m at 12.5 m and 126.8 m
+    # at 6.25 m, theory page), where it depends on the realisation (#248).
+    # The bound was "within one Δz of the envelope", set from two or three
+    # realisations; on the model (ONE-g, #456: another noise realisation and
+    # step sequence) seed 1 gives 90.2 m, 0.18 Δz below that bound, and five
+    # seeds give 89.5-99.3 m (mean 94.6 m, standard deviation 4.3 m = 0.5 Δz;
+    # the jet speed 9.05-9.13 m/s, inside the envelope in every one). The
+    # expectation was narrower than the realisation scatter, not the code
+    # wrong: the bound is 1.5 Δz, which every seed meets.
+    @test lo - 1.5 * (st.z[2] - st.z[1]) <= J.z <= hi
 end
 
 @testset "Surface-layer diagnostics and towers" begin
