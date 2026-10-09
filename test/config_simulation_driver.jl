@@ -55,7 +55,7 @@ end
         @test r.config_equal
         r1, r2 = r.runs
         @test r1.folder.run_id != r2.folder.run_id                   # a new run, a new folder
-        @test r1.obj.sim.t > 0 && r1.obj.stepper.step == 20
+        @test simulation(r1.obj).t > 0 && r1.obj.stepper.step == 20
         # the rows of 20 steps are there, with values (not only the header)
         lines = readlines(diagnostics_path(r1.folder))
         @test length(lines) == 21
@@ -98,7 +98,7 @@ end
     for (k, f) in pairs((u = sim.u, v = sim.v, w = sim.w, p = sim.p, θ = sim.θ))
         @test bitwise_equal(s[k], f.data)
     end
-    @test res.obj.sim.t === sim.t
+    @test simulation(res.obj).t === sim.t
 end
 
 @testset "simulation driver: TGV kinetic energy decays at 2νk² (t ∈ [0, 0.1])" begin
@@ -107,9 +107,9 @@ end
     # t = 0.1 KE(t) = KE₀ exp(−2ν|k|² t) up to the discretisation (the
     # discrete Laplacian's eigenvalue is 3 (1 − dx²/12 + …) at 32³).
     cfg = sim_cfg("taylor_green_vortex", 10, ["stepper.dt=0.01"])
-    ke0 = kinetic_energy(Config.build(SIMD, cfg).sim)
+    ke0 = kinetic_energy(simulation(Config.build(SIMD, cfg)))
     res = sim_run(cfg)
-    sim = res.obj.sim
+    sim = simulation(res.obj)
     @test sim.t ≈ 0.1
     rate = -log(kinetic_energy(sim) / ke0) / sim.t
     expected = 2 * 0.01 * 3
@@ -141,7 +141,7 @@ end
         @test res.obj.stepper.step == 20
         a = state_fields(full.obj); b = state_fields(res.obj)
         @test all(k -> bitwise_equal(a[k], b[k]), keys(a))
-        @test res.obj.sim.t === full.obj.sim.t
+        @test simulation(res.obj).t === simulation(full.obj).t
         rec2 = read_run_toml(folder)
         @test [s["status"] for s in rec2["session"]] == ["interrupted", "completed"]
     end
@@ -151,9 +151,9 @@ end
     # Free-slip walls, no flux through the top, the sponge damps velocity
     # only: the domain-mean θ rises by Q t / Lz exactly (flux form).
     cfg = sim_cfg("dry_convective_bl", 12, ["grid.size=[16,16,16]"])
-    m0 = sum(interior_view(Config.build(SIMD, cfg).sim.θ)) / 16^3
+    m0 = sum(interior_view(simulation(Config.build(SIMD, cfg)).θ)) / 16^3
     res = sim_run(cfg)
-    sim = res.obj.sim
+    sim = simulation(res.obj)
     m1 = sum(interior_view(sim.θ)) / 16^3
     expected = 0.24 * sim.t / 1600.0
     @test sim.t == 60.0
@@ -170,7 +170,7 @@ end
     @test profile_value(ml, 799.0) == 300.0 && profile_value(ml, 1000.0) ≈ 300.6
     # the DCBL θ: the mixed layer, plus noise of amplitude 0.1 K below 100 m only
     cfg = sim_cfg("dry_convective_bl", 1, ["grid.size=[16,16,16]"])
-    sim = Config.build(SIMD, cfg).sim
+    sim = simulation(Config.build(SIMD, cfg))
     θ = interior_view(sim.θ); zc = [sim.mesh.z0 + (k - 0.5) * sim.mesh.dz for k in 1:16]
     below = findall(<(100.0), zc); above = findall(>=(100.0), zc)
     δ = θ[:, :, below] .- 300.0
@@ -178,14 +178,14 @@ end
     @test abs(sum(δ) / length(δ)) < 0.005
     @test all(θ[:, :, k] == fill(profile_value(cfg.initial.theta, zc[k]), 16, 16) for k in above)
     # the noise comes from [run] seed: the same seed, the same field; another, another
-    @test interior_view(Config.build(SIMD, cfg).sim.θ) == θ
+    @test interior_view(simulation(Config.build(SIMD, cfg)).θ) == θ
     cfg2 = load_run_config(cfgs("dry_convective_bl"); overrides = ["grid.size=[16,16,16]", "run.seed=2"])
-    @test interior_view(Config.build(SIMD, cfg2).sim.θ) != θ
+    @test interior_view(simulation(Config.build(SIMD, cfg2)).θ) != θ
     # a table profile of u, and θ = theta0 when no θ profile is given
     cfg3 = load_run_config(cfgs("buoyant_convection");
                            overrides = ["initial.theta={}", "initial.perturbation_amplitude=0.0",
                                         "initial.u={kind=\"table\", z=[0.0, 1.0], values=[0.0, 2.0]}"])
-    s3 = Config.build(SIMD, cfg3).sim
+    s3 = simulation(Config.build(SIMD, cfg3))
     @test all(==(300.0), interior_view(s3.θ))
     @test interior_view(s3.u)[3, 5, 8] ≈ 2.0 * (7.5 / 32)              # 32³ on the unit box
 end
@@ -223,7 +223,7 @@ end
     cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "dynamics.core=\"anelastic\"",
                                            "initial.theta={}"])
     res = sim_run(cfg)
-    sim = res.obj.sim
+    sim = simulation(res.obj)
     @test sim isa AnelasticSimulation
     @test Aeolus.Anelastic.max_anelastic_divergence(sim) < 1e-12
     @test maximum(interior_view(sim.θ)) > 300.0          # heated from below
@@ -232,16 +232,19 @@ end
     cfg = sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "grid.stretching=\"tanh\"",
                                            "grid.stretching_parameter=1.5"])
     res = sim_run(cfg)
-    m = res.obj.sim.mesh
+    m = simulation(res.obj).mesh
     @test m isa StretchedGrid
     @test m.dzc[m.Hz+1] < m.dzc[m.Hz+8] < m.dzc[m.Hz+16]
-    @test max_divergence(res.obj.sim) < 1e-10
-    # closures: the plain Smagorinsky is the built-in one; the others are objects
+    @test max_divergence(simulation(res.obj)) < 1e-10
+    # closures: every one is the :sgs component's closure object (ONE-a: the
+    # plain Smagorinsky too, no longer the core's built-in C_s); none, no component
     b(over) = Config.build(SIMD, load_run_config(cfgs("dry_convective_bl"); overrides = over))
-    r = b(String[]); @test r.closure === nothing && r.sim.C_s == 0.17
-    r = b(["sgs.closure=\"sigma\"", "sgs.c_s=\"none\""]); @test r.closure isa SigmaModel && r.closure.C_σ == 1.35 && r.sim.C_s == 0
-    r = b(["sgs.closure=\"vreman\"", "sgs.c_s=0.07"]); @test r.closure isa VremanClosure && r.closure.C_s == 0.07
-    r = b(["sgs.stability=\"brown_et_al_1994\""]); @test r.closure isa StabilityCorrected
+    clo(r) = Aeolus.Components.sgs_closure(only(r.model.domains))
+    r = b(String[]); @test clo(r) isa StaticSmagorinsky && clo(r).C_s == 0.17 && simulation(r).C_s == 0
+    r = b(["sgs.closure=\"none\""]); @test clo(r) === nothing
+    r = b(["sgs.closure=\"sigma\"", "sgs.c_s=\"none\""]); @test clo(r) isa SigmaModel && clo(r).C_σ == 1.35
+    r = b(["sgs.closure=\"vreman\"", "sgs.c_s=0.07"]); @test clo(r) isa VremanClosure && clo(r).C_s == 0.07
+    r = b(["sgs.stability=\"brown_et_al_1994\""]); @test clo(r) isa StabilityCorrected
     # under strong stable stratification (Ri ≈ 13 from N² = g/θ₀ 0.01 K/m and a
     # 0.005 s⁻¹ shear) Brown et al. (1994) switch the vertical mixing off
     # beyond Ri_c = 1/4, while the horizontal coefficient stays on
@@ -249,16 +252,16 @@ end
               "initial.u={kind=\"table\", z=[0.0, 1600.0], values=[0.0, 8.0]}", "boundaries.theta_flux_bottom=0.0",
               "sgs.stability=\"brown_et_al_1994\""]
     rs = sim_run(sim_cfg("dry_convective_bl", 3, stable)).obj
-    Ri = interior_view(rs.closure.Ri); νv = interior_view(rs.closure.νv)
+    Ri = interior_view(clo(rs).Ri); νv = interior_view(clo(rs).νv)
     @test count(>(0.25), Ri) > length(Ri) ÷ 2
     @test all(iszero, νv[Ri .> 0.25])
-    @test max_νt(rs.sim) > 0
+    @test max_νt(simulation(rs)) > 0
     # schemes: rk3 is another trajectory than euler, both divergence-free
     out = Dict{String,Any}()
     for sch in ("euler", "rk3")
         res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "stepper.scheme=\"$sch\""]))
-        @test max_divergence(res.obj.sim) < 1e-10
-        out[sch] = copy(interior_view(res.obj.sim.w))
+        @test max_divergence(simulation(res.obj)) < 1e-10
+        out[sch] = copy(interior_view(simulation(res.obj).w))
     end
     @test out["euler"] != out["rk3"]
     @test isapprox(out["rk3"], out["euler"]; rtol = 0.2)               # the same flow, to O(dt)
@@ -272,8 +275,8 @@ end
     @test readdir(dir) == ["fields_00000000$(n).nc" for n in (0, 2, 4, 6)]    # dt = 5 s
     NCDataset(joinpath(dir, "fields_000000006.nc")) do nc
         @test only(nc.attrib["t"]) == 30.0
-        @test nc["theta"][:, :, :] == Float32.(interior_view(res.obj.sim.θ))
-        @test nc["u"][:, :, :] == Float32.(interior_view(res.obj.sim.u))
+        @test nc["theta"][:, :, :] == Float32.(interior_view(simulation(res.obj).θ))
+        @test nc["u"][:, :, :] == Float32.(interior_view(simulation(res.obj).u))
     end
     # no fields: no output folder
     res = sim_run(sim_cfg("dry_convective_bl", 2, ["grid.size=[16,16,16]"]))

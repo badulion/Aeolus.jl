@@ -16,6 +16,9 @@ using TOML
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
 const RD_EX = joinpath(pkgdir(Aeolus), "examples")
+# the core and the couplings of a run: a `simulation` run is a Model (ONE-a, #450)
+rd_sim(o) = o isa Aeolus.SimulationDriver.SimulationRun ? Aeolus.SimulationDriver.simulation(o) : o.sim
+rd_couplings(o) = Aeolus.SimulationDriver.sim_couplings(o)
 
 "Run the config `path` with `overrides` (the ESTIMATE planner, a temporary root); return the RunResult."
 function rd_run(path, overrides = String[])
@@ -124,9 +127,9 @@ end
     # eigenvalue and the energy the forward-Euler step of the centred
     # advection adds both slow it down a little), and the projection keeps
     # ∇·u at round-off
-    ratio = kinetic_energy(r.obj.sim) / ke0
+    ratio = kinetic_energy(rd_sim(r.obj)) / ke0
     @test isapprox(ratio, exp(-6ν * T_end); rtol = 0.01)
-    @test max_divergence(r.obj.sim) < 1e-12
+    @test max_divergence(rd_sim(r.obj)) < 1e-12
 end
 
 @testset "kernels: decaying_hit.toml is the old script, bit for bit; KE decays" begin
@@ -176,9 +179,9 @@ end
                 "stepper.end_time=$T_end"])
     @test rd_same_state(r, sim)
     # the physics: the free-slip walls are impermeable, the mean flow is kept
-    w = r.obj.sim.w.data; H = mesh.Hz
-    @test all(iszero, w[:, :, H+1]) && max_divergence(r.obj.sim) < 1e-12
-    @test 0.99 < sum(interior_view(r.obj.sim.u)) / (Nx * Ny * Nz) < 1.01
+    w = rd_sim(r.obj).w.data; H = mesh.Hz
+    @test all(iszero, w[:, :, H+1]) && max_divergence(rd_sim(r.obj)) < 1e-12
+    @test 0.99 < sum(interior_view(rd_sim(r.obj).u)) / (Nx * Ny * Nz) < 1.01
 end
 
 @testset "kernels: pollution_plume.toml is the old script, bit for bit; tracer budget" begin
@@ -214,16 +217,16 @@ end
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     @test bitwise_equal(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
-    @test only(r.obj.couplings.tracer.sources)[1:3] == (Hx + i_src, Hy + j_src, Hz + k_src)
+    @test only(rd_couplings(r.obj).tracer.sources)[1:3] == (Hx + i_src, Hy + j_src, Hz + k_src)
     # the physics: centred advection in a periodic box conserves the tracer,
     # so the cell sum obeys dM/dt = S − M/τ exactly, step by step (forward Euler)
     M = 0.0
     for n in 1:nsteps
         M += dt * (S_val - M / 60.0)
     end
-    @test isapprox(sum(interior_view(r.obj.couplings.tracer.c)), M; rtol = 1e-12)
+    @test isapprox(sum(interior_view(rd_couplings(r.obj).tracer.c)), M; rtol = 1e-12)
     # and the plume is carried downwind: the tracer is east of the source
-    ci = interior_view(r.obj.couplings.tracer.c)
+    ci = interior_view(rd_couplings(r.obj).tracer.c)
     @test sum(ci[i_src+1:end, :, :]) > 2sum(ci[1:i_src-1, :, :])
 end
 
@@ -331,7 +334,7 @@ end
         sum(interior_view(s.θ))
     end
     expect = Σθ0 + sum(Qs) * 5.0 / m.dz * m.Nx * m.Ny - 2.315e-5 * 5.0 * nsteps * m.Nx * m.Ny * m.Nz
-    @test isapprox(sum(interior_view(r.obj.sim.θ)), expect; rtol = 1e-13)
+    @test isapprox(sum(interior_view(rd_sim(r.obj).θ)), expect; rtol = 1e-13)
     # the ground is cooler than the air (T_s < 300 K), so the flux is
     # downward; in the first 150 s the ground still cools, because its
     # longwave loss σT⁴ ≈ 441 W m⁻² exceeds the 340 W m⁻² it receives plus
@@ -420,7 +423,7 @@ end
     @test rd_same_state(r, sim)
     # the physics: the patch puts 15 times the flux of its surroundings into
     # the air, so the lowest level is warmer over it than elsewhere
-    θ1 = interior_view(r.obj.sim.θ)[:, :, 1]
+    θ1 = interior_view(rd_sim(r.obj).θ)[:, :, 1]
     hot = [abs(x - 1000) < 250 && abs(y - 1000) < 250 for x in xs, y in ys]
     @test sum(θ1[hot]) / count(hot) > sum(θ1[.!hot]) / count(.!hot) + 0.1
 end
@@ -467,17 +470,17 @@ end
     end
     r = rd_run(joinpath(RD_CPL, "flow_past_cube.toml"), ["stepper.end_time=\"none\"", "stepper.nsteps=$nsteps"])
     # the static driver's cube is the script's cube, cell for cell
-    @test r.obj.couplings.solid.mask == sm.mask
-    @test sort(r.obj.couplings.tracer.sources) ==
+    @test rd_couplings(r.obj).solid.mask == sm.mask
+    @test sort(rd_couplings(r.obj).tracer.sources) ==
           sort([(Hx + i, Hy + j, Hz + k_src, 1.0) for i in i_src_start:i_src_end for j in j_src])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     @test bitwise_equal(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
     # the physics: the penalty stops the flow inside the cube (from 3 m/s,
     # e^(-6Δt/3Δt) = e^(-2) after six steps), and the tracer is released
-    ui = interior_view(r.obj.sim.u); solid = view(sm.mask, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
+    ui = interior_view(rd_sim(r.obj).u); solid = view(sm.mask, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     @test maximum(abs, ui[solid]) < 0.5U_inf
-    @test sum(interior_view(r.obj.couplings.tracer.c)) > 0
+    @test sum(interior_view(rd_couplings(r.obj).tracer.c)) > 0
 end
 
 @testset "coupled: the cube's committed static driver" begin
@@ -649,7 +652,7 @@ end
         # the faces between two solid cells), and the controller keeps the bulk
         # velocity at 1 within 2 %
         m = sim.mesh
-        ui = r.obj.sim.u.data
+        ui = rd_sim(r.obj).u.data
         solid_faces = [ui[i, j, k] for k in m.Hz+1:m.Hz+m.Nz, j in m.Hy+1:m.Hy+m.Ny, i in m.Hx+2:m.Hx+m.Nx
                        if sm.mask[i, j, k] && sm.mask[i-1, j, k]]
         @test sum(abs, solid_faces) / length(solid_faces) < 0.02 && maximum(abs, solid_faces) < 0.1

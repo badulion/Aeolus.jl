@@ -181,7 +181,7 @@ end
                      overrides = ["grid.size=[16,16,16]"])
     @test r.fields_equal && isempty(r.fields_differing)
     @test r.statuses == ["interrupted", "completed"]
-    @test r.runs[2].obj.stepper.step == 20 && r.runs[2].obj.sim.t === r.runs[1].obj.sim.t
+    @test r.runs[2].obj.stepper.step == 20 && Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
     # sbl driver: cases99 (GABLS2 with towers and series) at 16 × 16 × 32, 20 steps; the
     # towers and the series are restored from the checkpoint too
     r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");

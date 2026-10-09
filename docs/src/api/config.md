@@ -327,12 +327,18 @@ end_time = 2.0
 This config is, bit for bit, the simulation the script built before
 (`test/config_simulation_driver.jl`). Notes on the sections:
 
+  * The run is a [`Model`](@ref Aeolus.Components.Model) of one domain
+    stepped through the stage pipeline (ONE-a, #450; see
+    [Components and the stage pipeline](@ref)): the core carries the
+    dynamics, and the `:advection` and `:sgs` slots, the Coriolis term
+    (`[dynamics] f_coriolis`), the sponge (`sponge_*`) and the prescribed θ
+    fluxes (`[boundaries] theta_flux_*`) are its components.
   * `[stepper]`: `dt` or `cfl` (adaptive, `step_adaptive!`, with a finite
     `dt_max`), and `end_time` or `nsteps`. `euler` is `step!`, `rk3`
     `step_rk3!`.
-  * `[sgs] closure = "smagorinsky"` without a stability correction is the
-    simulation's built-in closure (`C_s ≠ 0`); every other choice is
-    passed to the steps as a closure object.
+  * `[sgs]` selects the closure object of the `:sgs` component
+    (`Components.build_closure`); `closure = "none"` enables no SGS
+    component.
   * `[dynamics] nu` is also θ's (and qv's) molecular diffusivity: the
     cores have one coefficient (Prandtl number 1), so there is no separate
     `kappa`.
