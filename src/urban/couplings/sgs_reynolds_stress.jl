@@ -159,9 +159,9 @@ end
 
 # the six stresses are tracers (written already); e and II of τ
 output_fields(c::SGSReynoldsStress, case) =
-    [OutputField("e", "m2 s-2", "subgrid-scale turbulent kinetic energy, tr(tau)/2",
+    [OutputVariable("e", "m2 s-2", "subgrid-scale turbulent kinetic energy, tr(tau)/2",
                  :xyz, cs -> last(rsm_model_stress(c, cs))),
-     OutputField("II_sgs", "1", "second invariant of the anisotropy of the SGS Reynolds stress (0 in solids)",
+     OutputVariable("II_sgs", "1", "second invariant of the anisotropy of the SGS Reynolds stress (0 in solids)",
                  :xyz, cs -> replace(lumley_invariants(first(rsm_model_stress(c, cs)))[1], NaN => 0.0))]
 
 function smoke_check(c::SGSReynoldsStress, case)

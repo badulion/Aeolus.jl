@@ -685,19 +685,19 @@ function _feedback!(c::NestingCoupling, case, w)
     sim = p.sim
     moist = p.pc.moisture
     hour = hour_of_day(p.pc.child, sim.t)
-    heat_begin_step!(p.heat, sim.θ, hour)
-    moist && heat_begin_step!(p.water, sim.qv, hour)
-    heat_open!(p.heat, :nest_feedback, :feedback_heat, sim.θ)
-    moist && heat_open!(p.water, :nest_feedback, :feedback_water, sim.qv)
+    budget_begin_step!(p.heat, sim.θ, hour)
+    moist && budget_begin_step!(p.water, sim.qv, hour)
+    budget_open!(p.heat, :nest_feedback, :feedback_heat, sim.θ)
+    moist && budget_open!(p.water, :nest_feedback, :feedback_water, sim.qv)
     H0 = sum(p.heat.H_now)
     W0 = moist ? sum(p.water.H_now) : 0.0
     tw = time_ns()
     end_parent_step!(c.run, w)
     c.feedback[:wall] = get(c.feedback, :wall, 0.0) + (time_ns() - tw) * 1e-9
-    heat_close!(p.heat, sim.θ)
-    moist && heat_close!(p.water, sim.qv)
-    heat_end_step!(p.heat, sim.θ, 0.0)
-    moist && heat_end_step!(p.water, sim.qv, 0.0)
+    budget_close!(p.heat, sim.θ)
+    moist && budget_close!(p.water, sim.qv)
+    budget_end_step!(p.heat, sim.θ, 0.0)
+    moist && budget_end_step!(p.water, sim.qv, 0.0)
     c.feedback[:heat] = get(c.feedback, :heat, 0.0) + (sum(p.heat.H_now) - H0)
     c.feedback[:water] = get(c.feedback, :water, 0.0) + (moist ? sum(p.water.H_now) - W0 : 0.0)
     c.feedback[:n] = get(c.feedback, :n, 0.0) + 1
@@ -756,9 +756,9 @@ end
 
 # --- smoke checks ------------------------------------------------------------
 
-"Relative closure of an `AirHeatLedger` (|closure| / largest term)."
+"Relative closure of an `StageBudget` (|closure| / largest term)."
 function _ledger_closure(hl)
-    b = heat_budget(hl)
+    b = stage_budget(hl)
     scale = maximum(abs, values(b.terms); init = 0.0)
     return scale == 0 ? 0.0 : abs(b.closure) / scale
 end
@@ -825,8 +825,8 @@ end
 # correction, and the re-projected parent is divergence-free.
 function _two_way_checks(c::NestingCoupling, case)
     p, run = c.parent, c.run
-    hb = heat_budget(p.heat)
-    wb = p.pc.moisture ? heat_budget(p.water) : nothing
+    hb = stage_budget(p.heat)
+    wb = p.pc.moisture ? stage_budget(p.water) : nothing
     return ["two-way: the run is two-way, with the transport-booked registers of θ and qv" =>
                 run.feedback === :two_way && (!c.opts.reflux || (run.regs !== nothing &&
                     run.regs.names == (p.pc.moisture ? [:θ, :qv] : [:θ]))),

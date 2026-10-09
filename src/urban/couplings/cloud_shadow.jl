@@ -134,8 +134,8 @@ function _direct_share!(fdir, case)
     return fdir
 end
 
-output_fields(c::CloudShadow, case) = OutputField[
-    OutputField("cloud_trans", "1", "direct-beam transmittance of the resolved cloud (slant path)",
+output_fields(c::CloudShadow, case) = OutputVariable[
+    OutputVariable("cloud_trans", "1", "direct-beam transmittance of the resolved cloud (slant path)",
                 :xy, cs -> c.trans)]
 
 """

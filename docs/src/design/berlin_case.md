@@ -614,7 +614,7 @@ function build(::Type{<:MicroP3}, case, o)
                    long_name = "ice mass")               # transport picks it up
     return MicroP3(...)
 end
-init!(c::MicroP3, case) = water_tracer!(case.ledger, :qi) # count it as water
+init!(c::MicroP3, case) = water_tracer!(case.budgets, :qi) # count it as water
 
 function run_stage!(c::MicroP3, case, ::Val{:microphysics}, dt)
     ...                                                  # calls into Aeolus.P3Microphysics

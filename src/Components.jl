@@ -17,6 +17,12 @@ substage of RK3), then the stages after it.
 The core's own pieces are the first components: [`CentredAdvection`](@ref)
 (slot `:advection`), [`SGS`](@ref) (slot `:sgs`), [`Coriolis`](@ref),
 [`SurfaceThetaFlux`](@ref) and [`Sponge`](@ref).
+
+A domain's budgets ([`with_budgets`](@ref), ONE-c #452) attribute every
+change of the measured quantities to the stage entries automatically
+(`Aeolus.BudgetSystem`); its output catalogue ([`domain_catalogue`](@ref))
+is the core's variables and every component's [`outputs`](@ref), which
+`Aeolus.Output` writes.
 """
 module Components
 
@@ -30,15 +36,26 @@ using ..TimeIntegration: TimeIntegration, CFLConstraints, adaptive_dt
 import ..TimeIntegration: step_adaptive!
 using ..InputDrivers: advance_feed!
 using ..Config: Config, Section, ConfigError, ConfigProblem
+using ..Grids: interior
+using ..Fields: interior_view
+using ..Backends: plane_partials!
+using ..MoistThermodynamics: DEFAULT_CONSTANTS, R_d
+using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weight, budget_start!,
+                      budget_begin_step!, budget_end_step!, budget_open!, budget_close!, budget_discard!,
+                      stage_budget
+using ..Output: OutputVariable, check_catalogue
 import ..IO: checkpoint_state, restore_checkpoint_state!
 import ..TimeSteppers: step!
 
 export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
-       CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux
+       CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux,
+       DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue
 
 include("components/interface.jl")
 include("components/pipeline.jl")
 include("components/domain.jl")
+include("components/budgets.jl")
+include("components/outputs.jl")
 include("components/advection.jl")
 include("components/sgs.jl")
 include("components/coriolis.jl")

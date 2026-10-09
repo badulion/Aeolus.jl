@@ -115,12 +115,12 @@ function soil_map(f, c::GroundSoil, case)
 end
 
 function output_fields(c::GroundSoil, case)
-    return OutputField[
-        OutputField("T_soil1", "K", "soil temperature, top layer (node 7 mm; NaN where not soil)",
+    return OutputVariable[
+        OutputVariable("T_soil1", "K", "soil temperature, top layer (node 7 mm; NaN where not soil)",
                     :xy, cs -> soil_map((s, I) -> s.water.T_soil[1], c, cs)),
-        OutputField("G_soil", "W m-2", "ground heat flux into the soil, last surface step (NaN where not soil)",
+        OutputVariable("G_soil", "W m-2", "ground heat flux into the soil, last surface step (NaN where not soil)",
                     :xy, cs -> soil_map((s, I) -> cs.bus.G[I], c, cs)),
-        OutputField("theta_soil1", "m3 m-3", "liquid soil water, top layer (NaN where not soil)",
+        OutputVariable("theta_soil1", "m3 m-3", "liquid soil water, top layer (NaN where not soil)",
                     :xy, cs -> soil_map((s, I) -> s.water.θ_liq[1], c, cs))]
 end
 

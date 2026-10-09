@@ -139,6 +139,8 @@ makedocs(
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
             "Components"           => "api/components.md",
+            "Budgets"              => "api/budgets.md",
+            "Output"               => "api/output.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
             "Example run types"    => "api/run_drivers.md",

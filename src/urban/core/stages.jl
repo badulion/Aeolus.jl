@@ -73,29 +73,29 @@ function build_schedule!(case)
     return case
 end
 
-# Every entry is an air-heat attribution context (core/air_heat_ledger.jl):
+# Every entry is an air-heat attribution context (src/budgets/stage_budget.jl):
 # the ledger measures the heat of the air around it and books the change
-# under (stage, coupling). The measuring is timed as (:ledger, :air_heat),
+# under (stage, coupling). The measuring is timed as (:budgets, :air_heat),
 # not as the coupling's.
 function timed_run!(case, e::ScheduleEntry, S::Symbol, dt)
     name = coupling_name(e.coupling)
-    hl = case.ledger.heat
+    hl = energy(case.budgets)
     th = hl.active ? time_ns() : UInt64(0)
-    hl.active && heat_open!(hl, S, name, case.sim.θ)
+    hl.active && budget_open!(hl, S, name, case.sim.θ)
     t0 = time_ns()
     run_stage!(e.coupling, case, Val(S), dt)
     t1 = time_ns()
     key = (S, name)
     case.timing[key] = get(case.timing, key, 0.0) + (t1 - t0) * 1e-9
     if hl.active
-        heat_close!(hl, case.sim.θ)
+        budget_close!(hl, case.sim.θ)
         _time_air_heat!(case, (t0 - th) + (time_ns() - t1))
     end
     return nothing
 end
 
 _time_air_heat!(case, ns) =
-    (case.timing[(:ledger, :air_heat)] = get(case.timing, (:ledger, :air_heat), 0.0) + ns * 1e-9)
+    (case.timing[(:budgets, :air_heat)] = get(case.timing, (:budgets, :air_heat), 0.0) + ns * 1e-9)
 
 function run_entries!(case, S::Symbol, dt, n, t_old, t_new)
     for e in case.schedule[S]
@@ -192,7 +192,7 @@ function _step_case!(case, dt::Real)
     n = clk.n
     t_old = sim.t
     t_new = t_old + dt
-    ledger_begin_step!(case)
+    budgets_begin_step!(case)
     # :clock (core)
     clk.hour = hour_of_day(case.cfg, sim.t)
     run_entries!(case, :clock, dt, n, t_old, t_new)
@@ -201,15 +201,15 @@ function _step_case!(case, dt::Real)
     end
     # the dynamics: one air-heat context, split into the terms booked
     # inside it (add_heat!), (:dynamics, :transport) and (:dynamics, :redistribution)
-    hl = case.ledger.heat
+    hl = energy(case.budgets)
     th = time_ns()
-    heat_open!(hl, :dynamics, :step!, sim.θ; split = true)
+    budget_open!(hl, :dynamics, :step!, sim.θ; split = true)
     t0 = time_ns()
     ts = timestepper(case)
     ts === nothing ? dynamics_step!(case, dt) : advance_dynamics!(ts, case, dt)
     t1 = time_ns()
     case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (t1 - t0) * 1e-9
-    heat_close!(hl, sim.θ)
+    budget_close!(hl, sim.θ)
     _time_air_heat!(case, (t0 - th) + (time_ns() - t1))
     run_entries!(case, :surface_update, dt, n, t_old, t_new)
     run_entries!(case, :column_tendency, dt, n, t_old, t_new)
@@ -222,7 +222,7 @@ function _step_case!(case, dt::Real)
         clk.blowup = true
         return false
     end
-    ledger_end_step!(case, dt)
+    budgets_end_step!(case, dt)
     # :output (core record + log line, then coupling entries)
     fires(resolve(Cadence(:output), case.cfg), n, t_old, t_new) && write_output!(case)
     run_entries!(case, :output, dt, n, t_old, t_new)

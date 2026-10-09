@@ -1,5 +1,5 @@
 # Kernel demo 05, the plot: the tracer at the source height at the end of a
-# run of configs/pollution_plume.toml. Reads the last output/fields_*.nc
+# run of configs/pollution_plume.toml. Reads the last record of output/output.nc
 # and run.toml only.
 #
 #   julia --project -m Aeolus run examples/kernels/configs/pollution_plume.toml
@@ -12,11 +12,11 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-cfg = recorded_config(folder)
-F, t = read_fields(last_fields_file(folder))
+dom = recorded_domain(folder)
+F, t = read_last_record(output_file(folder))
 c = F["tracer"]
-nz = size(c, 3); Lz = cfg["grid"]["extent"][3]
-zs = only(values(cfg["tracer"]["sources"]))["z"]
+nz = size(c, 3); Lz = dom["grid"]["extent"][3]
+zs = only(values(dom["tracer"]["sources"]))["z"]
 k = clamp(round(Int, (zs[1] + zs[2]) / 2 / (Lz / nz) + 0.5), 1, nz)      # the source level
 out = save_heatmap(plot_path(folder, "plume.ppm"), Array(c[:, :, k]'); upscale = 6)
 @printf("t = %.1f s: tracer max %.2e, at the source level %d: %.2e\n%s\n", t, maximum(c), k,

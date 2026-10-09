@@ -311,9 +311,9 @@ end
     @test rec["config"]["run"]["legacy"] == "urban" && rec["replayable"] == true
     @test length(readlines(diagnostics_path(r.runs[1].folder))) == case.clock.n + 1   # header + a row per step
     # the ledgers close to the smoke test's tolerances
-    rows = BCC.surface_budget(case.ledger)
-    w = BCC.water_budget(case.ledger)
-    hb = BCC.heat_budget(case.ledger)
+    rows = BCC.surface_budget(case.budgets)
+    w = BCC.water_budget(case.budgets)
+    hb = BCC.heat_budget(case.budgets)
     @test maximum(abs(x.closure) for x in rows) < 1e-6        # W/m²
     @test abs(w.residual) < 1e-12                              # kg/m²
     @test abs(hb.closure / hb.elapsed) <= 1e-10                # W/m²
@@ -334,19 +334,19 @@ end
     dom = rows[end]
     @test dom.name == "domain"
     for t in (:Rn, :H, :LE, :G, :dS, :closure)
-        @test num(last_row, "ledger.surface.domain.$t") == getfield(dom, t)
+        @test num(last_row, "budgets.surface.domain.$t") == getfield(dom, t)
     end
     for x in rows[1:end-1]     # every class present has its columns
-        @test num(last_row, "ledger.surface.$(x.name).closure") == x.closure
+        @test num(last_row, "budgets.surface.$(x.name).closure") == x.closure
     end
-    @test num(last_row, "ledger.water.residual") == w.residual
-    @test num(last_row, "ledger.water.storage") == w.storage
-    @test num(last_row, "ledger.heat.closure") == hb.closure / hb.elapsed
-    @test num(last_row, "ledger.heat.storage") == hb.storage / hb.elapsed
+    @test num(last_row, "budgets.water.residual") == w.residual
+    @test num(last_row, "budgets.water.storage") == w.storage
+    @test num(last_row, "budgets.heat.closure") == hb.closure / hb.elapsed
+    @test num(last_row, "budgets.heat.storage") == hb.storage / hb.elapsed
     # the stage timing: one wall.* column per timed entry, the final value
     # the case's own (and dropped, with the wall column, by the round trip)
     @test num(last_row, "wall.dynamics.step") == case.timing[(:dynamics, :step!)]
-    @test num(last_row, "wall.ledger.air_heat") == case.timing[(:ledger, :air_heat)]
+    @test num(last_row, "wall.budgets.air_heat") == case.timing[(:budgets, :air_heat)]
     wallcols = filter(startswith("wall."), head)
     @test length(wallcols) >= length(case.timing)
     @test all(k -> "wall.$(BCC.diag_name(k[1])).$(BCC.diag_name(k[2]))" in wallcols, keys(case.timing))
@@ -406,17 +406,17 @@ end
     tim = ev(:timing)
     @test length(tim) == length(case.timing)
     @test issorted([r.kwargs[:seconds] for r in tim]; rev = true)
-    rows = BCC.surface_budget(case.ledger)
-    led = ev(:ledger)
-    sfc = filter(r -> r.kwargs[:ledger] === :surface, led)
+    rows = BCC.surface_budget(case.budgets)
+    led = ev(:budget)
+    sfc = filter(r -> r.kwargs[:budget] === :surface, led)
     @test [r.kwargs[:class] for r in sfc] == [x.name for x in rows]
     @test [r.kwargs[:closure] for r in sfc] == [x.closure for x in rows]
-    wat = only(filter(r -> r.kwargs[:ledger] === :water, led)).kwargs
-    @test wat[:residual] == BCC.water_budget(case.ledger).residual
-    hb = BCC.heat_budget(case.ledger)
-    col = only(filter(r -> r.kwargs[:ledger] === :heat && r.kwargs[:layer] === :column, led)).kwargs
+    wat = only(filter(r -> r.kwargs[:budget] === :water, led)).kwargs
+    @test wat[:residual] == BCC.water_budget(case.budgets).residual
+    hb = BCC.heat_budget(case.budgets)
+    col = only(filter(r -> r.kwargs[:budget] === :heat && r.kwargs[:layer] === :column, led)).kwargs
     @test col[:closure] == hb.closure / hb.elapsed
-    @test length(filter(r -> r.kwargs[:ledger] === :heat_term, led)) == length(hb.terms)
+    @test length(filter(r -> r.kwargs[:budget] === :heat_term, led)) == length(hb.terms)
     # the profiles of diagnostics.nc: the closure's and the turbulence diagnostics', one value per level
     ps = BCC.case_profiles(case)
     @test "turbulence_diag.Ri_g" in [p.name for p in ps]
@@ -479,13 +479,13 @@ end
     @test rec["config"]["clock"]["nsteps"] == 2 && rec["config"]["run"]["name"] == "smoke"
     @test rec["config"]["run"]["legacy"] == "urban"
     # the run type's own checks (EX-a, #438): results.toml in the run folder,
-    # the ledgers closed within LEDGER_TOLERANCES, the state finite
+    # the ledgers closed within BUDGET_TOLERANCES, the state finite
     res = TOML.parsefile(joinpath(only(runs), "output", "results.toml"))
-    led = res["ledgers"]
+    led = res["budgets"]
     @test res["finite"] === true && led["closed"] === true && led["unattributed"] === false
-    @test led["surface_max_abs_closure"] < BCC.LEDGER_TOLERANCES.surface
-    @test abs(led["water_residual"]) < BCC.LEDGER_TOLERANCES.water
-    @test abs(led["air_heat_closure"]) <= BCC.LEDGER_TOLERANCES.air_heat
+    @test led["surface_max_abs_closure"] < BCC.BUDGET_TOLERANCES.surface
+    @test abs(led["water_residual"]) < BCC.BUDGET_TOLERANCES.water
+    @test abs(led["air_heat_closure"]) <= BCC.BUDGET_TOLERANCES.air_heat
     @test haskey(led["surface"], "domain") && led["surface"]["domain"]["Rn"] > 0     # local noon: net gain
     @test res["timing"]["simulated_s"] ≈ 4.0          # nsteps × dt (the adaptive stepper picks the steps)
     # the idealised profile: θ 293 K at the ground, an inversion at 60 m (berlin_smoke.toml)

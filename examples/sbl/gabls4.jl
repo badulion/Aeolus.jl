@@ -19,7 +19,7 @@
 # vertical resolution of experiment 2: Δz is coarser than in every
 # experiment-3 reference run, CSIRO's included.
 #
-# This script only reads the run folders (statistics.toml, series.csv).
+# This script only reads the run folders (statistics.toml, output.nc).
 #
 #   julia --project -m Aeolus run examples/sbl/configs/gabls4_closures.toml     # 2 m
 #   julia --project examples/sbl/gabls4.jl runs/gabls4_exp3_*
@@ -43,7 +43,7 @@ const OUTDIR = mkpath(SBL_OUT)
 results = map(RUNS) do r
     st = r.stats; stab = cfgval(r, "sgs.stability"); ρcp = cfgval(r, "surface.rho_cp")
     series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
-               θ2 = s.θ_screen, U10 = s.U_screen, θs = s.T_s) for s in r.series]          # every 300 s
+               θ2 = s.theta_screen, U10 = s.U_screen, θs = s.T_s) for s in r.series]          # every 300 s
     θst = mean(-s.H / ρcp / s.u_star for s in series if s.t >= T_AVG)
     @printf("%-8s %s: 16:30-17:30 UTC h = %5.1f m  L = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  θ* = %.3f K  LLJ %.2f m/s at %4.1f m  (%d steps, %.0f s)\n",
             stab, TAG, st.h, st.L, st.u_star, st.H0, θst, st.S_max, st.z_jet, st.nsteps, st.wall_time)

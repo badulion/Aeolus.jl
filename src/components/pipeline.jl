@@ -50,8 +50,10 @@ const PRE_CORE = (:clock, :nest_sync, :radiation, :sw_modifiers, :surface_flux, 
                   :chemistry, :microphysics, :tracers)
 "The stages the core runs inside each (sub)step, in order."
 const IN_CORE = (:tendencies, :body_force, :post_predictor)
-"The stages that run after the core step, in order."
+"The stages that run after the core step, in order (the budgets close after `:budgets`)."
 const POST_CORE = (:surface_update, :column_tendency, :nest_feedback, :budgets, :checks, :output)
+const _POST_CORE_BUDGETS = (:surface_update, :column_tendency, :nest_feedback, :budgets)
+const _POST_BUDGETS = (:checks, :output)
 # :open_boundaries and :projection are the core's own operations: no component attaches yet
 
 """
@@ -186,17 +188,19 @@ end
 # Run the components of `cs` attached to stage `S`, in tuple order (the
 # domain's tuple is ordered): recursion over the tuple, so each call is
 # statically dispatched.
+# With the domain's budgets on, every entry is an attribution context of
+# the measured budgets (components/budgets.jl); off, it is the plain call.
 @inline _run_each(::Tuple{}, d, ::Val, dt, t0, t1) = nothing
 @inline function _run_each(cs::Tuple, d, v::Val{S}, dt, t0, t1) where {S}
     c = first(cs)
     e = _every(c, S)
-    e >= 0 && _due(e, t0, t1) && run_stage!(c, d, v, dt)
+    e >= 0 && _due(e, t0, t1) && _attributed!(d.budgets, c, d, v, dt)
     return _run_each(Base.tail(cs), d, v, dt, t0, t1)
 end
 # inside the core: every attached component, every substage
 @inline _run_in_core(::Tuple{}, d, ::Val, dt) = nothing
 @inline function _run_in_core(cs::Tuple, d, v::Val{S}, dt) where {S}
     c = first(cs)
-    attaches(c, S) && run_stage!(c, d, v, dt)
+    attaches(c, S) && _attributed_in_core!(d.budgets, c, d, v, dt)
     return _run_in_core(Base.tail(cs), d, v, dt)
 end

@@ -90,6 +90,8 @@ include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, adve
 include("Transition.jl")           # Phase 59 (#180): laminar/turbulent + intermittency diagnostics
 include("PrognosticSGS.jl")        # Phase 56 Deardorff prognostic SGS TKE (#182)
 include("InputDrivers.jl")   # static (CFG-f, #361) and dynamic (CFG-g, #362) drivers; needs IBM, NCIO, IO, LargeScaleForcing
+include("BudgetSystem.jl")        # the one budget system: energy, water, momentum, tracers (ONE-c, #452)
+include("Output.jl")             # the one output writer: component catalogues, [output] variables (ONE-c, #452)
 include("Components.jl")     # the component interface, Domain/Model and the stage pipeline (ONE-a, #450)
 
 # CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,

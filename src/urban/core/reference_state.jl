@@ -347,7 +347,7 @@ and, since ``T = θ Π̄``, θ by that over ``Π̄``. A flux `F` (W m⁻²) into
 cell of thickness `Δz` over `τ` s raises θ by
 `F * τ / Δz * ref_θ_per_heat(case, k)`. The one conversion every
 coupling that heats the air uses, and the inverse of the weight with
-which the air-heat ledger (`core/air_heat.jl`) counts θ, so a flux `F`
+which the air-heat ledger (`src/budgets/meter.jl`) counts θ, so a flux `F`
 appears in the ledger as exactly `F τ`. (Before #253 the couplings
 divided by ``ρ̄ c_p`` only and the air received ``Π̄_k F`` — 0.4 % too
 much at the ground, where ``Π̄ ≈ 1.004``.) `cp` defaults to the case's

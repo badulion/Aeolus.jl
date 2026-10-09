@@ -184,7 +184,7 @@ function _open_transport_tol(case)
     imex = ts isa IMEXStep || (ts isa AdaptiveStep && ts.scheme !== nothing)
     exact = case.sim isa BoussinesqSimulation && !imex && !_tensor_diffusion(case)
     exact && return 1e-6
-    hb = heat_budget(case.ledger)
+    hb = heat_budget(case.budgets)
     hb.elapsed > 0 || return 0.05
     booked = get(hb.terms, (:dynamics, :boundary_heat), 0.0) + get(hb.terms, (:dynamics, :mass_correction), 0.0)
     return 0.05 + 0.2 * abs(booked) / hb.elapsed
@@ -211,7 +211,7 @@ function smoke_check(c::GeostrophicCoupling, case)
          # diffusion) leave ≈ 2e-2 W/m², as with the closed top (#254)
          (tol = _open_transport_tol(case);
           "open box: the column (:dynamics, :transport) is a residual (< $(round(tol, sigdigits = 3)) W/m²)" =>
-              (hb = heat_budget(case.ledger);
+              (hb = heat_budget(case.budgets);
                hb.elapsed == 0 || abs(get(hb.terms, (:dynamics, :transport), 0.0)) / hb.elapsed < tol))]
     if c.mode === :pressure_gradient
         # the pressure gradient in balance with (U_g, V_g): exactly

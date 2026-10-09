@@ -1,6 +1,6 @@
 # Coupled example 04, the plots: u and the tracer in the vertical centre
 # plane y = L_y/2 at the end of a run of configs/flow_past_cube.toml.
-# Reads the last output/fields_*.nc and run.toml only.
+# Reads the last record of output/output.nc and run.toml only.
 #
 #   julia --project -m Aeolus run examples/coupled/configs/flow_past_cube.toml
 #   julia --project=. examples/coupled/plot_flow_past_cube.jl runs/<date>_flow_past_cube_<id>
@@ -12,9 +12,9 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-cfg = recorded_config(folder)
-F, t = read_fields(last_fields_file(folder))
-Ny = size(F["u"], 2); Ly = cfg["grid"]["extent"][2]
+dom = recorded_domain(folder)
+F, t = read_last_record(output_file(folder))
+Ny = size(F["u"], 2); Ly = dom["grid"]["extent"][2]
 j = round(Int, (Ly / 2) / (Ly / Ny))
 u = Float64.(F["u"][:, j, :]); c = Float64.(F["tracer"][:, j, :])
 a = save_heatmap(plot_path(folder, "cube_u_slice.ppm"), reverse(Array(u'); dims = 1); upscale = 6)

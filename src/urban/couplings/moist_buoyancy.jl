@@ -141,7 +141,7 @@ init!(c::MoistBuoyancy, case) = (append!(empty!(c.qc), condensate_views(case)); 
 
 "The interior views of the condensate tracers: the ledger's water tracers other than qv."
 condensate_views(case) =
-    [interior_view(tracer(case, n)) for n in case.ledger.water_tracers
+    [interior_view(tracer(case, n)) for n in case.budgets.water_tracers
      if n !== :qv && haskey(case.tracers, n)]
 
 function run_stage!(c::MoistBuoyancy, case, ::Val{:body_force}, dt)
@@ -152,7 +152,7 @@ function run_stage!(c::MoistBuoyancy, case, ::Val{:body_force}, dt)
 end
 
 output_fields(c::MoistBuoyancy, case) =
-    [OutputField("b_moist", "m s-2",
+    [OutputVariable("b_moist", "m s-2",
                  "moist buoyancy perturbation g (theta_rho - theta)'/theta_0 (virtual + condensate loading)",
                  :xyz, cs -> c.Δ .* (c.g / c.θ₀))]
 
