@@ -13,45 +13,16 @@
 # =========================================================================
 
 using TOML
+# The CSV readers are the run type's own (one copy, in src/sbl/case.jl).
+using Aeolus.StableBoundaryLayer: sbl_read_csv, sbl_csv_value
 
 const SBL_DATA = joinpath(@__DIR__, "data")
 const SBL_OUT = joinpath(@__DIR__, "output")
 
-"""
-    read_table(path) -> (; header, columns, rows)
-
-A CSV of examples/sbl/data/ or of a run's output: the leading `#` lines
-(provenance) in `header`, the first other line the column names, the rest
-the rows (numbers parsed where possible).
-"""
-function read_table(path)
-    header = String[]; columns = String[]; rows = Vector{Any}[]
-    for line in eachline(path)
-        isempty(strip(line)) && continue
-        if startswith(line, "#")
-            push!(header, line)
-        elseif isempty(columns)
-            columns = String.(strip.(split(line, ",")))
-        else
-            push!(rows, Any[something(tryparse(Float64, strip(x)), String(strip(x))) for x in split(line, ",")])
-        end
-    end
-    return (header = header, columns = columns, rows = rows)
-end
-
-"The value of column `col` in the row whose first column is `key`."
-function table_value(tab, key, col)
-    j = findfirst(==(col), tab.columns)
-    for r in tab.rows
-        r[1] == key && return r[j]
-    end
-    throw(KeyError(key))
-end
-
 "The rows of a CSV as NamedTuples keyed by its columns (empty if the file does not exist)."
 function csv_rows(path)
     isfile(path) || return NamedTuple[]
-    t = read_table(path)
+    t = sbl_read_csv(path)
     names = Tuple(Symbol.(t.columns))
     return [NamedTuple{names}(Tuple(r)) for r in t.rows]
 end

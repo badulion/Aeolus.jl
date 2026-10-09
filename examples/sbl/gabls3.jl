@@ -46,12 +46,12 @@ results = map(RUNS) do r
 end
 
 # ---- jet against the digitised LES ensemble (03-04 UTC) ---------------------
-ref = read_table(joinpath(SBL_DATA, "gabls3_reference.csv"))
-env = read_table(joinpath(SBL_DATA, "gabls3_envelope.csv"))
+ref = sbl_read_csv(joinpath(SBL_DATA, "gabls3_reference.csv"))
+env = sbl_read_csv(joinpath(SBL_DATA, "gabls3_envelope.csv"))
 col(name) = [r[findfirst(==(name), ref.columns)] for r in ref.rows]
 zr = col("z_m")
-jetlo, jethi = table_value(env, "jet_height", "low"), table_value(env, "jet_height", "high")
-spdlo, spdhi = table_value(env, "jet_speed", "low"), table_value(env, "jet_speed", "high")
+jetlo, jethi = sbl_csv_value(env, "jet_height", "low"), sbl_csv_value(env, "jet_height", "high")
+spdlo, spdhi = sbl_csv_value(env, "jet_speed", "low"), sbl_csv_value(env, "jet_speed", "high")
 function jet_refined(z, S)
     k = clamp(argmax(S), 2, length(S) - 1)
     a, b, d = S[k-1], S[k], S[k+1]

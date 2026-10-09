@@ -38,13 +38,13 @@ const NN = Tuple(cfgval(RUNS[1], "grid.size"))
 const T_END = cfgval(RUNS[1], "stepper.end_time")
 const T_AVG = cfgval(RUNS[1], "averaging.from")
 const T_SPIN = cfgval(RUNS[1], "case.spinup_time")
-const DNS = read_table(joinpath(SBL_DATA, "stratified_channel_gv11_re180.csv"))
+const DNS = sbl_read_csv(joinpath(SBL_DATA, "stratified_channel_gv11_re180.csv"))
 const OUTDIR = mkpath(SBL_OUT)
 const TAG = join(NN, "x")
 
 let
     results = [r.stats for r in RUNS]
-    dns(Ri, col) = table_value(DNS, Ri, col)
+    dns(Ri, col) = sbl_csv_value(DNS, Ri, col)
     @printf("Stratified channel, Re_τ = 180, %s, neutral spin-up to %.0f, averaged over %.0f-%.0f δ/u_τ (DNS: García-Villalba & del Álamo 2011)\n",
             TAG, T_SPIN, T_AVG, T_END)
     @printf("%6s %-8s %8s %8s %7s %7s %8s %8s %7s\n", "Ri_τ", "closure", "U_b⁺", "DNS", "Nu", "DNS", "⟨τ_w⟩", "budget", "ΔU_b")

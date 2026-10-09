@@ -31,7 +31,7 @@ const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls1.jl <run folder>
 const N = cfgval(RUNS[1], "grid.size")[1]
 const T_END = cfgval(RUNS[1], "stepper.end_time")
 const T_AVG = cfgval(RUNS[1], "averaging.from")
-const REF = read_table(joinpath(SBL_DATA, "gabls1_reference.csv"))
+const REF = sbl_read_csv(joinpath(SBL_DATA, "gabls1_reference.csv"))
 
 results = map(RUNS) do r
     st = r.stats; stab = cfgval(r, "sgs.stability")
@@ -42,7 +42,7 @@ end
 outdir = mkpath(SBL_OUT)
 
 # ---- the comparison table -------------------------------------------------
-lo(k) = table_value(REF, k, "low"); hi(k) = table_value(REF, k, "high")
+lo(k) = sbl_csv_value(REF, k, "low"); hi(k) = sbl_csv_value(REF, k, "high")
 println("\nHours 8-9 against the intercomparison (Beare et al. 2006, via Basu & Porté-Agel 2006):")
 @printf("  ensemble: u* ∈ [%.3f, %.3f] m/s, w'θ'0 ∈ [%.4f, %.4f] K m/s (H ∈ [%.1f, %.1f] W/m²), h ≈ 200 m; LASD 64³: h = %.0f m, u* = %.3f\n",
         lo("u_star"), hi("u_star"), lo("surface_wtheta"), hi("surface_wtheta"),

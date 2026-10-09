@@ -64,12 +64,12 @@ results = map(RUNS) do r
 end
 
 # ---- GABLS2 against the SCM ranges and the screen-level values ---------------
-ref = read_table(joinpath(SBL_DATA, "gabls2_reference.csv"))
+ref = sbl_read_csv(joinpath(SBL_DATA, "gabls2_reference.csv"))
 at(r, h) = r.series[argmin([abs(s.t / 3600 - h) for s in r.series])]
 println("\nGABLS2 at the end of the first night (30 h = 06 LT 23 Oct) against the SCM range of Holtslag et al. (2007):")
 for r in results
     s = at(r, 30)
-    rng(k) = (table_value(ref, k, "low"), table_value(ref, k, "high"))
+    rng(k) = (sbl_csv_value(ref, k, "low"), sbl_csv_value(ref, k, "high"))
     f(x, (a, b)) = @sprintf("%.3g %s [%g, %g]", x, a <= x <= b ? "inside" : "OUTSIDE", a, b)
     println("  $(r.stab): H = ", f(s.H, rng("scm_heat_flux")), " W/m², u* = ", f(s.u_star, rng("scm_u_star")),
             " m/s, h = ", f(s.h, rng("scm_h")), " m")
@@ -118,15 +118,15 @@ svg_panel(fig, 460, 50, 300, 280; xlim = xl, ylim = (0.0, 10.0), xticks = xt, yt
 svg_panel(fig, 840, 50, 300, 280; xlim = xl, ylim = (0.0, 0.6), xticks = xt, yticks = 0:0.1:0.6,
           xlabel = "local time (h)", ylabel = "u* (m/s)", tag = "(c)",
           curves = [(th(r, s -> s.u_star)..., i) for (i, r) in enumerate(results)],
-          points = [([30.0, 30.0], [table_value(ref, "scm_u_star", "low"), table_value(ref, "scm_u_star", "high")], 8, :square)])
+          points = [([30.0, 30.0], [sbl_csv_value(ref, "scm_u_star", "low"), sbl_csv_value(ref, "scm_u_star", "high")], 8, :square)])
 svg_panel(fig, 80, 420, 300, 260; xlim = xl, ylim = (-100.0, 250.0), xticks = xt, yticks = -100:50:250,
           xlabel = "local time (h)", ylabel = "H (W/m²)", tag = "(d)",
           curves = [(th(r, s -> s.H)..., i) for (i, r) in enumerate(results)],
-          points = [([30.0, 30.0], [table_value(ref, "scm_heat_flux", "low"), table_value(ref, "scm_heat_flux", "high")], 8, :square)])
+          points = [([30.0, 30.0], [sbl_csv_value(ref, "scm_heat_flux", "low"), sbl_csv_value(ref, "scm_heat_flux", "high")], 8, :square)])
 svg_panel(fig, 460, 420, 300, 260; xlim = xl, ylim = (0.0, 1600.0), xticks = xt, yticks = 0:400:1600,
           xlabel = "local time (h)", ylabel = "h (m, 5 % stress)", tag = "(e)",
           curves = [(th(r, s -> s.h)..., i) for (i, r) in enumerate(results)],
-          points = [([30.0, 30.0], [table_value(ref, "scm_h", "low"), table_value(ref, "scm_h", "high")], 8, :square)])
+          points = [([30.0, 30.0], [sbl_csv_value(ref, "scm_h", "low"), sbl_csv_value(ref, "scm_h", "high")], 8, :square)])
 svg_panel(fig, 840, 420, 300, 260; xlim = xl, ylim = (0.0, 16.0), xticks = xt, yticks = 0:4:16,
           xlabel = "local time (h)", ylabel = "jet maximum (m/s)", tag = "(f)",
           curves = [(th(r, s -> s.S_max)..., i) for (i, r) in enumerate(results)])
@@ -135,7 +135,7 @@ svg_text(fig, 80, 744, "(c-e) squares: ends of the SCM range at 06 LT 23 Oct (30
 println("wrote ", svg_write(fig, joinpath(OUTDIR, "gabls2_$(TAG).svg")))
 
 # ---- the CASES-99 hockey stick --------------------------------------------------
-sun = let t = read_table(joinpath(SBL_DATA, "cases99_sun2012_threshold.csv"))
+sun = let t = sbl_read_csv(joinpath(SBL_DATA, "cases99_sun2012_threshold.csv"))
     (z = [r[1] for r in t.rows], V_s = [r[2] for r in t.rows], header = t.header)
 end
 logfit = let A = hcat(ones(length(sun.z)), log.(sun.z))   # V_s = a + b ln z (Sun et al. 2012 Fig. 3a, dashed)

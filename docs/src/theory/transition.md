@@ -697,8 +697,10 @@ from 48³ to 96³); at ``Re_τ = 180`` the example documents the
 coarse-LES threshold (0.12) only, with no DNS value at that ``Re_τ``
 to validate it against.
 
-The command lines are in the header of the example; every run is cached,
-`REUSE=1` reprints the table and redraws the figures.
+The command lines are in the header of the example. Every run writes its
+own run folder (`run.toml`, `output/`); an interrupted run continues with
+`aeolus run <run-folder> --resume`, and the analysis script re-reads the finished
+folders to reprint the table and redraw the figures.
 
 ### The Berlin case
 

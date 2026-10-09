@@ -50,7 +50,7 @@ results = map(RUNS) do r
     (stab = stab, st = st, θst = θst, series = series)
 end
 
-ref = read_table(joinpath(SBL_DATA, "gabls4_reference.csv"))
+ref = sbl_read_csv(joinpath(SBL_DATA, "gabls4_reference.csv"))
 row(kind) = only(r for r in ref.rows if r[1] == kind)
 lo, hi = row("envelope_low"), row("envelope_high")
 lo2, hi2 = row("envelope_exp2_low"), row("envelope_exp2_high")
