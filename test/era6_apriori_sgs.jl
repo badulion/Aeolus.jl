@@ -8,7 +8,7 @@
 #   3. the closed form of τ₁₁ for u = A sin(kx) under the box and Gaussian
 #      filters, in their transfer functions;
 #   4. the a-priori Smagorinsky numbers at Δ = 4h on the filtered-DNS
-#      fixture (test/fixtures/dns_decay.jl, 96³) against the published ranges;
+#      fixture (Aeolus.ValidationRuns.dns_decay, 96³) against the published ranges;
 #   5. the ranking Bardina > Smagorinsky in stress correlation, and the
 #      dynamic C_s against the dissipation-matched one;
 #   6. the offline filtered-DNS record (hybrid-DNS decision on #208): the
@@ -82,8 +82,8 @@
 # the physical argument does not hold at fixed Δ/η: the filter sits at
 # the same distance from the dissipation range whatever the Re, so only
 # Δ/L changes, and no monotone dependence is established at Re_λ 32–79.
-# The generator runs (past the peak, ν with a 3.5 % margin; examples/
-# validation/dns256_generate.jl header) already agreed within about
+# The generator runs (past the peak, ν with a 3.5 % margin; the header
+# of examples/validation/configs/dns256.toml) already agreed within about
 # ±0.01 at 4h from 64³ upward: 0.819 (32³, Re_λ 21, 7.6η), 0.869 (48³,
 # 31, 7.8η), 0.811 (64³, 45, 7.5η), 0.822 (96³, 52, 7.7η), against 0.810
 # for this fixture (Re_λ 64, 7.8η). Both trend assertions are dropped
@@ -333,9 +333,8 @@ end
     # The offline 256³ record (hybrid-DNS decision on #208). The pipeline
     # (DNS → statistics → TOML → read back) is proven here at 32³ on every
     # run; the 256³ run itself is offline (`aeolus run
-    # examples/validation/configs/dns256.toml`, examples/validation/
-    # dns256_generate.jl, or AEOLUS_DNS256=1 for the regeneration testset).
-    # Both go through the `dns` run driver (CFG-d, #359).
+    # examples/validation/configs/dns256.toml`, or AEOLUS_DNS256=1 for the
+    # regeneration testset). Both go through the `dns` run driver (CFG-d, #359).
     @testset "offline a-priori record: pipeline at 32³" begin
         path = joinpath(mktempdir(), "dns32_apriori.toml")
         run32 = dns_apriori_run(["grid.n=32", "apriori.widths=[4,8]", "apriori.out=\"$path\""])

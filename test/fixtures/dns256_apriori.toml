@@ -1,6 +1,6 @@
 # Filtered-DNS a-priori statistics (Aeolus, Era VI P56-c, #178).
 # Written by the dns run driver (examples/validation/configs/dns256.toml); read by test/era6_apriori_sgs.jl.
-# Do not edit by hand: regenerate (AEOLUS_DNS256=1 or examples/validation/dns256_generate.jl).
+# Do not edit by hand: regenerate (AEOLUS_DNS256=1, or aeolus run dns256.toml with apriori.out).
 created = "2026-10-08T09:49:27"
 generator = "the dns run driver, examples/validation/configs/dns256.toml (test/fixtures/dns_apriori.jl)"
 

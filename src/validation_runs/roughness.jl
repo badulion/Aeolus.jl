@@ -1,6 +1,5 @@
 # The dynamic roughness of a staggered cube array (P57-e, #190): the
-# a-priori evaluation the `roughness_map` case of the `column` run type
-# makes (examples/validation/configs/dynamic_roughness_cubes.toml). Moved
+# a-priori evaluation the `dynamic_roughness` run type makes (examples/validation/configs/dynamic_roughness_cubes.toml). Moved
 # from examples/validation/dynamic_roughness_cubes.jl (EX-c #440), where it
 # ran in the script.
 

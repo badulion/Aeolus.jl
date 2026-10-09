@@ -1115,7 +1115,7 @@ In the Berlin case both are providers of the
 The Era VI benchmark for SGS closures (Phase 54) is the wind-tunnel decay
 of Comte-Bellot & Corrsin (1971, CBC): grid mesh ``M = 5.08`` cm, mean
 speed ``U_0 = 10`` m/s, spectra measured at ``tU_0/M = 42, 98, 171``
-(their table 3, in `test/data/cbc1971_table3.txt`; the tabulated spectra
+(their table 3, in `src/data/cbc1971_table3.txt`; the tabulated spectra
 integrate to ``\tfrac32 u'^2`` of their table 4 within 4.2, 1.3 and
 0.3 %). Following Meneveau, Lund & Cabot (1996) and Kang, Chester &
 Meneveau (2003) the flow is simulated in a frame moving with ``U_0``: a

@@ -79,7 +79,7 @@ keeps the newest K, and `resume!` restores the newest one at start. The
 two shared run loops, `run_channel!` and `sbl_run!`, take it as a keyword
 and also write a final checkpoint, so re-running a finished phase is
 instant and a multi-phase script (GABLS3) uses one prefix per phase. The
-long drivers (the `dns256.toml` run, then `dns256_generate.jl`; the relaminarisation sweep,
+long drivers (the `dns256.toml` run; the relaminarisation sweep,
 `gabls1`–`gabls4.jl`) create one per run by default and delete it once the
 result is cached.
 

@@ -505,7 +505,7 @@ end
                        prefix = "checkpoint", wisdom = true)
 
 Periodic checkpoints of a long run in the folder `dir`, with automatic
-resume — the one helper the long drivers (`dns256_generate.jl`, the
+resume — the one helper the long drivers (the `dns` run type of `dns256.toml`, the
 relaminarisation and SBL drivers) hook into:
 
 1. **Construct it first**, before the simulation: it creates `dir` and, with
