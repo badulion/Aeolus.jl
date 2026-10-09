@@ -20,6 +20,7 @@ generated option reference is under *Reference*.
 | `advection` | `examples/configs/scalar_advection_2d.toml` | `examples/scalar_advection_2d.jl` |
 | `cbl` | `examples/sgs/configs/cbl_tke.toml`, `examples/nesting/configs/cbl_inflow_statistics.toml` | `examples/sgs/cbl_tke.jl`, `examples/nesting/cbl_inflow_statistics.jl`, `test/tke_cbl_driver.jl` |
 | `inflow_fetch` | `examples/nesting/configs/inflow_fetch.toml` | `examples/nesting/inflow_fetch.jl`, `test/inflow_fetch_harness.jl` |
+| `obstacle_channel` | `examples/sgs/configs/surface_mounted_cube.toml`, `surface_mounted_cube_closures.toml` (the cube in a static driver) | `examples/sgs/surface_mounted_cube.jl` |
 
 The bare `simulation` driver also gained the couplings of the kernel and
 coupled examples (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
@@ -27,5 +28,5 @@ coupled examples (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
 
 ```@autodocs
 Modules = [Aeolus.RunDrivers, Aeolus.RunDrivers.AdvectionDriver, Aeolus.RunDrivers.CBLDriver,
-           Aeolus.RunDrivers.InflowFetchDriver]
+           Aeolus.RunDrivers.InflowFetchDriver, Aeolus.RunDrivers.ObstacleChannelDriver]
 ```

@@ -98,7 +98,7 @@ function rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     m = sim.mesh
     return all(bitwise_equal(rd_interior(getproperty(f, k), m), rd_interior(getproperty(sim, k).data, m))
-               for k in (:u, :v, :w, :p, :θ, :qv))
+               for k in (:u, :v, :w, :p, :θ, :qv) if haskey(f, k))
 end
 
 @testset "kernels: tgv_energy_decay.toml is the old script, bit for bit; KE decays as exp(-6νt)" begin
@@ -562,4 +562,101 @@ using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child
     @test res["df"]["level_1"]["tke_over_reference"][1] > 0.1
     # the inflow carries the precursor's bulk velocity (Dirichlet mean profile)
     @test abs(res["off"]["bulk_ratio"] - 1) < 1e-3 && abs(res["df"]["bulk_ratio"] - 1) < 0.05
+end
+
+# ---------------------------------------------------------------------------
+# examples/sgs/configs/surface_mounted_cube.toml (the obstacle_channel driver)
+# ---------------------------------------------------------------------------
+
+using Aeolus.IBM: SolidMask, mark_solid!, implicit_ibm_correction!, wall_distance, first_level_cells
+
+"examples/sgs/surface_mounted_cube.jl before EX-d: build(model) and the loop of run(model), verbatim but for the times and the prints."
+function rd_cube_script(model::Symbol, T_SPIN, T_AVG)
+    NH = 16; LX, LY, LZ = 10.0, 6.0, 2.0; XC0, XC1 = 3.0, 4.0; RE_H = 40_000.0
+    h = 1 / NH
+    mesh = RegularGrid(; size = (round(Int, LX * NH), round(Int, LY * NH), round(Int, LZ * NH) + 1),
+                       extent = (LX, LY, LZ + h), origin = (0.0, 0.0, -h), halo = (3, 3, 3))
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    sim = BoussinesqSimulation(mesh; ν = 1 / RE_H, bcs = bcs)
+    sm = SolidMask(mesh)
+    yc = LY / 2
+    mark_solid!(sm, (x, y, z) -> z < 0 || (XC0 < x < XC1 && abs(y - yc) < 0.5 && z < 1))
+    mf = Field(CellCenter(), mesh)
+    mf.data .= sm.mask
+    fill_halos!(mf, FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    mask = mf.data .> 0.5
+    d = wall_distance(sm; bottom = false)
+    fl = first_level_cells(sm; bottom = false)
+    closure = model === :smagorinsky ? StaticSmagorinsky(0.1) :
+              model === :tke ? TKEClosure(mesh; mask = mask, wall_distance = d, first_level = fl) :
+              ReynoldsStressClosure(mesh; mask = mask, wall_distance = d, first_level = fl)
+    rng = Random.Xoshiro(1993)
+    interior_view(sim.u) .= 1 .+ 0.1 .* randn(rng, size(interior_view(sim.u)))
+    interior_view(sim.v) .= 0.1 .* randn(rng, size(interior_view(sim.v)))
+    interior_view(sim.w) .= 0.1 .* randn(rng, size(interior_view(sim.w)))
+    implicit_ibm_correction!(sim, sm)
+    function bulk_u(sim, sm)
+        m = sim.mesh
+        s = 0.0; n = 0
+        u = sim.u.data; mk = sm.mask
+        @inbounds for k in m.Hz+1:m.Hz+m.Nz, j in m.Hy+1:m.Hy+m.Ny, i in m.Hx+1:m.Hx+m.Nx
+            mk[i, j, k] && continue
+            s += u[i, j, k]; n += 1
+        end
+        return s / n
+    end
+    m = sim.mesh
+    model === :tke && initialize_tke!(closure, sim; e_min = 1e-4)
+    model === :rsm && initialize_reynolds_stress!(closure, sim; e_min = 1e-4)
+    Fi = Ref(0.0); Fp = Ref(0.0)
+    force = (s, Δt) -> (interior_view(s.tu) .+= Fi[] + Fp[]; nothing)
+    ibm = (s, Δt) -> (implicit_ibm_correction!(s, sm); nothing)
+    kf = 2
+    jc = (m.Ny ÷ 2, m.Ny ÷ 2 + 1)
+    ufl = zeros(m.Nx); tavg = 0.0
+    while sim.t < T_SPIN + T_AVG - 1e-9
+        ub = bulk_u(sim, sm)
+        umax = maximum(f -> maximum(abs, interior_view(f)), (sim.u, sim.v, sim.w))
+        dt = min(0.4 * m.dx / umax, T_SPIN + T_AVG - sim.t)
+        Fp[] = 2.0 * (1 - ub)
+        Fi[] += 0.5 * dt * (1 - ub)
+        step_rk3!(sim, dt; sgs = closure, body_force! = force, post_predictor! = ibm)
+        if sim.t > T_SPIN
+            u = interior_view(sim.u)
+            for i in 1:m.Nx
+                ip = i == m.Nx ? 1 : i + 1
+                ufl[i] += dt * sum((u[i, j, kf] + u[ip, j, kf]) / 2 for j in jc) / 2
+            end
+            tavg += dt
+        end
+    end
+    ufl ./= tavg
+    return sim, sm, ufl
+end
+
+@testset "obstacle_channel: surface_mounted_cube.toml (cube in the static driver) is the old script, bit for bit" begin
+    T = 0.04
+    f = joinpath(RD_EX, "sgs", "configs", "surface_mounted_cube_closures.toml")
+    for (k, model) in enumerate((:smagorinsky, :tke))
+        sim, sm, ufl = rd_cube_script(model, T, T)
+        cfg = last(only(load_sweep(f; member = k, overrides = ["stepper.t_spin=$T", "stepper.t_avg=$T",
+                                                                "fftw.planner=\"estimate\""])))
+        r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
+        @test r.obj.sm.mask == sm.mask                     # the static driver's cube and the floor = the script's mask
+        @test rd_same_state(r, sim)
+        @test r.obj.u_floor == ufl
+        res = rd_results(r)
+        @test res["x_front"] == 3.0 && res["x_rear"] == 4.0 && res["closure"] == String(model)
+        # the physics: the direct forcing nearly stops the flow inside the cube
+        # and the floor (it acts after the predictor, before the projection,
+        # which leaves a residual: measured mean |u| 0.0092 U_b, max 0.088 on
+        # the faces between two solid cells), and the controller keeps the bulk
+        # velocity at 1 within 2 %
+        m = sim.mesh
+        ui = r.obj.sim.u.data
+        solid_faces = [ui[i, j, k] for k in m.Hz+1:m.Hz+m.Nz, j in m.Hy+1:m.Hy+m.Ny, i in m.Hx+2:m.Hx+m.Nx
+                       if sm.mask[i, j, k] && sm.mask[i-1, j, k]]
+        @test sum(abs, solid_faces) / length(solid_faces) < 0.02 && maximum(abs, solid_faces) < 0.1
+        @test abs(res["mean_U_b"] - 1) < 0.02
+    end
 end

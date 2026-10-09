@@ -495,7 +495,7 @@ Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
 not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`;
 CI test: `test/era6_sgs_validation.jl`; example at 96³:
 `examples/sgs/rotating_stratified_decay.jl`; a wall-bounded case:
-`examples/sgs/surface_mounted_cube.jl` (below).
+`examples/sgs/configs/surface_mounted_cube_closures.toml` (below).
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
 spun up from a fixed seed to ``t_0 = 2``; see
@@ -626,7 +626,11 @@ stress starts much closer to the isotropic corner.
 
 ### Surface-mounted cube (example)
 
-`examples/sgs/surface_mounted_cube.jl` compares the three closures on
+`examples/sgs/configs/surface_mounted_cube_closures.toml` (the
+`obstacle_channel` run type, a sweep over the closures; the cube is the
+static driver `input/surface_mounted_cube_static.nc`, and
+`examples/sgs/plot_surface_mounted_cube.jl` draws the figure from the run
+folders) compares the three closures on
 the wall-bounded case of Martinuzzi & Tropea (1993): a cube of height
 ``H`` in a channel of height ``2H`` at ``\mathrm{Re}_H = 40\,000``, where
 the mean flow reattaches behind the cube at ``x_R/H = 1.612`` (from the
@@ -668,7 +672,7 @@ Reynolds-stress run was the slowest by 3–4×, more than its 2× in Berlin.
   this branch's stack (PR #211 is open), so the cube walls are no-slip
   with the SGS stress as the only wall treatment. With that model the
   comparison should be repeated. The 30 ``H/U_b`` average is short;
-  the curves in `examples/sgs/output/surface_mounted_cube_16.svg` are not
+  the curves in `surface_mounted_cube_16.svg` (in the first run folder's `output/`) are not
   yet smooth behind ``x = 6H``.
 
 ## Berlin coupling

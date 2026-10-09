@@ -208,7 +208,7 @@ const OTHER_ISSUE_DIRS = Dict("sbl/" => "#359 (CFG-d, SBL)")
 # split per directory). This list may only shrink: a file migrated to a
 # config must leave it (checked below).
 const PENDING_360 = Set([
-    "sgs/rotating_stratified_decay.jl", "sgs/surface_mounted_cube.jl",
+    "sgs/rotating_stratified_decay.jl",
     "transition/flat_plate_t3a.jl", "transition/kelvin_helmholtz.jl",
 ])
 

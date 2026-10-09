@@ -36,8 +36,9 @@ module RunDrivers
 include("run_drivers/advection.jl")
 include("run_drivers/cbl.jl")
 include("run_drivers/inflow_fetch.jl")
+include("run_drivers/obstacle_channel.jl")
 
 "The `[run] driver` names of the run types in this module."
-const DRIVER_NAMES = ["advection", "cbl", "inflow_fetch"]
+const DRIVER_NAMES = ["advection", "cbl", "inflow_fetch", "obstacle_channel"]
 
 end # module
