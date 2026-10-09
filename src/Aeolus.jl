@@ -217,7 +217,8 @@ export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        sgs_scalar_tensor, IsentropicDiffusion
 # Era VI, Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
-       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!,
+       spectrum_wavenumbers, PassotPouquetSpectrum, isotropic_turbulence_field!, dissipation_rate
 # Era VI (P54-d, #174): wall-bounded flow diagnostics
 export phi_m_profile, total_stress_profile, streamwise_spectrum
 # Era VI (P55-d, #176): AMD and Vreman closures

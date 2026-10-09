@@ -33,7 +33,7 @@ module Components
 
 using ..Operators: Operators, momentum_advect!, add_coriolis!, coriolis_parameter, add_surface_flux!,
                    total_stress_profile, total_heat_flux_profile, stress_bl_height, inversion_height,
-                   sgs_fields, damping_coordinates,
+                   sgs_fields, damping_coordinates, isotropic_energy_spectrum, dissipation_rate,
                    AbstractSGSClosure, StaticSmagorinsky, DynamicSmagorinsky, VremanClosure,
                    SigmaModel, AMDClosure, StabilityCorrected
 using ..TurbulenceStability: BrownEtAl1994, LillyCutoff, ShortTail, LongTail

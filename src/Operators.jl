@@ -29,7 +29,8 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        add_surface_flux!, add_sponge!,
        advect_weno5!,
        box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
-       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!
+       isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!,
+       spectrum_wavenumbers, PassotPouquetSpectrum, isotropic_turbulence_field!, dissipation_rate
 # #245: the FFTW planning policy (operators/fftw_planning.jl)
 export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
 # Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)

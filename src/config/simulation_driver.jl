@@ -23,6 +23,7 @@ module SimulationDriver
 
 using Random: Xoshiro, randn
 using ..Grids: RegularGrid, CellCenter
+using ..Operators: PassotPouquetSpectrum, isotropic_turbulence_field!, spectrum_wavenumbers
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!
@@ -197,6 +198,52 @@ function _velocity_noise_validator(t)
     return probs
 end
 
+const _FIELD_KEYS = ("kind", "spectrum", "u_rms", "k_peak", "seed")
+
+"The validator of `[initial] field`, a named analytic initial field (an empty table: none)."
+function _field_validator(t)
+    isempty(t) && return String[]
+    probs = String[]
+    get(t, "kind", nothing) == "isotropic_turbulence" ||
+        return ["kind: expected \"isotropic_turbulence\", got $(repr(get(t, "kind", nothing)))"]
+    for k in sort!(collect(keys(t)))
+        k in _FIELD_KEYS || push!(probs, "$k: unknown key (keys: $(join(_FIELD_KEYS, ", ")))")
+    end
+    get(t, "spectrum", "passot_pouquet") == "passot_pouquet" ||
+        push!(probs, "spectrum: expected \"passot_pouquet\" (E ∝ k⁴ exp(-2 (k/k_peak)²))")
+    for k in ("u_rms", "k_peak")
+        v = get(t, k, nothing)
+        (_isnum(v) && isfinite(v) && v > 0) || push!(probs, "$k: required, a number > 0")
+    end
+    s = get(t, "seed", 0)
+    (s isa Integer && !(s isa Bool) && s >= 0) || push!(probs, "seed: expected an integer ≥ 0")
+    return probs
+end
+
+"""
+    initial_field!(sim, t::AbstractDict, seed) -> sim
+
+Set the velocity of `sim` to the named analytic initial field `t` of
+`[initial] field`: `{kind = "isotropic_turbulence", spectrum =
+"passot_pouquet", u_rms, k_peak, seed}` is
+`Operators.isotropic_turbulence_field!` with the
+`Operators.PassotPouquetSpectrum(u_rms, k_peak)` (k_peak in rad m⁻¹) from
+the field's `seed` (default: `seed`, the run's): defined in spectral
+space, so a coarser grid on the same box holds exactly the large scales
+of a finer one (an LES and its DNS start alike). The field is
+divergence-free in the continuous sense; it is then projected once onto
+the grid's discrete divergence-free fields (the core's Chorin
+projection), which changes a mode by O((kΔ)²) of its divergent part: the
+SSP-RK3 step carries a third of the step-start state into the next one,
+so a start that is not discretely solenoidal would keep its divergence.
+"""
+function initial_field!(sim, t::AbstractDict, seed::Integer)
+    E = PassotPouquetSpectrum(Float64(t["u_rms"]), Float64(t["k_peak"]))
+    isotropic_turbulence_field!(sim.u, sim.v, sim.w, E; seed = get(t, "seed", seed))
+    _project!(sim, 1.0)
+    return sim
+end
+
 """
     profile_value(p::AbstractDict, z) -> Float64
 
@@ -333,6 +380,12 @@ function Config.driver_sections(::SimulationDriverType)
                       "depth (m; only below it, uniform: one draw per cell below it), components (a subset of " *
                       "[\"u\", \"v\", \"w\"], default all), taper (\"linear\": × (1 − z/depth); \"none\") and project " *
                       "(true: the velocity is projected once onto a divergence-free field afterwards, boussinesq); {}: none")
+        option!(s, "field", OpenTable(_field_validator),
+                doc = "a named analytic initial velocity field: {kind = \"isotropic_turbulence\", spectrum = " *
+                      "\"passot_pouquet\", u_rms (m s⁻¹), k_peak (rad m⁻¹), seed} — decaying isotropic turbulence " *
+                      "defined in spectral space (Operators.isotropic_turbulence_field!), so a coarser grid on the same " *
+                      "box starts from exactly the large scales of a finer one; seed: the field's (default [run] seed); " *
+                      "a triply periodic regular grid; {}: none")
         option!(s, "perturbation_kind", Symbol; default = :uniform, allowed = [:uniform, :normal],
                 doc = "the θ noise: uniform in [-a/2, a/2] or a × standard normal, one draw per cell below the depth")
         option!(s, "perturbation_amplitude", Float64; default = 0.0, range = (0, Inf), units = "K",
@@ -361,7 +414,9 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "variables", Vector{String}; default = collect(String, Components.DEFAULT_OUTPUTS),
                 doc = "the variables written, from the output catalogues of the core and the enabled components " *
                       "(ONE-c: 3-D fields, profiles and surface maps every cadence, time series every series_cadence; " *
-                      "the core's: " * join(Components.CORE_OUTPUTS, ", ") * "; the components': ql, qr, tracer); [] : none")
+                      "the core's: " * join(Components.CORE_OUTPUTS, ", ") * "; the components': ql, qr, tracer, " *
+                      "[surface_layer]'s " * join(Components.output_names(SurfaceLayer, nothing), ", ") *
+                      ", [towers]' tower_threshold); [] : none")
         option!(s, "averaging", Symbol; default = :instant, allowed = [:instant, :mean],
                 doc = "instant: the values at each record; mean: the time mean over the interval since the previous record")
         option!(s, "series_cadence", Float64; default = 60.0, range = (0, Inf), units = "s",
@@ -430,6 +485,21 @@ function _cross_checks(cfg)
         g.stretching === :uniform || push!(e, ConfigError("grid.stretching", "open faces need a uniform grid"))
         cfg.sponge.alpha_max == 0 ||
             push!(e, ConfigError("sponge.alpha_max", "the sponge of an open box has no target here; use 0"))
+    end
+    if !isempty(cfg.initial.field)
+        all(==(:periodic), (b.x, b.y, b.z)) ||
+            push!(e, ConfigError("initial.field", "isotropic turbulence needs a triply periodic box (boundaries x, y, z periodic)"))
+        g.stretching === :uniform || push!(e, ConfigError("initial.field", "isotropic turbulence needs a uniform grid"))
+        d.core === :boussinesq || push!(e, ConfigError("initial.field", "isotropic turbulence initialises the boussinesq core"))
+        for k in ("u", "v")
+            isempty(cfg.initial[k]) || push!(e, ConfigError("initial.$k", "initial.field sets the velocity: give one of the two"))
+        end
+    end
+    for n in vcat(cfg.output.variables, [get(v, "variable", q) for (q, v) in cfg.checks.reference])
+        n in ("energy_spectrum", "dissipation", "dissipation_sgs") || continue
+        g.stretching === :uniform || push!(e, ConfigError("output.variables", "$n needs a uniform grid"))
+        n == "energy_spectrum" && !all(==(:periodic), (b.x, b.y, b.z)) &&
+            push!(e, ConfigError("output.variables", "energy_spectrum needs a triply periodic box"))
     end
     get(cfg.initial.velocity_perturbation, "project", false) && d.core !== :boussinesq &&
         push!(e, ConfigError("initial.velocity_perturbation", "project = true projects with the boussinesq core's projection"))
@@ -555,7 +625,7 @@ const _CROSS_CHECKS_DOC = """
 exactly one of `time.duration` and `time.nsteps`; with a fixed `time.dt`, `time.cfl` and `time.dt_max` keep their defaults (they belong to adaptive steps)
 `noslip` is a z-wall condition: not for `boundaries.x`, `boundaries.y`
 an open face needs a domain `dynamic_driver`, the other lateral axis open or periodic, z walls, the boussinesq core, a uniform grid and no sponge
-`initial.velocity_perturbation.project` needs the boussinesq core; `time.start` is 0 with open faces; `coriolis.f` and `coriolis.latitude` exclude each other
+`initial.field` (isotropic turbulence) needs a triply periodic uniform grid and sets u, v (no `initial.u`, `initial.v`); `energy_spectrum` needs a triply periodic uniform grid, `dissipation` a uniform one; `initial.velocity_perturbation.project` needs the boussinesq core; `time.start` is 0 with open faces; `coriolis.f` and `coriolis.latitude` exclude each other
 the surface layer needs a uniform grid, z walls, `surface.model = "none"` and `surface_theta_flux.bottom = 0`; its `temperature = {kind = "driver"}` and the `[large_scale_forcing]` driver tables need the domain's `dynamic_driver`; a geostrophic wind needs `[coriolis]`; `sponge.target = "geostrophic"` needs `[large_scale_forcing]`; the towers need a uniform grid
 the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture and a uniform grid
 on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability` is `none`
@@ -716,6 +786,7 @@ function _initialise!(sim, cfg)
         set!(sim.θ, (x, y, z) -> cfg.dynamics.theta0)
     end                                  # anelastic: the constructor set θ = θ̄(z)
     isempty(ini.qv) || _set_profile!(sim.qv, ini.qv, :qv)
+    isempty(ini.field) || initial_field!(sim, ini.field, cfg.run.seed)
     a = ini.perturbation_amplitude
     rng = Xoshiro(cfg.run.seed)
     if a > 0
@@ -784,7 +855,8 @@ function _output_writer(r::SimulationRun, rf, resume_t)
     vars = select_variables(Components.domain_catalogue(dom), o.variables)
     dir = o.path === nothing ? output_dir(rf) : mkpath(o.path)
     x, y, z = cell_centres(dom.state.mesh)
-    return OutputWriter(joinpath(dir, o.netcdf); x = x, y = y, z = z,
+    k = any(v -> v.dims === :k, vars) ? spectrum_wavenumbers(dom.state.mesh) : nothing
+    return OutputWriter(joinpath(dir, o.netcdf); x = x, y = y, z = z, k = k,
                         records = filter(v -> v.dims !== :scalar, vars), series = filter(v -> v.dims === :scalar, vars),
                         ctx = dom, averaging = o.averaging, resume_time = resume_t,
                         attributes = Dict{String,Any}("title" => "Aeolus.jl — $(cfg.run.name)",

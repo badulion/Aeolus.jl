@@ -864,6 +864,7 @@ using Aeolus.Fields: set!, interior_view
     include("checks.jl")               # ONE-d (#453): in-model checks: [checks], results.toml, exit code 3
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
     include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
+    include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
