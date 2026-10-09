@@ -34,8 +34,10 @@ Their numbers go to `results.toml` (and CSV files) in the run folder's
 module RunDrivers
 
 include("run_drivers/advection.jl")
+include("run_drivers/cbl.jl")
+include("run_drivers/inflow_fetch.jl")
 
 "The `[run] driver` names of the run types in this module."
-const DRIVER_NAMES = ["advection"]
+const DRIVER_NAMES = ["advection", "cbl", "inflow_fetch"]
 
 end # module

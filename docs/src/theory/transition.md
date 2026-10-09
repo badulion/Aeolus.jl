@@ -969,8 +969,10 @@ parent, it takes 65 ms on one core (57 ms before the native-point
 variances, which add one second-moment pass per level). With ``τ_{\rm avg}`` = 600 s, a
 cadence of tens of seconds of parent time is enough.
 
-**A convective Aeolus parent** (`examples/nesting/cbl_inflow_statistics.jl`).
-The parent is the 64³ CBL of `examples/sgs/cbl_tke.jl`: ``Δx = 50`` m,
+**A convective Aeolus parent** (`examples/nesting/configs/cbl_inflow_statistics.toml`,
+the `cbl` run type with `[inflow_statistics]`; `examples/nesting/report_cbl_inflow_statistics.jl`
+prints the table from its `results.toml`).
+The parent is the 64³ CBL of `examples/sgs/configs/cbl_tke.toml`: ``Δx = 50`` m,
 ``Δz = 25`` m, ``Q = 0.1`` K m/s, Deardorff–Moeng TKE, 2 h, ``z_i = 1175`` m,
 ``w_* = 1.57`` m/s. The last 30 min are folded into the running mean
 (τ_avg = 600 s, refine (2, 2, 4), so the band is 100–200 m). Values at
@@ -1203,7 +1205,8 @@ The orderings DF < FSD in both moments and in the total stress, and
 |bias| DF < FSD < off, held in every realisation, and they are what the
 CI case asserts.
 
-Example (`examples/nesting/inflow_fetch.jl`, 15δ child, spanwise
+Example (`examples/nesting/configs/inflow_fetch.toml`, the `inflow_fetch` run type;
+`examples/nesting/plot_inflow_fetch.jl` prints the tables and writes the figures; 15δ child, spanwise
 periodic, averaged ``10δ/u_*``, about 11 min), ratios to the child-grid reference and
 development lengths (δ) to 10 % / 20 %:
 

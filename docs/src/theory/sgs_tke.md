@@ -246,7 +246,7 @@ mask is not supported on a stretched grid.
 | 500 RK3 steps of decaying turbulence (halo 2 / stratified with walls) | ``e ≥ 0``, ``ν_t ≥ 0``, ``κ_t ≥ ν_t`` throughout; 0 clips |
 | rejected adaptive step (first try committed, then rejected) | ``e``, ``u``, ``θ`` bitwise a direct ``Δt/2`` step |
 
-**Convective boundary layer** (`test/tke_cbl_driver.jl`): free convection
+**Convective boundary layer** ([`tke_cbl`](@ref Aeolus.RunDrivers.CBLDriver.tke_cbl), the `cbl` run type): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above
 ``z_{i0}``, periodic laterally, sponge in the top quarter, SSP-RK3 at the
 CFL step.
@@ -255,7 +255,7 @@ CFL step.
 | :-- | --: | --: | --: | --: | --: |
 | 24³, Δ = 50 m, 1 h (CI) | 900 m | −0.157 | 0.203 | 75 m (0.08 ``z_i``) | 0.50 ``w_*^2`` at 0.31 ``z_i`` |
 | 24³ with the ``κ d_{wall}`` cap | 850 m | −0.083 | 0.308 | 125 m (0.15 ``z_i``) | 0.34 ``w_*^2`` at 0.38 ``z_i`` |
-| 64³, 50 × 50 × 25 m, 2 h (`examples/sgs/cbl_tke.jl`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
+| 64³, 50 × 50 × 25 m, 2 h (`examples/sgs/configs/cbl_tke.toml`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
 
 Lenschow, Wyngaard & Pennell (1980): ``σ_w^2/w_*^2 = 1.8(z/z_i)^{2/3}(1 − 0.8z/z_i)^2``,
 maximum 0.466 at ``z/z_i = 0.31``; the 64³ run is 0.035 RMS from it over

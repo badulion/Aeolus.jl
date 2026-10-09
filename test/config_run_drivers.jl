@@ -493,3 +493,73 @@ end
     @test st.building_height == shipped.building_height
     @test count(>(0), st.building_height) == 9 * 12 && maximum(st.building_height) == 20.0
 end
+
+# ---------------------------------------------------------------------------
+# examples/sgs/configs/cbl_tke.toml, examples/nesting/configs/cbl_inflow_statistics.toml
+# (the cbl driver: tke_cbl, formerly test/tke_cbl_driver.jl, plus the parent statistics)
+# ---------------------------------------------------------------------------
+
+using Aeolus.RunDrivers.CBLDriver: tke_cbl
+
+@testset "cbl: the config maps onto tke_cbl and the parent statistics of the old example" begin
+    N = 12; Δ = 50.0; Δz = 25.0; T = 240.0; avg = 120.0; zi0 = 150.0
+    # what examples/nesting/cbl_inflow_statistics.jl did, verbatim but for the size
+    nlev = min(N, round(Int, 200.0 / Δz))
+    src = Ref{Any}(nothing)
+    function fold!(sim, c, h)
+        sim.t > T - avg || return
+        src[] === nothing && (src[] = ParentResolvedStatistics(sim; closure = c, τ_avg = 600.0, refine = (2, 2, 4),
+                                                              levels = 1:nlev))
+        update_inflow_statistics!(src[], h)
+    end
+    r0 = tke_cbl(N; Δ = Δ, Δz = Δz, Q = 0.1, z_i0 = zi0, Γ = 0.003, T_end = T, avg = avg, on_step = fold!)
+    r = rd_run(joinpath(RD_EX, "nesting", "configs", "cbl_inflow_statistics.toml"),
+               ["grid.n=$N", "grid.spacing=$Δ", "grid.dz=$Δz", "cbl.end_time=$T", "cbl.average=$avg",
+                "cbl.z_i0=$zi0", "inflow_statistics.depth=200.0"])
+    r1 = r.obj.result
+    @test all(getproperty(r0, k) == getproperty(r1, k) for k in (:e, :kres, :w2, :flux, :sgs_flux, :θ, :zi, :steps))
+    p0 = inflow_stress_parts(src[]); p1 = inflow_stress_parts(r.obj.stats)
+    @test all(getproperty(p0, k) == getproperty(p1, k) for k in keys(p0))
+    res = rd_results(r)
+    inf = res["inflow"]
+    # the physics of the record: heat goes up through the first face, at
+    # most the floor's Q (the flux profile is normalised by Q; 4 min into the
+    # run the first cell still stores part of it: measured 0.53), e stays
+    # positive, and in scale-gap mode what the generator adds is exactly the
+    # SGS part plus the band
+    @test 0 < res["profiles"]["flux"][1] <= 1.0
+    @test res["min_e"] > 0 && res["clips"] == 0
+    @test inf["uu_generated"] ≈ inf["uu_sgs"] .+ inf["uu_band"]
+    @test length(inf["z"]) == nlev && inf["updates"] > 0
+    # without [inflow_statistics] there is no [inflow] table
+    r2 = rd_run(joinpath(RD_EX, "sgs", "configs", "cbl_tke.toml"),
+                ["grid.n=$N", "grid.spacing=$Δ", "grid.dz=$Δz", "cbl.end_time=$T", "cbl.average=$avg", "cbl.z_i0=$zi0"])
+    @test !haskey(rd_results(r2), "inflow") && r2.obj.result.e == r1.e
+end
+
+# ---------------------------------------------------------------------------
+# examples/nesting/configs/inflow_fetch.toml (the inflow_fetch driver; its
+# harness, formerly test/inflow_fetch_harness.jl, is validated by the
+# full-tier test/era6_inflow_fetch.jl)
+# ---------------------------------------------------------------------------
+
+using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child
+
+@testset "inflow_fetch: the config runs the harness; the generator injects turbulence, off does not" begin
+    f = joinpath(RD_EX, "nesting", "configs", "inflow_fetch.toml")
+    ov = config_test_table(f).overrides
+    r = rd_run(f, ov)
+    # the same calls by hand
+    pre = fetch_precursor(; N = (12, 6, 8), extent = (5.0, 2.5), t_spin = 0.5, t_avg = 0.5)
+    df = fetch_child(pre; generator = :df, N = (24, 12, 8), extent = (5.0, 2.5), t_spin = 0.2, t_avg = 0.5,
+                     sample_every = 4, lateral = :periodic)
+    @test r.obj.pre.U == pre.U && Dict(r.obj.runs)["df"].p.tke == df.p.tke
+    res = rd_results(r)["runs"]
+    # with the mean profile only (and no initial noise) the child stays all
+    # but laminar (measured: TKE ≤ 0.5 % of the reference over 0.5 δ/u*);
+    # the digital filter puts turbulence in at the inflow plane
+    @test maximum(res["off"]["level_1"]["tke_over_reference"]) < 0.01
+    @test res["df"]["level_1"]["tke_over_reference"][1] > 0.1
+    # the inflow carries the precursor's bulk velocity (Dirichlet mean profile)
+    @test abs(res["off"]["bulk_ratio"] - 1) < 1e-3 && abs(res["df"]["bulk_ratio"] - 1) < 0.05
+end

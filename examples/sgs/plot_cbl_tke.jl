@@ -1,45 +1,36 @@
-# =========================================================================
-# Convective boundary layer with the prognostic SGS TKE closure — P56-b (#182)
+# The convective boundary layer of configs/cbl_tke.toml, the figure and
+# the comparison with Lenschow, Wyngaard & Pennell (1980):
+# σ_w²/w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)². Reads output/results.toml only.
 #
-# Free convection over a heated free-slip floor (Q = 0.1 K m/s, no mean
-# wind) with the Deardorff (1980) / Moeng (1984) closure
-# (`TKEClosure`, src/PrognosticSGS.jl), compared with the vertical-velocity
-# variance of Lenschow, Wyngaard & Pennell (1980),
+#   julia --project -m Aeolus run examples/sgs/configs/cbl_tke.toml
+#   julia --project=. examples/sgs/plot_cbl_tke.jl runs/<date>_cbl_tke_<id>
 #
-#     σ_w² / w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)²,
-#
-# whose maximum is 0.47 w*² at z/z_i = 0.31 (the issue quotes "0.4 w*² at
-# z/z_i ≈ 0.35 ± 0.1"). The harness is shared with the reduced 24³ CI test
-# (test/tke_cbl_driver.jl, test/era6_tke.jl).
-#
-#   julia --project=. examples/sgs/cbl_tke.jl [N] [hours]
-#
-# Default 64³ on 3200 × 3200 × 1600 m (Δx = 50 m, Δz = 25 m), z_i0 = 800 m,
-# Γ = 3 K/km above, 2 h, statistics over the last 30 min. Writes
-# examples/sgs/output/cbl_tke_<N>.svg and prints the numbers.
-# =========================================================================
+# Prints the σ_w² maximum against Lenschow et al. and the RMS difference
+# over 0.1 < z/z_i < 0.9, and writes output/cbl_tke_<N>.svg (three panels
+# against z/z_i: σ_w²/w*², the heat flux / Q with its SGS part, and the SGS
+# and resolved TKE / w*²).
 
-using Aeolus
 using Printf
-include(joinpath(@__DIR__, "..", "..", "test", "tke_cbl_driver.jl"))
+include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
-N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 64
-hours = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 2.0
+folder = run_folder_arg()
+res = read_results(folder)
+N = run_config_table(folder)["grid"]["n"]
+P = res["profiles"]
+r = (N = N, zi = res["zi"], w_star = res["w_star"], zc = P["zc"], zf = P["zf"], w2 = P["w2"], flux = P["flux"],
+     sgs_flux = P["sgs_flux"], e = P["e"], kres = P["kres"])
 
 lenschow(x) = 1.8 * x^(2 / 3) * (1 - 0.8x)^2     # x = z/z_i ≤ 1.25
-
-r = tke_cbl(N; Δ = 3200.0 / N, Δz = 1600.0 / N, Q = 0.1, z_i0 = 800.0, Γ = 0.003,
-            T_end = 3600hours, avg = 1800.0, progress = true)
-println(tke_cbl_summary(r))
 xs = range(0.01, 1.0, length = 400)
 ipk = argmax(lenschow.(xs))
 @printf("Lenschow et al. (1980): σ_w² max %.3f w*² at z/z_i = %.3f\n", lenschow(xs[ipk]), xs[ipk])
-@printf("LES:                    σ_w² max %.3f w*² at z/z_i = %.3f   (w* = %.2f m/s, z_i = %.0f m)\n",
-        r.w2max_norm, r.z_w2max_norm, r.w_star, r.zi)
-rms = sqrt(sum(((r.w2[k] / r.w_star^2) - lenschow(r.zc[k] / r.zi))^2
-               for k in eachindex(r.zc) if 0.1 < r.zc[k] / r.zi < 0.9) /
-           count(z -> 0.1 < z / r.zi < 0.9, r.zc))
+@printf("LES %d³:                 σ_w² max %.3f w*² at z/z_i = %.3f   (w* = %.2f m/s, z_i = %.0f m)\n",
+        N, res["w2max_norm"], res["z_w2max_norm"], r.w_star, r.zi)
+sel = [k for k in eachindex(r.zc) if 0.1 < r.zc[k] / r.zi < 0.9]
+rms = sqrt(sum(((r.w2[k] / r.w_star^2) - lenschow(r.zc[k] / r.zi))^2 for k in sel) / length(sel))
 @printf("RMS difference of σ_w²/w*² over 0.1 < z/z_i < 0.9: %.3f\n", rms)
+@printf("min heat-flux ratio %.3f, max SGS share of TKE (0.2–0.8 z_i) %.3f, e peak at %.0f m (%.2f z_i); %d steps\n",
+        res["min_flux_ratio"], res["max_sgs_fraction"], res["z_epeak"], res["z_epeak"] / r.zi, res["steps"])
 
 # --- figure: three profile panels against z/z_i --------------------------
 function write_figure(path, r)
@@ -99,5 +90,5 @@ function write_figure(path, r)
     return path
 end
 
-out = write_figure(joinpath(@__DIR__, "output", "cbl_tke_$(N).svg"), r)
+out = write_figure(plot_path(folder, "cbl_tke_$(N).svg"), r)
 println("wrote ", out)
