@@ -2,9 +2,11 @@
 # state, the boundary planes over time (FileBoundaryData, FileBoundaryFeed),
 # the large-scale and surface forcing; sounding, case-table and
 # Aeolus-parent drivers. The preprocessors that write the sounding and
-# case-table drivers are AeolusPrep.jl's since ONE-h (#457); the tests here
-# write them with the same Aeolus functions (`write_sounding_driver`,
-# `write_case_table_driver` below) and check what a run reads.
+# case-table drivers are AeolusPrep.jl's since ONE-h (#457); they call
+# Aeolus's writers (`UrbanCase.write_sounding_driver`,
+# `StableBoundaryLayer.write_sbl_driver`), which the tests here call too
+# (`write_sounding_driver`, `write_case_table_driver` below), and check what
+# a run reads.
 #
 # Acceptance tests of the issue covered here:
 #   * the time blend is exact for data linear in t (u = 1 + 0.01 t at
@@ -58,39 +60,11 @@ const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
 const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.csv"))
 
-"""
-    write_sounding_driver(cfg::RunConfig, out) -> out
+"The sounding driver of the urban run `cfg` at `out` (`UrbanCase.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
+write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.CaseConfig(cfg), out; preprocessor = "test/input_dynamic.jl")
 
-The sounding driver of the urban run `cfg` at `out`, as AeolusPrep.jl's
-`aeolusprep dynamic --from-sounding` writes it (from the same Aeolus
-functions): `UrbanCase.case_dynamic_inputs`, and for an open, non-nested
-run the steady planes of its profile boundary data in one record.
-"""
-function write_sounding_driver(cfg, out)
-    cc = BCD.CaseConfig(cfg)
-    mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
-    ox, oy = BCD.anchor_xy(cc, mesh)
-    d = BCD.case_dynamic_inputs(cc)
-    kw = (; source = cc.sounding, preprocessor = "test/input_dynamic.jl", origin_lat = cc.lat0, origin_lon = cc.lon0,
-          origin_x = ox, origin_y = oy)
-    if !BCD.case_nested(cc) && cc.lateral === :open
-        cc0 = deepcopy(cc); cc0.dynamic = nothing
-        st = only(open_boundary_states(BCD.case_boundary_conditions(cc0, mesh).bcs))
-        boundary_values!(st.planes, st.data, 0.0)
-        record_boundary!(NestBoundaryRecorder(out, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
-                         plane_snapshot(st.planes, mesh))
-    else
-        write_dynamic_driver(out, d; dx = mesh.dx, dy = mesh.dy, kw...)
-    end
-    return out
-end
-
-"The case-table driver of the sbl run `cfg` at `out` (`sbl_dynamic_inputs`, as `aeolusprep dynamic --from-sounding` writes it)."
-function write_case_table_driver(cfg, out)
-    lat = cfg.forcing.latitude === nothing ? NaN : cfg.forcing.latitude
-    return write_dynamic_driver(out, sbl_dynamic_inputs(cfg); source = something(cfg.case.data, ""), origin_lat = lat,
-                                preprocessor = "test/input_dynamic.jl")
-end
+"The case-table driver of the sbl run `cfg` at `out` (`StableBoundaryLayer.write_sbl_driver`, what `aeolusprep dynamic --from-sounding` calls)."
+write_case_table_driver(cfg, out) = write_sbl_driver(cfg, out; preprocessor = "test/input_dynamic.jl")
 
 # A synthetic boundary snapshot: every field has the value `val` everywhere.
 struct ConstSnapshot

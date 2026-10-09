@@ -98,6 +98,37 @@ function case_dynamic_inputs(cfg::CaseConfig)
 end
 
 """
+    write_sounding_driver(cfg, path; preprocessor) -> path
+
+The sounding driver of the case `cfg` at `path` (CFG-g, #362): the tables
+of [`case_dynamic_inputs`](@ref), `cfg.sounding` hashed as the source and
+`preprocessor` recorded. For an open, non-nested case (`cfg.lateral ===
+:open`, no nesting coupling) also the steady planes of its profile
+boundary data on its faces, one `time_bc` record at t = 0, taken from the
+CSV in memory (`cfg.dynamic` is ignored: the file being written is not
+read). The one writer of a sounding driver: AeolusPrep.jl's `aeolusprep
+dynamic --from-sounding` and the tests call it.
+"""
+function write_sounding_driver(cfg::CaseConfig, path::AbstractString; preprocessor::AbstractString)
+    mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
+    ox, oy = anchor_xy(cfg, mesh)
+    d = case_dynamic_inputs(cfg)
+    kw = (; source = cfg.sounding, preprocessor = preprocessor, origin_lat = cfg.lat0, origin_lon = cfg.lon0,
+          origin_x = ox, origin_y = oy)
+    mkpath(dirname(abspath(path)))
+    if !case_nested(cfg) && cfg.lateral === :open
+        cfg0 = deepcopy(cfg); cfg0.dynamic = nothing
+        st = only(open_boundary_states(case_boundary_conditions(cfg0, mesh).bcs))
+        boundary_values!(st.planes, st.data, 0.0)
+        record_boundary!(NestBoundaryRecorder(path, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
+                         plane_snapshot(st.planes, mesh))
+    else
+        write_dynamic_driver(path, d; dx = mesh.dx, dy = mesh.dy, kw...)
+    end
+    return path
+end
+
+"""
     case_sounding(cfg) -> (; profiles, t0, times, p_surface, inputs) or nothing
 
 The observed initial state of the case: its sounding's height-time tables

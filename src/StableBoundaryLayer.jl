@@ -38,12 +38,12 @@ using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Open
                 Optional, Path, section, option!, register_driver!, config_schema
 using ..IO: IO, RunFolder, CheckpointSchedule, with_monitor, monitor!, output_dir
 using ..Simulations: Simulations
-using ..InputDrivers: read_dynamic_driver, dynamic_forcing, forcing_dynamic_inputs
+using ..InputDrivers: read_dynamic_driver, dynamic_forcing, forcing_dynamic_inputs, write_dynamic_driver
 using Random
 using Statistics: mean
 import TOML
 
-export SBLDriver, SBLRun, SBL_CONFIG_DIR, SBL_KINDS, sbl_build, sbl_config, sbl_dynamic_inputs,
+export SBLDriver, SBLRun, SBL_CONFIG_DIR, SBL_KINDS, sbl_build, sbl_config, sbl_dynamic_inputs, write_sbl_driver,
        # the case builders and their step (case.jl)
        SBLCase, SBL_GABLS1_STABILITY, sbl_case, sbl_surface!, sbl_dt, sbl_step!, sbl_run!,
        sbl_column_heat, sbl_profiles, sbl_bl_height, sbl_read_csv, sbl_csv_value,

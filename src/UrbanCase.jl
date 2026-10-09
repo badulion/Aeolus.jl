@@ -50,7 +50,7 @@ using ..Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE
                            DynamicInputs, read_dynamic_driver, sounding_dynamic_inputs,
                            init_time_string, init_day_seconds, surface_pressure_at, shift_table, file_fnv1a64,
                            FileBoundaryFeed, feed_window!, feed_steady!, check_planes, check_coverage,
-                           NestBoundaryRecorder, record_boundary!
+                           NestBoundaryRecorder, record_boundary!, plane_snapshot, write_dynamic_driver
 using ..Aeolus.StretchedGrids: surface_refined_faces
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics

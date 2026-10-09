@@ -712,6 +712,23 @@ function sbl_dynamic_inputs(cfg::RunConfig)
     return d
 end
 
+"""
+    write_sbl_driver(cfg::RunConfig, path; preprocessor) -> path
+
+The case-table driver of the homogeneous SBL run `cfg` at `path`: the
+tables of [`sbl_dynamic_inputs`](@ref), the case table `case.data` hashed
+as the source, `forcing.latitude` as `origin_lat` (NaN when unset) and
+`preprocessor` recorded. The one writer of a case-table driver:
+AeolusPrep.jl's `aeolusprep dynamic --from-sounding` and the tests call it.
+"""
+function write_sbl_driver(cfg::RunConfig, path::AbstractString; preprocessor::AbstractString)
+    d = sbl_dynamic_inputs(cfg)
+    lat = cfg.forcing.latitude === nothing ? NaN : cfg.forcing.latitude
+    mkpath(dirname(abspath(path)))
+    return write_dynamic_driver(path, d; source = something(cfg.case.data, ""), origin_lat = lat,
+                                preprocessor = preprocessor)
+end
+
 # `cfg` with case.dynamic replaced (sbl_dynamic_inputs reads the config's own tables)
 with_case_dynamic(cfg::RunConfig, path) = path === cfg.case.dynamic ? cfg : with(cfg, "case.dynamic" => path)
 
