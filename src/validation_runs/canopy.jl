@@ -1,6 +1,5 @@
 # Within-canopy wind and temperature profiles (Phase 48, #25): the 1-D
-# PlantCanopy column the `plant_canopy` case of the `column` run type
-# solves (examples/validation/configs/canopy_profiles.toml). Moved from
+# PlantCanopy column the `plant_canopy` run type solves (examples/validation/configs/canopy_profiles.toml). Moved from
 # examples/validation/canopy_profiles.jl (EX-c #440), where it ran in the
 # script; the published profiles it is compared with are in
 # test/data/canopy_profiles.jl.
@@ -25,8 +24,10 @@ top, and the Harman & Finnigan (2007) mixing length
 ``l_c = 2β^3/(C_d\\,\\mathrm{LAI}/h)`` (`harman_finnigan_mixing_length`,
 wall-limited by `canopy_mixing_length`). Nothing is fitted. Returns
 `sol` (the column solution: `z`, `u`, `u_star`, …), `lad` (per layer),
-`zf` (the faces), `l_c`, `U_h` (the wind at `h`) and `d` (the
-displacement height, `canopy_displacement_height`).
+`zf` (the faces), `l_c`, `U_h` (the wind at `h`), `τ` (the kinematic
+stress ``K\\,∂U/∂z`` at the faces: the ground stress at face 1, ``u_*^2``
+at the top), `τ_h` (the stress at `h`) and `d` (the displacement height,
+`canopy_displacement_height`).
 """
 function canopy_wind_profile(p, h; C_d, ztop, N = 400, β = 0.3, u_top = 5.0)
     zf = collect(range(0, ztop; length = N + 1))
@@ -34,7 +35,11 @@ function canopy_wind_profile(p, h; C_d, ztop, N = 400, β = 0.3, u_top = 5.0)
     l_c = harman_finnigan_mixing_length(β, C_d, leaf_area_index(p) / h)
     sol = solve_canopy_wind_column(zf, lad; C_d = C_d, u_top = u_top, bottom = :no_slip,
                                    l_mix = z -> canopy_mixing_length(z; h = h, l_c = l_c))
-    return (; sol, lad, zf, l_c, U_h = _canopy_interp(sol.z, sol.u, h),
+    Nz = length(sol.u)
+    τ = [f == 1 ? sol.tau_ground :
+         f == Nz + 1 ? sol.u_star^2 :
+         sol.K[f] * (sol.u[f] - sol.u[f-1]) / (sol.z[f] - sol.z[f-1]) for f in 1:Nz+1]
+    return (; sol, lad, zf, l_c, U_h = _canopy_interp(sol.z, sol.u, h), τ, τ_h = _canopy_interp(zf, τ, h),
             d = canopy_displacement_height(sol, lad; C_d = C_d))
 end
 
@@ -57,7 +62,10 @@ scalar column (`solve_canopy_scalar_column`, `T_ref` at the top, no
 ground flux) and iterated until the air temperature the leaves see is
 the one their heat produces (`tol` K, at most `maxiter` sweeps).
 The air holds `rh` of saturation at `T_ref`. Returns `z` (layer
-centres), `ΔT` (the temperature minus `T_ref`) and `iterations`.
+centres), `ΔT` (the temperature minus `T_ref`), `iterations`, and the
+pieces of the last sweep: `Ta` (the air temperature), `leaf` (the leaf
+energy balance), `col` (the scalar column), `K` (the diffusivity at the
+faces) and `ρcp` (J m⁻³ K⁻¹).
 """
 function canopy_temperature_profile(p, h; C_d, u_star, T_ref, rh, μ, S_dir, S_dif, lw_down, gs,
                                     ztop, N, β = 0.3, Sc = 0.5, u_top = 5.0, chi_l = 0.01,
@@ -75,7 +83,7 @@ function canopy_temperature_profile(p, h; C_d, u_star, T_ref, rh, μ, S_dir, S_d
                   canopy_shortwave(m.zf, m.lad; sun = μ, sw_direct = 0.55S_dir, sw_diffuse = 0.55S_dif,
                                    optics = LeafOptics(0.35, 0.10), albedo_direct = 0.20, leaves = leaves)) :
          nothing
-    Ta = fill(Float64(T_ref), N); col = nothing; iters = 0
+    Ta = fill(Float64(T_ref), N); leaf = nothing; col = nothing; iters = 0
     for it in 1:maxiter
         iters = it
         leaf = canopy_leaf_energy_balance(m.zf, m.lad; shortwave = sw, par = sw === nothing ? nothing : 1,
@@ -87,7 +95,7 @@ function canopy_temperature_profile(p, h; C_d, u_star, T_ref, rh, μ, S_dir, S_d
         δ = maximum(abs.(col.c .- Ta)); Ta .= col.c
         δ < tol && break
     end
-    return (; z = col.z, ΔT = Ta .- T_ref, iterations = iters)
+    return (; z = col.z, ΔT = Ta .- T_ref, iterations = iters, Ta, leaf, col, K, ρcp)
 end
 
 """

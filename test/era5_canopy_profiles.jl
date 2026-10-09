@@ -9,7 +9,6 @@
 # test/data/canopy_profiles.jl.
 
 using Printf, Random
-using Aeolus.MoistThermodynamics: DEFAULT_CONSTANTS, R_d, saturation_vapor_pressure
 
 include(joinpath(@__DIR__, "data", "canopy_profiles.jl"))
 
@@ -21,65 +20,16 @@ function _cp_interp(zs, vs, z)
     return (1 - t) * vs[i] + t * vs[i+1]
 end
 
-# The 1-D canopy model used for every dataset: layer LAD from the profile,
-# the Harman & Finnigan (2007) canopy mixing length l_c = 2β³/(C_d LAI/h)
-# with β = 0.3, wall-limited near the ground and growing at κ above h
-# (`canopy_mixing_length`), a no-slip ground, and a wind prescribed at the
-# column top. Nothing is fitted to the data: C_d and the LAD are the
+# The 1-D canopy model used for every dataset is the one of the
+# `plant_canopy` run type (Aeolus.ValidationRuns): canopy_wind_profile
+# (layer LAD from the profile, the Harman & Finnigan (2007) canopy mixing
+# length l_c = 2β³/(C_d LAI/h) with β = 0.3, wall-limited near the ground
+# and growing at κ above h, a no-slip ground, a wind prescribed at the
+# column top) and canopy_temperature_profile (leaf energy balance of every
+# layer, the Harman & Finnigan (2008) scalar diffusivity, iterated to a
+# fixed point). Nothing is fitted to the data: C_d and the LAD are the
 # published ones (or, where none is published, the module default).
-function _cp_wind(p::AbstractLeafAreaDensity, h; C_d, ztop, N = 400, β = 0.3, u_top = 5.0)
-    zf = collect(range(0, ztop; length = N + 1))
-    lad = layer_leaf_area_density(p, zf)
-    l_c = harman_finnigan_mixing_length(β, C_d, leaf_area_index(p) / h)
-    sol = solve_canopy_wind_column(zf, lad; C_d = C_d, u_top = u_top, bottom = :no_slip,
-                                   l_mix = z -> canopy_mixing_length(z; h = h, l_c = l_c))
-    # Kinematic stress K ∂U/∂z at the faces (ground stress at face 1).
-    Nz = length(sol.u)
-    τ = [f == 1 ? sol.tau_ground :
-         f == Nz + 1 ? sol.u_star^2 :
-         sol.K[f] * (sol.u[f] - sol.u[f-1]) / (sol.z[f] - sol.z[f-1]) for f in 1:Nz+1]
-    U_h = _cp_interp(sol.z, sol.u, h)
-    τ_h = _cp_interp(zf, τ, h)
-    d = canopy_displacement_height(sol, lad; C_d = C_d)
-    return (; sol, lad, l_c, U_h, τ, τ_h, d, zf)
-end
-
-# Coupled in-canopy air temperature: leaf energy balance of every layer
-# (sunlit/shaded leaves, two-stream shortwave, longwave exchange) gives
-# the heat source; the steady scalar column with the Harman & Finnigan
-# (2008) diffusivity turns it into a temperature profile; repeat until the
-# air temperature the leaves see is the one their heat produces.
-function _cp_temperature(p, h; C_d, ztop, N, u_star, T_ref, rh, μ, S_dir, S_dif,
-                         lw_down, gs, H_ground = 0.0, Sc = 0.5, β = 0.3)
-    m = _cp_wind(p, h; C_d = C_d, ztop = ztop, N = N, u_top = 1.0, β = β)
-    U = m.sol.u .* (u_star / m.sol.u_star)
-    zf = m.zf; lad = m.lad
-    K = [harman_finnigan_scalar_diffusivity(z; h = h, u_star = u_star, l_mix = m.l_c,
-                                            β = β, Sc = Sc) for z in zf]
-    c = DEFAULT_CONSTANTS
-    ρcp = 101325 / (R_d(c) * T_ref) * c.cp_dry
-    ea = rh * saturation_vapor_pressure(T_ref)
-    leaves = RossGoudriaanLeaves(0.01)             # CLM needleleaf evergreen χ_L
-    sw = μ > 0 ? (canopy_shortwave(zf, lad; sun = μ, sw_direct = 0.45S_dir, sw_diffuse = 0.45S_dif,
-                                   optics = LeafOptics(0.07, 0.05), albedo_direct = 0.10, leaves = leaves),
-                  canopy_shortwave(zf, lad; sun = μ, sw_direct = 0.55S_dir, sw_diffuse = 0.55S_dif,
-                                   optics = LeafOptics(0.35, 0.10), albedo_direct = 0.20, leaves = leaves)) :
-         nothing
-    Ta = fill(Float64(T_ref), N); leaf = nothing; col = nothing; iters = 0
-    for it in 1:100
-        iters = it
-        leaf = canopy_leaf_energy_balance(zf, lad; shortwave = sw, par = sw === nothing ? nothing : 1,
-                                          T_air = Ta, e_air = ea, U = max.(U, 0.05), leaves = leaves,
-                                          lw_down = lw_down, T_ground = Ta[1], stomata = gs,
-                                          boundary_layer = CampbellNormanBoundaryLayer(leaf_width = 0.01))
-        col = solve_canopy_scalar_column(zf, K, leaf.heat_source ./ ρcp; top_value = T_ref,
-                                         bottom_flux = H_ground / ρcp)
-        δ = maximum(abs.(col.c .- Ta))
-        Ta .= col.c
-        δ < 1e-7 && break
-    end
-    return (; Ta, z = col.z, leaf, col, ρcp, iters, K)
-end
+using Aeolus.ValidationRuns: canopy_wind_profile, canopy_temperature_profile
 
 @testset "Era V — PlantCanopy: within-canopy profiles (#25)" begin
 
@@ -222,7 +172,7 @@ end
 @testset "wind tunnel: Brunet et al. (1994) waving wheat" begin
     wt = canopy_profile_observations().wind_tunnel
     h = wt.h
-    m = _cp_wind(UniformLAD(wt.ah, h), h; C_d = wt.C_d, ztop = 2h)
+    m = canopy_wind_profile(UniformLAD(wt.ah, h), h; C_d = wt.C_d, ztop = 2h)
     @test m.sol.residual < 1e-12
     @test m.sol.u_star^2 ≈ m.sol.drag_integral + m.sol.tau_ground rtol = 1e-9
     U = [_cp_interp(m.sol.z, m.sol.u, z * h) / m.U_h for z in wt.z]
@@ -251,7 +201,7 @@ end
     # The comparison discriminates between drag coefficients: with the
     # C_d = 1.2 quoted for the same canopy by Patton (1997) the in-canopy
     # error is several times larger.
-    m2 = _cp_wind(UniformLAD(wt.ah, h), h; C_d = wt.C_d_alt, ztop = 2h)
+    m2 = canopy_wind_profile(UniformLAD(wt.ah, h), h; C_d = wt.C_d_alt, ztop = 2h)
     U2 = [_cp_interp(m2.sol.z, m2.sol.u, z * h) / m2.U_h for z in wt.z]
     err2 = maximum(abs.(U2[inside] .- wt.U_over_Uh[inside]))
     @printf("      with C_d = %.2f: max |ΔU/U_h| in canopy %.3f\n", wt.C_d_alt, err2)
@@ -265,7 +215,7 @@ end
     for (key, ds) in ((:leaves, obs.chats_leaves), (:noleaves, obs.chats_noleaves))
         h = ds.h
         p = TabulatedLAD(ds.pad_z .* h, ds.pad_ah ./ h)
-        m = _cp_wind(p, h; C_d = C_d, ztop = 2.9h)
+        m = canopy_wind_profile(p, h; C_d = C_d, ztop = 2.9h)
         @test m.sol.residual < 1e-12
         U = [_cp_interp(m.sol.z, m.sol.u, z * h) / m.U_h for z in ds.z]
         crown = 0.4 .<= ds.z .< 1.0
@@ -333,7 +283,7 @@ end
     hy = canopy_profile_observations().hyytiala
     h = hy.h
     p = TabulatedLAD(hy.lad_z .* h, hy.lad)
-    m = _cp_wind(p, h; C_d = hy.C_d, ztop = 1.47h)
+    m = canopy_wind_profile(p, h; C_d = hy.C_d, ztop = 1.47h)
     @test m.sol.residual < 1e-12
     Uu = [_cp_interp(m.sol.z, m.sol.u, z * h) / m.sol.u_star for z in hy.z]
     println("    Hyytiälä (LAI $(round(leaf_area_index(p), digits = 2)), C_d = $(hy.C_d)):")
@@ -381,9 +331,9 @@ end
              lw_down = σ * 285.15^4 - 90, gs = 0.005)
     res = Dict{Symbol,Any}()
     for (lab, f, cls) in ((:day, day, :US), (:night, night, :S))
-        r = _cp_temperature(p, h; kw..., f...)
+        r = canopy_temperature_profile(p, h; u_top = 1.0, kw..., f...)
         @test r.leaf.converged
-        @test r.iters < 100
+        @test r.iterations < 100
         # The coupling conserves energy: the heat leaving the column top is
         # the leaves' sensible heat (no ground flux).
         @test r.col.flux[end] * r.ρcp ≈ r.leaf.H_total rtol = 1e-10
@@ -413,7 +363,7 @@ end
     @test all(Nn.o .< 0) && all(-5 .< Nn.ΔT .< -0.5)
     # K-theory scaling: doubling u* doubles K, the sources barely change,
     # so the anomaly halves.
-    r2 = _cp_temperature(p, h; kw..., day..., u_star = 0.8)
+    r2 = canopy_temperature_profile(p, h; u_top = 1.0, kw..., day..., u_star = 0.8)
     ΔT2 = _cp_interp(r2.z, r2.Ta, 8.4) - day.T_ref
     @printf("    day, u* doubled: ΔT(8.4 m) %+.3f K (ratio %.2f)\n", ΔT2, ΔT2 / D.ΔT[2])
     @test 0.4 < ΔT2 / D.ΔT[2] < 0.65
