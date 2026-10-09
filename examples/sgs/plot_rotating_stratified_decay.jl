@@ -17,7 +17,7 @@ res = read_results(folder)
 N = recorded_config(folder)["dns"]["n"]
 vmean(x) = sum(x) / length(x)
 b = res["base"]
-base = (T = b["T"],)
+base = (T = 1.0,)          # the figure's times are t/T, which results.toml holds
 @printf("DNS %d³: spin-up %.0f s, Re_λ = %.1f, u′ = %.3f, L = %.3f, T = %.3f, f = %.3f, N = %.3f\n",
         N, b["spinup_wall_seconds"], b["re_lambda"], b["u_prime"], b["L"], b["T"], b["f"], b["N_bv"])
 CASES = Tuple(Symbol.(recorded_config(folder)["dns"]["cases"]))
@@ -31,7 +31,7 @@ for c in CASES
     r = res["cases"][String(c)]
     snaps = [(K = r["dns_K"][i], e_sgs = r["dns_e"][i], II_mean = r["dns_II"][i], III_mean = r["dns_III"][i])
              for i in eachindex(r["dns_K"])]
-    dns[c] = (tsave = r["t_over_T"] .* base.T, snaps = snaps)
+    dns[c] = (tsave = r["t_over_T"], snaps = snaps)
     @printf("\n%s: DNS continuation %.0f s, K(t₀+2T)/K(t₀) = %.3f (full resolution)\n", c, r["dns_wall_seconds"],
             r["dns_K_ratio"])
     @printf("  %-16s %9s %9s %9s %9s %8s\n", "", "KE err", "e(2T)", "II(2T)", "τ33/τ11", "LES s")
