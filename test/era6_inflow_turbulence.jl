@@ -286,4 +286,134 @@ end
     @test any(!iszero, Pa)
 end
 
+# ---------------------------------------------------------------------------
+# N-inflow-e (#268): what the Berlin nest needs of the machinery above.
+
+# the refine-3 nest of the divergence test, on a parent with a weak
+# stratification, one-way or two-way
+function _it_nest(feedback; seed = 7)
+    pm = RegularGrid(size = (24, 24, 12), extent = (1200.0, 1200.0, 600.0), halo = (3, 3, 3))
+    p = BoussinesqSimulation(pm; θ₀ = 300.0, C_s = 0.17,
+                             bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    rng = Xoshiro(seed)
+    for f in (p.u, p.v, p.w)
+        interior_view(f) .= 0.5 .* randn(rng, size(interior_view(f)))
+    end
+    p.u.data .+= 3.0; p.v.data .+= 1.0
+    for k in axes(p.θ.data, 3)
+        p.θ.data[:, :, k] .= 300.0 + 0.003 * (k - pm.Hz - 0.5) * pm.dz
+    end
+    step!(p, 1e-3); p.t = 0.0
+    nest = nested_grid(pm, ((300.0, 900.0), (300.0, 900.0), (0.0, 300.0)), 3)
+    cm = nest_child_mesh(nest)
+    c = BoussinesqSimulation(cm; θ₀ = 300.0, C_s = 0.17,
+                             bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
+    st0 = nest_interp_state(nest)
+    interpolate_parent_state!(st0, p, nest; order = 3, region = :all)
+    for (cf, sf) in ((c.u, st0.u), (c.v, st0.v), (c.w, st0.w), (c.θ, st0.θ))
+        cf.data .= sf.data
+    end
+    run = NestedRun(p, c, nest; advance_parent = domain_advance(step_rk3!),
+                    advance_child = domain_advance(step_rk3!), feedback = feedback)
+    step!(c, 1e-9); c.t = 0.0
+    return p, c, nest, run
+end
+
+@testset "ParentResolvedStatistics on a StretchedGrid parent (the Berlin parent)" begin
+    # the same random state on a RegularGrid and on its uniform StretchedGrid
+    # (bit-identical levels): every statistic agrees exactly, and the levels
+    # are the stretched grid's own centres
+    g = RegularGrid(size = (24, 20, 10), extent = (1200.0, 1000.0, 500.0), halo = (3, 3, 3))
+    sg = StretchedGrid(g)
+    mk(m) = BoussinesqSimulation(m; θ₀ = 300.0, C_s = 0.17,
+                                 bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    a, b = mk(g), mk(sg)
+    rng = Xoshiro(11)
+    for (fa, fb) in ((a.u, b.u), (a.v, b.v), (a.w, b.w))
+        interior_view(fa) .= 2.0 .+ randn(rng, size(interior_view(fa)))
+        interior_view(fb) .= interior_view(fa)
+    end
+    lev = 2:8
+    sa = ParentResolvedStatistics(a; face = :west, refine = (2, 2), levels = lev)
+    sb = ParentResolvedStatistics(b; face = :west, refine = (2, 2), levels = lev)
+    for _ in 1:3
+        update_inflow_statistics!(sa, 10.0); update_inflow_statistics!(sb, 10.0)
+    end
+    z = [25.0 * k for k in 3:15]
+    @test sb.z == [sg.zc[sg.Hz+k] for k in lev] == sa.z
+    @test inflow_stresses(sa, z, 0.0) == inflow_stresses(sb, z, 0.0)
+    La, Lb = inflow_lengths(sa, z, 0.0), inflow_lengths(sb, z, 0.0)
+    @test La.L_s == Lb.L_s && La.L_z == Lb.L_z && La.T == Lb.T
+    @test inflow_normal_length(sa, z, 0.0) == inflow_normal_length(sb, z, 0.0)
+    @test any(r -> r[1] > 0, inflow_stresses(sb, z, 0.0))
+end
+
+@testset "fold_inflow_statistics!: the parent statistics folded where the parent is at rest" begin
+    p, c, nest, run = _it_nest(:one_way)
+    it = InflowTurbulence(run; statistics_kwargs = (τ_avg = 60.0,), statistics_interval = Inf)
+    src = it.faces[1].stats
+    n0 = src.nsamples
+    for _ in 1:4
+        step_nested!(run; dt = 2.0)
+    end
+    # the refreshes never fold with an infinite interval …
+    @test src.nsamples == n0 && it.t_stats == 0.0
+    # … a call does, once the parent has advanced by its interval
+    @test !fold_inflow_statistics!(it; interval = 10.0)            # 8 s elapsed
+    step_nested!(run; dt = 2.0)
+    @test fold_inflow_statistics!(it; interval = 10.0)              # 10 s
+    @test it.t_stats == p.t == 10.0
+    @test all(f -> f.stats.nsamples == n0 + 1, it.faces)
+    @test !fold_inflow_statistics!(it; interval = 10.0)
+    # with a finite interval the refresh folds by itself (the default)
+    p2, c2, _, run2 = _it_nest(:one_way)
+    it2 = InflowTurbulence(run2; statistics_kwargs = (τ_avg = 60.0,), statistics_interval = 10.0)
+    for _ in 1:6
+        step_nested!(run2; dt = 2.0)
+    end
+    @test it2.faces[1].stats.nsamples > n0
+end
+
+@testset "free_stream_generator: the FSD provider of the nest faces" begin
+    m = RegularGrid(size = (24, 16, 12), extent = (240.0, 160.0, 120.0), halo = (3, 3, 3))
+    sim, _ = _it_sim(m, 3.0, 1.0)
+    it = InflowTurbulence(sim; statistics = _ITConst(_IT_R, 20.0, 20.0, 20.0),
+                          generator = free_stream_generator(; U∞ = 3.0))
+    @test all(f -> f.gen isa FreeStreamInflow, it.faces)
+    w = only(f for f in it.faces if f.side === :west)
+    @test w.gen.fst.U∞ == 3.0 && w.gen.fst.L ≈ 20.0
+    worst = 0.0
+    for _ in 1:40
+        step_rk3!(sim, 0.5)
+        worst = max(worst, maximum(a.relative for a in added_mass_flux(it)))
+    end
+    P = inflow_perturbation(it, :west)
+    @test worst < 1e-12
+    @test any(!iszero, P[1]) && all(iszero, inflow_perturbation(it, :east)[1])
+    @test max_divergence(sim) < 1e-10
+end
+
+@testset "exclude_inflow_feedback!: the two-way feedback skips the inflow band" begin
+    p, c, nest, run = _it_nest(TwoWayFeedback(; buffer = 2))
+    it = InflowTurbulence(run; statistics_kwargs = (τ_avg = 60.0,))
+    w = exclude_inflow_feedback!(run, it)
+    @test w == ceil(Int, feedback_exclude_width(it) / 50.0 - 1e-9) && w >= 1
+    fb = run.twoway
+    @test fb.exclude_width == w && fb.buffer == 2 && fb.exclude_sides === :inflow && fb.reflux
+    # never narrows a band that was already wider
+    run.twoway = TwoWayFeedback(; buffer = 2, exclude_width = w + 3)
+    @test exclude_inflow_feedback!(run, it) == w + 3
+    # the mask: with the mean wind from the west-south-west, the west and
+    # south bands are w wide, the east and north ones the buffer
+    step_nested!(run; dt = 2.0)
+    act = feedback_mask(run)
+    nx, ny = nest.nx, nest.ny
+    @test !any(act[1:w+3, :, :]) && any(act[w+4, :, :])
+    @test !any(act[:, 1:w+3, :])
+    @test any(act[nx-2, :, :]) && !any(act[nx-1:nx, :, :])
+    # a one-way run is unchanged
+    p1, c1, _, run1 = _it_nest(:one_way)
+    @test exclude_inflow_feedback!(run1, InflowTurbulence(run1)) == 0 && run1.twoway === nothing
+end
+
 end

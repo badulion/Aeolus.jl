@@ -69,6 +69,7 @@ const CASE_FIELDS = (
     sponge_frac = ("dynamics.sponge_frac",), θ_top = ("dynamics.theta_top",),
     lateral = ("boundaries.lateral",), outflow = ("boundaries.outflow",),
     boundary_frame = ("boundaries.boundary_frame",), θ_relaxation = ("boundaries.theta_relaxation",),
+    analysis_buffer = ("boundaries.analysis_buffer",),
     sounding = ("initial.sounding",), dynamic = ("initial.dynamic",), θ_surface = ("initial.theta_surface",),
     θ_inversion_z = ("initial.theta_inversion_z",), θ_lapse = ("initial.theta_lapse",),
     u0 = ("initial.u0",), qv0 = ("initial.qv0",), qv_scale = ("initial.qv_scale",),
@@ -706,6 +707,9 @@ function Config.driver_sections(::BerlinDriver)
                 doc = "cells: buildings closer than this to an open face are removed")
         option!(s, "theta_relaxation", Bool; default = true,
                 doc = "relax θ over the sponge layer toward the boundary data's profile")
+        option!(s, "analysis_buffer", Float64; default = ANALYSIS_BUFFER_DEFAULT, range = (0, Inf), units = "m",
+                doc = "columns closer than this to a lateral open face are left out of the diagnostics " *
+                      "compared with observations (the inflow fetch, #268)")
     end
     ini = section("initial"; doc = "The initial state: the sounding, or the idealised profile.") do s
         option!(s, "sounding", Optional{Path}; default = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv"),
@@ -865,7 +869,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
                       (year(d), month(d), day(d)), c.utc_offset, c.start_h, c.dt, c.nsteps, cad,
                       dyn.nu, dyn.theta0, dyn.g, dyn.f_coriolis, dyn.c_s, dyn.pr_t, dyn.sgs_stability,
                       dyn.sponge_alpha_max, dyn.sponge_frac, dyn.theta_top,
-                      b.lateral, b.outflow, b.boundary_frame, b.theta_relaxation,
+                      b.lateral, b.outflow, b.boundary_frame, b.theta_relaxation, b.analysis_buffer,
                       ini.sounding, ini.dynamic, ini.theta_surface, ini.theta_inversion_z, ini.theta_lapse, ini.u0,
                       ini.qv0, ini.qv_scale, ini.ts0, ini.ts_water_offset, ini.t_soil0, ini.p_surface,
                       berlin_physics(cfg), options,

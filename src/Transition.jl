@@ -81,7 +81,7 @@ using ..BoundaryConditions: AbstractBoundaryData, OpenPlane, OpenBoundary,      
                             has_open_boundaries, open_boundary_states, _face_local,
                             WindowedBoundaryData
 import ..BoundaryConditions: boundary_values!
-using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range, refinement_ratio
+using ..Nesting: NestedRun, NestBoundaryData, nest_covered_range, refinement_ratio, TwoWayFeedback
 
 export turbulent_fraction, turbulent_indicator!, laminar_mask!,
        intermittency_factor, flux_richardson, buoyancy_reynolds,
@@ -108,7 +108,7 @@ export InflowStatistics, inflow_stresses, inflow_lengths, update_inflow_statisti
 # N-inflow-c (#264): turbulence on the inflow faces of an open-boundary child
 export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow_turbulence!,
        refresh_inflow_lengths!, added_mass_flux, injected_ke_flux, inflow_perturbation,
-       feedback_exclude_width
+       feedback_exclude_width, exclude_inflow_feedback!, fold_inflow_statistics!, free_stream_generator
 # N-inflow-d (#266): the development length (fetch) behind a synthetic inflow
 export FetchStatistics, accumulate_fetch!, fetch_profiles, development_length
 # P59-e (#195): relaminarisation in strongly stable stratification

@@ -161,6 +161,18 @@ end
     @test sm.options[:nesting].parent.refinement == (4, 4, 8)
 end
 
+@testset "Config berlin: the analysis buffer of the observation diagnostics (#268)" begin
+    @test BCC.CaseConfig().analysis_buffer == BCC.ANALYSIS_BUFFER_DEFAULT == 140.0
+    sm = BCC.CaseConfig(:smoke)
+    m = RegularGrid(; size = sm.size, extent = sm.extent, halo = sm.halo)
+    A = BCC.analysis_columns(sm, m)            # 31.25 m = 2 cells of 15.6 m from each nest face
+    @test sm.analysis_buffer == 31.25 && size(A) == (16, 16) && count(A) == 12 * 12
+    @test all(A[3:14, 3:14]) && !any(A[1:2, :]) && !any(A[:, 15:16])
+    # the periodic box has no inflow face: every column counts
+    pb = BCC.CaseConfig(:smoke; physics = Dict{Symbol,Any}(:nesting => false))
+    @test all(BCC.analysis_columns(pb, m))
+end
+
 @testset "Config berlin: [physics] and per-coupling options" begin
     smoke = berlin_toml("smoke")
     ld(ovr...) = BCC.CaseConfig(load_run_config(smoke; overrides = String[ovr...]))

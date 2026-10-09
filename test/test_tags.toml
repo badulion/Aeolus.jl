@@ -39,6 +39,12 @@ weight = "heavy"
 seconds = 299
 reason = "development-length runs behind synthetic inflow vs a periodic precursor; Transition stays fast in era6_synthetic_inflow.jl, era6_inflow_statistics.jl, era6_inflow_turbulence.jl (development_length/FetchStatistics have no other fast test)"
 
+["era6_inflow_nest_longrun.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 300
+reason = "2 h sheared-CBL nest runs, one-way and two-way, with and without the inflow generator; the generator on a nest stays fast in era6_inflow_turbulence.jl"
+
 ["era6_outflow_conditions.jl"]
 tier = "full"
 weight = "heavy"

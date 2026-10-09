@@ -789,7 +789,9 @@ _cols(case, T, cls = nothing) =
 
 Over the columns with a surface: the mean `H`, `LE`, `G` (W m⁻²) and
 the mean friction velocity of the roofs `ustar_roof` and the ground
-`ustar_ground` (m s⁻¹); with the dynamic roughness its `z0_alpha` and
+`ustar_ground` (m s⁻¹), the latter two over the
+[`analysis_columns`](@ref) only (outside `cfg.analysis_buffer` of the
+open faces: they are compared with observations, #270); with the dynamic roughness its `z0_alpha` and
 the street's mean `z0_street` (m). P58-e: the stable columns' downward
 buoyancy flux over their maximum sustainable heat flux, per class,
 `mshf_ratio_<class>` (mean |H|/H_max) and `mshf_beyond_<class>` (the
@@ -800,8 +802,10 @@ time of the MSHF maximisations per surface step `wall.mshf_ms_per_step`.
 function diagnostics(c::SurfaceExchangeMOST, case)
     bus, sfc = case.bus, case.geom.sfc
     have = [I for I in eachindex(bus.surface) if bus.surface[I] !== nothing]
-    roof = [I for I in have if sfc[I] == SURFACE_ROOF]
-    ground = [I for I in have if sfc[I] != SURFACE_ROOF]
+    # u* is compared with observations (#270): outside the inflow fetch (#268)
+    ana = analysis_columns(case)
+    roof = [I for I in have if sfc[I] == SURFACE_ROOF && ana[I]]
+    ground = [I for I in have if sfc[I] != SURFACE_ROOF && ana[I]]
     m(x, idx) = () -> isempty(idx) ? NaN : mean(x[idx])
     ds = Diagnostic[
         Diagnostic("H", "W m-2", m(bus.H, have); description = "mean sensible heat flux, upward"),

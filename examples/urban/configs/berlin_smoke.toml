@@ -44,6 +44,11 @@ nsteps = 12
 radiation = 8.0
 soil = 4.0
 
+[boundaries]
+# the 140 m default would leave no column of the 250 m window to the
+# observation diagnostics (u*): two cells
+analysis_buffer = 31.25
+
 [initial]
 sounding = "none"
 dynamic = "none"

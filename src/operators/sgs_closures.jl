@@ -495,7 +495,8 @@ needs to know which closure the parent runs:
 * every other closure (the default method, and `c = nothing` for a
   simulation's built-in Smagorinsky) returns **its own estimate**: the
   Deardorff (1980) eddy viscosity ``ν_t = c_k\\,l\\,\\sqrt e`` with the
-  neutral mixing length ``l = Δ = (ΔxΔyΔz)^{1/3}`` inverted,
+  neutral mixing length ``l = Δ = (ΔxΔyΔz)^{1/3}`` (on a `StretchedGrid`
+  with the thickness of each level) inverted,
   ``e = (ν_t/(c_kΔ))^2``, ``c_k = 0.1`` (Moeng 1984). ``ν_t`` is the
   horizontal viscosity the closure last wrote (`sgs_fields(c, sim).νh`,
   or `sim.νt`), so call it after a step (or after `sgs_coefficients!`).
@@ -514,6 +515,11 @@ end
 
 function _tke_from_viscosity!(e::Field, ν::Field, c_k::Real)
     g = mesh(e)
+    if hasproperty(g, :dzc)              # a StretchedGrid: Δ of each level (#268)
+        sk = [1 / (c_k * (g.dx * g.dy * dz)^(1 / 3)) for dz in g.dzc]
+        launch!(Backends.backend(e.data), _tke_from_ν_levels_body!, interior(g), e.data, ν.data, sk)
+        return e
+    end
     Δ = (g.dx * g.dy * g.dz)^(1 / 3)
     s = 1 / (c_k * Δ)
     launch!(Backends.backend(e.data), _tke_from_ν_body!, interior(g), e.data, ν.data, s)
@@ -522,5 +528,10 @@ end
 
 @inline function _tke_from_ν_body!(i, j, k, ed, νd, s)
     @inbounds ed[i, j, k] = (max(νd[i, j, k], 0) * s)^2
+    return nothing
+end
+
+@inline function _tke_from_ν_levels_body!(i, j, k, ed, νd, sk)
+    @inbounds ed[i, j, k] = (max(νd[i, j, k], 0) * sk[k])^2
     return nothing
 end

@@ -74,7 +74,10 @@ Groups of fields:
   this to an open face are removed; default 3) and `θ_relaxation` (default
   `true`: θ is relaxed over the velocity sponge layer toward the data's
   profile, in a nested case toward the parent's mean profile over the
-  child);
+  child); `analysis_buffer` (m, default [`ANALYSIS_BUFFER_DEFAULT`](@ref)):
+  the columns closer than this to a lateral open face are left out of the
+  diagnostics compared with observations ([`analysis_columns`](@ref)),
+  where the inflow turbulence is still developing (#268);
 * **initial state** — `sounding`: the radiosonde CSV the initial θ(z),
   qv(z) and surface pressure come from (default: the Lindenberg WMO 10393
   launches of 29/30 June 2019, `data/lindenberg_10393_20190629.csv`,
@@ -168,6 +171,7 @@ mutable struct CaseConfig
     outflow::Symbol
     boundary_frame::Int
     θ_relaxation::Bool
+    analysis_buffer::Float64          # m: left out of the observation diagnostics (#268)
     # initial state: the observed sounding (#247) …
     sounding::Union{Nothing,String}
     # the dynamic driver (CFG-g, #362): the sounding's (replaces `sounding`)

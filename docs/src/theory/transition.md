@@ -483,8 +483,9 @@ to the top inflated ``θ`` by 50 % at the inflow.
 Stated exception (#185): the Berlin domain is laterally periodic with
 geostrophic forcing and has no inflow direction, so a fringe, a
 free-stream top and an inflow generator have no place in it; inflow
-boundaries arrive with nesting and ERA5 driving (Phase 68). Transition
-stays coupled through the `turbulence_diag` addon (P59-c), and the
+boundaries arrived with nesting (#265), and the inflow generator is coupled
+there (N-inflow-e, #268, below). Transition stays coupled through the
+`turbulence_diag` addon (P59-c), and the
 Rayleigh sponge of every Berlin step now takes its rate from the shared
 damping profile (state bit-identical to the Phase-7 kernel in the smoke
 run). No Berlin list changed.
@@ -1091,13 +1092,13 @@ that makes a new knot costs 0.92 ms and a refresh within the window
 costs 0.22 ms. The data fill alone costs 0.08 ms.
 
 **Two-way.** Feedback should skip a frame of
-`feedback_exclude_width(it)` = ``2\max L_s`` next to the open faces
-(N-nest-e, #263, which has not merged yet). Without that frame, the
-feedback restricts the synthetic eddies into the parent, and the parent
-returns them through the next prolongation. On the refine-3 test nest,
-over 200 s, the child's kinetic energy grew ×5.5 and the parent's ×3.2.
-Without the inflow perturbations, the same two-way run kept the child's
-energy at ×0.99. N-inflow-c is therefore tested one-way only.
+`feedback_exclude_width(it)` = ``2\max L_s`` next to the inflow faces
+(N-nest-e's `exclude_width`, set by `exclude_inflow_feedback!`). Without
+that frame, the feedback restricts the synthetic eddies into the parent,
+and the parent returns them through the next prolongation; on the
+refine-3 test nest over 200 s (before N-nest-e) the child's kinetic
+energy grew ×5.5 and the parent's ×3.2. The frame is not enough
+(N-inflow-e, #268): see [Two-way with the generator](#Two-way-with-the-generator-(N-inflow-e)) below.
 
 ### Development length behind the inflow (N-inflow-d)
 
@@ -1347,28 +1348,66 @@ asserted inside the 10δ child.
   centre. Not an expectation that proved wrong, but a set-up the first
   attempt had replaced by periodic y.
 
-### The Berlin case
+### The Berlin case (N-inflow-e)
 
-Stated exception (as in #185): the Berlin run is laterally periodic and
-has no inflow face, so no generator or statistics source is coupled yet.
-The coupling to the nested child's open faces is N-inflow-e (#268), which
-will also quote the Berlin day and night statistics; `InflowTurbulence`
-(N-inflow-c) is the object it installs. Transition stays
-coupled through `turbulence_diag`; no Berlin list changed. One
-digital-filter step on a 64 × 40 face costs 0.10 ms. One update of
-`ParentResolvedStatistics` on the 192 × 192 Berlin parent (20 levels)
-costs 65 ms, so it belongs on a cadence. The convective-parent numbers
-above stand in for the Berlin numbers until then.
+The nested Berlin child runs `InflowTurbulence` on its four lateral
+faces by default, the addon `:inflow_turbulence` (#268; design, options
+and ledger on the [nesting page](../design/berlin_nesting.md#Synthetic-inflow-turbulence-(#268))):
+the digital filter with `ParentResolvedStatistics` of the Aeolus parent,
+which runs on a `StretchedGrid` — the statistics take that grid's level
+heights and thicknesses (bit-identical to a `RegularGrid` on a uniform
+one, `test/era6_inflow_turbulence.jl`; the child lies in the parent's
+uniform layers, where the vertical differences and lags are exact). The
+statistics are folded with `fold_inflow_statistics!` from the nest's
+window hook, while the parent is at rest: one-way, the parent's next step
+runs ahead on another task (SC-c, #403). The FSD provider is
+`free_stream_generator`; `ParametrizedStatistics` is the option for a
+parent without resolved turbulence. One digital-filter step on a
+64 × 40 face costs 0.10 ms; one update of `ParentResolvedStatistics`
+on the 192 × 192 Berlin parent (20 levels) 65 ms, hence the 60 s
+cadence.
 
-N-inflow-d (#266) adds no coupling either (stated exception): its
-fetch is measured on the periodic half channel above, and the Berlin
-child's fetch, day and night, is measured in N-inflow-e (#268), where
-the nested Berlin case exists. `development_length`, `FetchStatistics`
-and the open-x `half_channel_case` are diagnostics and a benchmark
-builder; no Berlin list changed. For the Berlin child the measurement
-here predicts two things to check: the fetch scales with
-``U(z)\,k/ε``, and a coarse parent's mean profile, not the generator,
-sets the near-wall turbulence level far downstream.
+**Effect, idealised.** On the 2 h sheared-CBL nest
+(`test/era6_inflow_nest_longrun.jl`: the two-way CBL of Hellsten et al.
+2021 with a (3, 1) m s⁻¹ wind, parent 100 m, child r = 3) the resolved
+TKE within 200 m of the upwind face, 50–150 m up, is 3.165 m² s⁻² with
+the generator against 2.278 without (+39 %); KE flux 0.79 W m⁻²
+(run mean), added flux ≤ 3.7e-17 of the mean-flow flux.
+
+**The Berlin fetch** (day and night, to 90 % of the canopy-top TKE
+plateau and at 100 m) needs hours of model time on the nested flagship
+and is measured with the 24 h validation (#270). Until then the
+analysis buffer of the observation diagnostics is the estimate from
+the rule measured above, ``L = 1.2\,Uk/ε`` at the mean roof height
+(140 m), not a measurement.
+
+#### Two-way with the generator (N-inflow-e)
+
+The maintainer's requirement for #268: 2 h, two-way, generator on: no
+NaN, child and parent mean KE within 1.5× of one-way, parent overlap θ
+drift < 0.2 K. Measured on the sheared-CBL nest (two realisations, the
+FFTW planner differs between them):
+
+| run | child KE (m² s⁻²) | parent KE | overlap θ − one-way |
+| :-- | --: | --: | --: |
+| one-way, generator | 6.665 | 5.943 | 0 |
+| one-way, none | 6.428 | 5.943 | 0 |
+| two-way, none | 6.714 | 5.915 | −0.002 K |
+| two-way, generator (band 1 parent cell) | 82.8 (×12.4; ×11.8) | 15.4 (×2.6; ×2.4) | +0.26 K (+0.23 K) |
+
+No NaN, but the KE and θ criteria **fail**: kept as `@test_broken`. The
+cause is the feedback, not the generator (one-way, the generator moves
+the child's KE by 4 %; two-way without it, by 4 %). On the decaying
+refine-3 nest of the tests above, run for 2 h: two-way with the
+generator ×2.4 (child) and ×1.3 (parent), +0.31 K; the same with the
+parent statistics frozen at their first sample, ×1.3 and ×0.97,
++0.23 K; with the band widened from 3 to 6 parent cells, ×2.1 and
+×1.2, +0.30 K. Once the synthetic eddies are past the band they are
+anterpolated into the parent, the parent-resolved statistics measure
+them, and the generator feeds them back amplified; the remaining θ
+drift is the child's extra mixing fed back. Not tuned (#268: report,
+do not tune); the coupling warns when the generator runs two-way, and
+the two-way campaign is #331.
 
 ## References
 

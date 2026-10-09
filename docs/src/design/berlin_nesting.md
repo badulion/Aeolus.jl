@@ -284,3 +284,98 @@ sound-proof child have no common measure, #327 M1).
 * the cost of two-way per parent step has not been measured on the
   flagship (the smoke run is dominated by compilation).
 
+
+## Synthetic inflow turbulence (#268)
+
+The child's lateral faces take the parent's field at 2–4× the child's
+spacing (flagship: Δx_p = 31.25 m against 15.6 m). The parent's eddies
+arrive; the eddies between the two resolutions do not, and an inflow fed
+only with the parent's interpolated field enters the child too smooth
+(N-inflow-d, #266: with no generator at all, a laminar inflow stayed
+laminar for 15 boundary-layer depths). The addon `:inflow_turbulence`
+(`couplings/inflow_turbulence.jl`, on by default) adds the missing part
+on the **inflow** parts of the four lateral faces with
+[`InflowTurbulence`](@ref Aeolus.Transition.InflowTurbulence) (N-inflow-c,
+#264; theory on the [transition page](../theory/transition.md)):
+velocity only, ramped on per level by the face-mean inflow
+(``\min(1, -U_n/u_{\min})``), its per-level mean removed (no mass added),
+linear in time over a parent window like the parent data, and inserted
+inside `update_open_boundaries!` before the mass-flux correction, so no
+step core is touched.
+
+| option | default | |
+| :-- | :-- | :-- |
+| `generator` | `:digital_filter` | `DigitalFilterGenerator` (Xie & Castro 2008); `:fsd`: the random-mode `FreeStreamInflow` (`free_stream_generator`, swept at the parent's mean wind over the child) |
+| `statistics` | `:parent_resolved` | the parent's resolved stress in the scale gap of the refinement plus its SGS stress (`ParentResolvedStatistics`, on the parent's `StretchedGrid`); `:parametrized`: `ParametrizedStatistics` with the child's u* and Obukhov length and the parent's ``z_i`` (the path of a mesoscale parent, #58) |
+| `u_min` | 0.5 m s⁻¹ | the inflow ramp |
+| `seed` | 1 | generator seeds (face q: seed + q − 1) |
+| `statistics_interval` | 60 s | parent time between two folds of the parent statistics |
+| `length_interval` | 3600 s | rebuild of the digital-filter kernels from the current lengths |
+| `length_scale` | `NaN` | `:parametrized` only: the single length (NaN: 8 child spacings) |
+
+**The parent is read only at rest.** One-way under several threads, the
+nest steps the parent of the next window on its own task while the child
+steps through this one (SC-c, #403). The parent statistics are therefore
+folded from a new hook of the nesting coupling (`window_hooks`, called
+when a window opens, after the parent's step and before the next one
+starts ahead), with [`fold_inflow_statistics!`](@ref
+Aeolus.Transition.fold_inflow_statistics!); the child's boundary refresh
+never reads the parent.
+
+**Ledger and checks.** `budget!` books the perturbation kinetic energy
+the mean inflow carries through the perturbed faces,
+``ρ⟨\tfrac12|u'|^2\max(-U_n,0)⟩`` (W m⁻² of perturbed face,
+`injected_ke_flux`), as the ledger term `:inflow_ke` (J m⁻²); the
+diagnostics `inflow_ke_flux`, `inflow_ke` and `inflow_added_flux_max`
+report it. The added mass flux is zero by construction: `smoke_check`
+asserts it ≤ 1e-12 of the face's mean-flow flux on every face at every
+step, the booked term, a non-zero perturbation on an inflow face and a
+newest knot that is exactly zero on every outflow level (the applied
+perturbation blends two knots in time, so a level that has just turned
+to outflow still carries the older knot's share). Its smoke variants are the FSD
+generator, the parametrized statistics (with both generators) and the
+parametrized statistics on the analytic `parent_driver = :profile` data;
+the nest's "two-way" variant runs it with the feedback.
+
+**No running parent.** Faces fed by a driver instead of the running
+parent (`parent_driver = :profile` or `:offline`, or the open box without
+the nest) have no resolved statistics: the generator is installed there
+only with `statistics = :parametrized`. The offline child replays the
+parent's faces, not the online child's perturbations, which are drawn
+from the running parent; `test/input_dynamic.jl`'s bit-for-bit
+online/offline round trip therefore runs with the addon off.
+
+**Two-way.** With `mode = :two_way` the feedback skips an inflow band of
+``⌈2\max L_s/Δx_p⌉`` parent cells (`exclude_inflow_feedback!`). That is
+not enough: two-way with the generator is **measured unstable**, and the
+coupling warns when it is selected. On the 2 h sheared-CBL nest of
+`test/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
+with a 3 m s⁻¹ wind, r = 3) two-way without the generator stays within
+5 % of one-way (child KE ×1.04, parent ×0.995, overlap θ −0.002 K), but
+with it the child's kinetic energy grows ×12, the parent's ×2.5 and the
+overlap θ drifts +0.25 K against one-way with the generator — the #268
+criteria (1.5×, 0.2 K) fail. The cause is the feedback, not the
+generator: one-way, the generator changes the child's KE by 4 %. On the
+decaying refine-3 nest (200 s → 2 h), freezing the parent statistics at
+their first sample (no loop through the parent) cut the growth from
+×2.4 to ×1.3 (child) and from ×1.3 to ×0.97 (parent) but left the
+overlap θ drift at 0.23 K; widening the band from 3 to 6 parent cells
+did not help (×2.1). The generator's eddies are anterpolated into the
+parent once they leave the band, the parent statistics measure them,
+and the generator returns them amplified. Not tuned here (#268: report,
+do not tune); the two-way campaign is #331.
+
+**Analysis buffer.** Behind an inflow face the turbulence is still
+developing, so the diagnostics compared with observations leave out the
+columns within `cfg.analysis_buffer` of the lateral open faces
+(`analysis_columns`, `core/open_boundary.jl`); today these are `ustar_roof` and
+`ustar_ground` of the surface exchange (#270 adds canopy T and the heat
+island). The default, 140 m, is an **estimate**: the 1.2-turnover rule
+N-inflow-d measured, ``L = 1.2\,Uk/ε``, with neutral surface-layer
+values at the mean roof height of the flagship scene
+(`ANALYSIS_BUFFER_DEFAULT`). The Berlin fetch itself — on the
+child with buildings, inflow from the parent at 12:00 and 03:00,
+generator on and off, to 90 % of the canopy-top TKE plateau and at
+100 m — needs hours of model time and is left to the 24 h validation
+(#270), which replaces the default with it; long Berlin runs were
+paused when this was written.

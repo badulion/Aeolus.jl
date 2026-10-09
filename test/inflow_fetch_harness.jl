@@ -103,9 +103,7 @@ function fetch_child(pre; generator::Symbol = :df, N, extent, t_spin, t_avg,
         # the isotropic random-mode field of P59-d, one length (the face-mean
         # streamwise L_s of the statistics), swept at the bulk velocity
         Ub = sum(pre.U) / length(pre.U)
-        gen = (side; ns, nz, Δs, Δz, L_s, L_z, T, seed) -> FreeStreamInflow(
-            FreeStreamDisturbance(0.1, sum(@view L_s[1, :]) / nz, nmodes; seed = seed, U∞ = Ub,
-                                  period_y = extent[2]), ns, nz, Δs, Δz)
+        gen = free_stream_generator(; U∞ = Ub, nmodes = nmodes)
         it = InflowTurbulence(sim; statistics = pre.src, faces = (:west,), generator = gen,
                               seed = seed)
     else

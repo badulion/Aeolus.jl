@@ -90,6 +90,14 @@ added_mass_flux(it).west.relative               # round-off
 injected_ke_flux(it).total                      # W m⁻²
 ```
 
+A nest whose parent steps ahead on its own task (the Berlin nest,
+N-inflow-e #268) builds `InflowTurbulence(run; statistics_interval = Inf)`
+and folds the parent statistics with `fold_inflow_statistics!` where the
+parent is at rest; `exclude_inflow_feedback!(run, it)` gives a two-way
+feedback the inflow band of `feedback_exclude_width(it)`;
+`free_stream_generator(; U∞)` is the FSD `generator` argument.
+`ParentResolvedStatistics` also takes a `StretchedGrid` parent.
+
 Development length (N-inflow-d, #266): `FetchStatistics`,
 `accumulate_fetch!` and `fetch_profiles` average the resolved moments of
 an inflow–outflow domain over y and time per streamwise column;

@@ -156,6 +156,9 @@ outflow = "dirichlet"
 boundary_frame = 3
 # relax θ over the sponge layer toward the boundary data's profile
 theta_relaxation = true
+# columns closer than this to a lateral open face are left out of the
+# diagnostics compared with observations (the inflow fetch, #268) [m]
+analysis_buffer = 140.0
 
 [initial]
 # The initial state: the sounding, or the idealised profile.
@@ -216,6 +219,7 @@ timestepper = "adaptive"    # the timestepper provider: adaptive, fixed, imex
 cloud_shadow = true    # the additive coupling cloud_shadow on or off
 fog_dew = true    # the additive coupling fog_dew on or off
 geostrophic = true    # the additive coupling geostrophic on or off
+inflow_turbulence = true    # the additive coupling inflow_turbulence on or off
 moist_buoyancy = true    # the additive coupling moist_buoyancy on or off
 nesting = true    # the additive coupling nesting on or off
 pollutant = true    # the additive coupling pollutant on or off
@@ -262,6 +266,15 @@ texture = "loam"
 sand = 40
 clay = 20
 nlayers = 10
+
+[physics.options.inflow_turbulence]
+generator = "digital_filter"
+statistics = "parent_resolved"
+u_min = 0.5
+seed = 1
+statistics_interval = 60.0
+length_interval = 3600.0
+length_scale = nan
 
 [physics.options.micro_kessler]
 qv_max = 0.03

@@ -65,6 +65,53 @@ function lateral_open(cfg::CaseConfig)
 end
 
 """
+    ANALYSIS_BUFFER_DEFAULT
+
+The default `cfg.analysis_buffer` (m): 140 m, the canopy-top inflow
+fetch of the Alexanderplatz child **estimated** from the rule N-inflow-d
+(#266) measured: behind a digital-filter inflow the turbulence recovers
+to 10 % in 1.2 local eddy-turnover distances, ``L = 1.2\\,U k/ε`` (6.6δ
+at 0.22δ and 12.3δ at 0.47δ of the half channel,
+`docs/src/theory/transition.md`). With the neutral surface-layer values
+``U = (u_*/κ)\\ln((z-d)/z_0)``, ``k = 5.48u_*^2`` (Panofsky & Dutton
+1984: σ_{u,v,w} = 2.39, 1.92, 1.25 u_*) and ``ε = u_*^3/(κ(z-d))`` this is
+``L = 6.58\\,(z-d)\\ln((z-d)/z_0)``, independent of ``u_*``; at the mean
+roof height of the flagship scene (h = 21.6 m, λ_p = 0.223, λ_f = 0.151;
+Macdonald et al. 1998: d = 9.6 m, z_0 = 2.0 m) L = 141 m. (At 100 m the
+same rule gives 2.3 km, more than the child: there the child keeps what
+the generator and the parent give it.) The Berlin fetch measured on the
+nested child, day and night (#268 step 2), replaces it when the 24 h runs
+are made (#270). Macdonald, R. W., Griffiths, R. F. & Hall, D. J. (1998),
+*Atmos. Environ.* 32, 1857-1864.
+"""
+const ANALYSIS_BUFFER_DEFAULT = 140.0
+
+"""
+    analysis_columns(cfg, mesh) -> BitMatrix
+    analysis_columns(case) -> BitMatrix
+
+The `Nx × Ny` columns the diagnostics compared with observations use:
+those whose centre lies at least `cfg.analysis_buffer` (m) from every
+lateral open face (all four sides when the case is nested or
+`lateral = :open`; none in the periodic box, where every column counts).
+Behind an inflow face the turbulence the face receives is still
+developing over a fetch (N-inflow-d #266, N-inflow-e #268), so a column
+inside it is not the equilibrium flow over its own surface. Every side
+is cut, not only the current inflow faces: the wind turns over the day.
+"""
+function analysis_columns(cfg::CaseConfig, m)
+    b = Float64(cfg.analysis_buffer)
+    A = trues(m.Nx, m.Ny)
+    (lateral_open(cfg) && b > 0) || return A
+    for j in 1:m.Ny, i in 1:m.Nx
+        x, y = (i - 0.5) * m.dx, (j - 0.5) * m.dy
+        A[i, j] = min(x, m.Lx - x, y, m.Ly - y) >= b
+    end
+    return A
+end
+analysis_columns(case) = analysis_columns(case.cfg, case.mesh)
+
+"""
     case_boundary_data(cfg) -> ProfileBoundaryData
 
 The boundary data of the `:open` case: `u = U_g`, `v = V_g` (the
