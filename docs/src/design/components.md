@@ -247,6 +247,26 @@ urban case and the SBL run type write through the same writer: the urban
 couplings' `output_fields` are catalogues of `OutputVariable`s, and the
 SBL time series are the time-series stream of `output/output.nc`.
 
+## Checks
+
+Every component publishes its checks (`checks(c)`: `Aeolus.Checks.Check`s,
+named as `check_names(C)` declares for its type), and the core publishes
+`Components.CORE_CHECKS`: the sanity check `finite` and the closure check
+of each measured budget. The model's `[checks]` section has one entry per
+published name, `name = {required, tolerance}` (an empty table is off),
+and the reference comparisons `[checks.reference.<quantity>]` against
+`reference_file`. The configuration is validated against the declared
+names and against the requirements of a closure's budget. A closure check
+turns its budget on.
+
+The checks run in stage 13, after the budgets close and before the
+output: each step, a check that accumulates (a reference comparison over
+a time window) samples the step; at the end of the run every enabled
+check is evaluated and `output/results.toml` is written. A failed
+required check ends the run with `Checks.ChecksFailed`, and `aeolus run`
+exits with 3. A run that stops with an error records the failed sanity
+check before the error propagates. See [Checks](../api/checks.md).
+
 ## Where the code still differs from the target
 
 * The low-level cores keep their keyword interface — `f_coriolis`,
@@ -264,6 +284,11 @@ SBL time series are the time-series stream of `output/output.nc`.
   defaults (the shared budgets and the catalogue-selected output, ONE-c
   #452); `checks` likewise, the `[checks]`/`results.toml` machinery is
   ONE-d (#453). The budget closure becomes one of its checks.
+* The urban couplings' `smoke_check`s, the urban run type's own
+  `results.toml` closure verdict (`run_results`) and the SBL reference
+  comparisons (the plotting scripts of `examples/sbl/`) are not checks
+  yet: they move to `checks(c)` and `[checks.reference]` when ONE-e (#454)
+  and ONE-g (#456) port those run types to components.
 * The urban couplings and the SBL run type report into the one
   `Budgets` and write through the one writer, but they are still run
   types of their own. Their budgets keep their own step hooks (the urban

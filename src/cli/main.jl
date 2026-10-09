@@ -4,7 +4,8 @@
 #   bin/aeolus run config.toml                       (any Julia)
 #
 # Argument parsing is in-package (no ArgParse/Comonicon dependency).
-# Exit codes: 0 success, 1 the run failed, 2 a usage or config error.
+# Exit codes: 0 success, 1 the run failed, 2 a usage or config error, 3 a required
+# check failed (ONE-d, #453).
 
 const _USAGE = """
 usage: aeolus <command> [arguments]
@@ -28,7 +29,8 @@ usage: aeolus <command> [arguments]
 
 Overrides are "dotted.key=<TOML value>": --set time.nsteps=20,
 --set 'run.name="tgv"' (a per-domain section's key: in every domain). Exit codes: 0 success, 1 the run failed,
-2 a usage or configuration error (nothing is written).
+2 a usage or configuration error (nothing is written), 3 the run completed but a required check of [checks]
+failed (output/results.toml says which).
 """
 
 "A command-line usage error (exit code 2)."
@@ -379,7 +381,7 @@ function _cmd_run(args, io, err)
             e isa IO.UncommittedCodeError && rethrow()   # raised before anything is written: 2
             println(err, "run failed", isempty(m.label) ? "" : " (member $(m.index), $(m.label))", ": ",
                     first(sprint(showerror, e), 2000))
-            return 1
+            return e isa ChecksFailed ? 3 : 1
         end
         rf = res.folder
         println(io, "run ", rf.run_id, " (session ", rf.session, ") completed: ", rf.path)
@@ -400,7 +402,9 @@ AeolusPrep.jl (`julia --project -m AeolusPrep …`; ONE-h, #457). Called as
 `Aeolus.main`) or `bin/aeolus <command> …`. Returns the exit code: 0 on
 success, 1 when the run failed (its session is recorded as `failed`),
 2 for a usage or configuration error, which is raised before anything is
-written. Messages go to `io`, errors and the run's console log to `err`.
+written, and 3 when the run completed but a required check of `[checks]`
+failed (`Aeolus.Checks.ChecksFailed`; the session is recorded as `failed`,
+`output/results.toml` says which). Messages go to `io`, errors and the run's console log to `err`.
 """
 function main(args::AbstractVector{<:AbstractString}; io::Base.IO = stdout, err::Base.IO = stderr)
     if isempty(args) || args[1] in ("help", "--help", "-h")

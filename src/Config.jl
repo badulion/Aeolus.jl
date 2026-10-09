@@ -40,6 +40,7 @@ using ..Simulations: run!
 using ..Operators: set_fftw_policy!, fftw_policy, load_fftw_wisdom!, FFTW_DEFAULT_PLANNER,
                    _FFTW_PLANNERS
 using ..IO: IO, CheckpointSchedule, RunFolder, fnv1a64
+using ..Checks: ChecksFailed
 
 export RunConfig, ConfigSection, DomainConfig, ConfigError, ConfigProblem, load_run_config, with,
        to_toml, write_config, config_text, config_hash, config_inputs, content_hash,

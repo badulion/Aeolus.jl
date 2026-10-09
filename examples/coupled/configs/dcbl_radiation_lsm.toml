@@ -69,5 +69,8 @@ duration = 10800.0              # 3 h
 [logging]
 diagnostics_cadence = 360.0     # 30 rows
 
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
 [test]
 overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]
