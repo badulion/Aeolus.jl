@@ -17,14 +17,18 @@
 #      eddies between the parent's and the child's resolution);
 #   2. two-way stability with the generator (the maintainer's requirement):
 #      no NaN; child and parent domain-mean KE within 1.5x of the one-way
-#      run with the generator; parent overlap θ drift < 0.2 K against it.
-#      Two-way *without* the generator meets all three. With the generator
-#      it does not (measured, two realisations — the FFTW planner differs:
-#      child KE ×11.8 / ×12.4, parent ×2.4 / ×2.6, overlap θ +0.23 / +0.26 K):
-#      kept as @test_broken, cause in docs/src/theory/transition.md
-#      ("Two-way with the generator") — the feedback, not the generator: the
-#      parent-resolved statistics measure the synthetic eddies the feedback
-#      put into the parent and the generator returns them amplified.
+#      run with the generator; parent overlap θ drift < 0.2 K against it, in
+#      two realisations (seeds 1 and 2 of the initial θ noise). Two-way
+#      *without* the generator meets all three. With the generator it failed
+#      until #418 (child KE ×9.7-12.4, parent ×2.1-2.6, overlap θ
+#      +0.23-0.26 K): the interface flux correction copied the generator's
+#      normal perturbation into the parent's interface faces, the next
+#      window's boundary data returned it to the child and the generator
+#      added the next one on top; the parent-resolved statistics then
+#      measured the grown eddies and raised the amplitude. The correction
+#      now gives the parent the child's flux minus the synthetic part
+#      (synthetic_normal_velocity); docs/src/theory/transition.md
+#      ("Two-way with the generator").
 
 using Test
 using Printf
@@ -106,8 +110,11 @@ end
     one = _inl_run(:one_way; generator = true)
     tw0 = _inl_run(:two_way; generator = false)
     two = _inl_run(:two_way; generator = true)
+    one2 = _inl_run(:one_way; generator = true, seed = 2)      # the second realisation
+    two2 = _inl_run(:two_way; generator = true, seed = 2)
     for (name, r) in (("one-way, no generator", off), ("one-way, generator", one),
-                      ("two-way, no generator", tw0), ("two-way, generator", two))
+                      ("two-way, no generator", tw0), ("two-way, generator", two),
+                      ("one-way, generator, s2", one2), ("two-way, generator, s2", two2))
         @printf("  %-22s wall %6.1f s, %4d parent steps: KE parent %.3f child %.3f m²/s², overlap θ %.4f K, west TKE %.3f m²/s², max|∇·u| %.1e, band %d\n",
                 name, r.wall, r.run.stats.parent_steps, r.ke_p, r.ke_c, r.θov, r.tke_w, r.divmax, r.excl)
     end
@@ -127,13 +134,15 @@ end
         @test 1 / 1.5 <= tw0.ke_c / off.ke_c <= 1.5 && 1 / 1.5 <= tw0.ke_p / off.ke_p <= 1.5
         @test abs(tw0.θov - off.θov) < 0.2
     end
-    @testset "two-way with the generator (#268 requirement; fails, cause: the feedback loop)" begin
-        @printf("  two-way/one-way with the generator: KE child ×%.2f, parent ×%.2f, overlap θ %+.3f K\n",
-                two.ke_c / one.ke_c, two.ke_p / one.ke_p, two.θov - one.θov)
-        @test two.finite                                 # no NaN
-        @test two.excl >= 1                              # the inflow band is set
-        @test_broken two.ke_c / one.ke_c <= 1.5          # measured ×11.8-12.4
-        @test_broken two.ke_p / one.ke_p <= 1.5          # measured ×2.4-2.6
-        @test_broken abs(two.θov - one.θov) < 0.2        # measured +0.23-0.26 K
+    @testset "two-way with the generator: within the criteria of one-way (#268, #418)" begin
+        for (o, t) in ((one, two), (one2, two2))
+            @printf("  two-way/one-way with the generator: KE child ×%.3f, parent ×%.3f, overlap θ %+.4f K\n",
+                    t.ke_c / o.ke_c, t.ke_p / o.ke_p, t.θov - o.θov)
+            @test t.finite                                   # no NaN
+            @test t.excl >= 1                                # the inflow band is set
+            @test 1 / 1.5 <= t.ke_c / o.ke_c <= 1.5          # measured ×0.94, ×1.09 (×9.7-12.4 before #418)
+            @test 1 / 1.5 <= t.ke_p / o.ke_p <= 1.5          # measured ×1.02, ×1.02 (×2.1-2.6)
+            @test abs(t.θov - o.θov) < 0.2                   # measured −0.003, −0.009 K (+0.23-0.26 K)
+        end
     end
 end
