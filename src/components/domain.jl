@@ -13,7 +13,7 @@ One domain of a [`Model`](@ref):
   * `scheme` — the core's time scheme, `:euler` (`step!`) or `:rk3`
     (`step_rk3!`, Boussinesq);
   * `cfl` — `nothing` for a fixed step, or the `CFLConstraints` of an
-    adaptive one ([`step_adaptive!`](@ref step_adaptive!(::Domain)));
+    adaptive one (`step_adaptive!(domain)`);
   * `drivers` — its input drivers: `boundary`, the
     `FileBoundaryFeed` of open lateral faces, advanced at the start of
     every step;
@@ -83,14 +83,14 @@ sgs_closure(d::Domain) = (c = slot_component(d, :sgs); c === nothing ? nothing :
     Model(domain)
 
 The model: its domains (today one; several, with their nest couplings,
-arrive with ONE-e). `step!(model, dt)` advances every domain by `dt`
+arrive with ONE-f, #455). `step!(model, dt)` advances every domain by `dt`
 through the stage pipeline.
 """
 struct Model{D<:Tuple}
     domains::D
     function Model(domains::Tuple)
         length(domains) == 1 ||
-            throw(ArgumentError("Model: one domain (several domains, with their nest couplings, arrive with ONE-e)"))
+            throw(ArgumentError("Model: one domain (several domains, with their nest couplings, arrive with ONE-f, #455)"))
         all(d -> d isa Domain, domains) || throw(ArgumentError("Model: the domains are Domains"))
         return new{typeof(domains)}(domains)
     end

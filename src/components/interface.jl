@@ -147,7 +147,7 @@ limit_dt(::AbstractComponent, domain) = nothing
     budget!(c, domain::Domain, budgets) -> nothing
 
 Book `c`'s terms in the shared budgets (energy, water, mass, momentum,
-tracers). The budget system itself arrives with ONE-c; the default books
+tracers). The budget system itself arrives with ONE-c (#452); the default books
 nothing.
 """
 budget!(::AbstractComponent, domain, budgets) = nothing
@@ -157,7 +157,7 @@ budget!(::AbstractComponent, domain, budgets) = nothing
 
 `c`'s output catalogue: the variables it can write (name, units,
 dimensions and how each is computed). The default is empty; the one
-writer that selects from the catalogues arrives with ONE-c.
+writer that selects from the catalogues arrives with ONE-c (#452).
 """
 outputs(::AbstractComponent) = ()
 
@@ -165,7 +165,7 @@ outputs(::AbstractComponent) = ()
     checks(c) -> Tuple
 
 The checks `c` publishes (name, default tolerance, evaluation), which
-`[checks]` enables (ONE-c). The default is empty.
+`[checks]` enables (ONE-d, #453). The default is empty.
 """
 checks(::AbstractComponent) = ()
 
