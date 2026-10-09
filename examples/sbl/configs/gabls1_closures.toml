@@ -1,0 +1,28 @@
+# GABLS1 with three SGS stability corrections (P55-f, #191): the runs that
+# examples/sbl/gabls1.jl compares with the intercomparison ranges
+# (examples/sbl/data/gabls1_reference.csv). One run folder per member:
+# Smagorinsky C_s = 0.1 with the Brown et al. (1994) correction (the Berlin
+# default), uncorrected, and with the Lilly cutoff; 64³ (6.25 m), 9 h,
+# statistics of hours 8-9 (gabls1.toml).
+#
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml                      # hours per member
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml --set grid.size=[32,32,32]
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml --member none        # one member
+#   julia --project -m Aeolus run --resume runs/<run folder>                                     # continue one
+#   julia --project examples/sbl/gabls1.jl runs/gabls1_*                                         # table and figure
+
+extends = "gabls1.toml"
+
+[sweep]
+axis = [ { key = "sgs.stability", values = ["brown94", "none", "lilly"] } ]
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl):
+# ignored by the loader, not part of the resolved config.
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+    "averaging.series_interval=0.0",
+]
+member = "lilly"

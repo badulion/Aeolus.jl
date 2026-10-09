@@ -3,75 +3,68 @@
 # Svensson et al. 2011; Poulos et al. 2002; LES: Kumar et al. 2010) and the
 # CASES-99 "hockey stick" of Sun et al. (2012), P58-d (#194)
 #
-# The run is examples/sbl/configs/cases99.toml (gabls2.toml with the
-# towers; the `sbl` run driver, CFG-d #359), one run folder per closure:
-# from 16 LT 22 October for 48 h, U_g = (3, -9) m/s, the prescribed surface
-# temperature, z0m = 0.03 m, z0h = 0.003 m; dry (see the CSV header); the
-# case's large-scale subsidence on θ from 40 h (16 LT 23 Oct,
-# LargeScaleForcing.Subsidence, #248; SUBSIDENCE=0 for the run without it).
-# The residual-layer inversion height (sbl_inversion_height) is recorded
-# with the series (output/series.csv of the run folder, every 600 s).
-# Virtual towers in every column record 5-min means and variances below
-# 60 m during the two nights (18-06 LT, as Sun et al. 2012); V_TKE
-# (Transition's turbulence_velocity_scale, resolved + SGS energy) is binned
-# against the wind speed and the hockey-stick threshold V_s is fitted per
-# level and compared with Sun et al. (2012) Fig. 3a. This script then
-# makes the figures.
+# The runs are the sweep examples/sbl/configs/cases99_closures.toml
+# (cases99.toml: gabls2.toml with the towers; the `sbl` run type), one run
+# folder per closure: from 16 LT 22 October for 48 h, U_g = (3, -9) m/s,
+# the prescribed surface temperature, z0m = 0.03 m, z0h = 0.003 m; dry
+# (see the CSV header); the case's large-scale subsidence on θ from 40 h
+# (16 LT 23 Oct, LargeScaleForcing.Subsidence, #248; `--set
+# 'forcing.subsidence={}'` for the runs without it). The residual-layer
+# inversion height (sbl_inversion_height) is recorded with the series
+# (output/series.csv, every 600 s). Virtual towers in every column record
+# 5-min means and variances below 60 m during the two nights (18-06 LT, as
+# Sun et al. 2012); V_TKE (Transition's turbulence_velocity_scale,
+# resolved + SGS energy) is binned against the wind speed per level
+# (output/towers.csv).
 #
-#   julia --project=. examples/sbl/gabls2.jl                    # 64 x 64 x 128 (37.5 m / 12.5 m)
-#   NX=48 NZ=80 julia --project=. examples/sbl/gabls2.jl        # 50 m / 20 m
-#   CLOSURES=brown94 ... ; REUSE=1 ... ; SUBSIDENCE=0 ... ; CLOSURES=brown94 RESUME=runs/<run folder> ...
+# This script only reads the run folders: it compares with the SCM ranges
+# and the screen-level observations, fits the hockey-stick threshold V_s
+# per level to the tower bins of at least 20 samples and compares it with
+# Sun et al. (2012) Fig. 3a, and makes the figures.
+#
+#   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml     # 64 x 64 x 128 (37.5 m / 12.5 m)
+#   julia --project examples/sbl/gabls2.jl runs/cases99_*
 #
 # writes examples/sbl/output/gabls2_<tag>.svg, cases99_hockey_<tag>.svg,
 # gabls2_<tag>_series.csv, cases99_hockey_<tag>.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "config_schema.jl"))
+include(joinpath(@__DIR__, "runs.jl"))
 include(joinpath(@__DIR__, "svgplot.jl"))
+using Aeolus.StableBoundaryLayer: sbl_hockey_threshold      # a fit to the tower bins (no model)
 using Printf
-using Serialization
 
-const NX = parse(Int, get(ENV, "NX", "64"))
-const NZ = parse(Int, get(ENV, "NZ", "128"))
-const LX = parse(Float64, get(ENV, "LX", "2400"))
-const LZ = parse(Float64, get(ENV, "L", "1600"))
-const T0 = 16 * 3600.0
-const T_END = parse(Float64, get(ENV, "T_END", string(64 * 3600)))
-const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
-const SUBSIDENCE = get(ENV, "SUBSIDENCE", "1") == "1"
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls2.jl <run folder>…")
+const NX, NZ = cfgval(RUNS[1], "grid.size")[[1, 3]]
+const LX, LZ = cfgval(RUNS[1], "grid.extent")[[1, 3]]
+const T0 = cfgval(RUNS[1], "initial.t_start")
+const T_END = cfgval(RUNS[1], "stepper.end_time")
+const SUBSIDENCE = !isempty(cfgval(RUNS[1], "forcing.subsidence"))
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))" * (SUBSIDENCE ? "" : "_nosubs")
-const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
-const P_SFC = 97200.0
+const OUTDIR = mkpath(SBL_OUT)
+const P_SFC = cfgval(RUNS[1], "surface.temperature")["p_sfc"]
+const EXPONENT = cfgval(RUNS[1], "surface.temperature")["exponent"]
 
-function run_closure(stab)
-    ov = ["grid.size=[$NX,$NX,$NZ]", "grid.extent=[$LX,$LX,$LZ]", "sponge.z=$(0.75LZ)",
-          "sgs.stability=\"$stab\"", "stepper.end_time=$T_END",
-          "surface.temperature={kind=\"gabls2\", p_sfc=$P_SFC, exponent=0.286, sample_every=60.0, until=$T_END}"]
-    SUBSIDENCE || push!(ov, "forcing.subsidence={}")
-    r = sbl_script_run("cases99"; overrides = ov)
-    c = r.case
+"The bins of tower level `z` with at least `min_count` samples (V, V_TKE, σ, n)."
+function tower_bins(rows, z; min_count = 20)
+    b = [r for r in rows if r.z == z && r.n >= min_count]
+    return (V = [r.V for r in b], V_TKE = [r.V_TKE for r in b], σ = [r.sigma for r in b], n = [Int(r.n) for r in b])
+end
+
+results = map(RUNS) do r
+    stab = cfgval(r, "sgs.stability")
     # the series rows in the script's units: 2 m and surface temperatures in °C
-    toC(θ) = θ * (P_SFC / 1e5)^0.286 - 273.15
+    toC(θ) = θ * (P_SFC / 1e5)^EXPONENT - 273.15
     series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet, z_inv = s.z_inv,
                ls_heat = s.ls_heat, T2 = toC(s.θ_screen), U10 = s.U_screen, Ts = toC(s.T_s)) for s in r.series]
-    @printf("%-8s %s: %d steps, %.0f s, %d tower segments\n", stab, TAG, c.nsteps, c.wall_time, r.towers.nseg)
-    return (stab = stab, series = series, towers = r.towers, nsteps = c.nsteps, wall = c.wall_time)
+    zs = unique([t.z for t in r.towers])
+    @printf("%-8s %s: %d steps, %.0f s, %d tower samples\n", stab, TAG, r.stats.nsteps, r.stats.wall_time,
+            isempty(r.towers) ? 0 : round(Int, sum(t.n for t in r.towers)))
+    (stab = stab, series = series, towers = (z = zs, rows = r.towers))
 end
-
-function cached(stab)
-    path = joinpath(OUTDIR, "gabls2_$(TAG)_$(stab).jls")
-    if get(ENV, "REUSE", "0") == "1" && isfile(path)
-        println("$stab: cached $path")
-        return deserialize(path)
-    end
-    r = run_closure(stab)
-    serialize(path, r)
-    return r
-end
-results = [cached(s) for s in CLOSURES]
 
 # ---- GABLS2 against the SCM ranges and the screen-level values ---------------
-ref = gabls2_reference()
+ref = sbl_read_csv(joinpath(SBL_DATA, "gabls2_reference.csv"))
 at(r, h) = r.series[argmin([abs(s.t / 3600 - h) for s in r.series])]
 println("\nGABLS2 at the end of the first night (30 h = 06 LT 23 Oct) against the SCM range of Holtslag et al. (2007):")
 for r in results
@@ -99,7 +92,7 @@ for r in results, h in (40, 42, 48, 54)
 end
 
 open(joinpath(OUTDIR, "gabls2_$(TAG)_series.csv"), "w") do io
-    println(io, "# GABLS2 time series (every 600 s), Aeolus.jl SBL driver, $TAG (P58-d, #194). Model output. t in s from 00 LT 22 Oct 1999.")
+    println(io, "# GABLS2 time series (every 600 s), Aeolus.jl sbl run type, $TAG (P58-d, #194). Model output. t in s from 00 LT 22 Oct 1999.")
     println(io, "closure,t_s,u_star,H_Wm2,h_m,S_max,z_jet,T_2m_C,U_10m,T_s_C,z_inv_m,subsidence_heat_Km")
     for r in results, s in r.series
         @printf(io, "%s,%.0f,%.4f,%.2f,%.1f,%.3f,%.1f,%.3f,%.3f,%.3f,%.1f,%.4f\n", r.stab, s.t, s.u_star, s.H, s.h,
@@ -142,7 +135,9 @@ svg_text(fig, 80, 744, "(c-e) squares: ends of the SCM range at 06 LT 23 Oct (30
 println("wrote ", svg_write(fig, joinpath(OUTDIR, "gabls2_$(TAG).svg")))
 
 # ---- the CASES-99 hockey stick --------------------------------------------------
-sun = sun2012_threshold()
+sun = let t = sbl_read_csv(joinpath(SBL_DATA, "cases99_sun2012_threshold.csv"))
+    (z = [r[1] for r in t.rows], V_s = [r[2] for r in t.rows], header = t.header)
+end
 logfit = let A = hcat(ones(length(sun.z)), log.(sun.z))   # V_s = a + b ln z (Sun et al. 2012 Fig. 3a, dashed)
     A \ sun.V_s
 end
@@ -154,7 +149,7 @@ open(joinpath(OUTDIR, "cases99_hockey_$(TAG).csv"), "w") do io
     println(io, "# CASES-99 hockey stick from the GABLS2 LES, $TAG: bin means of V_TKE against V per tower level. Model output.")
     println(io, "closure,z_m,V_bin_mean,V_TKE_mean,V_TKE_std,n")
     for r in results, (l, z) in enumerate(r.towers.z)
-        b = sbl_towers_bins(r.towers, l)
+        b = tower_bins(r.towers.rows, z)
         for i in eachindex(b.V)
             @printf(io, "%s,%.2f,%.3f,%.4f,%.4f,%d\n", r.stab, z, b.V[i], b.V_TKE[i], b.σ[i], b.n[i])
         end

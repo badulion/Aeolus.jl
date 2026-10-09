@@ -13,7 +13,8 @@ using Aeolus
 using Aeolus.Fields: interior_view, set!
 using Statistics: mean
 
-isdefined(Main, :sbl_build) || include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+using Aeolus.StableBoundaryLayer
+isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
 
 @testset "N-parent-c — GABLS2 (reduced) with large-scale subsidence (#248)" begin
 

@@ -156,8 +156,8 @@ their entries here. (The urban run type, formerly the `berlin` entry, is
 part of the package since EX-a #438: `Aeolus.UrbanCase`.)
 """
 const DRIVER_FILES = Dict{String,String}(
-    # CFG-d (#359): the stable-boundary-layer cases and the filtered-DNS record
-    "sbl" => "examples/sbl/config_schema.jl",
+    # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
+    # type in src since EX-b #439: Aeolus.StableBoundaryLayer)
     "dns" => "examples/validation/dns_apriori_driver.jl",
     # CFG-e (#360): the validation drivers and the remaining example scripts
     "channel" => "examples/validation/channel_driver.jl",

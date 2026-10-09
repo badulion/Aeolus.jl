@@ -1,0 +1,27 @@
+# GABLS2 / CASES-99 with and without the SGS stability correction (P58-d,
+# #194): the runs that examples/sbl/gabls2.jl compares with the SCM ranges,
+# the screen-level observations and the CASES-99 hockey stick of Sun et
+# al. (2012). The case is cases99.toml (gabls2.toml with the towers): from
+# 16 LT 22 October for 48 h on 64 × 64 × 128 (37.5 m / 12.5 m), the
+# subsidence on θ from 40 h. One run folder per member.
+#
+#   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml
+#   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml --set grid.size=[48,48,80]
+#   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml --set 'forcing.subsidence={}'   # without subsidence
+#   julia --project examples/sbl/gabls2.jl runs/cases99_*
+
+extends = "cases99.toml"
+
+[sweep]
+axis = [ { key = "sgs.stability", values = ["brown94", "none"] } ]
+
+[test]
+overrides = [
+    "grid.size=[16,16,32]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+    "averaging.series_interval=0.0",
+    "towers.hours=[0.0,24.0]",
+    "towers.window=30.0",
+]
+member = "none"

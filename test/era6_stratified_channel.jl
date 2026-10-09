@@ -7,7 +7,7 @@ using Test
 using Aeolus
 using Statistics: mean
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))   # stratified_channel_run, sbl_read_csv
+using Aeolus.StableBoundaryLayer   # stratified_channel_run, sbl_read_csv (the `sbl` run type)
 const GV11 = sbl_read_csv(joinpath(@__DIR__, "..", "examples", "sbl", "data",
                                    "stratified_channel_gv11_re180.csv"))
 

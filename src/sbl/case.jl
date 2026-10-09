@@ -37,9 +37,9 @@
 # private stability function family: the GABLS1 surface-layer functions
 # are `SurfaceExchange.BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)`
 # (`SBL_GABLS1_STABILITY`), the same family the ocean warm layer uses.
-# This file only defines functions and constants (prefix `sbl_`/`SBL_`); it is
-# included by `examples/sbl/gabls1.jl` and `test/era6_gabls1.jl`, and by
-# `examples/sbl/cases.jl` (GABLS2/3/4, P58-d #194).
+# This file only defines functions and constants (prefix `sbl_`/`SBL_`):
+# the case builders of the `sbl` run type (`Aeolus.StableBoundaryLayer`,
+# EX-b #439; moved here from examples/sbl/driver.jl).
 #
 # P58-d (#194) extensions, all generic (no case constants live here):
 #   * height- and time-dependent U_g(z, t), V_g(z, t) (any LargeScaleForcing
@@ -59,11 +59,6 @@
 #     the wind speed and the hockey-stick threshold fit (`sbl_hockey_threshold`).
 # =========================================================================
 
-using Aeolus
-using Aeolus.Fields: set!
-using Aeolus.Operators: add_sponge!, total_stress_profile, interior_view, sgs_fields
-using Random
-using Statistics: mean
 
 """
     SBL_GABLS1_STABILITY
@@ -75,6 +70,15 @@ The GABLS1 surface-layer functions, the package's
 """
 const SBL_GABLS1_STABILITY = BusingerDyerLogLinear(β_m = 4.8, β_h = 7.8)
 
+"""
+    SBLCase
+
+The homogeneous SBL LES built by [`sbl_case`](@ref): the simulation
+`sim`, its SGS closure, the large-scale forcing, the surface temperature
+series `Ts` and stability functions `sf`, the per-column surface-layer
+state (wall laws, ``w'θ'_0``, ``u_*``, ``L``), the heat ledgers and the
+step counters. Advanced by [`sbl_step!`](@ref) / [`sbl_run!`](@ref).
+"""
 mutable struct SBLCase
     sim::Any
     closure::Any
@@ -129,7 +133,7 @@ cooling. `θ₀` is the Boussinesq reference temperature of the buoyancy.
 `sgs_stability` is `:brown94` (Brown et al. 1994, the Berlin default),
 `:lilly`, or `:none` (the uncorrected `base`).
 
-The observed cases (GABLS2/3/4, `examples/sbl/cases.jl`, P58-d #194) use
+The observed cases (GABLS2/3/4, P58-d #194) use
 the remaining keywords:
 
 * `U_g`, `V_g` may be any `LargeScaleForcing` quantity — a number, a
@@ -151,8 +155,8 @@ the remaining keywords:
   `:symmetric` (the stress form, so that the corrected vertical viscosity
   reaches the momentum equation; the default) or `:laplacian`.
 
-The `sbl` run driver (`examples/sbl/config_schema.jl`, CFG-d #359) builds
-every case of `examples/sbl/configs/` through this function.
+The `sbl` run type ([`SBLDriver`](@ref), CFG-d #359) builds every case of
+`examples/sbl/configs/` through this function.
 """
 function sbl_case(; N = (32, 32, 32), extent = (400.0, 400.0, 400.0),
                   U_g = 8.0, V_g = 0.0, f = 1.39e-4, z0m = 0.1, z0h = z0m,
@@ -465,7 +469,7 @@ end
 
 Advance to `t_end` (s) with [`sbl_dt`](@ref), or until this call has taken
 `nsteps` steps (counted from the call's first step, across a resume). With
-`checkpoint` (a `CheckpointSchedule`, e.g. [`sbl_checkpoints`](@ref)) the
+`checkpoint` (a `CheckpointSchedule`: the run folder's, from `aeolus run`) the
 run resumes from the newest checkpoint of its folder, writes periodic ones,
 and (with `final_checkpoint`) a final one at the end; `checkpoint_components` (a `NamedTuple`) adds the state of the
 caller's callback (its series, counters) to every checkpoint. Use one
@@ -525,7 +529,7 @@ end
 """
     sbl_read_csv(path) -> (; header, columns, rows)
 
-Read a reference-data CSV of `examples/sbl/data/`: the leading `#` lines
+Read a case or reference-data CSV (`examples/sbl/data/`): the leading `#` lines
 are its provenance header (returned verbatim), the first other line the
 column names, the rest the rows (numbers parsed where possible).
 """
@@ -863,8 +867,8 @@ end
 
 # =========================================================================
 # The wall-resolved, stably stratified channel (García-Villalba & del
-# Álamo 2011) on the P54-d builder — shared by examples/sbl/
-# stratified_channel.jl and test/era6_stratified_channel.jl.
+# Álamo 2011) on the P54-d builder: the `stratified_channel` kind of the
+# `sbl` run type; test/era6_stratified_channel.jl.
 # =========================================================================
 
 """
@@ -959,9 +963,10 @@ end
 # channel cools by |Q| per h/u_τ — at most 100 over 20 h/u_τ at h/L = 2 —
 # and the bulk Richardson number of `relaminarisation_criteria`, which
 # divides by the upper θ, stays within |Q|t/θ₀ ≤ 10 % of the Boussinesq
-# one). Shared by examples/sbl/relaminarisation_channel.jl.
+# one). The `relaminarisation_channel` kind of the `sbl` run type.
 # =========================================================================
 
+"The reference temperature θ₀ (= g in wall units, g/θ₀ = 1) of the relaminarisation channel."
 const SBL_RELAM_θ₀ = 1000.0
 
 """
@@ -1003,6 +1008,14 @@ end
 # trip the 32³ open channel: from noise = 3 the σ and dynamic-Smagorinsky
 # runs relaminarise (⟨τ_w⟩ → 0.44 u_τ² by 5 h/u_τ, measured), from this
 # perturbation they reach ⟨τ_w⟩ = 0.9-1.0 u_τ² (P59-e).
+"""
+    relam_perturb!(c; amp = 2, kp = 3, seed = 1) -> c
+
+Add to the open channel `c` a smooth solenoidal random velocity
+perturbation (`isotropic_random_field!`, ``E ∝ k^4 e^{-2(k/k_p)^2}``,
+``k_p`` = `kp`·2π/h) of rms `amp`·u_τ in u, damped to the wall over
+z⁺ ≈ 10: the trip of the neutral spin-up (`relam_spinup`).
+"""
 function relam_perturb!(c; amp = 2.0, kp = 3.0, seed = 1)
     s = c.sim; g = s.mesh
     tmp = BoussinesqSimulation(RegularGrid(; size = (g.Nx, g.Ny, g.Nz), extent = (g.Lx, g.Ly, g.Lz));
@@ -1053,7 +1066,7 @@ value at the switch-on, the turbulent fraction γ of the lower half
 the bulk velocity. Returns the series, the final TKE ratio, the
 relaminarisation criteria at the switch-on (`relaminarisation_criteria`
 with the nominal u_τ = 1) and the wall time. `checkpoint` (a
-`CheckpointSchedule`, [`sbl_checkpoints`](@ref)) resumes an interrupted run,
+`CheckpointSchedule`) resumes an interrupted run,
 series included (`run_channel!`'s hook, #245). `case` is the channel to
 run (built by the `sbl` run driver from its config, CFG-d #359; returned
 as `case`); `callback(case)` is called after every step.
@@ -1090,7 +1103,7 @@ end
 # prescribed surface cooling, the flux-prescribed MOST wall law and the
 # stability-corrected Smagorinsky closure with isotropic length scales. A
 # neutral run is spun up; from its state the cooling is switched on.
-# Shared by examples/sbl/collapse_channel.jl and the `sbl` run driver.
+# The `collapse_channel` kind of the `sbl` run type.
 # =========================================================================
 
 """
@@ -1182,15 +1195,3 @@ end
 Aeolus.IO.checkpoint_state(T::SBLTowers) =
     fieldwise_checkpoint_state(T, (:t_win, :τ, :acc, :count, :sumV, :sumE, :sumE2, :nseg, :active))
 Aeolus.IO.restore_checkpoint_state!(T::SBLTowers, s) = restore_fieldwise!(T, s)
-
-"""
-    sbl_checkpoints(tag) -> Union{Nothing, CheckpointSchedule}
-
-The checkpoint folder `examples/sbl/output/checkpoints/<tag>` of one SBL
-run (`driver_checkpoints`: every 30 min of wall clock by default, the
-`AEOLUS_CHECKPOINT*` environment variables override). Create it **before**
-the case (it loads the folder's FFTW wisdom), pass it to `sbl_run!` (or
-`run_channel!`) as `checkpoint`, and call `finish_checkpoints!` once the
-result is cached. An interrupted run resumes from its newest checkpoint.
-"""
-sbl_checkpoints(tag) = driver_checkpoints(joinpath(@__DIR__, "output", "checkpoints", tag))

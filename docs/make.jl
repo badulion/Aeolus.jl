@@ -3,7 +3,7 @@ using Aeolus
 
 DocMeta.setdocmeta!(Aeolus, :DocTestSetup, :(using Aeolus); recursive=true)
 
-# The example drivers (DRIVER_FILES: sbl, dns, ...) are loaded to
+# The example drivers (DRIVER_FILES: dns, ...) are loaded to
 # document their options and `using FFTW` etc. at top level: give them the
 # package's own environment, whose dependencies the docs environment does
 # not list directly.
@@ -20,7 +20,8 @@ makedocs(
                 Aeolus.Grids, Aeolus.Fields, Aeolus.BoundaryConditions,
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations,
-                Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers, Aeolus.UrbanCase],
+                Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
+                Aeolus.UrbanCase, Aeolus.StableBoundaryLayer],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -197,6 +198,7 @@ makedocs(
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
                 "Transition"                   => "api/era6/transition.md",
                 "WallModels"                   => "api/era6/wall_models.md",
+                "StableBoundaryLayer (sbl)"    => "api/era6/stable_boundary_layer.md",
             ],
         ],
         "Examples" => [

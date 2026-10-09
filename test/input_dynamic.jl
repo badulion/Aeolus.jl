@@ -47,7 +47,7 @@ const BCD = Aeolus.UrbanCase
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
-isdefined(Main, :SBLDriver) || include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+using Aeolus.StableBoundaryLayer
 
 const ID_DATA = joinpath(@__DIR__, "data", "input_dynamic")
 const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))

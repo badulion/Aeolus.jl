@@ -9,17 +9,13 @@
 # of the surface flux and the nominal u_τ (`relaminarisation_criteria`;
 # L from `SurfaceExchange.obukhov_length`), L⁺ = L u_τ/ν = Re_τ/(h/L).
 #
-# The case is examples/sbl/configs/relaminarisation.toml (the `sbl` run
-# driver, CFG-d #359) with RE, N, T_SPIN, T_END and each h/L set on it.
-# Each Re_τ is spun up neutral once for T_SPIN h/u_τ (`relam_spinup`, the
-# driver's sbl_channel_spinup); from that state the cooling is switched on
-# and each h/L run for T_END h/u_τ (`relam_run`, sbl_channel_run). One
-# config run is `julia -m Aeolus run examples/sbl/configs/relaminarisation.toml
-# --set case.h_over_l=2.0` (with its own spin-up); this sweep shares one. A run has *collapsed* when the
-# volume-mean resolved TKE at T_END is below 10 % of its switch-on value,
-# and *survived* when it is above 50 %. The critical h/L is the geometric
-# mean of the largest surviving and the smallest collapsed h/L; its L⁺ is
-# Re_τ divided by it.
+# The runs are the sweep examples/sbl/configs/relaminarisation_sweep.toml
+# (the `sbl` run type): each Re_τ spun up neutral for spinup_time h/u_τ,
+# then the cooling switched on and each h/L run for end_time h/u_τ. A run
+# has *collapsed* when the volume-mean resolved TKE at the end is below
+# 10 % of its switch-on value, and *survived* when it is above 50 %. The
+# critical h/L is the geometric mean of the largest surviving and the
+# smallest collapsed h/L; its L⁺ is Re_τ divided by it.
 #
 # References: Nieuwstadt (2005), h/L ≈ 1.23 at Re_τ = 360 with an L that
 # excludes κ, i.e. h/L ≈ 1.23 κ ≈ 0.49 with Aeolus's L, which includes κ
@@ -28,66 +24,35 @@
 # threshold, L⁺ ≈ 730 there); Donda et al. (2015, QJRMS 141, 2137) for
 # the transient collapse.
 #
-#   julia --project=. examples/sbl/relaminarisation_channel.jl
-#   RE=180 HL=0.3,2 julia --project=. examples/sbl/relaminarisation_channel.jl
-#   RE=360 N=48,48,48 HL=1 julia … &  (one process per run; then REUSE=1)
-#   RE=360 N=96,96,96 HL=0.5 julia …   (#236: 10 750 s spin-up + 12 909 s run;
-#                                     collapses as on 48³)
+# This script only reads the run folders (statistics.toml: the TKE and γ
+# series, the switch-on criteria, the spin-up state).
 #
-# writes examples/sbl/output/relaminarisation_<Re>_<N>.svg and caches every
-# run (.jls); an interrupted run resumes from its periodic checkpoints; prints the table quoted on the theory page
-# (docs/src/theory/transition.md, "Relaminarisation").
+#   julia --project -m Aeolus run examples/sbl/configs/relaminarisation_sweep.toml
+#   julia --project -m Aeolus run examples/sbl/configs/relaminarisation.toml --set case.re_tau=360.0 --set grid.size=[96,96,96] --set case.h_over_l=0.5
+#                                     (#236: 10 750 s spin-up + 12 909 s run; collapses as on 48³)
+#   julia --project examples/sbl/relaminarisation_channel.jl runs/relaminarisation_*
+#
+# writes examples/sbl/output/relaminarisation_<Re>_<N>.svg; prints the
+# table quoted on the theory page (docs/src/theory/transition.md,
+# "Relaminarisation").
 # =========================================================================
 
-using Aeolus
-using Printf, Serialization
-using Statistics: mean
-include(joinpath(@__DIR__, "config_schema.jl"))
+include(joinpath(@__DIR__, "runs.jl"))
+using Aeolus: SurfaceExchange
+using Aeolus.StableBoundaryLayer: relam_heat_flux       # Q of an h/L (a formula, no model)
+using Printf
 
-const RES = parse.(Int, split(get(ENV, "RE", "180,360"), ","))
-const HLS = parse.(Float64, split(get(ENV, "HL", "0.3,0.6,1,1.5,2"), ","))
-const T_END = parse(Float64, get(ENV, "T_END", "20"))
-const T_SPIN = parse(Float64, get(ENV, "T_SPIN", "10"))
-grid(Re) = haskey(ENV, "N") ? Tuple(parse.(Int, split(ENV["N"], ","))) :
-           (Re <= 180 ? (32, 32, 32) : (48, 48, 48))
-const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/relaminarisation_channel.jl <run folder>…")
+const RES = sort!(unique([round(Int, cfgval(r, "case.re_tau")) for r in RUNS]))
+const OUTDIR = mkpath(SBL_OUT)
 # Nieuwstadt (2005)'s critical h/L at Re_τ = 360 is 1.23 with an Obukhov
 # length that excludes κ; Aeolus's L (`SurfaceExchange.obukhov_length`)
 # includes it, so the same threshold is 1.23 κ here.
-const H_NIEUWSTADT = 1.23 * Aeolus.SurfaceExchange.von_karman()
+const H_NIEUWSTADT = 1.23 * SurfaceExchange.von_karman()
+runs_of(Re) = sort!([r for r in RUNS if round(Int, cfgval(r, "case.re_tau")) == Re]; by = r -> r.stats.h_over_L)
+grid(Re) = Tuple(cfgval(first(runs_of(Re)), "grid.size"))
+t_end_of(Re) = cfgval(first(runs_of(Re)), "stepper.end_time")
 tag(Re) = "Re$(Re)_" * join(grid(Re), "x")
-
-"The relaminarisation.toml config of `Re` at this script's grid and times."
-relam_config(Re) = sbl_config("relaminarisation"; overrides = ["case.re_tau=$Re", "grid.size=[$(join(grid(Re), ","))]",
-                                                                 "case.spinup_time=$T_SPIN", "stepper.end_time=$T_END"])
-
-# Every run checkpoints periodically into output/checkpoints/<name> and
-# resumes from there when restarted (#245; AEOLUS_CHECKPOINT=0 turns it off);
-# the folder is removed once the run's result is cached.
-function spinup(Re)
-    name = "relam_$(tag(Re))_spinup_T$(round(Int, T_SPIN))"
-    path = joinpath(OUTDIR, name * ".jls")
-    isfile(path) && return deserialize(path)
-    ck = sbl_checkpoints(name)
-    sp = sbl_channel_spinup(relam_config(Re); checkpoint = ck)
-    serialize(path, sp)
-    finish_checkpoints!(ck)
-    return sp
-end
-
-function cached(Re, hL)
-    name = "relam_$(tag(Re))_hL$(hL)_T$(round(Int, T_END))"
-    path = joinpath(OUTDIR, name * ".jls")
-    get(ENV, "REUSE", "0") == "1" && isfile(path) && return deserialize(path)
-    sp = spinup(Re)
-    ck = sbl_checkpoints(name)
-    cfg = with(relam_config(Re), "case.h_over_l" => hL)
-    r = sbl_channel_run(cfg, sbl_channel_case(cfg), sp; checkpoint = ck)
-    r = merge(r, (; case = nothing))          # the result, not the solver state, is cached
-    serialize(path, r)
-    finish_checkpoints!(ck)
-    return r
-end
 
 # the critical h/L from the collapse classification of a sweep
 function critical(rs)
@@ -99,6 +64,7 @@ function critical(rs)
 end
 
 function figure(Re, rs)
+    T_END = t_end_of(Re)
     W, H = 1080, 430; pw, ph = 360, 300; y0 = 60
     pal = ["#1d4ed8", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be185d",
            "#65a30d", "#6b7280", "#92400e"]
@@ -167,22 +133,20 @@ function figure(Re, rs)
     println("wrote ", path)
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
-    for Re in RES
-        sp = spinup(Re)
-        @printf("\nRe_τ = %d on %s: neutral spin-up to %.0f h/u_τ: TKE %.3f u_τ², ⟨τ_w⟩ %.3f u_τ², U_b %.2f u_τ\n",
-                Re, join(grid(Re), "×"), T_SPIN, sp.tke, sp.τ_wall, sp.Ub)
-        rs = [cached(Re, hL) for hL in HLS]
-        @printf("%6s %8s %8s %10s %8s %8s %8s %8s\n", "h/L", "L⁺", "Q", "TKE(T)/0", "γ(T)", "τ_w(T)", "steps", "wall s")
-        for r in rs
-            @printf("%6.2f %8.1f %8.3f %10.3f %8.3f %8.3f %8d %8.0f   %s\n", r.h_over_L, r.crit.L_plus,
-                    relam_heat_flux(r.h_over_L), r.tke_end, r.γ_end, r.τ_wall[end],
-                    r.nsteps, r.wall_time,
-                    r.tke_end < 0.1 ? "collapsed" : r.tke_end > 0.5 ? "survived" : "intermediate")
-        end
-        hc = critical(rs)
-        @printf("critical h/L = %.3f (Nieuwstadt 2005: 1.23 κ = %.3f at Re_τ = 360, ratio %.2f); L⁺_c = %.1f (Flores & Riley 2011: ≈ 100, ratio %.2f)\n",
-                hc, H_NIEUWSTADT, hc / H_NIEUWSTADT, Re / hc, Re / hc / 100)
-        figure(Re, rs)
+for Re in RES
+    rr = runs_of(Re); rs = [r.stats for r in rr]
+    @printf("\nRe_τ = %d on %s: neutral spin-up to %.0f h/u_τ: TKE %.3f u_τ², ⟨τ_w⟩ %.3f u_τ², U_b %.2f u_τ\n",
+            Re, join(grid(Re), "×"), cfgval(rr[1], "case.spinup_time"), rs[1].spinup_tke, rs[1].spinup_τ_wall,
+            rs[1].spinup_Ub)
+    @printf("%6s %8s %8s %10s %8s %8s %8s %8s\n", "h/L", "L⁺", "Q", "TKE(T)/0", "γ(T)", "τ_w(T)", "steps", "wall s")
+    for r in rs
+        @printf("%6.2f %8.1f %8.3f %10.3f %8.3f %8.3f %8d %8.0f   %s\n", r.h_over_L, r.crit_L_plus,
+                relam_heat_flux(r.h_over_L), r.tke_end, r.γ_end, r.τ_wall[end],
+                r.nsteps, r.wall_time,
+                r.tke_end < 0.1 ? "collapsed" : r.tke_end > 0.5 ? "survived" : "intermediate")
     end
+    hc = critical(rs)
+    @printf("critical h/L = %.3f (Nieuwstadt 2005: 1.23 κ = %.3f at Re_τ = 360, ratio %.2f); L⁺_c = %.1f (Flores & Riley 2011: ≈ 100, ratio %.2f)\n",
+            hc, H_NIEUWSTADT, hc / H_NIEUWSTADT, Re / hc, Re / hc / 100)
+    figure(Re, rs)
 end
