@@ -577,7 +577,8 @@ Test 3 of the issue — the 32³ open channel at ``Re_τ = 180``, collapse at
 ``h/L = 2.0`` and survival at ``h/L = 0.3`` after 20 ``h/u_τ`` — costs
 4.5–9 min per 20 ``h/u_τ`` run (6 200–9 900 SSP-RK3 steps; 267–521 s wall
 time on the shared machine), plus a 2-min neutral spin-up,, over the 2-min CI budget, so it is
-`examples/sbl/relaminarisation_channel.jl` (with the sweep against the
+`configs/relaminarisation_sweep.toml` (with
+`examples/sbl/relaminarisation_channel.jl` reading the runs against the
 references) and is not in the suite. Set-up: ``2πh × πh × h``, ``Re_τ``
 by the forcing ``u_τ^2/h``, σ + correction (isotropic length scales),
 stress form, ``Pr = 0.71``, ``g/θ_0 = 1``. A neutral spin-up of 10
@@ -699,8 +700,10 @@ from 48³ to 96³); at ``Re_τ = 180`` the example documents the
 coarse-LES threshold (0.12) only, with no DNS value at that ``Re_τ``
 to validate it against.
 
-The command lines are in the header of the example; every run is cached,
-`REUSE=1` reprints the table and redraws the figures.
+The command lines are in the header of the example. Every run writes its
+own run folder (`run.toml`, `output/`); an interrupted run continues with
+`aeolus run <run-folder> --resume`, and the analysis script re-reads the finished
+folders to reprint the table and redraw the figures.
 
 ### The Berlin case
 

@@ -155,7 +155,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 ```
 
 `[run] driver = "cbl"` then selects this schema; the driver `"common"`
-(the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`berlin`](../reference/options/berlin.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
+(the common sections only) is always registered. The options of every driver are in the generated reference: [`common`](../reference/options/common.md), [`simulation`](../reference/options/simulation.md), [`urban`](../reference/options/urban.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the other example drivers; the guide is [Run configuration](../design/run_configuration.md). A driver section named
 like a common one adds its options to it (the `simulation` driver's
 `[output] fields`); redeclaring a common option is an error.
 
@@ -191,16 +191,18 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Drivers that live under `examples/` (the Berlin, SBL and validation
-drivers) are not moved into `src/`: [`DRIVER_FILES`](@ref
+Drivers that live under `examples/` (the Berlin and validation drivers)
+are loaded on first use: [`DRIVER_FILES`](@ref
 Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
 package directory, and the first config that names one includes the file
-into a fresh module. CFG-d (#359) lists `sbl` (`examples/sbl/config_schema.jl`)
-and `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
+into a fresh module. The `sbl` run type moved into `src/` with EX-b (#439,
+[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md)) and is
+registered when the package loads. CFG-d (#359) lists `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
 fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
 (#360) are in the table below. `dns` and `dns_decay` run the same DNS
 (the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
-record and its resolution refusal. `berlin` is the Berlin case (`examples/urban/BerlinCase.jl`, CFG-c #358).
+record and its resolution refusal. The Berlin case's driver is no longer
+an example file: it is the package's urban run type, `urban` (below; EX-a #438).
 
 ### The example drivers (CFG-e, #360)
 
@@ -351,11 +353,13 @@ This config is, bit for bit, the simulation the script built before
 
 Its options, every key with type, default, units, range and doc: [Options: driver `simulation`](../reference/options/simulation.md) (generated from the schema; `aeolus options simulation` prints the same).
 
-## The `berlin` driver
+## The `urban` driver
 
-`[run] driver = "berlin"` is the Berlin (Alexanderplatz) case
-(`examples/urban/core/config_schema.jl`, CFG-c #358). The scenarios are
-shipped base files in `examples/urban/configs/`:
+`[run] driver = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
+(`src/urban/core/config_schema.jl`; CFG-c #358 as the `berlin` example
+driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
+`urban_parent` runs the nest parent of the same config alone. The Berlin
+(Alexanderplatz) case is shipped as files in `examples/urban/configs/`:
 
 | file | what |
 | :-- | :-- |
@@ -363,22 +367,27 @@ shipped base files in `examples/urban/configs/`:
 | `berlin_winter.toml` | `extends = "berlin_summer.toml"`: 15 January 2024, idealised cold profile |
 | `berlin_smoke.toml` | `extends` summer: 16³ window at noon, small nest parent, 12 steps, no NetCDF |
 | `berlin_mitte_sample.toml` | `extends` summer: the synthetic OSM sample |
+| `berlin_parent.toml` | `extends` summer, `driver = "urban_parent"`: the 6 km nest parent alone, 24 h |
+| `berlin_parent_coarse.toml` | `extends` the parent file: the coarse 24 × 24 × 38 parent (the Lindenberg checks) |
 
 ```bash
 julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
 julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
 ```
 
-`examples/urban/alexanderplatz_diurnal.jl` is a three-line wrapper of the
-first (extra arguments are passed on). The environment variables
-`AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and `AEOLUS_OUTPUT_DT` are gone: use
-the file and `--set clock.nsteps=…`, `--set output.cadence=…`.
+There is no wrapper script (`alexanderplatz_diurnal.jl` was removed in
+#438). The environment variables `AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and
+`AEOLUS_OUTPUT_DT` are gone: use the file and `--set clock.nsteps=…`,
+`--set output.cadence=…`. A run writes its own checks (the ledgers'
+closure, the timing) to `output/results.toml`. The generic schema points
+at no data of the example: `[preprocess] osm_path` and `landuse` and
+`[initial] sounding` default to `"none"`.
 
 The sections are `[grid]`, `[geometry]` (the site and the static
 drivers `static`, `parent_static` the ground is read from, CFG-f #361,
 see [Input drivers](input_drivers.md)), `[preprocess]` (the drivers'
 sources: `osm_path`, `min_height`, `park_lai`, `landuse`; `julia
---project -m Aeolus preprocess static berlin_<s>.toml` writes the
+--project -m Aeolus preprocess static <config>.toml` writes the
 drivers from them), `[clock]`, `[cadence]`,
 `[dynamics]`, `[boundaries]`, `[initial]`, `[ledger]`, `[output]`
 (`netcdf`, the file name; `path`, its directory: the summer file writes
@@ -426,13 +435,14 @@ run 12 steps gives state bitwise equal to the Julia-built smoke case and
 passes the round trip with the nest on. The Berlin case has no
 checkpoint/restart yet, so `[checkpoint]` must stay off.
 
-Its options, the `[physics.options.<coupling>]` tables included: [Options: driver `berlin`](../reference/options/berlin.md).
+Its options, the `[physics.options.<coupling>]` tables included: [Options: driver `urban`](../reference/options/urban.md).
 
 ## The `sbl` driver
 
-`[run] driver = "sbl"` (`examples/sbl/config_schema.jl`, CFG-d #359) runs
-the stable-boundary-layer cases of `examples/sbl/`. One driver covers four
-kinds, `[case] kind`:
+`[run] driver = "sbl"` (CFG-d #359; the module
+[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md) since EX-b
+#439) runs the stable-boundary-layer cases of `examples/sbl/configs/`. One
+driver covers four kinds, `[case] kind`:
 
 | kind | builds and runs | shipped configs |
 | :-- | :-- | :-- |
@@ -441,8 +451,8 @@ kinds, `[case] kind`:
 | `relaminarisation_channel` | `relam_spinup`, then `relam_run` | `relaminarisation` |
 | `collapse_channel` | the neutral half channel, then `collapse_run` | `collapse_channel` |
 
-The Julia builders of `examples/sbl/driver.jl` stay the implementation;
-the driver only turns the config into their arguments. Each shipped
+The Julia builders (`src/sbl/case.jl`) are the implementation; the
+driver (`src/sbl/driver.jl`) only turns the config into their arguments. Each shipped
 config gives fields bitwise equal to the builder call it replaced
 (`test/config_sbl.jl`). Case constants live in the TOML files; the case
 tables stay the CSVs of `examples/sbl/data/`, named by `[case] data` (a
@@ -473,9 +483,15 @@ resolve (naming the table, the file and its size). A run writes
 `diagnostics.csv`, `output/statistics.toml` (the averaged statistics or
 the channel result), `output/series.csv` (every `[averaging]
 series_interval`) and, with `[towers] below > 0`, `output/towers.csv` (the
-CASES-99 hockey stick bins). The scripts `gabls1.jl` … `gabls4.jl` run
-their config (`sbl_script_run`) and make the figures; the channel sweeps
-build their cases from the configs and share one spin-up.
+CASES-99 hockey stick bins). The comparisons the old runner scripts made
+are sweeps now (`gabls1_closures.toml`, `cases99_closures.toml`,
+`gabls3_closures.toml`, `gabls4_closures.toml`,
+`stratified_channel_sweep.toml`, `relaminarisation_sweep.toml`,
+`collapse_channel_sweep.toml`: one run folder per member, each channel
+member with its own spin-up), and the scripts `gabls1.jl` … `gabls4.jl`,
+`stratified_channel.jl`, `relaminarisation_channel.jl` and
+`collapse_channel.jl` only read the run folders and make the tables and
+figures (`julia --project examples/sbl/gabls1.jl runs/gabls1_*`).
 
 Its options, every key with type, default, units, range and doc: [Options: driver `sbl`](../reference/options/sbl.md) (generated from the schema; `aeolus options sbl` prints the same).
 

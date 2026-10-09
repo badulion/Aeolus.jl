@@ -32,8 +32,10 @@ the patchy-surface LES. Each has a one-line reason in
 `test/test_tags.toml` naming the fast file that keeps its module
 covered. Every `src` module keeps fast coverage (checked by searching
 each module's name and exports in the fast files). The Berlin example
-has no tests of its own (#320): its end-to-end runs are
-`examples/urban/berlin_checks.jl`, run by hand.
+has no tests of its own (#320); the urban run type it configures
+(`Aeolus.UrbanCase`, #438) is tested in `urban_run.jl` (fast: a
+synthetic city) and `urban_checks.jl` (full: the end-to-end runs on the
+Berlin configs, formerly the by-hand `examples/urban/berlin_checks.jl`).
 
 The granularity is the file. A few full-only files also hold closed-form
 checks next to their simulations (the Blasius solution in
@@ -208,7 +210,8 @@ shorten it much.
 The 13 `test/berlin_*.jl` files (the "Berlin case" block, 4162
 assertions) were removed on 2026-10-07; their checks of `src/` physics
 are in module tests, the example's end-to-end runs in
-`examples/urban/berlin_checks.jl` (run by hand). Fast tier, `test/run.jl
+`examples/urban/berlin_checks.jl` (run by hand; `test/urban_checks.jl`
+since #438). Fast tier, `test/run.jl
 --jobs 4`, one thread per job, other agents' suites alongside:
 
 | | Wall | Jobs | Assertions (pass + broken) | 1-min load at start |

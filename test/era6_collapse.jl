@@ -8,7 +8,7 @@ using Aeolus.SurfaceExchange: _Φm, von_karman, grav
 
 # the LES runs are the cases of examples/sbl/configs/collapse_channel.toml
 # (the `sbl` run driver, CFG-d #359)
-isdefined(Main, :sbl_build) || include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+using Aeolus.StableBoundaryLayer
 
 @testset "P58-e: maximum sustainable heat flux" begin
     κ = von_karman(); g = grav()

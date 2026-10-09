@@ -16,17 +16,17 @@
 
 using Aeolus, TOML
 using Aeolus.IO: toml_value
-isdefined(Main, :BerlinCase) || include(joinpath(@__DIR__, "..", "..", "..", "examples", "urban", "BerlinCase.jl"))
-const BC = Main.BerlinCase
+const BC = Aeolus.UrbanCase
+include(joinpath(@__DIR__, "..", "..", "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_fixture.jl"))
 
 out = Dict{String,Any}("commit" => readchomp(`git -C $(@__DIR__) rev-parse HEAD`))
 for s in (:summer, :winter, :smoke, :mitte_sample)
-    cfg = BC.CaseConfig(s)
+    cfg = BC.CaseConfig(berlin_toml(s))
     out[string(s)] = Dict{String,Any}("case" => normalise(cfg), "parent" => normalise(BC.nest_parent_config(cfg)))
 end
 Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
-case = BC.build_case(BC.CaseConfig(:smoke))
+case = BC.build_case(BC.CaseConfig(berlin_toml("smoke")))
 BC.run_case!(case)
 out["smoke_digests"] = Dict{String,Any}(string(k) => digest(v) for (k, v) in pairs(berlin_state(case)))
 out["smoke_digests_threads"] = Threads.nthreads()

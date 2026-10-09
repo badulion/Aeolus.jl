@@ -3,69 +3,54 @@
 # Antarctic Plateau (Dome C, 11 Dec 2009; Couvreux et al. 2020, BLM 176,
 # 369-400), P58-d (#194)
 #
-# The run is examples/sbl/configs/gabls4_exp3.toml (the `sbl` run driver,
-# CFG-d #359; one run folder per closure): from 10 UTC, the experiment-2
-# ensemble-mean profiles, U_g = (1.25, 4.5) m/s, f = 2Ω sin(-75.1°), the
-# official case file's surface temperature (θ at 651 hPa), z0m = 1e-3 m,
-# z0h = 1e-4 m, β_m = 4.8, β_h = 7.8. Statistics of 16:30-17:30 UTC are
-# compared with Table 4, experiment 3: the envelope of the six LES that ran
-# at 1 m isotropic. The seventh, CSIRO-LES, ran at Δx = 3.9 m, Δz = 1.17 m
-# and is printed separately; so is the experiment-2 envelope of the four
-# Table 2 E2 runs at 5 m / 2 m (see examples/sbl/data/gabls4_reference.csv).
+# The runs are the sweep examples/sbl/configs/gabls4_closures.toml
+# (gabls4_exp3.toml; the `sbl` run type), one run folder per closure: from
+# 10 UTC, the experiment-2 ensemble-mean profiles, U_g = (1.25, 4.5) m/s,
+# f = 2Ω sin(-75.1°), the official case file's surface temperature (θ at
+# 651 hPa), z0m = 1e-3 m, z0h = 1e-4 m, β_m = 4.8, β_h = 7.8. Statistics of
+# 16:30-17:30 UTC are compared with Table 4, experiment 3: the envelope of
+# the six LES that ran at 1 m isotropic. The seventh, CSIRO-LES, ran at
+# Δx = 3.9 m, Δz = 1.17 m and is printed separately; so is the
+# experiment-2 envelope of the four Table 2 E2 runs at 5 m / 2 m (see
+# examples/sbl/data/gabls4_reference.csv).
 #
 # The six 1 m runs used 256 × 256 × 80 m to 512 × 512 × 150 m (up to 39 M
-# cells); the default here is 2 m on 128 × 128 × 96 m (64 × 64 × 48), the
+# cells); the sweep runs 2 m on 128 × 128 × 96 m (64 × 64 × 48), the
 # vertical resolution of experiment 2: Δz is coarser than in every
 # experiment-3 reference run, CSIRO's included.
 #
-#   julia --project=. examples/sbl/gabls4.jl                       # 2 m
-#   NX=64 NZ=64 LX=64 L=64 julia --project=. examples/sbl/gabls4.jl  # 1 m on a 64 m cube
-#   CLOSURES=brown94 ... ; REUSE=1 ... ; CLOSURES=brown94 RESUME=runs/<run folder> ...
+# This script only reads the run folders (statistics.toml, series.csv).
+#
+#   julia --project -m Aeolus run examples/sbl/configs/gabls4_closures.toml     # 2 m
+#   julia --project examples/sbl/gabls4.jl runs/gabls4_exp3_*
 #
 # writes examples/sbl/output/gabls4_<tag>.svg, _series.csv, _profiles.csv
 # =========================================================================
 
-include(joinpath(@__DIR__, "config_schema.jl"))
+include(joinpath(@__DIR__, "runs.jl"))
 include(joinpath(@__DIR__, "svgplot.jl"))
 using Printf
-using Serialization
+using Statistics: mean
 
-const NX = parse(Int, get(ENV, "NX", "64"))
-const NZ = parse(Int, get(ENV, "NZ", "48"))
-const LZ = parse(Float64, get(ENV, "L", "96"))
-const LX = parse(Float64, get(ENV, "LX", "128"))
-const T_END = parse(Float64, get(ENV, "T_END", string(17.5 * 3600)))
-const T_AVG = 16.5 * 3600
-const CLOSURES = Symbol.(split(get(ENV, "CLOSURES", "brown94,none"), ","))
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls4.jl <run folder>…")
+const NX, NZ = cfgval(RUNS[1], "grid.size")[[1, 3]]
+const LX, LZ = cfgval(RUNS[1], "grid.extent")[[1, 3]]
+const T_END = cfgval(RUNS[1], "stepper.end_time")
+const T_AVG = cfgval(RUNS[1], "averaging.from")
 const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
-const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
+const OUTDIR = mkpath(SBL_OUT)
 
-function run_closure(stab)
-    r = sbl_script_run("gabls4_exp3"; overrides = ["grid.size=[$NX,$NX,$NZ]", "grid.extent=[$LX,$LX,$LZ]",
-                                                   "sponge.z=$(0.75LZ)", "sgs.stability=\"$stab\"",
-                                                   "stepper.end_time=$T_END", "averaging.from=$T_AVG"])
-    st = r.stats; c = r.case
+results = map(RUNS) do r
+    st = r.stats; stab = cfgval(r, "sgs.stability"); ρcp = cfgval(r, "surface.rho_cp")
     series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
                θ2 = s.θ_screen, U10 = s.U_screen, θs = s.T_s) for s in r.series]          # every 300 s
-    θst = mean(-s.H / c.ρcp / s.u_star for s in series if s.t >= T_AVG)
+    θst = mean(-s.H / ρcp / s.u_star for s in series if s.t >= T_AVG)
     @printf("%-8s %s: 16:30-17:30 UTC h = %5.1f m  L = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  θ* = %.3f K  LLJ %.2f m/s at %4.1f m  (%d steps, %.0f s)\n",
-            stab, TAG, st.h, st.L, st.u_star, st.H0, θst, st.S_max, st.z_jet, c.nsteps, c.wall_time)
-    return (stab = stab, st = st, θst = θst, series = series, nsteps = c.nsteps, wall = c.wall_time)
+            stab, TAG, st.h, st.L, st.u_star, st.H0, θst, st.S_max, st.z_jet, st.nsteps, st.wall_time)
+    (stab = stab, st = st, θst = θst, series = series)
 end
 
-function cached(stab)
-    path = joinpath(OUTDIR, "gabls4_$(TAG)_$(stab).jls")
-    if get(ENV, "REUSE", "0") == "1" && isfile(path)
-        println("$stab: cached $path")
-        return deserialize(path)
-    end
-    r = run_closure(stab)
-    serialize(path, r)
-    return r
-end
-results = [cached(s) for s in CLOSURES]
-
-ref = gabls4_reference()
+ref = sbl_read_csv(joinpath(SBL_DATA, "gabls4_reference.csv"))
 row(kind) = only(r for r in ref.rows if r[1] == kind)
 lo, hi = row("envelope_low"), row("envelope_high")
 lo2, hi2 = row("envelope_exp2_low"), row("envelope_exp2_high")
@@ -86,7 +71,7 @@ compare("\n17 UTC against Couvreux et al. (2020) Table 4, experiment 3, the six 
 compare("17 UTC against Table 4, experiment 2, the four E2 runs at Δx = 5 m, Δz = 2 m (MesoNH, PALM, UConn, MONC):", lo2, hi2)
 
 open(joinpath(OUTDIR, "gabls4_$(TAG)_series.csv"), "w") do io
-    println(io, "# GABLS4 experiment 3 time series (every 300 s), Aeolus.jl SBL driver, $TAG (P58-d, #194). Model output.")
+    println(io, "# GABLS4 experiment 3 time series (every 300 s), Aeolus.jl sbl run type, $TAG (P58-d, #194). Model output.")
     println(io, "closure,t_s,u_star,H_Wm2,h_m,S_max,z_jet,theta_2m,U_10m,theta_s")
     for r in results, s in r.series
         @printf(io, "%s,%.0f,%.4f,%.2f,%.2f,%.3f,%.2f,%.3f,%.3f,%.3f\n", r.stab, s.t, s.u_star, s.H, s.h,
@@ -94,7 +79,7 @@ open(joinpath(OUTDIR, "gabls4_$(TAG)_series.csv"), "w") do io
     end
 end
 open(joinpath(OUTDIR, "gabls4_$(TAG)_profiles.csv"), "w") do io
-    println(io, "# GABLS4 experiment 3, 16:30-17:30 UTC mean profiles, Aeolus.jl SBL driver, $TAG. Model output.")
+    println(io, "# GABLS4 experiment 3, 16:30-17:30 UTC mean profiles, Aeolus.jl sbl run type, $TAG. Model output.")
     println(io, "closure,z_m,U,V,speed,theta")
     for r in results, k in eachindex(r.st.z)
         @printf(io, "%s,%.3f,%.4f,%.4f,%.4f,%.4f\n", r.stab, r.st.z[k], r.st.U[k], r.st.V[k], r.st.S[k], r.st.θ[k])

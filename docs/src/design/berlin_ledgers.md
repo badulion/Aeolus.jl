@@ -189,7 +189,7 @@ street canyons.
 removed in #320 with the rest of the Berlin suite; the heat content of
 the discretely hydrostatic reference against this analytic value is now
 asserted in `test/era2_anelastic.jl`, the ledger closure by the smoke runs
-of `examples/urban/berlin_checks.jl`). The meter
+of `test/urban_checks.jl`). The meter
 against the analytic heat of a uniform-θ hydrostatic layer
 (``c_p^2 θ p_0/(R g)\,[Π^{c_p/R+1}/(c_p/R+1)]``: 3.1e-8 at Nz = 16,
 2.0e-9 at Nz = 64, second order). A closed box (every θ source off):
@@ -555,9 +555,11 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 ## Smoke test
 
 The smoke runs were `test/berlin_smoke.jl` until #320 removed the Berlin
-test suite; they are now the `smoke` part of
-**`examples/urban/berlin_checks.jl`**, run by hand after changing the
-example (`julia --project=. examples/urban/berlin_checks.jl smoke`). They
+test suite; they were then the `smoke` part of the by-hand
+`examples/urban/berlin_checks.jl`, and since #438 are
+**`test/urban_checks.jl`** (full tier; `julia --project=. test/run.jl --only
+urban_checks.jl`), while every run writes its ledger closure to
+`output/results.toml`. They
 run the case in `examples/urban/configs/berlin_smoke.toml`
 (each run of the matrix is that file plus `--set` overrides, CFG-c #358): a
 250 m × 250 m × 100 m window of the real OSM file (16 × 16 × 16,

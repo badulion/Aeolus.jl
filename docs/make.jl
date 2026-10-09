@@ -3,7 +3,7 @@ using Aeolus
 
 DocMeta.setdocmeta!(Aeolus, :DocTestSetup, :(using Aeolus); recursive=true)
 
-# The example drivers (DRIVER_FILES: berlin, sbl, dns, ...) are loaded to
+# The example drivers (DRIVER_FILES: dns, ...) are loaded to
 # document their options and `using FFTW` etc. at top level: give them the
 # package's own environment, whose dependencies the docs environment does
 # not list directly.
@@ -21,7 +21,7 @@ makedocs(
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations,
                 Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
-                Aeolus.RunDrivers],
+                Aeolus.UrbanCase, Aeolus.StableBoundaryLayer, Aeolus.RunDrivers],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -34,7 +34,8 @@ makedocs(
         # long single pages: the KA port log (223 KiB) and the generated Berlin
         # option reference (137 KiB, one table per coupling); Documenter's
         # 200 KiB limit otherwise fails the build
-        size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/berlin.md"],
+        size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/urban.md",
+                                 "reference/options/urban_parent.md", "api/urban_case.md"],
     ),
     pages = [
         "Home"           => "index.md",
@@ -138,6 +139,7 @@ makedocs(
             "Run configuration"    => "api/config.md",
             "Example run types"    => "api/run_drivers.md",
             "Input drivers"        => "api/input_drivers.md",
+            "Urban run type"       => "api/urban_case.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [
@@ -197,6 +199,7 @@ makedocs(
                 "TurbulenceStability"          => "api/era6/turbulence_stability.md",
                 "Transition"                   => "api/era6/transition.md",
                 "WallModels"                   => "api/era6/wall_models.md",
+                "StableBoundaryLayer (sbl)"    => "api/era6/stable_boundary_layer.md",
             ],
         ],
         "Examples" => [

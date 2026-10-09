@@ -4,7 +4,7 @@
 boundary-layer air quality, together with resistance-model dry
 deposition and below-cloud wet deposition. All mixing ratios are in ppb.
 The Berlin case runs it on five advected tracers
-(`examples/urban/couplings/aq_chem.jl`, #135).
+(`src/urban/couplings/aq_chem.jl`, #135).
 
 ## Mechanism
 

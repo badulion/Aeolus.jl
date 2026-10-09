@@ -174,8 +174,6 @@ const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|sbl_run!|run_ca
 const CONFIG_RUN = r"(run_configs|Aeolus\.main)\("
 const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
 
-const URBAN_LIB = "library of the berlin driver (examples/urban/BerlinCase.jl; configs in examples/urban/configs/, CFG-c #358)"
-
 # Files that call an entry point (or look like runs) but are not runs of
 # their own, each with its reason. Paths relative to examples/.
 const EXEMPT = Dict(
@@ -188,21 +186,11 @@ const EXEMPT = Dict(
         "not a run: a-priori dynamic roughness of a cube height map under a prescribed log-law wind",
     "validation/dns256_generate.jl" =>
         "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
-    "urban/berlin_checks.jl" =>
-        "not a run: by-hand end-to-end checks of the Berlin example (the smoke matrix over configs/berlin_smoke.toml, the parent validations; #320)",
-    "urban/core/bus.jl" => URBAN_LIB,
-    "urban/core/config_schema.jl" => URBAN_LIB,
-    "urban/core/stages.jl" => URBAN_LIB,
-    "urban/couplings/buildings_citymean.jl" => URBAN_LIB,
-    "urban/couplings/nesting.jl" => URBAN_LIB,
-    "urban/couplings/surface_exchange.jl" => URBAN_LIB,
-    "urban/couplings/timestepper.jl" => URBAN_LIB,
-    "urban/parent/case.jl" => URBAN_LIB,
-    "urban/parent/surface.jl" => URBAN_LIB,
 )
 
-# Directories migrated by their own issues.
-const OTHER_ISSUE_DIRS = Dict("sbl/" => "#359 (CFG-d, SBL)")
+# Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
+# its runs are configs/*.toml of the `sbl` run type in src).
+const OTHER_ISSUE_DIRS = Dict{String,String}()
 
 # The rest of #360's scope, migrated in later parts of the issue (it may be
 # split per directory). This list may only shrink: a file migrated to a
@@ -257,5 +245,5 @@ end
     # examples/validation/ is complete: every script there is configured, a driver or exempt
     val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
     @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 9         # 8 validation scripts, urban/alexanderplatz_diurnal (CFG-c); the bare runners of CFG-b and kernels/04 are gone (EX-d)
+    @test nconfigured == 8         # the 8 validation scripts (the urban wrapper is gone, EX-a #438; the bare runners of CFG-b and kernels/04 are gone, EX-d #441)
 end

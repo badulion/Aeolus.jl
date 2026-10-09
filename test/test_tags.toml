@@ -51,6 +51,12 @@ weight = "heavy"
 seconds = 225
 reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
 
+["urban_checks.jl"]
+tier = "full"
+weight = "heavy"
+seconds = 700
+reason = "end-to-end runs of the urban run type on the Berlin configs (49-run smoke matrix, 20-step 64^3 flagship, parent encroachment/Wangara/24 h tiled-surface runs; formerly the by-hand examples/urban/berlin_checks.jl); the run type stays fast in urban_run.jl, config_berlin.jl"
+
 ["era6_gabls2.jl"]
 tier = "full"
 weight = "heavy"
@@ -67,7 +73,7 @@ reason = "Re_tau = 180 stratified channel run vs DNS; NoSlipWall and channel har
 tier = "full"
 weight = "heavy"
 seconds = 152
-reason = "GABLS1 32^3 LES on the examples/sbl driver (driver full-only); stability functions and forcing stay fast in era6_stability_functions.jl, era6_large_scale_forcing.jl"
+reason = "GABLS1 32^3 LES on the sbl run type (Aeolus.StableBoundaryLayer; full-only); stability functions and forcing stay fast in era6_stability_functions.jl, era6_large_scale_forcing.jl"
 
 ["era6_flat_plate.jl"]
 tier = "full"

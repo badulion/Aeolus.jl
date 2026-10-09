@@ -1,0 +1,26 @@
+# Turbulence collapse in the flux-cooled half channel (P58-e, #193): the
+# cooling in units of the maximum sustainable heat flux at the wall
+# model's height, H/H_max(wall) ∈ {0 (neutral), 0.0159, 0.0636, 0.25, 0.5,
+# 1, 2}. collapse_channel.toml (16 × 16 × 32, a neutral spin-up of
+# 10 H/u*, then 20 H/u*, statistics from 15); one run folder per member,
+# each with its own spin-up (the spin-up does not depend on the cooling).
+# examples/sbl/collapse_channel.jl prints the table quoted on
+# docs/src/theory/turbulence_stability.md ("Maximum sustainable heat flux").
+#
+#   julia --project -m Aeolus run examples/sbl/configs/collapse_channel_sweep.toml
+#   julia --project examples/sbl/collapse_channel.jl runs/collapse_channel_*
+
+extends = "collapse_channel.toml"
+
+[sweep]
+axis = [ { key = "case.heat_flux_fraction", values = [0.0, 0.0159, 0.0636, 0.25, 0.5, 1.0, 2.0] } ]
+
+[test]
+overrides = [
+    "grid.size=[16,16,32]",
+    "case.spinup_time=0.1",
+    "stepper.end_time=0.15",
+    "averaging.from=0.1",
+    "averaging.interval=0.05",
+]
+member = "2.0"

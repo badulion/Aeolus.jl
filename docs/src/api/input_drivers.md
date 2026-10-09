@@ -20,7 +20,7 @@ julia --project -m Aeolus preprocess static my_case.toml --out input/my_static.n
 `aeolus preprocess static` loads the run config and calls its driver's
 [`preprocess_static`](@ref Aeolus.Config.preprocess_static), which reads
 the grid and the sources from the config and writes the file(s). The
-`berlin` driver writes `[geometry] static` (from `[preprocess]
+`urban` driver writes `[geometry] static` (from `[preprocess]
 osm_path`, `min_height`, `park_lai`) and, for the nest, `[geometry]
 parent_static` (from `[preprocess] landuse`).
 

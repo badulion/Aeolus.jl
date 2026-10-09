@@ -4,25 +4,30 @@ The Berlin (Alexanderplatz) run is the flagship example of Aeolus. Until
 2026-10-06 every physics module in `src/` had to be exercised by it (the
 rule of #123); the maintainer dropped that rule, and the example has no
 test suite of its own (#320): the physics it couples is tested in the
-module tests, and its end-to-end runs are `examples/urban/berlin_checks.jl`,
-run by hand. Since #126 it is not a script but a small
-framework, the `BerlinCase` module in `examples/urban/`, built so that
-many couplings can be added independently and at the same time.
+module tests, and its end-to-end runs are `test/urban_checks.jl` (full
+tier). Since #126 it is not a script but a small framework, built so that
+many couplings can be added independently and at the same time; since
+EX-a (#438) that framework is the package's urban run type,
+`Aeolus.UrbanCase` in `src/UrbanCase.jl` and `src/urban/` (the `urban`
+run driver, see [Urban run type](../api/urban_case.md)), and the Berlin
+case is configuration only: `examples/urban/configs/berlin_*.toml`, its
+static drivers (OpenStreetMap buildings, the parent's land use) and its
+dynamic driver (the Lindenberg sounding).
 
 ```julia
-include("examples/urban/BerlinCase.jl")
-using .BerlinCase
+using Aeolus
+const UC = Aeolus.UrbanCase
 
-cfg  = CaseConfig(:alexanderplatz; nsteps = 1800)   # 1 h at dt = 2 s
-case = build_case(cfg)
-print(describe(case))                               # couplings and schedule
-run_case!(case)                                     # NetCDF + log events (frames, timing, ledgers)
+cfg  = UC.CaseConfig("examples/urban/configs/berlin_summer.toml"; nsteps = 1800)   # 1 h at dt = 2 s
+case = UC.build_case(cfg)
+print(UC.describe(case))                            # couplings and schedule
+UC.run_case!(case)                                  # NetCDF + log events (frames, timing, ledgers)
 ```
 
 What the case prints is the installed logger's choice (#347; there is no
 `verbose` setting and no `io` keyword): every line is a structured log
-record with `subsystem = :berlin`, an `event` key and its values as
-key-values (#338; the code is `examples/urban/core/diagnostics.jl`):
+record with `subsystem = :urban` (`:berlin` before #438), an `event` key
+and its values as key-values (#338; the code is `src/urban/core/diagnostics.jl`):
 
 | event | level | key-values |
 | :-- | :-- | :-- |
@@ -83,18 +88,18 @@ step and the 60 s cadence.
 
 The flagship is configured in TOML (CFG-c, #358): the scenarios are the
 shipped files `examples/urban/configs/berlin_<scenario>.toml`, run by the
-`berlin` driver,
+`urban` driver,
 
 ```bash
 julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800 --set output.cadence=600
 ```
 
-and `examples/urban/alexanderplatz_diurnal.jl` is a three-line wrapper of
-that command. The run folder (`runs/<date>_<name>_<id>/`) holds `run.toml`,
-the log and `diagnostics.csv`; the NetCDF output still goes to
-`examples/urban/output/alexanderplatz.nc` (`[output] path`). See
-[the `berlin` driver](../api/config.md#The-berlin-driver) for the schema;
-`CaseConfig(:summer)` in Julia loads the same file.
+with no wrapper script (#438). The run folder (`runs/<date>_<name>_<id>/`)
+holds `run.toml`, the log, `diagnostics.csv` and `output/results.toml`
+(the run's own checks: the ledgers' closure, the timing); the NetCDF
+output still goes to `examples/urban/output/alexanderplatz.nc` (`[output]
+path`). See [the `urban` driver](../api/config.md#The-urban-driver) for
+the schema; `CaseConfig(path)` in Julia loads the same file.
 
 ### Configuring with TOML
 
@@ -120,7 +125,7 @@ nox_street = 0.0                   # a coupling option, checked against its defa
 Julia, `CaseConfig(load_run_config("my_berlin.toml"))` gives the
 `CaseConfig` that `build_case` takes. Every key, with its type, default,
 units and range, is in the generated
-[option reference of the `berlin` driver](../reference/options/berlin.md);
+[option reference of the `urban` driver](../reference/options/urban.md);
 the guide to files, overrides, replays and `--resume` is
 [Run configuration](run_configuration.md). The run's `run.toml` holds the
 resolved config, so `aeolus run <folder>/run.toml` replays the run bit for
@@ -168,12 +173,13 @@ long-range roadmap, without marking a phase shipped.
 ## Layout
 
 ```
-examples/urban/
-  BerlinCase.jl        module: includes core/*, then every couplings/*.jl in sorted order
-  core/
+src/
+  UrbanCase.jl         module Aeolus.UrbanCase: includes urban/core/*, then every urban/couplings/*.jl in sorted order
+  urban/core/
     config.jl          CaseConfig — grid, window, clock, cadences (s), physics/options
-    scenarios.jl       CaseConfig(:summer) etc.: loads configs/berlin_<scenario>.toml
-    config_schema.jl   the `berlin` run driver: TOML schema (defaults), RunConfig → CaseConfig
+    config_schema.jl   the `urban` run driver: TOML schema (defaults), RunConfig → CaseConfig,
+                       CaseConfig(path), run_results (results.toml)
+    parent_driver.jl   the `urban_parent` run driver: the nest parent alone, its tables
     registry.jl        AbstractCoupling, the contract, Cadence, register!, selection
     geometry.jl        build_geometry: the static driver (or the OSM file in memory) → mask,
                        classes, radiosity scene, view factors; the readers, classes and
@@ -187,11 +193,17 @@ examples/urban/
     case.jl            Case, build_case
     stages.jl          the stage loop: step_case!, run_case!
     diagnostics.jl     the case's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
-  couplings/           one file per coupling, each ending in register!(Type)
-  configs/             berlin_summer.toml (every option), _winter, _smoke, _mitte_sample
-  alexanderplatz_diurnal.jl              the run (a wrapper of `aeolus run configs/berlin_summer.toml`)
+  urban/couplings/     one file per coupling, each ending in register!(Type)
+  urban/parent/        the nest parent: land-use surface, ParentConfig, the parent case
+  urban/preprocess.jl  aeolus preprocess fetch-osm, fetch-landuse, fetch-sounding, osm-sample
+examples/urban/
+  configs/             berlin_summer.toml (every option), _winter, _smoke, _mitte_sample, _parent, _parent_coarse
+  configs/input/       the static and dynamic drivers (aeolus preprocess static / dynamic)
+  data/                the drivers' sources: OSM files, the parent land-use table, the sounding
   alexanderplatz_animation.jl            renderer (reads the NetCDF only)
   alexanderplatz_surface_diagnostics.jl  per-class diurnal summary (NetCDF only)
+  berlin_parent_figures.jl, berlin_parent_lindenberg_check.jl, plot_parent_surface.jl
+                                         analysis of an urban_parent run's output
 ```
 
 Adding a coupling means adding one file under `couplings/`. No shared
@@ -224,7 +236,7 @@ default.
 | `diagnostics(c, case)` | `Vector{Diagnostic}`: the scalars it reports, in `diagnostics.csv` / `.nc` and its `:coupling` log event with each output record (see [Diagnostics](#Diagnostics)) |
 | `profile_diagnostics(c, case)` | `Vector{ProfileDiagnostic}`: its vertical profiles, in `diagnostics.nc` |
 | `smoke_variants(::Type{C})` | extra smoke-run configurations, a tuple of `NamedTuple`s (see [the smoke runs](berlin_ledgers.md#Smoke-test)) |
-| `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run (`examples/urban/berlin_checks.jl`) |
+| `smoke_check(c, case)` | `Vector{Pair{String,Bool}}` of physics checks on the state after a smoke run (`test/urban_checks.jl`) |
 | `sim_options(::Type{C}, cfg, mesh, opts)` | keywords of the dynamical core's constructor (the `solver` of `BoussinesqSimulation`; `tol`, `maxit` of a sound-proof core), before the core is built (see [numerics slots](berlin_numerics.md#Numerics-slots)) |
 | `step_options(c, case)` | keywords added to every dynamics step, `step!` or `step_imex!` (e.g. `momentum_advection`, `sgs`) |
 | `incompatible_reason(::Type{C})` | why the `incompatible` pairs fail, appended to the selection error |
@@ -421,7 +433,8 @@ Berlin-Brandenburg from 00 UTC on the 29th to 16 UTC on the 30th, and a
 Saturday; `case_weekday(cfg)` now feeds the weekday of `cfg.date` to the
 building schedules (they assumed the Thursday of 20 June 2024 before).
 
-**Data.** `examples/urban/data/fetch_lindenberg.jl` downloads the IGRA2
+**Data.** `aeolus preprocess fetch-sounding` (formerly
+`examples/urban/data/fetch_lindenberg.jl`) downloads the IGRA2
 record of GMM00010393 from NOAA NCEI (public domain; Durre et al. 2018)
 and writes `lindenberg_10393_20190629.csv`: the 00/06/12/18 UTC launches
 of 29 June and the 00/06 UTC launches of 30 June, with pressure, reported
@@ -578,7 +591,7 @@ implementation into the 3-D run. If the physics is missing, add it to
 the right src module with its own tests first. Never copy it into the
 example.
 
-**2. Write `examples/urban/couplings/<name>.jl`.** One struct, the
+**2. Write `src/urban/couplings/<name>.jl`.** One struct, the
 contract methods it needs, and `register!` as the last line:
 
 ```julia
@@ -643,8 +656,8 @@ between entries of the same stage and order).
 **3. Report to the ledger.** If the coupling changes a surface
 temperature, adds or removes water from the air, or clips anything,
 book it in `budget!` (next section). The smoke runs of
-`examples/urban/berlin_checks.jl` assert the closure, so a missing term
-fails them.
+`test/urban_checks.jl` assert the closure, and every run reports it in
+its `output/results.toml`, so a missing term shows.
 
 **4. Give it smoke coverage.** The smoke runs already run every
 additive coupling and one configuration per non-default provider, so
@@ -666,8 +679,8 @@ equations (a maximum principle, positivity, a range set by the
 thermostat), a sign that follows from the physics. "It ran" is already
 asserted for every coupling.
 
-**5. Run and quote.** `julia --project=. examples/urban/berlin_checks.jl smoke`
-locally (about 3.5 min); the physics itself is tested in its module's
+**5. Run and quote.** `julia --project=. test/run.jl --only urban_checks.jl`
+locally (the smoke matrix alone is about 3.5 min); the physics itself is tested in its module's
 tests, which the fast tier runs.
 In the PR body quote one Berlin diagnostic — a ledger term is often the
 natural one — the configuration it was measured in, and the cost from
@@ -738,5 +751,5 @@ transport stage is now ~1e-19 kg m⁻² per run (smoke) and +6.9e-19 kg m⁻²
 over the flagship hour; both `@test_broken` became `@test`, and the
 Berlin tests kept the mechanism tested with `refresh_halos = false`
 until they were removed (#320; the smoke runs of
-`examples/urban/berlin_checks.jl` still assert the water closure of the
+`test/urban_checks.jl` still assert the water closure of the
 transport).

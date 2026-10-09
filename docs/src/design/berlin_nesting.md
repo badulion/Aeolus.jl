@@ -109,7 +109,12 @@ every smoke run closes the child's surface, water and air-heat ledgers.
 The individual side and lid terms carry the through-flow of ≈ 293 K air
 and largely cancel; the heat the box exchanges is their sum.
 
-**Measured** (`examples/urban/berlin_nest_check.jl`, commit `e4b34e7`,
+**Measured** (`examples/urban/berlin_nest_check.jl`, commit `e4b34e7`; since #438
+these runs are `aeolus run examples/urban/configs/berlin_summer.toml` with
+`--set` overrides — the start hour, `physics.nesting=false`, the parent's
+refinement — and the numbers below are in each run's `output/results.toml`:
+`[timing] wall_s_per_simulated_h`, `[open_boundary_heat]`, `[air_heat]`,
+`theta_mean_below_100m_start`/`_end`;
 one thread each on the shared 24-core machine, 29 June 2019 from the
 Lindenberg sounding).
 

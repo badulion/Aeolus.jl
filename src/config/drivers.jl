@@ -152,11 +152,12 @@ them: `name => path` relative to the package directory. The file is
 included into a fresh module and must call [`register_driver!`](@ref)
 for `name`. Physics stays in `examples/`; nothing is moved into `src/`
 for the CLI's sake. The migrations of the example drivers (#311) add
-their entries here: `berlin` (the Berlin case, CFG-c #358).
+their entries here. (The urban run type, formerly the `berlin` entry, is
+part of the package since EX-a #438: `Aeolus.UrbanCase`.)
 """
 const DRIVER_FILES = Dict{String,String}(
-    # CFG-d (#359): the stable-boundary-layer cases and the filtered-DNS record
-    "sbl" => "examples/sbl/config_schema.jl",
+    # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
+    # type in src since EX-b #439: Aeolus.StableBoundaryLayer)
     "dns" => "examples/validation/dns_apriori_driver.jl",
     # CFG-e (#360): the validation drivers and the remaining example scripts
     "channel" => "examples/validation/channel_driver.jl",
@@ -164,8 +165,6 @@ const DRIVER_FILES = Dict{String,String}(
     "patchy_surface" => "examples/validation/patchy_surface_driver.jl",
     "column" => "examples/validation/column_driver.jl",
     "dns_decay" => "examples/validation/dns_driver.jl",
-    # CFG-c (#358): the Berlin case
-    "berlin" => "examples/urban/BerlinCase.jl",
 )
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
