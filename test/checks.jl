@@ -33,7 +33,9 @@ include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
 const CK_CFGS = joinpath(pkgdir(Aeolus), "examples", "configs")
 const CK_DCBL = joinpath(CK_CFGS, "dry_convective_bl.toml")
-const CK_SMALL = ["grid.size=[8,8,8]", "fftw.planner=\"estimate\"", "time.duration=\"none\"", "time.nsteps=6"]
+# the smoke size, with the checks the shipped file enables switched off ({} is off)
+const CK_SMALL = ["grid.size=[8,8,8]", "fftw.planner=\"estimate\"", "time.duration=\"none\"", "time.nsteps=6",
+                  "checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]
 
 ck_file(name, text) = (p = joinpath(mktempdir(), name); write(p, text); p)
 ck_cfg(sets...) = load_run_config(CK_DCBL; overrides = vcat(CK_SMALL, String[sets...]))

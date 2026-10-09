@@ -40,6 +40,9 @@ duration = 5.0
 [logging]
 diagnostics_cadence = 0.5
 
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
 # The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
 # CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
 # against this file's directory.

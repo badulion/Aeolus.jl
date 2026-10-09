@@ -279,7 +279,7 @@ end
                                            "output.cadence=10.0"])
     res = sim_run(cfg)
     dir = joinpath(res.folder.path, "output")
-    @test readdir(dir) == ["output.nc"]
+    @test readdir(dir) == ["output.nc", "results.toml"]                    # results.toml: the file's [checks] (ONE-d)
     NCDataset(joinpath(dir, "output.nc")) do nc
         @test nc["time"].var[:] == [0.0, 10.0, 20.0, 30.0]                   # dt = 5 s
         @test isempty(nc["time_series"].var[:])                              # no scalar selected
