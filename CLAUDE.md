@@ -167,7 +167,8 @@ dependency list short: every new dependency is justified in its PR —
 what it replaces, why it is worth it, and its load-time cost (`using
 Aeolus`, min of 3 fresh processes, before and after). Do not pin versions
 only to avoid a JLL. Today's non-stdlib dependencies (`Project.toml`):
-FFTW, KernelAbstractions, StaticArrays, NCDatasets and GRIBDatasets.
+FFTW, KernelAbstractions, StaticArrays and NCDatasets (GRIBDatasets went
+with the ERA5 reader to AeolusPrep.jl, #457).
 The existing in-package implementations (PNG,
 Mie, error and Bessel functions) stay as they are, but may
 be replaced by a package in a dedicated PR. (This replaced the old

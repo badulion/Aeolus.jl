@@ -23,8 +23,7 @@ using ..Grids: RegularGrid, CellCenter
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!
-using ..InputDrivers: InputDrivers, read_dynamic_driver, read_era5, write_era5_driver, check_planes,
-                      check_coverage, ERA5_OUTPUTS
+using ..InputDrivers: InputDrivers, read_dynamic_driver, check_planes, check_coverage
 using ..Simulations: Simulations, BoussinesqSimulation, step!
 using ..TimeIntegration: CFLConstraints
 using ..StretchedGrids: StretchedGrid
@@ -45,19 +44,17 @@ export SimulationDriverType, SimulationRun, simulation, profile_value
 The `simulation` driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
 `[run] driver = "simulation"`. Its sections are `[grid]`, `[dynamics]`,
 `[boundaries]`, `[sgs]`, `[initial]`, `[stepper]`, `fields` in
-`[output]` and `[preprocess]`, and the couplings around the step
-(EX-d, #441): `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
-`[particles]` and `[obstacles]` ([`SimCouplings`](@ref)); `aeolus
-options simulation` prints them. Shipped configs: `examples/configs/`,
+`[output]`, and the couplings around the step (EX-d, #441): `[forcing]`,
+`[surface]`, `[microphysics]`, `[tracer]`, `[particles]` and
+`[obstacles]` ([`SimCouplings`](@ref)); `aeolus options simulation`
+prints them. Shipped configs: `examples/configs/`,
 `examples/kernels/configs/`, `examples/coupled/configs/`.
 
 `[initial] dynamic` names a dynamic driver (CFG-g, #362): its initial
 profiles set u, v, θ, qv, and open lateral faces (`boundaries.x` or `y =
-"open"`) take its boundary planes, blended linearly in time. `aeolus
-preprocess dynamic --from-era5 <files…> --config <config.toml>` writes
-one from ERA5 (CFG-h, #363, [`preprocess_dynamic`](@ref
-Aeolus.Config.preprocess_dynamic)) with the site and outputs of
-`[preprocess.era5]`.
+"open"`) take its boundary planes, blended linearly in time. AeolusPrep.jl makes
+one from ERA5 (CFG-h #363, ONE-h #457: `aeolusprep dynamic --from-era5
+<files…> --config <config.toml> --lat … --lon …`).
 """
 struct SimulationDriverType <: AbstractRunDriver end
 
@@ -231,7 +228,7 @@ function Config.driver_sections(::SimulationDriverType)
                       "{kind = \"uniform\", amplitude} (uniform in [-a/2, a/2], one draw per cell) or " *
                       "{kind = \"normal\", amplitude} (a × standard normal, one randn array per field); {}: none")
         option!(s, "dynamic", Optional{Path};
-                doc = "a dynamic driver (CFG-g, #362; aeolus preprocess dynamic --from-era5): its initial profiles set u, v, theta (and qv) — not together with the tables above — and open faces take its boundary planes; hashed under [inputs]")
+                doc = "a dynamic driver (CFG-g, #362; AeolusPrep.jl: aeolusprep dynamic --from-era5): its initial profiles set u, v, theta (and qv) — not together with the tables above — and open faces take its boundary planes; hashed under [inputs]")
         option!(s, "perturbation_amplitude", Float64; default = 0.0, range = (0, Inf), units = "K",
                 doc = "white noise on θ, uniform in [-a/2, a/2], drawn from Xoshiro([run] seed)")
         option!(s, "perturbation_depth", Float64; default = Inf, range = (0, Inf), units = "m",
@@ -254,39 +251,7 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "fields", Vector{String}; default = String[], allowed = _OUTPUT_FIELDS,
                 doc = "fields written to output/fields_<step>.nc every cadence (cell-index arrays, Float32); [] : none")
     end
-    pre = section("preprocess"; doc = "Inputs of the preprocessors (aeolus preprocess dynamic, static).") do s
-        option!(s, "obstacles", Optional{Path};
-                doc = "a GeoJSON FeatureCollection of obstacle footprints in mesh metres with a `height` each: aeolus preprocess static writes obstacles.static from it (EX-d, #441)")
-        option!(s, "era5", OpenTable(_era5_validator),
-                doc = "ERA5 (--from-era5, CFG-h #363): {lat, lon (degrees, the domain centre; required), box = 0.5 (degrees, the half-width of the centred differences of the geostrophic wind and the advective tendencies), levels = \"pressure\" | \"model\", outputs = [\"profiles\", \"planes\", \"large_scale\", \"geostrophic\", \"subsidence\", \"advection\", \"surface\"] (the default: all)}")
-    end
-    return Section[grid, dyn, bnd, sgs, ini, stp, out, pre, _coupling_sections()...]
-end
-
-const _ERA5_KEYS = ("lat", "lon", "box", "levels", "outputs")
-
-"The validator of `[preprocess.era5]` (an empty table: no ERA5 preprocessing configured)."
-function _era5_validator(t)
-    isempty(t) && return String[]
-    probs = String[]
-    for k in sort!(collect(keys(t)))
-        k in _ERA5_KEYS || push!(probs, "$k: unknown key (keys: $(join(_ERA5_KEYS, ", ")))")
-    end
-    for (k, lo, hi) in (("lat", -90, 90), ("lon", -360, 360))
-        haskey(t, k) || (push!(probs, "$k: required (degrees, the domain centre)"); continue)
-        (_isnum(t[k]) && lo <= t[k] <= hi) || push!(probs, "$k: expected a number in [$lo, $hi], got $(repr(t[k]))")
-    end
-    haskey(t, "box") && !(_isnum(t["box"]) && t["box"] > 0) &&
-        push!(probs, "box: expected a positive number of degrees, got $(repr(t["box"]))")
-    haskey(t, "levels") && !(t["levels"] in ("pressure", "model")) &&
-        push!(probs, "levels: expected \"pressure\" or \"model\", got $(repr(t["levels"]))")
-    if haskey(t, "outputs")
-        o = t["outputs"]
-        ok = String.(ERA5_OUTPUTS)
-        (o isa AbstractVector && all(x -> x in ok, o)) ||
-            push!(probs, "outputs: expected an array of " * join(repr.(ok), ", ") * ", got $(repr(o))")
-    end
-    return probs
+    return Section[grid, dyn, bnd, sgs, ini, stp, out, _coupling_sections()...]
 end
 
 function _cross_checks(cfg)
@@ -305,7 +270,7 @@ function _cross_checks(cfg)
     if b.x === :open || b.y === :open
         ax = b.x === :open ? "x" : "y"
         cfg.initial.dynamic === nothing &&
-            push!(e, ConfigError("boundaries.$ax", "open faces take the boundary planes of a dynamic driver: set initial.dynamic (aeolus preprocess dynamic --from-era5)"))
+            push!(e, ConfigError("boundaries.$ax", "open faces take the boundary planes of a dynamic driver: set initial.dynamic (AeolusPrep.jl: aeolusprep dynamic --from-era5)"))
         (b.x in (:open, :periodic) && b.y in (:open, :periodic)) ||
             push!(e, ConfigError("boundaries.$ax", "with an open axis the other lateral axis is open or periodic"))
         b.z === :periodic && push!(e, ConfigError("boundaries.z", "an open box needs z walls"))
@@ -622,39 +587,6 @@ function Config.state_fields(r::SimulationRun)
     s = simulation(r)
     s isa BoussinesqSimulation && return merge(map(f -> f.data, IO.checkpoint_fields(s)), _coupling_fields(sim_couplings(r)))
     return (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data, θ = s.θ.data)
-end
-
-"""
-    preprocess_dynamic(::SimulationDriverType, cfg; from = :era5, files, box = nothing, out = nothing)
-        -> Vector{String}
-
-`aeolus preprocess dynamic --from-era5 <files…> --config <config.toml>
-[--box deg]` (CFG-h, #363): the dynamic driver of the run `cfg` from the
-ERA5 `files` ([`read_era5`](@ref Aeolus.InputDrivers.read_era5),
-[`write_era5_driver`](@ref Aeolus.InputDrivers.write_era5_driver)) at
-`[initial] dynamic` (or `out`): the domain centre at `[preprocess.era5]`
-`lat`, `lon`; its `levels`, `outputs` and `box` (`box` here replaces the
-config's; default 0.5°); on the run's level centres, with one boundary
-record per ERA5 time on the open faces of the run (`boundaries.x`/`y =
-"open"`).
-"""
-function Config.preprocess_dynamic(::SimulationDriverType, cfg::RunConfig; from::Symbol, out = nothing,
-                                   child = nothing, files = String[], box = nothing)
-    from === :era5 || throw(ArgumentError("the simulation driver's dynamic preprocessor reads ERA5 (--from-era5), not :$from"))
-    child === nothing || throw(ArgumentError("--from-era5 takes no child config"))
-    isempty(files) && throw(ArgumentError("--from-era5: no ERA5 files"))
-    t = cfg.preprocess.era5
-    isempty(t) && throw(ConfigError("preprocess.era5", "the ERA5 preprocessor needs [preprocess.era5] with lat and lon (the domain centre)"))
-    path = out !== nothing ? abspath(out) : cfg.initial.dynamic
-    path === nothing && throw(ArgumentError("[initial] dynamic is \"none\": pass --out file.nc"))
-    mesh = _mesh(cfg.grid)
-    mesh isa RegularGrid || throw(ConfigError("grid.stretching", "the ERA5 preprocessor needs a uniform grid"))
-    planes = _is_open(cfg) ? only(open_boundary_states(_open_bcs(cfg, mesh))).planes : nothing
-    e = read_era5(files; levels = Symbol(get(t, "levels", "pressure")))
-    outs = haskey(t, "outputs") ? Tuple(Symbol.(t["outputs"])) : ERA5_OUTPUTS
-    write_era5_driver(path, e; lat = Float64(t["lat"]), lon = Float64(t["lon"]), mesh, planes,
-                      box = box === nothing ? Float64(get(t, "box", 0.5)) : Float64(box), outputs = outs)
-    return [path]
 end
 
 register_driver!(SimulationDriverType())

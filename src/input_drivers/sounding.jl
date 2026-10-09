@@ -1,6 +1,8 @@
-# The sounding and case-table preprocessor of the dynamic driver (CFG-g,
-# #362): a radiosonde sounding, or the forcing tables of a case (GABLS,
-# CASES-99), as `DynamicInputs` on the "seconds since init_time" axis.
+# A sounding or a case's forcing tables as the contents of a dynamic driver
+# (CFG-g, #362): a radiosonde sounding, or the forcing tables of a case
+# (GABLS, CASES-99), as `DynamicInputs` on the "seconds since init_time"
+# axis. A run that reads its sounding or case tables in memory builds the
+# same `DynamicInputs`; AeolusPrep.jl writes them to a file (ONE-h, #457).
 # Nothing is resampled: the sounding's height-time tables and the case's
 # tables are written with their own nodes, so a run reading the file sees
 # the tables it would have built from the CSV, value for value.

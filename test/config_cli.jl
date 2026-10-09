@@ -114,7 +114,8 @@ end
                  ["run", TGV, "--set", "grid.size=[0,8,8]", "--root", root2],
                  ["run", TGV, "--set", "run.driver=\"common\"", "--root", root2],
                  ["check"], ["check", "/nonexistent/c.toml"], ["options", "nodriver"],
-                 ["options", "simulation", "nosection"], ["preprocess", "nokind"])
+                 ["options", "simulation", "nosection"],
+                 ["preprocess", "static", TGV])                               # AeolusPrep.jl's since ONE-h (#457)
         rc, _, err = cli(args...)
         @test rc == 2
         @test !isempty(err)
@@ -153,24 +154,6 @@ end
     # `|` inside a cell is escaped, so a row keeps its six cells
     @test occursin("| `cfl` | float \\| \"none\" | `\"none\"` | `1` |", md)
     @test_throws ArgumentError option_reference("simulation"; format = :html)
-end
-
-@testset "aeolus preprocess: registered preprocessors" begin
-    seen = String[]
-    register_preprocessor!("cfgtest_echo", args -> (append!(seen, args); 0), "cfgtest_echo <words…>")
-    register_preprocessor!("cfgtest_fail", args -> throw(ArgumentError("bad input file")), "cfgtest_fail")
-    try
-        rc, out, _ = cli("preprocess")
-        @test rc == 0 && occursin("cfgtest_echo <words…>", out)
-        @test cli("preprocess", "cfgtest_echo", "a", "b")[1] == 0
-        @test seen == ["a", "b"]
-        rc, _, err = cli("preprocess", "cfgtest_fail")
-        @test rc == 2 && occursin("bad input file", err)
-        rc, _, err = cli("preprocess", "cfgtest_ech")
-        @test rc == 2 && occursin("did you mean \"cfgtest_echo\"", err)
-    finally
-        delete!(Config._PREPROCESSORS, "cfgtest_echo"); delete!(Config._PREPROCESSORS, "cfgtest_fail")
-    end
 end
 
 @testset "example drivers are loaded on first use (DRIVER_FILES)" begin

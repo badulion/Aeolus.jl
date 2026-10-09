@@ -277,12 +277,14 @@ label).
 | `check <config> [--set k=v]…` | validates and prints every problem |
 | `resolve <config> [--set k=v]…` | prints the canonical resolved TOML |
 | `options [driver] [section]` | prints the option reference, generated from the schema |
-| `preprocess <kind> …` | a registered preprocessor ([`register_preprocessor!`](@ref Aeolus.Config.register_preprocessor!)) |
 
 Exit codes: **0** success; **1** the run failed (blowup or error; its
 session is recorded as `failed`); **2** a usage or configuration error,
 raised before anything is written. `--root` and `--allow-uncommitted`
 change where and whether the run starts, not its recorded config.
+The input drivers a run reads are made by the companion package
+AeolusPrep.jl (`julia --project -m AeolusPrep …`, ONE-h #457; see
+[Input drivers](input_drivers.md)), not by `aeolus`.
 `julia --project -m Aeolus …` needs Julia ≥ 1.12 (the `-m` flag; the
 `@main` entry point is marked on ≥ 1.11); `bin/aeolus` works on every
 Julia the package supports. In Julia, `Aeolus.main(["run", "case.toml"])`
@@ -352,10 +354,11 @@ This config is, bit for bit, the simulation the script built before
     initial u, v, θ (and qv), replacing the `[initial]` tables. Lateral
     faces set to `"open"` (`boundaries.x`, `y`) take its boundary planes,
     blended linearly in time (boussinesq core, uniform grid, z walls, no
-    sponge). `aeolus preprocess dynamic --from-era5 <files…> --config
-    <config.toml>` writes one from ERA5 with the site, levels and outputs
-    of `[preprocess.era5]` ([Input drivers](input_drivers.md), CFG-h
-    #363); `examples/configs/lindenberg_era5.toml` is the example.
+    sponge). AeolusPrep.jl writes one from ERA5 (`aeolusprep dynamic
+    --from-era5 <files…> --config <config.toml> --lat … --lon …`;
+    [Input drivers](input_drivers.md), CFG-h #363);
+    `examples/configs/lindenberg_era5.toml` is the example, with its
+    committed driver.
 
 Its options, every key with type, default, units, range and doc: [Options: driver `simulation`](../reference/options/simulation.md) (generated from the schema; `aeolus options simulation` prints the same).
 
@@ -386,15 +389,13 @@ There is no wrapper script (`alexanderplatz_diurnal.jl` was removed in
 `AEOLUS_OUTPUT_DT` are gone: use the file and `--set clock.nsteps=…`,
 `--set output.cadence=…`. A run writes its own checks (the ledgers'
 closure, the timing) to `output/results.toml`. The generic schema points
-at no data of the example: `[preprocess] osm_path` and `landuse` and
+at no data of the example: `[geometry] static` and `landuse` and
 `[initial] sounding` default to `"none"`.
 
 The sections are `[grid]`, `[geometry]` (the site and the static
 drivers `static`, `parent_static` the ground is read from, CFG-f #361,
-see [Input drivers](input_drivers.md)), `[preprocess]` (the drivers'
-sources: `osm_path`, `min_height`, `park_lai`, `landuse`; `julia
---project -m Aeolus preprocess static <config>.toml` writes the
-drivers from them), `[clock]`, `[cadence]`,
+see [Input drivers](input_drivers.md), made by AeolusPrep.jl, and the
+nest parent's land-use table `landuse`), `[clock]`, `[cadence]`,
 `[dynamics]`, `[boundaries]`, `[initial]`, `[ledger]`, `[output]`
 (`netcdf`, the file name; `path`, its directory: the summer file writes
 `examples/urban/output/alexanderplatz.nc`, where the renderers read it;

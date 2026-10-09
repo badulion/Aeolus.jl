@@ -13,7 +13,8 @@
 #   * the nest parent's land use (cropped and coarsened to the parent grid)
 #     for the smoke and summer parents;
 #   * the :smoke case's state after 12 steps (FFTW "estimate").
-# Kept for the record; it no longer runs after the switch.
+# Kept for the record; it no longer runs after the switch (and its OSM
+# reader, load_city_osm, is AeolusPrep.jl's since ONE-h, #457).
 
 using Aeolus, TOML
 const BC = Aeolus.UrbanCase

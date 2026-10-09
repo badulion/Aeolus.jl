@@ -13,7 +13,7 @@ Everything is in units of `H` and `U_b`. The domain extends
 `floor_cells` cells below z = 0, which are solid: the floor is an
 immersed wall like the obstacles, which come from a static driver (its
 buildings: solid in every cell whose centre is at or below their height;
-`aeolus preprocess static` writes it from a GeoJSON). The lid is a
+AeolusPrep.jl writes it from a GeoJSON, `aeolusprep static`). The lid is a
 free-slip wall. The immersed boundary is direct forcing
 (`IBM.implicit_ibm_correction!`, τ = 0) after every RK3 predictor
 (`step_rk3!`'s `post_predictor!`): a no-slip wall with the SGS stress as
@@ -40,9 +40,9 @@ import ...Simulations
 using ...Operators: StaticSmagorinsky
 using ...IBM: SolidMask, implicit_ibm_correction!, wall_distance, first_level_cells
 using ...PrognosticSGS: TKEClosure, ReynoldsStressClosure, initialize_tke!, initialize_reynolds_stress!
-using ...InputDrivers: read_static_driver, write_static_driver, solid_and_classes, load_city_geojson
+using ...InputDrivers: read_static_driver, solid_and_classes
 using ...IO: RunFolder, CheckpointSchedule, output_dir
-using ...Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Path, Optional, section, option!,
+using ...Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Path, section, option!,
                  register_driver!, write_results, no_checkpoints
 using Random: Xoshiro, randn
 
@@ -52,8 +52,8 @@ export ObstacleChannelDriverType, ObstacleChannelRun, reattachment
     ObstacleChannelDriverType()
 
 The `obstacle_channel` driver: `[run] driver = "obstacle_channel"`.
-Sections `[grid]`, `[flow]`, `[sgs]`, `[obstacles]`, `[stepper]` and
-`[preprocess]`; `aeolus options obstacle_channel` prints them.
+Sections `[grid]`, `[flow]`, `[sgs]`, `[obstacles]` and `[stepper]`;
+`aeolus options obstacle_channel` prints them.
 """
 struct ObstacleChannelDriverType <: AbstractRunDriver end
 
@@ -99,11 +99,7 @@ function Config.driver_sections(::ObstacleChannelDriverType)
         option!(s, "t_avg", Float64; default = 30.0, range = (0, Inf), open_lower = true, units = "1",
                 doc = "averaging time of the floor velocity after the spin-up (H/U_b)")
     end
-    pre = section("preprocess"; doc = "Inputs of the static preprocessor.") do s
-        option!(s, "obstacles", Optional{Path};
-                doc = "a GeoJSON FeatureCollection of the obstacle footprints (H) with a `height` each: aeolus preprocess static writes obstacles.static from it")
-    end
-    return Section[grid, flow, sgs, ob, stp, pre]
+    return Section[grid, flow, sgs, ob, stp]
 end
 
 function _checks(cfg)
@@ -290,25 +286,6 @@ The velocity and the mean centre-line floor velocity.
 """
 Config.state_fields(r::ObstacleChannelRun) = (u = r.sim.u.data, v = r.sim.v.data, w = r.sim.w.data,
                                              u_floor = r.u_floor)
-
-"""
-    preprocess_static(::ObstacleChannelDriverType, cfg; out = nothing, parent_out = nothing) -> Vector{String}
-
-`aeolus preprocess static <config.toml>`: rasterise the GeoJSON of
-`[preprocess] obstacles` on the run's horizontal grid and write the static
-driver `[obstacles] static` (or `out`), the GeoJSON hashed as its source.
-"""
-function Config.preprocess_static(::ObstacleChannelDriverType, cfg::RunConfig; out = nothing, parent_out = nothing)
-    parent_out === nothing || throw(ArgumentError("the obstacle_channel driver has no nest parent (--parent-out)"))
-    src = cfg.preprocess.obstacles
-    src === nothing && throw(ConfigError("preprocess.obstacles", "the static preprocessor needs a GeoJSON of the obstacles"))
-    path = out !== nothing ? abspath(out) : cfg.obstacles.static
-    mesh = _mesh(cfg)
-    lat, lon = cfg.obstacles.anchor
-    write_static_driver(path, load_city_geojson(src), mesh; origin_lat = lat, origin_lon = lon,
-                        origin_x = mesh.x0, origin_y = mesh.y0, source = src)
-    return [path]
-end
 
 register_driver!(ObstacleChannelDriverType())
 

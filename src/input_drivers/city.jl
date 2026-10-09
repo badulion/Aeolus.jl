@@ -1,7 +1,9 @@
-# The city of the urban preprocessors (CFG-f, #361): building and patch
-# footprints (`UrbanCity`), the surface classes, and the rasterisation of
-# the footprints on a run's grid. Moved from examples/urban/core/geometry.jl,
-# so there is one copy.
+# The city of the static driver (CFG-f, #361): building and patch
+# footprints (`UrbanCity`, the polygons a static driver stores), the
+# surface classes, and the rasterisation of the footprints on a run's grid
+# (the run rasterises the polygons too, e.g. for the per-building surface
+# exchange). The one copy; the readers of OpenStreetMap and GeoJSON that
+# make an `UrbanCity` are in AeolusPrep.jl (ONE-h, #457).
 
 # ---------------------------------------------------------------------------
 # surface classes

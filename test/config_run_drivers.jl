@@ -483,18 +483,14 @@ end
     @test sum(interior_view(rd_couplings(r.obj).tracer.c)) > 0
 end
 
-@testset "coupled: aeolus preprocess static writes the cube's static driver from the GeoJSON" begin
-    out = joinpath(mktempdir(), "cube.nc")
-    @test Aeolus.main(["preprocess", "static", joinpath(RD_CPL, "flow_past_cube.toml"), "--out", out];
-                      io = IOBuffer(), err = IOBuffer()) == 0
+@testset "coupled: the cube's committed static driver" begin
+    # AeolusPrep.jl writes it from its GeoJSON (ONE-h, #457; its recipes reproduce it)
     cfg = load_run_config(joinpath(RD_CPL, "flow_past_cube.toml"))
     mesh = RegularGrid(; size = cfg.grid.size, extent = cfg.grid.extent, halo = cfg.grid.halo)
-    st = Aeolus.InputDrivers.read_static_driver(out; mesh = mesh, origin_lat = 0.0, origin_lon = 0.0,
-                                                origin_x = 0.0, origin_y = 0.0)
-    shipped = Aeolus.InputDrivers.read_static_driver(cfg.obstacles.static; mesh = mesh, origin_lat = 0.0,
-                                                     origin_lon = 0.0, origin_x = 0.0, origin_y = 0.0)
-    @test st.building_height == shipped.building_height
+    st = Aeolus.InputDrivers.read_static_driver(cfg.obstacles.static; mesh = mesh, origin_lat = 0.0,
+                                                origin_lon = 0.0, origin_x = 0.0, origin_y = 0.0)
     @test count(>(0), st.building_height) == 9 * 12 && maximum(st.building_height) == 20.0
+    @test isempty(Aeolus.InputDrivers.check_driver(cfg.obstacles.static, Aeolus.InputDrivers.STATIC_SCHEMA))
 end
 
 # ---------------------------------------------------------------------------

@@ -12,8 +12,9 @@ deps/build.log
 # Simulation output (large binaries)
 output/
 *.nc
-# …but the committed static drivers of the shipped Berlin configs (CFG-f, #361)
-!examples/urban/configs/input/*_static.nc
+# …but the committed input drivers (CFG-f #361, CFG-g #362, made by AeolusPrep.jl: ONE-h #457)
+!examples/**/input/*.nc
+!test/data/**/input/*.nc
 *.ppm
 *.jls
 
@@ -27,7 +28,7 @@ output/
 # Agent worktrees (one per issue)
 .worktrees/
 
-# Raw OSM extracts (`aeolus preprocess fetch-landuse`; not committed)
+# Raw OSM extracts (AeolusPrep.jl `aeolusprep fetch-landuse`; not committed)
 examples/urban/data/raw/
 
 # Parallel test runner: per-run logs and measured timings (test/run.jl)

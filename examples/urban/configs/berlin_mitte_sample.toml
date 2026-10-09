@@ -1,6 +1,8 @@
-# Berlin Mitte sample (CFG-c, #358): the summer case on the bundled
-# synthetic OSM sample (data/sample_berlin_mitte.osm, hand-generated, not
-# real buildings), with buildings of 15 m and more.
+# Berlin Mitte sample (CFG-c, #358): the summer case on a synthetic OSM
+# sample (AeolusPrep.jl's data/berlin/sample_berlin_mitte.osm,
+# `aeolusprep osm-sample`; hand-generated, not real buildings), with
+# buildings of 15 m and more. Its static drivers (this size and the smoke
+# size of [test]) are AeolusPrep's.
 #
 #   julia --project -m Aeolus run examples/urban/configs/berlin_mitte_sample.toml
 
@@ -13,10 +15,6 @@ scenario = "mitte_sample"
 
 [geometry]
 static = "input/berlin_mitte_sample_static.nc"
-
-[preprocess]
-osm_path = "../data/sample_berlin_mitte.osm"
-min_height = 15.0
 
 # The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
 # CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
@@ -35,6 +33,6 @@ overrides = [
     "output.path=\"none\"",
     "output.netcdf=\"none\"",
     "output.cadence=8.0",
-    "geometry.static=\"none\"",
+    "geometry.static=\"input/berlin_mitte_sample_smoke_static.nc\"",
     "geometry.parent_static=\"none\"",
 ]
