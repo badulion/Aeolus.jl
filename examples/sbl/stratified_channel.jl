@@ -16,66 +16,34 @@
 # Re_τ = 180 the DNS bulk Reynolds and Nusselt numbers are tabulated
 # (examples/sbl/data/stratified_channel_gv11_re180.csv) rather than
 # digitised. Ri_τ ∈ {0 (passive θ), 18, 60}. As in the DNS, the
-# stratification is switched on in a developed neutral channel: one neutral
-# spin-up (T_SPIN, default T_END/4), then every run to T_END, statistics
-# from T_AVG (default T_END/2). The cases are
-# examples/sbl/configs/stratified_channel_re180.toml (the `sbl` run driver,
-# CFG-d #359) with N, the times and each run's Ri_τ and closure set on it;
-# the runs share one spin-up (`julia -m Aeolus run
-# examples/sbl/configs/stratified_channel_re180.toml` is one run with its
-# own).
+# stratification is switched on in a developed neutral channel (a neutral
+# spin-up, then the run, statistics from averaging.from). The runs are the
+# sweep examples/sbl/configs/stratified_channel_sweep.toml (the `sbl` run
+# type), one run folder per Ri_τ and closure.
 #
-#   julia --project=. examples/sbl/stratified_channel.jl            # 32×32×48, T = 40
-#   N=24,16,32 T_END=16 T_SPIN=6 T_AVG=10 julia --project=. examples/sbl/stratified_channel.jl
-#   RUNS=0:none julia … (makes the spin-up); then RUNS=60:brown94 julia … &
-#   RUNS=60:none julia … & …; REUSE=1 julia …     # in parallel, then combine
+# This script only reads the run folders (statistics.toml): it prints U_b⁺,
+# Nu and the momentum-budget residual against the DNS and makes the figure.
 #
-# writes examples/sbl/output/stratified_channel_<N>.svg and the per-run
-# results (.jls); prints U_b⁺, Nu and the momentum-budget residual against
-# the DNS.
+#   julia --project -m Aeolus run examples/sbl/configs/stratified_channel_sweep.toml      # 32×32×48, T = 40
+#   julia --project examples/sbl/stratified_channel.jl runs/stratified_channel_re180_*
+#
+# writes examples/sbl/output/stratified_channel_<N>.svg
 # =========================================================================
 
-using Aeolus
-using Printf, Serialization
-using Statistics: mean
-include(joinpath(@__DIR__, "config_schema.jl"))   # the `sbl` driver: sbl_config, sbl_channel_run, sbl_read_csv
+include(joinpath(@__DIR__, "runs.jl"))
+using Printf
 
-const NN = Tuple(parse.(Int, split(get(ENV, "N", "32,32,48"), ",")))
-const T_END = parse(Float64, get(ENV, "T_END", "40"))
-const T_AVG = parse(Float64, get(ENV, "T_AVG", string(0.5 * T_END)))
-const T_SPIN = parse(Float64, get(ENV, "T_SPIN", string(0.25 * T_END)))
-const RUNS = [(parse(Float64, split(r, ":")[1]), Symbol(split(r, ":")[2]))
-              for r in split(get(ENV, "RUNS", "0:none,0:brown94,18:none,18:brown94,60:none,60:brown94"), ",")]
-const DNS = sbl_read_csv(joinpath(@__DIR__, "data", "stratified_channel_gv11_re180.csv"))
-const OUTDIR = joinpath(@__DIR__, "output"); mkpath(OUTDIR)
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/stratified_channel.jl <run folder>…")
+const NN = Tuple(cfgval(RUNS[1], "grid.size"))
+const T_END = cfgval(RUNS[1], "stepper.end_time")
+const T_AVG = cfgval(RUNS[1], "averaging.from")
+const T_SPIN = cfgval(RUNS[1], "case.spinup_time")
+const DNS = sbl_read_csv(joinpath(SBL_DATA, "stratified_channel_gv11_re180.csv"))
+const OUTDIR = mkpath(SBL_OUT)
 const TAG = join(NN, "x")
 
-"stratified_channel_re180.toml at this script's grid and times."
-const CFG = sbl_config("stratified_channel_re180";
-                       overrides = ["grid.size=[$(join(NN, ","))]", "case.spinup_time=$T_SPIN",
-                                    "stepper.end_time=$T_END", "averaging.from=$T_AVG"])
-
-# The neutral spin-up every run starts from, computed once and cached
-# (run one process first when running the closures in parallel).
-function spinup()
-    path = joinpath(OUTDIR, "stratified_channel_$(TAG)_spinup_T$(round(Int, T_SPIN)).jls")
-    isfile(path) && return deserialize(path)
-    sp = sbl_channel_spinup(CFG)
-    serialize(path, sp)
-    return sp
-end
-
-function cached(Ri, stab)
-    path = joinpath(OUTDIR, "stratified_channel_$(TAG)_Ri$(round(Int, Ri))_$(stab).jls")
-    get(ENV, "REUSE", "0") == "1" && isfile(path) && return deserialize(path)
-    cfg = with(CFG, "case.richardson" => Ri, "sgs.stability" => stab)
-    r = merge(sbl_channel_run(cfg, sbl_channel_case(cfg), spinup()), (; case = nothing))
-    serialize(path, r)
-    return r
-end
-
-if abspath(PROGRAM_FILE) == @__FILE__
-    results = [cached(Ri, s) for (Ri, s) in RUNS]
+let
+    results = [r.stats for r in RUNS]
     dns(Ri, col) = sbl_csv_value(DNS, Ri, col)
     @printf("Stratified channel, Re_τ = 180, %s, neutral spin-up to %.0f, averaged over %.0f-%.0f δ/u_τ (DNS: García-Villalba & del Álamo 2011)\n",
             TAG, T_SPIN, T_AVG, T_END)
@@ -106,7 +74,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
         n2 = length(r.zc) ÷ 2
         Us = 0.5 .* (r.U[1:n2] .+ reverse(r.U)[1:n2])            # fold the two halves
         pts = join(("$(X(180z)),$(Y(u))" for (z, u) in zip(r.zc[1:n2], Us)), " ")
-        dash = r.stab === :none ? """ stroke-dasharray="6,4\"""" : ""
+        dash = r.stab == "none" ? """ stroke-dasharray="6,4\"""" : ""
         println(io, """<polyline clip-path="url(#pa)" fill="none" stroke="$(cols[r.Ri])" stroke-width="2"$dash points="$pts"/>""")
     end
     for (i, Ri) in enumerate((0.0, 18.0, 60.0))
@@ -135,8 +103,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         println(io, """<rect x="$(XR(Ri)-4)" y="$(YN(dns(Ri, "Nu"))-4)" width="8" height="8" fill="none" stroke="#7c3aed"/><rect x="$(XR(Ri)-4)" y="$(YU(dns(Ri, "U_b_plus"))-4)" width="8" height="8" fill="none" stroke="#b45309"/>""")
     end
     for r in results
-        f = r.stab === :none ? "white" : nothing
-        fillN = r.stab === :none ? "white" : "#7c3aed"; fillU = r.stab === :none ? "white" : "#b45309"
+        f = r.stab == "none" ? "white" : nothing
+        fillN = r.stab == "none" ? "white" : "#7c3aed"; fillU = r.stab == "none" ? "white" : "#b45309"
         println(io, """<circle cx="$(XR(r.Ri))" cy="$(YN(r.Nu))" r="4.5" fill="$fillN" stroke="#7c3aed" stroke-width="1.5"/><circle cx="$(XR(r.Ri))" cy="$(YU(r.Ub))" r="4.5" fill="$fillU" stroke="#b45309" stroke-width="1.5"/>""")
     end
     println(io, """<text x="$(x0+pw/2)" y="$(y0+ph+40)" font-size="14" text-anchor="middle">Ri_τ</text>""")

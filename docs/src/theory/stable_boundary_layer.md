@@ -10,8 +10,13 @@ wall-resolved, θ-walled variant of the P54-d channel builder is new
 
 ## The shared SBL driver
 
-`examples/sbl/driver.jl` is the one stable-boundary-layer driver; P58-d
-(#194) extends it for GABLS2/3/4 and CASES-99. A periodic Boussinesq LES
+The `sbl` run type ([`Aeolus.StableBoundaryLayer`](../api/era6/stable_boundary_layer.md),
+`src/sbl/`; an example driver under `examples/sbl/` until EX-b, #439) is
+the one stable-boundary-layer driver; P58-d (#194) extends it for
+GABLS2/3/4 and CASES-99. Every case is a TOML file of
+`examples/sbl/configs/` run with `julia --project -m Aeolus run`; the
+scripts of `examples/sbl/` only read the run folders and make the
+tables and figures. A periodic Boussinesq LES
 over a cooled surface, every piece delegated:
 
 | piece | provided by |
@@ -69,7 +74,7 @@ statistics over 1.0–1.25 h):
 | SGS share of the heat flux, lower half of the BL | 0.113 | 0.145 |
 | time-stepping cost (s, loaded machine) | 74 | 52 |
 
-Full runs (`examples/sbl/gabls1.jl`, hours 8–9):
+Full runs (`configs/gabls1_closures.toml`, read by `examples/sbl/gabls1.jl`; hours 8–9):
 
 | closure | grid | ``h`` (m) | ``u_*`` (m s⁻¹) | ``w'θ'_0`` (K m s⁻¹) | ``H`` (W m⁻²) | LLJ max (m s⁻¹) at z | ``L`` (m) |
 | :-- | :-- | --: | --: | --: | --: | :-- | --: |
@@ -114,11 +119,11 @@ of ``h``.
 ## Observed cases: GABLS2, GABLS3, GABLS4 and CASES-99 (P58-d)
 
 P58-d (#194) runs three observed stable-boundary-layer cases on the same
-driver. It adds no physics to `src/`. Since CFG-d (#359) each case is a
-config of the `sbl` run driver ([Run configuration](../api/config.md#The-sbl-driver))
+driver. It adds no physics. Since CFG-d (#359) each case is a
+config of the `sbl` run type ([Run configuration](../api/config.md#The-sbl-driver))
 in `examples/sbl/configs/`: the case constants are in the TOML file, the
 case data stay the CSVs under `examples/sbl/data/` (provenance in every
-header, read by `examples/sbl/cases.jl`), and `sbl_case` builds each case
+header, read by `sbl_case_tables` through `[case] data`), and `sbl_case` builds each case
 from package forcing, surface and closure objects:
 
 | case | config | forcing | surface | reference |
@@ -219,7 +224,7 @@ envelope, which holds in every run.
 
 ### GABLS3: full runs
 
-`examples/sbl/gabls3.jl` uses 03-04 UTC means. "Envelope" means the
+The runs are `configs/gabls3_closures.toml` (and its `--set` resolutions); `examples/sbl/gabls3.jl` reads them and uses 03-04 UTC means. "Envelope" means the
 digitised 10-90 % range of the 6.25 m ensemble. Wall times were measured
 on a machine shared with other jobs (load 12-18).
 
@@ -275,7 +280,7 @@ on a machine shared with other jobs (load 12-18).
 
 ### GABLS4, experiment 3
 
-`examples/sbl/gabls4.jl` uses experiment 3: it starts at 10 UTC from
+`configs/gabls4_closures.toml` (read by `examples/sbl/gabls4.jl`) uses experiment 3: it starts at 10 UTC from
 the Table 5 profiles, with z0m = 1e-3 m, z0h = 1e-4 m and β_m = 4.8,
 β_h = 7.8. Statistics are 16:30-17:30 UTC means. The finest affordable
 grid here is 2 m, the vertical resolution of experiment 2, on
@@ -354,7 +359,7 @@ layer is deeper and smoother in time (panel c).
 
 ### GABLS2 / CASES-99 and the hockey stick
 
-`examples/sbl/gabls2.jl` runs 48 h from 16 LT on 22 October. The grid
+`configs/cases99_closures.toml` (read by `examples/sbl/gabls2.jl`) runs 48 h from 16 LT on 22 October. The grid
 is 48 × 48 × 80, i.e. Δx = 50 m and Δz = 20 m on 2.4 × 2.4 × 1.6 km
 (6124 s / 4703 s wall). The convective days need the 1.6 km depth, and
 that depth limits the resolution. The SCM ranges of Holtslag et al.
@@ -497,9 +502,10 @@ still rising by 3.3 u_τ) and the corrected one partly (Nu = 2.65,
 from noise instead, the same grid stays turbulent for 16 δ/u_τ (Nu = 3.20
 both, ratio 0.45 against the DNS 0.464) but accelerates throughout
 (``U_b`` +0.7 u_τ over the window). ``Ri_τ = 60`` is run at 32×32×48 for
-longer in `examples/sbl/stratified_channel.jl`.
+longer in `configs/stratified_channel_sweep.toml`.
 
-Example run (`examples/sbl/stratified_channel.jl`, 32×32×48 on
+Example run (`configs/stratified_channel_sweep.toml`, read by
+`examples/sbl/stratified_channel.jl`; 32×32×48 on
 2πδ × πδ × 2δ, Δx⁺ = 35, Δy⁺ = 18, Δz⁺ = 7.5; neutral spin-up 10 δ/u_τ,
 each run to 40 δ/u_τ, statistics over 20–40 δ/u_τ; six single-thread
 processes of 10–15 min each on a loaded machine):

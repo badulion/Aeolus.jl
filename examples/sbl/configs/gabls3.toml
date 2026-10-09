@@ -10,7 +10,7 @@
 # and advective tendencies of u, v, θ (constant above 200 m, linear to zero
 # at the surface), perturbations u, v ~ N(0, 0.2 (1 - z/200)²) and
 # θ ~ N(0, 0.1) below 200 m, a sponge from 600 m damping only the
-# departures from the plane mean. Dry (examples/sbl/cases.jl header).
+# departures from the plane mean. Dry (the theory page, "Observed cases").
 # The reference resolution is 6.25 m (128³ on 800 m); the CI test runs
 # 16 × 16 × 48 on 400 m with the sponge from 300 m.
 #
@@ -78,7 +78,7 @@ sample_every = 5
 series_interval = 300.0
 
 [checkpoint]
-every_seconds = 1800.0         # an interrupted run resumes with --resume <run folder> (RESUME= for the scripts)
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
 keep = 2
 
 # The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,

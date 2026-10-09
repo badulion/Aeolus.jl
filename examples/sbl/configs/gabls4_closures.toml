@@ -1,0 +1,31 @@
+# GABLS4 stage 3, experiment 3 with and without the SGS stability
+# correction (P58-d, #194): the runs that examples/sbl/gabls4.jl compares
+# with Couvreux et al. (2020) Table 4 (examples/sbl/data/gabls4_reference.csv).
+# gabls4_exp3.toml at 2 m on 128 × 128 × 96 m (64 × 64 × 48, the vertical
+# resolution of experiment 2; the sponge from 72 m = 0.75 Lz), 10-17:30 UTC,
+# statistics of 16:30-17:30 UTC. One run folder per member.
+#
+#   julia --project -m Aeolus run examples/sbl/configs/gabls4_closures.toml
+#   julia --project -m Aeolus run examples/sbl/configs/gabls4_closures.toml --set grid.size=[64,64,64] --set grid.extent=[64.0,64.0,64.0] --set sponge.z=48.0   # 1 m
+#   julia --project examples/sbl/gabls4.jl runs/gabls4_exp3_*
+
+extends = "gabls4_exp3.toml"
+
+[grid]
+size = [64, 64, 48]
+extent = [128.0, 128.0, 96.0]
+
+[sponge]
+z = 72.0                       # 0.75 Lz
+
+[sweep]
+axis = [ { key = "sgs.stability", values = ["brown94", "none"] } ]
+
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+    "averaging.series_interval=0.0",
+]
+member = "none"

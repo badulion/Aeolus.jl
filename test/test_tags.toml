@@ -73,7 +73,7 @@ reason = "Re_tau = 180 stratified channel run vs DNS; NoSlipWall and channel har
 tier = "full"
 weight = "heavy"
 seconds = 152
-reason = "GABLS1 32^3 LES on the examples/sbl driver (driver full-only); stability functions and forcing stay fast in era6_stability_functions.jl, era6_large_scale_forcing.jl"
+reason = "GABLS1 32^3 LES on the sbl run type (Aeolus.StableBoundaryLayer; full-only); stability functions and forcing stay fast in era6_stability_functions.jl, era6_large_scale_forcing.jl"
 
 ["era6_flat_plate.jl"]
 tier = "full"

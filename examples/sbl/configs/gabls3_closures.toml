@@ -1,0 +1,32 @@
+# GABLS3 with and without the SGS stability correction (P58-d, #194): the
+# runs that examples/sbl/gabls3.jl compares with the digitised LES
+# ensemble at 03-04 UTC (examples/sbl/data/gabls3_reference.csv,
+# gabls3_envelope.csv). gabls3.toml at 6.25 m on a 400 m cube (64³, the
+# sponge from 300 m = 0.75 Lz), 00-04 UTC, profiles averaged from 03 UTC.
+# One run folder per member.
+#
+#   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml
+#   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml --set grid.size=[64,64,128] --set grid.extent=[200.0,200.0,400.0]   # 3.125 m
+#   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml --set grid.size=[128,128,128] --set grid.extent=[800.0,800.0,800.0] --set sponge.z=600.0
+#   julia --project examples/sbl/gabls3.jl runs/gabls3_*
+
+extends = "gabls3.toml"
+
+[grid]
+size = [64, 64, 64]
+extent = [400.0, 400.0, 400.0]
+
+[sponge]
+z = 300.0                      # 0.75 Lz
+
+[sweep]
+axis = [ { key = "sgs.stability", values = ["brown94", "none"] } ]
+
+[test]
+overrides = [
+    "grid.size=[16,16,48]",
+    "stepper.end_time=\"none\"",
+    "stepper.nsteps=10",
+    "averaging.series_interval=0.0",
+]
+member = "none"

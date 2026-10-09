@@ -9,7 +9,9 @@ using Test
 using Aeolus
 using Statistics: mean
 
-include(joinpath(@__DIR__, "..", "examples", "sbl", "config_schema.jl"))
+using Aeolus.StableBoundaryLayer
+using Aeolus.StableBoundaryLayer: _sbl_first_level     # the first-level wind and θ of the surface solve
+isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
 
 # One run, 00-04 UTC. The issue asks for 00-02 UTC; the only accessible LES
 # envelope (Basu, Holtslag & Bosveld 2012, Fig. 1) is for 03-04 UTC, so the
