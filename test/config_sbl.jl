@@ -100,7 +100,7 @@ const SBL_TEST = Dict(
 const SBL_HOMOGENEOUS = ("gabls1", "gabls2", "cases99", "gabls3", "gabls4_exp3")
 
 # The sweeps that replace the runner scripts (EX-b, #439): file => (the config
-# it extends, the member labels)
+# it was expanded from, ONE-b #451, the member labels)
 const SBL_SWEEPS = Dict(
     "gabls1_closures" => ("gabls1", ["brown94", "none", "lilly"]),
     "cases99_closures" => ("cases99", ["brown94", "none"]),
@@ -119,18 +119,17 @@ const SBL_SWEEPS = Dict(
     @test sort!(setdiff(all_names, names)) == sort!(collect(keys(SBL_SWEEPS)))
     for n in names
         cfg = load_run_config(sblcfg(n))
-        @test cfg.run.driver == "sbl"
+        @test cfg.run.legacy == "sbl"
         @test load_run_config(cfg_text_file(cfg)) == cfg              # the canonical form reloads
     end
-    @test sblcfg("gabls1") in shipped_configs()
-    # the sweeps: one run per member, each the extended config with the swept
+    # the sweeps: one run per member, each the base config with the swept
     # keys set (the closures, Ri_τ, h/L, the cooling), nothing else changed
     for (n, (base, labels)) in SBL_SWEEPS
         runs = load_sweep(sblcfg(n))
         @test [m.label for (m, _) in runs] == labels
         b = load_run_config(sblcfg(base))
         for (m, c) in runs
-            @test c.run.driver == "sbl" && c.run.name == "$(b.run.name)_$(m.label)"
+            @test c.run.legacy == "sbl" && c.run.name == "$(b.run.name)_$(m.label)"
             @test c.case.kind === b.case.kind
             # every member validates; the swept keys are the ones that differ
             # from the base, plus the grid of the sweeps that resize it
@@ -187,7 +186,7 @@ end
 
 @testset "sbl driver: round trip from run.toml is bit-identical (20 steps)" begin
     chan(n) = ["stepper.end_time=0.15", "averaging.from=0.1", "case.spinup_time=0.1"]
-    for (n, nso) in (("gabls1", simulation_nsteps), ("gabls3", simulation_nsteps), ("cases99", simulation_nsteps),
+    for (n, nso) in (("gabls1", sbl_nsteps), ("gabls3", sbl_nsteps), ("cases99", sbl_nsteps),
                      ("stratified_channel_re180", chan))
         ov = n == "cases99" ? vcat(SBL_TEST[n], "towers.hours=[0.0,24.0]", "towers.window=30.0") : SBL_TEST[n]
         n == "stratified_channel_re180" && (ov = ["grid.size=[24,16,32]"])
@@ -214,9 +213,8 @@ end
     @test occursin("sponge.target", msg) && occursin("\"geostrophic\"", msg) && occursin("\"mean\"", msg)
     # a GABLS3 config whose case table (the forcing's source) is missing names the path
     dir = mktempdir()
-    p = joinpath(dir, "g3.toml")
-    write(p, "extends = \"$(sblcfg("gabls3"))\"\n[case]\ndata = \"missing/gabls3_case.csv\"\n")
-    msg = sprint(showerror, sbl_cfg_error(() -> load_run_config(p)))
+    missing_csv = joinpath(dir, "missing", "gabls3_case.csv")
+    msg = sprint(showerror, sbl_cfg_error(() -> load_run_config(sblcfg("gabls3"); overrides = ["case.data=\"$missing_csv\""])))
     @test occursin("case.data", msg) && occursin(normpath(joinpath(dir, "missing", "gabls3_case.csv")), msg)
     # a table the file does not have, and a column it does not have
     msg = sprint(showerror, sbl_cfg_error(() -> load_run_config(sblcfg("gabls3");

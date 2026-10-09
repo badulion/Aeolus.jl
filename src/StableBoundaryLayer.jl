@@ -1,7 +1,7 @@
 """
     Aeolus.StableBoundaryLayer
 
-The `sbl` run type (`[run] driver = "sbl"`): the stable-boundary-layer
+The `sbl` run type (`[run] legacy = "sbl"`): the stable-boundary-layer
 cases (GABLS1-4, CASES-99, the stratified, relaminarising and collapsing
 channels) configured from TOML only. See [`SBLDriver`](@ref) and the
 Stable boundary layer theory page; the shipped configs are in
@@ -43,7 +43,7 @@ using Random
 using Statistics: mean
 import TOML
 
-export SBLDriver, SBLRun, SBL_CONFIG_DIR, SBL_KINDS, sbl_build, sbl_config,
+export SBLDriver, SBLRun, SBL_CONFIG_DIR, SBL_KINDS, sbl_build, sbl_config, sbl_dynamic_inputs, write_sbl_driver,
        # the case builders and their step (case.jl)
        SBLCase, SBL_GABLS1_STABILITY, sbl_case, sbl_surface!, sbl_dt, sbl_step!, sbl_run!,
        sbl_column_heat, sbl_profiles, sbl_bl_height, sbl_read_csv, sbl_csv_value,

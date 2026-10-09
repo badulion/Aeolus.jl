@@ -1,12 +1,14 @@
-# Loading a run configuration (CFG-a, #356): the `extends` chain, the
-# key-by-key merge, `dotted.key=<TOML value>` overrides, and the strict
+# Loading a run configuration (CFG-a, #356; schema 2, ONE-b #451): one
+# self-contained file, `dotted.key=<TOML value>` overrides, the domains
+# (`[[domain]]` blocks over the run-level sections), and the strict
 # validation that reports every problem in one ConfigError.
 
-"The schema version this Aeolus writes and reads."
-const CONFIG_SCHEMA_VERSION = 1
-
-"The deepest `extends` chain accepted (number of `extends` links)."
-const MAX_EXTENDS_DEPTH = 8
+"""
+The schema version this Aeolus writes and reads: 2 (ONE-b, #451: one model,
+no `[run] driver`, no `extends`, `[[domain]]`). A file of version 1 is
+refused with what changed.
+"""
+const CONFIG_SCHEMA_VERSION = 2
 
 "Origin tag of a value set by an override (`--set` / `overrides`)."
 const OVERRIDE_ORIGIN = "--set"
@@ -34,18 +36,20 @@ recorded under `[inputs]` must be unchanged (else a [`ConfigError`](@ref)
 names each changed file, unless `allow_changed_inputs = true`), and a
 record marked `replayable = false` is refused.
 
-A `.toml` file may name a base file with `extends = "base.toml"`, looked
-up relative to the extending file first, then in the driver's config
-directory ([`register_driver!`](@ref)); chains are followed up to
-$(MAX_EXTENDS_DEPTH) links deep, and a cycle is an error. Tables merge key by key;
-arrays and scalars replace. `overrides` are `"dotted.key=<TOML value>"`
-strings (`"clock.nsteps=12"`, `"grid.size=[16,16,16]"`, `"run.name=\\"x\\""`),
-applied last: precedence is base < child < override.
+A config file is self-contained: there is no `extends` (a file that has
+one is refused). `overrides` are `"dotted.key=<TOML value>"` strings
+(`"time.nsteps=12"`, `"grid.size=[16,16,16]"`, `"run.name=\\"x\\""`),
+applied last; an override of a per-domain section applies to every domain,
+over the `[[domain]]` blocks.
 
-The schema is `schema`, or that of the driver named by `[run] driver`
-(default `"common"`). Unknown keys, wrong types, values out of range or
-outside `allowed`, tuples of the wrong length and failed cross-field
-checks are all collected and thrown as one `ConfigError`.
+The schema is `schema`, or that of the legacy case named by `[run]
+legacy`, or else the model's ([`driver_schema`](@ref)). The model's
+per-domain sections are resolved for every domain: the run-level values,
+replaced key by key by the domain's `[domain.<section>]` tables (a config
+without `[[domain]]` has one domain, `"main"`). Unknown keys, wrong types,
+values out of range or outside `allowed`, tuples of the wrong length and
+failed cross-field checks are all collected and thrown as one
+`ConfigError`.
 """
 function load_run_config(path::AbstractString; overrides = String[], schema = nothing,
                          allow_changed_inputs::Bool = false)
@@ -60,7 +64,7 @@ function load_run_config(path::AbstractString; overrides = String[], schema = no
     if haskey(d, "run_id") && get(d, "config", nothing) isa AbstractDict
         return _load_record(p, overrides, schema, allow_changed_inputs; parsed = d)
     end
-    return _load_chain(p, d, overrides, schema)
+    return _load_file(p, d, overrides, schema)
 end
 
 function load_run_config(io::Base.IO; overrides = String[], schema = nothing,
@@ -72,38 +76,21 @@ function load_run_config(io::Base.IO; overrides = String[], schema = nothing,
     if haskey(r, "run_id") && get(r, "config", nothing) isa AbstractDict
         return _load_record(file, overrides, schema, allow_changed_inputs; parsed = r)
     end
-    return _load_chain(file, r, overrides, schema)
+    return _load_file(file, r, overrides, schema)
 end
 
 # ---------------------------------------------------------------------------
-# the extends chain
+# one file
 # ---------------------------------------------------------------------------
 
-function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sweep::Symbol = :error)
+function _load_file(leaf::String, leafdict::AbstractDict, overrides, schema; sweep::Symbol = :error)
     ovr, oprobs = _parse_overrides(overrides)
-    files = String[leaf]; dicts = Dict{String,Any}[_drop_test!(deepcopy(leafdict), leaf)]
-    seen = Set{String}([_real(leaf)])
-    while true
-        cur = files[end]; d = dicts[end]
-        haskey(d, "extends") || break
-        ext = pop!(d, "extends")
-        ext isa AbstractString ||
-            throw(ConfigError("extends", "expected a file name (a string), got $(_show_raw(ext))"; file = cur))
-        length(files) > MAX_EXTENDS_DEPTH &&
-            throw(ConfigError("extends", "the extends chain is deeper than $(MAX_EXTENDS_DEPTH): " *
-                              join(files, " -> "); file = cur))
-        hint = _driver_hint(ovr, dicts, schema)
-        next = _find_extends(String(ext), cur, hint)
-        r = _real(next)
-        r in seen && throw(ConfigError("extends", "extends cycle: " * join(vcat(files, next), " -> ");
-                                       file = cur))
-        push!(seen, r)
-        push!(files, next); push!(dicts, _drop_test!(_parse_toml_file(next), next))
-    end
+    d = _drop_test!(deepcopy(leafdict), leaf)
+    haskey(d, "extends") &&
+        throw(ConfigError("extends", "extends was removed in schema_version 2 (ONE-b, #451): every config " *
+                          "is self-contained; write the options of $(_show_raw(d["extends"])) into this file"; file = leaf))
     raw = Dict{String,Any}(); origins = Dict{String,String}()
-    for i in length(files):-1:1                     # root first, the leaf last
-        _merge!(raw, origins, dicts[i], files[i], "")
-    end
+    _merge!(raw, origins, d, leaf, "")
     # a [sweep] (CFG-e) is expanded by the runner, never part of a resolved config
     sw = pop!(raw, "sweep", nothing)
     sweep === :table && return sw
@@ -112,11 +99,9 @@ function _load_chain(leaf::String, leafdict::AbstractDict, overrides, schema; sw
         throw(_sweep_error(leaf, n))
     end
     _apply_overrides!(raw, origins, ovr, oprobs)
-    sources = Dict{String,Any}("files" => files, "overrides" => String[overrides...])
+    sources = Dict{String,Any}("files" => String[leaf], "overrides" => String[overrides...])
     return _resolve(raw, origins, sources, schema, oprobs, leaf)
 end
-
-_real(p) = ispath(p) ? realpath(p) : abspath(p)
 
 # ---------------------------------------------------------------------------
 # the [test] table (CFG-i, #364)
@@ -125,8 +110,7 @@ _real(p) = ispath(p) ? realpath(p) : abspath(p)
 """
     config_test_table(path) -> Union{Nothing, NamedTuple}
 
-The `[test]` table of the config file `path` (the file's own, not one it
-`extends`), or `nothing` if it has none:
+The `[test]` table of the config file `path`, or `nothing` if it has none:
 
 ```toml
 [test]
@@ -138,8 +122,7 @@ member = "lasd_32x32x32"                                   # a sweep: the member
 smoke run; the round-trip coverage suite (`test/config_roundtrip.jl`)
 runs every shipped config with them and replays it from its `run.toml`.
 The loader ignores `[test]` (it checks only its shape): it is not part
-of the resolved config, of `run.toml` or of the config hash, and a file's
-`[test]` is not inherited through `extends`.
+of the resolved config, of `run.toml` or of the config hash.
 """
 function config_test_table(path::AbstractString)
     d = _parse_toml_file(abspath(path))
@@ -167,51 +150,11 @@ function _check_test_table(t, file)
     return nothing
 end
 
-"Remove the `[test]` table of one file of an extends chain (after checking its shape)."
+"Remove the `[test]` table of a config file (after checking its shape)."
 function _drop_test!(d::AbstractDict, file)
     t = pop!(d, "test", nothing)
     t === nothing || _check_test_table(t, file)
     return d
-end
-
-"The driver whose config directory `extends` searches: the overrides', else the child-most file's."
-function _driver_hint(ovr, dicts, schema)
-    schema === nothing || return schema.name
-    for (k, v) in ovr
-        k == "run.driver" && v isa AbstractString && return String(v)
-    end
-    for d in dicts
-        r = get(d, "run", nothing)
-        r isa AbstractDict && get(r, "driver", nothing) isa AbstractString && return String(r["driver"])
-    end
-    return nothing
-end
-
-function _find_extends(ext::String, cur::String, hint)
-    cand = normpath(joinpath(dirname(cur), ext))
-    isfile(cand) && return cand
-    looked = String[cand]
-    dirs = String[]
-    hint === nothing || _ensure_driver(hint)
-    if hint !== nothing && haskey(_DRIVERS, hint)
-        d = _DRIVERS[hint].config_dir
-        d === nothing || push!(dirs, d)
-    elseif hint === nothing
-        for e in values(_DRIVERS)
-            e.config_dir === nothing || push!(dirs, e.config_dir)
-        end
-    end
-    hits = String[]
-    for d in sort!(unique!(dirs))
-        c = normpath(joinpath(d, ext)); push!(looked, c)
-        isfile(c) && push!(hits, c)
-    end
-    length(hits) == 1 && return hits[1]
-    length(hits) > 1 &&
-        throw(ConfigError("extends", "\"$ext\" is ambiguous: found in " * join(hits, ", ") *
-                          "; set [run] driver to pick one"; file = cur))
-    throw(ConfigError("extends", "extends file \"$ext\" not found (looked at " * join(looked, ", ") * ")";
-                      file = cur))
 end
 
 "Merge `src` into `dst`: tables key by key, arrays and scalars replace; record each key's file."
@@ -309,9 +252,9 @@ _base_dir(origin) = (origin == OVERRIDE_ORIGIN || origin == WITH_ORIGIN || origi
 function _pick_schema(raw, schema, leaf)
     schema === nothing || return schema
     r = get(raw, "run", nothing)
-    name = r isa AbstractDict ? get(r, "driver", "common") : "common"
+    name = r isa AbstractDict ? get(r, "legacy", MODEL) : MODEL
     name isa AbstractString ||
-        throw(ConfigError("run.driver", "expected a string, got $(_show_raw(name))"; file = leaf))
+        throw(ConfigError("run.legacy", "expected a string, got $(_show_raw(name))"; file = leaf))
     try
         return driver_schema(String(name))
     catch e
@@ -329,61 +272,184 @@ function _check_version(raw, origins, leaf)
     v > CONFIG_SCHEMA_VERSION &&
         throw(ConfigError("schema_version", "schema_version = $v is newer than this Aeolus supports " *
                           "(schema_version = $(CONFIG_SCHEMA_VERSION)); update Aeolus"; file = file))
-    v < 1 && throw(ConfigError("schema_version", "schema_version must be ≥ 1, got $v"; file = file))
+    v < CONFIG_SCHEMA_VERSION &&
+        throw(ConfigError("schema_version", "schema_version = $v is no longer read: schema_version 2 " *
+                          "(ONE-b, #451) has one model and no run types: `[run] driver` and `extends` are " *
+                          "gone, a case not yet ported to components is `[run] legacy = \"<case>\"`, and " *
+                          "the model's sections are those of the Configuration page; convert the file"; file = file))
     return
 end
 
+"A message for a key schema 2 removed, or `nothing`."
+function _removed_key(k::AbstractString)
+    k == "run.driver" && return "`[run] driver` was removed in schema_version 2 (ONE-b, #451): a config " *
+                                "runs the one model and needs no key; a case not yet ported to components " *
+                                "is `[run] legacy = \"<case>\"`"
+    return nothing
+end
+
+# the problems of one section's table `tbl` against its spec `s`: typed values
+# into `vals`, origins into `vorig`; `prefix` is the key prefix of messages
+# ("" or "domain[i].") and `korig(k)` the origin of key "section.k"
+function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf)
+    keys_ = [o.key for o in s.options]
+    for k in sort!(collect(keys(tbl)))
+        k in keys_ && continue
+        full = "$(s.name).$k"
+        why = _removed_key(full)
+        push!(probs, ConfigProblem(prefix * full, korig(full),
+              why === nothing ? "unknown key in [$(s.name)]" * _suggest(k, keys_) : why))
+    end
+    for o in s.options
+        key = "$(s.name).$(o.key)"
+        if haskey(tbl, o.key)
+            org = korig(key)
+            ok, v, why = _coerce(o, tbl[o.key], false, _base_dir(org), key)
+            ok ? (vals[o.key] = v) : push!(probs, ConfigProblem(prefix * key, org, why))
+            vorig[prefix * key] = org
+        elseif o.required
+            push!(probs, ConfigProblem(prefix * key, leaf, "required, expected $(_describe(o.type))$(_constraint_text(o))"))
+        else
+            ok, v, why = _default(o, key)
+            ok ? (vals[o.key] = v) : push!(probs, ConfigProblem(prefix * key, DEFAULT_ORIGIN, why))
+            vorig[prefix * key] = DEFAULT_ORIGIN
+        end
+    end
+    return vals
+end
+
 """
-Validate the merged raw table against the schema, resolve defaults and
-paths, run the cross-field checks; throw one ConfigError with every problem.
+Validate the raw table against the schema, resolve defaults, paths and the
+domains, run the cross-field checks; throw one ConfigError with every
+problem.
 """
 function _resolve(raw, origins, sources, schema, probs::Vector{ConfigProblem}, leaf)
     _check_version(raw, origins, leaf)
     sch = _pick_schema(raw, schema, leaf)
-    names = [s.name for s in sch.sections]
+    dsec = sch.domain_sections
+    blocks, base = isempty(dsec) ? (nothing, nothing) : _domain_input!(raw, origins, sch, probs, leaf)
+    names = [s.name for s in sch.sections]          # "domain": the [[domain]] blocks
     for k in sort!(collect(keys(raw)))
         k in names && continue
         push!(probs, ConfigProblem(k, _origin(origins, k, leaf),
               "unknown " * (raw[k] isa AbstractDict ? "table [$k]" : "key") *
-              " for driver \"$(sch.name)\"" * _suggest(k, names)))
+              (sch.name == MODEL ? "" : " for the legacy case \"$(sch.name)\"") * _suggest(k, names)))
     end
     values = Dict{String,Dict{String,Any}}()
     vorig = Dict{String,String}()
+    korig(key) = _origin(origins, key, leaf)
     for s in sch.sections
+        is_domain_section(sch, s.name) && continue
         tbl = get(raw, s.name, Dict{String,Any}())
         if !(tbl isa AbstractDict)
             push!(probs, ConfigProblem(s.name, _origin(origins, s.name, leaf),
                                        "expected a table [$(s.name)], got $(_show_raw(tbl))"))
             tbl = Dict{String,Any}()
         end
-        keys_ = [o.key for o in s.options]
-        for k in sort!(collect(keys(tbl)))
-            k in keys_ && continue
-            push!(probs, ConfigProblem("$(s.name).$k", _origin(origins, "$(s.name).$k", leaf),
-                  "unknown key in [$(s.name)]" * _suggest(k, keys_)))
-        end
-        vals = Dict{String,Any}()
-        for o in s.options
-            key = "$(s.name).$(o.key)"
-            if haskey(tbl, o.key)
-                org = _origin(origins, key, leaf)
-                ok, v, why = _coerce(o, tbl[o.key], false, _base_dir(org), key)
-                ok ? (vals[o.key] = v) : push!(probs, ConfigProblem(key, org, why))
-                vorig[key] = org
-            elseif o.required
-                push!(probs, ConfigProblem(key, leaf, "required, expected $(_describe(o.type))$(_constraint_text(o))"))
-            else
-                ok, v, why = _default(o, key)
-                ok ? (vals[o.key] = v) : push!(probs, ConfigProblem(key, DEFAULT_ORIGIN, why))
-                vorig[key] = DEFAULT_ORIGIN
-            end
-        end
-        values[s.name] = vals
+        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf)
     end
-    isempty(probs) || throw(ConfigError(_sorted(probs)))
-    return _finish(sch, values, vorig, sources)
+    domains = Vector{Dict{String,Dict{String,Any}}}()
+    if !isempty(dsec)
+        for (i, blk) in enumerate(blocks)
+            push!(domains, _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, length(blocks), leaf))
+        end
+        ids = [get(d["domain"], "id", "") for d in domains]
+        for id in unique(ids)
+            count(==(id), ids) > 1 &&
+                push!(probs, ConfigProblem("domain", _origin(origins, "domain", leaf),
+                                           "the domain id \"$id\" is given $(count(==(id), ids)) times; ids are unique"))
+        end
+    end
+    isempty(probs) || throw(ConfigError(_sorted(unique(probs))))
+    return _finish(sch, values, domains, vorig, sources)
 end
 
+# Pop the domain input of `raw`: the `[[domain]]` blocks (one empty block, the
+# domain "main", when there are none) and the run-level `domain` section (the
+# top-level keys static_driver, dynamic_driver).
+function _domain_input!(raw, origins, sch, probs, leaf)
+    dspec = _section(sch, "domain")
+    base = Dict{String,Any}()
+    if dspec !== nothing
+        for o in dspec.options
+            o.key == "id" && continue
+            haskey(raw, o.key) || continue
+            v = pop!(raw, o.key)
+            base[o.key] = v
+            origins["domain.$(o.key)"] = _origin(origins, o.key, leaf)
+        end
+    end
+    blk = pop!(raw, "domain", nothing)
+    if blk === nothing
+        return [Dict{String,Any}()], base
+    end
+    if !(blk isa AbstractVector && !isempty(blk) && all(x -> x isa AbstractDict, blk))
+        push!(probs, ConfigProblem("domain", _origin(origins, "domain", leaf),
+              "expected [[domain]] blocks (an array of tables), got $(_show_raw(blk))"))
+        return [Dict{String,Any}()], base
+    end
+    return [Dict{String,Any}(b) for b in blk], base
+end
+
+# One domain: the run-level values of the per-domain sections, replaced key
+# by key by the block's (an override, "--set", is not replaced), validated.
+function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf)
+    prefix = "domain[$i]."
+    borg = _origin(origins, "domain", leaf)
+    dorig = Dict{String,String}()
+    merged = Dict{String,Any}()
+    for name in sch.domain_sections
+        t = name == "domain" ? base : get(raw, name, Dict{String,Any}())
+        if !(t isa AbstractDict)
+            i == 1 && push!(probs, ConfigProblem(name, _origin(origins, name, leaf),
+                                                 "expected a table [$name], got $(_show_raw(t))"))
+            t = Dict{String,Any}()
+        end
+        merged[name] = Dict{String,Any}(t)
+        for k in keys(t)
+            dorig["$name.$k"] = _origin(origins, "$name.$k", leaf)
+        end
+    end
+    dkeys = (d = _section(sch, "domain"); d === nothing ? String[] : [o.key for o in d.options])
+    secs = [s for s in sch.domain_sections if s != "domain"]
+    fromblock = Set{String}()
+    for k in sort!(collect(keys(blk)))
+        v = blk[k]
+        if k in secs
+            if !(v isa AbstractDict)
+                push!(probs, ConfigProblem(prefix * k, borg, "expected a table [domain.$k], got $(_show_raw(v))"))
+                continue
+            end
+            for (kk, vv) in v
+                get(dorig, "$k.$kk", "") == OVERRIDE_ORIGIN && continue       # --set wins over the block
+                merged[k][kk] = vv; dorig["$k.$kk"] = borg; push!(fromblock, "$k.$kk")
+            end
+        elseif k in dkeys
+            get(dorig, "domain.$k", "") == OVERRIDE_ORIGIN && continue
+            merged["domain"][k] = v; dorig["domain.$k"] = borg; push!(fromblock, "domain.$k")
+        else
+            push!(probs, ConfigProblem(prefix * k, borg,
+                  "unknown " * (v isa AbstractDict ? "table [domain.$k]" : "key") * " in a [[domain]] block" *
+                  _suggest(k, vcat(dkeys, secs))))
+        end
+    end
+    vals = Dict{String,Dict{String,Any}}()
+    korig(key) = get(dorig, key, leaf)
+    for name in sch.domain_sections
+        s = _section(sch, name)
+        p = ConfigProblem[]
+        v = Dict{String,Any}()
+        _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf)
+        # a problem of a run-level value is reported under its own key (once:
+        # the caller drops duplicates), one of the block's under domain[i]
+        for q in p
+            k = q.key[length("domain[$i].")+1:end]
+            push!(probs, k in fromblock ? q : ConfigProblem(k, q.file, q.message))
+        end
+        vals[name] = v
+    end
+    return vals
+end
 "The default of `o`, evaluated (a function is called) and checked."
 function _default(o::Option, key)
     # invokelatest: a driver loaded from DRIVER_FILES during this load is newer than the caller's world
@@ -395,19 +461,31 @@ end
 
 _sorted(probs) = sort(probs; by = p -> (p.key, p.file, p.message))
 
-"Build the RunConfig and run the cross-field checks."
-function _finish(sch::ConfigSchema, values, vorig, sources)
-    cfg = RunConfig(sch, Dict{String,ConfigSection}(n => ConfigSection(n, v) for (n, v) in values),
-                    vorig, sources, _nonreplayable(values))
+"""
+Build the RunConfig and run the cross-field checks, on each domain's view of
+it ([`domain_view`](@ref)) when there are several domains; a problem of a
+per-domain section is then reported under `domain[i].`.
+"""
+function _finish(sch::ConfigSchema, values, domains, vorig, sources)
+    secs(v) = Dict{String,ConfigSection}(n => ConfigSection(n, x) for (n, x) in v)
+    cfg = RunConfig(sch, secs(values), DomainConfig[DomainConfig(secs(d)) for d in domains],
+                    vorig, sources, _nonreplayable(values, domains))
     probs = ConfigProblem[]
-    for (_, f) in sch.checks
-        for e in Base.invokelatest(f, cfg)     # an example driver may have been loaded just now
-            for p in (e isa ConfigError ? e.problems : [ConfigProblem("", "", string(e))])
-                push!(probs, isempty(p.file) ? ConfigProblem(p.key, get(vorig, p.key, ""), p.message) : p)
+    n = length(domains)
+    for i in (n <= 1 ? (0:0) : (1:n))
+        v = i == 0 ? cfg : domain_view(cfg, i)
+        for (_, f) in sch.checks
+            for e in Base.invokelatest(f, v)     # an example case may have been loaded just now
+                for p in (e isa ConfigError ? e.problems : [ConfigProblem("", "", string(e))])
+                    sec = first(split(p.key, '.'))
+                    key = i > 0 && is_domain_section(sch, sec) ? "domain[$i]." * p.key : p.key
+                    file = isempty(p.file) ? get(vorig, key, get(vorig, "domain[$(max(i, 1))]." * p.key, "")) : p.file
+                    push!(probs, ConfigProblem(key, file, p.message))
+                end
             end
         end
     end
-    isempty(probs) || throw(ConfigError(_sorted(probs)))
+    isempty(probs) || throw(ConfigError(_sorted(unique(probs))))
     return cfg
 end
 

@@ -31,7 +31,7 @@ export AdvectionDriverType, AdvectionRun
 """
     AdvectionDriverType()
 
-The `advection` driver: `[run] driver = "advection"`. Sections `[grid]`,
+The `advection` driver: `[run] legacy = "advection"`. Sections `[grid]`,
 `[flow]` (the prescribed velocity), `[scalar]` (the initial scalar),
 `[advection]` (the kernel), `[stepper]` and `[diagnostics]`; `aeolus
 options advection` prints them.
@@ -39,7 +39,6 @@ options advection` prints them.
 struct AdvectionDriverType <: AbstractRunDriver end
 
 Config.driver_name(::AdvectionDriverType) = "advection"
-Config.config_dir(::AdvectionDriverType) = normpath(joinpath(@__DIR__, "..", "..", "examples", "configs"))
 
 function Config.driver_sections(::AdvectionDriverType)
     grid = section("grid"; doc = "The periodic box and its mesh.") do s

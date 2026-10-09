@@ -257,7 +257,7 @@ export StructuralState, structural_state, restore_structural_state!, checkpoint_
 # CFG-a (#356): run configuration (schema building: Aeolus.Config)
 export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, config_text,
        config_hash, register_driver!
-# CFG-b (#357): the driver contract, run_config, the bare-simulation driver.
+# CFG-b (#357): the driver contract, run_config, the model (Aeolus.SimulationDriver).
 # `Aeolus.main` (the `julia -m Aeolus` entry point) is not exported.
 export AbstractRunDriver, run_config, state_fields
 # CFG-e (#360): sweeps; the example scripts run their configs with run_configs

@@ -509,8 +509,9 @@ the binary `NetCDF_jll` and `HDF5_jll`. It costs about 270 ms of
 64×64×32) it reduces the file from 316 MB (NetCDF-3) to 185 MB, bit for
 bit identical on read-back. All of Aeolus' output policy (NetCDF-4, deflate level 4
 with shuffle, chunks of one level and one record) is in `src/NCIO.jl`;
-reading is plain NCDatasets. GRIBDatasets, which #310 also admitted, is
-added with the first code that reads GRIB (the ERA5 preprocessors, #311).
+reading is plain NCDatasets. GRIBDatasets, which #310 also admitted, came
+with the ERA5 preprocessor (#363) and left with it for AeolusPrep.jl
+(ONE-h, #457): the model reads no GRIB.
 
 ### Look at what you produce
 

@@ -12,10 +12,25 @@
 #   julia --project -m Aeolus run examples/nesting/configs/cbl_inflow_statistics.toml
 #   julia --project=. examples/nesting/report_cbl_inflow_statistics.jl runs/<date>_cbl_inflow_statistics_<id>
 
-extends = "../../sgs/configs/cbl_tke.toml"
+schema_version = 2
 
 [run]
+legacy = "cbl"
 name = "cbl_inflow_statistics"
+seed = 1
+
+[grid]
+n = 64
+spacing = 50.0
+dz = 25.0
+
+[cbl]
+heat_flux = 0.1
+z_i0 = 800.0
+lapse = 0.003
+theta0 = 300.0
+end_time = 7200.0
+average = 1800.0
 
 [inflow_statistics]
 enabled = true

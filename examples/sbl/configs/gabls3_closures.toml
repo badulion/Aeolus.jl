@@ -10,14 +10,71 @@
 #   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml --set grid.size=[128,128,128] --set grid.extent=[800.0,800.0,800.0] --set sponge.z=600.0
 #   julia --project examples/sbl/gabls3.jl runs/gabls3_*
 
-extends = "gabls3.toml"
+schema_version = 2
+
+[run]
+legacy = "sbl"
+name = "gabls3"
+seed = 1
+
+[case]
+kind = "homogeneous"
+data = "../data/gabls3_case.csv"
 
 [grid]
 size = [64, 64, 64]
 extent = [400.0, 400.0, 400.0]
 
+[dynamics]
+theta0 = 290.0
+
+[forcing]
+latitude = 51.9711
+u_g = {kind = "table", z = [0.0, 2000.0], time = {table = "geostrophic", column = 1}, levels = [{column = 2}, {value = -2.0}]}
+v_g = {kind = "table", z = [0.0, 2000.0], time = {table = "geostrophic", column = 1}, levels = [{column = 3}, {value = 2.0}]}
+
+[forcing.advective_tendencies]
+u = {kind = "table", z = [0.0, 200.0], time = {table = "advection", column = 1}, levels = [{value = 0.0}, {column = 2}]}
+v = {kind = "table", z = [0.0, 200.0], time = {table = "advection", column = 1}, levels = [{value = 0.0}, {column = 3}]}
+theta = {kind = "table", z = [0.0, 200.0], time = {table = "advection", column = 1}, levels = [{value = 0.0}, {column = 4}]}
+
+[surface]
+z0m = 0.15
+z0h = 0.25                     # the height of the prescribed θ: the scalar reference height
+temperature = {kind = "series", table = "surface", time_column = 1, column = 3}
+stability = {family = "businger_dyer_log_linear", beta = 5.0}
+rho_cp = 1228.5454644005083    # p/(R_d θ) c_p at the first surface row: 102210/(287.05 × 291.28) × 1005
+
+[initial]
+# above 10 m the tabulated sounding; below, θ linear from the 0.25 m value
+# and the wind logarithmic from zero at z0m = 0.15 m
+theta = {kind = "table", table = "thermo", column = 3, below = {kind = "linear", z = 0.25, value = {table = "surface", row = 1, column = 3}}}
+u = {kind = "table", table = "wind", column = 2, below = {kind = "log", z0 = 0.15}}
+v = {kind = "table", table = "wind", column = 3, below = {kind = "log", z0 = 0.15}}
+perturbation = {kind = "gaussian", variance = [0.2, 0.2, 0.1], depth = 200.0, taper = ["linear", "linear", "none"]}
+t_start = 0.0
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+stability = "brown94"
+
 [sponge]
 z = 300.0                      # 0.75 Lz
+alpha = 0.01
+target = "mean"
+
+[stepper]
+end_time = 14400.0             # 04 UTC: the published LES envelope is for 03-04 UTC
+
+[averaging]
+from = 10800.0
+sample_every = 5
+series_interval = 300.0
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
+keep = 2
 
 [sweep]
 axis = [ { key = "sgs.stability", values = ["brown94", "none"] } ]

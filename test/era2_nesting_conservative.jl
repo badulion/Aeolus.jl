@@ -605,7 +605,7 @@ end
 end
 
 # -------------------------------------------------------------------------
-# The real Berlin buildings (OpenStreetMap, examples/urban/data) on the
+# The real Berlin buildings (OpenStreetMap, the summer static driver) on the
 # nested child: 1 km × 1 km, Δx = 15.625 m, 64 levels of 6.25 m (~400 m),
 # refinement (2, 2, 4) to the 31.25 m × 25 m parent. Child velocities on
 # solid faces are set to NaN: a single solid face in any parent average
@@ -618,10 +618,10 @@ end
                        halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     @test (cm.Nx, cm.Ny, cm.Nz, cm.dx, cm.dz) == (64, 64, 64, 15.625, 6.25)
-    city = BC.load_city_osm(cfg.osm_path; lat0=cfg.lat0, lon0=cfg.lon0,
-                            x_shift=cm.Lx / 2 - cfg.offset[1], y_shift=cm.Ly / 2 - cfg.offset[2],
-                            min_height=cfg.min_height)
-    sm, _ = BC.surface_class_map(city, cm; tag_walls=false)
+    # the summer ground (its static driver, on this child mesh: the summer grid)
+    st = BC.case_static_inputs(cfg, cm)
+    city = st.city
+    sm, _ = BC.solid_and_classes(st, cm; tag_walls=false)
     solid = sm.mask
     nsolid = count(solid)
     @test nsolid > 0

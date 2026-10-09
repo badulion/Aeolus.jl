@@ -21,8 +21,10 @@
 # The runs are independent: start one process per member (--member) to
 # run them in parallel.
 
+schema_version = 2
+
 [run]
-driver = "patchy_surface"
+legacy = "patchy_surface"
 name = "patchy_surface"
 seed = 1
 

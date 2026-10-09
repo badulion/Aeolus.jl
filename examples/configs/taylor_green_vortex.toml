@@ -6,8 +6,9 @@
 #
 #   julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "taylor_green_vortex"
 
 [grid]
@@ -16,15 +17,22 @@ extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
 
 [dynamics]
 nu = 0.01
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
+
+[sgs]
+closure = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.07853981633974483        # 0.4 dx / U₀ (the viscous limit 0.4 dx²/2ν is larger)
-end_time = 2.0                  # 26 steps of 2/26
+duration = 2.0                  # 26 steps of 2/26
 
 [logging]
 diagnostics_cadence = 0.1
@@ -35,6 +43,6 @@ diagnostics_cadence = 0.1
 [test]
 overrides = [
     "grid.size=[16,16,16]",
-    "stepper.end_time=\"none\"",
-    "stepper.nsteps=10",
+    "time.duration=\"none\"",
+    "time.nsteps=10",
 ]

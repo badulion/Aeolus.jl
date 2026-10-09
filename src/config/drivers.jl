@@ -1,22 +1,27 @@
-# The run-driver contract (CFG-b, #357): what a driver implements so that
-# `run_config` (the Julia API behind `aeolus run`) can build and run it
-# from a RunConfig, and the registry of runnable drivers, including the
-# drivers that live under `examples/` and are loaded on first use.
+# The run contract (CFG-b, #357; ONE-b, #451): what the model and each
+# legacy case implement so that `run_config` (the Julia API behind `aeolus
+# run`) can build and run them from a RunConfig, and the registry of the
+# runnable ones, including the legacy cases that live under `examples/` and
+# are loaded on first use.
 
 """
     AbstractRunDriver
 
-A driver: a kind of run that can be built from a [`RunConfig`](@ref) and
-run into a run folder. A driver type `D` implements
+What builds and runs a [`RunConfig`](@ref) into a run folder: the model
+(`Aeolus.SimulationDriver.SimulationDriverType`, registered as
+[`MODEL`](@ref)), or a **legacy case** — an assembly not yet ported to
+components (the urban, SBL, validation and example run types), selected by
+`[run] legacy = "<name>"` and removed by the later steps of the
+single-model epic. A type `D` implements
 
-  * `driver_name(::D) -> String`: the `[run] driver` value that selects it;
+  * `driver_name(::D) -> String`: `"model"`, or the legacy case's name;
   * `driver_sections(::D) -> Vector{Section}`: its sections, on top of the
     common ones (a section named like a common one adds options to it);
   * `driver_checks(::D)`: cross-field checks, `"what it checks" => f` pairs
     ([`check!`](@ref); default none);
-  * `config_dir(::D)`: where `extends = "base.toml"` looks for bare names
-    (default `nothing`);
-  * `driver_defaults(::D)`: the driver's own defaults of common options,
+  * `domain_sections(::D)`: the per-domain sections (the model's; default
+    none, [`ConfigSchema`](@ref));
+  * `driver_defaults(::D)`: its own defaults of common options,
     `"section.key" => value` pairs (default none);
   * `build(::D, cfg::RunConfig)`: the runnable object (a simulation and
     what goes with it);
@@ -35,7 +40,8 @@ abstract type AbstractRunDriver end
 """
     driver_name(d::AbstractRunDriver) -> String
 
-The `[run] driver` value that selects the driver `d`.
+The name `d` is registered under: `"model"`, or the `[run] legacy` value
+that selects the legacy case `d`.
 """
 function driver_name end
 
@@ -64,12 +70,12 @@ pairs (see [`ConfigSchema`](@ref)); default none.
 driver_defaults(::AbstractRunDriver) = ()
 
 """
-    config_dir(d::AbstractRunDriver) -> Union{Nothing,String}
+    domain_sections(d::AbstractRunDriver) -> Vector{String}
 
-The directory of the driver's shipped configs: where `extends` looks for a
-bare file name that is not next to the extending file.
+The per-domain sections of `d`'s schema ([`ConfigSchema`](@ref)): the
+model's; none for a legacy case.
 """
-config_dir(::AbstractRunDriver) = nothing
+domain_sections(::AbstractRunDriver) = String[]
 
 """
     build(d::AbstractRunDriver, cfg::RunConfig) -> obj
@@ -86,42 +92,6 @@ compares.
 """
 function state_fields end
 
-"""
-    preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
-        -> Vector{String}
-
-Write the static input driver(s) of the run `cfg` (CFG-f, #361:
-`Aeolus.InputDrivers`) from the sources its config names, and return the
-paths written. `out` replaces the path the config gives the run's own
-driver, `parent_out` that of a nest parent's. `aeolus preprocess static
-<config.toml> [--out file.nc] [--parent-out file.nc]` calls it. The
-default: the driver has no static preprocessor (an `ArgumentError`).
-"""
-preprocess_static(d::AbstractRunDriver, cfg::RunConfig; out = nothing, parent_out = nothing) =
-    throw(ArgumentError("the driver \"$(driver_name(d))\" has no static preprocessor"))
-
-"""
-    preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from, out = nothing, child = nothing)
-        -> Vector{String}
-
-Write the dynamic input driver of the run `cfg` (CFG-g, #362:
-`Aeolus.InputDrivers`) and return the paths written: `from = :sounding`
-from the sounding or case tables the config names, `from = :parent` by
-running the config's nest parent with the child's boundary slabs recorded
-at every parent step (`child`, a `RunConfig`, when the child is not `cfg`
-itself). `out` replaces the path the config gives the driver. `aeolus
-preprocess dynamic (--from-sounding | --from-parent) <config.toml>` calls
-it. The default: the driver has no dynamic preprocessor (an
-`ArgumentError`).
-
-`from = :era5` (CFG-h, #363; `aeolus preprocess dynamic --from-era5
-<files…> --config <config.toml> [--box deg]`) passes two more keywords,
-`files` (the ERA5 files) and `box` (degrees, or `nothing`: the config's);
-a driver with an ERA5 preprocessor accepts them (the `simulation` driver).
-"""
-preprocess_dynamic(d::AbstractRunDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing) =
-    throw(ArgumentError("the driver \"$(driver_name(d))\" has no dynamic preprocessor"))
-
 # Simulations.run!(::AbstractRunDriver, obj, rf, ck; callback) is the
 # contract's run method (it adds a method to the generic run!).
 
@@ -130,16 +100,15 @@ const _RUN_DRIVERS = Dict{String,AbstractRunDriver}()
 """
     register_driver!(d::AbstractRunDriver) -> d
 
-Register the runnable driver `d`: its schema (the common sections plus
-`driver_sections(d)`, with `driver_checks(d)`, `config_dir(d)` and
-`driver_defaults(d)`) under
-`driver_name(d)`, and `d` itself for [`run_config`](@ref). Registering
-a name again replaces it.
+Register the model or the legacy case `d`: its schema (the common sections
+plus `driver_sections(d)`, with `driver_checks(d)`, `domain_sections(d)`
+and `driver_defaults(d)`) under `driver_name(d)`, and `d` itself for
+[`run_config`](@ref). Registering a name again replaces it.
 """
 function register_driver!(d::AbstractRunDriver)
     name = String(driver_name(d))
     register_driver!(name; sections = driver_sections(d), checks = driver_checks(d),
-                     config_dir = config_dir(d), defaults = driver_defaults(d))
+                     defaults = driver_defaults(d), domain_sections = domain_sections(d))
     _RUN_DRIVERS[name] = d
     return d
 end
@@ -147,13 +116,11 @@ end
 """
     DRIVER_FILES
 
-Drivers that live under `examples/`, loaded the first time a config names
-them: `name => path` relative to the package directory. The file is
-included into a fresh module and must call [`register_driver!`](@ref)
-for `name`. Physics stays in `examples/`; nothing is moved into `src/`
-for the CLI's sake. The migrations of the example drivers (#311) add
-their entries here. (The urban run type, formerly the `berlin` entry, is
-part of the package since EX-a #438: `Aeolus.UrbanCase`.)
+Legacy cases that live under `examples/`, loaded the first time a config
+names them (`[run] legacy`): `name => path` relative to the package
+directory. The file is included into a fresh module and must call
+[`register_driver!`](@ref) for `name`. (The urban run type, formerly the
+`berlin` entry, is part of the package since EX-a #438: `Aeolus.UrbanCase`.)
 """
 const DRIVER_FILES = Dict{String,String}(
     # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
@@ -169,11 +136,11 @@ const DRIVER_FILES = Dict{String,String}(
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
 
-"Load the example driver `name` from [`DRIVER_FILES`](@ref) if it is listed and not yet registered."
+"Load the example legacy case `name` from [`DRIVER_FILES`](@ref) if it is listed and not yet registered."
 function _ensure_driver(name::AbstractString)
     (haskey(_DRIVERS, name) || !haskey(DRIVER_FILES, name)) && return nothing
     path = joinpath(_PKG_DIR, DRIVER_FILES[name])
-    isfile(path) || throw(ConfigError("run.driver", "the driver \"$name\" is listed in " *
+    isfile(path) || throw(ConfigError("run.legacy", "the legacy case \"$name\" is listed in " *
                                       "DRIVER_FILES but $path does not exist"))
     sym = Symbol("AeolusDriver_", name)
     m = Module(sym)
@@ -186,26 +153,36 @@ function _ensure_driver(name::AbstractString)
     Core.eval(m, :(eval(x) = Core.eval($m, x)))
     Base.include(m, path)
     haskey(_DRIVERS, name) ||
-        throw(ConfigError("run.driver", "$path did not register the driver \"$name\""))
+        throw(ConfigError("run.legacy", "$path did not register the legacy case \"$name\""))
     return nothing
 end
 
 """
     run_driver(name) -> AbstractRunDriver
+    run_driver(cfg::RunConfig) -> AbstractRunDriver
 
-The runnable driver registered as `name`, loading it from
-[`DRIVER_FILES`](@ref) on first use. A [`ConfigError`](@ref) for a name
-that has a schema but no driver (`"common"`), or none at all.
+What runs: the model (`name = "model"`) or the legacy case `name`, loading
+it from [`DRIVER_FILES`](@ref) on first use; for a config, the one its
+schema names ([`config_case`](@ref)). A [`ConfigError`](@ref) for a name
+that has a schema but nothing to run it (`"common"`), or none at all.
 """
 function run_driver(name::AbstractString)
     _ensure_driver(name)
     haskey(_RUN_DRIVERS, name) && return _RUN_DRIVERS[name]
-    runnable = sort!(vcat(collect(keys(_RUN_DRIVERS)), collect(keys(DRIVER_FILES))))
-    throw(ConfigError("run.driver", (haskey(_DRIVERS, name) ?
-        "the driver \"$name\" has a schema but cannot be run" :
-        "unknown driver \"$name\"" * _suggest(name, runnable)) *
-        "; runnable drivers: " * join(repr.(unique!(runnable)), ", ")))
+    throw(ConfigError("run.legacy", (haskey(_DRIVERS, name) ?
+        "the schema \"$name\" cannot be run" :
+        "unknown legacy case \"$name\"" * _suggest(name, legacy_cases())) *
+        "; legacy cases: " * join(repr.(legacy_cases()), ", ")))
 end
+run_driver(cfg::RunConfig) = run_driver(config_case(cfg))
+
+"""
+    config_case(cfg) -> String
+
+What the config `cfg` runs: `"model"` ([`MODEL`](@ref)), or the name of
+its legacy case (`[run] legacy`).
+"""
+config_case(cfg::RunConfig) = config_schema(cfg).name
 
 """
     RunResult
@@ -239,14 +216,14 @@ Run the configuration `cfg`: the Julia API behind `aeolus run`. The chain:
    the error, which is then rethrown.
 
 `root` and `allow_uncommitted` override `[run]` without changing the
-config (so the recorded config stays the one given). The driver is
-`cfg.run.driver` ([`run_driver`](@ref)).
+config (so the recorded config stays the one given). What runs is the
+model, or the config's legacy case ([`run_driver`](@ref)).
 """
 function run_config(cfg::RunConfig; root = nothing, resume = nothing,
                     allow_uncommitted::Union{Nothing,Bool} = nothing,
                     console = stderr, repo::AbstractString = IO.aeolus_source_dir(),
                     callback = nothing)
-    d = run_driver(cfg.run.driver)
+    d = run_driver(cfg)
     apply_fftw_config!(cfg)
     obj = nothing
     rf = IO.start_run(cfg; root = root, resume = resume, allow_uncommitted = allow_uncommitted,
@@ -306,7 +283,7 @@ function no_checkpoints(cfg)
     c = cfg.checkpoint
     (c.every_steps == 0 && c.every_seconds == Inf) && return ConfigError[]
     return [ConfigError("checkpoint.every_steps",
-                        "the \"$(cfg.run.driver)\" driver runs to the end in one call and writes no checkpoints; " *
+                        "the legacy case \"$(config_case(cfg))\" runs to the end in one call and writes no checkpoints; " *
                         "leave [checkpoint] off")]
 end
 

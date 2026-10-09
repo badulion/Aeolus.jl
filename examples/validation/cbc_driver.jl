@@ -21,7 +21,6 @@ include(joinpath(@__DIR__, "..", "..", "test", "cbc_benchmark_driver.jl"))
 struct CBCDriver <: AbstractRunDriver end
 
 Config.driver_name(::CBCDriver) = "cbc_decay"
-Config.config_dir(::CBCDriver) = joinpath(@__DIR__, "configs")
 
 const _CBC_CLOSURES = [:none, :smagorinsky, :dynamic, :lagrangian, :lasd, :tke, :amd, :vreman, :sigma]
 

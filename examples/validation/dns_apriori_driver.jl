@@ -2,7 +2,7 @@
 # The `dns` run driver (CFG-d, #359): the decaying-turbulence DNS of the
 # Era VI filtered-DNS fixture (test/fixtures/dns_decay.jl, P56-c #178) and
 # its a-priori record (test/fixtures/dns_apriori.jl), configured from TOML
-# (`[run] driver = "dns"`).
+# (`[run] legacy = "dns"`).
 #
 #   julia -m Aeolus run examples/validation/configs/dns256.toml
 #   julia -m Aeolus run examples/validation/configs/dns256.toml --set grid.n=64
@@ -29,7 +29,7 @@ using Aeolus.Simulations: Simulations
 """
     DNSDriver()
 
-The `dns` run driver: `[run] driver = "dns"`. Shipped config:
+The `dns` run driver: `[run] legacy = "dns"`. Shipped config:
 `examples/validation/configs/dns256.toml`.
 """
 struct DNSDriver <: AbstractRunDriver end
@@ -37,7 +37,6 @@ struct DNSDriver <: AbstractRunDriver end
 const DNS_CONFIG_DIR = joinpath(@__DIR__, "configs")
 
 Config.driver_name(::DNSDriver) = "dns"
-Config.config_dir(::DNSDriver) = DNS_CONFIG_DIR
 
 function _dns_spectrum_problems(t)
     get(t, "kind", nothing) == "k4_gaussian" ||

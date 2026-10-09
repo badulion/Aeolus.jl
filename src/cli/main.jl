@@ -19,16 +19,15 @@ usage: aeolus <command> [arguments]
         Validate the config (every member of a sweep) and print every problem.
   resolve <config> [--set key=value]... [--member k]
         Print the canonical resolved TOML (of every member of a sweep).
-  options [driver] [section] [--markdown]
-        Print the option reference of a driver (all sections and the cross-field
-        checks, or one section); --markdown: as the tables of the docs.
-  preprocess <kind> [arguments]
-        Run a registered preprocessor (no kind: list them).
+  options [legacy-case] [section] [--markdown]
+        Print the option reference of the model (all sections and the cross-field
+        checks, or one section), or of a legacy case; --markdown: as the tables of
+        the docs.
   help
         Print this message.
 
-Overrides are "dotted.key=<TOML value>": --set stepper.nsteps=20,
---set 'run.name="tgv"'. Exit codes: 0 success, 1 the run failed,
+Overrides are "dotted.key=<TOML value>": --set time.nsteps=20,
+--set 'run.name="tgv"' (a per-domain section's key: in every domain). Exit codes: 0 success, 1 the run failed,
 2 a usage or configuration error (nothing is written).
 """
 
@@ -82,98 +81,6 @@ _one_positional(pos, what) = length(pos) == 1 ? pos[1] :
     throw(UsageError(isempty(pos) ? "missing $what" : "expected one $what, got $(length(pos)): $(join(pos, " "))"))
 
 # ---------------------------------------------------------------------------
-# preprocessors
-# ---------------------------------------------------------------------------
-
-const _PREPROCESSORS = Dict{String,Tuple{Any,String}}()
-
-"""
-    register_preprocessor!(kind, f, usage) -> kind
-
-Register a preprocessor for `aeolus preprocess <kind> args…`:
-`f(args::Vector{String})` does the work and returns an exit code (an
-`Integer`; `nothing` counts as 0); `usage` is the one-line synopsis that
-`aeolus preprocess` lists. A [`ConfigError`](@ref) or an `ArgumentError`
-it throws exits with code 2, any other error with 1.
-"""
-function register_preprocessor!(kind::AbstractString, f, usage::AbstractString)
-    _PREPROCESSORS[String(kind)] = (f, String(usage))
-    return String(kind)
-end
-
-"""
-`aeolus preprocess static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...`:
-load the run config and write its static driver(s) with the driver's
-[`preprocess_static`](@ref) (CFG-f, #361); prints the files written.
-"""
-function _preprocess_static(args)
-    pos, sets, opts, _ = _parse_args(args, ("set", "out", "parent-out"), ())
-    path = _one_positional(pos, "config file")
-    cfg = load_run_config(path; overrides = sets)
-    d = run_driver(cfg.run.driver)
-    files = Base.invokelatest(preprocess_static, d, cfg; out = get(opts, "out", nothing),
-                              parent_out = get(opts, "parent-out", nothing))
-    for f in files
-        println("wrote ", f)
-    end
-    return 0
-end
-"""
-`aeolus preprocess dynamic (--from-sounding | --from-parent) <config.toml> [--child <child config>]
-[--out file.nc] [--set key=value]...`: load the run config and write its dynamic driver with the
-driver's [`preprocess_dynamic`](@ref) (CFG-g, #362): from the sounding or case tables the config
-names (`--from-sounding`), or by running the config's nest parent with the child's boundary slabs
-recorded at every parent step (`--from-parent`; `--child` names the child config when it is not
-the same file); prints the files written.
-
-`aeolus preprocess dynamic --from-era5 <files…> --config <config.toml> [--box deg] [--out file.nc]
-[--set key=value]...` (CFG-h, #363): the dynamic driver of the run from ERA5 files (GRIB2 or
-NetCDF; the config's `[preprocess.era5]` table gives the site, levels and outputs, `--box` the
-half-width in degrees of the centred differences).
-"""
-function _preprocess_dynamic(args)
-    pos, sets, opts, fl = _parse_args(args, ("set", "out", "child", "config", "box"),
-                                      ("from-sounding", "from-parent", "from-era5"))
-    length(fl) == 1 || throw(UsageError("give one of --from-sounding, --from-parent, --from-era5"))
-    from = "from-sounding" in fl ? :sounding : "from-parent" in fl ? :parent : :era5
-    if from === :era5
-        isempty(pos) && throw(UsageError("--from-era5: give the ERA5 files"))
-        haskey(opts, "config") || throw(UsageError("--from-era5: give the run config with --config"))
-        haskey(opts, "child") && throw(UsageError("--from-era5 takes no --child"))
-        box = haskey(opts, "box") ? tryparse(Float64, opts["box"]) : nothing
-        haskey(opts, "box") && box === nothing && throw(UsageError("--box: expected a number, got $(opts["box"])"))
-        cfg = load_run_config(opts["config"]; overrides = sets)
-        d = run_driver(cfg.run.driver)
-        Base.invokelatest(hasmethod, preprocess_dynamic, Tuple{typeof(d),typeof(cfg)}, (:files,)) ||
-            throw(ArgumentError("the driver \"$(cfg.run.driver)\" has no ERA5 preprocessor"))
-        files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
-                                  files = abspath.(pos), box = box)
-        foreach(f -> println("wrote ", f), files)
-        return 0
-    end
-    (haskey(opts, "config") || haskey(opts, "box")) && throw(UsageError("--config and --box go with --from-era5"))
-    path = _one_positional(pos, "config file")
-    cfg = load_run_config(path; overrides = sets)
-    d = run_driver(cfg.run.driver)
-    child = haskey(opts, "child") ? load_run_config(opts["child"]; overrides = sets) : nothing
-    files = Base.invokelatest(preprocess_dynamic, d, cfg; from = from, out = get(opts, "out", nothing),
-                              child = child)
-    for f in files
-        println("wrote ", f)
-    end
-    return 0
-end
-register_preprocessor!("dynamic", _preprocess_dynamic,
-                       "dynamic (--from-sounding | --from-parent) <config.toml> [--child <config.toml>] " *
-                       "[--out file.nc] [--set key=value]...  write the run's dynamic input driver;\n" *
-                       "    dynamic --from-era5 <files...> --config <config.toml> [--box deg] [--out file.nc] " *
-                       "[--set key=value]...  the same from ERA5 (GRIB2 or NetCDF)")
-
-register_preprocessor!("static", _preprocess_static,
-                       "static <config.toml> [--out file.nc] [--parent-out file.nc] [--set key=value]...  " *
-                       "write the run's static input driver(s)")
-
-# ---------------------------------------------------------------------------
 # the option reference
 # ---------------------------------------------------------------------------
 
@@ -204,24 +111,26 @@ function _default_text(o::Option)
 end
 
 """
-    option_reference(driver = "common"; section = nothing, format = :text) -> String
+    option_reference(name = "model"; section = nothing, format = :text) -> String
     option_reference(schema::ConfigSchema; section = nothing, format = :text) -> String
 
-The option reference of a driver's schema, generated from the schema (the
+The option reference of the model's schema, or of a legacy case's (`name`),
+generated from the schema (the
 one source of truth: nothing is written by hand). For each section its
 doc, then for each option its key, type, default, units, allowed values
 or range, and doc; after a section, the documented sub-tables of its
 [`OpenTable`](@ref) options ([`reference_sections`](@ref)); after the
 sections, the schema's cross-field checks in words ([`check!`](@ref)). `section` restricts it to one section (and
-leaves the checks out).
+leaves the checks out). A per-domain section ([`ConfigSchema`](@ref)) is
+marked so.
 
-`format = :text` is what `aeolus options [driver] [section]` prints;
+`format = :text` is what `aeolus options [legacy-case] [section]` prints;
 `format = :markdown` is one table per section (columns key, type,
 default, units, allowed / range, doc; one row per option) and a bullet
 list of the checks: `aeolus options --markdown` prints it and the docs
-build writes it to `docs/src/reference/options/<driver>.md`.
+build writes it to `docs/src/reference/options/<name>.md`.
 """
-function option_reference(driver::AbstractString = "common"; section = nothing, format::Symbol = :text)
+function option_reference(driver::AbstractString = MODEL; section = nothing, format::Symbol = :text)
     return option_reference(driver_schema(driver); section = section, format = format)
 end
 
@@ -229,7 +138,7 @@ function option_reference(sch::ConfigSchema; section = nothing, format::Symbol =
     format in (:text, :markdown) ||
         throw(ArgumentError("option_reference: format is :text or :markdown, got :$format"))
     secs = section === nothing ? sch.sections : filter(s -> s.name == section, sch.sections)
-    isempty(secs) && throw(ConfigError(String(section), "driver \"$(sch.name)\" has no section [$section]" *
+    isempty(secs) && throw(ConfigError(String(section), _schema_title(sch) * " has no section [$section]" *
                                        _suggest(String(section), [s.name for s in sch.sections])))
     checks = section === nothing ? _check_lines(sch) : String[]
     blocks = filter(b -> section === nothing || split(b.first, '.')[1] == section, reference_sections(sch))
@@ -308,11 +217,25 @@ function _check_lines(sch::ConfigSchema)
     return out
 end
 
+"`the model` or `the legacy case \"x\"`."
+_schema_title(sch) = sch.name == MODEL ? "the model" : "the legacy case \"$(sch.name)\""
+
+const _PER_DOMAIN = "Per domain: the run-level value applies to every domain; a [[domain]] block's table overrides it."
+const _DOMAIN_KEYS = "The domain's own keys: at the top level of a single-domain config, or in each [[domain]] block."
+
+"The doc of a reference block, with the per-domain note of a per-domain section."
+function _block_doc(sch, name, s)
+    is_domain_section(sch, name) || return s.doc
+    note = name == "domain" ? _DOMAIN_KEYS : _PER_DOMAIN
+    return isempty(s.doc) ? note : s.doc * " " * note
+end
+
 function _reference_text(sch, blocks, checks)
     io = IOBuffer()
-    println(io, "# options of driver \"", sch.name, "\"")
+    println(io, "# options of ", _schema_title(sch))
     for (name, s) in blocks
-        println(io, "\n[", name, "]", isempty(s.doc) ? "" : "  " * s.doc)
+        d = _block_doc(sch, name, s)
+        println(io, "\n[", name, "]", isempty(d) ? "" : "  " * d)
         for o in s.options
             print(io, "  ", o.key, " : ", _type_text(o.type), " = ", _default_text(o))
             isempty(o.units) || print(io, "  [", o.units, "]")
@@ -359,12 +282,14 @@ end
 
 function _reference_markdown(sch, blocks, checks)
     io = IOBuffer()
-    println(io, "Options of the driver `", sch.name, "`, generated from its schema ",
+    m = sch.name == MODEL
+    println(io, m ? "Options of the model" : "Options of the legacy case `$(sch.name)`", ", generated from its schema ",
             "(`Aeolus.Config.option_reference(\"", sch.name, "\"; format = :markdown)`, ",
-            "`aeolus options ", sch.name, " --markdown`). TOML has no null: `\"none\"` stands for nothing.")
+            "`aeolus options ", m ? "" : sch.name * " ", "--markdown`). TOML has no null: `\"none\"` stands for nothing.")
     for (name, s) in blocks
         println(io, "\n", count('.', name) == 0 ? "## " : "### ", "`[", name, "]`\n")
-        isempty(s.doc) || println(io, _md_prose(s.doc), "\n")
+        d = _block_doc(sch, name, s)
+        isempty(d) || println(io, _md_prose(d), "\n")
         println(io, "| key | type | default | units | allowed / range | doc |")
         println(io, "| :-- | :-- | :-- | :-- | :-- | :-- |")
         for o in s.options
@@ -395,7 +320,7 @@ function _cmd_check(args, io, err)
     path = _one_positional(pos, "config file")
     for (m, cfg) in load_sweep(path; overrides = sets)
         println(io, "ok: ", path, isempty(m.label) ? "" : " member $(m.index) ($(m.label))",
-                " (driver \"", config_schema(cfg).name, "\", config_hash ", config_hash_string(cfg), ")")
+                " (", _schema_title(config_schema(cfg)), ", config_hash ", config_hash_string(cfg), ")")
     end
     return 0
 end
@@ -412,33 +337,17 @@ end
 
 function _cmd_options(args, io, err)
     pos, _, _, fl = _parse_args(args, (), ("markdown",))
-    length(pos) <= 2 || throw(UsageError("options takes at most a driver and a section"))
-    driver = isempty(pos) ? "common" : pos[1]
-    print(io, option_reference(driver; section = length(pos) == 2 ? pos[2] : nothing,
-                               format = "markdown" in fl ? :markdown : :text))
-    if isempty(pos)
-        println(io, "\nregistered drivers: ", join(registered_drivers(), ", "),
-                isempty(DRIVER_FILES) ? "" : "; example drivers: " * join(sort!(collect(keys(DRIVER_FILES))), ", "))
-    end
+    length(pos) <= 2 || throw(UsageError("options takes at most a legacy case and a section"))
+    # [legacy-case] [section]: a first word that names a legacy case selects it
+    legacy = !isempty(pos) && pos[1] in legacy_cases()
+    length(pos) == 2 && !legacy &&
+        throw(UsageError("\"$(pos[1])\" is not a legacy case" * _suggest(pos[1], legacy_cases()) *
+                         "; legacy cases: " * join(legacy_cases(), ", ")))
+    name = legacy ? pos[1] : MODEL
+    sec = legacy ? (length(pos) == 2 ? pos[2] : nothing) : (isempty(pos) ? nothing : pos[1])
+    print(io, option_reference(name; section = sec, format = "markdown" in fl ? :markdown : :text))
+    isempty(pos) && println(io, "\nlegacy cases (aeolus options <case>): ", join(legacy_cases(), ", "))
     return 0
-end
-
-function _cmd_preprocess(args, io, err)
-    if isempty(args)
-        println(io, "preprocessors:")
-        isempty(_PREPROCESSORS) && println(io, "  (none registered)")
-        for k in sort!(collect(keys(_PREPROCESSORS)))
-            println(io, "  ", k, "  ", _PREPROCESSORS[k][2])
-        end
-        return 0
-    end
-    kind = String(args[1])
-    haskey(_PREPROCESSORS, kind) ||
-        throw(UsageError("unknown preprocessor \"$kind\"" * _suggest(kind, keys(_PREPROCESSORS)) *
-                         "; registered: " * (isempty(_PREPROCESSORS) ? "none" :
-                                             join(sort!(collect(keys(_PREPROCESSORS))), ", "))))
-    r = _PREPROCESSORS[kind][1](String[a for a in args[2:end]])
-    return r === nothing ? 0 : Int(r)
 end
 
 function _cmd_run(args, io, err)
@@ -460,7 +369,7 @@ function _cmd_run(args, io, err)
     runs = resume ? [SweepMember(1, "", String[]) => load_run_config(folder; overrides = sets)] :
                     load_sweep(path; overrides = sets, member = _member_arg(opts))
     for (_, cfg) in runs
-        run_driver(cfg.run.driver)                 # an unknown driver is a config error
+        run_driver(cfg)                            # an unknown legacy case is a config error
     end
     for (m, cfg) in runs
         local res
@@ -479,13 +388,14 @@ function _cmd_run(args, io, err)
 end
 
 const _COMMANDS = Dict("run" => _cmd_run, "check" => _cmd_check, "resolve" => _cmd_resolve,
-                       "options" => _cmd_options, "preprocess" => _cmd_preprocess)
+                       "options" => _cmd_options)
 
 """
     main(args::Vector{String}; io = stdout, err = stderr) -> Cint
 
-The `aeolus` command line: `run`, `check`, `resolve`, `options`,
-`preprocess` and `help` (see the Run configuration page). Called as
+The `aeolus` command line: `run`, `check`, `resolve`, `options` and
+`help` (see the Run configuration page). Input drivers are made by
+AeolusPrep.jl (`julia --project -m AeolusPrep …`; ONE-h, #457). Called as
 `julia --project -m Aeolus <command> …` (Julia ≥ 1.12, through
 `Aeolus.main`) or `bin/aeolus <command> …`. Returns the exit code: 0 on
 success, 1 when the run failed (its session is recorded as `failed`),
@@ -511,9 +421,6 @@ function main(args::AbstractVector{<:AbstractString}; io::Base.IO = stdout, err:
             println(err, sprint(showerror, e), "\n(aeolus help: the commands and their options)")
             return Cint(2)
         elseif e isa ConfigError || e isa IO.UncommittedCodeError
-            println(err, sprint(showerror, e))
-            return Cint(2)
-        elseif e isa ArgumentError && cmd == "preprocess"
             println(err, sprint(showerror, e))
             return Cint(2)
         end

@@ -57,7 +57,7 @@ apply_vegetation_drag!(sim, drag::ResolvedCanopyDrag, dt::Real) =
 Additive coupling: the resolved park canopy drag of `Aeolus.PlantCanopy`
 in `:post_predictor` (after the IBM). Options `cd` (leaf drag
 coefficient, 0.2) and `k_height` (crown depth in layers, 3 → 18.75 m).
-The LAI is `cfg.park_lai` on park columns.
+The LAI is the static driver's `lai` on park columns ([`park_lai_map`](@ref)).
 """
 struct VegDrag{D} <: AbstractCoupling
     drag::D

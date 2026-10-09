@@ -44,14 +44,13 @@ export FlatPlateDriverType, FlatPlateRun
 """
     FlatPlateDriverType()
 
-The `flat_plate` driver: `[run] driver = "flat_plate"`. Sections
+The `flat_plate` driver: `[run] legacy = "flat_plate"`. Sections
 `[plate]`, `[grid]`, `[disturbance]`, `[stepper]` and `[analysis]`;
 `aeolus options flat_plate` prints them.
 """
 struct FlatPlateDriverType <: AbstractRunDriver end
 
 Config.driver_name(::FlatPlateDriverType) = "flat_plate"
-Config.config_dir(::FlatPlateDriverType) = normpath(joinpath(@__DIR__, "..", "..", "examples", "transition", "configs"))
 
 function Config.driver_sections(::FlatPlateDriverType)
     pl = section("plate"; doc = "The plate and its box, in units of the inflow displacement thickness δ*₀ (U∞ = 1).") do s

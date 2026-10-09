@@ -16,8 +16,10 @@
 # results.toml: the base state, and per case the DNS decay and per closure
 # the resolved-KE error at t₀ + 2T, e, II, ⟨τ₃₃⟩/⟨τ₁₁⟩ and the SGS heat flux.
 
+schema_version = 2
+
 [run]
-driver = "sgs_decay"
+legacy = "sgs_decay"
 name = "rotating_stratified_decay"
 
 [dns]

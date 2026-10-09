@@ -10,8 +10,9 @@
 #   julia --project -m Aeolus run examples/coupled/configs/moist_convection.toml
 #   julia --project=. examples/coupled/plot_moist_convection.jl runs/<date>_moist_convection_<id>
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "moist_convection"
 seed = 3
 
@@ -23,17 +24,21 @@ extent = [3200.0, 3200.0, 2400.0]
 theta0 = 300.0
 g = 9.81
 moisture = true
-sponge_alpha_max = 0.02
-sponge_z_start = 1920.0
 
 [boundaries]
 z = "free_slip"
-theta_flux_bottom = 0.05
 
 [sgs]
 closure = "smagorinsky"
 c_s = 0.15
 pr_t = 0.3333333333333333
+
+[surface_theta_flux]
+bottom = 0.05
+
+[sponge]
+alpha_max = 0.02
+z_start = 1920.0
 
 [initial]
 theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 1500.0, lapse = 0.004 }
@@ -44,17 +49,17 @@ ql = { kind = "box", value = 2e-3, x = [800.0, 2400.0], y = [800.0, 2400.0], z =
 [microphysics]
 scheme = "kessler"
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 5.0
-end_time = 1200.0
+duration = 1200.0
 
 [output]
-fields = ["ql", "qr"]
+variables = ["ql", "qr"]
 cadence = 1200.0
 
 [logging]
 diagnostics_cadence = 60.0
 
 [test]
-overrides = ["grid.size=[12,12,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["grid.size=[12,12,16]", "time.duration=\"none\"", "time.nsteps=10"]

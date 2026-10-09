@@ -269,8 +269,8 @@ end
 The land use of the parent `pc` on its `mesh` from the table
 `pc.child.landuse` ([`read_parent_landuse`](@ref)): cropped to the box
 ([`crop_landuse`](@ref)) and coarsened to the mesh
-([`coarsen_landuse`](@ref)). What `aeolus preprocess static` writes to
-the parent's static driver.
+([`coarsen_landuse`](@ref)). What AeolusPrep.jl's `aeolusprep static`
+writes to the parent's static driver.
 """
 function parent_landuse_source(pc::ParentConfig, mesh)
     pl = crop_landuse(read_parent_landuse(pc.child.landuse), pc)
@@ -297,8 +297,8 @@ function parent_landuse(pc::ParentConfig, mesh)
     cfg = pc.child
     cfg.parent_static === nothing && return parent_landuse_source(pc, mesh)
     isfile(cfg.parent_static) ||
-        error("Missing the parent's static driver $(cfg.parent_static). Generate it with\n" *
-              "  julia --project -m Aeolus preprocess static <the config.toml naming it>\n" *
+        error("Missing the parent's static driver $(cfg.parent_static). Make it with AeolusPrep.jl:\n" *
+              "  julia --project -m AeolusPrep static <the config.toml naming it> --source <file.osm>\n" *
               "or set [geometry] parent_static = \"none\" to read $(cfg.landuse) in memory.")
     ox, oy = parent_anchor_xy(pc)
     t = read_static_tiles(cfg.parent_static; mesh = mesh, origin_lat = cfg.lat0, origin_lon = cfg.lon0,

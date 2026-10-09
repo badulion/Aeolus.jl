@@ -170,10 +170,11 @@ do not depend on ``ϕ_\text{ref}``; only the spurious redistribution
 breaks it. A child face that is a wall or periodic must coincide with the
 parent's own wall or periodic seam: a child lid inside the parent blocks
 the child but not the parent, the parent's flux through that plane has no
-fine counterpart, and the run warns. The anelastic core diffuses `θ` with
-the unweighted Laplacian, which does not conserve ``∫ρ̄θ`` by itself; the
-registers book the ``W``-weighted diffusive flux, exact for the lateral
-planes.
+fine counterpart, and the run warns. The anelastic core's SGS flux of `θ`
+is in the ``W``-weighted flux form (ONE-j, #460; see
+[Sound-proof cores](anelastic.md)) and conserves ``∫ρ̄θ``; its molecular
+term ``ν∇²θ`` is unweighted and does not. The registers book the
+``W``-weighted diffusive flux, exact for the lateral planes.
 
 ## Secondary circulation
 

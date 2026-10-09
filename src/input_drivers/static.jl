@@ -158,7 +158,7 @@ function _polygons(ps::Vector{Building})
 end
 
 """
-    write_static_driver(path, st::StaticInputs; source = "", preprocessor = "aeolus preprocess static") -> path
+    write_static_driver(path, st::StaticInputs; source = "", preprocessor = "") -> path
     write_static_driver(path, city, mesh; origin_lat, origin_lon, origin_x, origin_y,
                         class_lai = Dict(), source = "", preprocessor = …) -> path
 
@@ -169,7 +169,7 @@ the conventions' global attributes ([`DRIVER_ATTRIBUTES`](@ref)), with
 table on `surface_class` and `ground_class`.
 """
 function write_static_driver(path::AbstractString, st::StaticInputs; source::AbstractString = "",
-                             preprocessor::AbstractString = "aeolus preprocess static")
+                             preprocessor::AbstractString = "")
     attrs = driver_attributes("static", "resolved"; origin_lat = st.origin_lat, origin_lon = st.origin_lon,
                               origin_x = st.origin_x, origin_y = st.origin_y, dx = st.dx, dy = st.dy,
                               source = source, out = path, preprocessor = preprocessor)
@@ -215,7 +215,7 @@ end
 
 write_static_driver(path::AbstractString, city::UrbanCity, mesh; origin_lat, origin_lon, origin_x, origin_y,
                     class_lai::AbstractDict = Dict{UInt8,Float64}(), source::AbstractString = "",
-                    preprocessor::AbstractString = "aeolus preprocess static") =
+                    preprocessor::AbstractString = "") =
     write_static_driver(path, static_inputs(city, mesh; origin_lat = origin_lat, origin_lon = origin_lon,
                                             origin_x = origin_x, origin_y = origin_y, class_lai = class_lai);
                         source = source, preprocessor = preprocessor)
@@ -319,7 +319,7 @@ end
 Write the tile form of the static driver ([`STATIC_TILES_SCHEMA`](@ref)).
 """
 function write_static_tiles(path::AbstractString, t::StaticTiles; source::AbstractString = "",
-                            preprocessor::AbstractString = "aeolus preprocess static")
+                            preprocessor::AbstractString = "")
     attrs = driver_attributes("static", "tiles"; origin_lat = t.origin_lat, origin_lon = t.origin_lon,
                               origin_x = t.origin_x, origin_y = t.origin_y, dx = t.dx, dy = t.dy,
                               source = source, out = path, preprocessor = preprocessor)

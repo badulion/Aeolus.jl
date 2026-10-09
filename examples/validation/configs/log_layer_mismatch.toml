@@ -14,8 +14,10 @@
 #   julia --project=. examples/validation/log_layer_mismatch.jl        # ~3 min
 #   julia --project=. examples/validation/log_layer_mismatch.jl --set stepper.end_time=8.0
 
+schema_version = 2
+
 [run]
-driver = "channel"
+legacy = "channel"
 name = "log_layer_mismatch"
 seed = 1
 

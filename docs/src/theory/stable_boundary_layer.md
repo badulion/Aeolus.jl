@@ -120,7 +120,7 @@ of ``h``.
 
 P58-d (#194) runs three observed stable-boundary-layer cases on the same
 driver. It adds no physics. Since CFG-d (#359) each case is a
-config of the `sbl` run type ([Run configuration](../api/config.md#The-sbl-driver))
+config of the `sbl` run type ([Run configuration](../api/config.md#The-sbl-legacy-case))
 in `examples/sbl/configs/`: the case constants are in the TOML file, the
 case data stay the CSVs under `examples/sbl/data/` (provenance in every
 header, read by `sbl_case_tables` through `[case] data`), and `sbl_case` builds each case

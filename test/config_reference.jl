@@ -1,11 +1,11 @@
-# The generated references (CFG-i, #364): the option reference of every
-# driver and the input-format specifications of the driver schemas, both
+# The generated references (CFG-i, #364): the option reference of the model
+# and of every legacy case, and the input-format specifications of the driver schemas, both
 # generated from the schemas (docs/make.jl writes them to
 # docs/src/reference/ before makedocs; nothing is committed).
 #
 # Acceptance tests of the issue covered here:
-#   * the option reference has one table row per schema option, for every
-#     registered driver (urban included), counted against the schema;
+#   * the option reference has one table row per schema option, for the
+#     model and every legacy case (urban included), counted against the schema;
 #   * every option has a doc, every float option has units ("1" for a
 #     dimensionless one), every cross-field check is described in words;
 #   * the input-format pages list every variable of the static and dynamic
@@ -20,7 +20,7 @@ import Aeolus.Config as C
 import NCDatasets
 import Markdown
 
-const REF_DRIVERS = sort!(unique!(vcat("common", "simulation", collect(keys(C.DRIVER_FILES)))))
+const REF_DRIVERS = sort!(unique!(vcat("model", collect(keys(C.DRIVER_FILES)))))
 const REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))
 
 "The keys of the table rows of a Markdown option reference, per `[table]` heading."
@@ -57,7 +57,7 @@ function doc_problems(sch::ConfigSchema)
     return out
 end
 
-@testset "option reference: one Markdown table row per option, every driver" begin
+@testset "option reference: one Markdown table row per option, the model and every legacy case" begin
     for d in REF_DRIVERS
         sch = driver_schema(d)
         md = option_reference(d; format = :markdown)
