@@ -1,6 +1,6 @@
 # Coupled example 03, the plots: θ − 300 K in the horizontal plane nearest
 # 400 m and in the vertical centre plane at the end of a run of
-# configs/heated_plume.toml. Reads the last output/fields_*.nc and run.toml only.
+# configs/heated_plume.toml. Reads the last record of output/output.nc and run.toml only.
 #
 #   julia --project -m Aeolus run examples/coupled/configs/heated_plume.toml
 #   julia --project=. examples/coupled/plot_heated_plume.jl runs/<date>_heated_plume_<id>
@@ -12,10 +12,10 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-cfg = recorded_config(folder)
-F, t = read_fields(last_fields_file(folder))
+dom = recorded_domain(folder)
+F, t = read_last_record(output_file(folder))
 θ = Float64.(F["theta"]) .- 300.0
-Nx, Ny, Nz = size(θ); _, Ly, Lz = cfg["grid"]["extent"]
+Nx, Ny, Nz = size(θ); _, Ly, Lz = dom["grid"]["extent"]
 k = round(Int, 400.0 / (Lz / Nz))
 j = round(Int, (Ly / 2) / (Ly / Ny))
 a = save_heatmap(plot_path(folder, "plume_theta_400m.ppm"), Array(θ[:, :, k]'); upscale = 8)

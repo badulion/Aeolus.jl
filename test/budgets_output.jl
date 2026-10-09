@@ -215,6 +215,13 @@ end
         # the group's members appear as booked: a from step 3, b from step 5
         @test nc["g__a"].var[2:4] == [1.0, 1.0, 1.0] && nc["g__b"].var[3:4] == [2.0, 2.0]
     end
+    # the plotting scripts' reader (examples/viz/run_output.jl): the last
+    # record, without its time axis; the time series are not records
+    RO = Module(:RunOutput)
+    Base.include(RO, joinpath(pkgdir(Aeolus), "examples", "viz", "run_output.jl"))
+    F, tl = Base.invokelatest(RO.read_last_record, path)
+    @test tl == 8.0 && sort(collect(keys(F))) == ["f", "p"]
+    @test size(F["f"]) == (6, 5, 8) && all(==(6.5f0), F["f"]) && F["p"] == fill(13.0f0, 8)
     # :instant, and a resumed file continues after the last sample at or before t
     p2 = joinpath(dir, "inst.nc")
     w = OutputWriter(p2; x, y, z, records = [prof], series = [ser], ctx = ctx)
