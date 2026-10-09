@@ -208,10 +208,6 @@ const OTHER_ISSUE_DIRS = Dict("sbl/" => "#359 (CFG-d, SBL)")
 # split per directory). This list may only shrink: a file migrated to a
 # config must leave it (checked below).
 const PENDING_360 = Set([
-    "kernels/01_tgv_energy_decay.jl", "kernels/02_decaying_hit.jl", "kernels/03_channel_flow.jl",
-    "kernels/05_pollution_plume.jl", "kernels/06_particle_trail.jl",
-    "coupled/01_dcbl_radiation_lsm.jl", "coupled/02_moist_convection.jl", "coupled/03_heated_plume_rain.jl",
-    "coupled/04_flow_past_cube.jl",
     "sgs/cbl_tke.jl", "sgs/rotating_stratified_decay.jl", "sgs/surface_mounted_cube.jl",
     "transition/flat_plate_t3a.jl", "transition/kelvin_helmholtz.jl",
     "nesting/cbl_inflow_statistics.jl", "nesting/inflow_fetch.jl",
@@ -265,5 +261,5 @@ end
     # examples/validation/ is complete: every script there is configured, a driver or exempt
     val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
     @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 10        # 8 validation scripts, kernels/04, urban/alexanderplatz_diurnal (CFG-c); the 3 bare runners of CFG-b are gone (EX-d)
+    @test nconfigured == 9         # 8 validation scripts, urban/alexanderplatz_diurnal (CFG-c); the bare runners of CFG-b and kernels/04 are gone (EX-d)
 end
