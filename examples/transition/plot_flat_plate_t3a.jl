@@ -29,7 +29,7 @@ if haskey(res, "downstream")
             d["shape_factor_max"])
 end
 R = p["re_x"]
-Tu = run_config_table(folder)["disturbance"]["tu"]
+Tu = recorded_config(folder)["disturbance"]["tu"]
 save_multiline(plot_path(folder, "t3a_cf.svg"), R ./ 1e5, [1e3 .* p["cf"], 1e3 .* p["cf_laminar"], 1e3 .* p["cf_turbulent"]],
                [@sprintf("Tu = %.1f %%", 100Tu), "laminar", "turbulent"];
                xlabel = "Re_x / 1e5 (laminar 0.664 Re_x^-1/2, turbulent 0.0576 Re_x^-1/5)", ylabel = "1000 c_f",

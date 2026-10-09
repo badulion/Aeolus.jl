@@ -15,7 +15,7 @@ include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
 res = read_results(folder)
-lay = run_config_table(folder)["layer"]
+lay = recorded_config(folder)["layer"]
 J, Re, δ = lay["richardson"], lay["re"], lay["delta"]
 s = res["series"]
 ts, As, γm, Rif = s["t"], s["A"], s["gamma"], s["rif"]
@@ -28,7 +28,7 @@ for t_ in (40.0, 60.0, 80.0, 100.0, 140.0, 160.0)
     @printf("t = %5.0f: A = %.2e, γ(|z|<4δ) = %.3f, Ri_f = %.3f\n", ts[i], As[i], γm[i], Rif[i])
 end
 rc = res["rif_cumulative"]
-@printf("cumulative Ri_f from t = %.0f: %.3f to saturation (t = %.0f), %.3f to t = %.0f\n", run_config_table(folder)["diagnostics"]["rif_from"],
+@printf("cumulative Ri_f from t = %.0f: %.3f to saturation (t = %.0f), %.3f to t = %.0f\n", recorded_config(folder)["diagnostics"]["rif_from"],
         res["rif_cumulative_saturation"], res["t_saturation"], res["rif_cumulative_end"], ts[end])
 
 save_multiline(plot_path(folder, "kh_amplitude.svg"), ts, [As], ["rms w / U"];

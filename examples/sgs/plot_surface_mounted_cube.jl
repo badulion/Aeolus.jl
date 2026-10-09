@@ -28,7 +28,7 @@ runs = map(folders) do f
             res["wall_seconds_per_step"], res["mean_U_b"], res["force"])
     (res = res, x = first.(rows), u = last.(rows))
 end
-g = run_config_table(folders[1])["grid"]
+g = recorded_config(folders[1])["grid"]
 LX = g["extent"][1]; NH = g["cells_per_h"]
 XC0, XC1 = runs[1].res["x_front"], runs[1].res["x_rear"]
 

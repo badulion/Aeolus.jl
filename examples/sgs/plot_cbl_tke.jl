@@ -15,7 +15,7 @@ include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
 res = read_results(folder)
-N = run_config_table(folder)["grid"]["n"]
+N = recorded_config(folder)["grid"]["n"]
 P = res["profiles"]
 r = (N = N, zi = res["zi"], w_star = res["w_star"], zc = P["zc"], zf = P["zf"], w2 = P["w2"], flux = P["flux"],
      sgs_flux = P["sgs_flux"], e = P["e"], kres = P["kres"])

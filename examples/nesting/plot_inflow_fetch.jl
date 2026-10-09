@@ -16,7 +16,7 @@ include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
 res = read_results(folder)
-cfg = run_config_table(folder)["child"]
+cfg = recorded_config(folder)["child"]
 P = res["profiles"]
 @printf("precursor %.0f s, reference %.0f s\n", res["precursor_wall_seconds"], res["reference_wall_seconds"])
 println("  z/δ   U_pre  U_ref   TKE_pre TKE_ref  -u'w'_pre -u'w'_ref   τ_pre(z_f)  1 - z_f")

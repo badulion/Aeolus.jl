@@ -12,7 +12,7 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-ν = run_config_table(folder)["dynamics"]["nu"]
+ν = recorded_config(folder)["dynamics"]["nu"]
 d = read_diagnostics_csv(folder)
 t, ke = diagnostic_series(d, "ke_mean")          # the rows start after the first step
 linear = exp.(-6ν .* (t .- t[1]))

@@ -13,7 +13,7 @@ include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
 r = read_results(folder)
-kb = run_config_table(folder)["kessler_box"]
+kb = recorded_config(folder)["kessler_box"]
 nz = kb["size"][3]
 z = [(k - 0.5) * kb["height"] / nz for k in 1:nz]
 labels = ["t=$(round(Int, t))s" for t in r["t"]]

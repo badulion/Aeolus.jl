@@ -14,14 +14,14 @@ include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
 res = read_results(folder)
-N = run_config_table(folder)["dns"]["n"]
+N = recorded_config(folder)["dns"]["n"]
 vmean(x) = sum(x) / length(x)
 b = res["base"]
 base = (T = b["T"],)
 @printf("DNS %d³: spin-up %.0f s, Re_λ = %.1f, u′ = %.3f, L = %.3f, T = %.3f, f = %.3f, N = %.3f\n",
         N, b["spinup_wall_seconds"], b["re_lambda"], b["u_prime"], b["L"], b["T"], b["f"], b["N_bv"])
-CASES = Tuple(Symbol.(run_config_table(folder)["dns"]["cases"]))
-MODELS = Tuple(Symbol.(run_config_table(folder)["les"]["models"]))
+CASES = Tuple(Symbol.(recorded_config(folder)["dns"]["cases"]))
+MODELS = Tuple(Symbol.(recorded_config(folder)["les"]["models"]))
 LABEL = Dict(:smagorinsky => "Smagorinsky", :dynamic => "dynamic Smag.", :tke => "TKE",
              :rsm => "Reynolds stress", :dns => "filtered DNS")
 COLOR = Dict(:dns => "#000000", :smagorinsky => "#8c8c8c", :dynamic => "#4a7c3a",

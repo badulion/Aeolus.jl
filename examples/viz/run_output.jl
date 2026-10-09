@@ -21,7 +21,7 @@ function run_folder_arg(args = ARGS)
 end
 
 "The resolved configuration of the run (the `[config]` table of `run.toml`)."
-run_config_table(folder) = TOML.parsefile(joinpath(folder, "run.toml"))["config"]
+recorded_config(folder) = TOML.parsefile(joinpath(folder, "run.toml"))["config"]
 
 "A path in the run's `output/` directory (made if missing) for a figure."
 plot_path(folder, name) = joinpath(mkpath(joinpath(folder, "output")), name)

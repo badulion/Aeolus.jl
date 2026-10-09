@@ -12,7 +12,7 @@ include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-cfg = run_config_table(folder)
+cfg = recorded_config(folder)
 F, t = read_fields(last_fields_file(folder))
 Ny = size(F["u"], 2); Ly = cfg["grid"]["extent"][2]
 j = round(Int, (Ly / 2) / (Ly / Ny))

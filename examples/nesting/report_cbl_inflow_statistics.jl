@@ -13,7 +13,7 @@ include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 folder = run_folder_arg()
 res = read_results(folder)
 s = res["inflow"]
-N = run_config_table(folder)["grid"]["n"]
+N = recorded_config(folder)["grid"]["n"]
 @printf("ParentResolvedStatistics: %d updates, %.1f ms each (%d × %d plane, %d levels, lag_z = %d)\n",
         s["updates"], s["wall_ms_per_update"], N, N, length(s["z"]), s["lag_z"])
 @printf("w* = %.2f m/s, z_i = %.0f m; band: wavelengths %.0f–%.0f m\n", res["w_star"], res["zi"],
