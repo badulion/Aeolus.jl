@@ -13,7 +13,14 @@
 #
 #   julia -m Aeolus run examples/validation/configs/dns256.toml                   # ≈ 36 min at -t 12, ≈ 9 GB
 #   julia -m Aeolus run examples/validation/configs/dns256.toml --set grid.n=32   # the pipeline in 30 s
-#   julia --project=. examples/validation/dns256_generate.jl                       # writes test/fixtures/dns256_apriori.toml
+#   julia --project examples/validation/apriori_sgs.jl runs dns256               # its tables
+#
+# The record goes to output/dns_apriori.toml of the run folder. To refresh
+# the fixture test/era6_apriori_sgs.jl reads, write it there:
+#   julia -m Aeolus run examples/validation/configs/dns256.toml \
+#         --set 'apriori.out="test/fixtures/dns256_apriori.toml"'
+# (or AEOLUS_DNS256=1 for the regeneration testset). An interrupted run
+# resumes bit for bit: julia -m Aeolus run <run folder> --resume.
 #
 # Measured (test/fixtures/dns256_apriori.toml, re-captured 2026-10-08,
 # #400): 1264 steps to t = 3.85 (ε peak at t = 3.60), 1975 s of DNS with
@@ -46,7 +53,7 @@ widths = [4, 8, 16, 32]
 require_checks = true
 
 [checkpoint]
-every_seconds = 1800.0          # an interrupted run resumes with --resume <run folder>
+every_seconds = 1800.0          # an interrupted run resumes with --resume (see above)
 keep = 2
 
 # The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,

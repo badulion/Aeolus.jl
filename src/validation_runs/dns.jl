@@ -1,8 +1,9 @@
 # The decaying-turbulence DNS of Era VI (P56-c, #178): the filtered-DNS
-# fixture, its a-priori statistics and TOML record, and the run types
-# `dns` (CFG-d #359) and `dns_decay` (CFG-e #360). Moved from
-# test/fixtures/dns_decay.jl, test/fixtures/dns_apriori.jl and
-# examples/validation/dns_{apriori_,}driver.jl (EX-c #440).
+# fixture, its a-priori statistics and TOML record, and the run type `dns`
+# (CFG-d #359). Moved from test/fixtures/dns_decay.jl,
+# test/fixtures/dns_apriori.jl and examples/validation/dns_apriori_driver.jl
+# (EX-c #440); the `dns_decay` driver of CFG-e (#360) ran the same DNS and
+# is replaced by `dns` (apriori_sgs.toml).
 #
 # Filtered-DNS fixture of Era VI (P56-c, #178): decaying isotropic
 # turbulence computed by Aeolus itself, from a fixed seed.
@@ -708,60 +709,3 @@ end
 
 register_driver!(DNSDriver())
 
-# ===========================================================================
-# the `dns_decay` run type
-# ===========================================================================
-
-struct DNSDecayDriver <: AbstractRunDriver end
-
-Config.driver_name(::DNSDecayDriver) = "dns_decay"
-Config.config_dir(::DNSDecayDriver) = VALIDATION_CONFIG_DIR
-
-function Config.driver_sections(::DNSDecayDriver)
-    g = section("grid"; doc = "The periodic box of side 2π.") do s
-        option!(s, "n", Int; default = 48, range = (8, 4096), doc = "cells per side (N³)")
-    end
-    d = section("dns"; doc = "The decaying DNS (dns_decay of test/fixtures/dns_decay.jl).") do s
-        option!(s, "nu", Optional{Float64}; range = (0, Inf), open_lower = true, units = "m^2 s^-1",
-                doc = "kinematic viscosity; \"none\": 0.018 (48/N)^(4/3), which holds k_max η ≈ 1.5")
-        option!(s, "end_time", Float64; units = "L/u'", default = DNS_T_END, range = (0, Inf), open_lower = true,
-                doc = "simulated time (in units of L/u', u' = 1)")
-        option!(s, "past_peak", Float64; units = "L/u'", default = 0.0, range = (0, Inf),
-                doc = "run on this long past the dissipation peak (0: stop at end_time)")
-        option!(s, "cfl", Float64; units = "1", default = 0.5, range = (0, Inf), open_lower = true,
-                doc = "advective Courant number of the step")
-    end
-    return Section[g, d]
-end
-
-"What the `dns_decay` driver builds and runs: `result` (the NamedTuple of `dns_decay`) and `cfg`."
-mutable struct DNSDecayRun
-    result::Any
-    cfg::RunConfig
-end
-
-Config.build(::DNSDecayDriver, cfg::RunConfig) = DNSDecayRun(nothing, cfg)
-
-function Simulations.run!(::DNSDecayDriver, r::DNSDecayRun, rf::RunFolder, ck::CheckpointSchedule;
-                          callback = nothing)
-    c = r.cfg; d = c.dns
-    kw = d.nu === nothing ? (;) : (; ν = d.nu)
-    r.result = dns_decay(; N = c.grid.n, seed = c.run.seed, t_end = d.end_time, cfl = d.cfl,
-                         past_peak = d.past_peak, checkpoint = ck, kw...)
-    x = r.result
-    @info("decaying DNS", subsystem = :run, nsteps = x.nsteps, Re_lambda = x.Re_λ, kmax_eta = x.kmax_eta,
-          skewness = x.S[end], budget_error = maximum(abs, x.budget_err; init = 0.0))
-    write_results(rf, Dict("nu" => x.ν, "nsteps" => x.nsteps, "Re_lambda" => x.Re_λ, "kmax_eta" => x.kmax_eta,
-                           "kmax_eta_end" => x.kmax_eta_end, "u_rms" => x.u_rms, "eta" => x.η,
-                           "t" => x.t, "K" => x.K, "epsilon" => x.ε, "skewness" => x.S,
-                           "budget_error" => x.budget_err, "wall_time" => x.wall))
-    callback === nothing || callback(r, x.nsteps)
-    return r
-end
-
-function Config.state_fields(r::DNSDecayRun)
-    s = r.result.sim
-    return (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data)
-end
-
-register_driver!(DNSDecayDriver())

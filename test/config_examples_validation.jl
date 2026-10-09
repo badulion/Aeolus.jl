@@ -190,12 +190,12 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# cbc_decay, patchy_surface, dns_decay
+# cbc_decay, patchy_surface, dns (apriori_sgs)
 # ---------------------------------------------------------------------------
 
 using Aeolus.ValidationRuns     # cbc_benchmark, patchy_les / patchy_run!, dns_decay (EX-c #440)
 
-@testset "cbc_decay, patchy_surface, dns_decay drivers equal the old in-code runs, bit for bit" begin
+@testset "cbc_decay, patchy_surface, dns (apriori_sgs) drivers equal the old in-code runs, bit for bit" begin
     # cbc_decay.jl before CFG-e: cbc_benchmark(closure; N) for closure in (dynamic, smagorinsky, none)
     runs = load_sweep(vcfg("cbc_decay"))
     @test [c.sgs.closure for (_, c) in runs] == [:dynamic, :smagorinsky, :none]
@@ -225,13 +225,23 @@ using Aeolus.ValidationRuns     # cbc_benchmark, patchy_les / patchy_run!, dns_d
     labels = [m.label for (m, _) in load_sweep(vcfg("patchy_surface"))]
     @test length(labels) == 13 && count(startswith("A_"), labels) == 7
 
-    # apriori_sgs.jl before CFG-e: dns_decay(; N), here at 16³ to t = 0.3
+    # apriori_sgs.jl before CFG-e: dns_decay(; N), here at 16³ to t = 0.3; since EX-c (#440)
+    # the `dns` run type (nu_margin = 1, past_peak = 0) runs it, with the a-priori record
     d = dns_decay(; N = 16, t_end = 0.3)
-    r = val_run("apriori_sgs", nothing, ["grid.n=16", "dns.end_time=0.3"])
-    @test r.obj.result.nsteps == d.nsteps >= 5
+    r = val_run("apriori_sgs", nothing, ["grid.n=16", "stepper.end_time=0.3", "apriori.widths=[4,8]"])
+    @test r.obj.cfg.run.driver == "dns"
+    @test r.obj.summary.nsteps == d.nsteps >= 5
+    @test r.obj.summary.ν === d.ν
     s = d.sim
     @test fields_bitwise(Base.invokelatest(state_fields, r.obj),
                          (u = s.u.data, v = s.v.data, w = s.w.data, p = s.p.data))
+    @test bitwise_equal(r.obj.summary.S, d.S) && bitwise_equal(r.obj.summary.ε, d.ε)
     # the fixture's energy budget closes in the driver's run too
-    @test maximum(abs, r.obj.result.budget_err) < 0.05
+    @test maximum(abs, r.obj.summary.budget_err) < 0.05
+    # the a-priori tables the example prints are the record of the run, per width
+    rec = read_dns_apriori(joinpath(r.folder.path, "output", "dns_apriori.toml"))
+    @test sort(collect(keys(rec["filter"]))) == ["4h", "8h"]
+    @test all(haskey(rec["filter"]["4h"], m) for m in ("smagorinsky", "bardina", "gradient"))
+    # the Bardina model correlates better with the exact stress than Smagorinsky (Liu, Meneveau & Katz 1994)
+    @test rec["filter"]["4h"]["bardina"]["rho_Pi"] > rec["filter"]["4h"]["smagorinsky"]["rho_Pi"]
 end
