@@ -379,3 +379,29 @@ generator on and off, to 90 % of the canopy-top TKE plateau and at
 100 m — needs hours of model time and is left to the 24 h validation
 (#270), which replaces the default with it; long Berlin runs were
 paused when this was written.
+
+## Checkpoint / restart (#269)
+
+The nested case is checkpointed whole: `checkpoint_state(case)` is the
+structural state of the built case, which reaches the `:nesting`
+coupling's `ParentCase` (the parent core, its surface tiles, nudging and
+closure) and its `NestedRun`. The nest's own state is the content of
+`Nesting.nest_state`: both parent time levels prolongated at the ends of
+the open window, the window itself (`c.window`), the step sizes the two
+adaptive controllers continue from, the flux registers of a two-way run,
+the run statistics, the child's boundary data and the inflow generator
+(planes, RNG, folded parent statistics). A parent step that `run_case!`
+started ahead on its own task (SC-c, #403) is waited for, recorded and
+rebuilt on restore; the resumed `run_case!` gets the original run's end
+time, so it starts the parent's next steps ahead exactly where the
+uninterrupted run did. A checkpoint is taken between two child steps,
+in the middle of a parent window as often as not.
+
+`[checkpoint]` is on in `berlin_summer.toml` (every 30 min of wall clock,
+the newest 2 kept); `aeolus run <folder> --resume` continues the run.
+Module-level proof: `test/nest_restart.jl` (bitwise, one-way, one-way with
+the parent ahead, two-way, 1 and 12 threads); the case-level resume of
+`berlin_smoke.toml` is in `test/config_roundtrip.jl`. The 24 h flagship
+restart (22:00 resumed to 23:00) waits for the long Berlin runs, paused
+when this was written. Design and limits: [Checkpoint /
+restart](checkpoint_restart.md#The-Berlin-case).
