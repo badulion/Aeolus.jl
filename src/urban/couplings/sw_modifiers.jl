@@ -1,5 +1,6 @@
 # Shortwave modifier applied to the surface irradiance every step:
-# Beer's-law shade under the park trees. (The cloud shadow that used to
+# Beer's-law shade under the park trees (`PlantCanopy.apply_tree_shade!`,
+# moved there in ONE-e, #454). (The cloud shadow that used to
 # live here is `cloud_shadow.jl`, the slant-path
 # SolarGeometry.cloud_shadow_transmittance!, since #130.)
 #
@@ -15,33 +16,6 @@
 # KNOWN (later issues): the shade is a single big-leaf Beer's law on the
 # effective irradiance of the radiosity solve, not a resolved canopy
 # (#140, #145).
-
-"""
-    apply_tree_shade!(sw_arr, veg_mask, LAI_arr; k_leaf = 0.5)
-
-Attenuate the shortwave flux reaching the ground beneath tree canopies
-using Beer's law with an extinction coefficient `k_leaf` (typical
-`0.4..0.6` for a randomly-distributed broadleaf canopy):
-
-    SW_ground ← SW_ground · exp(-k_leaf · LAI)
-
-Modifies `sw_arr` in place at every cell where `veg_mask[i, j]` is
-`true`. Non-vegetated cells are untouched. Returns `sw_arr`.
-"""
-function apply_tree_shade!(sw_arr::AbstractMatrix{<:Real},
-                           veg_mask::AbstractMatrix{Bool},
-                           LAI_arr::AbstractMatrix{<:Real};
-                           k_leaf::Real = 0.5)
-    Nx, Ny = size(sw_arr)
-    k = Float64(k_leaf)
-    @inbounds for j in 1:Ny, i in 1:Nx
-        if veg_mask[i, j]
-            lai = Float64(LAI_arr[i, j])
-            sw_arr[i, j] *= exp(-k * lai)
-        end
-    end
-    return sw_arr
-end
 
 """
     SWModifiers

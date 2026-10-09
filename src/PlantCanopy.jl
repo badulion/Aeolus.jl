@@ -133,7 +133,7 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, Tabulat
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
-       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!, vegetation_canopy_drag, apply_tree_shade!,
        CanopyWindSolution, solve_canopy_wind_column,
        harman_finnigan_mixing_length, canopy_attenuation_coefficient,
        canopy_exponential_wind,
@@ -550,6 +550,31 @@ end
 function canopy_lad_field(mesh::RegularGrid, profile::AbstractLeafAreaDensity,
                           mask::AbstractMatrix{Bool})
     return canopy_lad_field(mesh, [m ? profile : nothing for m in mask])
+end
+
+"""
+    vegetation_canopy_drag(mesh, veg_mask, LAI; cd = 0.2, k_height = nothing)
+        -> ResolvedCanopyDrag
+
+The resolved canopy drag of a vegetation map: each column with
+`veg_mask[i, j]` and `LAI[i, j] > 0` gets a uniform crown
+`UniformLAD(LAI[i, j], h)` of depth `h = k_height · Δz` above the ground
+(`k_height === nothing`: `Nz ÷ 4` layers, at least one; clamped to
+`1 … Nz`), with leaf drag coefficient `cd`. Build it once and apply it
+with [`apply_canopy_drag!`](@ref) after the predictor (moved from the
+urban case's `veg_drag` coupling, ONE-e #454).
+"""
+function vegetation_canopy_drag(mesh, veg_mask::AbstractMatrix{Bool},
+                                LAI_arr::AbstractMatrix{<:Real};
+                                cd::Real = 0.2,
+                                k_height::Union{Nothing, Integer} = nothing)
+    Nz = mesh.Nz
+    k_top = clamp(k_height === nothing ? max(1, Nz ÷ 4) : Int(k_height), 1, Nz)
+    h = k_top * mesh.dz
+    profiles = Union{Nothing, UniformLAD{Float64}}[
+        (veg_mask[i, j] && LAI_arr[i, j] > 0) ? UniformLAD(LAI_arr[i, j], h) : nothing
+        for i in axes(veg_mask, 1), j in axes(veg_mask, 2)]
+    return ResolvedCanopyDrag(mesh, canopy_lad_field(mesh, profiles); C_d = cd)
 end
 
 """
@@ -1048,6 +1073,37 @@ Beer–Lambert transmittance of the direct beam through cumulative leaf area
 """
 canopy_beam_transmittance(d::AbstractLeafAngleDistribution, μ::Real, Λ::Real) =
     μ > 0 ? exp(-beam_extinction_coefficient(d, μ) * Λ) : 0.0
+
+"""
+    apply_tree_shade!(sw_arr, veg_mask, LAI_arr; k_leaf = 0.5)
+
+Attenuate the shortwave flux reaching the ground beneath tree canopies
+using Beer's law with an extinction coefficient `k_leaf` (typical
+`0.4..0.6` for a randomly-distributed broadleaf canopy):
+
+    SW_ground ← SW_ground · exp(-k_leaf · LAI)
+
+Modifies `sw_arr` in place at every cell where `veg_mask[i, j]` is
+`true`. Non-vegetated cells are untouched. Returns `sw_arr`. A single
+big-leaf extinction with a constant `k_leaf`, the spherical-leaf
+``G/μ = 0.5`` at the zenith; [`canopy_beam_transmittance`](@ref) is the
+angle-resolved form. Moved from the urban case's `sw_modifiers` coupling
+(ONE-e, #454).
+"""
+function apply_tree_shade!(sw_arr::AbstractMatrix{<:Real},
+                           veg_mask::AbstractMatrix{Bool},
+                           LAI_arr::AbstractMatrix{<:Real};
+                           k_leaf::Real = 0.5)
+    Nx, Ny = size(sw_arr)
+    k = Float64(k_leaf)
+    @inbounds for j in 1:Ny, i in 1:Nx
+        if veg_mask[i, j]
+            lai = Float64(LAI_arr[i, j])
+            sw_arr[i, j] *= exp(-k * lai)
+        end
+    end
+    return sw_arr
+end
 
 """
     sunlit_leaf_fraction(d, μ, Λ) -> f_sun
