@@ -1,12 +1,14 @@
 # The Berlin case: ledgers and tests
 
-## The budget ledger
+## The budgets
 
-`case.ledger` integrates, step by step, the surface energy balance of
+`case.budgets`, a `Budgets` of the one budget system
+([Budgets](../api/budgets.md), `Aeolus.BudgetSystem`, ONE-c #452: it
+replaced the case's `Ledger` and `AirHeatLedger`), integrates, step by step, the surface energy balance of
 every surface class, the water budget of the air and the heat of the
 air ([below](#The-heat-of-the-air), #253). The core calls
-`ledger_begin_step!` before `:clock` (it snapshots `bus.Ts` into
-`ledger.Ts_start` and the water in the air) and `ledger_end_step!` after
+`budgets_begin_step!` before `:clock` (it snapshots `bus.Ts` into
+`budgets.Ts_start` and the water in the air) and `budgets_end_step!` after
 `:sanity` (it calls every coupling's `budget!` and books the change of
 the water in the air). A coupling reports only what it did during that
 step:
@@ -16,7 +18,7 @@ step:
 | `add_surface!(l, term, F, sfc, dt)` | a W m⁻² map `F` on the columns, over `dt` s, sorted by surface class |
 | `add_water!(l, term, m)` | `m` kg m⁻² of domain added to the air (negative: removed) |
 | `water_tracer!(l, :qi)` | count a new tracer as water in the air (not one that is part of another, like P3's rime mass) |
-| `ledger_water(case, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
+| `water_content(case.budgets, case.mesh, q)` | ``Σ_k ρ_k Σ_{ij} q Δz / (N_x N_y)``, for measuring a change of a tracer |
 | `l.dt` | the length of the current step (s); use it, not `cfg.dt`, to turn the step's energy into a flux — they differ under the adaptive stepper |
 
 **Summation order (KA-b, #296).** Every ledger sum has one fixed order,
@@ -24,7 +26,7 @@ independent of the thread count. The water integrals build on
 `level_sums(q)`, the per-level plane sums ``S_k = Σ_{ij} q`` in the
 canonical order of `plane_partials!` ([kernel port](ka_port.md#The-reduction-contract)),
 combined over ``k`` in ascending order; the heat of the air takes its
-fluid and solid level sums the same way (`air_heat_levels!`).
+fluid and solid level sums the same way (`measure_levels!`).
 `add_surface!` sums the step's column contributions per class in
 column-major order and adds that step total to the accumulated term.
 The couplings' own column totals — the surface exchange's evaporation,
@@ -36,7 +38,7 @@ the same bits serially and threaded.
 **Surface energy.** `:Rn` (net radiation into the surface), `:H`,
 `:LE`, `:G` (sensible, latent and ground heat flux out of it) and `:dS`
 (storage change of the surface layer) are the core terms. Every other
-term name is an extra flux *into* the surface. `surface_budget(ledger)`
+term name is an extra flux *into* the surface. `surface_budget(case.budgets)`
 returns per class, and for the whole domain,
 
     residual = Rn − H − LE − G − ΔS        (what the four-term balance misses)
@@ -56,7 +58,7 @@ cells (`window_sun`); `glass` the shortwave transmitted into the
 building (`glass_transmission`). Before #129 the slab booked the same
 terms per step and its Ts clamp as `clamp`; nothing is clamped now.
 
-**Water.** `water_budget(ledger)` gives the change of water in the air
+**Water.** `water_budget(case.budgets)` gives the change of water in the air
 `ΔW` (measured by the ledger over `qv`, `ql`, `qr` and every
 `water_tracer!`), the booked sources and `residual = ΔW − Σ sources`.
 Sources in the default case: `evaporation` (surface exchange; negative
@@ -66,7 +68,7 @@ bottom), `qv_clamp` (the Kessler coupling's clamp), `transport` (the
 change of water the transport stage makes; zero for a conservative
 scheme, and measured at ~1e-19 kg m⁻² at ρ = 1 since #132) and
 `sgs_diffusion` (the same for the tracers' SGS diffusion, #177; ~1e-19). The ledger
-integrates the water with `ledger.ρ`, one density
+integrates the water with `budgets.ρ`, one density
 per level, the reference density `case.ref.ρ̄` (#131). A coupling that
 puts a flux into the air with a different density than the ledger's
 shows up as a water residual, so a coupling converts every flux with
@@ -75,7 +77,7 @@ shows up as a water residual, so a coupling converts every flux with
 The incompressible core does not conserve that ρ̄-weighted water: ∇·u = 0
 conserves Σ q, so vapour carried up into thinner air loses ρ̄-weighted
 mass. The transport stage therefore books its change of water in two
-parts (`ledger_water_split`): `transport`, the column-mean ρ̄ times its
+parts (`water_split`): `transport`, the column-mean ρ̄ times its
 change of Σ q (zero for a conservative scheme; before #132 the halo
 leak), and `density_redistribution`, the rest. Under a sound-proof core
 (#133) the transport is W-weighted and conserves Σ W q, and the split is
@@ -101,10 +103,10 @@ the surface exchange's smoke check counts writes into solid cells
 (zero).
 
 `run_case!` logs the ledgers at the end of the run as `Info` events
-(`event = :ledger`, one per class, the water and each air-heat layer and
+(`event = :budget`, one per class, the water and each air-heat layer and
 term, the values as key-values; #338), and the run monitor writes their
-means and closures to `diagnostics.csv` as `ledger.*`
-([Diagnostics](berlin_case.md#Diagnostics)). `ledger_report(case)` is
+means and closures to `diagnostics.csv` as `budgets.*`
+([Diagnostics](berlin_case.md#Diagnostics)). `budget_report(case.budgets)` is
 the same as a table, for scripts.
 The cost is about 1 ms/step on the flagship grid (the two water
 integrals), plus about 0.4 ms/step for the Kessler coupling's own
@@ -112,17 +114,17 @@ bookkeeping.
 
 ### The heat of the air
 
-`ledger.heat`, an `AirHeatLedger`, closes the heat of the air
+`energy(case.budgets)`, a `StageBudget`, closes the heat of the air
 
 ``H_{air} = Σ_k ρ̄_k c_p Π̄_k Σ_{ij ∈ fluid} θ_{ijk} Δz_k / (N_x N_y)``  (J m⁻²),
 
 the dry enthalpy ``c_p T`` (``T = θ Π̄``) of the air above a unit of
 ground, with the case's one reference state (`case.ref`) and without the
-solid cells. The meter (`AirHeatMeter`, `core/air_heat.jl`) and the
-ledger (`core/air_heat_ledger.jl`) are functions of (mesh or sim,
-reference state, solid mask) and of the θ field, not of the Berlin
+solid cells. The meter (`LevelMeter`, `src/budgets/meter.jl`) and the
+stage budget (`src/budgets/stage_budget.jl`) are functions of (mesh or
+sim, reference state, solid mask) and of the θ field, not of the Berlin
 `Case`, so the parent run of the nesting epic (#246) keeps its own with
-the same code.
+the same code, and so does every domain of the model (ONE-c, #452).
 
 **Every heater converts with the same weight.** A heat flux `q` (W m⁻²
 into level `k`) raises θ by ``q Δt / (ρ̄_k c_p Π̄_k Δz_k)``:
@@ -161,7 +163,7 @@ numerics alone). A change of θ outside every context is still caught:
 as `(:core, :unattributed)` within a step, as `(:output, :between_steps)`
 between two steps. The smoke test asserts that neither is booked.
 
-**Booked terms.** `add_heat!(ledger, term, J; k)` books `J` J m⁻² under
+**Booked terms.** `add_heat!(case.budgets, term, J; k)` (or `book!` on a `StageBudget`) books `J` J m⁻² under
 `(stage, term)` from inside a running context and takes it out of that
 context's own share, so a context's entry becomes the residual of the
 terms named inside it. The dynamics books `:top_flux`, the heat through
@@ -171,13 +173,13 @@ way; the nesting epic will add `:boundary_heat`, `:relaxation`,
 an error: that heat would have no place in the balance.
 
 **Layers and windows.** Every term is kept per level and per local hour
-of the step's start, so `heat_budget(ledger; window = (20, 5), layer =
+of the step's start, so `heat_budget(case.budgets; window = (20, 5), layer =
 :canopy)` returns the 20:00–05:00 integrals of #238 for the canopy
 (`(0, cfg.canopy_top)`; `NaN`, the default, takes the tallest roof),
 or for `layer = (0, 100)`, `:column`. For a sub-layer
 `(:dynamics, :transport)` is the heat the dynamics carried across the
-layer's top. `ledger_report` prints the whole-run table (column,
-canopy, 0–100 m); `heat_report(ledger; window = (20, 5))` the night one.
+layer's top. `budget_report(case.budgets)` prints the whole-run table (column,
+canopy, 0–100 m); `stage_report(energy(case.budgets); window = (20, 5))` the night one.
 
 In the Alexanderplatz scene the tallest roof is the Fernsehturm, clipped
 at the 200 m domain top (the next tallest roof is 143.75 m, the

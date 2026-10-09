@@ -70,7 +70,7 @@ section of the Berlin case page.
 | θ top | `FluxBC(Γ)` (#254) | Γ = ∂θ/∂z of the initial profile at the top face (`θ_top_gradient`) |
 | surface | the tiled mosaic of #249 | `build_parent_surface` with the child's class-to-surface factory; see *Surface coupling* |
 | radiation | the child's column radiation | `column_radiation!` on the parent's plane-mean column (`stitched_column` with the stretched layer thicknesses), every 600 s; the sun of the child's clock (`solar_position_at`) |
-| ledgers | two `AirHeatLedger`s (#253) | heat of the air ``Σ ρ̄c_pΠ̄θΔV/A`` and water of the air ``Σ ρ̄q_vΔV/A`` (the same meter with Π̄ = c_p = 1) |
+| budgets | two `StageBudget`s (#253; `Aeolus.BudgetSystem`, ONE-c #452) | heat of the air ``Σ ρ̄c_pΠ̄θΔV/A`` and water of the air ``Σ ρ̄q_vΔV/A`` (the same meter with Π̄ = c_p = 1) |
 
 Nothing in the parent is a copy. Four pieces of the child were factored so
 that both domains call one function: the column radiation

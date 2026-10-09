@@ -43,11 +43,11 @@ julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml
 Every `urban` run writes `output/results.toml`: a finite state, the
 surface-energy budget per class, the water residual of the air and the
 air-heat closure, each against
-[`LEDGER_TOLERANCES`](@ref Aeolus.UrbanCase.LEDGER_TOLERANCES)
-(`[ledgers] closed`), every air-heat term in W m⁻² of ground, the heat
+[`BUDGET_TOLERANCES`](@ref Aeolus.UrbanCase.BUDGET_TOLERANCES)
+(`[budgets] closed`), every air-heat term in W m⁻² of ground, the heat
 carried in through the open or nest faces, the mean θ of the lowest
 100 m at the start and the end, and the wall time per simulated hour. A
-run whose ledgers do not close logs a warning; the run itself is not
+run whose budgets do not close logs a warning; the run itself is not
 failed. These are what the by-hand `examples/urban/berlin_checks.jl` and
 `berlin_nest_check.jl` used to compute by running the model themselves.
 
