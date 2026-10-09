@@ -13,7 +13,7 @@
 # 256³ c2r transform under MEASURE segfaults intermittently at 10-14
 # threads (#397), so run `kernels` and `dns` with AEOLUS_FFTW_PLANNER=estimate.
 #
-# flagship: the Berlin case `CaseConfig(:summer)`: 64 × 64 × 64 child, nested
+# flagship: the Berlin case `CaseConfig("…/berlin_summer.toml")`: 64 × 64 × 64 child, nested
 #   in its Aeolus parent (the #265 default), no output file. `nwarm` steps
 #   (compilation), then `nsteps` timed steps. Per step: `step_dt(case)` and
 #   `step_case!` timed around the call (min and mean), and every
@@ -62,7 +62,6 @@ using Printf, Random
 
 const MODE = get(ARGS, 1, "launch")
 # loaded at top level, before the functions that use them run (world age)
-MODE in ("flagship", "child", "launches") && include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
 
 const NT = Threads.nthreads()
@@ -83,9 +82,9 @@ end
 # ---------------------------------------------------------------------------
 
 function bench_berlin(mode; nwarm = 2, nsteps = 9)
-    BC = Main.BerlinCase
+    BC = Aeolus.UrbanCase
     kw = mode == "child" ? (physics = Dict{Symbol,Any}(:nesting => false),) : NamedTuple()
-    cfg = BC.CaseConfig(:summer; output_path = nothing, kw...)
+    cfg = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); output_path = nothing, kw...)
     tb = @elapsed case = BC.build_case(cfg)
     m = case.mesh
     @printf("%s: %d × %d × %d child, -t %d, build %.1f s\n", mode, m.Nx, m.Ny, m.Nz, NT, tb)
@@ -180,8 +179,8 @@ const N_THREADED = Threads.Atomic{Int}(0)
 const N_SERIAL = Threads.Atomic{Int}(0)
 
 function count_launches(; nwarm = 2, nsteps = 9)
-    BC = Main.BerlinCase
-    case = BC.build_case(BC.CaseConfig(:summer; output_path = nothing))
+    BC = Aeolus.UrbanCase
+    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); output_path = nothing))
     for _ in 1:nwarm
         BC.step_case!(case, BC.step_dt(case))
     end

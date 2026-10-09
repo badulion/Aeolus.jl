@@ -1,8 +1,8 @@
-# Berlin (Alexanderplatz), summer: the flagship run of the `berlin` driver
-# (CFG-c, #358). Every option of the Berlin case is written out here; this
-# file is the reference copy, and the other scenarios (berlin_winter.toml,
-# berlin_smoke.toml, berlin_mitte_sample.toml) extend it with their
-# differences only.
+# Berlin (Alexanderplatz), summer: the flagship run of the `urban` driver
+# (the urban run type Aeolus.UrbanCase; CFG-c #358, EX-a #438). Every option
+# of the Berlin case is written out here; this file is the reference copy,
+# and the other scenarios (berlin_winter.toml, berlin_smoke.toml,
+# berlin_mitte_sample.toml) extend it with their differences only.
 #
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
@@ -21,14 +21,14 @@
 # coupling, the nest parent and the nested run) every 30 min of wall clock,
 # the newest 2 kept; `aeolus run <folder> --resume` continues bit for bit
 # (#269).
-# Relative paths are relative to this file. `aeolus options berlin` lists
+# Relative paths are relative to this file. `aeolus options urban` lists
 # every option with its type, units and default.
 
 schema_version = 1
 
 [run]
 # What runs and where its folder goes.
-driver = "berlin"
+driver = "urban"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "summer"
 # the seed of the run's random numbers
@@ -56,7 +56,7 @@ path = "../output"
 # simulated time between output files [s]
 cadence = 1800.0
 # file name of the NetCDF-4 output in [output] path (the run folder's output/
-# under aeolus run, else examples/urban/output/); "none": no NetCDF
+# under aeolus run, else output/ in the working directory); "none": no NetCDF
 netcdf = "alexanderplatz.nc"
 # with the online nest: write the child's boundary slabs at every parent step,
 # the 3-D initial wind and the parent's mean profiles to this dynamic driver
@@ -103,7 +103,7 @@ osm_path = "../data/alexanderplatz_real.osm"
 min_height = 8.0
 # leaf-area index of park cells
 park_lai = 2.5
-# the nest parent's land-use table (data/fetch_berlin_landuse.jl)
+# the nest parent's land-use table (`aeolus preprocess fetch-landuse`)
 landuse = "../data/berlin_landuse_6km.csv"
 
 [clock]

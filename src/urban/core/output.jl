@@ -82,13 +82,13 @@ function open_output!(case; resume::Bool = false)
     end
     mkpath(dirname(cfg.output_path))
     ncf = nc_create(cfg.output_path; attributes = Dict(
-        "title"       => "Aeolus.jl LES — Alexanderplatz, Berlin",
+        "title"       => "Aeolus.jl urban LES — $(cfg.name)",
         "institution" => "Aeolus.jl",
         "source"      => "Boussinesq LES, cut-cell IBM, Era III radiation",
-        "comment"     => @sprintf("Real OSM geometry; scenario %s from %05.2f local on %d-%02d-%02d",
+        "comment"     => @sprintf("scenario %s from %05.2f local on %d-%02d-%02d",
                                   cfg.scenario, cfg.start_h, cfg.date...),
         "couplings"   => join(string.(coupling_name.(case.couplings)), " "),
-        "references"  => "examples/urban/BerlinCase.jl"))
+        "references"  => "src/UrbanCase.jl"))
 
     ncf.dim["x"] = Nx; ncf.dim["y"] = Ny; ncf.dim["z"] = Nz
     ncf.dim["time"] = Inf                     # unlimited record dimension

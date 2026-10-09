@@ -1112,7 +1112,7 @@ export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
 # `advance_channel!` / `run_channel!` do not collide with the Berlin case's
-# `step_case!` / `run_case!` (examples/urban/BerlinCase.jl).
+# `step_case!` / `run_case!` (Aeolus.UrbanCase, not exported).
 export WallBoundedCase, half_channel_case, channel_case,
        advance_channel!, run_channel!, channel_dt,
        channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
@@ -1174,6 +1174,11 @@ export Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time
 export SubfilterHeight, subfilter_height, DynamicRoughness,
        surface_gradient_drag, roughness_surface_drag, roughness_drag_residual, dynamic_alpha,
        update_dynamic_roughness!, with_roughness, dynamic_wall_laws, dynamic_wall_laws!
+
+# EX-a (#438): the urban LES run type (the `urban` run driver; the Berlin
+# case is examples/urban/configs/). A submodule, not exported: its names
+# (CaseConfig, build_case, Ledger, …) stay under Aeolus.UrbanCase.
+include("UrbanCase.jl")
 
 # CFG-b (#357): the command line. `julia --project -m Aeolus <command> …`
 # (Julia ≥ 1.12) calls `Aeolus.main(ARGS)`; `bin/aeolus` does the same on

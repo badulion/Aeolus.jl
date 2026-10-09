@@ -18,7 +18,7 @@
 # over all rings is exactly the multipolygon with its holes (a courtyard,
 # an island in the Spree). The child's OSM file has no relations, so its
 # city is unchanged bit for bit; the 6 km parent extract
-# (`data/fetch_berlin_landuse.jl`) needs them for the Spree, the parks and
+# (`aeolus preprocess fetch-landuse`) needs them for the Spree, the parks and
 # the courtyard blocks.
 #
 # KNOWN DEFECTS, kept so the refactor stays bit-for-bit (the water /

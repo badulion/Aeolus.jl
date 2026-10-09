@@ -5,7 +5,7 @@
 #
 # Acceptance tests of the issue covered here:
 #   * the option reference has one table row per schema option, for every
-#     registered driver (berlin included), counted against the schema;
+#     registered driver (urban included), counted against the schema;
 #   * every option has a doc, every float option has units ("1" for a
 #     dimensionless one), every cross-field check is described in words;
 #   * the input-format pages list every variable of the static and dynamic
@@ -78,17 +78,17 @@ end
         isempty(lines) || @test count(l -> startswith(l, "- "), split(split(md, "## Cross-field checks")[end], '\n')) ==
                                 length(lines)
     end
-    # berlin: one row per option of a resolved RunConfig (its sections hold every option)
-    sch = driver_schema("berlin")
+    # urban (the Berlin configs): one row per option of a resolved RunConfig (its sections hold every option)
+    sch = driver_schema("urban")
     cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "configs", "berlin_smoke.toml"))
-    rows, _ = md_rows(option_reference("berlin"; format = :markdown))
+    rows, _ = md_rows(option_reference("urban"; format = :markdown))
     @test sum(length(rows[s.name]) for s in sch.sections) ==
           sum(length(getfield(getproperty(cfg, Symbol(s.name)), :values)) for s in sch.sections)
     # the per-coupling tables of [physics.options]: aq_chem's default_options, and the parent's schema
     @test "physics.options.aq_chem" in keys(rows) && "nox_street" in rows["physics.options.aq_chem"]
     @test "physics.options.nesting.parent" in keys(rows) && "extent" in rows["physics.options.nesting.parent"]
     # a section asked for alone keeps its sub-tables and leaves the checks out
-    one = option_reference("berlin"; section = "physics", format = :markdown)
+    one = option_reference("urban"; section = "physics", format = :markdown)
     @test occursin("### `[physics.options.aq_chem]`", one) && !occursin("Cross-field checks", one)
 end
 
@@ -131,7 +131,7 @@ end
     @test haskey(cfg.physics.options, "aq_chem")             # the file does set coupling options
     # the walk: a documented option (whatever its value, a table too), a documented
     # sub-table (recursed into), and a key no table documents
-    subs = Dict(x.name => x for x in C._subtables(C._option(C._section(driver_schema("berlin"), "physics"), "options")))
+    subs = Dict(x.name => x for x in C._subtables(C._option(C._section(driver_schema("urban"), "physics"), "options")))
     tbl = Dict{String,Any}("aq_chem" => Dict{String,Any}("background" => Dict{String,Any}("NOx" => 1.0)),
                            "nesting" => Dict{String,Any}("buffer" => 3,
                                          "parent" => Dict{String,Any}("q_surface" => Dict{String,Any}("kind" => "constant", "value" => 1.0),

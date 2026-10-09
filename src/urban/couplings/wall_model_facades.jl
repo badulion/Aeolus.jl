@@ -81,7 +81,7 @@ function init!(c::WallModelFacades, case)
         haskey(so, :sgs) && (c.sgs_walls = attach_immersed_walls!(so.sgs, c.iw))
     end
     nu, nv, nw = immersed_wall_count(c.iw)
-    @debug("facade wall model", subsystem = :berlin, domain = current_domain(), event = :init,
+    @debug("facade wall model", subsystem = :urban, domain = current_domain(), event = :init,
            coupling = :wall_model_facades, u_walls = nu, v_walls = nv, w_walls = nw,
            z0m_wall = c.z0m_wall, z0m_glass = c.z0m_glass)
     return nothing

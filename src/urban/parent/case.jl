@@ -454,7 +454,7 @@ function build_parent(pc::ParentConfig; child = nothing)
                                             :delivered_H => 0.0, :delivered_E => 0.0),
                        0.0, 350.0, 0.0, Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w),
                        0, 0, Float64[], Dict{Symbol,Float64}(), Any[])
-    @debug("Berlin parent built", subsystem = :berlin, domain = current_domain(), event = :parent_built,
+    @debug("Berlin parent built", subsystem = :urban, domain = current_domain(), event = :parent_built,
            grid = (Nx, Ny, Nz), dx = mesh.dx, dz_min = minimum(dzc), dz_max = maximum(dzc),
            surface = pc.surface, sgs = pc.sgs, z_g, zi_obs)
     return pcase
@@ -961,7 +961,7 @@ function run_parent!(p::ParentCase; hours::Real = p.pc.hours, record::Bool = tru
         all(isfinite, interior_view(p.sim.θ)) || error("run_parent!: non-finite θ at t = $(p.sim.t) s")
         if record && abs(p.sim.t / pc.output_period - round(p.sim.t / pc.output_period)) < 1e-6
             r = parent_record!(p)
-            @info("parent at $(round(r.t / 3600; digits = 2)) h", subsystem = :berlin,
+            @info("parent at $(round(r.t / 3600; digits = 2)) h", subsystem = :urban,
                   domain = current_domain(), event = :parent_record, t = r.t,
                   hour = round(r.hour; digits = 2), zi = round(r.zi; digits = 1),
                   zi_parcel = round(r.zi_parcel; digits = 1), theta1 = round(r.θ[1]; digits = 3),

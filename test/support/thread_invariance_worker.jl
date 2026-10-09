@@ -32,7 +32,7 @@
 #               surface / water / air-heat ledgers, the dt sequence and the
 #               pressure-solver iteration counts per step;
 #   flagship    one dt (2 s: two adaptive steps, the second in the parent's
-#               prefetched window when threaded) of the default CaseConfig() (the 64×64×32
+#               prefetched window when threaded) of the Berlin summer config (the 64×64×64
 #               Alexanderplatz run), hashed the same way;
 #   nested      nested runs (KA-f, #297): one-way (also with the parent prefetched, SC-c #403), two-way with a sponge,
 #               two-way with Orlanski outflow faces (16³ parent, 16³
@@ -282,9 +282,8 @@ function section_reductions()
 end
 
 # --------------------------------------------------------------------------
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "..", "examples", "urban", "BerlinCase.jl"))
-const BC = Main.BerlinCase
+const BC = Aeolus.UrbanCase
+include(joinpath(@__DIR__, "berlin_configs.jl"))
 include(joinpath(@__DIR__, "smoke_matrix.jl"))
 
 function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
@@ -348,7 +347,7 @@ function section_smoke()
 end
 
 function section_flagship()
-    cfg = BC.CaseConfig(; output_path = nothing, backend = BACKEND)
+    cfg = BC.CaseConfig(berlin_toml("summer"); output_path = nothing, backend = BACKEND)
     run_hashed!("flagship", cfg; seed = false, nsteps = 1)
 end
 
@@ -547,7 +546,7 @@ function section_columns()
     # emitted terms added), threaded the column_sum launch (a 3-tuple per
     # column, zeros included); equal hashes across the counts mean the two
     # paths give the same fields and totals
-    ac = BC.build_case(BC.CaseConfig(:smoke; output_path = nothing))
+    ac = BC.build_case(BC.CaseConfig(berlin_toml("smoke"); output_path = nothing))
     aq = BC.find_coupling(ac, :aq_chem)
     BC._aq_sun!(aq, ac)
     with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)

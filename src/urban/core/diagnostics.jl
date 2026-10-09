@@ -11,7 +11,7 @@
 #     ([`case_diagnostics`](@ref), [`case_profiles`](@ref));
 #   * the log: one `Info` event per output frame, one per coupling with
 #     diagnostics, and the end-of-run events (run, stage timing, ledgers),
-#     all `subsystem = :berlin` with the values as key-values
+#     all `subsystem = :urban` with the values as key-values
 #     ([`log_frame`](@ref), [`log_run_end`](@ref)).
 #
 # There is no other text: what a frame line shows is what the files hold.
@@ -268,7 +268,7 @@ diagnostic_pairs(ds) =
 """
     log_frame(case)
 
-The log events of an output record, `subsystem = :berlin`:
+The log events of an output record, `subsystem = :urban`:
 
 * `event = :frame`: `frame`, `hour`, `wall` (s since `run_case!`
   started) and the values of [`frame_diagnostics`](@ref);
@@ -280,14 +280,14 @@ evaluated when no logger wants them.
 """
 function log_frame(case)
     clk = case.clock
-    @info("frame $(clk.nrecord) at $(round(clk.hour; digits = 2)) h", subsystem = :berlin,
+    @info("frame $(clk.nrecord) at $(round(clk.hour; digits = 2)) h", subsystem = :urban,
           domain = current_domain(), event = :frame, frame = clk.nrecord,
           wall = round(time() - clk.t_wall0; digits = 1),
           diagnostic_pairs(frame_diagnostics(case))...)
     for c in case.couplings
         ds = diagnostics(c, case)
         isempty(ds) && continue
-        @info(string(coupling_name(c)), subsystem = :berlin, domain = current_domain(),
+        @info(string(coupling_name(c)), subsystem = :urban, domain = current_domain(),
               event = :coupling, coupling = coupling_name(c), diagnostic_pairs(ds)...)
     end
     return nothing
@@ -296,7 +296,7 @@ end
 """
     log_run_end(case; nsteps, t_wall)
 
-The end-of-run events, `Info`, `subsystem = :berlin`:
+The end-of-run events, `Info`, `subsystem = :urban`:
 
 * `event = :run_end`: `steps`, `wall` (s), `records`, `output` (the
   NetCDF path or `""`), `size_mb`, the peak heat island `peak_uhi`
@@ -317,27 +317,27 @@ function log_run_end(case; nsteps::Integer, t_wall::Real)
     out = cfg.output_path === nothing ? "" : cfg.output_path
     @info(isempty(out) ? "ran $nsteps steps in $(round(t_wall; digits = 1)) s (no output file)" :
                          "ran $nsteps steps in $(round(t_wall; digits = 1)) s, $(case.clock.nrecord) records",
-          subsystem = :berlin, domain = current_domain(), event = :run_end, steps = nsteps,
+          subsystem = :urban, domain = current_domain(), event = :run_end, steps = nsteps,
           wall = round(t_wall; digits = 2), records = case.clock.nrecord, output = out,
           size_mb = isempty(out) || !isfile(out) ? 0.0 : round(filesize(out) / 1e6; digits = 2),
           peak_uhi = round(maximum(case.bus.Ts) - minimum(case.bus.Ts); sigdigits = 4),
           max_div = max_divergence(case.sim))
     n = max(case.clock.n, 1)
     for ((S, name), t) in sort!(collect(case.timing); by = last, rev = true)
-        @info("timing $S/$name", subsystem = :berlin, domain = current_domain(), event = :timing,
+        @info("timing $S/$name", subsystem = :urban, domain = current_domain(), event = :timing,
               stage = S, entry = name, seconds = round(t; digits = 3),
               ms_per_step = round(1e3 * t / n; sigdigits = 4))
     end
     r4(x) = round(x; sigdigits = 4)
     for r in surface_budget(l)
-        @info("surface energy ledger: $(r.name)", subsystem = :berlin, domain = current_domain(),
+        @info("surface energy ledger: $(r.name)", subsystem = :urban, domain = current_domain(),
               event = :ledger, ledger = :surface, class = r.name, ncol = r.ncol, Rn = r4(r.Rn),
               H = r4(r.H), LE = r4(r.LE), G = r4(r.G), dS = r4(r.dS), residual = r4(r.residual),
               (t => r4(v) for (t, v) in sort!(collect(r.extras)))..., closure = r.closure)
     end
     if l.nsteps > 0
         w = water_budget(l)
-        @info("water ledger", subsystem = :berlin, domain = current_domain(), event = :ledger,
+        @info("water ledger", subsystem = :urban, domain = current_domain(), event = :ledger,
               ledger = :water, storage = w.storage, (t => v for (t, v) in sort!(collect(w.sources)))...,
               residual = w.residual)
     end
@@ -351,12 +351,12 @@ function log_run_end(case; nsteps::Integer, t_wall::Real)
         el = bs[1].elapsed
         if el > 0
             for (x, b) in zip(layers, bs)
-                @info("air-heat ledger: $(lname(x))", subsystem = :berlin, domain = current_domain(),
+                @info("air-heat ledger: $(lname(x))", subsystem = :urban, domain = current_domain(),
                       event = :ledger, ledger = :heat, layer = lname(x), elapsed = el,
                       storage = r4(b.storage / el), closure = b.closure / el)
             end
             for key in sort!(unique(vcat([collect(keys(b.terms)) for b in bs]...)); by = _heat_key_order)
-                @info("air-heat term $(key[1])/$(key[2])", subsystem = :berlin,
+                @info("air-heat term $(key[1])/$(key[2])", subsystem = :urban,
                       domain = current_domain(), event = :ledger, ledger = :heat_term,
                       term = "$(key[1])/$(key[2])",
                       (lname(x) => r4(get(b.terms, key, 0.0) / el) for (x, b) in zip(layers, bs))...)

@@ -8,7 +8,7 @@
 # area fraction:
 #
 #   * fractions — from `data/berlin_landuse_6km.csv` (the OSM extract of
-#     `data/fetch_berlin_landuse.jl`: the child's classifier and
+#     `aeolus preprocess fetch-landuse`: the child's classifier and
 #     rasteriser on the child's grid, coarse-grained; cropped and
 #     coarsened to the parent grid by `aeolus preprocess static`, which
 #     writes them to the parent's static driver, CFG-f #361), and, under the
@@ -31,12 +31,9 @@
 # Nothing here is coupled to a 3-D run yet: the parent case (N-parent-e,
 # #259) builds it and the nest (N-berlin-nest, #265) makes it default.
 
-using Aeolus.SurfaceTiles: SurfaceMosaic, BlendedMosaic, AbstractBlendingHeight,
+using ..Aeolus.SurfaceTiles: SurfaceMosaic, BlendedMosaic, AbstractBlendingHeight,
                            class_fractions, macdonald_roughness, mosaic_fractions,
                            last_tile_fluxes
-
-"The committed parent land-use table (`data/fetch_berlin_landuse.jl`)."
-const PARENT_LANDUSE_CSV = joinpath(DATA_DIR, "berlin_landuse_6km.csv")
 
 "Classes of the built fabric: their tiles take the unresolved-building roughness and displacement."
 is_built_class(c::Integer) = c == SURFACE_STREET || c == SURFACE_ROOF || c == SURFACE_WALL || c > SURFACE_WALL
@@ -69,15 +66,19 @@ struct ParentLanduse
     header::Vector{String}
 end
 
+read_parent_landuse(::Nothing) =
+    error("[preprocess] landuse is \"none\": the tiled parent surface needs a land-use table " *
+          "(`aeolus preprocess fetch-landuse`) or [geometry] parent_static")
+
 """
-    read_parent_landuse(path = PARENT_LANDUSE_CSV) -> ParentLanduse
+    read_parent_landuse(path) -> ParentLanduse
 
 Read the parent land-use CSV (`I,J,n1..n5,lambda_p,lambda_f,h_mean,h_max`
 with `#` provenance lines; the grid is taken from the `# parent grid:`
 line). Checks that every cell appears once, that the counts of every
 cell add up to `r²` and that `lambda_p = n2/r²`.
 """
-function read_parent_landuse(path::AbstractString = PARENT_LANDUSE_CSV)
+function read_parent_landuse(path::AbstractString)
     lines = readlines(path)
     header = [l for l in lines if startswith(l, "#")]
     g = nothing
@@ -261,7 +262,7 @@ struct ParentSurface
 end
 
 """
-    build_parent_surface(case, pl = read_parent_landuse(); child = case,
+    build_parent_surface(case, pl = read_parent_landuse(case.cfg.landuse); child = case,
                          columns = :all, z_centres = 12.5:25:2987.5,
                          window = 8, blending = nothing,
                          macdonald = (;)) -> ParentSurface
@@ -311,7 +312,7 @@ Reference: Kanda, M., Kanega, M., Kawai, T., Moriwaki, R. & Sugawara, H.
 (2007). Roughness lengths for momentum and heat derived from outdoor
 urban scale models. *J. Appl. Meteorol. Climatol.*, 46, 1067-1079.
 """
-function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse();
+function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse(case.cfg.landuse);
                               child = case, columns = :all,
                               z_centres = 12.5:25.0:2987.5, window::Integer = 8,
                               blending = nothing, macdonald::NamedTuple = (;),

@@ -1,10 +1,10 @@
-# The `berlin` run driver (CFG-c, #358): the configuration schema of the
-# Berlin case, its conversion to the CaseConfig that build_case consumes,
-# and the run-driver contract of CFG-b (#357), so that
+# The `urban` run driver (CFG-c #358, EX-a #438): the configuration
+# schema of the urban case, its conversion to the CaseConfig that
+# build_case consumes, and the run-driver contract of CFG-b (#357), so that
 #
 #   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml [--set clock.nsteps=…]
 #
-# runs the flagship. Included last in BerlinCase.jl: the schema is built
+# runs the Berlin flagship. Included last in UrbanCase.jl: the schema is built
 # from the coupling registry (every slot, provider, addon and
 # default_options) and from the parent's configuration.
 #
@@ -15,31 +15,29 @@
 # type of its default), so no second schema has to be kept in step with
 # the coupling files.
 
-using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Option, OpenTable,
+using ..Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Option, OpenTable,
                      Optional, OneOf, Path, section, option!, config_origin, config_schema, config_sources
-using Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir,
+using ..Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir,
                  resume!, maybe_checkpoint!
 using Dates: Date, year, month, day
 
-"Directory of the shipped Berlin configs (`extends = \"berlin_summer.toml\"` resolves here)."
-const CONFIG_DIR = joinpath(URBAN_DIR, "configs")
-
 """
-    BerlinDriver()
+    UrbanDriver()
 
-The `berlin` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
-`[run] driver = "berlin"`. `build` makes the [`CaseConfig`](@ref) of the
+The `urban` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
+`[run] driver = "urban"`. `build` makes the [`CaseConfig`](@ref) of the
 config and [`build_case`](@ref)s it; `run!` runs it with
 [`run_case!`](@ref) under the run monitor (the diagnostics CSV, the
 blowup guard), writing the NetCDF output into the run folder's `output/`
-unless `[output] path` says otherwise. `aeolus options berlin` prints
-the schema. Shipped configs: `examples/urban/configs/` ([`SCENARIO_FILES`](@ref)).
+unless `[output] path` says otherwise, and the run's checks
+([`run_results`](@ref): the ledgers' closure) into its `results.toml`.
+`aeolus options urban` prints the schema. Example configurations: the
+Berlin case, `examples/urban/configs/berlin_*.toml`.
 """
-struct BerlinDriver <: AbstractRunDriver end
+struct UrbanDriver <: AbstractRunDriver end
 
-Config.driver_name(::BerlinDriver) = "berlin"
-Config.config_dir(::BerlinDriver) = CONFIG_DIR
-Config.driver_defaults(::BerlinDriver) = ("output.cadence" => 1800.0, "run.name" => "alexanderplatz")
+Config.driver_name(::UrbanDriver) = "urban"
+Config.driver_defaults(::UrbanDriver) = ("output.cadence" => 1800.0, "run.name" => "urban")
 
 # ---------------------------------------------------------------------------
 # CaseConfig fields ↔ schema options
@@ -48,7 +46,7 @@ Config.driver_defaults(::BerlinDriver) = ("output.cadence" => 1800.0, "run.name"
 """
     CASE_FIELDS
 
-Every [`CaseConfig`](@ref) field and the dotted keys of the `berlin`
+Every [`CaseConfig`](@ref) field and the dotted keys of the `urban`
 schema it is made of (`physics` is every key of `[physics]` but
 `options`). The options of the schema that make a `CaseConfig` are
 exactly the union of these keys, each used once (`test/config_berlin.jl`).
@@ -588,7 +586,7 @@ function _option_default_text(v)
 end
 
 """
-    berlin_options_reference() -> Vector{Section}
+    urban_options_reference() -> Vector{Section}
 
 The documented sub-tables of `[physics.options]` for the option
 reference: one per coupling with options, `[physics.options.<name>]`,
@@ -596,7 +594,7 @@ listing its `default_options` (key, TOML form, default; generated, so it
 cannot drift), and `[physics.options.nesting.parent]`, the parent's
 schema ([`parent_section`](@ref)).
 """
-function berlin_options_reference()
+function urban_options_reference()
     out = Section[]
     for C in sort(REGISTRY; by = C -> String(coupling_name(C)))
         d = default_options(C)
@@ -614,7 +612,7 @@ function berlin_options_reference()
     return out
 end
 
-function Config.driver_sections(::BerlinDriver)
+function Config.driver_sections(::UrbanDriver)
     run = section("run") do s
         option!(s, "scenario", Symbol; default = :summer,
                 doc = "the scenario label (summer, winter, …): the output's comment; winter selects the subarctic-winter humidity of the column radiation")
@@ -647,13 +645,16 @@ function Config.driver_sections(::BerlinDriver)
                 doc = "wall facets per cell face of the radiosity scene")
     end
     pre = section("preprocess"; doc = "The sources of the static drivers (`aeolus preprocess static`, or in memory with static = \"none\").") do s
-        option!(s, "osm_path", Path; default = joinpath(DATA_DIR, "alexanderplatz_real.osm"),
-                doc = "the OpenStreetMap file of the buildings, parks and water")
+        option!(s, "osm_path", Optional{Path};
+                doc = "the source of the buildings, parks and water: an OpenStreetMap XML file (projected about " *
+                      "[geometry] lat0/lon0), or a GeoJSON file in metres in the mesh frame (`.geojson`); " *
+                      "\"none\": no source (a static driver is then required)")
         option!(s, "min_height", Float64; default = 8.0, range = (0, Inf), units = "m",
                 doc = "buildings lower than this are dropped")
         option!(s, "park_lai", Float64; units = "m2 m-2", default = 2.5, range = (0, Inf), doc = "leaf-area index of park cells")
-        option!(s, "landuse", Path; default = joinpath(DATA_DIR, "berlin_landuse_6km.csv"),
-                doc = "the nest parent's land-use table (data/fetch_berlin_landuse.jl)")
+        option!(s, "landuse", Optional{Path};
+                doc = "the nest parent's land-use table (`aeolus preprocess fetch-landuse`); \"none\": no table " *
+                      "(a tiled parent surface then needs [geometry] parent_static)")
     end
     clock = section("clock"; doc = "Date, start and steps.") do s
         option!(s, "date", Date; default = Date(2019, 6, 29),
@@ -713,7 +714,7 @@ function Config.driver_sections(::BerlinDriver)
                       "compared with observations (the inflow fetch, #268)")
     end
     ini = section("initial"; doc = "The initial state: the sounding, or the idealised profile.") do s
-        option!(s, "sounding", Optional{Path}; default = joinpath(DATA_DIR, "lindenberg_10393_20190629.csv"),
+        option!(s, "sounding", Optional{Path};
                 doc = "radiosonde CSV of the initial θ(z), qv(z) and surface pressure; \"none\": the idealised profile below")
         option!(s, "dynamic", Optional{Path};
                 doc = "the dynamic driver (CFG-g #362, `aeolus preprocess dynamic`): a sounding driver (--from-sounding), " *
@@ -762,7 +763,7 @@ function Config.driver_sections(::BerlinDriver)
             option!(s, String(coupling_name(C)), Bool; default = is_default(C),
                     doc = "the additive coupling $(coupling_name(C)) on or off")
         end
-        option!(s, "options", OpenTable(_options_problems; reference = berlin_options_reference);
+        option!(s, "options", OpenTable(_options_problems; reference = urban_options_reference);
                 doc = "[physics.options.<coupling>]: that coupling's options over its default_options " *
                       "(the keys are closed, a value has its default's type); " *
                       "[physics.options.nesting.parent] is the parent's schema")
@@ -771,12 +772,12 @@ function Config.driver_sections(::BerlinDriver)
 end
 
 """
-    berlin_physics(cfg::RunConfig) -> Dict{Symbol,Any}
+    urban_physics(cfg::RunConfig) -> Dict{Symbol,Any}
 
 The `[physics]` selection of `cfg` that differs from the registry
 defaults (what `CaseConfig.physics` holds).
 """
-function berlin_physics(cfg::RunConfig)
+function urban_physics(cfg::RunConfig)
     p = cfg.physics
     out = Dict{Symbol,Any}()
     for (sl, _) in slot_providers()
@@ -791,11 +792,11 @@ function berlin_physics(cfg::RunConfig)
     return out
 end
 
-function _berlin_checks(cfg::RunConfig)
+function _urban_checks(cfg::RunConfig)
     e = ConfigError[]
     # the declared incompatibilities, with their reasons
     sel = try
-        selected_couplings((physics = berlin_physics(cfg), options = Dict{Symbol,Any}()))
+        selected_couplings((physics = urban_physics(cfg), options = Dict{Symbol,Any}()))
     catch err
         err isa ErrorException || rethrow()
         push!(e, ConfigError("physics", err.msg))
@@ -826,39 +827,38 @@ function _berlin_checks(cfg::RunConfig)
     icore = findfirst(C -> slot(C) === :core, sel)
     (ckon && icore !== nothing && provider(sel[icore]) !== :boussinesq) &&
         push!(e, ConfigError("checkpoint.every_steps",
-            "checkpoints of the Berlin case need the Boussinesq core (physics.core = \"boussinesq\"); " *
+            "checkpoints of the urban case need the Boussinesq core (physics.core = \"boussinesq\"); " *
             "the :$(provider(sel[icore])) core has none yet: keep [checkpoint] off"))
     return e
 end
 
-const _BERLIN_CHECKS_DOC = """
+const _URBAN_CHECKS_DOC = """
 the selected couplings are compatible (the declared incompatibilities of `[physics]`, with their reasons)
 every cadence an enabled coupling needs is set, and a cadence a file sets is used by an enabled coupling
 `dynamics.theta_top` is `"initial_gradient"`, `"noflux"` or a gradient in K/m
 `[checkpoint]` needs the Boussinesq core (the whole case is checkpointed with its fields, #269)"""
 
-Config.driver_checks(::BerlinDriver) = Any[_BERLIN_CHECKS_DOC => _berlin_checks]
+Config.driver_checks(::UrbanDriver) = Any[_URBAN_CHECKS_DOC => _urban_checks]
 
-const _BERLIN_SCHEMA = Ref{Any}(nothing)
+const _URBAN_SCHEMA = Ref{Any}(nothing)
 
 """
-    berlin_schema() -> ConfigSchema
+    urban_schema() -> ConfigSchema
 
-The schema of the `berlin` driver of this module (registered when
-BerlinCase.jl is loaded).
+The schema of the `urban` driver (registered when Aeolus is loaded).
 """
-berlin_schema() = _BERLIN_SCHEMA[]
+urban_schema() = _URBAN_SCHEMA[]
 
-"The all-defaults `RunConfig` of the `berlin` driver (environment variables fill their defaults)."
-default_run_config() = load_run_config(IOBuffer("[run]\ndriver = \"berlin\"\n"); schema = berlin_schema())
+"The all-defaults `RunConfig` of the `urban` driver (environment variables fill their defaults)."
+default_run_config() = load_run_config(IOBuffer("[run]\ndriver = \"urban\"\n"); schema = urban_schema())
 
 # ---------------------------------------------------------------------------
 # RunConfig → CaseConfig
 # ---------------------------------------------------------------------------
 
 function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = nothing)
-    config_schema(cfg).name == "berlin" ||
-        throw(ArgumentError("CaseConfig: the config is for the driver \"$(config_schema(cfg).name)\", not \"berlin\""))
+    config_schema(cfg).name in ("urban", "urban_parent") ||
+        throw(ArgumentError("CaseConfig: the config is for the driver \"$(config_schema(cfg).name)\", not \"urban\""))
     r, g, geo, c, dyn, b, ini, out = cfg.run, cfg.grid, cfg.geometry, cfg.clock, cfg.dynamics,
                                       cfg.boundaries, cfg.initial, cfg.output
     pre = cfg.preprocess
@@ -867,7 +867,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
     cad[:output] = out.cadence
     probs, options = options_value(cfg.physics.options)
     isempty(probs) || throw(ConfigError("physics.options", join(probs, "; ")))
-    dir = out.path !== nothing ? out.path : run_output !== nothing ? run_output : joinpath(URBAN_DIR, "output")
+    dir = out.path !== nothing ? out.path : run_output !== nothing ? run_output : joinpath(pwd(), "output")
     d = c.date
     return CaseConfig(Symbol(r.name), r.scenario, g.size, g.extent, g.halo,
                       geo.static, geo.parent_static, geo.lat0, geo.lon0, geo.offset, geo.elevation,
@@ -878,10 +878,39 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
                       b.lateral, b.outflow, b.boundary_frame, b.theta_relaxation, b.analysis_buffer,
                       ini.sounding, ini.dynamic, ini.theta_surface, ini.theta_inversion_z, ini.theta_lapse, ini.u0,
                       ini.qv0, ini.qv_scale, ini.ts0, ini.ts_water_offset, ini.t_soil0, ini.p_surface,
-                      berlin_physics(cfg), options,
+                      urban_physics(cfg), options,
                       cfg.ledger.canopy_top,
                       out.netcdf === nothing ? nothing : joinpath(dir, out.netcdf), out.child_boundaries,
                       CPUBackend(; serial = r.serial))
+end
+
+"""
+    CaseConfig(path::AbstractString; overrides = String[], kwargs...)
+
+Load the run configuration `path` (a TOML file of the `urban` driver,
+`overrides` as `--set` gives them) and convert it ([`CaseConfig`](@ref)`(cfg::RunConfig)`),
+then set `kwargs` on top: `physics` merges over the file's selection,
+`options` per coupling over the file's options (the nest parent of a
+file survives a caller's options for another coupling), any other field
+replaces the file's value.
+"""
+function CaseConfig(path::AbstractString; overrides = String[], kwargs...)
+    c = CaseConfig(load_run_config(path; overrides = overrides, schema = urban_schema()))
+    for (k, v) in kwargs
+        hasfield(CaseConfig, k) || throw(ArgumentError("CaseConfig has no field $k"))
+        if k === :options
+            o = copy(c.options)
+            for (name, nt) in v
+                o[name] = haskey(o, name) ? merge(o[name], nt) : nt
+            end
+            c.options = o
+        elseif k === :physics
+            c.physics = merge(c.physics, Dict{Symbol,Any}(v))
+        else
+            setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
+        end
+    end
+    return c
 end
 
 # ---------------------------------------------------------------------------
@@ -889,13 +918,13 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    BerlinRun
+    UrbanRun
 
-What the `berlin` driver builds: the `cfg` (`RunConfig`) and the built
+What the `urban` driver builds: the `cfg` (`RunConfig`) and the built
 [`Case`](@ref) (`case`, `nothing` until `run!` builds it into the run
 folder).
 """
-mutable struct BerlinRun
+mutable struct UrbanRun
     cfg::RunConfig
     case::Any
 end
@@ -903,7 +932,7 @@ end
 # The case is built in run!: its NetCDF output goes into the run folder,
 # which build does not know yet. A missing static driver is reported here,
 # before a run folder exists, with the command that makes it.
-function Config.build(::BerlinDriver, cfg::RunConfig)
+function Config.build(::UrbanDriver, cfg::RunConfig)
     cc = CaseConfig(cfg)
     src = first(config_sources(cfg)["files"])
     for (f, key) in ((cc.static, "geometry.static"), (cc.parent_static, "geometry.parent_static"))
@@ -919,26 +948,26 @@ function Config.build(::BerlinDriver, cfg::RunConfig)
                                              "  julia --project -m Aeolus preprocess dynamic $how\n" *
                                              "or set it to \"none\" to read [initial] sounding in memory"))
     end
-    return BerlinRun(cfg, nothing)
+    return UrbanRun(cfg, nothing)
 end
 
 """
-    preprocess_static(::BerlinDriver, cfg; out = nothing, parent_out = nothing) -> Vector{String}
+    preprocess_static(::UrbanDriver, cfg; out = nothing, parent_out = nothing) -> Vector{String}
 
-`aeolus preprocess static berlin_<s>.toml`: write the child's static
+`aeolus preprocess static <config.toml>`: write the child's static
 driver (`[geometry] static`, or `out`) from `[preprocess] osm_path`
-([`berlin_static_inputs`](@ref)) and, for a nested case with a tiled
+([`urban_static_inputs`](@ref)) and, for a nested case with a tiled
 parent surface, the parent's (`[geometry] parent_static`, or
 `parent_out`) from `[preprocess] landuse`
 ([`parent_landuse_source`](@ref)), each with its source hashed.
 """
-function Config.preprocess_static(::BerlinDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
+function Config.preprocess_static(::UrbanDriver, cfg::RunConfig; out = nothing, parent_out = nothing)
     cc = CaseConfig(cfg)
     files = String[]
     child = out !== nothing ? abspath(out) : cc.static
     child === nothing && throw(ArgumentError("[geometry] static is \"none\": pass --out file.nc"))
     mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
-    write_static_driver(child, berlin_static_inputs(cc, mesh); source = cc.osm_path)
+    write_static_driver(child, urban_static_inputs(cc, mesh); source = cc.osm_path)
     push!(files, child)
     if case_nested(cc)
         pc = nest_parent_config(cc)
@@ -954,9 +983,9 @@ function Config.preprocess_static(::BerlinDriver, cfg::RunConfig; out = nothing,
 end
 
 """
-    preprocess_dynamic(::BerlinDriver, cfg; from, out = nothing, child = nothing) -> Vector{String}
+    preprocess_dynamic(::UrbanDriver, cfg; from, out = nothing, child = nothing) -> Vector{String}
 
-`aeolus preprocess dynamic --from-sounding berlin_<s>.toml`: write the
+`aeolus preprocess dynamic --from-sounding <config.toml>`: write the
 sounding driver (`[initial] dynamic`, or `out`) of the case from
 `[initial] sounding` ([`case_dynamic_inputs`](@ref): the height-time
 tables, times since the case start, and the ground pressure), the CSV
@@ -966,10 +995,10 @@ hashed; for an open, non-nested case (`boundaries.lateral = "open"`,
 `[clock] nsteps` with the child's boundary slabs recorded at every parent
 step (`[output] child_boundaries`, or `out`): the parent-made driver an
 offline child (`parent_driver = "offline"`, `[initial] dynamic` = this
-file) replays. The Berlin parent is a section of the child's config
+file) replays. The nest parent is a section of the child's config
 (`[physics.options.nesting.parent]`), so there is no separate `child`.
 """
-function Config.preprocess_dynamic(::BerlinDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
+function Config.preprocess_dynamic(::UrbanDriver, cfg::RunConfig; from::Symbol, out = nothing, child = nothing)
     cc = CaseConfig(cfg)
     mesh = RegularGrid(; size = cc.size, extent = cc.extent, halo = cc.halo)
     if from === :sounding
@@ -995,7 +1024,7 @@ function Config.preprocess_dynamic(::BerlinDriver, cfg::RunConfig; from::Symbol,
         return [path]
     end
     from === :parent || throw(ArgumentError("preprocess_dynamic: from = :$from; use :sounding or :parent"))
-    child === nothing || throw(ArgumentError("the Berlin nest's parent is the [physics.options.nesting.parent] " *
+    child === nothing || throw(ArgumentError("the nest's parent is the [physics.options.nesting.parent] " *
                                              "section of the child's config: give the child config alone, without --child"))
     case_nested(cc) || throw(ArgumentError("--from-parent: the case is not nested (physics.nesting = false)"))
     nest_offline(cc) && throw(ArgumentError("--from-parent: the case replays its parent (parent_driver = \"offline\"); " *
@@ -1008,7 +1037,7 @@ function Config.preprocess_dynamic(::BerlinDriver, cfg::RunConfig; from::Symbol,
     return [path]
 end
 
-function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck::CheckpointSchedule;
+function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::CheckpointSchedule;
                                  callback = nothing)
     cc = CaseConfig(r.cfg; run_output = output_dir(rf))
     case = build_case(cc)
@@ -1020,7 +1049,10 @@ function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck
     resumed = resume!(ck, case.sim; components = comps,
                       validate = (d, path) -> check_case_checkpoint(case, d, path)) !== nothing
     n0 = case.clock.n
+    θ_start = mean_θ_below(case, RESULTS_LAYER)
+    t_first = Ref(NaN)
     ckcb = (c, n) -> begin
+        isnan(t_first[]) && (t_first[] = time())
         maybe_checkpoint!(ck, case.sim; step = n, components = comps)
         callback === nothing || callback(r, n)
     end
@@ -1028,6 +1060,7 @@ function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck
     # timing and every coupling's (core/diagnostics.jl, #338); explicit rows,
     # one per case step (a case step may be several core steps; the step
     # record sums them, #336)
+    t0, sim_t0 = time(), case.sim.t
     with_monitor(case.sim; run = rf, t_end = t_end, cadence = r.cfg.logging.diagnostics_cadence,
                  diagnostics = case_diagnostics(case), profiles = case_profiles(case),
                  attach = false, step0 = n0) do m
@@ -1035,14 +1068,124 @@ function Aeolus.Simulations.run!(::BerlinDriver, r::BerlinRun, rf::RunFolder, ck
                   callback = ckcb)
         check_blowup!(m.guard, case.sim; step = case.clock.n, force = true)
     end
-    case.clock.blowup && error("the Berlin case blew up at step $(case.clock.n)")
+    case.clock.blowup && error("the urban case blew up at step $(case.clock.n)")
+    res = run_results(case; θ_start = θ_start, wall = time() - t0, wall_first_step = t_first[] - t0,
+                      simulated = case.sim.t - sim_t0, steps = case.clock.n - n0)
+    Config.write_results(rf, res)
+    led = res["ledgers"]
+    @info("ledgers " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
+          event = :results, surface = led["surface_max_abs_closure"], water = led["water_residual"],
+          air_heat = led["air_heat_closure"])
+    led["closed"] || @warn("the case's ledgers do not close within their tolerances (results.toml)",
+                           subsystem = :urban, domain = current_domain(), event = :ledgers_open)
     return r
+end
+
+"Height (m) below which [`run_results`](@ref) reports the fluid's mean θ."
+const RESULTS_LAYER = 100.0
+
+"""
+    LEDGER_TOLERANCES
+
+What [`run_results`](@ref) calls a closed ledger: the surface-energy
+closure of every class below `surface` W m⁻² (mean over the run;
+measured ≲ 3e-10 on the smoke runs), the water residual of the air below
+`water` kg m⁻² (measured ≲ 3e-16), the air-heat closure below `air_heat`
+W m⁻² of ground (mean over the run), with nothing booked as
+`(:core, :unattributed)` or `(:output, :between_steps)` (#253).
+"""
+const LEDGER_TOLERANCES = (surface = 1e-6, water = 1e-12, air_heat = 1e-10)
+
+"""
+    mean_θ_below(case, zmax) -> Float64
+
+The mean θ (K) of the fluid cells of the child whose centres are below
+`zmax` (m); `NaN` when there are none.
+"""
+function mean_θ_below(case, zmax)
+    m, θ = case.mesh, interior_view(case.sim.θ)
+    mask = case.geom.sm.mask
+    s = 0.0; n = 0
+    for k in 1:m.Nz
+        zc = (k - 0.5) * m.dz
+        zc < zmax || break
+        for j in 1:m.Ny, i in 1:m.Nx
+            mask[m.Hx+i, m.Hy+j, m.Hz+k] && continue
+            s += θ[i, j, k]; n += 1
+        end
+    end
+    return n == 0 ? NaN : s / n
+end
+
+"""
+    run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, simulated = NaN, steps = 0)
+        -> Dict{String,Any}
+
+The checks and summary numbers of a finished run, what the `urban`
+driver writes to the run folder's `output/results.toml` (EX-a, #438;
+they were the by-hand checks of the Berlin example):
+
+* `finite`: every interior value of u, v, w, θ and every tracer, and the
+  surface temperature, is finite;
+* `[ledgers]`: the surface-energy budget per class (`[ledgers.surface.<class>]`:
+  Rn, H, LE, G, dS and the closure, W m⁻², mean over the run), its
+  largest |closure|, the water residual of the air (kg m⁻²), the
+  air-heat closure (W m⁻² of ground), whether anything changed θ
+  unattributed, and `closed` against [`LEDGER_TOLERANCES`](@ref);
+* `[air_heat]`: every term of the air-heat ledger of the whole column,
+  `"<stage>.<name>"` in W m⁻² of ground (mean over the run; the nest's
+  or open faces' boundary terms among them), and the storage;
+* `[open_boundary_heat]` (a nested or open case): the heat carried in
+  through the four sides and the top (W m⁻² of ground, mean over the run);
+* `theta_mean_below_100m_start` / `_end` (K, [`mean_θ_below`](@ref));
+* `[timing]`: steps, simulated seconds, wall seconds of the run, of its
+  first step (compilation), wall seconds per simulated hour without the
+  first step, and, nested, the wall seconds of the parent's steps.
+
+Reading the state only: computing it changes nothing.
+"""
+function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, simulated = NaN, steps = 0)
+    l, sim, bus = case.ledger, case.sim, case.bus
+    tol = LEDGER_TOLERANCES
+    finite = all(f -> all(isfinite, interior_view(f)), (sim.u, sim.v, sim.w, sim.θ)) &&
+             all(t -> all(isfinite, interior_view(t.field)), case.tracers.list) && all(isfinite, bus.Ts)
+    rows = surface_budget(l)
+    surf = Dict{String,Any}(r.name => Dict{String,Any}("Rn" => r.Rn, "H" => r.H, "LE" => r.LE, "G" => r.G,
+                                                       "dS" => r.dS, "closure" => r.closure, "columns" => r.ncol)
+                            for r in rows)
+    smax = isempty(rows) ? 0.0 : maximum(abs(r.closure) for r in rows)
+    w = water_budget(l)
+    hb = heat_budget(l)
+    heat = hb.elapsed > 0 ? hb.closure / hb.elapsed : 0.0
+    unattributed = haskey(hb.terms, (:core, :unattributed)) || haskey(hb.terms, (:output, :between_steps))
+    closed = smax < tol.surface && abs(w.residual) < tol.water && abs(heat) <= tol.air_heat && !unattributed
+    ledgers = Dict{String,Any}("surface" => surf, "surface_max_abs_closure" => smax,
+                               "water_residual" => w.residual, "air_heat_closure" => heat,
+                               "unattributed" => unattributed, "closed" => closed,
+                               "tolerances" => Dict{String,Any}(string(k) => v for (k, v) in pairs(tol)))
+    air = Dict{String,Any}("$(k[1]).$(k[2])" => (hb.elapsed > 0 ? v / hb.elapsed : 0.0) for (k, v) in hb.terms)
+    air["storage"] = hb.elapsed > 0 ? hb.storage / hb.elapsed : 0.0
+    sim_h = simulated / 3600
+    rest = steps > 1 && sim_h > 0 ? (wall - wall_first_step) / (sim_h * (steps - 1) / steps) : NaN
+    timing = Dict{String,Any}("steps" => steps, "simulated_s" => simulated, "wall_s" => wall,
+                              "wall_first_step_s" => wall_first_step, "wall_s_per_simulated_h" => rest)
+    nest = find_coupling(case, :nesting)
+    nest === nothing || nest.parent === nothing || (timing["wall_parent_s"] = nest.wall_parent)
+    out = Dict{String,Any}("finite" => finite, "ledgers" => ledgers, "air_heat" => air,
+                           "theta_mean_below_100m_start" => θ_start,
+                           "theta_mean_below_100m_end" => mean_θ_below(case, RESULTS_LAYER),
+                           "timing" => timing)
+    ob = case.open
+    if ob !== nothing && hb.elapsed > 0
+        out["open_boundary_heat"] = Dict{String,Any}("lateral" => ob.lateral / hb.elapsed, "top" => ob.top / hb.elapsed)
+    end
+    return out
 end
 
 """
     case_state(case) -> NamedTuple
 
-The prognostic state of a built Berlin case, interior cells as
+The prognostic state of a built urban case, interior cells as
 `Array{Float64}`: the child's `u, v, w, p, θ`, every tracer, the surface
 temperature `Ts`, and, with the Aeolus nest parent, the parent's
 `parent_u, …, parent_θ` (and `parent_qv`). What the bitwise round trip
@@ -1069,7 +1212,7 @@ function case_state(case)
     return (; out...)
 end
 
-Config.state_fields(r::BerlinRun) = case_state(r.case)
+Config.state_fields(r::UrbanRun) = case_state(r.case)
 
-register_driver!(BerlinDriver())
-_BERLIN_SCHEMA[] = Config.driver_schema("berlin")
+register_driver!(UrbanDriver())
+_URBAN_SCHEMA[] = Config.driver_schema("urban")

@@ -32,8 +32,6 @@ using Aeolus.IBM: add_ibm_penalty!
 using Aeolus.StretchedGrids: StretchedGrid
 const LSF = Aeolus.LargeScaleForcing
 
-isdefined(Main, :BerlinCase) ||
-    include(joinpath(@__DIR__, "..", "examples", "urban", "BerlinCase.jl"))
 
 isdefined(@__MODULE__, :LegacyHooks) || include(joinpath(@__DIR__, "support", "legacy_hooks.jl"))
 
@@ -178,7 +176,7 @@ end
 end
 
 @testset "moist buoyancy of the Berlin example = former loops" begin
-    BCm = Main.BerlinCase
+    BCm = Aeolus.UrbanCase
     g = RegularGrid(; size = (24, 20, 10), extent = (24.0, 20.0, 10.0), halo = (3, 3, 3))
     rng = Xoshiro(13)
     θ = 300 .+ randn(rng, 24, 20, 10); qv = 8e-3 .+ 1e-3 .* randn(rng, 24, 20, 10)

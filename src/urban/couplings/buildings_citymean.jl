@@ -221,7 +221,7 @@ function init!(c::CityMeanBuildings, case)
                            sum(scene.facets[i].area for i in g.wall_ids);
                            start_weekday = case_weekday(case.cfg))
     bem = c.bem
-    @debug("city-mean building", subsystem = :berlin, domain = current_domain(), event = :init,
+    @debug("city-mean building", subsystem = :urban, domain = current_domain(), event = :init,
            coupling = :buildings_citymean, floor_area = bem.zone.floor_area,
            wall_area = bem.zone.envelope[1].area / (1 - 0.33), roof_area = bem.zone.envelope[2].area)
     return nothing
