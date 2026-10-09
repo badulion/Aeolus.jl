@@ -44,5 +44,8 @@ count = 24
 seed = 7
 z = [3.141592653589793, 3.141592653589793]   # the plane z = π (L/2)
 
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
 [test]
 overrides = ["grid.size=[16,16,16]", "time.nsteps=10"]

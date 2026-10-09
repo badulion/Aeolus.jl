@@ -26,7 +26,7 @@ interface:
 | [`budget!`](@ref)`(c, domain, budgets)` | no terms | the terms it reports in the shared budgets |
 | [`budget_fields`](@ref)`(c, q)`, [`solid_mask`](@ref)`(c)` | `()`, `nothing` | the fields of a measured quantity it carries, its obstacles |
 | [`outputs`](@ref)`(c)`, [`output_names`](@ref)`(C, opts)` | empty | its output catalogue |
-| [`checks`](@ref)`(c)` | `()` | the checks it publishes |
+| [`checks`](@ref)`(c)`, [`check_names`](@ref)`(C)` | empty | the checks it publishes |
 | `checkpoint_state(c)`, `restore_checkpoint_state!(c, s)` | `nothing` (stateless) | everything a bit-identical restart needs ([`checkpoint_state`](@ref Aeolus.IO.checkpoint_state)) |
 
 Every component works with both dynamical cores (`BoussinesqSimulation`
@@ -156,12 +156,16 @@ core ([`domain_catalogue`](@ref)). The default is empty.
 outputs(::AbstractComponent) = OutputVariable[]
 
 """
-    checks(c) -> Tuple
+    checks(c) -> Vector{Check}
 
-The checks `c` publishes (name, default tolerance, evaluation), which
-`[checks]` enables (ONE-d, #453). The default is empty.
+The checks `c` publishes: `Aeolus.Checks.Check`s (name, units, default
+tolerance, evaluation and an optional per-step sample), named as
+[`check_names`](@ref) gives them for its type. `[checks]` enables them,
+each required or advisory with its tolerance; the run evaluates the
+enabled ones at its end and writes `results.toml` (ONE-d, #453). The
+default is empty.
 """
-checks(::AbstractComponent) = ()
+checks(::AbstractComponent) = Check[]
 
 # A stateless component: nothing to checkpoint (the IO component contract).
 checkpoint_state(::AbstractComponent) = nothing
