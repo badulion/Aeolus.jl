@@ -299,27 +299,18 @@ function _check_mask_weights(ϕ, mask, weights)
 end
 
 """
-    add_surface_flux!(tϕ, F_bot, F_top; weights = nothing)
+    add_surface_flux!(tϕ, F_bot, F_top)
 
 Inject prescribed diffusive fluxes at the bottom (`F_bot`) and top
 (`F_top`) walls of the domain into the cell-centered scalar tendency.
 Sign convention: `F_bot > 0` means flux into the domain from below.
 
-`weights = (Wc, Wf)` is the sound-proof form ([`flux_weights`](@ref),
-ONE-j #460): the kinematic flux `F` through a wall face carries the mass
-`W_face` there, so the first level gains `(W_f/W_c) F_bot/Δz` and the last
-loses `(W_f/W_c) F_top/Δz`, and `Σ W ϕ ΔV` changes by
-`(W_f,bot F_bot − W_f,top F_top) A` per unit time, exactly (the same
-`W`-weighted flux form as the advection and the SGS fluxes). `nothing`
-(default) is the Boussinesq form, bit for bit.
+On a sound-proof core this is also the `W`-weighted flux form
+`(W_f/W_c) F/Δz`: the wall faces of a `ReferenceState` carry the weight of
+the adjacent cell (`W_f = W_c` there), so `Σ W ϕ ΔV` changes by
+`(W_bot F_bot − W_top F_top) A` exactly.
 """
-function add_surface_flux!(tϕ, F_bot, F_top; weights = nothing)
-    weights === nothing && return _add_surface_flux!(tϕ, F_bot, F_top, mesh(tϕ))
-    wc, wf = _level_weights(tϕ, weights)
-    kk = interior(mesh(tϕ))[3]
-    kb, kt = first(kk), last(kk)
-    return _add_surface_flux!(tϕ, F_bot * (wf[kb] / wc[kb]), F_top * (wf[kt+1] / wc[kt]), mesh(tϕ))
-end
+add_surface_flux!(tϕ, F_bot, F_top) = _add_surface_flux!(tϕ, F_bot, F_top, mesh(tϕ))
 
 """
     add_sponge!(tf, f, α_max, z_start, z_top; f_ref = 0)

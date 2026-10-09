@@ -200,15 +200,15 @@ end
 """
     flux_weights(sim) -> Union{Nothing, Tuple}
 
-The vertical weights of the flux-form operators (SGS fluxes, prescribed
-surface fluxes) on the core `sim`: `nothing` on the Boussinesq core (the
-unweighted operators), and the constraint weights `(Wc, Wf)` of a
-sound-proof core (`W = ρ̄` anelastic, `ρ̄θ̄` pseudo-incompressible;
-`Anelastic.constraint_weights`), on which the SGS tendencies are the flux
-form `(1/W) ∇·(W F)` of the weighted advection (ONE-j, #460): the SGS terms
-then conserve `Σ W uᵢ ΔV` and `Σ W θ ΔV`, and a prescribed kinematic
-surface flux `F` changes `Σ W θ ΔV` by `W_face F A` (see
-[`add_surface_flux!`](@ref)), so the core's θ budget closes exactly. The default
+The vertical weights of the SGS flux divergence on the core `sim`:
+`nothing` on the Boussinesq core (the unweighted operators), and the
+constraint weights `(Wc, Wf)` of a sound-proof core (`W = ρ̄` anelastic,
+`ρ̄θ̄` pseudo-incompressible; `Anelastic.constraint_weights`), on which the
+SGS tendencies are the flux form `(1/W) ∇·(W F)` of the weighted advection
+(ONE-j, #460): the SGS terms then conserve `Σ W uᵢ ΔV` and `Σ W θ ΔV`, so
+the core's θ budget closes with the prescribed surface fluxes alone (whose
+Boussinesq form `F/Δz` is already the weighted one: the wall faces of a
+`ReferenceState` carry the weight of the adjacent cell). The default
 [`add_sgs_momentum!`](@ref) and [`add_sgs_scalar!`](@ref) methods (and those
 of the eddy-viscosity and stability-corrected closures) read it; a closure
 with a full-tensor scalar flux or its own stress has no weighted form, and
