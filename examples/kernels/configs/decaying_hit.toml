@@ -1,0 +1,38 @@
+# Kernel demo 02 — decaying isotropic turbulence (formerly
+# examples/kernels/02_decaying_hit.jl): a triply periodic 2π box, 32³,
+# ν = 5e-3 with Smagorinsky-Lilly (C_s = 0.17), started from white noise
+# u, v, w = 0.3 × N(0, 1) (projected by the first step), dt = 0.3 Δx,
+# to t = 6. The kinetic energy spins down.
+#
+#   julia --project -m Aeolus run examples/kernels/configs/decaying_hit.toml
+#   julia --project=. examples/kernels/plot_decaying_hit.jl runs/<date>_decaying_hit_<id>
+
+[run]
+driver = "simulation"
+name = "decaying_hit"
+seed = 42
+
+[grid]
+size = [32, 32, 32]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[dynamics]
+nu = 0.005
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.17
+
+[initial]
+velocity_perturbation = { kind = "normal", amplitude = 0.3 }
+
+[stepper]
+scheme = "euler"
+dt = 0.05890486225480862        # 0.3 Δx / 1 m/s
+end_time = 6.0
+
+[logging]
+diagnostics_cadence = 0.05      # a row every step
+
+[test]
+overrides = ["grid.size=[16,16,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]

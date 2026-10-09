@@ -1,0 +1,38 @@
+# Decaying turbulence under rotation and stratification: the SGS closures
+# against filtered DNS — Era VI, P56-e (#192; formerly
+# examples/sgs/rotating_stratified_decay.jl). The CI test
+# (test/era6_sgs_validation.jl) at 96³: the P56-c DNS of decaying isotropic
+# turbulence (Re_λ ≈ 64 at t₀ = 2) continued for two turnovers T = L/u′ as
+# is, with rotation (Ro = 0.2), with a background stratification
+# (Fr = 0.3), and with both; each LES (Δ = 4h, 24³) starts from the
+# filtered DNS with e and τᵢⱼ from the exact subfilter stress and is
+# compared with the filtered DNS. Closures: Smagorinsky (C_s = 0.17),
+# dynamic Smagorinsky, the Deardorff TKE closure (P56-b) and the
+# Reynolds-stress closure (P56-d). About 7 min on one core.
+#
+#   julia --project -m Aeolus run examples/sgs/configs/rotating_stratified_decay.toml
+#   julia --project=. examples/sgs/plot_rotating_stratified_decay.jl runs/<date>_rotating_stratified_decay_<id>
+#
+# results.toml: the base state, and per case the DNS decay and per closure
+# the resolved-KE error at t₀ + 2T, e, II, ⟨τ₃₃⟩/⟨τ₁₁⟩ and the SGS heat flux.
+
+[run]
+driver = "sgs_decay"
+name = "rotating_stratified_decay"
+
+[dns]
+n = 96
+t0 = 2.0
+seed = 1
+cases = ["isotropic", "rotating", "stratified", "rotating_stratified"]
+turnovers = 2.0
+nsave = 16
+r = 4
+cfl = 0.5
+
+[les]
+models = ["smagorinsky", "dynamic", "tke", "rsm"]
+cfl = 0.4
+
+[test]
+overrides = ["dns.n=16", "dns.t0=0.2", "dns.turnovers=0.2", "dns.nsave=2", "dns.cases=[\"stratified\"]"]

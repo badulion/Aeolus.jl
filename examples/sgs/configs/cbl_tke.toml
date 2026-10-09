@@ -1,0 +1,40 @@
+# Convective boundary layer with the prognostic SGS TKE closure — P56-b
+# (#182; formerly examples/sgs/cbl_tke.jl). Free convection over a heated
+# free-slip floor (Q = 0.1 K m/s, no mean wind) with the Deardorff (1980) /
+# Moeng (1984) closure, compared with the vertical-velocity variance of
+# Lenschow, Wyngaard & Pennell (1980),
+#
+#     σ_w² / w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)²,
+#
+# maximum 0.466 w*² at z/z_i = 0.31. 64³ on 3200 × 3200 × 1600 m
+# (Δx = 50 m, Δz = 25 m), z_i0 = 800 m, Γ = 3 K/km above, 2 h,
+# statistics over the last 30 min. The reduced 24³ CI case is
+# test/era6_tke.jl (the same tke_cbl).
+#
+#   julia --project -m Aeolus run examples/sgs/configs/cbl_tke.toml
+#   julia --project=. examples/sgs/plot_cbl_tke.jl runs/<date>_cbl_tke_<id>
+#
+# results.toml: z_i, w*, the σ_w² maximum and its height, the heat-flux and
+# SGS-fraction numbers, and the averaged profiles.
+
+[run]
+driver = "cbl"
+name = "cbl_tke"
+seed = 1
+
+[grid]
+n = 64
+spacing = 50.0
+dz = 25.0
+
+[cbl]
+heat_flux = 0.1
+z_i0 = 800.0
+lapse = 0.003
+theta0 = 300.0
+end_time = 7200.0
+average = 1800.0
+
+[test]
+overrides = ["grid.n=12", "grid.spacing=100.0", "grid.dz=100.0", "cbl.end_time=120.0", "cbl.average=60.0",
+             "cbl.z_i0=600.0"]

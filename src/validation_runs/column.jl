@@ -206,7 +206,8 @@ function Simulations.run!(::ColumnDriver, r::ColumnRun, rf::RunFolder, ::Checkpo
         write_results(rf, Dict("t" => [x.t for x in r.snapshots],
                                "ql_max" => [maximum(x.ql) for x in r.snapshots],
                                "qr_max" => [maximum(x.qr) for x in r.snapshots],
-                               "ql_final" => r.snapshots[end].ql, "qr_final" => r.snapshots[end].qr))
+                               "ql_final" => r.snapshots[end].ql, "qr_final" => r.snapshots[end].qr,
+                               "ql_profiles" => [x.ql for x in r.snapshots], "qr_profiles" => [x.qr for x in r.snapshots]))
     else                                                  # droplet_parcel
         case = kwdef_value(BroadeningCase, cfg.parcel; exclude = ())
         r.state = run_broadening_case(case; model = cfg.parcel.model)

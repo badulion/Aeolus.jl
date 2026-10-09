@@ -1,4 +1,6 @@
 # Render a single still from an Aeolus NetCDF output file, for the README.
+# Output analysis only: it reads the file the urban run writes and runs no
+# simulation code.
 #
 # A 48-frame APNG of a full diurnal cycle is ~75 MB — far too heavy for a
 # repository front page — so the hero image is one well-chosen time level

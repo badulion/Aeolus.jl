@@ -37,7 +37,8 @@ using Aeolus
 using Aeolus.Fields: interior_view
 using Aeolus.BoundaryConditions: fill_halos!
 
-include(joinpath(@__DIR__, "inflow_fetch_harness.jl"))
+# the harness is the inflow_fetch run type's (EX-d #441; formerly test/inflow_fetch_harness.jl)
+using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child, pressure_gradient_bias, nearest_level
 
 @testset "N-inflow-d: inflow fetch (#266)" begin
 

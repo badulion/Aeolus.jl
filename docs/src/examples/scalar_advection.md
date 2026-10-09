@@ -4,13 +4,20 @@ Advects a Gaussian blob in a prescribed rigid-body-rotation flow.
 This is the Phase 0 end-to-end smoke test — it exercises the mesh,
 halo fill, upwind advection kernel, and the SSP-RK3 stepper.
 
-Location: `examples/scalar_advection_2d.jl`.
+Location: `examples/configs/scalar_advection_2d.toml` (the `advection`
+driver, [`Aeolus.RunDrivers.AdvectionDriver`](@ref); formerly the script
+`examples/scalar_advection_2d.jl`, which it reproduces bit for bit,
+`test/config_run_drivers.jl`).
 
 Run with:
 
 ```bash
-$ julia --project=. examples/scalar_advection_2d.jl
+$ julia --project -m Aeolus run examples/configs/scalar_advection_2d.toml
 ```
+
+The numbers below are in the run folder's `output/results.toml` (`t`,
+`mass`, `max`, `peak_x`, `peak_y`); this run gives them to the printed
+digits.
 
 ## Setup
 
