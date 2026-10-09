@@ -16,7 +16,10 @@ One domain of a [`Model`](@ref):
     adaptive one (`step_adaptive!(domain)`), on either core;
   * `drivers` — its input drivers: `boundary`, the
     `FileBoundaryFeed` of open lateral faces, advanced at the start of
-    every step;
+    every step, and `dynamic`, the `DynamicInputs` of the domain's
+    dynamic driver (its large-scale forcing tables and surface series,
+    which components read when they are built: [`LargeScale`](@ref),
+    [`SurfaceLayer`](@ref));
   * `components` — its components, validated ([`validate_components`](@ref))
     and stored as a concretely typed tuple in the fixed order of
     [`order_components`](@ref), so dispatch on them is static;
@@ -80,6 +83,15 @@ The SGS closure the core runs: that of the domain's `:sgs` component, or
 sgs_closure(d::Domain) = (c = slot_component(d, :sgs); c === nothing ? nothing : c.closure)
 
 """
+    sgs_stress(d::Domain) -> Symbol
+
+The form of the SGS momentum divergence the core runs: the `:sgs`
+component's `stress` (`:laplacian` or `:symmetric`), `:laplacian` without
+one.
+"""
+sgs_stress(d::Domain) = (c = slot_component(d, :sgs); c === nothing ? :laplacian : c.stress)
+
+"""
     Model(domain)
 
 The model: its domains (today one; several, with their nest couplings,
@@ -130,14 +142,15 @@ The keywords of the core step that run stages 6–8: `body_force!` and
 `post_predictor!` (`nothing` where no component attaches, which keeps the
 core's hook-free fast path; with the budgets on the body-force hook is
 always there, it counts the substages), `sgs` (the `:sgs` component's
-closure) and, for the Boussinesq Euler step, `momentum_advection` (the
+closure) and `sgs_stress` (its momentum divergence, [`sgs_stress`](@ref)).
+The Boussinesq Euler step also takes `momentum_advection` (the
 `:advection` component's operator).
 """
 function core_hooks(d::Domain)
     cs = d.components
     bf = d.budgets !== nothing || _any_attached(cs, (:tendencies, :body_force)) ? _ForceHook(d) : nothing
     pp = _any_attached(cs, (:post_predictor,)) ? _PostHook(d) : nothing
-    return (; body_force! = bf, post_predictor! = pp, sgs = sgs_closure(d))
+    return (; body_force! = bf, post_predictor! = pp, sgs = sgs_closure(d), sgs_stress = sgs_stress(d))
 end
 
 # ---------------------------------------------------------------------------
@@ -234,16 +247,16 @@ function step_adaptive!(d::Domain; dt_prev = nothing, t_end = nothing)
     c === nothing && throw(ArgumentError("step_adaptive!: the domain $(d.id) takes a fixed step (cfl = nothing)"))
     sync_drivers!(d)
     sim = d.state
-    closure = sgs_closure(d)
-    dt = adaptive_dt(sim, c; dt_prev = dt_prev, sgs = closure, limits = component_limits(d))
+    closure = sgs_closure(d); stress = sgs_stress(d)
+    dt = adaptive_dt(sim, c; dt_prev = dt_prev, sgs = closure, sgs_stress = stress, limits = component_limits(d))
     t_end === nothing || (dt = min(dt, t_end - sim.t))
     t0 = clock(d)
     _budgets_begin!(d.budgets, d)
     _run_stages!(d, PRE_CORE, dt, t0, t0 + dt)
     h = core_hooks(d)
-    stepper = d.scheme === :rk3 ? ((s, Δ; kw...) -> step_rk3!(s, Δ; kw..., sgs = closure)) : nothing
+    stepper = d.scheme === :rk3 ? ((s, Δ; kw...) -> step_rk3!(s, Δ; kw..., sgs = closure, sgs_stress = stress)) : nothing
     _dynamics_open!(d.budgets, d)
-    res = step_adaptive!(sim, c; dt = dt, sgs = closure, stepper = stepper,
+    res = step_adaptive!(sim, c; dt = dt, sgs = closure, sgs_stress = stress, stepper = stepper,
                                          body_force! = h.body_force!, post_predictor! = h.post_predictor!)
     _dynamics_close!(d.budgets, d)
     _post_core!(d, res[2], t0)
