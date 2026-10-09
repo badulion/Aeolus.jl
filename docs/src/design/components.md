@@ -269,6 +269,38 @@ check before the error propagates. See [Checks](../api/checks.md).
 
 ## Where the code still differs from the target
 
+* **ONE-e (#454), first part: the physics out of the urban glue.** The
+  equations the design names in the urban couplings, and the other
+  self-contained physics found there, now live in their physics modules,
+  and the couplings call them, bit for bit:
+
+  | from `src/urban/couplings/` | now |
+  | :-- | :-- |
+  | `moist_buoyancy.jl` | `Operators.moist_buoyancy_perturbation!`, `add_moist_buoyancy!` |
+  | `traffic_heat.jl` | `BuildingEnergy.traffic_heat_flux`, `add_traffic_heat!` |
+  | `buildings_citymean.jl` | `BuildingEnergy.CityBuildings`, `city_buildings`, `step_city_buildings!`, `apply_building_heat!` |
+  | `veg_drag.jl` | `PlantCanopy.vegetation_canopy_drag` (applied with `apply_canopy_drag!`) |
+  | `sw_modifiers.jl` | `PlantCanopy.apply_tree_shade!` |
+  | `aq_chem.jl` | `Chemistry.traffic_profile`, `SurfaceExchange.aerodynamic_resistance` |
+  | `glass.jl` | `UrbanSurface.glazing_areal_heat_capacity`, `glazing_solar_transmittance` |
+  | `fog_dew.jl` | `RadiationFog.dew_exchange_columns!` |
+  | `cloud_shadow.jl` | `Radiosity.direct_absorbed_share!`, `SolarGeometry.shade_direct_beam!` |
+  | `micro_kessler.jl` | `Microphysics.clamp_booked!` |
+
+  Two couplings measurably did nothing and were deleted rather than
+  moved: `snow_legacy.jl` (a snow flag that nothing read, and that could
+  never be set, as nothing passed it precipitation) and `aq_aerosol.jl`
+  (a toy aerosol that started at zero, had no source and was neither
+  advected nor written, so it stayed zero), with their `:snow` and
+  `:aerosol` slots. `test/glue_physics.jl` tests each moved function at
+  module level. Still in glue code: the surface exchange's delivery of
+  the surface fluxes to the first air cell (`surface_exchange.jl`), the
+  column radiation's stitching of the LES column onto a standard
+  atmosphere (`column_radiation.jl`) and the case's hydrostatic reference
+  state (`core/reference_state.jl`). The couplings themselves,
+  `UrbanCase`, `CaseConfig`, the registry and the urban stages, ledgers
+  and output are still there: their port to components is the rest of
+  ONE-e.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the
