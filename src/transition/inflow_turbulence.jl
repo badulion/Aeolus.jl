@@ -194,8 +194,11 @@ spacing raised to one spacing (shorter scales are not representable).
 generator` for another [`AbstractInflowGenerator`](@ref).
 [`generator_state`](@ref) / [`restore_generator_state!`](@ref) snapshot
 and restore everything the next perturbations depend on (bit-identical
-continuation). Two-way runs: the feedback should skip a frame of
-[`feedback_exclude_width`](@ref) next to the open faces.
+continuation). Two-way runs: the interface flux correction leaves the
+normal perturbation out of the parent's interface faces
+([`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity), #418),
+and the feedback can skip a frame of [`feedback_exclude_width`](@ref)
+next to the open faces ([`exclude_inflow_feedback!`](@ref)).
 
 References: Lund, T. S., Wu, X. & Squires, K. D. (1998), *J. Comput.
 Phys.* 140, 233-258. Xie, Z.-T. & Castro, I. P. (2008), *Flow Turbul.
@@ -446,15 +449,16 @@ _data_window(d::WindowedBoundaryData) = d.Δt > 0 ? (d.t0, d.Δt) : nothing
 # The applied perturbation is linear in time between two knots,
 # (t_prev, Lp) and (t_gen, Lc); τ is not clamped inside a window (a stage
 # time beyond its end extrapolates, as the data does).
-function _knot_value!(out, f::_InflowFace, s::Float64; clamp_τ::Bool)
+# `comps` picks the face-frame components (1 normal, 2 along, 3 vertical).
+function _knot_value!(out, f::_InflowFace, s::Float64; clamp_τ::Bool, comps = 1:3)
     if f.t_gen > f.t_prev
         τ = (s - f.t_prev) / (f.t_gen - f.t_prev)
         clamp_τ && (τ = clamp(τ, 0.0, 1.0))
-        for c in 1:3
+        for c in comps
             out[c] .= (1 - τ) .* f.Lp[c] .+ τ .* f.Lc[c]
         end
     else
-        for c in 1:3
+        for c in comps
             copyto!(out[c], f.Lc[c])
         end
     end
@@ -659,6 +663,30 @@ function inflow_perturbation(it::InflowTurbulence, side::Symbol)
 end
 
 """
+    synthetic_normal_velocity(it::InflowTurbulence, side, t) -> plane or nothing
+
+The normal perturbation (`ns × nz`, grid sign: the ``u`` of a west/east
+face, the ``v`` of a south/north face) the face `side` carries at time `t`,
+on the knot curve the boundary refresh follows (linear in the data's
+window). The contract of
+[`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity):
+a two-way [`NestedRun`](@ref)'s interface flux correction gives the parent
+the child's flux minus this plane, so the parent's interface faces never
+receive the synthetic eddies (#418). A face without perturbations
+delegates to the wrapped data.
+"""
+function synthetic_normal_velocity(it::InflowTurbulence, side::Symbol, t::Real)
+    for f in it.faces
+        f.side === side || continue
+        P = zeros(f.ns, f.nz)
+        _knot_value!((P,), f, Float64(t); clamp_τ = _data_window(it.data) === nothing, comps = 1:1)
+        inner = synthetic_normal_velocity(it.data, side, t)
+        return inner === nothing ? P : P .+ inner
+    end
+    return synthetic_normal_velocity(it.data, side, t)
+end
+
+"""
     feedback_exclude_width(it::InflowTurbulence) -> width (m)
 
 The default frame next to the open faces that a two-way feedback should
@@ -679,11 +707,16 @@ cells, rounded up (``⌈2\\max L_s/Δx_p⌉``, `Δx_p` the smaller horizontal
 parent spacing), and never narrower than the one it had. The faces it
 excludes stay the feedback's `exclude_sides` (`:inflow` by default: the
 faces whose mean normal velocity points into the child at each
-feedback). Without the band the feedback restricts the synthetic eddies
-into the parent, whose prolongation returns them as boundary data (on
-the refine-3 test nest: child kinetic energy ×5.5 and parent ×3.2 in
-200 s; `docs/src/theory/transition.md`). A one-way run is returned
-unchanged (0).
+feedback). A one-way run is returned unchanged (0).
+
+The band was introduced against a feedback loop measured on the refine-3
+test nest (child kinetic energy ×5.5 and parent ×3.2 in 200 s). The path
+of that loop was the interface flux correction, which since #418 leaves
+the synthetic part out
+([`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity)).
+With that, the band no longer measurably matters on the test nests: on
+the 100 s nest the child's kinetic energy is ×0.988 of one-way without
+it and ×0.995 with it (`docs/src/theory/transition.md`).
 """
 function exclude_inflow_feedback!(run::NestedRun, it::InflowTurbulence)
     fb = run.twoway

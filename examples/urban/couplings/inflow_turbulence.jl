@@ -41,14 +41,14 @@
 #              never from the child's refresh.
 #   two-way    the feedback skips an inflow band of
 #              ⌈2 max L_s / Δx_p⌉ parent cells (exclude_inflow_feedback!,
-#              N-nest-e #263): without it the feedback restricts the
-#              synthetic eddies into the parent, which returns them
-#              through the next prolongation. The band is not enough:
-#              two-way with the generator is measured unstable (2 h
-#              sheared CBL, test/era6_inflow_nest_longrun.jl: child KE ×12,
-#              parent ×2.5 against one-way; without the generator two-way
-#              is within 5 %), and init! warns. The default nest is
-#              one-way; the two-way campaign is #331.
+#              N-nest-e #263), and the interface flux correction leaves
+#              the generator's normal perturbation out of the parent's
+#              interface faces (synthetic_normal_velocity, #418). On the
+#              idealised 2 h sheared-CBL nest (test/era6_inflow_nest_longrun.jl)
+#              two-way with the generator is within 10 % of one-way in KE
+#              and 0.01 K in overlap θ (child KE ×12 before #418). In
+#              Berlin the two-way nest is unvalidated (nesting.jl); the
+#              default nest is one-way; the two-way campaign is #331.
 #   ledger     budget! books the perturbation kinetic energy the mean
 #              inflow carries in, ρ⟨½|u'|² max(−U_n, 0)⟩ (W m⁻² of
 #              perturbed face, injected_ke_flux), as the ledger term
@@ -188,13 +188,6 @@ function init!(c::InflowTurbulenceCoupling, case)
     end
     c.stats = o.statistics
     c.exclude = nested ? exclude_inflow_feedback!(run, c.it) : 0
-    if nested && run.twoway !== nothing
-        @warn "inflow_turbulence with the two-way nest is measured unstable: on the 2 h sheared-CBL " *
-              "nest the child's kinetic energy grows ×12 and the parent's ×2.5 against one-way " *
-              "(test/era6_inflow_nest_longrun.jl; the feedback returns the synthetic eddies through " *
-              "the parent statistics). Use it one-way, or physics.inflow_turbulence = false with " *
-              "two-way, until #331." exclude_width = c.exclude
-    end
     return nothing
 end
 

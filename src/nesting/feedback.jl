@@ -134,7 +134,11 @@ defaults), applied once per parent step after the child substeps:
 The anterpolated velocity faces are those strictly inside the covered
 region whose two parent cells are both anterpolated; the interface faces
 themselves get the child's flux from the interface flux correction
-(`flux_correction` of the run, on the open faces only).
+(`flux_correction` of the run, on the open faces only), less the part of
+the child's normal velocity its boundary data declare synthetic
+([`synthetic_normal_velocity`](@ref Aeolus.BoundaryConditions.synthetic_normal_velocity):
+inflow turbulence, which would otherwise return to the child through the
+next window's boundary data and accumulate, #418).
 
 Refluxing needs a core whose stage structure is known
 ([`nest_stage_weights`](@ref)): `step!` (Boussinesq or sound-proof; one

@@ -1097,8 +1097,10 @@ costs 0.22 ms. The data fill alone costs 0.08 ms.
 that frame, the feedback restricts the synthetic eddies into the parent,
 and the parent returns them through the next prolongation; on the
 refine-3 test nest over 200 s (before N-nest-e) the child's kinetic
-energy grew ×5.5 and the parent's ×3.2. The frame is not enough
-(N-inflow-e, #268): see [Two-way with the generator](#Two-way-with-the-generator-(N-inflow-e)) below.
+energy grew ×5.5 and the parent's ×3.2. The frame was not enough
+(N-inflow-e, #268): the interface flux correction copied the synthetic
+eddies into the parent's interface faces as well; since #418 it leaves
+them out. See [Two-way with the generator](#Two-way-with-the-generator-(N-inflow-e)) below.
 
 ### Development length behind the inflow (N-inflow-d)
 
@@ -1385,8 +1387,8 @@ the rule measured above, ``L = 1.2\,Uk/ε`` at the mean roof height
 
 The maintainer's requirement for #268: 2 h, two-way, generator on: no
 NaN, child and parent mean KE within 1.5× of one-way, parent overlap θ
-drift < 0.2 K. Measured on the sheared-CBL nest (two realisations, the
-FFTW planner differs between them):
+drift < 0.2 K. Measured on the sheared-CBL nest before #418 (two
+realisations, the FFTW planner differs between them):
 
 | run | child KE (m² s⁻²) | parent KE | overlap θ − one-way |
 | :-- | --: | --: | --: |
@@ -1395,19 +1397,79 @@ FFTW planner differs between them):
 | two-way, none | 6.714 | 5.915 | −0.002 K |
 | two-way, generator (band 1 parent cell) | 82.8 (×12.4; ×11.8) | 15.4 (×2.6; ×2.4) | +0.26 K (+0.23 K) |
 
-No NaN, but the KE and θ criteria **fail**: kept as `@test_broken`. The
-cause is the feedback, not the generator (one-way, the generator moves
-the child's KE by 4 %; two-way without it, by 4 %). On the decaying
-refine-3 nest of the tests above, run for 2 h: two-way with the
-generator ×2.4 (child) and ×1.3 (parent), +0.31 K; the same with the
-parent statistics frozen at their first sample, ×1.3 and ×0.97,
-+0.23 K; with the band widened from 3 to 6 parent cells, ×2.1 and
-×1.2, +0.30 K. Once the synthetic eddies are past the band they are
-anterpolated into the parent, the parent-resolved statistics measure
-them, and the generator feeds them back amplified; the remaining θ
-drift is the child's extra mixing fed back. Not tuned (#268: report,
-do not tune); the coupling warns when the generator runs two-way, and
-the two-way campaign is #331.
+Before #418 the KE and θ criteria failed (kept as `@test_broken`), and
+the measurements of #268 put the cause in the feedback, not the
+generator: one-way, the generator moves the child's KE by 4 %; two-way
+without it, by 4 %. On the decaying refine-3 nest of the tests above,
+run for 2 h: two-way with the generator ×2.4 (child) and ×1.3 (parent),
++0.31 K; the same with the parent statistics frozen at their first
+sample, ×1.3 and ×0.97, +0.23 K; with the band widened from 3 to 6
+parent cells, ×2.1 and ×1.2, +0.30 K.
+
+**The loop (#418).** The band and the statistics were not the path. The
+child's normal velocity on an inflow face is its boundary data plus the
+generator's perturbation, ``u_b = B + P`` (``P`` has zero mean per level
+and face, not per parent face). After the child substeps, the interface
+flux correction sets every parent interface face to the child's flux
+through it: ``u_p ← ⟨B + P⟩ = u_p + ⟨P⟩``, ``⟨·⟩`` the mean over the
+``r^2`` child faces of a parent face. The next window's boundary data
+interpolate that face, so ``B`` now carries ``⟨P⟩``, and the generator
+adds its next perturbation on top: the parent face integrates ``⟨P⟩``
+over the parent steps, and the parent-resolved statistics then measure
+the grown eddies and raise the amplitude. On the refine-3 test nest the
+parent-face mean of ``P`` reaches 0.97 m s⁻¹. The parent's interface
+faces now get the child's flux **minus** the synthetic part, which the
+boundary data declare (`synthetic_normal_velocity`, the contract of
+`AbstractBoundaryData`; `InflowTurbulence` returns its normal
+perturbation on the knot curve): the feedback subtracts it from the
+child's normal faces for the correction and the imbalance ledger, then
+restores them bit for bit. The synthetic eddies are the child's own
+sub-filter turbulence. The parent's interface flux is the data's, as it
+is one-way. Their mass flux is zero per level and face, so the net
+interface flux still matches, and the relative interface imbalance
+before the correction is ``1.2×10^{-16}`` (``1.4×10^{-2}`` before). Their
+θ flux ``\overline{P θ}`` through the interface is part of the child's
+flux, which the Berger–Colella registers book; refluxing gives it to the
+parent cells outside the nest. On the decaying nest, which has no θ
+sources, the composite θ is conserved to ``3.5×10^{-14}`` per parent
+step with the generator on. The generator has no θ perturbation of its
+own.
+
+Measured after #418, 2 h, sheared CBL (`test/era6_inflow_nest_longrun.jl`,
+the test runner's `:estimate` FFTW plans; two realisations, seeds 1 and
+2 of the initial θ noise):
+
+| run | child KE (m² s⁻²) | parent KE | overlap θ − one-way |
+| :-- | --: | --: | --: |
+| one-way, generator (s1; s2) | 6.665; 6.438 | 5.943; 5.899 | 0 |
+| two-way, generator (s1; s2) | 6.245 (×0.94); 7.023 (×1.09) | 6.034 (×1.02); 6.014 (×1.02) | −0.003 K; −0.009 K |
+| before #418 (s1, `:measure` plans) | 64.8 (×9.7) | 12.5 (×2.1) | +0.24 K |
+
+The #268 criteria (1.5×, 0.2 K) hold in both, and the test asserts them.
+The remaining θ drift of #268 (+0.23 K with frozen statistics) was the
+same loop: on the decaying nest, 2 h, two-way with the generator now
+gives child ×0.985, parent ×0.999, +0.001 K against one-way (×2.26,
+×1.21, +0.31 K before), and with frozen statistics ×0.98, ×0.99,
++0.04 K. On the 100 s refine-3 nest the fast test
+(`test/era6_inflow_turbulence.jl`) asserts the child within 5 % and
+the parent within 1 % of one-way: measured ×0.995 and ×0.999 (×1.29 and
+×1.025 before).
+
+**Choosing the fix by measurement.** Both candidates of #418 were run on
+the 2 h nest (seed 1, `:measure` plans). Measuring the statistics only
+from parent columns at least 2 cells outside the covered footprint kept
+the parent at ×1.003 and the θ drift at +0.026 K, but the child still
+grew ×1.76, because its own perturbations kept returning through the
+interface faces. Leaving the synthetic part out of the interface
+correction alone gave ×0.94, ×1.02 and −0.003 K. Both together gave
+×1.03, ×1.01 and +0.004 K, no better. Only the correction is changed:
+the statistics keep the whole plane. Runs without a synthetic part are
+bit-identical: one-way with and without the generator, and two-way
+without it, measured over 600 s in one process with the same FFTW plans.
+The inflow band (`exclude_inflow_feedback!`) is kept but no longer
+measurably matters. On the 100 s nest, no band gives ×0.988 against
+×0.995 with the 3-cell band. On the 2 h nest, the band is 1 cell, inside
+the 2-cell buffer.
 
 ## References
 

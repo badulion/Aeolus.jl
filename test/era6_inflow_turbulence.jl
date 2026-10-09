@@ -416,4 +416,54 @@ end
     @test exclude_inflow_feedback!(run1, InflowTurbulence(run1)) == 0 && run1.twoway === nothing
 end
 
+@testset "two-way: the synthetic inflow stays out of the parent's interface faces (#418)" begin
+    # The interface flux correction gives the parent the child's flux minus
+    # the generator's normal perturbation (synthetic_normal_velocity). With
+    # the perturbation fed into the parent's interface faces, the next
+    # window's boundary data carried it back and the generator added the
+    # next one on top (measured on this nest, 100 s: child KE ×1.29 and
+    # parent ×1.025 of one-way; on the 2 h CBL nest ×9.7, ×2.1, +0.24 K).
+    function _run418(fb; T = 100.0)
+        p, c, nest, run = _it_nest(fb)
+        it = InflowTurbulence(run; statistics_kwargs = (τ_avg = 60.0,))
+        exclude_inflow_feedback!(run, it)
+        mb = 0.0; syn = 0.0
+        while p.t < T - 1e-9
+            step_nested!(run; dt = 2.0)
+            run.twoway === nothing && continue
+            mb = max(mb, nest.ledger[:mass_before_correction])
+            # what the synthetic part would have put into the parent's west
+            # faces: its mean over each parent face (m/s)
+            P = synthetic_normal_velocity(it, :west, c.t)
+            for K in 1:nest.nz, J in 1:nest.ny
+                syn = max(syn, abs(sum(@view P[3J-2:3J, 3K-2:3K]) / 9))
+            end
+        end
+        return (p = p, c = c, it = it, run = run, mb = mb, syn = syn)
+    end
+    one = _run418(:one_way)
+    two = _run418(TwoWayFeedback(; buffer = 2))
+    @printf("  two-way/one-way with the generator, 100 s: KE child ×%.3f, parent ×%.4f; relative interface imbalance before the correction %.1e (synthetic parent-face mean up to %.3f m/s)\n",
+            kinetic_energy(two.c) / kinetic_energy(one.c), kinetic_energy(two.p) / kinetic_energy(one.p),
+            two.mb, two.syn)
+    # the contract: boundary data without a synthetic part declare none
+    @test synthetic_normal_velocity(two.it.data, :west, two.c.t) === nothing
+    @test synthetic_normal_velocity(two.it, :east, two.c.t) == zeros(size(inflow_perturbation(two.it, :east)[1]))
+    # the parent's interface faces match the child's data part to round-off
+    # (the correction has nothing left to copy), while the synthetic part
+    # is not small
+    @test two.syn > 0.01                                   # m/s
+    @test two.mb < 1e-12                                   # 1.4e-2 before
+    # no feedback loop: the child and the parent stay at their one-way energy
+    @test abs(kinetic_energy(two.c) / kinetic_energy(one.c) - 1) < 0.05   # measured ×0.995 (×1.29 before)
+    @test abs(kinetic_energy(two.p) / kinetic_energy(one.p) - 1) < 0.01   # measured ×0.999 (×1.025 before)
+    # the feedback gives the child's faces back bit for bit
+    run = two.run
+    w = begin_parent_step!(run)
+    Aeolus.Nesting._subcycle_child!(run, w.t_child_end)
+    u0 = copy(two.c.u.data); v0 = copy(two.c.v.data)
+    end_parent_step!(run, w)
+    @test two.c.u.data == u0 && two.c.v.data == v0
+end
+
 end

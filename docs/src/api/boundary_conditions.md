@@ -157,6 +157,15 @@ Aeolus.BoundaryConditions.window_fraction
 Aeolus.BoundaryConditions.blend_window!
 ```
 
+Data that superpose a part of their own on the source's values —
+synthetic inflow turbulence (`Transition.InflowTurbulence`) — declare its
+normal-velocity part, which a two-way nest keeps out of its parent's
+interface faces (#418):
+
+```@docs
+Aeolus.BoundaryConditions.synthetic_normal_velocity(::Any, ::Symbol, ::Any)
+```
+
 ### Update, mass-flux correction and multi-stage support
 
 ```@docs

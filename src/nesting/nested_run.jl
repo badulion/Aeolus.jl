@@ -1253,6 +1253,10 @@ function two_way_feedback!(run::NestedRun; reproject::Bool = true)
     anterpolate!(p, c, nest, run.s_bc; mask = wk.mask, α, solid = run.fluid,
                  scratch = wk.anterp)
     sides = nest_open_sides(c)
+    # the child's normal faces without the synthetic part of their boundary
+    # data (inflow turbulence, #418): the parent's interface faces get, and
+    # the imbalance measures, the flux the boundary data carry
+    syn = _strip_synthetic_normal!(c, sides)
     e_before = _interface_imbalance(p, c, nest, meas)
     if run.flux_correction
         _correct_interface_flux!(p.u, c.u, nest, 1, meas, sides)
@@ -1277,7 +1281,48 @@ function two_way_feedback!(run::NestedRun; reproject::Bool = true)
         nest.ledger[:mass_after_projection] =
             proj ? _interface_imbalance(p, c, nest, meas) : e_after
     end
+    _restore_synthetic_normal!(syn)
     return run
+end
+
+# Subtract from the child's normal velocity on every open face the
+# synthetic part its boundary data declare (`synthetic_normal_velocity`,
+# #418) and return the saved face planes (`nothing` when no face has one,
+# so a run without synthetic inflow is untouched). The interface flux
+# correction would otherwise copy the synthetic eddies' flux into the
+# parent's interface faces; the next window's boundary data would carry
+# it back to the child, where the generator adds its next perturbation on
+# top: a sum over parent steps (measured on the 2 h CBL nest: child KE
+# ×9.7, parent ×2.1, overlap θ +0.24 K; docs/src/theory/transition.md).
+function _strip_synthetic_normal!(c, sides::NTuple{6,Bool})
+    saved = nothing
+    m = c.mesh
+    H = (m.Hx, m.Hy, m.Hz); N = (m.Nx, m.Ny, m.Nz)
+    for s in 1:6
+        sides[s] || continue
+        side = _SIDE_NAMES[s]
+        P = synthetic_normal_velocity(getproperty(c.bcs, side).state.data, side, c.t)
+        P === nothing && continue
+        ax = _side_axis(s)
+        t1, t2 = _tang(ax)
+        size(P) == (N[t1], N[t2]) || throw(DimensionMismatch(
+            "synthetic_normal_velocity: the :$side plane is $(size(P)), the face $((N[t1], N[t2]))"))
+        q = H[ax] + (_side_high(s) ? N[ax] + 1 : 1)
+        v = view((c.u, c.v, c.w)[ax].data, ntuple(d -> d == ax ? (q:q) : (H[d]+1:H[d]+N[d]), 3)...)
+        saved === nothing && (saved = Tuple{typeof(v),Array{eltype(v),3}}[])
+        push!(saved, (v, copy(v)))
+        v .-= reshape(P, size(v))
+    end
+    return saved
+end
+
+# Put the saved planes back, bit for bit.
+_restore_synthetic_normal!(::Nothing) = nothing
+function _restore_synthetic_normal!(saved)
+    for (v, a) in saved
+        copyto!(v, a)
+    end
+    return nothing
 end
 
 # The parent's mean of a cell-centred field over the covered cells.

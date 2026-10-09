@@ -42,8 +42,8 @@ reason = "development-length runs behind synthetic inflow vs a periodic precurso
 ["era6_inflow_nest_longrun.jl"]
 tier = "full"
 weight = "heavy"
-seconds = 300
-reason = "2 h sheared-CBL nest runs, one-way and two-way, with and without the inflow generator; the generator on a nest stays fast in era6_inflow_turbulence.jl"
+seconds = 205
+reason = "2 h sheared-CBL nest runs, one-way and two-way, with and without the inflow generator (two realisations with it); the generator on a nest stays fast in era6_inflow_turbulence.jl"
 
 ["era6_outflow_conditions.jl"]
 tier = "full"
