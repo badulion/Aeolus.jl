@@ -222,6 +222,9 @@ const _SL_RK3_WEIGHTS = (1 / 6, 1 / 6, 2 / 3)
 function run_stage!(c::SurfaceLayer, d, ::Val{:post_predictor}, dt)
     s = d.state; m = s.mesh
     c.nsub[] += 1
+    # the first substage of an attempt (a retried adaptive step repeats the
+    # core step without the stages before it) starts the step's sums afresh
+    (!c.rk3 || mod1(c.nsub[], 3) == 1) && (c.τ[3] = 0.0; c.τ[4] = 0.0)
     w = c.rk3 ? _SL_RK3_WEIGHTS[mod1(c.nsub[], 3)] : 1.0
     F = apply_wall_stress!(s, c.wm, dt; side = :bottom)
     A = m.Lx * m.Ly
