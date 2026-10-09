@@ -39,14 +39,13 @@ export ShearLayerDriverType, ShearLayerRun
 """
     ShearLayerDriverType()
 
-The `shear_layer` driver: `[run] driver = "shear_layer"`. Sections
+The `shear_layer` driver: `[run] legacy = "shear_layer"`. Sections
 `[layer]`, `[grid]`, `[stepper]` and `[diagnostics]`; `aeolus options
 shear_layer` prints them.
 """
 struct ShearLayerDriverType <: AbstractRunDriver end
 
 Config.driver_name(::ShearLayerDriverType) = "shear_layer"
-Config.config_dir(::ShearLayerDriverType) = normpath(joinpath(@__DIR__, "..", "..", "examples", "transition", "configs"))
 
 function Config.driver_sections(::ShearLayerDriverType)
     lay = section("layer"; doc = "The shear layer and its seed.") do s

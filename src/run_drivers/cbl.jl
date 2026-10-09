@@ -158,7 +158,7 @@ tke_cbl_summary(r) =
 """
     CBLDriverType()
 
-The `cbl` driver: `[run] driver = "cbl"`. Sections `[grid]`, `[cbl]`
+The `cbl` driver: `[run] legacy = "cbl"`. Sections `[grid]`, `[cbl]`
 (the case and the averaging) and `[inflow_statistics]` (the parent's
 boundary statistics, off by default); `[run] seed` seeds the initial θ
 noise. `aeolus options cbl` prints them.
@@ -166,7 +166,6 @@ noise. `aeolus options cbl` prints them.
 struct CBLDriverType <: AbstractRunDriver end
 
 Config.driver_name(::CBLDriverType) = "cbl"
-Config.config_dir(::CBLDriverType) = normpath(joinpath(@__DIR__, "..", "..", "examples", "sgs", "configs"))
 Config.driver_defaults(::CBLDriverType) = ("run.seed" => 1,)
 
 function Config.driver_sections(::CBLDriverType)

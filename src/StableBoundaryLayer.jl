@@ -1,7 +1,7 @@
 """
     Aeolus.StableBoundaryLayer
 
-The `sbl` run type (`[run] driver = "sbl"`): the stable-boundary-layer
+The `sbl` run type (`[run] legacy = "sbl"`): the stable-boundary-layer
 cases (GABLS1-4, CASES-99, the stratified, relaminarising and collapsing
 channels) configured from TOML only. See [`SBLDriver`](@ref) and the
 Stable boundary layer theory page; the shipped configs are in

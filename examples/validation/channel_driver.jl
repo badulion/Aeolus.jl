@@ -22,7 +22,6 @@ import Aeolus.Simulations
 struct ChannelDriver <: AbstractRunDriver end
 
 Config.driver_name(::ChannelDriver) = "channel"
-Config.config_dir(::ChannelDriver) = joinpath(@__DIR__, "configs")
 
 function Config.driver_sections(::ChannelDriver)
     ch = section("channel"; doc = "The wall-bounded case (Aeolus.WallModels).") do s
