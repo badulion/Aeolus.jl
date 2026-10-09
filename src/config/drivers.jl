@@ -125,9 +125,12 @@ directory. The file is included into a fresh module and must call
 const DRIVER_FILES = Dict{String,String}(
     # CFG-e (#360): the decaying-turbulence DNS of P56-c, which the `sgs_decay`
     # run type builds on. (ONE-g #456: the SBL cases are configurations of the
-    # model; the channel, column, filtered-DNS record, CBC and patchy-surface
-    # validation run types are gone with their cases.)
+    # model; the channel, single-column, filtered-DNS record, CBC and
+    # patchy-surface validation run types are gone with their cases.)
     "dns_decay" => "examples/validation/dns_driver.jl",
+    # the Kessler box of the kernel demo (cloud_spinup.toml); the column
+    # validation cases it also ran are gone (ONE-g #456)
+    "column" => "examples/kernels/column_driver.jl",
 )
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
