@@ -84,8 +84,9 @@ include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / r
 # The `urban` run driver and its configuration schema (CFG-c #358, EX-a #438):
 # built from the registry, so it comes last
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
+include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
-export CaseConfig, UrbanDriver, run_results, case_state, build_case, run_case!, step_case!, describe,
+export CaseConfig, UrbanDriver, UrbanParentDriver, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,

@@ -1,0 +1,50 @@
+# The Berlin nest parent alone (the `urban_parent` driver, EX-a #438;
+# N-parent-e #259): 24 h, 06 to 06 LT, of the 6 km × 6 km × 3 km Aeolus
+# parent around Alexanderplatz on 29/30 June 2019 (the Lindenberg sounding
+# of #247), every parent forcing on: the tiled urban surface (#249), the
+# column radiation, the geostrophic pressure gradient, θ/qv nudging,
+# subsidence, θ damping and the fixed-gradient top (#248, #254), the TKE
+# closure on the stretched grid. See docs/src/design/berlin_parent.md.
+#
+#   julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml
+#
+# Grids (--set physics.options.nesting.parent.refinement=[…] and .vertical):
+#   [2, 2, 4] stretched (this file): 192 × 192 × 53, Δx = 31.25 m, Δz = 25 m → 100 m
+#   [4, 4, 8] uniform: 96 × 96 × 60, Δx = 62.5 m, Δz = 50 m
+#   [16, 16, 8] stretched: 24 × 24 × 38 (berlin_parent_coarse.toml)
+# The subsidence sensitivity run: --set physics.options.nesting.parent.divergence=3e-6
+# (diverges during the day, #312: the run then stops, writes its tables up
+# to that point and is marked failed).
+#
+# The run folder's output/ holds parent.csv (z_i, surface fluxes, the
+# air-heat ledger terms per output), parent_theta.csv (θ profiles) and
+# results.toml (dt history, retries, the ledger by night and day windows);
+# berlin_parent_figures.jl draws the figures from them.
+
+schema_version = 1
+extends = "berlin_summer.toml"
+
+[run]
+driver = "urban_parent"
+name = "parent"
+
+[checkpoint]
+# the parent alone runs to the end in one call
+every_seconds = inf
+keep = 2
+
+[geometry]
+# the land use from [preprocess] landuse in memory: any refinement
+parent_static = "none"
+
+[physics.options.nesting.parent]
+output_period = 1800.0
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): the coarse grid, 3 min. Paths resolve against this file's directory.
+[test]
+overrides = [
+    "physics.options.nesting.parent.refinement=[16, 16, 8]",
+    "physics.options.nesting.parent.hours=0.05",
+    "physics.options.nesting.parent.output_period=60.0",
+]

@@ -20,7 +20,7 @@
 #      run.toml; the state fields, diagnostics.csv, results.toml and
 #      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
 # A configs/*.toml without a [test] table fails the suite with a message
-# naming the file. Resume: for the simulation, sbl and berlin drivers, a run
+# naming the file. Resume: for the simulation, sbl and urban drivers, a run
 # interrupted after its middle checkpoint and resumed the way
 # `aeolus run <folder> --resume` does is bitwise the uninterrupted run
 # (the Berlin case's since #269).
@@ -88,7 +88,7 @@ const RT_FILES = shipped_config_files()
 @testset "round-trip coverage: the docs build writes a reference page per driver and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["simulation", "berlin", "sbl", "dns", "column"], reference_drivers())
+    @test issubset(["simulation", "urban", "urban_parent", "sbl", "dns", "column"], reference_drivers())
     # every option page is the schema's generated Markdown, verbatim after its header
     for d in reference_drivers()
         @test endswith(read(joinpath(RT_REFERENCE, "options", d * ".md"), String),
@@ -206,7 +206,7 @@ end
     @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.case.nsteps == 20 && r.runs[2].obj.case.sim.t === r.runs[1].obj.case.sim.t
-    # berlin driver (#269): berlin_smoke.toml, nested, every coupling on, 24 s (15 adaptive
+    # urban driver (#269): berlin_smoke.toml, nested, every coupling on, 24 s (15 adaptive
     # steps), a checkpoint every 6 steps, interrupted after step 9 and resumed from step 6;
     # the state of the child, every tracer, Ts and the nest parent bitwise, and the NetCDF
     # output's record written after the checkpoint is rewritten to the same values
