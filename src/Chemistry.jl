@@ -26,7 +26,7 @@ using ..Fields: Field, interior_view
 using ..Backends: Backends, plane_reduce!, plane_map!, ordered_sum, column_sum
 
 export apply_linear_chemistry!,
-       air_number_density, ppb_rate_constant, emission_ppb_flux,
+       air_number_density, ppb_rate_constant, emission_ppb_flux, traffic_profile,
        k_NO_O3, k_NO2_OH, k_VOC_O3, k_VOC_OH, j_NO2,
        nox_triad, photostationary_NO2, leighton_ratio,
        photochemistry_cell, apply_photochemistry!,
@@ -114,6 +114,23 @@ layer of depth ``Δz`` for a time ``Δt``, it raises the mixing ratio by
 """
 emission_ppb_flux(F::Real, M_molar::Real; p::Real = 101325.0, T::Real = 293.15) =
     1e9 * (F / M_molar) / (p / (_R_GAS * T))
+
+"""
+    traffic_profile(hour) -> 0…1
+
+Diurnal shape of road-traffic emissions at local `hour`: a night floor of
+0.15, a daytime plateau (06:30–21:00, logistic edges of 0.5 h and 0.7 h)
+and Gaussian rush-hour peaks (1.5 h wide) at 08:00 and 17:30, so that the
+rush hours are ≈ 1 (0.97 in the morning, 1.00 in the evening) and midday
+≈ 0.7. An assumed shape of the kind urban
+weekday traffic counts show, not a fit to a count. Moved from the urban
+case's air-quality coupling (ONE-e, #454).
+"""
+function traffic_profile(hour::Real)
+    day = 1 / (1 + exp(-(hour - 6.5) / 0.5)) / (1 + exp((hour - 21.0) / 0.7))
+    rush = exp(-((hour - 8.0) / 1.5)^2) + exp(-((hour - 17.5) / 1.5)^2)
+    return 0.15 + 0.55 * day + 0.3 * rush
+end
 
 # =========================================================================
 # 3. Rate constants and photolysis

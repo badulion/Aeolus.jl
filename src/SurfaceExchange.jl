@@ -71,7 +71,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
-       SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length,
+       SurfaceLayerSolution, solve_surface_layer, aerodynamic_resistance, bulk_richardson, obukhov_length,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
@@ -390,6 +390,16 @@ struct SurfaceLayerSolution{T<:AbstractFloat}
     iterations::Int
     converged::Bool
 end
+
+"""
+    aerodynamic_resistance(sol::SurfaceLayerSolution) -> s m⁻¹
+
+The scalar aerodynamic resistance of the surface layer,
+``r_a = 1/(C_H U)``: the heat flux is ``H = ρ c_p (θ_s − θ_a)/r_a``.
+Dry deposition (`Chemistry.dry_deposition_velocity`) puts it in series
+with the quasi-laminar and surface resistances.
+"""
+aerodynamic_resistance(sol::SurfaceLayerSolution) = 1 / (sol.C_H * sol.U)
 
 # ε' = R_v/R_d - 1 ≈ 0.608, the virtual-temperature coefficient.
 _virtual_coefficient(c::SurfaceConstants) = R_v(c.thermo) / R_d(c.thermo) - 1
