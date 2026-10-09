@@ -38,7 +38,7 @@
 # =========================================================================
 
 include(joinpath(@__DIR__, "runs.jl"))
-using Aeolus: SurfaceExchange
+using Aeolus.SurfaceExchange: von_karman
 using Aeolus.StableBoundaryLayer: relam_heat_flux       # Q of an h/L (a formula, no model)
 using Printf
 
@@ -48,7 +48,7 @@ const OUTDIR = mkpath(SBL_OUT)
 # Nieuwstadt (2005)'s critical h/L at Re_τ = 360 is 1.23 with an Obukhov
 # length that excludes κ; Aeolus's L (`SurfaceExchange.obukhov_length`)
 # includes it, so the same threshold is 1.23 κ here.
-const H_NIEUWSTADT = 1.23 * SurfaceExchange.von_karman()
+const H_NIEUWSTADT = 1.23 * von_karman()
 runs_of(Re) = sort!([r for r in RUNS if round(Int, cfgval(r, "case.re_tau")) == Re]; by = r -> r.stats.h_over_L)
 grid(Re) = Tuple(cfgval(first(runs_of(Re)), "grid.size"))
 t_end_of(Re) = cfgval(first(runs_of(Re)), "stepper.end_time")

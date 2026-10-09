@@ -22,7 +22,8 @@ using Test
 using Printf
 using TOML
 using Dates: DateTime, Date, value
-using Aeolus
+using Aeolus: load_run_config, boundary_layer_height, forcing_value
+using Aeolus.MoistThermodynamics: virtual_temperature, PhasePartition
 using Aeolus.InputDrivers: read_dynamic_driver, shift_table
 
 length(ARGS) == 1 || error("usage: berlin_parent_lindenberg_check.jl <run folder of berlin_parent_coarse.toml>")
@@ -65,10 +66,9 @@ const DYN = CFG.initial.dynamic
     d = read_dynamic_driver(DYN; planes = false)
     off = value(DateTime(rstrip(d.init_time, 'Z')) - DateTime(Date(DateTime(rstrip(d.init_time, 'Z'))))) / 1000
     P = (θ = shift_table(d.tables[:profile_theta], off), qv = shift_table(d.tables[:profile_qv], off))
-    MT = Aeolus.MoistThermodynamics
     t12 = 12 * 3600.0                     # 14 LT = 12 UTC (s from 00 UTC; released 10:45)
     z = P.θ.z
-    θv_obs = [MT.virtual_temperature(forcing_value(P.θ, h, t12), MT.PhasePartition(forcing_value(P.qv, h, t12)))
+    θv_obs = [virtual_temperature(forcing_value(P.θ, h, t12), PhasePartition(forcing_value(P.qv, h, t12)))
               for h in z]
     zi_obs = boundary_layer_height(z, θv_obs; method = :parcel)
     i14 = rec(14.0)

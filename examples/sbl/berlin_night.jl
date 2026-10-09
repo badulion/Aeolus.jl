@@ -22,7 +22,7 @@
 #   julia --project=. examples/sbl/berlin_night.jl [path/to/alexanderplatz.nc]
 # =========================================================================
 
-using Aeolus
+using Aeolus: NCDataset
 using Printf
 using Statistics: mean
 

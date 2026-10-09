@@ -12,7 +12,7 @@
 #     julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml
 #     julia --project examples/urban/berlin_parent_figures.jl <run folder> ["label"]
 
-using Aeolus, Printf
+using Printf
 isdefined(Main, :write_png) || include(joinpath(@__DIR__, "..", "viz", "apng.jl"))
 isdefined(Main, :svg_figure) || include(joinpath(@__DIR__, "..", "sbl", "svgplot.jl"))
 

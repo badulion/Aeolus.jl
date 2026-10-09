@@ -13,7 +13,7 @@
 # clearest.
 
 using Printf
-using Aeolus
+using Aeolus: NCDataset
 using Statistics: mean
 
 include(joinpath(@__DIR__, "apng.jl"))

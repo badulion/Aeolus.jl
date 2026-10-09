@@ -15,7 +15,7 @@
 #
 # Writes `output/surface_diurnal.svg`.
 
-using Aeolus
+using Aeolus: NCDataset
 using Printf
 
 include(joinpath(@__DIR__, "..", "viz", "plot_utils.jl"))

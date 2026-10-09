@@ -13,7 +13,8 @@
 # rasters are PNGs (the in-package encoder of examples/viz/apng.jl)
 # embedded in the SVG; all text is SVG text, so no bitmap font is involved.
 
-using Aeolus, Printf
+using Aeolus: NCDataset
+using Printf
 include(joinpath(@__DIR__, "..", "viz", "apng.jl"))
 
 length(ARGS) >= 1 || error("usage: plot_parent_surface.jl <run folder> [out.svg]")

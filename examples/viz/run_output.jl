@@ -9,7 +9,7 @@
 #   F = read_fields(last_fields_file(folder))  # Dict name => Array{Float32,3}
 
 using TOML
-import Aeolus
+import NCDatasets
 using Aeolus: NCDataset
 
 "The run folder given on the command line (`ARGS[1]`), checked."
@@ -60,7 +60,7 @@ function read_profile(folder, name)
     ds = NCDataset(joinpath(folder, "diagnostics.nc"))
     try
         v = ds[name]
-        ax = first(Aeolus.NCIO.NCDatasets.dimnames(v))
+        ax = first(NCDatasets.dimnames(v))
         return Array(ds[ax][:]), Array(v[:, :]), Array(ds["time_costly"][:])
     finally
         close(ds)

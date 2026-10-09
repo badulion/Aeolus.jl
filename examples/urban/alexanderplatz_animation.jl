@@ -30,7 +30,7 @@
 #   AEOLUS_FRAME_MS frame delay in ms (default 120)
 
 using Printf
-using Aeolus
+using Aeolus: NCDataset
 using Statistics: mean, quantile
 
 include(joinpath(@__DIR__, "..", "viz", "apng.jl"))
