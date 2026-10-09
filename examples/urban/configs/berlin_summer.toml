@@ -25,11 +25,11 @@
 # Relative paths are relative to this file. `aeolus options urban` lists
 # every option with its type, units and default.
 
-schema_version = 1
+schema_version = 2
 
 [run]
 # What runs and where its folder goes.
-driver = "urban"
+legacy = "urban"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "summer"
 # the seed of the run's random numbers

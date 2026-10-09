@@ -12,8 +12,10 @@
 #   julia --project -m Aeolus run examples/nesting/configs/cbl_inflow_statistics.toml
 #   julia --project=. examples/nesting/report_cbl_inflow_statistics.jl runs/<date>_cbl_inflow_statistics_<id>
 
+schema_version = 2
+
 [run]
-driver = "cbl"
+legacy = "cbl"
 name = "cbl_inflow_statistics"
 seed = 1
 

@@ -10,8 +10,10 @@
 #   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml --set 'forcing.subsidence={}'   # without subsidence
 #   julia --project examples/sbl/gabls2.jl runs/cases99_*
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "cases99"
 seed = 1
 

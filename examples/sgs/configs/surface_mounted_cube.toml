@@ -24,8 +24,10 @@
 # Remake the static driver after changing the grid:
 #   julia --project -m Aeolus preprocess static examples/sgs/configs/surface_mounted_cube.toml
 
+schema_version = 2
+
 [run]
-driver = "obstacle_channel"
+legacy = "obstacle_channel"
 name = "surface_mounted_cube"
 seed = 1993
 

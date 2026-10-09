@@ -11,8 +11,10 @@
 #   julia --project -m Aeolus run --resume runs/<run folder>                                     # continue one
 #   julia --project examples/sbl/gabls1.jl runs/gabls1_*                                         # table and figure
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "gabls1"
 seed = 1
 

@@ -12,8 +12,10 @@
 #   julia --project -m Aeolus run examples/sbl/configs/stratified_channel_sweep.toml --set grid.size=[24,16,32] --set stepper.end_time=16.0 --set case.spinup_time=6.0 --set averaging.from=10.0
 #   julia --project examples/sbl/stratified_channel.jl runs/stratified_channel_re180_*
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "stratified_channel_re180"
 seed = 1
 

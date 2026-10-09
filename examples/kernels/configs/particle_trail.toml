@@ -7,8 +7,9 @@
 #   julia --project -m Aeolus run examples/kernels/configs/particle_trail.toml
 #   julia --project=. examples/kernels/plot_particle_trail.jl runs/<date>_particle_trail_<id>
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "particle_trail"
 
 [grid]
@@ -17,16 +18,23 @@ extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
 
 [dynamics]
 nu = 0.01
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
+
+[sgs]
+closure = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.05
-end_time = "none"
 nsteps = 100
+duration = "none"
 
 [logging]
 diagnostics_cadence = 1.0
@@ -37,4 +45,4 @@ seed = 7
 z = [3.141592653589793, 3.141592653589793]   # the plane z = π (L/2)
 
 [test]
-overrides = ["grid.size=[16,16,16]", "stepper.nsteps=10"]
+overrides = ["grid.size=[16,16,16]", "time.nsteps=10"]

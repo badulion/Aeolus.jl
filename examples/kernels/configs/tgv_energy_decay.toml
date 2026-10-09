@@ -9,8 +9,9 @@
 #
 # The plot reads ke_mean from the run's diagnostics.csv.
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "tgv_energy_decay"
 
 [grid]
@@ -19,18 +20,25 @@ extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
 
 [dynamics]
 nu = 0.01
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
+
+[sgs]
+closure = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.07853981633974483        # 0.4 dx / U₀ (the viscous limit 0.4 dx²/2ν is larger)
-end_time = 4.0                  # 51 steps of 4/51
+duration = 4.0                  # 51 steps of 4/51
 
 [logging]
 diagnostics_cadence = 0.07      # a row every step
 
 [test]
-overrides = ["grid.size=[16,16,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]

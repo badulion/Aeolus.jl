@@ -9,11 +9,11 @@
 # The check reads the run folder's output/ (parent.csv, parent_theta.csv,
 # results.toml) and the sounding CSV; it runs nothing.
 
-schema_version = 1
+schema_version = 2
 
 [run]
 # What runs and where its folder goes.
-driver = "urban_parent"
+legacy = "urban_parent"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "parent_coarse"
 # the seed of the run's random numbers

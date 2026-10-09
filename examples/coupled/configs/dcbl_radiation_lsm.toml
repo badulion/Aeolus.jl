@@ -16,8 +16,9 @@
 # so its land never heated the air; the run type applies the flux (EX-d,
 # #441; test/config_run_drivers.jl).
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "dcbl_radiation_lsm"
 seed = 1
 
@@ -28,8 +29,6 @@ extent = [3200.0, 3200.0, 1600.0]
 [dynamics]
 theta0 = 300.0
 g = 9.81
-sponge_alpha_max = 0.01
-sponge_z_start = 1200.0
 
 [boundaries]
 z = "free_slip"
@@ -38,6 +37,10 @@ z = "free_slip"
 closure = "smagorinsky"
 c_s = 0.17
 pr_t = 0.3333333333333333
+
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0
 
 [initial]
 theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
@@ -58,13 +61,13 @@ sw_peak = 800.0
 sw_duration = 10800.0
 lw_down = 340.0
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 5.0
-end_time = 10800.0              # 3 h
+duration = 10800.0              # 3 h
 
 [logging]
 diagnostics_cadence = 360.0     # 30 rows
 
 [test]
-overrides = ["grid.size=[16,16,16]", "stepper.end_time=\"none\"", "stepper.nsteps=10"]
+overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]

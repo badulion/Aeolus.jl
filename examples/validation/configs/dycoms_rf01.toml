@@ -10,8 +10,10 @@
 #   julia --project=. examples/validation/dycoms_rf01_radiation.jl
 #   julia --project -m Aeolus run examples/validation/configs/dycoms_rf01.toml
 
+schema_version = 2
+
 [run]
-driver = "column"
+legacy = "column"
 name = "dycoms_rf01"
 
 [column]

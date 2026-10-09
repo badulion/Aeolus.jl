@@ -6,8 +6,9 @@
 #
 #   julia --project -m Aeolus run examples/configs/buoyant_convection.toml
 
+schema_version = 2
+
 [run]
-driver = "simulation"
 name = "buoyant_convection"
 seed = 1
 
@@ -19,6 +20,9 @@ extent = [1.0, 1.0, 1.0]
 theta0 = 300.0
 g = 9.81
 
+[boundaries]
+z = "periodic"
+
 [sgs]
 closure = "smagorinsky"
 c_s = 0.17
@@ -28,10 +32,10 @@ pr_t = 0.3333333333333333
 theta = { kind = "mixed_layer_lapse", value = 300.5, z_i = 0.0, lapse = -1.0 }   # θ₀ + Δθ (1/2 − z/L)
 perturbation_amplitude = 0.001
 
-[stepper]
+[time]
 scheme = "euler"
 dt = 0.05184386846337478        # 0.3 dx / w*, w* = sqrt(g Δθ / θ₀ L)
-end_time = 5.0
+duration = 5.0
 
 [logging]
 diagnostics_cadence = 0.5
@@ -42,6 +46,6 @@ diagnostics_cadence = 0.5
 [test]
 overrides = [
     "grid.size=[16,16,16]",
-    "stepper.end_time=\"none\"",
-    "stepper.nsteps=10",
+    "time.duration=\"none\"",
+    "time.nsteps=10",
 ]

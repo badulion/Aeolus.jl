@@ -21,11 +21,11 @@
 # results.toml (dt history, retries, the ledger by night and day windows);
 # berlin_parent_figures.jl draws the figures from them.
 
-schema_version = 1
+schema_version = 2
 
 [run]
 # What runs and where its folder goes.
-driver = "urban_parent"
+legacy = "urban_parent"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "parent"
 # the seed of the run's random numbers

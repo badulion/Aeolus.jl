@@ -8,8 +8,10 @@
 #   julia --project=. examples/validation/apriori_sgs.jl
 #   julia --project=. examples/validation/apriori_sgs.jl --set grid.n=48
 
+schema_version = 2
+
 [run]
-driver = "dns_decay"
+legacy = "dns_decay"
 name = "apriori_sgs"
 seed = 1
 

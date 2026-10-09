@@ -10,8 +10,10 @@
 #   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml --set grid.size=[128,128,128] --set grid.extent=[800.0,800.0,800.0] --set sponge.z=600.0
 #   julia --project examples/sbl/gabls3.jl runs/gabls3_*
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "gabls3"
 seed = 1
 

@@ -8,8 +8,10 @@
 #   julia --project -m Aeolus run examples/sgs/configs/surface_mounted_cube_closures.toml --member tke  # one
 #   julia --project=. examples/sgs/plot_surface_mounted_cube.jl runs/<date>_surface_mounted_cube_*
 
+schema_version = 2
+
 [run]
-driver = "obstacle_channel"
+legacy = "obstacle_channel"
 name = "surface_mounted_cube"
 seed = 1993
 

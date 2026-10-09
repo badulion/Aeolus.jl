@@ -16,11 +16,11 @@
 #
 #   julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml
 
-schema_version = 1
+schema_version = 2
 
 [run]
 # What runs and where its folder goes.
-driver = "urban"
+legacy = "urban"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "smoke"
 # the seed of the run's random numbers

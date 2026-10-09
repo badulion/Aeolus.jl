@@ -10,8 +10,10 @@
 #   julia --project -m Aeolus run examples/sbl/configs/collapse_channel_sweep.toml
 #   julia --project examples/sbl/collapse_channel.jl runs/collapse_channel_*
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "collapse_channel"
 seed = 1
 

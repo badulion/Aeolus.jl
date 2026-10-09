@@ -11,8 +11,10 @@
 #   julia --project -m Aeolus run examples/sbl/configs/relaminarisation_sweep.toml --member re180_2.0
 #   julia --project examples/sbl/relaminarisation_channel.jl runs/relaminarisation_*
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "relaminarisation"
 seed = 1
 

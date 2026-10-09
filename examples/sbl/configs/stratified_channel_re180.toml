@@ -11,8 +11,10 @@
 # statistics from averaging.from. Times in δ/u_τ.
 # DNS: examples/sbl/data/stratified_channel_gv11_re180.csv.
 
+schema_version = 2
+
 [run]
-driver = "sbl"
+legacy = "sbl"
 name = "stratified_channel_re180"
 seed = 1
 
