@@ -74,7 +74,8 @@ using ..Operators: laplacian, divergence, ∂x, ∂y, ∂z,
                    add_eddy_viscosity_w!, add_eddy_diffusion_scalar!,
                    add_surface_flux!, add_sponge!,
                    compute_sgs!, add_sgs_momentum!, add_sgs_scalar!, advance_sgs!,
-                   _active_sgs, _check_sgs_stress
+                   _active_sgs, _check_sgs_stress, sgs_weighted_form
+import ..Operators: flux_weights
 using ..PressureSolvers: PressureSolvers, AbstractPressureSolver, ColumnTridiagonalSolver
 using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
@@ -1491,6 +1492,9 @@ constraint_weights(sim::MassWeightedSimulation) =
 # flux of the constraint weight W (ρ̄ or ρ̄θ̄), the quantity the projection
 # annihilates.
 boundary_flux_weights(sim::MassWeightedSimulation) = constraint_weights(sim)
+# The SGS fluxes and the prescribed surface fluxes in the same W-weighted
+# flux form as the advection (ONE-j, #460): Σ W θ ΔV and Σ W uᵢ ΔV close.
+flux_weights(sim::MassWeightedSimulation) = constraint_weights(sim)
 
 _default_reference(::AnelasticWeighting, mesh)            = isentropic_reference(mesh)
 _default_reference(::PseudoIncompressibleWeighting, mesh)  = constant_stability_reference(mesh)
@@ -1643,9 +1647,17 @@ legacy alias `eddy_viscosity!` is accepted) replaces the built-in
 Smagorinsky closure (`C_s`), its coefficients go into `sim.νt` / `sim.κt`,
 its tendencies are added in step 3 where the built-in ones are, and its
 memory is committed once after the projection; `sgs_stress = :laplacian |
-:symmetric` selects the form of its momentum divergence as for `step!`. The
-SGS stress is applied in the unweighted form, like the built-in closure (the `O(∂ln ρ̄/∂z)` weighting
-correction is omitted for the same reason as for the molecular term).
+:symmetric` selects the form of its momentum divergence as for `step!`.
+
+The SGS stress and scalar flux, and the prescribed surface fluxes, are in
+the `W`-weighted flux form of the advection, `(1/W) ∇·(W F)` (ONE-j, #460;
+[`flux_weights`](@ref Aeolus.Operators.flux_weights)): with the walls
+closed, `Σ W θ ΔV` changes only by the surface fluxes,
+`(W_f,bot F_bot − W_f,top F_top) A`, and the SGS terms conserve
+`Σ W uᵢ ΔV`. A closure without a weighted form (a full-tensor scalar
+flux, an explicit Reynolds stress: `sgs_weighted_form`) is refused. The
+molecular term `ν∇²` stays unweighted (the `O(∂ln ρ̄/∂z)` correction is
+negligible at molecular `ν`).
 """
 step_anelastic!(sim::AnelasticSimulation, dt::Real; kwargs...) =
     _step_mass_weighted!(sim, dt; kwargs...)
@@ -1750,6 +1762,10 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
     if closure !== nothing
         t_sgs = time_ns()
         f = compute_sgs!(closure, sim)
+        sgs_weighted_form(closure, f, sim) ||
+            throw(ArgumentError("the $(nameof(typeof(sim.weighting))) core takes the SGS fluxes in the " *
+                                "W-weighted flux form; $(nameof(typeof(closure))) has a full-tensor scalar " *
+                                "flux or its own stress, which have none"))
         add_sgs_momentum!(sim.tu, sim.tv, sim.tw, closure, f, sim; stress = sgs_stress)
         add_sgs_scalar!(sim.tθ, sim.θ, closure, f, sim)
         sim.workspaces.rec.wall_sgs += _wall(t_sgs)
@@ -1760,7 +1776,7 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
 
     # 6. Coriolis / surface flux / sponge / user forcing
     sim.has_coriolis && add_coriolis!(sim.tu, sim.tv, sim.u, sim.v, sim.f_coriolis)
-    sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top)
+    sim.has_surface_flux && add_surface_flux!(sim.tθ, sim.θ_flux_bottom, sim.θ_flux_top; weights = (Wc, Wf))
     sim.has_sponge && add_velocity_sponge!(sim)   # toward sim.sponge_target (#262)
     body_force! === nothing || body_force!(sim, Δt)
 

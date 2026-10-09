@@ -20,7 +20,7 @@ The core's own pieces are the first components: [`CentredAdvection`](@ref)
 """
 module Components
 
-using ..Operators: Operators, momentum_advect!, add_coriolis!, add_surface_flux!,
+using ..Operators: Operators, momentum_advect!, add_coriolis!, add_surface_flux!, flux_weights,
                    AbstractSGSClosure, StaticSmagorinsky, DynamicSmagorinsky, VremanClosure,
                    SigmaModel, AMDClosure, StabilityCorrected
 using ..TurbulenceStability: BrownEtAl1994, LillyCutoff, ShortTail, LongTail

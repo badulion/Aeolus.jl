@@ -141,18 +141,22 @@ Add the SGS stress divergence to the momentum tendencies. `stress` is the
   [`add_sgs_stress_divergence!`](@ref) with `νh = f.νh`, `νv = f.νv`
   (P55-b, #175).
 
+On a sound-proof core ([`flux_weights`](@ref)`(sim)` not `nothing`) both
+forms are the weighted flux divergence `(1/W) ∂ⱼ(W τᵢⱼ)`.
+
 A closure with its own stress (an explicit Reynolds stress) adds a method
 and may call [`add_stress_divergence!`](@ref). Halos of `sim.u, sim.v,
 sim.w` and of `f` are filled.
 """
 function add_sgs_momentum!(tu, tv, tw, c::AbstractSGSClosure, f::SGSFields, sim;
                            stress::Symbol = :laplacian)
+    W = flux_weights(sim)
     if stress === :laplacian
-        add_eddy_viscosity_u!(tu, sim.u, f.νh)
-        add_eddy_viscosity_v!(tv, sim.v, f.νh)
-        add_eddy_viscosity_w!(tw, sim.w, f.νh)
+        add_eddy_viscosity_u!(tu, sim.u, f.νh; weights = W)
+        add_eddy_viscosity_v!(tv, sim.v, f.νh; weights = W)
+        add_eddy_viscosity_w!(tw, sim.w, f.νh; weights = W)
     elseif stress === :symmetric
-        add_sgs_stress_divergence!(tu, tv, tw, sim.u, sim.v, sim.w, f.νh, f.νv)
+        add_sgs_stress_divergence!(tu, tv, tw, sim.u, sim.v, sim.w, f.νh, f.νv; weights = W)
     else
         _check_sgs_stress(stress)
     end
@@ -184,13 +188,44 @@ diffusivity tensor adds a method that calls
 Halos of `ϕ` and of `f` are filled.
 """
 function add_sgs_scalar!(tϕ, ϕ, c::AbstractSGSClosure, f::SGSFields, sim)
+    W = flux_weights(sim)
     if f.κv === f.κh
-        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh)
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh; weights = W)
     else
-        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, f.κv)
+        add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, f.κv; weights = W)
     end
     return nothing
 end
+
+"""
+    flux_weights(sim) -> Union{Nothing, Tuple}
+
+The vertical weights of the flux-form operators (SGS fluxes, prescribed
+surface fluxes) on the core `sim`: `nothing` on the Boussinesq core (the
+unweighted operators), and the constraint weights `(Wc, Wf)` of a
+sound-proof core (`W = ρ̄` anelastic, `ρ̄θ̄` pseudo-incompressible;
+`Anelastic.constraint_weights`), on which the SGS tendencies are the flux
+form `(1/W) ∇·(W F)` of the weighted advection (ONE-j, #460): the SGS terms
+then conserve `Σ W uᵢ ΔV` and `Σ W θ ΔV`, and a prescribed kinematic
+surface flux `F` changes `Σ W θ ΔV` by `W_face F A` (see
+[`add_surface_flux!`](@ref)), so the core's θ budget closes exactly. The default
+[`add_sgs_momentum!`](@ref) and [`add_sgs_scalar!`](@ref) methods (and those
+of the eddy-viscosity and stability-corrected closures) read it; a closure
+with a full-tensor scalar flux or its own stress has no weighted form, and
+a sound-proof core refuses it (`sgs_weighted_form`).
+"""
+flux_weights(sim) = nothing
+
+"""
+    sgs_weighted_form(c::AbstractSGSClosure, f::SGSFields, sim) -> Bool
+
+Whether the closure `c`'s tendencies take the weights of
+[`flux_weights`](@ref): a closure whose scalar flux has the diagonal face
+form ([`sgs_scalar_face_diffusivity`](@ref) not `nothing`) and whose
+momentum tendency is the eddy viscosity (not [`sgs_explicit_stress`](@ref)).
+"""
+sgs_weighted_form(c::AbstractSGSClosure, f::SGSFields, sim) =
+    !sgs_explicit_stress(c) && sgs_scalar_face_diffusivity(c, f, sim) !== nothing
 
 """
     sgs_scalar_face_diffusivity(c::AbstractSGSClosure, f::SGSFields, sim) -> (Kh, Kv, s) or nothing
@@ -353,8 +388,14 @@ function _fill_sgs_halos!(f::SGSFields, c::AbstractEddyViscosityClosure, sim)
     return f
 end
 
-add_sgs_scalar!(tϕ, ϕ, c::AbstractEddyViscosityClosure, f::SGSFields, sim) =
-    (add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, turbulent_prandtl(c, sim)); nothing)
+# On a sound-proof core the weighted kernel takes the stored κt = νt/Prₜ
+# (its halos are νt's divided by Prₜ, _fill_sgs_halos!).
+function add_sgs_scalar!(tϕ, ϕ, c::AbstractEddyViscosityClosure, f::SGSFields, sim)
+    W = flux_weights(sim)
+    W === nothing ? add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, turbulent_prandtl(c, sim)) :
+                    add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh; weights = W)
+    return nothing
+end
 sgs_scalar_face_diffusivity(c::AbstractEddyViscosityClosure, f::SGSFields, sim) =
     (f.νh, f.νh, 1 / turbulent_prandtl(c, sim))
 

@@ -298,8 +298,14 @@ restore_sgs_state!(c::StabilityCorrected, s) = (restore_sgs_state!(c.base, s); c
 
 # (1/Prₜ) ∂ⱼ(aⱼ ∂ⱼϕ), a = νh on the x, y faces and a_v on the z faces: the
 # kernel and order of operations of the base closure's scalar tendency.
-add_sgs_scalar!(tϕ, ϕ, c::StabilityCorrected, f::SGSFields, sim) =
-    (_add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, c.av, 1 / turbulent_prandtl(c.base, sim),
-                                 mesh(ϕ)); nothing)
+# On a sound-proof core: the weighted kernel with the stored κh = νh/Prₜ,
+# κv = a_v/Prₜ (flux_weights).
+function add_sgs_scalar!(tϕ, ϕ, c::StabilityCorrected, f::SGSFields, sim)
+    W = flux_weights(sim)
+    W === nothing ? _add_eddy_diffusion_scalar!(tϕ, ϕ, f.νh, c.av, 1 / turbulent_prandtl(c.base, sim),
+                                                mesh(ϕ)) :
+                    add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, f.κv; weights = W)
+    return nothing
+end
 sgs_scalar_face_diffusivity(c::StabilityCorrected, f::SGSFields, sim) =
     (f.νh, c.av, 1 / turbulent_prandtl(c.base, sim))

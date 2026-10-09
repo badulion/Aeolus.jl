@@ -122,16 +122,23 @@ edge interpolation of the Laplacian kernels; this is what the IMEX steppers
 treat implicitly) or `:transpose` (the remainder `∂ⱼ(νᵢⱼ∂ᵢuⱼ)`, explicit).
 `:diagonal` + `:transpose` = `:full`.
 
+`weights = (Wc, Wf)` (default `nothing`) is the sound-proof form
+`(1/W) ∂ⱼ(W τᵢⱼ)` of a core with the per-level constraint weights `W`
+(`Anelastic.constraint_weights`, ONE-j #460): the vertical fluxes `τ₁₃`,
+`τ₂₃`, `τ₃₃` are weighted, so `Σ W uᵢ ΔV` is conserved. RegularGrid only.
+
 References: Bryan & Fritsch (2002), *Mon. Wea. Rev.* 130, 2917 (CM1);
 Kosović (1997), *J. Fluid Mech.* 336, 151; Deardorff (1970),
 *J. Fluid Mech.* 41, 453 (the stress form on a staggered grid).
 """
-function add_sgs_stress_divergence!(tu, tv, tw, u, v, w, νh, νv = νh; part::Symbol = :full)
+function add_sgs_stress_divergence!(tu, tv, tw, u, v, w, νh, νv = νh; part::Symbol = :full,
+                                    weights = nothing)
     a, b = part === :full ? (1, 1) : part === :diagonal ? (1, 0) :
            part === :transpose ? (0, 1) :
            throw(ArgumentError("part must be :full, :diagonal or :transpose, got $(repr(part))"))
+    wc, wf = weights === nothing ? (nothing, nothing) : weights
     _add_sgs_stress_divergence!(tu, tv, tw, u, v, w, _coefdata(νh), _coefdata(νv),
-                                a, b, mesh(u))
+                                a, b, mesh(u), wc, wf)
     return nothing
 end
 

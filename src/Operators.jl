@@ -39,7 +39,8 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        compute_sgs!, sgs_closure,
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
-       sgs_tke!                 # N-inflow-b (#258)
+       sgs_tke!,                # N-inflow-b (#258)
+       flux_weights, sgs_weighted_form    # ONE-j (#460)
 # Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
 # Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
@@ -193,18 +194,40 @@ the center. Halos of `u, v, w` must be filled.
 compute_smagorinsky_νt!(νt, u, v, w, C_s) = _compute_smagorinsky_νt!(νt, u, v, w, C_s, mesh(u))
 
 """
-    add_eddy_viscosity_u!(tu, u, νt)
-    add_eddy_viscosity_v!(tv, v, νt)
-    add_eddy_viscosity_w!(tw, w, νt)
+    add_eddy_viscosity_u!(tu, u, νt; weights = nothing)
+    add_eddy_viscosity_v!(tv, v, νt; weights = nothing)
+    add_eddy_viscosity_w!(tw, w, νt; weights = nothing)
 
 Add the conservative eddy-viscosity tendency `∂/∂xⱼ(νₜ ∂uᵢ/∂xⱼ)` to the
 face-centered momentum tendencies. `νt` is interpolated from cell centers
 to the flux face (edges for off-diagonal fluxes).
-"""
-add_eddy_viscosity_u!(tu, u, νt) = _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
 
-@doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_v!(tv, v, νt) = _add_eddy_viscosity_v!(tv, v, νt, mesh(v))
-@doc (@doc add_eddy_viscosity_u!) add_eddy_viscosity_w!(tw, w, νt) = _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
+`weights = (Wc, Wf)` is the sound-proof form `(1/W) ∂ⱼ(W νₜ ∂uᵢ/∂xⱼ)`, with
+a cell weight `Wc[k]` and a bottom-z-face weight `Wf[k]` per storage level
+(`Anelastic.constraint_weights`, ONE-j #460): only the vertical fluxes are
+weighted (`W` depends on z), and `Σ W uᵢ ΔV` is conserved instead of
+`Σ uᵢ ΔV`. `nothing` (default) is the unweighted operator, bit for bit.
+"""
+function add_eddy_viscosity_u!(tu, u, νt; weights = nothing)
+    weights === nothing && return _add_eddy_viscosity_u!(tu, u, νt, mesh(u))
+    return _add_eddy_viscosity_u!(tu, u, νt, mesh(u), _level_weights(u, weights)...)
+end
+@doc (@doc add_eddy_viscosity_u!) function add_eddy_viscosity_v!(tv, v, νt; weights = nothing)
+    weights === nothing && return _add_eddy_viscosity_v!(tv, v, νt, mesh(v))
+    return _add_eddy_viscosity_v!(tv, v, νt, mesh(v), _level_weights(v, weights)...)
+end
+@doc (@doc add_eddy_viscosity_u!) function add_eddy_viscosity_w!(tw, w, νt; weights = nothing)
+    weights === nothing && return _add_eddy_viscosity_w!(tw, w, νt, mesh(w))
+    return _add_eddy_viscosity_w!(tw, w, νt, mesh(w), _level_weights(w, weights)...)
+end
+
+# the per-storage-level weights (Wc, Wf) of a sound-proof operator, checked
+function _level_weights(f, (wc, wf))
+    n = size(f.data, 3)
+    (length(wc) >= n && length(wf) >= n) ||
+        throw(DimensionMismatch("weights: need Wc and Wf per storage level ($n), got $(length(wc)), $(length(wf))"))
+    return wc, wf
+end
 
 """
     add_eddy_diffusion_scalar!(tϕ, ϕ, κt::Field; mask = nothing, weights = nothing)
@@ -276,13 +299,27 @@ function _check_mask_weights(ϕ, mask, weights)
 end
 
 """
-    add_surface_flux!(tϕ, F_bot, F_top)
+    add_surface_flux!(tϕ, F_bot, F_top; weights = nothing)
 
 Inject prescribed diffusive fluxes at the bottom (`F_bot`) and top
 (`F_top`) walls of the domain into the cell-centered scalar tendency.
 Sign convention: `F_bot > 0` means flux into the domain from below.
+
+`weights = (Wc, Wf)` is the sound-proof form ([`flux_weights`](@ref),
+ONE-j #460): the kinematic flux `F` through a wall face carries the mass
+`W_face` there, so the first level gains `(W_f/W_c) F_bot/Δz` and the last
+loses `(W_f/W_c) F_top/Δz`, and `Σ W ϕ ΔV` changes by
+`(W_f,bot F_bot − W_f,top F_top) A` per unit time, exactly (the same
+`W`-weighted flux form as the advection and the SGS fluxes). `nothing`
+(default) is the Boussinesq form, bit for bit.
 """
-add_surface_flux!(tϕ, F_bot, F_top) = _add_surface_flux!(tϕ, F_bot, F_top, mesh(tϕ))
+function add_surface_flux!(tϕ, F_bot, F_top; weights = nothing)
+    weights === nothing && return _add_surface_flux!(tϕ, F_bot, F_top, mesh(tϕ))
+    wc, wf = _level_weights(tϕ, weights)
+    kk = interior(mesh(tϕ))[3]
+    kb, kt = first(kk), last(kk)
+    return _add_surface_flux!(tϕ, F_bot * (wf[kb] / wc[kb]), F_top * (wf[kt+1] / wc[kt]), mesh(tϕ))
+end
 
 """
     add_sponge!(tf, f, α_max, z_start, z_top; f_ref = 0)
