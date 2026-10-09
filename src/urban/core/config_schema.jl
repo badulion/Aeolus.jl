@@ -744,8 +744,8 @@ function Config.driver_sections(::UrbanDriver)
                 doc = "top of the :canopy layer of the air-heat budget; nan: the tallest roof")
     end
     out = section("output") do s
-        option!(s, "netcdf", Optional{String}; default = "alexanderplatz.nc",
-                doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ under aeolus run, else examples/urban/output/); \"none\": no NetCDF")
+        option!(s, "netcdf", Optional{String}; default = "urban.nc",
+                doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ under aeolus run, else output/ in the working directory); \"none\": no NetCDF")
         option!(s, "child_boundaries", Optional{Path}; input = false,
                 doc = "with the online nest: write the child's boundary slabs at every parent step, the 3-D initial wind " *
                       "and the parent's mean profiles to this dynamic driver (CFG-g #362, `aeolus preprocess dynamic " *
