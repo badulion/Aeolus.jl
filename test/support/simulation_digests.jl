@@ -67,6 +67,49 @@ const SD_VARIANTS = [
     "lindenberg_open_rk3"  => ("lindenberg_era5", [sd_steps(6)]),
 ]
 
+# The simulation configs EX-d (#441) added with their couplings around the
+# step ([forcing], [surface], [microphysics], [tracer], [particles],
+# [obstacles]): `label => (config path under examples/, overrides)`, at
+# their own [test] smoke size, plus RK3 runs of the couplings that act
+# inside the step (the IBM obstacles, the slab's floor flux). Captured on
+# master a22b57ba (simulation_digests_exd.toml).
+const SD_EXD_TEST = ["stepper.end_time=\"none\"", "stepper.nsteps=10"]
+const SD_EXD_VARIANTS = [
+    "dcbl_radiation_lsm"     => ("coupled/configs/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]"]),
+    "dcbl_radiation_lsm_rk3" => ("coupled/configs/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]", "stepper.scheme=\"rk3\""]),
+    "heated_plume"           => ("coupled/configs/heated_plume.toml", ["grid.size=[16,16,16]"]),
+    "flow_past_cube"         => ("coupled/configs/flow_past_cube.toml", String[]),
+    "flow_past_cube_rk3"     => ("coupled/configs/flow_past_cube.toml", ["stepper.scheme=\"rk3\""]),
+    "moist_convection"       => ("coupled/configs/moist_convection.toml", ["grid.size=[12,12,16]"]),
+    "channel_flow"           => ("kernels/configs/channel_flow.toml", String[]),
+    "decaying_hit"           => ("kernels/configs/decaying_hit.toml", ["grid.size=[16,16,16]"]),
+    "pollution_plume"        => ("kernels/configs/pollution_plume.toml", String[]),
+]
+
+"""
+    exd_digests(; examples = <this checkout's examples/>, only = nothing) -> Dict
+
+The digests of `SD_EXD_VARIANTS` (as [`simulation_digests`](@ref)), each
+run from its config's directory (relative input paths).
+"""
+function exd_digests(; examples = normpath(joinpath(@__DIR__, "..", "..", "examples")), only = nothing)
+    out = Dict{String,Dict{String,String}}()
+    for (label, (rel, ovr)) in SD_EXD_VARIANTS
+        only === nothing || label in only || continue
+        path = joinpath(examples, rel)
+        r = cd(dirname(path)) do
+            cfg = load_run_config(path; overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\"", ovr))
+            run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
+        end
+        s = Base.invokelatest(state_fields, r.obj)
+        d = Dict{String,String}(string(k) => sd_digest(v) for (k, v) in pairs(s))
+        d["t"] = sd_digest([Base.invokelatest(sd_clock, r.obj)])
+        d["diagnostics_csv"] = sd_digest(codeunits(join(sd_diagnostics(r.folder), "\n")))
+        out[label] = d
+    end
+    return out
+end
+
 "fnv1a64 of the bytes of an array, as 16 hex digits."
 sd_digest(a) = string(fnv1a64(collect(reinterpret(UInt8, vec(collect(a))))); base = 16, pad = 16)
 
