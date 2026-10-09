@@ -39,6 +39,10 @@ them.
 | Validation | **Checks run inside the model.** `[checks]` turns on checks that modules publish. Results go to `results.toml` with pass/fail, and `aeolus run` exits non-zero if a `required` check failed. |
 | Preprocessing | **A separate package in its own repository**, AeolusPrep.jl. It covers OSM/GIS to static driver, ERA5/sounding/parent output to dynamic driver, and data download. Aeolus keeps only the readers and the format schemas. |
 | Single-column cases | **Dropped.** Only 3-D runs. |
+| Channel cases | **Dropped** (the stratified, relaminarisation and collapse channels). No pressure-gradient forcing component is built for them. |
+| Config inheritance | **None.** Every TOML is self-contained; `extends` is removed. Variants of a case (Berlin winter, smoke) are complete files of their own; `--set` overrides on the command line remain for one-off changes. |
+| Dynamical cores | **Every component supports both cores**, Boussinesq and anelastic, checkpointing included. There is no core-specific component and no "Boussinesq only" declaration. |
+| Self-nesting feedback | **Two-way by default** for an Aeolus parent driving an Aeolus child (as in PALM). One-way stays available per child. Driving from reanalysis or a mesoscale model (offline, through the dynamic driver) is one-way by nature. |
 | Compatibility | **Clean break.** All shipped configs are converted in the same PRs; old names, old run folders and old checkpoints are not supported. |
 
 ## What exists today, and why it changes
@@ -81,7 +85,7 @@ Model ──► Output (catalogue-selected) + results.toml (checks) + checkpoint
 A `Domain` holds:
 - its grid;
 - its prognostic state;
-- its **core**: the dynamical core, an exclusive choice of `boussinesq` or `anelastic`;
+- its **core**: the dynamical core, an exclusive choice of `boussinesq` or `anelastic`. Every component works with either; a component's contract tests run on both cores;
 - its tuple of active **components**;
 - its static and dynamic driver;
 - its clock, which nesting keeps in sync.
@@ -193,7 +197,7 @@ id = "child"
 parent = "parent"
 origin = [2500.0, 2500.0]
 refinement = [2, 2, 4]
-feedback = "one_way"         # the self-nesting default stays one-way until #331 validates two-way
+feedback = "two_way"         # the self-nesting default; "one_way" per child is allowed
 static_driver = "input/berlin_mitte_static.nc"
 ```
 
@@ -202,7 +206,7 @@ Rules:
 - **Per-domain overrides.** Run-level module sections apply to every domain. A `[domain.<section>]` block replaces keys for that domain.
 - **Resolved config.** It lists, for every domain, every component with every option (resolved), so a run is fully described by its `run.toml`.
 - **Validation.** Unknown keys are errors. Slot conflicts, missing requirements and incompatibilities are reported with the section names involved.
-- **`extends`** (from CFG-a) stays only for variants of one case (Berlin winter extends Berlin summer). It is not a way to ship module bundles; see the open questions.
+- **Self-contained.** There is no `extends` and no inheritance. Every shipped TOML contains every option it relies on, apart from the model defaults. A change that must reach several variants is made in each file, and the round-trip tests show the diffs between variants explicitly.
 
 ### Input
 
@@ -282,9 +286,9 @@ bit, checked on the config digests, the Berlin smoke and the thread-invariance
 harness. Re-captures are allowed only with a stated reason, and assertions are
 never weakened.
 
-## Open questions
+## Resolved questions (2026-10-09)
 
-1. **`extends`.** Is inheritance between configs still wanted for case variants (winter extends summer), given "explicit only"? The default kept here is yes, for variants only.
-2. **Channel and DNS cases.** Driving pressure gradients and the DNS a-priori filtering analysis need a forcing component and an output-analysis script respectively. Check whether anything there is not expressible.
-3. **Anelastic parity.** Which components must support the anelastic core from the start? Today checkpointing does not, for example.
-4. **The self-nesting default** stays one-way until #331 validates two-way. It is a single config default to flip.
+1. **`extends`:** removed. Every TOML is self-contained.
+2. **Channel cases:** dropped. The DNS a-priori study is kept as output analysis: the model writes 3-D fields at the chosen times, and an analysis script filters them.
+3. **Anelastic parity:** every component supports both cores, checkpointing included.
+4. **Self-nesting default:** two-way. The Berlin two-way nest is still validated in #331, but the default does not wait for it. Two-way with synthetic inflow has been stable on idealised nests since #419.
