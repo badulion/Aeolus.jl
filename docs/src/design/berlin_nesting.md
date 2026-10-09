@@ -346,24 +346,21 @@ from the running parent; `test/input_dynamic.jl`'s bit-for-bit
 online/offline round trip therefore runs with the addon off.
 
 **Two-way.** With `mode = :two_way` the feedback skips an inflow band of
-``⌈2\max L_s/Δx_p⌉`` parent cells (`exclude_inflow_feedback!`). That is
-not enough: two-way with the generator is **measured unstable**, and the
-coupling warns when it is selected. On the 2 h sheared-CBL nest of
+``⌈2\max L_s/Δx_p⌉`` parent cells (`exclude_inflow_feedback!`). The
+interface flux correction gives the parent the child's flux minus the
+generator's normal perturbation (`synthetic_normal_velocity`, #418).
+Before #418 it copied the perturbation into the parent's interface faces.
+The next window's boundary data returned it to the child, and the
+generator added the next one on top. On the 2 h sheared-CBL nest of
 `test/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
-with a 3 m s⁻¹ wind, r = 3) two-way without the generator stays within
-5 % of one-way (child KE ×1.04, parent ×0.995, overlap θ −0.002 K), but
-with it the child's kinetic energy grows ×12, the parent's ×2.5 and the
-overlap θ drifts +0.25 K against one-way with the generator — the #268
-criteria (1.5×, 0.2 K) fail. The cause is the feedback, not the
-generator: one-way, the generator changes the child's KE by 4 %. On the
-decaying refine-3 nest (200 s → 2 h), freezing the parent statistics at
-their first sample (no loop through the parent) cut the growth from
-×2.4 to ×1.3 (child) and from ×1.3 to ×0.97 (parent) but left the
-overlap θ drift at 0.23 K; widening the band from 3 to 6 parent cells
-did not help (×2.1). The generator's eddies are anterpolated into the
-parent once they leave the band, the parent statistics measure them,
-and the generator returns them amplified. Not tuned here (#268: report,
-do not tune); the two-way campaign is #331.
+with a 3 m s⁻¹ wind, r = 3), that made the child's kinetic energy ×12
+and the parent's ×2.5, with an overlap θ drift of +0.25 K against one-way
+with the generator. Two-way with the generator now meets the #268
+criteria (1.5×, 0.2 K) in two realisations: child ×0.94 and ×1.09,
+parent ×1.02, overlap θ −0.003 K and −0.009 K. Two-way without the
+generator gives ×1.04, ×0.995 and −0.002 K. Analysis and the choice of
+fix: [Two-way with the generator](../theory/transition.md#Two-way-with-the-generator-(N-inflow-e)).
+The Berlin two-way nest itself is unvalidated; its campaign is #331.
 
 **Analysis buffer.** Behind an inflow face the turbulence is still
 developing, so the diagnostics compared with observations leave out the
