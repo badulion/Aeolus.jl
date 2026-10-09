@@ -81,13 +81,13 @@ export latlon_to_meters, meters_to_latlon, DriverVariable, DriverSchema, check_d
        coriolis_parameter, era5_columns, era5_times, era5_dynamic_inputs, era5_planes!, write_era5_driver
 
 include("input_drivers/conventions.jl")
-include("preprocess/city.jl")
+include("input_drivers/city.jl")
 include("preprocess/osm.jl")
 include("preprocess/geojson.jl")
 include("input_drivers/static.jl")
 include("input_drivers/dynamic.jl")
-include("preprocess/sounding.jl")
-include("preprocess/parent.jl")
+include("input_drivers/sounding.jl")
+include("input_drivers/recorder.jl")
 include("preprocess/era5.jl")
 
 end # module

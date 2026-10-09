@@ -1,7 +1,7 @@
-# The Aeolus-parent preprocessor of the dynamic driver (CFG-g, #362): an
-# in-run writer. A parent run (in the Berlin case, the nest of the child
-# run) records the prolongated boundary slabs of the child at every parent
-# step, so a child run alone, fed from the file, sees the same Float64
+# The dynamic driver an Aeolus parent writes for its child (CFG-g, #362):
+# an in-run writer, model output (`[output] child_boundaries`). A parent run
+# (in the Berlin case, the nest of the child run) records the prolongated
+# boundary slabs of the child at every parent step, so a child run alone, fed from the file, sees the same Float64
 # snapshots and the same time blend as the online nest: offline equals
 # online bit for bit. One-way offline nesting.
 
@@ -11,8 +11,9 @@
     NestBoundaryRecorder(path, planes, mesh; init_time = "", fields = Dict(), profiles = (;),
                          attributes = Dict(), inputs = nothing, source = "", preprocessor, anchor…)
 
-The in-run writer of a dynamic driver's boundary planes (the Aeolus-parent
-preprocessor, CFG-g #362): it defines a `bc_<face>_<var>` variable for
+The in-run writer of a dynamic driver's boundary planes (an Aeolus parent
+writing its child's driver, CFG-g #362; AeolusPrep.jl uses it for the
+steady planes of a sounding driver and the ERA5 planes): it defines a `bc_<face>_<var>` variable for
 every non-mirror plane of `planes` (the `OpenPlane`s of the child's open
 boundary set) over the unlimited `time_bc`, writes the 3-D initial
 `fields` (`:u`, `:v`, `:w`, …: interior arrays), and on each
