@@ -86,9 +86,9 @@ end
     end
     @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux"]
     @test Set(sch.domain_sections) == Set(DOMAIN_SECTIONS)
-    # run-level sections: the common ones and time, output, checks, preprocess
+    # run-level sections: the common ones and time, output, checks (no preprocess: AeolusPrep.jl, ONE-h)
     @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==
-          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "checks", "preprocess"])
+          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "checks"])
     # a component is enabled by its own section
     cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sponge]\nalpha_max = 0.01\nz_start = 1200.0\n[sgs]\nclosure = \"none\"\n"))
     @test enabled_components(cfg) == Any[CentredAdvection, Coriolis, Sponge]

@@ -56,7 +56,7 @@ The sections:
 
 | level | sections |
 | :-- | :-- |
-| run | `[run]`, `[time]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]`, `[preprocess]` |
+| run | `[run]`, `[time]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]` |
 | per domain | `[grid]`, `[dynamics]` (the core), `[boundaries]`, `[initial]`, and one section per component, generated from its schema: `[advection]`, `[sgs]`, `[coriolis]`, `[sponge]`, `[surface_theta_flux]`; the EX-d couplings `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]` (one component today, split in ONE-e) |
 | the domain itself | `id`, `static_driver`, `dynamic_driver` (top level for one domain, else in each `[[domain]]` block) |
 
