@@ -104,6 +104,7 @@ makedocs(
         ],
         "Design" => [
             "Architecture"                => "design/architecture.md",
+            "One model (target architecture)" => "design/single_model.md",
             "Multiple dispatch on Location" => "design/dispatch.md",
             "Pluggable pressure solvers"  => "design/pressure_solvers.md",
             "The Berlin case"             => [
