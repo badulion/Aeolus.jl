@@ -19,7 +19,7 @@ makedocs(
     modules  = [Aeolus,
                 Aeolus.Grids, Aeolus.Fields, Aeolus.BoundaryConditions,
                 Aeolus.Operators, Aeolus.TimeSteppers,
-                Aeolus.PressureSolvers, Aeolus.Simulations,
+                Aeolus.PressureSolvers, Aeolus.Simulations, Aeolus.Components,
                 Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
                 Aeolus.UrbanCase, Aeolus.StableBoundaryLayer],
     sitename = "Aeolus.jl",
@@ -105,6 +105,7 @@ makedocs(
         "Design" => [
             "Architecture"                => "design/architecture.md",
             "One model (target architecture)" => "design/single_model.md",
+            "Components and the stage pipeline" => "design/components.md",
             "Multiple dispatch on Location" => "design/dispatch.md",
             "Pluggable pressure solvers"  => "design/pressure_solvers.md",
             "The Berlin case"             => [
@@ -136,6 +137,7 @@ makedocs(
             "TimeSteppers"         => "api/time_steppers.md",
             "PressureSolvers"      => "api/pressure_solvers.md",
             "Simulations"          => "api/simulations.md",
+            "Components"           => "api/components.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
             "Input drivers"        => "api/input_drivers.md",
