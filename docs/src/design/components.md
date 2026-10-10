@@ -306,7 +306,34 @@ check before the error propagates. See [Checks](../api/checks.md).
   and the independent recomputations inside the `smoke_check`s. The couplings themselves,
   `UrbanCase`, `CaseConfig`, the registry and the urban stages, ledgers
   and output are still there: their port to components is the rest of
-  ONE-e.
+  ONE-e, in the issue's sub-PRs:
+
+  1. **The shared state as components**, which every urban coupling reads:
+     the ground from the static driver (solid mask, surface classes,
+     vegetation, the radiosity scene), the set of tracers with their
+     scalar transport, the hydrostatic reference state of the initial
+     profile, and the surface bus, held by the urban surface component
+     the surface couplings `require`.
+  2. Surface, radiation and buildings; 3. moisture, microphysics and
+     chemistry; 4. forcing, drag, inflow and the numerics slots (the
+     urban `:core`, `:timestepper`, `:pressure_solver` and
+     `:momentum_advection` providers become the domain's core, time
+     scheme and solver options and the `:advection` slot).
+  5. Berlin as `examples/urban/berlin_*.toml` on the model, and the
+     deletion of `UrbanCase` (its nest parent goes with ONE-f, #455).
+
+  Two differences between the urban stage loop and the pipeline decide
+  what "bit for bit" can mean there. The loop has stages the pipeline
+  lacks: `:transport` (the scalar advection) between `:chemistry` and
+  `:microphysics`, `:fog_dew` after `:tracers`, and `:anthropogenic`
+  where the pipeline has `:sources`. And within a stage the loop runs its
+  entries in declared integer order, the pipeline by slot, then name: in
+  `:body_force` the loop's order is `nesting` (5), `geostrophic` (10),
+  `ibm` (10) or the facade stress (12), the surface drag (15),
+  `moist_buoyancy` (20), `veg_drag` (20) and the facade stencil removal
+  (40) (berlin_case.md, the stage table); several add to the same
+  momentum tendency, so the pipeline's order changes the rounding of the
+  sum unless the component names reproduce it.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the
