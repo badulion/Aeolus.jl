@@ -71,7 +71,7 @@ end
 
 function _cc_runs(; tracer = false, kw...)
     pairs = _cc_pairs(; tracer, NamedTuple(k => v for (k, v) in kw if k in (:seed, :moisture, :stretched, :open_top))...)
-    rkw = NamedTuple(k => v for (k, v) in kw if !(k in (:seed, :moisture, :stretched, :open_top)))
+    rkw = merge((; feedback = :one_way), NamedTuple(k => v for (k, v) in kw if !(k in (:seed, :moisture, :stretched, :open_top))))
     map(pairs) do (p, c, nest)
         sc = tracer ? (:co2 => (Field(CellCenter(), c.mesh), _cc_tracer(p)),) : ()
         NestedRun(p, c, nest; scalars = sc, rkw...)

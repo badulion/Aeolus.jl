@@ -335,7 +335,7 @@ function _nr_tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
     step!(psim, 1e-6); psim.t = 0.0           # project once
     csim = BoussinesqSimulation(cm; ν = ν, bcs = nest_bcs(cm, :nest, :nest, :periodic))
     _nr_init_child_from_parent!(csim, psim, nest)
-    return NestedRun(psim, csim, nest; sponge, kwargs...)
+    return NestedRun(psim, csim, nest; sponge, merge((; feedback = :one_way), NamedTuple(kwargs))...)
 end
 
 "KE of the parent over the cells the child covers (u, v, w averaged to centres)."
