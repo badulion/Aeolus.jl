@@ -131,7 +131,7 @@ export Facet, facet_corners, facet_sample_points, facet_edges,
        LongwaveSolution, solve_longwave,
        LongwaveResponse, longwave_response,
        effective_albedo, longwave_trapping_factor,
-       UrbanRadiationForcing, aggregate_to_grid, facet_column_index,
+       UrbanRadiationForcing, aggregate_to_grid, surface_irradiance!, facet_column_index,
        ray_blocked, segment_blocked
 
 # =========================================================================
@@ -2485,6 +2485,35 @@ function aggregate_to_grid(s::RadiosityScene{T}, vf::ViewFactors{T};
             swa, lwn, aden, svf, swe, lwe, cls, s.facets, ptr, ids, sw_abs, lw_net,
             vf.F_sky, s.materials.albedo, s.materials.emissivity, T_surface, cell, nx)
     return UrbanRadiationForcing{T}(swa, lwn, aden, svf, swe, lwe, cls)
+end
+
+"""
+    surface_irradiance!(sw, lw, forcing, T_surface) -> (sw, lw)
+
+The irradiance per unit of actual **surface** of each column, from the
+per-**plan**-area fluxes of [`aggregate_to_grid`](@ref) (`forcing`): a
+column holding a tall building reports its walls' energy per unit of
+footprint, `area_density` times the incident flux, which is the right
+column energy but not what a one-temperature surface of the column
+absorbs per m². With ``a = \\max(\\mathrm{area\\_density}, 1)``:
+
+```math
+SW = \\frac{SW_{\\mathrm{eff}}}{a}, \\qquad
+LW = σ T_s^4 + \\frac{LW_{\\downarrow,\\mathrm{eff}} - σ T_s^4}{a},
+```
+
+i.e. the net longwave of the column is spread over its surface area, the
+emission ``σ T_s^4`` of the column's temperature `T_surface` kept. (Moved
+from the urban case's radiosity coupling, ONE-e #454; one temperature per
+facet, `UrbanFacetScene`, removes the approximation.)
+"""
+function surface_irradiance!(sw::AbstractMatrix, lw::AbstractMatrix, forcing, T_surface::AbstractMatrix)
+    ad = max.(forcing.area_density, 1.0)
+    σSB = STEFAN_BOLTZMANN
+    sw .= forcing.sw_effective ./ ad
+    lw .= σSB .* T_surface.^4 .+
+          (forcing.lw_down_effective .- σSB .* T_surface.^4) ./ ad
+    return sw, lw
 end
 
 """

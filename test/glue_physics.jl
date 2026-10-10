@@ -31,7 +31,9 @@
 #     column, energy closure of the heating, the TOA insolation, fog, night;
 #   * SurfaceExchange.deliver_surface_fluxes! and MoistThermodynamics.θ_per_heat
 #     (from couplings/surface_exchange.jl, core/reference_state.jl): the air
-#     receives exactly H τ and E τ.
+#     receives exactly H τ and E τ;
+#   * Radiosity.surface_irradiance! (from couplings/radiosity_sun.jl): the
+#     column's shortwave energy and net longwave spread over its surface.
 
 using Test
 using Aeolus
@@ -409,4 +411,20 @@ const GP_MT = Aeolus.MoistThermodynamics
         @test θ_per_heat(1.2, 1004.0, 1.01) ≈ 1 / (1.2 * 1004.0 * 1.01) rtol = 1e-15
     end
 
+    @testset "Radiosity: the irradiance per unit of surface of a column" begin
+        σ = Aeolus.RadiationCore.STEFAN_BOLTZMANN
+        Ts = [300.0 310.0; 290.0 305.0]
+        f = (area_density = [0.4 1.0; 4.0 13.0], sw_effective = [600.0 500.0; 2400.0 3900.0],
+             lw_down_effective = [380.0 360.0; 900.0 4000.0])
+        sw = zeros(2, 2); lw = zeros(2, 2)
+        surface_irradiance!(sw, lw, f, Ts)
+        a = max.(f.area_density, 1.0)
+        # flat columns (area ≤ plan area) keep the plan fluxes
+        @test sw[1, 1] == 600 && sw[1, 2] == 500
+        @test lw[1, 1] ≈ 380 rtol = 1e-14
+        @test lw[1, 2] ≈ 360 rtol = 1e-14
+        # the column's shortwave energy and its net longwave are kept, spread over its surface
+        @test sw .* a ≈ f.sw_effective rtol = 1e-14
+        @test (lw .- σ .* Ts .^ 4) .* a ≈ f.lw_down_effective .- σ .* Ts .^ 4 rtol = 1e-12
+    end
 end

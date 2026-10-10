@@ -288,6 +288,7 @@ check before the error propagates. See [Checks](../api/checks.md).
   | `micro_kessler.jl` | `Microphysics.clamp_booked!` |
   | `column_radiation.jl` | the module `ColumnRadiation`: `ColumnRadiationModel`, `column_radiation_solver`, `stitched_column`, `column_radiation!`, `column_heating_kday` (the nest parent uses it too) |
   | `surface_exchange.jl` | `SurfaceExchange.deliver_surface_fluxes!` (the held H and E into the first air cell) |
+  | `radiosity_sun.jl` | `Radiosity.surface_irradiance!` (plan-area fluxes to per-surface irradiance) |
   | `core/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration), `MoistThermodynamics.θ_per_heat` (the heat-to-θ conversion ``1/(ρ c_p Π)``) |
 
   Two couplings measurably did nothing and were deleted rather than
@@ -296,11 +297,13 @@ check before the error propagates. See [Checks](../api/checks.md).
   (a toy aerosol that started at zero, had no source and was neither
   advected nor written, so it stayed zero), with their `:snow` and
   `:aerosol` slots. `test/glue_physics.jl` tests each moved function at
-  module level. Still in glue code: the surface exchange's delivery of
-  the surface fluxes to the first air cell (`surface_exchange.jl`), the
-  column radiation's stitching of the LES column onto a standard
-  atmosphere (`column_radiation.jl`) and the case's hydrostatic reference
-  state (`core/reference_state.jl`). The couplings themselves,
+  module level. The couplings now gather the case's fields and hand the
+  results on (the case's reference state itself is
+  `Anelastic.reference_from_profile` of its initial profile); small
+  formulas that remain are the radiative temperature of the surface
+  ``(Σε T_s^4/Σε)^{1/4}`` (the column radiation and, summed differently,
+  the nest parent), the friction velocity ``\sqrt{τ/ρ}`` of a surface step,
+  and the independent recomputations inside the `smoke_check`s. The couplings themselves,
   `UrbanCase`, `CaseConfig`, the registry and the urban stages, ledgers
   and output are still there: their port to components is the rest of
   ONE-e.

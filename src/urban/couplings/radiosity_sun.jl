@@ -82,18 +82,8 @@ function run_stage!(c::RadiositySun, case, ::Val{:radiation}, dt)
     bus.swsol = swsol
     bus.lwsol = lwsol
     forcing = aggregate_to_grid(scene, vfac; sw = swsol, lw = lwsol, T_surface = Ts)
-    # `aggregate_to_grid` returns fluxes per unit PLAN area, so a column
-    # holding a 200 m tower reports ~13x the incident flux — its wall
-    # area is 13x its footprint. That is the correct column ENERGY, but
-    # the slab carries one temperature per column and wants an irradiance
-    # per unit of actual SURFACE: divide by the area density to get the
-    # area-weighted mean over the column's facets. `UrbanFacetScene`
-    # removes this approximation (one skin temperature per facet).
-    ad = max.(forcing.area_density, 1.0)
-    σSB = 5.670374419e-8
-    bus.sw .= forcing.sw_effective ./ ad
-    bus.lw .= σSB .* Ts.^4 .+
-              (forcing.lw_down_effective .- σSB .* Ts.^4) ./ ad
+    # per unit of actual surface, not of plan area (Radiosity, ONE-e #454)
+    surface_irradiance!(bus.sw, bus.lw, forcing, Ts)
     bus.sw_beam = irr.dni * μ
     return nothing
 end
