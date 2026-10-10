@@ -60,6 +60,7 @@ include("TwoStream.jl")         # Phase 33
 include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
+include("ColumnRadiation.jl")   # a model's mean column through the Era III stack (ONE-e, #454)
 # Era V, Phase 52 — lake / coastal-sea water column (needs SurfaceOptics).
 include("OceanMixedLayer.jl")
 
@@ -141,6 +142,7 @@ using .TwoStream
 using .MonteCarloRT
 using .Radiosity
 using .SolarGeometry
+using .ColumnRadiation
 
 using .MoistThermodynamics
 using .AerosolCloud
@@ -439,6 +441,9 @@ export AbstractSolarPosition, MeeusPosition,
        partition_global_irradiance,
        cloud_optical_depth_column, cloud_shadow_transmittance!,
        cloud_shadow_map, combined_shadow_transmittance!, shade_direct_beam!
+# a model's mean column through the Era III stack (ONE-e, #454; from the urban glue)
+export ColumnRadiationModel, column_radiation_solver, stitched_column, column_radiation!,
+       column_heating_kday
 
 # Phase 32 — correlated-k gas optics
 export MalkmusParams, malkmus_transmission, malkmus_log_transmission,

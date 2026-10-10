@@ -170,6 +170,7 @@ makedocs(
                 "Surface optics"               => "api/era3/surface_optics.md",
                 "Aerosol optics"               => "api/era3/aerosol_optics.md",
                 "Solar geometry"               => "api/era3/solar_geometry.md",
+                "Column radiation"             => "api/era3/column_radiation.md",
             ],
             "Era IV — microphysics" => [
                 "Overview"                     => "api/era4.md",

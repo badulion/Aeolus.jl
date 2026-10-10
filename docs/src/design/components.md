@@ -286,6 +286,8 @@ check before the error propagates. See [Checks](../api/checks.md).
   | `fog_dew.jl` | `RadiationFog.dew_exchange_columns!` |
   | `cloud_shadow.jl` | `Radiosity.direct_absorbed_share!`, `SolarGeometry.shade_direct_beam!` |
   | `micro_kessler.jl` | `Microphysics.clamp_booked!` |
+  | `column_radiation.jl` | the module `ColumnRadiation`: `ColumnRadiationModel`, `column_radiation_solver`, `stitched_column`, `column_radiation!`, `column_heating_kday` (the nest parent uses it too) |
+  | `core/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration) |
 
   Two couplings measurably did nothing and were deleted rather than
   moved: `snow_legacy.jl` (a snow flag that nothing read, and that could

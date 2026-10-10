@@ -26,7 +26,9 @@
 #   * Microphysics.clamp_booked! (from couplings/micro_kessler.jl): the
 #     clamp's removal, ρ-weighted;
 #   * Anelastic.hydrostatic_pressure (from core/reference_state.jl): the
-#     exact isentropic atmosphere, RK4 convergence.
+#     exact isentropic atmosphere, RK4 convergence;
+#   * ColumnRadiation (from couplings/column_radiation.jl): the stitched
+#     column, energy closure of the heating, the TOA insolation, fog, night.
 
 using Test
 using Aeolus
@@ -326,4 +328,49 @@ const GP_MT = Aeolus.MoistThermodynamics
         e(n) = maximum(abs.(hydrostatic_pressure(θs, zc, 1.0e5; nsub = n) .- pr))
         @test 12 < e(1) / e(2) < 20
     end
+
+    @testset "ColumnRadiation: a model column under the standard atmosphere" begin
+        Nz = 12
+        dz = fill(25.0, Nz)
+        θ = 300.0 .+ 0.003 .* (cumsum(dz) .- dz ./ 2)
+        qv = fill(8e-3, Nz)
+        c = column_radiation_solver(Nz, 101325.0; nz_upper = 30)
+        @test c.p_surf == 101325.0 && length(c.heat) == Nz && c.ncalls == 0
+        col = stitched_column(c, θ, qv, zeros(Nz), dz; T_rad = 301.0)
+        # the model layers under 30 standard-atmosphere layers to 30 km
+        @test length(col.dz) == Nz + 30
+        @test col.dz[1:Nz] == dz
+        @test sum(col.dz) ≈ 30_000 rtol = 1e-9
+        noon = solar_position(solar_time(2019, 6, 29, 11, 0, 0.0; latitude = 52.52, longitude = 13.41))
+        column_radiation!(c, col, noon, 0.95, 0.15)
+        cp = Aeolus.RadiationCore.CP_DRY_AIR
+        # energy: ∫ ρ c_p (dT/dt) dz over the model layers is the net flux into them
+        ΔF = (c.flw.flux_net[Nz+1] - c.flw.flux_net[1]) + (c.fsw.flux_net[Nz+1] - c.fsw.flux_net[1])
+        Q = sum(col.ρ[k] * cp * c.heat[k] * col.dz[k] for k in 1:Nz)
+        @test Q ≈ ΔF rtol = 1e-10
+        @test c.heat ≈ c.heat_lw .+ c.heat_sw rtol = 1e-14
+        # the top of the column receives S₀ (distance-corrected) μ₀
+        @test c.fsw.flux_dn[end] ≈ Aeolus.RadiationCore.SOLAR_CONSTANT * earth_sun_distance_factor(noon) * c.μ₀ rtol = 1e-10
+        @test 0 <= c.fsw.flux_dn_dir[1] <= c.fsw.flux_dn[1] <= c.fsw.flux_dn[end]
+        # the sky longwave is between nothing and the black body of the warmest level
+        Tmax = max(maximum(col.T_lev), maximum(col.T_lay))
+        @test 0 < c.flw.flux_dn[1] < Aeolus.RadiationCore.STEFAN_BOLTZMANN * Tmax^4
+        @test c.fsw_clear === c.fsw                     # no condensate: one shortwave solve
+        k, kl, ks = column_heating_kday(c)
+        w = col.ρ[1:Nz] .* col.dz[1:Nz]
+        @test k ≈ 86400 * sum(w .* c.heat) / sum(w) rtol = 1e-14
+        @test k ≈ kl + ks rtol = 1e-12
+        # a fog layer: less direct beam at the ground than in the clear column
+        ql = [k <= 3 ? 3e-4 : 0.0 for k in 1:Nz]
+        fog = stitched_column(c, θ, qv, ql, dz; T_rad = 301.0)
+        column_radiation!(c, fog, noon, 0.95, 0.15; clear = () -> col)
+        @test c.fsw.flux_dn_dir[1] < 0.5 * c.fsw_clear.flux_dn_dir[1]
+        @test c.ncalls == 2
+        # night: no shortwave, longwave cooling only
+        night = solar_position(solar_time(2019, 6, 29, 23, 0, 0.0; latitude = 52.52, longitude = 13.41))
+        column_radiation!(c, col, night, 0.95, 0.15)
+        @test c.fsw === nothing && c.fsw_clear === nothing && all(iszero, c.heat_sw) && c.μ₀ == 0
+        @test c.heat == c.heat_lw
+    end
+
 end
