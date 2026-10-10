@@ -409,8 +409,8 @@ Riley 2011; Donda et al. 2015):
 
 `max_sustainable_heat_flux(stability, U₁, Δz/2, z0, z0, θ_ref)` with the
 neutral first-level wind ``U_1 = (u_*/κ)\\ln(Δz/(2z_0))`` is the MSHF the
-collapse sweep is normalised by (`examples/sbl/collapse_channel.jl`,
-`test/era6_collapse.jl`).
+collapse sweep is normalised by (`test/era6_collapse.jl`; the former
+`examples/sbl/collapse_channel.jl` was removed by ONE-g, #456).
 
 Measured with `StaticSmagorinsky(0.1)` at 24³ (`test/era6_neutral_abl.jl`)
 and `StaticSmagorinsky(0.17)` (the Mason & Thomson 1992 overshoot): see

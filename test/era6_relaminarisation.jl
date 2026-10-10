@@ -13,9 +13,9 @@
 # Test 3 of the issue (the 32³ open channel at Re_τ = 180, collapse at
 # h/L = 2 and survival at h/L = 0.3 over 20 h/u_τ) costs 4.5–9 min per run
 # here (6200–9900 SSP-RK3 steps), over the 2-min CI budget the issue sets:
-# it is examples/sbl/relaminarisation_channel.jl, which also sweeps h/L at
-# Re_τ = 180 and 360 against Nieuwstadt (2005) and Flores & Riley (2011).
-# Measured there: h/L = 2 collapses, but so does h/L = 0.3 (critical h/L
+# it was the former examples/sbl/relaminarisation_channel.jl (removed by
+# ONE-g, #456), which also swept h/L at Re_τ = 180 and 360 against
+# Nieuwstadt (2005) and Flores & Riley (2011). Measured there: h/L = 2 collapses, but so does h/L = 0.3 (critical h/L
 # 0.12 at Re_τ = 180 on 32³, 0.47 at Re_τ = 360 on 48³; Nieuwstadt's 1.23
 # is for an L without κ, i.e. 1.23 κ ≈ 0.49 with the κ-including L of
 # `relaminarisation_criteria`; h/L = 0.5 collapses on 96³ too) — see

@@ -266,10 +266,10 @@ averaging windows: the 24³ half channel of `era6_neutral_abl.jl`
 (wall stress over 8–20 ``H/u_*``, Φ_m of ``C_s = 0.17``) and of
 `era6_wall_models_channel.jl` (first cell against ``h_{wm}`` and
 filtering over 6–12 ``H/u_*``), whose tolerances were set from seed
-studies over those windows; the laminar Poiseuille channels of
-`era6_stratified_channel.jl` (Nu = 1, ``Ri_τ = 5``) and
+studies over those windows; the laminar Poiseuille channel of
 `era6_relaminarisation.jl` (laminar consistency of the σ closures,
-``Ri_τ = 50``); the 96³ (`era6_apriori_sgs.jl`) and 48³
+``Ri_τ = 50``; the former `era6_stratified_channel.jl`, Nu = 1 at
+``Ri_τ = 5``, was removed by ONE-g, #456); the 96³ (`era6_apriori_sgs.jl`) and 48³
 (`era6_sgs_validation.jl`) DNS fixtures; the config tests' runs of the
 legacy in-code builds, which are the bit-identity oracles of the config
 migration. The slowest fast file, `config_berlin.jl` (111.9 s in the
