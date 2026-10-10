@@ -140,10 +140,17 @@ function sbl_runs(args, usage; kw...)
     return [sbl_run(a; kw...) for a in args]
 end
 
-"The config value `section.key` of a run."
+"""
+    cfgval(r, "section.key")
+
+The config value `section.key` of a run: a run-level section (`time`,
+`output`, …) or a per-domain one of its (first) domain (`grid`, `sgs`,
+`surface_layer`, …; run.toml writes those under `[[config.domain]]`).
+"""
 function cfgval(r, key)
     s, k = split(key, '.')
-    return r.config[s][k]
+    haskey(r.config, s) && return r.config[s][k]
+    return only(r.config["domain"])[s][k]
 end
 
 "The model time of a run's end (s): `[time] start + duration`."
