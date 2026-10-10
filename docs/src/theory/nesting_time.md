@@ -276,18 +276,25 @@ normal velocity enters, the zero-gradient mirror where it leaves.
 
 ## Feedback
 
-* **`:one_way`** (default, the Berlin default). The parent never sees the
-  child. The parent of a one-way run is bit-identical to a standalone parent
-  run with the same ``Δt`` sequence; the test checks this over 20 adaptive
-  steps. The boundary data at the start of a step is reused from the end of
-  the previous one.
-* **`:two_way`** (or a [`TwoWayFeedback`](@ref)). After the child reaches
+* **`:two_way`** (the default since ONE-f, #455, or a
+  [`TwoWayFeedback`](@ref)): the self-nesting default, an Aeolus parent
+  driving an Aeolus child, as in PALM. After the child reaches
   ``t_p + Δt_p``, its field set is anterpolated onto the covered parent
   cells outside a buffer zone, the interface flux of the open faces is
   corrected, the scalars are refluxed from flux registers booked at every
   stage of both domains, and the parent is re-projected; see the
   [two-way nesting page](nesting_twoway.md). The conservation ledger is
   read with [`nest_conservation_error`](@ref).
+* **`:one_way`**, per child. The parent never sees the child. The parent
+  of a one-way run is bit-identical to a standalone parent run with the
+  same ``Δt`` sequence; the test checks this over 20 adaptive steps. The
+  boundary data at the start of a step is reused from the end of the
+  previous one. A mixed core pair (Boussinesq with sound-proof) and a child
+  without a conservation box can only be nested one-way, and so is a
+  child driven offline, by a dynamic driver instead of a running parent.
+  The urban run type's Berlin nest (`[physics.options.nesting] mode`)
+  keeps one-way as its default until it becomes a `[[domain]]` config:
+  its two-way validation is #331.
 
 The historical `step_nested!(parent, child, nest, dt; …)` is a thin wrapper.
 It is a two-way `NestedRun` with a fixed ``Δt``, a fixed `substeps`

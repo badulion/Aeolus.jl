@@ -441,7 +441,7 @@ end
     for (cf, pf) in ((c.u, p.u), (c.v, p.v), (c.w, p.w))
         interpolate_parent_to_child!(cf, pf, nest)
     end
-    run = NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing)
+    run = NestedRun(p, c, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing)
     worst_div = 0.0; worst_Q = 0.0
     for _ in 1:10
         step_nested!(run; dt = 4.0)
@@ -715,7 +715,7 @@ end
         add_nest!(h, :root => c, n1; id = :child, advance = domain_advance(step_rk3!), cfl = nothing,
                   feedback = :two_way)
         gadv = inject === nothing ? domain_advance(step_rk3!) : domain_advance(inject)
-        add_nest!(h, :child => g, n2; id = :grand, advance = gadv, cfl = nothing)   # one-way
+        add_nest!(h, :child => g, n2; feedback = :one_way, id = :grand, advance = gadv, cfl = nothing)   # one-way
         return h, p, c, g
     end
     ha, pa, ca, ga = h3(nothing)
@@ -745,9 +745,9 @@ end
     n1 = nested_grid(pm, ((400.0, 1000.0), (400.0, 1200.0), (400.0, 1200.0)), 2)
     # overlapping siblings
     h = NestHierarchy(p; cfl = nothing)
-    add_nest!(h, :root => _nh_child(n1), n1; id = :A, cfl = nothing)
+    add_nest!(h, :root => _nh_child(n1), n1; feedback = :one_way, id = :A, cfl = nothing)
     n2 = nested_grid(pm, ((900.0, 1400.0), (400.0, 1200.0), (400.0, 1200.0)), 2)
-    err = try add_nest!(h, :root => _nh_child(n2), n2; id = :B, cfl = nothing); nothing catch e; e end
+    err = try add_nest!(h, :root => _nh_child(n2), n2; feedback = :one_way, id = :B, cfl = nothing); nothing catch e; e end
     @test err isa ArgumentError && occursin("overlaps its sibling :A", err.msg)
     # two-way siblings with boxes less than one parent cell apart
     p2 = _nh_root(); h2 = NestHierarchy(p2; cfl = nothing)
@@ -757,7 +757,7 @@ end
     err = try add_nest!(h2, :root => _nh_child(nB), nB; id = :B, cfl = nothing, feedback = :two_way); nothing catch e; e end
     @test err isa ArgumentError && occursin("less than one parent cell apart", err.msg)
     # … one-way they may touch
-    @test add_nest!(h2, :root => _nh_child(nB), nB; id = :B, cfl = nothing) === :B
+    @test add_nest!(h2, :root => _nh_child(nB), nB; feedback = :one_way, id = :B, cfl = nothing) === :B
     # a two-way child without a conservation box: r = 5/2 with no two
     # common faces inside (x extent 2 parent cells, origin off the faces)
     nn = nested_grid(pm, ((450.0, 650.0), (400.0, 1200.0), (400.0, 1200.0)), (5 // 2, 2, 2))
@@ -765,13 +765,13 @@ end
     p3 = _nh_root()
     err = try NestedRun(p3, _nh_child(nn), nn; feedback = :two_way); nothing catch e; e end
     @test err isa ArgumentError && occursin("conservation box", err.msg)
-    @test NestedRun(_nh_root(), _nh_child(nn), nn) isa NestedRun        # one-way is fine
+    @test NestedRun(_nh_root(), _nh_child(nn), nn; feedback = :one_way) isa NestedRun        # one-way is fine
     # a grandchild whose halo stencils reach the child's open boundary
     p4 = _nh_root(); h4 = NestHierarchy(p4; cfl = nothing)
     nc = nested_grid(p4.mesh, ((400.0, 1200.0), (400.0, 1200.0), (400.0, 1200.0)), 2)
-    c4 = _nh_child(nc); add_nest!(h4, :root => c4, nc; id = :child, cfl = nothing)
+    c4 = _nh_child(nc); add_nest!(h4, :root => c4, nc; feedback = :one_way, id = :child, cfl = nothing)
     ng = nested_grid(c4.mesh, ((400.0, 800.0), (600.0, 1000.0), (600.0, 1000.0)), 2)
-    err = try add_nest!(h4, :child => _nh_child(ng), ng; id = :g, cfl = nothing); nothing catch e; e end
+    err = try add_nest!(h4, :child => _nh_child(ng), ng; feedback = :one_way, id = :g, cfl = nothing); nothing catch e; e end
     @test err isa ArgumentError && occursin("not properly nested", err.msg) && occursin("west", err.msg)
     @test !isempty(proper_nesting_violations(ng, c4, _nh_child(ng)))
     @test isempty(proper_nesting_violations(nc, p4, c4))         # a periodic root: no limit
@@ -816,8 +816,8 @@ end
     p2 = _nh_root(); c2 = _nh_child(n1)
     g2 = _nh_child(nested_grid(c2.mesh, ((600.0, 1000.0), (600.0, 1000.0), (600.0, 1000.0)), 2))
     h2 = NestHierarchy(p2; advance = domain_advance(step_rk3!), cfl, sync = :shared_min_dt)
-    add_nest!(h2, :root => c2, n1; id = :child, advance = domain_advance(step_rk3!))
-    add_nest!(h2, :child => g2, nested_grid(c2.mesh, ((600.0, 1000.0), (600.0, 1000.0), (600.0, 1000.0)), 2);
+    add_nest!(h2, :root => c2, n1; feedback = :one_way, id = :child, advance = domain_advance(step_rk3!))
+    add_nest!(h2, :child => g2, nested_grid(c2.mesh, ((600.0, 1000.0), (600.0, 1000.0), (600.0, 1000.0)), 2); feedback = :one_way,
               id = :grand, advance = domain_advance(step_rk3!))
     for _ in 1:3; step_nested!(h2); end
     @test nest_link(h2, :child).stats.child_substeps == 3 && nest_link(h2, :grand).stats.child_substeps == 3

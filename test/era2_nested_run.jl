@@ -160,7 +160,7 @@ function _nr_linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
     end
     adv = domain_advance(child_adv.core, child_adv.args...;
                          child_adv.kwargs..., body_force! = record!)
-    run = NestedRun(psim, csim, nest; advance_parent = domain_advance(_nr_analytic_core(f)),
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(_nr_analytic_core(f)),
                     advance_child = adv, cfl_parent = nothing, cfl_child = nothing,
                     substeps)
     RUN[] = run
@@ -214,7 +214,7 @@ end
             err[] = max(err[], abs(sim.θ.data[1, 1, 1] - (300.0 + A * sin(ω * ts))))
             sim
         end
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(_nr_analytic_core(f)),
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(_nr_analytic_core(f)),
                         advance_child = domain_advance(step_rk3!; body_force! = rec!),
                         cfl_parent = nothing, cfl_child = nothing, substeps = 2)
         RUN[] = run
@@ -244,7 +244,7 @@ end
         psim = BoussinesqSimulation(pm); fill!(psim.u.data, 1.3); fill!(psim.θ.data, 300.0)
         csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
         fill!(csim.u.data, 1.3); fill!(csim.θ.data, 300.0)
-        run = NestedRun(psim, csim, nest; cfl_parent = CFLConstraints(C_advective = 0.5))
+        run = NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = CFLConstraints(C_advective = 0.5))
         for _ in 1:3
             step_nested!(run)
         end
@@ -283,7 +283,7 @@ function _nr_drag_case(; drag_on::Symbol, child_core::Symbol = :boussinesq, c = 
     ac = drag_on === :child ? (child_core === :boussinesq ? drag_rk3 : drag_pp) :
          (child_core === :boussinesq ? plain_rk3 : domain_advance())
     cfl = CFLConstraints(dt_max = 0.01)
-    run = NestedRun(psim, csim, nest; advance_parent = ap, advance_child = ac,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = ap, advance_child = ac,
                     cfl_parent = cfl)
     while run.t < T - 1e-12
         step_nested!(run; dt = min(0.01, T - run.t))
@@ -463,7 +463,7 @@ end
             end
             s
         end
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(counting),
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(counting),
                         advance_child = domain_advance(cdrag; post_predictor! = pp),
                         cfl_parent = CFLConstraints(dt_max = 0.02))
         for _ in 1:10
@@ -516,7 +516,7 @@ end
                                  armed_c[] && (armed_c[] = false; child_throw(sim)); sim)
         pcore(sim, dt; kw...) = (pcalls[] += 1; step!(sim, dt; kw...);
                                  armed_p[] && (armed_p[] = false; parent_throw(sim)); sim)
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(pcore),
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(pcore),
                         advance_child = domain_advance(ccore),
                         cfl_parent = CFLConstraints(dt_max = 0.02))
         return run, ccalls, pcalls
@@ -622,7 +622,7 @@ end
     @test_throws ArgumentError a.s_bc.θ.data[cm.Hx + 2, cm.Hy + 2, cm.Hz + 2]
     @test_throws ArgumentError interpolate_parent_state!(a.s_bc, a.parent, nest; region = :all)
     @test_throws ArgumentError apply_nest_sponge!(a.child, a.s_bc, NestSponge())
-    @test_throws ArgumentError NestedRun(a.parent, a.child, nest; sponge = NestSponge(),
+    @test_throws ArgumentError NestedRun(a.parent, a.child, nest; feedback = :one_way, sponge = NestSponge(),
                                          state = (a.s_old, a.s_new, a.s_bc),
                                          cfl_parent = nothing, cfl_child = nothing)
 end
@@ -688,7 +688,7 @@ end
         c = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest, :nest; scalars = (:q,)))
         fill!(c.θ.data, 300.0)
         qc = Field(CellCenter(), cm)
-        return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing,
+        return NestedRun(p, c, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing,
                          scalars = (:q => (qc, qp),), limit_scalars = :positive,
                          limit_theta = :monotone, limit_momentum = :monotone)
     end
