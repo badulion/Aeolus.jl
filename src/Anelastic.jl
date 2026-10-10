@@ -98,12 +98,13 @@ using ..TimeIntegration: _step_adaptive!, _max_abs
 import ..TimeIntegration: adaptive_dt, StateSnapshot, save_state!, restore_state!,
                           state_snapshot, _all_finite
 using ..IO: allfinite                    # the one finiteness check (#346)
+using ..MoistThermodynamics: DEFAULT_CONSTANTS   # the dry-air constants of hydrostatic_pressure
 import ..IO: checkpoint_fields, checkpoint_reference
 
 export ReferenceState,
        isothermal_reference, isentropic_reference,
        constant_stability_reference, reference_from_profile,
-       hydrostatic_residual, max_hydrostatic_residual,
+       hydrostatic_residual, max_hydrostatic_residual, hydrostatic_pressure,
        reference_scale_height,
        DensityWeightedPoissonSolver, DirectWeightedPoissonSolver, apply_weighted_laplacian!,
        solver_iterations, solver_residual,
@@ -563,6 +564,46 @@ function reference_from_profile(mesh::RegularGrid{T}, θ_profile,
     end
     p̄, ρ̄ = _integrate_hydrostatic(mesh, θ̄, T(p_surf); R_d = R, cp = c, p₀ = p0, g = gg)
     return _assemble_reference(mesh, θ̄, p̄, ρ̄; R_d = R, cp = c, p₀ = p0, g = gg)
+end
+
+"""
+    hydrostatic_pressure(θ, z, p_surf; g = 9.81, nsub = 1000) -> Vector (Pa)
+
+The pressure at the heights `z` (m, increasing, above the ground) of a
+hydrostatic atmosphere with potential temperature `θ(z)` (a function) and
+ground pressure `p_surf`: the continuous
+
+```math
+\\frac{dp}{dz} = -\\frac{g\\,p}{R_d\\,θ(z)\\,Π(p)}, \\qquad Π = (p/p_{ref})^{R_d/c_{pd}},
+```
+
+integrated by RK4 with `nsub` sub-steps per interval, with the dry-air
+constants of `MoistThermodynamics` (`R_d`, `c_pd`, `p_ref` = 1000 hPa).
+Unlike the discrete balance of a [`ReferenceState`](@ref) (exact on its
+uniform grid), it takes any heights: the urban case measures its
+discrete reference state against it, and the nest parent, whose
+stretched levels `reference_from_profile` does not take, uses it as its
+reference pressure. For a constant `θ` the exact solution is
+``Π(z) = Π_s − g z/(c_{pd} θ)``. (Moved from the urban case's glue,
+ONE-e #454.)
+"""
+function hydrostatic_pressure(θ, z::AbstractVector, p_surf::Real; g::Real = 9.81, nsub::Int = 1000)
+    c = DEFAULT_CONSTANTS
+    R_d = c.gas_constant / c.molmass_dry
+    κ = R_d / c.cp_dry
+    f(zz, pp) = -g * pp / (R_d * θ(zz) * (pp / c.p_ref)^κ)
+    out = similar(z, Float64)
+    p, zz = Float64(p_surf), 0.0
+    for k in eachindex(z)
+        h = (z[k] - zz) / nsub
+        for _ in 1:nsub
+            k1 = f(zz, p); k2 = f(zz + h / 2, p + h / 2 * k1)
+            k3 = f(zz + h / 2, p + h / 2 * k2); k4 = f(zz + h, p + h * k3)
+            p += h / 6 * (k1 + 2k2 + 2k3 + k4); zz += h
+        end
+        out[k] = p
+    end
+    return out
 end
 
 # ---------------------------------------------------------- balance check

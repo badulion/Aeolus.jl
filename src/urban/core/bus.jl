@@ -19,11 +19,6 @@ Stefan–Boltzmann constant, delegated to `RadiationCore.STEFAN_BOLTZMANN`
 of `radiosity_sun` until the column-radiation issue (#130).
 """
 const STEFAN = Aeolus.RadiationCore.STEFAN_BOLTZMANN
-# J kg⁻¹, the latent heat buildings_citymean converts its latent release
-# with (and books to the ledger with). The surface exchange uses
-# MoistThermodynamics.latent_heat_vapor(T); the per-building zones issue
-# (#144) replaces the city-mean building and this constant.
-const _L_v   = 2.45e6
 
 # ---------------------------------------------------------------------------
 # Per-class physical parameters

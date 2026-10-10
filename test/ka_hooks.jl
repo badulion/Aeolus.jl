@@ -176,7 +176,7 @@ end
 end
 
 @testset "moist buoyancy of the Berlin example = former loops" begin
-    BCm = Aeolus.UrbanCase
+    BCm = Aeolus.Operators          # the moist buoyancy operator (ONE-e #454: from UrbanCase)
     g = RegularGrid(; size = (24, 20, 10), extent = (24.0, 20.0, 10.0), halo = (3, 3, 3))
     rng = Xoshiro(13)
     θ = 300 .+ randn(rng, 24, 20, 10); qv = 8e-3 .+ 1e-3 .* randn(rng, 24, 20, 10)

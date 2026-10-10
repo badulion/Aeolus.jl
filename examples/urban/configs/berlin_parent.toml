@@ -193,7 +193,6 @@ canopy_top = nan
 
 [physics]
 # Which couplings run: a provider per exclusive slot, on/off per addon.
-aerosol = "toy_two_moment"    # the aerosol provider: toy_two_moment
 buildings = "citymean"    # the buildings provider: citymean
 chemistry = "nox_o3_voc"    # the chemistry provider: nox_o3_voc, off
 column_radiation = "twostream"    # the column_radiation provider: twostream
@@ -206,7 +205,6 @@ momentum_advection = "centered"    # the momentum_advection provider: centered, 
 pressure_solver = "cosine_fft"    # the pressure_solver provider: cosine_fft, density_weighted_cg, density_weighted_direct, mg_cg, multigrid
 scalar_advection = "advection_schemes"    # the scalar_advection provider: advection_schemes
 sgs = "tke"    # the sgs provider: amd, dynamic, mlsgs, reynolds_stress, sigma, smagorinsky, tke, vreman
-snow = "legacy_flag"    # the snow provider: legacy_flag
 surface_exchange = "most"    # the surface_exchange provider: most
 surface_radiation = "radiosity"    # the surface_radiation provider: radiosity
 timestepper = "adaptive"    # the timestepper provider: adaptive, fixed, imex
@@ -222,9 +220,6 @@ traffic_heat = true    # the additive coupling traffic_heat on or off
 turbulence_diag = true    # the additive coupling turbulence_diag on or off
 veg_drag = true    # the additive coupling veg_drag on or off
 wall_model_facades = true    # the additive coupling wall_model_facades on or off
-
-[physics.options.aq_aerosol]
-V_sed = 0.005
 
 [physics.options.aq_chem]
 background = {HNO3 = 0.5, NOx = 5.5, Ox = 45.0, VOC = 0.5}

@@ -24,9 +24,9 @@ using ..Grids: RegularGrid, interior
 using ..Fields: Field, interior_view
 using ..Superdroplet: DEFAULT_MICRO
 using ..P3Microphysics: p3_sediment!, p3_rain_sedimentation_velocities
-using ..Backends: AbstractBackend, backend, launch!, foreach_column!
+using ..Backends: AbstractBackend, backend, launch!, foreach_column!, plane_map!, ordered_sum
 
-export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed
+export apply_kessler_step!, KESSLER_N0, kessler_rain_number, kessler_fall_speed, clamp_booked!
 
 """
     KESSLER_N0 = 8.0e6
@@ -213,6 +213,35 @@ function _kessler_sediment_column!(i, j, qrd, kk, ρ, dz, Δt, N0)
     p3_sediment!((col,), _KesslerRainSpeed(similar(col), ρ, N0), ρ, dz, Δt)
     @inbounds for (n, k) in enumerate(kk); qrd[i, j, k] = col[n]; end
     return nothing
+end
+
+"""
+    clamp_booked!(q, lo, hi, ρ) -> removed
+
+`clamp!(q, lo, hi)` on a 3-D mixing-ratio array, returning what the
+clamp removed, ``Σ_k ρ_k Σ_{ij} (q − q_{clamped})`` (per unit layer depth
+and cell area: multiply by ``Δz`` and divide by the number of columns
+for kg m⁻² of domain), so a water budget can book it. `ρ` is the
+density per level. The levels are work items, each summed in (j, i)
+order, the levels added in ascending k: the same bits at every thread
+count. Moved from the urban case's Kessler coupling (ONE-e, #454), which
+clamps the vapour to `[0, qv_max]` after the warm-rain step.
+"""
+function clamp_booked!(q::AbstractArray{<:Real,3}, lo, hi, ρ)
+    parts = Vector{Float64}(undef, size(q, 3))
+    plane_map!(parts, backend(q), _clamp_level!, axes(q), q, lo, hi, ρ)
+    return ordered_sum(parts)
+end
+
+function _clamp_level!(k, ir, jr, q, lo, hi, ρ)
+    rk = 0.0
+    @inbounds for j in jr, i in ir
+        x = q[i, j, k]
+        xc = clamp(x, lo, hi)
+        rk += x - xc
+        q[i, j, k] = xc
+    end
+    return @inbounds ρ[k] * rk
 end
 
 end # module

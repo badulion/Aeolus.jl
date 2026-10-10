@@ -278,6 +278,71 @@ check before the error propagates. See [Checks](../api/checks.md).
 
 ## Where the code still differs from the target
 
+* **ONE-e (#454), first part: the physics out of the urban glue.** The
+  equations the design names in the urban couplings, and the other
+  self-contained physics found there, now live in their physics modules,
+  and the couplings call them, bit for bit:
+
+  | from `src/urban/couplings/` | now |
+  | :-- | :-- |
+  | `moist_buoyancy.jl` | `Operators.moist_buoyancy_perturbation!`, `add_moist_buoyancy!` |
+  | `traffic_heat.jl` | `BuildingEnergy.traffic_heat_flux`, `add_traffic_heat!` |
+  | `buildings_citymean.jl` | `BuildingEnergy.CityBuildings`, `city_buildings`, `step_city_buildings!`, `apply_building_heat!` |
+  | `veg_drag.jl` | `PlantCanopy.vegetation_canopy_drag` (applied with `apply_canopy_drag!`) |
+  | `sw_modifiers.jl` | `PlantCanopy.apply_tree_shade!` |
+  | `aq_chem.jl` | `Chemistry.traffic_profile`, `SurfaceExchange.aerodynamic_resistance` |
+  | `glass.jl` | `UrbanSurface.glazing_areal_heat_capacity`, `glazing_solar_transmittance` |
+  | `fog_dew.jl` | `RadiationFog.dew_exchange_columns!` |
+  | `cloud_shadow.jl` | `Radiosity.direct_absorbed_share!`, `SolarGeometry.shade_direct_beam!` |
+  | `micro_kessler.jl` | `Microphysics.clamp_booked!` |
+  | `column_radiation.jl` | the module `ColumnRadiation`: `ColumnRadiationModel`, `column_radiation_solver`, `stitched_column`, `column_radiation!`, `column_heating_kday` (the nest parent uses it too) |
+  | `surface_exchange.jl` | `SurfaceExchange.deliver_surface_fluxes!` (the held H and E into the first air cell) |
+  | `radiosity_sun.jl` | `Radiosity.surface_irradiance!` (plan-area fluxes to per-surface irradiance) |
+  | `core/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration), `MoistThermodynamics.θ_per_heat` (the heat-to-θ conversion ``1/(ρ c_p Π)``) |
+
+  Two couplings measurably did nothing and were deleted rather than
+  moved: `snow_legacy.jl` (a snow flag that nothing read, and that could
+  never be set, as nothing passed it precipitation) and `aq_aerosol.jl`
+  (a toy aerosol that started at zero, had no source and was neither
+  advected nor written, so it stayed zero), with their `:snow` and
+  `:aerosol` slots. `test/glue_physics.jl` tests each moved function at
+  module level. The couplings now gather the case's fields and hand the
+  results on (the case's reference state itself is
+  `Anelastic.reference_from_profile` of its initial profile); small
+  formulas that remain are the radiative temperature of the surface
+  ``(Σε T_s^4/Σε)^{1/4}`` (the column radiation and, summed differently,
+  the nest parent), the friction velocity ``\sqrt{τ/ρ}`` of a surface step,
+  and the independent recomputations inside the `smoke_check`s. The couplings themselves,
+  `UrbanCase`, `CaseConfig`, the registry and the urban stages, ledgers
+  and output are still there: their port to components is the rest of
+  ONE-e, in the issue's sub-PRs:
+
+  1. **The shared state as components**, which every urban coupling reads:
+     the ground from the static driver (solid mask, surface classes,
+     vegetation, the radiosity scene), the set of tracers with their
+     scalar transport, the hydrostatic reference state of the initial
+     profile, and the surface bus, held by the urban surface component
+     the surface couplings `require`.
+  2. Surface, radiation and buildings; 3. moisture, microphysics and
+     chemistry; 4. forcing, drag, inflow and the numerics slots (the
+     urban `:core`, `:timestepper`, `:pressure_solver` and
+     `:momentum_advection` providers become the domain's core, time
+     scheme and solver options and the `:advection` slot).
+  5. Berlin as `examples/urban/berlin_*.toml` on the model, and the
+     deletion of `UrbanCase` (its nest parent goes with ONE-f, #455).
+
+  Two differences between the urban stage loop and the pipeline decide
+  what "bit for bit" can mean there. The loop has stages the pipeline
+  lacks: `:transport` (the scalar advection) between `:chemistry` and
+  `:microphysics`, `:fog_dew` after `:tracers`, and `:anthropogenic`
+  where the pipeline has `:sources`. And within a stage the loop runs its
+  entries in declared integer order, the pipeline by slot, then name: in
+  `:body_force` the loop's order is `nesting` (5), `geostrophic` (10),
+  `ibm` (10) or the facade stress (12), the surface drag (15),
+  `moist_buoyancy` (20), `veg_drag` (20) and the facade stencil removal
+  (40) (berlin_case.md, the stage table); several add to the same
+  momentum tendency, so the pipeline's order changes the rounding of the
+  sum unless the component names reproduce it.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the

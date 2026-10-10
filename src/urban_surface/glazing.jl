@@ -407,6 +407,32 @@ function glazing_optics_hemispherical(g::Glazing; nquad::Int = 48)
     return (R = R, T = T, A = A)
 end
 
+"""
+    glazing_areal_heat_capacity(g::Glazing) -> J m⁻² K⁻¹
+
+The heat capacity of the panes per unit glazed area, ``Σ ρ c d`` over
+the panes (1.5e4 J m⁻² K⁻¹ for an uncoated 4-16-4 double unit; the gas
+in the gaps is negligible). A one-temperature glazing surface (the urban
+case's glass class) takes it as its `C_s`.
+"""
+glazing_areal_heat_capacity(g::Glazing) =
+    sum(p -> p.material.density * p.material.specific_heat * p.thickness, g.panes)
+
+"""
+    glazing_solar_transmittance(g::Glazing; cos_incidence = nothing) -> T
+
+The solar transmittance of glazing unit `g`: the hemispherical
+(diffuse) value of [`glazing_optics_hemispherical`](@ref) without an
+incidence angle (or for `cos_incidence ≤ 0`), else the direct-beam value
+of [`glazing_optics`](@ref) at `acos(cos_incidence)`. A one-temperature
+glazing surface with the hemispherical reflectance as its albedo absorbs
+``(1 − R − T) SW`` when this ``T SW`` leaves its budget into the room.
+"""
+glazing_solar_transmittance(g::Glazing; cos_incidence::Union{Nothing,Real} = nothing) =
+    cos_incidence === nothing || cos_incidence <= 0 ?
+        glazing_optics_hemispherical(g).T :
+        glazing_optics(g, acos(min(cos_incidence, 1.0))).T
+
 # =========================================================================
 # 10. The window thermal network: U-value and SHGC
 # =========================================================================

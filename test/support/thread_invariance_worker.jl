@@ -750,8 +750,8 @@ function section_hooks()
         θ = 300 .+ randn(rng, 64, 64, 32); qv = 8e-3 .+ 1e-3 .* randn(rng, 64, 64, 32)
         qc = [abs.(1e-4 .* randn(rng, 64, 64, 32))]; fluid = rand(rng, 64, 64, 32) .< 0.8
         Δ = zeros(64, 64, 32)
-        BC.moist_buoyancy_perturbation!(Δ, θ, qv, qc, fluid)
-        BC.add_moist_buoyancy!(sim.tw, Δ, 300.0, 9.81)
+        Aeolus.Operators.moist_buoyancy_perturbation!(Δ, θ, qv, qc, fluid)
+        Aeolus.Operators.add_moist_buoyancy!(sim.tw, Δ, 300.0, 9.81)
         record!("hooks/moist.Δ", Δ); record!("hooks/moist.tw", sim.tw.data)
     end
     # the large-scale forcings on a regular and a stretched grid

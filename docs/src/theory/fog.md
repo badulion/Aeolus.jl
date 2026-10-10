@@ -138,8 +138,9 @@ deposit is really frost, which saturates over ice and releases
 
 ## 5. In the urban example
 
-`apply_fog_dew!` (src/urban/couplings/fog_dew.jl) now delegates to
-these functions and is switched on. Enabling it exposed that the
+The urban case's `fog_dew` coupling (src/urban/couplings/fog_dew.jl)
+delegates to these functions (`fog_adjust!`, and `dew_exchange_columns!`
+for the dew on the first air cell of each column) and is switched on. Enabling it exposed that the
 example's moisture transport, forward-Euler with centered advection,
 is unconditionally unstable: with condensation off, relative humidity
 reached 2.07 in 8,395 cells within 1000 steps, which the 0.03 clamp

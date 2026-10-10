@@ -66,7 +66,7 @@ Explicit Euler, ``U^{n+1} = U^n (1 - Δt\,C_d a |U^n|)``, reverses the flow
 once ``Δt\,C_d a|U| > 1`` and amplifies it once that exceeds 2. For a
 dense forest (``a ≈ 1`` m⁻¹, ``C_d = 0.2``) in a 5 m s⁻¹ wind the limit is
 ``Δt = 2`` s — the urban example's step. The old explicit
-`apply_vegetation_drag!` shipped disabled after an instability at that
+drag of the urban example shipped disabled after an instability at that
 step was reported, but in the urban example's own configuration
 ``Δt\,C_d\,\mathrm{LAI}\,|U| ≤ 0.05`` and re-running it for #22 did not
 reproduce the instability; its cause is undiagnosed. The implicit form

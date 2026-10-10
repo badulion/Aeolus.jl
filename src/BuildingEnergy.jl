@@ -76,7 +76,9 @@ using ..UrbanSurface: UrbanSurface, ConductionColumn, ColumnBoundary, WallLayer,
                       column_heat_content, thermal_resistance,
                       fixed_temperature_boundary, heat_flux_boundary,
                       set_interior_boundary!, ISO6946_SURFACE_RESISTANCE,
-                      volumetric_heat_capacity, UrbanFacetScene
+                      volumetric_heat_capacity, UrbanFacetScene,
+                      example_wall_layers, example_roof_layers
+using ..Fields: interior_view
 
 export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
@@ -96,7 +98,9 @@ export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
        office_internal_gains, office_thermostat,
        BuildingHeatRelease, building_heat_release, energy_consumption, total_heat_release,
        anthropogenic_sensible_heat, anthropogenic_latent_heat,
-       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps
+       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps,
+       traffic_heat_flux, add_traffic_heat!,
+       CityBuildings, city_buildings, step_city_buildings!, apply_building_heat!, CITY_BUILDING_L_V
 
 const _H_WALL = 1 / ISO6946_SURFACE_RESISTANCE.inside_horizontal   # 7.69 W m⁻² K⁻¹
 const _H_OUT  = 1 / ISO6946_SURFACE_RESISTANCE.outside             # 25 W m⁻² K⁻¹
@@ -1947,6 +1951,238 @@ exchange, and vented latent gains.
 """
 anthropogenic_latent_heat(r::BuildingHeatRelease) =
     r.Q_exhaust_latent + r.Q_ventilation_latent + r.Q_latent_vented
+
+# =========================================================================
+# 3d'. The vehicle part of the anthropogenic heat (ONE-e, #454; moved from
+#      the urban case's `traffic_heat` coupling)
+# =========================================================================
+
+"""
+    traffic_heat_flux(Q_urban, n_cells, n_road) -> W m⁻²
+
+The heat flux released over each of `n_road` road cells when the vehicle
+part of the anthropogenic heat flux, ``Q_V = `` `Q_urban` W m⁻² of urban
+area (`n_cells` columns), is concentrated on the roads:
+``Q_V n_\\mathrm{cells} / n_\\mathrm{road}``, so the domain mean is
+`Q_urban`. Sailor (2011, Int. J. Climatol. 31, 189) splits
+``Q_F = Q_V + Q_H + Q_M`` (vehicles, buildings, metabolism); the building
+part is [`building_heat_release`](@ref).
+"""
+traffic_heat_flux(Q_urban::Real, n_cells::Integer, n_road::Integer) = Q_urban * n_cells / n_road
+
+"""
+    add_traffic_heat!(sim, road, n_cells, dt; Q_urban = 8.0, ρcp = 1005.0)
+
+Vehicle heat: a constant `Q_urban` W m⁻² of urban area (`n_cells`
+columns), released into the first air layer over the `road` cells
+(column indices), ``Δθ = q Δt / (ρc_p Δz)`` with the road flux
+``q`` of [`traffic_heat_flux`](@ref). `sim` is a dynamical core (its
+`θ` and `mesh`); `ρcp` (J m⁻³ K⁻¹) is the heat that raises θ of that
+layer by 1 K, ``ρ̄_1 c_p Π̄_1`` (the base state's on the anelastic core).
+The default 8.0 W m⁻² is the traffic heat Bueno et al. (2012, Geosci.
+Model Dev. 5, 433, Table 3) prescribe for the Toulouse centre (their
+Table 4 uses the same value for Athens); the tables give no source for
+it, and it is not a Berlin inventory.
+"""
+function add_traffic_heat!(sim, road::AbstractVector{CartesianIndex{2}}, n_cells::Integer, dt::Real;
+                           Q_urban::Real = 8.0, ρcp::Real = 1005.0)
+    isempty(road) && return sim
+    q = traffic_heat_flux(Q_urban, n_cells, length(road))
+    Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
+    for I in road
+        i, j = Tuple(I)
+        sim.θ.data[Hx+i, Hy+j, Hz+1] += q / ρcp * dt / sim.mesh.dz
+    end
+    return sim
+end
+
+# =========================================================================
+# 3f. The city-mean building (ONE-e, #454; moved from the urban case's
+#     `buildings_citymean` coupling, which now only wires it in)
+# =========================================================================
+#
+# A surface scheme with no building interior (one temperature per surface
+# cell) represents the city's buildings by ONE city-mean `BuildingZone`
+# whose volume, footprint and wall area are the scene's totals, run with
+# the DOE medium-office schedules (#33). Its walls and roof are conduction
+# columns that exchange with the canyon air through the ISO 6946 outside
+# coefficient but absorb no sunshine: the surface cells already absorb it,
+# and a first version with sol-air walls counted it twice (-8.7 W/m²
+# returned to the air in a one-hour run). A version that held the
+# envelope's outer face at the slab skin temperature was dropped: that
+# stiff interface, exchanged explicitly every 10 min, swung the slab budget
+# by -64 then +27 W/m² (domain mean) between two radiation updates.
+# The release is mapped onto the grid: HVAC exhaust and the roof envelope
+# at the roofs (exhaust weighted by the floors above each roof cell); air
+# exchange, glazing, lost gains and the wall envelope into the canyon (the
+# wall cells next to buildings). Sunshine transmitted by the windows is
+# taken out of the wall cells' surface budget (`S`), which would otherwise
+# absorb it too. Totals are conserved: Σ (H + LE) dx dy = the zone's direct
+# release, Σ S dx dy = -Q_solar. `UrbanFacetScene` + `step_buildings!`
+# resolve each building behind its own facets instead.
+
+"""
+    CITY_BUILDING_L_V
+
+The latent heat (J kg⁻¹, 2.45e6, its value near 20 °C) with which
+[`apply_building_heat!`](@ref) converts the city-mean building's latent
+release into vapour; a ledger of that vapour converts with the same.
+"""
+const CITY_BUILDING_L_V = 2.45e6
+
+"""
+    CityBuildings
+
+State of the city-mean building of the example: the `BuildingZone`, its
+`IdealLoadsHVAC`, `ThermostatSchedule` and `InternalGains`, and the maps
+`H`, `LE` (W m⁻² of plan area) of the heat it put directly into the air
+over the last building step, and `S` (≤ 0), the window-transmitted sun
+taken from the wall cells' surface budget. See [`city_buildings`](@ref).
+"""
+mutable struct CityBuildings
+    zone::BuildingZone{Float64}
+    hvac::IdealLoadsHVAC
+    thermostat::ThermostatSchedule
+    gains::InternalGains
+    floors::Matrix{Float64}          # floors above each column (0 off buildings)
+    kair::Matrix{Int}                # first air layer above each column
+    wall_cells::Vector{CartesianIndex{2}}
+    H::Matrix{Float64}
+    LE::Matrix{Float64}
+    S::Matrix{Float64}
+    release::Union{Nothing, BuildingHeatRelease{Float64}}
+    hvac_budget::Union{Nothing, HVACBudget{Float64}}
+end
+
+"""
+    city_buildings(heightmap, wall_cells, dx, dy, dz, wall_area; floor_height = 3.96,
+                   glazing = 0.33, start_weekday = 4, T_air = 297.15) -> CityBuildings
+
+One city-mean office building standing for every building of a window:
+`heightmap` (m, 0 off buildings) on a grid of `dx × dy` columns and
+layers `dz`, `wall_cells` the ground columns next to the buildings that
+take the canyon part of the release, `wall_area` the total wall area (m²,
+e.g. the sum over a radiosity scene's wall facets).
+
+Assumptions, none of them a survey of Alexanderplatz: DOE medium-office
+schedules, internal gains and thermostat (`office_internal_gains`,
+`office_thermostat`); floor-to-floor height 3.96 m and window-to-wall
+ratio 0.33, chosen to be close to the DOE medium-office reference
+building (Deru et al. 2011) but not checked against it here; the illustrative
+`UrbanSurface` example wall and roof; window U = 2.8 W m⁻² K⁻¹;
+infiltration 0.3 h⁻¹; a packaged DX unit (COP 3.0) and a gas boiler.
+`start_weekday` (1 = Monday): the weekday of day 1; the coupling passes
+`case_weekday(cfg)` (29 June 2019, the case day, is a Saturday).
+"""
+function city_buildings(heightmap::AbstractMatrix, wall_cells::AbstractVector{CartesianIndex{2}},
+                        dx::Real, dy::Real, dz::Real, wall_area::Real;
+                        floor_height::Real = 3.96, glazing::Real = 0.33,
+                        start_weekday::Integer = 4, T_air::Real = 297.15)
+    cell = dx * dy
+    built = heightmap .> 0
+    A_roof = count(built) * cell
+    V = sum(heightmap[built]) * cell
+    floor_area = V / floor_height
+    # outdoor air through 1/R_se, no absorbed sun (the slabs take it)
+    walls = EnvelopeElement(example_wall_layers(), (1 - glazing) * wall_area;
+                            absorptance = 0.0, T = T_air, name = :walls)
+    roof = EnvelopeElement(example_roof_layers(), A_roof; h_inside = 1 / 0.10,
+                           absorptance = 0.0, T = T_air, name = :roof)
+    slab = EnvelopeElement([WallLayer(:xps_insulation, 0.05), WallLayer(:concrete, 0.20)], A_roof;
+                           exterior = :ground, T_ground = 285.15, h_inside = 1 / 0.17,
+                           T = T_air, name = :slab)
+    n_floors = V / A_roof / floor_height
+    floors = InternalMass([WallLayer(:concrete, 0.20)], max(n_floors - 1, 0.01) * A_roof;
+                          sides = 2, T = T_air, name = :floors)
+    zone = BuildingZone(; volume = V, floor_area = floor_area,
+                        envelope = AbstractZoneElement[walls, roof, slab],
+                        internal_mass = [floors], window_area = glazing * wall_area,
+                        window_U = 2.8, infiltration_ach = 0.3, T_air = T_air)
+    hvac = IdealLoadsHVAC(cop_rated = 3.0, curves = DX_CURVES_PACKAGED_AC, heating = :boiler)
+    fl = [built[I] ? heightmap[I] / floor_height : 0.0 for I in CartesianIndices(heightmap)]
+    kair = [clamp(round(Int, heightmap[I] / dz) + 1, 1, typemax(Int)) for I in CartesianIndices(heightmap)]
+    wc = collect(wall_cells)
+    Nx, Ny = size(heightmap)
+    return CityBuildings(zone, hvac, office_thermostat(; start_weekday),
+                         office_internal_gains(floor_area; start_weekday), fl, kair, wc,
+                         zeros(Nx, Ny), zeros(Nx, Ny), zeros(Nx, Ny), nothing, nothing)
+end
+
+"""
+    step_city_buildings!(cb, t, dt, T_out, q_out; sw_wall = 0, shgc = 0.4)
+
+Advance the city-mean building by `dt` seconds starting `t` seconds after
+00:00 of day 1, against canyon air at `T_out` (K) and `q_out` (kg/kg),
+with `sw_wall` (W m⁻²) the mean irradiance on the walls (for the
+window-transmitted sun), and refresh `cb.H`, `cb.LE`, `cb.S`. `shgc` of
+the glazing is an assumption.
+"""
+function step_city_buildings!(cb::CityBuildings, t::Real, dt::Real, T_out::Real, q_out::Real;
+                              sw_wall::Real = 0.0, shgc::Real = 0.4)
+    z = cb.zone
+    # start from the outdoor humidity, so the first hours are not a
+    # vapour exchange with an arbitrary initial indoor value
+    cb.release === nothing && (z.q_air = q_out)
+    r = internal_gains(cb.gains, t, dt; T_air = zone_air_temperature(z))
+    f = ZoneForcing(r; T_out = T_out, q_out = q_out, Q_solar = shgc * z.window_area * sw_wall)
+    hv = scheduled_hvac(cb.hvac, cb.thermostat, t)
+    q0 = zone_specific_humidity(z)
+    b, hb = step_zone!(z, f, dt, hv)
+    rel = building_heat_release(z, f, b; dt = dt, gains = r, hvac = hv, hvac_budget = hb,
+                                q_before = q0)
+    cb.release = rel; cb.hvac_budget = hb
+    # what the walls and roof give to the air (`Q_envelope_air` split)
+    walls, roof = z.envelope[1], z.envelope[2]
+    Q_wall = -walls.area * walls.F_outer
+    Q_roof = -roof.area * roof.F_outer
+    fill!(cb.H, 0.0); fill!(cb.LE, 0.0); fill!(cb.S, 0.0)
+    cell_floors = sum(cb.floors)
+    nroof = count(>(0), cb.floors)
+    Nx, Ny = size(cb.H)
+    cell_area = roof.area / nroof
+    for I in CartesianIndices(cb.floors)
+        cb.floors[I] > 0 || continue
+        w = cb.floors[I] / cell_floors
+        cb.H[I] += (w * rel.Q_exhaust_sensible + Q_roof / nroof) / cell_area
+        cb.LE[I] += w * rel.Q_exhaust_latent / cell_area
+    end
+    canyon_H = rel.Q_ventilation_sensible + rel.Q_windows + rel.Q_lost + Q_wall
+    canyon_LE = rel.Q_ventilation_latent + rel.Q_latent_vented
+    nw = length(cb.wall_cells)
+    for I in cb.wall_cells
+        cb.H[I] += canyon_H / nw / cell_area
+        cb.LE[I] += canyon_LE / nw / cell_area
+        cb.S[I] -= rel.Q_solar / nw / cell_area
+    end
+    return cb
+end
+
+"""
+    apply_building_heat!(sim, qv_field, sensible, cb, dt; ρ = 1.0, cp = 1005.0, π = 1.0)
+
+Put the city-mean building's direct release into the first air layer of
+each column (above the roof for building columns): θ gets `H/(ρ_k cp Π_k)`
+(`π` the Exner function, scalar or per level; T = θΠ),
+the vapour field `LE/(ρ_k L_v)`, per `dz`, over `dt`. `ρ` is a scalar or
+a per-level vector (the case passes the reference density `ρ̄`). `S` goes to the slab
+surfaces: `sensible` is their loss term, so it is reduced by `S`.
+"""
+function apply_building_heat!(sim, qv_field, sensible::AbstractMatrix, cb::CityBuildings, dt::Real;
+                              ρ = 1.0, cp::Real = 1005.0, π = 1.0)
+    sensible .-= cb.S
+    Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
+    dz = sim.mesh.dz; Nz = sim.mesh.Nz
+    qv = interior_view(qv_field)
+    @inbounds for I in CartesianIndices(cb.H)
+        i, j = Tuple(I)
+        k = min(cb.kair[I], Nz)
+        ρk = ρ isa AbstractVector ? ρ[k] : ρ
+        πk = π isa AbstractVector ? π[k] : π
+        sim.θ.data[Hx+i, Hy+j, Hz+k] += cb.H[I] / (ρk * cp * πk) * dt / dz
+        qv[i, j, k] += cb.LE[I] / (ρk * CITY_BUILDING_L_V) * dt / dz
+    end
+    return sim
+end
 
 # =========================================================================
 # 3e. Buildings in the urban canopy: zones behind the facets of a scene
