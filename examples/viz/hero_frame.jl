@@ -22,7 +22,7 @@ const NCPATH = length(ARGS) >= 1 ? ARGS[1] :
     joinpath(@__DIR__, "..", "urban", "output", "alexanderplatz.nc")
 isfile(NCPATH) || error("""
     No output at $NCPATH — run the simulation first:
-        julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
+        julia --project -m Aeolus run examples/urban/berlin_summer.toml
     """)
 
 ncf   = NCDataset(NCPATH)

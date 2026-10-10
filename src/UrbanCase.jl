@@ -1,17 +1,19 @@
-# UrbanCase — the urban LES run type (the `urban` run driver).
+# UrbanCase — the urban site of the model (ONE-e, #454; formerly the urban
+# LES run type, EX-a #438).
 #
 # A 3-D LES of a city window: buildings and land use from a static input
 # driver, the initial state and the boundary forcing from a sounding, a
 # dynamic input driver or an online Aeolus nest parent, and the urban
-# physics wired in through a registry of couplings. Selected by
+# physics as components of the domain's stage pipeline. A model config is
+# an urban site with
 #
-#   [run]
-#   legacy = "urban"           # a legacy case until its port to components (ONE-e, #454)
+#   [urban]
+#   enabled = true
 #
-# and configured only through its schema (`aeolus options urban`). The
-# Berlin (Alexanderplatz) case is one configuration of it:
+# and one section per urban component it enables (`aeolus options` lists
+# them). The Berlin (Alexanderplatz) case is one configuration of it:
 #
-#   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
+#   julia --project -m Aeolus run examples/urban/berlin_summer.toml
 #
 # From Julia: `build_case(CaseConfig(load_run_config(path)))`, then
 # `run_case!(case)`.
@@ -20,8 +22,9 @@
 #
 #   core/        the case machinery — config, the coupling registry,
 #                geometry, the surface bus, the tracer registry, the
-#                budget ledger, the Case, the stage loop, the output, the
-#                run driver and its configuration schema.
+#                budgets, the Case and its Domain on the core's stage
+#                pipeline, the output, and the site's sections of the
+#                model's configuration schema.
 #   couplings/   one file per physics coupling. Each defines a struct
 #                `<: AbstractCoupling`, extends the registry contract, and
 #                ends with `register!(...)`. Files are included in sorted
@@ -85,12 +88,12 @@ include(joinpath(@__DIR__, "urban", "parent", "config.jl"))
 include(joinpath(@__DIR__, "urban", "parent", "case.jl"))
 include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / restart of the case (#269)
 
-# The `urban` run driver and its configuration schema (CFG-c #358, EX-a #438):
-# built from the registry, so it comes last
+# The site's sections of the model's schema and its run under `aeolus run`
+# (CFG-c #358, EX-a #438, ONE-e #454): built from the registry, so it comes last
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
-export CaseConfig, UrbanDriver, UrbanParentDriver, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
+export CaseConfig, UrbanParentDriver, run_urban!, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
        AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,

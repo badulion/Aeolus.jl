@@ -42,6 +42,8 @@ using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!
                 close_output!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
                 Path, section, option!, register_driver!, config_domains, MODEL
+# the urban site (ONE-e, #454): its sections, its build and its run
+using ..UrbanCase: UrbanCase
 
 export SimulationDriverType, SimulationRun, simulation, profile_value
 
@@ -202,7 +204,8 @@ end
 "The per-domain sections of the model: the domain's own keys, its grid, core, boundaries, initial state and components."
 const DOMAIN_SECTIONS = vcat(["domain", "grid", "dynamics", "boundaries", "initial"],
                              [Components.section(C) for C in COMPONENTS],
-                             ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"])
+                             ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"],
+                             UrbanCase.urban_section_names())
 
 Config.domain_sections(::SimulationDriverType) = DOMAIN_SECTIONS
 
@@ -335,7 +338,8 @@ function Config.driver_sections(::SimulationDriverType)
                       "Results as check reference_<quantity>")
     end
     comps = Section[Components.schema(C) for C in COMPONENTS]
-    return Section[tim, out, chk, dom, grid, dyn, bnd, ini, comps..., _coupling_sections()...]
+    return Section[tim, out, chk, dom, grid, dyn, bnd, ini, comps..., _coupling_sections()...,
+                   UrbanCase.urban_sections()...]
 end
 
 "The schema default of `section.key` of the model."
@@ -349,6 +353,7 @@ _adaptive(cfg) = cfg.time.dt === :adaptive
 enabled_components(cfg) = Any[C for C in COMPONENTS if Components.enabled(C, cfg[Components.section(C)])]
 
 function _cross_checks(cfg)
+    UrbanCase.urban_enabled(cfg) && return _urban_site_checks(cfg)
     e = ConfigError[]
     t = cfg.time; d = cfg.dynamics; b = cfg.boundaries; s = cfg.sgs; g = cfg.grid; dom = cfg.domain
     adaptive = _adaptive(cfg)
@@ -421,6 +426,25 @@ function _cross_checks(cfg)
     return e
 end
 
+# An urban site (ONE-e, #454): its own checks, and none of the model's own
+# components or couplings enabled (the site's core carries its Coriolis
+# force, sponge and closure until those are the model's components)
+function _urban_site_checks(cfg)
+    e = UrbanCase.urban_checks(cfg)
+    for C in (Coriolis, Sponge, SurfaceThetaFlux)
+        Components.enabled(C, cfg[Components.section(C)]) || continue
+        push!(e, ConfigError(Components.section(C), "an urban site carries its own $(Components.section(C)) ([urban]); the model's component is not part of it"))
+    end
+    sg = cfg.sgs
+    (sg.closure === _schema_default(cfg, "sgs", "closure") && isequal(sg.c_s, _schema_default(cfg, "sgs", "c_s")) &&
+     sg.stability === _schema_default(cfg, "sgs", "stability")) ||
+        push!(e, ConfigError("sgs", "an urban site selects its closure with an sgs_* component ([urban] c_s, sgs_stability); leave [sgs] at its defaults"))
+    _any_coupling(cfg) && push!(e, ConfigError("urban", "an urban site takes no [forcing], [surface], [microphysics], [tracer], [particles] or [obstacles]"))
+    (isempty(_published_enabled(cfg)) && isempty(cfg.checks.reference)) ||
+        push!(e, ConfigError("checks", "an urban site publishes no checks yet"))
+    return e
+end
+
 "The values of the resolved `[checks]` table."
 _checks_table(cfg) = getfield(cfg.checks, :values)
 
@@ -483,7 +507,8 @@ the enabled components hold at most one component per slot and an `:advection` p
 every `[checks]` entry is published by the core or an enabled component (`Components.check_problems`): a closure check has the requirements of its `budget_*` output
 `[checks.reference]` comparisons need `checks.reference_file`, which must hold each quantity, and their variables are in the output catalogue; a `reference_file` without comparisons is an error"""
 
-Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC => _cross_checks]
+Config.driver_checks(::SimulationDriverType) =
+    Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC * "\n" * UrbanCase.URBAN_CHECKS_DOC => _cross_checks]
 
 # ---------------------------------------------------------------------------
 # build
@@ -537,7 +562,25 @@ end
 
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
+"""
+    UrbanSiteRun
+
+What the model builds from the config of an urban site (`[urban] enabled`,
+ONE-e #454): the `cfg`, and the built case (`Aeolus.UrbanCase`; `nothing`
+until `run!` builds it, with its output in the run folder).
+"""
+mutable struct UrbanSiteRun
+    cfg::RunConfig
+    case::Any
+end
+
 function Config.build(::SimulationDriverType, cfg::RunConfig)
+    if UrbanCase.urban_enabled(cfg)
+        length(config_domains(cfg)) == 1 ||
+            throw(ConfigError("domain", "an urban site is one domain (its nest parent is the [nesting] component's)"))
+        UrbanCase.urban_input_problems(cfg)        # a missing driver, before a run folder exists
+        return UrbanSiteRun(cfg, nothing)
+    end
     n = length(config_domains(cfg))
     n == 1 || throw(ConfigError("domain", "the model runs one domain; $n [[domain]] blocks are validated but " *
                                           "run only with nesting by domains (ONE-f, #455)"))
@@ -754,6 +797,13 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     return r
 end
 
+function Simulations.run!(::SimulationDriverType, r::UrbanSiteRun, rf::RunFolder, ck::CheckpointSchedule;
+                          callback = nothing)
+    r.case = UrbanCase.run_urban!(r.cfg, rf, ck; callback = callback === nothing ? nothing : (c, n) -> callback(r, n))
+    return r
+end
+Config.state_fields(r::UrbanSiteRun) = UrbanCase.case_state(r.case)
+
 # the enabled checks of a run: the domain's published checks and the
 # reference comparisons that [checks] enables, or nothing (ONE-d)
 function _check_runner(r::SimulationRun)
@@ -796,5 +846,10 @@ Config.state_fields(r::SimulationRun) =
     merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)))
 
 register_driver!(SimulationDriverType())
+# the nest parent of an urban site alone (`[run] legacy = "urban_parent"`):
+# the model's sections, so registered after them (ONE-f, #455, replaces it)
+UrbanCase.MODEL_SECTIONS[] = Config.driver_sections(SimulationDriverType())
+UrbanCase.MODEL_DOMAIN_SECTIONS[] = DOMAIN_SECTIONS
+register_driver!(UrbanCase.UrbanParentDriver())
 
 end # module

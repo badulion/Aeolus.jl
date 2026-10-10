@@ -19,7 +19,6 @@
 #   incompatible(::Type{C})     -> tuple of `slot => provider` or coupling names
 #   incompatible_reason(::Type{C}) -> String, why (appended to the selection error)
 #   stages(::Type{C})           -> tuple of (stage::Symbol, order::Int, Cadence), one per stage
-#   cadence_keys(::Type{C})     -> named cadences (`cfg.cadence` keys) C reads beyond its stages'
 #   build(::Type{C}, case, opts)-> instance (default `C()`)
 #   init!(c, case)              -> called once, after every coupling is built
 #   init_priority(::Type{C})    -> Int, init! order (lower first, default 0; ties: registry order)
@@ -117,16 +116,6 @@ default_options(::Type{<:AbstractCoupling}) = (;)
 incompatible(::Type{<:AbstractCoupling}) = ()
 incompatible_reason(::Type{<:AbstractCoupling}) = ""
 stages(::Type{<:AbstractCoupling}) = ()
-"""
-    cadence_keys(::Type{C}) -> tuple of Symbol
-
-The named cadences (keys of `cfg.cadence`, `[cadence]` in TOML) coupling
-`C` reads besides the `Symbol` periods of its `stages` (e.g. the surface
-exchange's optional `:surface` period). The `berlin` configuration schema
-declares a `[cadence]` key for every cadence some coupling declares, and
-refuses one set in a file that no enabled coupling uses. Default `()`.
-"""
-cadence_keys(::Type{<:AbstractCoupling}) = ()
 build(C::Type{<:AbstractCoupling}, case, opts) = C()
 init!(c::AbstractCoupling, case) = nothing
 """

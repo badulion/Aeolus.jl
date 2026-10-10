@@ -1,6 +1,6 @@
-# The urban run type (EX-a, #438): Aeolus.UrbanCase, the `urban` and
-# `urban_parent` run drivers, moved from examples/urban/ into src/. Small
-# synthetic setups:
+# The urban site of the model (EX-a #438, ONE-e #454): Aeolus.UrbanCase,
+# a model config with `[urban] enabled`, and the `urban_parent` run driver.
+# Small synthetic setups:
 #
 #   * a synthetic city (test/data/urban/small_city.toml: two buildings, a
 #     park and a pond from GeoJSON, 16³, periodic, local noon) runs through
@@ -41,7 +41,7 @@ end
     @test rc == 0
     run = only(readdir(root; join = true))
     rec = read_run_toml(run)
-    @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["legacy"] == "urban"
+    @test rec["session"][end]["status"] == "completed" && !haskey(rec["config"]["run"], "legacy")
     res = TOML.parsefile(joinpath(run, "output", "results.toml"))
     led = res["budgets"]
     @test res["finite"] === true
@@ -139,9 +139,10 @@ end
     @test isempty(offenders)
     isempty(offenders) || @info "examples/urban scripts that build or run the model" offenders
     # every config validates; every script is analysis of output
-    for f in readdir(joinpath(ex, "configs"); join = true)
+    for f in readdir(ex; join = true)
         endswith(f, ".toml") || continue
-        @test load_run_config(f).run.legacy in ("urban", "urban_parent")
+        cfg = load_run_config(f)
+        @test cfg.urban.enabled && (!hasproperty(cfg.run, :legacy) || cfg.run.legacy == "urban_parent")
     end
     @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
                                   "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl",

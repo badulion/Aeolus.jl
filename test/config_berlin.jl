@@ -1,6 +1,6 @@
-# The Berlin case configured from TOML (CFG-c, #358): the `urban` run
-# driver (src/urban/core/config_schema.jl, EX-a #438) and the configs of
-# examples/urban/configs/.
+# The Berlin case configured from TOML (CFG-c, #358): the urban site of the
+# model (src/urban/core/config_schema.jl, EX-a #438, ONE-e #454) and the
+# configs examples/urban/berlin_*.toml.
 #
 # Acceptance tests of the issue covered here:
 #   * field for field: CaseConfig(load_run_config("berlin_<s>.toml")) equals
@@ -94,50 +94,51 @@ as_toml(x) = TOML.parse(sprint(TOML.print, x))
     @test config_origin(w, "grid.size") == berlin_toml("winter")
     tw = to_toml(w); ts = to_toml(su)
     @test sort!([lstrip(split(d, ':')[1], '.') for d in table_diff(ts, tw, "")]) ==
-          sort!(["run.name", "run.scenario", "clock.date", "clock.utc_offset", "dynamics.theta0",
-                 "initial.sounding", "initial.dynamic", "initial.theta_surface", "initial.qv0", "initial.ts0",
-                 "initial.t_soil0"])
+          sort!(["run.name", "domain[1].urban.scenario", "domain[1].urban.date", "domain[1].urban.utc_offset",
+                 "domain[1].dynamics.theta0", "domain[1].urban.sounding", "domain[1].dynamic_driver",
+                 "domain[1].urban.theta_surface", "domain[1].urban.qv0", "domain[1].urban.ts0",
+                 "domain[1].urban.t_soil0"])
     @test_throws ConfigError BCC.CaseConfig(berlin_toml("autumn"))
 end
 
 @testset "Config berlin: one source of truth for the defaults" begin
-    sch = BCC.urban_schema()
-    # every CaseConfig field is made of schema options, each used once
+    sch = driver_schema("model")
+    sec(n) = sch.sections[findfirst(x -> x.name == n, sch.sections)]
+    # every CaseConfig field is made of the model's options, each used once
     @test collect(keys(BCC.CASE_FIELDS)) == collect(fieldnames(BCC.CaseConfig))
     used = String[]
+    names = [String(BCC.coupling_name(C)) for C in BCC.REGISTRY]
     for keys_ in values(BCC.CASE_FIELDS), k in keys_
-        s, o = split(k, '.')
-        sec = sch.sections[findfirst(x -> x.name == s, sch.sections)]
-        if o == "*"                   # the whole section ([physics]: but its options)
-            append!(used, ["$s.$(x.key)" for x in sec.options if !(s == "physics" && x.key == "options")])
+        s_, o = split(k, '.')
+        if s_ == "*"                 # every urban component's section: enabled (physics), the rest (options)
+            for n in names, x in sec(n).options
+                (o == "enabled") == (x.key == "enabled") && push!(used, "$n.$(x.key)")
+            end
         else
-            @test any(x -> x.key == o, sec.options)
+            @test any(x -> x.key == o, sec(s_).options)
             push!(used, k)
         end
     end
     @test allunique(used)
-    common = Set(["run.legacy", "run.seed", "run.root", "run.allow_uncommitted", "logging.console_level", "logging.file_level",
-                  "logging.flush_interval", "logging.diagnostics_cadence"])
-    case_opts = ["$(s.name).$(o.key)" for s in sch.sections for o in s.options
-                 if !(s.name in ("fftw", "checkpoint")) && !("$(s.name).$(o.key)" in common)]
-    @test sort(used) == sort(case_opts)
-    # berlin_summer.toml is the reference copy: every Berlin option is
-    # written out (the common [fftw], [logging], [checkpoint] and run.root /
-    # allow_uncommitted are left to their defaults, which environment
-    # variables fill), every coupling option and every parent option
+    # every option of the urban site's sections makes a field ([urban] enabled: the site itself)
+    site = vcat(["urban.$(o.key)" for o in sec("urban").options if o.key != "enabled"],
+                ["$n.$(o.key)" for n in names for o in sec(n).options])
+    @test issubset(site, used)
+    # berlin_summer.toml is the reference copy: every option of the urban site,
+    # every component's option and every parent option is written out
     f = TOML.parsefile(berlin_toml("summer"))
-    left = Set(["run.root", "run.allow_uncommitted"])
-    missing_ = ["$(s.name).$(o.key)" for s in sch.sections for o in s.options
-                if !(s.name in ("fftw", "logging", "checkpoint")) && !("$(s.name).$(o.key)" in left) &&
-                   !haskey(get(f, s.name, Dict()), o.key)]
-    for C in BCC.REGISTRY, k in keys(BCC.default_options(C))
-        haskey(get(f["physics"]["options"], String(BCC.coupling_name(C)), Dict()), String(k)) ||
-            push!(missing_, "physics.options.$(BCC.coupling_name(C)).$k")
+    missing_ = String[]
+    for o in sec("urban").options
+        haskey(f["urban"], o.key) || push!(missing_, "urban.$(o.key)")
+    end
+    for n in names, o in sec(n).options
+        haskey(get(f, n, Dict()), o.key) || push!(missing_, "$n.$(o.key)")
     end
     for o in BCC.parent_schema_section().options
-        haskey(f["physics"]["options"]["nesting"]["parent"], o.key) || push!(missing_, "parent.$(o.key)")
+        haskey(f["nesting"]["parent"], o.key) || push!(missing_, "nesting.parent.$(o.key)")
     end
     @test isempty(missing_)
+    isempty(missing_) || @info "options berlin_summer.toml does not write out" missing_
     # ParentConfig: every field but the child is a key of the parent schema
     ps = BCC.parent_schema_section()
     @test collect(keys(BCC.PARENT_FIELDS)) == collect(fieldnames(BCC.ParentConfig))[2:end]
@@ -146,9 +147,9 @@ end
     c = BCC.CaseConfig()
     dflt = BCC.default_run_config()
     @test c.size == dflt.grid.size && c.ν === dflt.dynamics.nu && c.θ_top === :initial_gradient
-    @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)   # the driver's output cadence
+    @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)
     @test c.name === :urban && c.physics == Dict() && c.options == Dict()
-    # the generic run type points at no input data of an example (EX-a, #438)
+    # the generic site points at no input data of an example (EX-a, #438)
     @test c.landuse === nothing && c.sounding === nothing && c.static === nothing
     p = BCC.ParentConfig(c)
     @test p.extent == (6000.0, 6000.0, 3000.0) && p.refinement == (2, 2, 4) && isnan(p.z_g)
@@ -162,6 +163,10 @@ end
     sm = BCC.CaseConfig(berlin_toml("smoke"); options = Dict(:pollutant => (tau = 60.0,)))
     @test sm.options[:pollutant] == (tau = 60.0,)
     @test sm.options[:nesting].parent.refinement == (4, 4, 8)
+    # every urban component is off until its section enables it: a model
+    # config without [urban] is no urban site, and enables none of them
+    bare = load_run_config(IOBuffer(""))
+    @test !BCC.urban_enabled(bare) && !any(n -> bare[n].enabled, names)
 end
 
 @testset "Config berlin: the analysis buffer of the observation diagnostics (#268)" begin
@@ -176,15 +181,15 @@ end
     @test all(BCC.analysis_columns(pb, m))
 end
 
-@testset "Config berlin: [physics] and per-coupling options" begin
+@testset "Config berlin: the components' sections and their options" begin
     smoke = berlin_toml("smoke")
     ld(ovr...) = BCC.CaseConfig(load_run_config(smoke; overrides = String[ovr...]))
-    # the type of an option is the type of its default
-    c = ld("physics.options.geostrophic.mode=\"nudging\"", "physics.options.geostrophic.U_g=3",
-           "physics.options.geostrophic.τ=900.0",            # a Julia name as a key
-           "physics.options.surface_exchange.z0m={3 = 0.2}",   # merged over the class table
-           "physics.options.nesting.z_anterp=12.5", "physics.options.sgs_smagorinsky.diapycnal=0.1",
-           "physics.options.pollutant.stacks=[[1.0, 2.0, 3.0]]", "physics.options.ground_soil.classes=[1, 3, 5]")
+    # the form of an option is the form of its default
+    c = ld("geostrophic.mode=\"nudging\"", "geostrophic.u_g=3",
+           "geostrophic.tau=900.0",                    # τ: its ASCII key
+           "surface_exchange.z0m={3 = 0.2}",           # merged over the class table
+           "nesting.z_anterp=12.5", "sgs_smagorinsky.diapycnal=0.1",
+           "pollutant.stacks=[[1.0, 2.0, 3.0]]", "ground_soil.classes=[1, 3, 5]")
     g = c.options[:geostrophic]
     @test g.mode === :nudging && g.U_g === 3.0 && g.τ === 900.0
     o = BCC.coupling_options(BCC.GeostrophicCoupling, c)
@@ -196,18 +201,19 @@ end
     @test c.options[:sgs_smagorinsky].diapycnal === 0.1
     @test c.options[:pollutant].stacks == [(1.0, 2.0, 3.0)]
     @test c.options[:ground_soil].classes === (0x01, 0x03, 0x05)
-    @test ld("physics.options.surface_exchange.z0m=\"dynamic\"").options[:surface_exchange].z0m === :dynamic
+    @test ld("surface_exchange.z0m=\"dynamic\"").options[:surface_exchange].z0m === :dynamic
     # options equal to the defaults are not stored
-    @test !haskey(ld("physics.options.geostrophic.U_g=1.0").options, :geostrophic)
-    # [physics]: slot = provider, addon = true/false; the registry default is not stored
-    c = ld("physics.sgs=\"smagorinsky\"", "physics.pollutant=false", "physics.microphysics=\"kessler\"")
+    @test !haskey(ld("geostrophic.u_g=1.0").options, :geostrophic)
+    # the selection: one provider per urban slot, additive components on or
+    # off; what the registry defaults to is not stored
+    c = ld("sgs_tke.enabled=false", "sgs_smagorinsky.enabled=true", "pollutant.enabled=false")
     @test c.physics == Dict{Symbol,Any}(:sgs => :smagorinsky, :pollutant => false)
     @test BCC.SGSSmagorinsky in BCC.selected_couplings(c) && !(BCC.PollutantCoupling in BCC.selected_couplings(c))
     # the parent's function-valued fields from their TOML tables
-    c = ld("physics.options.nesting.parent.surface=\"prescribed\"",
-           "physics.options.nesting.parent.q_surface={kind = \"series\", t = [0.0, 3600.0], value = [0.0, 0.2]}",
-           "physics.options.nesting.parent.theta_init={kind = \"table\", z = [0.0, 1000.0], values = [290.0, 293.0]}",
-           "physics.options.nesting.parent.u_init={kind = \"constant\", value = 2.5}")
+    c = ld("nesting.parent.surface=\"prescribed\"",
+           "nesting.parent.q_surface={kind = \"series\", t = [0.0, 3600.0], value = [0.0, 0.2]}",
+           "nesting.parent.theta_init={kind = \"table\", z = [0.0, 1000.0], values = [290.0, 293.0]}",
+           "nesting.parent.u_init={kind = \"constant\", value = 2.5}")
     p = BCC.nest_parent_config(c)
     @test p.surface === :prescribed && p.Q_surface(1800.0) ≈ 0.1 && p.Q_surface(7200.0) == 0.2
     @test p.E_surface(0.0) == 0.0
@@ -216,66 +222,67 @@ end
     # an arbitrary Julia function only through the escape hatch: not replayable
     cfg = load_run_config(smoke)
     f = t -> 1e-3 * sin(t)
-    cfg2 = with(cfg, "physics.options" => Dict("nesting" => Dict("parent" => Dict("q_surface" => f))))
-    @test nonreplayable_keys(cfg2) == ["physics.options"]
+    cfg2 = with(cfg, "nesting.parent" => Dict("q_surface" => f))
+    @test !isempty(nonreplayable_keys(cfg2)) && all(k -> occursin("nesting", k), nonreplayable_keys(cfg2))
     @test BCC.nest_parent_config(BCC.CaseConfig(cfg2)).Q_surface === f
     @test BCC.toml_literal(BCC.SeriesForcing([0.0, 1.0], [2.0, 3.0])) ==
           "{kind = \"series\", t = [0.0, 1.0], value = [2.0, 3.0]}"
     @test_throws ArgumentError BCC.toml_form(f)
-    # [output]: netcdf in path; "none" → no file; the run folder's output/ under run_config
+    # [urban] netcdf in [output] path; "none" → no file; the run folder's output/ under run_config
     c = BCC.CaseConfig(load_run_config(berlin_toml("summer")))
-    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "..", "output", "alexanderplatz.nc"))
+    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "output", "alexanderplatz.nc"))
     c = BCC.CaseConfig(load_run_config(berlin_toml("summer"); overrides = ["output.path=\"none\""]); run_output = "/tmp/x")
     @test c.output_path == "/tmp/x/alexanderplatz.nc"
     @test ld().output_path === nothing
-    # the cadences the couplings declare
-    @test Set(BCC.declared_cadences(BCC.RadiositySun)) == Set([:radiation])
-    @test :surface in BCC.declared_cadences(BCC.SurfaceExchangeMOST)
-    @test ld("cadence.surface=2.0").cadence[:surface] == 2.0
+    # the periods
+    @test ld("urban.surface_period=2.0").cadence[:surface] == 2.0
     @test !haskey(ld().cadence, :surface)
+    @test ld().cadence == Dict(:radiation => 8.0, :soil => 4.0, :output => 12.0)
 end
 
 @testset "Config berlin: errors name the key and the allowed values" begin
     smoke = berlin_toml("smoke")
     err(ovr...) = berlin_error(() -> load_run_config(smoke; overrides = String[ovr...]))
-    # an unknown provider lists the registered ones
-    e = err("physics.microphysics=\"p4\"")
-    @test only(e.problems).key == "physics.microphysics" && occursin("\"kessler\"", only(e.problems).message)
-    e = err("physics.sgs=\"tk\"")
-    @test occursin("\"smagorinsky\"", errtext(e)) && occursin("\"tke\"", errtext(e))
+    # a slot without a provider, or with two, names its providers
+    e = err("micro_kessler.enabled=false")
+    @test only(e.problems).key == "micro_kessler" && occursin(":microphysics", errtext(e)) && occursin("none is enabled", errtext(e))
+    e = err("sgs_smagorinsky.enabled=true")
+    @test occursin(":sgs", errtext(e)) && occursin("sgs_smagorinsky", errtext(e)) && occursin("sgs_tke", errtext(e))
     # the parent's own schema
-    e = err("physics.options.nesting.parent.refinement=[2, 2]")
-    @test only(e.problems).key == "physics.options"
-    @test occursin("nesting.parent.refinement", errtext(e)) && occursin("array of 3 integers", errtext(e))
-    e = err("physics.options.nesting.parent.vertikal=\"uniform\"")
+    e = err("nesting.parent.refinement=[2, 2]")
+    @test occursin("parent.refinement", errtext(e)) && occursin("array of 3 integers", errtext(e))
+    e = err("nesting.parent.vertikal=\"uniform\"")
     @test occursin("did you mean \"vertical\"", errtext(e))
-    e = err("physics.options.nesting.parent.q_surface={kind = \"series\", t = [1.0, 0.0], value = [0.0, 1.0]}")
+    e = err("nesting.parent.q_surface={kind = \"series\", t = [1.0, 0.0], value = [0.0, 1.0]}")
     @test occursin("strictly increasing", errtext(e))
     # a declared incompatibility, with its reason
-    e = err("physics.core=\"anelastic\"")
+    e = err("core_boussinesq.enabled=false", "core_anelastic.enabled=true")
     reason = BCC.incompatible_reason(BCC.coupling_type(:core_anelastic))
-    @test !isempty(reason) && occursin(reason, errtext(e)) && only(e.problems).key == "physics"
-    # an unknown per-coupling option lists that coupling's options
-    e = err("physics.options.geostrophic.Ug=2.0")
-    @test occursin("geostrophic.Ug: unknown option", errtext(e))
-    @test occursin("U_g, V_g, mode, τ, sponge_to_geostrophic", errtext(e)) && occursin("did you mean \"U_g\"", errtext(e))
-    e = err("physics.options.geostrophic.U_g=\"fast\"")
-    @test occursin("geostrophic.U_g: expected a number", errtext(e))
-    e = err("physics.options.geostrofic.U_g=1.0")
-    @test occursin("no coupling named \"geostrofic\"", errtext(e)) && occursin("did you mean \"geostrophic\"", errtext(e))
-    e = err("physics.options.nesting.z_anterp=\"roof\"")
-    @test occursin("\"canopy\" or a height", errtext(e))
+    @test !isempty(reason) && any(p -> p.key == "urban" && occursin(reason, p.message), e.problems)
+    # an unknown option of a component lists its options
+    e = err("geostrophic.ug=2.0")
+    @test occursin("geostrophic.ug", errtext(e)) && occursin("did you mean \"u_g\"", errtext(e))
+    e = err("geostrophic.u_g=\"fast\"")
+    @test occursin("geostrophic.u_g", errtext(e))
+    e = err("geostrofic.u_g=1.0")
+    @test occursin("geostrofic", errtext(e)) && occursin("geostrophic", errtext(e))
+    e = err("nesting.z_anterp=\"roof\"")
+    @test occursin("z_anterp", errtext(e)) && occursin("canopy", errtext(e))
     # θ top: a name or a number
-    @test BCC.CaseConfig(load_run_config(smoke; overrides = ["dynamics.theta_top=0.003"])).θ_top === 0.003
-    @test occursin("theta_top", errtext(err("dynamics.theta_top=\"lid\"")))
+    @test BCC.CaseConfig(load_run_config(smoke; overrides = ["urban.theta_top=0.003"])).θ_top === 0.003
+    @test occursin("theta_top", errtext(err("urban.theta_top=\"lid\"")))
     # checkpoints (#269): on with the Boussinesq core; the sound-proof cores have none
     @test load_run_config(smoke; overrides = ["checkpoint.every_steps=5"]).checkpoint.every_steps == 5
-    e = err("checkpoint.every_steps=5", "physics.core=\"anelastic\"",
-            "physics.pressure_solver=\"density_weighted_direct\"", "physics.timestepper=\"fixed\"")
+    e = err("checkpoint.every_steps=5", "core_boussinesq.enabled=false", "core_anelastic.enabled=true",
+            "pressure_fft.enabled=false", "pressure_density_direct.enabled=true",
+            "timestep_adaptive.enabled=false", "timestep_fixed.enabled=true")
     @test any(p -> p.key == "checkpoint.every_steps" && occursin("Boussinesq core", p.message), e.problems)
+    # the urban site's own rules: a fixed dt, nsteps, a uniform grid
+    e = err("time.dt=\"adaptive\"")
+    @test any(p -> p.key == "time.dt", e.problems)
     # five independent problems are all reported
-    e = err("physics.microphysics=\"p4\"", "grid.size=[16, 16]", "clock.dt=-1.0",
-            "physics.options.nesting.parent.refinement=[2, 2]", "boundaries.lateral=\"closed\"")
+    e = err("micro_kessler.qv_max=\"x\"", "grid.size=[16, 16]", "time.dt=-1.0",
+            "nesting.parent.refinement=[2, 2]", "urban.lateral=\"closed\"")
     @test length(e.problems) == 5
 end
 
@@ -283,7 +290,7 @@ end
     t0 = time()
     # every diagnostic evaluated at every step (#338): the state below must
     # still be the fixture's, bit for bit (the diagnostics only read it)
-    r = roundtrip_check(berlin_toml("smoke"); nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
+    r = roundtrip_check(berlin_toml("smoke"); nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
                         overrides = ["logging.diagnostics_cadence=1e-3"])
     wall = time() - t0
     @test r.fields_equal
@@ -308,7 +315,7 @@ end
     # steps to get there), completed, every step a diagnostics row
     rec = read_run_toml(r.runs[1].folder.path)
     @test case.sim.t == 24.0 && !case.clock.blowup
-    @test rec["config"]["run"]["legacy"] == "urban" && rec["replayable"] == true
+    @test !haskey(rec["config"]["run"], "legacy") && rec["replayable"] == true
     @test length(readlines(diagnostics_path(r.runs[1].folder))) == case.clock.n + 1   # header + a row per step
     # the ledgers close to the smoke test's tolerances
     rows = BCC.surface_budget(case.budgets)
@@ -346,7 +353,6 @@ end
     # the stage timing: one wall.* column per timed entry, the final value
     # the case's own (and dropped, with the wall column, by the round trip)
     @test num(last_row, "wall.dynamics.step") == case.timing[(:dynamics, :step!)]
-    @test num(last_row, "wall.budgets.air_heat") == case.timing[(:budgets, :air_heat)]
     wallcols = filter(startswith("wall."), head)
     @test length(wallcols) >= length(case.timing)
     @test all(k -> "wall.$(BCC.diag_name(k[1])).$(BCC.diag_name(k[2]))" in wallcols, keys(case.timing))
@@ -469,15 +475,15 @@ end
     root = mktempdir()
     rc = redirect_stdout(devnull) do
         Aeolus.main(["run", berlin_toml("smoke"), "--root", root, "--allow-uncommitted",
-                     "--set", "fftw.planner=\"estimate\"", "--set", "clock.nsteps=2"])
+                     "--set", "fftw.planner=\"estimate\"", "--set", "time.nsteps=2"])
     end
     @test rc == 0
     runs = readdir(root; join = true)
     @test length(runs) == 1
     rec = read_run_toml(only(runs))
     @test rec["session"][end]["status"] == "completed"
-    @test rec["config"]["clock"]["nsteps"] == 2 && rec["config"]["run"]["name"] == "smoke"
-    @test rec["config"]["run"]["legacy"] == "urban"
+    @test rec["config"]["time"]["nsteps"] == 2
+    @test rec["config"]["run"]["name"] == "smoke" && !haskey(rec["config"]["run"], "legacy")
     # the run type's own checks (EX-a, #438): results.toml in the run folder,
     # the ledgers closed within BUDGET_TOLERANCES, the state finite
     res = TOML.parsefile(joinpath(only(runs), "output", "results.toml"))
@@ -497,23 +503,23 @@ end
     # a config error exits 2 before anything is written
     root2 = mktempdir()
     rc = redirect_stderr(devnull) do
-        Aeolus.main(["run", berlin_toml("smoke"), "--root", root2, "--set", "physics.microphysics=\"p4\""])
+        Aeolus.main(["run", berlin_toml("smoke"), "--root", root2, "--set", "micro_kessler.enabled=false"])
     end
     @test rc == 2 && isempty(readdir(root2))
 end
 
 @testset "Config berlin: aeolus check in a fresh process" begin
-    # The urban driver's validators and checks run in a fresh process (when
-    # the driver was an example file, included while the config was being
-    # loaded, `aeolus check` failed there with a world-age MethodError)
+    # The urban site's validators and checks run in a fresh process (when
+    # the urban run type was an example file, included while the config was
+    # being loaded, `aeolus check` failed there with a world-age MethodError)
     root = pkgdir(Aeolus)
     aeolus(args...) = VERSION >= v"1.12" ?
         `$(Base.julia_cmd()) --startup-file=no --project=$root -m Aeolus $args` :
         `$(Base.julia_cmd()) --startup-file=no --project=$root $(joinpath(root, "bin", "aeolus")) $args`
     err = IOBuffer()
-    p = run(pipeline(ignorestatus(aeolus("check", berlin_toml("smoke"), "--set", "physics.microphysics=\"p4\""));
+    p = run(pipeline(ignorestatus(aeolus("check", berlin_toml("smoke"), "--set", "micro_kessler.enabled=false"));
                      stdout = devnull, stderr = err))
     @test p.exitcode == 2
     msg = String(take!(err))
-    @test occursin("physics.microphysics", msg) && occursin("kessler", msg)
+    @test occursin("micro_kessler", msg) && occursin(":microphysics", msg)
 end

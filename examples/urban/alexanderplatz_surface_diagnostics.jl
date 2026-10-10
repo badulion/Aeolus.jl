@@ -1,7 +1,7 @@
 # Surface diurnal-cycle diagnostics for the Alexanderplatz run — NO PHYSICS.
 #
 # Reads the NetCDF of a berlin_summer.toml run (`julia --project -m Aeolus run
-# examples/urban/configs/berlin_summer.toml`) and prints, per
+# examples/urban/berlin_summer.toml`) and prints, per
 # surface class, the class-mean surface temperature cycle: maximum and
 # night minimum (with their local hour), their difference, and the nocturnal
 # cooling from sunset to the night minimum (the minimum after sunset —

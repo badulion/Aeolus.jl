@@ -96,9 +96,6 @@ include("BudgetSystem.jl")        # the one budget system: energy, water, moment
 include("Output.jl")             # the one output writer: component catalogues, [output] variables (ONE-c, #452)
 include("Components.jl")     # the component interface, Domain/Model and the stage pipeline (ONE-a, #450)
 
-# CFG-b (#357): the bare-simulation run driver (needs the dynamical cores,
-# so after them; the driver contract and the CLI are in Config).
-include("config/simulation_driver.jl")
 # EX-d (#441): the run types of the example cases (configured from TOML only).
 include("RunDrivers.jl")
 
@@ -1196,10 +1193,16 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
 # fixed stage pipeline (the component interface: Aeolus.Components).
 export Model, Domain
 
-# EX-a (#438): the urban LES run type (the `urban` run driver; the Berlin
-# case is examples/urban/configs/). A submodule, not exported: its names
-# (CaseConfig, build_case, Ledger, …) stay under Aeolus.UrbanCase.
+# EX-a (#438), ONE-e (#454): the urban site of the model (`[urban] enabled`;
+# the Berlin case is examples/urban/berlin_*.toml). A submodule, not
+# exported: its names (CaseConfig, build_case, …) stay under Aeolus.UrbanCase.
 include("UrbanCase.jl")
+
+# CFG-b (#357): the model's configuration and run (needs the dynamical
+# cores and the components, so after them; the driver contract and the CLI
+# are in Config). After UrbanCase (ONE-e, #454): the urban site's sections
+# and components are part of the model's schema.
+include("config/simulation_driver.jl")
 
 # EX-b (#439): the `sbl` run type (CFG-d #359), moved from examples/sbl/.
 # Included after the exports above: it builds on them (`using ..Aeolus`).

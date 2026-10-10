@@ -1,6 +1,6 @@
 # The `urban_parent` run driver (EX-a, #438): the nest parent of an urban
-# case run on its own, configured by the same schema as the `urban` driver
-# (the parent is `[physics.options.nesting.parent]` of the case's config):
+# case run on its own, configured by the model's schema of the urban site
+# (ONE-e, #454; the parent is `[nesting] parent` of the site's config):
 #
 #   [run]
 #   legacy = "urban_parent"
@@ -17,8 +17,8 @@
 The `urban_parent` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
 the nest parent of an urban case alone ([`build_parent`](@ref) of
 [`nest_parent_config`](@ref)), run for its `hours` with
-[`run_parent!`](@ref). Same schema as the `urban` driver (a parent config
-is an urban case's file with `[run] legacy = "urban_parent"`), with
+[`run_parent!`](@ref). The model's schema (a parent config is an urban
+site's file with `[run] legacy = "urban_parent"`, ONE-e #454), with
 `[checkpoint]` off (the parent runs to the end in one call). Writes, into
 the run folder's `output/` ([`write_parent_tables`](@ref),
 [`parent_results`](@ref)):
@@ -37,10 +37,15 @@ the run folder's `output/` ([`write_parent_tables`](@ref),
 struct UrbanParentDriver <: AbstractRunDriver end
 
 Config.driver_name(::UrbanParentDriver) = "urban_parent"
-Config.driver_sections(::UrbanParentDriver) = Config.driver_sections(UrbanDriver())
+"The model's sections (set by `Aeolus.SimulationDriver`, which registers this driver after the model's)."
+const MODEL_SECTIONS = Ref{Any}(nothing)
+Config.driver_sections(::UrbanParentDriver) = MODEL_SECTIONS[]
+"The model's per-domain sections (set by `Aeolus.SimulationDriver` with `MODEL_SECTIONS`): the config is one domain's."
+const MODEL_DOMAIN_SECTIONS = Ref{Any}(String[])
+Config.domain_sections(::UrbanParentDriver) = MODEL_DOMAIN_SECTIONS[]
 Config.driver_defaults(::UrbanParentDriver) = ("output.cadence" => 1800.0, "run.name" => "urban_parent")
 Config.driver_checks(::UrbanParentDriver) =
-    Any[_URBAN_CHECKS_DOC => _urban_checks,
+    Any[URBAN_CHECKS_DOC => urban_checks,
         "[checkpoint] is off: the parent alone runs to the end in one call" => Config.no_checkpoints]
 
 """
@@ -59,7 +64,7 @@ function Config.build(::UrbanParentDriver, cfg::RunConfig)
     f = cc.parent_static
     if f !== nothing && !isfile(f)
         src = first(config_sources(cfg)["files"])
-        throw(ConfigError("geometry.parent_static", "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
+        throw(ConfigError("urban.parent_static", "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
                                                     "  julia --project -m AeolusPrep static $src --source <file.osm>"))
     end
     return UrbanParentRun(cfg, build_parent(nest_parent_config(cc)))
@@ -234,4 +239,3 @@ function Config.state_fields(r::UrbanParentRun)
     return (; out...)
 end
 
-register_driver!(UrbanParentDriver())

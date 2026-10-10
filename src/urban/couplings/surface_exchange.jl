@@ -215,8 +215,6 @@ slot(::Type{SurfaceExchangeMOST}) = :surface_exchange
 provider(::Type{SurfaceExchangeMOST}) = :most
 modules_used(::Type{SurfaceExchangeMOST}) = (:SurfaceExchange, :Radiation, :MoistThermodynamics,
                                               :WallModels)
-# the surface step's period: `[cadence] surface` if set, else `soil` (see `period`)
-cadence_keys(::Type{SurfaceExchangeMOST}) = (:surface, :soil)
 default_options(::Type{SurfaceExchangeMOST}) =
     (U_min = 0.1, z0h_ratio = 0.1, period = nothing, wall_formulation = :local,
      # the wall-model input (P57-b): time filter on, matching at the first air cell

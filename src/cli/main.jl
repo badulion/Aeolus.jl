@@ -156,14 +156,15 @@ _subtables(o::Option) = (o.type isa OpenTable && o.type.reference !== nothing) ?
 
 Every table the option reference of `schema` documents, `"dotted.name" =>
 section`: the schema's sections and, after each, the documented
-sub-tables of its [`OpenTable`](@ref) options (`"physics.options.aq_chem"`).
+sub-tables of its [`OpenTable`](@ref) options (`"nesting.parent"`: a
+sub-table named `""` documents the option's table itself).
 """
 function reference_sections(sch::ConfigSchema)
     out = Pair{String,Section}[]
     for s in sch.sections
         push!(out, s.name => s)
         for o in s.options, sub in _subtables(o)
-            push!(out, "$(s.name).$(o.key).$(sub.name)" => sub)
+            push!(out, (isempty(sub.name) ? "$(s.name).$(o.key)" : "$(s.name).$(o.key).$(sub.name)") => sub)
         end
     end
     return out

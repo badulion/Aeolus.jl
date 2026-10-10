@@ -329,25 +329,25 @@ end
 
 @testset "InputDrivers dynamic: a missing driver is a config error naming the command that makes it" begin
     dir = mktempdir()
-    msg = errmsg(() -> Config.build(BCD.UrbanDriver(),
-                                    load_run_config(ID_SMOKE; overrides = ["initial.dynamic=\"$(joinpath(dir, "none.nc"))\""])))
+    msg = errmsg(() -> Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
+                                    load_run_config(ID_SMOKE; overrides = ["dynamic_driver=\"$(joinpath(dir, "none.nc"))\""])))
     @test occursin("AeolusPrep dynamic --from-sounding $ID_SMOKE", msg)
     # the offline nest: the online run writes it
-    msg = errmsg(() -> Config.build(BCD.UrbanDriver(),
-                                    load_run_config(ID_SMOKE; overrides = ["initial.dynamic=\"$(joinpath(dir, "none.nc"))\"",
-                                                                           "physics.options.nesting.parent_driver=\"offline\""])))
+    msg = errmsg(() -> Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
+                                    load_run_config(ID_SMOKE; overrides = ["dynamic_driver=\"$(joinpath(dir, "none.nc"))\"",
+                                                                           "nesting.parent_driver=\"offline\""])))
     @test occursin("child_boundaries", msg)
 end
 
 @testset "InputDrivers dynamic: the smoke case from a sounding driver = the CSV path (12 steps, round trip)" begin
     dir = mktempdir()
     out = joinpath(dir, "smoke_sounding.nc")
-    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\""]), out)
-    r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
-                        overrides = ["initial.dynamic=\"$out\""])
+    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ["urban.sounding=\"$ID_CSV\""]), out)
+    r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
+                        overrides = ["dynamic_driver=\"$out\""])
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
-    @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(out)
+    @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(out)
     case = r.runs[1].obj.case
     @test BCD.case_sounding(case.cfg) !== nothing && case.cfg.sounding === nothing
     # the CSV path, run the same way in this process. The 12-step state is
@@ -356,7 +356,7 @@ end
     # in the last bits in others (3 of 12 fresh processes on the same code;
     # cause not identified, see the PR), while the initial state above
     # matched every time.
-    csv = load_run_config(ID_SMOKE; overrides = ["initial.sounding=\"$ID_CSV\"", "clock.nsteps=12",
+    csv = load_run_config(ID_SMOKE; overrides = ["urban.sounding=\"$ID_CSV\"", "time.nsteps=12",
                                                  "fftw.planner=\"estimate\""])
     ref = run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj.case
     want, got = berlin_state(ref), berlin_state(case)
@@ -403,11 +403,11 @@ end
         @info @sprintf("online smoke with child_boundaries: %d parent windows, %d records, driver %.1f MB, %.1f s",
                        nc.windows, length(f.time), filesize(drv) / 1024^2, t_online)
         # the child alone from the file, through aeolus run and its replay
-        r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["clock.nsteps=$n"],
-                            overrides = ["initial.dynamic=\"$drv\"", "physics.options.nesting.parent_driver=\"offline\""])
+        r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
+                            overrides = ["dynamic_driver=\"$drv\"", "nesting.parent_driver=\"offline\""])
         @test r.fields_equal && r.diagnostics_equal && r.config_equal
         rec = read_run_toml(r.runs[1].folder.path)
-        @test rec["inputs"]["initial.dynamic"]["fnv1a64"] == content_hash(drv)
+        @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv)
         off = r.runs[1].obj.case
         oc = BCD.find_coupling(off, :nesting)
         @test BCD.offline(oc) && oc.parent === nothing && oc.windows == nc.windows
@@ -429,7 +429,7 @@ end
 @testset "InputDrivers dynamic: the open case from the sounding driver's steady planes (smoke, 12 steps)" begin
     dir = mktempdir()
     out = joinpath(dir, "smoke_open.nc")
-    ov = ["initial.sounding=\"$ID_CSV\"", "physics.nesting=false", "boundaries.lateral=\"open\""]
+    ov = ["urban.sounding=\"$ID_CSV\"", "nesting.enabled=false", "urban.lateral=\"open\""]
     write_sounding_driver(load_run_config(ID_SMOKE; overrides = ov), out)
     m = RegularGrid(; size = (16, 16, 16), extent = (250.0, 250.0, 100.0), halo = (3, 3, 3))
     d = read_dynamic_driver(out; mesh = m)

@@ -5,7 +5,7 @@
 # runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.UrbanCase`
 # and loads Aeolus, `interior_view` and `Random.Xoshiro`.
 #
-# Every run is examples/urban/configs/berlin_smoke.toml with `--set`
+# Every run is examples/urban/berlin_smoke.toml with `--set`
 # overrides (CFG-c, #358): `smoke_specs` derives what each run changes
 # from the registry, `smoke_overrides` writes it as overrides, and
 # `smoke_matrix` loads the configs.
@@ -47,15 +47,19 @@ end
     smoke_overrides(spec) -> Vector{String}
 
 The `--set` overrides of `berlin_smoke.toml` for a run of
-[`smoke_specs`](@ref): `physics.<slot or addon>`, every option as
-`physics.options.<coupling>.<key>` (the nest parent's as
-`physics.options.nesting.parent.<key>`), every `CaseConfig` field by its
-TOML key (`BC.CASE_FIELDS`), then the spec's raw overrides.
+[`smoke_specs`](@ref): per urban slot, `<provider>.enabled` of the
+provider the run selects on and every other provider of the slot off; per
+additive component `<name>.enabled`; every option as `<component>.<key>`
+(the nest parent's as `nesting.parent.<key>`); every `CaseConfig` field
+by its key of the model (`BC.CASE_FIELDS`); then the spec's raw overrides.
 """
 function smoke_overrides(spec)
     out = String[]
-    for k in sort!(collect(keys(spec.physics)))
-        push!(out, "physics.$k=" * BC.toml_literal(spec.physics[k]))
+    for C in BC.REGISTRY
+        s = BC.slot(C)
+        on = s === :addon ? spec.physics[BC.coupling_name(C)] :
+                            BC.provider(C) === Symbol(get(spec.physics, s, BC.default_provider(s)))
+        push!(out, "$(BC.coupling_name(C)).enabled=" * BC.toml_literal(on))
     end
     # berlin_summer.toml turns [checkpoint] on, and only the Boussinesq
     # core can be checkpointed (#269): a run on another core turns it off
@@ -64,23 +68,23 @@ function smoke_overrides(spec)
     for c in sort!(collect(keys(spec.options))), (k, v) in pairs(spec.options[c])
         if c === :nesting && k === :parent
             for (pk, pv) in pairs(v)
-                push!(out, "physics.options.nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
+                push!(out, "nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
             end
         else
-            push!(out, "physics.options.$c.$k=" * BC.toml_literal(v))
+            push!(out, "$c.$(BC.option_key(k))=" * BC.toml_literal(v))
         end
     end
     for (f, v) in pairs(spec.fields)
         keys_ = BC.CASE_FIELDS[f]
         length(keys_) == 1 || error("smoke_overrides: the field $f is made of several options ($(join(keys_, ", ")))")
-        push!(out, keys_[1] * "=" * BC.toml_literal(v))
+        # the domain's driver paths are top-level keys of a one-domain config
+        push!(out, replace(keys_[1], r"^domain\." => "") * "=" * BC.toml_literal(v))
     end
     return vcat(out, spec.extra)
 end
 
 "The `CaseConfig` of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
-smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec),
-                                                   schema = BC.urban_schema()))
+smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec)))
 
 """
     smoke_matrix(registry = BC.REGISTRY) -> Vector{Pair{String,CaseConfig}}

@@ -231,7 +231,7 @@ end
 @testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's, bit for bit" begin
     # smoke: from the committed static driver
     cs = BCI.CaseConfig(berlin_toml("smoke"))
-    @test endswith(cs.static, "configs/input/berlin_smoke_static.nc")
+    @test endswith(cs.static, "urban/input/berlin_smoke_static.nc")
     @test geom_digests_equal("smoke", BCI.build_geometry(cs, meshof(cs)))
     # the Mitte sample at 32 × 32 × 16, nested (frame) and periodic (no frame, wrapped
     # walls): its committed driver's polygons rasterised on that grid give the
@@ -277,8 +277,8 @@ end
     end
     # the round trip hashes the static drivers under [inputs]
     inp = config_inputs(load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml")))
-    @test inp["geometry.static"]["fnv1a64"] == content_hash(cs.static)
-    @test inp["geometry.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
+    @test inp["domain.main.static_driver"]["fnv1a64"] == content_hash(cs.static)
+    @test inp["domain.main.urban.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
     # a grid the file was not made for is refused, naming both grids and the command
     e = try
         BCI.build_geometry(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16)), meshof(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16))))
@@ -288,9 +288,9 @@ end
     end
     @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolusprep static", e)
     # a missing driver: a config error before any run folder, with the exact command
-    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["geometry.static=\"nope.nc\""])
+    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["static_driver=\"nope.nc\""])
     e = try
-        Aeolus.Config.build(BCI.UrbanDriver(), cfg); nothing
+        Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg); nothing
     catch err
         err
     end

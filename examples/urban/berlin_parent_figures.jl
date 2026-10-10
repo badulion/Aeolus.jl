@@ -9,7 +9,7 @@
 #
 # Run the parent first, then draw (reads the tables only, runs nothing):
 #
-#     julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml
+#     julia --project -m Aeolus run examples/urban/berlin_parent.toml
 #     julia --project examples/urban/berlin_parent_figures.jl <run folder> ["label"]
 
 using Aeolus, Printf

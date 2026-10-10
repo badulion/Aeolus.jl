@@ -4,25 +4,26 @@
 # parameters, initial state, cadences (in SECONDS, never in steps, so the
 # schedule survives a change of dt or an adaptive stepper) and the
 # `physics` / `options` dictionaries the coupling registry reads to decide
-# which couplings run and how. Its defaults and its TOML form are the
-# `urban` run-configuration schema (core/config_schema.jl, CFG-c #358);
-# the Berlin case is the TOML files in examples/urban/configs/.
+# which couplings run and how. Its defaults and its TOML form are the urban
+# site's sections of the model's schema (core/config_schema.jl, CFG-c #358,
+# ONE-e #454); the Berlin case is the TOML files examples/urban/berlin_*.toml.
 
 """
     CaseConfig(; kwargs...)
     CaseConfig(path::AbstractString; overrides = String[], kwargs...)
     CaseConfig(cfg::RunConfig; run_output = nothing)
 
-Configuration of an urban case (the `urban` run driver), the struct
-[`build_case`](@ref) consumes. Its defaults are those of the `urban`
-run-configuration schema (`core/config_schema.jl`, CFG-c #358; `aeolus
-options urban` lists them with the TOML key of every field): the first
+Configuration of an urban case (the urban site of a model config), the
+struct [`build_case`](@ref) consumes. Its defaults are those of the urban
+site's sections of the model's schema (`core/config_schema.jl`, CFG-c
+#358, ONE-e #454; [`CASE_FIELDS`](@ref) gives the key of every field and
+`aeolus options` lists them): the first
 form is the all-defaults config with `kwargs` set on top (it has no
 ground: set `static`). The second loads a run
-configuration file (the Berlin case: `examples/urban/configs/berlin_*.toml`)
+configuration file (the Berlin case: `examples/urban/berlin_*.toml`)
 and then applies `kwargs` (`physics` and `options` merge per coupling
 over the file's). The third converts a loaded
-[`RunConfig`](@ref Aeolus.Config.RunConfig) of the `urban` driver.
+[`RunConfig`](@ref Aeolus.Config.RunConfig) of an urban site.
 
 Groups of fields:
 
@@ -43,9 +44,9 @@ Groups of fields:
 * **clock** — `date = (y, m, d)`, `start_h` (local hour at t = 0), `utc_offset` (h, local − UTC), `dt`
   (s), `nsteps`;
 * **cadences** — `cadence::Dict{Symbol,Float64}`, periods in seconds.
-  `:radiation`, `:soil` and `:output` are used by the initial couplings;
-  a coupling may add its own key (in TOML: `[cadence]`, whose keys are
-  the ones the couplings declare, and `[output] cadence`);
+  `:radiation`, `:soil`, `:surface` (optional) and `:output` (in TOML:
+  `[urban] radiation_period`, `soil_period`, `surface_period` and
+  `[output] cadence`);
 * **dynamics** — `ν`, `θ₀`, `g`, `f_coriolis`, `C_s`, `Pr_t`,
   `sponge_α_max`, `sponge_frac` (sponge starts at `sponge_frac·Lz`; it
   damps the velocity only; in a nested case toward the parent's mean wind
@@ -108,7 +109,7 @@ Groups of fields:
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
 * **output** — `output_path` (`nothing` disables NetCDF output; in TOML
-  `[output] netcdf`, the file name, in `[output] path`, a directory: the
+  `[urban] netcdf`, the file name, in `[output] path`, a directory: the
   run folder's `output/` under `aeolus run`, else `output/` in the working directory);
   `child_boundaries` (`nothing`: off) — with the online nest, the dynamic
   driver the run writes the child's boundary slabs to at every parent

@@ -8,7 +8,7 @@
 #           failed (#392): no retry, CFL ≤ C_advective, |u_i| < 20 m/s, θ
 #           within 2 K of its initial range; the forced 2 s step is rejected;
 #   smoke   every coupling of the run type in a short window of the real OSM
-#           scene (examples/urban/configs/berlin_smoke.toml: 16³, 250 m ×
+#           scene (examples/urban/berlin_smoke.toml: 16³, 250 m ×
 #           250 m × 100 m, 12 steps of 2 s), in every configuration the
 #           registry knows about (test/support/smoke_matrix.jl, shared with
 #           the thread-invariance harness): a finite state, every coupling's
@@ -27,7 +27,7 @@
 #           margins, energy closure per tile).
 #
 # The 24 h Lindenberg checks of the parent are an analysis of a run of
-# examples/urban/configs/berlin_parent_coarse.toml
+# examples/urban/berlin_parent_coarse.toml
 # (examples/urban/berlin_parent_lindenberg_check.jl). Numbers measured when
 # these were tests are quoted next to the assertions.
 

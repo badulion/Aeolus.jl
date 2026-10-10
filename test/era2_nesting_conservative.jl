@@ -612,7 +612,7 @@ end
 # would make that parent value NaN.
 @testset "solid-aware restriction on the real Berlin solid field" begin
     BC = Aeolus.UrbanCase
-    cfg = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"))
+    cfg = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"))
     pm = RegularGrid(Float64; size=(32, 32, 20), extent=(1000.0, 1000.0, 500.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.0, 1000.0), (0.0, 1000.0), (0.0, 400.0)), (2, 2, 4);
                        halo=(3, 3, 3))
