@@ -355,7 +355,7 @@ export scalar_face_flux, face_diffusivity, face_inv_spacing   # #327 M2: the one
 export ReferenceState,
        isothermal_reference, isentropic_reference,
        constant_stability_reference, reference_from_profile,
-       hydrostatic_residual, max_hydrostatic_residual,
+       hydrostatic_residual, max_hydrostatic_residual, hydrostatic_pressure,
        reference_scale_height,
        DensityWeightedPoissonSolver, DirectWeightedPoissonSolver, apply_weighted_laplacian!,
        solver_iterations, solver_residual,

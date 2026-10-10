@@ -24,7 +24,9 @@
 #   * Radiosity.direct_absorbed_share! and SolarGeometry.shade_direct_beam!
 #     (from couplings/cloud_shadow.jl): flat ground, sun only, share 1;
 #   * Microphysics.clamp_booked! (from couplings/micro_kessler.jl): the
-#     clamp's removal, ρ-weighted.
+#     clamp's removal, ρ-weighted;
+#   * Anelastic.hydrostatic_pressure (from core/reference_state.jl): the
+#     exact isentropic atmosphere, RK4 convergence.
 
 using Test
 using Aeolus
@@ -301,5 +303,27 @@ const GP_MT = Aeolus.MoistThermodynamics
         @test q == clamp.(q0, 0.0, 0.03)
         @test removed ≈ sum(ρ[k] * sum(q0[:, :, k] .- q[:, :, k]) for k in 1:3) rtol = 1e-12
         @test Aeolus.Microphysics.clamp_booked!(q, 0.0, 0.03, ρ) == 0   # nothing left to remove
+    end
+
+    @testset "Anelastic: the continuous hydrostatic pressure" begin
+        c = GP_MT.DEFAULT_CONSTANTS
+        R_d = c.gas_constant / c.molmass_dry
+        κ = R_d / c.cp_dry
+        # constant θ: Π(z) = Π_s − g z/(c_pd θ) exactly (an isentropic atmosphere)
+        z = collect(5.0:10.0:995.0)
+        p = hydrostatic_pressure(_ -> 300.0, z, 101325.0; g = 9.81, nsub = 50)
+        Πs = (101325.0 / c.p_ref)^κ
+        p_exact = c.p_ref .* (Πs .- 9.81 .* z ./ (c.cp_dry * 300.0)) .^ (1 / κ)
+        @test maximum(abs.(p .- p_exact) ./ p_exact) < 1e-12
+        # a stable profile (θ warmer aloft, the air lighter) falls slower than the
+        # isentropic one of its surface θ; RK4 is 4th order: halving the
+        # sub-step cuts the error about 16-fold (coarse levels, so the error is
+        # far above round-off)
+        θs(zz) = 300.0 + 0.01 * zz
+        @test all(hydrostatic_pressure(θs, z, 101325.0) .> p)
+        zc = [500.0, 2000.0, 5000.0]
+        pr = hydrostatic_pressure(θs, zc, 1.0e5; nsub = 4000)
+        e(n) = maximum(abs.(hydrostatic_pressure(θs, zc, 1.0e5; nsub = n) .- pr))
+        @test 12 < e(1) / e(2) < 20
     end
 end

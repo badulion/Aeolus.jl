@@ -374,35 +374,3 @@ function hydrostatic_check(cfg::CaseConfig, ref::CaseReference, mesh; nsub::Int 
     p = hydrostatic_pressure(z -> θ0(0.0, 0.0, z), zc, ref.p_surface; g = cfg.g, nsub = nsub)
     return maximum(abs.(ref.p̄ .- p) ./ p)
 end
-
-"""
-    hydrostatic_pressure(θ, z, p_surf; g = 9.81, nsub = 1000) -> Vector (Pa)
-
-The pressure at the heights `z` (m, increasing, above the ground) of a
-hydrostatic atmosphere with potential temperature `θ(z)` (a function) and
-ground pressure `p_surf`: the continuous ``dp/dz = -g p/(R_d θ(z) Π(p))``
-integrated by RK4 with `nsub` sub-steps per interval, with the dry-air
-constants of `MoistThermodynamics` (R_d, c_pd, p_ref = 1000 hPa). The one
-integration of the case: [`hydrostatic_check`](@ref) measures the child's
-discrete reference state against it, and the nesting parent (#259),
-whose stretched levels the discrete `Anelastic` reference does not take,
-uses it as its reference pressure ([`parent_reference`](@ref)).
-"""
-function hydrostatic_pressure(θ, z::AbstractVector, p_surf::Real; g::Real = 9.81, nsub::Int = 1000)
-    c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
-    R_d = c.gas_constant / c.molmass_dry
-    κ = R_d / c.cp_dry
-    f(zz, pp) = -g * pp / (R_d * θ(zz) * (pp / c.p_ref)^κ)
-    out = similar(z, Float64)
-    p, zz = Float64(p_surf), 0.0
-    for k in eachindex(z)
-        h = (z[k] - zz) / nsub
-        for _ in 1:nsub
-            k1 = f(zz, p); k2 = f(zz + h / 2, p + h / 2 * k1)
-            k3 = f(zz + h / 2, p + h / 2 * k2); k4 = f(zz + h, p + h * k3)
-            p += h / 6 * (k1 + 2k2 + 2k3 + k4); zz += h
-        end
-        out[k] = p
-    end
-    return out
-end
