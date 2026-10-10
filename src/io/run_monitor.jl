@@ -347,3 +347,17 @@ function with_monitor(f, sim; attach::Bool = true, kwargs...)
         close(m)
     end
 end
+
+# A step record's hook is the run session's monitor (its log, its writer,
+# its open files), not state of the model: a structural checkpoint
+# (`structural_state`, #269) of a model whose cores carry it records no
+# hook, and a restore keeps the fresh run's own (ONE-f, #455: the nest
+# of a monitored model run is checkpointed structurally).
+const _SESSION_HOOKS = IdDict{StepRecord,Any}()
+const _SESSION_HOOKS_LOCK = ReentrantLock()
+_hold_hook!(r::StepRecord) = (lock(() -> (_SESSION_HOOKS[r] = r.hook), _SESSION_HOOKS_LOCK); r.hook = nothing)
+_give_hook!(r::StepRecord) = (r.hook = lock(() -> pop!(_SESSION_HOOKS, r), _SESSION_HOOKS_LOCK); nothing)
+structural_save_begin(r::StepRecord) = (_hold_hook!(r); nothing)
+structural_save_end(r::StepRecord, _) = _give_hook!(r)
+structural_restore_begin(r::StepRecord, _) = (_hold_hook!(r); nothing)
+structural_restore_end(r::StepRecord, _) = _give_hook!(r)
