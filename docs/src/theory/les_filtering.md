@@ -312,6 +312,48 @@ Mech.* 275, 83; Vreman, B., Geurts, B. & Kuerten, H. (1994), *J. Fluid
 Mech.* 278, 351; Bardina, J., Ferziger, J. H. & Reynolds, W. C. (1980),
 AIAA 80-1357; Lumley, J. L. (1978), *Adv. Appl. Mech.* 18, 123.
 
+## A posteriori: LES against DNS (ONE-g)
+
+`examples/dns_vs_les/` runs decaying isotropic turbulence as model
+configurations: a 256³ DNS (no SGS model) and a 64³ LES per SGS model,
+all on the 2π box from the same field. The named analytic initial field
+`[initial] field = {kind = "isotropic_turbulence", …}`
+(`Operators.isotropic_turbulence_field!`) is defined in spectral space:
+every mode's random vector depends only on the seed and the integer mode,
+so the 64³ start is the 256³ start truncated to its modes, to round-off
+(`test/dns_vs_les.jl`, at 32³ / 16³; each start is then projected once
+onto its grid's discretely divergence-free fields). The spectrum is
+Passot & Pouquet's ``E ∝ k^4 \exp(-2(k/k_p)^2)``, ``k_p = 1.5``,
+``u' = 1`` m s⁻¹ (realised ``K_0 = 1.743`` m² s⁻²), ``ν = 2.0·10^{-3}``
+m² s⁻¹, run to ``t = 8`` s with adaptive SSP-RK3 steps (CFL 1). The runs
+write the resolved kinetic energy, the dissipation (molecular + SGS,
+``⟨(ν+ν_t)|S|^2⟩``) and the energy spectrum, and `compare.jl` reads only
+those:
+
+| run | decay exponent ``n`` (``K ∝ t^{-n}``, 4–8 s) | ε peak (m² s⁻³) at t (s) | SGS share of ε at the peak | max \|ΔK\|/K vs DNS | RMS log₁₀(E/E_DNS), t = 2 / 4 / 8 s, k ≤ 16 |
+| :-- | --: | :-- | --: | --: | :-- |
+| DNS 256³ | 2.200 | 0.438 at 3.55 | — | — | — |
+| LES dynamic Smagorinsky | 1.998 | 0.364 at 3.21 | 0.50 | 0.079 | 0.047 / 0.116 / 0.061 |
+| LES σ (1.35) | 1.955 | 0.338 at 3.06 | 0.56 | 0.125 | 0.085 / 0.151 / 0.081 |
+| LES Vreman (0.17) | 1.948 | 0.329 at 2.96 | 0.56 | 0.126 | 0.096 / 0.160 / 0.083 |
+| LES Smagorinsky (0.17) | 1.977 | 0.343 at 3.00 | 0.60 | 0.125 | 0.120 / 0.173 / 0.084 |
+| LES AMD (0.3) | 1.956 | 0.369 at 3.00 | 0.66 | 0.141 | 0.145 / 0.205 / 0.111 |
+
+The DNS took 2047 steps and 3563 s on 12 threads of a shared machine
+(max RSS 7.5 GB); each LES 39–140 s on one thread. Its dissipation peak,
+``t = 3.55`` s, is where the former 256³ record had it (3.60 s). Every
+static model drains energy early: the LES dissipation peaks 0.3–0.6 s
+before the DNS and 16–25 % lower, the kinetic energy falls below the DNS
+by up to 13–14 % around ``t ≈ 3`` s, and the LES decay is slower over
+4–8 s (``n ≈ 1.95``–2.0 against 2.20). The dynamic model, which lowers its
+coefficient while the cascade builds, follows the DNS closest in every
+measure; AMD is furthest. At ``t = 4`` s the LES spectra fall below the
+DNS from ``k ≈ 10`` toward the cut-off ``k_c = 32`` (figure, panel e).
+One seed, one resolution: the numbers rank the models on this flow,
+they are not converged statistics.
+
+![LES against DNS](../assets/dns_vs_les/dns_vs_les.svg)
+
 ## What LES buys us — and what it doesn't
 
 **Buys us:** the ability to run turbulence at meteorological Reynolds

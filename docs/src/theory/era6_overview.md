@@ -153,5 +153,5 @@ closure differences measured above.
 * [Stability functions and Ri_g](turbulence_stability.md)
 * [Wall models](wall_models.md)
 * [Large-scale forcing](large_scale_forcing.md)
-* [Stable BLs: GABLS1–4, CASES-99, channel](stable_boundary_layer.md)
+* [Stable BLs: GABLS1–4, CASES-99](stable_boundary_layer.md)
 * [Transition and wall-bounded flow](transition.md)

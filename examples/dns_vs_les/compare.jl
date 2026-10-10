@@ -39,7 +39,7 @@ const TIMES = (2.0, 4.0, 8.0)          # the times of the spectra comparison (s)
 function read_run(folder)
     cfg = TOML.parsefile(joinpath(folder, "run.toml"))["config"]
     NCDataset(joinpath(folder, "output", "output.nc")) do ds
-        (name = cfg["run"]["name"], n = cfg["grid"]["size"][1], t = Float64.(ds["time_series"][:]),
+        (name = cfg["run"]["name"], n = ds.dim["x"], t = Float64.(ds["time_series"][:]),
          K = Float64.(ds["kinetic_energy"][:]), ε = Float64.(ds["dissipation"][:]),
          εs = Float64.(ds["dissipation_sgs"][:]), k = Float64.(ds["k"][:]), tr = Float64.(ds["time"][:]),
          E = Float64.(ds["energy_spectrum"][:, :]))
@@ -114,16 +114,16 @@ leg = [(r.name, i, "") for (i, r) in enumerate(runs)]
 tmax = dns.t[end]
 svg_panel(fig, 80, 50, 300, 280; xlim = (0.0, tmax), ylim = (0.0, 2.0), xticks = 0:2:tmax, yticks = 0:0.5:2,
           xlabel = "t (s)", ylabel = "resolved K (m²/s²)", tag = "(a)",
-          curves = [(r.t, r.K, i) for (i, r) in enumerate(runs)], legend = leg)
+          curves = [(r.t, r.K, i) for (i, r) in enumerate(runs)], legend = leg, legend_x = 120)
 svg_panel(fig, 460, 50, 300, 280; xlim = (0.0, tmax), ylim = (0.0, 0.8), xticks = 0:2:tmax, yticks = 0:0.2:0.8,
           xlabel = "t (s)", ylabel = "ε, molecular + SGS (m²/s³)", tag = "(b)",
           curves = [(r.t, r.ε, i) for (i, r) in enumerate(runs)])
-svg_panel(fig, 840, 50, 300, 280; xlim = (log10(0.5), log10(5.0)), ylim = (-1.0, 0.5), xticks = [0.0, 0.5],
+svg_panel(fig, 840, 50, 300, 280; xlim = (log10(0.5), log10(tmax)), ylim = (-1.0, 0.5), xticks = [0.0, 0.25, 0.5, 0.75],
           yticks = -1:0.5:0.5, xlabel = "log10 t", ylabel = "log10 K", tag = "(c)",
           curves = [(log10.(r.t[2:end]), log10.(r.K[2:end]), i) for (i, r) in enumerate(runs)],
           vbands = [(log10(FIT[1]), log10(FIT[2]))])
 for (j, t) in enumerate(TIMES)
-    svg_panel(fig, 80 + (j - 1) * 380, 440, 300, 280; xlim = (0.0, log10(dns.k[end])), ylim = (-8.0, 0.0),
+    svg_panel(fig, 80 + (j - 1) * 380, 440, 300, 280; xlim = (0.0, log10(dns.k[end])), ylim = (-8.0, 1.0),
               xticks = 0:0.5:2.5, yticks = -8:2:0, xlabel = "log10 k (rad/m)", ylabel = "log10 E(k)",
               tag = "($('d' + j - 1)) t = $(Int(t)) s",
               curves = [(log10.(r.k[2:end]), log10.(max.(r.E[2:end, record(r, t)], 1e-12)), i) for (i, r) in enumerate(runs)],
