@@ -82,7 +82,7 @@ end
 function _air_density(case)
     cr = find_coupling(case, :column_radiation)
     Nz = case.mesh.Nz
-    cr !== nothing && cr.col !== nothing && return cr.col.ρ[1:Nz]
+    cr !== nothing && cr.m.col !== nothing && return cr.m.col.ρ[1:Nz]
     return ref_density(case)
 end
 
