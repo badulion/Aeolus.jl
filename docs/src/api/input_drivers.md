@@ -24,9 +24,9 @@ on GRIBDatasets).
 
 ```bash
 # in an AeolusPrep.jl checkout
-julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml \
+julia --project -m AeolusPrep static <aeolus>/examples/urban/berlin_summer.toml \
       --source data/berlin/alexanderplatz_real.osm --min-height 8 --park-lai 2.5
-julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/berlin_summer.toml
 julia --project -m AeolusPrep dynamic --from-era5 data/era5/era5_lindenberg_20190629_*.nc \
       --config <aeolus>/examples/configs/lindenberg_era5.toml --lat 52.2085 --lon 14.118
 julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed driver, reproduced?
@@ -35,7 +35,7 @@ julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed 
 `aeolusprep static` reads the run's grid and anchor from the Aeolus
 config and the source and its options (`--source`, `--min-height`,
 `--park-lai`) from the command line; for a nested urban run it also writes
-`[geometry] parent_static` from `[geometry] landuse`. Every driver
+`[urban] parent_static` from `[urban] landuse`. Every driver
 committed to Aeolus (`examples/**/input/`, `test/data/**/input/`) is listed
 with its command and options in AeolusPrep's `recipes.toml`, and its tests
 regenerate each one: every data variable bit for bit, every global
@@ -121,9 +121,9 @@ the source's provenance lines.
 ## The dynamic driver
 
 ```bash
-julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/berlin_summer.toml
 julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
-julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set 'urban.child_boundaries="child.nc"'
 ```
 
 One schema,
@@ -253,16 +253,16 @@ hashed under `[inputs]` of `run.toml`, and 20 steps round-trip bit for bit
 
 ## The Berlin case
 
-`examples/urban/configs/berlin_<s>.toml` name their drivers in
-`[geometry] static` and `parent_static` (relative to the config, hashed
+`examples/urban/berlin_<s>.toml` name their drivers in
+the domain's `static_driver` and `[urban] parent_static` (relative to the config, hashed
 under `[inputs]` of `run.toml`); the generated files are committed in
-`examples/urban/configs/input/` (all of them together 790 KB; each is
+`examples/urban/input/` (all of them together 790 KB; each is
 under the 2 MB limit for committed drivers) with their source hashes.
 A missing file is a configuration error before any run folder is made,
 and it prints the `aeolusprep static <config>` command that makes it.
 There is no in-memory ground: a grid no file was made for needs its
 driver made first (`aeolusprep static <config> --set grid.size=…
---out …`); `parent_static = "none"` still reads `[geometry] landuse` in
+--out …`); `parent_static = "none"` still reads `[urban] landuse` in
 memory for a different parent box. The Mitte sample at the smoke size of
 its `[test]` overrides and the synthetic city of `test/urban_run.jl` have
 committed drivers of their own.
@@ -277,30 +277,30 @@ reader (the `&&`/`||` precedence of the node parser, now in AeolusPrep;
 patches drawn over roofs, the rasterisation here) are kept and
 documented; fixing them is #141's.
 
-The dynamic driver (CFG-g, #362): `[initial] dynamic` names it.
+The dynamic driver (CFG-g, #362): the domain's `dynamic_driver` names it (`[initial] dynamic` of the `urban` run type before ONE-e #454).
 
 * **Sounding.** `berlin_summer.toml` reads its initial state from
   `input/berlin_20190629_dynamic.nc` (`aeolusprep dynamic
   --from-sounding`, from the Lindenberg CSV, which stays as
-  `[initial] sounding`, the driver's hashed source). The tables are the
+  `[urban] sounding`, the driver's hashed source). The tables are the
   ones the CSV path builds, so the initial θ(z), qv(z), ground pressure
   (101841.78 Pa), reference state, the parent's geostrophic wind and z_i
   are bitwise those of master's CSV path (digests captured before the
-  switch). With `dynamic = "none"` the CSV is preprocessed in memory by
+  switch). With `dynamic_driver = "none"` the CSV is preprocessed in memory by
   the same functions. The driver holds the whole sounding series: a case
-  starting at another time (`[clock] start_h`) reads the same tables with
+  starting at another time (`[urban] start_h`) reads the same tables with
   the time axis moved and its ground pressure recomputed at its start,
   bitwise the CSV read in memory.
   The smoke and winter scenarios keep the idealised profile
-  (`sounding = dynamic = "none"`).
-* **Offline nest.** An online run with `[output] child_boundaries =
+  (`sounding = dynamic_driver = "none"`).
+* **Offline nest.** An online run with `[urban] child_boundaries =
   "<file>"` writes the parent's
   windows, the child's boundary slabs, its initial wind and the parent's
-  mean profiles. A child run with `[initial] dynamic = "<file>"` and
-  `[physics.options.nesting] parent_driver = "offline"` replays them
+  mean profiles. A child run with `dynamic_driver = "<file>"` and
+  `[nesting] parent_driver = "offline"` replays them
   without the parent: the same windows (the child steps land on the
   parent times), the same face data and targets; its own initial θ, qv
-  and reference state come from `[initial] sounding` as online. Measured
+  and reference state come from `[urban] sounding` as online. Measured
   on the smoke case: 12 steps, bitwise the online one-way child in every
   child field. The online nest stays the default; `offline` is for a
   parent run once and reused. Two-way and `offline` exclude each other.

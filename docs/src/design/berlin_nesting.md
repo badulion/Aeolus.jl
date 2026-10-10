@@ -63,7 +63,7 @@ landing on the parent's windows:
 | where | what |
 | :-- | :-- |
 | `step_dt` → `limit_dt` | the child's step: `subcycle_dt(R, dt)`, `R` the time left in the open window, or the parent's next step `parent_dt` when none is open |
-| `:nest_parent` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed. One-way under `run_case!`: the parent's step of the next window starts on its own task (`prefetch_parent_step!`, SC-c #403, below) |
+| `:nest_sync` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed. One-way under `run_case!`: the parent's step of the next window starts on its own task (`prefetch_parent_step!`, SC-c #403, below) |
 | dynamics (`advance_dynamics!`) | every core reads the blended parent at its stage times |
 | `:nest_feedback` (after `:column_tendency`) | the child reached the window's end: `end_parent_step!` (one-way: the clock and the statistics; two-way: also the feedback onto the parent, see below) |
 
@@ -73,10 +73,10 @@ child's wind.
 
 **The parent ahead (SC-c, #403).** A one-way parent never sees the child,
 so its step of window ``n+1`` needs only the parent at the end of window
-``n``. When `:nest_parent` opens window ``n`` and the run will step past
+``n``. When `:nest_sync` opens window ``n`` and the run will step past
 its end, it starts that step on its own task
 ([`prefetch_parent_step!`](@ref)) and the child steps through window
-``n`` meanwhile; the next `:nest_parent` takes the step
+``n`` meanwhile; the next `:nest_sync` takes the step
 ([`begin_parent_step!`](@ref)). The step size is the sequential one:
 `parent_dt` of the parent at the window start, which `limit_dt` would
 read there (the child's step is never longer than the window, so the
@@ -110,8 +110,8 @@ The individual side and lid terms carry the through-flow of ≈ 293 K air
 and largely cancel; the heat the box exchanges is their sum.
 
 **Measured** (`examples/urban/berlin_nest_check.jl`, commit `e4b34e7`; since #438
-these runs are `aeolus run examples/urban/configs/berlin_summer.toml` with
-`--set` overrides — the start hour, `physics.nesting=false`, the parent's
+these runs are `aeolus run examples/urban/berlin_summer.toml` with
+`--set` overrides — the start hour, `nesting.enabled=false`, the parent's
 refinement — and the numbers below are in each run's `output/results.toml`:
 `[timing] wall_s_per_simulated_h`, `[open_boundary_heat]`, `[air_heat]`,
 `theta_mean_below_100m_start`/`_end`;
@@ -232,7 +232,7 @@ code that transports it, with [`book_nest_flux!`](@ref) and
 | θ | child | the coupling's `:body_force` entry (order 5; a no-op one-way), every stage of `step!` | centred advection + the closure's θ diffusion |
 | qv | child | the `:scalar_advection` slot, before its update (#327 M3) | the slot's scheme (WENO-Z5) with the velocity it uses, then the SGS diffusion with the tracer's κ |
 
-Each child step is bracketed by `begin_child_step!` (in `:nest_parent`)
+Each child step is bracketed by `begin_child_step!` (in `:nest_sync`)
 and `end_child_step!` (in `:nest_feedback`), so the slot's and the
 dynamics' bookings of the step land in its registers. The other tracers
 are anterpolated but not refluxed; a tracer the parent does not carry

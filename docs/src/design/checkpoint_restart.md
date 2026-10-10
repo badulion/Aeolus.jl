@@ -224,7 +224,7 @@ parent and the 18 × 18 × 12 child.
 
 ## The Berlin case
 
-The `urban` driver (formerly `berlin`, #438) checkpoints the whole case (#269):
+An urban site (the `urban` run type until ONE-e #454, formerly `berlin`, #438) checkpoints the whole case (#269):
 `checkpoint_state(case)` is its structural state, a component of the
 checkpoint `[checkpoint]` schedules in the run folder. It covers the
 child core and its open-boundary buffers, every coupling's state (soil
@@ -236,16 +236,19 @@ original end time; the NetCDF output is reopened and continues at the
 checkpoint's record (a record the interrupted session wrote after the
 checkpoint is rewritten). Refused, with the reason: a checkpoint without
 the case state (a nested case would cold-start its parent and the
-couplings), checkpoints with a sound-proof core (the urban run type's own config
+couplings), checkpoints with a sound-proof core (the urban site's own config
 check; `checkpoint!` takes the sound-proof cores since ONE-j #460, and the
-urban couplings become components on both cores in ONE-e #454), and resuming a run that
-records the child's boundary driver (`[output] child_boundaries`).
+urban couplings are to become components on both cores in the rest of ONE-e #454), and resuming a run that
+records the child's boundary driver (`[urban] child_boundaries`).
 Run folders of the old `berlin` example driver (before #438) cannot be
 resumed: their `run.toml` names a driver that no longer exists, and their
 checkpoints hold the case's types under the example's module
 (`Main.AeolusDriver_berlin`), which Serialization cannot map to
-`Aeolus.UrbanCase`; start such a run again from its config (today
-`[run] legacy = "urban"`, schema 2, ONE-b #451).
+`Aeolus.UrbanCase`; start such a run again from its config (today a
+model config of an urban site, ONE-e #454). Run folders of the `urban`
+run type (`[run] legacy = "urban"`, before ONE-e) cannot be resumed
+either: the type is gone (a clean break); start them again from the
+converted config.
 `test/config_roundtrip.jl` resumes `berlin_smoke.toml` (nested, every
 coupling on) interrupted after its middle checkpoint and compares it
 with the uninterrupted run bit for bit, its NetCDF output included.

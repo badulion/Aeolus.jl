@@ -86,9 +86,9 @@ Details: [`docs/src/testing.md`](docs/src/testing.md).
 Every piece of physics is tested **in its own module's tests**, with small
 synthetic setups (analytic limits, conservation, published benchmarks) —
 not through the Berlin case. The Berlin (Alexanderplatz) run,
-`julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml`,
-is an **example** of the urban run type (`Aeolus.UrbanCase`, the `urban`
-driver, #438): couple new physics into it when that makes sense, but
+`julia --project -m Aeolus run examples/urban/berlin_summer.toml`,
+is an **example** of the urban site of the model (`Aeolus.UrbanCase`,
+`[urban] enabled`, #438, #454): couple new physics into it when that makes sense, but
 nothing requires it, and it has no test suite of its own (maintainer
 decision, 2026-10-06; the `test/berlin_*.jl` files and the coverage lists
 are gone, #320).
@@ -97,7 +97,7 @@ are gone, #320).
 - Examples are configuration (TOML, static and dynamic input drivers);
   a `.jl` in `examples/` only analyses run output (maintainer rule,
   2026-10-09, #438). Model code goes in `src/`.
-- After changing the urban run type, run its end-to-end checks:
+- After changing the urban site (`Aeolus.UrbanCase`), run its end-to-end checks:
   `julia --project=. test/run.jl --only urban_run.jl,urban_checks.jl`
   (every coupling on, ledgers closed; the nest parent's smoke run and
   validations). A run's own checks are in its `output/results.toml`.
