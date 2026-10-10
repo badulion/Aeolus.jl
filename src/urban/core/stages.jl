@@ -107,6 +107,49 @@ end
 # the water the air gained over the step (the budgets close after :budgets)
 Components.budget!(u::UrbanCore, d::Domain, b) = (b.water_air += air_water(u.case) - b.W_start; nothing)
 
+"""
+    urban_check_names() -> Vector{String}
+
+The checks an urban site publishes (ONE-d, #453; `[checks]` of the
+model enables them): `urban_budgets`, the closure of the case's budgets
+against [`BUDGET_TOLERANCES`](@ref) (the verdict of [`run_results`](@ref)),
+and `<coupling>_checks` per urban component, its `smoke_check`s.
+"""
+urban_check_names() = vcat(["urban_budgets"], ["$(coupling_name(C))_checks" for C in REGISTRY])
+
+# The checks of the case (see urban_check_names): `urban_budgets` is the
+# largest closure measure relative to its tolerance (≤ 1 passes); a
+# coupling's is the number of its smoke checks that fail.
+function Components.checks(u::UrbanCore)
+    case = u.case
+    budgets = Check("urban_budgets";
+        doc = "the case's budgets closed: max(surface closure / $(BUDGET_TOLERANCES.surface) W m-2, " *
+              "|water residual| / $(BUDGET_TOLERANCES.water) kg m-2, |air-heat closure| / $(BUDGET_TOLERANCES.air_heat) W m-2), " *
+              "and nothing changed θ unattributed (Inf)",
+        tolerance = 1.0,
+        evaluate = _ -> begin
+            r = run_results(case)["budgets"]
+            tol = BUDGET_TOLERANCES
+            v = max(r["surface_max_abs_closure"] / tol.surface, abs(r["water_residual"]) / tol.water,
+                    abs(r["air_heat_closure"]) / tol.air_heat)
+            (r["unattributed"] ? Inf : v,
+             Dict{String,Any}("surface_max_abs_closure" => r["surface_max_abs_closure"],
+                              "water_residual" => r["water_residual"], "air_heat_closure" => r["air_heat_closure"]))
+        end)
+    cs = Check[budgets]
+    for c in case.couplings
+        n = coupling_name(typeof(c))
+        push!(cs, Check("$(n)_checks"; doc = "the smoke checks of the urban component $n that fail",
+                        tolerance = 0.0,
+                        evaluate = _ -> begin
+                            r = smoke_check(c, case)
+                            failed = String[k for (k, ok) in r if !ok]
+                            (Float64(length(failed)), Dict{String,Any}("checks" => length(r), "failed" => failed))
+                        end))
+    end
+    return cs
+end
+
 _urban_core(::Tuple{}) = error("the domain has no urban case")
 _urban_core(cs::Tuple) = first(cs) isa UrbanCore ? first(cs) : _urban_core(Base.tail(cs))
 "The urban case of a `Domain` built by [`build_case`](@ref)."

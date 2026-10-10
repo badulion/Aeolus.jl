@@ -210,7 +210,8 @@ const DOMAIN_SECTIONS = vcat(["domain", "grid", "dynamics", "boundaries", "initi
 Config.domain_sections(::SimulationDriverType) = DOMAIN_SECTIONS
 
 "The names of every check the model can publish: the core's and those of the component types of [`COMPONENTS`](@ref)."
-check_names_all() = vcat(collect(String, Components.CORE_CHECKS), String[n for C in COMPONENTS for n in Components.check_names(C)])
+check_names_all() = vcat(collect(String, Components.CORE_CHECKS), String[n for C in COMPONENTS for n in Components.check_names(C)],
+                         UrbanCase.urban_check_names())
 
 const _CHECK_DOCS = merge(
     Dict(n => "the closure of the $(join(v.qs, " and ")) budget, (|closure| + |unattributed|) / elapsed " *
@@ -218,7 +219,10 @@ const _CHECK_DOCS = merge(
          for (n, v) in Components.CLOSURE_CHECKS),
     Dict("finite" => "the sanity check: the number of non-finite interior values of the prognostic fields at the " *
                      "end (default tolerance 0); a run that blows up records it failed"),
-    Dict(n => "a check of [$(Components.section(C))]" for C in COMPONENTS for n in Components.check_names(C)))
+    Dict(n => "a check of [$(Components.section(C))]" for C in COMPONENTS for n in Components.check_names(C)),
+    Dict("urban_budgets" => "an urban site's budgets closed against UrbanCase.BUDGET_TOLERANCES: the largest closure relative to its tolerance (default tolerance 1)"),
+    Dict("$(UrbanCase.coupling_name(C))_checks" => "the smoke checks of the urban component [$(UrbanCase.coupling_name(C))] that fail (default tolerance 0)"
+         for C in UrbanCase.REGISTRY))
 
 function _reference_validator(t)
     probs = String[]
@@ -440,8 +444,16 @@ function _urban_site_checks(cfg)
      sg.stability === _schema_default(cfg, "sgs", "stability")) ||
         push!(e, ConfigError("sgs", "an urban site selects its closure with an sgs_* component ([urban] c_s, sgs_stability); leave [sgs] at its defaults"))
     _any_coupling(cfg) && push!(e, ConfigError("urban", "an urban site takes no [forcing], [surface], [microphysics], [tracer], [particles] or [obstacles]"))
-    (isempty(_published_enabled(cfg)) && isempty(cfg.checks.reference)) ||
-        push!(e, ConfigError("checks", "an urban site publishes no checks yet"))
+    # the checks an urban site publishes: the sanity check, the closure of
+    # the heat of the air (its domain's budget), its budgets' and those of
+    # its enabled components
+    own = Set(vcat(["finite", "energy_closure", "urban_budgets"],
+                   ["$(UrbanCase.coupling_name(C))_checks" for C in UrbanCase.REGISTRY
+                    if cfg[String(UrbanCase.coupling_name(C))].enabled]))
+    for n in _published_enabled(cfg)
+        n in own || push!(e, ConfigError("checks.$n", "an urban site publishes no check $n (its checks: $(join(sort!(collect(own)), ", ")))"))
+    end
+    isempty(cfg.checks.reference) || push!(e, ConfigError("checks.reference", "an urban site takes no reference comparisons yet"))
     return e
 end
 

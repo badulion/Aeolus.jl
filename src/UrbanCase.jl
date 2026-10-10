@@ -60,6 +60,8 @@ using ..Aeolus.BudgetSystem
 # the one output writer (ONE-c, #452): the case and its couplings publish catalogues
 # the core's stage pipeline (ONE-a #450, ONE-e #454): the case is a Domain of it
 using ..Aeolus.Components: Components, AbstractComponent, Stage, Domain, DomainBudgets
+using ..Aeolus.Checks: Check, CheckRunner, enabled_checks, evaluate_checks, results_table, required_failures,
+                       advisory_failures, ChecksFailed
 using ..Aeolus.Output: Output, OutputVariable, OutputWriter, check_catalogue, cell_centres, write_record!
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics

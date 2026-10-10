@@ -967,8 +967,11 @@ case with its NetCDF output in the run folder's `output/` (unless
 `[output] path` says otherwise), restore the newest checkpoint of a
 resumed run, run it with [`run_case!`](@ref) under the run monitor (the
 diagnostics CSV, the blowup guard) checkpointing on `ck`, and write the
-run's checks ([`run_results`](@ref): the budgets' closure) into its
-`results.toml`. `callback(case, n)` after step `n`.
+run's own results ([`run_results`](@ref): the budgets' closure, the
+timing) into its `results.toml`, with the checks `[checks]` enables
+(ONE-d, #453: `finite`, `energy_closure` and the site's,
+[`urban_check_names`](@ref)); a failed required check ends the run with
+`Checks.ChecksFailed`. `callback(case, n)` after step `n`.
 """
 function run_urban!(cfg::RunConfig, rf::RunFolder, ck::CheckpointSchedule; callback = nothing)
     cc = CaseConfig(cfg; run_output = output_dir(rf))
@@ -1002,6 +1005,11 @@ function run_urban!(cfg::RunConfig, rf::RunFolder, ck::CheckpointSchedule; callb
     case.clock.blowup && error("the urban case blew up at step $(case.clock.n)")
     res = run_results(case; θ_start = θ_start, wall = time() - t0, wall_first_step = t_first[] - t0,
                       simulated = case.sim.t - sim_t0, steps = case.clock.n - n0)
+    # the checks [checks] enables (ONE-d, #453): the core's and the site's
+    settings = enabled_checks(getfield(cfg.checks, :values))
+    results = isempty(settings) ? nothing :
+              evaluate_checks(CheckRunner(Components.domain_checks(case.domain), settings))
+    results === nothing || merge!(res, results_table(results))
     Config.write_results(rf, res)
     led = res["budgets"]
     @info("budgets " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
@@ -1009,6 +1017,17 @@ function run_urban!(cfg::RunConfig, rf::RunFolder, ck::CheckpointSchedule; callb
           air_heat = led["air_heat_closure"])
     led["closed"] || @warn("the case's budgets do not close within their tolerances (results.toml)",
                            subsystem = :urban, domain = current_domain(), event = :budgets_open)
+    if results !== nothing
+        for x in results
+            @info("check $(x.name) $(x.passed ? "passed" : "FAILED")", subsystem = :checks, domain = current_domain(),
+                  event = :check, required = x.required, value = x.value, tolerance = x.tolerance, units = x.units)
+        end
+        adv = advisory_failures(results)
+        isempty(adv) || @warn("advisory checks failed: $(join((x.name for x in adv), ", "))",
+                              subsystem = :checks, domain = current_domain(), event = :checks_failed)
+        req = required_failures(results)
+        isempty(req) || throw(ChecksFailed(req))
+    end
     return case
 end
 
