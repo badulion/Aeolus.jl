@@ -15,7 +15,7 @@ The stages of one step of one domain, in execution order, as
 | 2 | `:radiation`, `:sw_modifiers` | |
 | 3 | `:surface_flux` | |
 | 4 | `:sources` | |
-| 5 | `:chemistry`, `:microphysics`, `:tracers` | |
+| 5 | `:chemistry`, `:transport`, `:microphysics`, `:tracers` | `:transport`: the carried tracers' advection with the step's starting velocity |
 | 6 | `:tendencies` | inside the core, after its halo fill, advection, SGS and buoyancy |
 | 7 | `:body_force` | inside the core, before the predictor |
 | 8 | `:post_predictor` | inside the core, after the predictor |
@@ -34,7 +34,7 @@ const PIPELINE = ((1, :clock), (1, :nest_sync),
                   (2, :radiation), (2, :sw_modifiers),
                   (3, :surface_flux),
                   (4, :sources),
-                  (5, :chemistry), (5, :microphysics), (5, :tracers),
+                  (5, :chemistry), (5, :transport), (5, :microphysics), (5, :tracers),
                   (6, :tendencies),
                   (7, :body_force),
                   (8, :post_predictor),
@@ -47,7 +47,7 @@ const PIPELINE = ((1, :clock), (1, :nest_sync),
 const _STAGE_NAMES = map(last, PIPELINE)
 "The stages that run before the core step, in order."
 const PRE_CORE = (:clock, :nest_sync, :radiation, :sw_modifiers, :surface_flux, :sources,
-                  :chemistry, :microphysics, :tracers)
+                  :chemistry, :transport, :microphysics, :tracers)
 "The stages the core runs inside each (sub)step, in order."
 const IN_CORE = (:tendencies, :body_force, :post_predictor)
 "The stages that run after the core step, in order (the budgets close after `:budgets`)."
@@ -66,25 +66,35 @@ The exclusive slots, in the order their components run within a stage
 const SLOTS = (:advection, :sgs, :microphysics, :radiation, :surface)
 
 """
-    Stage(name; every = 0.0)
+    Stage(name; every = 0.0, first = false, order = 0)
 
 A pipeline stage a component runs in ([`stages`](@ref)), with a cadence:
 `every = 0` runs every step; `every > 0` (seconds of model time) runs in
-the step that reaches or crosses a multiple of `every`. The stages inside
-the core (6–8) take no cadence.
+the step that crosses a multiple of `every`, `floor(t₁/every) >
+floor(t₀/every)`, and with `first = true` also in the step that starts at
+model time 0. The stages inside the core (6–8) take no cadence.
+
+`order` places the component within the stage: lower first, ties by slot,
+then by [`component_name`](@ref) ([`order_components`](@ref)). It is
+declared by the component's code, never by the configuration, and is for
+components whose work in a stage depends on another's (the column
+radiation before the radiosity that distributes its fluxes, before the
+buildings that absorb them).
 """
 struct Stage
     name::Symbol
     every::Float64
-    function Stage(name::Symbol; every::Real = 0.0)
+    first::Bool
+    order::Int
+    function Stage(name::Symbol; every::Real = 0.0, first::Bool = false, order::Integer = 0)
         name in _STAGE_NAMES || throw(ArgumentError("Stage: unknown stage :$name (the stages: $(join(_STAGE_NAMES, ", ")))"))
         every >= 0 || throw(ArgumentError("Stage: every must be ≥ 0, got $every"))
-        return new(name, Float64(every))
+        return new(name, Float64(every), first, Int(order))
     end
 end
 
-"Whether a stage with cadence `every` runs in the step from `t0` to `t1`."
-_due(every::Float64, t0, t1) = every == 0 || fld(t1, every) > fld(t0, every)
+"Whether stage entry `st` runs in the step from `t0` to `t1`."
+_due(st::Stage, t0, t1) = st.every == 0 || (st.first && t0 == 0) || floor(t1 / st.every) > floor(t0 / st.every)
 
 """
     ComponentError(problems)
@@ -103,11 +113,33 @@ _slot_rank(s::Symbol) = something(findfirst(==(s), SLOTS), length(SLOTS) + 2)
 
 The components in the fixed order they run within every stage: by slot
 first (in the order of [`SLOTS`](@ref), additive components last), then
-by [`component_name`](@ref). Their order is never a configuration
-question.
+by [`component_name`](@ref), except where a stage's [`Stage`](@ref)
+`order`s say otherwise: a component with a lower `order` in some stage
+runs before one with a higher `order` in that stage. The result is the
+order by slot and name that meets every such precedence (a topological
+order; components that declare no `order` keep the slot-and-name order).
+Their order is never a configuration question.
 """
-order_components(cs) =
-    Tuple(sort!(collect(Any, cs); by = c -> (_slot_rank(slot(c)), string(component_name(c)))))
+function order_components(cs)
+    key(c) = (_slot_rank(slot(c)), string(component_name(c)))
+    v = sort!(collect(Any, cs); by = key)
+    n = length(v)
+    # precedence: within a stage, a lower `order` first
+    before = [Int[] for _ in 1:n]          # before[j]: the components that must precede j
+    for i in 1:n, j in 1:n
+        i == j && continue
+        for a in stages(v[i]), b in stages(v[j])
+            a.name === b.name && a.order < b.order && (push!(before[j], i); break)
+        end
+    end
+    done = falses(n); out = Any[]
+    for _ in 1:n
+        k = findfirst(j -> !done[j] && all(i -> done[i], before[j]), 1:n)
+        k === nothing && throw(ArgumentError("order_components: the stage orders of $(join(map(c -> component_name(c), v[.!done]), ", ")) contradict each other"))
+        done[k] = true; push!(out, v[k])
+    end
+    return Tuple(out)
+end
 
 """
     component_problems(types) -> Vector{ConfigProblem}
@@ -177,12 +209,12 @@ Whether component `c` runs in `stage`.
 """
 attaches(c, stage::Symbol) = any(s -> s.name === stage, stages(c))
 
-# the cadence of `c` in `stage` (attached)
-function _every(c, stage::Symbol)
+# the entry of `c` in `stage`, or nothing
+function _entry(c, stage::Symbol)
     for s in stages(c)
-        s.name === stage && return s.every
+        s.name === stage && return s
     end
-    return -1.0
+    return nothing
 end
 
 # Run the components of `cs` attached to stage `S`, in tuple order (the
@@ -193,8 +225,8 @@ end
 @inline _run_each(::Tuple{}, d, ::Val, dt, t0, t1) = nothing
 @inline function _run_each(cs::Tuple, d, v::Val{S}, dt, t0, t1) where {S}
     c = first(cs)
-    e = _every(c, S)
-    e >= 0 && _due(e, t0, t1) && _attributed!(d.budgets, c, d, v, dt)
+    e = _entry(c, S)
+    e === nothing || _due(e, t0, t1) && _attributed!(d.budgets, c, d, v, dt)
     return _run_each(Base.tail(cs), d, v, dt, t0, t1)
 end
 # inside the core: every attached component, every substage

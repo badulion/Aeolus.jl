@@ -237,6 +237,56 @@ end
     @test isconcretetype(typeof(d.components))
 end
 
+"A component with a name and stages of choice (the order within a stage)."
+struct CPOrdered{N} <: AbstractComponent
+    st::Tuple
+    log::Vector{Symbol}
+end
+cpo(N::Symbol, st::Stage...; log = Symbol[]) = CPOrdered{N}(st, log)
+Aeolus.Components.component_name(::Type{CPOrdered{N}}) where {N} = N
+Aeolus.Components.section(::Type{CPOrdered{N}}) where {N} = string(N)
+Aeolus.Components.stages(c::CPOrdered) = c.st
+Aeolus.Components.run_stage!(c::CPOrdered{N}, d, ::Val{S}, dt) where {N,S} = (push!(c.log, N); nothing)
+
+@testset "pipeline: a stage's declared order, then slot and name (ONE-e)" begin
+    # within :radiation the declared order puts c before b before a, in
+    # :sources c before a; the slot-and-name order (a, b, c) bends to both
+    a = cpo(:a, Stage(:radiation; order = 20), Stage(:sources; order = 30))
+    b = cpo(:b, Stage(:radiation; order = 10))
+    c = cpo(:c, Stage(:radiation; order = 5), Stage(:sources; order = 10))
+    o = CPC.order_components((a, b, c))
+    @test map(CPC.component_name, o) == (:c, :b, :a)
+    # no declared order: the slot-and-name order is unchanged
+    @test map(CPC.component_name, CPC.order_components((cpo(:z, Stage(:radiation)),
+                                                         cpo(:y, Stage(:radiation))))) == (:y, :z)
+    # orders that contradict each other across stages are refused
+    x = cpo(:x, Stage(:radiation; order = 1), Stage(:sources; order = 2))
+    y = cpo(:y, Stage(:radiation; order = 2), Stage(:sources; order = 1))
+    @test_throws ArgumentError CPC.order_components((x, y))
+    # the pipeline runs a stage in that order
+    log = Symbol[]
+    a2 = cpo(:a, Stage(:radiation; order = 20); log = log)
+    c2 = cpo(:c, Stage(:radiation; order = 5); log = log)
+    d = cp_domain(cp_core(:boussinesq; ν = 1.0), extra = (a2, c2))
+    step!(d, 0.1)
+    @test log == [:c, :a]
+end
+
+@testset "pipeline: the first step of a cadenced stage, and the :transport stage" begin
+    rec = CPRecorder((Stage(:radiation; every = 1.0, first = true), Stage(:transport)))
+    d = cp_domain(cp_core(:boussinesq; ν = 1.0), extra = (rec,))
+    for _ in 1:4
+        step!(d, 0.4)                               # t = 0.4, 0.8, 1.2, 1.6
+    end
+    # radiation on the step from t = 0 (first) and on the one that crosses t = 1
+    @test count(==(:radiation), rec.log) == 2
+    @test count(==(:transport), rec.log) == 4
+    # :transport runs after :chemistry and before :microphysics
+    names = map(last, PIPELINE)
+    @test findfirst(==(:chemistry), names) < findfirst(==(:transport), names) < findfirst(==(:microphysics), names)
+    @test Stage(:radiation; every = 8, first = true, order = 5).order == 5
+end
+
 @testset "pipeline: validation names the sections" begin
     err(f) = try f(); nothing catch e; e isa ConfigError ? e : rethrow() end
     adv = CentredAdvection()
