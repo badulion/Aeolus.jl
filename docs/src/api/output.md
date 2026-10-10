@@ -23,7 +23,9 @@ streams:
 
 With `averaging = "mean"` every value is the time mean over its interval.
 The writer accumulates it every step, weighted by the step length, and
-the variable carries `cell_methods`.
+the variable carries `cell_methods`. A checkpoint stores the open
+intervals ([`output_means`](@ref Aeolus.Output.output_means)), so a run
+resumed from it writes the same means as the uninterrupted run.
 
 ```toml
 [output]

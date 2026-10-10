@@ -185,7 +185,9 @@ end
     @test r.runs[2].obj.stepper.step == 20 && Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
     # the SBL components (ONE-g #456): cases99 (GABLS2 with the towers, the surface layer, the
     # large-scale forcing and the retargeted sponge) at 16 × 16 × 32, 20 steps; the surface
-    # layer's state, the towers' segments and bins and the output.nc series are restored too
+    # layer's state, the towers' segments and bins and the output.nc series are restored too;
+    # averaging = "mean": the open averaging intervals straddle the checkpoint (step 10, t = 57700 s;
+    # records at 57720 s), so the means are restored from it too
     r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");
                      overrides = ["grid.size=[16,16,32]", "towers.hours=[0.0,24.0]", "towers.window=30.0",
                                   "output.series_cadence=60.0", "output.cadence=120.0",

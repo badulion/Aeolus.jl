@@ -32,7 +32,7 @@ using ..NCIO: NCDataset, nc_create, nc_defvar!, nc_append_record!
 
 export OutputVariable, OUTPUT_DIMS, check_catalogue, catalogue_names, select_variables,
        cell_centres, OutputWriter, accumulate_output!, write_record!, write_series!, close_output!,
-       output_path
+       output_path, output_means, restore_output_means!
 
 """
     OUTPUT_DIMS
@@ -319,6 +319,30 @@ Append one sample of the time-series variables at time `t` (s), like
 [`write_record!`](@ref).
 """
 write_series!(w::OutputWriter, ctx, t::Real) = _write!(w, w.series, ctx, t, nothing)
+
+"""
+    output_means(w) -> state
+    restore_output_means!(w, state) -> w
+
+The open intervals of a `:mean` writer: per stream the accumulated
+``Σ value·dt`` of every variable and ``Σ dt`` since its last record. A
+checkpoint taken between two records stores them, so that a run resumed
+from it writes the same means as the uninterrupted run (the first record
+after the checkpoint averages over the whole interval, not only the part
+after the restart). `state` is self-contained (deep copies).
+"""
+output_means(w::OutputWriter) =
+    (records = (acc = deepcopy(w.records.acc), acc_dt = w.records.acc_dt),
+     series = (acc = deepcopy(w.series.acc), acc_dt = w.series.acc_dt))
+
+function restore_output_means!(w::OutputWriter, s)
+    for (st, x) in ((w.records, s.records), (w.series, s.series))
+        length(x.acc) == length(st.vars) ||
+            throw(ArgumentError("restore_output_means!: $(length(st.vars)) $(st.dim) variables, the state has $(length(x.acc))"))
+        st.acc .= deepcopy(x.acc); st.acc_dt = x.acc_dt
+    end
+    return w
+end
 
 "Close the writer's file (if it has one)."
 function close_output!(w::OutputWriter)

@@ -41,7 +41,7 @@ using ..RunLog: current_domain
 using ..Checks: Checks, CheckRunner, enabled_checks, sample_checks!, evaluate_checks, stopped_checks,
                 results_table, required_failures, advisory_failures, ChecksFailed, read_reference
 using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
-                close_output!
+                close_output!, output_means, restore_output_means!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
                 Path, section, option!, register_driver!, config_domains, MODEL
 
@@ -864,6 +864,22 @@ function _output_writer(r::SimulationRun, rf, resume_t)
                                                       "components" => join(string.(map(Components.component_name, dom.components)), " ")))
 end
 
+# the open averaging intervals of a `:mean` writer as a checkpoint component:
+# the checkpoint is restored before the writer is reopened (the writer needs
+# the restored time), so the state waits in `pending` until `attach!`
+mutable struct OutputMeans
+    w::Union{Nothing,OutputWriter}
+    pending::Any
+end
+IO.checkpoint_state(o::OutputMeans) = output_means(o.w)
+IO.restore_checkpoint_state!(o::OutputMeans, s) = (o.pending = s; o)
+function _attach!(o::OutputMeans, w::OutputWriter)
+    o.w = w
+    o.pending === nothing || restore_output_means!(w, o.pending)
+    o.pending = nothing
+    return w
+end
+
 # the next output time after `t` of a stream with cadence `c` (0: every step)
 _next_out(t, c) = c == 0 ? t : (floor(t / c * (1 + 1e-9)) + 1) * c
 
@@ -873,6 +889,8 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     dom = _domain(r); comps = checkpoint_components(dom); closure = sgs_closure(dom)
     checks = _check_runner(r)                      # nothing without [checks] (ONE-d)
     checks === nothing || (comps = merge(comps, (; checks = checks)))
+    means = cfg.output.averaging === :mean ? OutputMeans(nothing, nothing) : nothing
+    means === nothing || (comps = merge(comps, (; output_means = means)))
     resume!(ck, sim; components = comps, stepper = r.stepper)
     n = ck.last_step
     adaptive = _adaptive(cfg)
@@ -884,6 +902,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     feed = get(dom.drivers, :boundary, nothing)
     (feed === nothing || t_end === nothing) || check_coverage(feed, sim.t, t_end)
     w = _output_writer(r, rf, n == 0 ? nothing : sim.t)
+    means === nothing || _attach!(means, w)
     o = cfg.output; mean = o.averaging === :mean
     # instant: a record at the start, then every cadence; mean: the first
     # record is the mean of the first cadence
