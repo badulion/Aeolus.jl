@@ -81,18 +81,25 @@ sgs_closure(d::Domain) = (c = slot_component(d, :sgs); c === nothing ? nothing :
 
 """
     Model(domain)
+    Model(domains::Tuple, nest)
 
-The model: its domains (today one; several, with their nest couplings,
-arrive with ONE-f, #455). `step!(model, dt)` advances every domain by `dt`
-through the stage pipeline.
+The model: its domains and the nest coupling between them. One domain
+needs no coupling (`nest = nothing`); several are a nest tree (ONE-f,
+#455), built from the `[[domain]]` graph by [`nested_model`](@ref), whose
+`nest` is a [`ModelNest`](@ref). `step!(model, dt)` advances every domain
+by `dt` through the stage pipeline: one domain alone, a nest tree with
+the children subcycling inside each step of their parent
+([`ModelNest`](@ref)).
 """
-struct Model{D<:Tuple}
+struct Model{D<:Tuple, N}
     domains::D
-    function Model(domains::Tuple)
-        length(domains) == 1 ||
-            throw(ArgumentError("Model: one domain (several domains, with their nest couplings, arrive with ONE-f, #455)"))
+    nest::N
+    function Model(domains::Tuple, nest = nothing)
+        isempty(domains) && throw(ArgumentError("Model: no domain"))
         all(d -> d isa Domain, domains) || throw(ArgumentError("Model: the domains are Domains"))
-        return new{typeof(domains)}(domains)
+        length(domains) == 1 || nest !== nothing ||
+            throw(ArgumentError("Model: $(length(domains)) domains need their nest coupling (nested_model)"))
+        return new{typeof(domains), typeof(nest)}(domains, nest)
     end
 end
 Model(d::Domain) = Model((d,))
@@ -159,9 +166,30 @@ function _run_stages!(d::Domain, names, dt, t0, t1)
     return d
 end
 
-# the core step of stages 6-10 with the pipeline's hooks
-function _core_step!(sim::BoussinesqSimulation, d::Domain, dt)
+# Two hooks of the core called in turn (a nest's hook and the domain's).
+struct _Chained{A,B} <: Function
+    a::A
+    b::B
+end
+@inline (c::_Chained)(sim, Δt) = (c.a(sim, Δt); c.b(sim, Δt); nothing)
+_chain(::Nothing, ::Nothing) = nothing
+_chain(a, ::Nothing) = a
+_chain(::Nothing, b) = b
+_chain(a, b) = _Chained(a, b)
+
+# The pipeline's hooks with a nest's (ModelNest): the nest's body-force
+# hook (the flux registers) before the domain's, its post-predictor hook
+# (the nest sponge) after the domain's, as `Nesting.DomainAdvance` chains
+# them. Without them, exactly `core_hooks(d)`.
+function _hooks(d::Domain, bf, pp)
     h = core_hooks(d)
+    bf === nothing && pp === nothing && return h
+    return (; body_force! = _chain(bf, h.body_force!), post_predictor! = _chain(h.post_predictor!, pp), sgs = h.sgs)
+end
+
+# the core step of stages 6-10 with the pipeline's hooks (and a nest's)
+function _core_step!(sim::BoussinesqSimulation, d::Domain, dt, bf = nothing, pp = nothing)
+    h = _hooks(d, bf, pp)
     if d.scheme === :rk3
         step_rk3!(sim, dt; h...)
     else
@@ -169,8 +197,8 @@ function _core_step!(sim::BoussinesqSimulation, d::Domain, dt)
     end
     return sim
 end
-function _core_step!(sim::MassWeightedSimulation, d::Domain, dt)
-    d.scheme === :rk3 ? step_rk3!(sim, dt; core_hooks(d)...) : step!(sim, dt; core_hooks(d)...)
+function _core_step!(sim::MassWeightedSimulation, d::Domain, dt, bf = nothing, pp = nothing)
+    d.scheme === :rk3 ? step_rk3!(sim, dt; _hooks(d, bf, pp)...) : step!(sim, dt; _hooks(d, bf, pp)...)
     return sim
 end
 
@@ -207,7 +235,7 @@ function _post_core!(d::Domain, dt, t0)
     end
     return d
 end
-step!(m::Model, dt::Real) = (foreach(d -> step!(d, dt), m.domains); m)
+step!(m::Model{<:Tuple,Nothing}, dt::Real) = (foreach(d -> step!(d, dt), m.domains); m)
 
 """
     component_limits(d::Domain) -> Tuple
@@ -249,7 +277,9 @@ function step_adaptive!(d::Domain; dt_prev = nothing, t_end = nothing)
     _post_core!(d, res[2], t0)
     return res
 end
-step_adaptive!(m::Model; kw...) = step_adaptive!(only(m.domains); kw...)
+step_adaptive!(m::Model{<:Tuple,Nothing}; kw...) = step_adaptive!(only(m.domains); kw...)
+step_adaptive!(m::Model; kw...) =
+    throw(ArgumentError("step_adaptive!: a nested model takes fixed steps (step!(model, dt)); its children subcycle"))
 
 # ---------------------------------------------------------------------------
 # checkpoints
