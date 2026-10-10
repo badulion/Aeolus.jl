@@ -74,8 +74,10 @@ section of the Berlin case page.
 
 Nothing in the parent is a copy. Four pieces of the child were factored so
 that both domains call one function: the column radiation
-(`column_radiation_solver`, `stitched_column`, `column_radiation!`), the
-hydrostatic integration (`hydrostatic_pressure`), the fixed-gradient top
+(`column_radiation_solver`, `stitched_column`, `column_radiation!`; since
+ONE-e #454 the module `Aeolus.ColumnRadiation`), the
+hydrostatic integration (`hydrostatic_pressure`; since ONE-e #454 in
+`Aeolus.Anelastic`), the fixed-gradient top
 (`θ_top_gradient(cfg; H, dz)`), and the total heat-flux profile
 (`mean_heat_flux`, any core, any grid).
 

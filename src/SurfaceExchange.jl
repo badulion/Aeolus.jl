@@ -57,7 +57,8 @@ module SurfaceExchange
 
 using ..MoistThermodynamics
 using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
-                             PhasePartition, R_d, R_v
+                             PhasePartition, R_d, R_v, θ_per_heat
+using ..Backends: column_sum, backend
 import ..MoistThermodynamics: LH_f0
 using ..RadiationCore: STEFAN_BOLTZMANN
 # The broadband albedo / emissivity of an AbstractSurface are further
@@ -71,14 +72,15 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        LH_v0, LH_s0, LH_f0, grav, cp_water, cp_ice, von_karman,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
-       SurfaceLayerSolution, solve_surface_layer, bulk_richardson, obukhov_length,
+       SurfaceLayerSolution, solve_surface_layer, aerodynamic_resistance, bulk_richardson, obukhov_length,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!,
        MOSTConsistent, most_gradient_richardson, most_stability_parameter,
        log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
-       flux_friction_velocity, surface_mshf_ratio
+       flux_friction_velocity, surface_mshf_ratio,
+       deliver_surface_fluxes!
 
 # =========================================================================
 # 1. Material constants
@@ -390,6 +392,16 @@ struct SurfaceLayerSolution{T<:AbstractFloat}
     iterations::Int
     converged::Bool
 end
+
+"""
+    aerodynamic_resistance(sol::SurfaceLayerSolution) -> s m⁻¹
+
+The scalar aerodynamic resistance of the surface layer,
+``r_a = 1/(C_H U)``: the heat flux is ``H = ρ c_p (θ_s − θ_a)/r_a``.
+Dry deposition (`Chemistry.dry_deposition_velocity`) puts it in series
+with the quasi-laminar and surface resistances.
+"""
+aerodynamic_resistance(sol::SurfaceLayerSolution) = 1 / (sol.C_H * sol.U)
 
 # ε' = R_v/R_d - 1 ≈ 0.608, the virtual-temperature coefficient.
 _virtual_coefficient(c::SurfaceConstants) = R_v(c.thermo) / R_d(c.thermo) - 1
@@ -1033,6 +1045,55 @@ function surface_mshf_ratio(sf::AbstractStabilityFunctions, fl::SurfaceFluxes,
     end
     return (ratio = Qdown / Qmax, Q_down = Qdown, Q_max = Qmax, H_max = ρ * cp * Qmax,
             ζ_mshf = ζs)
+end
+
+# =========================================================================
+# The surface fluxes into the first air cell (ONE-e, #454: from the urban
+# case's surface exchange)
+# =========================================================================
+
+"""
+    deliver_surface_fluxes!(θ, qv, H, E, k_air, surfaces, cp, ρ̄, Π̄, dz, τ;
+                            solid, offsets) -> (evaporated, solid_writes)
+
+Hand the sensible heat flux `H` (W m⁻²) and the evaporation `E`
+(kg m⁻² s⁻¹) of every surface column to its first air cell for `τ`
+seconds: at `(i, j, k_air[i, j])` of the interior arrays `θ` and `qv`,
+
+```math
+Δθ = \\frac{H\\,τ}{Δz}\\,\\frac{1}{ρ̄_k\\, c_p\\, Π̄_k}, \\qquad
+Δq_v = \\frac{E\\,τ}{ρ̄_k\\,Δz},
+```
+
+([`θ_per_heat`](@ref Aeolus.MoistThermodynamics.θ_per_heat) with the
+column's moist heat capacity `cp[i, j]`), so that the heat and the water
+the air receives are exactly `H τ` and `E τ` per unit area. Columns whose
+`surfaces[i, j] === nothing` have no surface and are skipped. `ρ̄`, `Π̄`
+are the reference density and Exner function per level, `dz` the cell
+height. `solid` is the solid mask of the storage array (offset by the
+halos `offsets = (Hx, Hy, Hz)`); a delivery into a solid cell is counted
+as a `solid_write` (a geometry error). Returns the evaporated water
+`Σ E τ` (kg m⁻², summed over the columns in column-major order — the
+canonical order of a 2-D sum, thread-invariant) and the number of solid
+writes.
+"""
+function deliver_surface_fluxes!(θ, qv, H, E, k_air, surfaces, cp, ρ̄, Π̄, dz, τ; solid, offsets)
+    Nx, Ny = size(k_air)
+    Hx, Hy, Hz = offsets
+    return column_sum(backend(E), _deliver_column!, (1:Nx, 1:Ny),
+                      θ, qv, H, E, k_air, surfaces, cp, ρ̄, Π̄, solid, Hx, Hy, Hz, dz, τ)
+end
+
+@inline function _deliver_column!(i, j, θ, qv, H, E, k_air, surfaces, cp, ρ̄, Π̄, mask, Hx, Hy, Hz, dz, τ)
+    @inbounds begin
+        surfaces[i, j] === nothing && return (0.0, 0.0)
+        k = k_air[i, j]
+        solid = mask[Hx+i, Hy+j, Hz+k]
+        ρk = ρ̄[k]
+        θ[i, j, k] += H[i, j] * τ / dz * θ_per_heat(ρ̄[k], cp[i, j], Π̄[k])
+        qv[i, j, k] += E[i, j] * τ / (ρk * dz)
+        return (E[i, j] * τ, solid ? 1.0 : 0.0)
+    end
 end
 
 end # module

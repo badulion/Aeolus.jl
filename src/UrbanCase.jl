@@ -100,7 +100,7 @@ export CaseConfig, UrbanDriver, UrbanParentDriver, run_results, parent_results, 
        CaseReference, ref_pressure, ref_pressure_storage, ref_density, ref_exner, surface_pressure,
        initial_θ, initial_qv, case_sounding, case_start_time, case_surface_pressure,
        initial_inversion_height, case_weekday,
-       θ_top_gradient, θ_top_bc, TopHeatFlux, hydrostatic_pressure,
+       θ_top_gradient, θ_top_bc, TopHeatFlux,
        case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
        ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
        parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse

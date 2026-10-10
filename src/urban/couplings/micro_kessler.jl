@@ -33,30 +33,9 @@ function run_stage!(c::MicroKessler, case, ::Val{:microphysics}, dt)
     apply_kessler_step!(qv, ql, qr, dt; Vt = :spectrum)
     c.precip = Wc0 - water_content(case.budgets, case.mesh, interior_view(ql)) - water_content(case.budgets, case.mesh, interior_view(qr))
     # the clamp, booking what it removes (same values as clamp!)
-    c.clip = clamp_booked!(interior_view(qv), 0.0, c.qv_max, case.budgets.ρ) *
+    c.clip = Aeolus.Microphysics.clamp_booked!(interior_view(qv), 0.0, c.qv_max, case.budgets.ρ) *
              case.mesh.dz / (case.mesh.Nx * case.mesh.Ny)
     return nothing
-end
-
-# clamp!(q, lo, hi), returning Σ_k ρ_k Σ_ij (q − clamped q), the amount removed.
-# The levels run as plane_map! work items (KA-m, #301): each level's sum in
-# (j, i) order times ρ_k, the levels added in ascending k — the old loop's
-# order, so the same bits, at every thread count.
-function clamp_booked!(q::AbstractArray{<:Real,3}, lo, hi, ρ)
-    parts = Vector{Float64}(undef, size(q, 3))
-    plane_map!(parts, Aeolus.Backends.backend(q), _clamp_level!, axes(q), q, lo, hi, ρ)
-    return ordered_sum(parts)
-end
-
-function _clamp_level!(k, ir, jr, q, lo, hi, ρ)
-    rk = 0.0
-    @inbounds for j in jr, i in ir
-        x = q[i, j, k]
-        xc = clamp(x, lo, hi)
-        rk += x - xc
-        q[i, j, k] = xc
-    end
-    return @inbounds ρ[k] * rk
 end
 
 function budget!(c::MicroKessler, case, l)

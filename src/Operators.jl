@@ -12,7 +12,8 @@ using ..BoundaryConditions: BoundaryConditions, fill_halos!, Periodic, FieldBoun
 using ..TurbulenceStability: buoyancy_frequency_squared, gradient_richardson, RI_SHEAR2_FLOOR,
                              AbstractRiStability, BrownEtAl1994,
                              stability_factor_m, stability_factor_h
-using ..MoistThermodynamics: saturated_buoyancy_frequency_squared, DEFAULT_CONSTANTS
+using ..MoistThermodynamics: saturated_buoyancy_frequency_squared, DEFAULT_CONSTANTS,
+                             density_temperature, PhasePartition
 using FFTW: rfft, irfft, fft, ifft, fftfreq, plan_rfft
 using StaticArrays: MVector
 using Random: AbstractRNG, default_rng, randn
@@ -51,6 +52,7 @@ export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion, sgs_scalar_face_diffusivity
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!   # P58-a (#170)
+export moist_buoyancy_perturbation!, add_moist_buoyancy!   # ONE-e (#454)
 # The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
        DampingProfile, sponge_profile, damping_rate, damping_coordinates
@@ -938,5 +940,9 @@ include("operators/stratification.jl")
 # Era VI: the stability-corrected anisotropic eddy viscosity / diffusivity
 # (P55-e; uses the contract, the scalar operators and the N² / Ri_g stencils).
 include("operators/sgs_stability.jl")
+
+# The moist buoyancy perturbation g (θ_ρ − θ)′/θ₀ of a core that carries
+# θ only (ONE-e, #454; from the urban case's glue).
+include("operators/moist_buoyancy.jl")
 
 end # module

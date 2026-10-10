@@ -4,10 +4,11 @@
 # model dry deposition whose aerodynamic resistance comes from
 # Aeolus.SurfaceExchange, and rain scavenging of HNO3.
 #
-# All the chemistry, the deposition physics and the unit conversions live
-# in src/Chemistry.jl (#135). This file holds only what is specific to the
-# case: the emission inventory, the class → surface-kind and roughness
-# maps, and the initial state.
+# All the chemistry, the deposition physics, the traffic profile and the
+# unit conversions live in src/Chemistry.jl (#135, ONE-e #454), the
+# aerodynamic resistance in src/SurfaceExchange.jl. This file holds only
+# what is specific to the case: the emission inventory, the class →
+# surface-kind and roughness maps, and the initial state.
 #
 # Assumptions to know about (all stated, none tuned):
 #   * the emission inventory below is an order-of-magnitude estimate, not
@@ -31,20 +32,6 @@ const _AQ_SURFACE_KIND = (:paved, :paved, :vegetation, :water, :paved, :glass)
 const AQ_DEPOSITING = (:NO, :NO2, :O3, :HNO3)
 "All species of the mechanism, in the order of `apply_photochemistry!`."
 const AQ_SPECIES = (:NO, :NO2, :O3, :VOC, :HNO3)
-
-"""
-    traffic_profile(hour) -> 0…1
-
-Diurnal shape of the traffic emissions: a night floor of 0.15, a daytime
-plateau (06:30–21:00) and rush-hour peaks at 08:00 and 17:30, so that the
-morning peak is ≈ 1 and midday ≈ 0.7. An assumed shape of the kind urban
-weekday traffic counts show, not a Berlin count.
-"""
-function traffic_profile(hour::Real)
-    day = 1 / (1 + exp(-(hour - 6.5) / 0.5)) / (1 + exp((hour - 21.0) / 0.7))
-    rush = exp(-((hour - 8.0) / 1.5)^2) + exp(-((hour - 17.5) / 1.5)^2)
-    return 0.15 + 0.55 * day + 0.3 * rush
-end
 
 """
     AQChem
@@ -249,7 +236,7 @@ function _aq_vd_column!(i, j, c, case, θ, qv, Ts, z_m, Nz, Sc, vds, rcs)
         sol = solve_surface_layer(; U = U, z_m = z_m, θ_a = θ[i, j, k],
                                   θ_s = Ts[i, j] / ref_exner(case, k),
                                   q_a = q, q_s = q, z0m = z0, z0h = z0 / 10)
-        ra = 1 / (sol.C_H * sol.U)
+        ra = aerodynamic_resistance(sol)
         c.r_a[i, j] = ra
         c.u_star[i, j] = sol.u_star
         for n in eachindex(vds)
@@ -465,34 +452,6 @@ function smoke_check(c::AQChem, case)
                   0.8 <= L.φ <= 1.25)
     end
     return checks
-end
-
-# ---------------------------------------------------------------------------
-# Legacy PM path of the toy aerosol (aq_aerosol.jl, replaced by #147): a
-# class table of PM deposition velocities, applied at k = 1 through the src
-# `apply_dry_deposition!`.
-# ---------------------------------------------------------------------------
-
-"""
-    deposition_velocity(:PM, cls::UInt8) -> m/s
-
-PM dry deposition velocity of the toy aerosol by surface class (park
-0.005, water 0.001, glass 0.0005, otherwise 0.001 m/s). Kept only for
-`aq_aerosol.jl` until #147 unifies the aerosol.
-"""
-@inline function deposition_velocity(species::Symbol, cls::UInt8)
-    species === :PM || throw(ArgumentError("deposition_velocity: only :PM (gases use Chemistry.dry_deposition_velocity)"))
-    cls == SURFACE_PARK  && return 0.005
-    cls == SURFACE_WATER && return 0.001
-    cls == 0x06          && return 0.0005   # SURFACE_GLASS
-    return 0.001
-end
-
-function Aeolus.Chemistry.apply_dry_deposition!(field::Field, sfc::AbstractMatrix{UInt8},
-                                                species::Symbol, dt::Real; dz::Real)
-    vd = [deposition_velocity(species, cl) for cl in sfc]
-    Aeolus.Chemistry.apply_dry_deposition!(interior_view(field), vd, dt; dz = dz, k = 1)
-    return field
 end
 
 register!(AQChem)

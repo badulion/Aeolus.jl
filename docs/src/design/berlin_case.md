@@ -296,13 +296,13 @@ in the integer `order` their couplings declare.
 | `:sw_modifiers` | `sw_modifiers` (10, tree shade) |
 | `:surface_flux` | `surface_exchange` (10): the held H, E into the first air cell (step 1: the first surface step) |
 | `:anthropogenic` | `buildings_citymean` (10), `traffic_heat` (20), `glass` (30) |
-| `:chemistry` | `aq_chem` (10), `aq_aerosol` (20) |
+| `:chemistry` | `aq_chem` (10) |
 | `:transport` | `scalar_advection` (10) |
 | `:microphysics` | `micro_kessler` (10) |
 | `:tracers` | `pollutant` (10) |
 | `:fog_dew` | `fog_dew` (10) |
 | dynamics: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:body_force` / `:post_predictor` | `nesting` (5: the two-way θ booking, a no-op one-way, #267), `geostrophic` (10), `moist_buoyancy` (20), `wall_model_facades` stencil-flux removal (40) / `ibm` (10), `wall_model_facades` facade stress (12), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
-| `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `snow_legacy` (30), `aq_chem` r_a / v_d refresh (90, every 30 s) |
+| `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `column_radiation` (10) |
 | `:nest_feedback` | `nesting` (10): closes the window when the child reaches its end (one-way: clock and statistics; `mode = :two_way`, #267: also the feedback onto the parent, see [Nesting](berlin_nesting.md#Two-way-option-(#267))) |
 | `:sanity` | the core finiteness check |
@@ -559,7 +559,9 @@ adds the rest of the density-potential-temperature buoyancy,
     g (θ_ρ − θ)′ / θ₀,     θ_ρ = θ (1 + q_v/ε − q_t) ≈ θ (1 + 0.608 q_v − q_c),
 
 from `MoistThermodynamics.density_temperature`, at every interior w face
-(the two adjacent centres averaged, as the core does for θ). The prime
+(the two adjacent centres averaged, as the core does for θ); the operator
+is `Operators.moist_buoyancy_perturbation!` / `add_moist_buoyancy!`
+(moved out of the coupling in ONE-e, #454). The prime
 is the deviation from the mean over the fluid cells of the level: a
 horizontally uniform force is a pure pressure gradient in the
 incompressible core, so subtracting it only changes the diagnosed
@@ -718,7 +720,7 @@ later issue.
 | slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 (fixed: `surface_exchange.jl`, `ground_soil.jl`) |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |
-| toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 |
+| toy aerosol: not advected or output, zero with no source; its PM deposition table | `aq_aerosol.jl` (table in `aq_chem.jl`) | #147 (deleted in ONE-e #454: it measurably did nothing; so did the legacy snow flag `snow_legacy.jl`, which nothing read) |
 | OSM `&&`/`||` precedence; patches overwrite roofs | AeolusPrep.jl `src/osm.jl` (ONE-h #457), `src/input_drivers/city.jl` (moved by CFG-f #361, kept bit for bit) | #141 |
 
 **Found during #126, fixed in #132: stale velocity halos in the scalar

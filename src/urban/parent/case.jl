@@ -44,7 +44,7 @@ A built Berlin parent run: `pc` ([`ParentConfig`](@ref)), `mesh`, `sim`
 (the Boussinesq core), `ref` (the hydrostatic reference state, a
 [`CaseReference`](@ref)), `closure` (the SGS closure or `nothing`),
 `forcing` (named tuple of the large-scale forcings), `surface` (the
-[`ParentSurface`](@ref) or `nothing`), `rad` (the `ColumnRadiation` state
+[`ParentSurface`](@ref) or `nothing`), `rad` (the `Aeolus.ColumnRadiation.ColumnRadiationModel` state
 or `nothing`), the ledgers `heat` and `water` ([`StageBudget`](@ref)),
 `top` (the [`TopHeatFlux`](@ref) or `nothing`), the time-stepping state,
 the surface-flux state, the sounding time `t0` of the start and `diag`,

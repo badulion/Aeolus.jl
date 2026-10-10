@@ -1,30 +1,6 @@
 # Vehicle heat: a constant urban-area mean released over the road cells.
-# Inventory data of the example, not a building quantity.
-
-"""
-    add_traffic_heat!(sim, road, n_cells, dt; Q_urban = 8.0, ρcp = 1005.0)
-
-Vehicle heat: a constant `Q_urban` W m⁻² of urban area (`n_cells`
-columns), released into the first air layer over the `road` cells
-(streets and the building-adjacent cells). `ρcp` (J m⁻³ K⁻¹) is the heat
-that raises θ of that layer by 1 K, ``ρ̄_1 c_p Π̄_1`` in the case
-([`ref_θ_per_heat`](@ref)). The default 8.0 W m⁻² is the
-traffic heat Bueno et al. (2012, Geosci. Model Dev. 5, 433, Table 3)
-prescribe for the Toulouse centre (their Table 4 uses the same value for
-Athens); the tables give no source for it, and it is not a Berlin
-inventory.
-"""
-function add_traffic_heat!(sim, road::AbstractVector{CartesianIndex{2}}, n_cells::Integer, dt::Real;
-                           Q_urban::Real = 8.0, ρcp::Real = 1005.0)
-    isempty(road) && return sim
-    q = Q_urban * n_cells / length(road)
-    Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
-    for I in road
-        i, j = Tuple(I)
-        sim.θ.data[Hx+i, Hy+j, Hz+1] += q / ρcp * dt / sim.mesh.dz
-    end
-    return sim
-end
+# The physics is `BuildingEnergy.add_traffic_heat!` (ONE-e, #454); this
+# file picks the road cells and the heat capacity of the first layer.
 
 """
     TrafficHeat

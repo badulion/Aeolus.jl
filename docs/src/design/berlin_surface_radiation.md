@@ -404,7 +404,9 @@ the column of a model's mean profiles on layers of thickness `dz` (a
 vector, so the parent's stretched levels fit), and
 `column_radiation!(c, col, sun, ε, α)` the solve and the heating profile;
 the coupling's `:radiation` stage only gathers the child's inputs and
-sets the bus (bit for bit the former stage).
+sets the bus (bit for bit the former stage). Since ONE-e (#454) the three
+functions and their state, `ColumnRadiationModel`, are the physics module
+`Aeolus.ColumnRadiation`; the coupling holds one.
 
 **The sun** of every radiation coupling is `solar_position_at(cfg, hour)`
 at the local clock hour. `SolarGeometry.solar_time` takes UTC; before #259

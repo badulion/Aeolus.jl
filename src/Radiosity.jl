@@ -116,7 +116,7 @@ export Facet, facet_corners, facet_sample_points, facet_edges,
        material_albedo, material_emissivity,
        URBAN_STREET, URBAN_ROOF, URBAN_PARK, URBAN_WATER, URBAN_WALL,
        RadiosityScene, build_facets, build_scene, heightmap_from_solid_mask,
-       nfacets, facet_areas, facet_albedos, facet_emissivities,
+       nfacets, facet_areas, facet_albedos, facet_emissivities, direct_absorbed_share!,
        facet_temperatures, set_temperatures!, set_temperature!,
        ViewFactors, view_factors, exchange_area, view_factor_contour,
        sky_view_factor_raycast, sky_view_factors_raycast,
@@ -131,7 +131,7 @@ export Facet, facet_corners, facet_sample_points, facet_edges,
        LongwaveSolution, solve_longwave,
        LongwaveResponse, longwave_response,
        effective_albedo, longwave_trapping_factor,
-       UrbanRadiationForcing, aggregate_to_grid, facet_column_index,
+       UrbanRadiationForcing, aggregate_to_grid, surface_irradiance!, facet_column_index,
        ray_blocked, segment_blocked
 
 # =========================================================================
@@ -2056,6 +2056,29 @@ function solve_shortwave(s::RadiosityScene{T}, vf::ViewFactors{T}, sun;
 end
 
 """
+    direct_absorbed_share!(fdir, scene, sol::ShortwaveSolution, facet_col) -> fdir
+
+The share of each ground column's absorbed shortwave that arrived as
+direct beam, ``Σ A_f (1 − α_f) E_{dir,f} / Σ A_f Q_{abs,f}`` over the
+facets `f` of the column (`facet_col[f] = (i, j)`), 0 where nothing was
+absorbed. What a cloud shadow on the beam
+(`SolarGeometry.shade_direct_beam!`) attenuates. Moved from the urban
+case's `cloud_shadow` coupling (ONE-e, #454).
+"""
+function direct_absorbed_share!(fdir::AbstractMatrix, s::RadiosityScene, sw::ShortwaveSolution,
+                                facet_col)
+    α = facet_albedos(s)
+    A = facet_areas(s)
+    num = zeros(size(fdir)); den = zeros(size(fdir))
+    @inbounds for (fi, (ci, cj)) in enumerate(facet_col)
+        num[ci, cj] += A[fi] * (1 - α[fi]) * sw.direct[fi]
+        den[ci, cj] += A[fi] * sw.absorbed[fi]
+    end
+    @. fdir = ifelse(den > 0, num / den, 0.0)
+    return fdir
+end
+
+"""
     effective_albedo(scene, vf, sun; dni = 900, dhi = 100, kwargs...) -> T
 
 The **effective albedo** of the scene: the fraction of the shortwave energy
@@ -2462,6 +2485,35 @@ function aggregate_to_grid(s::RadiosityScene{T}, vf::ViewFactors{T};
             swa, lwn, aden, svf, swe, lwe, cls, s.facets, ptr, ids, sw_abs, lw_net,
             vf.F_sky, s.materials.albedo, s.materials.emissivity, T_surface, cell, nx)
     return UrbanRadiationForcing{T}(swa, lwn, aden, svf, swe, lwe, cls)
+end
+
+"""
+    surface_irradiance!(sw, lw, forcing, T_surface) -> (sw, lw)
+
+The irradiance per unit of actual **surface** of each column, from the
+per-**plan**-area fluxes of [`aggregate_to_grid`](@ref) (`forcing`): a
+column holding a tall building reports its walls' energy per unit of
+footprint, `area_density` times the incident flux, which is the right
+column energy but not what a one-temperature surface of the column
+absorbs per m². With ``a = \\max(\\mathrm{area\\_density}, 1)``:
+
+```math
+SW = \\frac{SW_{\\mathrm{eff}}}{a}, \\qquad
+LW = σ T_s^4 + \\frac{LW_{\\downarrow,\\mathrm{eff}} - σ T_s^4}{a},
+```
+
+i.e. the net longwave of the column is spread over its surface area, the
+emission ``σ T_s^4`` of the column's temperature `T_surface` kept. (Moved
+from the urban case's radiosity coupling, ONE-e #454; one temperature per
+facet, `UrbanFacetScene`, removes the approximation.)
+"""
+function surface_irradiance!(sw::AbstractMatrix, lw::AbstractMatrix, forcing, T_surface::AbstractMatrix)
+    ad = max.(forcing.area_density, 1.0)
+    σSB = STEFAN_BOLTZMANN
+    sw .= forcing.sw_effective ./ ad
+    lw .= σSB .* T_surface.^4 .+
+          (forcing.lw_down_effective .- σSB .* T_surface.^4) ./ ad
+    return sw, lw
 end
 
 """

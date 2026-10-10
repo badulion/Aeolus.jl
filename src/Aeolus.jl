@@ -60,6 +60,7 @@ include("TwoStream.jl")         # Phase 33
 include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
+include("ColumnRadiation.jl")   # a model's mean column through the Era III stack (ONE-e, #454)
 # Era V, Phase 52 — lake / coastal-sea water column (needs SurfaceOptics).
 include("OceanMixedLayer.jl")
 
@@ -141,6 +142,7 @@ using .TwoStream
 using .MonteCarloRT
 using .Radiosity
 using .SolarGeometry
+using .ColumnRadiation
 
 using .MoistThermodynamics
 using .AerosolCloud
@@ -197,7 +199,8 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
        add_eddy_viscosity_u!, add_eddy_viscosity_v!, add_eddy_viscosity_w!,
        add_eddy_diffusion_scalar!,
        add_surface_flux!, add_sponge!,
-       advect_weno5!
+       advect_weno5!,
+       moist_buoyancy_perturbation!, add_moist_buoyancy!   # ONE-e (#454)
 # Era VI (P54-a, #167): the SGS closure contract
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
@@ -296,7 +299,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
 export SpectralElementMesh, gll_nodes, gll_weights
 export apply_radiative_cooling!, SlabLand, step_land!, surface_temperature
 export apply_linear_chemistry!,
-       air_number_density, ppb_rate_constant, emission_ppb_flux,
+       air_number_density, ppb_rate_constant, emission_ppb_flux, traffic_profile,
        k_NO_O3, k_NO2_OH, k_VOC_O3, k_VOC_OH, j_NO2,
        nox_triad, photostationary_NO2, leighton_ratio,
        photochemistry_cell, apply_photochemistry!,
@@ -354,7 +357,7 @@ export scalar_face_flux, face_diffusivity, face_inv_spacing   # #327 M2: the one
 export ReferenceState,
        isothermal_reference, isentropic_reference,
        constant_stability_reference, reference_from_profile,
-       hydrostatic_residual, max_hydrostatic_residual,
+       hydrostatic_residual, max_hydrostatic_residual, hydrostatic_pressure,
        reference_scale_height,
        DensityWeightedPoissonSolver, DirectWeightedPoissonSolver, apply_weighted_laplacian!,
        solver_iterations, solver_residual,
@@ -437,7 +440,10 @@ export AbstractSolarPosition, MeeusPosition,
        clearness_index, diffuse_fraction_erbs, diffuse_fraction_reindl,
        partition_global_irradiance,
        cloud_optical_depth_column, cloud_shadow_transmittance!,
-       cloud_shadow_map, combined_shadow_transmittance!
+       cloud_shadow_map, combined_shadow_transmittance!, shade_direct_beam!
+# a model's mean column through the Era III stack (ONE-e, #454; from the urban glue)
+export ColumnRadiationModel, column_radiation_solver, stitched_column, column_radiation!,
+       column_heating_kday
 
 # Phase 32 — correlated-k gas optics
 export MalkmusParams, malkmus_transmission, malkmus_log_transmission,
@@ -521,12 +527,12 @@ export MCDomain, MCMedium, MCResult, MonteCarloSolver,
 export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
        URBAN_CLASS_MIXTURES, URBAN_PARK, URBAN_ROOF, URBAN_STREET,
        URBAN_WALL, URBAN_WATER, UrbanMaterials, UrbanRadiationForcing,
-       ViewFactors, aggregate_to_grid, build_facets, build_scene,
+       ViewFactors, aggregate_to_grid, surface_irradiance!, build_facets, build_scene,
        canyon_centreline_sky_view_factor, canyon_sky_view_factor,
        canyon_wallside_sky_view_factor, closure_error,
        default_urban_materials, diffuse_sky_irradiance,
        direct_beam_irradiance, effective_albedo, exchange_area,
-       facet_albedos, facet_areas, facet_corners, facet_edges,
+       facet_albedos, facet_areas, facet_corners, facet_edges, direct_absorbed_share!,
        facet_emissivities, facet_sample_points, facet_sunlit_fraction,
        facet_temperatures, heightmap_from_solid_mask,
        longwave_trapping_factor, LongwaveResponse, longwave_response,
@@ -546,6 +552,7 @@ export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
 
 # Phase 39 — exact moist thermodynamics (the Era IV shared contract)
 export ThermodynamicConstants, DEFAULT_CONSTANTS,
+       θ_per_heat,                     # ONE-e (#454)
        latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
        saturation_vapor_pressure, saturation_vapor_pressure_ice,
        saturation_specific_humidity, saturation_mixing_ratio,
@@ -741,7 +748,7 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
 
 # Phase 44 — fog / dew condensation coupled to the vapour field
 export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
-       dew_deposition, dew_exchange!
+       dew_deposition, dew_exchange!, dew_exchange_columns!
 # Phase 44 (#9) — droplet-radiative feedback: fog droplets in the Era III
 # radiation (delegated to GasOptics/TwoStream/RadiationCore)
 export fog_effective_radius, FogRadiation, fog_radiation,
@@ -768,7 +775,7 @@ export fog_effective_radius, FogRadiation, fog_radiation,
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag, BusingerDyerLogLinear,
        phi_m, phi_h, psi_m, psi_h,
-       SurfaceLayerSolution, solve_surface_layer,
+       SurfaceLayerSolution, solve_surface_layer, aerodynamic_resistance,
        bulk_richardson, obukhov_length,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        roughness_lengths, moisture_availability,
@@ -842,7 +849,7 @@ export AbstractLeafAreaDensity, UniformLAD, LalicMihailovicLAD, BetaLAD, Tabulat
        leaf_area_density, leaf_area_index, canopy_height, cumulative_leaf_area,
        layer_leaf_area_density,
        canopy_drag_factor, canopy_drag_force, implicit_canopy_drag,
-       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!,
+       ResolvedCanopyDrag, canopy_lad_field, apply_canopy_drag!, vegetation_canopy_drag, apply_tree_shade!,
        CanopyWindSolution, solve_canopy_wind_column,
        harman_finnigan_mixing_length, canopy_attenuation_coefficient,
        canopy_exponential_wind,
@@ -891,7 +898,7 @@ export CLEAR_FLOAT_REFRACTIVE_INDEX, CLEAR_FLOAT_EXTINCTION, UNCOATED_GLASS_EMIS
        GlassPane, glass_pane_from_normal, pane_optics,
        FillGas, GLAZING_AIR, GLAZING_ARGON, GlazingGap, gap_nusselt, gap_conductance,
        Glazing, single_glazing, double_glazing, triple_glazing,
-       glazing_optics, glazing_optics_hemispherical,
+       glazing_optics, glazing_optics_hemispherical, glazing_areal_heat_capacity, glazing_solar_transmittance,
        glazing_u_value, inward_flowing_fractions, glazing_shgc,
        WindowFacet, set_solar_incidence!, window_optics, transmitted_shortwave,
        pane_temperatures, window_heat_content
@@ -922,7 +929,9 @@ export DayProfile, WeeklySchedule, schedule_value, schedule_mean, full_load_hour
 # Phase 49 — anthropogenic heat from the building energy model (#29).
 export BuildingHeatRelease, building_heat_release, energy_consumption, total_heat_release,
        anthropogenic_sensible_heat, anthropogenic_latent_heat,
-       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps
+       step_buildings!, building_facets, scene_building_zone, anthropogenic_heat_maps,
+       traffic_heat_flux, add_traffic_heat!,   # ONE-e (#454)
+       CityBuildings, city_buildings, step_city_buildings!, apply_building_heat!, CITY_BUILDING_L_V
 
 # Phase 49 — TEB canyon-exchange closures used by the BUBBLE / CAPITOUL
 # validation (#30).
@@ -1045,7 +1054,8 @@ export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
 # and the flux-prescribed MOST friction velocity, in SurfaceExchange.
 export log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
-       flux_friction_velocity, surface_mshf_ratio
+       flux_friction_velocity, surface_mshf_ratio,
+       deliver_surface_fluxes!         # ONE-e (#454)
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 

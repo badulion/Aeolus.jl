@@ -96,7 +96,7 @@ using ..MoistThermodynamics: saturation_vapor_pressure,
                              virtual_potential_temperature, air_density
 
 export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
-       dew_deposition, dew_exchange!
+       dew_deposition, dew_exchange!, dew_exchange_columns!
 # Phase 44 (#9) — droplet-radiative feedback and the 1-D radiation-fog column
 export fog_effective_radius, FogRadiation, fog_radiation,
        fog_atmospheric_column, fog_radiative_transfer!,
@@ -354,6 +354,50 @@ end
         end
         q_dew[i, j] = max(q_dew[i, j] + r.mass, 0.0)
         H[i, j] = r.surface_heat / dt
+    end
+    return nothing
+end
+
+"""
+    dew_exchange_columns!(H, qv, q_dew, Ts, mask, k_air, p, ρ, dz, dt) -> H
+
+[`dew_deposition`](@ref) between the air cell `k_air[i, j]` of each
+column with `mask[i, j]` (e.g. the first air cell above a roof, and
+only over surfaces without a vapour exchange of their own) and the dew
+reservoir `q_dew` (kg m⁻², updated in place) at the surface temperature
+`Ts`, at that cell's pressure `p[k]` and density `ρ[k]` (per-level
+vectors). `qv` is the 3-D vapour array; its increment is applied as
+`qv += (q + Δqv) − q`. `H` (W m⁻², overwritten; 0 where nothing forms or
+evaporates) is the latent heat released at the surface, positive when
+dew forms: it belongs in the surface energy budget, not the air's. The
+columns are independent work items, so the result is the same at any
+thread count. Moved from the urban case's `fog_dew` coupling (ONE-e,
+#454); [`dew_exchange!`](@ref) is the form at level 1 with one pressure.
+"""
+function dew_exchange_columns!(H::AbstractMatrix, qv::AbstractArray{<:Real,3}, q_dew::AbstractMatrix,
+                               Ts::AbstractMatrix, mask::AbstractMatrix{Bool}, k_air::AbstractMatrix{<:Integer},
+                               p::AbstractVector, ρ::AbstractVector, dz::Real, dt::Real)
+    Nx, Ny = size(H)
+    foreach_column!(backend(H), _dew_column!, (1:Nx, 1:Ny), H, qv,
+                    mask, k_air, Ts, q_dew, p, ρ, dz, dt; weight = DEW_WEIGHT)
+    return H
+end
+
+# the work of one dew column in grid-point equivalents (one saturation
+# humidity and a few divisions: about the cost of 16 pointwise updates)
+const DEW_WEIGHT = 16
+
+@inline function _dew_column!(i, j, H_dew, qv, dew_mask, k_air, Ts, dew, p̄, ρ̄, dz, dt)
+    @inbounds begin
+        H_dew[i, j] = 0.0
+        dew_mask[i, j] || return nothing
+        k = k_air[i, j]
+        q = qv[i, j, k]
+        r = dew_deposition(q, Ts[i, j], p̄[k], dt; dz = dz, ρ = ρ̄[k], dew = dew[i, j])
+        r.mass == 0 && return nothing
+        qv[i, j, k] += (q + r.Δqv) - q
+        dew[i, j] = max(dew[i, j] + r.mass, 0.0)
+        H_dew[i, j] = r.surface_heat / dt
     end
     return nothing
 end
