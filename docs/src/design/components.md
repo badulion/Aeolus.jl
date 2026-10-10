@@ -293,13 +293,21 @@ Measured (`test/model_nesting.jl`; 16 × 16 × 8 parent at Δ = 100 m, its
 
 - one-way, the parent's state after 6 steps is the parent run alone, bit
   for bit;
-- two-way, the composite θ of the nest is conserved to round-off (relative
-  change below 1e-13 over 6 steps; also over a three-level two-way nest),
-  and the parent differs from the parent alone under the child;
+- two-way, the composite θ of the nest is conserved to round-off: a
+  relative change of 2.0e-16 over 6 steps (the test bound is 1e-13), and
+  4.0e-16 over 3 steps of a three-level two-way nest; one-way, where
+  nothing is refluxed, it changes by 8.4e-7. The parent differs from the
+  parent alone under the child;
 - a child's pipeline stages run twice per parent step (2 substeps), its
   in-core stage 3 × 2 times with RK3;
 - an interrupted nested run resumes from its checkpoint bit for bit, both
   domains.
+
+A root step of this nest costs 1.27 ms one-way and 1.71 ms two-way,
+against 0.19 ms for the parent alone (the child has as many cells as the
+parent and takes two substeps). The single-domain step is unchanged: a
+64³ RK3 step of the bare config takes 33.6 ms on the branch and 33.4 ms
+on its base (minimum of 15, two alternating runs each).
 
 The nested model takes fixed steps and does not measure budgets; the
 other limits are on [Run configuration](run_configuration.md).
