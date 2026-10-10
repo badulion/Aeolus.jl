@@ -339,7 +339,7 @@ those:
 | LES Smagorinsky (0.17) | 1.977 | 0.343 at 3.00 | 0.60 | 0.125 | 0.120 / 0.173 / 0.084 |
 | LES AMD (0.3) | 1.956 | 0.369 at 3.00 | 0.66 | 0.141 | 0.145 / 0.205 / 0.111 |
 
-The DNS took 2047 steps and 3563 s on 12 threads of a shared machine
+The DNS took 2047 steps and 3592 s of run wall time (1.75 s per step) on 12 threads of a shared machine
 (max RSS 7.5 GB); each LES 39–140 s on one thread. Its dissipation peak,
 ``t = 3.55`` s, is where the former 256³ record had it (3.60 s). Every
 static model drains energy early: the LES dissipation peaks 0.3–0.6 s
