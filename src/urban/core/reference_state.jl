@@ -355,7 +355,7 @@ dry-air value; the surface exchange passes the moist heat capacity of
 the first air cell.
 """
 ref_θ_per_heat(case, k::Integer; cp::Real = case.ref.cp) =
-    1 / (case.ref.ρ̄[k] * cp * case.ref.π̄[k])
+    θ_per_heat(case.ref.ρ̄[k], cp, case.ref.π̄[k])
 
 """
     hydrostatic_check(cfg, ref, mesh; nsub = 1000) -> max relative |p̄ − p_hyd| / p_hyd

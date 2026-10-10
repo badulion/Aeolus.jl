@@ -66,6 +66,7 @@ REFERENCES
 module MoistThermodynamics
 
 export ThermodynamicConstants, DEFAULT_CONSTANTS,
+       θ_per_heat,
        latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
        saturation_vapor_pressure, saturation_vapor_pressure_ice,
        saturation_specific_humidity, saturation_mixing_ratio,
@@ -1467,5 +1468,19 @@ function kohler_equilibrium_radius(s::Real, r_dry::Real, κ::Real, T::Real,
     end
     return 0.5 * (lo + hi)
 end
+
+"""
+    θ_per_heat(ρ, cp, Π) -> K m³ J⁻¹
+
+The potential-temperature increment per J m⁻³ of heat added to air of
+density `ρ`, heat capacity `cp` and Exner function `Π`,
+``1 / (ρ\\, c_p\\, Π)``: heat raises the temperature by ``q / (ρ c_p)``,
+and θ by that over ``Π``, since ``T = θ Π``. A flux `F` (W m⁻²) into a
+cell of thickness `Δz` for `τ` s raises θ by `F τ / Δz · θ_per_heat(ρ, c_p, Π)`.
+(Moved from the urban case's reference state, ONE-e #454; there, before
+#253, the couplings divided by ``ρ c_p`` only, and the air received
+``Π F``.)
+"""
+θ_per_heat(ρ::Real, cp::Real, Π::Real) = 1 / (ρ * cp * Π)
 
 end # module

@@ -665,29 +665,14 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_flux}, dt)
     bus, mesh = case.bus, case.mesh
     θ = interior_view(case.sim.θ)
     qv = interior_view(tracer(case, :qv))
-    sm = case.geom.sm
-    Hx, Hy, Hz, dz = mesh.Hx, mesh.Hy, mesh.Hz, mesh.dz
-    # one work item per (i, j) column, returning its evaporation and whether
-    # it wrote into a solid cell; the totals folded in column-major order —
-    # the canonical order of a 2-D sum, the old loop's (KA-m, #301)
-    Nx, Ny = size(bus.k_air)
-    evap, nsolid = column_sum(Aeolus.Backends.backend(bus.E), _deliver_column!, (1:Nx, 1:Ny),
-                              θ, qv, bus, c.cp, sm.mask, case, Hx, Hy, Hz, dz, τ)
+    # the first air cell of each column gets H τ and E τ (SurfaceExchange,
+    # ONE-e #454); the evaporation folded in column-major order (KA-m, #301)
+    evap, nsolid = deliver_surface_fluxes!(θ, qv, bus.H, bus.E, bus.k_air, bus.surface, c.cp,
+                                           case.ref.ρ̄, case.ref.π̄, mesh.dz, τ;
+                                           solid = case.geom.sm.mask, offsets = (mesh.Hx, mesh.Hy, mesh.Hz))
     c.evap = evap / length(bus.k_air)
     c.solid_writes += Int(nsolid)
     return nothing
-end
-
-@inline function _deliver_column!(i, j, θ, qv, bus, cp, mask, case, Hx, Hy, Hz, dz, τ)
-    @inbounds begin
-        bus.surface[i, j] === nothing && return (0.0, 0.0)
-        k = bus.k_air[i, j]
-        solid = mask[Hx+i, Hy+j, Hz+k]
-        ρk = ref_density(case, k)
-        θ[i, j, k] += bus.H[i, j] * τ / dz * ref_θ_per_heat(case, k; cp = cp[i, j])
-        qv[i, j, k] += bus.E[i, j] * τ / (ρk * dz)
-        return (bus.E[i, j] * τ, solid ? 1.0 : 0.0)
-    end
 end
 
 """

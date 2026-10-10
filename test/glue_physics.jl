@@ -28,7 +28,10 @@
 #   * Anelastic.hydrostatic_pressure (from core/reference_state.jl): the
 #     exact isentropic atmosphere, RK4 convergence;
 #   * ColumnRadiation (from couplings/column_radiation.jl): the stitched
-#     column, energy closure of the heating, the TOA insolation, fog, night.
+#     column, energy closure of the heating, the TOA insolation, fog, night;
+#   * SurfaceExchange.deliver_surface_fluxes! and MoistThermodynamics.θ_per_heat
+#     (from couplings/surface_exchange.jl, core/reference_state.jl): the air
+#     receives exactly H τ and E τ.
 
 using Test
 using Aeolus
@@ -371,6 +374,39 @@ const GP_MT = Aeolus.MoistThermodynamics
         column_radiation!(c, col, night, 0.95, 0.15)
         @test c.fsw === nothing && c.fsw_clear === nothing && all(iszero, c.heat_sw) && c.μ₀ == 0
         @test c.heat == c.heat_lw
+    end
+
+    @testset "SurfaceExchange: the surface fluxes into the first air cell" begin
+        rng = Xoshiro(11)
+        Nx, Ny, Nz, H = 6, 5, 4, 2
+        θ = fill(300.0, Nx, Ny, Nz); qv = fill(8e-3, Nx, Ny, Nz)
+        Hs = 200 .* rand(rng, Nx, Ny) .- 50; Es = 1e-4 .* rand(rng, Nx, Ny)
+        k_air = rand(rng, 1:2, Nx, Ny)
+        surfaces = Matrix{Any}(fill(:ground, Nx, Ny)); surfaces[2, 3] = nothing   # one column without a surface
+        cp = 1004 .+ 10 .* rand(rng, Nx, Ny)
+        ρ̄ = [1.20, 1.19, 1.18, 1.17]; Π̄ = [1.003, 1.002, 1.001, 1.0]
+        mask = falses(Nx + 2H, Ny + 2H, Nz + 2H); mask[H+4, H+4, H+k_air[4, 4]] = true   # one roof cell
+        dz, τ = 5.0, 2.0
+        θ0, q0 = copy(θ), copy(qv)
+        evap, nsolid = deliver_surface_fluxes!(θ, qv, Hs, Es, k_air, surfaces, cp, ρ̄, Π̄, dz, τ;
+                                               solid = mask, offsets = (H, H, H))
+        @test θ[2, 3, :] == θ0[2, 3, :] && qv[2, 3, :] == q0[2, 3, :]     # no surface: nothing
+        @test nsolid == 1
+        heat = water = 0.0; Hτ = Eτ = 0.0
+        for j in 1:Ny, i in 1:Nx
+            surfaces[i, j] === nothing && continue
+            k = k_air[i, j]
+            # only the first air cell changes
+            @test all(θ[i, j, kk] == θ0[i, j, kk] for kk in 1:Nz if kk != k)
+            heat += ρ̄[k] * cp[i, j] * Π̄[k] * (θ[i, j, k] - θ0[i, j, k]) * dz
+            water += ρ̄[k] * (qv[i, j, k] - q0[i, j, k]) * dz
+            Hτ += Hs[i, j] * τ; Eτ += Es[i, j] * τ
+        end
+        # the air gets exactly H τ and E τ per unit area (the θ_per_heat conversion)
+        @test heat ≈ Hτ rtol = 1e-10
+        @test water ≈ Eτ rtol = 1e-10
+        @test evap ≈ Eτ rtol = 1e-14
+        @test θ_per_heat(1.2, 1004.0, 1.01) ≈ 1 / (1.2 * 1004.0 * 1.01) rtol = 1e-15
     end
 
 end

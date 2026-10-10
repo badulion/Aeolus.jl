@@ -552,6 +552,7 @@ export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
 
 # Phase 39 — exact moist thermodynamics (the Era IV shared contract)
 export ThermodynamicConstants, DEFAULT_CONSTANTS,
+       θ_per_heat,                     # ONE-e (#454)
        latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
        saturation_vapor_pressure, saturation_vapor_pressure_ice,
        saturation_specific_humidity, saturation_mixing_ratio,
@@ -1053,7 +1054,8 @@ export MOSTConsistent, most_gradient_richardson, most_stability_parameter
 # P58-e (#193): the maximum sustainable heat flux (Van de Wiel et al. 2012)
 # and the flux-prescribed MOST friction velocity, in SurfaceExchange.
 export log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
-       flux_friction_velocity, surface_mshf_ratio
+       flux_friction_velocity, surface_mshf_ratio,
+       deliver_surface_fluxes!         # ONE-e (#454)
 # Operators' pointwise fields of the contract.
 export buoyancy_frequency_squared!, gradient_richardson!, strain_rate_squared!
 
