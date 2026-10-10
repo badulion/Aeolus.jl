@@ -41,7 +41,8 @@ using ..Checks: Checks, CheckRunner, enabled_checks, sample_checks!, evaluate_ch
 using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
                 close_output!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
-                Path, section, option!, register_driver!, config_domains, MODEL
+                Path, section, option!, register_driver!, config_domains, domain_view, MODEL
+using ..Nesting: nested_grid, nest_bcs
 
 export SimulationDriverType, SimulationRun, simulation, profile_value
 
@@ -71,8 +72,11 @@ from its profiles, and open lateral faces (`boundaries.x` or `y = "open"`)
 take its boundary planes, blended linearly in time. AeolusPrep.jl makes
 one from ERA5 (CFG-h #363, ONE-h #457: `aeolusprep dynamic --from-era5
 <files…> --config <config.toml> --lat … --lon …`). A config with several
-`[[domain]]` blocks is validated domain by domain, but the model runs one
-domain until nesting by domains (ONE-f, #455).
+`[[domain]]` blocks is a nest (ONE-f, #455): the first domain is the
+root, every later one names its `parent`, its `origin` and `refinement`
+in it, and its `feedback` (`two_way` by default, or `one_way`); see
+[`Components.nested_model`](@ref Aeolus.Components.nested_model) and the
+Run configuration page.
 """
 struct SimulationDriverType <: AbstractRunDriver end
 
@@ -94,6 +98,8 @@ _isnum(x) = x isa Real && !(x isa Bool)
 
 # the couplings around the core's step (EX-d, #441)
 include("simulation_couplings.jl")
+# several [[domain]] blocks: nesting by domains (ONE-f, #455)
+include("simulation_nesting.jl")
 
 # ---------------------------------------------------------------------------
 # initial profiles
@@ -234,6 +240,14 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "the static driver (AeolusPrep.jl: aeolusprep static --source <obstacles.geojson>): its buildings are the obstacles of [obstacles]; hashed under [inputs]")
         option!(s, "dynamic_driver", Optional{Path};
                 doc = "the dynamic driver (CFG-g, #362; AeolusPrep.jl: aeolusprep dynamic --from-era5): its initial profiles set u, v, theta (and qv) — not together with the [initial] tables — and open faces take its boundary planes; hashed under [inputs]")
+        option!(s, "parent", Optional{String};
+                doc = "the id of the domain this one is nested in (ONE-f, #455): an earlier [[domain]] block; \"none\": the root, the first domain")
+        option!(s, "origin", Optional{NTuple{2,Float64}}; units = "m",
+                doc = "a nested domain: its lower-left corner (x, y) in its parent's coordinates; it stands on the parent's ground, grid.extent its size")
+        option!(s, "refinement", Optional{NTuple{3,Int}}; range = (1, 64),
+                doc = "a nested domain: its parent's spacing over its own, per axis (grid.size = grid.extent / parent spacing × refinement)")
+        option!(s, "feedback", Symbol; default = :two_way, allowed = [:two_way, :one_way],
+                doc = "a nested domain: two_way (the self-nesting default: anterpolation onto the parent, flux correction, refluxing) or one_way (the parent never sees it)")
     end
     grid = section("grid"; doc = "The box and its mesh.") do s
         option!(s, "size", NTuple{3,Int}; default = (32, 32, 32), range = (1, 65536),
@@ -413,6 +427,7 @@ function _cross_checks(cfg)
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
     end
     append!(e, _checks_problems(cfg))
+    append!(e, _nest_domain_checks(cfg))
     # slots, requirements, incompatibilities of the enabled components (ONE-b)
     for p in component_problems(enabled_components(cfg))
         push!(e, ConfigError(p.key, p.message))
@@ -483,7 +498,8 @@ the enabled components hold at most one component per slot and an `:advection` p
 every `[checks]` entry is published by the core or an enabled component (`Components.check_problems`): a closure check has the requirements of its `budget_*` output
 `[checks.reference]` comparisons need `checks.reference_file`, which must hold each quantity, and their variables are in the output catalogue; a `reference_file` without comparisons is an error"""
 
-Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC => _cross_checks]
+Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC => _cross_checks,
+                                                   _NEST_CHECKS_DOC => Config.ModelCheck(_nest_checks)]
 
 # ---------------------------------------------------------------------------
 # build
@@ -494,7 +510,8 @@ Config.driver_checks(::SimulationDriverType) = Any[_CROSS_CHECKS_DOC * "\n" * _C
 
 What the model builds from a config: `model`, a [`Model`](@ref
 Aeolus.Components.Model) of one [`Domain`](@ref Aeolus.Components.Domain)
-(ONE-a, #450) — the core (a `BoussinesqSimulation` or an
+(ONE-a, #450), or of several with their nest coupling (ONE-f, #455).
+Each domain has its core (a `BoussinesqSimulation` or an
 `AnelasticSimulation`, [`simulation`](@ref)), its time scheme, its
 components (the `:advection` and `:sgs` slots, Coriolis, the sponge, the
 surface θ flux) and its drivers (`boundary`, the
@@ -510,9 +527,9 @@ struct SimulationRun{M<:Model}
     cfg::RunConfig
 end
 
-"The core of a `simulation` run: the `BoussinesqSimulation` or `AnelasticSimulation` of its one domain."
-simulation(r::SimulationRun) = only(Components.domains(r.model)).state
-_domain(r::SimulationRun) = only(Components.domains(r.model))
+"The core of a `simulation` run: the `BoussinesqSimulation` or `AnelasticSimulation` of its (root) domain."
+simulation(r::SimulationRun) = first(Components.domains(r.model)).state
+_domain(r::SimulationRun) = first(Components.domains(r.model))
 
 function _mesh(g)
     if g.stretching === :uniform
@@ -538,14 +555,21 @@ end
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
 function Config.build(::SimulationDriverType, cfg::RunConfig)
-    n = length(config_domains(cfg))
-    n == 1 || throw(ConfigError("domain", "the model runs one domain; $n [[domain]] blocks are validated but " *
-                                          "run only with nesting by domains (ONE-f, #455)"))
-    mesh = _mesh(cfg.grid)
+    model = _nested(cfg) ? _build_nested(cfg) : Model(_build_domain(cfg))
+    return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : cfg.time.scheme), cfg)
+end
+
+# One domain of the model from its config (a single-domain config, or one
+# domain's view of a nested one): its core on `mesh` with the faces of its
+# [boundaries] (or `bcs`, a nested domain's nest faces), its initial
+# state, components, couplings and budgets.
+function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
     d = cfg.dynamics; b = cfg.boundaries; s = cfg.sgs; ddrv = cfg.domain.dynamic_driver
     dyn = ddrv === nothing ? nothing : read_dynamic_driver(ddrv; mesh = mesh, planes = _is_open(cfg))
     feed = nothing
-    if _is_open(cfg)
+    if bcs !== nothing
+        θ_bcs = bcs
+    elseif _is_open(cfg)
         dyn.boundary === nothing &&
             throw(ConfigError("dynamic_driver", "$ddrv has no boundary planes, which the open faces need (write it with the run's open boundaries)"))
         bcs = θ_bcs = _open_bcs(cfg, mesh)
@@ -574,13 +598,11 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
                 drivers = feed === nothing ? (;) : (; boundary = feed))
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
-    scheme = _adaptive(cfg) ? :adaptive : t.scheme
     # the budgets the [output] selection measures (ONE-c): off unless selected,
     # and the closure checks [checks] enables (ONE-d)
     qs = unique!(vcat(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())],
                       Components.check_budgets(_published_enabled(cfg))))
-    dom = Components.with_budgets(Domain(d0; components = comps), qs)
-    return SimulationRun(Model(dom), StepperState(scheme), cfg)
+    return Components.with_budgets(Domain(d0; components = comps), qs)
 end
 
 # The initial profiles of a dynamic driver (linear in z, constant beyond
@@ -665,13 +687,18 @@ _adaptive_step!(r::SimulationRun, t_end) =
     step_adaptive!(r.model; dt_prev = previous_dt(r.stepper), t_end = t_end)
 
 # output: the one writer (Aeolus.Output, ONE-c) of the variables
-# `[output]` selects from the domain's catalogue
-function _output_writer(r::SimulationRun, rf, resume_t)
-    cfg = r.cfg; o = cfg.output; dom = _domain(r)
+# `[output]` selects from the domain's catalogue; in a nested model one
+# file per domain, the root's `netcdf` and `<stem>_<id>.nc` for the others
+function _output_writer(r::SimulationRun, rf, resume_t, dom = _domain(r))
+    cfg = r.cfg; o = cfg.output
     vars = select_variables(Components.domain_catalogue(dom), o.variables)
     dir = o.path === nothing ? output_dir(rf) : mkpath(o.path)
-    x, y, z = cell_centres(dom.state.mesh)
-    return OutputWriter(joinpath(dir, o.netcdf); x = x, y = y, z = z,
+    m = dom.state.mesh
+    x, y, z = cell_centres(m)
+    x .+= m.x0; y .+= m.y0                         # a nested domain's cells in the root's frame
+    stem, ext = splitext(o.netcdf)
+    file = dom === _domain(r) ? o.netcdf : string(stem, "_", dom.id, ext)
+    return OutputWriter(joinpath(dir, file); x = x, y = y, z = z,
                         records = filter(v -> v.dims !== :scalar, vars), series = filter(v -> v.dims === :scalar, vars),
                         ctx = dom, averaging = o.averaging, resume_time = resume_t,
                         attributes = Dict{String,Any}("title" => "Aeolus.jl — $(cfg.run.name)",
@@ -686,6 +713,9 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                           ck::CheckpointSchedule; callback = nothing)
     sim = simulation(r); cfg = r.cfg; st = cfg.time
     dom = _domain(r); comps = checkpoint_components(dom); closure = sgs_closure(dom)
+    doms = Components.domains(r.model)
+    nest = r.model.nest                            # several domains: the nest coupling (ONE-f)
+    nest === nothing || (comps = merge(comps, (; nest = nest)))
     checks = _check_runner(r)                      # nothing without [checks] (ONE-d)
     checks === nothing || (comps = merge(comps, (; checks = checks)))
     resume!(ck, sim; components = comps, stepper = r.stepper)
@@ -697,7 +727,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
     feed = get(dom.drivers, :boundary, nothing)
     (feed === nothing || t_end === nothing) || check_coverage(feed, sim.t, t_end)
-    w = _output_writer(r, rf, n == 0 ? nothing : sim.t)
+    ws = [_output_writer(r, rf, n == 0 ? nothing : sim.t, d) for d in doms]
     o = cfg.output; mean = o.averaging === :mean
     # instant: a record at the start, then every cadence; mean: the first
     # record is the mean of the first cadence
@@ -705,10 +735,10 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     next_ser = n == 0 && !mean ? 0.0 : _next_out(sim.t, o.series_cadence)
     function write_due!()
         if sim.t >= next_rec * (1 - 1e-9)
-            write_record!(w, dom, sim.t); next_rec = _next_out(sim.t, o.cadence)
+            foreach((w, d) -> write_record!(w, d, sim.t), ws, doms); next_rec = _next_out(sim.t, o.cadence)
         end
         if o.series_cadence == 0 || sim.t >= next_ser * (1 - 1e-9)
-            write_series!(w, dom, sim.t); next_ser = _next_out(sim.t, o.series_cadence)
+            foreach((w, d) -> write_series!(w, d, sim.t), ws, doms); next_ser = _next_out(sim.t, o.series_cadence)
         end
     end
     done() = n >= nmax || (adaptive && st.duration !== nothing && sim.t >= st.duration * (1 - 1e-12))
@@ -730,13 +760,13 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                 end
                 record_step!(r.stepper, dt; retries = retries)
                 checks === nothing || sample_checks!(checks, sim.t, dt)     # stage 13: :checks, then :output
-                accumulate_output!(w, dom, dt)
+                foreach((w, d) -> accumulate_output!(w, d, dt), ws, doms)
                 write_due!()
                 maybe_checkpoint!(ck, sim; step = n, components = comps, stepper = r.stepper)
                 callback === nothing || callback(r, n)
             end
         finally
-            close_output!(w)
+            foreach(close_output!, ws)
         end
         # the guard checks on its cadence; a run never ends `completed` with
         # non-finite fields between two checks
@@ -755,12 +785,15 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
 end
 
 # the enabled checks of a run: the domain's published checks and the
-# reference comparisons that [checks] enables, or nothing (ONE-d)
+# reference comparisons that [checks] enables, or nothing (ONE-d); in a
+# nested model each published check is the worst over the domains, the
+# reference comparisons are the root's
 function _check_runner(r::SimulationRun)
     cfg = r.cfg; c = cfg.checks; dom = _domain(r)
     settings = enabled_checks(_checks_table(cfg))
     isempty(settings) && return nothing
-    cs = Components.domain_checks(dom)
+    doms = Components.domains(r.model)
+    cs = length(doms) == 1 ? Components.domain_checks(dom) : _nest_checks_merged(doms)
     isempty(c.reference) ||
         append!(cs, Components.reference_checks(dom, read_reference(c.reference_file), c.reference))
     return CheckRunner(cs, settings)
@@ -790,10 +823,17 @@ The prognostic arrays with their halos, as a checkpoint stores them
 (`IO.checkpoint_fields`): `u, v, w, p, θ`, the eddy coefficients `νt, κt`
 of the last step and, on the Boussinesq core, `qv`; and those of the
 couplings: the slab temperature `T_s`, `ql`, `qr`, `tracer` and the
-particle positions (`particles`, 3 × n).
+particle positions (`particles`, 3 × n). Those of the root domain; in a
+nested model also every other domain's prognostic arrays, named
+`<id>_<name>` (`inner_u`, …).
 """
-Config.state_fields(r::SimulationRun) =
-    merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)))
+function Config.state_fields(r::SimulationRun)
+    root = merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)))
+    doms = Components.domains(r.model)
+    length(doms) == 1 && return root
+    more = [Symbol(d.id, "_", k) => f.data for d in doms[2:end] for (k, f) in pairs(IO.checkpoint_fields(d.state))]
+    return merge(root, NamedTuple(more))
+end
 
 register_driver!(SimulationDriverType())
 
