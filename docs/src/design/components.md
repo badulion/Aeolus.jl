@@ -9,7 +9,8 @@ target.
 ## What a step does
 
 `step!(model, dt)` steps every domain of the [`Model`](@ref
-Aeolus.Components.Model) (one today; nesting by domains is ONE-f, #455). For one
+Aeolus.Components.Model): one alone, or several as a nest (ONE-f, #455;
+see "Nesting by domains" below). For one
 [`Domain`](@ref Aeolus.Components.Domain):
 
 1. the domain's drivers advance to the step (the open faces' boundary
@@ -267,6 +268,42 @@ required check ends the run with `Checks.ChecksFailed`, and `aeolus run`
 exits with 3. A run that stops with an error records the failed sanity
 check before the error propagates. See [Checks](../api/checks.md).
 
+## Nesting by domains (ONE-f, #455)
+
+A model of several domains is built by
+[`nested_model`](@ref Aeolus.Components.nested_model) from one
+[`NestLink`](@ref Aeolus.Components.NestLink) per child; the
+configuration builds it from its `[[domain]]` blocks
+([Run configuration](run_configuration.md)). The coupling is
+`Nesting.NestHierarchy` (#328), unchanged: its operators, boundary data,
+subcycling, flux registers and two-way feedback. What is new is that each
+domain's advance is its own pipeline:
+[`PipelineCore`](@ref Aeolus.Components.PipelineCore) runs a domain's
+drivers, its stages before the core, the core step with stages 6–8 (the
+nest's register hook chained before the domain's body-force hook, a nest
+sponge after its post-predictor hook) and its stages after the core. A
+child therefore runs every stage once per substep, and its in-core stages
+once per stage of its scheme. The design's `:nest_sync` (1) and
+`:nest_feedback` (12) are the two halves of the coupling the model runs
+around the domains' pipelines: the boundary data prolongated at both ends
+of the parent's step, then the feedback after the children reach its end.
+
+Measured (`test/model_nesting.jl`; 16 × 16 × 8 parent at Δ = 100 m, its
+16 × 16 × 8 child at Δ = 50 m, RK3, dt = 4 s):
+
+- one-way, the parent's state after 6 steps is the parent run alone, bit
+  for bit;
+- two-way, the composite θ of the nest is conserved to round-off (relative
+  change below 1e-13 over 6 steps; also over a three-level two-way nest),
+  and the parent differs from the parent alone under the child;
+- a child's pipeline stages run twice per parent step (2 substeps), its
+  in-core stage 3 × 2 times with RK3;
+- an interrupted nested run resumes from its checkpoint bit for bit, both
+  domains.
+
+The nested model takes fixed steps and does not measure budgets; the
+other limits are on [Run configuration](run_configuration.md).
+
 ## Where the code still differs from the target
 
 * **ONE-e (#454), first part: the physics out of the urban glue.** The
@@ -320,7 +357,12 @@ check before the error propagates. See [Checks](../api/checks.md).
      `:momentum_advection` providers become the domain's core, time
      scheme and solver options and the `:advection` slot).
   5. Berlin as `examples/urban/berlin_*.toml` on the model, and the
-     deletion of `UrbanCase` (its nest parent goes with ONE-f, #455).
+     deletion of `UrbanCase`. Its nest parent (`ParentCase`,
+     `ParentConfig`, the `urban_parent` run type) then becomes the root
+     `[[domain]]` of the Berlin config: nesting by domains (ONE-f, #455)
+     is built, but the parent's physics (the tiled surface, the column
+     radiation, TKE, the large-scale forcing) is not a set of components
+     yet, so the parent cannot be a domain until 1–4 have landed.
 
   Two differences between the urban stage loop and the pipeline decide
   what "bit for bit" can mean there. The loop has stages the pipeline
