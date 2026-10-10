@@ -18,7 +18,7 @@
 #             of the core and the periodic box and the θ `:initial_gradient`
 #             top are not built at all. The outflow condition is
 #             `cfg.outflow` (Dirichlet from the parent by default).
-#   time      `:nest_parent` (after `:clock`) opens a parent window
+#   time      `:nest_sync` (after `:clock`) opens a parent window
 #             `[t_p, t_p + Δt_p]` (`Nesting.begin_parent_step!`): the parent
 #             takes its own adaptive step, its field set is prolongated at
 #             both ends; the child's stepper lands on the window end
@@ -32,7 +32,7 @@
 #             and the run will step past its end, the parent's step of the
 #             next window starts on its own task (`Nesting.prefetch_parent_step!`)
 #             and runs while the child steps through this window; the next
-#             `:nest_parent` takes it. Its step size is the one the
+#             `:nest_sync` takes it. Its step size is the one the
 #             sequential run picks there (`parent_dt` of the parent at the
 #             window end; a fixed child step: the whole number of child
 #             steps), and the result is bit-identical. `wall.parent` is then
@@ -145,7 +145,7 @@ default_options(::Type{<:NestingCoupling}) =
     (mode = :one_way, parent = (;), parent_driver = :aeolus,
      buffer = 2, z_anterp = :canopy, τ = nothing, reflux = true)
 # the child's θ booking of the two-way registers runs in every dynamics stage
-stages(::Type{<:NestingCoupling}) = ((:nest_parent, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP),
+stages(::Type{<:NestingCoupling}) = ((:nest_sync, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP),
                                      (:body_force, 5, EVERY_STEP))
 
 """
@@ -543,7 +543,7 @@ function limit_dt(c::NestingCoupling, case, dt)
     return subcycle_dt(R, dt)
 end
 
-function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
+function run_stage!(c::NestingCoupling, case, ::Val{:nest_sync}, dt)
     ensure_nest!(c, case)
     external_driver(c) && return nothing
     t = case.sim.t

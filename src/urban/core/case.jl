@@ -27,13 +27,6 @@ end
 "Whether `run_case!` will start a step at time `t` (false when it does not know)."
 step_will_run(clk::Clock, t::Real) = clk.t_stop - t > clk.stop_margin
 
-"One scheduled call: `coupling` runs stage `S` at `order` with `cadence`."
-struct ScheduleEntry
-    coupling::AbstractCoupling
-    order::Int
-    cadence::Cadence{Float64}
-end
-
 """
     Case
 
@@ -43,8 +36,9 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
 ([`TracerRegistry`](@ref)), `budgets` ([`Budgets`](@ref Aeolus.BudgetSystem.Budgets)), the hydrostatic reference state
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
-order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
-NetCDF `output` (or `nothing`), the composed
+order), the `domain` (the case as a `Domain` of the core's stage pipeline,
+[`build_domain!`](@ref)), the `clock`, the
+NetCDF `output` (or `nothing`), the pipeline's
 `step!` hooks, `timing` (wall seconds per `(stage, coupling)`, the
 `wall.*` diagnostics and the `:timing` events of [`log_run_end`](@ref)), `top` — the heat flux through a
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
@@ -61,7 +55,7 @@ mutable struct Case{M, S, G<:Geometry}
     budgets::Budgets
     ref::CaseReference
     couplings::Vector{AbstractCoupling}
-    schedule::Dict{Symbol,Vector{ScheduleEntry}}
+    domain::Any
     clock::Clock
     output::Any
     body_force::Union{Nothing,Function}
@@ -189,7 +183,7 @@ function build_case(cfg::CaseConfig)
 
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0)
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
-                AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
+                AbstractCoupling[], nothing, clock,
                 nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
                 top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
     # a building the box edge cuts is solid on the open faces (#262): zero
@@ -226,7 +220,8 @@ function build_case(cfg::CaseConfig)
     for c in sort(case.couplings; by = c -> init_priority(typeof(c)))   # stable: registry order
         init!(c, case)
     end
-    build_schedule!(case)
+    reset_budgets!(case)
+    build_domain!(case)
 
     sfc = geom.sfc
     @debug("$(cfg.name): built", subsystem = :urban, domain = current_domain(), event = :built,
@@ -241,7 +236,7 @@ end
     describe(case) -> String
 
 The enabled couplings with their slot and provider, and the stage
-schedule, one line each.
+schedule of the case's `Domain`, one line per stage.
 """
 function describe(case::Case)
     io = IOBuffer()
@@ -253,11 +248,11 @@ function describe(case::Case)
     end
     println(io, "Schedule:")
     for S in ALL_STAGES
-        es = get(case.schedule, S, ScheduleEntry[])
+        es = [(Components.component_name(c), st) for c in case.domain.components
+              for st in Components.stages(c) if st.name === S]
         isempty(es) && continue
         println(io, "  ", rpad(string(S), 16),
-                join(("$(coupling_name(e.coupling))@$(e.order)" *
-                      (e.cadence.period > 0 ? "/$(e.cadence.period)s" : "") for e in es), "  "))
+                join(("$(n)@$(st.order)" * (st.every > 0 ? "/$(st.every)s" : "") for (n, st) in es), "  "))
     end
     return String(take!(io))
 end

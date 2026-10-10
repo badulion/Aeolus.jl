@@ -1,107 +1,141 @@
-# The single ordered step loop.
+# One step of the urban case: the core's stage pipeline
+# (`Aeolus.Components`, ONE-a #450; ONE-e #454).
 #
-# One step of the Berlin case is this fixed sequence of stages. Within a
-# stage the entries run in the integer `order` their couplings declare
-# (ties: registry order). The order reproduces the pre-refactor script
-# exactly — floating-point order included — so the refactor is
-# bit-for-bit.
+# The case is a `Domain` of the pipeline: its components are the case's own
+# shared state (`UrbanCore`: the clock and the captures of the fixed-gradient
+# top and the open faces) and every enabled coupling (`UrbanEntry`). A
+# coupling's stages are the pipeline's (`Components.PIPELINE`), each with the
+# cadence and the place in its stage (`order`) the coupling declares, so
+# the pipeline runs them in the order of the urban stage loop it replaces,
+# bit for bit:
 #
-#   :clock           local hour of day (core)
-#   :nest_parent     the parent run advanced to cover the child step, the
+#   :clock           local hour of day (the case)
+#   :nest_sync       the parent run advanced to cover the child step, the
 #                    child's nest faces pointed at the new parent window (#265)
 #   :radiation       sun, radiosity, buildings over the radiation interval
 #   :sw_modifiers    tree shade, cloud shadow
 #   :surface_flux    surface → air fluxes; builds bus.sensible
-#   :anthropogenic   buildings, traffic, glazing
-#   :chemistry       reactive species, aerosol
+#   :sources         buildings, traffic, glazing (anthropogenic heat)
+#   :chemistry       reactive species
 #   :transport       advection of the registered tracers
-#   :microphysics    cloud / rain
+#   :microphysics    cloud / rain, then dew on surfaces and fog in the air
 #   :tracers         passive tracers with their own schemes
-#   :fog_dew         dew on surfaces, fog in the air
-#   -- dynamics: step!(sim, dt) with the :body_force and :post_predictor
-#      entries composed into its body_force! / post_predictor! hooks --
+#   -- the core's step (the :timestepper provider) with the :tendencies,
+#      :body_force and :post_predictor entries called from its hooks --
 #   :surface_update  surface and soil prognostics
 #   :column_tendency column (radiative) tendencies of θ
 #   :nest_feedback   the parent window closed when the child reached its end
 #                    (one-way: clock and statistics; two-way, #267: the feedback)
-#   :sanity          guards (e.g. clamps), then the core blow-up check
-#   :output          NetCDF record and log line (core)
+#   :budgets         (the blow-up check, then the budgets close)
+#   :checks, :output NetCDF record and log line (the case), then the entries
 
-"Stages before the dynamics, in order."
-const PRE_DYNAMICS_STAGES = (:clock, :nest_parent, :radiation, :sw_modifiers, :surface_flux,
-                             :anthropogenic, :chemistry, :transport, :microphysics, :tracers,
-                             :fog_dew)
-"Stages composed into the hooks of `step!`."
-const DYNAMICS_STAGES = (:body_force, :post_predictor)
-"Stages after the dynamics, in order."
-const POST_DYNAMICS_STAGES = (:surface_update, :column_tendency, :nest_feedback, :sanity, :output)
-"Every stage name, in execution order."
-const ALL_STAGES = (PRE_DYNAMICS_STAGES..., DYNAMICS_STAGES..., POST_DYNAMICS_STAGES...)
+"""
+    pipeline_stages(C, cfg) -> Tuple{Vararg{Stage}}
 
-"Assemble `case.schedule` from the enabled couplings' `stages`, and the dynamics hooks."
-function build_schedule!(case)
-    empty!(case.schedule)
-    for S in ALL_STAGES
-        case.schedule[S] = ScheduleEntry[]
-    end
-    for c in case.couplings, (S, order, cad) in stages(typeof(c))
-        push!(case.schedule[S], ScheduleEntry(c, order, resolve(cad, case.cfg)))
-    end
-    for S in ALL_STAGES
-        sort!(case.schedule[S]; by = e -> e.order)   # stable: ties keep registry order
-    end
-    for S in DYNAMICS_STAGES, e in case.schedule[S]
-        e.cadence.period > 0 && error("coupling :$(coupling_name(e.coupling)): stage :$S runs inside step! and must use every-step cadence")
-    end
-    bf = case.schedule[:body_force]
-    pp = case.schedule[:post_predictor]
-    # a fixed-gradient θ top: capture the top-face flux of every dynamics
-    # stage (core/top_boundary.jl) before the body-force entries run
-    # an open case: the open faces' heat and the θ relaxation toward the
-    # boundary data (core/open_boundary.jl, #262), likewise
-    tf = case.top
-    ob = case.open
-    case.body_force = (isempty(bf) && tf === nothing && ob === nothing) ? nothing :
-        (s, Δt) -> (tf === nothing || capture_top_flux!(tf, s, get(case.step_kwargs, :sgs, nothing));
-                    ob === nothing || capture_boundary_heat!(ob, s, get(case.step_kwargs, :sgs, nothing));
-                    for e in bf; timed_run!(case, e, :body_force, Δt); end; nothing)
-    case.post_predictor = isempty(pp) ? nothing :
-        (s, Δt) -> (for e in pp; timed_run!(case, e, :post_predictor, Δt); end; nothing)
+The pipeline stages of coupling type `C` under `cfg`: one
+`Components.Stage` per entry of `stages(C)`, its `Cadence` resolved to
+seconds (`every`, `first`) and its integer order its `order`.
+"""
+function pipeline_stages(C, cfg)
+    return Tuple(begin
+                     cad = resolve(c, cfg)
+                     S in ALL_STAGES || error("coupling :$(coupling_name(C)): unknown stage :$S")
+                     Stage(S; every = max(cad.period, 0.0), first = cad.first, order = order)
+                 end for (S, order, c) in stages(C))
+end
+
+"""
+    UrbanEntry
+
+A coupling of the case as a component of its `Domain` (`Aeolus.Components`):
+the coupling `c`, its name and its [`pipeline_stages`](@ref); every stage
+entry is timed into `case.timing[(stage, coupling)]`. One concrete type for
+every coupling (the call into the coupling is dynamic, as in the urban stage
+loop it replaced), so a case's domain is not compiled anew for every
+selection of couplings.
+"""
+struct UrbanEntry <: AbstractComponent
+    c::AbstractCoupling
+    name::Symbol
+    stages::Tuple{Vararg{Stage}}
+end
+UrbanEntry(c::AbstractCoupling, st) = UrbanEntry(c, coupling_name(typeof(c)), Tuple(st))
+Components.component_name(e::UrbanEntry) = e.name
+Components.section(e::UrbanEntry) = string(e.name)
+Components.stages(e::UrbanEntry) = e.stages
+Components.budget!(e::UrbanEntry, d::Domain, b) = budget!(e.c, urban_case(d), b)
+function Components.run_stage!(e::UrbanEntry, d::Domain, v::Val{S}, dt) where {S}
+    case = urban_case(d)
+    t0 = time_ns()
+    run_stage!(e.c, case, v, dt)
+    key = (S, e.name)
+    case.timing[key] = get(case.timing, key, 0.0) + (time_ns() - t0) * 1e-9
+    return nothing
+end
+
+"""
+    UrbanCore{C}
+
+The case's own component of its `Domain`: in `:clock` (first) the local
+hour and the snapshot of the surface temperature and the water in the
+air the budgets close against; in `:tendencies` (every dynamics stage,
+before the `:body_force` entries) the heat of a fixed-gradient θ top and
+of the open faces, and the θ relaxation of the open faces
+(`core/top_boundary.jl`, `core/open_boundary.jl`).
+"""
+struct UrbanCore{C} <: AbstractComponent
+    case::C
+end
+Components.component_name(::Type{<:UrbanCore}) = :urban
+Components.section(::Type{<:UrbanCore}) = "urban"
+Components.stages(::UrbanCore) = (Stage(:clock; order = typemin(Int)), Stage(:tendencies))
+function Components.run_stage!(u::UrbanCore, d::Domain, ::Val{:clock}, dt)
+    case = u.case
+    l = case.budgets
+    size(l.Ts_start) == size(case.bus.Ts) ? copyto!(l.Ts_start, case.bus.Ts) : (l.Ts_start = copy(case.bus.Ts))
+    l.W_start = air_water(case)
+    case.clock.hour = hour_of_day(case.cfg, case.sim.t)
+    return nothing
+end
+function Components.run_stage!(u::UrbanCore, d::Domain, ::Val{:tendencies}, dt)
+    case = u.case
+    sgs = get(case.step_kwargs, :sgs, nothing)
+    case.top === nothing || capture_top_flux!(case.top, case.sim, sgs)
+    case.open === nothing || capture_boundary_heat!(case.open, case.sim, sgs)
+    return nothing
+end
+# the water the air gained over the step (the budgets close after :budgets)
+Components.budget!(u::UrbanCore, d::Domain, b) = (b.water_air += air_water(u.case) - b.W_start; nothing)
+
+_urban_core(::Tuple{}) = error("the domain has no urban case")
+_urban_core(cs::Tuple) = first(cs) isa UrbanCore ? first(cs) : _urban_core(Base.tail(cs))
+"The urban case of a `Domain` built by [`build_case`](@ref)."
+urban_case(d::Domain) = _urban_core(d.components).case
+
+"""
+    build_domain!(case) -> case
+
+The case as a `Domain` of the core's pipeline (`case.domain`): its
+[`UrbanCore`](@ref) and an [`UrbanEntry`](@ref) per enabled coupling, in
+the pipeline's order (`Components.order_components`), with the case's
+budgets as the domain's (the heat of the air, attributed to every stage
+entry); `case.body_force` and `case.post_predictor` are the pipeline's
+hooks of the core step, and `case.step_kwargs` the numerics slots' step
+keywords.
+"""
+function build_domain!(case)
+    cfg = case.cfg
+    comps = (UrbanCore(case), (UrbanEntry(c, pipeline_stages(typeof(c), cfg)) for c in case.couplings)...)
+    d = Domain(case.sim; id = string(cfg.name), components = comps, validate = false)
+    db = DomainBudgets(case.budgets, (:energy,), Dict(:energy => case.sim.θ), Dict(:energy => case.sim.tθ);
+                       nsub = 1, hour = t -> hour_of_day(cfg, t))
+    case.domain = Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
+    h = Components.core_hooks(case.domain)
+    case.body_force, case.post_predictor = h.body_force!, h.post_predictor!
     case.step_kwargs = merge_keywords("step!", (coupling_name(c) => step_options(c, case)
                                                 for c in case.couplings))
     empty!(case.timing)
     return case
-end
-
-# Every entry is an air-heat attribution context (src/budgets/stage_budget.jl):
-# the ledger measures the heat of the air around it and books the change
-# under (stage, coupling). The measuring is timed as (:budgets, :air_heat),
-# not as the coupling's.
-function timed_run!(case, e::ScheduleEntry, S::Symbol, dt)
-    name = coupling_name(e.coupling)
-    hl = energy(case.budgets)
-    th = hl.active ? time_ns() : UInt64(0)
-    hl.active && budget_open!(hl, S, name, case.sim.θ)
-    t0 = time_ns()
-    run_stage!(e.coupling, case, Val(S), dt)
-    t1 = time_ns()
-    key = (S, name)
-    case.timing[key] = get(case.timing, key, 0.0) + (t1 - t0) * 1e-9
-    if hl.active
-        budget_close!(hl, case.sim.θ)
-        _time_air_heat!(case, (t0 - th) + (time_ns() - t1))
-    end
-    return nothing
-end
-
-_time_air_heat!(case, ns) =
-    (case.timing[(:budgets, :air_heat)] = get(case.timing, (:budgets, :air_heat), 0.0) + ns * 1e-9)
-
-function run_entries!(case, S::Symbol, dt, n, t_old, t_new)
-    for e in case.schedule[S]
-        fires(e.cadence, n, t_old, t_new) && timed_run!(case, e, S, dt)
-    end
-    return nothing
 end
 
 "The enabled provider of the `:timestepper` slot, or `nothing` (plain `step!` at `cfg.dt`)."
@@ -185,47 +219,37 @@ function step_case!(case, dt::Real)
     return _step_case!(case, dt)
 end
 
+const _POST_CORE_STAGES = (:surface_update, :column_tendency, :nest_feedback, :budgets)
+
 # One step of `dt`, unchecked: `run_case!` passes the step `step_dt` picked.
 function _step_case!(case, dt::Real)
-    sim, clk = case.sim, case.clock
+    sim, clk, d = case.sim, case.clock, case.domain
     clk.n += 1
     n = clk.n
     t_old = sim.t
     t_new = t_old + dt
-    budgets_begin_step!(case)
-    # :clock (core)
-    clk.hour = hour_of_day(case.cfg, sim.t)
-    run_entries!(case, :clock, dt, n, t_old, t_new)
-    for S in PRE_DYNAMICS_STAGES[2:end]
-        run_entries!(case, S, dt, n, t_old, t_new)
-    end
+    b = d.budgets
+    Components._budgets_begin!(b, d)
+    Components._run_stages!(d, Components.PRE_CORE, dt, t_old, t_new)
     # the dynamics: one air-heat context, split into the terms booked
     # inside it (add_heat!), (:dynamics, :transport) and (:dynamics, :redistribution)
-    hl = energy(case.budgets)
-    th = time_ns()
-    budget_open!(hl, :dynamics, :step!, sim.θ; split = true)
+    Components._dynamics_open!(b, d)
     t0 = time_ns()
     ts = timestepper(case)
     ts === nothing ? dynamics_step!(case, dt) : advance_dynamics!(ts, case, dt)
-    t1 = time_ns()
-    case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (t1 - t0) * 1e-9
-    budget_close!(hl, sim.θ)
-    _time_air_heat!(case, (t0 - th) + (time_ns() - t1))
-    run_entries!(case, :surface_update, dt, n, t_old, t_new)
-    run_entries!(case, :column_tendency, dt, n, t_old, t_new)
-    run_entries!(case, :nest_feedback, dt, n, t_old, t_new)
-    # :sanity (coupling guards first, then the core finiteness check)
-    run_entries!(case, :sanity, dt, n, t_old, t_new)
+    case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (time_ns() - t0) * 1e-9
+    Components._dynamics_close!(b, d)
+    Components._run_stages!(d, _POST_CORE_STAGES, dt, t_old, t_new)
     if clk.blowup || any(!isfinite, interior_view(sim.u)) || any(!isfinite, case.bus.Ts)
         @error("blowup at step $n", subsystem = :urban, domain = current_domain(),
                event = :blowup, step = n)
         clk.blowup = true
         return false
     end
-    budgets_end_step!(case, dt)
-    # :output (core record + log line, then coupling entries)
+    Components._budgets_end!(b, d, dt)
+    # :output (the case's record and log line, then the entries)
     fires(resolve(Cadence(:output), case.cfg), n, t_old, t_new) && write_output!(case)
-    run_entries!(case, :output, dt, n, t_old, t_new)
+    Components._run_stages!(d, (:checks, :output), dt, t_old, t_new)
     return true
 end
 

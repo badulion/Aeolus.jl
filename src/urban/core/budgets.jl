@@ -4,13 +4,13 @@
 # hooks and the integrals that need the case (its tracers, mesh and
 # reference density).
 #
-# Each step the core calls `budgets_begin_step!` before the first stage
-# (it snapshots the surface temperature and the water in the air, and
-# starts attributing the heat of the air) and `budgets_end_step!` after
-# `:sanity` (it calls every coupling's `budget!(c, case, budgets)` and
-# books the change of air water). A coupling reports only what it did
-# during that step (`add_surface!`, `add_water!`, `add_heat!`: see
-# `src/budgets/budgets.jl`).
+# The budgets are the case's `Domain`'s (core/stages.jl): the pipeline
+# attributes the heat of the air to every stage entry, the case's
+# `UrbanCore` snapshots the surface temperature and the water in the air at
+# the step's start and books the change of air water at its end, and
+# every coupling's `budget!(c, case, budgets)` runs after `:budgets`. A
+# coupling reports only what it did during that step (`add_surface!`,
+# `add_water!`, `add_heat!`: see `src/budgets/budgets.jl`).
 
 """
     air_water(case) -> kg m⁻²
@@ -31,7 +31,7 @@ end
     reset_budgets!(case) -> budgets
 
 Zero every accumulated term and start integrating from the current
-state (called automatically before the first step).
+state (called by [`build_case`](@ref)).
 """
 function reset_budgets!(case)
     l = case.budgets
@@ -61,36 +61,4 @@ function canopy_top(case)
     isfinite(case.cfg.canopy_top) && return Float64(case.cfg.canopy_top)
     return max(maximum(building_height(case.geom, case.mesh); init = 0.0),
                Float64(level_thickness(case.mesh)[1]))
-end
-
-_time_budgets!(case, t0) =
-    (case.timing[(:budgets, :budgets)] = get(case.timing, (:budgets, :budgets), 0.0) + (time_ns() - t0) * 1e-9)
-
-"Core hook, before the first stage of a step: snapshot Ts and the water in the air."
-function budgets_begin_step!(case)
-    t0 = time_ns()
-    l = case.budgets
-    l.nsteps == 0 && isempty(l.ncol) && reset_budgets!(case)
-    size(l.Ts_start) == size(case.bus.Ts) ? copyto!(l.Ts_start, case.bus.Ts) :
-                                           (l.Ts_start = copy(case.bus.Ts))
-    l.W_start = air_water(case)
-    budget_begin_step!(energy(l), case.sim.θ, hour_of_day(case.cfg, case.sim.t))
-    _time_budgets!(case, t0)
-    return l
-end
-
-"Core hook, after `:sanity`: collect every coupling's `budget!` for this step."
-function budgets_end_step!(case, dt::Real)
-    t0 = time_ns()
-    l = case.budgets
-    l.dt = dt
-    for c in case.couplings
-        budget!(c, case, l)
-    end
-    l.water_air += air_water(case) - l.W_start
-    budget_end_step!(energy(l), case.sim.θ, dt)
-    l.elapsed += dt
-    l.nsteps += 1
-    _time_budgets!(case, t0)
-    return l
 end

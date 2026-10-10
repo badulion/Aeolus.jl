@@ -58,6 +58,9 @@
 # a numerics provider whose keywords it does not take is declared with
 # `incompatible` (and `incompatible_reason`), so selecting it is an error.
 
+"Every stage name, in execution order: the core pipeline's (`Components.PIPELINE`)."
+const ALL_STAGES = Components._STAGE_NAMES
+
 """
     AbstractCoupling
 

@@ -26,7 +26,7 @@ Slot `:buildings`, provider `:citymean`. The [`CityBuildings`](@ref)
 state is built from the scene at `init!`; at the `:radiation` cadence
 (after the radiosity, which it needs for the wall irradiance) the zone
 is advanced over the radiation interval against the mean first-layer air
-of the open columns; every step, in `:anthropogenic`, its release goes
+of the open columns; every step, in `:sources`, its release goes
 into θ and qv and the window sun on the walls leaves the surface budget
 ([`apply_building_heat!`](@ref)).
 """
@@ -39,7 +39,7 @@ slot(::Type{CityMeanBuildings}) = :buildings
 provider(::Type{CityMeanBuildings}) = :citymean
 modules_used(::Type{CityMeanBuildings}) = (:BuildingEnergy, :UrbanSurface)
 stages(::Type{CityMeanBuildings}) = ((:radiation, 20, Cadence(:radiation; first = true)),
-                                     (:anthropogenic, 10, EVERY_STEP))
+                                     (:sources, 10, EVERY_STEP))
 build(::Type{CityMeanBuildings}, case, o) = CityMeanBuildings(nothing)
 
 function init!(c::CityMeanBuildings, case)
@@ -71,7 +71,7 @@ function run_stage!(c::CityMeanBuildings, case, ::Val{:radiation}, dt)
     return nothing
 end
 
-run_stage!(c::CityMeanBuildings, case, ::Val{:anthropogenic}, dt) =
+run_stage!(c::CityMeanBuildings, case, ::Val{:sources}, dt) =
     apply_building_heat!(case.sim, tracer(case, :qv), case.bus.sensible, c.bem, dt;
                          ρ = ref_density(case), cp = case.ref.cp, π = case.ref.π̄)
 
