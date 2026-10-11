@@ -69,7 +69,7 @@ const ALL_STAGES = Components._STAGE_NAMES
     UrbanComponent <: Components.AbstractComponent
 
 Supertype of every urban component of the site (ONE-e, #454; formerly
-`UrbanComponent` of the coupling registry). See `core/components.jl`
+`AbstractCoupling` of the coupling registry). See `core/components.jl`
 for its interface and `docs/src/design/berlin_case.md` for how to add
 one. Its section is `[`[`component_name`](@ref Aeolus.Components.component_name)`]`;
 the case runs it through the pipeline in an [`UrbanEntry`](@ref).

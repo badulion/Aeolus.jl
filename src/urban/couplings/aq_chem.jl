@@ -464,8 +464,9 @@ the 64 × 64 × 32 case on master `915bd49` with the adaptive step on a
 loaded machine: 233.7 → 289.1 ms/step, of which 50 ms is the WENO
 transport of the five species and 12 ms the `aq_chem` stage; see
 `docs/src/design/berlin_air_quality.md`), so runs that do not need air quality
-can switch it off with
-`physics = Dict(:chemistry => :off)`.
+can switch it off with the sections `[aq_chem] enabled = false` and
+`[chem_off] enabled = true` (`--set aq_chem.enabled=false --set
+chem_off.enabled=true`).
 """
 struct NoChem <: UrbanComponent end
 component_name(::Type{NoChem}) = :chem_off

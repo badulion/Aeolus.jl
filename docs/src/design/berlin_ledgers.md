@@ -307,7 +307,7 @@ in both places.
 
 `cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
 case open west, east, south, north and top faces fed by analytic data (with
-the nest switched off, `physics = Dict(:nesting => false)`; the nested
+the nest switched off, `nesting.enabled=false`; the nested
 default of #265 feeds the same faces from the parent, see
 [Nesting](berlin_nesting.md#Nesting-(#265))):
 

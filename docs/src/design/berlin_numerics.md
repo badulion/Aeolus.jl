@@ -3,8 +3,11 @@
 ## Numerics slots
 
 Four exclusive slots swap the numerics of the dynamical core and the
-transport (#132). Select with `physics = Dict(:slot => :provider)`;
-options go under the coupling name in `options`.
+transport (#132). Each provider is a component with a section of its
+own (the component name in parentheses below): enable the one you want
+and disable the slot's default, e.g. `[pressure_fft] enabled = false`
+and `[pressure_multigrid] enabled = true`; its options are keys of the
+same section (`--set pressure_multigrid.tol=1e-8` on the command line).
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
@@ -329,13 +332,16 @@ Two exclusive slots select the dynamics (#133), both in
 | `:timestepper` | `:adaptive` (default) | `TimeIntegration.adaptive_dt`, `step_adaptive!` | CFL / diffusion / buoyancy limited step, growth ≤ 10 %, rollback and halving on failure; option `imex = true` steps with ARK2 and only the explicit limits bind |
 | `:timestepper` | `:imex` | `TimeIntegration.step_imex!(…, ARK2())` | implicit diffusion, explicit advection and hooks, a projection per stage, at `cfg.dt` |
 
-```julia
-cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # a sound-proof core brings its solver
-                 physics = Dict{Symbol,Any}(:core => :anelastic,
-                                            :pressure_solver => :density_weighted_direct,
-                                            :timestepper => :fixed))
-cfg = CaseConfig(:alexanderplatz; nsteps = 1800,          # 1 h of simulated time
-                 options = Dict{Symbol,Any}(:timestep_adaptive => (C_advective = 0.5, dt_max = 10.0)))
+```sh
+# a sound-proof core brings its solver (and has no checkpoints yet)
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800 \
+    --set checkpoint.every_seconds=inf \
+    --set core_boussinesq.enabled=false --set core_anelastic.enabled=true \
+    --set pressure_fft.enabled=false --set pressure_density_direct.enabled=true \
+    --set timestep_adaptive.enabled=false --set timestep_fixed.enabled=true
+# 1 h of simulated time with the adaptive step's limits set
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800 \
+    --set timestep_adaptive.c_advective=0.5 --set timestep_adaptive.dt_max=10.0
 ```
 
 **Stretched vertical grid (#151): a stated exception.** The
