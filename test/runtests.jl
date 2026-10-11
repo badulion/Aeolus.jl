@@ -863,6 +863,7 @@ using Aeolus.Fields: set!, interior_view
     include("budgets_output.jl")       # ONE-c (#452): the one budget system and the one output writer
     include("checks.jl")               # ONE-d (#453): in-model checks: [checks], results.toml, exit code 3
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
+    include("model_nesting.jl")       # ONE-f (#455): nesting by [[domain]]: the graph, pipelines per domain, one-/two-way, restart
     include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
     include("glue_physics.jl")         # ONE-e (#454): the physics moved out of the urban glue into its modules
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit

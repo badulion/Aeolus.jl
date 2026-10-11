@@ -99,9 +99,11 @@ Keywords:
     step and the child subcycles to land exactly on its end;
     `:shared_min_dt`: both domains take one step of the smaller of the two
     limits (PALM's scheme, Hellsten et al. 2021, §3.1);
-  * `feedback` — `:one_way` (default; the parent never sees the child),
-    `:two_way` (the default [`TwoWayFeedback`](@ref)) or a
-    `TwoWayFeedback(…)`: anterpolation of the child field set onto the
+  * `feedback` — `:two_way` (the default: the default
+    [`TwoWayFeedback`](@ref), as for every Aeolus parent driving an Aeolus
+    child, ONE-f #455), a `TwoWayFeedback(…)`, or `:one_way` (the parent
+    never sees the child; what a mixed core pair, or a child without a
+    conservation box, needs). Two-way is anterpolation of the child field set onto the
     covered parent cells outside a buffer zone, an optional relaxation,
     canopy restriction and inflow exclusion, the interface flux
     correction on the open faces, Berger–Colella scalar refluxing from
@@ -245,7 +247,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    cfl_parent = CFLConstraints(),
                    cfl_child = cfl_parent,
                    sync::Symbol = :subcycle,
-                   feedback::Union{Symbol,TwoWayFeedback} = :one_way,
+                   feedback::Union{Symbol,TwoWayFeedback} = :two_way,
                    order::Int = 3,
                    limit_scalars::Symbol = :positive,
                    limit_theta::Symbol = :none,

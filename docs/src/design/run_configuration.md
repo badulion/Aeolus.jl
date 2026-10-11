@@ -58,7 +58,7 @@ The sections:
 | :-- | :-- |
 | run | `[run]`, `[time]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]` |
 | per domain | `[grid]`, `[dynamics]` (the core), `[boundaries]`, `[initial]`, and one section per component, generated from its schema: `[advection]`, `[sgs]`, `[coriolis]`, `[sponge]`, `[surface_theta_flux]`; the EX-d couplings `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]` (one component today, split in ONE-e) |
-| the domain itself | `id`, `static_driver`, `dynamic_driver` (top level for one domain, else in each `[[domain]]` block) |
+| the domain itself | `id`, `static_driver`, `dynamic_driver` (top level for one domain, else in each `[[domain]]` block); a nested domain's `parent`, `origin`, `refinement`, `feedback` (ONE-f, #455) |
 
 `[checks]` takes one key per check the enabled components publish; none
 publishes one yet (ONE-d, #453), so any key is an error. The component
@@ -79,14 +79,24 @@ domain, and a block's `[domain.<section>]` tables replace keys for its
 domain:
 
 ```toml
+[time]
+dt = 1.0                   # a nest takes a fixed step
+
 [sgs]
 closure = "vreman"         # every domain …
+
+[grid]
+size = [8, 8, 8]           # the parent: 3200 × 3200 × 1600 m, Δ = 400 × 400 × 200 m
 
 [[domain]]
 id = "outer"
 
 [[domain]]
 id = "inner"
+parent = "outer"
+origin = [1200.0, 1200.0]  # its lower-left corner in the parent; it stands on the ground
+refinement = [8, 8, 8]     # Δ = 50 × 50 × 25 m: grid.size = extent / parent spacing × refinement
+feedback = "two_way"       # the default; "one_way" per child
 static_driver = "input/inner_static.nc"
   [domain.sgs]
   closure = "amd"          # … but this one
@@ -98,9 +108,43 @@ The resolved config, and so `run.toml`, lists every domain with every
 option of every component (`[[domain]]` then `[domain.grid]`,
 `[domain.sgs]`, …), so a run is fully described by its record. A problem
 in a block is reported under `domain[i].<section>.<key>`; the cross-field
-checks run on each domain. The model runs one domain until nesting by
-domains (ONE-f, #455): a config with several validates, and `aeolus run`
-refuses it with that reason.
+checks run on each domain, and the checks of the domain graph once.
+
+### Nesting by domains (ONE-f, #455)
+
+Several domains are a nest, and one `aeolus run` steps them all. The
+first domain is the root; every later one names an earlier domain as its
+`parent`, its `origin` (x, y) in it and its `refinement` per axis. A
+nested domain stands on its parent's ground: its lateral faces are nest
+faces fed by the parent (periodic along an axis it spans entirely if the
+parent is periodic there), its top a nest face below the parent's top.
+Each domain is built as a single domain would be — its own `[initial]`,
+components and couplings — and runs its own stage pipeline. One step is
+one root step of `dt`; a child subcycles `max(refinement)` substeps per
+step of its parent, recursively (Berger & Oliger 1984), so several levels
+and siblings work as one (#328). `feedback` is per child: `two_way`, the
+self-nesting default (anterpolation onto the covered parent cells,
+interface flux correction, Berger–Colella refluxing, re-projection of the
+parent; see [Two-way nesting](../theory/nesting_twoway.md)), or
+`one_way`, where the parent never sees the child. The coupling is
+[`Components.nested_model`](@ref Aeolus.Components.nested_model), over
+`Nesting.NestHierarchy`.
+
+A run writes one output file per domain (`output.nc` for the root,
+`output_<id>.nc` for the others), evaluates each published check on every
+domain (the value is the worst, each domain's under its id in
+`results.toml`; the reference comparisons are the root's), and a
+checkpoint holds the whole nest, so a resumed run continues bit for bit.
+
+What a nested model does not do yet, each refused by the configuration
+with its reason: an adaptive `time.dt`, budgets (the two-way feedback is
+outside every stage, so it is not attributed), the anelastic core and
+stretched grids, a child's `dynamic_driver`, and the EX-d couplings
+(`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
+`[obstacles]`) in a child, whose fields have no nest faces. The urban run
+type's Berlin nest (`ParentCase`, the `urban_parent` run type) is still
+its own until the urban couplings are components (ONE-e, #454); it then
+becomes a `[[domain]]` config.
 
 The enabled components of a domain are validated before anything is
 built: at most one per exclusive slot (`:advection`, `:sgs`,

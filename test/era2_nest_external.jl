@@ -223,7 +223,7 @@ end
     θ_init = copy(interior_view(csim.θ))
     dev = maximum(abs(θ_init[i, j, k] - θp(_nx_zc(cm, k + cm.Hz))) for i in 1:cm.Nx, j in 1:cm.Ny, k in 1:cm.Nz)
     adv = domain_advance(step!)
-    run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                     cfl_parent = nothing, cfl_child = nothing)
     Δt_p = 2.0
     n = 0
@@ -251,7 +251,7 @@ end
         fill!(s.u.data, U); fill!(s.v.data, V); fill!(s.θ.data, 300.0)
     end
     adv = domain_advance(step_rk3!)
-    run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                     cfl_parent = nothing, cfl_child = nothing)
     for _ in 1:6
         _nx_window!(run, adv, 4.0, 1.7)
@@ -277,7 +277,7 @@ end
     csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm; bottom = :wall, top = :nest))
     _nx_init_child!(csim, psim, nest)
     adv = domain_advance(step_rk3!)
-    run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                     cfl_parent = nothing, cfl_child = nothing)
     step!(csim, 1e-12); csim.t = psim.t
     U = maximum(abs, interior_view(psim.u)); A = _nx_open_area(csim)
@@ -340,7 +340,7 @@ _nx_heat(sim, θ0) = sum(interior_view(sim.θ) .- θ0) * sim.mesh.dx * sim.mesh.
                                                      diffusivity = (ν = ν, κh = nothing, κv = nothing)).total; s)
     advc = domain_advance(step!; body_force! = hook)
     adv = domain_advance(step!)
-    run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = advc,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = advc,
                     cfl_parent = nothing, cfl_child = nothing)
     exported = 0.0
     for _ in 1:40
@@ -407,7 +407,7 @@ end
     advp = domain_advance(step!; body_force! = phook)
     advc = domain_advance(step!; body_force! = (s, Δt) -> (apply_forcing!(s, G, s.t, Δt); s),
                           post_predictor! = ibm)
-    run = NestedRun(psim, csim, nest; advance_parent = advp, advance_child = advc,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = advp, advance_child = advc,
                     cfl_parent = nothing, cfl_child = nothing, solid = sm)
     for _ in 1:5
         _nx_window!(run, advc, 4.0, 1.5)
@@ -448,7 +448,7 @@ end
     @test_throws ArgumentError Aeolus.BoundaryConditions.OpenPlane(:u, FaceX(), :west, cm; mode = :inflow)
     st = ntuple(_ -> nest_interp_state(nest; scalars = (:a => (ac, ap), :b => (bc_, b0))), 3)
     adv = domain_advance(step!)
-    run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                     cfl_parent = nothing, cfl_child = nothing, state = st)
     fill_halos!(ac, csim.θ_bcs); fill_halos!(bc_, csim.θ_bcs)
     Hx, Nx = cm.Hx, cm.Nx
@@ -561,7 +561,7 @@ end
         step!(psim, 1e-10); psim.t = 0.0          # project the random parent
         csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
         _nx_init_child!(csim, psim, nest)
-        return NestedRun(psim, csim, nest; cfl_parent = nothing, cfl_child = nothing, sponge)
+        return NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing, sponge)
     end
     run = pair(NestSponge(; width = 3, α_max = 20.0))
     p, c = run.parent, run.child
