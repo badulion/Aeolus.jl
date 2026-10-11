@@ -20,15 +20,15 @@
 #
 # Layout (src/urban/):
 #
-#   core/        the case machinery — config, the coupling registry,
+#   core/        the case machinery — config, the component interface,
 #                geometry, the surface bus, the tracer registry, the
 #                budgets, the Case and its Domain on the core's stage
 #                pipeline, the output, and the site's sections of the
 #                model's configuration schema.
-#   couplings/   one file per physics coupling. Each defines a struct
-#                `<: AbstractCoupling`, extends the registry contract, and
-#                ends with `register!(...)`. Files are included in sorted
-#                order; adding a coupling means adding one file.
+#   couplings/   one file per urban component. Each defines a struct
+#                `<: UrbanComponent` (an `Aeolus.Components.AbstractComponent`)
+#                and its methods (core/components.jl); `URBAN_COMPONENTS`
+#                lists them.
 #   parent/      the nest parent: its tiled land-use surface, its config,
 #                the parent case.
 #
@@ -60,6 +60,8 @@ using ..Aeolus.BudgetSystem
 # the one output writer (ONE-c, #452): the case and its couplings publish catalogues
 # the core's stage pipeline (ONE-a #450, ONE-e #454): the case is a Domain of it
 using ..Aeolus.Components: Components, AbstractComponent, Stage, Domain, DomainBudgets
+# the urban components' names, slots and incompatibilities are the component interface's
+import ..Aeolus.Components: component_name, slot, incompatible
 using ..Aeolus.Checks: Check, CheckRunner, enabled_checks, evaluate_checks, results_table, required_failures,
                        advisory_failures, ChecksFailed
 using ..Aeolus.Output: Output, OutputVariable, OutputWriter, check_catalogue, cell_centres, write_record!
@@ -70,18 +72,60 @@ using Dates: Dates, DateTime, Millisecond
 using Statistics: mean
 import Random
 
-for f in ("config", "registry", "geometry", "bus",
+for f in ("config", "components", "geometry", "bus",
           "tracers", "budgets", "reference_state", "top_boundary",
           "open_boundary",
           "output", "case", "stages", "diagnostics")
     include(joinpath(@__DIR__, "urban", "core", f * ".jl"))
 end
 
-"Coupling source files, in the order they are included (and registered)."
+"Urban component source files, in the order they are included."
 const COUPLING_FILES = sort!(filter(endswith(".jl"), readdir(joinpath(@__DIR__, "urban", "couplings"))))
 for f in COUPLING_FILES
     include(joinpath(@__DIR__, "urban", "couplings", f))
 end
+
+"""
+    URBAN_COMPONENTS
+
+The urban components of the site (ONE-e, #454; formerly the coupling
+registry), in the order `build_case` builds them (and of the `init!`
+calls of equal `init_priority`); within a stage the case's domain orders
+them by their declared stage order, then by name. Per slot the
+alternatives, in the order the smoke matrix tries them when it moves a
+slot to its first compatible component. Each has a section of the model's schema; a config enables it
+there.
+"""
+const URBAN_COMPONENTS = Type[
+    AQChem, NoChem, CityMeanBuildings, CloudShadow, ColumnRadiation,
+    BoussinesqCore, AnelasticCore, PseudoIncompressibleCore, FogDew, GeostrophicCoupling,
+    GlassClass, GroundSoil, IBMCoupling, InflowTurbulenceCoupling, MicroKessler, MoistBuoyancy,
+    MomentumCentered, MomentumWENOZ, NestingCoupling, PollutantCoupling,
+    PressureCosineFFT, PressureMultigrid, PressureMGCG, PressureDensityDirect, PressureDensityWeighted,
+    RadiositySun, ScalarAdvection,
+    SGSSmagorinsky, SGSDynamic, SGSMLSGS, SGSAMD, SGSVreman, SGSReynoldsStress, SGSSigma, SGSTKE,
+    SurfaceExchangeMOST, SWModifiers, FixedStep, AdaptiveStep, IMEXStep,
+    TrafficHeat, TurbulenceDiag, VegDrag, WallModelFacades]
+foreach(check_urban_component, URBAN_COMPONENTS)
+allunique(map(component_name, URBAN_COMPONENTS)) || error("two urban components share a name")
+
+"""
+    URBAN_DEFAULTS
+
+The reference selection of the urban site: one component per urban slot
+and every additive one, what the Berlin configurations enable (each
+`examples/urban/berlin_*.toml` states its selection in full) and what
+`CaseConfig(; kw...)` starts from. The smoke matrix varies one slot of it
+at a time.
+"""
+const URBAN_DEFAULTS = Type[
+    AQChem, CityMeanBuildings, CloudShadow, ColumnRadiation, BoussinesqCore, FogDew, GeostrophicCoupling,
+    GlassClass, GroundSoil, IBMCoupling, InflowTurbulenceCoupling, MicroKessler, MoistBuoyancy,
+    MomentumCentered, NestingCoupling, PollutantCoupling, PressureCosineFFT, RadiositySun, ScalarAdvection,
+    SGSTKE, SurfaceExchangeMOST, SWModifiers, AdaptiveStep, TrafficHeat, TurbulenceDiag, VegDrag,
+    WallModelFacades]
+all(s -> count(C -> slot(C) === s, URBAN_DEFAULTS) == 1, URBAN_SLOTS) ||
+    error("URBAN_DEFAULTS: one component per urban slot")
 
 # The parent domain of the nest (#246): its tiled surface (#249), the
 # parent case (#259)
@@ -91,12 +135,12 @@ include(joinpath(@__DIR__, "urban", "parent", "case.jl"))
 include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / restart of the case (#269)
 
 # The site's sections of the model's schema and its run under `aeolus run`
-# (CFG-c #358, EX-a #438, ONE-e #454): built from the registry, so it comes last
+# (CFG-c #358, EX-a #438, ONE-e #454): built from URBAN_COMPONENTS, so it comes last
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
 export CaseConfig, UrbanParentDriver, run_urban!, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
-       AbstractCoupling, Cadence, REGISTRY, register!, selected_couplings,
+       UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_DEFAULTS, selected_components, component_options,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,
        register_surface_factory!,

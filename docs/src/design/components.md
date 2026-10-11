@@ -413,10 +413,25 @@ other limits are on [Run configuration](run_configuration.md).
     evaluates them into `results.toml`, and a failed required one ends it
     with exit code 3.
 
+  - **The coupling registry is gone.** The couplings are urban
+    components, `UrbanComponent <: AbstractComponent`, with the
+    component interface's `component_name` (their section), `slot`
+    (`nothing`, or an urban slot of `URBAN_SLOTS`) and `incompatible`
+    (component types, not `slot => provider` pairs). The site's
+    components are the fixed list `URBAN_COMPONENTS`; a config enables
+    one by its section (`enabled`), and `CaseConfig.components` holds
+    the enabled ones with all their options (the registry's `REGISTRY`,
+    `register!`, `selected_couplings`, `is_default`, `default_provider`
+    and `CaseConfig.physics`/`options` are gone; `URBAN_DEFAULTS` is the
+    reference selection of `CaseConfig()` and the smoke runs). The
+    smoke matrix's 54 runs hash bit for bit as before (3809 hashes of
+    the thread-invariance worker's `smoke` section).
+
   What is still the urban case's own, for the rest of ONE-e: the
-  couplings are components through the `UrbanEntry` adapter (their
-  methods take the case, `run_stage!(c, case, Val(S), dt)`, and the
-  registry still lists them, with their slots and defaults); `CaseConfig`
+  components run through the `UrbanEntry` adapter (one concrete type,
+  so a selection does not compile the domain anew; their methods take
+  the case, `run_stage!(c, case, Val(S), dt)`, since they read its
+  shared state); `CaseConfig`
   is the site's resolved configuration that `build_case` reads; the case
   builds its own core (the Coriolis force, the Smagorinsky coefficient and
   the sponge in the core's constructor, not the model's `Coriolis`,

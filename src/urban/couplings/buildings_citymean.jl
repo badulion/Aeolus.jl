@@ -30,11 +30,11 @@ of the open columns; every step, in `:sources`, its release goes
 into θ and qv and the window sun on the walls leaves the surface budget
 ([`apply_building_heat!`](@ref)).
 """
-mutable struct CityMeanBuildings <: AbstractCoupling
+mutable struct CityMeanBuildings <: UrbanComponent
     bem::Union{Nothing,CityBuildings}
 end
 
-coupling_name(::Type{CityMeanBuildings}) = :buildings_citymean
+component_name(::Type{CityMeanBuildings}) = :buildings_citymean
 slot(::Type{CityMeanBuildings}) = :buildings
 provider(::Type{CityMeanBuildings}) = :citymean
 modules_used(::Type{CityMeanBuildings}) = (:BuildingEnergy, :UrbanSurface)
@@ -132,4 +132,3 @@ function smoke_check(c::CityMeanBuildings, case)
                 case.cfg.scenario !== :summer || sum(bem.H .+ bem.LE) >= 0]
 end
 
-register!(CityMeanBuildings)

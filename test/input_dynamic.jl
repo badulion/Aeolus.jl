@@ -387,15 +387,15 @@ end
         # drawn from the running parent's statistics and are not part of the
         # driver, so an offline child cannot replay them (it would add its own)
         t0 = time()
-        nogen = Dict{Symbol,Any}(:inflow_turbulence => false)
-        online = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); output_path = nothing, child_boundaries = drv,
-                                               physics = nogen))
+        nogen = ["inflow_turbulence.enabled=false"]
+        online = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen, output_path = nothing,
+                                               child_boundaries = drv))
         BCD.run_case!(online)
         t_online = time() - t0
         nc = BCD.find_coupling(online, :nesting)
         st_on = berlin_state(online)
         # recording does not change the run: the same case without the recorder
-        plain = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); output_path = nothing, physics = nogen))
+        plain = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen, output_path = nothing))
         BCD.run_case!(plain)
         st_plain = berlin_state(plain)
         @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
@@ -441,7 +441,7 @@ end
     d = read_dynamic_driver(out; mesh = m)
     @test d.boundary !== nothing && length(d.boundary.time) == 1 && haskey(d.tables, :profile_theta)
     @test d.attributes["dynamic_source"] == "sounding"
-    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); output_path = nothing, physics = Dict{Symbol,Any}(:nesting => false),
+    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = ["nesting.enabled=false"], output_path = nothing,
                                                   lateral = :open, sounding = ID_CSV, dynamic = dyn));
                 BCD.run_case!(c); c)
     a, b = run(nothing), run(out)

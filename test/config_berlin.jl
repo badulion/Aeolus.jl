@@ -107,10 +107,10 @@ end
     # every CaseConfig field is made of the model's options, each used once
     @test collect(keys(BCC.CASE_FIELDS)) == collect(fieldnames(BCC.CaseConfig))
     used = String[]
-    names = [String(BCC.coupling_name(C)) for C in BCC.REGISTRY]
+    names = [String(BCC.component_name(C)) for C in BCC.URBAN_COMPONENTS]
     for keys_ in values(BCC.CASE_FIELDS), k in keys_
         s_, o = split(k, '.')
-        if s_ == "*"                 # every urban component's section: enabled (physics), the rest (options)
+        if s_ == "*"                 # every urban component's section: enabled and its options (components)
             for n in names, x in sec(n).options
                 (o == "enabled") == (x.key == "enabled") && push!(used, "$n.$(x.key)")
             end
@@ -148,7 +148,8 @@ end
     dflt = BCC.default_run_config()
     @test c.size == dflt.grid.size && c.ν === dflt.dynamics.nu && c.θ_top === :initial_gradient
     @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)
-    @test c.name === :urban && c.physics == Dict() && c.options == Dict()
+    @test c.name === :urban && Set(keys(c.components)) == Set(BCC.component_name.(BCC.URBAN_DEFAULTS))
+    @test all(C -> c.components[BCC.component_name(C)] == BCC.default_options(C), BCC.URBAN_DEFAULTS)
     # the generic site points at no input data of an example (EX-a, #438)
     @test c.landuse === nothing && c.sounding === nothing && c.static === nothing
     p = BCC.ParentConfig(c)
@@ -158,11 +159,13 @@ end
     # a field that does not exist is an error, not silently ignored
     @test_throws ArgumentError BCC.CaseConfig(; nstep = 3)
     @test_throws ArgumentError BCC.ParentConfig(c; refinment = (2, 2, 2))
-    # Julia kwargs on a scenario merge options per coupling over the file's
-    # (the smoke file's nest parent survives)
-    sm = BCC.CaseConfig(berlin_toml("smoke"); options = Dict(:pollutant => (tau = 60.0,)))
-    @test sm.options[:pollutant] == (tau = 60.0,)
-    @test sm.options[:nesting].parent.refinement == (4, 4, 8)
+    # a component's options change with an override of its section (the
+    # smoke file's nest parent survives one of another component's); the
+    # components are not CaseConfig keywords (ONE-e, #454)
+    sm = BCC.CaseConfig(berlin_toml("smoke"); overrides = ["pollutant.tau=60.0"])
+    @test sm.components[:pollutant].tau == 60.0
+    @test sm.components[:nesting].parent.refinement == (4, 4, 8)
+    @test_throws ArgumentError BCC.CaseConfig(berlin_toml("smoke"); physics = Dict(:nesting => false))
     # every urban component is off until its section enables it: a model
     # config without [urban] is no urban site, and enables none of them
     bare = load_run_config(IOBuffer(""))
@@ -177,7 +180,7 @@ end
     @test sm.analysis_buffer == 31.25 && size(A) == (16, 16) && count(A) == 12 * 12
     @test all(A[3:14, 3:14]) && !any(A[1:2, :]) && !any(A[:, 15:16])
     # the periodic box has no inflow face: every column counts
-    pb = BCC.CaseConfig(berlin_toml("smoke"); physics = Dict{Symbol,Any}(:nesting => false))
+    pb = BCC.CaseConfig(berlin_toml("smoke"); overrides = ["nesting.enabled=false"])
     @test all(BCC.analysis_columns(pb, m))
 end
 
@@ -190,25 +193,29 @@ end
            "surface_exchange.z0m={3 = 0.2}",           # merged over the class table
            "nesting.z_anterp=12.5", "sgs_smagorinsky.diapycnal=0.1",
            "pollutant.stacks=[[1.0, 2.0, 3.0]]", "ground_soil.classes=[1, 3, 5]")
-    g = c.options[:geostrophic]
+    g = c.components[:geostrophic]
     @test g.mode === :nudging && g.U_g === 3.0 && g.τ === 900.0
-    o = BCC.coupling_options(BCC.GeostrophicCoupling, c)
-    @test o.V_g == 0.0 && o.sponge_to_geostrophic                     # the rest: the defaults
-    z = c.options[:surface_exchange].z0m
+    o = BCC.component_options(BCC.GeostrophicCoupling, c)
+    @test o === g && o.V_g == 0.0 && o.sponge_to_geostrophic          # the rest: the defaults
+    @test keys(o) == keys(BCC.default_options(BCC.GeostrophicCoupling))
+    z = c.components[:surface_exchange].z0m
     @test z[0x03] == 0.2 && z[0x01] == 0.05 && length(z) == 6
-    @test c.options[:nesting].z_anterp === 12.5 && length(c.options[:nesting]) == 2
-    @test c.options[:nesting].parent == (extent = (1000.0, 1000.0, 500.0), refinement = (4, 4, 8), vertical = :uniform)
-    @test c.options[:sgs_smagorinsky].diapycnal === 0.1
-    @test c.options[:pollutant].stacks == [(1.0, 2.0, 3.0)]
-    @test c.options[:ground_soil].classes === (0x01, 0x03, 0x05)
-    @test ld("surface_exchange.z0m=\"dynamic\"").options[:surface_exchange].z0m === :dynamic
-    # options equal to the defaults are not stored
-    @test !haskey(ld("geostrophic.u_g=1.0").options, :geostrophic)
-    # the selection: one provider per urban slot, additive components on or
-    # off; what the registry defaults to is not stored
-    c = ld("sgs_tke.enabled=false", "sgs_smagorinsky.enabled=true", "pollutant.enabled=false")
-    @test c.physics == Dict{Symbol,Any}(:sgs => :smagorinsky, :pollutant => false)
-    @test BCC.SGSSmagorinsky in BCC.selected_couplings(c) && !(BCC.PollutantCoupling in BCC.selected_couplings(c))
+    @test c.components[:nesting].z_anterp === 12.5
+    @test c.components[:nesting].parent == (extent = (1000.0, 1000.0, 500.0), refinement = (4, 4, 8), vertical = :uniform)
+    @test c.components[:pollutant].stacks == [(1.0, 2.0, 3.0)]
+    @test c.components[:ground_soil].classes === (0x01, 0x03, 0x05)
+    @test ld("surface_exchange.z0m=\"dynamic\"").components[:surface_exchange].z0m === :dynamic
+    # a component the config does not enable has no entry; its options are its defaults
+    @test !haskey(c.components, :sgs_smagorinsky)
+    @test BCC.component_options(BCC.SGSSmagorinsky, c) == BCC.default_options(BCC.SGSSmagorinsky)
+    # the selection: one component per urban slot, additive components on or
+    # off, exactly what the sections enable
+    c = ld("sgs_tke.enabled=false", "sgs_smagorinsky.enabled=true", "sgs_smagorinsky.diapycnal=0.1",
+           "pollutant.enabled=false")
+    @test c.components[:sgs_smagorinsky].diapycnal === 0.1
+    @test BCC.SGSSmagorinsky in BCC.selected_components(c) && !(BCC.PollutantCoupling in BCC.selected_components(c))
+    @test !(BCC.SGSTKE in BCC.selected_components(c))
+    @test BCC.selected_components(c) == [C for C in BCC.URBAN_COMPONENTS if haskey(c.components, BCC.component_name(C))]
     # the parent's function-valued fields from their TOML tables
     c = ld("nesting.parent.surface=\"prescribed\"",
            "nesting.parent.q_surface={kind = \"series\", t = [0.0, 3600.0], value = [0.0, 0.2]}",
@@ -257,8 +264,9 @@ end
     @test occursin("strictly increasing", errtext(e))
     # a declared incompatibility, with its reason
     e = err("core_boussinesq.enabled=false", "core_anelastic.enabled=true")
-    reason = BCC.incompatible_reason(BCC.coupling_type(:core_anelastic))
-    @test !isempty(reason) && any(p -> p.key == "urban" && occursin(reason, p.message), e.problems)
+    reason = BCC.incompatible_reason(BCC.component_type(:core_anelastic))
+    @test !isempty(reason) && any(p -> p.key == "pressure_fft" && occursin("[core_anelastic] is incompatible with [pressure_fft]", p.message) &&
+                                       occursin(reason, p.message), e.problems)
     # an unknown option of a component lists its options
     e = err("geostrophic.ug=2.0")
     @test occursin("geostrophic.ug", errtext(e)) && occursin("did you mean \"u_g\"", errtext(e))
@@ -401,7 +409,7 @@ end
     with_diags = [c for c in case.couplings if !isempty(BCC.diagnostics(c, case))]
     @test length(ev(:coupling)) == 2 * length(with_diags)
     for c in with_diags
-        e = last(filter(r -> r.kwargs[:coupling] === BCC.coupling_name(c), ev(:coupling)))
+        e = last(filter(r -> r.kwargs[:coupling] === BCC.component_name(c), ev(:coupling)))
         @test Set(k for k in keys(e.kwargs) if !(k in (:subsystem, :domain, :event, :coupling))) ==
               Set(Symbol(d.name) for d in BCC.diagnostics(c, case))
     end

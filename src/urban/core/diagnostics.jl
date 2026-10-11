@@ -210,7 +210,7 @@ function profile_diagnostics(case::Case, ::Case)
 end
 
 "The enabled couplings as a `NamedTuple` `name = coupling`, in registry order (the registry's component keys)."
-coupling_components(case) = (; (coupling_name(c) => c for c in case.couplings)...)
+coupling_components(case) = (; (component_name(c) => c for c in case.couplings)...)
 
 """
     case_diagnostics(case) -> Vector{Diagnostic}
@@ -288,8 +288,8 @@ function log_frame(case)
     for c in case.couplings
         ds = diagnostics(c, case)
         isempty(ds) && continue
-        @info(string(coupling_name(c)), subsystem = :urban, domain = current_domain(),
-              event = :coupling, coupling = coupling_name(c), diagnostic_pairs(ds)...)
+        @info(string(component_name(c)), subsystem = :urban, domain = current_domain(),
+              event = :coupling, coupling = component_name(c), diagnostic_pairs(ds)...)
     end
     return nothing
 end

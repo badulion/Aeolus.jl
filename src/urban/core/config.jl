@@ -2,9 +2,8 @@
 #
 # A config is plain data: grid, geometry window, clock, dynamics
 # parameters, initial state, cadences (in SECONDS, never in steps, so the
-# schedule survives a change of dt or an adaptive stepper) and the
-# `physics` / `options` dictionaries the coupling registry reads to decide
-# which couplings run and how. Its defaults and its TOML form are the urban
+# schedule survives a change of dt or an adaptive stepper) and the urban
+# components it enables with their options (`components`). Its defaults and its TOML form are the urban
 # site's sections of the model's schema (core/config_schema.jl, CFG-c #358,
 # ONE-e #454); the Berlin case is the TOML files examples/urban/berlin_*.toml.
 
@@ -20,9 +19,9 @@ site's sections of the model's schema (`core/config_schema.jl`, CFG-c
 `aeolus options` lists them): the first
 form is the all-defaults config with `kwargs` set on top (it has no
 ground: set `static`). The second loads a run
-configuration file (the Berlin case: `examples/urban/berlin_*.toml`)
-and then applies `kwargs` (`physics` and `options` merge per coupling
-over the file's). The third converts a loaded
+configuration file (the Berlin case: `examples/urban/berlin_*.toml`;
+the components are enabled and configured by its sections, or by
+`overrides` such as `"nesting.enabled=false"`) and then applies `kwargs`. The third converts a loaded
 [`RunConfig`](@ref Aeolus.Config.RunConfig) of an urban site.
 
 Groups of fields:
@@ -61,9 +60,9 @@ Groups of fields:
   `:short_tail`, `:most`, or `:none` for the uncorrected closure);
 * **lateral boundaries** (`core/open_boundary.jl`) — by default the
   case is **nested** (N-berlin-nest, #265): the `:nesting` coupling runs
-  an Aeolus parent (its settings in `options[:nesting]`) whose state
+  an Aeolus parent (its settings in `[nesting]`) whose state
   feeds the four sides and the top; `lateral` is then not used. With the
-  nest switched off (`physics = Dict(:nesting => false)`), `lateral`
+  nest switched off (`[nesting] enabled = false`), `lateral`
   chooses them (N-open-d, #262): `:periodic` (default) or `:open` (the
   four sides and the top fed by `ProfileBoundaryData` of the geostrophic
   wind and the initial θ profile). `outflow` (`:dirichlet`, default,
@@ -94,17 +93,17 @@ Groups of fields:
   (CFG-g, #362; `nothing`, the default: none) — a sounding driver
   (AeolusPrep.jl, `aeolusprep dynamic --from-sounding`), which then
   replaces `sounding` (the same tables, read from one file), or, with the
-  offline nest (`options[:nesting].parent_driver = :offline`), the
+  offline nest (`[nesting] parent_driver = "offline"`), the
   parent-made driver of the nest faces (`child_boundaries` of the
   online run); see
   [`case_sounding`](@ref). `u0`, `Ts0` and `Ts_water_offset`
   (surface temperature, water `Ts0 + offset`), `T_soil0`;
-* **physics** — `physics::Dict{Symbol,Any}`: for an exclusive slot,
-  `slot => provider` (e.g. `:microphysics => :kessler`); for an additive
-  coupling, `name => true/false`. Anything absent takes the registry
-  default;
-* **options** — `options::Dict{Symbol,Any}`: `coupling_name => NamedTuple`
-  merged over that coupling's `default_options`;
+* **components** — `components::Dict{Symbol,Any}`: the urban components
+  the site enables (ONE-e, #454; formerly the registry's `physics` and
+  `options`), `component_name => NamedTuple` of every option of its
+  section (the `default_options` with the section's values on top), in no
+  order: `build_case` builds them in the order of
+  [`URBAN_COMPONENTS`](@ref);
 * **ledger** — `canopy_top` (m): top of the `:canopy` layer of the
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
@@ -184,9 +183,8 @@ mutable struct CaseConfig
     Ts_water_offset::Float64
     T_soil0::Float64
     p_surface::Union{Nothing,Float64}  # nothing: from the sounding
-    # coupling selection
-    physics::Dict{Symbol,Any}
-    options::Dict{Symbol,Any}
+    # the enabled urban components and their options
+    components::Dict{Symbol,Any}
     # output
     canopy_top::Float64
     output_path::Union{Nothing,String}

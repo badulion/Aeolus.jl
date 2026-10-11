@@ -43,7 +43,7 @@ Momentum is not in the ledger (the surface-energy and water budgets), so
 there is no `budget!`; its diagnostics give the facade share of the surface
 drag.
 """
-mutable struct WallModelFacades <: AbstractCoupling
+mutable struct WallModelFacades <: UrbanComponent
     iw::Any                  # ImmersedWalls (built at init!)
     z0m_wall::Float64
     z0m_glass::Float64
@@ -51,7 +51,7 @@ mutable struct WallModelFacades <: AbstractCoupling
     sgs_walls::Bool          # the :sgs closure books facade production from τ_w (#232)
 end
 
-coupling_name(::Type{WallModelFacades}) = :wall_model_facades
+component_name(::Type{WallModelFacades}) = :wall_model_facades
 modules_used(::Type{WallModelFacades}) = (:WallModels, :IBM)
 stages(::Type{WallModelFacades}) = ((:body_force, 40, EVERY_STEP),
                                     (:post_predictor, 12, EVERY_STEP))
@@ -175,4 +175,3 @@ function smoke_check(c::WallModelFacades, case)
                 iw.stats[:F_stencil][1] * W.u + iw.stats[:F_stencil][2] * W.v < 0]
 end
 
-register!(WallModelFacades)

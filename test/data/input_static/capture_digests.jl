@@ -31,7 +31,7 @@ function geomdig(g)
 end
 for (label, cfg) in ("smoke" => BC.CaseConfig(berlin_toml("smoke")),
                      "mitte_periodic" => BC.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16), lateral = :periodic,
-                                                       physics = Dict{Symbol,Any}(:nesting => false)),
+                                                       overrides = ["nesting.enabled=false"]),
                      "mitte_sample" => BC.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16)))
     out[label] = geomdig(BC.build_geometry(cfg, meshof(cfg)))
 end

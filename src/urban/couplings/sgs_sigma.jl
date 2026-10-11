@@ -27,14 +27,13 @@ the canopy (levels with buildings) and in the free stream above the sponge
 start, next to what the Smagorinsky closure (`cfg.C_s`) gives on the same
 flow.
 """
-struct SGSSigma{C} <: AbstractCoupling
+struct SGSSigma{C} <: UrbanComponent
     closure::C
     stress::Symbol      # the form of the momentum divergence (#175)
 end
-coupling_name(::Type{<:SGSSigma}) = :sgs_sigma
+component_name(::Type{<:SGSSigma}) = :sgs_sigma
 slot(::Type{<:SGSSigma}) = :sgs
 provider(::Type{<:SGSSigma}) = :sigma
-is_default(::Type{<:SGSSigma}) = false
 modules_used(::Type{<:SGSSigma}) = (:Operators,)
 default_options(::Type{<:SGSSigma}) = (C_σ = 1.35, SGS_STRESS_DEFAULT...)
 build(::Type{<:SGSSigma}, case, o) = SGSSigma(SigmaModel(o.C_σ), o.stress)
@@ -102,4 +101,3 @@ function smoke_check(c::SGSSigma, case)
             "σ-model ν_t/ν < 1e-2 above the sponge start" => p.free_σ < 1e-2 * case.cfg.ν]
 end
 
-register!(SGSSigma)

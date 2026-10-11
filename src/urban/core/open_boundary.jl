@@ -5,7 +5,7 @@
 # `OpenBoundary` faces fed by `Nesting.NestBoundaryData`, built by the
 # coupling's `sim_options` (couplings/nesting.jl). `cfg.lateral` is then
 # not consulted for the boundary conditions. With the nest switched off
-# (`physics = Dict(:nesting => false)`) `cfg.lateral` chooses them:
+# (`[nesting] enabled = false`) `cfg.lateral` chooses them:
 #
 #   :periodic  (default) periodic in x and y, walls at the bottom and the
 #              top for the velocity; θ with the top of `cfg.θ_top`
@@ -55,7 +55,7 @@
 Whether `cfg` runs the `:nesting` coupling (the default, #265): its sides
 and top are then the nest faces of the parent run.
 """
-case_nested(cfg::CaseConfig) = any(C -> coupling_name(C) === :nesting, selected_couplings(cfg))
+case_nested(cfg::CaseConfig) = haskey(cfg.components, :nesting)
 
 "Whether the lateral boundaries of `cfg` are open: nested (the default) or `cfg.lateral = :open`."
 function lateral_open(cfg::CaseConfig)
@@ -119,7 +119,7 @@ The boundary data of the `:open` case: `u = U_g`, `v = V_g` (the
 and θ the initial profile [`initial_θ`](@ref) of `cfg`.
 """
 function case_boundary_data(cfg::CaseConfig)
-    g = coupling_options(GeostrophicCoupling, cfg)
+    g = component_options(GeostrophicCoupling, cfg)
     θi = initial_θ(cfg)
     return ProfileBoundaryData(u = Float64(g.U_g), v = Float64(g.V_g), w = 0.0,
                                θ = z -> θi(0.0, 0.0, z))

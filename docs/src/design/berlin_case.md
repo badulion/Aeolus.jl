@@ -184,14 +184,15 @@ long-range roadmap, without marking a phase shipped.
 
 ```
 src/
-  UrbanCase.jl         module Aeolus.UrbanCase: includes urban/core/*, then every urban/couplings/*.jl in sorted order
+  UrbanCase.jl         module Aeolus.UrbanCase: includes urban/core/*, then every urban/couplings/*.jl in sorted order;
+                       URBAN_COMPONENTS (the site's components), URBAN_DEFAULTS (the reference selection)
   urban/core/
-    config.jl          CaseConfig — grid, window, clock, cadences (s), physics/options
+    config.jl          CaseConfig — grid, window, clock, cadences (s), the enabled components and their options
     config_schema.jl   the urban site in the model's schema: [urban] and the component sections
                        (defaults), RunConfig → CaseConfig, CaseConfig(path), run_urban!,
                        run_results (results.toml)
     parent_driver.jl   the `urban_parent` run driver: the nest parent alone, its tables
-    registry.jl        AbstractCoupling, the contract, Cadence, register!, selection
+    components.jl      UrbanComponent, its interface, Cadence, URBAN_SLOTS, the selection of a CaseConfig
     geometry.jl        build_geometry: the static driver → mask, classes, radiosity scene,
                        view factors; the reader, classes and rasterisation are
                        Aeolus.InputDrivers (src/input_drivers/, CFG-f #361)
@@ -200,12 +201,12 @@ src/
     ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
     reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
     open_boundary.jl   cfg.lateral (:periodic / :open), the open faces' data and heat (#262)
-    output.jl          NetCDF output driven by the registry
+    output.jl          NetCDF output of the case and its components
     case.jl            Case, build_case
     stages.jl          the case as a Domain of the core's stage pipeline (UrbanCore, UrbanEntry):
                        step_case!, run_case!
     diagnostics.jl     the case's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
-  urban/couplings/     one file per coupling, each ending in register!(Type)
+  urban/couplings/     one file per urban component
   urban/parent/        the nest parent: land-use surface, ParentConfig, the parent case
 examples/urban/
   berlin_summer.toml   every option; berlin_winter, _smoke, _mitte_sample, _parent, _parent_coarse.toml
@@ -218,29 +219,34 @@ examples/urban/
                                          analysis of an urban_parent run's output
 ```
 
-Adding a coupling means adding one file under `couplings/`. No shared
-file is edited: the file is picked up by the directory scan, registers
-itself, and the registry decides from the config whether it runs.
+Adding a component means adding one file under `couplings/` (picked up
+by the directory scan) and its type to `URBAN_COMPONENTS`; its section
+of the model's schema is generated from its `default_options`, and a
+config runs it when that section enables it. (Until ONE-e, #454, a
+coupling registry with `register!` and `[physics]` selected them.)
 
-## The coupling contract
+## The component interface
 
-A coupling is a struct `<: AbstractCoupling` plus methods of the
-contract below for its type. Only `coupling_name` and the `run_stage!`
-methods of the declared stages are required; everything else has a
-default.
+An urban component is a struct `<: UrbanComponent` (an
+`Aeolus.Components.AbstractComponent`) plus the methods below for its
+type. Only `component_name` and the `run_stage!` methods of the declared
+stages are required; everything else has a default. Its name, slot and
+incompatibilities are the component interface's
+(`Components.component_name`, `slot`, `incompatible`); the rest take the
+case, since the components read its shared state (the ground, the
+surface bus, the tracers, the reference state).
 
 | method | meaning |
 | :-- | :-- |
-| `coupling_name(::Type{C})` | unique `Symbol`; key in `cfg.physics` / `cfg.options` |
-| `slot(::Type{C})` | `:addon` (additive, on/off) or an exclusive slot such as `:microphysics` |
-| `provider(::Type{C})` | the value of `cfg.physics[slot]` that selects `C` |
-| `is_default(::Type{C})` | default provider of its slot; for an addon, on by default |
+| `component_name(::Type{C})` | unique `Symbol`: its section `[<name>]`, its key in `cfg.components` |
+| `slot(::Type{C})` | `nothing` (additive, on/off) or an urban slot (`URBAN_SLOTS`) such as `:microphysics`: a site enables exactly one component per slot |
+| `provider(::Type{C})` | its short name within the slot (`:kessler`), for messages and the smoke runs' labels |
 | `modules_used(::Type{C})` | Aeolus submodules it runs |
-| `default_options(::Type{C})` | `NamedTuple`, merged with `cfg.options[name]` and passed to `build`; also the TOML schema of its section `[<name>]` (closed keys, each value of its default's form) |
-| `incompatible(::Type{C})` | `slot => provider` pairs or coupling names it cannot run with |
+| `default_options(::Type{C})` | `NamedTuple`: the TOML schema of its section `[<name>]` (closed keys, each value of its default's form); the section's values on top of it are `cfg.components[name]`, passed to `build` |
+| `incompatible(::Type{C})` | the component types it cannot run with |
 | `stages(::Type{C})` | `((stage, order, Cadence), …)`, at most one entry per stage, the stages the pipeline's (`Components.PIPELINE`); a `Symbol` period is one of `cfg.cadence` (`:radiation`, `:soil`, `:surface`: `[urban] radiation_period`, …; `:output`: `[output] cadence`) |
 | `build(::Type{C}, case, opts)` | construct the instance (default `C()`) |
-| `init!(c, case)` | after every coupling is built, in registry order |
+| `init!(c, case)` | after every component is built, by `init_priority`, then in `URBAN_COMPONENTS` order |
 | `run_stage!(c, case, ::Val{S}, dt)` | the work of stage `S` |
 | `output_fields(c, case)` | `OutputField`s added to the NetCDF file |
 | `budget!(c, case, ledger)` | this step's surface-energy and water terms (see [the ledger](berlin_ledgers.md#The-budget-ledger)) |
@@ -265,14 +271,14 @@ Two slots drive the dynamics itself and have four more methods
 
 A keyword from `sim_options` or `step_options` is never dropped: every
 time stepper passes `case.step_kwargs` to the step it takes, and a core
-or stepper that cannot take a provider's keyword declares that provider
-`incompatible` (with `incompatible_reason`), so the selection fails
+or stepper that cannot take a component's keyword declares that component
+`incompatible` (with `incompatible_reason`), so the configuration fails
 with the reason instead.
 
-`selected_couplings(cfg)` checks the configuration: an unknown key, an
-unknown provider, an additive switch used on a slot coupling, a slot
-without exactly one default, and a declared incompatibility are all
-errors rather than silently ignored.
+The config checks of an urban site (`urban_checks`, run when a config is
+loaded) report an urban slot without exactly one enabled component, a
+declared incompatibility between two enabled ones, and an option of the
+wrong form; an unknown option or section is the schema's error.
 
 **Cadences are in seconds.** `Cadence(600.0)` fires on the step that
 crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
@@ -620,20 +626,20 @@ implementation into the 3-D run. If the physics is missing, add it to
 the right src module with its own tests first. Never copy it into the
 example.
 
-**2. Write `src/urban/couplings/<name>.jl`.** One struct, the
-contract methods it needs, and `register!` as the last line:
+**2. Write `src/urban/couplings/<name>.jl`.** One struct and the
+interface methods it needs; then add the type to `URBAN_COMPONENTS`
+(`src/UrbanCase.jl`):
 
 ```julia
 # P3 microphysics (Aeolus.P3Microphysics) in the :microphysics slot.
 
-struct MicroP3{W} <: AbstractCoupling
+struct MicroP3{W} <: UrbanComponent
     work::W
 end
 
-coupling_name(::Type{<:MicroP3}) = :micro_p3             # unique; key in cfg.options
-slot(::Type{<:MicroP3})          = :microphysics         # or :addon
-provider(::Type{<:MicroP3})      = :p3                   # cfg.physics[:microphysics] = :p3
-is_default(::Type{<:MicroP3})    = false                 # an alternative: off by default
+component_name(::Type{<:MicroP3}) = :micro_p3            # unique; its section [micro_p3]
+slot(::Type{<:MicroP3})          = :microphysics         # or nothing (additive)
+provider(::Type{<:MicroP3})      = :p3                   # its short name in the slot
 modules_used(::Type{<:MicroP3})  = (:P3Microphysics,)    # the Aeolus modules it runs
 default_options(::Type{<:MicroP3}) = (skip_dry = true,)
 stages(::Type{<:MicroP3}) = ((:microphysics, 10, EVERY_STEP),)
@@ -654,17 +660,18 @@ budget!(c::MicroP3, case, l) = add_water!(l, :precipitation, -c.surface_precip_s
 smoke_check(c::MicroP3, case) =
     ["ice ≥ 0" => minimum(interior_view(tracer(case, :qi))) >= 0,
      "precipitation ≥ 0" => c.surface_precip_step >= 0]
-
-register!(MicroP3)
 ```
 
-The file is picked up by the directory scan; include order is the
-sorted file name, which is also the registry order (and the tie-break
-between entries of the same stage and order).
+The file is picked up by the directory scan (include order: the sorted
+file name); `build_case` builds the enabled components in the order of
+`URBAN_COMPONENTS`, and within a stage the case's domain runs them by
+their declared order, then by name.
 
-* **On by default.** An additive coupling is on unless `is_default`
-  says otherwise; a slot provider is the slot's default only if it is
-  the one with `is_default = true`. Coupling new physics into the
+* **Off until a config enables it.** Every urban component's section
+  has `enabled = false` by default: a config runs it only when it says
+  `[micro_p3] enabled = true` (and, in a slot, turns the other one off).
+  `URBAN_DEFAULTS` is the reference selection (what `CaseConfig()`
+  starts from and the smoke runs vary). Coupling new physics into the
   example is welcome where it makes sense, not required (the rule of
   #123 was dropped on 2026-10-06); quote the cost per step from
   the `:timing` events in the PR.

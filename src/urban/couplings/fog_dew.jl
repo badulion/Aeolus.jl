@@ -46,12 +46,12 @@ fog (`RadiationFog.fog_adjust!`) on θ, qv, ql. The dew's latent heat warms the 
 adjusted at the reference pressure `p̄_k`, dew at the `p̄_k` and `ρ̄_k` of
 its air cell (`case.ref`).
 """
-mutable struct FogDew <: AbstractCoupling
+mutable struct FogDew <: UrbanComponent
     H_dew::Matrix{Float64}    # this step's dew latent heat into the surface (W/m²)
     dew_start::Matrix{Float64}  # dew reservoir before this step's exchange (kg/m²)
 end
 
-coupling_name(::Type{FogDew}) = :fog_dew
+component_name(::Type{FogDew}) = :fog_dew
 modules_used(::Type{FogDew}) = (:RadiationFog, :MoistThermodynamics)
 stages(::Type{FogDew}) = ((:microphysics, 20, EVERY_STEP),)
 
@@ -103,4 +103,3 @@ function smoke_check(c::FogDew, case)
                          1e-9 * abs(c.H_dew[I]) + 1e-12, eachindex(Δdew))]
 end
 
-register!(FogDew)

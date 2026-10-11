@@ -27,8 +27,8 @@ using Dates: Date, year, month, day
     CASE_FIELDS
 
 Every [`CaseConfig`](@ref) field and the dotted keys of the model's
-schema it is made of (`physics` is the `enabled` key of every urban
-component's section, `options` their other keys). The options that make a
+schema it is made of (`components` is the `enabled` key of every urban
+component's section and their other keys). The options that make a
 `CaseConfig` are exactly the union of these keys, each used once
 (`test/config_berlin.jl`).
 """
@@ -54,7 +54,7 @@ const CASE_FIELDS = (
     u0 = ("urban.u0",), qv0 = ("urban.qv0",), qv_scale = ("urban.qv_scale",),
     Ts0 = ("urban.ts0",), Ts_water_offset = ("urban.ts_water_offset",),
     T_soil0 = ("urban.t_soil0",), p_surface = ("urban.p_surface",),
-    physics = ("*.enabled",), options = ("*.*",),
+    components = ("*.enabled", "*.*"),
     canopy_top = ("urban.canopy_top",),
     output_path = ("output.path", "urban.netcdf"), child_boundaries = ("urban.child_boundaries",),
     backend = ("urban.serial",))
@@ -242,7 +242,7 @@ function coupling_option_value(C, key::Symbol, x, path)
     # a value TOML cannot hold (set with `with`) is taken as it is; a table
     # holding one is still checked key by key (the parent's q_surface)
     (x isa AbstractDict || Config._toml_native(x)) || return (true, x, "")
-    f = get(get(OPTION_FORMS, coupling_name(C), Dict{Symbol,Function}()), key, nothing)
+    f = get(get(OPTION_FORMS, component_name(C), Dict{Symbol,Function}()), key, nothing)
     f === nothing || return f(x, path)
     return option_value(default_options(C)[key], x, path)
 end
@@ -475,7 +475,7 @@ end
 _scalar_spec(x) = x isa Bool ? Bool : x isa Integer ? Int : x isa AbstractFloat ? Float64 :
                   x isa Symbol ? Symbol : x isa AbstractString ? String : nothing
 function _option_spec(C, key::Symbol, d)
-    name = coupling_name(C)
+    name = component_name(C)
     (name, key) == (:nesting, :parent) &&
         return OpenTable(t -> _form_problems(parent_value, t, "parent");
                          reference = () -> (p = parent_schema_section(); Section[Section("", p.doc, p.options)]))
@@ -501,7 +501,7 @@ end
 # The schema default of a coupling option: its default's TOML form, typed as
 # the option (`_option_spec`)
 function _option_default(C, key::Symbol, d)
-    name = coupling_name(C)
+    name = component_name(C)
     (name, key) == (:nesting, :parent) && return Dict{String,Any}()
     d === nothing && return nothing
     d isa Symbol && return d
@@ -568,7 +568,7 @@ const OPTION_UNITS = Dict{Tuple{Symbol,Symbol},String}(
 """
     coupling_section(C) -> Section
 
-The model's section of the urban coupling `C`, `[<coupling_name>]`:
+The model's section of the urban coupling `C`, `[<component_name>]`:
 `enabled` (default `false`: every component is off until its section
 enables it) and one option per key of `default_options(C)`, typed by the
 form of its default (the per-key forms of [`OPTION_FORMS`](@ref) for the
@@ -576,23 +576,23 @@ nest's `parent`, `z_anterp` and `parent_driver`, the surface exchange's
 `z0m` and the ML closure's `fn`).
 """
 function coupling_section(C)
-    name = String(coupling_name(C))
+    name = String(component_name(C))
     s = slot(C)
-    doc = s === :addon ? "The urban component `$name` (`$(nameof(C))`)." :
-                         "The urban component `$name` (`$(nameof(C))`): provider `$(provider(C))` of the urban slot `$s` (one provider per slot is enabled)."
+    doc = s === nothing ? "The urban component `$name` (`$(nameof(C))`)." :
+                         "The urban component `$name` (`$(nameof(C))`): `$(provider(C))` of the urban slot `$s` (a site enables one component per urban slot)."
     return section(name; doc = doc) do sec
         option!(sec, "enabled", Bool; default = false, doc = "run the component")
         keys_ = [option_key(k) for k in keys(default_options(C))]
         allunique(keys_) || error("the options of $(nameof(C)) collide as TOML keys: $keys_")
         for (k, d) in pairs(default_options(C))
             T = _option_spec(C, k, d)
-            kw = T === Symbol && (coupling_name(C), k) == (:nesting, :parent_driver) ?
+            kw = T === Symbol && (component_name(C), k) == (:nesting, :parent_driver) ?
                  (; allowed = [:aeolus, :profile, :offline]) :
-                 T isa OneOf && (coupling_name(C), k) == (:nesting, :z_anterp) ? (; allowed = [:canopy]) :
+                 T isa OneOf && (component_name(C), k) == (:nesting, :z_anterp) ? (; allowed = [:canopy]) :
                  T isa OneOf ? (; allowed = [:dynamic]) : (;)
-            u = get(OPTION_UNITS, (coupling_name(C), k), "")
+            u = get(OPTION_UNITS, (component_name(C), k), "")
             option!(sec, option_key(k), T; default = _option_default(C, k, d), kw..., units = u,
-                    doc = "see `?$(nameof(C))`" * ((coupling_name(C), k) == (:nesting, :parent) ?
+                    doc = "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
                           ": the nest parent's options, [$name.parent] (`aeolus options` lists them)" : ""))
         end
     end
@@ -711,12 +711,12 @@ end
     urban_section_names() -> Vector{String}
 
 The names of the urban site's per-domain sections of the model:
-`"urban"` and one per urban component (`coupling_name`, registry order).
+`"urban"` and one per urban component (`component_name`, registry order).
 """
-urban_section_names() = vcat(["urban"], [String(coupling_name(C)) for C in REGISTRY])
+urban_section_names() = vcat(["urban"], [String(component_name(C)) for C in URBAN_COMPONENTS])
 
 "The urban site's sections of the model's schema: [`urban_site_section`](@ref) and every [`coupling_section`](@ref)."
-urban_sections() = Section[urban_site_section(), (coupling_section(C) for C in REGISTRY)...]
+urban_sections() = Section[urban_site_section(), (coupling_section(C) for C in URBAN_COMPONENTS)...]
 
 """
     urban_enabled(cfg) -> Bool
@@ -740,56 +740,63 @@ _raw_form(x::Union{Tuple,AbstractVector}) = Any[_raw_form(e) for e in x]
 _raw_form(x::AbstractDict) = Dict{String,Any}(string(k) => _raw_form(v) for (k, v) in x)
 _raw_form(x) = x
 
-# the Julia value of every option of coupling C's resolved section that
-# differs from its default (the former CaseConfig.options entry)
+# the Julia value of every option of component C's resolved section: its
+# default_options with the section's values on top
 function _section_options(C, sec)
     probs = String[]; out = Pair{Symbol,Any}[]
     d = default_options(C)
-    name = String(coupling_name(C))
+    name = String(component_name(C))
     for k in keys(d)
         raw = _raw_form(sec[option_key(k)])
         ok, v, why = coupling_option_value(C, k, raw, "$name.$k")
         ok || (push!(probs, why); continue)
         isequal(v, d[k]) || push!(out, k => v)
     end
-    return probs, (; out...)
+    return probs, merge(d, (; out...))
 end
 
-# The selection of the urban components a resolved config enables (the
-# former CaseConfig.physics: per slot the provider, per addon on/off, as
-# far as they differ from the registry's defaults), and its problems: a
-# slot without exactly one enabled provider.
+# The urban components a resolved config enables (in the order of
+# URBAN_COMPONENTS), and its problems: an urban slot without exactly one
+# enabled component, two enabled components one of which declares the
+# other incompatible.
 function _urban_selection(cfg)
-    probs = ConfigError[]; physics = Dict{Symbol,Any}()
-    for (sl, ps) in slot_providers()
-        on = [C for C in REGISTRY if slot(C) === sl && cfg[String(coupling_name(C))].enabled]
-        names = [String(coupling_name(C)) for C in REGISTRY if slot(C) === sl]
-        if length(on) != 1
-            push!(probs, ConfigError(isempty(on) ? names[1] : String(coupling_name(on[2])),
-                "the urban slot :$sl needs exactly one enabled provider, of [" * join(names, "], [") * "]" *
-                (isempty(on) ? "; none is enabled" : "; enabled: " * join(String.(coupling_name.(on)), ", "))))
-            continue
-        end
-        p = provider(on[1])
-        p === default_provider(sl) || (physics[sl] = p)
+    probs = ConfigError[]
+    on = Type[C for C in URBAN_COMPONENTS if cfg[String(component_name(C))].enabled]
+    for sl in URBAN_SLOTS
+        these = [C for C in on if slot(C) === sl]
+        length(these) == 1 && continue
+        names = [String(component_name(C)) for C in URBAN_COMPONENTS if slot(C) === sl]
+        push!(probs, ConfigError(isempty(these) ? names[1] : String(component_name(these[2])),
+            "the urban slot :$sl needs exactly one enabled component, of [" * join(names, "], [") * "]" *
+            (isempty(these) ? "; none is enabled" : "; enabled: " * join(String.(component_name.(these)), ", "))))
     end
-    for C in REGISTRY
-        slot(C) === :addon || continue
-        v = cfg[String(coupling_name(C))].enabled
-        v == is_default(C) || (physics[coupling_name(C)] = v)
+    for C in on, D in on
+        D in incompatible(C) || continue
+        why = incompatible_reason(C)
+        push!(probs, ConfigError(String(component_name(D)),
+            "[$(component_name(C))] is incompatible with [$(component_name(D))]" * (isempty(why) ? "" : ": " * why)))
     end
-    return probs, physics
+    return probs, on
 end
 
-"The options of every urban component of a resolved config that differ from their defaults (the former CaseConfig.options)."
-function _urban_options(cfg)
-    probs = String[]; out = Dict{Symbol,Any}()
-    for C in REGISTRY
-        p, nt = _section_options(C, cfg[String(coupling_name(C))])
-        append!(probs, p)
-        isempty(nt) || (out[coupling_name(C)] = nt)
+"""
+    urban_components(cfg) -> Dict{Symbol,Any}
+
+The urban components a resolved model config enables, `component_name =>`
+their options (the `components` of [`CaseConfig`](@ref)); a problem of
+the selection or of an option's form is a `ConfigError`.
+"""
+function urban_components(cfg)
+    probs, on = _urban_selection(cfg)
+    isempty(probs) || throw(ConfigError(reduce(vcat, (p.problems for p in probs))))
+    po, out = String[], Dict{Symbol,Any}()
+    for C in URBAN_COMPONENTS
+        p, nt = _section_options(C, cfg[String(component_name(C))])
+        append!(po, p)
+        C in on && (out[component_name(C)] = nt)
     end
-    return probs, out
+    isempty(po) || throw(ConfigError("urban", join(po, "; ")))
+    return out
 end
 
 """
@@ -805,19 +812,11 @@ is the simulated time); a uniform grid, the Boussinesq `[dynamics]` core
 component; `[checkpoint]` only with the Boussinesq core.
 """
 function urban_checks(cfg)
-    e = ConfigError[]
-    p, physics = _urban_selection(cfg)
-    append!(e, p)
-    po, _ = _urban_options(cfg)
-    for x in po
-        push!(e, ConfigError(first(split(x, ':')), x))
-    end
-    if isempty(p)
-        try
-            selected_couplings((physics = physics, options = Dict{Symbol,Any}()))
-        catch err
-            err isa ErrorException || rethrow()
-            push!(e, ConfigError("urban", err.msg))
+    e, on = _urban_selection(cfg)
+    for C in URBAN_COMPONENTS
+        po, _ = _section_options(C, cfg[String(component_name(C))])
+        for x in po
+            push!(e, ConfigError(first(split(x, ':')), x))
         end
     end
     t = cfg.time
@@ -832,7 +831,8 @@ function urban_checks(cfg)
     (tt isa Real || tt in (:initial_gradient, :noflux)) ||
         push!(e, ConfigError("urban.theta_top", "expected \"initial_gradient\", \"noflux\" or a gradient in K/m"))
     ckon = !(cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf)
-    core = get(physics, :core, default_provider(:core))
+    ic = findfirst(C -> slot(C) === :core, on)
+    core = ic === nothing ? :boussinesq : provider(on[ic])
     (ckon && core !== :boussinesq) &&
         push!(e, ConfigError("checkpoint.every_steps",
             "checkpoints of an urban site need the Boussinesq core ([core_boussinesq]); " *
@@ -853,9 +853,8 @@ domain) as the [`CaseConfig`](@ref) `build_case` consumes: the grid of
 `[grid]`, the ground of the domain's `static_driver`, the dynamic driver
 of its `dynamic_driver`, `ν`, `θ₀`, `g` of `[dynamics]`, `dt` and
 `nsteps` of `[time]`, the output cadence of `[output]`, every other field
-of `[urban]`, and the components the urban sections enable (`physics`,
-the selection as far as it differs from the registry defaults) with their
-options (`options`, those that differ from the defaults). The NetCDF file
+of `[urban]`, and the urban components the sections enable with their
+options (`components`, [`urban_components`](@ref)). The NetCDF file
 is `[urban] netcdf` in `[output] path`, else in `run_output`, else in
 `output/` of the working directory.
 """
@@ -863,10 +862,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
     config_schema(cfg).name in (Config.MODEL, "urban_parent") ||
         throw(ArgumentError("CaseConfig: the config is for \"$(config_schema(cfg).name)\", not the model"))
     u = cfg.urban
-    probs, physics = _urban_selection(cfg)
-    isempty(probs) || throw(ConfigError(reduce(vcat, (p.problems for p in probs))))
-    po, options = _urban_options(cfg)
-    isempty(po) || throw(ConfigError("urban", join(po, "; ")))
+    components = urban_components(cfg)
     g, t, dyn, out, dom = cfg.grid, cfg.time, cfg.dynamics, cfg.output, cfg.domain
     t.dt isa Real || throw(ConfigError("time.dt", "an urban site takes a fixed dt"))
     cad = Dict{Symbol,Float64}(:radiation => u.radiation_period, :soil => u.soil_period, :output => out.cadence)
@@ -883,7 +879,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
                       u.lateral, u.outflow, u.boundary_frame, u.theta_relaxation, u.analysis_buffer,
                       u.sounding, dom.dynamic_driver, u.theta_surface, u.theta_inversion_z, u.theta_lapse, u.u0,
                       u.qv0, u.qv_scale, u.ts0, u.ts_water_offset, u.t_soil0, u.p_surface,
-                      physics, options, u.canopy_top,
+                      components, u.canopy_top,
                       u.netcdf === nothing ? nothing : joinpath(dir, u.netcdf), u.child_boundaries,
                       CPUBackend(; serial = u.serial))
 end
@@ -893,26 +889,15 @@ end
 
 Load the model configuration `path` (an urban site's TOML file,
 `overrides` as `--set` gives them) and convert it
-([`CaseConfig`](@ref)`(cfg::RunConfig)`), then set `kwargs` on top:
-`physics` merges over the file's selection, `options` per coupling over
-the file's options (the nest parent of a file survives a caller's options
-for another coupling), any other field replaces the file's value.
+([`CaseConfig`](@ref)`(cfg::RunConfig)`), then set the fields `kwargs`
+on top (the components and their options are the file's sections: change
+them with `overrides`, `"nesting.enabled=false"`).
 """
 function CaseConfig(path::AbstractString; overrides = String[], kwargs...)
     c = CaseConfig(load_run_config(path; overrides = overrides))
     for (k, v) in kwargs
         hasfield(CaseConfig, k) || throw(ArgumentError("CaseConfig has no field $k"))
-        if k === :options
-            o = copy(c.options)
-            for (name, nt) in v
-                o[name] = haskey(o, name) ? merge(o[name], nt) : nt
-            end
-            c.options = o
-        elseif k === :physics
-            c.physics = merge(c.physics, Dict{Symbol,Any}(v))
-        else
-            setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
-        end
+        setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
     end
     return c
 end
@@ -921,8 +906,7 @@ end
     default_run_config() -> RunConfig
 
 The model's config of an urban site with every option at its default,
-every urban slot's default provider (and every default-on addon)
-enabled, and the former `urban` run type's grid (64³ on 1 km × 1 km ×
+the components of [`URBAN_DEFAULTS`](@ref) enabled, and the former `urban` run type's grid (64³ on 1 km × 1 km ×
 400 m, halo 3), `ν = 2`, `θ₀ = 293 K`, 43 200 steps of 2 s and output
 every 1800 s: what `CaseConfig(; kw...)` starts from.
 """
@@ -931,9 +915,8 @@ function default_run_config()
     println(io, "[run]\nname = \"urban\"\n[time]\ndt = 2.0\nduration = \"none\"\nnsteps = 43200\n[output]\ncadence = 1800.0\n",
             "[grid]\nsize = [64, 64, 64]\nextent = [1000.0, 1000.0, 400.0]\nhalo = [3, 3, 3]\n",
             "[dynamics]\nnu = 2.0\ntheta0 = 293.0\n[urban]\nenabled = true")
-    for C in REGISTRY
-        (slot(C) === :addon ? is_default(C) : provider(C) === default_provider(slot(C))) &&
-            println(io, "[", coupling_name(C), "]\nenabled = true")
+    for C in URBAN_DEFAULTS
+        println(io, "[", component_name(C), "]\nenabled = true")
     end
     seekstart(io)
     return load_run_config(io)

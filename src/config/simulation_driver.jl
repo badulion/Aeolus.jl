@@ -321,8 +321,8 @@ const _CHECK_DOCS = merge(
                      "end (default tolerance 0); a run that blows up records it failed"),
     Dict(n => "a check of [$(Components.section(C))]" for C in COMPONENTS for n in Components.check_names(C)),
     Dict("urban_budgets" => "an urban site's budgets closed against UrbanCase.BUDGET_TOLERANCES: the largest closure relative to its tolerance (default tolerance 1)"),
-    Dict("$(UrbanCase.coupling_name(C))_checks" => "the smoke checks of the urban component [$(UrbanCase.coupling_name(C))] that fail (default tolerance 0)"
-         for C in UrbanCase.REGISTRY))
+    Dict("$(UrbanCase.component_name(C))_checks" => "the smoke checks of the urban component [$(UrbanCase.component_name(C))] that fail (default tolerance 0)"
+         for C in UrbanCase.URBAN_COMPONENTS))
 
 function _reference_validator(t)
     probs = String[]
@@ -589,8 +589,8 @@ function _urban_site_checks(cfg)
     # the heat of the air (its domain's budget), its budgets' and those of
     # its enabled components
     own = Set(vcat(["finite", "energy_closure", "urban_budgets"],
-                   ["$(UrbanCase.coupling_name(C))_checks" for C in UrbanCase.REGISTRY
-                    if cfg[String(UrbanCase.coupling_name(C))].enabled]))
+                   ["$(UrbanCase.component_name(C))_checks" for C in UrbanCase.URBAN_COMPONENTS
+                    if cfg[String(UrbanCase.component_name(C))].enabled]))
     for n in _published_enabled(cfg)
         n in own || push!(e, ConfigError("checks.$n", "an urban site publishes no check $n (its checks: $(join(sort!(collect(own)), ", ")))"))
     end

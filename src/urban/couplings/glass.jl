@@ -133,11 +133,11 @@ and extends `bus.params` with the glass class
 the buildings and traffic, the transmitted shortwave leaves the glass
 cells' surface budget ([`apply_glass_sw_transmission!`](@ref)).
 """
-struct GlassClass{G} <: AbstractCoupling
+struct GlassClass{G} <: UrbanComponent
     glazing::G
 end
 
-coupling_name(::Type{<:GlassClass}) = :glass
+component_name(::Type{<:GlassClass}) = :glass
 slot(::Type{<:GlassClass}) = :glazing
 provider(::Type{<:GlassClass}) = :glass_class
 modules_used(::Type{<:GlassClass}) = (:UrbanSurface,)
@@ -179,4 +179,3 @@ function smoke_check(c::GlassClass, case)
                 isapprox(opt.R + opt.T + sum(opt.A), 1; atol = 1e-9) && α == opt.R]
 end
 
-register!(GlassClass)

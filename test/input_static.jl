@@ -241,7 +241,7 @@ end
     for (label, c) in ("mitte_sample" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16)),
                        "mitte_periodic" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16),
                                                           lateral = :periodic,
-                                                          physics = Dict{Symbol,Any}(:nesting => false)))
+                                                          overrides = ["nesting.enabled=false"]))
         m = meshof(c)
         ox, oy = BCI.anchor_xy(c, m)
         c.static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0, origin_lon = c.lon0,

@@ -52,18 +52,17 @@ Options: `wall_cap = true` (cap ``l`` at ``κ d_{wall}``), `surface = true`
 `bus.u_star`), `e_min = 1e-4`
 (m² s⁻²: the floor of the initial isotropic local-equilibrium ``e``).
 """
-struct SGSReynoldsStress{C, F} <: AbstractCoupling
+struct SGSReynoldsStress{C, F} <: UrbanComponent
     closure::C
     K2::F                       # 2ν_t, the diffusivity of the stresses in :transport
     e_min::Float64
 end
-coupling_name(::Type{<:SGSReynoldsStress}) = :sgs_reynolds_stress
+component_name(::Type{<:SGSReynoldsStress}) = :sgs_reynolds_stress
 slot(::Type{<:SGSReynoldsStress}) = :sgs
 provider(::Type{<:SGSReynoldsStress}) = :reynolds_stress
-is_default(::Type{<:SGSReynoldsStress}) = false
 modules_used(::Type{<:SGSReynoldsStress}) = (:PrognosticSGS,)
 default_options(::Type{<:SGSReynoldsStress}) = (wall_cap = true, surface = true, e_min = 1e-4)
-incompatible(::Type{<:SGSReynoldsStress}) = (:timestepper => :imex,)
+incompatible(::Type{<:SGSReynoldsStress}) = (IMEXStep,)
 incompatible_reason(::Type{<:SGSReynoldsStress}) =
     "step_imex! treats the SGS momentum implicitly as an eddy viscosity and cannot represent " *
     "the Reynolds stress (Operators.sgs_explicit_stress); use timestepper = :adaptive or :fixed"
@@ -210,4 +209,3 @@ smoke_variants(::Type{<:SGSReynoldsStress}) =
      (label = "Reynolds stress in the closed (periodic) box",
       physics = Dict(:sgs => :reynolds_stress, :nesting => false)))
 
-register!(SGSReynoldsStress)

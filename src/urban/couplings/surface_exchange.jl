@@ -151,7 +151,7 @@ and `h_wm_classes` (the matching height of the open columns),
 (`:pressure_gradient`, `:full` or `:equilibrium_ode`),
 `dynamic_refine`, `dynamic_filter`, `dynamic_C_d` (the dynamic roughness).
 """
-mutable struct SurfaceExchangeMOST <: AbstractCoupling
+mutable struct SurfaceExchangeMOST <: UrbanComponent
     P::Float64                 # surface step period (s)
     U_min::Float64
     z0m::Dict{UInt8,Float64}
@@ -210,7 +210,7 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     colterms::Matrix{Float64}
 end
 
-coupling_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
+component_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
 slot(::Type{SurfaceExchangeMOST}) = :surface_exchange
 provider(::Type{SurfaceExchangeMOST}) = :most
 modules_used(::Type{SurfaceExchangeMOST}) = (:SurfaceExchange, :Radiation, :MoistThermodynamics,
@@ -964,4 +964,3 @@ function _h_sign_ok(bus, I, case)
     return abs(d) <= 1 || abs(bus.H[I]) <= 1 || sign(bus.H[I]) == sign(d)
 end
 
-register!(SurfaceExchangeMOST)

@@ -60,12 +60,12 @@ with ρ̄c_p already divided out), in the fluid cells only (`Radiation.apply_rad
 solid mask): the heating rate is a property of the air, and heating the
 immersed buildings' cells leaks into the air next to the walls.
 """
-mutable struct ColumnRadiation{M<:ColumnRadiationModel} <: AbstractCoupling
+mutable struct ColumnRadiation{M<:ColumnRadiationModel} <: UrbanComponent
     m::M                          # the column's radiation (Aeolus.ColumnRadiation)
     ghi_bird::Float64             # Bird GHI with the radiosity coupling's sky, for the log
 end
 
-coupling_name(::Type{<:ColumnRadiation}) = :column_radiation
+component_name(::Type{<:ColumnRadiation}) = :column_radiation
 slot(::Type{<:ColumnRadiation}) = :column_radiation
 provider(::Type{<:ColumnRadiation}) = :twostream
 modules_used(::Type{<:ColumnRadiation}) =
@@ -269,4 +269,3 @@ function smoke_check(c::ColumnRadiation, case)
     return checks
 end
 
-register!(ColumnRadiation)

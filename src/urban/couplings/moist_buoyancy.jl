@@ -18,7 +18,7 @@ virtual-temperature and condensate-loading buoyancy
 [`add_moist_buoyancy!`](@ref). `Δ` keeps the last ``(θ_ρ − θ)′`` (K) for
 the output field `b_moist` and the diagnostics.
 """
-struct MoistBuoyancy{V} <: AbstractCoupling
+struct MoistBuoyancy{V} <: UrbanComponent
     Δ::Array{Float64,3}
     fluid::Array{Bool,3}
     θ₀::Float64
@@ -26,7 +26,7 @@ struct MoistBuoyancy{V} <: AbstractCoupling
     qc::Vector{V}                 # condensate_views(case), collected once in init! (#295)
 end
 
-coupling_name(::Type{<:MoistBuoyancy}) = :moist_buoyancy
+component_name(::Type{<:MoistBuoyancy}) = :moist_buoyancy
 modules_used(::Type{<:MoistBuoyancy}) = (:MoistThermodynamics,)
 stages(::Type{<:MoistBuoyancy}) = ((:body_force, 20, EVERY_STEP),)
 
@@ -131,4 +131,3 @@ function smoke_check(c::MoistBuoyancy, case)
             "0.608 = 1/ε − 1 from the MoistThermodynamics molar masses" => abs(a - 0.608) < 1e-3]
 end
 
-register!(MoistBuoyancy)

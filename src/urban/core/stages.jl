@@ -39,7 +39,7 @@ seconds (`every`, `first`) and its integer order its `order`.
 function pipeline_stages(C, cfg)
     return Tuple(begin
                      cad = resolve(c, cfg)
-                     S in ALL_STAGES || error("coupling :$(coupling_name(C)): unknown stage :$S")
+                     S in ALL_STAGES || error("coupling :$(component_name(C)): unknown stage :$S")
                      Stage(S; every = max(cad.period, 0.0), first = cad.first, order = order)
                  end for (S, order, c) in stages(C))
 end
@@ -55,11 +55,11 @@ loop it replaced), so a case's domain is not compiled anew for every
 selection of couplings.
 """
 struct UrbanEntry <: AbstractComponent
-    c::AbstractCoupling
+    c::UrbanComponent
     name::Symbol
     stages::Tuple{Vararg{Stage}}
 end
-UrbanEntry(c::AbstractCoupling, st) = UrbanEntry(c, coupling_name(typeof(c)), Tuple(st))
+UrbanEntry(c::UrbanComponent, st) = UrbanEntry(c, component_name(typeof(c)), Tuple(st))
 Components.component_name(e::UrbanEntry) = e.name
 Components.section(e::UrbanEntry) = string(e.name)
 Components.stages(e::UrbanEntry) = e.stages
@@ -115,7 +115,7 @@ model enables them): `urban_budgets`, the closure of the case's budgets
 against [`BUDGET_TOLERANCES`](@ref) (the verdict of [`run_results`](@ref)),
 and `<coupling>_checks` per urban component, its `smoke_check`s.
 """
-urban_check_names() = vcat(["urban_budgets"], ["$(coupling_name(C))_checks" for C in REGISTRY])
+urban_check_names() = vcat(["urban_budgets"], ["$(component_name(C))_checks" for C in URBAN_COMPONENTS])
 
 # The checks of the case (see urban_check_names): `urban_budgets` is the
 # largest closure measure relative to its tolerance (≤ 1 passes); a
@@ -138,7 +138,7 @@ function Components.checks(u::UrbanCore)
         end)
     cs = Check[budgets]
     for c in case.couplings
-        n = coupling_name(typeof(c))
+        n = component_name(typeof(c))
         push!(cs, Check("$(n)_checks"; doc = "the smoke checks of the urban component $n that fail",
                         tolerance = 0.0,
                         evaluate = _ -> begin
@@ -175,7 +175,7 @@ function build_domain!(case)
     case.domain = Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
     h = Components.core_hooks(case.domain)
     case.body_force, case.post_predictor = h.body_force!, h.post_predictor!
-    case.step_kwargs = merge_keywords("step!", (coupling_name(c) => step_options(c, case)
+    case.step_kwargs = merge_keywords("step!", (component_name(c) => step_options(c, case)
                                                 for c in case.couplings))
     empty!(case.timing)
     return case
@@ -220,7 +220,7 @@ function step_dt(case)
     for c in case.couplings
         d = limit_dt(c, case, dt)
         # the coupling that shortened the step is what limited it
-        d < dt && hasproperty(ts, :stats) && (ts.stats.last_limiter = coupling_name(c))
+        d < dt && hasproperty(ts, :stats) && (ts.stats.last_limiter = component_name(c))
         dt = d
     end
     return dt

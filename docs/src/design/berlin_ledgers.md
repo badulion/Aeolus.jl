@@ -578,7 +578,8 @@ dew, fog, sedimentation and precipitation all do real work. The
 flagship's pollutant stacks are outside this window, so the smoke runs
 put one stack in it, 40 m up.
 
-The run matrix is derived from the registry (`smoke_specs()` in
+The run matrix is derived from the urban components (`URBAN_COMPONENTS`,
+the reference selection `URBAN_DEFAULTS`; `smoke_specs()` in
 `test/support/smoke_matrix.jl`, written as overrides by `smoke_overrides`):
 
 1. **summer, everything on** — every additive coupling on, including
@@ -599,8 +600,8 @@ without a blow-up, leave every field and tracer finite, pass every
 class (1e-6 W m⁻²) and the water ledger (1e-12 kg m⁻²). The first run
 also asserts that the domain gains radiative energy at noon (Rn > 0,
 ΔS > 0) and that the transport conserves water (|transport| <
-1e-12 kg m⁻²; measured ~1e-19 since #132). Finally every registered
-coupling must have run in at least one configuration. (As a test it also
+1e-12 kg m⁻²; measured ~1e-19 since #132). Finally every urban
+component must have run in at least one configuration. (As a test it also
 had to take less than 300 s; the by-hand script has no time limit.)
 
 At #127 the matrix was 2 runs (no slot had a second provider yet); #130

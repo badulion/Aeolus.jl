@@ -54,7 +54,7 @@ cadence, ``r_a = 1/(C_H U)`` and ``u_*`` are recomputed per column from
 `solve_surface_layer` (first-air-cell wind and θ, surface skin Ts) and
 the deposition velocities with them.
 """
-mutable struct AQChem{F} <: AbstractCoupling
+mutable struct AQChem{F} <: UrbanComponent
     NO::F; NO2::F; O3::F; VOC::F; HNO3::F
     k_air::Matrix{Int}               # first air level of each column (Nz+1 if none)
     kind::Matrix{Symbol}             # surface kind per column
@@ -77,7 +77,7 @@ mutable struct AQChem{F} <: AbstractCoupling
     OH::Float64
 end
 
-coupling_name(::Type{<:AQChem}) = :aq_chem
+component_name(::Type{<:AQChem}) = :aq_chem
 slot(::Type{<:AQChem}) = :chemistry
 provider(::Type{<:AQChem}) = :nox_o3_voc
 modules_used(::Type{<:AQChem}) = (:Chemistry, :SurfaceExchange)
@@ -454,7 +454,6 @@ function smoke_check(c::AQChem, case)
     return checks
 end
 
-register!(AQChem)
 
 """
     NoChem
@@ -468,10 +467,8 @@ transport of the five species and 12 ms the `aq_chem` stage; see
 can switch it off with
 `physics = Dict(:chemistry => :off)`.
 """
-struct NoChem <: AbstractCoupling end
-coupling_name(::Type{NoChem}) = :chem_off
+struct NoChem <: UrbanComponent end
+component_name(::Type{NoChem}) = :chem_off
 slot(::Type{NoChem}) = :chemistry
 provider(::Type{NoChem}) = :off
-is_default(::Type{NoChem}) = false
 
-register!(NoChem)

@@ -61,9 +61,9 @@ Slot `:core`, provider `:boussinesq` (default): the dry Boussinesq core
 of `Aeolus.Simulations` built by [`boussinesq_core`](@ref) (buoyancy about
 the constant `cfg.θ₀`, advanced by `step!`).
 """
-struct BoussinesqCore <: AbstractCoupling end
+struct BoussinesqCore <: UrbanComponent end
 
-coupling_name(::Type{BoussinesqCore}) = :core_boussinesq
+component_name(::Type{BoussinesqCore}) = :core_boussinesq
 slot(::Type{BoussinesqCore}) = :core
 provider(::Type{BoussinesqCore}) = :boussinesq
 modules_used(::Type{BoussinesqCore}) = (:Simulations, :Backends)
@@ -96,20 +96,17 @@ these cores accept.
 The constraint the projection enforces is the core's `max_div`
 diagnostic (and checked by the smoke test).
 """
-struct MassWeightedCore{P} <: AbstractCoupling end
+struct MassWeightedCore{P} <: UrbanComponent end
 
 const AnelasticCore = MassWeightedCore{:anelastic}
 const PseudoIncompressibleCore = MassWeightedCore{:pseudo_incompressible}
 
-coupling_name(::Type{AnelasticCore}) = :core_anelastic
-coupling_name(::Type{PseudoIncompressibleCore}) = :core_pseudo_incompressible
+component_name(::Type{AnelasticCore}) = :core_anelastic
+component_name(::Type{PseudoIncompressibleCore}) = :core_pseudo_incompressible
 slot(::Type{<:MassWeightedCore}) = :core
 provider(::Type{MassWeightedCore{P}}) where {P} = P
-is_default(::Type{<:MassWeightedCore}) = false
 modules_used(::Type{<:MassWeightedCore}) = (:Anelastic, :Backends)
-incompatible(::Type{<:MassWeightedCore}) =
-    (:pressure_solver => :cosine_fft, :pressure_solver => :multigrid, :pressure_solver => :mg_cg,
-     :momentum_advection => :weno_z)
+incompatible(::Type{<:MassWeightedCore}) = (PressureCosineFFT, PressureMultigrid, PressureMGCG, MomentumWENOZ)
 incompatible_reason(::Type{<:MassWeightedCore}) =
     "a sound-proof core projects with its own density-weighted solver (select " *
     "pressure_solver = :density_weighted_direct or :density_weighted_cg) and advects momentum in its weighted centred " *
@@ -123,7 +120,7 @@ _mass_weighted_type(::Type{PseudoIncompressibleCore}) = Aeolus.Anelastic.PseudoI
 
 function build_core(C::Type{<:MassWeightedCore}, cfg, mesh, ref, simkw)
     bad = setdiff(keys(simkw), MASS_WEIGHTED_SIM_KEYWORDS)
-    isempty(bad) || error("coupling :$(coupling_name(C)): the sim_options keyword(s) " *
+    isempty(bad) || error("coupling :$(component_name(C)): the sim_options keyword(s) " *
                           "$(join(bad, ", ")) are not keywords of the sound-proof core " *
                           "(it takes $(join(MASS_WEIGHTED_SIM_KEYWORDS, ", ")))")
     return _mass_weighted_type(C)(mesh; core_parameters(cfg, mesh)..., ref = ref.state,
@@ -162,6 +159,3 @@ function smoke_check(c::MassWeightedCore{P}, case) where {P}
             "∇·(W u) ≪ plain ∇·u (the constraint is the weighted one)" => res < 1e-2 * plain]
 end
 
-register!(BoussinesqCore)
-register!(AnelasticCore)
-register!(PseudoIncompressibleCore)

@@ -113,7 +113,7 @@ before its next one starts ahead on another task — the one point where
 another coupling may read the parent's fields (the synthetic inflow's
 statistics, `couplings/inflow_turbulence.jl`, #268).
 """
-mutable struct NestingCoupling <: AbstractCoupling
+mutable struct NestingCoupling <: UrbanComponent
     mode::Symbol
     opts::Any                     # the coupling's options (the two-way keywords)
     driver::Any                   # :aeolus, or the AbstractBoundaryData that replaces the parent
@@ -139,7 +139,7 @@ mutable struct NestingCoupling <: AbstractCoupling
     window_hooks::Vector{Any}     # f(c, case) at every window opening, the parent at rest (#268)
 end
 
-coupling_name(::Type{<:NestingCoupling}) = :nesting
+component_name(::Type{<:NestingCoupling}) = :nesting
 modules_used(::Type{<:NestingCoupling}) = (:Nesting, :StretchedGrids, :SurfaceTiles, :LargeScaleForcing)
 default_options(::Type{<:NestingCoupling}) =
     (mode = :one_way, parent = (;), parent_driver = :aeolus,
@@ -156,7 +156,7 @@ The parent of the nested case `cfg`: [`ParentConfig`](@ref)`(cfg)` with
 the #259 default), centred on the child.
 """
 function nest_parent_config(cfg::CaseConfig)
-    o = coupling_options(NestingCoupling, cfg)
+    o = component_options(NestingCoupling, cfg)
     return ParentConfig(cfg; o.parent...)
 end
 
@@ -182,7 +182,7 @@ the coupling's `sim_options` pass it to the core, the pressure-solver
 couplings derive their axes from it.
 """
 function nest_case_bcs(cfg::CaseConfig, mesh)
-    sa = coupling_options(ScalarAdvection, cfg)
+    sa = component_options(ScalarAdvection, cfg)
     H = Aeolus.AdvectionSchemes.required_halo(Aeolus.AdvectionSchemes.advection_scheme(sa.scheme))
     return nest_bcs(mesh; bottom = :wall, top = :nest, outflow = cfg.outflow, halo = H)
 end
@@ -223,7 +223,7 @@ Whether the nested case `cfg` replays its parent from the parent-made
 dynamic driver `cfg.dynamic` (`options[:nesting].parent_driver =
 :offline`, CFG-g #362) instead of running it.
 """
-nest_offline(cfg::CaseConfig) = case_nested(cfg) && coupling_options(NestingCoupling, cfg).parent_driver === :offline
+nest_offline(cfg::CaseConfig) = case_nested(cfg) && component_options(NestingCoupling, cfg).parent_driver === :offline
 
 "Whether the nest feeds the child back onto the parent (`mode = :two_way`, #267)."
 two_way(c::NestingCoupling) = c.mode === :two_way
@@ -852,4 +852,3 @@ smoke_variants(::Type{<:NestingCoupling}) =
       options = Dict(:nesting => (parent_driver = :profile,))),
      (label = "nest off: the periodic box", physics = Dict(:nesting => false)))
 
-register!(NestingCoupling)
