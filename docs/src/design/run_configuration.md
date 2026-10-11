@@ -186,8 +186,8 @@ On the command line an override is `--set dotted.key=<TOML value>`.
 Strings are quoted, arrays are TOML arrays:
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml --set grid.size=[16,16,16]
-julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
+julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml --set grid.size=[16,16,16]
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
 julia --project -m Aeolus check my_case.toml --set time.nsteps=10 --set time.duration='"none"'   # validate only
 julia --project -m Aeolus resolve my_case.toml                            # print the canonical TOML
 julia --project -m Aeolus options sgs                                     # the model's option reference, one section
@@ -207,7 +207,7 @@ Scripts can build or change a config in Julia:
 
 ```julia
 using Aeolus
-cfg  = load_run_config("examples/configs/dry_convective_bl.toml"; overrides = ["grid.size=[32,32,32]"])
+cfg  = load_run_config("examples/dry_convective_bl/dry_convective_bl.toml"; overrides = ["grid.size=[32,32,32]"])
 cfg2 = with(cfg, "run.seed" => 7)          # a new, validated config
 res  = run_config(cfg2)                    # what `aeolus run` does
 ```
@@ -250,9 +250,9 @@ readers and the schemas:
 
 ```bash
 # in an AeolusPrep.jl checkout
-julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
+julia --project -m AeolusPrep static <aeolus>/examples/urban/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
 # the parent-made driver of an offline nest is model output
-julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
 ```
 
 The static driver (terrain, buildings, land use, trees, surfaces) is
@@ -273,9 +273,9 @@ Their variables, dimensions, units and attributes are listed on the
 | directory | configs |
 | :-- | :-- |
 | `examples/configs/` | the model: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection`, `lindenberg_era5`; `advection`: `scalar_advection_2d` |
-| `examples/urban/configs/` | `urban` (in `src/`, `Aeolus.UrbanCase`): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
-| `examples/sbl/configs/` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps (`input/`: the case-table dynamic drivers) |
-| `examples/dns_vs_les/configs/` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence |
+| `examples/urban/` | `urban` (in `src/`, `Aeolus.UrbanCase`): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
+| `examples/sbl/` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps (`input/`: the case-table dynamic drivers) |
+| `examples/dns_vs_les/` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence |
 | `examples/kernels/configs/` | `column`: `cloud_spinup`; the model: `tgv_energy_decay`, `decaying_hit`, `channel_flow`, `pollution_plume`, `particle_trail` |
 | `examples/coupled/configs/` | the model with the EX-d couplings: `dcbl_radiation_lsm`, `moist_convection`, `heated_plume`, `flow_past_cube` (`input/`: the cube's GeoJSON and static driver) |
 | `examples/sgs/configs/` | `cbl`: `cbl_tke`; `sgs_decay`: `rotating_stratified_decay`; `obstacle_channel`: `surface_mounted_cube`, `surface_mounted_cube_closures` (`input/`: the cube) |

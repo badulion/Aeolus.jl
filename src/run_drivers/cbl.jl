@@ -11,8 +11,8 @@ window is folded into a `Transition.ParentResolvedStatistics` (the
 boundary statistics a refined child's synthetic inflow needs,
 N-inflow-b, #258).
 
-Configs: `examples/sgs/configs/cbl_tke.toml` (64³, against Lenschow,
-Wyngaard & Pennell 1980) and `examples/nesting/configs/cbl_inflow_statistics.toml`.
+Configs: `examples/cbl_tke/cbl_tke.toml` (64³, against Lenschow,
+Wyngaard & Pennell 1980) and `examples/cbl_inflow_statistics/cbl_inflow_statistics.toml`.
 `results.toml`: the summary scalars and profiles of [`tke_cbl`](@ref), and
 `[inflow]` the boundary statistics per level.
 """

@@ -31,8 +31,8 @@ using Aeolus.SimulationDriver: SimulationDriverType
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
-const CK_CFGS = joinpath(pkgdir(Aeolus), "examples", "configs")
-const CK_DCBL = joinpath(CK_CFGS, "dry_convective_bl.toml")
+const CK_EX = joinpath(pkgdir(Aeolus), "examples")
+const CK_DCBL = joinpath(CK_EX, "dry_convective_bl", "dry_convective_bl.toml")
 # the smoke size, with the checks the shipped file enables switched off ({} is off)
 const CK_SMALL = ["grid.size=[8,8,8]", "fftw.planner=\"estimate\"", "time.duration=\"none\"", "time.nsteps=6",
                   "checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]
@@ -383,7 +383,7 @@ end
 
 @testset "aeolus run: a blow-up records the failed sanity check (exit code 1)" begin
     root = mktempdir()
-    tgv = joinpath(CK_CFGS, "taylor_green_vortex.toml")
+    tgv = joinpath(CK_EX, "taylor_green_vortex", "taylor_green_vortex.toml")
     # a step far beyond the stability limit (the blowup test of config_cli.jl): NaN by step 11
     sets = ["grid.size=[8,8,8]", "time.duration=\"none\"", "time.nsteps=20", "fftw.planner=\"estimate\"",
             "time.dt=50.0", "checks.reference_file=\"$(ck_file("tgv.csv", "quantity,value\nu_mean,0.0\n"))\"",

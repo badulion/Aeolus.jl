@@ -1202,7 +1202,7 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
 export Model, Domain
 
 # EX-a (#438): the urban LES run type (the `urban` run driver; the Berlin
-# case is examples/urban/configs/). A submodule, not exported: its names
+# case is examples/urban/). A submodule, not exported: its names
 # (CaseConfig, build_case, Ledger, …) stay under Aeolus.UrbanCase.
 include("UrbanCase.jl")
 

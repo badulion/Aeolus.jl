@@ -12,7 +12,7 @@ boundary data, two-way feedback, the parent as default of the Berlin run
 Code: `src/urban/parent/config.jl` (`ParentConfig`),
 `src/urban/parent/case.jl` (`build_parent`, `step_parent!`,
 `run_parent!`), the surface `src/urban/parent/surface.jl` (#249),
-the run `examples/urban/configs/berlin_parent.toml` (the `urban_parent`
+the run `examples/urban/berlin_parent.toml` (the `urban_parent`
 driver, `src/urban/core/parent_driver.jl`, #438; figures from its output:
 `examples/urban/berlin_parent_figures.jl <run folder>`), the checks
 `test/urban_checks.jl` (the smoke run, checks 1–3 and the parent surface;
@@ -239,7 +239,7 @@ D (#315) are open.
 
 The fallback grid (96 × 96 × 60, Δx = 62.5 m, Δz = 50 m), D = 0, every
 other forcing on, 06:00 LT 29 June to 06:00 LT 30 June 2019:
-`julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml --set physics.options.nesting.parent.refinement=[4,4,8] --set 'physics.options.nesting.parent.vertical="uniform"'`
+`julia --project -m Aeolus run examples/urban/berlin_parent.toml --set physics.options.nesting.parent.refinement=[4,4,8] --set 'physics.options.nesting.parent.vertical="uniform"'`
 (until #438 `examples/urban/berlin_parent_diurnal.jl fallback`).
 It completed in 7598 s wall (19 299 steps, dt 0.03–10 s, no retry).
 The 24 h run on the default grid, and with it the final validation of

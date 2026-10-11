@@ -231,7 +231,7 @@ end
 @testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's, bit for bit" begin
     # smoke: from the committed static driver
     cs = BCI.CaseConfig(berlin_toml("smoke"))
-    @test endswith(cs.static, "configs/input/berlin_smoke_static.nc")
+    @test endswith(cs.static, "urban/input/berlin_smoke_static.nc")
     @test geom_digests_equal("smoke", BCI.build_geometry(cs, meshof(cs)))
     # the Mitte sample at 32 × 32 × 16, nested (frame) and periodic (no frame, wrapped
     # walls): its committed driver's polygons rasterised on that grid give the
@@ -333,7 +333,7 @@ end
     mk(joinpath(model, "docs"), nothing)                        # a Project.toml without a name is not a package
     src_here = joinpath(model, "examples", "data", "s.csv"); mkpath(dirname(src_here)); write(src_here, "x")
     src_prep = joinpath(prep, "data", "berlin", "a.osm"); mkpath(dirname(src_prep)); write(src_prep, "x")
-    out = joinpath(model, "examples", "configs", "input", "d.nc")
+    out = joinpath(model, "examples", "case", "input", "d.nc")
     # the same package: relative to the driver's directory, as before
     @test ref(src_here, out) == "../../data/s.csv"
     # another package: its name and the path in it, wherever it is checked out

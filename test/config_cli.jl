@@ -18,8 +18,8 @@ using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml
 
-const CLI_CFGS = joinpath(pkgdir(Aeolus), "examples", "configs")
-const TGV = joinpath(CLI_CFGS, "taylor_green_vortex.toml")
+const CLI_EX = joinpath(pkgdir(Aeolus), "examples")
+const TGV = joinpath(CLI_EX, "taylor_green_vortex", "taylor_green_vortex.toml")
 const SMALL = ["--set", "grid.size=[8,8,8]", "--set", "time.duration=\"none\"",
                "--set", "time.nsteps=4", "--set", "fftw.planner=\"estimate\""]
 

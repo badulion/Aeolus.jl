@@ -2,7 +2,7 @@
 # schema of the urban case, its conversion to the CaseConfig that
 # build_case consumes, and the run-driver contract of CFG-b (#357), so that
 #
-#   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml [--set clock.nsteps=…]
+#   julia --project -m Aeolus run examples/urban/berlin_summer.toml [--set clock.nsteps=…]
 #
 # runs the Berlin flagship. Included last in UrbanCase.jl: the schema is built
 # from the coupling registry (every slot, provider, addon and
@@ -32,7 +32,7 @@ blowup guard), writing the NetCDF output into the run folder's `output/`
 unless `[output] path` says otherwise, and the run's checks
 ([`run_results`](@ref): the ledgers' closure) into its `results.toml`.
 `aeolus options urban` prints the schema. Example configurations: the
-Berlin case, `examples/urban/configs/berlin_*.toml`.
+Berlin case, `examples/urban/berlin_*.toml`.
 """
 struct UrbanDriver <: AbstractRunDriver end
 

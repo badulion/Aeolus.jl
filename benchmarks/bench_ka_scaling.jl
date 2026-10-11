@@ -28,7 +28,7 @@
 #   flagship − child is the cost of the parent and the nest exchange.
 # dns: the 256³ decaying-turbulence DNS of the former a-priori record
 #   (dns256.toml and test/fixtures/dns256_apriori.toml, removed by ONE-g
-#   #456; examples/dns_vs_les/configs/dns.toml is the DNS run today)
+#   #456; examples/dns_vs_les/dns.toml is the DNS run today)
 #   (`dns_step!`: step_rk3! at CFL 0.5 plus the per-step K / ε / skewness
 #   history). Both are timed per step; that run was 1264 steps, so its DNS
 #   time was 1264 × the `dns_step!` time. Needs about 8 GB at 256³.
@@ -85,7 +85,7 @@ end
 function bench_berlin(mode; nwarm = 2, nsteps = 9)
     BC = Aeolus.UrbanCase
     kw = mode == "child" ? (physics = Dict{Symbol,Any}(:nesting => false),) : NamedTuple()
-    cfg = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); output_path = nothing, kw...)
+    cfg = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"); output_path = nothing, kw...)
     tb = @elapsed case = BC.build_case(cfg)
     m = case.mesh
     @printf("%s: %d × %d × %d child, -t %d, build %.1f s\n", mode, m.Nx, m.Ny, m.Nz, NT, tb)
@@ -181,7 +181,7 @@ const N_SERIAL = Threads.Atomic{Int}(0)
 
 function count_launches(; nwarm = 2, nsteps = 9)
     BC = Aeolus.UrbanCase
-    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); output_path = nothing))
+    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"); output_path = nothing))
     for _ in 1:nwarm
         BC.step_case!(case, BC.step_dt(case))
     end

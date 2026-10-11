@@ -11,7 +11,7 @@ wall-resolved, θ-walled variant of the P54-d channel builder is new
 ## The cases on the one model
 
 Since ONE-g (#456) every SBL case is a configuration of the model
-(`examples/sbl/configs/`, run with `julia --project -m Aeolus run`): a
+(`examples/sbl/`, run with `julia --project -m Aeolus run`): a
 periodic Boussinesq LES over a cooled surface whose every piece is a
 component of the stage pipeline, a thin adapter to a physics module. (P55-f
 #191 and P58-d #194 built the cases as the `sbl` run type,
@@ -32,7 +32,7 @@ folders and make the tables and figures.
 | BL diagnostics | `SurfaceLayer` outputs (`u_star`, `surface_wtheta`, `surface_heat_flux`, `obukhov_length`, `bl_height`, `jet_speed`, `jet_height`, `inversion_height`, `theta_2m`, `wind_10m`, the stress and heat-flux profiles) | `Operators.total_stress_profile`, `total_heat_flux_profile`, `stress_bl_height`, `inversion_height`; `SurfaceExchange.similarity_theta`, `similarity_wind` |
 | CASES-99 towers | `Towers` (`[towers]`), output `tower_threshold` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
-The case tables are dynamic drivers (`examples/sbl/configs/input/`), the
+The case tables are dynamic drivers (`examples/sbl/input/`), the
 initial profiles TOML tables (a `log` or `linear` tail below the lowest
 height), the start time `[time] start` (the clock the driver tables are
 read on), and the comparisons with the intercomparisons are
@@ -174,7 +174,7 @@ of ``h``.
 
 P58-d (#194) runs three observed stable-boundary-layer cases on the same
 driver. It adds no physics. Since CFG-d (#359) each case is a
-configuration in `examples/sbl/configs/` (since ONE-g #456 of the model;
+configuration in `examples/sbl/` (since ONE-g #456 of the model;
 before, of the `sbl` run type): the case constants are in the TOML file,
 the case data the CSVs under `examples/sbl/data/` (provenance in every
 header), written into the configs' dynamic drivers, and the components

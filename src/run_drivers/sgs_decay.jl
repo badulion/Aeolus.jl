@@ -43,7 +43,7 @@ across the periodic boundary with the jump ΓL_z.
 `results.toml`: the base state (Re_λ, u′, L, T, f, N), and per case the
 DNS decay, per closure the resolved-KE error at t₀ + 2T, e, II and
 ⟨τ₃₃⟩/⟨τ₁₁⟩, the mean SGS heat flux, and the series of the figure.
-Config: `examples/sgs/configs/rotating_stratified_decay.toml`.
+Config: `examples/rotating_stratified_decay/rotating_stratified_decay.toml`.
 """
 module SGSDecayDriver
 

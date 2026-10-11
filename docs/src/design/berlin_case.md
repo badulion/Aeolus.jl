@@ -10,7 +10,7 @@ many couplings can be added independently and at the same time; since
 EX-a (#438) that framework is the package's urban run type,
 `Aeolus.UrbanCase` in `src/UrbanCase.jl` and `src/urban/` (the `urban`
 run driver, see [Urban run type](../api/urban_case.md)), and the Berlin
-case is configuration only: `examples/urban/configs/berlin_*.toml`, its
+case is configuration only: `examples/urban/berlin_*.toml`, its
 static drivers (OpenStreetMap buildings, the parent's land use) and its
 dynamic driver (the Lindenberg sounding).
 
@@ -18,7 +18,7 @@ dynamic driver (the Lindenberg sounding).
 using Aeolus
 const UC = Aeolus.UrbanCase
 
-cfg  = UC.CaseConfig("examples/urban/configs/berlin_summer.toml"; nsteps = 1800)   # 1 h at dt = 2 s
+cfg  = UC.CaseConfig("examples/urban/berlin_summer.toml"; nsteps = 1800)   # 1 h at dt = 2 s
 case = UC.build_case(cfg)
 print(UC.describe(case))                            # couplings and schedule
 UC.run_case!(case)                                  # NetCDF + log events (frames, timing, ledgers)
@@ -87,11 +87,11 @@ once per record a costly row costs 16 ms, 0.4 % of the run at a 2 s
 step and the 60 s cadence.
 
 The flagship is configured in TOML (CFG-c, #358): the scenarios are the
-shipped files `examples/urban/configs/berlin_<scenario>.toml`, run by the
+shipped files `examples/urban/berlin_<scenario>.toml`, run by the
 `urban` driver,
 
 ```bash
-julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800 --set output.cadence=600
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set clock.nsteps=1800 --set output.cadence=600
 ```
 
 with no wrapper script (#438). The run folder (`runs/<date>_<name>_<id>/`)

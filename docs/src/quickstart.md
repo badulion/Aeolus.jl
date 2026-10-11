@@ -34,8 +34,8 @@ end
 @show sim.t, kinetic_energy(sim), max_divergence(sim)
 ```
 
-The full example is the config `examples/configs/taylor_green_vortex.toml`:
-`julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml`
+The full example is the config `examples/taylor_green_vortex/taylor_green_vortex.toml`:
+`julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml`
 writes the diagnostics every 0.1 s to the run folder.
 
 ## Anatomy of a `BoussinesqSimulation`

@@ -6,7 +6,7 @@
 # (`UrbanCase.write_sounding_driver`), which the tests here call too
 # (`write_sounding_driver` below), and check what a run reads. The
 # case-table drivers of the SBL configs are committed
-# (examples/sbl/configs/input/, ONE-g #456).
+# (examples/sbl/input/, ONE-g #456).
 #
 # Acceptance tests of the issue covered here:
 #   * the time blend is exact for data linear in t (u = 1 + 0.01 t at
@@ -460,8 +460,8 @@ end
 # with the file it reads.
 # ---------------------------------------------------------------------------
 
-const E5_CFG = joinpath(pkgdir(Aeolus), "examples", "configs", "lindenberg_era5.toml")
-const E5_DRIVER = joinpath(pkgdir(Aeolus), "examples", "configs", "input", "lindenberg_era5_dynamic.nc")
+const E5_CFG = joinpath(pkgdir(Aeolus), "examples", "lindenberg_era5", "lindenberg_era5.toml")
+const E5_DRIVER = joinpath(pkgdir(Aeolus), "examples", "lindenberg_era5", "input", "lindenberg_era5_dynamic.nc")
 
 @testset "meters_to_latlon inverts latlon_to_meters" begin
     lat0, lon0 = 52.2085, 14.118

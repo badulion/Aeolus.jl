@@ -21,7 +21,7 @@ import NCDatasets
 import Markdown
 
 const REF_DRIVERS = ["model"]
-const REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))
+const REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "input"))
 
 "The keys of the table rows of a Markdown option reference, per `[table]` heading."
 function md_rows(md::AbstractString)
@@ -80,7 +80,7 @@ end
     end
     # urban (the Berlin configs): one row per option of a resolved RunConfig (its sections hold every option)
     sch = driver_schema("urban")
-    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "configs", "berlin_smoke.toml"))
+    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_smoke.toml"))
     rows, _ = md_rows(option_reference("urban"; format = :markdown))
     @test sum(length(rows[s.name]) for s in sch.sections) ==
           sum(length(getfield(getproperty(cfg, Symbol(s.name)), :values)) for s in sch.sections)
@@ -126,7 +126,7 @@ end
 end
 
 @testset "undocumented_keys: [physics.options] keys against the coupling tables" begin
-    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "configs", "berlin_summer.toml"))
+    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_summer.toml"))
     @test isempty(undocumented_keys(cfg))
     @test haskey(cfg.physics.options, "aq_chem")             # the file does set coupling options
     # the walk: a documented option (whatever its value, a table too), a documented

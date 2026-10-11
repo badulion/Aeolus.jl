@@ -1,0 +1,503 @@
+# The Berlin nest parent alone (the `urban_parent` driver, EX-a #438;
+# N-parent-e #259): 24 h, 06 to 06 LT, of the 6 km × 6 km × 3 km Aeolus
+# parent around Alexanderplatz on 29/30 June 2019 (the Lindenberg sounding
+# of #247), every parent forcing on: the tiled urban surface (#249), the
+# column radiation, the geostrophic pressure gradient, θ/qv nudging,
+# subsidence, θ damping and the fixed-gradient top (#248, #254), the TKE
+# closure on the stretched grid. See docs/src/design/berlin_parent.md.
+#
+#   julia --project -m Aeolus run examples/urban/berlin_parent.toml
+#
+# Grids (--set physics.options.nesting.parent.refinement=[…] and .vertical):
+#   [2, 2, 4] stretched (this file): 192 × 192 × 53, Δx = 31.25 m, Δz = 25 m → 100 m
+#   [4, 4, 8] uniform: 96 × 96 × 60, Δx = 62.5 m, Δz = 50 m
+#   [16, 16, 8] stretched: 24 × 24 × 38 (berlin_parent_coarse.toml)
+# The subsidence sensitivity run: --set physics.options.nesting.parent.divergence=3e-6
+# (diverges during the day, #312: the run then stops, writes its tables up
+# to that point and is marked failed).
+#
+# The run folder's output/ holds parent.csv (z_i, surface fluxes, the
+# air-heat ledger terms per output), parent_theta.csv (θ profiles) and
+# results.toml (dt history, retries, the ledger by night and day windows);
+# berlin_parent_figures.jl draws the figures from them.
+
+schema_version = 2
+
+[run]
+# What runs and where its folder goes.
+legacy = "urban_parent"
+# the case name: part of the run folder name runs/<date>_<name>_<id>
+name = "parent"
+# the seed of the run's random numbers
+seed = 0
+# the scenario label (summer, winter, …): the output's comment; winter selects
+# the subarctic-winter humidity of the column radiation
+scenario = "summer"
+# the compute backend (Aeolus.Backends)
+backend = "cpu"
+# CPUBackend(serial = true): the single-task reference
+serial = false
+
+[checkpoint]
+# the parent alone runs to the end in one call
+every_seconds = inf
+keep = 2
+
+[output]
+# Output files.
+# output directory; "none": the run folder's output/. The flagship writes
+# examples/urban/output/alexanderplatz.nc, where the renderers
+# (alexanderplatz_animation.jl, alexanderplatz_surface_diagnostics.jl) read it
+path = "output"
+# simulated time between output files [s]
+cadence = 1800.0
+# file name of the NetCDF-4 output in [output] path (the run folder's output/
+# under aeolus run, else output/ in the working directory); "none": no NetCDF
+netcdf = "alexanderplatz.nc"
+# with the online nest: write the child's boundary slabs at every parent step,
+# the 3-D initial wind and the parent's mean profiles to this dynamic driver
+# (CFG-g #362; the file of an offline child); "none": not written
+child_boundaries = "none"
+
+[grid]
+# The child mesh (RegularGrid).
+# cells in x, y, z
+size = [64, 64, 64]
+# domain size; 400 m deep so that the Fernsehturm fits and the top sits in the
+# parent's uniform layers (#246) [m]
+extent = [1000.0, 1000.0, 400.0]
+# halo cells per side (3: WENO-Z5 moisture transport)
+halo = [3, 3, 3]
+
+[geometry]
+# The ground (static drivers) and the site.
+# the static driver of the child (CFG-f #361; AeolusPrep.jl writes it,
+# `aeolusprep static`, from data/berlin/alexanderplatz_real.osm, buildings of
+# 8 m and more, park LAI 2.5)
+static = "input/berlin_summer_static.nc"
+# the land use from [geometry] landuse in memory: any refinement
+parent_static = "none"
+# the nest parent's land-use table (`aeolusprep fetch-landuse`)
+landuse = "data/berlin_landuse_6km.csv"
+# latitude of the OSM projection's anchor (and of the solar position) [degree]
+lat0 = 52.522
+# longitude of the anchor [degree]
+lon0 = 13.41
+# the window centre relative to the anchor [m]
+offset = [0.0, 0.0]
+# height above sea level [m]
+elevation = 34.0
+# wall facets per cell face of the radiosity scene
+wall_subdivisions = 1
+
+[clock]
+# Date, start and steps.
+# the local date (29 June 2019: a clear day of the heat wave, #247)
+date = 2019-06-29
+# local clock = UTC + utc_offset (2: CEST) [h]
+utc_offset = 2.0
+# local hour at t = 0 [h]
+start_h = 6.0
+# the step (with the adaptive stepper: nsteps × dt is the simulated time) [s]
+dt = 2.0
+# steps to run (43200: 24 h)
+nsteps = 43200
+
+[cadence]
+# Periods (s) of the couplings' stages; [output] cadence is the output's.
+# the period named :radiation (used by buildings_citymean, cloud_shadow,
+# column_radiation, radiosity_sun) [s]
+radiation = 600.0
+# the period named :soil (used by aq_chem, surface_exchange) [s]
+soil = 30.0
+# the period named :surface (used by surface_exchange); "none": not set [s]
+surface = "none"
+
+[dynamics]
+# Parameters of the dynamical core.
+# kinematic viscosity ν [m^2 s^-1]
+nu = 2.0
+# reference potential temperature θ₀ of the buoyancy [K]
+theta0 = 293.0
+# gravitational acceleration [m s^-2]
+g = 9.81
+# Coriolis parameter [s^-1]
+f_coriolis = 0.0001
+# Smagorinsky coefficient C_s of the core
+c_s = 0.1
+# turbulent Prandtl number
+pr_t = 0.3333333333333333
+# the stability correction every eddy-viscosity sgs provider wraps its closure
+# in (P55-e, #187); none: uncorrected
+sgs_stability = "brown94"
+# velocity sponge rate at the top [s^-1]
+sponge_alpha_max = 0.05
+# the sponge starts at sponge_frac × Lz
+sponge_frac = 0.75
+# θ condition of a closed top (#254): initial_gradient, noflux or a gradient
+# in K/m [K m^-1]
+theta_top = "initial_gradient"
+
+[boundaries]
+# Lateral boundaries without the nest (N-open-d, #262).
+# the four sides when physics.nesting = false: periodic or open (fed by the
+# geostrophic wind and the initial θ)
+lateral = "periodic"
+# outflow condition of the open or nest faces (N-open-c, #260)
+outflow = "dirichlet"
+# cells: buildings closer than this to an open face are removed
+boundary_frame = 3
+# relax θ over the sponge layer toward the boundary data's profile
+theta_relaxation = true
+# columns closer than this to a lateral open face are left out of the
+# diagnostics compared with observations (the inflow fetch, #268) [m]
+analysis_buffer = 140.0
+
+[initial]
+# The initial state: the sounding, or the idealised profile.
+# radiosonde CSV of the initial θ(z), qv(z) and surface pressure; "none": the
+# idealised profile below
+sounding = "data/lindenberg_10393_20190629.csv"
+# the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl,
+# `aeolusprep dynamic --from-sounding`), used instead of sounding; or, with
+# physics.options.nesting.parent_driver = "offline", the parent-made driver of
+# the nest faces ([output] child_boundaries of the online run); "none": no
+# driver
+dynamic = "input/berlin_20190629_dynamic.nc"
+# idealised: θ at the ground [K]
+theta_surface = 293.0
+# idealised: base of the capping inversion [m]
+theta_inversion_z = 100.0
+# idealised: dθ/dz above it [K m^-1]
+theta_lapse = 0.003
+# initial u (without the nest) [m s^-1]
+u0 = 1.0
+# idealised: qv at the ground [kg kg^-1]
+qv0 = 0.01
+# idealised: qv(z) = qv0 exp(-z / qv_scale) [m]
+qv_scale = 800.0
+# initial surface temperature [K]
+ts0 = 285.0
+# water surfaces start at ts0 + ts_water_offset [K]
+ts_water_offset = 5.0
+# initial soil temperature [K]
+t_soil0 = 288.0
+# pressure at the ground; "none": from the sounding (101325 Pa for the
+# idealised profile) [Pa]
+p_surface = "none"
+
+[budgets]
+# The budgets (Aeolus.BudgetSystem).
+# top of the :canopy layer of the air-heat budget; nan: the tallest roof [m]
+canopy_top = nan
+
+[physics]
+# Which couplings run: a provider per exclusive slot, on/off per addon.
+buildings = "citymean"    # the buildings provider: citymean
+chemistry = "nox_o3_voc"    # the chemistry provider: nox_o3_voc, off
+column_radiation = "twostream"    # the column_radiation provider: twostream
+core = "boussinesq"    # the core provider: anelastic, boussinesq, pseudo_incompressible
+glazing = "glass_class"    # the glazing provider: glass_class
+ground = "soil_column"    # the ground provider: soil_column
+immersed_boundary = "direct_forcing"    # the immersed_boundary provider: direct_forcing
+microphysics = "kessler"    # the microphysics provider: kessler
+momentum_advection = "centered"    # the momentum_advection provider: centered, weno_z
+pressure_solver = "cosine_fft"    # the pressure_solver provider: cosine_fft, density_weighted_cg, density_weighted_direct, mg_cg, multigrid
+scalar_advection = "advection_schemes"    # the scalar_advection provider: advection_schemes
+sgs = "tke"    # the sgs provider: amd, dynamic, mlsgs, reynolds_stress, sigma, smagorinsky, tke, vreman
+surface_exchange = "most"    # the surface_exchange provider: most
+surface_radiation = "radiosity"    # the surface_radiation provider: radiosity
+timestepper = "adaptive"    # the timestepper provider: adaptive, fixed, imex
+cloud_shadow = true    # the additive coupling cloud_shadow on or off
+fog_dew = true    # the additive coupling fog_dew on or off
+geostrophic = true    # the additive coupling geostrophic on or off
+inflow_turbulence = true    # the additive coupling inflow_turbulence on or off
+moist_buoyancy = true    # the additive coupling moist_buoyancy on or off
+nesting = true    # the additive coupling nesting on or off
+pollutant = true    # the additive coupling pollutant on or off
+sw_modifiers = true    # the additive coupling sw_modifiers on or off
+traffic_heat = true    # the additive coupling traffic_heat on or off
+turbulence_diag = true    # the additive coupling turbulence_diag on or off
+veg_drag = true    # the additive coupling veg_drag on or off
+wall_model_facades = true    # the additive coupling wall_model_facades on or off
+
+[physics.options.aq_chem]
+background = {HNO3 = 0.5, NOx = 5.5, Ox = 45.0, VOC = 0.5}
+nox_street = 2.0e-9
+no2_fraction = 0.1
+isoprene_park = 3.0e-10
+OH_max = 5.0e6
+"ν" = 2.0
+z0m = [0.05, 0.05, 0.1, 0.0001, 0.05, 0.01]
+output_3d = ["NO2", "O3"]
+
+[physics.options.cloud_shadow]
+r_eff_liq = 10.0
+r_eff_ice = 30.0
+
+[physics.options.column_radiation]
+nz_upper = 60
+r_eff_liq = 10.0
+surface_sw = "twostream"
+p_surf = "none"
+
+[physics.options.geostrophic]
+U_g = 1.0
+V_g = 0.0
+mode = "pressure_gradient"
+"τ" = 1800.0
+sponge_to_geostrophic = true
+
+[physics.options.ground_soil]
+classes = [1, 5, 3]
+"θ0" = {1 = 0.1, 3 = 0.25, 5 = 0.1}
+texture = "loam"
+sand = 40
+clay = 20
+nlayers = 10
+
+[physics.options.inflow_turbulence]
+generator = "digital_filter"
+statistics = "parent_resolved"
+u_min = 0.5
+seed = 1
+statistics_interval = 60.0
+length_interval = 3600.0
+length_scale = nan
+
+[physics.options.micro_kessler]
+qv_max = 0.03
+
+[physics.options.momentum_weno_z]
+order = 5
+
+[physics.options.nesting]
+mode = "one_way"
+parent_driver = "aeolus"
+buffer = 2
+z_anterp = "canopy"
+"τ" = "none"
+reflux = true
+
+[physics.options.nesting.parent]
+# The nest parent (ParentConfig, #259): physics.options.nesting.parent.
+# horizontal centre of the parent box relative to the OSM anchor; "none": on
+# the child [m]
+center = "none"
+# the parent box [m]
+extent = [6000.0, 6000.0, 3000.0]
+# a parent cell is rx × ry × rz child cells
+refinement = [2, 2, 4]
+# stretched: Δz uniform up to z_uniform, then × ratio per level up to dz_max;
+# uniform: Δz everywhere
+vertical = "stretched"
+# top of the uniform layers (stretched) [m]
+z_uniform = 500.0
+# growth of Δz per level (stretched)
+ratio = 1.08
+# largest Δz (stretched) [m]
+dz_max = 100.0
+# halo cells per side
+halo = [2, 2, 2]
+# tiles: the tiled urban mosaic (#249); prescribed: the kinematic fluxes
+# q_surface, e_surface
+surface = "tiles"
+# prescribed kinematic heat flux, a function of the simulation time t (s):
+# {kind = "constant", value} or {kind = "series", t = […], value = […]}
+# (linear in t, constant beyond the ends) [K m s^-1]
+q_surface = {kind = "constant", value = 0.0}
+# prescribed kinematic moisture flux, a function of the simulation time t (s):
+# {kind = "constant", value} or {kind = "series", t = […], value = […]}
+# (linear in t, constant beyond the ends) [kg kg^-1 m s^-1]
+e_surface = {kind = "constant", value = 0.0}
+# step of the surface tiles [s]
+surface_period = 60.0
+# wind floor of the surface layer [m s^-1]
+u_min = 0.5
+# column radiation on the parent's mean column
+radiation = true
+# period of the column radiation [s]
+radiation_period = 600.0
+# the geostrophic pressure gradient of the sounding wind above z_g
+geostrophic = true
+# height of the geostrophic wind; nan: 1.2 × the sounding's largest z_i [m]
+z_g = nan
+# θ/qv nudging time scale; inf: off [s]
+nudging_tau = 21600.0
+# the nudging acts above nudging_factor × the running maximum of z_i
+nudging_factor = 1.2
+# depth of the nudging weight's ramp [m]
+nudging_depth = 200.0
+# large-scale divergence of the subsidence w_s = -D z (3e-6 diverges by day,
+# #312) [s^-1]
+divergence = 0.0
+# θ reference damping and velocity sponge rate [s^-1]
+damping_rate = 0.01
+# the damping acts over the top damping_frac of the domain
+damping_frac = 0.25
+# the θ top: the fixed initial gradient (#254) or no flux
+theta_top = "initial_gradient"
+# initial θ(z): "sounding" (the child's) or {kind = "constant", value} or
+# {kind = "table", z = […], values = […]} (linear in z, constant beyond the
+# ends)
+theta_init = "sounding"
+# initial qv(z): "sounding" (the child's) or {kind = "constant", value} or
+# {kind = "table", z = […], values = […]} (linear in z, constant beyond the
+# ends)
+qv_init = "sounding"
+# initial u(z): "geostrophic" or {kind = "constant", value} or {kind =
+# "table", z = […], values = […]} (linear in z, constant beyond the ends)
+u_init = "geostrophic"
+# uniform random θ amplitude in the lowest perturbation_depth [K]
+perturbation = 0.2
+# depth of the initial θ perturbation [m]
+perturbation_depth = 100.0
+# seed of the perturbation
+seed = 259
+# simulated length of a stand-alone parent run [h]
+hours = 24.0
+# cadence of the parent's diagnostics [s]
+output_period = 1800.0
+# the parent's closure: tke (Deardorff) or smagorinsky (the core's)
+sgs = "tke"
+# rk3 (SSP-RK3 under step_adaptive!) or euler
+stepper = "rk3"
+# advective Courant number of the parent's step pick
+c_advective = 0.9
+# carry qv
+moisture = true
+
+[physics.options.pollutant]
+stacks = [[0.0, 0.0, 60.0], [-150.0, 150.0, 25.0], [200.0, -100.0, 40.0]]
+tau = 3600.0
+
+[physics.options.pressure_multigrid]
+tol = 1.0e-10
+maxcycles = 50
+cycle = "V"
+
+[physics.options.pressure_mg_cg]
+tol = 1.0e-10
+maxit = 200
+
+[physics.options.pressure_density_weighted]
+tol = 1.0e-10
+maxit = 500
+
+[physics.options.radiosity_sun]
+aod380 = 0.24
+aod500 = 0.16
+precipitable_water = 2.0
+ozone = 0.33
+albedo = 0.15
+
+[physics.options.scalar_advection]
+scheme = "weno_z5"
+positivity = true
+refresh_halos = true
+weighted = true
+sgs_diffusion = true
+
+[physics.options.sgs_smagorinsky]
+stress = "symmetric"
+scalar_tensor = "diagonal"
+diapycnal = "none"
+slope_max = 1.0
+
+[physics.options.sgs_dynamic]
+averaging = "lagrangian"
+scale_dependent = true
+cadence = 4
+filter_ratio = 3.0
+cs_max = 0.5
+stress = "symmetric"
+scalar_tensor = "diagonal"
+diapycnal = "none"
+slope_max = 1.0
+
+[physics.options.sgs_mlsgs]
+fn = "none"
+stress = "symmetric"
+scalar_tensor = "diagonal"
+diapycnal = "none"
+slope_max = 1.0
+
+[physics.options.sgs_amd]
+C = 0.3
+stress = "symmetric"
+
+[physics.options.sgs_vreman]
+C_s = "none"
+stress = "symmetric"
+
+[physics.options.sgs_reynolds_stress]
+wall_cap = true
+surface = true
+e_min = 0.0001
+
+[physics.options.sgs_sigma]
+"C_σ" = 1.35
+stress = "symmetric"
+
+[physics.options.sgs_tke]
+wall_cap = true
+surface = true
+e_min = 0.0001
+
+[physics.options.surface_exchange]
+U_min = 0.1
+z0h_ratio = 0.1
+period = "none"
+wall_formulation = "local"
+input_T_f = 10.0
+h_wm_cells = 1
+h_wm_classes = [3, 4]
+wall_model = "equilibrium"
+tble_terms = "pressure_gradient"
+dynamic_refine = 4
+dynamic_filter = "spectral"
+dynamic_C_d = 1.0
+z0m = {1 = 0.05, 2 = 0.05, 3 = 0.1, 4 = 0.0001, 5 = 0.05, 6 = 0.01}
+
+[physics.options.sw_modifiers]
+k_leaf = 0.5
+
+[physics.options.timestep_adaptive]
+C_advective = 0.5
+C_diffusive = 0.25
+C_buoyancy = 0.5
+C_coriolis = 0.5
+dt_min = 0.01
+dt_max = 10.0
+growth_max = 1.1
+max_retries = 3
+divergence_tol = 1.0e-6
+max_velocity = 50.0
+imex = false
+
+[physics.options.timestep_imex]
+tol = 1.0e-8
+maxit = 200
+
+[physics.options.traffic_heat]
+Q_urban = 8.0
+
+[physics.options.turbulence_diag]
+stability = "brown"
+gamma_threshold = 0.2
+gamma_normalization = "plane"
+"relam_νt_ratio" = 0.01
+relam_normalization = "volume"
+
+[physics.options.veg_drag]
+cd = 0.2
+k_height = 3
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): the coarse grid, 3 min. Paths resolve against this file's directory.
+[test]
+overrides = [
+    "physics.options.nesting.parent.refinement=[16, 16, 8]",
+    "physics.options.nesting.parent.hours=0.05",
+    "physics.options.nesting.parent.output_period=60.0",
+]

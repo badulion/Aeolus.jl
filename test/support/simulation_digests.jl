@@ -1,6 +1,6 @@
 # The `simulation`-config digests of the component pipeline (ONE-a, #450).
 #
-# Each variant is a shipped `examples/configs/*.toml` with overrides that
+# Each variant is a shipped `examples/<case>/<case>.toml` with overrides that
 # switch on one or more of the core's pieces (the SGS closures, Coriolis, the
 # sponge, the surface θ flux, the advection), on both cores and with every
 # stepper (euler, rk3, adaptive). `simulation_digests()` runs every variant
@@ -14,7 +14,9 @@ using Aeolus
 using Aeolus.Config
 using Aeolus.IO: fnv1a64
 
-const SD_CONFIGS = normpath(joinpath(@__DIR__, "..", "..", "examples", "configs"))
+const SD_EXAMPLES = normpath(joinpath(@__DIR__, "..", "..", "examples"))
+"The shipped config of the example case `name`, `examples/<name>/<name>.toml`."
+sd_config(name) = joinpath(SD_EXAMPLES, name, name * ".toml")
 const SD_SMALL = ["grid.size=[16,16,16]", "fftw.planner=\"estimate\"", "time.duration=\"none\""]
 sd_steps(n) = "time.nsteps=$n"
 
@@ -91,15 +93,15 @@ sd_anelastic(label) = occursin("anelastic", label)
 # master a22b57ba (simulation_digests_exd.toml).
 const SD_EXD_TEST = ["time.duration=\"none\"", "time.nsteps=10"]
 const SD_EXD_VARIANTS = [
-    "dcbl_radiation_lsm"     => ("coupled/configs/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]"]),
-    "dcbl_radiation_lsm_rk3" => ("coupled/configs/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]", "time.scheme=\"rk3\""]),
-    "heated_plume"           => ("coupled/configs/heated_plume.toml", ["grid.size=[16,16,16]"]),
-    "flow_past_cube"         => ("coupled/configs/flow_past_cube.toml", String[]),
-    "flow_past_cube_rk3"     => ("coupled/configs/flow_past_cube.toml", ["time.scheme=\"rk3\""]),
-    "moist_convection"       => ("coupled/configs/moist_convection.toml", ["grid.size=[12,12,16]"]),
-    "channel_flow"           => ("kernels/configs/channel_flow.toml", String[]),
-    "decaying_hit"           => ("kernels/configs/decaying_hit.toml", ["grid.size=[16,16,16]"]),
-    "pollution_plume"        => ("kernels/configs/pollution_plume.toml", String[]),
+    "dcbl_radiation_lsm"     => ("dcbl_radiation_lsm/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]"]),
+    "dcbl_radiation_lsm_rk3" => ("dcbl_radiation_lsm/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]", "time.scheme=\"rk3\""]),
+    "heated_plume"           => ("heated_plume/heated_plume.toml", ["grid.size=[16,16,16]"]),
+    "flow_past_cube"         => ("flow_past_cube/flow_past_cube.toml", String[]),
+    "flow_past_cube_rk3"     => ("flow_past_cube/flow_past_cube.toml", ["time.scheme=\"rk3\""]),
+    "moist_convection"       => ("moist_convection/moist_convection.toml", ["grid.size=[12,12,16]"]),
+    "channel_flow"           => ("channel_flow/channel_flow.toml", String[]),
+    "decaying_hit"           => ("decaying_hit/decaying_hit.toml", ["grid.size=[16,16,16]"]),
+    "pollution_plume"        => ("pollution_plume/pollution_plume.toml", String[]),
 ]
 
 """
@@ -154,7 +156,7 @@ function simulation_digests(; inputs = Dict{String,Vector{String}}(), only = not
     out = Dict{String,Dict{String,String}}()
     for (label, (name, ovr)) in variants
         only === nothing || label in only || continue
-        cfg = load_run_config(joinpath(SD_CONFIGS, name * ".toml");
+        cfg = load_run_config(sd_config(name);
                               overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))
         r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
         s = Base.invokelatest(state_fields, r.obj)

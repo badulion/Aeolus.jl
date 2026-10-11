@@ -6,8 +6,7 @@ ONE-b #451): a config without `[run] legacy` builds a
 [`Model`](@ref Aeolus.Components.Model) of the Boussinesq or the
 anelastic core on a box with its components, and runs it. See
 [`SimulationDriverType`](@ref) and the Run configuration page; shipped
-configs are in `examples/configs/`, `examples/kernels/configs/` and
-`examples/coupled/configs/`.
+configs are the TOML files of the example cases, `examples/<case>/<case>.toml`.
 """
 module SimulationDriver
 

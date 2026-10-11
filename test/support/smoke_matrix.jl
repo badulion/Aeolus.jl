@@ -5,7 +5,7 @@
 # runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.UrbanCase`
 # and loads Aeolus, `interior_view` and `Random.Xoshiro`.
 #
-# Every run is examples/urban/configs/berlin_smoke.toml with `--set`
+# Every run is examples/urban/berlin_smoke.toml with `--set`
 # overrides (CFG-c, #358): `smoke_specs` derives what each run changes
 # from the registry, `smoke_overrides` writes it as overrides, and
 # `smoke_matrix` loads the configs.

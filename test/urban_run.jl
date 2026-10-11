@@ -139,7 +139,7 @@ end
     @test isempty(offenders)
     isempty(offenders) || @info "examples/urban scripts that build or run the model" offenders
     # every config validates; every script is analysis of output
-    for f in readdir(joinpath(ex, "configs"); join = true)
+    for f in readdir(ex; join = true)
         endswith(f, ".toml") || continue
         @test load_run_config(f).run.legacy in ("urban", "urban_parent")
     end

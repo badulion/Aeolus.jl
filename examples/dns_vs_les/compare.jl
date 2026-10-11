@@ -1,7 +1,7 @@
 # =========================================================================
 # Decaying isotropic turbulence: LES against DNS, a posteriori (ONE-g, #456)
 #
-# The runs are the configurations of examples/dns_vs_les/configs/: the
+# The runs are the configurations of examples/dns_vs_les/: the
 # 256³ DNS (dns.toml) and the 64³ LES of the SGS models (les_<model>.toml),
 # all started from the same isotropic field ([initial] field: the LES
 # start is the DNS start truncated to its modes). This script only reads
@@ -19,9 +19,9 @@
 # prints the table and writes examples/dns_vs_les/output/dns_vs_les.svg
 # and dns_vs_les.csv.
 #
-#   julia --project -m Aeolus run examples/dns_vs_les/configs/dns.toml
+#   julia --project -m Aeolus run examples/dns_vs_les/dns.toml
 #   for m in smagorinsky dynamic_smagorinsky amd vreman sigma; do
-#       julia --project -m Aeolus run examples/dns_vs_les/configs/les_$m.toml; done
+#       julia --project -m Aeolus run examples/dns_vs_les/les_$m.toml; done
 #   julia --project examples/dns_vs_les/compare.jl runs/*_dns_* runs/*_les_*
 #
 # The first folder whose run is named "dns" is the reference.

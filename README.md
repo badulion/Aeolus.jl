@@ -288,8 +288,8 @@ doing its job. Run the full test suite with `Pkg.test()`, or a worked case
 directly:
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
-julia --project -m Aeolus run examples/configs/buoyant_convection.toml
+julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml
+julia --project -m Aeolus run examples/buoyant_convection/buoyant_convection.toml
 ```
 
 ---
@@ -348,11 +348,11 @@ transport of the seven advected tracers (qv, ql and the five species;
 # 1. In an AeolusPrep.jl checkout: fetch a 1 km box from OpenStreetMap and
 #    preprocess it into the static driver of the config
 julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
-julia --project -m AeolusPrep static ../Aeolus.jl/examples/urban/configs/berlin_summer.toml \
+julia --project -m AeolusPrep static ../Aeolus.jl/examples/urban/berlin_summer.toml \
     --source data/berlin/alexanderplatz_real.osm
 
 # 2. Simulate 24 hours — writes CF-1.8 NetCDF and the run's checks (results.toml)
-julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
+julia --project -m Aeolus run examples/urban/berlin_summer.toml
 
 # 3. Render the diurnal cycle as an animation (reads the NetCDF only)
 julia --project=. examples/urban/alexanderplatz_animation.jl

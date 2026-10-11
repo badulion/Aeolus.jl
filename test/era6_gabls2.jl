@@ -1,6 +1,6 @@
 # N-parent-c (#248), ONE-g (#456) — LargeScaleForcing: GABLS2 (reduced) on
 # the one model, the validation run of large-scale subsidence (check 8 of
-# the issue): the configuration examples/sbl/configs/gabls2.toml with its
+# the issue): the configuration examples/sbl/gabls2.toml with its
 # dynamic driver (the surface θ series and the subsidence from 40 h), the
 # heat budget with the subsidence measured as the large_scale_forcing
 # term, the residual-layer inversion lowered by about the passive descent,

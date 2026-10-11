@@ -86,7 +86,7 @@ Details: [`docs/src/testing.md`](docs/src/testing.md).
 Every piece of physics is tested **in its own module's tests**, with small
 synthetic setups (analytic limits, conservation, published benchmarks) —
 not through the Berlin case. The Berlin (Alexanderplatz) run,
-`julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml`,
+`julia --project -m Aeolus run examples/urban/berlin_summer.toml`,
 is an **example** of the urban run type (`Aeolus.UrbanCase`, the `urban`
 driver, #438): couple new physics into it when that makes sense, but
 nothing requires it, and it has no test suite of its own (maintainer

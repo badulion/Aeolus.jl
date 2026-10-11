@@ -1,6 +1,6 @@
 # The Berlin case configured from TOML (CFG-c, #358): the `urban` run
 # driver (src/urban/core/config_schema.jl, EX-a #438) and the configs of
-# examples/urban/configs/.
+# examples/urban/.
 #
 # Acceptance tests of the issue covered here:
 #   * field for field: CaseConfig(load_run_config("berlin_<s>.toml")) equals
@@ -224,7 +224,7 @@ end
     @test_throws ArgumentError BCC.toml_form(f)
     # [output]: netcdf in path; "none" → no file; the run folder's output/ under run_config
     c = BCC.CaseConfig(load_run_config(berlin_toml("summer")))
-    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "..", "output", "alexanderplatz.nc"))
+    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "output", "alexanderplatz.nc"))
     c = BCC.CaseConfig(load_run_config(berlin_toml("summer"); overrides = ["output.path=\"none\""]); run_output = "/tmp/x")
     @test c.output_path == "/tmp/x/alexanderplatz.nc"
     @test ld().output_path === nothing

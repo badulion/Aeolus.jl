@@ -6,7 +6,7 @@
 # `physics` / `options` dictionaries the coupling registry reads to decide
 # which couplings run and how. Its defaults and its TOML form are the
 # `urban` run-configuration schema (core/config_schema.jl, CFG-c #358);
-# the Berlin case is the TOML files in examples/urban/configs/.
+# the Berlin case is the TOML files in examples/urban/.
 
 """
     CaseConfig(; kwargs...)
@@ -19,7 +19,7 @@ run-configuration schema (`core/config_schema.jl`, CFG-c #358; `aeolus
 options urban` lists them with the TOML key of every field): the first
 form is the all-defaults config with `kwargs` set on top (it has no
 ground: set `static`). The second loads a run
-configuration file (the Berlin case: `examples/urban/configs/berlin_*.toml`)
+configuration file (the Berlin case: `examples/urban/berlin_*.toml`)
 and then applies `kwargs` (`physics` and `options` merge per coupling
 over the file's). The third converts a loaded
 [`RunConfig`](@ref Aeolus.Config.RunConfig) of the `urban` driver.

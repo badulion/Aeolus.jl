@@ -1,11 +1,11 @@
 # Lindenberg, 29/30 June 2019: the checks of the Berlin parent alone against
 # the soundings — checks 4 and 6 of the parent validation (N-parent-e,
 # #259). Analysis only (EX-a, #438): it reads the output of a finished run
-# of examples/urban/configs/berlin_parent_coarse.toml (24 h on the coarse
+# of examples/urban/berlin_parent_coarse.toml (24 h on the coarse
 # parent, 24 × 24 × 38, Δx = 250 m, ~6 min wall) and the sounding driver,
 # and runs nothing:
 #
-#     julia --project -m Aeolus run examples/urban/configs/berlin_parent_coarse.toml
+#     julia --project -m Aeolus run examples/urban/berlin_parent_coarse.toml
 #     julia --project examples/urban/berlin_parent_lindenberg_check.jl <run folder>
 #
 #   4. z_i at 14 LT against the 12 UTC Lindenberg sounding, θ at 500 m and

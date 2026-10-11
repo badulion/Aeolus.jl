@@ -21,7 +21,7 @@ every legacy case's.
 reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "urban", "urban_parent",
                                          Aeolus.RunDrivers.DRIVER_NAMES)))
 
-const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))
+const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "input"))
 
 """
     generate_reference(dir = joinpath(@__DIR__, "src", "reference")) -> Vector{String}

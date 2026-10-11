@@ -24,11 +24,11 @@ on GRIBDatasets).
 
 ```bash
 # in an AeolusPrep.jl checkout
-julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml \
+julia --project -m AeolusPrep static <aeolus>/examples/urban/berlin_summer.toml \
       --source data/berlin/alexanderplatz_real.osm --min-height 8 --park-lai 2.5
-julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/berlin_summer.toml
 julia --project -m AeolusPrep dynamic --from-era5 data/era5/era5_lindenberg_20190629_*.nc \
-      --config <aeolus>/examples/configs/lindenberg_era5.toml --lat 52.2085 --lon 14.118
+      --config <aeolus>/examples/lindenberg_era5/lindenberg_era5.toml --lat 52.2085 --lon 14.118
 julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed driver, reproduced?
 ```
 
@@ -121,8 +121,8 @@ the source's provenance lines.
 ## The dynamic driver
 
 ```bash
-julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
-julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
+julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/berlin_summer.toml
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
 ```
 
 One schema,
@@ -201,7 +201,7 @@ pressure reduced from the launch site ([`surface_pressure_at`](@ref Aeolus.Input
 [`forcing_dynamic_inputs`](@ref Aeolus.InputDrivers.forcing_dynamic_inputs)
 holds the `ForcingTable`s of a case's forcing (GABLS, CASES-99); a number
 stays in the case's config. The committed drivers of the SBL
-configurations (`examples/sbl/configs/input/*_dynamic.nc`: GABLS2 and
+configurations (`examples/sbl/input/*_dynamic.nc`: GABLS2 and
 CASES-99 the surface θ series and the subsidence, GABLS3 the geostrophic
 wind, the advective tendencies and the 0.25 m θ series, GABLS4 the surface
 θ series) were written from the case tables by the former `sbl` run type
@@ -247,7 +247,7 @@ its profiles set the initial u, v, θ (and qv), and lateral faces set to
 `boundaries.x`/`y = "open"` take its boundary planes through a
 [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed), blended
 linearly in time (boussinesq core, uniform grid, z walls).
-`examples/configs/lindenberg_era5.toml` is a 16³ open box over
+`examples/lindenberg_era5/lindenberg_era5.toml` is a 16³ open box over
 Lindenberg reading the committed `input/lindenberg_era5_dynamic.nc`
 (1.4 MB; ERA5 of 2019-06-29 00–12 UTC at 52.2085 N, 14.118 E); the file is
 hashed under `[inputs]` of `run.toml`, and 20 steps round-trip bit for bit
@@ -255,10 +255,10 @@ hashed under `[inputs]` of `run.toml`, and 20 steps round-trip bit for bit
 
 ## The Berlin case
 
-`examples/urban/configs/berlin_<s>.toml` name their drivers in
+`examples/urban/berlin_<s>.toml` name their drivers in
 `[geometry] static` and `parent_static` (relative to the config, hashed
 under `[inputs]` of `run.toml`); the generated files are committed in
-`examples/urban/configs/input/` (all of them together 790 KB; each is
+`examples/urban/input/` (all of them together 790 KB; each is
 under the 2 MB limit for committed drivers) with their source hashes.
 A missing file is a configuration error before any run folder is made,
 and it prints the `aeolusprep static <config>` command that makes it.

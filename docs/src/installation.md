@@ -44,9 +44,9 @@ tiers, the runner's options and measured times.
 ## Running examples
 
 ```bash
-$ julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
-$ julia --project -m Aeolus run examples/configs/buoyant_convection.toml
-$ julia --project -m Aeolus run examples/configs/scalar_advection_2d.toml
+$ julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml
+$ julia --project -m Aeolus run examples/buoyant_convection/buoyant_convection.toml
+$ julia --project -m Aeolus run examples/scalar_advection_2d/scalar_advection_2d.toml
 ```
 
 An example is a TOML file (and its input drivers) run by `aeolus run`; the

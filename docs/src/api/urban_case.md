@@ -12,7 +12,7 @@ moved into the package unchanged in its physics: the Berlin smoke run, the
 Berlin scenarios are bit for bit those of before the move.
 
 The Berlin (Alexanderplatz) case is now configuration only:
-`examples/urban/configs/berlin_*.toml`, its static drivers
+`examples/urban/berlin_*.toml`, its static drivers
 (`configs/input/*_static.nc`: the OpenStreetMap buildings and the parent's
 land-use tiles), its dynamic driver (`configs/input/berlin_20190629_dynamic.nc`:
 the Lindenberg sounding) and the source data in `examples/urban/data/`.
@@ -33,9 +33,9 @@ config is an urban case's file with `[run] legacy = "urban_parent"` (and
 file into the struct `build_case` consumes.
 
 ```bash
-julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
-julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml
-julia --project -m Aeolus run examples/urban/configs/berlin_parent.toml
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set clock.nsteps=1800
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml
+julia --project -m Aeolus run examples/urban/berlin_parent.toml
 ```
 
 ### The run's own checks: `results.toml`
@@ -54,7 +54,7 @@ failed. These are what the by-hand `examples/urban/berlin_checks.jl` and
 ## Input data: AeolusPrep.jl
 
 The case reads its ground, its nest parent's land-use tiles and its
-sounding from input drivers (`examples/urban/configs/input/`). They, and
+sounding from input drivers (`examples/urban/input/`). They, and
 the sources they are made from, are made by the companion package
 AeolusPrep.jl (ONE-h, #457; [Input drivers](input_drivers.md)):
 
@@ -72,7 +72,7 @@ The Berlin data were made with
 ```bash
 # in an AeolusPrep.jl checkout, <aeolus> the Aeolus checkout
 julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
-julia --project -m AeolusPrep fetch-landuse <aeolus>/examples/urban/configs/berlin_summer.toml --min-height 8
+julia --project -m AeolusPrep fetch-landuse <aeolus>/examples/urban/berlin_summer.toml --min-height 8
 julia --project -m AeolusPrep fetch-sounding --station GMM00010393 --elevation 112 \
     --launches 2019-06-29T00,2019-06-29T06,2019-06-29T12,2019-06-29T18,2019-06-30T00,2019-06-30T06 \
     --out <aeolus>/examples/urban/data/lindenberg_10393_20190629.csv

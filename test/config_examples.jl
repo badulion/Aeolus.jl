@@ -17,7 +17,7 @@ using Aeolus.Fields: interior_view
 import NCDatasets
 
 const EX_DIR = joinpath(pkgdir(Aeolus), "examples")
-const TGV_CFG = joinpath(EX_DIR, "configs", "taylor_green_vortex.toml")
+const TGV_CFG = joinpath(EX_DIR, "taylor_green_vortex", "taylor_green_vortex.toml")
 
 ex_file(text) = (p = joinpath(mktempdir(), "sweep.toml"); write(p, text); p)
 
@@ -124,7 +124,7 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# examples/kernels/: 04_cloud_spinup, the Kessler box on the model (ONE-i #458)
+# examples/cloud_spinup/: kernel demo 04, the Kessler box on the model (ONE-i #458)
 # ---------------------------------------------------------------------------
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
@@ -141,7 +141,7 @@ include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
     for _ in 1:8
         apply_kessler_step!(qv, ql, qr, 60.0; Vt = :spectrum)
     end
-    cfg = load_run_config(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
+    cfg = load_run_config(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
     root = mktempdir()
     r = run_config(cfg; root = root, console = false, repo = mktempdir())
     sim = Aeolus.SimulationDriver.simulation(r.obj)
@@ -170,7 +170,7 @@ include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 end
 
 @testset "round trip from run.toml (kernels: cloud_spinup.toml), bit-identical" begin
-    r = roundtrip_check(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
+    r = roundtrip_check(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
     @test r.fields_equal && r.config_equal && r.results_equal
 end
 

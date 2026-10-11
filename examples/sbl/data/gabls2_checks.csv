@@ -1,4 +1,4 @@
-# GABLS2 reference bands for the in-model checks of examples/sbl/configs/gabls2.toml ([checks.reference]), one row
+# GABLS2 reference bands for the in-model checks of examples/sbl/gabls2.toml ([checks.reference]), one row
 #   per quantity. Derived from gabls2_reference.csv (its header gives the sources and the digitisation): the SCM
 #   ranges at 30 h (end of the first night) and the LES screen values of night 2 at 48 h (00 LT 24 October).
 #   les_theta2m_48: the 2 m temperature band 1.9-3.3 degC converted to the potential temperature the model writes,

@@ -562,7 +562,7 @@ test suite; they were then the `smoke` part of the by-hand
 **`test/urban_checks.jl`** (full tier; `julia --project=. test/run.jl --only
 urban_checks.jl`), while every run writes its ledger closure to
 `output/results.toml`. They
-run the case in `examples/urban/configs/berlin_smoke.toml`
+run the case in `examples/urban/berlin_smoke.toml`
 (each run of the matrix is that file plus `--set` overrides, CFG-c #358): a
 250 m × 250 m × 100 m window of the real OSM file (16 × 16 × 16,
 dx = 15.6 m, 312.5 m south of the anchor, 69 building and 50 park

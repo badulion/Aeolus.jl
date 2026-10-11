@@ -1,0 +1,113 @@
+# GABLS2 / CASES-99 with and without the SGS stability correction (P58-d,
+# #194): cases99.toml (gabls2.toml with the towers: from 16 LT 22 October
+# for 48 h on 64 × 64 × 128, 37.5 m / 12.5 m, the subsidence on θ from
+# 40 h) as a sweep, one run folder per member. examples/sbl/gabls2.jl
+# compares the members with the SCM ranges, the screen-level values and
+# the CASES-99 hockey stick of Sun et al. (2012).
+#
+#   julia --project -m Aeolus run examples/sbl/cases99_closures.toml
+#   julia --project -m Aeolus run examples/sbl/cases99_closures.toml --set grid.size=[48,48,80]
+#   julia --project -m Aeolus run examples/sbl/cases99_closures.toml --set large_scale_forcing.subsidence=false   # without subsidence
+#   julia --project examples/sbl/gabls2.jl runs/*cases99*
+
+schema_version = 2
+dynamic_driver = "input/gabls2_dynamic.nc"
+
+[run]
+name = "cases99"
+seed = 1
+
+[time]
+scheme = "rk3"
+dt = "adaptive"
+cfl = 1.2
+start = 57600.0                # 16 LT 22 Oct (s after 00 LT)
+duration = 172800.0            # to 64 h local: 00 LT 25 Oct
+
+[grid]
+size = [64, 64, 128]           # 37.5 m / 12.5 m
+extent = [2400.0, 2400.0, 1600.0]
+
+[dynamics]
+theta0 = 288.0
+
+[boundaries]
+z = "free_slip"
+
+[initial]
+theta = {kind = "table", z = [0.0, 200.0, 850.0, 900.0, 1000.0, 2000.0, 3500.0, 4000.0], values = [288.0, 286.0, 286.0, 288.0, 292.0, 300.0, 310.0, 312.0]}
+u = {kind = "constant", value = 3.0}
+v = {kind = "constant", value = -9.0}
+perturbation_amplitude = 0.2   # uniform in [-0.1, 0.1] K
+perturbation_depth = 200.0
+velocity_perturbation = {kind = "uniform", amplitude = 1.0, depth = 200.0, components = ["u", "v"], project = true}
+
+[coriolis]
+f = 8.8983571e-5
+
+[large_scale_forcing]
+u_g = 3.0
+v_g = -9.0
+subsidence = true
+
+[surface_layer]
+enabled = true
+z0m = 0.03
+z0h = 0.003
+temperature = {kind = "driver"}
+stability = {family = "businger_dyer_log_linear", beta = 5.0}
+rho_cp = 1194.0703526801676    # 97200/(287.05 × 285) × 1005
+
+[towers]
+below = 60.0
+window = 300.0
+hours = [18.0, 6.0]
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+pr_t = 0.3333333333333333
+stability = "brown_et_al_1994"
+stress = "symmetric"
+
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0               # 0.75 Lz
+target = "geostrophic"
+
+[output]
+variables = ["u_profile", "v_profile", "theta_profile", "wind_speed_profile", "stress_profile", "heat_flux_profile",
+             "u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "bl_height", "jet_speed",
+             "jet_height", "inversion_height", "theta_2m", "wind_10m", "surface_temperature", "tower_threshold"]
+averaging = "mean"
+cadence = 3600.0
+series_cadence = 600.0
+
+[checks]                       # results.toml: the hockey-stick threshold against CASES-99 (Sun et al. 2012)
+finite = { required = true }
+reference_file = "data/cases99_sun2012_threshold.csv"
+# the RMS difference of V_s(z) over the tower levels; 1 m/s: four bins of
+# 0.25 m/s, the spread of the levels of Sun et al. (2012) Fig. 3a
+reference.v_s_ms = { required = false, variable = "tower_threshold", tolerance = 1.0 }
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
+keep = 2
+
+[sweep]
+axis = [ { key = "sgs.stability", values = ["brown_et_al_1994", "none"] } ]
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,32]",
+    "towers.hours=[0.0,24.0]",
+    "towers.window=30.0",
+    "time.duration=\"none\"",
+    "time.nsteps=10",
+    "checks.reference={}",
+    "checks.reference_file=\"none\"",
+]
+member = "none"

@@ -44,7 +44,7 @@ const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
     inputs = sd_made_inputs()
     for (label, (name, ovr)) in SD_VARIANTS
         sd_anelastic(label) && continue      # new physics in ONE-j (#460): see the next testset
-        cfg = load_run_config(joinpath(SD_CONFIGS, name * ".toml");
+        cfg = load_run_config(sd_config(name);
                               overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))
         r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
         @test r.obj.model isa Model
@@ -104,10 +104,10 @@ end
         @test (label, d[key]) == (label, ref[label]["diagnostics_csv"])
     end
     # the couplings are one component of the domain, attached where they acted before
-    cfg = load_run_config(joinpath(SD_CONFIGS, "..", "coupled", "configs", "flow_past_cube.toml");
+    cfg = load_run_config(sd_config("flow_past_cube");
                           overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\""))
     r = cd(() -> Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg),
-           joinpath(SD_CONFIGS, "..", "coupled", "configs"))
+           joinpath(SD_EXAMPLES, "flow_past_cube"))
     c = only(x for x in only(r.model.domains).components if x isa Aeolus.SimulationDriver.SimulationCouplings)
     @test map(st -> st.name, CPC.stages(c)) == (:surface_flux, :body_force, :surface_update)
 end

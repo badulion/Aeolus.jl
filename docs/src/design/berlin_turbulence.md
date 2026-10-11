@@ -85,7 +85,7 @@ output record.
 ### Inflow fetch (#266) and the inflow generator (#268)
 
 N-inflow-d measures the development length behind a synthetic inflow on
-the periodic half channel (`examples/nesting/configs/inflow_fetch.toml`, theory:
+the periodic half channel (`examples/inflow_fetch/inflow_fetch.toml`, theory:
 [Development length behind the inflow](../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d))).
 Its diagnostics (`FetchStatistics`, `development_length`) are not coupled;
 the generator itself is, on the nested child's lateral faces: the addon

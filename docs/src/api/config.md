@@ -9,8 +9,8 @@ canonical form from which the run can be rebuilt. The loader, the
 all build on it. The guide is [Run configuration](../design/run_configuration.md).
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml   # Julia ≥ 1.12
-bin/aeolus run examples/configs/taylor_green_vortex.toml                  # any Julia
+julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml   # Julia ≥ 1.12
+bin/aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml                  # any Julia
 ```
 
 ## Quick reference
@@ -411,7 +411,7 @@ This config is, bit for bit, the simulation the script built before
     sponge). AeolusPrep.jl writes one from ERA5 (`aeolusprep dynamic
     --from-era5 <files…> --config <config.toml> --lat … --lon …`;
     [Input drivers](input_drivers.md), CFG-h #363);
-    `examples/configs/lindenberg_era5.toml` is the example, with its
+    `examples/lindenberg_era5/lindenberg_era5.toml` is the example, with its
     committed driver.
 
 Its options, every key with type, default, units, range and doc: [Options: the model](../reference/options/model.md) (generated from the schema; `aeolus options` prints the same).
@@ -422,7 +422,7 @@ Its options, every key with type, default, units, range and doc: [Options: the m
 (`src/urban/core/config_schema.jl`; CFG-c #358 as the `berlin` example
 driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 `urban_parent` runs the nest parent of the same config alone. The Berlin
-(Alexanderplatz) case is shipped as files in `examples/urban/configs/`:
+(Alexanderplatz) case is shipped as files in `examples/urban/`:
 
 | file | what |
 | :-- | :-- |
@@ -436,8 +436,8 @@ driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 Each file is complete (no `extends`, ONE-b #451).
 
 ```bash
-julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set clock.nsteps=1800
-julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set clock.nsteps=1800
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
 ```
 
 There is no wrapper script (`alexanderplatz_diurnal.jl` was removed in
@@ -503,7 +503,7 @@ Its options, the `[physics.options.<coupling>]` tables included: [Options: legac
 
 ## The stable-boundary-layer cases
 
-GABLS1-4 and CASES-99 (`examples/sbl/configs/`) are configurations of the
+GABLS1-4 and CASES-99 (`examples/sbl/`) are configurations of the
 model since ONE-g (#456): the geostrophic forcing and the dynamic driver's
 large-scale tables are `[large_scale_forcing]`
 ([`LargeScale`](@ref Aeolus.Components.LargeScale)), the Monin-Obukhov
@@ -511,7 +511,7 @@ surface layer over the prescribed surface temperature `[surface_layer]`
 ([`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer)), the sponge
 retargeted at the geostrophic wind or the plane mean `[sponge] target`,
 the CASES-99 towers `[towers]` ([`Towers`](@ref Aeolus.Components.Towers)).
-Their case tables are dynamic drivers (`examples/sbl/configs/input/`), their
+Their case tables are dynamic drivers (`examples/sbl/input/`), their
 initial profiles TOML tables (with a `log` or `linear` tail below the
 lowest height), their comparisons with the intercomparisons
 `[checks.reference]` (`results.toml`), and the scripts of `examples/sbl/`

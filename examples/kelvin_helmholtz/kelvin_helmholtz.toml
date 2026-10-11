@@ -1,0 +1,47 @@
+# Kelvin–Helmholtz billow — Era VI, Phase 59 (P59-c, #180; formerly
+# examples/transition/kelvin_helmholtz.jl). A weakly stratified tanh shear
+# layer (u = U tanh(z/δ), θ = θ₀ + Δθ tanh(z/δ), minimum Ri_g = J = 0.05
+# at the centre, Re = Uδ/ν = 1000) in 2-D (128 × 1 × 256) with free-slip
+# walls at z = ±14δ, seeded at the most unstable wavelength αδ = 0.4446 with
+# w′ = 1e-4 U. Unlike the linear test (test/era6_transition_kh.jl) the base
+# state is free to diffuse and the billow runs into its nonlinear stage.
+#
+#   julia --project -m Aeolus run examples/kelvin_helmholtz/kelvin_helmholtz.toml
+#   julia --project=. examples/kelvin_helmholtz/plot_kelvin_helmholtz.jl runs/<date>_kelvin_helmholtz_<id>
+#
+# results.toml: the growth rate of rms w, the saturation, the cumulative
+# flux Richardson number, the series; output/vorticity.nc: ω_y at t = 60,
+# 90, 140 δ/U.
+
+schema_version = 2
+
+[run]
+legacy = "shear_layer"
+name = "kelvin_helmholtz"
+
+[layer]
+delta = 1.0
+velocity = 1.0
+re = 1000.0
+richardson = 0.05
+theta0 = 300.0
+g = 9.81
+alpha = 0.4446
+seed_amplitude = 1e-4
+
+[grid]
+nx = 128
+nz = 256
+
+[stepper]
+cfl = 0.6
+end_time = 160.0
+
+[diagnostics]
+every = 1.0
+layer = 4.0
+rif_from = 10.0
+snapshots = [60.0, 90.0, 140.0]
+
+[test]
+overrides = ["grid.nx=16", "grid.nz=32", "stepper.end_time=12.0", "diagnostics.snapshots=[6.0]"]

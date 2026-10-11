@@ -220,7 +220,7 @@ where the centred form is the accurate one.
 The GABLS2 case applies ``w_s = -0.005\,z/1000`` m s⁻¹ below 1 km
 (−0.005 above) from 40 h local time (16 LT 23 October), from the CLUBB
 participant set-up (`examples/sbl/data/gabls2_case.csv`; since CFG-d
-#359 the `[forcing.subsidence]` table of `examples/sbl/configs/gabls2.toml`).
+#359 the `[forcing.subsidence]` table of `examples/sbl/gabls2.toml`).
 That config applies it to θ (`--set forcing.subsidence={}` for the
 sensitivity run without it), and the SBL driver books it in its θ ledger. In the reduced test
 (16 × 16 × 40, Δx = 150 m, Δz = 40 m), the residual-layer inversion
@@ -463,7 +463,7 @@ parent (N-parent-e). See [The Berlin case](../design/berlin_ledgers.md#The-θ-to
   N-parent-e), not to the nested Berlin child: the child takes its top
   and lateral θ and q from the parent, and nudging it as well would apply
   the large scale twice.
-* **GABLS2** (`examples/sbl/configs/gabls2.toml`): `Subsidence` from 40 h.
+* **GABLS2** (`examples/sbl/gabls2.toml`): `Subsidence` from 40 h.
 
 ### The Berlin case and the sponge
 

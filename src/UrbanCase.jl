@@ -11,7 +11,7 @@
 # and configured only through its schema (`aeolus options urban`). The
 # Berlin (Alexanderplatz) case is one configuration of it:
 #
-#   julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml
+#   julia --project -m Aeolus run examples/urban/berlin_summer.toml
 #
 # From Julia: `build_case(CaseConfig(load_run_config(path)))`, then
 # `run_case!(case)`.
