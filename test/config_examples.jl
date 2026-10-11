@@ -2,11 +2,10 @@
 #
 # Acceptance tests of the issue covered in this file:
 #   * sweeps: a [sweep] table expands into override sets in a fixed order,
-#     one run folder per member, each member validated (the neutral_abl
-#     3 closures × 2 resolutions is in config_examples_validation.jl);
-#   * coverage: every examples/**/*.jl that calls a step!/run!/sbl_run!/
-#     run_case! entry point has a configs/*.toml file or a reasoned entry
-#     in EXEMPT below.
+#     one run folder per member, each member validated;
+#   * coverage: every examples/**/*.jl that calls a step!/run!/run_case!
+#     entry point has a configs/*.toml file or a reasoned entry in EXEMPT
+#     below (empty since ONE-g #456).
 # The per-directory bit-identity and round-trip tests are in
 # config_examples_*.jl.
 
@@ -167,7 +166,7 @@ end
 # ---------------------------------------------------------------------------
 
 # A script integrates the equations if it calls a stepping entry point.
-const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|sbl_run!|run_case!)\("
+const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|run_case!)\("
 # A script is configured if it runs a shipped configs/*.toml through
 # run_configs or the aeolus command line.
 const CONFIG_RUN = r"(run_configs|Aeolus\.main)\("
@@ -175,20 +174,10 @@ const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
 
 # Files that call an entry point (or look like runs) but are not runs of
 # their own, each with its reason. Paths relative to examples/.
-const EXEMPT = Dict(
-    "validation/patchy_surface/driver.jl" =>
-        "library: patchy_les / patchy_run!, included by the patchy_surface driver and test/era5_heterogeneous_surface.jl",
-    "validation/dycoms_rf01/rf01.jl" => "library: the RF01 column and solve, included by the column driver",
-    "validation/canopy_profiles.jl" =>
-        "not a run: steady 1-D canopy wind / scalar boundary-value solves against published profiles",
-    "validation/dynamic_roughness_cubes.jl" =>
-        "not a run: a-priori dynamic roughness of a cube height map under a prescribed log-law wind",
-    "validation/dns256_generate.jl" =>
-        "fixture generator: writes test/fixtures/dns256_apriori.toml offline (generate_dns_apriori, its own checkpoints)",
-)
+const EXEMPT = Dict{String,String}()
 
 # Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
-# its runs are configs/*.toml of the `sbl` run type in src).
+# its runs are configs/*.toml of the model since ONE-g #456).
 const OTHER_ISSUE_DIRS = Dict{String,String}()
 
 # The rest of #360's scope, migrated in later parts of the issue (it may be
@@ -241,8 +230,9 @@ end
     @test all(isfile(joinpath(EX_DIR, p)) for p in keys(EXEMPT))
     @test all(isfile(joinpath(EX_DIR, p)) for p in PENDING_360)
     @test all(!isempty(r) for r in values(EXEMPT))
-    # examples/validation/ is complete: every script there is configured, a driver or exempt
+    # examples/validation/ is complete: every script there is a driver (the
+    # validation wrappers went with their cases, ONE-g #456)
     val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
-    @test all(!isempty(script_configs(r)) || haskey(EXEMPT, r) for r in val)
-    @test nconfigured == 8         # the 8 validation scripts (the urban wrapper is gone, EX-a #438; the bare runners of CFG-b and kernels/04 are gone, EX-d #441)
+    @test isempty(val)
+    @test nconfigured == 0         # no script runs a config: the runs are `aeolus run <config>.toml` (ONE-g #456)
 end

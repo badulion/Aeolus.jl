@@ -23,15 +23,17 @@ module SimulationDriver
 
 using Random: Xoshiro, randn
 using ..Grids: RegularGrid, CellCenter
+using ..Operators: PassotPouquetSpectrum, isotropic_turbulence_field!, spectrum_wavenumbers
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!
 using ..InputDrivers: InputDrivers, read_dynamic_driver, check_planes, check_coverage
 using ..Simulations: Simulations, BoussinesqSimulation, step!
-using ..TimeIntegration: CFLConstraints
+using ..TimeIntegration: CFLConstraints, _project!
 using ..StretchedGrids: StretchedGrid
 using ..Anelastic: AnelasticSimulation, MassWeightedSimulation, isentropic_reference
 using ..Components: Components, Domain, Model, CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux,
+                    LargeScale, SurfaceLayer, Towers,
                     build_components, checkpoint_components, sgs_closure, step_adaptive!, component_problems
 using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previous_dt, resume!,
             maybe_checkpoint!, with_monitor, monitored_step!, check_blowup!, output_dir
@@ -39,7 +41,7 @@ using ..RunLog: current_domain
 using ..Checks: Checks, CheckRunner, enabled_checks, sample_checks!, evaluate_checks, stopped_checks,
                 results_table, required_failures, advisory_failures, ChecksFailed, read_reference
 using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
-                close_output!
+                close_output!, output_means, restore_output_means!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
                 Path, section, option!, register_driver!, config_domains, domain_view, MODEL
 using ..Nesting: nested_grid, nest_bcs
@@ -88,11 +90,13 @@ Config.driver_name(::SimulationDriverType) = MODEL
 The component types of the model whose sections the configuration schema
 generates from their [`schema`](@ref Aeolus.Components.schema), in the
 order of the option reference: the `:advection` and `:sgs` slots,
-Coriolis, the sponge and the surface θ flux. (The EX-d couplings are one
+Coriolis, the sponge, the surface θ flux, the large-scale forcing, the
+Monin–Obukhov surface layer (the `:surface` slot) and the virtual towers
+(ONE-g, #456). (The EX-d couplings are one
 component, [`SimulationCouplings`](@ref), with six sections, until their
 port to components, ONE-e #454.)
 """
-const COMPONENTS = (CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux)
+const COMPONENTS = (CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers)
 
 _isnum(x) = x isa Real && !(x isa Bool)
 
@@ -126,10 +130,13 @@ function _profile_validator(var::String)
         kind in kinds || return ["kind: expected one of " * join(repr.(kinds), ", ") *
                                  ", got $(repr(kind))"]
         want = _PROFILE_KEYS[kind]
+        opt = kind == "table" ? ["below"] : String[]
         probs = String[]
         for k in sort!(collect(keys(t)))
-            k == "kind" || k in want || push!(probs, "$k: unknown key for kind = \"$kind\" (keys: $(join(want, ", ")))")
+            k == "kind" || k in want || k in opt ||
+                push!(probs, "$k: unknown key for kind = \"$kind\" (keys: $(join(vcat(want, opt), ", ")))")
         end
+        haskey(t, "below") && append!(probs, _below_problems(t["below"]))
         for k in want
             haskey(t, k) || (push!(probs, "$k: required for kind = \"$kind\""); continue)
             v = t[k]
@@ -154,18 +161,93 @@ function _profile_validator(var::String)
     end
 end
 
+# the extension of a table profile below its lowest height
+function _below_problems(b)
+    b isa AbstractDict || return ["below: expected {kind = \"log\", z0} or {kind = \"linear\", z, value}"]
+    kind = get(b, "kind", nothing)
+    want = kind == "log" ? ["z0"] : kind == "linear" ? ["z", "value"] :
+           return ["below.kind: expected \"log\" or \"linear\", got $(repr(kind))"]
+    probs = String[]
+    for k in sort!(collect(keys(b)))
+        k == "kind" || k in want || push!(probs, "below.$k: unknown key for kind = \"$kind\" (keys: $(join(want, ", ")))")
+    end
+    for k in want
+        v = get(b, k, nothing)
+        (_isnum(v) && isfinite(v)) || push!(probs, "below.$k: required, a finite number")
+    end
+    kind == "log" && isempty(probs) && !(b["z0"] > 0) && push!(probs, "below.z0: expected a positive roughness length (m)")
+    return probs
+end
+
+const _NOISE_KEYS = ("kind", "amplitude", "depth", "components", "taper", "project")
+
 "The validator of `[initial] velocity_perturbation` (an empty table: none)."
 function _velocity_noise_validator(t)
     isempty(t) && return String[]
     probs = String[]
     for k in sort!(collect(keys(t)))
-        k in ("kind", "amplitude") || push!(probs, "$k: unknown key (keys: kind, amplitude)")
+        k in _NOISE_KEYS || push!(probs, "$k: unknown key (keys: $(join(_NOISE_KEYS, ", ")))")
     end
     get(t, "kind", nothing) in ("uniform", "normal") ||
         push!(probs, "kind: expected \"uniform\" or \"normal\", got $(repr(get(t, "kind", nothing)))")
     a = get(t, "amplitude", nothing)
     (_isnum(a) && isfinite(a) && a >= 0) || push!(probs, "amplitude: required, a finite number ≥ 0 (m s⁻¹)")
+    d = get(t, "depth", Inf)
+    (_isnum(d) && d > 0) || push!(probs, "depth: expected a height > 0 (m)")
+    c = get(t, "components", ["u", "v", "w"])
+    (c isa AbstractVector && !isempty(c) && allunique(c) && all(x -> x in ("u", "v", "w"), c)) ||
+        push!(probs, "components: expected a non-empty subset of [\"u\", \"v\", \"w\"]")
+    get(t, "taper", "none") in ("none", "linear") ||
+        push!(probs, "taper: expected \"none\" or \"linear\" (× (1 − z/depth))")
+    get(t, "taper", "none") == "linear" && !isfinite(d) && push!(probs, "taper: \"linear\" needs a finite depth")
+    get(t, "project", false) isa Bool || push!(probs, "project: expected true or false")
     return probs
+end
+
+const _FIELD_KEYS = ("kind", "spectrum", "u_rms", "k_peak", "seed")
+
+"The validator of `[initial] field`, a named analytic initial field (an empty table: none)."
+function _field_validator(t)
+    isempty(t) && return String[]
+    probs = String[]
+    get(t, "kind", nothing) == "isotropic_turbulence" ||
+        return ["kind: expected \"isotropic_turbulence\", got $(repr(get(t, "kind", nothing)))"]
+    for k in sort!(collect(keys(t)))
+        k in _FIELD_KEYS || push!(probs, "$k: unknown key (keys: $(join(_FIELD_KEYS, ", ")))")
+    end
+    get(t, "spectrum", "passot_pouquet") == "passot_pouquet" ||
+        push!(probs, "spectrum: expected \"passot_pouquet\" (E ∝ k⁴ exp(-2 (k/k_peak)²))")
+    for k in ("u_rms", "k_peak")
+        v = get(t, k, nothing)
+        (_isnum(v) && isfinite(v) && v > 0) || push!(probs, "$k: required, a number > 0")
+    end
+    s = get(t, "seed", 0)
+    (s isa Integer && !(s isa Bool) && s >= 0) || push!(probs, "seed: expected an integer ≥ 0")
+    return probs
+end
+
+"""
+    initial_field!(sim, t::AbstractDict, seed) -> sim
+
+Set the velocity of `sim` to the named analytic initial field `t` of
+`[initial] field`: `{kind = "isotropic_turbulence", spectrum =
+"passot_pouquet", u_rms, k_peak, seed}` is
+`Operators.isotropic_turbulence_field!` with the
+`Operators.PassotPouquetSpectrum(u_rms, k_peak)` (k_peak in rad m⁻¹) from
+the field's `seed` (default: `seed`, the run's): defined in spectral
+space, so a coarser grid on the same box holds exactly the large scales
+of a finer one (an LES and its DNS start alike). The field is
+divergence-free in the continuous sense; it is then projected once onto
+the grid's discrete divergence-free fields (the core's Chorin
+projection), which changes a mode by O((kΔ)²) of its divergent part: the
+SSP-RK3 step carries a third of the step-start state into the next one,
+so a start that is not discretely solenoidal would keep its divergence.
+"""
+function initial_field!(sim, t::AbstractDict, seed::Integer)
+    E = PassotPouquetSpectrum(Float64(t["u_rms"]), Float64(t["k_peak"]))
+    isotropic_turbulence_field!(sim.u, sim.v, sim.w, E; seed = get(t, "seed", seed))
+    _project!(sim, 1.0)
+    return sim
 end
 
 """
@@ -178,7 +260,10 @@ The value at height `z` of a vertical profile of `[initial]`:
     `value + lapse (z − z_i)` above (a capping inversion; with `z_i` at the
     ground, a linear profile);
   * `{kind = "table", z = […], values = […]}`: linear interpolation,
-    constant beyond the ends;
+    constant beyond the ends; below the lowest height, with `below =
+    {kind = "log", z0}`, the log law from zero at `z0` to the lowest value
+    (`v₁ ln(z/z0)/ln(z₁/z0)`), or with `below = {kind = "linear", z, value}`
+    linear from `value` at `z` to the lowest value;
   * `{kind = "exponential", value, scale_height}`: `value exp(−z/scale_height)`.
 """
 function profile_value(p::AbstractDict, z::Real)
@@ -190,6 +275,15 @@ function profile_value(p::AbstractDict, z::Real)
         return z < zi ? Float64(p["value"]) : Float64(p["value"]) + Float64(p["lapse"]) * (z - zi)
     elseif kind == "table"
         zs = Float64.(p["z"]); vs = Float64.(p["values"])
+        if z < zs[1] && haskey(p, "below")
+            b = p["below"]
+            if b["kind"] == "log"                 # from zero at z0 to the lowest tabulated value
+                z0 = Float64(b["z0"])
+                return vs[1] * (log(max(z, z0) / z0) / log(zs[1] / z0))
+            end
+            zb = Float64(b["z"]); yb = Float64(b["value"])   # linear from (z, value) to the lowest one
+            return yb + (vs[1] - yb) * (max(z, zb) - zb) / (zs[1] - zb)
+        end
         z <= zs[1] && return vs[1]
         z >= zs[end] && return vs[end]
         i = searchsortedlast(zs, z)
@@ -296,9 +390,20 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "velocity_perturbation", OpenTable(_velocity_noise_validator),
                 doc = "noise added to u, v and w (in that order, after the θ noise, from the same Xoshiro([run] seed)): " *
                       "{kind = \"uniform\", amplitude} (uniform in [-a/2, a/2], one draw per cell) or " *
-                      "{kind = \"normal\", amplitude} (a × standard normal, one randn array per field); {}: none")
+                      "{kind = \"normal\", amplitude} (a × standard normal, one randn array per field); optional: " *
+                      "depth (m; only below it, uniform: one draw per cell below it), components (a subset of " *
+                      "[\"u\", \"v\", \"w\"], default all), taper (\"linear\": × (1 − z/depth); \"none\") and project " *
+                      "(true: the velocity is projected once onto a divergence-free field afterwards, boussinesq); {}: none")
+        option!(s, "field", OpenTable(_field_validator),
+                doc = "a named analytic initial velocity field: {kind = \"isotropic_turbulence\", spectrum = " *
+                      "\"passot_pouquet\", u_rms (m s⁻¹), k_peak (rad m⁻¹), seed} — decaying isotropic turbulence " *
+                      "defined in spectral space (Operators.isotropic_turbulence_field!), so a coarser grid on the same " *
+                      "box starts from exactly the large scales of a finer one; seed: the field's (default [run] seed); " *
+                      "a triply periodic regular grid; {}: none")
+        option!(s, "perturbation_kind", Symbol; default = :uniform, allowed = [:uniform, :normal],
+                doc = "the θ noise: uniform in [-a/2, a/2] or a × standard normal, one draw per cell below the depth")
         option!(s, "perturbation_amplitude", Float64; default = 0.0, range = (0, Inf), units = "K",
-                doc = "white noise on θ, uniform in [-a/2, a/2], drawn from Xoshiro([run] seed)")
+                doc = "white noise on θ (perturbation_kind), drawn from Xoshiro([run] seed)")
         option!(s, "perturbation_depth", Float64; default = Inf, range = (0, Inf), units = "m",
                 doc = "the noise is added below this height")
     end
@@ -315,12 +420,17 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "duration", Optional{Float64}; default = 3600.0, range = (0, Inf), open_lower = true, units = "s",
                 doc = "simulated time to run; \"none\" with nsteps")
         option!(s, "nsteps", Optional{Int}; range = (0, typemax(Int)), doc = "steps to run (with duration = \"none\")")
+        option!(s, "start", Float64; default = 0.0, units = "s",
+                doc = "the model time at the start: the run ends at start + duration; the dynamic driver's times " *
+                      "(s since its init_time) are read at the model time − start, a [checks.reference] window is in model time")
     end
     out = section("output"; doc = "") do s
         option!(s, "variables", Vector{String}; default = collect(String, Components.DEFAULT_OUTPUTS),
                 doc = "the variables written, from the output catalogues of the core and the enabled components " *
                       "(ONE-c: 3-D fields, profiles and surface maps every cadence, time series every series_cadence; " *
-                      "the core's: " * join(Components.CORE_OUTPUTS, ", ") * "; the components': ql, qr, tracer); [] : none")
+                      "the core's: " * join(Components.CORE_OUTPUTS, ", ") * "; the components': ql, qr, tracer, " *
+                      "[surface_layer]'s " * join(Components.output_names(SurfaceLayer, nothing), ", ") *
+                      ", [towers]' tower_threshold); [] : none")
         option!(s, "averaging", Symbol; default = :instant, allowed = [:instant, :mean],
                 doc = "instant: the values at each record; mean: the time mean over the interval since the previous record")
         option!(s, "series_cadence", Float64; default = 60.0, range = (0, Inf), units = "s",
@@ -390,12 +500,27 @@ function _cross_checks(cfg)
         cfg.sponge.alpha_max == 0 ||
             push!(e, ConfigError("sponge.alpha_max", "the sponge of an open box has no target here; use 0"))
     end
-    if dom.dynamic_driver !== nothing
-        for (k, p) in (("u", cfg.initial.u), ("v", cfg.initial.v), ("theta", cfg.initial.theta), ("qv", cfg.initial.qv))
-            isempty(p) || push!(e, ConfigError("initial.$k", "the domain's dynamic_driver sets the initial $k: give one of the two"))
+    if !isempty(cfg.initial.field)
+        all(==(:periodic), (b.x, b.y, b.z)) ||
+            push!(e, ConfigError("initial.field", "isotropic turbulence needs a triply periodic box (boundaries x, y, z periodic)"))
+        g.stretching === :uniform || push!(e, ConfigError("initial.field", "isotropic turbulence needs a uniform grid"))
+        d.core === :boussinesq || push!(e, ConfigError("initial.field", "isotropic turbulence initialises the boussinesq core"))
+        for k in ("u", "v")
+            isempty(cfg.initial[k]) || push!(e, ConfigError("initial.$k", "initial.field sets the velocity: give one of the two"))
         end
-        d.core === :boussinesq || push!(e, ConfigError("dynamic_driver", "a dynamic driver initialises the boussinesq core"))
     end
+    for n in vcat(cfg.output.variables, [get(v, "variable", q) for (q, v) in cfg.checks.reference])
+        n in ("energy_spectrum", "dissipation", "dissipation_sgs") || continue
+        g.stretching === :uniform || push!(e, ConfigError("output.variables", "$n needs a uniform grid"))
+        n == "energy_spectrum" && !all(==(:periodic), (b.x, b.y, b.z)) &&
+            push!(e, ConfigError("output.variables", "energy_spectrum needs a triply periodic box"))
+    end
+    get(cfg.initial.velocity_perturbation, "project", false) && d.core !== :boussinesq &&
+        push!(e, ConfigError("initial.velocity_perturbation", "project = true projects with the boussinesq core's projection"))
+    (t.start != 0 && (b.x === :open || b.y === :open)) &&
+        push!(e, ConfigError("time.start", "open faces read their boundary planes from the run start: time.start = 0"))
+    (cfg.coriolis.f != 0 && cfg.coriolis.latitude !== nothing) &&
+        push!(e, ConfigError("coriolis.latitude", "give coriolis.f or coriolis.latitude, not both"))
     if d.core === :anelastic
         b.z === :periodic && push!(e, ConfigError("boundaries.z", "the anelastic core needs z walls"))
         d.theta0 > 0 || push!(e, ConfigError("dynamics.theta0", "the anelastic core needs theta0 > 0 (its base state's θ)"))
@@ -426,6 +551,7 @@ function _cross_checks(cfg)
         (get(p, "kind", "") == "taylor_green" && (b.x !== :periodic || b.y !== :periodic)) &&
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
     end
+    append!(e, _boundary_layer_checks(cfg))
     append!(e, _checks_problems(cfg))
     append!(e, _nest_domain_checks(cfg))
     # slots, requirements, incompatibilities of the enabled components (ONE-b)
@@ -433,6 +559,34 @@ function _cross_checks(cfg)
         push!(e, ConfigError(p.key, p.message))
     end
     append!(e, _coupling_checks(cfg))
+    return e
+end
+
+# the boundary-layer components (ONE-g): what they need of the domain
+function _boundary_layer_checks(cfg)
+    e = ConfigError[]
+    sl = cfg.surface_layer; ls = cfg.large_scale_forcing; g = cfg.grid; b = cfg.boundaries
+    nodrv = cfg.domain.dynamic_driver === nothing
+    if sl.enabled
+        g.stretching === :uniform || push!(e, ConfigError("surface_layer.enabled", "the surface layer needs a uniform grid"))
+        b.z === :periodic && push!(e, ConfigError("surface_layer.enabled", "the surface layer needs z walls"))
+        cfg.surface.model === :none ||
+            push!(e, ConfigError("surface_layer.enabled", "[surface] model = \"$(cfg.surface.model)\" sets the floor's θ flux too: use one of the two"))
+        cfg.surface_theta_flux.bottom == 0 ||
+            push!(e, ConfigError("surface_theta_flux.bottom", "the surface layer sets the floor's θ flux: leave surface_theta_flux.bottom at 0"))
+        get(sl.temperature, "kind", "") == "driver" && nodrv &&
+            push!(e, ConfigError("surface_layer.temperature", "kind = \"driver\" reads the domain's dynamic_driver: set it"))
+    end
+    Components.lsf_reads_driver(ls) && nodrv &&
+        push!(e, ConfigError("large_scale_forcing", "reads the domain's dynamic_driver (\"driver\" values, " *
+                                                     "advective_tendencies, subsidence, nudging): set it"))
+    (ls.u_g != 0 || ls.v_g != 0) && !Components.enabled(Coriolis, cfg.coriolis) &&
+        push!(e, ConfigError("large_scale_forcing.u_g", "the geostrophic pressure gradient balances the Coriolis term: set coriolis.f or coriolis.latitude"))
+    sp = cfg.sponge
+    sp.target === :geostrophic && Components.enabled(Sponge, sp) && !Components.enabled(LargeScale, ls) &&
+        push!(e, ConfigError("sponge.target", "\"geostrophic\" relaxes toward the geostrophic wind of [large_scale_forcing], which is off"))
+    cfg.towers.below > 0 && g.stretching !== :uniform &&
+        push!(e, ConfigError("towers.below", "the towers need a uniform grid"))
     return e
 end
 
@@ -486,7 +640,8 @@ const _CROSS_CHECKS_DOC = """
 exactly one of `time.duration` and `time.nsteps`; with a fixed `time.dt`, `time.cfl` and `time.dt_max` keep their defaults (they belong to adaptive steps)
 `noslip` is a z-wall condition: not for `boundaries.x`, `boundaries.y`
 an open face needs a domain `dynamic_driver`, the other lateral axis open or periodic, z walls, the boussinesq core, a uniform grid and no sponge
-the domain's `dynamic_driver` and the `initial` tables of u, v, theta, qv exclude each other; it initialises the boussinesq core
+`initial.field` (isotropic turbulence) needs a triply periodic uniform grid and sets u, v (no `initial.u`, `initial.v`); `energy_spectrum` needs a triply periodic uniform grid, `dissipation` a uniform one; `initial.velocity_perturbation.project` needs the boussinesq core; `time.start` is 0 with open faces; `coriolis.f` and `coriolis.latitude` exclude each other
+the surface layer needs a uniform grid, z walls, `surface.model = "none"` and `surface_theta_flux.bottom = 0`; its `temperature = {kind = "driver"}` and the `[large_scale_forcing]` driver tables need the domain's `dynamic_driver`; a geostrophic wind needs `[coriolis]`; `sponge.target = "geostrophic"` needs `[large_scale_forcing]`; the towers need a uniform grid
 the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture and a uniform grid
 on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability` is `none`
 `sgs.stability` wraps `smagorinsky`, `dynamic_smagorinsky`, `vreman` or `sigma` only
@@ -591,11 +746,12 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
     couplings = _couplings(cfg, mesh)
     _initialise!(sim, cfg)
     dyn === nothing || _initialise_dynamic!(sim, dyn, cfg)
+    sim.t = cfg.time.start
     couplings.water === nothing || isempty(cfg.initial.ql) || _set_profile!(couplings.water.ql, cfg.initial.ql, :ql)
     t = cfg.time
     cfl = _adaptive(cfg) ? CFLConstraints(; C_advective = t.cfl, dt_max = t.dt_max) : nothing
-    d0 = Domain(sim; id = cfg.domain.id, scheme = t.scheme, cfl = cfl, validate = false,
-                drivers = feed === nothing ? (;) : (; boundary = feed))
+    drivers = merge(feed === nothing ? (;) : (; boundary = feed), dyn === nothing ? (;) : (; dynamic = dyn))
+    d0 = Domain(sim; id = cfg.domain.id, scheme = t.scheme, cfl = cfl, validate = false, drivers = drivers)
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
     # the budgets the [output] selection measures (ONE-c): off unless selected,
@@ -607,13 +763,22 @@ end
 
 # The initial profiles of a dynamic driver (linear in z, constant beyond
 # the ends: `profile_value` of a table).
+# A driver without profiles (one that holds only forcing tables or a
+# surface series, read by the components) initialises nothing; the
+# [initial] tables and the driver's profiles exclude each other per
+# variable, and only the boussinesq core takes the driver's profiles.
 function _initialise_dynamic!(sim, dyn, cfg)
     P = dyn.profiles
-    P === nothing && throw(ConfigError("dynamic_driver", "$(cfg.domain.dynamic_driver) has no initial profiles (init_theta, …)"))
+    P === nothing && return sim
+    path = cfg.domain.dynamic_driver
+    sim isa BoussinesqSimulation ||
+        throw(ConfigError("dynamic_driver", "$path has initial profiles, which initialise the boussinesq core only"))
     for (n, f) in ((:u, sim.u), (:v, sim.v), (:theta, sim.θ), (:qv, sim.qv))
         n === :qv && !cfg.dynamics.moisture && continue
         a = getproperty(P, n)
         a === nothing && continue
+        isempty(cfg.initial[String(n)]) ||
+            throw(ConfigError("initial.$n", "$path has an initial $n profile: give one of the two"))
         _set_profile!(f, Dict{String,Any}("kind" => "table", "z" => P.z, "values" => a), n)
     end
     return sim
@@ -643,26 +808,45 @@ function _initialise!(sim, cfg)
         set!(sim.θ, (x, y, z) -> cfg.dynamics.theta0)
     end                                  # anelastic: the constructor set θ = θ̄(z)
     isempty(ini.qv) || _set_profile!(sim.qv, ini.qv, :qv)
+    isempty(ini.field) || initial_field!(sim, ini.field, cfg.run.seed)
     a = ini.perturbation_amplitude
     rng = Xoshiro(cfg.run.seed)
     if a > 0
         depth = ini.perturbation_depth
         noise = Field(CellCenter(), sim.mesh)
-        set!(noise, (x, y, z) -> z < depth ? a * (rand(rng) - 0.5) : 0.0)
+        if ini.perturbation_kind === :normal
+            set!(noise, (x, y, z) -> z < depth ? a * randn(rng) : 0.0)
+        else
+            set!(noise, (x, y, z) -> z < depth ? a * (rand(rng) - 0.5) : 0.0)
+        end
         interior_view(sim.θ) .+= interior_view(noise)
     end
     vp = ini.velocity_perturbation
     if !isempty(vp)
         A = Float64(vp["amplitude"]); uniform = vp["kind"] == "uniform"
-        for f in (sim.u, sim.v, sim.w)          # one field at a time, in this order
-            if uniform                          # one draw per cell, in set!'s order
+        depth = Float64(get(vp, "depth", Inf)); comps = get(vp, "components", ["u", "v", "w"])
+        linear = get(vp, "taper", "none") == "linear"
+        shaped = isfinite(depth) || linear
+        tap(z) = linear ? 1 - z / depth : 1.0
+        for (name, f) in (("u", sim.u), ("v", sim.v), ("w", sim.w))   # one field at a time, in this order
+            name in comps || continue
+            if uniform                          # one draw per cell (below depth), in set!'s order
                 noise = Field(location(f), sim.mesh)
-                set!(noise, (x, y, z) -> A * (rand(rng) - 0.5))
+                set!(noise, (x, y, z) -> z < depth ? A * (rand(rng) - 0.5) * tap(z) : 0.0)
                 interior_view(f) .+= interior_view(noise)
-            else                                # one array of normals per field (randn's bulk stream)
+            elseif !shaped                      # one array of normals per field (randn's bulk stream)
                 interior_view(f) .+= A .* randn(rng, size(interior_view(f))...)
+            else                                # the same draws, zero above depth, tapered
+                r = randn(rng, size(interior_view(f))...)
+                shape = Field(location(f), sim.mesh)
+                set!(shape, (x, y, z) -> z < depth ? tap(z) : 0.0)
+                interior_view(f) .+= A .* r .* interior_view(shape)
             end
         end
+        # random velocities are not solenoidal: the flux-form scalar advection
+        # would turn their divergence into a source (θ ∇·u), so they are
+        # projected once (the core's Chorin projection)
+        get(vp, "project", false) && _project!(sim, 1.0)
     end
     return sim
 end
@@ -696,14 +880,38 @@ function _output_writer(r::SimulationRun, rf, resume_t, dom = _domain(r))
     m = dom.state.mesh
     x, y, z = cell_centres(m)
     x .+= m.x0; y .+= m.y0                         # a nested domain's cells in the root's frame
+    k = any(v -> v.dims === :k, vars) ? spectrum_wavenumbers(m) : nothing
     stem, ext = splitext(o.netcdf)
     file = dom === _domain(r) ? o.netcdf : string(stem, "_", dom.id, ext)
-    return OutputWriter(joinpath(dir, file); x = x, y = y, z = z,
+    return OutputWriter(joinpath(dir, file); x = x, y = y, z = z, k = k,
                         records = filter(v -> v.dims !== :scalar, vars), series = filter(v -> v.dims === :scalar, vars),
                         ctx = dom, averaging = o.averaging, resume_time = resume_t,
                         attributes = Dict{String,Any}("title" => "Aeolus.jl — $(cfg.run.name)",
                                                       "source" => "the Aeolus model, domain $(dom.id)",
                                                       "components" => join(string.(map(Components.component_name, dom.components)), " ")))
+end
+
+# the open averaging intervals of a `:mean` writer as a checkpoint component:
+# the checkpoint is restored before the writer is reopened (the writer needs
+# the restored time), so the state waits in `pending` until `attach!`
+# (one writer per domain of a nest, ONE-f; a single domain's state is its
+# writer's alone, as before)
+mutable struct OutputMeans
+    ws::Union{Nothing,Vector{OutputWriter}}
+    pending::Any
+end
+IO.checkpoint_state(o::OutputMeans) = length(o.ws) == 1 ? output_means(o.ws[1]) : map(output_means, o.ws)
+IO.restore_checkpoint_state!(o::OutputMeans, s) = (o.pending = s; o)
+function _attach!(o::OutputMeans, ws::AbstractVector)
+    o.ws = collect(OutputWriter, ws)
+    if o.pending !== nothing
+        states = length(ws) == 1 ? (o.pending,) : o.pending
+        length(states) == length(ws) ||
+            throw(ArgumentError("output means: $(length(states)) writers in the checkpoint, $(length(ws)) domains"))
+        foreach(restore_output_means!, ws, states)
+    end
+    o.pending = nothing
+    return ws
 end
 
 # the next output time after `t` of a stream with cadence `c` (0: every step)
@@ -718,16 +926,20 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     nest === nothing || (comps = merge(comps, (; nest = nest)))
     checks = _check_runner(r)                      # nothing without [checks] (ONE-d)
     checks === nothing || (comps = merge(comps, (; checks = checks)))
+    means = cfg.output.averaging === :mean ? OutputMeans(nothing, nothing) : nothing
+    means === nothing || (comps = merge(comps, (; output_means = means)))
     resume!(ck, sim; components = comps, stepper = r.stepper)
     n = ck.last_step
     adaptive = _adaptive(cfg)
     dt_fixed, nfix = adaptive ? (NaN, typemax(Int)) : _fixed_steps(st)
     nmax = adaptive ? something(st.nsteps, typemax(Int)) : nfix
-    t_end = adaptive ? st.duration : sim.t + (nmax - n) * dt_fixed      # for the progress line
+    t_stop = st.duration === nothing ? nothing : st.start + st.duration   # the model time of the end
+    t_end = adaptive ? t_stop : sim.t + (nmax - n) * dt_fixed      # for the progress line
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
     feed = get(dom.drivers, :boundary, nothing)
     (feed === nothing || t_end === nothing) || check_coverage(feed, sim.t, t_end)
     ws = [_output_writer(r, rf, n == 0 ? nothing : sim.t, d) for d in doms]
+    means === nothing || _attach!(means, ws)
     o = cfg.output; mean = o.averaging === :mean
     # instant: a record at the start, then every cadence; mean: the first
     # record is the mean of the first cadence
@@ -741,7 +953,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
             foreach((w, d) -> write_series!(w, d, sim.t), ws, doms); next_ser = _next_out(sim.t, o.series_cadence)
         end
     end
-    done() = n >= nmax || (adaptive && st.duration !== nothing && sim.t >= st.duration * (1 - 1e-12))
+    done() = n >= nmax || (adaptive && t_stop !== nothing && sim.t >= t_stop * (1 - 1e-12))
     cpl = sim_couplings(r)
     n == 0 && _record_initial!(cpl, sim)
     # attached (#336): the step cores report every step; monitored_step!
@@ -759,7 +971,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
             while !done()
                 n += 1
                 _, dt, retries = monitored_step!(m, sim; step = n) do
-                    adaptive ? _adaptive_step!(r, st.duration) : _take_step!(r, dt_fixed)
+                    adaptive ? _adaptive_step!(r, t_stop) : _take_step!(r, dt_fixed)
                 end
                 record_step!(r.stepper, dt; retries = retries)
                 checks === nothing || sample_checks!(checks, sim.t, dt)     # stage 13: :checks, then :output

@@ -26,11 +26,12 @@
 #   so the default is 2 + 9.
 # child: the same with the nest switched off (the child alone, periodic):
 #   flagship − child is the cost of the parent and the nest exchange.
-# dns: the 256³ decaying-turbulence DNS of examples/validation/configs/dns256.toml
+# dns: the 256³ decaying-turbulence DNS of the former a-priori record
+#   (dns256.toml and test/fixtures/dns256_apriori.toml, removed by ONE-g
+#   #456; examples/dns_vs_les/configs/dns.toml is the DNS run today)
 #   (`dns_step!`: step_rk3! at CFL 0.5 plus the per-step K / ε / skewness
-#   history). Both are timed per step; the whole run is 1264 steps
-#   (test/fixtures/dns256_apriori.toml), so a run's DNS time is 1264 ×
-#   the `dns_step!` time. Needs about 8 GB at 256³.
+#   history). Both are timed per step; that run was 1264 steps, so its DNS
+#   time was 1264 × the `dns_step!` time. Needs about 8 GB at 256³.
 # kernels: idealised kernels on seeded fields (min of repeats, µs), with an
 #   effective bandwidth from the arrays each one streams (8 B per point per
 #   array read or written): memory-bound kernels stop where the bandwidth
@@ -203,7 +204,7 @@ end
 # ---------------------------------------------------------------------------
 
 function bench_dns(N; nwarm = 1, nsteps = 3)
-    ν = 1.035 * 0.018 * (48 / N)^(4 / 3)                 # dns256.toml: nu = "scaled", margin 1.035
+    ν = 1.035 * 0.018 * (48 / N)^(4 / 3)                 # the former dns256.toml: nu = "scaled", margin 1.035
     tb = @elapsed st = Main.dns_start(; N, seed = 1, ν, spectrum = q -> q^4 * exp(-2 * (q / 1.5)^2))
     @printf("dns %d³, -t %d, ν = %.4g, start %.1f s\n", N, NT, ν, tb)
     for _ in 1:nwarm

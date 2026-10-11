@@ -21,15 +21,11 @@ grew apart: the urban case's energy and water ledger, its air-heat ledger
   sources ([`add_water!`](@ref Aeolus.BudgetSystem.add_water!)) and named
   heat ([`add_heat!`](@ref Aeolus.BudgetSystem.add_heat!),
   [`book!`](@ref Aeolus.BudgetSystem.book!)).
-- **Diagnosed momentum.** [`MomentumBudget`](@ref
-  Aeolus.BudgetSystem.MomentumBudget) holds the plane-mean momentum
-  equation's terms, evaluated from the state (the SBL cases' budget).
 
 Each budget closes to round-off when nothing escapes: `storage − Σ terms`
 ([`stage_budget`](@ref Aeolus.BudgetSystem.stage_budget),
 [`surface_budget`](@ref Aeolus.BudgetSystem.surface_budget),
-[`water_budget`](@ref Aeolus.BudgetSystem.water_budget),
-[`momentum_closure`](@ref Aeolus.BudgetSystem.momentum_closure)). The
+[`water_budget`](@ref Aeolus.BudgetSystem.water_budget)). The
 mechanism is described on
 [Components and the stage pipeline](@ref "Budgets: the stage-context measurement").
 

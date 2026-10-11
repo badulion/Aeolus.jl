@@ -32,16 +32,17 @@ using ..NCIO: NCDataset, nc_create, nc_defvar!, nc_append_record!
 
 export OutputVariable, OUTPUT_DIMS, check_catalogue, catalogue_names, select_variables,
        cell_centres, OutputWriter, accumulate_output!, write_record!, write_series!, close_output!,
-       output_path
+       output_path, output_means, restore_output_means!
 
 """
     OUTPUT_DIMS
 
 The dimensions an output variable can have: `:xyz` (a 3-D field, per
 record), `:xy` (a surface map, per record), `:z` (a vertical profile, per
-record) and `:scalar` (one number: a time series, or a per-record value).
+record), `:k` (a spectrum over the writer's wavenumbers `k`, per record)
+and `:scalar` (one number: a time series, or a per-record value).
 """
-const OUTPUT_DIMS = (:xyz, :xy, :z, :scalar)
+const OUTPUT_DIMS = (:xyz, :xy, :z, :k, :scalar)
 
 """
     OutputVariable(name, units, long_name, dims, getter; eltype = Float32 (Float64 for :scalar),
@@ -50,7 +51,8 @@ const OUTPUT_DIMS = (:xyz, :xy, :z, :scalar)
 One variable of an output catalogue. `dims` is one of [`OUTPUT_DIMS`](@ref);
 `getter(ctx)` returns its value for the writer's context `ctx` (a model
 domain, an urban case, …): an interior-sized `(Nx, Ny, Nz)` array for
-`:xyz`, `(Nx, Ny)` for `:xy`, a length-`Nz` vector for `:z`, a number for
+`:xyz`, `(Nx, Ny)` for `:xy`, a length-`Nz` vector for `:z`, a vector of
+the length of the writer's wavenumbers `k` for `:k`, a number for
 `:scalar`. With `group = true` (a `:scalar` variable) `getter` returns a
 `Dict{String,Float64}`: a **group** of scalars, written as
 `<name>__<key>` and defined as they appear (the budget terms, which
@@ -129,12 +131,13 @@ mutable struct _Stream
 end
 
 """
-    OutputWriter(path; x, y, z, records = [], series = [], statics = [], ctx = nothing,
+    OutputWriter(path; x, y, z, k = nothing, records = [], series = [], statics = [], ctx = nothing,
                  time_units = "s", attributes = Dict(), averaging = :instant, resume_at = nothing,
                  resume_time = nothing)
 
 The writer of one run's output file `path` (NetCDF-4, `Aeolus.NCIO`):
-coordinates `x`, `y`, `z` (cell centres, m), the record variables
+coordinates `x`, `y`, `z` (cell centres, m) and, for spectra, `k` (rad
+m⁻¹), the record variables
 `records` (any of [`OUTPUT_DIMS`](@ref); unlimited dimension `time`), the
 time-series variables `series` (`:scalar`; unlimited dimension
 `time_series`), and `statics`, written once from `ctx` (`:xy` or `:xyz`
@@ -158,7 +161,7 @@ mutable struct OutputWriter
     averaging::Symbol
 end
 
-function OutputWriter(path::AbstractString; x, y, z, records = OutputVariable[], series = OutputVariable[],
+function OutputWriter(path::AbstractString; x, y, z, k = nothing, records = OutputVariable[], series = OutputVariable[],
                       statics = OutputVariable[], ctx = nothing, time_units::AbstractString = "s",
                       attributes::AbstractDict = Dict{String,Any}(), averaging::Symbol = :instant,
                       resume_at::Union{Nothing,Integer} = nothing, resume_time::Union{Nothing,Real} = nothing)
@@ -168,6 +171,8 @@ function OutputWriter(path::AbstractString; x, y, z, records = OutputVariable[],
     check_catalogue(vcat(records, series, statics))
     all(v -> v.dims === :scalar, series) || throw(ArgumentError("OutputWriter: the time series are :scalar variables"))
     all(v -> v.dims in (:xy, :xyz), statics) || throw(ArgumentError("OutputWriter: the static variables are :xy or :xyz maps"))
+    any(v -> v.dims === :k, records) && k === nothing &&
+        throw(ArgumentError("OutputWriter: a spectrum (:k) needs the wavenumbers k"))
     rs = _Stream("time", records, Any[nothing for _ in records], 0.0, Dict{String,Set{String}}(), 0)
     ss = _Stream("time_series", series, Any[nothing for _ in series], 0.0, Dict{String,Set{String}}(), 0)
     w = OutputWriter(nothing, String(path), rs, ss, averaging)
@@ -194,6 +199,12 @@ function OutputWriter(path::AbstractString; x, y, z, records = OutputVariable[],
                                                             "long_name" => "$d cell centre"))
         ds[d][:] = Float32.(c)
     end
+    if k !== nothing
+        ds.dim["k"] = length(k)
+        nc_defvar!(ds, "k", Float64, ("k",); attributes = Dict("units" => "rad m-1",
+                                                                "long_name" => "wavenumber of the spectral shells"))
+        ds["k"][:] = Float64.(k)
+    end
     for (d, ln) in (("time", "simulation time of the records"), ("time_series", "simulation time of the time series"))
         nc_defvar!(ds, d, Float64, (d,); attributes = Dict("units" => time_units, "axis" => "T", "long_name" => ln))
     end
@@ -211,9 +222,10 @@ end
 
 function _defvar!(w::OutputWriter, st::_Stream, v::OutputVariable, name, units, long_name)
     dims = v.dims === :xyz ? ("x", "y", "z", st.dim) : v.dims === :xy ? ("x", "y", st.dim) :
-           v.dims === :z ? ("z", st.dim) : (st.dim,)
+           v.dims === :z ? ("z", st.dim) : v.dims === :k ? ("k", st.dim) : (st.dim,)
     attrs = Dict{String,Any}("units" => units, "long_name" => long_name)
-    v.dims === :scalar || (attrs["coordinates"] = v.dims === :xyz ? "x y z" : v.dims === :xy ? "x y" : "z")
+    v.dims === :scalar ||
+        (attrs["coordinates"] = v.dims === :xyz ? "x y z" : v.dims === :xy ? "x y" : v.dims === :k ? "k" : "z")
     w.averaging === :mean && (attrs["cell_methods"] = "$(st.dim): mean")
     nc_defvar!(w.ds, name, v.eltype, dims; attributes = attrs)
     return nothing
@@ -307,6 +319,30 @@ Append one sample of the time-series variables at time `t` (s), like
 [`write_record!`](@ref).
 """
 write_series!(w::OutputWriter, ctx, t::Real) = _write!(w, w.series, ctx, t, nothing)
+
+"""
+    output_means(w) -> state
+    restore_output_means!(w, state) -> w
+
+The open intervals of a `:mean` writer: per stream the accumulated
+``Σ value·dt`` of every variable and ``Σ dt`` since its last record. A
+checkpoint taken between two records stores them, so that a run resumed
+from it writes the same means as the uninterrupted run (the first record
+after the checkpoint averages over the whole interval, not only the part
+after the restart). `state` is self-contained (deep copies).
+"""
+output_means(w::OutputWriter) =
+    (records = (acc = deepcopy(w.records.acc), acc_dt = w.records.acc_dt),
+     series = (acc = deepcopy(w.series.acc), acc_dt = w.series.acc_dt))
+
+function restore_output_means!(w::OutputWriter, s)
+    for (st, x) in ((w.records, s.records), (w.series, s.series))
+        length(x.acc) == length(st.vars) ||
+            throw(ArgumentError("restore_output_means!: $(length(st.vars)) $(st.dim) variables, the state has $(length(x.acc))"))
+        st.acc .= deepcopy(x.acc); st.acc_dt = x.acc_dt
+    end
+    return w
+end
 
 "Close the writer's file (if it has one)."
 function close_output!(w::OutputWriter)

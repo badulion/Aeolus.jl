@@ -6,10 +6,11 @@
 # skewness recorded every step.
 #
 # A driver of its own: the fixture's step is cfl·dx/max|u| with the
-# budget and skewness bookkeeping of every step; the a-priori analysis
-# (examples/validation/apriori_sgs.jl) reads the final fields. Loaded on
-# first use (Aeolus.Config.DRIVER_FILES). Config:
-# examples/validation/configs/apriori_sgs.toml.
+# budget and skewness bookkeeping of every step. Loaded on first use
+# (Aeolus.Config.DRIVER_FILES) by the `sgs_decay` run type
+# (Aeolus.RunDrivers), which starts its rotating and stratified decays from
+# this DNS. (Its own config, apriori_sgs.toml, went with the DNS a-priori
+# study, ONE-g #456.)
 
 using Aeolus
 using Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Optional,

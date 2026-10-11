@@ -253,17 +253,16 @@ inside the band. ``ρ_Π`` falls with ``Δ/η`` at every resolution. Its
 dependence on ``Re_λ`` at fixed ``Δ/η`` (``k_{max}η`` is held fixed by
 the choice of ``ν``) is shown here as data. It is **not asserted**:
 
-| Δ/η | 48³, ``Re_λ = 32`` | 96³, ``Re_λ = 64`` | 256³, ``Re_λ = 78.6`` |
-| :-- | --: | --: | --: |
-| ≈ 8η (4h) | 0.867 (8.0η) | 0.810 (7.8η) | 0.832 (8.1η) |
-| ≈ 16η (8h) | 0.814 (15.9η) | 0.734 (15.7η) | 0.787 (16.1η) |
-| ≈ 32η (16h) | 0.669 (31.9η) | 0.669 (31.3η) | 0.755 (32.2η) |
-| ≈ 64η (32h) | — | — | 0.727 (64.4η) |
+| Δ/η | 48³, ``Re_λ = 32`` | 96³, ``Re_λ = 64`` |
+| :-- | --: | --: |
+| ≈ 8η (4h) | 0.867 (8.0η) | 0.810 (7.8η) |
+| ≈ 16η (8h) | 0.814 (15.9η) | 0.734 (15.7η) |
+| ≈ 32η (16h) | 0.669 (31.9η) | 0.669 (31.3η) |
 
-Each column is a single seed. The 256³ record starts at 8.05η, so its
-≈ 8η entry is the 4h value. Earlier versions of this page and of the
-test said that ``ρ_Π`` falls with ``Re_λ``, and the test asserted
-48³ > 96³ > 256³ at fixed ``Δ/η``. The 256³ record broke that, and the
+Each column is a single seed. Earlier versions of this page and of the
+test said that ``ρ_Π`` falls with ``Re_λ``, and the test asserted it at
+fixed ``Δ/η``. An offline 256³ record (``Re_λ = 79``; removed with the
+DNS a-priori study, below) broke that, and the
 *expectation* was what was wrong, not the code. It was extrapolated from
 two single-seed points (48³ → 96³), and the physical argument does not
 hold at fixed ``Δ/η``. The filter sits at the same distance from the
@@ -271,18 +270,17 @@ dissipation range whatever the ``Re``, so only ``Δ/L`` changes, and no
 monotone dependence is established for ``Re_λ`` between 32 and 79. The
 generator runs had already shown this: from 64³ upward they agree within
 about ±0.01 at 4h (below). At 16h the filter is a third of the 48³ box.
-None of the 48³ / 96³ / 256³ comparisons is asserted; the table is
-data. On the maintainer's decision on #208 both trend checks were
+None of these comparisons is asserted; the table is data. On the maintainer's decision on #208 both trend checks were
 removed: 48³, 96³ > 256³, and 48³ > 96³, which still passes but rests on
 the same claim.
 
 At ``Δ ≈ 8η`` the filter sits in the near-dissipation range. There
 ``τ`` is given by its Taylor expansion, the gradient model
 ``(Δ^2/12)∂_k\bar u_i∂_k\bar u_j``, which correlates with the exact
-``τ`` at 0.97 (48³), 0.98 (96³) and 0.977 (256³). Both its ``Π`` and
+``τ`` at 0.97 (48³) and 0.98 (96³). Both its ``Π`` and
 the Smagorinsky ``(C_sΔ)^2|\bar S|^3`` are cubic in the velocity
 gradient, which is why ``ρ_Π`` is high at small ``Δ/η``. The test asserts
-the literature band at 4h for the 96³ fixture and for the 256³ record.
+the literature band at 4h for the 96³ fixture.
 
 **The dynamic coefficient depends on the filter-width ratio.** The
 coefficient from `compute_dynamic_smagorinsky_νt!` is comparable to the
@@ -295,134 +293,66 @@ coarse-grained by Fourier truncation) the dynamic ``C_s`` is 0.116 at 4h
 (+24 %; 0.133, +33 %, at 48³), because the coarse second-order strain
 underestimates ``|\bar S|``.
 
-**The example** (`examples/validation/apriori_sgs.jl`, the same 96³
-fixture) writes the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` is
-0.20, 0.22 and 0.24. The dissipation-matched ``C_s`` is 0.094, 0.097
-and 0.111. The dynamic ``C_s`` on the DNS grid is +6 %, +3 % and −14 %
+The former example (`examples/validation/apriori_sgs.jl`, the same 96³
+fixture) wrote the full tables for 4h, 8h and 16h. The Smagorinsky ``ρ(τ_{12})`` was
+0.20, 0.22 and 0.24, the dissipation-matched ``C_s`` 0.094, 0.097
+and 0.111, the dynamic ``C_s`` on the DNS grid +6 %, +3 % and −14 %
 from it, and on the LES grid +24 % and +47 % (4h, 8h).
 
-**The offline 256³ record.** The 96³ fixture is the CI reference. A
-256³ run of the same fixture is made once, offline, by the `dns` run
-driver: `julia -m Aeolus run examples/validation/configs/dns256.toml`,
-or `examples/validation/dns256_generate.jl`, which runs that config and
-prints the table (or by the suite with `AEOLUS_DNS256=1`; see
-[Run configuration](../api/config.md#The-dns-legacy-case)). It writes `test/fixtures/dns256_apriori.toml`: the
-DNS checks, ``Re_λ``, ``k_{max}η``, skewness, energy budget, the energy
-spectrum, and per Gaussian width 4h, 8h, 16h and 32h the per-component
-correlations, ``ρ_Π`` and ``⟨Π⟩`` ratio of the Smagorinsky, Bardina and
-gradient models, the matched and dynamic ``C_s`` and the backscatter. The
-file is plain TOML, written by the standard library Aeolus already uses.
-Two choices differ from the fixture:
-
-- ``ν = 1.035·0.018(48/N)^{4/3}`` (``2.00·10^{-3}``): the plain scaling
-  gave ``k_{max}η = 1.494`` at 32³, so the generator keeps a margin
-  (``k_{max}η`` × 1.026), and it refuses to write the record (writing
-  `<out>.failed` instead) if ``k_{max}η < 1.5`` or another required DNS
-  check fails;
-- the run continues past the dissipation peak, where ``k_{max}η`` has
-  its minimum.
-
-The record in the repository (seed 1; regenerated after #205 on
-2026-10-05 and re-captured after #400 on 2026-10-08, see below) passed
-every DNS check:
-
-| Check | 256³ record |
-| :-- | --: |
-| ``Re_λ`` at the end | 78.6 |
-| ``k_{max}η`` (minimum over the run; at the end) | 1.555; 1.561 |
-| velocity-derivative skewness at the end | −0.506 |
-| discrete energy budget, max per step | 3.4·10⁻⁴ |
-| ε peak; end of run | ``t = 3.60``; ``t = 3.85`` (1264 RK3 steps) |
-| run time | 1975 s = 33 min of DNS on 12 threads, plus 174 s of statistics |
-| peak memory (max RSS, reported by the run; not stored in the TOML) | 8.5 GB |
-| Parseval: ``\sum E\,Δk / K`` at the end (asserted to 10⁻¹⁰) | 1.000000 |
-
-The run time is that of `julia -t 12` on the 24-core development machine
-(1.56 s per step on average). The solver and the per-step history (ε,
-the derivative skewness, the CFL maximum) are threaded and bit-identical
-at every thread count (the KernelAbstractions port, #291, and #400); the
-2026-10-05 record took 5671 s on one core, when both were serial.
-
-| Gaussian Δ | 4h (8.1η) | 8h (16.1η) | 16h (32.2η) | 32h (64.4η) |
-| :-- | --: | --: | --: | --: |
-| Smagorinsky ``ρ_Π`` | 0.832 | 0.787 | 0.755 | 0.727 |
-| Smagorinsky ``ρ(τ_{12}, τ_{13}, τ_{23})`` | 0.24, 0.24, 0.25 | 0.27, 0.27, 0.27 | 0.34, 0.32, 0.31 | 0.43, 0.42, 0.36 |
-| dissipation-matched ``C_s`` | 0.099 | 0.104 | 0.118 | 0.142 |
-| dynamic ``C_s`` (DNS grid) | 0.105 | 0.103 | 0.097 | 0.089 |
-| dynamic ``C_s`` (LES grid) | 0.122 | 0.137 | 0.150 | 0.164 |
-| Bardina ``ρ_Π`` | 0.956 | 0.895 | 0.818 | 0.761 |
-| gradient model ``ρ(τ_{12})`` | 0.977 | 0.944 | 0.891 | 0.805 |
-| backscatter (points with ``Π < 0``) | 21 % | 20 % | 18 % | 14 % |
-| min ``λ_1/τ_{kk}`` | 4.9·10⁻⁴ | 3.7·10⁻³ | 1.4·10⁻² | 5.6·10⁻² |
-
-At 4h the record is inside the literature bands, which the suite asserts
-(``0.4 < ρ_Π < 0.85``, component correlations 0.1–0.45, ``C_s``
-0.08–0.22, backscatter below 50 %, Bardina above Smagorinsky in ``ρ_Π``
-at every width). The comparison of ``ρ_Π`` with the 48³ and 96³ values
-at the same ``Δ/η`` is logged but not asserted (the table above).
-
-**Regeneration after #205 (#235).** The first record (2026-10-04) was
-made before #205 moved `isotropic_energy_spectrum` and
-`isotropic_random_field!` to the stored face values. Its spectrum was
-the centre-averaged one, which held ``\sum E\,Δk / K = 0.99668`` (0.33 %
-low), and its initial field came from the old initialiser. The suite now
-asserts Parseval on the record, ``\sum E\,Δk = K`` to a relative 10⁻¹⁰,
-which the old record fails and the regenerated one passes (1.000000).
-Same seed, same ``ν``, same 1264 steps. Every recorded number moved by
-at most 1.1·10⁻³ (largest: Smagorinsky ``ρ(τ_{13})`` at 4h,
-0.2408 → 0.2419; ``ρ_Π`` 0.8320 → 0.8320, 0.7867 → 0.7867,
-0.7556 → 0.7553, 0.7278 → 0.7272 at 4h–32h; ``K`` at the end
-0.81936 → 0.81892, ``Re_λ`` 78.67 → 78.63, skewness −0.5046 → −0.5058).
-That is an order of magnitude below the ±0.01 that different seeds give
-at 4h, so it is the effect of the initialiser change on one realisation,
-not a physical change from #205.
-
-**Re-capture after #400 (2026-10-08).** #400 moved the history sums (ε,
-and the two moments of the derivative skewness) from `sum` over
-broadcast temporaries, in Julia's pairwise order, to the canonical
-plane sums of the reduction primitives, which are threaded and
-thread-invariant. That moves ε and S in their last bits and nothing
-else: at 96³ (12 threads, FFTW `estimate`) ``t``, ``K``, every ``Δt`` and
-every field are identical, S is within 10 ulp and ε within 3 ulp of the
-old values. The record was re-captured with the new code (same seed,
-``ν`` and 1264 steps). Every recorded number agrees with the 2026-10-05
-one to a relative 6·10⁻¹³ or better, except three that are rounding of
-a small difference: `budget_err_max` (relative 1.3·10⁻⁷, absolute
-4·10⁻¹¹: it is ``ΔK`` over one step, a cancellation), and the two
-spectrum shells at the round-off floor (``k = 0``, ``E ≈ 6·10⁻³³``, and
-the corner shell ``k = 222``, ``E ≈ 10⁻³⁸``). The differences of the
-field statistics at 10⁻¹³ are not from #400, which does not touch the
-fields: they come from the canonical reductions the port put into the
-step cores since 2026-10-05, and from the FFTW `measure` plans, which
-are chosen per process (the run log states `bitwise_reproducible=false`).
-
-Two things the record does *not* test. The check `eps_plateau` (formerly
-`on_plateau`) is ``\mathrm{d}\ln ε/\mathrm{d}t < 0.25`` over the last 0.25
-time units, a test on ε(t), not on the spectrum. And the spectrum has no
-``k^{-5/3}`` range at ``Re_λ ≈ 79``: the compensated spectrum
-``E k^{5/3} ε^{-2/3}`` rises to a bump of 2.37 (3-shell mean, near
-``kη ≈ 0.16``) and falls straight into the dissipation range, so no
-assertion is made on the spectrum's shape.
-
-The integral scale of the final field,
-``L = (π/2u'^2)\int E/k\,\mathrm{d}k``, is 0.82, so the 32h filter
-(``Δ = 0.785``) is at ``Δ ≈ L`` and the 16h filter at ``L/2``. Their
-numbers describe filtering at the energy-containing scale, not a
-subgrid model in an inertial range; only 4h and 8h are subgrid in the
-usual sense (Δ ≤ L/4).
-
-The pipeline is proven at 32³ in every suite run and was validated end
-to end at 32³–96³. The suite's 256³ testset is a no-op when the file is
-absent. At 4h (≈ 7.5–7.8η) the generator gives 0.819 at ``Re_λ = 21``
-(32³), 0.869 at 31 (48³), 0.811 at 45 (64³) and 0.822 at 52 (96³, past
-the peak), and the fixture gives 0.810 at 64. From 64³ upward these
-agree within about ±0.01, the scatter of a single seed.
+**No offline DNS record.** The a-priori study beyond the 96³ fixture
+(an offline 256³ filtered-DNS record, its `dns` run type and its tables)
+was removed by the maintainer's decision of 2026-10-09 (ONE-g, #456): the
+LES is to be validated differently, possibly externally (#461). The
+a-priori unit tests of the SGS models stay (`test/era6_apriori_sgs.jl`);
+the comparison of the models in the running LES is a posteriori, below.
 
 References: Clark, R. A., Ferziger, J. H. & Reynolds, W. C. (1979),
 *J. Fluid Mech.* 91, 1; Liu, S., Meneveau, C. & Katz, J. (1994), *J. Fluid
 Mech.* 275, 83; Vreman, B., Geurts, B. & Kuerten, H. (1994), *J. Fluid
 Mech.* 278, 351; Bardina, J., Ferziger, J. H. & Reynolds, W. C. (1980),
 AIAA 80-1357; Lumley, J. L. (1978), *Adv. Appl. Mech.* 18, 123.
+
+## A posteriori: LES against DNS (ONE-g)
+
+`examples/dns_vs_les/` runs decaying isotropic turbulence as model
+configurations: a 256³ DNS (no SGS model) and a 64³ LES per SGS model,
+all on the 2π box from the same field. The named analytic initial field
+`[initial] field = {kind = "isotropic_turbulence", …}`
+(`Operators.isotropic_turbulence_field!`) is defined in spectral space:
+every mode's random vector depends only on the seed and the integer mode,
+so the 64³ start is the 256³ start truncated to its modes, to round-off
+(`test/dns_vs_les.jl`, at 32³ / 16³; each start is then projected once
+onto its grid's discretely divergence-free fields). The spectrum is
+Passot & Pouquet's ``E ∝ k^4 \exp(-2(k/k_p)^2)``, ``k_p = 1.5``,
+``u' = 1`` m s⁻¹ (realised ``K_0 = 1.743`` m² s⁻²), ``ν = 2.0·10^{-3}``
+m² s⁻¹, run to ``t = 8`` s with adaptive SSP-RK3 steps (CFL 1). The runs
+write the resolved kinetic energy, the dissipation (molecular + SGS,
+``⟨(ν+ν_t)|S|^2⟩``) and the energy spectrum, and `compare.jl` reads only
+those:
+
+| run | decay exponent ``n`` (``K ∝ t^{-n}``, 4–8 s) | ε peak (m² s⁻³) at t (s) | SGS share of ε at the peak | max \|ΔK\|/K vs DNS | RMS log₁₀(E/E_DNS), t = 2 / 4 / 8 s, k ≤ 16 |
+| :-- | --: | :-- | --: | --: | :-- |
+| DNS 256³ | 2.200 | 0.438 at 3.55 | — | — | — |
+| LES dynamic Smagorinsky | 1.998 | 0.364 at 3.21 | 0.50 | 0.079 | 0.047 / 0.116 / 0.061 |
+| LES σ (1.35) | 1.955 | 0.338 at 3.06 | 0.56 | 0.125 | 0.085 / 0.151 / 0.081 |
+| LES Vreman (0.17) | 1.948 | 0.329 at 2.96 | 0.56 | 0.126 | 0.096 / 0.160 / 0.083 |
+| LES Smagorinsky (0.17) | 1.977 | 0.343 at 3.00 | 0.60 | 0.125 | 0.120 / 0.173 / 0.084 |
+| LES AMD (0.3) | 1.956 | 0.369 at 3.00 | 0.66 | 0.141 | 0.145 / 0.205 / 0.111 |
+
+The DNS took 2047 steps and 3592 s of run wall time (1.75 s per step) on 12 threads of a shared machine
+(max RSS 7.5 GB); each LES 39–140 s on one thread. Its dissipation peak,
+``t = 3.55`` s, is where the former 256³ record had it (3.60 s). Every
+static model drains energy early: the LES dissipation peaks 0.3–0.6 s
+before the DNS and 16–25 % lower, the kinetic energy falls below the DNS
+by up to 13–14 % around ``t ≈ 3`` s, and the LES decay is slower over
+4–8 s (``n ≈ 1.95``–2.0 against 2.20). The dynamic model, which lowers its
+coefficient while the cascade builds, follows the DNS closest in every
+measure; AMD is furthest. At ``t = 4`` s the LES spectra fall below the
+DNS from ``k ≈ 10`` toward the cut-off ``k_c = 32`` (figure, panel e).
+One seed, one resolution: the numbers rank the models on this flow,
+they are not converged statistics.
+
+![LES against DNS](../assets/dns_vs_les/dns_vs_les.svg)
 
 ## What LES buys us — and what it doesn't
 

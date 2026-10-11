@@ -1,7 +1,6 @@
 # Bulk velocity of turbulent plane channel flow: the DNS of Lee & Moser
 # (2015) and the correlation of Dean (1978). Used by
-# test/era6_wall_models_channel.jl and examples/validation/log_layer_mismatch.jl
-# (P57-b, #183).
+# test/era6_wall_models_channel.jl (P57-b, #183).
 #
 # Lee, M. & Moser, R. D. (2015). Direct numerical simulation of turbulent
 # channel flow up to Re_τ ≈ 5200. J. Fluid Mech. 774, 395-415.

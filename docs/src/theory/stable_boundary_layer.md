@@ -1,4 +1,4 @@
-# Stable boundary layers: GABLS1-4, CASES-99 and the stratified channel
+# Stable boundary layers: GABLS1-4 and CASES-99
 
 P55-f (#191) validates the stability-corrected closure of P55-e
 (`StabilityCorrected`, [Smagorinsky-Lilly SGS → Stability
@@ -8,26 +8,35 @@ are assembled from the Era V and Era VI modules, and only the
 wall-resolved, θ-walled variant of the P54-d channel builder is new
 (`channel_case(bottom_bc = :noslip, θ_walls = …)`).
 
-## The shared SBL driver
+## The cases on the one model
 
-The `sbl` run type ([`Aeolus.StableBoundaryLayer`](../api/era6/stable_boundary_layer.md),
-`src/sbl/`; an example driver under `examples/sbl/` until EX-b, #439) is
-the one stable-boundary-layer driver; P58-d (#194) extends it for
-GABLS2/3/4 and CASES-99. Every case is a TOML file of
-`examples/sbl/configs/` run with `julia --project -m Aeolus run`; the
-scripts of `examples/sbl/` only read the run folders and make the
-tables and figures. A periodic Boussinesq LES
-over a cooled surface, every piece delegated:
+Since ONE-g (#456) every SBL case is a configuration of the model
+(`examples/sbl/configs/`, run with `julia --project -m Aeolus run`): a
+periodic Boussinesq LES over a cooled surface whose every piece is a
+component of the stage pipeline, a thin adapter to a physics module. (P55-f
+#191 and P58-d #194 built the cases as the `sbl` run type,
+`Aeolus.StableBoundaryLayer`; its closures became these components and the
+run type was removed.) The scripts of `examples/sbl/` only read the run
+folders and make the tables and figures.
 
-| piece | provided by |
-| :-- | :-- |
-| geostrophic pressure gradient ``(-fV_g, +fU_g)`` | `LargeScaleForcing.GeostrophicPressureGradient` (#171), `apply_forcing!` from `body_force!`, the core's Coriolis term |
-| surface temperature | `SurfaceTemperatureSeries` (#171), `surface_temperature(series, t)` |
-| surface heat flux ``w'θ'_0 = -u_*θ_*`` | `SurfaceExchange.solve_surface_layer` per column, first level at Δz/2 |
-| surface stress | `WallModels.MOSTWallLaw(sf, z0m, L)` with the ``L`` of that solve, `apply_wall_stress!` in every RK3 substage (the law returns the solver's ``u_*`` bit for bit) |
-| SGS closure | any eddy-viscosity closure in `StabilityCorrected` (`sgs_stability = :brown94` default, `:lilly`, `:none`), stress-form divergence (`sgs_stress = :symmetric`) so that ``ν_v`` reaches the momentum |
-| top damping | the core's Rayleigh sponge, retargeted at ``(U_g, V_g)`` with its own `add_sponge!(…; f_ref)` profile, as the Berlin `:geostrophic` coupling does; for height/time-dependent ``U_g(z,t)`` level by level, or (`sponge_target = :mean`) at the plane mean, damping only the fluctuations |
-| large-scale advection (P58-d) | `LargeScaleForcing.AdvectiveTendencies` in `extra_forcing`; the θ ledger books it (`adv_heat_applied`) |
+| piece | component (section) | provided by |
+| :-- | :-- | :-- |
+| geostrophic pressure gradient ``(-fV_g, +fU_g)`` | `LargeScale` (`[large_scale_forcing] u_g, v_g`: numbers, or `"driver"`: the dynamic driver's `ls_u_g`, `ls_v_g`), stage 7 | `LargeScaleForcing.GeostrophicPressureGradient` (#171) with the `Coriolis` component's ``f`` |
+| Coriolis term | `Coriolis` (`[coriolis] f` or `latitude`), stage 6 | `Operators.add_coriolis!`, `coriolis_parameter` |
+| large-scale advection, subsidence, nudging (P58-d) | `LargeScale` (`advective_tendencies`, `subsidence`, `nudging`: the driver's `ls_*` tables, read generically) | `AdvectiveTendencies`, `Subsidence`, `ProfileNudging` |
+| surface temperature | `SurfaceLayer` (`[surface_layer] temperature`: constant, cooling rate, or the driver's `sfc_temperature`) | `SurfaceTemperatureSeries` (#171) |
+| surface heat flux ``w'θ'_0 = -u_*θ_*`` | `SurfaceLayer`, solved per column in stage 3, added in stage 6 | `SurfaceExchange.solve_surface_layer`, `kinematic_heat_flux` |
+| surface stress | `SurfaceLayer`, stage 8 (every RK3 substage) | `WallModels.MOSTWallLaw(sf, z0m, L)` with the ``L`` of that solve, `apply_wall_stress!` (the law returns the solver's ``u_*`` bit for bit) |
+| SGS closure | `SGS` (`[sgs] closure`, `stability = "brown_et_al_1994"`, `stress = "symmetric"` so that ``ν_v`` reaches the momentum) | `Operators.StabilityCorrected` (P55-e) |
+| top damping | `Sponge` (`[sponge] target = "geostrophic"`: toward ``U_g(z, t)`` level by level; `"mean"`: toward the plane mean, damping only the departures) | `Simulations.add_velocity_sponge!` with level-vector targets |
+| BL diagnostics | `SurfaceLayer` outputs (`u_star`, `surface_wtheta`, `surface_heat_flux`, `obukhov_length`, `bl_height`, `jet_speed`, `jet_height`, `inversion_height`, `theta_2m`, `wind_10m`, the stress and heat-flux profiles) | `Operators.total_stress_profile`, `total_heat_flux_profile`, `stress_bl_height`, `inversion_height`; `SurfaceExchange.similarity_theta`, `similarity_wind` |
+| CASES-99 towers | `Towers` (`[towers]`), output `tower_threshold` | `Transition.TowerSampler`, `hockey_stick_threshold` |
+
+The case tables are dynamic drivers (`examples/sbl/configs/input/`), the
+initial profiles TOML tables (a `log` or `linear` tail below the lowest
+height), the start time `[time] start` (the clock the driver tables are
+read on), and the comparisons with the intercomparisons are
+`[checks.reference]` against the reference data (`results.toml`).
 
 The GABLS1 surface-layer functions, ``φ_m = 1 + 4.8ζ``,
 ``φ_h = 1 + 7.8ζ``, are the package's log-linear family
@@ -38,6 +47,36 @@ own. The surface layer is solved once per step from the
 start-of-step state at the mid-step surface temperature; the heat flux is
 held over the step (the RK3 weights sum to one), so exactly
 ``⟨w'θ'_0⟩Δt`` enters the column.
+
+### The comparisons as in-model checks
+
+Each configuration compares itself with its reference data in
+`[checks.reference]` (advisory: `results.toml` and the run log say
+passed or FAILED, the run completes). Reduced runs on the model (ONE-g,
+#456; one realisation each, the configs with `--set grid.size=…`):
+
+| case (grid) | quantity, window | model | reference band | check |
+| :-- | :-- | --: | :-- | :-- |
+| GABLS1 (32³, 12.5 m) | ``u_*``, hours 8–9 | 0.303 m s⁻¹ | 0.245–0.283 | fails (0.020 above) |
+| | ``w'θ'_0`` | −0.0149 K m s⁻¹ | −0.0148 to −0.0094 | fails (1.2·10⁻⁴ outside) |
+| | ``H`` | −19.5 W m⁻² | −19.3 to −12.3 | fails (0.2 outside) |
+| GABLS3 (32³ on 400 m, 12.5 m) | jet height, 03–04 UTC | 117.9 m | 100–130 | passes |
+| | jet speed | 7.55 m s⁻¹ | 7.8–9.3 | fails (0.25 below) |
+| GABLS4 exp. 3 (32³ on 128 m, 4 m) | ``u_*``, 16:30–17:30 | 0.089 m s⁻¹ | 0.08–0.12 | passes |
+| | ``H`` | −10.5 W m⁻² | −13.5 to −5.3 | passes |
+| | ``h`` | 36.4 m | 14.5–19.5 | fails |
+| | ``L`` | 4.2 m | 6.5–9.9 | fails |
+| CASES-99 (24×24×48, 100 m / 33 m) | hockey-stick ``V_s(z)``, two nights | RMS 0.69 m s⁻¹ (3 levels) | Sun et al. (2012) Fig. 3a, tolerance 1 m s⁻¹ | passes |
+
+The coarse grids are on the strong side as before: the `sbl` run type gave
+``u_* = 0.304``, ``w'θ'_0 = -0.0153``, ``H = -19.9`` at 32³ for GABLS1
+(below), and at 2 m for GABLS4 ``h = 30.7`` m, ``L = 4.6`` m; the
+resolution, not the port, puts them outside the bands (the GABLS1 64³ runs
+of the run type were inside the heat-flux band and at the upper end of the
+``u_*`` band, below). The GABLS3 jet speed checked here
+is the mean of the instantaneous maxima of the plane-mean wind over the
+window, a little below the maximum of the window-mean profile that the
+analysis script and the reduced CI test report.
 
 ## GABLS1
 
@@ -60,6 +99,21 @@ available to this change quotes the ensemble's low-level-jet maximum, so
 it is reported without a reference.
 
 ### Results
+
+The numbers below were measured on the `sbl` run type (P55-f). The
+reduced CI case on the model (`test/era6_gabls1.jl`: 32³, 1.0–1.25 h)
+reproduces them within the scatter of a realisation (another θ noise
+draw and the model's adaptive step, which takes 2834 steps where the
+run type took 3501):
+
+| 32³, 1.0–1.25 h, Brown et al. (1994) | `sbl` run type | model (ONE-g) |
+| :-- | --: | --: |
+| ``h`` (m) | 178.0 | 174.0 |
+| ``u_*`` mean (range) (m s⁻¹) | 0.275 (0.267–0.283) | 0.276 (0.262–0.288) |
+| ``w'θ'_0`` (K m s⁻¹) | −0.00514 | −0.00502 |
+| θ budget, max relative residual | 1.7·10⁻⁹ | 1.4·10⁻⁹ |
+| ``κ_v/κ_h`` below ``h`` | 0.63 | 0.61 |
+| SGS share of the heat flux (uncorrected) | 0.108 (0.153) | 0.109 (0.148) |
 
 Reduced CI test (`test/era6_gabls1.jl`, 32³ at 12.5 m, 0–1.25 h,
 statistics over 1.0–1.25 h):
@@ -120,11 +174,11 @@ of ``h``.
 
 P58-d (#194) runs three observed stable-boundary-layer cases on the same
 driver. It adds no physics. Since CFG-d (#359) each case is a
-config of the `sbl` run type ([Run configuration](../api/config.md#The-sbl-legacy-case))
-in `examples/sbl/configs/`: the case constants are in the TOML file, the
-case data stay the CSVs under `examples/sbl/data/` (provenance in every
-header, read by `sbl_case_tables` through `[case] data`), and `sbl_case` builds each case
-from package forcing, surface and closure objects:
+configuration in `examples/sbl/configs/` (since ONE-g #456 of the model;
+before, of the `sbl` run type): the case constants are in the TOML file,
+the case data the CSVs under `examples/sbl/data/` (provenance in every
+header), written into the configs' dynamic drivers, and the components
+above apply them:
 
 | case | config | forcing | surface | reference |
 | :-- | :-- | :-- | :-- | :-- |
@@ -434,114 +488,17 @@ have no physical meaning there.
 
 ![CASES-99 hockey stick](../assets/sbl/cases99_hockey_nx48_nz80_L2400x1600.svg)
 
-## The stably stratified channel
+## The stably stratified channel (removed)
 
-The wall-resolved channel of García-Villalba & del Álamo (2011, Phys.
-Fluids 23, 045104; the issue's "JFM 680, 75" is this paper): isothermal
-walls with the top hotter, a constant pressure gradient, ``Pr = 0.71``,
-the friction Richardson number
-
-```math
-Ri_τ = \frac{g\,Δρ\,δ}{ρ_0 u_τ^2} = \frac{g\,(θ_{top} - θ_{bottom})\,δ}{θ_0\,u_τ^2}.
-```
-
-`channel_case(; Re_τ, bottom_bc = :noslip, θ_walls, Pr, θ₀, g_accel,
-sgs_stress)` builds it on the P54-d harness: `NoSlipWall`s (P59-a) instead
-of the wall model; θ an active Boussinesq scalar with diffusivity
-``ν/Pr`` (the core diffuses θ with ν; the difference is added) and wall
-conduction ``(ν/Pr)(θ_w - θ_1)/(Δz/2)`` — the Dirichlet ghost
-``2θ_w - θ_1`` — into the wall cells, with mirrored θ halos so the SGS flux
-through a wall face is zero (``κ_t → 0`` at a resolved wall);
-`stratified_channel_walls(Ri_τ)` gives the walls and
-`channel_richardson(case)` the inverse. Laminar checks: the conduction
-flux is the laminar ``κΔθ/2δ`` (Nu = 1) to 1e-12, and steady Poiseuille
-flow has the total stress ``u_τ^2(1 - z/δ)`` to 1e-6.
-
-The DNS at ``Re_τ = 550`` is not affordable wall-resolved here (about
-three times the points per direction of ``Re_τ = 180``), so the
-validation uses the lowest Re_τ of the DNS, 180, where its bulk Reynolds
-and Nusselt numbers are tabulated (Ahmed et al. 2021, Table I, columns
-"GV11"; `examples/sbl/data/stratified_channel_gv11_re180.csv`):
-``U_b^+ = 15.67, 16.91, 19.09`` and ``Nu = 6.03, 4.02, 2.80`` at
-``Ri_τ = 0, 18, 60``. The closure is the plane-averaged dynamic
-Smagorinsky model (Germano et al. 1991), which needs no wall damping;
-static Smagorinsky without damping is not usable at a resolved wall here
-(at 32³ and ``C_s = 0.1`` its SGS wall flux exceeds the molecular one and
-the flow relaminarises: ``⟨τ_w⟩ = 0.32 u_τ^2``).
-
-As in the DNS, the stratification is switched on in a developed neutral
-channel (`stratified_channel_spinup`: θ passive, no buoyancy), and θ is
-rescaled to the walls of each run.
-
-Reduced CI test (`test/era6_stratified_channel.jl`, 24×16×32 on
-2πδ × πδ × 2δ, Δx⁺ = 47, Δy⁺ = 35, Δz⁺ = 11.25; neutral spin-up 6 δ/u_τ,
-then each run to 16 δ/u_τ, statistics over 10–16 δ/u_τ; 2.5 min for the
-file on a loaded machine):
-
-| | ``Ri_τ = 0`` (passive θ) | 18, none | 18, corrected | DNS 0 / 18 |
-| :-- | --: | --: | --: | :-- |
-| ``U_b^+`` | 14.80 | 15.74 | 15.58 | 15.67 / 16.91 |
-| Nu | 7.05 | 4.79 | 4.89 | 6.03 / 4.02 |
-| Nu(18)/Nu(0) | | 0.680 | 0.694 | 0.667 |
-| ``⟨τ_w⟩`` (molecular, u_τ²) | 0.92 | 0.86 | 0.93 | |
-| momentum budget residual (u_τ²) | 0.0019 | 0.0063 | 0.0023 | |
-
-The momentum budget is ``τ(z) = τ(0) + ∫_0^z(∂⟨U⟩/∂t - G)\,dz'`` of the
-time-averaged total stress (resolved + SGS + viscous), unsteadiness
-included (``U_b`` still drifts by 0.1–0.4 over the window). The
-stratification cuts the wall heat transfer to 0.68–0.69 of the neutral
-value (DNS 0.667) and raises the bulk velocity by 6.4 % (uncorrected) and
-5.3 % (corrected), against 7.9 % in the DNS. The coarse LES under-predicts
-``U_b^+`` by 5.5 % and over-predicts Nu by 17 %.
-
-The highest Ri_τ of the CI test is 18. At ``Ri_τ = 60`` this grid does not
-hold a turbulent state after the switch-on: over 10–16 δ/u_τ the
-uncorrected run relaminarises (Nu = 1.55, ``⟨τ_w⟩ = 0.45 u_τ^2``, ``U_b``
-still rising by 3.3 u_τ) and the corrected one partly (Nu = 2.65,
-``U_b`` +2.2 u_τ), so no statistics of that window mean anything; started
-from noise instead, the same grid stays turbulent for 16 δ/u_τ (Nu = 3.20
-both, ratio 0.45 against the DNS 0.464) but accelerates throughout
-(``U_b`` +0.7 u_τ over the window). ``Ri_τ = 60`` is run at 32×32×48 for
-longer in `configs/stratified_channel_sweep.toml`.
-
-Example run (`configs/stratified_channel_sweep.toml`, read by
-`examples/sbl/stratified_channel.jl`; 32×32×48 on
-2πδ × πδ × 2δ, Δx⁺ = 35, Δy⁺ = 18, Δz⁺ = 7.5; neutral spin-up 10 δ/u_τ,
-each run to 40 δ/u_τ, statistics over 20–40 δ/u_τ; six single-thread
-processes of 10–15 min each on a loaded machine):
-
-| ``Ri_τ`` | closure | ``U_b^+`` | DNS | Nu | DNS | ``⟨τ_w⟩`` (u_τ²) | budget (u_τ²) | ``ΔU_b`` over the window |
-| --: | :-- | --: | --: | --: | --: | --: | --: | --: |
-| 0 | none | 14.98 | 15.67 | 6.96 | 6.03 | 0.946 | 0.0047 | +0.02 |
-| 0 | corrected | 14.88 | 15.67 | 6.87 | 6.03 | 0.995 | 0.0027 | −0.15 |
-| 18 | none | 16.67 | 16.91 | 4.40 | 4.02 | 0.936 | 0.0079 | +0.23 |
-| 18 | corrected | 17.36 | 16.91 | 4.57 | 4.02 | 1.025 | 0.0139 | −0.78 |
-| 60 | none | 25.85 | 19.09 | 1.23 | 2.80 | 0.532 | 0.0079 | +9.37 |
-| 60 | corrected | 25.85 | 19.09 | 1.23 | 2.80 | 0.532 | 0.0079 | +9.37 |
-
-At ``Ri_τ = 0`` and 18 the finer grid is closer to the DNS than the CI
-grid: ``U_b^+`` within 4.4 % (neutral) and 1.4 %/2.7 % (``Ri_τ = 18``), Nu
-over-predicted by 15 % and 9 %/14 %; Nu(18)/Nu(0) = 0.63/0.67 against the
-DNS 0.667. **A miss:** at ``Ri_τ = 60`` both closures relaminarise after
-the switch-on (Nu = 1.23, ``⟨τ_w⟩ = 0.53 u_τ^2``, the flow still
-accelerating by 9.4 u_τ over the window), where the DNS stays turbulent
-(Nu = 2.80). The two runs are nearly identical because the SGS
-viscosity vanishes in the laminarised flow. We attribute the miss to
-resolution, not to a code error: neither grid (Δx⁺ = 47 or 35) holds the
-near-wall cycle against this stratification; matching the DNS at
-``Ri_τ = 60`` needs a finer, DNS-like wall resolution not affordable here. This
-is the regime P59-e (#195) studies.
-
-**An expectation that proved wrong.** The issue expected the corrected
-closure's mean profile to be closer to the DNS than the uncorrected one.
-At CI resolution it is not: at ``Ri_τ = 18`` the corrected run gives
-``U_b^+ = 15.58`` and Nu = 4.89 against 15.74 and 4.79 uncorrected (DNS
-16.91 and 4.02), the uncorrected one closer by 1–2 % in both. With a
-dynamic base the correction applies no ``f_m`` to the momentum (the dynamic
-coefficient already sees the stratification), only
-``Pr_t(Ri) = Pr_t/(1 - 1.2Ri)`` below ``Ri_c`` (Brown et al. 1994) and the
-anisotropic length scales; the test reports the numbers and does not assert
-the ordering.
+The wall-resolved stratified channel of García-Villalba & del Álamo
+(2011), and the relaminarising and collapsing channels of P58-e and P59-e,
+ran on the `sbl` run type. They were removed with it (ONE-g #456;
+maintainer decision of 2026-10-09: no channel cases, no pressure-gradient
+forcing component). Their physics stays in `WallModels` (`channel_case`
+with θ walls, `stratified_channel_walls`, `MOSTFluxWallLaw`) and
+`SurfaceExchange` (the maximum sustainable heat flux), tested at module
+level (`test/era6_walls.jl`, `era6_collapse.jl`); the measured channel
+results are in the history of this page before #456.
 
 ## Berlin
 

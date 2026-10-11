@@ -12,8 +12,9 @@
 #      filter), no wall damping — the headline test;
 #   5. robustness: ν_t ≥ 0, β ≥ 0.125, no NaN over 500 steps of isotropic
 #      turbulence and of the masked cube.
-# (Test 4, the spectra, is examples/validation/neutral_abl.jl and the CBC
-# benchmark in era6_cbc_decay.jl.)
+# (Test 4, the spectra, was the former examples/validation/neutral_abl.jl,
+# a channel case removed by ONE-g #456; the CBC benchmark is in
+# era6_cbc_decay.jl.)
 
 using Test
 using Aeolus

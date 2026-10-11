@@ -315,8 +315,8 @@ taken for the neutral state:
   (2015), who normalise by the half height.
 
 Their ratio is ``Q_{bulk}/Q_{wall} = 0.032``. The table is
-`examples/sbl/collapse_channel.jl` over the runs of
-`configs/collapse_channel_sweep.toml`, averaged over 15–20 ``H/u_*``, with
+the former `examples/sbl/collapse_channel.jl` over the runs of
+`configs/collapse_channel_sweep.toml` (channel cases, (removed by ONE-g, #456)), averaged over 15–20 ``H/u_*``, with
 γ at 20 ``H/u_*``:
 
 | ``H/H_{max}^{wall}`` | ``H/H_{max}^{bulk}`` | TKE/TKE₀ | TKE/TKE₀ lowest third | levels with γ < 0.2 (of 11) | ``U_1/U_0`` | ``τ_w/u_*^2`` |
