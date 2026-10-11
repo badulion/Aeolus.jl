@@ -396,12 +396,10 @@ end
 """
     driver_schema(name = "model") -> ConfigSchema
 
-The schema registered as `name` ([`register_driver!`](@ref)): the model's,
-or a legacy case's (an example case listed in [`DRIVER_FILES`](@ref) is
-loaded on first use).
+The schema registered as `name` ([`register_driver!`](@ref)): the model's
+or a legacy case's.
 """
 function driver_schema(name::AbstractString = MODEL)
-    _ensure_driver(name)              # an example case is loaded on first use (CFG-b)
     haskey(_DRIVERS, name) || throw(ConfigError("run.legacy",
         "unknown legacy case \"$name\"" * _suggest(name, legacy_cases()) *
         "; legacy cases: " * join(repr.(legacy_cases()), ", ")))
@@ -419,11 +417,10 @@ registered_drivers() = sort!(collect(keys(_DRIVERS)))
 """
     legacy_cases() -> Vector{String}
 
-The legacy cases `[run] legacy` may name: the registered ones and those of
-[`DRIVER_FILES`](@ref), sorted.
+The legacy cases `[run] legacy` may name (the registered schemas but the
+model's and `"common"`), sorted.
 """
-legacy_cases() = sort!(unique!(vcat(filter(n -> !(n in (MODEL, "common")), collect(keys(_DRIVERS))),
-                                    collect(keys(DRIVER_FILES)))))
+legacy_cases() = sort!(filter(n -> !(n in (MODEL, "common")), collect(keys(_DRIVERS))))
 
 # ---------------------------------------------------------------------------
 # value checks

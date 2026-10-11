@@ -13,6 +13,8 @@ using Test
 using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml
+using Aeolus.Fields: interior_view
+import NCDatasets
 
 const EX_DIR = joinpath(pkgdir(Aeolus), "examples")
 const TGV_CFG = joinpath(EX_DIR, "configs", "taylor_green_vortex.toml")
@@ -122,38 +124,49 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# examples/kernels/: 04_cloud_spinup (the column driver's kessler_box)
+# examples/kernels/: 04_cloud_spinup, the Kessler box on the model (ONE-i #458)
 # ---------------------------------------------------------------------------
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
-@testset "kernels: cloud_spinup.toml equals the old in-code Kessler box, bit for bit" begin
-    # examples/kernels/04_cloud_spinup.jl before CFG-e, verbatim but for the plots
+@testset "kernels: cloud_spinup.toml is the Kessler box at rest on the model" begin
+    # the same box with the same eight Kessler steps applied directly
+    # (Microphysics.apply_kessler_step!, the Marshall-Palmer fall speeds)
     H = 2000.0
     mesh = RegularGrid(; size = (4, 4, 32), extent = (H, H, H), halo = (1, 1, 1))
     qv = Field(CellCenter(), mesh); Aeolus.Fields.set!(qv, (x, y, z) -> 0.01)
     ql = Field(CellCenter(), mesh); Aeolus.Fields.set!(ql, (x, y, z) -> 0.6H < z < 0.9H ? 3e-3 : 0.0)
     qr = Field(CellCenter(), mesh); Aeolus.Fields.set!(qr, (x, y, z) -> 0.0)
-    q0 = sum(qv.data) + sum(ql.data)
-    for dt in (60.0, 60.0, 120.0, 120.0, 120.0)
-        apply_kessler_step!(qv, ql, qr, dt; Vt = :spectrum)
+    q0 = sum(interior_view(qv)) + sum(interior_view(ql))
+    for _ in 1:8
+        apply_kessler_step!(qv, ql, qr, 60.0; Vt = :spectrum)
     end
     cfg = load_run_config(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
-    r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-    f = Base.invokelatest(state_fields, r.obj)
-    @test f.qv == qv.data && f.ql == ql.data && f.qr == qr.data
-    @test all(bitwise_equal(a, b) for (a, b) in ((f.qv, qv.data), (f.ql, ql.data), (f.qr, qr.data)))
-    # the physics: autoconversion turns cloud into rain (the cloud-layer
-    # maximum falls monotonically) and the rain reaches below the cloud base
-    snaps = r.obj.snapshots
-    @test [s.t for s in snaps] == [0.0, 60.0, 120.0, 240.0, 360.0, 480.0]
-    qlmax = [maximum(s.ql) for s in snaps]
+    root = mktempdir()
+    r = run_config(cfg; root = root, console = false, repo = mktempdir())
+    sim = Aeolus.SimulationDriver.simulation(r.obj)
+    water = Aeolus.SimulationDriver.sim_couplings(r.obj).water
+    @test sim.t ≈ 480.0
+    # horizontally uniform fields: the layer's buoyancy is balanced by the
+    # pressure, the air stays at rest and the run is the microphysics alone
+    @test maximum(abs, interior_view(sim.u)) == 0 && maximum(abs, interior_view(sim.v)) == 0
+    @test maximum(abs, interior_view(sim.w)) < 1e-12
+    @test isapprox(interior_view(sim.qv), interior_view(qv); rtol = 1e-12)
+    @test isapprox(interior_view(water.ql), interior_view(ql); rtol = 1e-12, atol = 1e-15)
+    @test isapprox(interior_view(water.qr), interior_view(qr); rtol = 1e-12, atol = 1e-15)
+    # the physics, from the run's profiles (diagnostics.nc): autoconversion
+    # turns cloud into rain (the cloud maximum falls monotonically) and the
+    # rain reaches below the cloud base
+    ds = NCDatasets.NCDataset(joinpath(r.folder.path, "diagnostics.nc"))
+    z = Array(ds["z"][:]); QL = Array(ds["micro.ql"][:, :]); QR = Array(ds["micro.qr"][:, :])
+    t = Array(ds["time_costly"][:]); close(ds)
+    @test t ≈ 0:60:480
+    qlmax = vec(maximum(QL; dims = 1))
     @test issorted(qlmax; rev = true) && qlmax[end] < qlmax[1]
-    @test maximum(snaps[1].qr) == 0 && maximum(snaps[end].qr) > 1e-5
-    zc = collect(Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter()))
-    @test any(snaps[end].qr[k] > 0 for k in eachindex(zc) if zc[k] < 0.6H)
+    @test maximum(QR[:, 1]) == 0 && maximum(QR[:, end]) > 1e-5
+    @test any(QR[k, end] > 0 for k in eachindex(z) if z[k] < 0.6H)
     # vapour and cloud only lose water to the rain (no source of water)
-    @test sum(f.qv) + sum(f.ql) <= q0
+    @test sum(interior_view(sim.qv)) + sum(interior_view(water.ql)) <= q0
 end
 
 @testset "round trip from run.toml (kernels: cloud_spinup.toml), bit-identical" begin
@@ -201,11 +214,9 @@ function script_configs(rel)
 end
 
 @testset "coverage: every example that integrates the equations has a config or a reasoned exemption" begin
-    drivers = Set(relpath(joinpath(pkgdir(Aeolus), p), EX_DIR) for p in values(Aeolus.Config.DRIVER_FILES))
     missing_ = String[]
     nconfigured = 0
     for rel in example_scripts()
-        rel in drivers && continue                        # a run driver (registers itself)
         any(startswith(rel, d) for d in keys(OTHER_ISSUE_DIRS)) && continue
         cfgs = script_configs(rel)
         if !isempty(cfgs)
@@ -230,9 +241,5 @@ end
     @test all(isfile(joinpath(EX_DIR, p)) for p in keys(EXEMPT))
     @test all(isfile(joinpath(EX_DIR, p)) for p in PENDING_360)
     @test all(!isempty(r) for r in values(EXEMPT))
-    # examples/validation/ is complete: every script there is a driver (the
-    # validation wrappers went with their cases, ONE-g #456)
-    val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
-    @test isempty(val)
     @test nconfigured == 0         # no script runs a config: the runs are `aeolus run <config>.toml` (ONE-g #456)
 end

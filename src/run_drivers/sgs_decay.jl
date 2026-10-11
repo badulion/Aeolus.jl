@@ -8,7 +8,7 @@ and the fixture `test/fixtures/sgs_validation.jl` (which
 `test/era6_sgs_validation.jl` runs at 48³).
 
 The method ("a priori in time"). One DNS of decaying isotropic
-turbulence (the P56-c fixture `dns_decay` of the `dns_decay` run type: 2π
+turbulence (the P56-c fixture `dns_decay`, test/fixtures/dns_decay.jl: 2π
 box, ν ∝ N^{-4/3}, spun up from a fixed seed to t₀ = 2) is continued from
 t₀ in up to four ways:
 
@@ -64,7 +64,7 @@ import ...PressureSolvers
 using ...PrognosticSGS: TKEClosure, ReynoldsStressClosure, initialize_tke!, initialize_reynolds_stress!
 using ...IO: RunFolder, CheckpointSchedule
 using ...Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, section, option!,
-                 register_driver!, write_results, no_checkpoints, run_driver
+                 register_driver!, write_results, no_checkpoints
 
 export SGSDecayDriverType, SGSDecayRun, validation_base, run_dns_case, run_les, filtered_snapshot,
        centre_sample, BackgroundGradient, LinearJumpPeriodic, background_advection, les_closure, les_stress,
@@ -74,14 +74,21 @@ export SGSDecayDriverType, SGSDecayRun, validation_base, run_dns_case, run_les, 
 vmean(x) = sum(x) / length(x)
 vmean(f, x) = sum(f, x) / length(x)
 
-# The DNS fixture of P56-c lives with the `dns_decay` run type: its
-# example driver (examples/validation/dns_driver.jl, which includes
-# test/fixtures/dns_decay.jl) or, after EX-c (#440), Aeolus.ValidationRuns.
-# Found at run time either way.
+# The DNS of P56-c is the fixture the tests and benchmarks share,
+# test/fixtures/dns_decay.jl (one source of truth), included into a module
+# of its own the first time a run needs it. (It was reached through the
+# `dns_decay` legacy case of examples/validation/, which is gone: no file
+# under examples/ builds or steps a model, ONE-i #458.)
+const _DNS_FIXTURE = normpath(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_decay.jl"))
+const _DNS_MODULE = Ref{Union{Nothing,Module}}(nothing)
 function _dns()
-    A = parentmodule(parentmodule(@__MODULE__))
-    isdefined(A, :ValidationRuns) && return getfield(A, :ValidationRuns)
-    return parentmodule(typeof(run_driver("dns_decay")))
+    _DNS_MODULE[] === nothing || return _DNS_MODULE[]
+    m = Module(:AeolusDNSDecayFixture)
+    # what `module` defines for its body: include (relative to the file) and eval
+    Core.eval(m, :(include(p::AbstractString) = Base.include($m, p)))
+    Core.eval(m, :(eval(x) = Core.eval($m, x)))
+    Base.include(m, _DNS_FIXTURE)
+    return _DNS_MODULE[] = m
 end
 # (the bindings of a module loaded at run time are read in the latest world)
 _dns_fn(name::Symbol) = Base.invokelatest(getfield, _dns(), name)

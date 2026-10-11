@@ -88,8 +88,9 @@ const RT_FILES = shipped_config_files()
 @testset "round-trip coverage: the docs build writes a reference page per schema and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["model", "urban", "urban_parent", "cbl", "dns_decay", "column"], reference_drivers())
+    @test issubset(["model", "urban", "urban_parent", "cbl"], reference_drivers())
     @test isempty(intersect(["sbl", "dns", "channel", "cbc_decay", "patchy_surface"], reference_drivers()))   # gone (ONE-g #456)
+    @test isempty(intersect(["column", "dns_decay"], reference_drivers()))   # gone (ONE-i #458)
     # every option page is the schema's generated Markdown, verbatim after its header
     for d in reference_drivers()
         @test endswith(read(joinpath(RT_REFERENCE, "options", d * ".md"), String),

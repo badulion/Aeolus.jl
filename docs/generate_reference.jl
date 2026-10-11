@@ -16,11 +16,10 @@ import Aeolus.InputDrivers as AeolusInput
 
 """
 Every schema the option reference documents: the model's (`"model"`) and
-every legacy case's, the built-in ones (in src) and those of `DRIVER_FILES`.
+every legacy case's.
 """
 reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "urban", "urban_parent",
-                                         Aeolus.RunDrivers.DRIVER_NAMES,
-                                         collect(keys(AeolusConfig.DRIVER_FILES)))))
+                                         Aeolus.RunDrivers.DRIVER_NAMES)))
 
 const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))
 
