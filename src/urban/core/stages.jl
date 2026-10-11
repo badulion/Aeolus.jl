@@ -97,6 +97,9 @@ function Components.run_stage!(u::UrbanCore, d::Domain, ::Val{:clock}, dt)
     case.clock.hour = hour_of_day(case.cfg, case.sim.t)
     return nothing
 end
+# the open faces' θ relaxation is booked as (:dynamics, :relaxation) after
+# the step (book_dynamics_heat!), not measured as an entry of its own
+Components.attributed(::UrbanCore, ::Val{:tendencies}) = false
 function Components.run_stage!(u::UrbanCore, d::Domain, ::Val{:tendencies}, dt)
     case = u.case
     sgs = get(case.step_kwargs, :sgs, nothing)

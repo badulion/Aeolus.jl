@@ -215,6 +215,10 @@ obstacles) are not air.
   times Δt (1 for Euler; 1/6, 1/6, 2/3 for the SSP-RK3 substages). A
   `:post_predictor` entry changes the predicted state, so it is measured
   on the state and scaled by the weight.
+  An entry that books what it does itself inside the dynamics' context
+  (`add_heat!`) opts out with `Components.attributed(c, Val(stage)) =
+  false`, so it is not counted twice: the urban site's open faces, whose
+  θ relaxation is `(:dynamics, :relaxation)` (ONE-e, #454).
 - **The core step** is one context (`:dynamics`). Whatever the core does
   beyond the components inside it is split into `(:dynamics, :transport)`
   (what the transport conserves; over the whole column it is the
