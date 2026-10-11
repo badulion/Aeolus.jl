@@ -21,6 +21,14 @@ model = Model(Domain(d0; components = comps))
 step!(model, 2.0)
 ```
 
+Several domains are a nest (ONE-f, #455): [`nested_model`](@ref
+Aeolus.Components.nested_model) couples them with one
+[`NestLink`](@ref Aeolus.Components.NestLink) per child (its parent, its
+`Nesting.NestedGrid` and its feedback, two-way by default), and
+`step!(model, dt)` steps the root with every child subcycling through its
+own pipeline. A config builds it from its `[[domain]]` blocks; see
+[Run configuration](../design/run_configuration.md).
+
 ```@autodocs
 Modules = [Aeolus.Components]
 ```

@@ -426,6 +426,14 @@ throws ([`guarded_step!`](@ref Aeolus.IO.guarded_step!), e.g.
 3. **stops** with a [`BlowupError`](@ref Aeolus.IO.BlowupError) carrying all
    of it. Inside `with_run`, the session is recorded as `failed`.
 
+The check covers the state the checkpoint components hold outside the
+simulation too ([`component_nonfinite_fields`](@ref
+Aeolus.IO.component_nonfinite_fields)): in a nested model the guard steps
+the root's core, and the nest reports its child domains, each field named
+`<domain>.<field>` (`inner.θ`). A one-way child feeds nothing back, so
+without this a NaN in it never reached the root and the run ended
+`completed` (`test/model_nesting.jl`).
+
 Only `BoussinesqSimulation` has a checkpoint format (#245) today; for the
 other cores the diagnosis is logged and says that no checkpoint was
 written.

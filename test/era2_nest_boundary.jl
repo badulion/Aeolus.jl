@@ -93,7 +93,7 @@ end
         csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest;
                                                        bottom = c.bottom, top = :nest))
         _nb_init_child!(csim, psim, nest)
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(step_rk3!),
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
                         advance_child = domain_advance(step_rk3!),
                         cfl_parent = CFLConstraints(C_advective = 0.4))
         # project the prolongated child once (with its open faces): SSP-RK3
@@ -162,7 +162,7 @@ function _nb_advect(r; sponge = nothing, weno = false, order = 3, σ = 150.0, U 
     bf = weno ? (s, Δt) -> (fill!(s.tθ.data, 0); advect_weno_z!(s.tθ, s.u, s.v, s.w, s.θ); s) :
                 nothing
     adv = domain_advance(step_rk3!; body_force! = bf)
-    run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                     cfl_parent = nothing, cfl_child = nothing, substeps = r, sponge, order)
     cx, _, _ = nest_covered_range(nest)
     l2(s, idx, t) = sqrt(sum(abs2, interior_view(s.θ)[idx, 1, 1] .-
@@ -250,7 +250,7 @@ function _nb_cbl(seed; nested, T1 = 1200.0, T2 = 2400.0)
         c = BoussinesqSimulation(cm; θ₀ = 300.0, C_s = 0.17, θ_flux_bottom = 0.1,
                                  bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
         _nb_init_child!(c, p, nest)
-        run = NestedRun(p, c, nest; cfl_parent = cfl)
+        run = NestedRun(p, c, nest; feedback = :one_way, cfl_parent = cfl)
     end
     ap = zeros(length(cz), 2); ac = zeros(cm.Nz, 2); n = 0; dtp = nothing
     while p.t < T2
@@ -326,7 +326,7 @@ end
             ctr[] += 1
             s
         end
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(core),
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(core),
                         advance_child = domain_advance(; body_force! = probe!),
                         cfl_parent = nothing, cfl_child = nothing, substeps = 3)
         V = cm.dx * cm.dy * cm.dz
@@ -371,7 +371,7 @@ end
     csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
     _nb_init_child!(csim, psim, nest)
     apply_solid_mask!(csim, sm)
-    run = NestedRun(psim, csim, nest; solid = sm,
+    run = NestedRun(psim, csim, nest; feedback = :one_way, solid = sm,
                     advance_child = domain_advance(; post_predictor! = (s, h) -> apply_solid_mask!(s, sm)),
                     cfl_parent = CFLConstraints(C_advective = 0.4))
     st = only(open_boundary_states(csim))
@@ -459,7 +459,7 @@ end
         csim = BoussinesqSimulation(cm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1,
                                     bcs = nest_bcs(cm, :nest, :nest, :periodic))
         _nb_init_child!(csim, psim, nest)
-        run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                         cfl_parent = nothing, cfl_child = nothing, substeps = 1)
         cx, cy, cz = nest_covered_range(nest)
         rel(fc, fp; base = 0.0) =
@@ -501,7 +501,7 @@ function _nb_outflow_pulse(mode; σ = 4.0, U = 1.0)
         csim.θ.data[i, jj, kk] .= exp(-(_nb_xc(cm, i) - 32.0)^2 / (2σ^2))
     end
     E0 = sum(abs2, interior_view(csim.θ))
-    run = NestedRun(psim, csim, nest; advance_parent = domain_advance(step_rk3!),
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
                     advance_child = domain_advance(step_rk3!),
                     cfl_parent = nothing, cfl_child = nothing, substeps = 2)
     st = only(open_boundary_states(csim))
@@ -546,7 +546,7 @@ end
         step!(psim, 1e-10); psim.t = 0.0
         csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
         _nb_init_child!(csim, psim, nest)
-        run = NestedRun(psim, csim, nest; advance_parent = adv, advance_child = adv,
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
                         cfl_parent = nothing, cfl_child = nothing,
                         sponge = NestSponge(; width = 3, α_max = 20.0))
         # project the prolongated child once with its open faces attached
@@ -605,7 +605,7 @@ end
             end
             nothing
         end
-        run = NestedRun(psim, csim, nest; advance_parent = domain_advance(step_rk3!),
+        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
                         advance_child = domain_advance(step_rk3!; body_force! = hook),
                         cfl_parent = nothing, cfl_child = nothing,
                         sponge = NestSponge(; width = 3, α_max = 20.0))
