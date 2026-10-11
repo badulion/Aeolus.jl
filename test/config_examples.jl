@@ -3,9 +3,7 @@
 # Acceptance tests of the issue covered in this file:
 #   * sweeps: a [sweep] table expands into override sets in a fixed order,
 #     one run folder per member, each member validated;
-#   * coverage: every examples/**/*.jl that calls a step!/run!/run_case!
-#     entry point has a configs/*.toml file or a reasoned entry in EXEMPT
-#     below (empty since ONE-g #456).
+#   * the Kessler box of the kernel demos (cloud_spinup.toml) on the model.
 # The per-directory bit-identity and round-trip tests are in
 # config_examples_*.jl.
 
@@ -100,9 +98,10 @@ end
         axis = [ { key = "dynamics.nu", values = [0.01, 0.02] } ]
         """))
     root = mktempdir()
-    args = ["--set", "grid.size=[8,8,8]", "--set", "time.duration=\"none\"", "--set", "time.nsteps=3",
-            "--set", "fftw.planner=\"estimate\"", "--root", root]
-    res = run_configs(p, args; console = false, repo = mktempdir())
+    sets = ["grid.size=[8,8,8]", "time.duration=\"none\"", "time.nsteps=3", "fftw.planner=\"estimate\""]
+    args = vcat(collect(Iterators.flatten(("--set", s) for s in sets)), "--root", root)
+    # every member, one run each, as aeolus run takes them
+    res = [run_config(cfg; root = root, console = false, repo = mktempdir()) for (_, cfg) in load_sweep(p; overrides = sets)]
     @test length(res) == 2
     @test res[1].folder.path != res[2].folder.path
     @test [Aeolus.SimulationDriver.simulation(r.obj).ν for r in res] == [0.01, 0.02]
@@ -117,7 +116,7 @@ end
     out = IOBuffer()
     @test Aeolus.main(["run", p, args..., "--member", "2", "--allow-uncommitted"]; io = out, err = IOBuffer()) == 0
     @test count("completed", String(take!(out))) == 1
-    @test_throws Aeolus.Config.UsageError run_configs(p, ["32"])
+    @test Aeolus.main(["run", p, "32"]; io = IOBuffer(), err = IOBuffer()) != 0
     out = IOBuffer()
     @test Aeolus.main(["check", p]; io = out) == 0
     @test count("ok:", String(take!(out))) == 2
@@ -174,72 +173,6 @@ end
     @test r.fields_equal && r.config_equal && r.results_equal
 end
 
-# ---------------------------------------------------------------------------
-# coverage: every example that integrates the equations runs from a config
-# ---------------------------------------------------------------------------
-
-# A script integrates the equations if it calls a stepping entry point.
-const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|run_case!)\("
-# A script is configured if it runs a shipped configs/*.toml through
-# run_configs or the aeolus command line.
-const CONFIG_RUN = r"(run_configs|Aeolus\.main)\("
-const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
-
-# Files that call an entry point (or look like runs) but are not runs of
-# their own, each with its reason. Paths relative to examples/.
-const EXEMPT = Dict{String,String}()
-
-# Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
-# its runs are configs/*.toml of the model since ONE-g #456).
-const OTHER_ISSUE_DIRS = Dict{String,String}()
-
-# The rest of #360's scope, migrated in later parts of the issue (it may be
-# split per directory). This list may only shrink: a file migrated to a
-# config must leave it (checked below).
-const PENDING_360 = Set{String}()
-
-function example_scripts()
-    files = String[]
-    for (dir, _, fs) in walkdir(EX_DIR), f in fs
-        endswith(f, ".jl") && push!(files, relpath(joinpath(dir, f), EX_DIR))
-    end
-    return sort!(replace.(files, '\\' => '/'))
-end
-
-"The configs a script runs, as absolute paths (empty if it runs none)."
-function script_configs(rel)
-    src = read(joinpath(EX_DIR, rel), String)
-    occursin(CONFIG_RUN, src) || return String[]
-    return [joinpath(dirname(joinpath(EX_DIR, rel)), "configs", m[1]) for m in eachmatch(CONFIG_REF, src)]
-end
-
-@testset "coverage: every example that integrates the equations has a config or a reasoned exemption" begin
-    missing_ = String[]
-    nconfigured = 0
-    for rel in example_scripts()
-        any(startswith(rel, d) for d in keys(OTHER_ISSUE_DIRS)) && continue
-        cfgs = script_configs(rel)
-        if !isempty(cfgs)
-            nconfigured += 1
-            # each config the script names exists and validates (every member of a sweep)
-            for c in cfgs
-                @test isfile(c)
-                @test !isempty(load_sweep(c))
-            end
-            @test !(rel in PENDING_360)                    # migrated: leaves the pending list
-            @test !haskey(EXEMPT, rel)
-            # and the script parses no ARGS / ENV of its own (they go to run_configs)
-            src = read(joinpath(EX_DIR, rel), String)
-            @test !occursin(r"ARGS\[|parse\([^)]*ARGS|ENV\[|get\(ENV", src)
-        elseif occursin(ENTRY_POINT, read(joinpath(EX_DIR, rel), String))
-            haskey(EXEMPT, rel) || rel in PENDING_360 || push!(missing_, rel)
-        end
-    end
-    @test isempty(missing_)
-    isempty(missing_) || @info "examples that integrate the equations with neither a config nor an exemption" missing_
-    # no stale entries: every exemption and pending file exists
-    @test all(isfile(joinpath(EX_DIR, p)) for p in keys(EXEMPT))
-    @test all(isfile(joinpath(EX_DIR, p)) for p in PENDING_360)
-    @test all(!isempty(r) for r in values(EXEMPT))
-    @test nconfigured == 0         # no script runs a config: the runs are `aeolus run <config>.toml` (ONE-g #456)
-end
+# (The coverage test of the scripts that integrate the equations is
+# test/examples_enforcement.jl since ONE-i #458: no file under examples/
+# builds or steps a model, with no exemptions.)
