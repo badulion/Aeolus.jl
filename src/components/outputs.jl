@@ -13,6 +13,9 @@ The names in the core's output catalogue ([`core_outputs`](@ref)):
 | `u_profile`, `v_profile`, `theta_profile`, `qv_profile` | z | horizontal means per level |
 | `u_mean`, `v_mean`, `w_mean`, `theta_mean`, `qv_mean` | scalar | domain means (time series) |
 | `budget_energy`, `budget_water`, `budget_momentum`, `budget_tracer` | scalar group | the measured budgets ([`with_budgets`](@ref)): cumulative storage, every attributed term and the closure (time series) |
+| `kinetic_energy` | scalar | the resolved kinetic energy ``½⟨u^2 + v^2 + w^2⟩`` of the face values (m² s⁻²) |
+| `dissipation`, `dissipation_sgs` | scalar | the dissipation of the resolved energy, molecular plus SGS, and its SGS part (`Operators.dissipation_rate`, m² s⁻³) |
+| `energy_spectrum` | k | the shell-summed energy spectrum ``E(k)`` (`Operators.isotropic_energy_spectrum`, m³ s⁻²; a triply periodic regular grid) |
 
 `qv*` need moisture; `budget_water` needs moisture, `budget_tracer` a
 component that carries a tracer, `budget_energy` on the Boussinesq core
@@ -21,7 +24,8 @@ component that carries a tracer, `budget_energy` on the Boussinesq core
 const CORE_OUTPUTS = ("u", "v", "w", "p", "theta", "qv",
                       "u_profile", "v_profile", "theta_profile", "qv_profile",
                       "u_mean", "v_mean", "w_mean", "theta_mean", "qv_mean",
-                      "budget_energy", "budget_water", "budget_momentum", "budget_tracer")
+                      "budget_energy", "budget_water", "budget_momentum", "budget_tracer",
+                      "kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum")
 
 """
     DEFAULT_OUTPUTS
@@ -53,6 +57,23 @@ _level_sums(f) = plane_partials!(zeros(f.mesh.Nz), identity, interior(f.mesh), f
 function _profile(f)
     m = f.mesh
     return _level_sums(f) ./ (m.Nx * m.Ny)
+end
+
+# the resolved kinetic energy per unit volume of the face values (the energy
+# the solver carries; Parseval with `isotropic_energy_spectrum`)
+function _kinetic_energy(sim)
+    n = sim.mesh.Nx * sim.mesh.Ny * sim.mesh.Nz
+    return 0.5 * (sum(abs2, interior_view(sim.u)) + sum(abs2, interior_view(sim.v)) + sum(abs2, interior_view(sim.w))) / n
+end
+
+# the dissipation of the resolved energy: the strain of the current state with
+# the molecular ν and the closure's last eddy viscosity (none without an :sgs component)
+function _dissipation(d)
+    s = d.state
+    for f in (s.u, s.v, s.w)
+        fill_halos!(f, s.bcs)
+    end
+    return dissipation_rate(s.u, s.v, s.w, s.ν, sgs_closure(d) === nothing ? nothing : s.νt)
 end
 
 # the domain mean: level means weighted by the level thickness
@@ -102,7 +123,15 @@ function core_outputs(d::Domain)
         OutputVariable("u_mean", "m s-1", "domain mean of u", :scalar, d -> _domain_mean(d.state.u)),
         OutputVariable("v_mean", "m s-1", "domain mean of v", :scalar, d -> _domain_mean(d.state.v)),
         OutputVariable("w_mean", "m s-1", "domain mean of w", :scalar, d -> _domain_mean(d.state.w)),
-        OutputVariable("theta_mean", "K", "domain mean of theta", :scalar, d -> _domain_mean(d.state.θ))]
+        OutputVariable("theta_mean", "K", "domain mean of theta", :scalar, d -> _domain_mean(d.state.θ)),
+        OutputVariable("kinetic_energy", "m2 s-2", "resolved kinetic energy, domain mean of (u^2 + v^2 + w^2)/2",
+                       :scalar, d -> _kinetic_energy(d.state)),
+        OutputVariable("dissipation", "m2 s-3", "dissipation of the resolved kinetic energy, molecular + SGS",
+                       :scalar, d -> (r = _dissipation(d); r.resolved + r.sgs)),
+        OutputVariable("dissipation_sgs", "m2 s-3", "SGS part of the dissipation (the eddy viscosity's transfer)",
+                       :scalar, d -> _dissipation(d).sgs),
+        OutputVariable("energy_spectrum", "m3 s-2", "shell-summed kinetic-energy spectrum E(k)", :k,
+                       d -> (s = d.state; last(isotropic_energy_spectrum(s.u, s.v, s.w))))]
     if moist
         append!(vs, OutputVariable[
             OutputVariable("qv", "kg kg-1", "water vapour mixing ratio", :xyz, d -> iv(d.state.qv)),

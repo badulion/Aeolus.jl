@@ -1,63 +1,90 @@
-# N-parent-c (#248) — LargeScaleForcing: GABLS2 (reduced), the validation
-# run of large-scale subsidence (check 8 of the issue): subsidence from
-# 40 h, the heat ledger with it booked, the residual-layer inversion
-# lowered by about the passive descent, and night 2 against the
-# gabls2_reference.csv envelopes. Split from era6_nudging_subsidence.jl
-# (#320) so that checks 1-7 of ProfileNudging and Subsidence run in the
-# fast tier (their only fast check before was the Berlin parent smoke
-# test, test/berlin_parent_smoke.jl, deleted with the Berlin suite) while
-# this mini-simulation stays full-only.
+# N-parent-c (#248), ONE-g (#456) — LargeScaleForcing: GABLS2 (reduced) on
+# the one model, the validation run of large-scale subsidence (check 8 of
+# the issue): the configuration examples/sbl/configs/gabls2.toml with its
+# dynamic driver (the surface θ series and the subsidence from 40 h), the
+# heat budget with the subsidence measured as the large_scale_forcing
+# term, the residual-layer inversion lowered by about the passive descent,
+# and night 2 against the gabls2_reference.csv envelopes. Checks 1-7 of
+# ProfileNudging and Subsidence run in the fast tier
+# (era6_nudging_subsidence.jl); this mini-simulation stays full-only.
 
 using Test, Printf
 using Aeolus
-using Aeolus.Fields: interior_view, set!
+using Aeolus.Config: load_run_config, build
+using Aeolus.SimulationDriver: SimulationDriverType
+using Aeolus.Components: Components, Domain, LargeScale, SurfaceLayer, step_adaptive!, with_budgets
+using Aeolus.BudgetSystem: stage_budget
+using Aeolus.Fields: interior_view
 using Statistics: mean
 
-using Aeolus.StableBoundaryLayer
 isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
+
+_g2comp(d, T) = only(c for c in d.components if c isa T)
+
+"Advance the domain `d` to the model time `t_end` (adaptive steps)."
+function g2_run!(d, t_end)
+    dt_prev = nothing
+    while d.state.t < t_end - 1e-9
+        _, dt, _ = step_adaptive!(d; dt_prev = dt_prev, t_end = t_end)
+        dt_prev = dt
+    end
+    return d
+end
+
+"The energy budget of the air since its start: storage, the subsidence term and the closure (J m⁻²)."
+function g2_budget(d)
+    b = stage_budget(Components.budgets(d).measured[:energy])
+    return (storage = b.storage, subsidence = get(b.terms, (:body_force, :large_scale_forcing), 0.0),
+            closure = b.closure, scale = maximum(abs, values(b.terms)))
+end
 
 @testset "N-parent-c — GABLS2 (reduced) with large-scale subsidence (#248)" begin
 
-    @testset "8. GABLS2 (reduced): subsidence from 40 h, ledger, inversion, night 2" begin
+    @testset "8. GABLS2 (reduced): subsidence from 40 h, the heat budget, inversion, night 2" begin
         # 16 × 16 × 40 on 2.4 × 2.4 × 1.6 km (Δx = 150 m, Δz = 40 m), 16 LT
         # 22 Oct to 06 LT 24 Oct (16-54 h). One run to 40 h, then the case
         # with subsidence and a copy without it (the D = 0 sensitivity run).
-        # The full-resolution numbers are from examples/sbl/gabls2.jl (PR body).
-        # The case of examples/sbl/configs/gabls2.toml (the `sbl` run driver,
-        # CFG-d #359), its surface temperature sampled to 56 h.
-        c = sbl_build("gabls2"; overrides = ["grid.size=[16,16,40]",
-            "surface.temperature={kind=\"gabls2\", p_sfc=97200.0, exponent=0.286, sample_every=60.0, until=201600.0}"]).case
-        @test count(f -> f isa Subsidence, c.forcing) == 1
-        H0 = sbl_column_heat(c)
-        ledger(c) = sbl_column_heat(c) - H0 - c.heat_applied - c.adv_heat_applied - c.ls_heat_applied
-        res = Dict(:subs => 0.0, :nosubs => 0.0)
-        cb(tag) = c -> (res[tag] = max(res[tag], abs(ledger(c))))
-        sbl_run!(c, 40 * 3600.0; callback = cb(:subs))
-        @test c.ls_heat_applied == 0                    # off before 40 h local
-        c0 = deepcopy(c)
-        c0.forcing = Tuple(f for f in c0.forcing if !(f isa Subsidence))
-        res[:nosubs] = res[:subs]
-        prof(c) = sbl_profiles(c)
-        zinv(c) = (p = prof(c); sbl_inversion_height(p.z, p.θ))
-        screen(c) = (s = sbl_screen(c); (T2 = s.θ_screen * (97200 / 1e5)^0.286 - 273.15, U10 = s.U_screen))
-        z40 = zinv(c)
-        for cc in (c, c0); sbl_run!(cc, 42 * 3600.0; callback = cb(cc === c ? :subs : :nosubs)); end
-        z42 = zinv(c); z42_0 = zinv(c0)
-        for cc in (c, c0); sbl_run!(cc, 48 * 3600.0; callback = cb(cc === c ? :subs : :nosubs)); end
-        s48 = screen(c); s48_0 = screen(c0)
-        for cc in (c, c0); sbl_run!(cc, 54 * 3600.0; callback = cb(cc === c ? :subs : :nosubs)); end
-        z54 = zinv(c); z54_0 = zinv(c0)
+        cfg = load_run_config(joinpath(SBL_CONFIGS, "gabls2.toml");
+                              overrides = ["grid.size=[16,16,40]", "output.variables=[\"budget_energy\"]",
+                                           "checkpoint.every_seconds=inf"])
+        d = only(build(SimulationDriverType(), cfg).model.domains)
+        ls = _g2comp(d, LargeScale)
+        @test count(f -> f isa Subsidence, ls.extra) == 1
+        # the driver's surface θ is the case formula, sampled every minute (θ with p_s = 972 hPa)
+        sl = _g2comp(d, SurfaceLayer)
+        for h in (16.0, 30.0, 40.0, 52.5)
+            @test surface_temperature(sl.Ts, 3600h) ≈ (gabls2_surface_temperature_C(h) + 273.15) * (1e5 / 97200)^0.286 rtol = 1e-12
+        end
+        g2_run!(d, 40 * 3600.0)
+        b40 = g2_budget(d)
+        @test b40.subsidence == 0                       # off before 40 h local
+        # the copy without subsidence, its budget started at 40 h
+        dc = deepcopy(d)
+        lc = _g2comp(dc, LargeScale)
+        nosubs = LargeScale(lc.geostrophic, Tuple(f for f in lc.extra if !(f isa Subsidence)), lc.U_g, lc.V_g, lc.t0)
+        d0 = with_budgets(Domain(dc; components = Tuple(c isa LargeScale ? nosubs : c for c in dc.components)), [:energy])
+        prof(d) = Components.sl_profiles(_g2comp(d, SurfaceLayer), d)
+        zinv(d) = (p = prof(d); inversion_height(p.z, p.θ))
+        screen(d) = (s = Components.sl_screen(_g2comp(d, SurfaceLayer), d);
+                     (T2 = s.θ_screen * (97200 / 1e5)^0.286 - 273.15, U10 = s.U_screen))
+        z40 = zinv(d)
+        for x in (d, d0); g2_run!(x, 42 * 3600.0); end
+        z42 = zinv(d); z42_0 = zinv(d0)
+        for x in (d, d0); g2_run!(x, 48 * 3600.0); end
+        s48 = screen(d); s48_0 = screen(d0)
+        for x in (d, d0); g2_run!(x, 54 * 3600.0); end
+        z54 = zinv(d); z54_0 = zinv(d0)
         # the passive descent dz/dt = w_s(z) of a level that starts at the
         # 18 LT (42 h) inversion, after the evening transition
-        W = only(f for f in c.forcing if f isa Subsidence).w_s
+        W = only(f for f in ls.extra if f isa Subsidence).w_s
         zp = z42
         for t in 42 * 3600.0:10.0:(54 * 3600.0 - 10)
             k1 = forcing_value(W, zp, t); k2 = forcing_value(W, zp + 5k1, t + 5)
             k3 = forcing_value(W, zp + 5k2, t + 5); k4 = forcing_value(W, zp + 10k3, t + 10)
             zp += 10 * (k1 + 2k2 + 2k3 + k4) / 6
         end
-        dz = c.sim.mesh.dz
-        content = sbl_column_heat(c)
+        dz = d.state.mesh.dz
+        B = g2_budget(d); B0 = g2_budget(d0)
         ref = gabls2_reference()
         rows = [r for r in ref.rows if (startswith(r[1], "obs_") || startswith(r[1], "les_")) && 42 <= r[2] <= 54]
         val(s, q) = endswith(q, "T2m") ? s.T2 : s.U10
@@ -66,14 +93,16 @@ isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data
                        z40, z54, z54_0, z54 - z54_0, z42, zp, z54 - zp, (z54 - zp) / dz)
         @info @sprintf("GABLS2 (16×16×40) at 48 h: T2 %.2f °C with / %.2f °C without subsidence, U10 %.2f / %.2f m/s; envelopes (inside with, without): %s",
                        s48.T2, s48_0.T2, s48.U10, s48_0.U10, join(("$(q) $(a ? "in" : "out")/$(b ? "in" : "out")" for (q, a, b) in inside), ", "))
-        @info @sprintf("GABLS2 (16×16×40) θ ledger: max |Δ∫⟨θ⟩dz − surface − advective − subsidence| %.1e K m (with), %.1e K m (without) = %.1e of the column content %.0f K m; booked subsidence heating %.2f K m (%.3f K column mean)",
-                       res[:subs], res[:nosubs], res[:subs] / content, content, c.ls_heat_applied, c.ls_heat_applied / c.sim.mesh.Lz)
-        @test res[:subs] < 1e-11 * content && res[:nosubs] < 1e-11 * content
-        @test c.ls_heat_applied > 0 && c0.ls_heat_applied == 0   # descent into a stable column warms it
-        @test z42_0 == z40 || abs(z42_0 - z40) < dz              # without: the residual inversion stays
+        @info @sprintf("GABLS2 (16×16×40) heat budget of the air: closure %.1e J/m² (with, 16-54 h), %.1e J/m² (without, 40-54 h), of the largest term %.2e; subsidence heating %.4e J/m²",
+                       B.closure, B0.closure, B.scale, B.subsidence)
+        # the heat budget closes, every change attributed (the sbl run type's
+        # ledger closed to 8e-13 of the column content)
+        @test abs(B.closure) <= 1e-9 * B.scale && abs(B0.closure) <= 1e-9 * B0.scale
+        @test B.subsidence > 0 && B0.subsidence == 0      # descent into a stable column warms it
+        @test z42_0 == z40 || abs(z42_0 - z40) < dz       # without: the residual inversion stays
         @test abs(z54_0 - z40) < dz
-        @test z54 < z54_0 - 3dz                                  # with: it descends …
-        @test abs(z54 - zp) < dz                                 # … as a passive surface, within one Δz
+        @test z54 < z54_0 - 3dz                           # with: it descends …
+        @test abs(z54 - zp) < dz                          # … as a passive surface, within one Δz
         # night 2 against the digitised envelopes: subsidence moves the
         # screen values by less than the digitisation half-widths and does
         # not change which envelopes the run is inside

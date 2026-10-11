@@ -106,7 +106,8 @@ In a coupled run `S` is `canopy_leaf_energy_balance(...).heat_source`
 divided by ``ρc_p``, iterated with `T.c` as the leaves' air temperature.
 The comparison with a wind tunnel, the CHATS orchard and the Hyytiälä
 pine forest is in [Resolved plant canopy §6](../../theory/plant_canopy.md)
-and `examples/validation/canopy_profiles.jl`.
+and `test/era5_canopy_profiles.jl` (the column example went with the
+single-column cases, ONE-g #456).
 
 ```@autodocs
 Modules = [Aeolus.PlantCanopy]

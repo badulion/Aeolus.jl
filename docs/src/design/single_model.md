@@ -39,7 +39,8 @@ them.
 | Validation | **Checks run inside the model.** `[checks]` turns on checks that modules publish. Results go to `results.toml` with pass/fail, and `aeolus run` exits non-zero if a `required` check failed. |
 | Preprocessing | **A separate package in its own repository**, AeolusPrep.jl. It covers OSM/GIS to static driver, ERA5/sounding/parent output to dynamic driver, and data download. Aeolus keeps only the readers and the format schemas. |
 | Single-column cases | **Dropped.** Only 3-D runs. |
-| Channel cases | **Dropped** (the stratified, relaminarisation and collapse channels). No pressure-gradient forcing component is built for them. |
+| Channel cases | **Dropped** (the stratified, relaminarisation and collapse channels, and the wall-modelled validation channels). No pressure-gradient forcing component is built for them. |
+| DNS a-priori study | **Dropped** (the filtered-DNS record and its run type). LES validation is to be done differently, possibly externally (#461); the model ships an a-posteriori DNS-against-LES example as configuration plus an output-only comparison script. |
 | Config inheritance | **None.** Every TOML is self-contained; `extends` is removed. Variants of a case (Berlin winter, smoke) are complete files of their own; `--set` overrides on the command line remain for one-off changes. |
 | Dynamical cores | **Every component supports both cores**, Boussinesq and anelastic, checkpointing included. There is no core-specific component and no "Boussinesq only" declaration. |
 | Self-nesting feedback | **Two-way by default** for an Aeolus parent driving an Aeolus child (as in PALM). One-way stays available per child. Driving from reanalysis or a mesoscale model (offline, through the dynamic driver) is one-way by nature. |
@@ -289,6 +290,6 @@ never weakened.
 ## Resolved questions (2026-10-09)
 
 1. **`extends`:** removed. Every TOML is self-contained.
-2. **Channel cases:** dropped. The DNS a-priori study is kept as output analysis: the model writes 3-D fields at the chosen times, and an analysis script filters them.
+2. **Channel cases and the DNS a-priori study:** both dropped (2026-10-09). LES validation is to be done differently, possibly externally (#461). In place of the a-priori study the model ships an **a-posteriori** example, `examples/dns_vs_les/`: decaying isotropic turbulence from the named analytic initial field `isotropic_turbulence` (defined in spectral space, so the 64³ LES starts from exactly the large scales of the 256³ DNS), a DNS config and one self-contained LES config per SGS model, the resolved kinetic energy, the dissipation (molecular + SGS) and the energy spectrum E(k) as output catalogue entries, and a script that only reads the outputs and compares the decay, the dissipation and the spectra.
 3. **Anelastic parity:** every component supports both cores, checkpointing included.
 4. **Self-nesting default:** two-way. The Berlin two-way nest is still validated in #331, but the default does not wait for it. Two-way with synthetic inflow has been stable on idealised nests since #419.

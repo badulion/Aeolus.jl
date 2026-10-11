@@ -64,9 +64,9 @@ while st.step < nsteps
 end
 ```
 
-`run_channel!` (WallModels) and the SBL driver's `sbl_run!` take the
-schedule as their `checkpoint` keyword; `dns256_generate.jl`, the
-relaminarisation driver and `gabls1`–`gabls4.jl` use it by default
+`run_channel!` (WallModels) takes the schedule as its `checkpoint`
+keyword; the model's run (`aeolus run`) uses the one of `[checkpoint]`, and
+long scripts use it by default
 ([`driver_checkpoints`](@ref): every 30 min of wall clock,
 `AEOLUS_CHECKPOINT=0` / `_EVERY` / `_SECONDS` / `_KEEP` override).
 

@@ -1,0 +1,70 @@
+# Decaying isotropic turbulence, DNS against LES (a posteriori; ONE-g #456):
+# a triply periodic 2π box started from the random-phase field of the
+# Passot-Pouquet spectrum E(k) ∝ k⁴ exp(-2 (k/1.5)²), u' = 1 m/s, defined in
+# spectral space ([initial] field, Operators.isotropic_turbulence_field!), so
+# every grid on the box starts from the same large scales: the 64³ LES field
+# is the 256³ DNS field truncated to its modes, to round-off. ν = 2.0e-3
+# m²/s, the viscosity of the former 256³ DNS record (k_max η ≥ 1.5 over the
+# decay at 256³; Re_λ ≈ 79 at the dissipation peak, t ≈ 3.6 s), no buoyancy.
+# Run to t = 8 s; the output is the resolved kinetic energy and the
+# dissipation (molecular + SGS) every 0.05 s and the energy spectrum E(k)
+# every second. examples/dns_vs_les/compare.jl reads the run folders.
+#
+# The DNS: 256³ (Δ = 0.0245 m), no SGS model. About an hour at 12 threads
+# and 5-6 GB (measured: see the PR of ONE-g, #456).
+#
+#   julia --project -t 12 -m Aeolus run examples/dns_vs_les/configs/dns.toml
+
+schema_version = 2
+
+[run]
+name = "dns"
+seed = 1
+
+[time]
+scheme = "rk3"
+dt = "adaptive"
+cfl = 1.0
+dt_max = 0.05
+duration = 8.0
+
+[grid]
+size = [256, 256, 256]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "periodic"
+
+[dynamics]
+theta0 = 0.0                   # no buoyancy
+nu = 2.0e-3
+
+[initial]
+field = {kind = "isotropic_turbulence", spectrum = "passot_pouquet", u_rms = 1.0, k_peak = 1.5, seed = 1}
+
+[sgs]
+closure = "none"
+
+[output]
+variables = ["kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum"]
+averaging = "instant"
+cadence = 1.0
+series_cadence = 0.05
+
+[checks]
+finite = { required = true }
+
+[fftw]
+planner = "estimate"           # MEASURE planning of a threaded 256³ c2r transform can segfault in FFTW (#397)
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[32,32,32]",
+    "time.duration=\"none\"",
+    "time.nsteps=5",
+]

@@ -12,8 +12,6 @@
 #   * the surface energy balance of every surface class, from the terms the
 #     components report (`add_surface!`), and the water of the air from the
 #     sources they report (`add_water!`) against its measured change;
-#   * the diagnosed plane-mean momentum budget (`MomentumBudget`,
-#     budgets/momentum.jl), whose terms are evaluated from the state;
 #   * free-form accumulated diagnostics (`add_term!`).
 #
 # A component reports only what it did during a step:
@@ -69,8 +67,6 @@ The budgets of a run, integrated over the steps taken since they were
 * `water[term]` — ``∫`` source of water to the air, kg m⁻² of domain;
 * `water_air` — change of the water in the air, kg m⁻² of domain;
 * `terms[name]` — free-form accumulated diagnostics ([`add_term!`](@ref));
-* `momentum` — the diagnosed plane-mean momentum budget
-  ([`MomentumBudget`](@ref)), or `nothing`;
 * `ncol` — columns per class, `elapsed` (s), `nsteps`;
 * `water_tracers` — tracers counted as water in the air;
 * `ρ` — air density per level used for the water integral (kg m⁻³), the
@@ -95,12 +91,11 @@ mutable struct Budgets
     W_start::Float64
     dt::Float64
     measured::Dict{Symbol,StageBudget}
-    momentum::Union{Nothing,MomentumBudget}
 end
 Budgets(; bins::Integer = 24, order = ()) =
     Budgets(Dict{Symbol,Float64}(), Dict{Symbol,Vector{Float64}}(), Dict{Symbol,Float64}(),
             0.0, [:qv, :ql, :qr], Float64[], Int[], 0.0, 0, zeros(0, 0), 0.0, 0.0,
-            Dict{Symbol,StageBudget}(:energy => StageBudget(; bins = bins, order = order)), nothing)
+            Dict{Symbol,StageBudget}(:energy => StageBudget(; bins = bins, order = order)))
 
 "The stage budget of the heat of the air (the energy budget of the air)."
 energy(b::Budgets) = b.measured[:energy]

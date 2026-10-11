@@ -122,7 +122,6 @@ the source's provenance lines.
 
 ```bash
 julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/configs/berlin_summer.toml
-julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/sbl/configs/gabls3.toml --out gabls3_dynamic.nc
 julia --project -m Aeolus run examples/urban/configs/berlin_smoke.toml --set 'output.child_boundaries="child.nc"'
 ```
 
@@ -200,15 +199,18 @@ holds a radiosonde sounding's height-time tables (`ls_profile_theta`,
 the table top) on the "seconds since init_time" axis and the ground
 pressure reduced from the launch site ([`surface_pressure_at`](@ref Aeolus.InputDrivers.surface_pressure_at)).
 [`forcing_dynamic_inputs`](@ref Aeolus.InputDrivers.forcing_dynamic_inputs)
-holds the `ForcingTable`s of a case's forcing (GABLS, CASES-99,
-[`sbl_dynamic_inputs`](@ref Aeolus.StableBoundaryLayer.sbl_dynamic_inputs)
-of an `sbl` config); a number or a formula stays in the case's config. A
-run that reads its CSV builds the same `DynamicInputs` in memory;
-AeolusPrep writes them to the file (`aeolusprep dynamic --from-sounding`). The `sbl` driver's
-`[case] dynamic` replaces the config's geostrophic wind, extra forcings
-and surface θ series by those the driver holds (its initial profiles,
-which carry formula rules below the lowest table level, stay in
-`[initial]`); GABLS3 run 50 steps from its driver is bitwise the CSV path.
+holds the `ForcingTable`s of a case's forcing (GABLS, CASES-99); a number
+stays in the case's config. The committed drivers of the SBL
+configurations (`examples/sbl/configs/input/*_dynamic.nc`: GABLS2 and
+CASES-99 the surface θ series and the subsidence, GABLS3 the geostrophic
+wind, the advective tendencies and the 0.25 m θ series, GABLS4 the surface
+θ series) were written from the case tables by the former `sbl` run type
+(ONE-g, #456). The model reads the large-scale tables generically: the
+`[large_scale_forcing]` component (`u_g = "driver"`, `advective_tendencies`,
+`subsidence`, `nudging`; [`dynamic_forcing`](@ref Aeolus.InputDrivers.dynamic_forcing))
+and the `[surface_layer]` `temperature = {kind = "driver"}`, the times read
+at the model time minus `[time] start`; a driver with no initial profiles
+initialises nothing (the profiles stay in `[initial]`).
 
 ### The parent-made driver
 

@@ -1,7 +1,9 @@
 # Filtered-DNS fixture of Era VI (P56-c, #178): decaying isotropic
 # turbulence computed by Aeolus itself, from a fixed seed.
 #
-# Included by test/era6_apriori_sgs.jl and examples/validation/apriori_sgs.jl.
+# Included by test/era6_apriori_sgs.jl, the thread-invariance worker and the
+# `dns_decay` run type (examples/validation/dns_driver.jl) that the `sgs_decay`
+# run type builds on.
 #
 # Set-up. A triply periodic 2π box at N³ (96³ in the test and the
 # example; 48³ was the test's size before the review of #208) is filled
@@ -113,8 +115,8 @@ the simulation `sim` on the triply periodic 2π box at `N`³ filled by
 to u' = 1, and its history `hist = (t, K, ε, S, budget_err)` (one entry per
 step, the initial one included). Advance it with [`dns_step!`](@ref)
 while [`dns_running`](@ref); [`dns_summary`](@ref) is the result of
-[`dns_decay`](@ref). The `dns` run driver (examples/validation/dns_apriori_driver.jl,
-CFG-d #359) runs the same steps.
+[`dns_decay`](@ref). The `dns_decay` run type (examples/validation/dns_driver.jl)
+runs the same steps.
 """
 function dns_start(; N::Integer = 48, seed::Integer = 1, ν::Real = DNS_NU48 * (48 / N)^(4 / 3),
                    spectrum = _dns_spectrum)
@@ -254,43 +256,3 @@ end
 
 _field_like(f::Field{L}) where {L} = Field(L(), f.mesh)
 
-"""
-    dynamic_cs_on_coarse_grid(sim, r, Δ_filter) -> (C_s, cs2_profile)
-
-Filter the DNS velocity with a Gaussian of width `Δ_filter` (staggered
-components filtered in place of their location), coarse-grain it by `r`
-(`coarse_grain`) and evaluate `compute_dynamic_smagorinsky_νt!` (default
-3-cell box test filter, `filter_ratio = 3`) on that grid of spacing
-``rh``. Returns the volume-averaged Germano–Lilly coefficient
-``C_s = (⟨L_{ij}M_{ij}⟩/⟨M_{ij}M_{ij}⟩)^{1/2}`` (no clip, `germano_lilly_cs`) and the clipped
-plane-averaged ``C_s^2`` profile the routine stores.
-"""
-function dynamic_cs_on_coarse_grid(sim, r::Integer, Δ_filter::Real)
-    g = sim.mesh
-    cmesh = RegularGrid(; size = (g.Nx ÷ r, g.Ny ÷ r, g.Nz ÷ r), extent = (g.Lx, g.Ly, g.Lz), halo = (3, 3, 3))
-    bcs = FieldBoundaryConditions(:periodic)
-    cf = (Field(FaceX(), cmesh), Field(FaceY(), cmesh), Field(FaceZ(), cmesh))
-    for (c, f) in zip(cf, (sim.u, sim.v, sim.w))
-        ff = _field_like(f)
-        gaussian_filter!(ff, f, Δ_filter)
-        interior_view(c) .= coarse_grain(ff, r)
-        fill_halos!(c, bcs)
-    end
-    νt = Field(CellCenter(), cmesh)
-    ws = DynamicSmagorinskyWorkspace(cmesh)
-    compute_dynamic_smagorinsky_νt!(νt, cf...; workspace = ws)
-    return germano_lilly_cs(ws), ws.cs2[1, 1, :]
-end
-
-"""
-    germano_lilly_cs(ws::DynamicSmagorinskyWorkspace) -> C_s
-
-``(⟨L_{ij}M_{ij}⟩/⟨M_{ij}M_{ij}⟩)^{1/2}`` from the workspace of the last
-`compute_dynamic_smagorinsky_νt!` call, volume-averaged and unclipped;
-`NaN` when the mean ``L_{ij}M_{ij}`` is negative (net backscatter between
-the two filter levels, e.g. a filter width near the box size).
-"""
-function germano_lilly_cs(ws)
-    r = sum(ws.LM) / sum(ws.MM)
-    return r >= 0 ? sqrt(r) : NaN
-end

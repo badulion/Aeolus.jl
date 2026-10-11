@@ -167,6 +167,15 @@ default is empty.
 """
 checks(::AbstractComponent) = Check[]
 
+"""
+    option(opts, key::Symbol, default)
+
+The option `key` of the resolved section `opts`, or `default` when `opts`
+does not have it (options built in code as a `NamedTuple` may leave out
+the options added after they were written, with their schema default).
+"""
+option(opts, key::Symbol, default) = hasproperty(opts, key) ? getproperty(opts, key) : default
+
 # A stateless component: nothing to checkpoint (the IO component contract).
 checkpoint_state(::AbstractComponent) = nothing
 restore_checkpoint_state!(c::AbstractComponent, ::Nothing) = c

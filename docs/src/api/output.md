@@ -6,7 +6,7 @@ the urban case's NetCDF file and the SBL run type's `series.csv`.
 
 Every component publishes an **output catalogue**, a list of
 [`OutputVariable`](@ref Aeolus.Output.OutputVariable)s. Each variable has
-a name, units, dimensions (`:xyz`, `:xy`, `:z`, `:scalar`) and a getter.
+a name, units, dimensions (`:xyz`, `:xy`, `:z`, `:k` — a spectrum over the shell wavenumbers —, `:scalar`) and a getter.
 The model's catalogue is the core's variables plus every enabled
 component's ([`domain_catalogue`](@ref Aeolus.Components.domain_catalogue)),
 and `[output] variables` selects from it. Selecting a variable that no
@@ -23,7 +23,9 @@ streams:
 
 With `averaging = "mean"` every value is the time mean over its interval.
 The writer accumulates it every step, weighted by the step length, and
-the variable carries `cell_methods`.
+the variable carries `cell_methods`. A checkpoint stores the open
+intervals ([`output_means`](@ref Aeolus.Output.output_means)), so a run
+resumed from it writes the same means as the uninterrupted run.
 
 ```toml
 [output]

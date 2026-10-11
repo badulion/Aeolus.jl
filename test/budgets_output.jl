@@ -145,21 +145,6 @@ end
     @test abs(r.terms[(:dynamics, :transport)]) < 1e-12 && abs(r.closure) < 1e-12
 end
 
-@testset "momentum budget: terms, the surface stress and the residual" begin
-    U0 = [1.0, 2.0, 3.0]; V0 = zeros(3)
-    mb = MomentumBudget(U0, V0, 0.0; terms = (:turb, :cor), diagnostics = (:model,), surface_term = :turb)
-    for k in 1:3
-        book_momentum!(mb, :turb, k, 0.1k, 0.0); book_momentum!(mb, :cor, k, 0.0, -0.2)
-        book_momentum!(mb, :model, k, 5.0, 5.0)                        # not in the closure
-    end
-    book_surface_momentum!(mb, -0.05, 0.01)
-    r = momentum_closure(mb, U0 .+ [0.05, 0.2, 0.3], V0 .+ [-0.19, -0.2, -0.2])
-    @test r.u[:turb] ≈ [0.05, 0.2, 0.3] && r.v[:cor] == fill(-0.2, 3)
-    @test maximum(abs, r.res_u) < 1e-15 && maximum(abs, r.res_v) < 1e-15 && r.rel < 1e-14
-    @test r.largest ≈ 0.3
-    @test_throws ArgumentError MomentumBudget(U0, V0, 0.0; terms = (:a,), surface_term = :b)
-end
-
 @testset "budgets: the surface classes and the water of the air" begin
     b = Budgets()
     sfc = UInt8[1 2; 1 3]

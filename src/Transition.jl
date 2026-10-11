@@ -113,6 +113,9 @@ export InflowTurbulence, inflow_normal_length, set_integral_time!, remove_inflow
 export FetchStatistics, accumulate_fetch!, fetch_profiles, development_length
 # P59-e (#195): relaminarisation in strongly stable stratification
 export friction_reynolds, relaminarisation_criteria, relaminarised_fraction
+# ONE-g (#456): virtual towers and the hockey stick of the SBL (Sun et al. 2012)
+export TowerSampler, tower_sampler, sample_towers!, reset_segment!, tower_bins, hockey_stick_threshold,
+       tower_thresholds
 
 # =========================================================================
 # Turbulent fraction γ(z)
@@ -702,5 +705,6 @@ include("transition/synthetic_inflow.jl")             # N-inflow-a (#252)
 include("transition/inflow_statistics.jl")            # N-inflow-b (#258)
 include("transition/inflow_turbulence.jl")            # N-inflow-c (#264)
 include("transition/inflow_fetch.jl")                 # N-inflow-d (#266)
+include("transition/towers.jl")                       # ONE-g (#456): virtual towers, hockey stick
 
 end # module

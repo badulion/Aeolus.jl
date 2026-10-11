@@ -11,13 +11,19 @@ committed once per step, `advance_sgs!`). The closures are those of
 `Operators`; this component only selects and builds one from the `[sgs]`
 section ([`schema`](@ref)): `closure` (`smagorinsky`, the default,
 `dynamic_smagorinsky`, `vreman`, `sigma`, `amd`), its coefficient `c_s`,
-`pr_t`, and the Richardson-number `stability` correction
-(`StabilityCorrected`). `closure = "none"` enables no component (no SGS
-terms). Its checkpoint state is the closure's memory (`sgs_state`).
+`pr_t`, the Richardson-number `stability` correction
+(`StabilityCorrected`) and the form of the momentum divergence, `stress`
+(`laplacian`, the default, or `symmetric`: the stress form, through which
+an anisotropic vertical viscosity such as the stability correction's
+reaches the momentum equation; `Operators.add_sgs_stress_divergence!`).
+`closure = "none"` enables no component (no SGS terms). Its checkpoint
+state is the closure's memory (`sgs_state`).
 """
 struct SGS{C<:AbstractSGSClosure} <: AbstractComponent
     closure::C
+    stress::Symbol
 end
+SGS(closure::AbstractSGSClosure) = SGS(closure, :laplacian)
 
 component_name(::Type{<:SGS}) = :sgs
 section(::Type{<:SGS}) = "sgs"
@@ -36,6 +42,9 @@ function schema(::Type{<:SGS})
         Config.option!(s, "stability", Symbol; default = :none,
                        allowed = [:none, :brown_et_al_1994, :lilly_cutoff, :short_tail, :long_tail],
                        doc = "Richardson-number stability correction of the eddy viscosity (StabilityCorrected); none: off")
+        Config.option!(s, "stress", Symbol; default = :laplacian, allowed = [:laplacian, :symmetric],
+                       doc = "the SGS momentum divergence: laplacian (ν_t ∇²u) or symmetric (the stress form ∇·(2ν_t S), " *
+                             "with which the stability correction's vertical viscosity reaches the momentum)")
     end
 end
 
@@ -60,7 +69,7 @@ function build_closure(s, mesh)
     return StabilityCorrected(base, mesh; scheme = scheme)
 end
 
-build(::Type{<:SGS}, opts, domain) = SGS(build_closure(opts, grid(domain)))
+build(::Type{<:SGS}, opts, domain) = SGS(build_closure(opts, grid(domain)), option(opts, :stress, :laplacian))
 
 # the closure's memory, under its type's name (a restart into another closure is refused)
 checkpoint_state(c::SGS) = (closure = string(nameof(typeof(c.closure))), state = checkpoint_state(c.closure))

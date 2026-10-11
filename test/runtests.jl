@@ -865,13 +865,11 @@ using Aeolus.Fields: set!, interior_view
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
     include("model_nesting.jl")       # ONE-f (#455): nesting by [[domain]]: the graph, pipelines per domain, one-/two-way, restart
     include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
+    include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
     include("glue_physics.jl")         # ONE-e (#454): the physics moved out of the urban glue into its modules
     include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
-    include("config_sbl.jl")          # CFG-d (#359): sbl driver, bit-identity to the old builders, round trip
-    include("config_dns.jl")          # CFG-d (#359): dns driver, round trip, the k_max η refusal
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
-    include("config_examples_validation.jl")  # CFG-e (#360): examples/validation/ from TOML, bit-identical to the old scripts
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
@@ -1072,9 +1070,8 @@ end
     include("era6_inflow_turbulence.jl")  # N-inflow-c: inflow faces, zero added mass flux (#264)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
-    include("era6_gabls1.jl")            # P55-f: GABLS1 on the shared SBL driver, reduced (#191)
-    include("era6_stratified_channel.jl") # P55-f: wall-resolved stably stratified channel vs DNS (#191)
-    include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, LES collapse regime (#193)
+    include("era6_gabls1.jl")            # P55-f, ONE-g: GABLS1 on the model, reduced (#191, #456)
+    include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, the flux-cooled half channel (#193)
     include("era6_gabls3.jl")            # P58-d: GABLS3 on the SBL driver: budgets, MOST, LLJ (#194)
     include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
     include("era6_deep_top.jl")          # N-parent-b: θ damping toward a profile, fixed-gradient θ top (#254)

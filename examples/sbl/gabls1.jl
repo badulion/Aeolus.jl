@@ -5,21 +5,21 @@
 # 400 m cube, U_g = 8 m/s, f = 1.39e-4 s⁻¹, z0 = 0.1 m, θ = 265 K to 100 m
 # then +0.01 K/m, surface cooled at 0.25 K/h, 9 h; statistics of hours 8-9.
 # The runs are the sweep examples/sbl/configs/gabls1_closures.toml (the
-# `sbl` run type, Aeolus.StableBoundaryLayer: geostrophic forcing from
-# LargeScaleForcing, surface heat flux from SurfaceExchange, surface stress
-# from WallModels.MOSTWallLaw, SGS closure stability-corrected by
+# model with its components: the geostrophic forcing [large_scale_forcing],
+# the surface heat flux and stress of [surface_layer] (SurfaceExchange,
+# WallModels.MOSTWallLaw), the SGS closure stability-corrected by
 # Operators.StabilityCorrected), one run folder per closure: Smagorinsky
-# C_s = 0.1 with the Brown et al. 1994 correction (the Berlin default),
-# uncorrected, and with the Lilly cutoff, at 64³ (Δ = 6.25 m).
+# C_s = 0.1 with the Brown et al. 1994 correction, uncorrected, and with
+# the Lilly cutoff, at 64³ (Δ = 6.25 m).
 #
-# This script only reads the run folders (output/statistics.toml and
-# output/output.nc): it compares h, u*, the surface heat flux and the
+# This script only reads the run folders (output/output.nc, run.toml): it
+# compares h, u*, the surface heat flux and the
 # low-level jet with the intercomparison ranges of
 # examples/sbl/data/gabls1_reference.csv and makes the figure.
 #
 #   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml   # 64³: hours per closure
 #   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml --set grid.size=[32,32,32]
-#   julia --project examples/sbl/gabls1.jl runs/gabls1_*                       # the table and the figure
+#   julia --project examples/sbl/gabls1.jl runs/*gabls1*                       # the table and the figure
 #
 # writes examples/sbl/output/gabls1_N<N>.svg and gabls1_N<N>_profiles.csv
 # =========================================================================
@@ -27,17 +27,17 @@
 include(joinpath(@__DIR__, "runs.jl"))
 using Printf
 
-const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls1.jl <run folder>…")
+const RUNS = sbl_runs(ARGS, "julia --project examples/sbl/gabls1.jl <run folder>…"; last = 3600.0)
 const N = cfgval(RUNS[1], "grid.size")[1]
-const T_END = cfgval(RUNS[1], "stepper.end_time")
-const T_AVG = cfgval(RUNS[1], "averaging.from")
+const T_END = run_end(RUNS[1])
+const T_AVG = run_end(RUNS[1]) - 3600.0
 const REF = sbl_read_csv(joinpath(SBL_DATA, "gabls1_reference.csv"))
 
 results = map(RUNS) do r
     st = r.stats; stab = cfgval(r, "sgs.stability")
     @printf("%-8s N=%d: h = %5.1f m  u* = %.3f m/s  w'θ'0 = %.5f K m/s (H = %5.1f W/m²)  LLJ %.2f m/s at %3.0f m  L = %4.0f m  (%d steps, %.0f s)\n",
             stab, N, st.h, st.u_star, st.wθ0, st.H0, st.S_max, st.z_jet, st.L, st.nsteps, st.wall_time)
-    (stab = stab, st = st, series = r.series)              # series: every 300 s (averaging.series_interval)
+    (stab = stab, st = st, series = r.series)              # series: every 300 s ([output] series_cadence)
 end
 outdir = mkpath(SBL_OUT)
 
@@ -55,7 +55,7 @@ end
 
 # ---- profiles CSV ------------------------------------------------------------
 open(joinpath(outdir, "gabls1_N$(N)_profiles.csv"), "w") do io
-    println(io, "# GABLS1 hours $(T_AVG/3600)-$(T_END/3600), Aeolus.jl sbl run type, $(N)^3 (P55-f, #191). Model output, not reference data.")
+    println(io, "# GABLS1 hours $(T_AVG/3600)-$(T_END/3600), Aeolus.jl model, $(N)^3 (P55-f, #191). Model output, not reference data.")
     println(io, "closure,z_m,U,V,speed,theta,tau_total")
     for r in results, k in eachindex(r.st.z)
         @printf(io, "%s,%.3f,%.4f,%.4f,%.4f,%.4f,%.6f\n", r.stab, r.st.z[k], r.st.U[k], r.st.V[k],

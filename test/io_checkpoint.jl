@@ -444,9 +444,11 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# The long drivers' hooks: run_channel! (relaminarisation, channel drivers)
-# and sbl_run! (GABLS1-4) interrupted after a checkpoint and resumed in fresh
-# objects return the uninterrupted run's state and statistics bit for bit.
+# The long drivers' hook: run_channel! (WallModels' channel runs)
+# interrupted after a checkpoint and resumed in fresh objects returns the
+# uninterrupted run's state and statistics bit for bit. (The GABLS cases are
+# configurations of the model since ONE-g, #456: their components'
+# checkpoints are tested in components_both_cores.jl.)
 # ---------------------------------------------------------------------------
 struct CkKilled <: Exception end
 
@@ -482,33 +484,6 @@ struct CkKilled <: Exception end
     @test c2.st.U == st_ref.U && c2.c.nsteps == ref.nsteps
     finish_checkpoints!(CheckpointSchedule(dir))
     @test !isdir(dir)
-end
-
-@testset "driver hook: sbl_run! interrupted and resumed" begin
-    SBL = Aeolus.StableBoundaryLayer
-    mk() = SBL.sbl_case(; N = (8, 8, 8), base = LagrangianDynamicSmagorinsky(
-                RegularGrid(; size = (8, 8, 8), extent = (400.0, 400.0, 400.0))))
-    T = 300.0
-    ref = mk(); st_ref = SBL.sbl_run!(ref, T; average_from = 100.0, sample_every = 2)
-    dir = mktempdir()
-    run_part(kill_at) = begin
-        ck = CheckpointSchedule(dir; every_steps = 3, keep = 1)
-        c = mk()
-        st = try
-            SBL.sbl_run!(c, T; average_from = 100.0, sample_every = 2, checkpoint = ck,
-                          callback = c -> c.nsteps == kill_at && throw(CkKilled()))
-        catch e
-            e isa CkKilled || rethrow(); nothing
-        end
-        (c = c, st = st)
-    end
-    @test run_part(7).st === nothing
-    b = run_part(-1)
-    @test ck_state(b.c.sim).u == ck_state(ref.sim).u && b.c.nsteps == ref.nsteps
-    @test b.st.U == st_ref.U && b.st.u_star === st_ref.u_star && b.st.wθ0 === st_ref.wθ0
-    @test b.c.heat_applied === ref.heat_applied               # the ledger continues exactly
-    @test ref.nsteps > 7
-    rm(dir; recursive = true)
 end
 
 end # testset

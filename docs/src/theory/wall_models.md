@@ -252,7 +252,7 @@ amplitude `noise·u*` (default 3, rms 1.7 u*); with `noise = 0.3` the
 24³ half channel never becomes turbulent in 30 H/u* (``τ_w`` ≈ 0.5-0.7
 u*²): the eddy viscosity damps weak noise.
 
-`examples/validation/neutral_abl.jl` runs `StaticSmagorinsky(0.1)` at 32³
+The former `examples/validation/neutral_abl.jl` (a channel case (removed by ONE-g, #456)) ran `StaticSmagorinsky(0.1)` at 32³
 and 48³ for 50 H/u* and plots Φ_m(z) and E11(k1):
 averaged over 30-50 H/u*, ⟨τ_w⟩ = 1.002 u*² (32³, 28,157 steps, 188 s)
 and 1.001 u*² (48³, 45,999 steps, 904 s) — the 2-3 % deficit of the
@@ -357,7 +357,7 @@ nearly cancels in the bulk integral, while U_b⁺ is set by the coarse
 grid's outer-layer deficit (−0.8 at the centre), which the wall-model
 input cannot change. That expectation is a broken test.
 
-**Four Reynolds numbers** (`examples/validation/log_layer_mismatch.jl`,
+**Four Reynolds numbers** (the former `examples/validation/log_layer_mismatch.jl` (removed by ONE-g, #456),
 same grid, averaged over 10-20 δ/u_τ; reference data from the headers of
 the published Lee & Moser profiles, `test/data/lee_moser_2015.jl`):
 
@@ -588,7 +588,7 @@ and updates α once per step.
     difference is dominated by how the SGS closure depends on the
     horizontal resolution, not by the roughness. The test therefore
     compares the model's u\* a priori, on the same LES wind.
-  * **Example 3, staggered cubes** (`examples/validation/dynamic_roughness_cubes.jl`,
+  * **Example 3, staggered cubes** (the former `examples/validation/dynamic_roughness_cubes.jl` (removed by ONE-g, #456),
     λ_p = 0.25, uniform log-law wind at 2h). At Δ = h/2 with C_d = 1:
       * α = 2.26 and ⟨z_0⟩/h = 0.53;
       * the effective ``z_0/h`` from the total drag, with the
