@@ -718,8 +718,17 @@ urban_section_names() = vcat(["urban"], [String(coupling_name(C)) for C in REGIS
 "The urban site's sections of the model's schema: [`urban_site_section`](@ref) and every [`coupling_section`](@ref)."
 urban_sections() = Section[urban_site_section(), (coupling_section(C) for C in REGISTRY)...]
 
-"Whether the (resolved) model config `cfg` makes its domain an urban site (`[urban] enabled`)."
-urban_enabled(cfg) = cfg.urban.enabled
+"""
+    urban_enabled(cfg) -> Bool
+
+Whether the (resolved) model config `cfg` makes a domain an urban site
+(`[urban] enabled`; any of its domains, or the config itself for a legacy
+case, which has none).
+"""
+function urban_enabled(cfg)
+    ds = Config.config_domains(cfg)
+    return isempty(ds) ? cfg.urban.enabled : any(d -> d.urban.enabled, ds)
+end
 
 # A resolved option value in its TOML form (a symbol as a string, nothing as
 # "none", tuples as arrays, tables with string keys), a Julia object that

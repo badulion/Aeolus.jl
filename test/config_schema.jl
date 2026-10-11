@@ -160,15 +160,15 @@ end
     @test occursin("float | table", option_reference("cfgtest_oneof"))
 end
 
-"Every shipped config: examples/**/configs/*.toml."
+"Every shipped config: examples/**/configs/*.toml and a case directory's examples/<case>/*.toml (ONE-e, #454)."
 function cfg_shipped()
     ex = normpath(joinpath(@__DIR__, "..", "examples"))
     return sort!([joinpath(r, f) for (r, _, fs) in walkdir(ex) for f in fs
-                  if endswith(f, ".toml") && basename(r) == "configs"])
+                  if endswith(f, ".toml") && (basename(r) == "configs" || dirname(r) == rstrip(ex, '/'))])
 end
 
 @testset "Config: canonical fixed point (shipped + 200 random configs per schema)" begin
-    # shipped configs: every examples/**/configs/*.toml, every member of a sweep
+    # shipped configs: every examples/**/configs/*.toml and examples/urban/*.toml, every member of a sweep
     shipped = cfg_shipped()
     @test length(shipped) >= 50
     for f in shipped
