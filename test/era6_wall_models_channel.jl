@@ -174,7 +174,7 @@ end
     # by the outer-layer deficit of the coarse LES (−0.8 at the centre)
     # that no wall-model input changes. At Re_τ = 182, where the first
     # cell centre is at y⁺ = 11, the factor is met: +5.6 % → −1.2 %
-    # (examples/validation/log_layer_mismatch.jl, 10-20 δ/u_τ).
+    # (the former examples/validation/log_layer_mismatch.jl, 10-20 δ/u_τ).
     @test_broken abs(eb) <= abs(ea) / 2
 end
 

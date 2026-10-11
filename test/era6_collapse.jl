@@ -1,14 +1,12 @@
 # P58-e (#193): turbulence collapse — the maximum sustainable heat flux
-# (MSHF, Van de Wiel et al. 2012) of SurfaceExchange, and the LES
-# collapse regime of the flux-cooled half channel (Donda et al. 2015).
+# (MSHF, Van de Wiel et al. 2012) of SurfaceExchange, and the flux-cooled
+# half channel of WallModels (its MOSTFluxWallLaw). The LES collapse regime
+# (the collapse_channel case of the former sbl run type) went with the
+# channel cases (ONE-g, #456: maintainer decision of 2026-10-09).
 
 using Test
 using Aeolus
 using Aeolus.SurfaceExchange: _Φm, von_karman, grav
-
-# the LES runs are the cases of examples/sbl/configs/collapse_channel.toml
-# (the `sbl` run driver, CFG-d #359)
-using Aeolus.StableBoundaryLayer
 
 @testset "P58-e: maximum sustainable heat flux" begin
     κ = von_karman(); g = grav()
@@ -195,78 +193,4 @@ _plane_u1(s) = (g = s.mesh; sum(view(s.u.data, g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.N
     lam = half_channel_case(; N = N, noise = 0.0).sim
     @test maximum(resolved_tke_profile(lam.u, lam.v, lam.w)) < 1e-24   # round-off of the plane means (U² ~ 600)
     @test all(>(0), resolved_tke_profile(hn.sim.u, hn.sim.v, hn.sim.w)[2:end])
-end
-
-@testset "P58-e: LES collapse regime (16×16×32 half channel)" begin
-    # The case has two MSHFs. The wall model evaluates MOST at the first
-    # cell centre h = Δz/2 = H/64 with the local wind; the turbulent
-    # channel as a whole carries the flux over its depth H. Both are
-    # max_sustainable_heat_flux of the neutral state (u* = 1):
-    #   Q_wall = MSHF(U(h), h)  — beyond it the wall model collapses;
-    #   Q_bulk = MSHF(U(H), H)  — the channel-scale criterion of
-    #            Donda et al. (2015), who normalise by the half height.
-    # Q_bulk/Q_wall = 0.032 here. The issue's "H = 0.5 H_max" and
-    # "H = 2 H_max" are tested at the bulk and the wall MSHF respectively
-    # (see the theory page for why one H_max cannot separate the regimes).
-    sf = BusingerDyerBeljaarsHoltslag(); κ = von_karman()
-    N = (16, 16, 32); z0 = 1e-4; θ = 300.0; Nz = N[3]
-    h = 1 / (2Nz)
-    U1 = log(h / z0) / κ
-    Qwall = max_sustainable_heat_flux(sf, U1, h, z0, z0, θ)
-    Qbulk = max_sustainable_heat_flux(sf, log(1 / z0) / κ, 1.0, z0, z0, θ)
-    @test 0.02 < Qbulk / Qwall < 0.05
-    # The closure: StabilityCorrected with isotropic length scales. The
-    # default anisotropic scales (Δh = √(dx dy) = 12.6 Δz on this grid)
-    # give νh 5.4× the isotropic value and relaminarise even the neutral
-    # run (resolved TKE 0.18 → 0.0035 u*² over 20 H/u*, measured).
-    # The cases of collapse_channel.toml: its spin-up of 10 H/u* (developed
-    # neutral turbulence), then the cooling in units of Q_wall.
-    cfg = sbl_config("collapse_channel")
-    @test cfg.grid.size == N && cfg.case.z0 == z0 && cfg.case.theta_ref == θ && cfg.case.spinup_time == 10.0
-    @test collapse_heat_flux_scales(N; z0 = z0, θ_ref = θ).Q_wall == Qwall
-    spin = sbl_channel_spinup(cfg)
-    @test spin.closure isa StabilityCorrected && spin.sim.t ≈ 10.0
-    lowest = 1:cld(Nz, 3)
-    function branch(frac, t_end)
-        hc = sbl_channel_case(with(cfg, "case.heat_flux_fraction" => frac))
-        hc.sim.u.data .= spin.sim.u.data; hc.sim.v.data .= spin.sim.v.data
-        hc.sim.w.data .= spin.sim.w.data
-        rec = (t = Float64[], e = Float64[], elow = Float64[], u1 = Float64[], γ20 = Float64[])
-        nxt = Ref(1.0)
-        run_channel!(hc, t_end; callback = c -> begin
-            if c.sim.t >= nxt[] - 1e-9
-                e = resolved_tke_profile(c.sim.u, c.sim.v, c.sim.w)
-                push!(rec.t, c.sim.t); push!(rec.e, sum(e) / Nz)
-                push!(rec.elow, sum(e[lowest]) / length(lowest)); push!(rec.u1, _plane_u1(c.sim))
-                abs(c.sim.t - 20) < 0.5 && isempty(rec.γ20) && append!(rec.γ20, turbulent_fraction(c.sim))
-                nxt[] += 1
-            end
-        end)
-        return rec
-    end
-    late(r, f) = sum(f[(r.t .>= 15) .& (r.t .<= 20.5)]) / count((r.t .>= 15) .& (r.t .<= 20.5))
-    neu = branch(0.0, 20.0)
-    sub = branch(0.5Qbulk / Qwall, 20.0)
-    col = branch(2.0, 40.0)
-    e_neu = late(neu, neu.e); elow_neu = late(neu, neu.elow)
-    i20 = findfirst(t -> abs(t - 20) < 0.5, col.t); i40 = findlast(t -> t > 39.5, col.t)
-    @info "P58-e collapse LES" Qwall Qbulk e_neu elow_neu e_sub = late(sub, sub.e) e_col20 = col.e[i20] e_col40 = col.e[i40] elow_col20 = col.elow[i20] u1_col = extrema(col.u1[5:20]) ./ U1 γlow_col20 = col.γ20[lowest] γlow_neu = neu.γ20[lowest]
-    @test e_neu > 1.0                                  # neutral: developed turbulence (u*² units)
-    # H = 0.5 H_max (bulk): turbulence survives, ≥ 30 % of the neutral TKE
-    @test late(sub, sub.e) >= 0.3e_neu
-    # H = 2 H_max (wall): the wall layer collapses —
-    #  * the turbulent fraction (P59-c) is < 0.2 on ≥ 80 % of the lowest third
-    @test count(<(0.2), col.γ20[lowest]) >= 0.8length(lowest)
-    @test count(<(0.2), neu.γ20[lowest]) < 0.8length(lowest)   # and it is not in the neutral run
-    #  * the resolved TKE of the lowest third is < 5 % of the neutral one at 20 H/u*
-    @test col.elow[i20] < 0.05elow_neu
-    #  * the whole-domain TKE is < 5 % of neutral — at 40 H/u*, not 20: the
-    #    upper two thirds, cut off from the wall shear, decay on their own
-    #    turnover time (measured 12 % at 20, 3.6 % at 40)
-    @test col.e[i40] < 0.05e_neu
-    @test col.e[i40] < col.e[i20]
-    #  * the first-level wind is held at the minimum wind for sustainable
-    #    turbulence, U = (|H|/H_max)^{1/3} U₀ = 2^{1/3} U₀ (Van de Wiel et al.
-    #    2012): the collapsed wall stops braking it until it gets there
-    @test all(u -> abs(u / U1 / 2^(1 / 3) - 1) < 0.02, col.u1[5:20])
 end

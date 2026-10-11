@@ -115,7 +115,7 @@ end
                  ["run", TGV, "--set", "run.driver=\"simulation\"", "--root", root2],   # removed (ONE-b)
                  ["run", TGV, "--set", "run.legacy=\"nocase\"", "--root", root2],
                  ["check"], ["check", "/nonexistent/c.toml"], ["options", "nosection"],
-                 ["options", "nocase", "grid"], ["options", "sbl", "nosection"],
+                 ["options", "nocase", "grid"], ["options", "cbl", "nosection"],
                  ["preprocess", "static", TGV])                               # AeolusPrep.jl's since ONE-h (#457)
         rc, _, err = cli(args...)
         @test rc == 2
@@ -144,14 +144,14 @@ end
     end
     # [output] extended by the model; its default set (ONE-c): u, v, w, theta and the domain means
     @test occursin("variables : [string, …] = [\"u\", \"v\", \"w\", \"theta\", \"u_mean\"", out)
-    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("sbl", out) && occursin("urban", out)
+    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("cbl", out) && occursin("urban", out)
     # the cross-field checks, in words (CFG-i, #364): after the sections, one line each
     @test occursin("\ncross-field checks:\n  - exactly one of `time.duration` and `time.nsteps`", out)
     rc, out1, _ = cli("options", "grid")
     @test !occursin("cross-field checks", out1)          # one section: no checks
     # a legacy case, and one of its sections
-    rc, out, _ = cli("options", "sbl", "stepper")
-    @test rc == 0 && occursin("[stepper]", out) && occursin("the legacy case \"sbl\"", out)
+    rc, out, _ = cli("options", "cbl", "cbl")
+    @test rc == 0 && occursin("[cbl]", out) && occursin("the legacy case \"cbl\"", out)
     # --markdown: the docs' tables, the same text option_reference(...; format = :markdown) gives
     rc, md, _ = cli("options", "--markdown")
     @test rc == 0 && startswith(md, option_reference(; format = :markdown))

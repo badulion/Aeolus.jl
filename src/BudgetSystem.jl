@@ -6,7 +6,8 @@ The one budget system of the model (ONE-c, #452; the design is
 surface classes and the heat of the air), water, momentum and tracers,
 in one [`Budgets`](@ref) container. It replaces the urban case's energy
 and water ledger, its air-heat ledger and the SBL run type's momentum
-budget, which were three separate systems.
+budget (since ONE-g #456 the SBL cases measure momentum like every other
+quantity), which were three separate systems.
 
 * [`LevelMeter`](@ref) measures the per-level content of a field in the
   air (the heat of the air, the mass of water or a tracer, momentum);
@@ -17,12 +18,11 @@ budget, which were three separate systems.
   their stages through it (`Components`), and so does the urban case;
 * [`Budgets`](@ref) holds the measured budgets, the surface energy
   balance per class and the water of the air from reported sources
-  ([`add_surface!`](@ref), [`add_water!`](@ref), [`add_heat!`](@ref)),
-  and the diagnosed plane-mean momentum budget ([`MomentumBudget`](@ref)).
+  ([`add_surface!`](@ref), [`add_water!`](@ref), [`add_heat!`](@ref)).
 
 Components book their terms through `Components.budget!`; the closures
-are reported by [`stage_budget`](@ref), [`surface_budget`](@ref),
-[`water_budget`](@ref) and [`momentum_closure`](@ref).
+are reported by [`stage_budget`](@ref), [`surface_budget`](@ref) and
+[`water_budget`](@ref).
 """
 module BudgetSystem
 
@@ -34,14 +34,12 @@ export LevelMeter, measure_levels!, solid_levels!, measure, air_heat, layer_frac
        split_transport, transport_conserved_weight,
        StageBudget, budget_start!, budget_begin_step!, budget_end_step!, budget_open!, budget_close!,
        budget_discard!, book!, stage_budget, stage_report, report_order,
-       MomentumBudget, book_momentum!, book_surface_momentum!, momentum_closure,
        Budgets, energy, measured_quantities, add_term!, water_tracer!, add_surface!, add_water!, add_heat!,
        heat_budget, level_sums, water_content, water_split, water_split_levels, surface_budget,
        water_budget, budget_report, SURFACE_CLASS_NAMES, SURFACE_CORE_TERMS
 
 include("budgets/meter.jl")
 include("budgets/stage_budget.jl")
-include("budgets/momentum.jl")
 include("budgets/budgets.jl")
 
 end # module

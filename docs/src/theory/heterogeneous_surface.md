@@ -28,7 +28,8 @@ construction. Here each column's flux depends on its own first-level
 air through Monin–Obukhov similarity, as in a coupled land surface
 (Patton et al. 2005).
 
-The driver is `examples/validation/patchy_surface/driver.jl`. It is a
+The harness is `test/support/patchy_surface.jl` (the example driver
+`examples/validation/patchy_surface/driver.jl` until ONE-g, #456). It is a
 Boussinesq LES with Smagorinsky SGS and SSP-RK3 with one projection per
 stage. Every surface column is a `SurfaceExchange.AbstractSurface`, and
 its fluxes come from the contract's `turbulent_fluxes`. The heat flux
@@ -51,7 +52,7 @@ modes agree to ``8×10^{-13}`` K after 200 s.
 The resolved domain-mean flux ``\overline{w'θ'_0}`` is compared with the
 mosaic's flux under several choices of forcing air. 50 m grid,
 3.2 × 1.6 × 1.6 km, mean over the second hour
-(`examples/validation/patchy_surface_les.jl`):
+(the former `examples/validation/patchy_surface_les.jl`, (removed by ONE-g, #456)):
 
 | case | LES (K m s⁻¹) | tiles, patch air | tiles, mean air & speed | `BlendedMosaic` | parameter |
 |:--|--:|--:|--:|--:|--:|

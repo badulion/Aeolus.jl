@@ -578,7 +578,7 @@ Test 3 of the issue — the 32³ open channel at ``Re_τ = 180``, collapse at
 4.5–9 min per 20 ``h/u_τ`` run (6 200–9 900 SSP-RK3 steps; 267–521 s wall
 time on the shared machine), plus a 2-min neutral spin-up,, over the 2-min CI budget, so it is
 `configs/relaminarisation_sweep.toml` (with
-`examples/sbl/relaminarisation_channel.jl` reading the runs against the
+the former `examples/sbl/relaminarisation_channel.jl` ((removed by ONE-g, #456)) reading the runs against the
 references) and is not in the suite. Set-up: ``2πh × πh × h``, ``Re_τ``
 by the forcing ``u_τ^2/h``, σ + correction (isotropic length scales),
 stress form, ``Pr = 0.71``, ``g/θ_0 = 1``. A neutral spin-up of 10

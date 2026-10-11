@@ -167,7 +167,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
-cases [`urban_parent`](../reference/options/urban_parent.md), [`sbl`](../reference/options/sbl.md), [`dns`](../reference/options/dns.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+cases [`urban_parent`](../reference/options/urban_parent.md), [`dns_decay`](../reference/options/dns_decay.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -207,28 +207,22 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Legacy cases that live under `examples/` (the validation drivers) are
-loaded on first use: [`DRIVER_FILES`](@ref
-Aeolus.Config.DRIVER_FILES) maps their names to files relative to the
-package directory, and the first config that names one includes the file
-into a fresh module. The `sbl` run type moved into `src/` with EX-b (#439,
-[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md)) and is
-registered when the package loads. CFG-d (#359) lists `dns` (`examples/validation/dns_apriori_driver.jl`: the filtered-DNS
-fixture with its a-priori record, `dns256.toml`); the drivers of CFG-e
-(#360) are in the table below. `dns` and `dns_decay` run the same DNS
-(the steps of `test/fixtures/dns_decay.jl`); `dns` adds the a-priori
-record and its resolution refusal. The Berlin case's driver is no longer
+Legacy cases that live under `examples/` are loaded on first use:
+[`DRIVER_FILES`](@ref Aeolus.Config.DRIVER_FILES) maps their names to
+files relative to the package directory, and the first config that names
+one includes the file into a fresh module. The stable-boundary-layer
+cases (the former `sbl` run type) are configurations of the model since
+ONE-g (#456); the validation run types `dns`, `channel`, `cbc_decay` and
+`patchy_surface` and the single-column cases went with their cases
+(maintainer decisions of 2026-10-09). The Berlin case's driver is no longer
 an example file: it is the package's urban run type, `urban` (below; EX-a #438).
 
 ### The example legacy cases (CFG-e, #360)
 
 | `[run] legacy` | file | builds and runs | configs |
 | :-- | :-- | :-- | :-- |
-| `channel` | `examples/validation/channel_driver.jl` | `half_channel_case` / `channel_case`, `run_channel!` (wall-modelled channel LES) | `validation/configs/neutral_abl.toml`, `log_layer_mismatch.toml` |
-| `column` | `examples/validation/column_driver.jl` | `[column] case`: `dycoms_rf01` (RF01 column + longwave solve), `parisfog_2011` (the RadiationFog column), `droplet_parcel` (spectral broadening, `run_broadening_case`), `kessler_box` (Kessler microphysics, no dynamics) | `validation/configs/dycoms_rf01.toml`, `parisfog_2011.toml`, `spectral_broadening.toml`, `kernels/configs/cloud_spinup.toml` |
-| `cbc_decay` | `examples/validation/cbc_driver.jl` | `cbc_benchmark` (Comte-Bellot & Corrsin decay, spin-up and seeds) | `validation/configs/cbc_decay.toml` |
-| `patchy_surface` | `examples/validation/patchy_surface_driver.jl` | `patchy_les` / `patchy_run!` (CBL over hot and cool strips) | `validation/configs/patchy_surface.toml` |
-| `dns_decay` | `examples/validation/dns_driver.jl` | `dns_decay` (the decaying DNS the a-priori analysis filters) | `validation/configs/apriori_sgs.toml` |
+| `column` | `examples/kernels/column_driver.jl` | `[column] case = "kessler_box"` (Kessler microphysics, no dynamics) | `kernels/configs/cloud_spinup.toml` |
+| `dns_decay` | `examples/validation/dns_driver.jl` | `dns_decay` (the decaying DNS of P56-c, which the `sgs_decay` run type starts from) | — |
 
 Each example script is now "run the config(s), then analyse or plot":
 `run_configs(path, ARGS)` takes the script's command line (`--set`,
@@ -240,19 +234,12 @@ section of a case that is not selected
 ([`selected_case_sections`](@ref Aeolus.Config.selected_case_sections)).
 A section whose options are the fields of a keyword struct is made with
 [`kwdef_section`](@ref Aeolus.Config.kwdef_section) (the struct's
-defaults are the schema's: `FogColumnSettings` is `[fog]`,
-`BroadeningCase` is `[parcel]`) and read back with
+defaults are the schema's) and read back with
 [`kwdef_value`](@ref Aeolus.Config.kwdef_value).
 
-Not runs, so without a config (`EXEMPT` in `test/config_examples.jl`,
-each with its reason): `validation/canopy_profiles.jl` (steady 1-D
-boundary-value solves), `validation/dynamic_roughness_cubes.jl`
-(a-priori roughness of a height map), `validation/dns256_generate.jl`
-(the offline fixture generator), the Poisson manufactured-solution
-checks, and the library files the drivers include. The same test lists
-every example that calls a stepping entry point and requires a config or
-an exemption; the scripts of #360's later parts are listed there until
-they move.
+`test/config_examples.jl` lists every example that calls a stepping entry
+point and requires a config or a reasoned exemption (`EXEMPT`, empty since
+ONE-g #456).
 
 ## Sweeps
 
@@ -362,8 +349,24 @@ This config is, bit for bit, the simulation the script built before
     [Components and the stage pipeline](@ref)): the core carries the
     dynamics, and its components have one section each, generated from
     their schemas ([`COMPONENTS`](@ref Aeolus.SimulationDriver.COMPONENTS)):
-    `[advection]`, `[sgs]`, `[coriolis]` (`f`), `[sponge]` (`alpha_max`,
-    `z_start`) and `[surface_theta_flux]` (`bottom`, `top`).
+    `[advection]`, `[sgs]`, `[coriolis]` (`f` or `latitude`), `[sponge]`
+    (`alpha_max`, `z_start`, `target`), `[surface_theta_flux]` (`bottom`,
+    `top`), and the boundary-layer components of the SBL cases (ONE-g,
+    #456): `[large_scale_forcing]`, `[surface_layer]` and `[towers]`
+    ([The stable-boundary-layer cases](@ref)).
+  * `[initial]` sets the velocity, θ and qv from vertical profiles
+    (`constant`, `mixed_layer_lapse`, `table` with an optional `log` or
+    `linear` tail below the lowest height, `exponential`), the Taylor–Green
+    field, or a named analytic field: `field = {kind =
+    "isotropic_turbulence", spectrum = "passot_pouquet", u_rms, k_peak,
+    seed}`, decaying isotropic turbulence defined in spectral space, so that
+    a coarse grid on the same box starts from exactly the large scales of a
+    fine one (`examples/dns_vs_les/`). The θ noise (`perturbation_amplitude`,
+    `perturbation_depth`, `perturbation_kind` uniform or normal) and the
+    velocity noise (`velocity_perturbation`: kind, amplitude, `depth`,
+    `components`, a `linear` taper and `project`) are drawn from the run's
+    seed. `[time] start` is the model time at the start (the clock on which
+    the dynamic driver's tables are read).
   * `[time]`: `dt` a fixed step or `"adaptive"` (`step_adaptive!` with
     `cfl` and `dt_max`), and `duration` or `nsteps`. `euler` is `step!`,
     `rk3` `step_rk3!`.
@@ -389,7 +392,10 @@ This config is, bit for bit, the simulation the script built before
     components. The default set is `u`, `v`, `w`, `theta` and the domain
     means of u, v, w, θ. A `budget_*` variable (`budget_energy`,
     `budget_water`, `budget_momentum`, `budget_tracer`) switches on that
-    budget of the domain ([Budgets](budgets.md)) and writes its terms.
+    budget of the domain ([Budgets](budgets.md)) and writes its terms. The
+    core also offers `kinetic_energy`, `dissipation` (molecular + SGS),
+    `dissipation_sgs` and, on a triply periodic regular grid, the energy
+    spectrum `energy_spectrum` (a record over the shell wavenumbers `k`).
   * `[checks]` enables the checks the core and the components publish,
     each `name = {required, tolerance}`: the sanity check `finite`, the
     budget closures `energy_closure`, `water_closure`,
@@ -503,83 +509,23 @@ Julia-built smoke case and passes the round trip with the nest on.
 
 Its options, the component sections and `[nesting.parent]` included: [Options: the model](../reference/options/model.md).
 
-## The `sbl` legacy case
+## The stable-boundary-layer cases
 
-`[run] legacy = "sbl"` (CFG-d #359; the module
-[`Aeolus.StableBoundaryLayer`](era6/stable_boundary_layer.md) since EX-b
-#439) runs the stable-boundary-layer cases of `examples/sbl/configs/`. One
-driver covers four kinds, `[case] kind`:
-
-| kind | builds and runs | shipped configs |
-| :-- | :-- | :-- |
-| `homogeneous` | `sbl_case`, `sbl_run!`: the periodic SBL LES | `gabls1`, `gabls2`, `cases99` (gabls2 + virtual towers), `gabls3`, `gabls4_exp3` |
-| `stratified_channel` | a neutral spin-up, then `stratified_channel_run` | `stratified_channel_re180` |
-| `relaminarisation_channel` | `relam_spinup`, then `relam_run` | `relaminarisation` |
-| `collapse_channel` | the neutral half channel, then `collapse_run` | `collapse_channel` |
-
-The Julia builders (`src/sbl/case.jl`) are the implementation; the
-driver (`src/sbl/driver.jl`) only turns the config into their arguments. Each shipped
-config gives fields bitwise equal to the builder call it replaced
-(`test/config_sbl.jl`). Case constants live in the TOML files; the case
-tables stay the CSVs of `examples/sbl/data/`, named by `[case] data` (a
-`Path`, hashed under `[inputs]` of `run.toml`) and referenced as
-`{table, column[, row]}`. Things TOML cannot hold are named kinds with
-parameters, added in code:
-
-  * a forcing quantity (`[forcing] u_g`, `v_g`, the `subsidence` `w`, the
-    `advective_tendencies` and `nudging` targets) is a number or
-    `{kind = "table", z = […], t = […] | time = {table, column}, levels =
-    [{value} | {values} | {column}]}`, a `ForcingTable`;
-  * `[surface] temperature` is `constant`, `cooling_rate`, `series` (a
-    case-table column; with `p_sfc` and `exponent` the values are T,
-    converted to θ) or `gabls2` (the case formula, sampled);
-  * `[surface] stability` is a `SurfaceExchange` family with its
-    parameters: `{family = "businger_dyer_log_linear", beta_m = 4.8,
-    beta_h = 7.8}`;
-  * `[initial]` profiles are `constant`, `mixed_layer_lapse` or `table`
-    (with a `log` or `linear` profile below the lowest height), the
-    perturbation `theta_uniform`, `uniform`, `gaussian` (with a linear
-    taper per component) or `none`.
-
-An option that the configured kind does not use, set away from its
-default, is an error (a silently ignored key is a bug), as are `f` and
-`latitude` together, `end_time` and `nsteps` together, a closure the
-channel builders do not take, and a case-table reference that does not
-resolve (naming the table, the file and its size). A run writes
-`diagnostics.csv`, `output/statistics.toml` (the averaged statistics or
-the channel result), the time series (every `[averaging]
-series_interval`) in `output/output.nc` (the one writer, [Output](output.md))
-and, with `[towers] below > 0`, `output/towers.csv` (the
-CASES-99 hockey stick bins). The comparisons the old runner scripts made
-are sweeps now (`gabls1_closures.toml`, `cases99_closures.toml`,
-`gabls3_closures.toml`, `gabls4_closures.toml`,
-`stratified_channel_sweep.toml`, `relaminarisation_sweep.toml`,
-`collapse_channel_sweep.toml`: one run folder per member, each channel
-member with its own spin-up), and the scripts `gabls1.jl` … `gabls4.jl`,
-`stratified_channel.jl`, `relaminarisation_channel.jl` and
-`collapse_channel.jl` only read the run folders and make the tables and
-figures (`julia --project examples/sbl/gabls1.jl runs/gabls1_*`).
-
-Its options, every key with type, default, units, range and doc: [Options: legacy case `sbl`](../reference/options/sbl.md) (generated from the schema; `aeolus options sbl` prints the same).
-
-## The `dns` legacy case
-
-`[run] legacy = "dns"` (`examples/validation/dns_apriori_driver.jl`) is the
-decaying-turbulence DNS of the filtered-DNS fixture
-(`test/fixtures/dns_decay.jl`) and its a-priori record
-(`test/fixtures/dns_apriori.jl`). `examples/validation/configs/dns256.toml`
-is the offline 256³ run; `--set grid.n=32` runs the pipeline in seconds.
-`[fluid] nu = "scaled"` is the fixture's ν = 0.018 (48/N)^{4/3} times
-`nu_margin` (1.035, the generator's margin), so the file holds no
-hand-computed viscosity. The run is the fixture's own steps (`dns_start`,
-`dns_step!` while `dns_running`), bitwise `dns_decay`'s. After the run the
-record goes to `[apriori] out` (default `output/dns_apriori.toml`); with
-`require_checks` a run that misses a required DNS check (k_max η ≥ 1.5
-over the run, the skewness band, the energy budget, monotone decay, past
-the dissipation peak) fails, names the measured k_max η, and leaves its
-record at `<out>.failed` only.
-
-Its options, every key with type, default, units, range and doc: [Options: legacy case `dns`](../reference/options/dns.md) (generated from the schema; `aeolus options dns` prints the same).
+GABLS1-4 and CASES-99 (`examples/sbl/configs/`) are configurations of the
+model since ONE-g (#456): the geostrophic forcing and the dynamic driver's
+large-scale tables are `[large_scale_forcing]`
+([`LargeScale`](@ref Aeolus.Components.LargeScale)), the Monin-Obukhov
+surface layer over the prescribed surface temperature `[surface_layer]`
+([`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer)), the sponge
+retargeted at the geostrophic wind or the plane mean `[sponge] target`,
+the CASES-99 towers `[towers]` ([`Towers`](@ref Aeolus.Components.Towers)).
+Their case tables are dynamic drivers (`examples/sbl/configs/input/`), their
+initial profiles TOML tables (with a `log` or `linear` tail below the
+lowest height), their comparisons with the intercomparisons
+`[checks.reference]` (`results.toml`), and the scripts of `examples/sbl/`
+read `output/output.nc`. The channel cases of the former `sbl` run type
+(stratified, relaminarisation, collapse) are gone (maintainer decision of
+2026-10-09: no pressure-gradient forcing component).
 
 ## The bit-identical round trip
 

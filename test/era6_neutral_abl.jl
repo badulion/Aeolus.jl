@@ -173,7 +173,8 @@ end
     @test_throws ArgumentError half_channel_case(; θ_walls = (300.0, 290.0))
     @test_throws ArgumentError half_channel_case(; filter = :box)
     # channel_case's bottom_bc = :noslip and θ_walls are implemented by
-    # P55-f (#191, test/era6_stratified_channel.jl); only invalid values throw
+    # P55-f (#191; exercised by test/era6_relaminarisation.jl since the former
+    # test/era6_stratified_channel.jl was removed by ONE-g, #456); only invalid values throw
     @test_throws ArgumentError channel_case(; bottom_bc = :bogus)
     @test_throws ArgumentError channel_case(; θ_walls = (0.0, 1.0))   # θ walls need :noslip
     # a resolved (:noslip) wall has no wall model, so the wall-model keywords

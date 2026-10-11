@@ -5,21 +5,29 @@
 # 400 m cube, U_g = 8 m/s, f = 1.39e-4 s⁻¹ (73° N), z0 = 0.1 m, θ = 265 K to
 # 100 m then +0.01 K/m, the surface cooled at 0.25 K/h from 265 K, the
 # log-linear surface functions β_m = 4.8, β_h = 7.8, a Rayleigh damping
-# layer above 300 m, θ perturbations of ±0.1 K below 50 m; 9 h, statistics
-# of hours 8-9 (examples/sbl/data/gabls1_reference.csv). 64³ is 6.25 m.
+# layer above 300 m relaxing toward the geostrophic wind, θ perturbations
+# of ±0.1 K below 50 m; 9 h. The model's components: the geostrophic
+# forcing ([large_scale_forcing]), the Monin-Obukhov surface layer
+# ([surface_layer]), Smagorinsky with the Brown et al. (1994) stability
+# correction in the stress form ([sgs]). 64³ is 6.25 m.
 #
-#   julia -m Aeolus run examples/sbl/configs/gabls1.toml
-#   julia -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32] --set sgs.stability=\"none\"
+# The checks compare hours 8-9 with the intercomparison ranges
+# (data/gabls1_reference.csv); examples/sbl/gabls1.jl plots the output.
+#
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1.toml
+#   julia --project -m Aeolus run examples/sbl/configs/gabls1.toml --set grid.size=[32,32,32]
 
 schema_version = 2
 
 [run]
-legacy = "sbl"
 name = "gabls1"
 seed = 1
 
-[case]
-kind = "homogeneous"
+[time]
+scheme = "rk3"
+dt = "adaptive"
+cfl = 1.2
+duration = 32400.0             # 9 h
 
 [grid]
 size = [64, 64, 64]
@@ -28,42 +36,56 @@ extent = [400.0, 400.0, 400.0]
 [dynamics]
 theta0 = 263.5                 # Boussinesq reference temperature of the buoyancy
 
-[forcing]
-u_g = 8.0
-v_g = 0.0
+[boundaries]
+z = "free_slip"                # the wall stress is the surface layer's
+
+[initial]
+theta = {kind = "mixed_layer_lapse", value = 265.0, z_i = 100.0, lapse = 0.01}
+u = {kind = "constant", value = 8.0}
+perturbation_amplitude = 0.2   # uniform in [-0.1, 0.1] K
+perturbation_depth = 50.0
+
+[coriolis]
 f = 1.39e-4
 
-[surface]
+[large_scale_forcing]
+u_g = 8.0
+v_g = 0.0
+
+[surface_layer]
+enabled = true
 z0m = 0.1
 z0h = 0.1
 temperature = {kind = "cooling_rate", initial = 265.0, rate_per_hour = 0.25}
 stability = {family = "businger_dyer_log_linear", beta_m = 4.8, beta_h = 7.8}
 rho_cp = 1306.5                # 1.3 kg m-3 x 1005 J kg-1 K-1 near 263 K
 
-[initial]
-theta = {kind = "mixed_layer_lapse", value = 265.0, z_i = 100.0, lapse = 0.01}
-perturbation = {kind = "theta_uniform", amplitude = 0.1, depth = 50.0}
-t_start = 0.0
-
 [sgs]
 closure = "smagorinsky"
 c_s = 0.1
-stability = "brown94"          # Brown et al. (1994): the Berlin default
+pr_t = 0.3333333333333333
+stability = "brown_et_al_1994" # Brown et al. (1994)
 stress = "symmetric"
 
 [sponge]
-z = 300.0
-alpha = 0.01
+alpha_max = 0.01
+z_start = 300.0
 target = "geostrophic"
 
-[stepper]
-cfl = 1.2
-end_time = 32400.0             # 9 h
+[output]
+variables = ["u_profile", "v_profile", "theta_profile", "wind_speed_profile", "stress_profile", "heat_flux_profile",
+             "u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "bl_height", "jet_speed",
+             "jet_height", "theta_2m", "wind_10m", "surface_temperature"]
+averaging = "mean"
+cadence = 3600.0               # hourly mean profiles
+series_cadence = 300.0
 
-[averaging]
-from = 28800.0                 # hours 8-9
-sample_every = 10
-series_interval = 300.0
+[checks]                       # results.toml: the intercomparison ranges of hours 8-9
+finite = { required = true }
+reference_file = "../data/gabls1_reference.csv"
+reference.u_star = { required = false, variable = "u_star", window = [28800.0, 32400.0] }
+reference.surface_wtheta = { required = false, variable = "surface_wtheta", window = [28800.0, 32400.0] }
+reference.surface_heat_flux = { required = false, variable = "surface_heat_flux", window = [28800.0, 32400.0] }
 
 [checkpoint]
 every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
@@ -75,7 +97,8 @@ keep = 2
 [test]
 overrides = [
     "grid.size=[16,16,16]",
-    "stepper.end_time=\"none\"",
-    "stepper.nsteps=10",
-    "averaging.series_interval=0.0",
+    "time.duration=\"none\"",
+    "time.nsteps=10",
+    "checks.reference={}",
+    "checks.reference_file=\"none\"",
 ]

@@ -548,8 +548,8 @@ end
                        prefix = "checkpoint", wisdom = true)
 
 Periodic checkpoints of a long run in the folder `dir`, with automatic
-resume — the one helper the long drivers (`dns256_generate.jl`, the
-relaminarisation and SBL drivers) hook into:
+resume — the one helper the long drivers (the model's run, the urban run
+type, `WallModels.run_channel!`) hook into:
 
 1. **Construct it first**, before the simulation: it creates `dir` and, with
    `wisdom = true`, imports the FFTW wisdom `dir/fftw_wisdom` if a previous

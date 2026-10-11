@@ -793,7 +793,7 @@ At 32³ (same set-up, seed 1) ``Φ_m`` at ``z/H = k/32``, ``k = 1 … 8`` is
   these filters, "above 0.2 H" needs ``N ≳ 50``. The expectation assumed
   a resolution-independent height, and it is kept as a broken test.
 
-**Spectra** (`examples/validation/neutral_abl.jl`, seed 1, averaged over
+**Spectra** (the former `examples/validation/neutral_abl.jl` (removed by ONE-g, #456), seed 1, averaged over
 18-30 ``H/u_*``; slopes are least-squares fits in log-log):
 
 | run | ``Φ_m``, ``0.05 ≤ z/H ≤ 0.3`` | ``E_{11}`` slope near the wall, ``k_1H ∈ [1, 6]`` | slope at ``z/H ≈ 0.24``, ``k_1H ∈ [4, N/3]`` |
@@ -1130,7 +1130,7 @@ harness (`cbc_benchmark(closure; N)` in `test/cbc_benchmark_driver.jl`)
 accepts any spectrum function, so a tabulated DNS spectrum can replace it.
 
 Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
-`examples/validation/cbc_decay.jl` at 64³):
+the former `examples/validation/cbc_decay.jl` at 64³, (removed by ONE-g, #456)):
 
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
 | :-- | :-- | --: | --: | --: | --: |
@@ -1223,8 +1223,9 @@ Two candidates in the numerics remain open:
 
 The test therefore asserts ±10 % at station 171 (32³) and ±20 % at
 station 98, and keeps ±10 % at station 98 as a broken test. A closure
-or numerics change that moves the 64³ numbers is checked with
-`examples/validation/cbc_decay.jl`. Starting from the random-phase field
+or numerics change that moves the 64³ numbers was checked with
+the former `examples/validation/cbc_decay.jl` (its harness is
+`test/cbc_benchmark_driver.jl`). Starting from the random-phase field
 without the rescale cycles gives +33.5 % / +10.5 % at 32³, because the
 field transfers no energy during the first turnover.
 

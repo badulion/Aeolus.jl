@@ -24,7 +24,7 @@ tested at are in
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
 - [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
 - σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
-- [The `sbl` run type — StableBoundaryLayer](era6/stable_boundary_layer.md) — `Aeolus.StableBoundaryLayer`, GABLS1-4, CASES-99 and the stratified, relaminarising and collapsing channels from TOML (CFG-d, #359; in `src/` since EX-b, #439; [theory](../theory/stable_boundary_layer.md))
+- The stable-boundary-layer cases (GABLS1-4, CASES-99) are configurations of the model since ONE-g (#456): `examples/sbl/configs/`, run with the components `LargeScale`, `SurfaceLayer`, the retargeted `Sponge` and `Towers` ([Components](../components.md); [theory](../theory/stable_boundary_layer.md)). The `sbl` run type (`Aeolus.StableBoundaryLayer`) and its channel cases are gone.
 
 ## Shared contract — SGS closures (P54-a)
 

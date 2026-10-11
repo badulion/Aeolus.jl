@@ -10,7 +10,7 @@
 What builds and runs a [`RunConfig`](@ref) into a run folder: the model
 (`Aeolus.SimulationDriver.SimulationDriverType`, registered as
 [`MODEL`](@ref)), or a **legacy case** — an assembly not yet ported to
-components (the urban, SBL, validation and example run types), selected by
+components (the urban, the validation and the example run types), selected by
 `[run] legacy = "<name>"` and removed by the later steps of the
 single-model epic. A type `D` implements
 
@@ -60,6 +60,20 @@ pairs with `f(cfg) -> Vector{ConfigError}` (see [`check!`](@ref)). The
 text goes into the option reference, one bullet per line.
 """
 driver_checks(::AbstractRunDriver) = Any[]
+
+"""
+    ModelCheck(f)
+
+A cross-field check of the whole model rather than of one domain: as a
+[`driver_checks`](@ref) entry, `f(cfg)` runs once on the config with all
+its domains (the `[[domain]]` graph: parents, nesting, ONE-f #455),
+where the other checks run on each domain's view of it. Its problems
+name their keys in full (`domain[i].<section>.<key>` for a domain's).
+"""
+struct ModelCheck{F} <: Function
+    f::F
+end
+(c::ModelCheck)(cfg) = c.f(cfg)
 
 """
     driver_defaults(d::AbstractRunDriver)
@@ -123,15 +137,14 @@ directory. The file is included into a fresh module and must call
 `berlin` entry, is part of the package since EX-a #438: `Aeolus.UrbanCase`.)
 """
 const DRIVER_FILES = Dict{String,String}(
-    # CFG-d (#359): the filtered-DNS record (the SBL cases are the `sbl` run
-    # type in src since EX-b #439: Aeolus.StableBoundaryLayer)
-    "dns" => "examples/validation/dns_apriori_driver.jl",
-    # CFG-e (#360): the validation drivers and the remaining example scripts
-    "channel" => "examples/validation/channel_driver.jl",
-    "cbc_decay" => "examples/validation/cbc_driver.jl",
-    "patchy_surface" => "examples/validation/patchy_surface_driver.jl",
-    "column" => "examples/validation/column_driver.jl",
+    # CFG-e (#360): the decaying-turbulence DNS of P56-c, which the `sgs_decay`
+    # run type builds on. (ONE-g #456: the SBL cases are configurations of the
+    # model; the channel, single-column, filtered-DNS record, CBC and
+    # patchy-surface validation run types are gone with their cases.)
     "dns_decay" => "examples/validation/dns_driver.jl",
+    # the Kessler box of the kernel demo (cloud_spinup.toml); the column
+    # validation cases it also ran are gone (ONE-g #456)
+    "column" => "examples/kernels/column_driver.jl",
 )
 
 const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))

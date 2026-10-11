@@ -18,7 +18,7 @@ import Aeolus.InputDrivers as AeolusInput
 Every schema the option reference documents: the model's (`"model"`) and
 every legacy case's, the built-in ones (in src) and those of `DRIVER_FILES`.
 """
-reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "sbl", "urban_parent",
+reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "urban_parent",
                                          Aeolus.RunDrivers.DRIVER_NAMES,
                                          collect(keys(AeolusConfig.DRIVER_FILES)))))
 

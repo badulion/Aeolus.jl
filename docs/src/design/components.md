@@ -9,7 +9,8 @@ target.
 ## What a step does
 
 `step!(model, dt)` steps every domain of the [`Model`](@ref
-Aeolus.Components.Model) (one today; nesting by domains is ONE-f, #455). For one
+Aeolus.Components.Model): one alone, or several as a nest (ONE-f, #455;
+see "Nesting by domains" below). For one
 [`Domain`](@ref Aeolus.Components.Domain):
 
 1. the domain's drivers advance to the step (the open faces' boundary
@@ -76,10 +77,18 @@ on a retry.
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
 | [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability` | called by the core in stage 6 | the closure of `Components.build_closure` |
-| [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` | `:tendencies` | `Operators.add_coriolis!` |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability`, `stress` | called by the core in stage 6 | the closure of `Components.build_closure` |
+| [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` or `latitude` | `:tendencies` | `Operators.add_coriolis!` |
 | [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
-| [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start` | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
+| [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start`, `target` (`rest`, `geostrophic`, `mean`) | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
+
+The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
+
+| component | slot | section | stage | delegates to |
+| :-- | :-- | :-- | :-- | :-- |
+| [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables) | `:clock` (the step start), `:body_force` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``) |
+| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface_layer]` `enabled`, `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
+| [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
 Every domain has an `:advection` provider; `[sgs] closure = "none"`
 enables no `:sgs` component. Each component has its own per-domain
@@ -258,10 +267,11 @@ means.
 One writer, `Aeolus.Output.OutputWriter`, writes the selection into one
 NetCDF-4 file. Records (3-D, maps, profiles) go out every `cadence`, and
 the time series every `series_cadence`. Each value is either the value at
-the record or its mean over the record's interval (`averaging`). The
-urban case and the SBL run type write through the same writer: the urban
-couplings' `output_fields` are catalogues of `OutputVariable`s, and the
-SBL time series are the time-series stream of `output/output.nc`.
+the record or its mean over the record's interval (`averaging`). A
+spectrum (dimension `k`, the shell wavenumbers) is a record too: the
+core's `energy_spectrum` (ONE-g #456, with `kinetic_energy`, `dissipation`
+and `dissipation_sgs`). The urban case writes through the same writer:
+the urban couplings' `output_fields` are catalogues of `OutputVariable`s.
 
 ## Checks
 
@@ -282,6 +292,53 @@ check is evaluated and `output/results.toml` is written. A failed
 required check ends the run with `Checks.ChecksFailed`, and `aeolus run`
 exits with 3. A run that stops with an error records the failed sanity
 check before the error propagates. See [Checks](../api/checks.md).
+
+## Nesting by domains (ONE-f, #455)
+
+A model of several domains is built by
+[`nested_model`](@ref Aeolus.Components.nested_model) from one
+[`NestLink`](@ref Aeolus.Components.NestLink) per child; the
+configuration builds it from its `[[domain]]` blocks
+([Run configuration](run_configuration.md)). The coupling is
+`Nesting.NestHierarchy` (#328), unchanged: its operators, boundary data,
+subcycling, flux registers and two-way feedback. What is new is that each
+domain's advance is its own pipeline:
+[`PipelineCore`](@ref Aeolus.Components.PipelineCore) runs a domain's
+drivers, its stages before the core, the core step with stages 6–8 (the
+nest's register hook chained before the domain's body-force hook, a nest
+sponge after its post-predictor hook) and its stages after the core. A
+child therefore runs every stage once per substep, and its in-core stages
+once per stage of its scheme. The design's `:nest_sync` (1) and
+`:nest_feedback` (12) are the two halves of the coupling the model runs
+around the domains' pipelines: the boundary data prolongated at both ends
+of the parent's step, then the feedback after the children reach its end.
+
+Measured (`test/model_nesting.jl`; 16 × 16 × 8 parent at Δ = 100 m, its
+16 × 16 × 8 child at Δ = 50 m, RK3, dt = 4 s):
+
+- one-way, the parent's state after 6 steps is the parent run alone, bit
+  for bit;
+- two-way, the composite θ of the nest is conserved to round-off: a
+  relative change of 2.0e-16 over 6 steps (the test bound is 1e-13), and
+  4.0e-16 over 3 steps of a three-level two-way nest; one-way, where
+  nothing is refluxed, it changes by 8.4e-7. The parent differs from the
+  parent alone under the child;
+- a child's pipeline stages run twice per parent step (2 substeps), its
+  in-core stage 3 × 2 times with RK3;
+- an interrupted nested run resumes from its checkpoint bit for bit, both
+  domains;
+- a one-way child that goes non-finite stops the run as a blow-up (the
+  guard inspects every domain, not only the root it steps), and the crash
+  checkpoint holds the whole nest at its last good state.
+
+A root step of this nest costs 1.27 ms one-way and 1.71 ms two-way,
+against 0.19 ms for the parent alone (the child has as many cells as the
+parent and takes two substeps). The single-domain step is unchanged: a
+64³ RK3 step of the bare config takes 33.6 ms on the branch and 33.4 ms
+on its base (minimum of 15, two alternating runs each).
+
+The nested model takes fixed steps and does not measure budgets; the
+other limits are on [Run configuration](run_configuration.md).
 
 ## Where the code still differs from the target
 
@@ -366,32 +423,29 @@ check before the error propagates. See [Checks](../api/checks.md).
   `SGS` and `Sponge` components) and steps it with its `:timestepper`
   provider (its adaptive step covers the step it picked in pieces, and
   the nest shortens it to land on the parent's window), and writes its
-  output, results and diagnostics itself. The nest parent goes with
-  ONE-f (#455).
+  output, results and diagnostics itself. Its nest parent (`ParentCase`,
+  `ParentConfig`, the `urban_parent` run type) becomes the root
+  `[[domain]]` of the Berlin config once the parent's physics (the tiled
+  surface, the column radiation, TKE, the large-scale forcing) is a set of
+  components: nesting by domains (ONE-f, #455) is built.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the
-  steps — because the urban site, the SBL run type, the nesting drivers and
-  many module tests still assemble the core by hand. A `Model` passes
-  these keywords; the run types that still use them directly move to
-  components in the later steps of the epic (urban couplings ONE-e #454,
-  nesting ONE-f #455, SBL ONE-g #456), after which the keywords go.
-* The urban site and the SBL run type still select their SGS closures
-  themselves; their `[sgs]`/`:sgs` paths become the `:sgs` component when
-  they are ported.
-* The urban couplings' `smoke_check`s, the urban site's own
-  `results.toml` closure verdict (`run_results`) and the SBL reference
-  comparisons (the plotting scripts of `examples/sbl/`) are not checks
-  yet: they move to `checks(c)` and `[checks.reference]` when ONE-e (#454)
-  and ONE-g (#456) port those run types to components.
-* The urban couplings and the SBL run type report into the one
-  `Budgets` and write through the one writer; the urban case's budgets
-  are its domain's (ONE-e part 2), the SBL run type keeps its own step
-  hooks (the substage evaluation of the momentum terms) until ONE-g (#456)
-  ports it to components. The particle tracks of the model's couplings
-  (`particles.csv`) are Lagrangian rows, not a gridded catalogue variable,
-  and stay a file of their own.
-* The urban site and the SBL run type still refuse the anelastic core's
-  checkpoints and adaptive step in their own config checks; they become
-  components in ONE-e (#454) and ONE-g (#456), which deliver every
-  component they port on both cores.
+  steps — because the urban site, the nesting drivers and many module
+  tests still assemble the core by hand. A `Model` passes these keywords;
+  the urban site moves to components in the rest of ONE-e (#454), after
+  which the keywords go. (The SBL run type is gone: its cases are
+  configurations of the model, ONE-g #456.)
+* The urban site still selects its SGS closures itself; its `:sgs` path
+  becomes the `:sgs` component when it is ported.
+* The urban site's own `results.toml` closure verdict (`run_results`) is
+  written beside the checks it publishes. (The SBL reference comparisons
+  are `[checks.reference]` of the SBL configurations since ONE-g, #456.)
+* The urban couplings report into the one `Budgets` and write through the
+  one writer; the urban case's budgets are its domain's (ONE-e part 2).
+  The particle tracks of the model's couplings (`particles.csv`) are
+  Lagrangian rows, not a gridded catalogue variable, and stay a file of
+  their own; so are the CASES-99 tower bins, of which the model writes the
+  fitted threshold profile only (`tower_threshold`).
+* The urban site still refuses the anelastic core's checkpoints and
+  adaptive step in its own config checks.

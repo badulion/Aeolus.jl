@@ -22,7 +22,7 @@
 #      run.toml; the state fields, diagnostics.csv, results.toml and
 #      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
 # A configs/*.toml without a [test] table fails the suite with a message
-# naming the file. Resume: for the model and the sbl and urban legacy cases, a run
+# naming the file. Resume: for the model (the SBL components among them) and the urban legacy case, a run
 # interrupted after its middle checkpoint and resumed the way
 # `aeolus run <folder> --resume` does is bitwise the uninterrupted run
 # (the Berlin case's since #269).
@@ -92,7 +92,8 @@ const RT_FILES = shipped_config_files()
 @testset "round-trip coverage: the docs build writes a reference page per schema and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["model", "urban_parent", "sbl", "dns", "column"], reference_drivers())
+    @test issubset(["model", "urban_parent", "cbl", "dns_decay", "column"], reference_drivers())
+    @test isempty(intersect(["sbl", "dns", "channel", "cbc_decay", "patchy_surface"], reference_drivers()))   # gone (ONE-g #456)
     @test !("urban" in reference_drivers())             # the urban site is the model's (ONE-e, #454)
     # every option page is the schema's generated Markdown, verbatim after its header
     for d in reference_drivers()
@@ -187,16 +188,21 @@ end
     @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.stepper.step == 20 && Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
-    # sbl legacy case: cases99 (GABLS2 with towers and series) at 16 × 16 × 32, 20 steps; the
-    # towers and the series are restored from the checkpoint too
+    # the SBL components (ONE-g #456): cases99 (GABLS2 with the towers, the surface layer, the
+    # large-scale forcing and the retargeted sponge) at 16 × 16 × 32, 20 steps; the surface
+    # layer's state, the towers' segments and bins and the output.nc series are restored too;
+    # averaging = "mean": the open averaging intervals straddle the checkpoint (step 10, t = 57700 s;
+    # records at 57720 s), so the means are restored from it too
     r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");
                      overrides = ["grid.size=[16,16,32]", "towers.hours=[0.0,24.0]", "towers.window=30.0",
-                                  "averaging.series_interval=60.0"], nsteps_overrides = sbl_nsteps,
-                     outputs = ["towers.csv", "output.nc", "statistics.toml"])
+                                  "output.series_cadence=60.0", "output.cadence=120.0",
+                                  "checks.reference={}", "checks.reference_file=\"none\""],
+                     outputs = ["output.nc"])
     @test r.fields_equal && isempty(r.fields_differing)
     @test r.outputs_equal
     @test r.statuses == ["interrupted", "completed"]
-    @test r.runs[2].obj.case.nsteps == 20 && r.runs[2].obj.case.sim.t === r.runs[1].obj.case.sim.t
+    @test r.runs[2].obj.stepper.step == 20 &&
+          Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
     # the urban site (#269, ONE-e #454): berlin_smoke.toml, nested, every component on, 24 s (15 adaptive
     # steps), a checkpoint every 6 steps, interrupted after step 9 and resumed from step 6;
     # the state of the child, every tracer, Ts and the nest parent bitwise, and the NetCDF

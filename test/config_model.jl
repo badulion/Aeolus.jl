@@ -15,7 +15,7 @@
 #   * validation: per-domain problems and cross-field checks keyed by
 #     domain[i], duplicate ids, unknown block keys, [checks], slots,
 #     requirements and incompatibilities named by their sections;
-#   * the model runs one domain until nesting by domains (ONE-f, #455).
+#   * several domains are a nest (ONE-f, #455): the build couples them.
 
 using Test
 using Aeolus
@@ -85,7 +85,8 @@ end
         @test [(o.key, o.default) for o in s.options] == [(o.key, o.default) for o in CMC.schema(C).options]
         @test is_domain_section(sch, s.name)
     end
-    @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux"]
+    @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux",
+                                                   "large_scale_forcing", "surface_layer", "towers"]   # ONE-g #456
     @test Set(sch.domain_sections) == Set(DOMAIN_SECTIONS)
     # run-level sections: the common ones and time, output, checks (no preprocess: AeolusPrep.jl, ONE-h)
     @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==
@@ -99,6 +100,8 @@ end
 
 const CM_TWO = """
     schema_version = 2
+    [time]
+    dt = 1.0
     [sgs]
     closure = "vreman"
     [grid]
@@ -107,6 +110,9 @@ const CM_TWO = """
     id = "outer"
     [[domain]]
     id = "inner"
+    parent = "outer"
+    origin = [1200.0, 1200.0]
+    refinement = [8, 8, 8]
     [domain.sgs]
     closure = "amd"
     [domain.grid]
@@ -136,7 +142,8 @@ const CM_TWO = """
         s == "domain" && continue
         @test count("\n[domain.$s]\n", t) == 2
     end
-    @test occursin("\n[[domain]]\nid = \"inner\"\nstatic_driver = \"none\"\n", replace(t, "dynamic_driver = \"none\"\n" => ""))
+    @test occursin("\n[[domain]]\nfeedback = \"two_way\"\nid = \"inner\"\norigin = [1200.0, 1200.0]\nparent = \"outer\"\n" *
+                   "refinement = [8, 8, 8]\nstatic_driver = \"none\"\n", replace(t, "dynamic_driver = \"none\"\n" => ""))
     @test !occursin("\n[sgs]\n", t) && !occursin("\n[grid]\n", t)            # only per domain
     c3 = load_run_config(IOBuffer(t))
     @test c3 == cfg && config_text(c3) == t
@@ -144,9 +151,10 @@ const CM_TWO = """
     # a run record keeps it: replayed from run.toml, the same config
     rf = start_run(cfg; root = mktempdir(), repo = mktempdir(), console = false); finish_run!(rf)
     @test load_run_config(rf.path) == cfg
-    # the model runs one domain until nesting by domains (ONE-f, #455)
-    e = cm_error(() -> Config.build(SimulationDriverType(), cfg))
-    @test only(e.problems).key == "domain" && occursin("ONE-f", only(e.problems).message)
+    # several domains are a nest (ONE-f, #455; test/model_nesting.jl has the rest)
+    m = Config.build(SimulationDriverType(), cfg).model
+    @test [d.id for d in m.domains] == ["outer", "inner"] && m.nest isa CMC.ModelNest
+    @test only(m.nest.links).feedback === :two_way                           # the self-nesting default
 end
 
 @testset "[[domain]]: one block is the top-level form" begin

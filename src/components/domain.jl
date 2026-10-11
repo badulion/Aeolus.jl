@@ -16,7 +16,10 @@ One domain of a [`Model`](@ref):
     adaptive one (`step_adaptive!(domain)`), on either core;
   * `drivers` — its input drivers: `boundary`, the
     `FileBoundaryFeed` of open lateral faces, advanced at the start of
-    every step;
+    every step, and `dynamic`, the `DynamicInputs` of the domain's
+    dynamic driver (its large-scale forcing tables and surface series,
+    which components read when they are built: [`LargeScale`](@ref),
+    [`SurfaceLayer`](@ref));
   * `components` — its components, validated ([`validate_components`](@ref))
     and stored as a concretely typed tuple in the fixed order of
     [`order_components`](@ref), so dispatch on them is static;
@@ -80,19 +83,35 @@ The SGS closure the core runs: that of the domain's `:sgs` component, or
 sgs_closure(d::Domain) = (c = slot_component(d, :sgs); c === nothing ? nothing : c.closure)
 
 """
-    Model(domain)
+    sgs_stress(d::Domain) -> Symbol
 
-The model: its domains (today one; several, with their nest couplings,
-arrive with ONE-f, #455). `step!(model, dt)` advances every domain by `dt`
-through the stage pipeline.
+The form of the SGS momentum divergence the core runs: the `:sgs`
+component's `stress` (`:laplacian` or `:symmetric`), `:laplacian` without
+one.
 """
-struct Model{D<:Tuple}
+sgs_stress(d::Domain) = (c = slot_component(d, :sgs); c === nothing ? :laplacian : c.stress)
+
+"""
+    Model(domain)
+    Model(domains::Tuple, nest)
+
+The model: its domains and the nest coupling between them. One domain
+needs no coupling (`nest = nothing`); several are a nest tree (ONE-f,
+#455), built from the `[[domain]]` graph by [`nested_model`](@ref), whose
+`nest` is a [`ModelNest`](@ref). `step!(model, dt)` advances every domain
+by `dt` through the stage pipeline: one domain alone, a nest tree with
+the children subcycling inside each step of their parent
+([`ModelNest`](@ref)).
+"""
+struct Model{D<:Tuple, N}
     domains::D
-    function Model(domains::Tuple)
-        length(domains) == 1 ||
-            throw(ArgumentError("Model: one domain (several domains, with their nest couplings, arrive with ONE-f, #455)"))
+    nest::N
+    function Model(domains::Tuple, nest = nothing)
+        isempty(domains) && throw(ArgumentError("Model: no domain"))
         all(d -> d isa Domain, domains) || throw(ArgumentError("Model: the domains are Domains"))
-        return new{typeof(domains)}(domains)
+        length(domains) == 1 || nest !== nothing ||
+            throw(ArgumentError("Model: $(length(domains)) domains need their nest coupling (nested_model)"))
+        return new{typeof(domains), typeof(nest)}(domains, nest)
     end
 end
 Model(d::Domain) = Model((d,))
@@ -130,14 +149,15 @@ The keywords of the core step that run stages 6–8: `body_force!` and
 `post_predictor!` (`nothing` where no component attaches, which keeps the
 core's hook-free fast path; with the budgets on the body-force hook is
 always there, it counts the substages), `sgs` (the `:sgs` component's
-closure) and, for the Boussinesq Euler step, `momentum_advection` (the
+closure) and `sgs_stress` (its momentum divergence, [`sgs_stress`](@ref)).
+The Boussinesq Euler step also takes `momentum_advection` (the
 `:advection` component's operator).
 """
 function core_hooks(d::Domain)
     cs = d.components
     bf = d.budgets !== nothing || _any_attached(cs, (:tendencies, :body_force)) ? _ForceHook(d) : nothing
     pp = _any_attached(cs, (:post_predictor,)) ? _PostHook(d) : nothing
-    return (; body_force! = bf, post_predictor! = pp, sgs = sgs_closure(d))
+    return (; body_force! = bf, post_predictor! = pp, sgs = sgs_closure(d), sgs_stress = sgs_stress(d))
 end
 
 # ---------------------------------------------------------------------------
@@ -159,9 +179,30 @@ function _run_stages!(d::Domain, names, dt, t0, t1)
     return d
 end
 
-# the core step of stages 6-10 with the pipeline's hooks
-function _core_step!(sim::BoussinesqSimulation, d::Domain, dt)
+# Two hooks of the core called in turn (a nest's hook and the domain's).
+struct _Chained{A,B} <: Function
+    a::A
+    b::B
+end
+@inline (c::_Chained)(sim, Δt) = (c.a(sim, Δt); c.b(sim, Δt); nothing)
+_chain(::Nothing, ::Nothing) = nothing
+_chain(a, ::Nothing) = a
+_chain(::Nothing, b) = b
+_chain(a, b) = _Chained(a, b)
+
+# The pipeline's hooks with a nest's (ModelNest): the nest's body-force
+# hook (the flux registers) before the domain's, its post-predictor hook
+# (the nest sponge) after the domain's, as `Nesting.DomainAdvance` chains
+# them. Without them, exactly `core_hooks(d)`.
+function _hooks(d::Domain, bf, pp)
     h = core_hooks(d)
+    bf === nothing && pp === nothing && return h
+    return (; body_force! = _chain(bf, h.body_force!), post_predictor! = _chain(h.post_predictor!, pp), sgs = h.sgs)
+end
+
+# the core step of stages 6-10 with the pipeline's hooks (and a nest's)
+function _core_step!(sim::BoussinesqSimulation, d::Domain, dt, bf = nothing, pp = nothing)
+    h = _hooks(d, bf, pp)
     if d.scheme === :rk3
         step_rk3!(sim, dt; h...)
     else
@@ -169,8 +210,8 @@ function _core_step!(sim::BoussinesqSimulation, d::Domain, dt)
     end
     return sim
 end
-function _core_step!(sim::MassWeightedSimulation, d::Domain, dt)
-    d.scheme === :rk3 ? step_rk3!(sim, dt; core_hooks(d)...) : step!(sim, dt; core_hooks(d)...)
+function _core_step!(sim::MassWeightedSimulation, d::Domain, dt, bf = nothing, pp = nothing)
+    d.scheme === :rk3 ? step_rk3!(sim, dt; _hooks(d, bf, pp)...) : step!(sim, dt; _hooks(d, bf, pp)...)
     return sim
 end
 
@@ -207,7 +248,7 @@ function _post_core!(d::Domain, dt, t0)
     end
     return d
 end
-step!(m::Model, dt::Real) = (foreach(d -> step!(d, dt), m.domains); m)
+step!(m::Model{<:Tuple,Nothing}, dt::Real) = (foreach(d -> step!(d, dt), m.domains); m)
 
 """
     component_limits(d::Domain) -> Tuple
@@ -234,22 +275,24 @@ function step_adaptive!(d::Domain; dt_prev = nothing, t_end = nothing)
     c === nothing && throw(ArgumentError("step_adaptive!: the domain $(d.id) takes a fixed step (cfl = nothing)"))
     sync_drivers!(d)
     sim = d.state
-    closure = sgs_closure(d)
-    dt = adaptive_dt(sim, c; dt_prev = dt_prev, sgs = closure, limits = component_limits(d))
+    closure = sgs_closure(d); stress = sgs_stress(d)
+    dt = adaptive_dt(sim, c; dt_prev = dt_prev, sgs = closure, sgs_stress = stress, limits = component_limits(d))
     t_end === nothing || (dt = min(dt, t_end - sim.t))
     t0 = clock(d)
     _budgets_begin!(d.budgets, d)
     _run_stages!(d, PRE_CORE, dt, t0, t0 + dt)
     h = core_hooks(d)
-    stepper = d.scheme === :rk3 ? ((s, Δ; kw...) -> step_rk3!(s, Δ; kw..., sgs = closure)) : nothing
+    stepper = d.scheme === :rk3 ? ((s, Δ; kw...) -> step_rk3!(s, Δ; kw..., sgs = closure, sgs_stress = stress)) : nothing
     _dynamics_open!(d.budgets, d)
-    res = step_adaptive!(sim, c; dt = dt, sgs = closure, stepper = stepper,
+    res = step_adaptive!(sim, c; dt = dt, sgs = closure, sgs_stress = stress, stepper = stepper,
                                          body_force! = h.body_force!, post_predictor! = h.post_predictor!)
     _dynamics_close!(d.budgets, d)
     _post_core!(d, res[2], t0)
     return res
 end
-step_adaptive!(m::Model; kw...) = step_adaptive!(only(m.domains); kw...)
+step_adaptive!(m::Model{<:Tuple,Nothing}; kw...) = step_adaptive!(only(m.domains); kw...)
+step_adaptive!(m::Model; kw...) =
+    throw(ArgumentError("step_adaptive!: a nested model takes fixed steps (step!(model, dt)); its children subcycle"))
 
 # ---------------------------------------------------------------------------
 # checkpoints

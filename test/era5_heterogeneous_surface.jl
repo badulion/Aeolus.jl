@@ -3,9 +3,10 @@
 # A resolved LES of a convective boundary layer over strips of hot and
 # cool ground (prescribed skin temperature, Monin–Obukhov fluxes per
 # column through the SurfaceExchange contract) against the SurfaceTiles
-# aggregation of the same two surfaces. The driver is
-# examples/validation/patchy_surface/driver.jl; the full-resolution runs
-# and the λ/z_i sweep are in examples/validation/patchy_surface_les.jl.
+# aggregation of the same two surfaces. The harness is
+# test/support/patchy_surface.jl (moved from examples/validation/ by
+# ONE-g, #456: the patchy-surface example, its full-resolution runs and the
+# λ/z_i sweep, waits for a heterogeneous-surface component of the model).
 #
 # What is checked against what:
 #   * discrete conservation of the coupling (column heat content against
@@ -30,7 +31,7 @@
 using Test, Printf
 using Aeolus
 
-include(joinpath(@__DIR__, "..", "examples", "validation", "patchy_surface", "driver.jl"))
+include(joinpath(@__DIR__, "support", "patchy_surface.jl"))
 
 # Coarse version of the example's setup: 100 m cells, 3.2 × 1.6 × 1.6 km.
 const HS_GRID = (Nx = 32, Ny = 16, Nz = 16, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0)

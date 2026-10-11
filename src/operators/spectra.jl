@@ -51,8 +51,7 @@ function isotropic_energy_spectrum(u::Field, v::Field, w::Field; Δk::Real = _sh
     g isa RegularGrid || throw(ArgumentError("isotropic_energy_spectrum: RegularGrid only"))
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     kx = _rfft_k(Nx, g.Lx); ky = _fft_k(Ny, g.Ly); kz = _fft_k(Nz, g.Lz)
-    kmax = sqrt(maximum(abs2, kx) + maximum(abs2, ky) + maximum(abs2, kz))
-    nmax = round(Int, kmax / Δk)
+    nmax = length(spectrum_wavenumbers(g; Δk = Δk)) - 1
     shell = zeros(Float64, nmax + 1)
     norm = 0.5 / (Nx * Ny * Nz)^2
     for f in (u, v, w)
@@ -65,8 +64,20 @@ function isotropic_energy_spectrum(u::Field, v::Field, w::Field; Δk::Real = _sh
             shell[n + 1] += wgt * norm * abs2(F[a,b,c])
         end
     end
-    k = collect((0:nmax) .* float(Δk))
-    return k, shell ./ Δk
+    return spectrum_wavenumbers(g; Δk = Δk), shell ./ Δk
+end
+
+"""
+    spectrum_wavenumbers(g::RegularGrid; Δk = 2π / max(Lx, Ly, Lz)) -> Vector
+
+The shell wavenumbers ``k_n = nΔk`` (rad m⁻¹), ``n = 0`` to the shell of
+the corner mode, at which [`isotropic_energy_spectrum`](@ref) of a field
+on `g` is given.
+"""
+function spectrum_wavenumbers(g::RegularGrid; Δk::Real = _shell_width(g))
+    kx = _rfft_k(g.Nx, g.Lx); ky = _fft_k(g.Ny, g.Ly); kz = _fft_k(g.Nz, g.Lz)
+    kmax = sqrt(maximum(abs2, kx) + maximum(abs2, ky) + maximum(abs2, kz))
+    return collect((0:round(Int, kmax / Δk)) .* float(Δk))
 end
 
 """
@@ -216,4 +227,154 @@ function rescale_to_spectrum!(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
         interior_view(f) .= real.(ifft(F))
     end
     return u, v, w
+end
+
+# =========================================================================
+# A grid-independent isotropic field: the named analytic initial field
+# `isotropic_turbulence` of the model (ONE-g, #456).
+# =========================================================================
+
+"""
+    PassotPouquetSpectrum(u_rms, k_peak)
+
+The energy spectrum ``E(k) = 16\\sqrt{2/π}\\, u_{rms}^2\\, k^4 / k_p^5\\,
+\\exp(-2 (k/k_p)^2)`` (Passot & Pouquet 1987; the ``k^4`` low-wavenumber
+range of Batchelor turbulence), normalised so that ``\\int_0^∞ E\\,dk =
+\\tfrac32 u_{rms}^2`` (`u_rms` per component, m s⁻¹; `k_peak` in rad m⁻¹,
+its maximum). A callable: `E(k)`.
+
+Reference: Passot, T. & Pouquet, A. (1987), *J. Fluid Mech.* 181, 441–466.
+"""
+struct PassotPouquetSpectrum
+    u_rms::Float64
+    k_peak::Float64
+end
+(E::PassotPouquetSpectrum)(k::Real) =
+    16 * sqrt(2 / π) * E.u_rms^2 * k^4 / E.k_peak^5 * exp(-2 * (k / E.k_peak)^2)
+
+# SplitMix64 (Steele, Lea & Flood 2014): the counter-based hash behind the
+# per-mode random numbers, so a mode's draw depends on (seed, mode) only.
+@inline function _splitmix(x::UInt64)
+    x += 0x9e3779b97f4a7c15
+    x = (x ⊻ (x >> 30)) * 0xbf58476d1ce4e5b9
+    x = (x ⊻ (x >> 27)) * 0x94d049bb133111eb
+    return x ⊻ (x >> 31)
+end
+@inline _mode_key(seed, m1, m2, m3) =
+    _splitmix(_splitmix(_splitmix(_splitmix(UInt64(seed)) ⊻ (m1 % UInt64)) ⊻ (m2 % UInt64)) ⊻ (m3 % UInt64))
+# a uniform number in (0, 1] from a hash
+@inline _unit(h::UInt64) = ((h >> 11) + 1) * 0x1.0p-53
+# three complex standard normals (E|r_j|² = 1) of mode key h (Box-Muller)
+@inline function _mode_normals(h::UInt64)
+    out = ntuple(3) do j
+        a = _splitmix(h + UInt64(2j - 1)); b = _splitmix(h + UInt64(2j))
+        ρ = sqrt(-2 * log(_unit(a))); φ = 2π * _unit(b)
+        complex(ρ * cos(φ), ρ * sin(φ)) / sqrt(2)
+    end
+    return out
+end
+
+"""
+    isotropic_turbulence_field!(u, v, w, E; seed = 1, kmax = Inf) -> (u, v, w)
+
+Fill the staggered velocity `u @ FaceX, v @ FaceY, w @ FaceZ` of a triply
+periodic `RegularGrid` with the isotropic random field of spectrum `E(k)`
+(rad m⁻¹ → m³ s⁻²) **defined in spectral space, independently of the
+grid**: the field is
+
+```math
+\\mathbf u(\\mathbf x) = \\sum_{\\mathbf m} \\hat{\\mathbf u}_{\\mathbf m}\\, e^{i\\mathbf k\\cdot\\mathbf x},
+\\qquad
+\\hat{\\mathbf u}_{\\mathbf m} = \\sqrt{\\frac{E(k)\\,δV_k}{4πk^2}}\\;
+\\mathsf P(\\mathbf k)\\,\\mathbf r_{\\mathbf m},
+```
+
+``\\mathbf k = 2π(m_1/L_x, m_2/L_y, m_3/L_z)``, ``δV_k = (2π)^3/(L_xL_yL_z)``,
+``\\mathsf P = \\mathsf I - \\mathbf k\\mathbf k^T/k^2`` the continuous
+solenoidal projection and ``\\mathbf r_{\\mathbf m}`` a complex standard
+normal vector that depends only on `seed` and the integer mode ``\\mathbf
+m`` (a counter-based hash, `_mode_key`; ``\\hat{\\mathbf u}_{-\\mathbf m} =
+\\hat{\\mathbf u}_{\\mathbf m}^*``), so the expected shell energy is
+``E(k)\\,Δk``. The grid evaluates the modes it carries, ``|m_i| < N_i/2``
+(and ``|\\mathbf k| ≤`` `kmax`), each component at its own staggered
+positions (the phase ``e^{i\\mathbf k\\cdot\\mathbf x_1}`` of its first
+node). Two grids on the same box therefore hold the same Fourier
+coefficients where both have the mode: the field of a fine grid,
+truncated to the modes of a coarse one (a sharp spectral filter), *is* the
+coarse grid's field, to round-off. That is what makes an LES and a DNS
+start from the same large scales. The field is divergence-free in the
+continuous sense (its discrete staggered divergence is ``O((kΔ)^2)``,
+removed by the first projection of a run). Halos are not filled.
+
+References: Rogallo, R. S. (1981), NASA TM 81315 (the random-phase
+construction); Steele, Lea & Flood (2014), OOPSLA, 453–472 (SplitMix64).
+"""
+function isotropic_turbulence_field!(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, E;
+                                     seed::Integer = 1, kmax::Real = Inf)
+    g = mesh(u)
+    g isa RegularGrid || throw(ArgumentError("isotropic_turbulence_field!: RegularGrid only"))
+    Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
+    mx = fftfreq(Nx, Nx); my = fftfreq(Ny, Ny); mz = fftfreq(Nz, Nz)
+    ck = (2π / g.Lx, 2π / g.Ly, 2π / g.Lz)
+    δV = ck[1] * ck[2] * ck[3]
+    keep(m, N) = 2 * abs(m) < N
+    for (j, f, loc) in ((1, u, FaceX()), (2, v, FaceY()), (3, w, FaceZ()))
+        x1 = (first(xnodes(g, loc)), first(ynodes(g, loc)), first(znodes(g, loc)))
+        A = zeros(ComplexF64, Nx, Ny, Nz)
+        @inbounds for c in 1:Nz, b in 1:Ny, a in 1:Nx
+            m = (Int(mx[a]), Int(my[b]), Int(mz[c]))
+            (keep(m[1], Nx) && keep(m[2], Ny) && keep(m[3], Nz)) || continue
+            m == (0, 0, 0) && continue
+            kv = (ck[1] * m[1], ck[2] * m[2], ck[3] * m[3])
+            k2 = kv[1]^2 + kv[2]^2 + kv[3]^2
+            k = sqrt(k2)
+            k <= kmax || continue
+            # the canonical half of the modes carries the draw; the other half its conjugate
+            canon = m[3] > 0 || (m[3] == 0 && (m[2] > 0 || (m[2] == 0 && m[1] > 0)))
+            mc = canon ? m : (-m[1], -m[2], -m[3])
+            r = _mode_normals(_mode_key(seed, mc...))
+            kc = canon ? kv : (-kv[1], -kv[2], -kv[3])
+            kr = (kc[1] * r[1] + kc[2] * r[2] + kc[3] * r[3]) / k2
+            pj = r[j] - kc[j] * kr
+            amp = sqrt(max(float(E(k)), 0.0) * δV / (4π * k2))
+            uh = amp * (canon ? pj : conj(pj))
+            A[a, b, c] = uh * cis(kv[1] * x1[1] + kv[2] * x1[2] + kv[3] * x1[3]) * (Nx * Ny * Nz)
+        end
+        interior_view(f) .= real.(ifft(A))
+    end
+    return u, v, w
+end
+
+"""
+    dissipation_rate(u, v, w, ν, νt) -> (resolved, sgs)
+
+The domain-mean dissipation rate of the resolved kinetic energy (m² s⁻³)
+at the cell centres of a `RegularGrid`, with the strain-rate stencil of
+the SGS closures (`_strain_at`, ``|S| = (2S_{ij}S_{ij})^{1/2}``):
+
+* `resolved` — the molecular ``2ν⟨S_{ij}S_{ij}⟩ = ν⟨|S|^2⟩`` (for a
+  periodic incompressible flow ``ν⟨∂_ju_i∂_ju_i⟩``);
+* `sgs` — the eddy-viscosity transfer to the subgrid scales
+  ``⟨ν_t|S|^2⟩`` with the eddy viscosity `νt` (a cell-centred field: the
+  closure's coefficient of the last evaluation; `nothing` for none).
+
+Their sum is the dissipation of an LES, comparable with the ``ν⟨|S|^2⟩``
+of a DNS. The halos of `u`, `v`, `w` must be filled.
+
+Reference: Pope, S. B. (2000), *Turbulent Flows*, §§6.1, 13.4.
+"""
+function dissipation_rate(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, ν::Real, νt)
+    g = mesh(u)
+    g isa RegularGrid || throw(ArgumentError("dissipation_rate: RegularGrid only"))
+    idx, idy, idz = 1 / g.dx, 1 / g.dy, 1 / g.dz
+    ud, vd, wd = u.data, v.data, w.data
+    res = 0.0; sgs = 0.0
+    @inbounds for k in 1:g.Nz, j in 1:g.Ny, i in 1:g.Nx
+        I, J, K = g.Hx + i, g.Hy + j, g.Hz + k
+        S = _strain_at(ud, vd, wd, I, J, K, idx, idy, idz)[7]
+        res += S^2
+        νt === nothing || (sgs += νt.data[I, J, K] * S^2)
+    end
+    n = g.Nx * g.Ny * g.Nz
+    return (resolved = ν * res / n, sgs = sgs / n)
 end

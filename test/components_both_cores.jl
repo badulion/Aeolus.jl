@@ -14,10 +14,15 @@
 #   * checkpoints on both cores and every scheme: a restart (in-process,
 #     through the components, and through the `simulation` run type's
 #     resume) is bitwise the uninterrupted run; another base state is refused;
-#   * the component contracts on both cores and both schemes.
+#   * the component contracts on both cores and both schemes;
+#   * the boundary-layer components of the SBL cases (ONE-g, #456): the
+#     geostrophic balance and the inertial oscillation, the surface layer's
+#     heat flux (closing Σ W θ) and drag, the retargeted sponges, the towers,
+#     and their checkpoints, on both cores.
 
 using Test
 using Printf
+using Statistics: mean
 using Random: Xoshiro
 using Aeolus
 using Aeolus.Components
@@ -353,5 +358,127 @@ end
         a = state(sim)
         step!(dd, 2.0); step!(dd, 2.0)
         @test (core, sch, first(comp), check(a, state(sim), sim)) == (core, sch, first(comp), true)
+    end
+end
+
+# ---------------------------------------------------------------------------
+# the boundary-layer components of the SBL cases (ONE-g, #456) on both cores
+# ---------------------------------------------------------------------------
+
+const BC_LSF = (u_g = 8.0, v_g = -2.0, advective_tendencies = false, subsidence = false, nudging = false)
+bc_sl_opts(T_s) = (enabled = true, z0m = 0.1, z0h = nothing, rho_cp = 1206.0,
+                   temperature = Dict{String,Any}("kind" => "cooling_rate", "initial" => T_s, "rate_per_hour" => 1.0),
+                   stability = Dict{String,Any}("family" => "businger_dyer_log_linear", "beta_m" => 4.8, "beta_h" => 7.8))
+"A domain of `core` with the given component specs (`C => opts`) and the centred advection."
+bc_with(sim, specs...; scheme = :euler, cfl = nothing) =
+    (d0 = Domain(sim; scheme = scheme, cfl = cfl, validate = false);
+     Domain(d0; components = (CentredAdvection(), BCC.build_components(specs, d0)...)))
+"The θ of a core set to 300 K (the Boussinesq core starts at 0)."
+bc_warm!(sim) = (sim isa BoussinesqSimulation && set!(sim.θ, (x, y, z) -> 300.0); sim)
+
+@testset "the SBL components on both cores ($core, $sch)" for core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
+    H = BC_MESH.Hz; dx, dy, dz = BC_MESH.dx, BC_MESH.dy, BC_MESH.dz
+    # geostrophic balance: (u, v) = (U_g, V_g) is steady under the
+    # geostrophic forcing and the Coriolis term (a uniform flow: no advection)
+    sim = bc_warm!(bc_core(core))
+    set!(sim.u, (x, y, z) -> 8.0); set!(sim.v, (x, y, z) -> -2.0)
+    d = bc_with(sim, Coriolis => (; f = 1e-3), LargeScale => BC_LSF; scheme = sch)
+    for _ in 1:3; step!(d, 5.0); end
+    @test maximum(abs, interior_view(sim.u) .- 8.0) < 1e-12 && maximum(abs, interior_view(sim.v) .+ 2.0) < 1e-12
+    # ... and a departure from it turns at the inertial frequency about (U_g, V_g):
+    # the forced, frictionless flow keeps |u - U_g| (to the scheme's amplification)
+    sim = bc_warm!(bc_core(core))
+    set!(sim.u, (x, y, z) -> 9.0); set!(sim.v, (x, y, z) -> -2.0)
+    d = bc_with(sim, Coriolis => (; f = 1e-3), LargeScale => BC_LSF; scheme = sch)
+    for _ in 1:10; step!(d, 5.0); end
+    du = mean(interior_view(sim.u)) - 8.0; dv = mean(interior_view(sim.v)) + 2.0
+    @test hypot(du, dv) ≈ 1.0 rtol = (sch === :rk3 ? 1e-8 : 3e-4)
+    @test atan(-dv, du) ≈ 1e-3 * 50.0 rtol = 1e-3             # the inertial rotation f t, clockwise
+    # the surface layer over a colder surface: Σ W θ ΔV falls by exactly the
+    # applied flux (W_f at the floor × Σ w'θ'₀ dt ΔxΔy), the first level only,
+    # and the wall stress slows the first-level wind
+    sim = bc_warm!(bc_core(core))
+    set!(sim.u, (x, y, z) -> 5.0)
+    d = bc_with(sim, SurfaceLayer => bc_sl_opts(280.0); scheme = sch)
+    sl = only(c for c in d.components if c isa SurfaceLayer)
+    Wc, Wf = bc_weights(sim)
+    θ0 = copy(interior_view(sim.θ)); u0 = copy(interior_view(sim.u))
+    applied = 0.0
+    for _ in 1:3
+        step!(d, 2.0)
+        applied += Wf[H+1] * sum(sl.wθ) * dx * dy * 2.0
+    end
+    dθ = interior_view(sim.θ) .- θ0
+    got = sum(Wc[H+k] * sum(dθ[:, :, k]) for k in 1:BC_MESH.Nz) * dx * dy * dz
+    # round-off: δθ ≈ 3e-6 K is the difference of two θ ≈ 300 K, so each
+    # cell's δθ carries ~300 ε / 3e-6 ≈ 2e-8 of relative error
+    @test applied < 0 && isapprox(got, applied; rtol = 1e-6)
+    @test maximum(abs, dθ[:, :, 2:end]) < 1e-11
+    @test all(<(0), sl.wθ) && all(>(0), sl.ustar) && all(>(0), sl.Lob)        # stable: heat down, L > 0
+    @test mean(interior_view(sim.u)[:, :, 1]) < 5.0 && maximum(abs, interior_view(sim.u)[:, :, 2:end] .- 5.0) < 1e-12
+    @test BCC.sl_ustar(sl)^2 ≈ sum(sl.ustar .^ 2) / length(sl.ustar) rtol = 0.01     # applied ≈ the solve's u*²
+    # the sponge toward the geostrophic wind: a fluid at rest is pulled to
+    # U_g in the sponge only, at the rate α(z) (one Euler step: exactly α U_g dt)
+    sim = bc_warm!(bc_core(core))
+    d = bc_with(sim, LargeScale => BC_LSF, Sponge => (alpha_max = 0.01, z_start = 3000.0, target = :geostrophic))
+    step!(d, 1.0)
+    z = [(k - 0.5) * dz for k in 1:BC_MESH.Nz]
+    Ū = [mean(interior_view(sim.u)[:, :, k]) for k in 1:BC_MESH.Nz]
+    α(z) = z >= 3000 ? 0.01 * sin(0.5π * (z - 3000) / 1000)^2 : 0.0
+    @test all(isapprox(Ū[k], α(z[k]) * 8.0; atol = 1e-13) for k in 1:BC_MESH.Nz)
+    @test any(>(1e-3), Ū)
+    # the sponge toward the plane mean damps only the departures: its
+    # tendency has zero plane mean in every level
+    sim = bc_state!(bc_core(core))
+    d = bc_with(sim, Sponge => (alpha_max = 0.01, z_start = 2000.0, target = :mean))
+    foreach(t -> fill!(t.data, 0), (sim.tu, sim.tv, sim.tw))
+    BCC.run_stage!(only(c for c in d.components if c isa Sponge), d, Val(:body_force), 1.0)
+    tu = interior_view(sim.tu)
+    @test maximum(abs(mean(tu[:, :, k])) for k in 1:BC_MESH.Nz) < 1e-15
+    @test maximum(abs, tu) > 1e-4
+    # the towers close a segment per window and bin it
+    sim = bc_state!(bc_core(core))
+    d = bc_with(sim, Towers => (below = 600.0, window = 4.0, hours = (0.0, 24.0)); scheme = sch)
+    tw = only(c for c in d.components if c isa Towers)
+    for _ in 1:4; step!(d, 2.0); end
+    @test tw.sampler.nseg == 2 && sum(tw.sampler.count) <= 2 * 64 * length(tw.sampler.ks)
+    @test length(BCC.outputs(tw)[1].getter(d)) == BC_MESH.Nz
+end
+
+"A domain on `core` with every SBL component (and the ONE-a ones)."
+function bc_sbl_domain(core; scheme = :euler, cfl = nothing)
+    sim = bc_state!(bc_core(core; ν = 0.2))
+    set!(sim.u, (x, y, z) -> 5.0 + 0.3 * sin(2π * x / 800))
+    # a solenoidal start: SSP-RK3 carries a third of the step-start state into
+    # the next one, and the adaptive step's guard checks the constraint
+    core === :boussinesq ? Aeolus.TimeIntegration._project!(sim, 1.0) : Aeolus.Anelastic._project_mass_weighted!(sim)
+    d0 = Domain(sim; scheme = scheme, cfl = cfl, validate = false)
+    comps = (CentredAdvection(), SGS(StabilityCorrected(StaticSmagorinsky(0.1), BC_MESH), :symmetric),
+             BCC.build_components((Coriolis => (; f = 1e-3), LargeScale => BC_LSF,
+                                   SurfaceLayer => bc_sl_opts(299.0),
+                                   Sponge => (alpha_max = 0.01, z_start = 3000.0, target = :geostrophic),
+                                   Towers => (below = 600.0, window = 4.0, hours = (0.0, 24.0))), d0)...)
+    return Domain(d0; components = comps)
+end
+
+@testset "checkpoint round trip of the SBL components on both cores ($core, $sch)" for
+        core in (:boussinesq, :anelastic), (sch, cfl) in ((:euler, nothing), (:rk3, nothing),
+                                                          (:rk3, CFLConstraints(; C_advective = 0.4, dt_max = 4.0)))
+    d = bc_advance!(bc_sbl_domain(core; scheme = sch, cfl = cfl), 3)
+    path = joinpath(mktempdir(), "ck.jls")
+    checkpoint!(d.state, path; components = BCC.checkpoint_components(d))
+    bc_advance!(d, 3)
+    d2 = bc_sbl_domain(core; scheme = sch, cfl = cfl)
+    restart!(d2.state, path; components = BCC.checkpoint_components(d2))
+    bc_advance!(d2, 3)
+    @test bc_bits(d2.state) == bc_bits(d.state)
+    sl = only(c for c in d.components if c isa SurfaceLayer); sl2 = only(c for c in d2.components if c isa SurfaceLayer)
+    @test sl2.wθ == sl.wθ && sl2.τ == sl.τ
+    tw = only(c for c in d.components if c isa Towers); tw2 = only(c for c in d2.components if c isa Towers)
+    @test tw2.sampler.acc == tw.sampler.acc && tw2.sampler.count == tw.sampler.count && tw2.sampler.nseg == tw.sampler.nseg
+    for c in d.components
+        T = typeof(c)
+        @test BCC.schema(T).name == BCC.section(T)
+        @test Set(v.name for v in BCC.outputs(c)) == Set(BCC.output_names(T, nothing))
     end
 end

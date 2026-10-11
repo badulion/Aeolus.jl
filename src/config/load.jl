@@ -464,7 +464,8 @@ _sorted(probs) = sort(probs; by = p -> (p.key, p.file, p.message))
 """
 Build the RunConfig and run the cross-field checks, on each domain's view of
 it ([`domain_view`](@ref)) when there are several domains; a problem of a
-per-domain section is then reported under `domain[i].`.
+per-domain section is then reported under `domain[i].`. A
+[`ModelCheck`](@ref) runs once, on the whole config.
 """
 function _finish(sch::ConfigSchema, values, domains, vorig, sources)
     secs(v) = Dict{String,ConfigSection}(n => ConfigSection(n, x) for (n, x) in v)
@@ -475,6 +476,7 @@ function _finish(sch::ConfigSchema, values, domains, vorig, sources)
     for i in (n <= 1 ? (0:0) : (1:n))
         v = i == 0 ? cfg : domain_view(cfg, i)
         for (_, f) in sch.checks
+            f isa ModelCheck && continue
             for e in Base.invokelatest(f, v)     # an example case may have been loaded just now
                 for p in (e isa ConfigError ? e.problems : [ConfigProblem("", "", string(e))])
                     sec = first(split(p.key, '.'))
@@ -482,6 +484,15 @@ function _finish(sch::ConfigSchema, values, domains, vorig, sources)
                     file = isempty(p.file) ? get(vorig, key, get(vorig, "domain[$(max(i, 1))]." * p.key, "")) : p.file
                     push!(probs, ConfigProblem(key, file, p.message))
                 end
+            end
+        end
+    end
+    # the checks of the whole model (the [[domain]] graph), once
+    for (_, f) in sch.checks
+        f isa ModelCheck || continue
+        for e in Base.invokelatest(f, cfg)
+            for p in (e isa ConfigError ? e.problems : [ConfigProblem("", "", string(e))])
+                push!(probs, ConfigProblem(p.key, isempty(p.file) ? get(vorig, p.key, "") : p.file, p.message))
             end
         end
     end
