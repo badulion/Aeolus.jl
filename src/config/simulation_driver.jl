@@ -745,10 +745,13 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     cpl = sim_couplings(r)
     n == 0 && _record_initial!(cpl, sim)
     # attached (#336): the step cores report every step; monitored_step!
-    # turns a step that throws into a diagnosed blowup
+    # turns a step that throws into a diagnosed blowup. A nest is not
+    # attached: the root's step core ends before its children subcycle, so
+    # the guard checks (every domain) and keeps its good state after the
+    # whole model step, never a root ahead of its children.
     mon = merge(closure === nothing ? (;) : (; sgs = closure), _coupling_components(cpl))
     try
-    with_monitor(sim; run = rf, components = mon, t_end = t_end,
+    with_monitor(sim; run = rf, components = mon, t_end = t_end, attach = nest === nothing,
                  cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
         try

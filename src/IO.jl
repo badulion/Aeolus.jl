@@ -37,7 +37,7 @@ export StructuralState, structural_state, restore_structural_state!, checkpoint_
        structural_save_begin, structural_save_end, structural_restore_begin, structural_restore_end
 # #335: blowup guard and run monitor (io/blowup.jl, io/run_monitor.jl)
 export checkpoint_payload, write_checkpoint,
-       BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, blowup_fields,
+       BlowupGuard, BlowupError, NonFiniteField, nonfinite_fields, component_nonfinite_fields, blowup_fields,
        check_blowup!, guarded_step!, blowup!, snapshot_good!, crash_checkpoint_path,
        RunMonitor, monitor!, monitored_step!, with_monitor, crash_dir,
        attach_monitor!, detach_monitor!, MonitorHook

@@ -301,7 +301,10 @@ Measured (`test/model_nesting.jl`; 16 × 16 × 8 parent at Δ = 100 m, its
 - a child's pipeline stages run twice per parent step (2 substeps), its
   in-core stage 3 × 2 times with RK3;
 - an interrupted nested run resumes from its checkpoint bit for bit, both
-  domains.
+  domains;
+- a one-way child that goes non-finite stops the run as a blow-up (the
+  guard inspects every domain, not only the root it steps), and the crash
+  checkpoint holds the whole nest at its last good state.
 
 A root step of this nest costs 1.27 ms one-way and 1.71 ms two-way,
 against 0.19 ms for the parent alone (the child has as many cells as the

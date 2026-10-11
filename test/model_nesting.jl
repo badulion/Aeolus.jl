@@ -291,3 +291,39 @@ end
     @test haskey(a, :inner_u) && keys(a) == keys(b)
     @test all(k -> a[k] == b[k], keys(a))
 end
+
+@testset "a one-way child that goes non-finite is a blow-up of the run" begin
+    # A one-way child feeds nothing back, so a NaN in it never reaches the
+    # root core the blow-up guard is given; the guard inspects every domain
+    # (component_nonfinite_fields of the nest). Without [checks] finite, a
+    # NaN put into the child after the last step used to end the run
+    # `completed`.
+    cfg = mn_cfg(mn_two(; feedback = "one_way"))
+    root = mktempdir()
+    poison = (r, n) -> n == 6 && (r.model.domains[2].state.θ.data[6, 6, 4] = NaN)
+    err = try
+        run_config(cfg; root = root, console = false, repo = mktempdir(), callback = poison)
+        nothing
+    catch e
+        e
+    end
+    @test err isa Aeolus.IO.BlowupError
+    # checks at step 1 (the first) and, forced, at the last step 6
+    @test err.step == 6 && err.checkpoint_step == 1 && err.cause === nothing
+    @test [f.name for f in err.fields] == [:var"inner.θ"] && err.fields[1].count == 1
+    folder = only(readdir(root; join = true))
+    s = Aeolus.IO.read_run_toml(folder)["session"][end]
+    @test s["status"] == "failed" && occursin("BlowupError", s["error"])
+    # a diagnostics row per model step (the monitor reports after the whole
+    # nest step, not from the root's step core)
+    rows = [split(l, ',') for l in readlines(joinpath(folder, "diagnostics.csv"))[2:end]]
+    @test [parse(Int, r[1]) for r in rows] == collect(1:6) && all(r -> parse(Float64, r[4]) == 4.0, rows)
+    # the crash checkpoint is the good state of step 1, the whole nest at t = 4 s
+    # (taken after the children's substeps, not between the root's step and theirs)
+    ck = Aeolus.IO.read_checkpoint(err.checkpoint)
+    r = Config.build(SimulationDriverType(), cfg)
+    MNC.restore_checkpoint_state!(r.model.nest, ck[:components][:nest].state)
+    c = r.model.domains[2].state
+    @test ck[:t] == 4.0 && c.t == 4.0 && all(isfinite, interior_view(c.θ))
+    @test isempty(Aeolus.IO.component_nonfinite_fields(r.model.nest))
+end

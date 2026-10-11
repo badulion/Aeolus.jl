@@ -100,7 +100,9 @@ The model of `domains` (the root first) coupled by `links` (a
 whose hierarchy steps every domain through its own pipeline
 ([`pipeline_advance`](@ref)), with fixed steps (the root's `dt`; each
 child `max(r)` substeps per step of its parent) and no step rejection (a
-blow-up is the run's sanity check). Refused with an `ArgumentError` that
+blow-up is the run's sanity check: the blow-up guard inspects every
+domain, [`component_nonfinite_fields`](@ref Aeolus.IO.component_nonfinite_fields),
+a one-way child too). Refused with an `ArgumentError` that
 names the domains: a domain that measures budgets (not attributed across
 the nest's feedback yet), an adaptive domain, a child without a link or
 with two, a child that is not properly nested in its parent, overlapping
@@ -155,3 +157,18 @@ Nesting.nest_link(m::Model{<:Tuple,<:ModelNest}, id::AbstractString) = Nesting.n
 # registers and statistics (the structural walk of #269).
 checkpoint_state(n::ModelNest) = structural_state(n.hierarchy)
 restore_checkpoint_state!(n::ModelNest, s) = (restore_structural_state!(n.hierarchy, s); n)
+
+# The blow-up guard inspects the run's root core; the child domains are
+# the nest's, so it reports theirs (a one-way child feeds nothing back,
+# and a NaN in it would otherwise never reach the root), each field
+# named `<domain>.<field>`.
+function component_nonfinite_fields(n::ModelNest)
+    out = NonFiniteField[]
+    for d in @view n.hierarchy.domains[2:end]
+        for f in nonfinite_fields(d.sim)
+            push!(out, NonFiniteField(Symbol(d.id, ".", f.name), f.count, f.nan, f.inf,
+                                      f.index, f.position, f.size))
+        end
+    end
+    return out
+end

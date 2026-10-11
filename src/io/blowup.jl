@@ -99,6 +99,27 @@ function nonfinite_fields(sim)
 end
 
 """
+    component_nonfinite_fields(c) -> Vector{NonFiniteField}
+
+The non-finite fields of state that a checkpoint component `c` holds
+outside the simulation itself: the child domains of a nest, whose cores
+are not `sim` (`Components.ModelNest` extends it, naming each field
+`<domain>.<field>`). [`check_blowup!`](@ref) inspects every component the
+guard checkpoints, so a run cannot end `completed` with a non-finite
+child. Empty by default.
+"""
+component_nonfinite_fields(c) = NonFiniteField[]
+
+# the simulation's non-finite fields and those of the guard's components
+function _guard_nonfinite(g, sim)
+    bad = nonfinite_fields(sim)
+    for c in values(g.components)
+        append!(bad, component_nonfinite_fields(c))
+    end
+    return bad
+end
+
+"""
     allfinite(a) -> Bool
 
 Whether every value of `a` is finite. Branch-free (`x * 0` is `0` for a
@@ -256,7 +277,8 @@ end
     check_blowup!(guard, sim; step, force = false) -> Bool
 
 If `every_steps` steps have passed since the last check (or `force`),
-inspect `sim`: a healthy state becomes the last good state and `false` is
+inspect `sim` and the state its checkpoint components hold outside it
+([`component_nonfinite_fields`](@ref): a nest's child domains): a healthy state becomes the last good state and `false` is
 returned; a non-finite one is diagnosed, dumped and stopped (see
 [`BlowupGuard`](@ref)): this throws a [`BlowupError`](@ref). Returns
 `false` without looking when no check is due.
@@ -264,7 +286,7 @@ returned; a non-finite one is diagnosed, dumped and stopped (see
 function check_blowup!(g::BlowupGuard, sim; step::Integer, force::Bool = false)
     (force || step - g.last_check >= g.every_steps) || return false
     g.last_check = step; g.checks += 1
-    bad = nonfinite_fields(sim)
+    bad = _guard_nonfinite(g, sim)
     isempty(bad) || blowup!(g, sim; step, fields = bad)
     snapshot_good!(g, sim; step)
     return false
@@ -302,14 +324,14 @@ function guarded_step!(f, g::BlowupGuard, sim; step::Integer)
 end
 
 """
-    blowup!(guard, sim; step, fields = nonfinite_fields(sim), cause = nothing)
+    blowup!(guard, sim; step, fields = <the non-finite fields of sim and its components>, cause = nothing)
 
 Diagnose, dump and stop: log the diagnosis, write the crash checkpoint,
 throw the [`BlowupError`](@ref). [`check_blowup!`](@ref) and
 [`guarded_step!`](@ref) call it; a driver with its own failure detection
 may too.
 """
-function blowup!(g::BlowupGuard, sim; step::Integer, fields = nonfinite_fields(sim),
+function blowup!(g::BlowupGuard, sim; step::Integer, fields = _guard_nonfinite(g, sim),
                  cause = nothing, backtrace = nothing)
     t = hasproperty(sim, :t) ? Float64(sim.t) : NaN
     dom = current_domain()
