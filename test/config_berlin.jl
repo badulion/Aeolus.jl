@@ -149,7 +149,7 @@ end
     @test c.size == dflt.grid.size && c.ν === dflt.dynamics.nu && c.θ_top === :initial_gradient
     @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)
     @test c.name === :urban && Set(keys(c.components)) == Set(BCC.component_name.(BCC.URBAN_DEFAULTS))
-    @test all(C -> c.components[BCC.component_name(C)] == BCC.default_options(C), BCC.URBAN_DEFAULTS)
+    @test all(C -> isequal(c.components[BCC.component_name(C)], BCC.default_options(C)), BCC.URBAN_DEFAULTS)   # isequal: NaN defaults
     # the generic site points at no input data of an example (EX-a, #438)
     @test c.landuse === nothing && c.sounding === nothing && c.static === nothing
     p = BCC.ParentConfig(c)
