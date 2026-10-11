@@ -71,7 +71,7 @@ end
 
 function _cc_runs(; tracer = false, kw...)
     pairs = _cc_pairs(; tracer, NamedTuple(k => v for (k, v) in kw if k in (:seed, :moisture, :stretched, :open_top))...)
-    rkw = NamedTuple(k => v for (k, v) in kw if !(k in (:seed, :moisture, :stretched, :open_top)))
+    rkw = merge((; feedback = :one_way), NamedTuple(k => v for (k, v) in kw if !(k in (:seed, :moisture, :stretched, :open_top))))
     map(pairs) do (p, c, nest)
         sc = tracer ? (:co2 => (Field(CellCenter(), c.mesh), _cc_tracer(p)),) : ()
         NestedRun(p, c, nest; scalars = sc, rkw...)
@@ -256,7 +256,7 @@ end
     calls = Ref(0)
     bad = domain_advance((s, h; kw...) -> (calls[] += 1; calls[] >= 2 && throw(ArgumentError("parent core failed"));
                                            step!(s, h; kw...)))
-    run = NestedRun(p, c, nest; advance_parent = bad, cfl_parent = nothing, cfl_child = nothing,
+    run = NestedRun(p, c, nest; feedback = :one_way, advance_parent = bad, cfl_parent = nothing, cfl_child = nothing,
                     validate = false)
     w = begin_parent_step!(run; dt = 0.5)
     prefetch_parent_step!(run, w; dt = 0.5)

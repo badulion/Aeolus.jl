@@ -62,6 +62,20 @@ text goes into the option reference, one bullet per line.
 driver_checks(::AbstractRunDriver) = Any[]
 
 """
+    ModelCheck(f)
+
+A cross-field check of the whole model rather than of one domain: as a
+[`driver_checks`](@ref) entry, `f(cfg)` runs once on the config with all
+its domains (the `[[domain]]` graph: parents, nesting, ONE-f #455),
+where the other checks run on each domain's view of it. Its problems
+name their keys in full (`domain[i].<section>.<key>` for a domain's).
+"""
+struct ModelCheck{F} <: Function
+    f::F
+end
+(c::ModelCheck)(cfg) = c.f(cfg)
+
+"""
     driver_defaults(d::AbstractRunDriver)
 
 The driver's own defaults of common options, `"section.key" => value`

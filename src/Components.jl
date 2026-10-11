@@ -9,7 +9,8 @@ instance configured by one TOML section: a thin adapter from a physics
 module (the equations live there) to the pipeline. A [`Domain`](@ref)
 holds a dynamical core (`BoussinesqSimulation` or `AnelasticSimulation`),
 its time scheme, its drivers and its concretely typed tuple of components;
-a [`Model`](@ref) holds the domains. `step!(model, dt)` runs the fixed
+a [`Model`](@ref) holds the domains and, for several, their nest coupling
+([`nested_model`](@ref), ONE-f #455). `step!(model, dt)` runs the fixed
 stage pipeline ([`PIPELINE`](@ref)): the stages before the core, the core
 step with the components of stages 6–8 called from inside it (every
 substage of RK3), then the stages after it.
@@ -47,14 +48,15 @@ using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weig
                       stage_budget
 using ..Output: OutputVariable, check_catalogue, cell_centres
 using ..Checks: Check, ReferenceProfile, reference_check
-using ..IO: nonfinite_fields
-import ..IO: checkpoint_state, restore_checkpoint_state!
+using ..IO: NonFiniteField, nonfinite_fields, structural_state, restore_structural_state!
+using ..Nesting: Nesting, NestHierarchy, add_nest!, step_nested!, domain_advance
+import ..IO: checkpoint_state, restore_checkpoint_state!, component_nonfinite_fields
 import ..TimeSteppers: step!
 
 export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
        CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
-       CORE_CHECKS, domain_checks
+       CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model
 
 include("components/interface.jl")
 include("components/pipeline.jl")
@@ -62,6 +64,7 @@ include("components/domain.jl")
 include("components/budgets.jl")
 include("components/outputs.jl")
 include("components/checks.jl")
+include("components/nesting.jl")
 include("components/advection.jl")
 include("components/sgs.jl")
 include("components/coriolis.jl")

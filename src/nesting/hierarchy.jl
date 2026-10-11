@@ -144,14 +144,16 @@ end
 
 """
     add_nest!(h::NestHierarchy, parent => child_sim, nest; id, advance = domain_advance(),
-              cfl = <the parent's>, feedback = :one_way, kwargs...) -> id
+              cfl = <the parent's>, feedback = :two_way, kwargs...) -> id
 
 Attach `child_sim` (on `nest`'s child mesh) as a child of domain
 `parent` (its id, a `Symbol`, or number) of the [`NestHierarchy`](@ref)
 `h`, coupled through the [`NestedGrid`](@ref) `nest` (whose parent mesh is
 the parent domain's). `advance` and `cfl` are the child's
 [`DomainAdvance`](@ref) and `CFLConstraints` (`cfl = nothing`: a fixed
-number of `substeps` per parent step); `feedback` and the other keywords
+number of `substeps` per parent step); `feedback` (two-way by default, as
+for every Aeolus parent driving an Aeolus child, ONE-f #455; `:one_way`
+per child) and the other keywords
 (`sponge`, `solid`, `order`, `scalars`, `flux_correction`, limiters, …)
 are those of the link's [`NestedRun`](@ref). Returns the new domain's id
 (default `Symbol(:d, n)`).
@@ -175,7 +177,7 @@ separate feature.
 """
 function add_nest!(h::NestHierarchy, pr::Pair, nest::NestedGrid; id::Symbol = Symbol(:d, length(h.domains) + 1),
                    advance::DomainAdvance = domain_advance(), cfl = :parent,
-                   feedback = :one_way, kwargs...)
+                   feedback = :two_way, kwargs...)
     pidx = _domain_index(h, first(pr))
     child = last(pr)
     child isa _NestSim || throw(ArgumentError("add_nest!: the child must be a simulation"))
