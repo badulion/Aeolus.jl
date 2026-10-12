@@ -31,7 +31,14 @@ them.
 | Bare-config default | **Minimal dry LES**: dynamics, SGS, pressure solve and dry θ. Every other module is off until enabled. |
 | Coupling in a step | **A fixed, documented stage pipeline.** Modules implement one component interface and attach to named stages. |
 | Nesting | **One TOML with several `[[domain]]` blocks.** Each domain has its own static and dynamic driver, and one `aeolus run` steps all of them. |
-| Per-domain modules | Module sections at run level apply to every domain. A section inside a `[[domain]]` block overrides it for that domain. |
+| Per-domain modules | **Every domain carries its complete module configuration**, the parent included, inside its own `[[domain]]` block. Run-level sections hold only what must be common to the run (`[run]`, `[time]`, output defaults, `[checks]`). There is no sharing or overriding of module sections between domains (decided 2026-10-12). |
+| Nest time stepping | **Different step sizes per domain.** The parent picks its step adaptively; each child takes *n* equal substeps per parent step, *n* chosen every parent step as the smallest whole number that keeps the child stable. Parent and child meet at the end of every parent step, where two-way feedback is applied. |
+| Failed steps in a nest | **Retry the window.** A failing child substep makes the child redo its window with a larger *n*. A failing parent step redoes the whole window (parent plus all children) with a smaller parent step, from the state saved at the window start. |
+| Budgets across a nest | **Selectable, default `exchange_term`.** Each domain closes its own budgets, and what crosses its nest boundary or arrives through two-way feedback is booked as one "nest exchange" term per quantity. `off` is also available. A third mode, `attributed` (the exchange split into the physical processes that caused it), is a later issue on the same interface. |
+| Concurrency in a nest | **The parent steps ahead (prefetch) only for one-way children.** With two-way feedback the parent waits for the feedback. Sibling children step in parallel. |
+| Exchanged fields | **PALM rule plus a driver exception.** Every field exchanged through the nest (moisture, cloud and rain variables, tracers, chemistry species) must exist with the same definition in parent and child. A child may carry an extra field only if its own dynamic driver provides that field's boundary values. Nothing is switched on automatically; the config check names both domains. |
+| Subgrid model per domain | **May differ** (for example TKE in the parent, dynamic Smagorinsky in the child). The nest passes resolved fields; a TKE field present on one side only has a documented boundary treatment. The config check warns when the parent is much smoother than the child and no inflow turbulence is switched on. |
+| Mixed cores in a nest | **Fully supported**, two-way included. A Boussinesq child can nest in an anelastic parent and the other way round, with a conservative density conversion in the boundary data and the feedback. |
 | Idealised set-ups | Allowed in TOML: vertical profiles, a named set of analytic initial fields, and simple box obstacles. Anything spatially detailed comes from the static or dynamic driver. |
 | Driver format | **Aeolus's own schema** (CFG-f/g, `Aeolus.InputDrivers`). No PALM PIDS compatibility. |
 | Parameters | Small parameter tables (materials, land-use classes, emission factors) may be written in TOML. Per-cell and per-object values belong in the static driver. |
@@ -204,7 +211,7 @@ static_driver = "input/berlin_mitte_static.nc"
 
 Rules:
 - **Single domain.** A run with one domain may write `[grid]` and the driver paths at top level instead of a `[[domain]]` block.
-- **Per-domain overrides.** Run-level module sections apply to every domain. A `[domain.<section>]` block replaces keys for that domain.
+- **Complete per domain.** Each `[[domain]]` block contains all of that domain's module sections as `[domain.<section>]` tables, the parent included. Nothing is inherited from run level or from another domain. (The example above still shows module sections at run level; under this rule they move into each domain block.)
 - **Resolved config.** It lists, for every domain, every component with every option (resolved), so a run is fully described by its `run.toml`.
 - **Validation.** Unknown keys are errors. Slot conflicts, missing requirements and incompatibilities are reported with the section names involved.
 - **Exclusive slots** (ONE-m, #476). Every exclusive slot is one section with a selector key: `[core] model`, `[timestep] scheme`, `[sgs] model`, `[surface] model`, `[microphysics] scheme`, `[advection] scheme`, and the urban site's `[pressure] solver`, `[momentum_advection] scheme`, `[chemistry] scheme = "none" | "aq_chem"` and the rest (`Urban.URBAN_SLOT_SECTIONS`). The section holds the chosen provider's options and no other's: an option of another provider is an error naming the providers that have it, and the resolved config shows the provider with all its options. A selector set at a higher level (`--set`, a `[domain.<section>]` block, `with`) that names another provider replaces it: the lower level's options are dropped and the new provider starts from its defaults. A section the model and the urban site share offers each domain the providers of its kind. There are no `enabled` pairs for a choice: `enabled` is for additive components.
@@ -246,9 +253,19 @@ GIS and downloader dependencies leave the model package.
 
 ### Nesting
 
-- **A parent is just a domain** with its own components and drivers. `ParentCase`, `ParentConfig` and the `urban_parent` run type disappear. The parent's physics is whatever its configuration enables.
-- **The nest coupling** (today's `NestedRun`) is built by the model from the `[[domain]]` graph: one level, several levels or siblings (#328), with one-way or two-way feedback per child.
-- **Concurrency.** Parent prefetch (SC-c), synthetic inflow (#268), restart (#269) and the two-way generator fix (#419) carry over unchanged in behaviour.
+- **A parent is just a domain** with its own components and drivers. `ParentCase`, `ParentConfig` and the `urban_parent` run type disappear. The parent's physics is whatever its own `[[domain]]` block enables. Its coarse surface (today's tiled mosaic) becomes data in the parent's own static driver, read by a surface component.
+- **One nest engine.** The model's generic nest (`ModelNest`, built from the `[[domain]]` graph: one level, several levels or siblings, #328) becomes the only one. It gains what the Berlin nest needs today and the generic engine refuses:
+  - adaptive parent steps with adaptive integer child substeps, and window retries;
+  - per-domain budgets with the nest-exchange term (`[nesting] budget_exchange = "exchange_term"` by default, or `"off"`);
+  - parent prefetch for one-way children, siblings in parallel;
+  - synthetic inflow with parent-measured statistics (#268) and the two-way generator fix (#419);
+  - mixed cores with a conservative density conversion;
+  - validation of exchanged fields (the PALM rule plus the driver exception) and the subgrid-model handover.
+
+  After that, `Nesting.NestedRun`'s separate Berlin path is deleted.
+- **Feedback default.** Two-way for an Aeolus parent driving an Aeolus child; one-way per child is allowed. Driving through the dynamic driver from outside data is one-way.
+
+How PALM does it, for comparison (Hellsten et al. 2021): every domain is the same PALM program with its own namelist and static driver; local modules (surface, buildings, radiation, canopy) are free per domain; exchanged fields must match in all domains; all domains share one time step (the minimum); domains run concurrently on separate MPI processes. Aeolus keeps per-domain step sizes instead of the common step, and closes budgets across the nest, which PALM does not.
 
 ### Tests
 
