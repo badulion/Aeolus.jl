@@ -274,6 +274,32 @@ reach green, without stating that the original expectation was
 physically incorrect, is the one thing that will get a PR rejected
 outright.
 
+### AeolusPrep
+
+The preprocessors live in the private package
+[AeolusPrep.jl](https://github.com/badulion/AeolusPrep.jl) (ONE-h,
+#457), which calls Aeolus: the config (`load_run_config`, `[run]
+legacy`, `[urban] enabled`, the domain's `static_driver` and
+`dynamic_driver`), `Aeolus.InputDrivers` (writers, schemas,
+`check_driver`), the urban site (`Urban.site_options`,
+`write_sounding_driver`, the nest parent's tiles), the simulation's mesh
+and open faces, and the layout of `examples/<case>/`. Its tests
+regenerate every driver committed here and compare it with the committed
+file. CI cannot run them (the repository is private), so **a PR that
+changes one of these APIs, moves an example, or touches a committed
+driver runs them itself** and quotes the summary line in the PR body:
+
+```bash
+# in an AeolusPrep.jl checkout (git@github.com:badulion/AeolusPrep.jl.git)
+julia bin/test-against <this worktree>        # --env dir reuses an environment
+```
+
+A failure is either an API AeolusPrep has to follow (a PR in
+AeolusPrep.jl, linked from the Aeolus PR) or a committed driver to
+regenerate (`julia --project -m AeolusPrep regenerate <this worktree>`,
+committed in the Aeolus PR). Until #487 the epic's API changes (ONE-b to
+ONE-m) went unnoticed there: 17 failures and 10 errors had built up.
+
 ---
 
 ## Continuous integration
