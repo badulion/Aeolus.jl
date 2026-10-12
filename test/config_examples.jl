@@ -3,9 +3,7 @@
 # Acceptance tests of the issue covered in this file:
 #   * sweeps: a [sweep] table expands into override sets in a fixed order,
 #     one run folder per member, each member validated;
-#   * coverage: every examples/**/*.jl that calls a step!/run!/run_case!
-#     entry point has a configs/*.toml file or a reasoned entry in EXEMPT
-#     below (empty since ONE-g #456).
+#   * the Kessler box of the kernel demos (cloud_spinup.toml) on the model.
 # The per-directory bit-identity and round-trip tests are in
 # config_examples_*.jl.
 
@@ -13,9 +11,11 @@ using Test
 using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml
+using Aeolus.Fields: interior_view
+import NCDatasets
 
 const EX_DIR = joinpath(pkgdir(Aeolus), "examples")
-const TGV_CFG = joinpath(EX_DIR, "configs", "taylor_green_vortex.toml")
+const TGV_CFG = joinpath(EX_DIR, "taylor_green_vortex", "taylor_green_vortex.toml")
 
 ex_file(text) = (p = joinpath(mktempdir(), "sweep.toml"); write(p, text); p)
 
@@ -98,9 +98,10 @@ end
         axis = [ { key = "dynamics.nu", values = [0.01, 0.02] } ]
         """))
     root = mktempdir()
-    args = ["--set", "grid.size=[8,8,8]", "--set", "time.duration=\"none\"", "--set", "time.nsteps=3",
-            "--set", "fftw.planner=\"estimate\"", "--root", root]
-    res = run_configs(p, args; console = false, repo = mktempdir())
+    sets = ["grid.size=[8,8,8]", "time.duration=\"none\"", "time.nsteps=3", "fftw.planner=\"estimate\""]
+    args = vcat(collect(Iterators.flatten(("--set", s) for s in sets)), "--root", root)
+    # every member, one run each, as aeolus run takes them
+    res = [run_config(cfg; root = root, console = false, repo = mktempdir()) for (_, cfg) in load_sweep(p; overrides = sets)]
     @test length(res) == 2
     @test res[1].folder.path != res[2].folder.path
     @test [Aeolus.SimulationDriver.simulation(r.obj).ν for r in res] == [0.01, 0.02]
@@ -115,124 +116,69 @@ end
     out = IOBuffer()
     @test Aeolus.main(["run", p, args..., "--member", "2", "--allow-uncommitted"]; io = out, err = IOBuffer()) == 0
     @test count("completed", String(take!(out))) == 1
-    @test_throws Aeolus.Config.UsageError run_configs(p, ["32"])
+    @test Aeolus.main(["run", p, "32"]; io = IOBuffer(), err = IOBuffer()) != 0
     out = IOBuffer()
     @test Aeolus.main(["check", p]; io = out) == 0
     @test count("ok:", String(take!(out))) == 2
 end
 
 # ---------------------------------------------------------------------------
-# examples/kernels/: 04_cloud_spinup (the column driver's kessler_box)
+# examples/cloud_spinup/: kernel demo 04, the Kessler box on the model (ONE-i #458)
 # ---------------------------------------------------------------------------
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
-@testset "kernels: cloud_spinup.toml equals the old in-code Kessler box, bit for bit" begin
-    # examples/kernels/04_cloud_spinup.jl before CFG-e, verbatim but for the plots
+@testset "kernels: cloud_spinup.toml is the Kessler box at rest on the model" begin
+    # the same box with the same eight Kessler steps applied directly
+    # (Microphysics.apply_kessler_step!, the Marshall-Palmer fall speeds)
     H = 2000.0
     mesh = RegularGrid(; size = (4, 4, 32), extent = (H, H, H), halo = (1, 1, 1))
     qv = Field(CellCenter(), mesh); Aeolus.Fields.set!(qv, (x, y, z) -> 0.01)
     ql = Field(CellCenter(), mesh); Aeolus.Fields.set!(ql, (x, y, z) -> 0.6H < z < 0.9H ? 3e-3 : 0.0)
     qr = Field(CellCenter(), mesh); Aeolus.Fields.set!(qr, (x, y, z) -> 0.0)
-    q0 = sum(qv.data) + sum(ql.data)
-    for dt in (60.0, 60.0, 120.0, 120.0, 120.0)
-        apply_kessler_step!(qv, ql, qr, dt; Vt = :spectrum)
+    q0 = sum(interior_view(qv)) + sum(interior_view(ql))
+    for _ in 1:8
+        apply_kessler_step!(qv, ql, qr, 60.0; Vt = :spectrum)
     end
-    cfg = load_run_config(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
-    r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-    f = Base.invokelatest(state_fields, r.obj)
-    @test f.qv == qv.data && f.ql == ql.data && f.qr == qr.data
-    @test all(bitwise_equal(a, b) for (a, b) in ((f.qv, qv.data), (f.ql, ql.data), (f.qr, qr.data)))
-    # the physics: autoconversion turns cloud into rain (the cloud-layer
-    # maximum falls monotonically) and the rain reaches below the cloud base
-    snaps = r.obj.snapshots
-    @test [s.t for s in snaps] == [0.0, 60.0, 120.0, 240.0, 360.0, 480.0]
-    qlmax = [maximum(s.ql) for s in snaps]
+    cfg = load_run_config(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
+    root = mktempdir()
+    r = run_config(cfg; root = root, console = false, repo = mktempdir())
+    sim = Aeolus.SimulationDriver.simulation(r.obj)
+    water = Aeolus.SimulationDriver.sim_couplings(r.obj).water
+    @test sim.t ≈ 480.0
+    # horizontally uniform fields: the layer's buoyancy is balanced by the
+    # pressure, the air stays at rest and the run is the microphysics alone
+    @test maximum(abs, interior_view(sim.u)) == 0 && maximum(abs, interior_view(sim.v)) == 0
+    @test maximum(abs, interior_view(sim.w)) < 1e-12
+    @test isapprox(interior_view(sim.qv), interior_view(qv); rtol = 1e-12)
+    @test isapprox(interior_view(water.ql), interior_view(ql); rtol = 1e-12, atol = 1e-15)
+    @test isapprox(interior_view(water.qr), interior_view(qr); rtol = 1e-12, atol = 1e-15)
+    # the physics, from the run's profiles (diagnostics.nc): autoconversion
+    # turns cloud into rain (the cloud maximum falls monotonically) and the
+    # rain reaches below the cloud base
+    ds = NCDatasets.NCDataset(joinpath(r.folder.path, "diagnostics.nc"))
+    z = Array(ds["z"][:]); QL = Array(ds["micro.ql"][:, :]); QR = Array(ds["micro.qr"][:, :])
+    t = Array(ds["time_costly"][:]); close(ds)
+    # a row per step, written after it (the run monitor records no row of
+    # the initial state): t = 60, 120, …, 480 s
+    @test t ≈ 60:60:480
+    qlmax = vec(maximum(QL; dims = 1))
     @test issorted(qlmax; rev = true) && qlmax[end] < qlmax[1]
-    @test maximum(snaps[1].qr) == 0 && maximum(snaps[end].qr) > 1e-5
-    zc = collect(Aeolus.Grids.znodes(mesh, Aeolus.Grids.CellCenter()))
-    @test any(snaps[end].qr[k] > 0 for k in eachindex(zc) if zc[k] < 0.6H)
+    # the core step writes the row (the run monitor is attached to it), before
+    # the step's Kessler update: the row at 60 s still holds the initial
+    # cloud and no rain (the direct steps above: 0.0192 summed qr after one);
+    # at the end the rain is there
+    @test maximum(QR[:, 1]) == 0 && maximum(QR[:, end]) > 1e-5
+    @test any(QR[k, end] > 0 for k in eachindex(z) if z[k] < 0.6H)
     # vapour and cloud only lose water to the rain (no source of water)
-    @test sum(f.qv) + sum(f.ql) <= q0
+    @test sum(interior_view(sim.qv)) + sum(interior_view(water.ql)) <= q0
 end
 
 @testset "round trip from run.toml (kernels: cloud_spinup.toml), bit-identical" begin
-    r = roundtrip_check(joinpath(EX_DIR, "kernels", "configs", "cloud_spinup.toml"))
+    r = roundtrip_check(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
     @test r.fields_equal && r.config_equal && r.results_equal
 end
 
-# ---------------------------------------------------------------------------
-# coverage: every example that integrates the equations runs from a config
-# ---------------------------------------------------------------------------
-
-# A script integrates the equations if it calls a stepping entry point.
-const ENTRY_POINT = r"(^|[^A-Za-z0-9_.])(step[A-Za-z0-9_]*!|run!|run_case!)\("
-# A script is configured if it runs a shipped configs/*.toml through
-# run_configs or the aeolus command line.
-const CONFIG_RUN = r"(run_configs|Aeolus\.main)\("
-const CONFIG_REF = r"\"configs\",\s*\"([A-Za-z0-9_.-]+\.toml)\""
-
-# Files that call an entry point (or look like runs) but are not runs of
-# their own, each with its reason. Paths relative to examples/.
-const EXEMPT = Dict{String,String}()
-
-# Directories migrated by their own issues (sbl/: analysis scripts only since EX-b #439,
-# its runs are configs/*.toml of the model since ONE-g #456).
-const OTHER_ISSUE_DIRS = Dict{String,String}()
-
-# The rest of #360's scope, migrated in later parts of the issue (it may be
-# split per directory). This list may only shrink: a file migrated to a
-# config must leave it (checked below).
-const PENDING_360 = Set{String}()
-
-function example_scripts()
-    files = String[]
-    for (dir, _, fs) in walkdir(EX_DIR), f in fs
-        endswith(f, ".jl") && push!(files, relpath(joinpath(dir, f), EX_DIR))
-    end
-    return sort!(replace.(files, '\\' => '/'))
-end
-
-"The configs a script runs, as absolute paths (empty if it runs none)."
-function script_configs(rel)
-    src = read(joinpath(EX_DIR, rel), String)
-    occursin(CONFIG_RUN, src) || return String[]
-    return [joinpath(dirname(joinpath(EX_DIR, rel)), "configs", m[1]) for m in eachmatch(CONFIG_REF, src)]
-end
-
-@testset "coverage: every example that integrates the equations has a config or a reasoned exemption" begin
-    drivers = Set(relpath(joinpath(pkgdir(Aeolus), p), EX_DIR) for p in values(Aeolus.Config.DRIVER_FILES))
-    missing_ = String[]
-    nconfigured = 0
-    for rel in example_scripts()
-        rel in drivers && continue                        # a run driver (registers itself)
-        any(startswith(rel, d) for d in keys(OTHER_ISSUE_DIRS)) && continue
-        cfgs = script_configs(rel)
-        if !isempty(cfgs)
-            nconfigured += 1
-            # each config the script names exists and validates (every member of a sweep)
-            for c in cfgs
-                @test isfile(c)
-                @test !isempty(load_sweep(c))
-            end
-            @test !(rel in PENDING_360)                    # migrated: leaves the pending list
-            @test !haskey(EXEMPT, rel)
-            # and the script parses no ARGS / ENV of its own (they go to run_configs)
-            src = read(joinpath(EX_DIR, rel), String)
-            @test !occursin(r"ARGS\[|parse\([^)]*ARGS|ENV\[|get\(ENV", src)
-        elseif occursin(ENTRY_POINT, read(joinpath(EX_DIR, rel), String))
-            haskey(EXEMPT, rel) || rel in PENDING_360 || push!(missing_, rel)
-        end
-    end
-    @test isempty(missing_)
-    isempty(missing_) || @info "examples that integrate the equations with neither a config nor an exemption" missing_
-    # no stale entries: every exemption and pending file exists
-    @test all(isfile(joinpath(EX_DIR, p)) for p in keys(EXEMPT))
-    @test all(isfile(joinpath(EX_DIR, p)) for p in PENDING_360)
-    @test all(!isempty(r) for r in values(EXEMPT))
-    # examples/validation/ is complete: every script there is a driver (the
-    # validation wrappers went with their cases, ONE-g #456)
-    val = [r for r in example_scripts() if startswith(r, "validation/") && !(r in drivers)]
-    @test isempty(val)
-    @test nconfigured == 0         # no script runs a config: the runs are `aeolus run <config>.toml` (ONE-g #456)
-end
+# (The coverage test of the scripts that integrate the equations is
+# test/examples_enforcement.jl since ONE-i #458: no file under examples/
+# builds or steps a model, with no exemptions.)

@@ -27,7 +27,7 @@ rear face, where the mean floor u turns from negative to positive), `x_F`
 (the separation ahead of it, from its front face), the steps, the mean
 bulk velocity over the second half of the steps and the final force;
 `output/floor_u.csv`: x/H and the mean centre-line floor u.
-Config: `examples/sgs/configs/surface_mounted_cube.toml` (a sweep over
+Config: `examples/surface_mounted_cube/surface_mounted_cube.toml` (a sweep over
 the three closures).
 """
 module ObstacleChannelDriver

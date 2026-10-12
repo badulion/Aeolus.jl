@@ -3,7 +3,7 @@
 # description; Bosveld et al. 2014a,b; LES results: Basu, Holtslag &
 # Bosveld 2012), P58-d (#194)
 #
-# The runs are the sweep examples/sbl/configs/gabls3_closures.toml (the
+# The runs are the sweep examples/sbl/gabls3_closures.toml (the
 # model; one run folder per closure): time-height geostrophic
 # wind and advective tendencies from LargeScaleForcing, the prescribed
 # 0.25 m θ as a SurfaceTemperatureSeries, MOST surface fluxes
@@ -16,7 +16,7 @@
 # digitised ensemble (examples/sbl/data/gabls3_reference.csv,
 # gabls3_envelope.csv) and makes the figure.
 #
-#   julia --project -m Aeolus run examples/sbl/configs/gabls3_closures.toml    # 6.25 m on 400 m
+#   julia --project -m Aeolus run examples/sbl/gabls3_closures.toml    # 6.25 m on 400 m
 #   julia --project examples/sbl/gabls3.jl runs/*gabls3*
 #
 # writes examples/sbl/output/gabls3_<tag>.svg, _profiles.csv, _series.csv

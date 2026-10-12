@@ -1,0 +1,56 @@
+# Kernel demo 04 — Kessler cloud spinup.
+#
+# A 4 × 4 × 32 box of side 2 km at rest: uniform vapour 10 g/kg, a cloud
+# layer of 3 g/kg between 1200 and 1800 m (0.6 and 0.9 of the height);
+# Kessler microphysics converts cloud to rain and the rain falls out, in
+# eight steps of 60 s. Every field is horizontally uniform, so the
+# buoyancy of the layer is balanced by the pressure and the air stays at
+# rest: the run is the microphysics alone. (Formerly the `column` run
+# type's kessler_box with steps of 60, 60, 120, 120 and 120 s; the model
+# takes fixed steps, ONE-i #458.)
+#
+#   julia --project -m Aeolus run examples/cloud_spinup/cloud_spinup.toml
+#   julia --project=. examples/cloud_spinup/plot_cloud_spinup.jl runs/<date>_cloud_spinup_<id>
+#
+# The plot reads the micro.ql and micro.qr profiles of diagnostics.nc.
+
+schema_version = 2
+
+[run]
+name = "cloud_spinup"
+
+[grid]
+size = [4, 4, 32]
+extent = [2000.0, 2000.0, 2000.0]
+
+[dynamics]
+theta0 = 300.0
+moisture = true
+
+[boundaries]
+z = "free_slip"
+
+[sgs]
+closure = "none"
+
+[initial]
+theta = { kind = "constant", value = 300.0 }
+qv = { kind = "constant", value = 0.01 }
+ql = { kind = "box", value = 3e-3, x = [0.0, 2000.0], y = [0.0, 2000.0], z = [1200.0, 1800.0] }
+
+[microphysics]
+scheme = "kessler"
+
+[time]
+scheme = "euler"
+dt = 60.0
+duration = 480.0
+
+[logging]
+diagnostics_cadence = 60.0      # a row and a profile every step
+
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
+[test]
+overrides = []                  # already a smoke run

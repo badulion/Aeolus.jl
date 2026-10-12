@@ -1,0 +1,116 @@
+# GABLS3 — the Cabauw low-level-jet night of 1-2 July 2006 (Basu 2008 case
+# description; Bosveld et al. 2014a,b; LES: Basu, Holtslag & Bosveld 2012).
+#
+# From 00 UTC 2 July: Cabauw (51.9711° N), z0m = 0.15 m, the prescribed
+# 0.25 m θ (z0h = 0.25 m in solve_surface_layer gives exactly the case's
+# w'θ' = u* κ (θ_0.25 - θ_z1) / [ln(z1/0.25) - Ψ_H(z1/L) + Ψ_H(0.25/L)]),
+# stable ψ_M = ψ_H = -5 z/L (the morning's unstable branch is that
+# family's Businger-Dyer, γ = 16), a sponge from 600 m damping only the
+# departures from the plane mean, perturbations u, v ~ N(0, 0.2 (1 - z/200)²)
+# and θ ~ N(0, 0.1) below 200 m (the velocity projected). Dry (the theory
+# page, "Observed cases"). The initial profiles are the case table's
+# (data/gabls3_case.csv): θ linear below 10 m from the 0.25 m surface value
+# 291.28 K, u, v logarithmic below 10 m. The dynamic driver
+# (input/gabls3_dynamic.nc, made from the case table by the former sbl run
+# type) holds the time-height geostrophic wind (the surface values of the
+# case table, linear in z to (-2, 2) m/s at 2000 m), the advective
+# tendencies of u, v, θ (constant above 200 m, linear to zero at the
+# surface) and the 0.25 m θ series.
+#
+# The reference resolution is 6.25 m (128³ on 800 m); the checks compare the
+# 03-04 UTC low-level jet with the LES ensemble (data/gabls3_envelope.csv);
+# examples/sbl/gabls3.jl sets the profiles against data/gabls3_reference.csv.
+#
+#   julia --project -m Aeolus run examples/sbl/gabls3.toml
+
+schema_version = 2
+dynamic_driver = "input/gabls3_dynamic.nc"
+
+[run]
+name = "gabls3"
+seed = 1
+
+[time]
+scheme = "rk3"
+dt = "adaptive"
+cfl = 1.2
+duration = 14400.0             # 04 UTC: the published LES envelope is for 03-04 UTC
+
+[grid]
+size = [128, 128, 128]
+extent = [800.0, 800.0, 800.0]
+
+[dynamics]
+theta0 = 290.0
+
+[boundaries]
+z = "free_slip"
+
+[initial]
+theta = {kind = "table", z = [10.0, 20.0, 40.0, 80.0, 140.0, 200.0, 203.0, 257.0, 308.0, 363.0, 408.0, 465.0, 520.0, 575.0, 635.0, 694.0, 749.0, 801.0, 854.0], values = [292.72, 293.02, 293.41, 294.3, 295.68, 297.35, 297.35, 297.51, 297.66, 297.81, 297.94, 298.11, 298.27, 298.42, 298.6, 298.77, 298.93, 299.08, 299.23], below = {kind = "linear", z = 0.25, value = 291.28}}
+u = {kind = "table", z = [10.0, 20.0, 40.0, 80.0, 140.0, 200.0, 203.0, 257.0, 308.0, 310.0, 363.0, 408.0, 426.0, 465.0, 520.0, 541.0, 575.0, 635.0, 657.0, 694.0, 715.0, 749.0, 772.0, 801.0, 830.0], values = [-3.35, -4.31, -6.13, -9.0, -11.48, -10.16, -10.08, -9.15, -8.75, -8.74, -8.57, -8.46, -8.41, -8.23, -7.82, -7.6, -7.17, -6.22, -5.82, -5.14, -4.77, -4.19, -3.86, -3.54, -3.37], below = {kind = "log", z0 = 0.15}}
+v = {kind = "table", z = [10.0, 20.0, 40.0, 80.0, 140.0, 200.0, 203.0, 257.0, 308.0, 310.0, 363.0, 408.0, 426.0, 465.0, 520.0, 541.0, 575.0, 635.0, 657.0, 694.0, 715.0, 749.0, 772.0, 801.0, 830.0], values = [-0.04, 0.08, 0.32, 0.9, 3.5, 5.58, 5.57, 5.47, 5.54, 5.55, 5.64, 5.64, 5.61, 5.47, 5.1, 4.9, 4.53, 3.76, 3.47, 3.0, 2.76, 2.46, 2.34, 2.31, 2.46], below = {kind = "log", z0 = 0.15}}
+perturbation_kind = "normal"
+perturbation_amplitude = 0.31622776601683794   # √0.1 K
+perturbation_depth = 200.0
+velocity_perturbation = {kind = "normal", amplitude = 0.4472135954999579, depth = 200.0, taper = "linear", components = ["u", "v"], project = true}
+
+[coriolis]
+latitude = 51.9711
+
+[large_scale_forcing]
+u_g = "driver"
+v_g = "driver"
+advective_tendencies = true
+
+[surface_layer]
+enabled = true
+z0m = 0.15
+z0h = 0.25                     # the height of the prescribed θ: the scalar reference height
+temperature = {kind = "driver"}
+stability = {family = "businger_dyer_log_linear", beta = 5.0}
+rho_cp = 1228.5454644005083    # p/(R_d θ) c_p at the first surface row: 102210/(287.05 × 291.28) × 1005
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.1
+pr_t = 0.3333333333333333
+stability = "brown_et_al_1994"
+stress = "symmetric"
+
+[sponge]
+alpha_max = 0.01
+z_start = 600.0
+target = "mean"
+
+[output]
+variables = ["u_profile", "v_profile", "theta_profile", "wind_speed_profile", "stress_profile", "heat_flux_profile",
+             "u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "bl_height", "jet_speed",
+             "jet_height", "theta_2m", "wind_10m", "surface_temperature"]
+averaging = "mean"
+cadence = 3600.0               # hourly mean profiles: the last is 03-04 UTC
+series_cadence = 300.0
+
+[checks]                       # results.toml: the 03-04 UTC low-level jet against the LES ensemble
+finite = { required = true }
+reference_file = "data/gabls3_envelope.csv"
+reference.jet_height = { required = false, variable = "jet_height", window = [10800.0, 14400.0] }
+reference.jet_speed = { required = false, variable = "jet_speed", window = [10800.0, 14400.0] }
+
+[checkpoint]
+every_seconds = 1800.0         # an interrupted run resumes with `aeolus run --resume <run folder>`
+keep = 2
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,48]",
+    "grid.extent=[400.0,400.0,400.0]",
+    "sponge.z_start=300.0",
+    "time.duration=\"none\"",
+    "time.nsteps=10",
+    "checks.reference={}",
+    "checks.reference_file=\"none\"",
+]

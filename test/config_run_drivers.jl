@@ -30,7 +30,7 @@ end
 rd_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
 
 # ---------------------------------------------------------------------------
-# examples/configs/scalar_advection_2d.toml (the advection driver)
+# examples/scalar_advection_2d/scalar_advection_2d.toml (the advection driver)
 # ---------------------------------------------------------------------------
 
 @testset "advection: scalar_advection_2d.toml is the old script, bit for bit" begin
@@ -68,7 +68,7 @@ rd_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml")
         t += dt
     end
 
-    r = rd_run(joinpath(RD_EX, "configs", "scalar_advection_2d.toml"), ["grid.size=[$N,$N,1]"])
+    r = rd_run(joinpath(RD_EX, "scalar_advection_2d", "scalar_advection_2d.toml"), ["grid.size=[$N,$N,1]"])
     f = Base.invokelatest(state_fields, r.obj)
     @test bitwise_equal(f.ϕ, ϕ.data)
     @test r.obj.nsteps == nsteps && r.obj.dt === dt
@@ -83,11 +83,11 @@ rd_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml")
 end
 
 # ---------------------------------------------------------------------------
-# examples/kernels/configs/: the simulation driver with its couplings
+# the kernel demos: the simulation driver with its couplings
 # ---------------------------------------------------------------------------
 
-const RD_KER = joinpath(RD_EX, "kernels", "configs")
-const RD_CPL = joinpath(RD_EX, "coupled", "configs")
+"The shipped config of the example case `name`, examples/<name>/<name>.toml."
+rd_case(name) = joinpath(RD_EX, name, name * ".toml")
 
 "The interior of a halo-padded array of `mesh`."
 rd_interior(a, mesh) = a[mesh.Hx+1:mesh.Hx+mesh.Nx, mesh.Hy+1:mesh.Hy+mesh.Ny, mesh.Hz+1:mesh.Hz+mesh.Nz]
@@ -119,7 +119,7 @@ end
     for n in 1:nsteps
         step!(sim, dt)
     end
-    r = rd_run(joinpath(RD_KER, "tgv_energy_decay.toml"),
+    r = rd_run(rd_case("tgv_energy_decay"),
                ["grid.size=[$N,$N,$N]", "time.dt=$(repr(min(0.4dx, 0.4dx^2 / (2ν))))", "time.duration=$T_end"])
     @test rd_same_state(r, sim)
     # the physics: over t = 1 the decay is the linear viscous one, KE₀ e^(−6νt),
@@ -150,7 +150,7 @@ end
         step!(sim, dt)
         push!(kes, kinetic_energy(sim))
     end
-    r = rd_run(joinpath(RD_KER, "decaying_hit.toml"),
+    r = rd_run(rd_case("decaying_hit"),
                ["grid.size=[$N,$N,$N]", "time.dt=$(repr(0.3 * dx))", "time.duration=$T_end"])
     @test rd_same_state(r, sim)
     # the physics: after the first projection the energy only decays
@@ -174,7 +174,7 @@ end
     for n in 1:nsteps
         step!(sim, dt)
     end
-    r = rd_run(joinpath(RD_KER, "channel_flow.toml"),
+    r = rd_run(rd_case("channel_flow"),
                ["grid.size=[$Nx,$Ny,$Nz]", "time.dt=$(repr(min(0.3dx / 1.2, 0.4dz^2 / (2ν))))",
                 "time.duration=$T_end"])
     @test rd_same_state(r, sim)
@@ -213,7 +213,7 @@ end
         interior_view(c) .+= dt .* view(tc.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
         step!(sim, dt)
     end
-    r = rd_run(joinpath(RD_KER, "pollution_plume.toml"), ["time.duration=$T_end"])
+    r = rd_run(rd_case("pollution_plume"), ["time.duration=$T_end"])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     @test bitwise_equal(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
@@ -248,7 +248,7 @@ end
         fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs); fill_halos!(sim.w, sim.bcs)
         advance_particles!(ps, sim, dt)
     end
-    r = rd_run(joinpath(RD_KER, "particle_trail.toml"), ["grid.size=[$N,$N,$N]", "time.nsteps=$nsteps"])
+    r = rd_run(rd_case("particle_trail"), ["grid.size=[$N,$N,$N]", "time.nsteps=$nsteps"])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     @test f.particles == [x[d] for d in 1:3, x in positions(ps)]
@@ -261,7 +261,7 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# examples/coupled/configs/
+# the coupled examples
 # ---------------------------------------------------------------------------
 
 "examples/coupled/01_dcbl_radiation_lsm.jl before EX-d at N³ for `nsteps`, verbatim but for the size and the plots; `fix` sets the surface-flux flag."
@@ -319,7 +319,7 @@ end
     @test interior_view(old.θ) == interior_view(noland.θ)
     @test interior_view(fixed.θ) != interior_view(old.θ)
     # the config is the script with the flux applied
-    r = rd_run(joinpath(RD_CPL, "dcbl_radiation_lsm.toml"),
+    r = rd_run(rd_case("dcbl_radiation_lsm"),
                ["grid.size=[$N,$N,$N]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test rd_same_state(r, fixed)
     f = Base.invokelatest(state_fields, r.obj)
@@ -374,7 +374,7 @@ end
         step!(sim, dt)
         apply_kessler_step!(sim.qv, ql, qr, dt; Vt=:spectrum)
     end
-    r = rd_run(joinpath(RD_CPL, "moist_convection.toml"),
+    r = rd_run(rd_case("moist_convection"),
                ["grid.size=[$Nx,$Ny,$Nz]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test 0.8 * Lz == 1920.0                     # the config's sponge_z_start is the script's 0.8 Lz
     @test rd_same_state(r, sim)
@@ -388,7 +388,7 @@ end
     qri = interior_view(qr)
     @test any(qri[:, :, k] != zeros(Nx, Ny) for k in eachindex(zc) if zc[k] < 1000)
     # without the run type's [microphysics] the water is not carried
-    @test_throws ConfigError load_run_config(joinpath(RD_CPL, "moist_convection.toml");
+    @test_throws ConfigError load_run_config(rd_case("moist_convection");
                                              overrides = ["microphysics.scheme=\"none\""])
 end
 
@@ -417,7 +417,7 @@ end
         end
         step!(sim, dt)
     end
-    r = rd_run(joinpath(RD_CPL, "heated_plume.toml"),
+    r = rd_run(rd_case("heated_plume"),
                ["grid.size=[$N,$N,$N]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test 0.8 * Lz == 1200.0
     @test rd_same_state(r, sim)
@@ -468,7 +468,7 @@ end
         end
         interior_view(c) .+= dt .* view(tc.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
     end
-    r = rd_run(joinpath(RD_CPL, "flow_past_cube.toml"), ["time.duration=\"none\"", "time.nsteps=$nsteps"])
+    r = rd_run(rd_case("flow_past_cube"), ["time.duration=\"none\"", "time.nsteps=$nsteps"])
     # the static driver's cube is the script's cube, cell for cell
     @test rd_couplings(r.obj).solid.mask == sm.mask
     @test sort(rd_couplings(r.obj).tracer.sources) ==
@@ -485,7 +485,7 @@ end
 
 @testset "coupled: the cube's committed static driver" begin
     # AeolusPrep.jl writes it from its GeoJSON (ONE-h, #457; its recipes reproduce it)
-    cfg = load_run_config(joinpath(RD_CPL, "flow_past_cube.toml"))
+    cfg = load_run_config(rd_case("flow_past_cube"))
     mesh = RegularGrid(; size = cfg.grid.size, extent = cfg.grid.extent, halo = cfg.grid.halo)
     st = Aeolus.InputDrivers.read_static_driver(cfg.domain.static_driver; mesh = mesh, origin_lat = 0.0,
                                                 origin_lon = 0.0, origin_x = 0.0, origin_y = 0.0)
@@ -494,7 +494,7 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# examples/sgs/configs/cbl_tke.toml, examples/nesting/configs/cbl_inflow_statistics.toml
+# examples/cbl_tke/cbl_tke.toml, examples/cbl_inflow_statistics/cbl_inflow_statistics.toml
 # (the cbl driver: tke_cbl, formerly test/tke_cbl_driver.jl, plus the parent statistics)
 # ---------------------------------------------------------------------------
 
@@ -512,7 +512,7 @@ using Aeolus.RunDrivers.CBLDriver: tke_cbl
         update_inflow_statistics!(src[], h)
     end
     r0 = tke_cbl(N; Δ = Δ, Δz = Δz, Q = 0.1, z_i0 = zi0, Γ = 0.003, T_end = T, avg = avg, on_step = fold!)
-    r = rd_run(joinpath(RD_EX, "nesting", "configs", "cbl_inflow_statistics.toml"),
+    r = rd_run(joinpath(RD_EX, "cbl_inflow_statistics", "cbl_inflow_statistics.toml"),
                ["grid.n=$N", "grid.spacing=$Δ", "grid.dz=$Δz", "cbl.end_time=$T", "cbl.average=$avg",
                 "cbl.z_i0=$zi0", "inflow_statistics.depth=200.0"])
     r1 = r.obj.result
@@ -531,13 +531,13 @@ using Aeolus.RunDrivers.CBLDriver: tke_cbl
     @test inf["uu_generated"] ≈ inf["uu_sgs"] .+ inf["uu_band"]
     @test length(inf["z"]) == nlev && inf["updates"] > 0
     # without [inflow_statistics] there is no [inflow] table
-    r2 = rd_run(joinpath(RD_EX, "sgs", "configs", "cbl_tke.toml"),
+    r2 = rd_run(joinpath(RD_EX, "cbl_tke", "cbl_tke.toml"),
                 ["grid.n=$N", "grid.spacing=$Δ", "grid.dz=$Δz", "cbl.end_time=$T", "cbl.average=$avg", "cbl.z_i0=$zi0"])
     @test !haskey(rd_results(r2), "inflow") && r2.obj.result.e == r1.e
 end
 
 # ---------------------------------------------------------------------------
-# examples/nesting/configs/inflow_fetch.toml (the inflow_fetch driver; its
+# examples/inflow_fetch/inflow_fetch.toml (the inflow_fetch driver; its
 # harness, formerly test/inflow_fetch_harness.jl, is validated by the
 # full-tier test/era6_inflow_fetch.jl)
 # ---------------------------------------------------------------------------
@@ -545,7 +545,7 @@ end
 using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child
 
 @testset "inflow_fetch: the config runs the harness; the generator injects turbulence, off does not" begin
-    f = joinpath(RD_EX, "nesting", "configs", "inflow_fetch.toml")
+    f = joinpath(RD_EX, "inflow_fetch", "inflow_fetch.toml")
     ov = config_test_table(f).overrides
     r = rd_run(f, ov)
     # the same calls by hand
@@ -564,7 +564,7 @@ using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child
 end
 
 # ---------------------------------------------------------------------------
-# examples/sgs/configs/surface_mounted_cube.toml (the obstacle_channel driver)
+# examples/surface_mounted_cube/surface_mounted_cube.toml (the obstacle_channel driver)
 # ---------------------------------------------------------------------------
 
 using Aeolus.IBM: SolidMask, mark_solid!, implicit_ibm_correction!, wall_distance, first_level_cells
@@ -635,7 +635,7 @@ end
 
 @testset "obstacle_channel: surface_mounted_cube.toml (cube in the static driver) is the old script, bit for bit" begin
     T = 0.04
-    f = joinpath(RD_EX, "sgs", "configs", "surface_mounted_cube_closures.toml")
+    f = joinpath(RD_EX, "surface_mounted_cube", "surface_mounted_cube_closures.toml")
     for (k, model) in enumerate((:smagorinsky, :tke))
         sim, sm, ufl = rd_cube_script(model, T, T)
         cfg = last(only(load_sweep(f; member = k, overrides = ["stepper.t_spin=$T", "stepper.t_avg=$T",
@@ -661,7 +661,7 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# examples/transition/configs/: kelvin_helmholtz.toml (shear_layer) and
+# examples/kelvin_helmholtz/kelvin_helmholtz.toml (shear_layer) and
 # flat_plate_t3a.toml (flat_plate)
 # ---------------------------------------------------------------------------
 
@@ -695,7 +695,7 @@ end
             push!(Bs, sum(r.B[layer])); push!(Ps, sum(r.P[layer]))
         end
     end
-    r = rd_run(joinpath(RD_EX, "transition", "configs", "kelvin_helmholtz.toml"),
+    r = rd_run(joinpath(RD_EX, "kelvin_helmholtz", "kelvin_helmholtz.toml"),
                ["grid.nx=$Nx", "grid.nz=$Nz", "stepper.end_time=$tend", "diagnostics.snapshots=[6.0]"])
     @test rd_same_state(r, sim)
     s = r.obj.records
@@ -733,7 +733,7 @@ end
         end
     end
     cf ./= nacc; ū ./= nacc
-    f = joinpath(RD_EX, "transition", "configs", "flat_plate_t3a.toml")
+    f = joinpath(RD_EX, "flat_plate_t3a", "flat_plate_t3a.toml")
     r = rd_run(f, config_test_table(f).overrides)
     @test rd_same_state(r, sim)
     @test r.obj.cf == cf && r.obj.ū == ū
@@ -747,7 +747,7 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# examples/sgs/configs/rotating_stratified_decay.toml (the sgs_decay driver;
+# examples/rotating_stratified_decay/rotating_stratified_decay.toml (the sgs_decay driver;
 # its fixture, formerly test/fixtures/sgs_validation.jl, is validated by the
 # full-tier test/era6_sgs_validation.jl)
 # ---------------------------------------------------------------------------
@@ -755,7 +755,7 @@ end
 using Aeolus.RunDrivers.SGSDecayDriver: validation_base, run_dns_case, run_les
 
 @testset "sgs_decay: the config runs the fixture; the stratified continuation loses K + PE" begin
-    f = joinpath(RD_EX, "sgs", "configs", "rotating_stratified_decay.toml")
+    f = joinpath(RD_EX, "rotating_stratified_decay", "rotating_stratified_decay.toml")
     r = rd_run(f, config_test_table(f).overrides)
     base = validation_base(; N = 16, t0 = 0.2)
     d = run_dns_case(base, :stratified; nturn = 0.2, nsave = 2)

@@ -1,7 +1,7 @@
 # =========================================================================
 # Reading the run folders of the SBL configurations for the analysis
 # scripts of examples/sbl/ (ONE-g, #456). Nothing is integrated here: a run
-# is made with `julia --project -m Aeolus run examples/sbl/configs/<config>.toml`
+# is made with `julia --project -m Aeolus run examples/sbl/<config>.toml`
 # (the model with its [large_scale_forcing], [surface_layer], [sponge] and
 # [towers] components), and these functions read what it wrote:
 #

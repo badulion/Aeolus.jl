@@ -3,7 +3,7 @@
 # Svensson et al. 2011; Poulos et al. 2002; LES: Kumar et al. 2010) and the
 # CASES-99 "hockey stick" of Sun et al. (2012), P58-d (#194)
 #
-# The runs are the sweep examples/sbl/configs/cases99_closures.toml
+# The runs are the sweep examples/sbl/cases99_closures.toml
 # (cases99.toml: gabls2.toml with the towers; configurations of the
 # model), one run folder per closure: from 16 LT 22 October for 48 h,
 # U_g = (3, -9) m/s, the prescribed surface temperature, z0m = 0.03 m,
@@ -23,7 +23,7 @@
 # and the screen-level observations, compares V_s(z) with Sun et al.
 # (2012) Fig. 3a, and makes the figures.
 #
-#   julia --project -m Aeolus run examples/sbl/configs/cases99_closures.toml     # 64 x 64 x 128 (37.5 m / 12.5 m)
+#   julia --project -m Aeolus run examples/sbl/cases99_closures.toml     # 64 x 64 x 128 (37.5 m / 12.5 m)
 #   julia --project examples/sbl/gabls2.jl runs/*cases99*
 #
 # writes examples/sbl/output/gabls2_<tag>.svg, cases99_hockey_<tag>.svg,

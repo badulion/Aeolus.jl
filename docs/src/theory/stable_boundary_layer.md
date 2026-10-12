@@ -11,7 +11,7 @@ wall-resolved, θ-walled variant of the P54-d channel builder is new
 ## The cases on the one model
 
 Since ONE-g (#456) every SBL case is a configuration of the model
-(`examples/sbl/configs/`, run with `julia --project -m Aeolus run`): a
+(`examples/sbl/`, run with `julia --project -m Aeolus run`): a
 periodic Boussinesq LES over a cooled surface whose every piece is a
 component of the stage pipeline, a thin adapter to a physics module. (P55-f
 #191 and P58-d #194 built the cases as the `sbl` run type,
@@ -32,7 +32,7 @@ folders and make the tables and figures.
 | BL diagnostics | `SurfaceLayer` outputs (`u_star`, `surface_wtheta`, `surface_heat_flux`, `obukhov_length`, `bl_height`, `jet_speed`, `jet_height`, `inversion_height`, `theta_2m`, `wind_10m`, the stress and heat-flux profiles) | `Operators.total_stress_profile`, `total_heat_flux_profile`, `stress_bl_height`, `inversion_height`; `SurfaceExchange.similarity_theta`, `similarity_wind` |
 | CASES-99 towers | `Towers` (`[towers]`), output `tower_threshold` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
-The case tables are dynamic drivers (`examples/sbl/configs/input/`), the
+The case tables are dynamic drivers (`examples/sbl/input/`), the
 initial profiles TOML tables (a `log` or `linear` tail below the lowest
 height), the start time `[time] start` (the clock the driver tables are
 read on), and the comparisons with the intercomparisons are
@@ -128,7 +128,7 @@ statistics over 1.0–1.25 h):
 | SGS share of the heat flux, lower half of the BL | 0.113 | 0.145 |
 | time-stepping cost (s, loaded machine) | 74 | 52 |
 
-Full runs (`configs/gabls1_closures.toml`, read by `examples/sbl/gabls1.jl`; hours 8–9):
+Full runs (`examples/sbl/gabls1_closures.toml`, read by `examples/sbl/gabls1.jl`; hours 8–9):
 
 | closure | grid | ``h`` (m) | ``u_*`` (m s⁻¹) | ``w'θ'_0`` (K m s⁻¹) | ``H`` (W m⁻²) | LLJ max (m s⁻¹) at z | ``L`` (m) |
 | :-- | :-- | --: | --: | --: | --: | :-- | --: |
@@ -174,7 +174,7 @@ of ``h``.
 
 P58-d (#194) runs three observed stable-boundary-layer cases on the same
 driver. It adds no physics. Since CFG-d (#359) each case is a
-configuration in `examples/sbl/configs/` (since ONE-g #456 of the model;
+configuration in `examples/sbl/` (since ONE-g #456 of the model;
 before, of the `sbl` run type): the case constants are in the TOML file,
 the case data the CSVs under `examples/sbl/data/` (provenance in every
 header), written into the configs' dynamic drivers, and the components
@@ -278,7 +278,7 @@ envelope, which holds in every run.
 
 ### GABLS3: full runs
 
-The runs are `configs/gabls3_closures.toml` (and its `--set` resolutions); `examples/sbl/gabls3.jl` reads them and uses 03-04 UTC means. "Envelope" means the
+The runs are `examples/sbl/gabls3_closures.toml` (and its `--set` resolutions); `examples/sbl/gabls3.jl` reads them and uses 03-04 UTC means. "Envelope" means the
 digitised 10-90 % range of the 6.25 m ensemble. Wall times were measured
 on a machine shared with other jobs (load 12-18).
 
@@ -334,7 +334,7 @@ on a machine shared with other jobs (load 12-18).
 
 ### GABLS4, experiment 3
 
-`configs/gabls4_closures.toml` (read by `examples/sbl/gabls4.jl`) uses experiment 3: it starts at 10 UTC from
+`examples/sbl/gabls4_closures.toml` (read by `examples/sbl/gabls4.jl`) uses experiment 3: it starts at 10 UTC from
 the Table 5 profiles, with z0m = 1e-3 m, z0h = 1e-4 m and β_m = 4.8,
 β_h = 7.8. Statistics are 16:30-17:30 UTC means. The finest affordable
 grid here is 2 m, the vertical resolution of experiment 2, on
@@ -413,7 +413,7 @@ layer is deeper and smoother in time (panel c).
 
 ### GABLS2 / CASES-99 and the hockey stick
 
-`configs/cases99_closures.toml` (read by `examples/sbl/gabls2.jl`) runs 48 h from 16 LT on 22 October. The grid
+`examples/sbl/cases99_closures.toml` (read by `examples/sbl/gabls2.jl`) runs 48 h from 16 LT on 22 October. The grid
 is 48 × 48 × 80, i.e. Δx = 50 m and Δz = 20 m on 2.4 × 2.4 × 1.6 km
 (6124 s / 4703 s wall). The convective days need the 1.6 km depth, and
 that depth limits the resolution. The SCM ranges of Holtslag et al.

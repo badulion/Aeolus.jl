@@ -94,9 +94,16 @@ decision, 2026-10-06; the `test/berlin_*.jl` files and the coverage lists
 are gone, #320).
 
 - Do not add Berlin tests; put new physics tests in module tests.
-- Examples are configuration (TOML, static and dynamic input drivers);
-  a `.jl` in `examples/` only analyses run output (maintainer rule,
-  2026-10-09, #438). Model code goes in `src/`.
+- There is one model (`docs/src/design/single_model.md`): a run is a
+  TOML configuration plus its static and dynamic input drivers. New
+  physics goes in its module, with a thin component adapter in
+  `src/components/` and its own TOML section; never a run type or a
+  per-case script.
+- Examples are configuration: a case directory `examples/<case>/` with
+  `<case>.toml` (and its variants), `input/*.nc`, `data/` (reference
+  data) and optional scripts that only read run output (maintainer rule,
+  2026-10-09, #438). `test/examples_enforcement.jl` fails on any `.jl`
+  under `examples/` that builds or steps a model, with no exemptions.
 - After changing the urban site (`Aeolus.UrbanCase`), run its end-to-end checks:
   `julia --project=. test/run.jl --only urban_run.jl,urban_checks.jl`
   (every coupling on, ledgers closed; the nest parent's smoke run and
@@ -189,10 +196,11 @@ weeks because nobody viewed the image at size.
 ## Layout
 
 ```
-src/            65 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl and other module tests, 106,776 fast-tier
+src/            70 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
+test/           runtests.jl + era*_*.jl and other module tests, 121,573 fast-tier
                 assertions; run.jl = parallel runner, test_tags.toml = tiers
-examples/       worked cases; examples/urban/ is the flagship
+examples/       one directory per case: <case>.toml + input/*.nc + data/ + output
+                analysis scripts; examples/urban/ (Berlin) is the flagship
 docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
 ```

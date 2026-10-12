@@ -3,12 +3,6 @@ using Aeolus
 
 DocMeta.setdocmeta!(Aeolus, :DocTestSetup, :(using Aeolus); recursive=true)
 
-# The example drivers (DRIVER_FILES: dns, ...) are loaded to
-# document their options and `using FFTW` etc. at top level: give them the
-# package's own environment, whose dependencies the docs environment does
-# not list directly.
-push!(LOAD_PATH, normpath(joinpath(@__DIR__, "..")))
-
 # The option reference of the model and of every legacy case, and the input-format specifications,
 # generated from the schemas into docs/src/reference/ (CFG-i, #364; not committed).
 include(joinpath(@__DIR__, "generate_reference.jl"))

@@ -385,7 +385,7 @@ MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay
 
 function bench_flagship(; nwarm = 2, nsteps = 9)
     BC = Aeolus.UrbanCase
-    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); output_path = nothing))
+    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"); output_path = nothing))
     for _ in 1:nwarm
         BC.step_case!(case) || error("blowup in warm-up")
     end

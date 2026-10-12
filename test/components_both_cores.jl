@@ -144,7 +144,7 @@ end
 # a dry CBL on both cores
 # ---------------------------------------------------------------------------
 
-const BC_CFG = joinpath(pkgdir(Aeolus), "examples", "configs", "dry_convective_bl.toml")
+const BC_CFG = joinpath(pkgdir(Aeolus), "examples", "dry_convective_bl", "dry_convective_bl.toml")
 bc_cbl_cfg(core, n; extra = String[]) =
     load_run_config(BC_CFG; overrides = vcat(["grid.size=[16,16,16]", "time.duration=\"none\"",
                                               "time.nsteps=$n", "fftw.planner=\"estimate\""],

@@ -7,7 +7,7 @@ case selected by `[run] legacy` (until its port to components) and
 configured only through its schema, so an example is a
 TOML file (plus its input drivers), run with
 
-    julia --project -m Aeolus run examples/<dir>/configs/<case>.toml
+    julia --project -m Aeolus run examples/<case>/<case>.toml
 
 One submodule per driver:
 

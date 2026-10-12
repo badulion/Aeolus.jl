@@ -1,5 +1,5 @@
 # The case and reference tables of the SBL tests (examples/sbl/data/) and
-# the committed dynamic drivers of the SBL configs (examples/sbl/configs/
+# the committed dynamic drivers of the SBL configs (examples/sbl/
 # input/). The model reads only the drivers and the reference files its
 # configs name ([checks.reference]); these readers are the tests' own, for
 # the provenance of the data and for checking the drivers against the case
@@ -7,7 +7,7 @@
 # these were, is gone).
 
 const SBL_DATA = joinpath(pkgdir(Aeolus), "examples", "sbl", "data")
-const SBL_CONFIGS = joinpath(pkgdir(Aeolus), "examples", "sbl", "configs")
+const SBL_CONFIGS = joinpath(pkgdir(Aeolus), "examples", "sbl")
 
 """
     sbl_read_csv(path) -> (; header, columns, rows)

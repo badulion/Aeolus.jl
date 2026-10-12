@@ -1,0 +1,69 @@
+# Decaying isotropic turbulence, DNS against LES (a posteriori; ONE-g #456):
+# a triply periodic 2π box started from the random-phase field of the
+# Passot-Pouquet spectrum E(k) ∝ k⁴ exp(-2 (k/1.5)²), u' = 1 m/s, defined in
+# spectral space ([initial] field, Operators.isotropic_turbulence_field!), so
+# every grid on the box starts from the same large scales: the 64³ LES field
+# is the 256³ DNS field truncated to its modes, to round-off. ν = 2.0e-3
+# m²/s, the viscosity of the former 256³ DNS record (k_max η ≥ 1.5 over the
+# decay at 256³; Re_λ ≈ 79 at the dissipation peak, t ≈ 3.6 s), no buoyancy.
+# Run to t = 8 s; the output is the resolved kinetic energy and the
+# dissipation (molecular + SGS) every 0.05 s and the energy spectrum E(k)
+# every second. examples/dns_vs_les/compare.jl reads the run folders.
+#
+# The LES: 64³ (Δ = 0.098 m ≈ 8 η of the DNS), Smagorinsky-Lilly, C_s = 0.17 (Lilly 1967).
+# A minute or two on one core.
+#
+#   julia --project -m Aeolus run examples/dns_vs_les/les_smagorinsky.toml
+
+schema_version = 2
+
+[run]
+name = "les_smagorinsky"
+seed = 1
+
+[time]
+scheme = "rk3"
+dt = "adaptive"
+cfl = 1.0
+dt_max = 0.05
+duration = 8.0
+
+[grid]
+size = [64, 64, 64]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "periodic"
+
+[dynamics]
+theta0 = 0.0                   # no buoyancy
+nu = 2.0e-3
+
+[initial]
+field = {kind = "isotropic_turbulence", spectrum = "passot_pouquet", u_rms = 1.0, k_peak = 1.5, seed = 1}
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.17
+pr_t = 0.3333333333333333
+
+[output]
+variables = ["kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum"]
+averaging = "instant"
+cadence = 1.0
+series_cadence = 0.05
+
+[checks]
+finite = { required = true }
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
+# against this file's directory.
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "time.duration=\"none\"",
+    "time.nsteps=5",
+]
