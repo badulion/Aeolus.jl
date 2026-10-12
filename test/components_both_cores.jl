@@ -482,3 +482,143 @@ end
         @test Set(v.name for v in BCC.outputs(c)) == Set(BCC.output_names(T, nothing))
     end
 end
+
+# ---------------------------------------------------------------------------
+# the components of the validation cases (ONE-l, #475) on both cores: the
+# prognostic TKE closure of [sgs], the parent's inflow statistics, the
+# kinematic flow and the fringe
+# ---------------------------------------------------------------------------
+
+const BC_TKE = (closure = :tke, c_s = nothing, pr_t = 1 / 3, stability = :none, stress = :laplacian,
+                e_min = 1e-3, surface_factor = 3.9, wall_cap = true)
+const BC_STATS = (enabled = true, start = 0.0, tau_avg = 600.0, refine = (2, 2, 4), depth = 1000.0)
+
+"A domain on `core` with the TKE closure, a heated floor and the inflow statistics."
+function bc_tke_domain(core; scheme = :euler, cfl = nothing, stats = true)
+    sim = bc_state!(bc_core(core; ν = 0.2))
+    core === :boussinesq ? Aeolus.TimeIntegration._project!(sim, 1.0) : Aeolus.Anelastic._project_mass_weighted!(sim)
+    d0 = Domain(sim; scheme = scheme, cfl = cfl, validate = false)
+    specs = (SGS => BC_TKE, SurfaceThetaFlux => (bottom = 0.1, top = 0.0),
+             (stats ? (ParentStatistics => BC_STATS,) : ())...)
+    return Domain(d0; components = (CentredAdvection(), BCC.build_components(specs, d0)...))
+end
+
+@testset "[sgs] closure = \"tke\" on both cores: the surface buoyancy of the components' wall flux ($core)" for
+        core in (:boussinesq, :anelastic)
+    # at rest over a uniform θ (N² = 0) the TKE closure's buoyant production
+    # is the floor flux's half-face share in every first-level cell,
+    # (g/θ₀) Q/2 ΔV: the flux the domain's SurfaceThetaFlux applies (not the core's)
+    sim = bc_warm!(bc_core(core))
+    d = bc_with(sim, SGS => BC_TKE, SurfaceThetaFlux => (bottom = 0.1, top = -0.02))
+    sgs = only(c for c in d.components if c isa SGS)
+    @test sgs.closure isa TKEClosure && BCC.attaches(sgs, :surface_flux)
+    BCC.run_stage!(sgs, d, Val(:surface_flux), 1.0)
+    @test sgs.wall_flux == [0.1, -0.02]
+    b = Aeolus.PrognosticSGS.tke_budget(sgs.closure, sim)
+    m = BC_MESH; V = m.dx * m.dy * m.dz
+    @test isapprox(b.buoyancy, 64 * 9.81 / 300.0 * (0.1 - 0.02) / 2 * V; rtol = 1e-12)
+    # the seed: the local equilibrium of the initial flow, at least e_min; the wall cap needs a floor
+    @test minimum(interior_view(sgs.closure.e)) >= 1e-3 && sgs.closure.l_wall !== nothing
+    @test Set(v.name for v in BCC.outputs(sgs)) == Set(BCC.output_names(SGS, BC_TKE)) == Set(["sgs_tke", "sgs_tke_profile"])
+end
+
+@testset "checkpoint round trip of the TKE closure and the inflow statistics ($core, $sch)" for
+        core in (:boussinesq, :anelastic), (sch, cfl) in ((:euler, nothing), (:rk3, nothing),
+                                                          (:rk3, CFLConstraints(; C_advective = 0.4, dt_max = 4.0)))
+    d = bc_advance!(bc_tke_domain(core; scheme = sch, cfl = cfl), 3)
+    path = joinpath(mktempdir(), "ck.jls")
+    checkpoint!(d.state, path; components = BCC.checkpoint_components(d))
+    bc_advance!(d, 3)
+    d2 = bc_tke_domain(core; scheme = sch, cfl = cfl)
+    restart!(d2.state, path; components = BCC.checkpoint_components(d2))   # the statistics wait for their first fold
+    bc_advance!(d2, 3)
+    @test bc_bits(d2.state) == bc_bits(d.state)
+    e(d) = only(c for c in d.components if c isa SGS).closure.e.data
+    @test e(d2) == e(d) && minimum(interior_view(only(c for c in d.components if c isa SGS).closure.e)) > 0
+    st(d) = only(c for c in d.components if c isa ParentStatistics).stats
+    @test st(d2).nsamples == st(d).nsamples == 6
+    p, p2 = Aeolus.Transition.inflow_stress_parts(st(d)), Aeolus.Transition.inflow_stress_parts(st(d2))
+    @test all(getproperty(p, k) == getproperty(p2, k) for k in keys(p))
+    # the statistics' outputs: the four levels below 1000 m, NaN above; what
+    # the generator adds is the SGS part plus the scale-gap band
+    ps = only(c for c in d.components if c isa ParentStatistics)
+    vs = Dict(v.name => v.getter(d) for v in BCC.outputs(ps))
+    @test Set(keys(vs)) == Set(BCC.output_names(ParentStatistics, BC_STATS))
+    @test all(isfinite, vs["inflow_uu_generated"][1:4]) && all(isnan, vs["inflow_uu_generated"][5:end])
+    @test vs["inflow_uu_generated"][1:4] ≈ vs["inflow_uu_sgs"][1:4] .+ vs["inflow_uu_band"][1:4]
+end
+
+@testset "[kinematic_flow] on both cores: the velocity is prescribed, θ is carried at it ($core, $sch)" for
+        core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
+    m = RegularGrid(; size = (32, 32, 4), extent = (3200.0, 3200.0, 400.0), halo = (2, 2, 2))
+    sim = bc_warm!(bc_core(core; mesh = m))
+    set!(sim.θ, (x, y, z) -> 300.0 + exp(-((x - 1600)^2 + (y - 1600)^2) / (2 * 200.0^2)))   # e^-32 at the edges
+    kf = (kind = :uniform, omega = 0.0, center = (0.0, 0.0), velocity = (10.0, -5.0, 0.0))
+    d = bc_with(sim, KinematicFlow => kf; scheme = sch)
+    Wc, _ = bc_weights(sim); H = m.Hz
+    xs = collect(Aeolus.Grids.xnodes(m, CellCenter())); ys = collect(Aeolus.Grids.ynodes(m, CellCenter()))
+    function moments(s)
+        θp = interior_view(s.θ) .- 300.0
+        M = sum(Wc[H+k] * sum(θp[:, :, k]) for k in 1:m.Nz)
+        X = sum(Wc[H+k] * sum(xs[i] * θp[i, j, k] for i in 1:m.Nx, j in 1:m.Ny) for k in 1:m.Nz)
+        Y = sum(Wc[H+k] * sum(ys[j] * θp[i, j, k] for i in 1:m.Nx, j in 1:m.Ny) for k in 1:m.Nz)
+        return M, X / M, Y / M
+    end
+    M0, X0, Y0 = moments(sim)
+    for _ in 1:10; step!(d, 2.0); end
+    M1, X1, Y1 = moments(sim)
+    @test all(==(10.0), interior_view(sim.u)) && all(==(-5.0), interior_view(sim.v)) && all(iszero, interior_view(sim.w))
+    # the flux form conserves Σ W θ' and moves its centroid at exactly the
+    # prescribed velocity: 200 m in x, −100 m in y in 20 s (the moments are
+    # sums of θ − 300 K, whose round-off at 300 K sets the tolerance)
+    @test isapprox(M1, M0; rtol = 1e-10)
+    # (measured on the Boussinesq core: 199.99999954 m with Euler, 199.9999926 m
+    # with SSP-RK3, whose stage combinations round θ ≈ 300 K more often)
+    @test isapprox(X1 - X0, 200.0; rtol = 1e-7) && isapprox(Y1 - Y0, -100.0; rtol = 1e-7)
+    @test checkpoint_state(only(c for c in d.components if c isa KinematicFlow)) === nothing   # stateless
+end
+
+const BC_FRINGE = (profile = :blasius, inflow_reynolds = 300.0, velocity = 1.0, length = 40.0, rise = 10.0,
+                   fall = 5.0, lambda_max = 0.4, top = :wall, tu = 0.033, length_scale = 5.0, modes = 50, seed = 1,
+                   kappa_cells = 3.0, damping_height = 2.0)
+const BC_PLATE = RegularGrid(; size = (64, 4, 16), extent = (100.0, 8.0, 8.0), halo = (2, 2, 2))
+"A plate on `core` with the fringe ([`BC_FRINGE`](@ref), a closed lid)."
+function bc_plate(core; scheme = :rk3)
+    sim = bc_core(core; mesh = BC_PLATE, ν = 1 / 300.0,
+                  bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall))
+    return bc_with(sim, Fringe => BC_FRINGE; scheme = scheme)
+end
+
+@testset "[fringe] on both cores: the relaxation toward the Blasius target, the plate's c_f, a restart ($core)" for
+        core in (:boussinesq, :anelastic)
+    d = bc_plate(core); s = d.state; m = BC_PLATE
+    fr = only(c for c in d.components if c isa Fringe)
+    # the initial state is the Blasius layer: its skin friction 0.664 Re_x^(-1/2)
+    # at Re_x = (x − x_le)/ν on the plate (Δz = 0.5 δ*₀: within 15 %)
+    cf = only(BCC.outputs(fr)).getter(d)
+    x = collect(Aeolus.Grids.xnodes(m, Aeolus.Grids.FaceX()))
+    x_in = (300.0 / Aeolus.Transition.default_blasius().delta_star)^2 / 300.0
+    Re = (x .+ x_in) .* 300.0
+    @test all(isapprox(cf[i, j], Aeolus.Transition.blasius_skin_friction(Re[i]); rtol = 0.15) for i in 1:20, j in 1:m.Ny)
+    # the tendency: −λ(x)(u − u_target) in the fringe, nothing upstream of it,
+    # the target refreshed with the free-stream disturbance first
+    for f in (s.tu, s.tv, s.tw); fill!(f.data, 0); end
+    interior_view(s.u) .+= 0.1
+    BCC.run_stage!(fr, d, Val(:body_force), 1.0)
+    ut = fr.target.u.data; tu = s.tu.data; ud = s.u.data
+    i_up = m.Hx + 10; i_pl = m.Hx + findfirst(>(80.0), x)            # x = 15 m (plate), x > 80 m (plateau)
+    @test all(iszero, tu[i_up, :, :])
+    @test all(tu[i_pl, j, k] ≈ -0.4 * (ud[i_pl, j, k] - ut[i_pl, j, k]) for j in m.Hy+1:m.Hy+m.Ny, k in m.Hz+1:m.Hz+m.Nz)
+    @test maximum(abs, fr.target.v.data[i_pl, :, :]) > 0           # the disturbance in the target
+    # a restart continues bit for bit: the target and the time of its last
+    # refresh are checkpointed (the first substage of a step keeps the
+    # previous step's last target, so a target rebuilt from the time would not)
+    d1 = bc_plate(core); for _ in 1:3; step!(d1, 0.5); end
+    path = joinpath(mktempdir(), "ck.jls")
+    checkpoint!(d1.state, path; components = BCC.checkpoint_components(d1))
+    for _ in 1:3; step!(d1, 0.5); end
+    d2 = bc_plate(core)
+    restart!(d2.state, path; components = BCC.checkpoint_components(d2))
+    for _ in 1:3; step!(d2, 0.5); end
+    @test bc_bits(d2.state) == bc_bits(d1.state)
+end

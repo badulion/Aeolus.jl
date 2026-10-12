@@ -538,6 +538,9 @@ function Components.outputs(c::SimulationCouplings)
     return vs
 end
 
+# the slab's floor flux of the step (the TKE closure's surface buoyancy)
+Components.wall_theta_flux(c::SimulationCouplings, d) = c.c.slab === nothing ? (0.0, 0.0) : (c.c.slab.Q, 0.0)
+
 Components.budget_fields(c::SimulationCouplings, q::Symbol) =
     q === :water && c.c.water !== nothing ? (c.c.water.ql, c.c.water.qr) :
     q === :tracer && c.c.tracer !== nothing ? (c.c.tracer.c,) : ()

@@ -34,11 +34,14 @@ module Components
 
 using ..Operators: Operators, momentum_advect!, add_coriolis!, coriolis_parameter, add_surface_flux!,
                    total_stress_profile, total_heat_flux_profile, stress_bl_height, inversion_height,
-                   sgs_fields, damping_coordinates, isotropic_energy_spectrum, dissipation_rate,
+                   sgs_fields, damping_coordinates, w_variance_profile, resolved_tke_profile, smooth_step, isotropic_energy_spectrum, dissipation_rate,
                    AbstractSGSClosure, StaticSmagorinsky, DynamicSmagorinsky, VremanClosure,
                    SigmaModel, AMDClosure, StabilityCorrected
 using ..TurbulenceStability: BrownEtAl1994, LillyCutoff, ShortTail, LongTail
 using ..Simulations: Simulations, BoussinesqSimulation, step_rk3!, add_velocity_sponge!
+using ..PrognosticSGS: TKEClosure, initialize_tke!
+using ..IBM: SolidMask, first_level_cells, wall_distance
+using ..BoundaryConditions: Periodic, NoSlipWall
 using ..Grids: CellCenter
 using ..BoundaryConditions: fill_halos!
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, BusingerDyerBeljaarsHoltslag,
@@ -46,14 +49,18 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, Busi
 using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!
 using ..LargeScaleForcing: GeostrophicPressureGradient, AdvectiveTendencies, Subsidence, ProfileNudging,
                            SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature
-using ..Transition: TowerSampler, tower_sampler, sample_towers!, reset_segment!, tower_thresholds
+using ..Transition: TowerSampler, tower_sampler, sample_towers!, reset_segment!, tower_thresholds,
+                    ParentResolvedStatistics, update_inflow_statistics!, inflow_stress_parts,
+                    turbulent_fraction, flux_richardson, FringeRegion, blasius_target, blasius_freestream,
+                    FreeStreamDisturbance, blasius_solution, disturbance_fringe_update, set_blasius!, add_fringe!,
+                    skin_friction, default_blasius
 using ..Anelastic: MassWeightedSimulation
 using ..TimeIntegration: TimeIntegration, CFLConstraints, adaptive_dt
 import ..TimeIntegration: step_adaptive!
 using ..InputDrivers: advance_feed!, dynamic_forcing
 using ..Config: Config, Section, ConfigError, ConfigProblem
 using ..Grids: interior
-using ..Fields: interior_view
+using ..Fields: interior_view, set!
 using ..Backends: plane_partials!
 using ..MoistThermodynamics: DEFAULT_CONSTANTS, R_d
 using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weight, budget_start!,
@@ -67,7 +74,7 @@ import ..IO: checkpoint_state, restore_checkpoint_state!, component_nonfinite_fi
 import ..TimeSteppers: step!
 
 export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
-       CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers,
+       CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
        CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model
 
@@ -86,5 +93,8 @@ include("components/large_scale_forcing.jl")
 include("components/sponge.jl")
 include("components/surface_layer.jl")
 include("components/towers.jl")
+include("components/inflow_statistics.jl")
+include("components/kinematic_flow.jl")
+include("components/fringe.jl")
 
 end # module

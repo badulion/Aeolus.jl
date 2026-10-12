@@ -86,7 +86,8 @@ end
         @test is_domain_section(sch, s.name)
     end
     @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux",
-                                                   "large_scale_forcing", "surface_layer", "towers"]   # ONE-g #456
+                                                   "large_scale_forcing", "surface_layer", "towers",   # ONE-g #456
+                                                   "inflow_statistics", "kinematic_flow", "fringe"]    # ONE-l #475
     @test Set(sch.domain_sections) == Set(DOMAIN_SECTIONS)
     # run-level sections: the common ones and time, output, checks (no preprocess: AeolusPrep.jl, ONE-h)
     @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==

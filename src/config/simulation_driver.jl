@@ -32,7 +32,7 @@ using ..TimeIntegration: CFLConstraints, _project!
 using ..StretchedGrids: StretchedGrid
 using ..Anelastic: AnelasticSimulation, MassWeightedSimulation, isentropic_reference
 using ..Components: Components, Domain, Model, CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux,
-                    LargeScale, SurfaceLayer, Towers,
+                    LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
                     build_components, checkpoint_components, sgs_closure, step_adaptive!, component_problems
 using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previous_dt, resume!,
             maybe_checkpoint!, with_monitor, monitored_step!, check_blowup!, output_dir
@@ -97,7 +97,8 @@ Monin–Obukhov surface layer (the `:surface` slot) and the virtual towers
 component, [`SimulationCouplings`](@ref), with six sections, until their
 port to components, ONE-e #454.)
 """
-const COMPONENTS = (CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers)
+const COMPONENTS = (CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers,
+                    ParentStatistics, KinematicFlow, Fringe)
 
 _isnum(x) = x isa Real && !(x isa Bool)
 
@@ -115,12 +116,17 @@ const _PROFILE_KEYS = Dict("constant" => ["value"],
                            "table" => ["z", "values"],
                            "exponential" => ["value", "scale_height"],
                            "taylor_green" => ["amplitude", "k"],
-                           "box" => ["value", "x", "y", "z"])
+                           "box" => ["value", "x", "y", "z"],
+                           "gaussian" => ["value", "amplitude", "center", "sigma"],
+                           "tanh" => ["value", "amplitude", "center", "thickness"],
+                           "seed_mode" => ["amplitude", "wavenumber", "center", "thickness"])
 
 # the profile kinds of each variable: the vertical ones for all, the
 # Taylor–Green field for u and v, a box for the cloud water (EX-d, #441)
-_profile_kinds(var) = sort!(vcat(["constant", "exponential", "mixed_layer_lapse", "table"],
-                                var in ("u", "v") ? ["taylor_green"] : String[], var == "ql" ? ["box"] : String[]))
+_profile_kinds(var) = var == "w" ? ["seed_mode"] :
+    sort!(vcat(["constant", "exponential", "mixed_layer_lapse", "table"],
+               var in ("u", "v") ? ["taylor_green"] : String[], var == "ql" ? ["box"] : String[],
+               var == "theta" ? ["gaussian"] : String[], var in ("u", "v", "theta") ? ["tanh"] : String[]))
 
 "The validator of the profile table of variable `var` (an empty table: the default profile)."
 function _profile_validator(var::String)
@@ -147,6 +153,9 @@ function _profile_validator(var::String)
             elseif kind == "box" && k != "value"
                 (v isa AbstractVector && length(v) == 2 && all(_isnum, v) && v[1] < v[2]) ||
                     push!(probs, "$k: expected [lower, upper] with lower < upper (m)")
+            elseif kind == "gaussian" && k == "center"
+                (v isa AbstractVector && length(v) == 2 && all(_isnum, v)) ||
+                    push!(probs, "center: expected [x₀, y₀] (m)")
             else
                 _isnum(v) && isfinite(v) || push!(probs, "$k: expected a finite number, got $(repr(v))")
             end
@@ -156,6 +165,9 @@ function _profile_validator(var::String)
                 push!(probs, "z and values have different lengths ($(length(t["z"])) and $(length(t["values"])))")
             issorted(t["z"]; lt = <=) || push!(probs, "z: expected strictly increasing heights")
         end
+        kind == "gaussian" && isempty(probs) && !(t["sigma"] > 0) && push!(probs, "sigma: expected a positive width (m)")
+        kind in ("tanh", "seed_mode") && isempty(probs) && !(t["thickness"] > 0) &&
+            push!(probs, "thickness: expected a positive thickness (m)")
         kind == "exponential" && isempty(probs) && !(t["scale_height"] > 0) &&
             push!(probs, "scale_height: expected a positive height (m)")
         return probs
@@ -265,7 +277,9 @@ The value at height `z` of a vertical profile of `[initial]`:
     {kind = "log", z0}`, the log law from zero at `z0` to the lowest value
     (`v₁ ln(z/z0)/ln(z₁/z0)`), or with `below = {kind = "linear", z, value}`
     linear from `value` at `z` to the lowest value;
-  * `{kind = "exponential", value, scale_height}`: `value exp(−z/scale_height)`.
+  * `{kind = "exponential", value, scale_height}`: `value exp(−z/scale_height)`;
+  * `{kind = "tanh", value, amplitude, center, thickness}`: `value +
+    amplitude tanh((z − center)/thickness)`, a shear layer.
 """
 function profile_value(p::AbstractDict, z::Real)
     kind = p["kind"]
@@ -292,6 +306,8 @@ function profile_value(p::AbstractDict, z::Real)
         return (1 - w) * vs[i] + w * vs[i+1]
     elseif kind == "exponential"
         return Float64(p["value"]) * exp(-z / Float64(p["scale_height"]))
+    elseif kind == "tanh"
+        return Float64(p["value"]) + Float64(p["amplitude"]) * tanh((z - Float64(p["center"])) / Float64(p["thickness"]))
     end
     throw(ArgumentError("profile_value: kind $(repr(kind)) is not a vertical profile"))
 end
@@ -387,9 +403,15 @@ function Config.driver_sections(::SimulationDriverType)
             option!(s, v, OpenTable(_profile_validator(v)),
                     doc = "initial $v: {kind = \"constant\", value}, {kind = \"mixed_layer_lapse\", value, z_i, lapse}, " *
                           "{kind = \"table\", z, values}" *
+                          (v == "theta" ? ", {kind = \"gaussian\", value, amplitude, center = [x₀, y₀], sigma} (value + amplitude exp(−((x − x₀)² + (y − y₀)²)/(2σ²)), a column)" : "") *
+                          (v == "qv" ? "" : ", {kind = \"tanh\", value, amplitude, center, thickness} (value + amplitude tanh((z − center)/thickness), a shear layer)") *
                           (v in ("u", "v") ? ", or {kind = \"taylor_green\", amplitude, k} (u = A sin kx cos ky cos kz, v = -A cos kx sin ky cos kz)" : "") *
                           "; {} (the default): $d")
         end
+        option!(s, "w", OpenTable(_profile_validator("w")),
+                doc = "initial w (at the z faces): {kind = \"seed_mode\", amplitude, wavenumber, center, thickness}, " *
+                      "w = amplitude sin(wavenumber x) exp(−((z − center)/thickness)²), a normal-mode seed of a shear " *
+                      "layer (not projected); {} (the default): 0")
         option!(s, "ql", OpenTable(_profile_validator("ql")),
                 doc = "initial cloud water (microphysics.scheme = \"kessler\"): a vertical profile as for theta, or " *
                       "{kind = \"box\", value, x = [x₀, x₁], y = [y₀, y₁], z = [z₀, z₁]} (value strictly inside the box, 0 outside); {}: 0")
@@ -536,10 +558,16 @@ function _cross_checks(cfg)
         g.stretching === :uniform || push!(e, ConfigError("grid.stretching", "the anelastic core needs a uniform grid"))
     end
     if g.stretching !== :uniform
-        s.closure in (:none, :smagorinsky) ||
-            push!(e, ConfigError("sgs.closure", "on a stretched grid the closure is none or smagorinsky, not $(s.closure)"))
+        s.closure in (:none, :smagorinsky, :tke) ||
+            push!(e, ConfigError("sgs.closure", "on a stretched grid the closure is none, smagorinsky or tke, not $(s.closure)"))
         s.stability === :none ||
             push!(e, ConfigError("sgs.stability", "the stability correction needs a uniform grid"))
+    end
+    if s.closure !== :tke
+        for k in ("e_min", "surface_factor", "wall_cap")
+            isequal(s[k], _schema_default(cfg, "sgs", k)) ||
+                push!(e, ConfigError("sgs.$k", "belongs to sgs.closure = \"tke\", not $(s.closure): it would be ignored"))
+        end
     end
     s.stability === :none || s.closure in (:smagorinsky, :dynamic_smagorinsky, :vreman, :sigma) ||
         push!(e, ConfigError("sgs.stability", "the stability correction wraps smagorinsky, dynamic_smagorinsky, vreman or sigma, not $(s.closure)"))
@@ -560,6 +588,7 @@ function _cross_checks(cfg)
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
     end
     append!(e, _boundary_layer_checks(cfg))
+    append!(e, _one_l_checks(cfg))
     append!(e, _checks_problems(cfg))
     append!(e, _nest_domain_checks(cfg))
     # slots, requirements, incompatibilities of the enabled components (ONE-b)
@@ -625,6 +654,34 @@ function _boundary_layer_checks(cfg)
     return e
 end
 
+# the components of the validation cases (ONE-l, #475): what they need of the domain
+function _one_l_checks(cfg)
+    e = ConfigError[]
+    fr = cfg.fringe; b = cfg.boundaries; g = cfg.grid; d = cfg.dynamics
+    if fr.profile !== :none
+        b.x === :periodic || push!(e, ConfigError("fringe.profile", "the fringe recycles the outflow: boundaries.x = \"periodic\""))
+        b.z === :noslip || push!(e, ConfigError("fringe.profile", "the plate is a no-slip floor: boundaries.z = \"noslip\""))
+        g.stretching === :uniform || push!(e, ConfigError("fringe.profile", "the fringe needs a uniform grid"))
+        fr.length < g.extent[1] || push!(e, ConfigError("fringe.length", "the fringe is longer than the domain"))
+        fr.rise + fr.fall <= fr.length || push!(e, ConfigError("fringe.rise", "rise + fall exceed the fringe length"))
+        d.nu == fr.velocity / fr.inflow_reynolds ||
+            push!(e, ConfigError("dynamics.nu", "the fringe's layer has ν = velocity / inflow_reynolds = " *
+                                                "$(fr.velocity / fr.inflow_reynolds) m² s⁻¹ (δ*₀ = 1 m), got $(d.nu)"))
+    end
+    kf = cfg.kinematic_flow
+    if kf.kind !== :none
+        any(==(:open), (b.x, b.y)) && push!(e, ConfigError("kinematic_flow.kind", "the prescribed flow runs in a closed or periodic box"))
+        kf.kind === :solid_body_rotation && kf.omega == 0 &&
+            push!(e, ConfigError("kinematic_flow.omega", "a solid-body rotation needs omega ≠ 0"))
+    end
+    st = cfg.inflow_statistics
+    st.enabled && cfg.sgs.closure === :none &&
+        push!(e, ConfigError("inflow_statistics.enabled", "the statistics' SGS part reads the domain's [sgs] closure: set one"))
+    st.enabled && g.stretching !== :uniform &&
+        push!(e, ConfigError("inflow_statistics.enabled", "the inflow statistics need a uniform grid"))
+    return e
+end
+
 "The values of the resolved `[checks]` table."
 _checks_table(cfg) = getfield(cfg.checks, :values)
 
@@ -678,7 +735,8 @@ an open face needs a domain `dynamic_driver`, the other lateral axis open or per
 `initial.field` (isotropic turbulence) needs a triply periodic uniform grid and sets u, v (no `initial.u`, `initial.v`); `energy_spectrum` needs a triply periodic uniform grid, `dissipation` a uniform one; `initial.velocity_perturbation.project` needs the boussinesq core; `time.start` is 0 with open faces; `coriolis.f` and `coriolis.latitude` exclude each other
 the surface layer needs a uniform grid, z walls, `surface.model = "none"` and `surface_theta_flux.bottom = 0`; its `temperature = {kind = "driver"}` and the `[large_scale_forcing]` driver tables need the domain's `dynamic_driver`; a geostrophic wind needs `[coriolis]`; `sponge.target = "geostrophic"` needs `[large_scale_forcing]`; the towers need a uniform grid
 the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture and a uniform grid
-on a stretched grid `sgs.closure` is `none` or `smagorinsky` and `sgs.stability` is `none`
+`[fringe]` needs periodic x, a no-slip floor (`boundaries.z = "noslip"`), a uniform grid, a fringe shorter than the domain with `rise + fall ≤ length`, and `dynamics.nu = velocity / inflow_reynolds`; `[kinematic_flow]` runs in a box without open faces (a rotation with `omega ≠ 0`); `[inflow_statistics]` needs an `[sgs]` closure and a uniform grid
+on a stretched grid `sgs.closure` is `none`, `smagorinsky` or `tke` and `sgs.stability` is `none`; `sgs.e_min`, `surface_factor` and `wall_cap` belong to `closure = "tke"`
 `sgs.stability` wraps `smagorinsky`, `dynamic_smagorinsky`, `vreman` or `sigma` only
 `sponge.z_start` lies below the top
 an `initial.qv` profile needs `dynamics.moisture = true`
@@ -731,6 +789,16 @@ function _mesh(g)
 end
 
 _bc(s::Symbol) = s === :free_slip ? :wall : s
+
+# the top of a closed box: the [boundaries] z face, or the one an enabled
+# component sets (Components.core_boundaries: the fringe's free stream, ONE-l)
+function _top_bc(cfg, mesh)
+    for C in enabled_components(cfg)
+        o = Components.core_boundaries(C, cfg[Components.section(C)], mesh, cfg.dynamics.nu)
+        o === nothing || return o.top
+    end
+    return _bc(cfg.boundaries.z)
+end
 _scalar_bc(s::Symbol) = s === :periodic ? :periodic : :noflux
 
 # The open box of `cfg` (an open lateral axis): the faces' planes, data set later.
@@ -786,7 +854,7 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
         check_planes(feed, only(open_boundary_states(bcs)).planes)
         set_boundary_data!(bcs, feed.data)
     else
-        bcs = FieldBoundaryConditions(_bc(b.x), _bc(b.y), _bc(b.z))
+        bcs = FieldBoundaryConditions(_bc(b.x), _bc(b.y), _bc(b.z); top = _top_bc(cfg, mesh))
         θ_bcs = FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y), _scalar_bc(b.z))
     end
     # the core carries the dynamics only: SGS, advection, Coriolis, the
@@ -843,6 +911,12 @@ function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
         A = Float64(p["amplitude"]); k = Float64(p["k"])
         comp === :u ? set!(f, (x, y, z) -> A * (sin(k * x) * cos(k * y) * cos(k * z))) :
                       set!(f, (x, y, z) -> A * (-cos(k * x) * sin(k * y) * cos(k * z)))
+    elseif get(p, "kind", "") == "seed_mode"          # amplitude sin(k x) exp(−((z − center)/thickness)²)
+        a = Float64(p["amplitude"]); k = Float64(p["wavenumber"]); c = Float64(p["center"]); h = Float64(p["thickness"])
+        set!(f, (x, y, z) -> a * sin(k * x) * exp(-((z - c) / h)^2))
+    elseif get(p, "kind", "") == "gaussian"           # a column: value + amplitude exp(−r²/(2σ²))
+        v = Float64(p["value"]); a = Float64(p["amplitude"]); x0, y0 = Float64.(p["center"]); σ = Float64(p["sigma"])
+        set!(f, (x, y, z) -> v + a * exp(-((x - x0)^2 + (y - y0)^2) / (2σ^2)))
     elseif get(p, "kind", "") == "box"
         v = Float64(p["value"]); bx = Float64.(p["x"]); by = Float64.(p["y"]); bz = Float64.(p["z"])
         set!(f, (x, y, z) -> (bx[1] < x < bx[2] && by[1] < y < by[2] && bz[1] < z < bz[2]) ? v : 0.0)
@@ -856,6 +930,7 @@ function _initialise!(sim, cfg)
     ini = cfg.initial
     isempty(ini.u) || _set_profile!(sim.u, ini.u, :u)
     isempty(ini.v) || _set_profile!(sim.v, ini.v, :v)
+    isempty(ini.w) || _set_profile!(sim.w, ini.w, :w)
     if !isempty(ini.theta)
         _set_profile!(sim.θ, ini.theta, :theta)
     elseif sim isa BoussinesqSimulation && cfg.dynamics.theta0 != 0

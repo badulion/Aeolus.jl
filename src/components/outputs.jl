@@ -11,8 +11,15 @@ The names in the core's output catalogue ([`core_outputs`](@ref)):
 | :-- | :-- | :-- |
 | `u`, `v`, `w`, `p`, `theta`, `qv` | 3-D | the prognostic fields (`qv` with moisture), at their own staggered positions |
 | `u_profile`, `v_profile`, `theta_profile`, `qv_profile` | z | horizontal means per level |
+| `heat_flux_profile` | z | the total (resolved + SGS) upward θ flux, at the cell centres (the mean of its two faces; the bottom face holds the wall flux the components apply, [`wall_theta_flux`](@ref)), `Operators.total_heat_flux_profile` |
+| `w_variance_profile`, `resolved_tke_profile` | z | the plane variance of w at the cell centres (`Operators.w_variance_profile`) and the resolved TKE per level (`Operators.resolved_tke_profile`) |
 | `u_mean`, `v_mean`, `w_mean`, `theta_mean`, `qv_mean` | scalar | domain means (time series) |
 | `budget_energy`, `budget_water`, `budget_momentum`, `budget_tracer` | scalar group | the measured budgets ([`with_budgets`](@ref)): cumulative storage, every attributed term and the closure (time series) |
+| `u_squared` | 3-D | ``u^2`` at the x faces: its time mean (`averaging = "mean"`) less the square of the mean `u` is the variance of u |
+| `w_rms` | scalar | the root-mean-square of w over the interior faces (m s⁻¹): the amplitude of a growing mode |
+| `turbulent_fraction_profile` | z | the plane fraction γ of turbulent cells (`Transition.turbulent_fraction`, the vorticity-fluctuation indicator) |
+| `shear_production_profile`, `buoyancy_production_profile` | z | the resolved (+ SGS) shear production ``P = −⟨u'w'⟩∂_zU − ⟨v'w'⟩∂_zV`` and buoyancy flux ``B = (g/θ_0)⟨w'θ'⟩`` per level (`Transition.flux_richardson`; ``Ri_f = −B/P``); `buoyancy_production_profile` on the Boussinesq core needs `θ₀ > 0` |
+| `vorticity_y` | 3-D | the y component of the vorticity at the cell centres (s⁻¹) |
 | `kinetic_energy` | scalar | the resolved kinetic energy ``½⟨u^2 + v^2 + w^2⟩`` of the face values (m² s⁻²) |
 | `dissipation`, `dissipation_sgs` | scalar | the dissipation of the resolved energy, molecular plus SGS, and its SGS part (`Operators.dissipation_rate`, m² s⁻³) |
 | `energy_spectrum` | k | the shell-summed energy spectrum ``E(k)`` (`Operators.isotropic_energy_spectrum`, m³ s⁻²; a triply periodic regular grid) |
@@ -23,9 +30,12 @@ component that carries a tracer, `budget_energy` on the Boussinesq core
 """
 const CORE_OUTPUTS = ("u", "v", "w", "p", "theta", "qv",
                       "u_profile", "v_profile", "theta_profile", "qv_profile",
+                      "heat_flux_profile", "w_variance_profile", "resolved_tke_profile",
                       "u_mean", "v_mean", "w_mean", "theta_mean", "qv_mean",
                       "budget_energy", "budget_water", "budget_momentum", "budget_tracer",
-                      "kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum")
+                      "kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum",
+                      "u_squared", "w_rms", "turbulent_fraction_profile", "shear_production_profile", "buoyancy_production_profile",
+                      "vorticity_y")
 
 """
     DEFAULT_OUTPUTS
@@ -76,6 +86,46 @@ function _dissipation(d)
     return dissipation_rate(s.u, s.v, s.w, s.ν, sgs_closure(d) === nothing ? nothing : s.νt)
 end
 
+# The total (resolved + SGS) upward θ flux at the w faces: the closure's last
+# vertical diffusivity (the core's κt without a closure), the bottom face the
+# wall flux the domain's components apply (`Operators.total_heat_flux_profile`)
+function _heat_flux_faces(d)
+    s = d.state
+    fill_halos!(s.w, s.bcs); fill_halos!(s.θ, s.θ_bcs)
+    clo = sgs_closure(d)
+    κv = clo === nothing ? s.κt : sgs_fields(clo, s).κv
+    fill_halos!(κv, s.bcs)
+    return total_heat_flux_profile(s.w, s.θ, κv; surface = first(_sum_wall_flux(d.components, d))).total
+end
+# a face profile (Nz + 1) at the cell centres: the mean of the two faces
+_centred(f) = [(f[k] + f[k+1]) / 2 for k in 1:length(f)-1]
+
+# the velocity halos, filled (the transition diagnostics read neighbours)
+_fill_velocity!(s) = (fill_halos!(s.u, s.bcs); fill_halos!(s.v, s.bcs); fill_halos!(s.w, s.bcs); s)
+
+# the resolved (+ SGS) production terms of `Transition.flux_richardson`; the
+# buoyancy reference: θ₀ of the Boussinesq core, the base state's θ̄ at the
+# first level on the anelastic one
+function _flux_richardson(d)
+    s = _fill_velocity!(d.state)
+    fill_halos!(s.θ, s.θ_bcs)
+    θ0 = s isa BoussinesqSimulation ? s.θ₀ : s.ref.θ̄[1]
+    sgs = sgs_closure(d) !== nothing
+    sgs && fill_halos!(s.νt, s.bcs)
+    return flux_richardson(s.u, s.v, s.w, s.θ; θ₀ = θ0, g = s.g_accel, νt = sgs ? s.νt : nothing, Pr_t = s.Pr_t)
+end
+
+# ω_y at the cell centres (`Operators._vorticity_at`)
+function _vorticity_y(d)
+    s = _fill_velocity!(d.state); m = s.mesh
+    ω = Array{Float64}(undef, m.Nx, m.Ny, m.Nz)
+    for k in 1:m.Nz, j in 1:m.Ny, i in 1:m.Nx
+        ω[i, j, k] = Operators._vorticity_at(s.u.data, s.v.data, s.w.data, m.Hx + i, m.Hy + j, m.Hz + k,
+                                             1 / m.dx, 1 / m.dy, 1 / m.dz)[2]
+    end
+    return ω
+end
+
 # the domain mean: level means weighted by the level thickness
 function _domain_mean(f)
     m = f.mesh
@@ -120,10 +170,26 @@ function core_outputs(d::Domain)
         OutputVariable("u_profile", "m s-1", "horizontal mean of u", :z, d -> _profile(d.state.u)),
         OutputVariable("v_profile", "m s-1", "horizontal mean of v", :z, d -> _profile(d.state.v)),
         OutputVariable("theta_profile", "K", "horizontal mean of theta", :z, d -> _profile(d.state.θ)),
+        OutputVariable("heat_flux_profile", "K m s-1", "total (resolved + SGS) upward heat flux, at the cell centres",
+                       :z, d -> _centred(_heat_flux_faces(d))),
+        OutputVariable("w_variance_profile", "m2 s-2", "horizontal variance of w at the cell centres", :z,
+                       d -> w_variance_profile(d.state.w)),
+        OutputVariable("resolved_tke_profile", "m2 s-2", "resolved turbulent kinetic energy per level (fluctuations about the plane means)",
+                       :z, d -> resolved_tke_profile(d.state.u, d.state.v, d.state.w)),
         OutputVariable("u_mean", "m s-1", "domain mean of u", :scalar, d -> _domain_mean(d.state.u)),
         OutputVariable("v_mean", "m s-1", "domain mean of v", :scalar, d -> _domain_mean(d.state.v)),
         OutputVariable("w_mean", "m s-1", "domain mean of w", :scalar, d -> _domain_mean(d.state.w)),
         OutputVariable("theta_mean", "K", "domain mean of theta", :scalar, d -> _domain_mean(d.state.θ)),
+        OutputVariable("u_squared", "m2 s-2", "square of the x wind (at the x faces)", :xyz, d -> iv(d.state.u) .^ 2),
+        OutputVariable("w_rms", "m s-1", "root-mean-square of w over the interior faces", :scalar,
+                       d -> (wi = iv(d.state.w); sqrt(sum(abs2, wi) / length(wi)))),
+        OutputVariable("turbulent_fraction_profile", "1", "plane fraction of turbulent cells (vorticity-fluctuation indicator)",
+                       :z, d -> (s = _fill_velocity!(d.state); turbulent_fraction(s.u, s.v, s.w))),
+        OutputVariable("shear_production_profile", "m2 s-3", "shear production of the resolved TKE, -<u'w'> dU/dz - <v'w'> dV/dz",
+                       :z, d -> _flux_richardson(d).P),
+        OutputVariable("buoyancy_production_profile", "m2 s-3", "buoyancy flux of the resolved TKE, (g/theta0) <w'theta'>",
+                       :z, d -> _flux_richardson(d).B),
+        OutputVariable("vorticity_y", "s-1", "y component of the vorticity at the cell centres", :xyz, _vorticity_y),
         OutputVariable("kinetic_energy", "m2 s-2", "resolved kinetic energy, domain mean of (u^2 + v^2 + w^2)/2",
                        :scalar, d -> _kinetic_energy(d.state)),
         OutputVariable("dissipation", "m2 s-3", "dissipation of the resolved kinetic energy, molecular + SGS",
@@ -195,6 +261,8 @@ function output_problems(names, types_opts; moisture::Bool, theta0::Real, core::
             n == "budget_water" && !moisture && push!(probs, "budget_water needs dynamics.moisture = true")
             n == "budget_tracer" && !haskey(comp, "tracer") &&
                 push!(probs, "budget_tracer needs a component that carries a tracer (one that publishes \"tracer\")")
+            n == "buoyancy_production_profile" && core === :boussinesq && theta0 <= 0 &&
+                push!(probs, "buoyancy_production_profile needs dynamics.theta0 > 0 (the buoyancy g/theta0)")
             n == "budget_energy" && core === :boussinesq && theta0 <= 0 &&
                 push!(probs, "budget_energy needs dynamics.theta0 > 0 (the Boussinesq reference density p_ref / (R_d theta0))")
         elseif !haskey(comp, n)

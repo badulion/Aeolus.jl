@@ -195,7 +195,7 @@ end
                wall_distance = nothing, first_level = nothing, mask = nothing,
                surface = nothing, θ₀ = nothing, g_accel = nothing, qv = :auto,
                qc = nothing, p = nothing,
-               transport = true, dissipation = :semi_implicit, advection = :auto)
+               transport = true, dissipation = :semi_implicit, advection = :auto, surface_flux = nothing)
 
 The Deardorff (1980) / Moeng (1984) prognostic-TKE closure, an
 `AbstractSGSClosure` for every core's `sgs` keyword (see the module
@@ -231,6 +231,12 @@ Keywords:
   Durran & Klemp (1982) — the stratocumulus buoyancy of Deardorff (1980),
   so the length scale ``c_l\\sqrt{e}/N`` and the buoyant production do not
   treat moist-neutral cloud as stable. Needs a humidity (`qv`).
+* `surface_flux` — `nothing` (the default: the simulation's prescribed
+  `θ_flux_bottom`, `θ_flux_top`), or a 2-vector `(bottom, top)` of the
+  kinematic θ fluxes (K m s⁻¹) through the walls that a component applies
+  instead of the core (the model's `[sgs] closure = "tke"`, ONE-l #475,
+  fills it every step from the domain's components); their buoyant
+  production enters the first and last level as above. Read at every step.
 * `transport` — advect (flux-limited, `AdvectionSchemes.advect_positive!`
   with `advection`: `:auto` = WENO-Z5 if the halo is ≥ 3, else centred) and
   diffuse (``∇·(2ν_t∇e)``, the three-argument
@@ -263,7 +269,7 @@ Keywords:
   resolved shear across the wall instead of the stencil's: see
   [`attach_immersed_walls!`](@ref), which also attaches them later.
 """
-struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC} <: AbstractSGSClosure
+struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC, SX} <: AbstractSGSClosure
     e::F
     c_k::T; c_ε0::T; c_ε1::T; c_l::T; κ::T; surface_factor::T
     Δ::T                  # the filter width (of the lowest level on a StretchedGrid)
@@ -277,6 +283,7 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC} <: AbstractSGSClos
     first_level::FL       # interior-sized Bool, or nothing
     mask::MK              # storage-sized Bool, or nothing
     surface::SF           # nothing or (u_star, k)
+    surface_flux::SX      # nothing (the simulation's θ_flux_bottom/top) or a 2-vector (bottom, top), ONE-l
     transport::Bool
     dissipation::Symbol
     advection::Symbol
@@ -316,9 +323,11 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
                     mask = nothing, surface = nothing, θ₀ = nothing, g_accel = nothing,
                     qv = :auto, qc = nothing, p = nothing,
                     transport::Bool = true, dissipation::Symbol = :semi_implicit,
-                    advection::Symbol = :auto, walls = nothing) where {T}
+                    advection::Symbol = :auto, walls = nothing, surface_flux = nothing) where {T}
     dissipation in (:semi_implicit, :exact) ||
         throw(ArgumentError("dissipation must be :semi_implicit or :exact, got $(repr(dissipation))"))
+    surface_flux === nothing || (surface_flux isa AbstractVector && length(surface_flux) == 2) ||
+        throw(ArgumentError("surface_flux must be nothing or a 2-vector (bottom, top), got $(repr(surface_flux))"))
     ef = e === nothing ? Field(CellCenter(), g) : e
     e === nothing && (ef.data .= T(e0))
     N = (g.Nx, g.Ny, g.Nz)
@@ -341,7 +350,7 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
     mkf() = Field(CellCenter(), g)
     c = TKEClosure(ef, T(c_k), T(c_ε0), T(c_ε1), T(c_l), T(κ), T(surface_factor), Δ, Δk, vrel,
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
-                      qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, transport, dissipation, adv,
+                      qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, surface_flux, transport, dissipation, adv,
                       transport ? _reconstruction(adv) : nothing, mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
                       similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS))
     walls === nothing || attach_immersed_walls!(c, walls)
@@ -391,6 +400,11 @@ end
 # apportioned (P_b = (g/θ₀)·F/2 there). Zero without buoyancy or flux.
 function _surface_buoyancy(c::TKEClosure{T}, sim) where {T}
     θ₀ = _θref(c, sim); g = _gref(c, sim)
+    sf = c.surface_flux
+    if sf !== nothing             # the fluxes a component applies (ONE-l), not the core
+        (θ₀ > 0 && g > 0) || return zero(T), zero(T)
+        return T(g / θ₀ * sf[1] / 2), T(g / θ₀ * sf[2] / 2)
+    end
     (θ₀ > 0 && g > 0 && hasproperty(sim, :has_surface_flux) && sim.has_surface_flux) ||
         return zero(T), zero(T)
     return T(g / θ₀ * sim.θ_flux_bottom / 2), T(g / θ₀ * sim.θ_flux_top / 2)
