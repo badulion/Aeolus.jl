@@ -292,7 +292,7 @@ normal velocity enters, the zero-gradient mirror where it leaves.
   previous one. A mixed core pair (Boussinesq with sound-proof) and a child
   without a conservation box can only be nested one-way, and so is a
   child driven offline, by a dynamic driver instead of a running parent.
-  The urban run type's Berlin nest (`[physics.options.nesting] mode`)
+  The urban site's Berlin nest (`[nesting] mode`)
   keeps one-way as its default until it becomes a `[[domain]]` config:
   its two-way validation is #331.
 

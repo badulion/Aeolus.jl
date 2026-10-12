@@ -167,7 +167,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
-cases [`urban_parent`](../reference/options/urban_parent.md), [`dns_decay`](../reference/options/dns_decay.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+cases [`urban_parent`](../reference/options/urban_parent.md), [`cbl`](../reference/options/cbl.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -207,8 +207,8 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Every legacy case is code in `src/` (the urban run type and the
-validation run types of [`Aeolus.RunDrivers`](@ref)); nothing is loaded
+Every legacy case is code in `src/` (`urban_parent`, the nest parent of
+an urban site alone, and the validation run types of [`Aeolus.RunDrivers`](@ref)); nothing is loaded
 from `examples/`. The stable-boundary-layer cases (the former `sbl` run
 type) are configurations of the model since ONE-g (#456); the validation
 run types `dns`, `channel`, `cbc_decay` and `patchy_surface` and the

@@ -28,7 +28,7 @@ julia --project -m AeolusPrep static <aeolus>/examples/urban/berlin_summer.toml 
       --source data/berlin/alexanderplatz_real.osm --min-height 8 --park-lai 2.5
 julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/berlin_summer.toml
 julia --project -m AeolusPrep dynamic --from-era5 data/era5/era5_lindenberg_20190629_*.nc \
-      --config <aeolus>/examples/configs/lindenberg_era5.toml --lat 52.2085 --lon 14.118
+      --config <aeolus>/examples/lindenberg_era5/lindenberg_era5.toml --lat 52.2085 --lon 14.118
 julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed driver, reproduced?
 ```
 

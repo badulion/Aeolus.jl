@@ -461,8 +461,9 @@ of `src/` physics from `test/berlin_*.jl` into the owning module's tests
 (synthetic setups, same quantitative targets) and deleted those files.
 The end-to-end runs of the example (every coupling on, ledgers closed;
 the nest parent's smoke run and its idealised validations) became
-`examples/urban/berlin_checks.jl`, run by hand; since the urban run type
-moved into `src/` (EX-a, #438) they are `test/urban_checks.jl` (full
+`examples/urban/berlin_checks.jl`, run by hand; since the urban case
+moved into `src/` (EX-a, #438; an urban site of the model since ONE-e,
+#454) they are `test/urban_checks.jl` (full
 tier), and every urban run writes its ledger closure to
 `output/results.toml`.
 

@@ -349,9 +349,10 @@ A run does not call this: a run is a configuration of the one model, and
 through the stage pipeline, which hands its stages 7 and 8
 (`:body_force`, `:post_predictor`) and the `[sgs]` closure to the core
 through the keywords below. Physics reaches a run as a component, never
-by passing a hook here; the hooks are the pipeline's mechanism, and the
-module tests and the legacy run types (`Aeolus.RunDrivers`, the urban
-run type) call them directly.
+by passing a hook here; the hooks are the pipeline's mechanism. Their
+other callers are the module tests, the urban site's step
+(`Aeolus.UrbanCase`, which passes the pipeline's hooks of its domain)
+and the legacy validation run types of `Aeolus.RunDrivers`.
 
 Two optional callbacks are supported:
 

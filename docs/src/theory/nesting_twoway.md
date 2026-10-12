@@ -246,7 +246,7 @@ two-way nest is real and set-up dependent (≈ 0.05–0.2 m/s of descent here,
 growing with the resolution contrast and shrinking with the child's
 size). Two-way nesting is **not validated against** Hellsten et al.'s
 circulation; it reproduces their mechanism, not their sign. This is one
-reason the Berlin nest of the urban run type stays one-way until its
+reason the Berlin nest of the urban site stays one-way until its
 validation (#331), although two-way is the self-nesting default (ONE-f,
 #455). `test/era2_nest_twoway_longrun.jl`
 asserts that the suite run's circulation is thermally direct and that the
