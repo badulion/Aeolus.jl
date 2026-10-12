@@ -14,7 +14,7 @@
 # The script this replaces set the flux on a simulation built with
 # θ_flux_bottom = 0, whose surface-flux flag is frozen off at construction,
 # so its land never heated the air; the run type applies the flux (EX-d,
-# #441; test/config_run_drivers.jl).
+# #441; test/config_cases.jl).
 
 schema_version = 2
 

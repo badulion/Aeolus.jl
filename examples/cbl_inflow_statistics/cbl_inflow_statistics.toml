@@ -1,10 +1,11 @@
 # Inflow statistics of a convective Aeolus parent — N-inflow-b (#258;
-# formerly examples/nesting/cbl_inflow_statistics.jl). The convective
-# boundary layer of examples/cbl_tke/cbl_tke.toml (64³, 2 h) is the
-# parent: over the last 30 min every step is folded into a
-# ParentResolvedStatistics (τ_avg = 600 s, whole plane, west face) in
+# formerly examples/nesting/cbl_inflow_statistics.jl, then the `cbl` run
+# type; on the model since ONE-l, #475). The convective boundary layer of
+# examples/cbl_tke/cbl_tke.toml (64³, 2 h) is the parent: every step of
+# the last 30 min is folded into a ParentResolvedStatistics
+# ([inflow_statistics]: τ_avg = 600 s, whole plane, west face) in
 # scale-gap mode for a child refined (2, 2, 4) — the Berlin nest — and
-# results.toml [inflow] holds the boundary statistics per level, split into
+# output.nc holds the boundary statistics per level at the end, split into
 # the parent's resolved stress (what the interpolated boundary values carry)
 # and what the generator must add (SGS + the band k_c < k ≤ 2k_c,
 # wavelengths 100–200 m at Δx = 50 m).
@@ -15,29 +16,68 @@
 schema_version = 2
 
 [run]
-legacy = "cbl"
 name = "cbl_inflow_statistics"
 seed = 1
 
-[grid]
-n = 64
-spacing = 50.0
-dz = 25.0
+[time]
+scheme = "rk3"
+dt = "adaptive"
+cfl = 0.4
+dt_max = 20.0
+duration = 7200.0
 
-[cbl]
-heat_flux = 0.1
-z_i0 = 800.0
-lapse = 0.003
+[grid]
+size = [64, 64, 64]
+extent = [3200.0, 3200.0, 1600.0]
+halo = [3, 3, 3]                # the TKE transport is WENO-Z5 with three halo cells
+
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "free_slip"
+
+[dynamics]
 theta0 = 300.0
-end_time = 7200.0
-average = 1800.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_kind = "uniform"
+perturbation_amplitude = 0.1
+perturbation_depth = 200.0
+
+[sgs]
+closure = "tke"
+e_min = 1e-3
+surface_factor = 3.9
+wall_cap = false
+
+[surface_theta_flux]
+bottom = 0.1
+
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0
 
 [inflow_statistics]
 enabled = true
+start = 5400.0                  # the last 30 min
 tau_avg = 600.0
 refine = [2, 2, 4]
 depth = 500.0
 
+[output]
+variables = ["inflow_uu_resolved", "inflow_uu_band", "inflow_uu_sgs", "inflow_uu_generated",
+             "inflow_ww_resolved", "inflow_ww_generated", "inflow_uw_resolved", "inflow_uw_generated",
+             "inflow_e_sgs", "inflow_L_z_full_u", "inflow_L_z_u", "inflow_L_s_u"]
+averaging = "instant"           # the statistics are running means already: the record at the end
+cadence = 1800.0
+series_cadence = 1800.0
+
+[checks]
+finite = { required = true }
+
 [test]
-overrides = ["grid.n=12", "grid.spacing=100.0", "grid.dz=100.0", "cbl.end_time=120.0", "cbl.average=60.0",
-             "cbl.z_i0=600.0", "inflow_statistics.depth=400.0"]
+overrides = ["grid.size=[12,12,12]", "grid.extent=[1200.0,1200.0,1200.0]", "time.duration=120.0",
+             "output.cadence=60.0", "initial.theta={kind=\"mixed_layer_lapse\",value=300.0,z_i=600.0,lapse=0.003}",
+             "sponge.z_start=900.0", "inflow_statistics.start=60.0",
+             "inflow_statistics.depth=400.0"]
