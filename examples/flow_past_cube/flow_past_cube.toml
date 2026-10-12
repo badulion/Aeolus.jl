@@ -30,7 +30,7 @@ theta0 = 0.0                    # no buoyancy
 z = "free_slip"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.15
 
 [initial]
@@ -46,8 +46,10 @@ decay_time = 30.0
 # the leeward face: cells 39–40 in x, 19–30 in y, level 9 (z = 17 m)
 sources = { leeward = { x = [79.5, 83.5], y = [30.0, 50.0], z = [16.0, 18.0], rate = 1.0 } }
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.10416666666666667        # 0.15 Δx / 3 m/s
 duration = 40.0
 

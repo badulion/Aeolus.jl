@@ -17,8 +17,10 @@ schema_version = 2
 [run]
 name = "scalar_advection_2d"
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = 0.000994718394324346       # 0.4 Δx / (ω L/2): CFL 0.4 at the box edge
 duration = 1.0                  # one revolution
 
@@ -36,7 +38,7 @@ theta0 = 0.0                    # no buoyancy: θ is a passive scalar
 nu = 0.0
 
 [sgs]
-closure = "none"
+model = "none"
 
 [initial]
 theta = { kind = "gaussian", value = 0.0, amplitude = 1.0, center = [0.75, 0.5], sigma = 0.08 }

@@ -24,7 +24,7 @@ g = 9.81
 z = "periodic"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.17
 pr_t = 0.3333333333333333
 
@@ -32,8 +32,10 @@ pr_t = 0.3333333333333333
 theta = { kind = "mixed_layer_lapse", value = 300.5, z_i = 0.0, lapse = -1.0 }   # θ₀ + Δθ (1/2 − z/L)
 perturbation_amplitude = 0.001
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.05184386846337478        # 0.3 dx / w*, w* = sqrt(g Δθ / θ₀ L)
 duration = 5.0
 

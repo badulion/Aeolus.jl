@@ -25,14 +25,16 @@ theta0 = 0.0                    # no buoyancy
 z = "periodic"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.17
 
 [initial]
 velocity_perturbation = { kind = "normal", amplitude = 0.3 }
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.05890486225480862        # 0.3 Δx / 1 m/s
 duration = 6.0
 

@@ -41,36 +41,36 @@ radiation_period = 8.0
 soil_period = 4.0
 theta_inversion_z = 60.0
 
-[core_boussinesq]
-enabled = true
-[timestep_adaptive]
-enabled = true
-[pressure_fft]
-enabled = true
-[momentum_centered]
-enabled = true
+[core]
+model = "boussinesq"
+[timestep]
+scheme = "adaptive"
+[pressure]
+solver = "cosine_fft"
+[momentum_advection]
+scheme = "centered"
 [scalar_advection]
-enabled = true
-[sgs_tke]
-enabled = true
+model = "advection_schemes"
+[sgs]
+model = "tke"
 [surface_exchange]
-enabled = true
-[ground_soil]
-enabled = true
-[radiosity_sun]
-enabled = true
+model = "most"
+[ground]
+model = "soil_column"
+[surface_radiation]
+model = "radiosity"
 [column_radiation]
-enabled = true
-[buildings_citymean]
-enabled = true
-[glass]
-enabled = true
-[aq_chem]
-enabled = true
-[micro_kessler]
-enabled = true
-[ibm]
-enabled = true
+model = "twostream"
+[buildings]
+model = "citymean"
+[glazing]
+model = "glass_class"
+[chemistry]
+scheme = "aq_chem"
+[microphysics]
+scheme = "kessler"
+[immersed_boundary]
+method = "direct_forcing"
 
 [cloud_shadow]
 enabled = true

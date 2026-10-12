@@ -15,8 +15,10 @@ dynamic_driver = "input/gabls3_dynamic.nc"
 name = "gabls3"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 1.2
 duration = 14400.0             # 04 UTC: the published LES envelope is for 03-04 UTC
@@ -48,8 +50,8 @@ u_g = "driver"
 v_g = "driver"
 advective_tendencies = true
 
-[surface_layer]
-enabled = true
+[surface]
+model = "most"
 z0m = 0.15
 z0h = 0.25                     # the height of the prescribed θ: the scalar reference height
 temperature = {kind = "driver"}
@@ -57,7 +59,7 @@ stability = {family = "businger_dyer_log_linear", beta = 5.0}
 rho_cp = 1228.5454644005083    # p/(R_d θ) c_p at the first surface row: 102210/(287.05 × 291.28) × 1005
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.1
 pr_t = 0.3333333333333333
 stability = "brown_et_al_1994"
