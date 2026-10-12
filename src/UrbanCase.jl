@@ -22,7 +22,7 @@
 #
 #   core/        the case machinery — config, the component interface,
 #                geometry, the surface bus, the tracer registry, the
-#                budgets, the Case and its Domain on the core's stage
+#                budgets, the UrbanSite (the site's component) and its Domain on the core's stage
 #                pipeline, the output, and the site's sections of the
 #                model's configuration schema.
 #   couplings/   one file per urban component. Each defines a struct
@@ -59,7 +59,7 @@ using ..Aeolus.StretchedGrids: surface_refined_faces
 using ..Aeolus.BudgetSystem
 # the one output writer (ONE-c, #452): the case and its couplings publish catalogues
 # the core's stage pipeline (ONE-a #450, ONE-e #454): the case is a Domain of it
-using ..Aeolus.Components: Components, AbstractComponent, Stage, Domain, DomainBudgets
+using ..Aeolus.Components: Components, AbstractComponent, Stage, Domain, Model, DomainBudgets
 # the urban components' names, slots and incompatibilities are the component interface's
 import ..Aeolus.Components: component_name, slot, incompatible
 using ..Aeolus.Checks: Check, CheckRunner, enabled_checks, evaluate_checks, results_table, required_failures,
@@ -139,7 +139,7 @@ include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / r
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
-export CaseConfig, UrbanParentDriver, run_urban!, run_results, parent_results, case_state, build_case, run_case!, step_case!, describe,
+export CaseConfig, UrbanParentDriver, run_urban!, run_results, parent_results, case_state, build_case, run_case!, describe,
        UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_DEFAULTS, selected_components, component_options,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,

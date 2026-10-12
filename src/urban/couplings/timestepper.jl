@@ -228,7 +228,7 @@ non-finite flow gives `dt_min`, as in `adaptive_dt`.
 CFL number, so a step forced above this limit is accepted while it
 amplifies the flow: at `dt = cfg.dt = 2 s` (4–20× this limit over steps 1–9) the
 flagship's |v| grows from 12 to 49 m/s over steps 6–12 and the run
-fails at step 16 (#392). [`step_case!`](@ref) therefore rejects such a
+fails at step 16 (#392). [`check_step_dt`](@ref) therefore rejects such a
 `dt`.
 """
 function stable_dt(c::AdaptiveStep, case)

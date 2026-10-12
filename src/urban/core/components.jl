@@ -55,7 +55,7 @@
 #                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
 #                      stable_dt(c, case)               -> the longest step the provider's
 #                                                          limits allow now (variable_dt only;
-#                                                          an explicit dt of step_case! is checked against it)
+#                                                          an explicit dt of step!(model, dt) is checked against it)
 #
 # Keywords are never dropped: a combination of a core / time stepper with
 # a numerics component whose keywords it does not take is declared with
@@ -186,7 +186,7 @@ next_dt(c::UrbanComponent, case) = case.cfg.dt
 The longest step (s) a variable-step `:timestepper` provider
 (`variable_dt`) allows from the current state: its stability limits
 (CFL, diffusion, buoyancy, ...) and `dt_max`, without the growth limit of
-`next_dt` and without side effects. [`step_case!`](@ref) rejects
+`next_dt` and without side effects. [`check_step_dt`](@ref) rejects
 an explicit `dt` above it (#392). Default: `Inf` (a fixed-step provider
 takes the `dt` it is given).
 """

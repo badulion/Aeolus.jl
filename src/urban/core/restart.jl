@@ -18,8 +18,8 @@
 # the open NetCDF file of the case: the resumed run reopens it
 Aeolus.IO.checkpoint_opaque(::CaseOutput) = true
 
-Aeolus.IO.checkpoint_state(case::Case) = structural_state(case)
-Aeolus.IO.restore_checkpoint_state!(case::Case, s) = restore_structural_state!(case, s)
+Aeolus.IO.checkpoint_state(case::UrbanSite) = structural_state(case)
+Aeolus.IO.restore_checkpoint_state!(case::UrbanSite, s) = restore_structural_state!(case, s)
 
 """
     case_checkpoint_components(case) -> NamedTuple

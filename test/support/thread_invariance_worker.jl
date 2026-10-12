@@ -307,8 +307,9 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
     while variable ? BC.step_will_run(clk, case.sim.t) : n < nsteps
         n += 1
         t0 = case.sim.t
-        ok = variable ? BC.step_case!(case, BC.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
-                        BC.step_case!(case, cfg.dt)
+        variable ? step!(case.model, Aeolus.Components.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
+                   step!(case.model, cfg.dt)
+        ok = !case.clock.blowup
         push!(dts, case.sim.t - t0)
         append!(iters, solver_iters(case.sim))
         ok || break

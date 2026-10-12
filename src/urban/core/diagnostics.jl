@@ -186,14 +186,14 @@ timing_diagnostics(case) = Diagnostic[
     for (S, n) in timing_keys(case)]
 
 """
-    diagnostics(case::Case, case) -> Vector{Diagnostic}
+    diagnostics(case::UrbanSite, case) -> Vector{Diagnostic}
 
 The core's own diagnostics: [`frame_diagnostics`](@ref), the ledgers
 under `budgets.` ([`budget_diagnostics`](@ref)), the stage timing
 ([`timing_diagnostics`](@ref)) and the closure the steps run under
 `sgs.` (the library's `diagnostics(closure, sim)`).
 """
-function diagnostics(case::Case, ::Case)
+function diagnostics(case::UrbanSite, ::UrbanSite)
     ds = frame_diagnostics(case)
     append!(ds, prefixed("budgets", budget_diagnostics(case)))
     append!(ds, timing_diagnostics(case))
@@ -203,7 +203,7 @@ function diagnostics(case::Case, ::Case)
 end
 
 "The closure's profiles under `sgs.`."
-function profile_diagnostics(case::Case, ::Case)
+function profile_diagnostics(case::UrbanSite, ::UrbanSite)
     sgs = get(case.step_kwargs, :sgs, nothing)
     sgs === nothing && return ProfileDiagnostic[]
     return prefixed("sgs", profile_diagnostics(sgs, case.sim))

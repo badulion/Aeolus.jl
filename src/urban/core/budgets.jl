@@ -6,7 +6,7 @@
 #
 # The budgets are the case's `Domain`'s (core/stages.jl): the pipeline
 # attributes the heat of the air to every stage entry, the case's
-# `UrbanCore` snapshots the surface temperature and the water in the air at
+# `UrbanSite` snapshots the surface temperature and the water in the air at
 # the step's start and books the change of air water at its end, and
 # every coupling's `budget!(c, case, budgets)` runs after `:budgets`. A
 # coupling reports only what it did during that step (`add_surface!`,

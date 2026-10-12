@@ -163,17 +163,19 @@ end
 """
     attributed(c, ::Val{stage}) -> Bool
 
-Whether the budgets measure `c`'s entry in an in-core `stage` as a context
-of its own (default `true`). `false` for an entry that books what it does
-itself inside the dynamics' context (`add_heat!`), so that it is not
-counted twice: the urban site's open faces, whose θ relaxation is the
-dynamics' term `(:dynamics, :relaxation)` (`Aeolus.UrbanCase.UrbanCore`).
+Whether the budgets measure `c`'s entry in `stage` as a context of its
+own (default `true`). `false` for an entry that books what it does itself
+inside the dynamics' context (`add_heat!`), so that it is not counted
+twice: the urban site's open faces, whose θ relaxation is the dynamics'
+term `(:dynamics, :relaxation)`; and for an entry that only reads the
+state (the urban site's record and sanity check), which books no term.
 """
 attributed(c, ::Val) = true
 
 # a component's stage entry outside the core: a context on the state
 @inline _attributed!(::Nothing, c, d, v::Val, dt) = run_stage!(c, d, v, dt)
 function _attributed!(b::DomainBudgets, c, d, v::Val{S}, dt) where {S}
+    attributed(c, v) || return run_stage!(c, d, v, dt)
     n = component_name(c)
     for q in b.quantities
         budget_open!(b.budgets.measured[q], S, n, b.state[q])

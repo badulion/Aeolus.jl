@@ -1,4 +1,4 @@
-# The Case: one configured, built, runnable Berlin simulation.
+# The urban site: one configured, built urban domain (formerly the Case).
 
 """
     Clock
@@ -28,9 +28,10 @@ end
 step_will_run(clk::Clock, t::Real) = clk.t_stop - t > clk.stop_margin
 
 """
-    Case
+    UrbanSite <: AbstractComponent
 
-A built case: `cfg`, `mesh`, `sim` (the dynamical core: a
+The urban site, a component of its `Domain` (ONE-k, #474; formerly the
+`Case`, which stepped the core in its own loop): `cfg`, `mesh`, `sim` (the dynamical core: a
 `BoussinesqSimulation`, or the `MassWeightedSimulation` of the `:core`
 slot's anelastic / pseudo-incompressible provider), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
@@ -44,8 +45,14 @@ NetCDF `output` (or `nothing`), the pipeline's
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
 lid) — and `open`, the heat of the open faces of a `lateral = :open`
 case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one).
+
+It is the first component of its domain (section `[urban]`, component
+name `:urban`): it runs the site's own work in the pipeline's stages and
+takes the domain's core step with its `:timestepper` component
+(core/stages.jl). `model` is the `Model` of its domain; `step!(model)`
+advances the site.
 """
-mutable struct Case{M, S, G<:Geometry}
+mutable struct UrbanSite{M, S, G<:Geometry} <: AbstractComponent
     cfg::CaseConfig
     mesh::M
     sim::S
@@ -56,6 +63,7 @@ mutable struct Case{M, S, G<:Geometry}
     ref::CaseReference
     couplings::Vector{UrbanComponent}
     domain::Any
+    model::Any                   # Model(domain): what steps the case (ONE-k, #474)
     clock::Clock
     output::Any
     body_force::Union{Nothing,Function}
@@ -67,7 +75,7 @@ mutable struct Case{M, S, G<:Geometry}
 end
 
 "The enabled coupling called `name`, or `nothing`."
-function find_coupling(case::Case, name::Symbol)
+function find_coupling(case::UrbanSite, name::Symbol)
     for c in case.couplings
         component_name(c) === name && return c
     end
@@ -138,7 +146,7 @@ boussinesq_core(cfg::CaseConfig, mesh; kw...) =
     BoussinesqSimulation(mesh; core_parameters(cfg, mesh)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 """
-    build_case(cfg) -> Case
+    build_case(cfg) -> UrbanSite
 
 Build the mesh, the geometry, the dynamical core (`build_core` of the
 provider of the `:core` slot) and its initial state,
@@ -182,8 +190,8 @@ function build_case(cfg::CaseConfig)
     budgets.ρ = copy(ref.ρ̄)
 
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0)
-    case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
-                UrbanComponent[], nothing, clock,
+    case = UrbanSite(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
+                UrbanComponent[], nothing, nothing, clock,
                 nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
                 top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
     # a building the box edge cuts is solid on the open faces (#262): zero
@@ -238,7 +246,7 @@ end
 The enabled couplings with their slot and provider, and the stage
 schedule of the case's `Domain`, one line per stage.
 """
-function describe(case::Case)
+function describe(case::UrbanSite)
     io = IOBuffer()
     println(io, "Couplings:")
     for c in case.couplings
