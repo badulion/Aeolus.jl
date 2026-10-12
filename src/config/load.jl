@@ -214,6 +214,9 @@ function _parse_overrides(overrides)
     return out, probs
 end
 
+"The prefix of the origin entries that keep the file's value of an overridden string key."
+const _WAS = "\0was:"
+
 function _apply_overrides!(raw, origins, ovr, probs)
     for (key, v) in ovr
         parts = split(key, '.')
@@ -229,6 +232,10 @@ function _apply_overrides!(raw, origins, ovr, probs)
             t = nxt
         end
         ok || continue
+        # the value it replaces, for a slot section's selector (ONE-m, #476):
+        # an override that changes the provider resets its options
+        old = get(t, parts[end], nothing)
+        old isa AbstractString && !haskey(origins, _WAS * key) && (origins[_WAS * key] = String(old))
         _forget!(origins, key)
         if v isa AbstractDict
             t[parts[end]] = Dict{String,Any}()
@@ -292,9 +299,10 @@ end
 # into `vals`, origins into `vorig`; `prefix` is the key prefix of messages
 # ("" or "domain[i].") and `korig(k)` the origin of key "section.k"
 function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf;
-                         tables = nothing, rank = k -> (korig(k) in (OVERRIDE_ORIGIN, WITH_ORIGIN) ? 2 : 0))
+                         tables = nothing, rank = k -> (korig(k) in (OVERRIDE_ORIGIN, WITH_ORIGIN) ? 2 : 0),
+                         lower = k -> nothing)
     s.selector === nothing ||
-        return _check_slot_section!(probs, vals, vorig, s, tbl, korig, prefix, leaf, tables, rank)
+        return _check_slot_section!(probs, vals, vorig, s, tbl, korig, prefix, leaf, tables, rank, lower)
     keys_ = [o.key for o in s.options]
     for k in sort!(collect(keys(tbl)))
         k in keys_ && continue
@@ -308,10 +316,12 @@ end
 
 # A slot section (ONE-m, #476): the selector names a provider of the
 # domain's kind; the other keys are options of that provider (or shared
-# options of the section). An option of another provider set below the
-# selector (`rank`: 0 the file's run-level section, 1 a [[domain]] block,
-# 2 an override) is dropped: a higher-level selector replaces the provider.
-function _check_slot_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf, tables, rank)
+# options of the section). A selector set above the section's other keys
+# (`rank`: 0 the file's run-level section, 1 a [[domain]] block, 2 an
+# override) that names another provider than the level below it (`lower`:
+# that level's raw value, `nothing` for the default) replaces the
+# provider: the options set below it are dropped.
+function _check_slot_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf, tables, rank, lower)
     sel = s.selector
     kind = domain_kind(s, tables === nothing ? Dict{String,Any}() : tables)
     provs = providers(s, kind)
@@ -350,11 +360,13 @@ function _check_slot_section!(probs, vals, vorig, s::Section, tbl, korig, prefix
     opts = vcat(s.options, p.options)
     keys_ = [o.key for o in opts]
     srank = rank(skey)
+    low = srank == 0 ? pname : lower(skey)
+    replaced = srank > 0 && String(something(low, sel.defaults[kind])) != pname
+    tbl = replaced ? Dict{String,Any}(k => v for (k, v) in tbl if k == sel.key || rank("$(s.name).$k") >= srank) : tbl
     for k in sort!(collect(keys(tbl)))
         (k == sel.key || k in keys_) && continue
         full = "$(s.name).$k"
         owners = unique([q.name for q in sel.providers if any(o -> o.key == k, q.options)])
-        !isempty(owners) && rank(full) < srank && continue         # replaced with its provider
         push!(probs, ConfigProblem(prefix * full, korig(full),
               isempty(owners) ?
                   "unknown key in [$(s.name)] for $(sel.key) = \"$pname\"" * _suggest(k, keys_) *
@@ -416,7 +428,8 @@ function _resolve(raw, origins, sources, schema, probs::Vector{ConfigProblem}, l
         # a run-level slot section ([timestep]) tells the domain kind from the
         # run-level tables and, with one domain, its block's
         kt = s.selector === nothing ? raw : (length(blocks === nothing ? () : blocks) == 1 ? merge(raw, blocks[1]) : raw)
-        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf; tables = kt)
+        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf; tables = kt,
+                                         lower = k -> get(origins, _WAS * k, nothing))
     end
     domains = Vector{Dict{String,Dict{String,Any}}}()
     if !isempty(dsec)
@@ -509,8 +522,13 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
         s = _section(sch, name)
         p = ConfigProblem[]
         v = Dict{String,Any}()
+        # the level below a selector: the file's for an override (the value it
+        # replaced), the run level's for a [[domain]] block
+        runlevel = get(raw, name, Dict{String,Any}())
+        lowerval(k) = korig(k) == OVERRIDE_ORIGIN ? get(origins, _WAS * k, nothing) :
+                      (runlevel isa AbstractDict ? get(runlevel, split(k, '.'; limit = 2)[2], nothing) : nothing)
         _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf; tables = merged,
-                        rank = k -> korig(k) == OVERRIDE_ORIGIN ? 2 : k in fromblock ? 1 : 0)
+                        rank = k -> korig(k) == OVERRIDE_ORIGIN ? 2 : k in fromblock ? 1 : 0, lower = lowerval)
         # a problem of a run-level value is reported under its own key (once:
         # the caller drops duplicates), one of the block's under domain[i]
         for q in p

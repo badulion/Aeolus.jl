@@ -292,8 +292,9 @@ function _slot_option(s::Section, tabs, okey, kt = tabs)
 end
 
 # Switch the slot section `s` of the tables `tabs` to the provider `v`
-# (`with`): the options the new provider shares with the old one keep
-# their values, the others take its defaults. A problem as a message.
+# (`with`): another provider than the current one starts from its
+# defaults (the old provider's options are dropped); the same one keeps its
+# options. A problem as a message.
 function _with_provider!(tabs, s::Section, v, kt = tabs)
     sel = s.selector
     kind = domain_kind(s, kt)
@@ -302,11 +303,13 @@ function _with_provider!(tabs, s::Section, v, kt = tabs)
     p === nothing && return "expected one of " * join(repr.([q.name for q in providers(s, kind)]), ", ") *
                             " on $(kind_text(s, kind)), got $(_show_raw(v))"
     old = tabs[s.name]
+    get(old, sel.key, nothing) === Symbol(name) && return nothing
     new = Dict{String,Any}(sel.key => Symbol(name))
-    for o in vcat(s.options, p.options)
-        key = "$(s.name).$(o.key)"
-        ok, val, _ = haskey(old, o.key) ? _coerce(o, old[o.key], true, pwd(), key) : (false, nothing, "")
-        ok || ((ok, val, why) = _default(o, key))
+    for o in s.options                              # the shared options keep their values
+        haskey(old, o.key) && (new[o.key] = old[o.key])
+    end
+    for o in p.options
+        ok, val, why = _default(o, "$(s.name).$(o.key)")
         ok || return why
         new[o.key] = val
     end

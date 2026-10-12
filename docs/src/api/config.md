@@ -366,10 +366,10 @@ This config is, bit for bit, the simulation the script built before
     = "tke"` with `e_min`, `surface_factor`, `wall_cap`, `stress`; a
     `c_s` there is an error naming the closures that have one), and the
     resolved config shows the provider with all its options. A selector
-    set by `--set`, `with` or a `[domain.<section>]` block replaces the
-    provider: the options set below it that the new provider does not
-    have are dropped (`--set sgs.model="vreman"` on a file with
-    `[sgs] model = "tke"`). Each provider's options are a block of the
+    set by `--set`, `with` or a `[domain.<section>]` block that names
+    another provider replaces it: the options set below it are dropped
+    and the new provider starts from its defaults (`--set
+    sgs.model="vreman"` on a file with `[sgs] model = "tke"`). Each provider's options are a block of the
     option reference (`[sgs] model = "tke"`).
   * `[initial]` sets the velocity, θ and qv from vertical profiles
     (`constant`, `mixed_layer_lapse`, `table` with an optional `log` or

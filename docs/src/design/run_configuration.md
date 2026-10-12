@@ -81,10 +81,12 @@ additive component (on or off, any number of them) keeps its `enabled`
 key. A slot section the model and the urban site share offers each
 domain the providers of its kind (`[sgs] model = "tke"` is the model's
 TKE closure on a model domain, the site's on an urban site). A selector
-set at a higher level replaces the provider: `--set sgs.model="vreman"`
-on a file with `[sgs] model = "tke"` drops the file's tke options (a
-`[domain.sgs]` block's selector does the same for its domain, and
-`with` from Julia), keeping the options the new provider shares.
+set at a higher level that names another provider replaces the
+provider: `--set sgs.model="vreman"` on a file with `[sgs] model =
+"tke"` drops the file's `[sgs]` options, and the vreman closure starts
+from its defaults and the other overrides (a `[domain.sgs]` block's
+selector does the same for its domain, and `with` from Julia). Naming
+the provider the file names changes nothing.
 
 Conventions: keys are ASCII `snake_case`; values are SI and durations are
 in seconds; `"none"` stands for nothing (TOML has no null); a path is
@@ -121,8 +123,8 @@ refinement = [8, 8, 8]     # Δ = 50 × 50 × 25 m: grid.size = extent / parent 
 feedback = "two_way"       # the default; "one_way" per child
 static_driver = "input/inner_static.nc"
   [domain.sgs]
-  model = "amd"            # … but this one (its own provider: the run level's
-                           # vreman options, if any were set, are dropped)
+  model = "amd"            # … but this one (another provider: the run level's
+                           # [sgs] options, if any were set, are dropped)
   [domain.grid]
   extent = [400.0, 400.0, 200.0]
 ```

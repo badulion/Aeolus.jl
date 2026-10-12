@@ -60,18 +60,30 @@ end
 @testset "slot sections: a selector set above the file replaces the provider" begin
     p = joinpath(mktempdir(), "c.toml")
     write(p, "[sgs]\nmodel = \"tke\"\ne_min = 1e-4\nstress = \"symmetric\"\n")
-    # --set: the file's tke options the new provider lacks are dropped, a shared one stays
+    # --set another provider: the file's options are dropped, the new provider starts from its defaults
+    # (a stress = "symmetric" set for tke is not silently the vreman closure's)
     cfg = load_run_config(p; overrides = ["sgs.model=\"vreman\""])
     @test sl_section(cfg, "sgs") == Dict("model" => :vreman, "c_s" => 0.17, "pr_t" => 1 / 3, "stability" => :none,
-                                         "stress" => :symmetric)
-    @test config_origin(cfg, "sgs.stress") == p && config_origin(cfg, "sgs.model") == "--set"
+                                         "stress" => :laplacian)
+    @test config_origin(cfg, "sgs.stress") == "default" && config_origin(cfg, "sgs.model") == "--set"
+    # with its own options set at the same level
+    cfg = load_run_config(p; overrides = ["sgs.model=\"vreman\"", "sgs.stress=\"symmetric\"", "sgs.c_s=0.1"])
+    @test (cfg.sgs.stress, cfg.sgs.c_s) == (:symmetric, 0.1)
+    # --set the provider the file names: nothing is dropped
+    cfg = load_run_config(p; overrides = ["sgs.model=\"tke\""])
+    @test (cfg.sgs.e_min, cfg.sgs.stress) == (1e-4, :symmetric)
+    # a file that leaves the selector at its default: an override naming the default keeps its options
+    q = joinpath(mktempdir(), "d.toml"); write(q, "[sgs]\nc_s = 0.1\n")
+    @test load_run_config(q; overrides = ["sgs.model=\"smagorinsky\""]).sgs.c_s == 0.1
+    @test load_run_config(q; overrides = ["sgs.model=\"sigma\""]).sgs.c_s == 1.35
     # an override of an option of a provider the file does not select is still an error
     e = sl_error(() -> load_run_config(p; overrides = ["sgs.c_s=0.2"]))
     @test haskey(sl_keys(e), "sgs.c_s")
     # with(): the same rule, from Julia
     c2 = with(load_run_config(p), "sgs.model" => :sigma)
     @test sl_section(c2, "sgs") == Dict("model" => :sigma, "c_s" => 1.35, "pr_t" => 1 / 3, "stability" => :none,
-                                        "stress" => :symmetric)
+                                        "stress" => :laplacian)
+    @test with(load_run_config(p), "sgs.model" => :tke).sgs.e_min == 1e-4        # the same provider: unchanged
     @test with(c2, "sgs.c_s" => 1.5).sgs.c_s == 1.5
     @test_throws ConfigError with(c2, "sgs.e_min" => 1e-3)
     @test_throws ConfigError with(c2, "sgs.model" => :lasd)

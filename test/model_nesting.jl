@@ -42,8 +42,9 @@ const MN_HEAD = """
     seed = 7
     [fftw]
     planner = "estimate"
-    [time]
+    [timestep]
     scheme = "rk3"
+    [time]
     dt = 4.0
     duration = "none"
     nsteps = 6

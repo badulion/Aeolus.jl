@@ -249,7 +249,7 @@ end
     clo(r) = Aeolus.Components.sgs_closure(only(r.model.domains))
     r = b(String[]); @test clo(r) isa StaticSmagorinsky && clo(r).C_s == 0.17 && simulation(r).C_s == 0
     r = b(["sgs.model=\"none\""]); @test clo(r) === nothing
-    r = b(["sgs.model=\"sigma\"", "sgs.c_s=\"none\""]); @test clo(r) isa SigmaModel && clo(r).C_σ == 1.35
+    r = b(["sgs.model=\"sigma\""]); @test clo(r) isa SigmaModel && clo(r).C_σ == 1.35   # its own default c_s (ONE-m)
     r = b(["sgs.model=\"vreman\"", "sgs.c_s=0.07"]); @test clo(r) isa VremanClosure && clo(r).C_s == 0.07
     r = b(["sgs.stability=\"brown_et_al_1994\""]); @test clo(r) isa StabilityCorrected
     # under strong stable stratification (Ri ≈ 13 from N² = g/θ₀ 0.01 K/m and a

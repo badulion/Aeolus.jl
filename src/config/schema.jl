@@ -278,11 +278,13 @@ Validation ([`load_run_config`](@ref)): the selector must name a provider
 of the domain's kind; every other key must be an option of the chosen
 provider (a key of another provider is an error that names it). The
 resolved config holds the selector and the chosen provider's options,
-defaults included, and nothing else. A selector set at a higher level
-than an option — an override (`--set`, [`with`](@ref)) over the file, or
-a `[domain.<name>]` block over the run-level section — replaces the
-provider: the lower level's options that the new provider does not have
-are dropped.
+defaults included, and nothing else. A selector set at a higher level —
+an override (`--set`, [`with`](@ref)) over the file, or a
+`[domain.<name>]` block over the run-level section — that names another
+provider than the level below replaces the provider: the lower level's
+options of the section are dropped (the new provider starts from its
+defaults and the options set at the selector's level). Naming the same
+provider changes nothing.
 """
 function slot_section(f, name::AbstractString; key::AbstractString, kind = _ -> :model,
                       kind_text = Dict{Symbol,String}(), doc::AbstractString = "")
