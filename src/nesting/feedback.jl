@@ -235,7 +235,7 @@ it; the registers are consumed by the refluxing of
 fields.
 """
 mutable struct NestFluxRegisters{WP<:Tuple, WC<:Tuple, KP, KC, FP<:Field, FC<:Field,
-                                 SP<:Field, SC<:Field}
+                                 SP<:Field, SC<:Field, MP, MC}
     names::Vector{Symbol}
     models::Vector{NestScalarFlux}
     pfield::Vector{FP}
@@ -262,6 +262,8 @@ mutable struct NestFluxRegisters{WP<:Tuple, WC<:Tuple, KP, KC, FP<:Field, FC<:Fi
     pscratch::SP
     cscratch::SC
     mismatch::NestFluxMismatch{Float64}        # scratch of the refluxing (parent planes)
+    pW::MP                                     # the (cell, face) mass weights of each side's
+    cW::MC                                     # fluxes (nothing: the Boussinesq volume flux)
 end
 
 """
@@ -328,7 +330,8 @@ function _core_name(a::DomainAdvance)
 end
 
 function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
-                           fb::TwoWayFeedback, ap::DomainAdvance, ac::DomainAdvance)
+                           fb::TwoWayFeedback, ap::DomainAdvance, ac::DomainAdvance,
+                           conv = nothing)
     names = Symbol[:θ]
     models = NestScalarFlux[fb.theta_flux === nothing ?
                             NestScalarFlux(; molecular = true, sgs = :theta) : fb.theta_flux]
@@ -383,7 +386,8 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
                              _new_planes(nest, sides, 1), _new_planes(nest, sides, 2),
                              wp, wc, 0, 0, false, false, _sgs_keywords(ap), _sgs_keywords(ac),
                              Field(CellCenter(), nest.parent_mesh),
-                             Field(CellCenter(), nest.child_mesh), mm)
+                             Field(CellCenter(), nest.child_mesh), mm,
+                             _register_weights(parent, conv), _register_weights(child, conv))
 end
 
 # A child face that is not open but lies inside the parent (a lid below the
@@ -466,7 +470,7 @@ function (h::_RegisterHook)(sim, Δt)
     w = ws[st] * Float64(Δt)
     closure = _domain_closure(sim, kw)
     f = closure === nothing ? nothing : sgs_fields(closure, sim)
-    W = _register_weights(sim)
+    W = par ? r.pW : r.cW
     # the stage's volume (mass) flux, the same for every core-transported scalar
     for s in 1:6
         r.sides[s] || continue
@@ -702,7 +706,7 @@ function _book_entry!(r::NestFluxRegisters, which::Symbol, nest::NestedGrid, sim
     (n === nothing || _by_core(r.models[n])) && return false
     par = which === :parent
     (par ? r.popen : r.copen) || return false
-    W = weights === :sim ? _register_weights(sim) : weights
+    W = weights === :sim ? (par ? r.pW : r.cW) : weights
     w = Float64(dt)
     planes = par ? r.ppend[n] : r.cpend[n]
     vplanes = par ? r.pvpend[n] : r.cvpend[n]

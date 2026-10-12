@@ -185,8 +185,11 @@ Refused with an `ArgumentError` that names the domains: a mix of fixed
 and adaptive domains, a domain that measures budgets under
 `budget_exchange = :off`, a child without
 a link or with two, a child that is not properly nested in its parent,
-overlapping siblings, or a two-way pair without a conservation box or of
-mixed cores (those of `Nesting.add_nest!`).
+overlapping siblings, or a two-way pair without a conservation box
+(those of `Nesting.add_nest!`). A mixed core pair (a Boussinesq domain and
+an anelastic one, either way round, either feedback) is nested with the
+conservative density conversion of `Nesting.NestCoreConversion`, the
+Boussinesq side's density `ρ₀ = p_ref / (R_d θ₀)`.
 """
 function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term,
                       concurrent::Bool = Threads.nthreads() > 1)
@@ -223,7 +226,8 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
         c = domains[l.child]
         try
             add_nest!(h, ids[l.parent] => c.state, l.nest; id = ids[l.child], advance = pipeline_advance(c),
-                      cfl = nothing, feedback = l.feedback)
+                      cfl = nothing, feedback = l.feedback,
+                      boussinesq_density = _boussinesq_density(domains[l.parent], c))
         catch e
             e isa ArgumentError || rethrow()
             throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
@@ -250,6 +254,11 @@ Nesting.nest_link(m::Model{<:Tuple,<:ModelNest}, id::AbstractString) = Nesting.n
 # A checkpoint of a nested model holds the whole hierarchy: every domain's
 # core and components, both parent time levels of every link, the flux
 # registers and statistics (the structural walk of #269).
+# The density of the Boussinesq side of a mixed core pair (NaN for a
+# same-core pair): ρ₀ = p_ref / (R_d θ₀), the density its budgets give it.
+_boussinesq_density(p::Domain, c::Domain) =
+    core(p) === core(c) ? NaN : _reference_profiles((core(p) === :boussinesq ? p : c).state).ρ̄[1]
+
 # Synthetic inflow turbulence on the lateral nest faces of a child (#268),
 # with the parent's resolved statistics. They are folded where the parent is
 # at rest, when the engine opens the child's window (statistics_interval =

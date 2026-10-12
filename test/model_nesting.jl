@@ -126,8 +126,9 @@ end
     @test occursin("measures no budgets", keyed(e)["output.variables"])
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.forcing]\nradiative_cooling = -1e-5\n"))
     @test occursin("not nested", keyed(e)["domain[2].domain.parent"])
+    # (mixed cores are nested since NEST-p2, #482; an anelastic child needs the Euler step)
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.core]\nmodel = \"anelastic\"\n"))
-    @test occursin("boussinesq", keyed(e)["domain[2].core.model"])
+    @test occursin("SSP-RK3", keyed(e)["domain[2].core.model"])
     # placement the stencils cannot take is refused at build, naming the domain
     cfg = mn_cfg(mn_two(; origin = "[0.0, 400.0]"); overrides = ["boundaries.x=\"free_slip\""])
     e = mn_error(() -> Config.build(SimulationDriverType(), cfg))
@@ -763,4 +764,102 @@ end
     @test length(w) == 1 && occursin("\"inner\" refines its parent \"outer\" by 4", only(w))
     @test_logs (:warn, r"refines its parent \"outer\" by 4") match_mode = :any Config.build(SimulationDriverType(), mn_cfg(fine))
     @test isempty(SimulationDriver_warn(mn_cfg(fine * "[domain.inflow_turbulence]\nenabled = true\n")))
+end
+
+# ---------------------------------------------------------------------------
+# mixed cores: a Boussinesq domain and an anelastic one, either way round
+# ---------------------------------------------------------------------------
+
+using Aeolus.Anelastic: AnelasticSimulation, isentropic_reference, constraint_weights
+
+function mn_core(kind, mesh, bcs, θbcs)
+    kind === :boussinesq ? BoussinesqSimulation(mesh; θ₀ = 300.0, bcs = bcs, θ_bcs = θbcs) :
+        AnelasticSimulation(mesh; ref = isentropic_reference(mesh; θ_const = 300.0, g_accel = 9.81), bcs = bcs, θ_bcs = θbcs)
+end
+
+# a 3.2 km deep parent and a 1.6 km deep child (ρ̄ falls by 17 % over it)
+function mn_mixed(pk, ck; feedback = :two_way)
+    pm = RegularGrid(; size = (16, 16, 16), extent = (3200.0, 3200.0, 3200.0))
+    nest = nested_grid(pm, ((800.0, 2400.0), (800.0, 2400.0), (0.0, 1600.0)), 2)
+    p = mn_core(pk, pm, FieldBoundaryConditions(:periodic, :periodic, :wall), FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    cb = nest_bcs(nest.child_mesh; bottom = :wall)
+    c = mn_core(ck, nest.child_mesh, cb, cb)
+    for s in (p, c)
+        set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.3sin(2π * x / 1600))
+        set!(s.u, (x, y, z) -> 2.0 + 0.5cos(2π * z / 3200))
+        set!(s.v, (x, y, z) -> 0.7)
+    end
+    scheme = ck === :anelastic ? :euler : :rk3                   # the anelastic RK3 step takes no open faces
+    dp = Domain(p; id = "p", scheme = scheme, components = (CentredAdvection(),))
+    dc = Domain(c; id = "c", scheme = scheme, components = (CentredAdvection(),))
+    return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)]), nest
+end
+
+# the cell density weights of a core (ρ₀ of the Boussinesq one)
+mn_W(sim, ρ0) = sim isa BoussinesqSimulation ? fill(ρ0, size(sim.θ.data, 3)) : constraint_weights(sim)[1]
+
+@testset "mixed cores ($pk parent, $ck child): the boundary data carry the parent's mass flux" for (pk, ck) in ((:anelastic, :boussinesq), (:boussinesq, :anelastic))
+    m, nest = mn_mixed(pk, ck; feedback = :one_way)
+    step!(m, 10.0)
+    L = nest_link(m, "c")
+    @test L.conv !== nothing
+    p = m.domains[1].state; c = m.domains[2].state
+    ρ0 = L.conv.ρ0
+    Wp = mn_W(p, ρ0); Wc = mn_W(c, ρ0)
+    pm = p.mesh; cm = c.mesh
+    # the west interface plane: parent face (ix) against the child's boundary faces in B(t_end)
+    ub = L.s_new.u.data
+    worst = 0.0; Fp = 0.0; Fc = 0.0; naive = 0.0
+    for K in 1:nest.nz, J in 1:nest.ny
+        Kp = nest.iz + K - 1; Jp = nest.iy + J - 1
+        fp = Wp[pm.Hz + Kp] * p.u.data[pm.Hx + nest.ix, pm.Hy + Jp, pm.Hz + Kp] * pm.dy * pm.dz
+        fc = 0.0; fv = 0.0
+        for k in (K - 1) * nest.rz + 1:K * nest.rz, j in (J - 1) * nest.ry + 1:J * nest.ry
+            fc += Wc[cm.Hz + k] * ub[cm.Hx + 1, cm.Hy + j, cm.Hz + k] * cm.dy * cm.dz
+            fv += Wp[pm.Hz + Kp] * ub[cm.Hx + 1, cm.Hy + j, cm.Hz + k] * cm.dy * cm.dz
+        end
+        worst = max(worst, abs(fc - fp) / abs(fp))
+        Fp += fp; Fc += fc; naive += fv
+    end
+    ratio = maximum(abs(Wp[pm.Hz + nest.iz + K - 1] / Wc[cm.Hz + 2K] - 1) for K in 1:nest.nz)
+    @info "mixed cores ($pk → $ck): west-plane mass flux, worst patch relative error $worst; the density ratios differ from 1 by up to $ratio"
+    @test worst < 1e-12                       # every parent face patch: the same mass flux on both sides
+    @test abs(Fc - Fp) <= 1e-12 * abs(Fp)
+    @test ratio > 0.01                        # (and the conversion is not a no-op: ρ̄/ρ₀ ≠ 1 there)
+end
+
+@testset "mixed cores ($pk parent, $ck child), two-way: the composite heat and the interface mass flux are conserved" for (pk, ck) in ((:anelastic, :boussinesq), (:boussinesq, :anelastic))
+    m, nest = mn_mixed(pk, ck)
+    h = m.nest.hierarchy
+    I0 = composite_integral(h, :θ)
+    for _ in 1:6
+        step!(m, 10.0)
+    end
+    rel = abs(composite_integral(h, :θ) - I0) / abs(I0)
+    L = nest_link(m, "c")
+    @info "mixed cores ($pk → $ck) two-way: composite ∫Wθ relative change over 6 windows $rel; interface mass-flux imbalance $(L.nest.ledger[:mass]) (before the correction $(L.nest.ledger[:mass_before_correction]))"
+    @test rel < 1e-13
+    @test L.nest.ledger[:mass] < 1e-12
+    @test all(d -> all(isfinite, interior_view(d.state.θ)), m.domains)
+    # the parent sees the child (the feedback converted the velocity back to its own density)
+    @test max_divergence(m.domains[2].state) < (ck === :boussinesq ? 1e-9 : Inf)
+end
+
+@testset "mixed cores in a config: an anelastic root with a Boussinesq child, and the reverse" begin
+    text = replace(mn_two(), "[[domain]]\nid = \"outer\"\n" => "[core]\nmodel = \"anelastic\"\n[[domain]]\nid = \"outer\"\n"; count = 1) *
+           "[domain.core]\nmodel = \"boussinesq\"\n"
+    r = Config.build(SimulationDriverType(), mn_cfg(text))
+    m = r.model
+    @test MNC.core(m.domains[1]) === :anelastic && MNC.core(m.domains[2]) === :boussinesq
+    I0 = composite_integral(m.nest.hierarchy, :θ)
+    for _ in 1:3
+        step!(m, 4.0)
+    end
+    @test abs(composite_integral(m.nest.hierarchy, :θ) - I0) / abs(I0) < 1e-13
+    rev = mn_cfg(mn_two() * "[domain.core]\nmodel = \"anelastic\"\n"; overrides = ["timestep.scheme=\"euler\""])
+    m2 = Config.build(SimulationDriverType(), rev).model
+    for _ in 1:3
+        step!(m2, 4.0)
+    end
+    @test MNC.core(m2.domains[2]) === :anelastic && all(isfinite, interior_view(m2.domains[2].state.θ))
 end

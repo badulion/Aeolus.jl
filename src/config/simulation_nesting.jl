@@ -10,7 +10,7 @@ const _NEST_CHECKS_DOC = """
 the first domain is the root (no `parent`); every later domain names an earlier one as its `parent`
 a root has no `origin` or `refinement`, and `feedback` stays two_way (it has no parent); a nested domain gives both
 a nested model steps every domain with `time.dt`: a fixed dt (each child takes max(refinement) substeps per step of its parent) or adaptive (the root picks its step, each child the smallest whole number of equal substeps that keeps it stable; a failed step retries the window); with `[nesting] budget_exchange = "off"` it measures no budgets (no `budget_*` output, no closure check); with `"exchange_term"` (the default) each domain closes its own, with one nest-exchange term per quantity
-every domain of a nested model runs the boussinesq core on a uniform grid between z walls
+every domain of a nested model runs the boussinesq or the anelastic core (mixed freely, two-way included: a conservative density conversion in the boundary data and the feedback) on a uniform grid between z walls; an anelastic nested domain needs [timestep] scheme = "euler" (its SSP-RK3 step takes no open faces), and one nested in an anelastic parent the same dynamics.theta0 and g (one reference profile)
 a nested domain lies inside its parent (origin ≥ 0, origin + grid.extent within the parent's extent, its height at most the parent's), with `grid.size` = `grid.extent` / parent spacing × `refinement`
 a nested domain may enable `[inflow_turbulence]` (synthetic turbulence on its lateral nest faces, with its parent's resolved statistics: `statistics = "parent_resolved"`, no `length_scale`); the root may not
 every field the nest exchanges (`qv`, the Kessler `ql`, `qr`, the tracer) exists in a nested domain exactly when it exists in its parent (the PALM rule; a nested domain could carry an extra field only with its own dynamic driver giving its boundary values, and has none yet)
@@ -87,8 +87,10 @@ function _nest_checks(cfg)
         end
     end
     for (i, d) in enumerate(ds)
-        d.core.model === :boussinesq ||
-            push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq core (the anelastic children would share their parent's reference profile)"))
+        d.core.model in (:boussinesq, :anelastic) ||
+            push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq or the anelastic core"))
+        i > 1 && d.core.model === :anelastic && cfg.timestep.scheme === :rk3 &&
+            push!(e, ConfigError(key(i, "core.model"), "an anelastic nested domain has open (nest) faces, which the anelastic SSP-RK3 step does not take: step the nest with [timestep] scheme = \"euler\""))
         d.grid.stretching === :uniform ||
             push!(e, ConfigError(key(i, "grid.stretching"), "a nested model takes uniform grids"))
         d.boundaries.z === :periodic &&
@@ -113,6 +115,11 @@ function _nest_checks(cfg)
         end
         g.extent[3] <= pg.extent[3] * (1 + 1e-12) ||
             push!(e, ConfigError(key(i, "grid.extent"), "the domain is $(g.extent[3]) m high, its parent $(pg.extent[3]) m"))
+        # two anelastic domains share one reference profile (their transfers use its mass measure)
+        (d.core.model === :anelastic && p.core.model === :anelastic &&
+         (d.dynamics.theta0 != p.dynamics.theta0 || d.dynamics.g != p.dynamics.g)) &&
+            push!(e, ConfigError(key(i, "dynamics.theta0"), "an anelastic domain nested in an anelastic parent shares its reference profile: " *
+                                                           "the same dynamics.theta0 and dynamics.g (parent $(p.dynamics.theta0), $(p.dynamics.g))"))
         for ax in ("x", "y", "z")
             d.boundaries[ax] === p.boundaries[ax] ||
                 push!(e, ConfigError(key(i, "boundaries.$ax"), "a nested domain keeps its parent's faces ($(p.boundaries[ax])): " *
