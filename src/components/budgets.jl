@@ -34,10 +34,31 @@ mutable struct DomainBudgets
     t0::Float64
     nsub::Int
     hour::Any
+    exchange::Union{Nothing,Tuple{Symbol,Symbol}}
 end
-DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing) =
+DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing, exchange = nothing) =
     DomainBudgets(b, collect(Symbol, quantities), Dict{Symbol,Any}(state), Dict{Symbol,Any}(tendency),
-                  0, 0.0, Int(nsub), hour)
+                  0, 0.0, Int(nsub), hour, exchange)
+
+"""
+    NEST_EXCHANGE
+
+The key `(:nest_feedback, :nest_exchange)` of the nest-exchange term of a
+nested domain's budgets (NEST-p2, #482; `[nesting] budget_exchange =
+"exchange_term"`): one term per measured quantity holding everything the
+nest did to the domain — what crossed its nest faces in its dynamics (the
+column total of the transport, for the conserved scalars: energy, water,
+tracers), what the window opening did between its steps (the two-way
+child's re-projection onto the new boundary data) and, in a parent, the
+two-way feedback of its children (stage 12). Each domain's budget closes
+with it; [`nest_exchange`](@ref) reads it.
+"""
+const NEST_EXCHANGE = (:nest_feedback, :nest_exchange)
+
+# the quantities whose dynamics' column total is the nest exchange (the
+# transport conserves them; for momentum the column total also holds the
+# pressure force and the walls' friction)
+const _EXCHANGE_SPLIT = (:energy, :water, :tracer)
 
 """
     budget_fields(c, q::Symbol) -> Tuple
@@ -129,7 +150,7 @@ function with_budgets(d::Domain, quantities)
         budget_start!(sb, m)
         b.measured[q] = sb
     end
-    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing)
+    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing, nothing)
     return Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
 end
 
@@ -141,8 +162,9 @@ budgets(d::Domain) = d.budgets === nothing ? nothing : d.budgets.budgets
 _budgets_begin!(::Nothing, d) = nothing
 function _budgets_begin!(b::DomainBudgets, d)
     h = b.hour === nothing ? 0.0 : Float64(b.hour(clock(d)))
+    gap = b.exchange === nothing ? (:output, :between_steps) : b.exchange
     for q in b.quantities
-        budget_begin_step!(b.budgets.measured[q], b.state[q], h)
+        budget_begin_step!(b.budgets.measured[q], b.state[q], h; gap = gap)
     end
     return nothing
 end
@@ -242,7 +264,8 @@ end
 _dynamics_close!(::Nothing, d) = nothing
 function _dynamics_close!(b::DomainBudgets, d)
     for q in Iterators.reverse(b.quantities)
-        budget_close!(b.budgets.measured[q], b.state[q])
+        budget_close!(b.budgets.measured[q], b.state[q];
+                      exchange = q in _EXCHANGE_SPLIT ? b.exchange : nothing)
     end
     return nothing
 end
@@ -260,4 +283,16 @@ function restore_checkpoint_state!(b::DomainBudgets, s)
         f === :measured || setfield!(b.budgets, f, deepcopy(getfield(s.budgets, f)))
     end
     return b
+end
+
+"""
+    nest_exchange(d::Domain, q::Symbol) -> Float64
+
+The nest-exchange term of quantity `q` of the nested domain `d`'s
+budgets over the run so far ([`NEST_EXCHANGE`](@ref); per unit ground
+area of the domain, J m⁻² for the energy), `0.0` when nothing was booked.
+"""
+function nest_exchange(d::Domain, q::Symbol)
+    d.budgets === nothing && throw(ArgumentError("nest_exchange: the domain $(d.id) measures no budgets"))
+    return get(stage_budget(d.budgets.budgets.measured[q]).terms, NEST_EXCHANGE, 0.0)
 end

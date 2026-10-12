@@ -120,7 +120,8 @@ end
     # the faces are the nest's; no budgets; no couplings in a child
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.boundaries]\nx = \"free_slip\"\n"))
     @test occursin("keeps its parent's faces", keyed(e)["domain[2].boundaries.x"])
-    e = mn_error(() -> mn_cfg(mn_two(); overrides = ["output.variables=[\"budget_energy\"]"]))
+    e = mn_error(() -> mn_cfg(mn_two(); overrides = ["output.variables=[\"budget_energy\"]",
+                                                     "nesting.budget_exchange=\"off\""]))
     @test occursin("measures no budgets", keyed(e)["output.variables"])
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.forcing]\nradiative_cooling = -1e-5\n"))
     @test occursin("not nested", keyed(e)["domain[2].domain.parent"])
@@ -536,4 +537,84 @@ end
     resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
     a = state_fields(full.obj); b = state_fields(resumed.obj)
     @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+end
+
+# ---------------------------------------------------------------------------
+# budgets across a nest: each domain closes its own, with a nest exchange
+# ---------------------------------------------------------------------------
+
+using Aeolus.Components: with_budgets, nest_exchange, NEST_EXCHANGE, budgets
+using Aeolus.BudgetSystem: stage_budget
+using Aeolus.Nesting: nest_covered_range
+
+function mn_budget_pair(; feedback = :two_way, scheme = :rk3, adaptive = false, qs = (:energy, :momentum_x))
+    pm = RegularGrid(; size = (16, 16, 8), extent = (1600.0, 1600.0, 800.0))
+    nest = nested_grid(pm, ((400.0, 1200.0), (400.0, 1200.0), (0.0, 400.0)), 2)
+    wall = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    p = BoussinesqSimulation(pm; θ₀ = 300.0, bcs = wall, θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    c = BoussinesqSimulation(nest.child_mesh; θ₀ = 300.0, bcs = nest_bcs(nest.child_mesh; bottom = :wall))
+    for s in (p, c)
+        set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.5sin(2π * x / 1600) + 0.2cos(2π * y / 800))
+        set!(s.u, (x, y, z) -> 2.0)
+        set!(s.v, (x, y, z) -> 0.5)
+    end
+    cfl = adaptive ? CFLConstraints(; C_advective = 0.5, dt_max = 30.0) : nothing
+    dp = with_budgets(Domain(p; id = "p", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    dc = with_budgets(Domain(c; id = "c", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)]), nest
+end
+
+# the heat of the parent's covered cells, J (ρ₀ c_p Σ θ ΔV)
+function mn_covered_heat(p, nest, ρcp)
+    cx, cy, cz = nest_covered_range(nest)
+    m = p.mesh
+    return ρcp * sum(p.θ.data[m.Hx .+ cx, m.Hy .+ cy, m.Hz .+ cz]) * m.dx * m.dy * m.dz
+end
+
+@testset "budgets across a nest: each domain closes, the nest exchange accounts for the composite ($fb, $scheme, adaptive $ad)" for fb in (:one_way, :two_way), scheme in (:euler, :rk3), ad in (false, true)
+    m, nest = mn_budget_pair(; feedback = fb, scheme = scheme, adaptive = ad)
+    p = m.domains[1]; c = m.domains[2]
+    ρcp = budgets(p).ρ[1] * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
+    Hcov0 = mn_covered_heat(p.state, nest, ρcp)
+    for _ in 1:5
+        ad ? step_adaptive!(m) : step!(m, 5.0)
+    end
+    for d in (p, c), q in (:energy, :momentum_x)
+        meas = budgets(d).measured[q]
+        sb = stage_budget(meas)
+        content = abs(Aeolus.BudgetSystem.measure(meas.meter, q === :energy ? d.state.θ : d.state.u))
+        @test abs(sb.closure) <= 1e-12 * content                       # every domain closes its own
+        @test !haskey(sb.terms, (:core, :unattributed))
+        @test !haskey(sb.terms, (:output, :between_steps))              # the nest's work is named
+    end
+    Ep = nest_exchange(p, :energy); Ec = nest_exchange(c, :energy)
+    @info "nest budgets ($fb, $scheme, adaptive $ad): energy exchange parent $Ep, child $Ec J/m²"
+    @test abs(Ec) > 1e3                                                 # the child's inflow
+    # the child's θ changes only through its faces (no sources): its heat
+    # change is its exchange
+    sbc = stage_budget(budgets(c).measured[:energy])
+    @test abs(sbc.storage - Ec) <= 1e-9 * abs(Ec)
+    if fb === :one_way
+        @test Ep == 0.0                                                 # the parent never sees the child
+    else
+        # the composite is conserved: the parent's exchange (the feedback) and
+        # the child's (its inflow) add up to what the covered cells gained
+        Ap = 1600.0^2; Ac = 800.0^2
+        ΔHcov = mn_covered_heat(p.state, nest, ρcp) - Hcov0
+        @test abs(Ep) > 10                                             # the feedback changed the parent
+        @test abs(Ep * Ap + Ec * Ac - ΔHcov) <= 1e-9 * (abs(Ep * Ap) + abs(Ec * Ac))
+    end
+end
+
+@testset "[nesting] budget_exchange: a nested config measures budgets, every domain closes" begin
+    cfg = mn_cfg(mn_two() * "[checks]\nenergy_closure = {required = true}\n";
+                 overrides = ["output.variables=[\"u\", \"budget_energy\"]"])
+    full = mn_run(cfg)
+    m = full.obj.model
+    @test all(d -> budgets(d) !== nothing, m.domains)
+    res = TOML.parsefile(joinpath(Aeolus.IO.output_dir(full.folder), "results.toml"))
+    @test res["passed"] && res["checks"]["energy_closure"]["passed"]
+    @test haskey(res["checks"]["energy_closure"], "inner")
+    @test nest_exchange(m.domains[2], :energy) != 0
+    @test_throws ArgumentError nested_model((m.domains[1], m.domains[2]), m.nest.links; budget_exchange = :off)
 end

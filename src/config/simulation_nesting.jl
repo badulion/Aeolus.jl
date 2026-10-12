@@ -9,7 +9,7 @@
 const _NEST_CHECKS_DOC = """
 the first domain is the root (no `parent`); every later domain names an earlier one as its `parent`
 a root has no `origin` or `refinement`, and `feedback` stays two_way (it has no parent); a nested domain gives both
-a nested model steps every domain with `time.dt`: a fixed dt (each child takes max(refinement) substeps per step of its parent) or adaptive (the root picks its step, each child the smallest whole number of equal substeps that keeps it stable; a failed step retries the window); it measures no budgets (no `budget_*` output, no closure check)
+a nested model steps every domain with `time.dt`: a fixed dt (each child takes max(refinement) substeps per step of its parent) or adaptive (the root picks its step, each child the smallest whole number of equal substeps that keeps it stable; a failed step retries the window); with `[nesting] budget_exchange = "off"` it measures no budgets (no `budget_*` output, no closure check); with `"exchange_term"` (the default) each domain closes its own, with one nest-exchange term per quantity
 every domain of a nested model runs the boussinesq core on a uniform grid between z walls
 a nested domain lies inside its parent (origin ≥ 0, origin + grid.extent within the parent's extent, its height at most the parent's), with `grid.size` = `grid.extent` / parent spacing × `refinement`
 a nested domain keeps its parent's `[boundaries]` and `dynamics.moisture`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
@@ -66,12 +66,14 @@ function _nest_checks(cfg)
         end
     end
     n == 1 && return e
-    for v in cfg.output.variables
-        haskey(Components.BUDGET_OUTPUTS, v) &&
-            push!(e, ConfigError("output.variables", "$v: a nested model measures no budgets (the two-way feedback is outside every stage)"))
-    end
-    for c in Components.check_budgets(_published_enabled(cfg)) |> unique
-        push!(e, ConfigError("checks", "the closure checks measure budgets, which a nested model does not (:$c)"))
+    if ds[1].nesting.budget_exchange === :off
+        for v in cfg.output.variables
+            haskey(Components.BUDGET_OUTPUTS, v) &&
+                push!(e, ConfigError("output.variables", "$v: with [nesting] budget_exchange = \"off\" a nested model measures no budgets"))
+        end
+        for c in Components.check_budgets(_published_enabled(cfg)) |> unique
+            push!(e, ConfigError("checks", "the closure checks measure budgets, which a nested model with [nesting] budget_exchange = \"off\" does not (:$c)"))
+        end
     end
     for (i, d) in enumerate(ds)
         d.core.model === :boussinesq ||
@@ -164,7 +166,7 @@ function _build_nested(cfg)
         push!(links, Components.NestLink(i, j, nest; feedback = v.domain.feedback))
     end
     return try
-        Components.nested_model(Tuple(doms), links)
+        Components.nested_model(Tuple(doms), links; budget_exchange = ds[1].nesting.budget_exchange)
     catch err
         err isa ArgumentError || rethrow()
         throw(ConfigError("domain", err.msg))

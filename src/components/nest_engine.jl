@@ -189,18 +189,24 @@ end
 function _nest_feedback!(mn::ModelNest, i::Int, ws)
     h = mn.hierarchy
     hd = h.domains[i]
+    b = _ndom(mn, i).budgets
+    twoway = any(l -> h.links[l].feedback === :two_way, hd.links)
+    # the parent's budgets book the feedback as its nest exchange
+    ctx = b !== nothing && twoway
+    ctx && foreach(q -> budget_open!(b.budgets.measured[q], NEST_EXCHANGE..., b.state[q]), b.quantities)
     reproject = false
     for (n, l) in enumerate(hd.links)
         L = h.links[l]
         _end_parent_step!(L, ws[n], false)
         L.twoway !== nothing && L.twoway.reproject && (reproject = true)
     end
-    if any(l -> h.links[l].feedback === :two_way, hd.links)
+    if twoway
         reproject && _reproject!(_ndom(mn, i).state)
         for l in hd.links                       # the parent changed after every link's end data
             h.links[l].new_valid_at = NaN
         end
     end
+    ctx && foreach(q -> budget_close!(b.budgets.measured[q], b.state[q]), Iterators.reverse(b.quantities))
     return nothing
 end
 

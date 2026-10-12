@@ -76,7 +76,8 @@ import ..TimeSteppers: step!
 export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
        CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
-       CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model, nest_window!, NestStepFailure
+       CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model, nest_window!, NestStepFailure,
+       NEST_EXCHANGE, nest_exchange
 
 include("components/interface.jl")
 include("components/pipeline.jl")

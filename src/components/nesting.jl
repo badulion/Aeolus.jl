@@ -138,20 +138,30 @@ the run's sanity check: the blow-up guard inspects every domain,
 a one-way child too). Adaptive (every domain has a `cfl`), the root
 picks its step and each child the number of substeps it needs, a failed
 step retries the window (up to `max_retries` times,
-[`nest_window!`](@ref)). Refused with an `ArgumentError` that names the
-domains: a mix of fixed and adaptive domains, a domain that measures
-budgets (not attributed across the nest's feedback yet), a child without
+[`nest_window!`](@ref)). `budget_exchange` (`[nesting]
+budget_exchange`): `:exchange_term` (the default) lets the domains
+measure budgets, each closing its own with one nest-exchange term per
+quantity ([`NEST_EXCHANGE`](@ref)); `:off` measures none in a nest.
+Refused with an `ArgumentError` that names the domains: a mix of fixed
+and adaptive domains, a domain that measures budgets under
+`budget_exchange = :off`, a child without
 a link or with two, a child that is not properly nested in its parent,
 overlapping siblings, or a two-way pair without a conservation box or of
 mixed cores (those of `Nesting.add_nest!`).
 """
-function nested_model(domains::Tuple, links; max_retries::Integer = 3)
+function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term)
     length(domains) >= 2 || throw(ArgumentError("nested_model: a nest needs two domains or more"))
+    budget_exchange in (:exchange_term, :off) ||
+        throw(ArgumentError("nested_model: budget_exchange is :exchange_term or :off, got :$budget_exchange"))
     n = length(domains)
     for d in domains
-        d.budgets === nothing ||
-            throw(ArgumentError("nested_model: domain $(d.id) measures budgets; budgets across a nest " *
-                                "(the two-way feedback is outside every stage) are not attributed yet"))
+        budget_exchange === :off && d.budgets !== nothing &&
+            throw(ArgumentError("nested_model: domain $(d.id) measures budgets, and budget_exchange = :off books " *
+                                "nothing of the nest: a nest measures budgets with budget_exchange = :exchange_term"))
+    end
+    # every nested domain books what the nest does to it as its nest exchange
+    for d in domains[2:end]
+        d.budgets === nothing || (d.budgets.exchange = NEST_EXCHANGE)
     end
     adaptive = domains[1].cfl !== nothing
     for d in domains

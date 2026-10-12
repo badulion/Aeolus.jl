@@ -579,11 +579,16 @@ function coupling_options!(sec, C)
         T = _option_spec(C, k, d)
         kw = T === Symbol && (component_name(C), k) == (:nesting, :parent_driver) ?
              (; allowed = [:aeolus, :profile, :offline]) :
+             T === Symbol && (component_name(C), k) == (:nesting, :budget_exchange) ?
+             (; allowed = [:exchange_term, :off]) :
              T isa OneOf && (component_name(C), k) == (:nesting, :z_anterp) ? (; allowed = [:canopy]) :
              T isa OneOf ? (; allowed = [:dynamic]) : (;)
         u = get(OPTION_UNITS, (component_name(C), k), "")
         option!(sec, option_key(k), T; default = _option_default(C, k, d), kw..., units = u,
-                doc = "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
+                doc = (component_name(C), k) == (:nesting, :budget_exchange) ?
+                      "budgets across a nest of [[domain]] blocks (NEST-p2, #482): exchange_term (each domain closes its " *
+                      "own budgets with one nest-exchange term per quantity) or off (a nest measures no budgets)" :
+                      "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
                       ": the nest parent's options, [$name.parent] (`aeolus options` lists them)" : ""))
     end
     return sec

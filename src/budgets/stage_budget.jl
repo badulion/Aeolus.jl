@@ -160,21 +160,23 @@ function _book!(hl::StageBudget, key::Tuple{Symbol,Symbol}, v::AbstractVector, e
 end
 
 """
-    budget_begin_step!(b, x, hour = 0) -> b
+    budget_begin_step!(b, x, hour = 0; gap = (:output, :between_steps)) -> b
 
 Start attributing one step: measure the quantity of the field `x` (any
-change since the end of the previous step is booked as `(:output,
-:between_steps)`). With 24 bins the step is binned by its local `hour`;
-with one bin `hour` is ignored.
+change since the end of the previous step is booked under `gap`,
+`(:output, :between_steps)` by default; a nested domain names it its nest
+exchange, NEST-p2 #482). With 24 bins the step is binned by its local
+`hour`; with one bin `hour` is ignored.
 """
-function budget_begin_step!(hl::StageBudget, θ, hour::Real = 0.0)
+function budget_begin_step!(hl::StageBudget, θ, hour::Real = 0.0;
+                            gap::Tuple{Symbol,Symbol} = (:output, :between_steps))
     hl.meter === nothing && error("budget_begin_step!: the stage budget has no meter (budget_start!)")
     hl.bin = hl.nbins == 24 ? mod(floor(Int, hour), 24) + 1 : 1
     _measure!(hl.H_now, hl, θ)
     copyto!(hl.Hs_now, hl.sbuf)
     if hl.have_end
-        gap = hl.H_now .- hl.H_end
-        any(!iszero, gap) && _book!(hl, (:output, :between_steps), gap)
+        Δ = hl.H_now .- hl.H_end
+        any(!iszero, Δ) && _book!(hl, gap, Δ)
     else
         copyto!(hl.H_end, hl.H_now)       # storage counts from here
         hl.have_end = true
@@ -251,14 +253,22 @@ function budget_open!(hl::StageBudget, stage::Symbol, name::Symbol, θ; split::B
 end
 
 """
-    budget_close!(b, x) -> b
+    budget_close!(b, x; exchange = nothing) -> b
 
 Close the innermost context: measure the quantity, and book the change
 minus what was booked inside it under `(stage, name)` (or split, see
 [`budget_open!`](@ref)). A nested context's change counts as booked for
 its parent. A deferring context commits what its nested contexts booked.
+
+`exchange = (stage, term)` (a split context only: the dynamics of a
+domain with nest faces, NEST-p2 #482): the column total of what the
+transport would conserve, `Σ_k conserved_k` of [`split_transport`](@ref)
+— for a closed domain the numerics residual, for a domain with open faces
+what crossed them — is booked under that key as a column amount (no
+level), and taken out of `(stage, :transport)`, whose column total is
+then the residual alone.
 """
-function budget_close!(hl::StageBudget, θ)
+function budget_close!(hl::StageBudget, θ; exchange::Union{Nothing,Tuple{Symbol,Symbol}} = nothing)
     hl.active || return hl
     ctx = pop!(hl.stack)
     Nz = hl.meter.Nz
@@ -292,7 +302,13 @@ function budget_close!(hl::StageBudget, θ)
         Δs = hl.sbuf .- ctx.S0
         any(!iszero, Δs) && _book!(hl, (ctx.stage, :solid_exchange), -Δs)
         cons, red = split_transport(hl.meter, rest .+ Δs)
-        _book!(hl, (ctx.stage, :transport), cons, unlocated)
+        if exchange === nothing
+            _book!(hl, (ctx.stage, :transport), cons, unlocated)
+        else
+            X = sum(cons)
+            _book!(hl, exchange, zeros(Nz), X)
+            _book!(hl, (ctx.stage, :transport), cons, unlocated - X)
+        end
         any(!iszero, red) && _book!(hl, (ctx.stage, :redistribution), red)
     elseif any(!iszero, rest) || unlocated != 0
         _book!(hl, (ctx.stage, ctx.name), rest, unlocated)
