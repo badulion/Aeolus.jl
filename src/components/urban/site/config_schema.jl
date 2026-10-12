@@ -27,8 +27,9 @@ using Dates: Date, year, month, day
     SITE_FIELDS
 
 Every field of [`site_options`](@ref) and the dotted keys of the
-model's schema it is made of (`components` is the `enabled` key of every
-urban component's section and their other keys). The options that make
+model's schema it is made of (`components` is the selector of every urban
+slot section, the `enabled` key of every additive component's section,
+and their other keys). The options that make
 the site's options are exactly the union of these keys, each used once
 (`test/config_berlin.jl`).
 """
@@ -54,7 +55,7 @@ const SITE_FIELDS = (
     u0 = ("urban.u0",), qv0 = ("urban.qv0",), qv_scale = ("urban.qv_scale",),
     Ts0 = ("urban.ts0",), Ts_water_offset = ("urban.ts_water_offset",),
     T_soil0 = ("urban.t_soil0",), p_surface = ("urban.p_surface",),
-    components = ("*.enabled", "*.*"),
+    components = ("<slot>.<selector>", "*.enabled", "*.*"),
     canopy_top = ("urban.canopy_top",),
     child_boundaries = ("urban.child_boundaries",),
     backend = ("urban.serial",))
@@ -565,35 +566,68 @@ const OPTION_UNITS = Dict{Tuple{Symbol,Symbol},String}(
     (:pressure_multigrid, :tol) => "1", (:pressure_mg_cg, :tol) => "1", (:pressure_density_weighted, :tol) => "1",
     (:turbulence_diag, :gamma_threshold) => "1", (:turbulence_diag, :relam_νt_ratio) => "1")
 
+# The options of the urban component `C`, declared on `sec` (a section or a
+# provider): one option per key of `default_options(C)`, typed by the form of
+# its default (the per-key forms of `OPTION_FORMS` for the nest's `parent`,
+# `z_anterp` and `parent_driver`, the surface exchange's `z0m` and the ML
+# closure's `fn`).
+function coupling_options!(sec, C)
+    name = String(component_name(C))
+    keys_ = [option_key(k) for k in keys(default_options(C))]
+    allunique(keys_) || error("the options of $(nameof(C)) collide as TOML keys: $keys_")
+    for (k, d) in pairs(default_options(C))
+        T = _option_spec(C, k, d)
+        kw = T === Symbol && (component_name(C), k) == (:nesting, :parent_driver) ?
+             (; allowed = [:aeolus, :profile, :offline]) :
+             T isa OneOf && (component_name(C), k) == (:nesting, :z_anterp) ? (; allowed = [:canopy]) :
+             T isa OneOf ? (; allowed = [:dynamic]) : (;)
+        u = get(OPTION_UNITS, (component_name(C), k), "")
+        option!(sec, option_key(k), T; default = _option_default(C, k, d), kw..., units = u,
+                doc = "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
+                      ": the nest parent's options, [$name.parent] (`aeolus options` lists them)" : ""))
+    end
+    return sec
+end
+
 """
     coupling_section(C) -> Section
 
-The model's section of the urban coupling `C`, `[<component_name>]`:
-`enabled` (default `false`: every component is off until its section
-enables it) and one option per key of `default_options(C)`, typed by the
-form of its default (the per-key forms of [`OPTION_FORMS`](@ref) for the
-nest's `parent`, `z_anterp` and `parent_driver`, the surface exchange's
-`z0m` and the ML closure's `fn`).
+The model's section of the additive urban component `C`,
+`[<component_name>]`: `enabled` (default `false`: every additive
+component is off until its section enables it) and its options
+([`coupling_options!`](@ref)). A slot's components are providers of its
+slot section instead ([`urban_slot_section`](@ref)).
 """
 function coupling_section(C)
+    slot(C) === nothing || error("coupling_section: $(nameof(C)) is a provider of the slot :$(slot(C))")
     name = String(component_name(C))
-    s = slot(C)
-    doc = s === nothing ? "The urban component `$name` (`$(nameof(C))`)." :
-                         "The urban component `$name` (`$(nameof(C))`): `$(provider(C))` of the urban slot `$s` (a site enables one component per urban slot)."
-    return section(name; doc = doc) do sec
+    return section(name; doc = "The urban component `$name` (`$(nameof(C))`).") do sec
         option!(sec, "enabled", Bool; default = false, doc = "run the component")
-        keys_ = [option_key(k) for k in keys(default_options(C))]
-        allunique(keys_) || error("the options of $(nameof(C)) collide as TOML keys: $keys_")
-        for (k, d) in pairs(default_options(C))
-            T = _option_spec(C, k, d)
-            kw = T === Symbol && (component_name(C), k) == (:nesting, :parent_driver) ?
-                 (; allowed = [:aeolus, :profile, :offline]) :
-                 T isa OneOf && (component_name(C), k) == (:nesting, :z_anterp) ? (; allowed = [:canopy]) :
-                 T isa OneOf ? (; allowed = [:dynamic]) : (;)
-            u = get(OPTION_UNITS, (component_name(C), k), "")
-            option!(sec, option_key(k), T; default = _option_default(C, k, d), kw..., units = u,
-                    doc = "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
-                          ": the nest parent's options, [$name.parent] (`aeolus options` lists them)" : ""))
+        coupling_options!(sec, C)
+    end
+end
+
+"""
+    urban_slot_section(sl) -> Section
+
+The slot section of the urban slot `sl` (ONE-m, #476;
+[`URBAN_SLOT_SECTIONS`](@ref)): one provider per urban component of the
+slot, available on an urban site, the component of
+[`URBAN_DEFAULTS`](@ref) the default, each with its options
+([`coupling_options!`](@ref)). The model's schema pools it with the
+model's own providers of the same section (`[core]`, `[timestep]`,
+`[sgs]`, `[microphysics]`).
+"""
+function urban_slot_section(sl::Symbol)
+    name, key = URBAN_SLOT_SECTIONS[sl]
+    return Config.slot_section(name; key = key, doc = "") do sec
+        for C in URBAN_COMPONENTS
+            slot(C) === sl || continue
+            Config.provider!(sec, String(provider(C)); kinds = [:urban],
+                             default = C in URBAN_DEFAULTS ? [:urban] : Symbol[],
+                             doc = "The urban component `$(component_name(C))` (`$(nameof(C))`).") do p
+                coupling_options!(p, C)
+            end
         end
     end
 end
@@ -711,10 +745,26 @@ end
 The names of the urban site's per-domain sections of the model:
 `"urban"` and one per urban component (`component_name`, registry order).
 """
-urban_section_names() = vcat(["urban"], [String(component_name(C)) for C in URBAN_COMPONENTS])
+urban_section_names() = vcat(["urban"], [String(component_name(C)) for C in URBAN_COMPONENTS if slot(C) === nothing],
+                             [URBAN_SLOT_SECTIONS[sl][1] for sl in URBAN_SLOTS])
 
-"The urban site's sections of the model's schema: [`urban_site_section`](@ref) and every [`coupling_section`](@ref)."
-urban_sections() = Section[urban_site_section(), (coupling_section(C) for C in URBAN_COMPONENTS)...]
+"""
+The urban site's sections of the model's schema: [`urban_site_section`](@ref),
+the [`coupling_section`](@ref) of every additive component and the
+[`urban_slot_section`](@ref) of every urban slot.
+"""
+urban_sections() = Section[urban_site_section(),
+                           (coupling_section(C) for C in URBAN_COMPONENTS if slot(C) === nothing)...,
+                           (urban_slot_section(sl) for sl in URBAN_SLOTS)...]
+
+"""
+    is_selected(cfg, C) -> Bool
+
+Whether the resolved (one-domain) model config `cfg` selects the urban
+component `C`: on an urban site (`[urban] enabled`), the provider its
+slot section names, or an additive component its section enables.
+"""
+is_selected(cfg, C) = cfg.urban.enabled && Components.enabled(C, cfg[Components.section(C)])
 
 """
     urban_enabled(cfg) -> Bool
@@ -743,7 +793,7 @@ _raw_form(x) = x
 function _section_options(C, sec)
     probs = String[]; out = Pair{Symbol,Any}[]
     d = default_options(C)
-    name = String(component_name(C))
+    name = Components.section(C)
     for k in keys(d)
         raw = _raw_form(sec[option_key(k)])
         ok, v, why = coupling_option_value(C, k, raw, "$name.$k")
@@ -753,26 +803,25 @@ function _section_options(C, sec)
     return probs, merge(d, (; out...))
 end
 
-# The urban components a resolved config enables (in the order of
-# URBAN_COMPONENTS), and its problems: an urban slot without exactly one
-# enabled component, two enabled components one of which declares the
-# other incompatible.
+# The urban components a resolved config selects (in the order of
+# URBAN_COMPONENTS: per slot the provider its section names, the additive
+# ones their sections enable), and its problems: two selected components
+# one of which declares the other incompatible.
+_selection_text(C) = slot(C) === nothing ? "[$(component_name(C))]" :
+                     (u = URBAN_SLOT_SECTIONS[slot(C)]; "[$(u[1])] $(u[2]) = \"$(provider(C))\"")
+_selection_key(C) = slot(C) === nothing ? "$(component_name(C)).enabled" : join(URBAN_SLOT_SECTIONS[slot(C)], ".")
 function _urban_selection(cfg)
     probs = ConfigError[]
-    on = Type[C for C in URBAN_COMPONENTS if cfg[String(component_name(C))].enabled]
+    on = Type[C for C in URBAN_COMPONENTS if is_selected(cfg, C)]
     for sl in URBAN_SLOTS
-        these = [C for C in on if slot(C) === sl]
-        length(these) == 1 && continue
-        names = [String(component_name(C)) for C in URBAN_COMPONENTS if slot(C) === sl]
-        push!(probs, ConfigError(isempty(these) ? names[1] : String(component_name(these[2])),
-            "the urban slot :$sl needs exactly one enabled component, of [" * join(names, "], [") * "]" *
-            (isempty(these) ? "; none is enabled" : "; enabled: " * join(String.(component_name.(these)), ", "))))
+        count(C -> slot(C) === sl, on) == 1 ||
+            error("the urban slot :$sl has $(count(C -> slot(C) === sl, on)) providers selected")   # the schema makes it one
     end
     for C in on, D in on
         D in incompatible(C) || continue
         why = incompatible_reason(C)
-        push!(probs, ConfigError(String(component_name(D)),
-            "[$(component_name(C))] is incompatible with [$(component_name(D))]" * (isempty(why) ? "" : ": " * why)))
+        push!(probs, ConfigError(_selection_key(D),
+            "$(_selection_text(C)) is incompatible with $(_selection_text(D))" * (isempty(why) ? "" : ": " * why)))
     end
     return probs, on
 end
@@ -788,10 +837,10 @@ function urban_components(cfg)
     probs, on = _urban_selection(cfg)
     isempty(probs) || throw(ConfigError(reduce(vcat, (p.problems for p in probs))))
     po, out = String[], Dict{Symbol,Any}()
-    for C in URBAN_COMPONENTS
-        p, nt = _section_options(C, cfg[String(component_name(C))])
+    for C in on
+        p, nt = _section_options(C, cfg[Components.section(C)])
         append!(po, p)
-        C in on && (out[component_name(C)] = nt)
+        out[component_name(C)] = nt
     end
     isempty(po) || throw(ConfigError("urban", join(po, "; ")))
     return out
@@ -800,47 +849,43 @@ end
 """
     urban_checks(cfg) -> Vector{ConfigError}
 
-The cross-field checks of an urban site (`[urban] enabled`): exactly one
-enabled provider per urban slot; the selection's declared
-incompatibilities, with their reasons; every component's options of the
-right form; a fixed `[time] dt` and `[time] nsteps` (the time stepping is
-the urban `timestep_*` provider's: with `timestep_adaptive` `nsteps × dt`
-is the simulated time); a uniform grid, the Boussinesq `[dynamics]` core
-(the site picks its core with the `core_*` providers) and no model
-component; `[checkpoint]` only with the Boussinesq core.
+The cross-field checks of an urban site (`[urban] enabled`): the
+selection's declared incompatibilities, with their reasons (one provider
+per urban slot is what its slot section selects, ONE-m #476); every
+selected component's options of the right form; a fixed `[time] dt` and
+`[time] nsteps` (the time stepping is the urban `[timestep] scheme`'s:
+with `"adaptive"` `nsteps × dt` is the simulated time); a uniform grid
+and no model component; `[checkpoint]` only with the Boussinesq core.
 """
 function urban_checks(cfg)
     e, on = _urban_selection(cfg)
-    for C in URBAN_COMPONENTS
-        po, _ = _section_options(C, cfg[String(component_name(C))])
+    for C in on
+        po, _ = _section_options(C, cfg[Components.section(C)])
         for x in po
             push!(e, ConfigError(first(split(x, ':')), x))
         end
     end
     t = cfg.time
-    t.dt isa Real || push!(e, ConfigError("time.dt", "an urban site takes a fixed dt (its time stepping is the enabled timestep_* component's)"))
+    t.dt isa Real || push!(e, ConfigError("time.dt", "an urban site takes a fixed dt (its time stepping is its [timestep] scheme's)"))
     (t.nsteps === nothing || t.duration !== nothing) &&
         push!(e, ConfigError("time.nsteps", "an urban site runs nsteps steps of dt (duration = \"none\")"))
     cfg.grid.stretching === :uniform || push!(e, ConfigError("grid.stretching", "an urban site needs a uniform grid"))
-    cfg.dynamics.core === :boussinesq ||
-        push!(e, ConfigError("dynamics.core", "an urban site picks its core with [core_boussinesq], [core_anelastic] or [core_pseudo_incompressible]"))
     cfg.dynamics.moisture && push!(e, ConfigError("dynamics.moisture", "an urban site carries its water as tracers (qv, ql, qr)"))
     tt = cfg.urban.theta_top
     (tt isa Real || tt in (:initial_gradient, :noflux)) ||
         push!(e, ConfigError("urban.theta_top", "expected \"initial_gradient\", \"noflux\" or a gradient in K/m"))
     ckon = !(cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf)
-    ic = findfirst(C -> slot(C) === :core, on)
-    core = ic === nothing ? :boussinesq : provider(on[ic])
+    core = provider(only(C for C in on if slot(C) === :core))
     (ckon && core !== :boussinesq) &&
         push!(e, ConfigError("checkpoint.every_steps",
-            "checkpoints of an urban site need the Boussinesq core ([core_boussinesq]); " *
+            "checkpoints of an urban site need the Boussinesq core ([core] model = \"boussinesq\"); " *
             "the :$core core has none yet: keep [checkpoint] off"))
     return e
 end
 
 const URBAN_CHECKS_DOC = """
-an urban site (`[urban] enabled`) enables exactly one provider per urban slot, a compatible selection (the declared incompatibilities, with their reasons), and options of the right form
-an urban site takes a fixed `[time] dt` with `nsteps` (duration = \"none\"), a uniform grid, `[dynamics] core = \"boussinesq\"` (its core is a `core_*` provider) and no moisture (its water is tracers)
+an urban site (`[urban] enabled`) selects a compatible set of providers (the declared incompatibilities, with their reasons), with options of the right form
+an urban site takes a fixed `[time] dt` with `nsteps` (duration = \"none\"), a uniform grid and no moisture (its water is tracers)
 `[urban] theta_top` is `\"initial_gradient\"`, `\"noflux\"` or a gradient in K/m; `[checkpoint]` needs the Boussinesq core"""
 
 """
@@ -905,7 +950,12 @@ function default_run_config()
             "[grid]\nsize = [64, 64, 64]\nextent = [1000.0, 1000.0, 400.0]\nhalo = [3, 3, 3]\n",
             "[dynamics]\nnu = 2.0\ntheta0 = 293.0\n[urban]\nenabled = true")
     for C in URBAN_DEFAULTS
-        println(io, "[", component_name(C), "]\nenabled = true")
+        if slot(C) === nothing
+            println(io, "[", component_name(C), "]\nenabled = true")
+        else
+            sec, key = URBAN_SLOT_SECTIONS[slot(C)]
+            println(io, "[", sec, "]\n", key, " = \"", provider(C), "\"")
+        end
     end
     seekstart(io)
     return load_run_config(io)
