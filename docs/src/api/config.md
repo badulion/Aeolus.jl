@@ -167,7 +167,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
-cases [`urban_parent`](../reference/options/urban_parent.md), [`cbl`](../reference/options/cbl.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+case [`urban_parent`](../reference/options/urban_parent.md); the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -207,17 +207,23 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Every legacy case is code in `src/` (`urban_parent`, the nest parent of
-an urban site alone, and the validation run types of [`Aeolus.RunDrivers`](@ref)); nothing is loaded
-from `examples/`. The stable-boundary-layer cases (the former `sbl` run
+The one legacy case left is code in `src/` (`urban_parent`, the nest
+parent of an urban site alone); nothing is loaded from `examples/`. The
+validation run types of the former `Aeolus.RunDrivers` are configurations
+of the model since ONE-l (#475): `advection` (`[kinematic_flow]`), `cbl`
+(`[sgs] closure = "tke"`, `[inflow_statistics]`), `shear_layer` (the
+`tanh` and `seed_mode` initial profiles) and `flat_plate` (`[fringe]`);
+`inflow_fetch` and `obstacle_channel` (channel cases) and `sgs_decay`
+(the filtered-DNS study) were dropped, their harnesses kept as test
+fixtures (`test/fixtures/`). The stable-boundary-layer cases (the former `sbl` run
 type) are configurations of the model since ONE-g (#456); the validation
 run types `dns`, `channel`, `cbc_decay` and `patchy_surface` and the
 single-column cases went with their cases (maintainer decisions of
 2026-10-09). The two legacy cases that were Julia files under `examples/`
 are gone (ONE-i #458): the Kessler box of the kernel demos (`column`) is
 the configuration `examples/cloud_spinup/cloud_spinup.toml` of the model,
-and `sgs_decay` includes the shared P56-c fixture
-`test/fixtures/dns_decay.jl` itself instead of the `dns_decay` run type.
+and the `dns_decay` run type is the shared P56-c fixture
+`test/fixtures/dns_decay.jl`.
 
 A legacy case gets a new section only where the case has structure of its
 own; a driver with a `case` switch keeps one section per case and refuses
@@ -302,9 +308,8 @@ Aeolus.Components.Model) of the Boussinesq or the anelastic core on a box
 with its components. A bare config is a minimal dry LES (32³ on 3.2 km ×
 3.2 km × 1.6 km, free-slip z walls, θ₀ = 300 K, Smagorinsky, adaptive
 RK3, one hour). The example cases (`examples/<case>/<case>.toml`) replace
-the scripts that built these runs in code (EX-d, #441; ONE-i, #458). The
-run types of the other example cases are legacy cases in
-[`Aeolus.RunDrivers`](@ref).
+the scripts that built these runs in code (EX-d, #441; ONE-i, #458), and
+the validation run types (ONE-l, #475).
 
 ```toml
 schema_version = 2

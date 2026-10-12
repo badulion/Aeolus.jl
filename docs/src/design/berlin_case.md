@@ -549,7 +549,7 @@ suite run.
 
 **The boundary-layer height.** z_i comes from
 `TurbulenceStability.boundary_layer_height` everywhere: soundings, the
-CBL harness (`tke_cbl` of the `cbl` run type, formerly `test/tke_cbl_driver.jl`) and the nesting diagnostics. It is
+CBL harness (`tke_cbl`, the test fixture `test/fixtures/tke_cbl.jl`) and the nesting diagnostics. It is
 the only z_i diagnostic in the package; see [Stability functions and the
 gradient Richardson number](../theory/turbulence_stability.md).
 

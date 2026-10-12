@@ -274,7 +274,7 @@ truth):
 | any `AbstractSGSClosure` | `nu_h_max`, `nu_v_max`, `kappa_h_max` (via `sgs_fields`); `TKEClosure` adds `e_mean`, `e_max` |
 | `WallModel` | `ustar_mean`, `ustar_max` of the bottom wall (the law at the first-cell speed, from `apply_wall_stress!` with a zero step) |
 | `TBLEWallModel` | per wall used: `<wall>.utau_mean` (its active columns), `<wall>.kappa_wm` |
-| `WallBoundedCase` | `tau_wall_bottom`, `tau_wall_top`, with a scalar `q_wall_bottom`, `q_wall_top` (all `:step`); a TBLE wall model's under `wall.` |
+| `WallBoundedCase` (the test fixture `test/fixtures/channel_cases.jl`) | `tau_wall_bottom`, `tau_wall_top`, with a scalar `q_wall_bottom`, `q_wall_top` (all `:step`); a TBLE wall model's under `wall.` |
 | `NestedRun` | `parent_steps`, `child_substeps`, `parent_retries`, `child_retries`, `substeps_last`, `max_child_cfl`, `max_clock_error` (`:step`); the stage wall times; every diagnostic of both domains under `parent.` and `child.` |
 
 The Berlin case (an example, not the library) implements the same

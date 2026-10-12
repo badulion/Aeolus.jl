@@ -21,7 +21,7 @@ ImageMagick if you want to view them in most browsers:
 `convert file.ppm file.png`.
 
 Each config reproduces the script it replaced bit for bit
-(`test/config_run_drivers.jl`), except `dcbl_radiation_lsm`, see below,
+(`test/config_cases.jl`), except `dcbl_radiation_lsm`, see below,
 and `cloud_spinup`, whose Kessler box runs on the model in fixed steps of
 60 s since ONE-i (#458) (the `column` run type took 60, 60, 120, 120 and
 120 s). The couplings are sections of the model's config
