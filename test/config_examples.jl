@@ -159,9 +159,15 @@ include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
     ds = NCDatasets.NCDataset(joinpath(r.folder.path, "diagnostics.nc"))
     z = Array(ds["z"][:]); QL = Array(ds["micro.ql"][:, :]); QR = Array(ds["micro.qr"][:, :])
     t = Array(ds["time_costly"][:]); close(ds)
-    @test t ≈ 0:60:480
+    # a row per step, written after it (the run monitor records no row of
+    # the initial state): t = 60, 120, …, 480 s
+    @test t ≈ 60:60:480
     qlmax = vec(maximum(QL; dims = 1))
     @test issorted(qlmax; rev = true) && qlmax[end] < qlmax[1]
+    # the core step writes the row (the run monitor is attached to it), before
+    # the step's Kessler update: the row at 60 s still holds the initial
+    # cloud and no rain (the direct steps above: 0.0192 summed qr after one);
+    # at the end the rain is there
     @test maximum(QR[:, 1]) == 0 && maximum(QR[:, end]) > 1e-5
     @test any(QR[k, end] > 0 for k in eachindex(z) if z[k] < 0.6H)
     # vapour and cloud only lose water to the rain (no source of water)
