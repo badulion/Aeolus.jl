@@ -35,7 +35,7 @@
 # BoussinesqSimulation, so both providers are incompatible with the
 # anelastic and pseudo-incompressible cores (couplings/core_select.jl).
 
-const _SOUNDPROOF_CORES = (:core => :anelastic, :core => :pseudo_incompressible)
+_soundproof_cores() = (AnelasticCore, PseudoIncompressibleCore)
 const _SOUNDPROOF_REASON =
     "TimeIntegration's adaptive_dt / step_adaptive! / step_imex! are defined for the " *
     "Boussinesq core only (they are typed on BoussinesqSimulation); use timestepper = :fixed " *
@@ -54,12 +54,11 @@ pseudo-incompressible cores. Not the default: at the flagship's
 step 141), and in summer the step exceeds the advective limit the
 adaptive stepper keeps to (it takes 1.67 s on average, 0.76 s by 13:00).
 """
-struct FixedStep <: AbstractCoupling end
+struct FixedStep <: UrbanComponent end
 
-coupling_name(::Type{FixedStep}) = :timestep_fixed
+component_name(::Type{FixedStep}) = :timestep_fixed
 slot(::Type{FixedStep}) = :timestepper
 provider(::Type{FixedStep}) = :fixed
-is_default(::Type{FixedStep}) = false
 modules_used(::Type{FixedStep}) = (:TimeSteppers,)
 
 """
@@ -142,7 +141,7 @@ integrate over their period). `run_case!` runs to the simulated time
 `nsteps · cfg.dt` rather than a number of steps; the first step grows
 from `cfg.dt` (at most `growth_max · cfg.dt`).
 """
-mutable struct AdaptiveStep{S} <: AbstractCoupling
+mutable struct AdaptiveStep{S} <: UrbanComponent
     constraints::CFLConstraints{Float64}
     scheme::S                      # nothing (explicit step!) or ARK2()
     max_retries::Int
@@ -153,11 +152,11 @@ mutable struct AdaptiveStep{S} <: AbstractCoupling
     stats::StepStats
 end
 
-coupling_name(::Type{<:AdaptiveStep}) = :timestep_adaptive
+component_name(::Type{<:AdaptiveStep}) = :timestep_adaptive
 slot(::Type{<:AdaptiveStep}) = :timestepper
 provider(::Type{<:AdaptiveStep}) = :adaptive
 modules_used(::Type{<:AdaptiveStep}) = (:TimeIntegration, :TimeSteppers)   # step_adaptive! drives the generic step!
-incompatible(::Type{<:AdaptiveStep}) = _SOUNDPROOF_CORES
+incompatible(::Type{<:AdaptiveStep}) = _soundproof_cores()
 incompatible_reason(::Type{<:AdaptiveStep}) = _SOUNDPROOF_REASON
 variable_dt(::Type{<:AdaptiveStep}) = true
 default_options(::Type{<:AdaptiveStep}) =
@@ -328,19 +327,18 @@ and `maxit` of the implicit CG solves. Buys nothing at a dt the explicit
 step is stable at (it costs two projections and four implicit solves per
 step); it is what lets `cfg.dt` exceed the diffusive limit Δ²/ν_eff.
 """
-struct IMEXStep{S} <: AbstractCoupling
+struct IMEXStep{S} <: UrbanComponent
     scheme::S
     tol::Float64
     maxit::Int
     stats::StepStats
 end
 
-coupling_name(::Type{<:IMEXStep}) = :timestep_imex
+component_name(::Type{<:IMEXStep}) = :timestep_imex
 slot(::Type{<:IMEXStep}) = :timestepper
 provider(::Type{<:IMEXStep}) = :imex
-is_default(::Type{<:IMEXStep}) = false
 modules_used(::Type{<:IMEXStep}) = (:TimeIntegration,)
-incompatible(::Type{<:IMEXStep}) = _SOUNDPROOF_CORES
+incompatible(::Type{<:IMEXStep}) = _soundproof_cores()
 incompatible_reason(::Type{<:IMEXStep}) = _SOUNDPROOF_REASON
 default_options(::Type{<:IMEXStep}) = (tol = 1e-8, maxit = 200)
 build(::Type{<:IMEXStep}, case, o) = IMEXStep(ARK2(), o.tol, o.maxit, StepStats())
@@ -372,6 +370,3 @@ function smoke_check(c::IMEXStep, case)
             "∇·u at round-off after the stage projections (< 1e-10 s⁻¹)" => max_divergence(case.sim) < 1e-10]
 end
 
-register!(FixedStep)
-register!(AdaptiveStep)
-register!(IMEXStep)

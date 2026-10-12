@@ -78,7 +78,7 @@ function open_output!(case; resume::Bool = false)
         "source"      => "Boussinesq LES, cut-cell IBM, Era III radiation",
         "comment"     => @sprintf("scenario %s from %05.2f local on %d-%02d-%02d",
                                   cfg.scenario, cfg.start_h, cfg.date...),
-        "couplings"   => join(string.(coupling_name.(case.couplings)), " "),
+        "couplings"   => join(string.(component_name.(case.couplings)), " "),
         "references"  => "src/UrbanCase.jl")
     w = OutputWriter(cfg.output_path; x = x, y = y, z = z, records = _output_fields(case),
                      statics = static_output_fields(case), ctx = case,

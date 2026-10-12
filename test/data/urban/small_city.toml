@@ -1,39 +1,95 @@
-# A small synthetic city for the urban run-type tests (test/urban_run.jl,
-# EX-a #438): 200 m × 200 m × 100 m on 16 × 16 × 16 cells (12.5 m × 6.25 m),
-# periodic sides (no nest), at local noon on the default date, the idealised
-# initial profile (an inversion at 60 m). The ground: its static driver
-# (input/small_city_static.nc), which AeolusPrep.jl makes from its
-# small_city.geojson in mesh metres — a 40 m and a 20 m building (a 5 m
-# shed below the 8 m minimum height is dropped), a park and a pond.
-# Everything else is the urban driver's defaults: every default coupling.
+# A small synthetic city for the urban site's tests (test/urban_run.jl,
+# EX-a #438, ONE-e #454): 200 m × 200 m × 100 m on 16 × 16 × 16 cells
+# (12.5 m × 6.25 m), periodic sides (no nest), at local noon on the default
+# date, the idealised initial profile (an inversion at 60 m). The ground: its
+# static driver (input/small_city_static.nc), which AeolusPrep.jl makes from
+# its small_city.geojson in mesh metres — a 40 m and a 20 m building (a 5 m
+# shed below the 8 m minimum height is dropped), a park and a pond. The
+# urban components: the default provider of every urban slot and every
+# additive component but the nest, at their default options.
 
 schema_version = 2
 
+static_driver = "input/small_city_static.nc"
+
 [run]
-legacy = "urban"
 name = "small_city"
 
 [output]
 cadence = 12.0
-netcdf = "none"
+
+[time]
+dt = 2.0
+duration = "none"
+nsteps = 6
 
 [grid]
 size = [16, 16, 16]
 extent = [200.0, 200.0, 100.0]
+halo = [3, 3, 3]
 
-[geometry]
-static = "input/small_city_static.nc"
+[dynamics]
+nu = 2.0
+theta0 = 293.0
 
-[clock]
+[urban]
+enabled = true
+netcdf = "none"
 start_h = 12.0
-nsteps = 6
-
-[cadence]
-radiation = 8.0
-soil = 4.0
-
-[initial]
+radiation_period = 8.0
+soil_period = 4.0
 theta_inversion_z = 60.0
 
-[physics]
-nesting = false
+[core_boussinesq]
+enabled = true
+[timestep_adaptive]
+enabled = true
+[pressure_fft]
+enabled = true
+[momentum_centered]
+enabled = true
+[scalar_advection]
+enabled = true
+[sgs_tke]
+enabled = true
+[surface_exchange]
+enabled = true
+[ground_soil]
+enabled = true
+[radiosity_sun]
+enabled = true
+[column_radiation]
+enabled = true
+[buildings_citymean]
+enabled = true
+[glass]
+enabled = true
+[aq_chem]
+enabled = true
+[micro_kessler]
+enabled = true
+[ibm]
+enabled = true
+
+[cloud_shadow]
+enabled = true
+[fog_dew]
+enabled = true
+[geostrophic]
+enabled = true
+[inflow_turbulence]
+enabled = true
+[moist_buoyancy]
+enabled = true
+[pollutant]
+enabled = true
+[sw_modifiers]
+enabled = true
+[traffic_heat]
+enabled = true
+[turbulence_diag]
+enabled = true
+[veg_drag]
+enabled = true
+[wall_model_facades]
+enabled = true

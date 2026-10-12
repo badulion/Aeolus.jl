@@ -90,7 +90,7 @@ with the default statistics), the source the statistics came from
 cells), the running ledgers (`ke` J m⁻², `qmax` the largest relative
 added flux of any face and step, `nsteps`).
 """
-mutable struct InflowTurbulenceCoupling <: AbstractCoupling
+mutable struct InflowTurbulenceCoupling <: UrbanComponent
     opts::Any
     it::Any                    # Transition.InflowTurbulence, or nothing
     stats::Symbol              # :parent_resolved / :parametrized / :none
@@ -101,7 +101,7 @@ mutable struct InflowTurbulenceCoupling <: AbstractCoupling
     nsteps::Int
 end
 
-coupling_name(::Type{<:InflowTurbulenceCoupling}) = :inflow_turbulence
+component_name(::Type{<:InflowTurbulenceCoupling}) = :inflow_turbulence
 modules_used(::Type{<:InflowTurbulenceCoupling}) = (:Transition, :Nesting)
 default_options(::Type{<:InflowTurbulenceCoupling}) =
     (generator = :digital_filter, statistics = :parent_resolved, u_min = 0.5, seed = 1,
@@ -286,4 +286,3 @@ smoke_variants(::Type{<:InflowTurbulenceCoupling}) =
       options = Dict(:nesting => (parent_driver = :profile,),
                      :inflow_turbulence => (statistics = :parametrized,))))
 
-register!(InflowTurbulenceCoupling)

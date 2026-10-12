@@ -151,7 +151,7 @@ and `h_wm_classes` (the matching height of the open columns),
 (`:pressure_gradient`, `:full` or `:equilibrium_ode`),
 `dynamic_refine`, `dynamic_filter`, `dynamic_C_d` (the dynamic roughness).
 """
-mutable struct SurfaceExchangeMOST <: AbstractCoupling
+mutable struct SurfaceExchangeMOST <: UrbanComponent
     P::Float64                 # surface step period (s)
     U_min::Float64
     z0m::Dict{UInt8,Float64}
@@ -210,13 +210,11 @@ mutable struct SurfaceExchangeMOST <: AbstractCoupling
     colterms::Matrix{Float64}
 end
 
-coupling_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
+component_name(::Type{SurfaceExchangeMOST}) = :surface_exchange
 slot(::Type{SurfaceExchangeMOST}) = :surface_exchange
 provider(::Type{SurfaceExchangeMOST}) = :most
 modules_used(::Type{SurfaceExchangeMOST}) = (:SurfaceExchange, :Radiation, :MoistThermodynamics,
                                               :WallModels)
-# the surface step's period: `[cadence] surface` if set, else `soil` (see `period`)
-cadence_keys(::Type{SurfaceExchangeMOST}) = (:surface, :soil)
 default_options(::Type{SurfaceExchangeMOST}) =
     (U_min = 0.1, z0h_ratio = 0.1, period = nothing, wall_formulation = :local,
      # the wall-model input (P57-b): time filter on, matching at the first air cell
@@ -966,4 +964,3 @@ function _h_sign_ok(bus, I, case)
     return abs(d) <= 1 || abs(bus.H[I]) <= 1 || sign(bus.H[I]) == sign(d)
 end
 
-register!(SurfaceExchangeMOST)

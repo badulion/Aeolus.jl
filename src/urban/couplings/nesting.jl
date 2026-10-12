@@ -18,7 +18,7 @@
 #             of the core and the periodic box and the θ `:initial_gradient`
 #             top are not built at all. The outflow condition is
 #             `cfg.outflow` (Dirichlet from the parent by default).
-#   time      `:nest_parent` (after `:clock`) opens a parent window
+#   time      `:nest_sync` (after `:clock`) opens a parent window
 #             `[t_p, t_p + Δt_p]` (`Nesting.begin_parent_step!`): the parent
 #             takes its own adaptive step, its field set is prolongated at
 #             both ends; the child's stepper lands on the window end
@@ -32,7 +32,7 @@
 #             and the run will step past its end, the parent's step of the
 #             next window starts on its own task (`Nesting.prefetch_parent_step!`)
 #             and runs while the child steps through this window; the next
-#             `:nest_parent` takes it. Its step size is the one the
+#             `:nest_sync` takes it. Its step size is the one the
 #             sequential run picks there (`parent_dt` of the parent at the
 #             window end; a fixed child step: the whole number of child
 #             steps), and the result is bit-identical. `wall.parent` is then
@@ -113,7 +113,7 @@ before its next one starts ahead on another task — the one point where
 another coupling may read the parent's fields (the synthetic inflow's
 statistics, `couplings/inflow_turbulence.jl`, #268).
 """
-mutable struct NestingCoupling <: AbstractCoupling
+mutable struct NestingCoupling <: UrbanComponent
     mode::Symbol
     opts::Any                     # the coupling's options (the two-way keywords)
     driver::Any                   # :aeolus, or the AbstractBoundaryData that replaces the parent
@@ -139,13 +139,13 @@ mutable struct NestingCoupling <: AbstractCoupling
     window_hooks::Vector{Any}     # f(c, case) at every window opening, the parent at rest (#268)
 end
 
-coupling_name(::Type{<:NestingCoupling}) = :nesting
+component_name(::Type{<:NestingCoupling}) = :nesting
 modules_used(::Type{<:NestingCoupling}) = (:Nesting, :StretchedGrids, :SurfaceTiles, :LargeScaleForcing)
 default_options(::Type{<:NestingCoupling}) =
     (mode = :one_way, parent = (;), parent_driver = :aeolus,
      buffer = 2, z_anterp = :canopy, τ = nothing, reflux = true)
 # the child's θ booking of the two-way registers runs in every dynamics stage
-stages(::Type{<:NestingCoupling}) = ((:nest_parent, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP),
+stages(::Type{<:NestingCoupling}) = ((:nest_sync, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP),
                                      (:body_force, 5, EVERY_STEP))
 
 """
@@ -156,7 +156,7 @@ The parent of the nested case `cfg`: [`ParentConfig`](@ref)`(cfg)` with
 the #259 default), centred on the child.
 """
 function nest_parent_config(cfg::CaseConfig)
-    o = coupling_options(NestingCoupling, cfg)
+    o = component_options(NestingCoupling, cfg)
     return ParentConfig(cfg; o.parent...)
 end
 
@@ -182,7 +182,7 @@ the coupling's `sim_options` pass it to the core, the pressure-solver
 couplings derive their axes from it.
 """
 function nest_case_bcs(cfg::CaseConfig, mesh)
-    sa = coupling_options(ScalarAdvection, cfg)
+    sa = component_options(ScalarAdvection, cfg)
     H = Aeolus.AdvectionSchemes.required_halo(Aeolus.AdvectionSchemes.advection_scheme(sa.scheme))
     return nest_bcs(mesh; bottom = :wall, top = :nest, outflow = cfg.outflow, halo = H)
 end
@@ -223,7 +223,7 @@ Whether the nested case `cfg` replays its parent from the parent-made
 dynamic driver `cfg.dynamic` (`options[:nesting].parent_driver =
 :offline`, CFG-g #362) instead of running it.
 """
-nest_offline(cfg::CaseConfig) = case_nested(cfg) && coupling_options(NestingCoupling, cfg).parent_driver === :offline
+nest_offline(cfg::CaseConfig) = case_nested(cfg) && component_options(NestingCoupling, cfg).parent_driver === :offline
 
 "Whether the nest feeds the child back onto the parent (`mode = :two_way`, #267)."
 two_way(c::NestingCoupling) = c.mode === :two_way
@@ -543,7 +543,7 @@ function limit_dt(c::NestingCoupling, case, dt)
     return subcycle_dt(R, dt)
 end
 
-function run_stage!(c::NestingCoupling, case, ::Val{:nest_parent}, dt)
+function run_stage!(c::NestingCoupling, case, ::Val{:nest_sync}, dt)
     ensure_nest!(c, case)
     external_driver(c) && return nothing
     t = case.sim.t
@@ -852,4 +852,3 @@ smoke_variants(::Type{<:NestingCoupling}) =
       options = Dict(:nesting => (parent_driver = :profile,))),
      (label = "nest off: the periodic box", physics = Dict(:nesting => false)))
 
-register!(NestingCoupling)

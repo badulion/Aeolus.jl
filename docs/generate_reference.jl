@@ -18,11 +18,11 @@ import Aeolus.InputDrivers as AeolusInput
 Every schema the option reference documents: the model's (`"model"`) and
 every legacy case's, the built-in ones (in src) and those of `DRIVER_FILES`.
 """
-reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "urban", "urban_parent",
+reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "urban_parent",
                                          Aeolus.RunDrivers.DRIVER_NAMES,
                                          collect(keys(AeolusConfig.DRIVER_FILES)))))
 
-const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "configs", "input"))
+const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "input"))
 
 """
     generate_reference(dir = joinpath(@__DIR__, "src", "reference")) -> Vector{String}
@@ -55,7 +55,7 @@ function generate_reference(dir::AbstractString = joinpath(@__DIR__, "src", "ref
              "input_dynamic.md" => ("Dynamic input driver",
                  "The dynamic driver holds what changes in time: initial profiles, large-scale forcing, " *
                  "surface series and boundary data (CFG-g, #362). AeolusPrep.jl writes it (`aeolusprep dynamic`), " *
-                 "or an Aeolus parent run (`[output] child_boundaries`).",
+                 "or an Aeolus parent run (`[urban] child_boundaries`).",
                  [(AeolusInput.DYNAMIC_SCHEMA, "berlin_20190629_dynamic.nc")]))
     for (name, (title, intro, schemas)) in pages
         p = joinpath(dir, name)

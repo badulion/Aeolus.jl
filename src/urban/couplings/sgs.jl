@@ -416,14 +416,13 @@ divergence (option `stress = :symmetric`; `:laplacian` is the cores'
 built-in form). With `C_s = 0` there is no closure (no SGS terms), as
 before.
 """
-struct SGSSmagorinsky{C} <: AbstractCoupling
+struct SGSSmagorinsky{C} <: UrbanComponent
     stress::Symbol
     closure::C                 # nothing when C_s = 0
 end
-coupling_name(::Type{<:SGSSmagorinsky}) = :sgs_smagorinsky
+component_name(::Type{<:SGSSmagorinsky}) = :sgs_smagorinsky
 slot(::Type{<:SGSSmagorinsky}) = :sgs
 provider(::Type{<:SGSSmagorinsky}) = :smagorinsky
-is_default(::Type{<:SGSSmagorinsky}) = false
 modules_used(::Type{<:SGSSmagorinsky}) = (:Simulations, :Operators, :TurbulenceStability)
 default_options(::Type{<:SGSSmagorinsky}) = (; SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 build(::Type{<:SGSSmagorinsky}, case, o) =
@@ -505,16 +504,15 @@ The diagnostics give the mean `C_s` (and, with LASD, the geometric-mean `β`)
 over the air cells in the canopy (the levels with buildings) and in the
 free stream (between the highest roof and the sponge).
 """
-struct SGSDynamic{W, O, C} <: AbstractCoupling
+struct SGSDynamic{W, O, C} <: UrbanComponent
     ws::W
     opts::O
     closure::C
     stress::Symbol
 end
-coupling_name(::Type{<:SGSDynamic}) = :sgs_dynamic
+component_name(::Type{<:SGSDynamic}) = :sgs_dynamic
 slot(::Type{<:SGSDynamic}) = :sgs
 provider(::Type{<:SGSDynamic}) = :dynamic
-is_default(::Type{<:SGSDynamic}) = false
 modules_used(::Type{<:SGSDynamic}) = (:Operators, :TurbulenceStability)
 default_options(::Type{<:SGSDynamic}) =
     (averaging = :lagrangian, scale_dependent = true, cadence = 4, filter_ratio = 3.0,
@@ -630,16 +628,15 @@ Option `fn` (`fn(νt, u, v, w, mesh)`); `nothing` (default) means the
 Smagorinsky closure with `cfg.C_s`, which reproduces the default run bit
 for bit. Option `stress = :symmetric` (as for `SGSSmagorinsky`).
 """
-struct SGSMLSGS{M, C} <: AbstractCoupling
+struct SGSMLSGS{M, C} <: UrbanComponent
     ml::M
     C_s::Float64
     stress::Symbol
     closure::C                 # ml, stability-corrected and/or wrapped for scalar_tensor = :isentropic
 end
-coupling_name(::Type{<:SGSMLSGS}) = :sgs_mlsgs
+component_name(::Type{<:SGSMLSGS}) = :sgs_mlsgs
 slot(::Type{<:SGSMLSGS}) = :sgs
 provider(::Type{<:SGSMLSGS}) = :mlsgs
-is_default(::Type{<:SGSMLSGS}) = false
 modules_used(::Type{<:SGSMLSGS}) = (:ML, :TurbulenceStability)
 default_options(::Type{<:SGSMLSGS}) = (fn = nothing, SGS_STRESS_DEFAULT..., SGS_SCALAR_DEFAULT...)
 function build(::Type{<:SGSMLSGS}, case, o)
@@ -667,6 +664,3 @@ function smoke_check(c::SGSMLSGS, case)
             sgs_stability_checks(c.closure, case)...]
 end
 
-register!(SGSSmagorinsky)
-register!(SGSDynamic)
-register!(SGSMLSGS)

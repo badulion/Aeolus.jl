@@ -1,6 +1,6 @@
-# The urban run type (EX-a, #438): Aeolus.UrbanCase, the `urban` and
-# `urban_parent` run drivers, moved from examples/urban/ into src/. Small
-# synthetic setups:
+# The urban site of the model (EX-a #438, ONE-e #454): Aeolus.UrbanCase,
+# a model config with `[urban] enabled`, and the `urban_parent` run driver.
+# Small synthetic setups:
 #
 #   * a synthetic city (test/data/urban/small_city.toml: two buildings, a
 #     park and a pond from GeoJSON, 16³, periodic, local noon) runs through
@@ -41,7 +41,7 @@ end
     @test rc == 0
     run = only(readdir(root; join = true))
     rec = read_run_toml(run)
-    @test rec["session"][end]["status"] == "completed" && rec["config"]["run"]["legacy"] == "urban"
+    @test rec["session"][end]["status"] == "completed" && !haskey(rec["config"]["run"], "legacy")
     res = TOML.parsefile(joinpath(run, "output", "results.toml"))
     led = res["budgets"]
     @test res["finite"] === true
@@ -59,6 +59,34 @@ end
     # the idealised profile: 293 K at the ground below the 60 m inversion
     @test 292.9 < res["theta_mean_below_100m_start"] < 293.5
     @test isfile(joinpath(run, "diagnostics.csv")) || isfile(joinpath(run, "output", "diagnostics.csv"))
+end
+
+@testset "urban site: its checks through [checks] (ONE-d) in results.toml" begin
+    root = mktempdir()
+    chk = ["--set", "checks.urban_budgets={required = true}", "--set", "checks.surface_exchange_checks={required = true}",
+           "--set", "checks.energy_closure={required = true, tolerance = 1e-9}", "--set", "checks.finite={required = true}"]
+    rc = quiet_main(vcat(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\""], chk))
+    @test rc == 0
+    res = TOML.parsefile(joinpath(only(readdir(root; join = true)), "output", "results.toml"))
+    @test res["passed"] === true && isempty(res["failed_required"])
+    c = res["checks"]
+    @test Set(keys(c)) == Set(["urban_budgets", "surface_exchange_checks", "energy_closure", "finite"])
+    @test c["urban_budgets"]["passed"] && c["urban_budgets"]["value"] <= 1.0
+    @test c["surface_exchange_checks"]["value"] == 0 && c["surface_exchange_checks"]["checks"] > 0
+    @test c["energy_closure"]["value"] < 1e-9 && c["finite"]["value"] == 0
+    # the same figures as the run's own verdict
+    @test c["urban_budgets"]["air_heat_closure"] == res["budgets"]["air_heat_closure"]
+    # a required check that fails ends the run with exit code 3, its results written
+    root = mktempdir()
+    rc = quiet_main(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\"",
+                     "--set", "checks.urban_budgets={required = true, tolerance = 0.0}"])
+    @test rc == 3
+    res = TOML.parsefile(joinpath(only(readdir(root; join = true)), "output", "results.toml"))
+    @test res["failed_required"] == ["urban_budgets"]
+    # a check the site does not publish is a config error
+    rc = quiet_main(["run", SMALL_CITY, "--root", mktempdir(), "--allow-uncommitted",
+                     "--set", "checks.nesting_checks={required = true}"])
+    @test rc == 2
 end
 
 @testset "urban run type: the GeoJSON ground from its static driver" begin
@@ -139,9 +167,10 @@ end
     @test isempty(offenders)
     isempty(offenders) || @info "examples/urban scripts that build or run the model" offenders
     # every config validates; every script is analysis of output
-    for f in readdir(joinpath(ex, "configs"); join = true)
+    for f in readdir(ex; join = true)
         endswith(f, ".toml") || continue
-        @test load_run_config(f).run.legacy in ("urban", "urban_parent")
+        cfg = load_run_config(f)
+        @test cfg.urban.enabled && (!hasproperty(cfg.run, :legacy) || cfg.run.legacy == "urban_parent")
     end
     @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
                                   "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl",

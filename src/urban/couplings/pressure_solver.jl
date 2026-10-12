@@ -72,8 +72,8 @@ Slot `:pressure_solver`, provider `:cosine_fft` (default):
 (periodic x, y and walls in z by default; all-Neumann for `lateral = :open`
 or a nested child).
 """
-struct PressureCosineFFT <: AbstractCoupling end
-coupling_name(::Type{PressureCosineFFT}) = :pressure_fft
+struct PressureCosineFFT <: UrbanComponent end
+component_name(::Type{PressureCosineFFT}) = :pressure_fft
 slot(::Type{PressureCosineFFT}) = :pressure_solver
 provider(::Type{PressureCosineFFT}) = :cosine_fft
 modules_used(::Type{PressureCosineFFT}) = (:PressureSolvers,)
@@ -91,11 +91,10 @@ Slot `:pressure_solver`, provider `:multigrid`: `MultigridPoissonSolver`
 with the case's axis BCs (`case_poisson_axes`), options `tol = 1e-10`
 (relative residual), `maxcycles = 50`, `cycle = :V`.
 """
-struct PressureMultigrid <: AbstractCoupling end
-coupling_name(::Type{PressureMultigrid}) = :pressure_multigrid
+struct PressureMultigrid <: UrbanComponent end
+component_name(::Type{PressureMultigrid}) = :pressure_multigrid
 slot(::Type{PressureMultigrid}) = :pressure_solver
 provider(::Type{PressureMultigrid}) = :multigrid
-is_default(::Type{PressureMultigrid}) = false
 modules_used(::Type{PressureMultigrid}) = (:Multigrid,)
 default_options(::Type{PressureMultigrid}) = (tol = 1e-10, maxcycles = 50, cycle = :V)
 sim_options(::Type{PressureMultigrid}, cfg, mesh, o) =
@@ -123,11 +122,10 @@ one multigrid V-cycle as the preconditioner) with the case's axis BCs
 (`case_poisson_axes`), options `tol = 1e-10`,
 `maxit = 200`.
 """
-struct PressureMGCG <: AbstractCoupling end
-coupling_name(::Type{PressureMGCG}) = :pressure_mg_cg
+struct PressureMGCG <: UrbanComponent end
+component_name(::Type{PressureMGCG}) = :pressure_mg_cg
 slot(::Type{PressureMGCG}) = :pressure_solver
 provider(::Type{PressureMGCG}) = :mg_cg
-is_default(::Type{PressureMGCG}) = false
 modules_used(::Type{PressureMGCG}) = (:Multigrid,)
 default_options(::Type{PressureMGCG}) = (tol = 1e-10, maxit = 200)
 sim_options(::Type{PressureMGCG}, cfg, mesh, o) =
@@ -156,13 +154,12 @@ projection of the sound-proof cores (`core = :anelastic`,
 (`case.ref.state`) and its weighting. No options. Incompatible with the
 Boussinesq core.
 """
-struct PressureDensityDirect <: AbstractCoupling end
-coupling_name(::Type{PressureDensityDirect}) = :pressure_density_direct
+struct PressureDensityDirect <: UrbanComponent end
+component_name(::Type{PressureDensityDirect}) = :pressure_density_direct
 slot(::Type{PressureDensityDirect}) = :pressure_solver
 provider(::Type{PressureDensityDirect}) = :density_weighted_direct
-is_default(::Type{PressureDensityDirect}) = false
 modules_used(::Type{PressureDensityDirect}) = (:Anelastic, :PressureSolvers)
-incompatible(::Type{PressureDensityDirect}) = (:core => :boussinesq,)
+incompatible(::Type{PressureDensityDirect}) = (BoussinesqCore,)
 incompatible_reason(::Type{PressureDensityDirect}) =
     "the direct density-weighted solver solves the projection ∇·(W∇φ) = ∇·(W u*) of the " *
     "sound-proof cores (core = :anelastic or :pseudo_incompressible); the Boussinesq core " *
@@ -190,14 +187,13 @@ base state (`case.ref.state`) and its weighting. Options `tol = 1e-10`
 (relative residual of the CG), `maxit = 500`, passed to the core
 constructor as `sim_options`. Incompatible with the Boussinesq core.
 """
-struct PressureDensityWeighted <: AbstractCoupling end
-coupling_name(::Type{PressureDensityWeighted}) = :pressure_density_weighted
+struct PressureDensityWeighted <: UrbanComponent end
+component_name(::Type{PressureDensityWeighted}) = :pressure_density_weighted
 slot(::Type{PressureDensityWeighted}) = :pressure_solver
 provider(::Type{PressureDensityWeighted}) = :density_weighted_cg
-is_default(::Type{PressureDensityWeighted}) = false
 modules_used(::Type{PressureDensityWeighted}) = (:Anelastic,)
 default_options(::Type{PressureDensityWeighted}) = (tol = 1e-10, maxit = 500)
-incompatible(::Type{PressureDensityWeighted}) = (:core => :boussinesq,)
+incompatible(::Type{PressureDensityWeighted}) = (BoussinesqCore,)
 incompatible_reason(::Type{PressureDensityWeighted}) =
     "the density-weighted CG solves the projection ∇·(W∇φ) = ∇·(W u*) of the sound-proof " *
     "cores (core = :anelastic or :pseudo_incompressible); the Boussinesq core takes one of " *
@@ -213,7 +209,7 @@ function smoke_check(c::PressureDensityWeighted, case)
     s, sim = case.sim.solver, case.sim
     ref = Aeolus.Anelastic.reference_state(sim)
     W = sim isa Aeolus.Anelastic.AnelasticSimulation ? ref.ρ̄ : ref.ρ̄ .* ref.θ̄
-    o = coupling_options(PressureDensityWeighted, case.cfg)
+    o = component_options(PressureDensityWeighted, case.cfg)
     return ["the solver is the density-weighted CG" => s isa DensityWeightedPoissonSolver,
             "with this provider's tol and maxit" => s.tol == o.tol && s.maxit == o.maxit,
             solver_axes_check(case),
@@ -224,8 +220,3 @@ function smoke_check(c::PressureDensityWeighted, case)
                 Aeolus.Anelastic.constraint_residual(sim) < 1e-6]
 end
 
-register!(PressureCosineFFT)
-register!(PressureMultigrid)
-register!(PressureMGCG)
-register!(PressureDensityDirect)    # before the CG: the first provider a sound-proof core is given
-register!(PressureDensityWeighted)

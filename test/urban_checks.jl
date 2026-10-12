@@ -8,7 +8,7 @@
 #           failed (#392): no retry, CFL ≤ C_advective, |u_i| < 20 m/s, θ
 #           within 2 K of its initial range; the forced 2 s step is rejected;
 #   smoke   every coupling of the run type in a short window of the real OSM
-#           scene (examples/urban/configs/berlin_smoke.toml: 16³, 250 m ×
+#           scene (examples/urban/berlin_smoke.toml: 16³, 250 m ×
 #           250 m × 100 m, 12 steps of 2 s), in every configuration the
 #           registry knows about (test/support/smoke_matrix.jl, shared with
 #           the thread-invariance harness): a finite state, every coupling's
@@ -27,7 +27,7 @@
 #           margins, energy closure per tile).
 #
 # The 24 h Lindenberg checks of the parent are an analysis of a run of
-# examples/urban/configs/berlin_parent_coarse.toml
+# examples/urban/berlin_parent_coarse.toml
 # (examples/urban/berlin_parent_lindenberg_check.jl). Numbers measured when
 # these were tests are quoted next to the assertions.
 
@@ -74,7 +74,7 @@ function berlin_smoke_checks()
                 case = BC.build_case(cfg)
                 seed_fog!(case, Xoshiro(127))
                 BC.run_case!(case)
-                union!(exercised, BC.coupling_name.(case.couplings))
+                union!(exercised, BC.component_name.(case.couplings))
                 sim, bus = case.sim, case.bus
                 # nsteps·dt of simulated time (in nsteps steps, unless the
                 # time stepper chooses its own step, #133)
@@ -87,7 +87,7 @@ function berlin_smoke_checks()
                 failed = String[]
                 for c in case.couplings, (what, ok) in BC.smoke_check(c, case)
                     nchecks += 1
-                    ok || push!(failed, "$(BC.coupling_name(c)): $what")
+                    ok || push!(failed, "$(BC.component_name(c)): $what")
                 end
                 @test failed == String[]
                 # the surface energy ledger closes per class
@@ -123,11 +123,19 @@ function berlin_smoke_checks()
                     @test dom.Rn > 0 && dom.dS > 0
                     # the flux-form transport conserves water (#132)
                     @test abs(get(w.sources, :transport, 0.0)) < 1e-12
+                    # and the heat of the air: the dynamics' transport term is
+                    # round-off (measured -1.1e-8 J m⁻² over the 24 s), and
+                    # the open faces' θ relaxation is booked once, as the
+                    # dynamics' (:relaxation), not also measured as the
+                    # site's :tendencies entry (which had left +119.6 J m⁻²
+                    # in the transport term to compensate)
+                    @test abs(get(hb.terms, (:dynamics, :transport), 0.0)) < 1e-6
+                    @test !haskey(hb.terms, (:tendencies, :urban))
                 end
             end
         end
         @testset "every registered coupling ran in some configuration" begin
-            @test isempty(setdiff(Set(BC.coupling_name.(BC.REGISTRY)), exercised))
+            @test isempty(setdiff(Set(BC.component_name.(BC.URBAN_COMPONENTS)), exercised))
         end
         @info @sprintf("Berlin smoke matrix: %d runs, %d coupling checks, %.1f s", length(runs), nchecks,
                        time() - t_start)

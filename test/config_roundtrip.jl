@@ -1,9 +1,11 @@
 # The round-trip coverage suite (CFG-i, #364): every shipped config stays
 # valid, canonical, documented and replayable bit for bit.
 #
-# Every `examples/**/configs/*.toml` (and so `examples/configs/*.toml`) is
-# found by globbing the tree, not from a list, and each one must carry its
-# own smoke size, a `[test]` table:
+# Every `examples/**/configs/*.toml` (and so `examples/configs/*.toml`) and
+# every config of a case directory, `examples/<case>/*.toml` (the Berlin
+# case, examples/urban/berlin_*.toml, ONE-e #454), is found by globbing the
+# tree, not from a list, and each one must carry its own smoke size, a
+# `[test]` table:
 #
 #   [test]
 #   overrides = ["grid.size=[16,16,16]", "time.nsteps=10"]
@@ -14,8 +16,8 @@
 #   2. `resolve` is a fixed point: the canonical text of the resolved config
 #      is byte-identical after a reload;
 #   3. every key it holds appears in its schema's generated option reference
-#      (the Markdown the docs build writes), the [physics.options] coupling
-#      tables of the Berlin case included;
+#      (the Markdown the docs build writes), the Berlin case's component
+#      sections and the nest parent's table included;
 #   4. it replays: run at its smoke size, then re-run from the first run's
 #      run.toml; the state fields, diagnostics.csv, results.toml and
 #      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
@@ -37,12 +39,14 @@ const RT_EXAMPLES = normpath(joinpath(@__DIR__, "..", "examples"))
 
 """
 Every shipped config: the `.toml` files directly in a directory named
-`configs` anywhere under `root` (`examples/configs/`, `examples/sbl/configs/`, …).
+`configs` anywhere under `root` (`examples/configs/`, `examples/sbl/configs/`, …),
+and those directly in a case directory `root/<case>/` (`examples/urban/`,
+ONE-e #454).
 """
 function shipped_config_files(root::AbstractString = RT_EXAMPLES)
     out = String[]
     for (dir, _, files) in walkdir(root)
-        basename(dir) == "configs" || continue
+        (basename(dir) == "configs" || dirname(dir) == rstrip(root, '/')) || continue
         append!(out, joinpath(dir, f) for f in files if endswith(f, ".toml"))
     end
     return sort!(out)
@@ -88,8 +92,9 @@ const RT_FILES = shipped_config_files()
 @testset "round-trip coverage: the docs build writes a reference page per schema and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["model", "urban", "urban_parent", "cbl", "dns_decay", "column"], reference_drivers())
+    @test issubset(["model", "urban_parent", "cbl", "dns_decay", "column"], reference_drivers())
     @test isempty(intersect(["sbl", "dns", "channel", "cbc_decay", "patchy_surface"], reference_drivers()))   # gone (ONE-g #456)
+    @test !("urban" in reference_drivers())             # the urban site is the model's (ONE-e, #454)
     # every option page is the schema's generated Markdown, verbatim after its header
     for d in reference_drivers()
         @test endswith(read(joinpath(RT_REFERENCE, "options", d * ".md"), String),
@@ -198,13 +203,13 @@ end
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.stepper.step == 20 &&
           Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
-    # urban legacy case (#269): berlin_smoke.toml, nested, every coupling on, 24 s (15 adaptive
+    # the urban site (#269, ONE-e #454): berlin_smoke.toml, nested, every component on, 24 s (15 adaptive
     # steps), a checkpoint every 6 steps, interrupted after step 9 and resumed from step 6;
     # the state of the child, every tracer, Ts and the nest parent bitwise, and the NetCDF
     # output's record written after the checkpoint is rewritten to the same values
-    r = resume_check(joinpath(RT_EXAMPLES, "urban", "configs", "berlin_smoke.toml");
-                     nsteps = 12, stop = 9, every_steps = 6, nsteps_overrides = n -> ["clock.nsteps=$n"],
-                     overrides = ["output.netcdf=\"smoke.nc\"", "output.path=\"none\""])
+    r = resume_check(joinpath(RT_EXAMPLES, "urban", "berlin_smoke.toml");
+                     nsteps = 12, stop = 9, every_steps = 6, nsteps_overrides = n -> ["time.nsteps=$n"],
+                     overrides = ["urban.netcdf=\"smoke.nc\"", "output.path=\"none\""])
     @test r.fields_equal && isempty(r.fields_differing)
     isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
     @test r.statuses == ["interrupted", "completed"]

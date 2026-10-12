@@ -27,13 +27,6 @@ end
 "Whether `run_case!` will start a step at time `t` (false when it does not know)."
 step_will_run(clk::Clock, t::Real) = clk.t_stop - t > clk.stop_margin
 
-"One scheduled call: `coupling` runs stage `S` at `order` with `cadence`."
-struct ScheduleEntry
-    coupling::AbstractCoupling
-    order::Int
-    cadence::Cadence{Float64}
-end
-
 """
     Case
 
@@ -43,8 +36,9 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 ([`Geometry`](@ref)), `bus` ([`SurfaceBus`](@ref)), `tracers`
 ([`TracerRegistry`](@ref)), `budgets` ([`Budgets`](@ref Aeolus.BudgetSystem.Budgets)), the hydrostatic reference state
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
-order), the `schedule` (stage ⇒ ordered entries), the `clock`, the
-NetCDF `output` (or `nothing`), the composed
+order), the `domain` (the case as a `Domain` of the core's stage pipeline,
+[`build_domain!`](@ref)), the `clock`, the
+NetCDF `output` (or `nothing`), the pipeline's
 `step!` hooks, `timing` (wall seconds per `(stage, coupling)`, the
 `wall.*` diagnostics and the `:timing` events of [`log_run_end`](@ref)), `top` — the heat flux through a
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
@@ -60,8 +54,8 @@ mutable struct Case{M, S, G<:Geometry}
     tracers::TracerRegistry
     budgets::Budgets
     ref::CaseReference
-    couplings::Vector{AbstractCoupling}
-    schedule::Dict{Symbol,Vector{ScheduleEntry}}
+    couplings::Vector{UrbanComponent}
+    domain::Any
     clock::Clock
     output::Any
     body_force::Union{Nothing,Function}
@@ -75,7 +69,7 @@ end
 "The enabled coupling called `name`, or `nothing`."
 function find_coupling(case::Case, name::Symbol)
     for c in case.couplings
-        coupling_name(c) === name && return c
+        component_name(c) === name && return c
     end
     return nothing
 end
@@ -149,7 +143,7 @@ boussinesq_core(cfg::CaseConfig, mesh; kw...) =
 Build the mesh, the geometry, the dynamical core (`build_core` of the
 provider of the `:core` slot) and its initial state,
 the surface bus and the core tracers (`qv`, `ql`, `qr`), then the
-couplings `cfg` enables (see [`selected_couplings`](@ref)): each is
+components `cfg` enables (see [`selected_components`](@ref)): each is
 constructed with `build(C, case, opts)`, then every `init!` runs
 (in `init_priority` order, then registry order: the nest first), and
 finally the stage schedule is assembled. The setup summary (buildings,
@@ -169,9 +163,9 @@ function build_case(cfg::CaseConfig)
     # use. One reference state per case.
     ref = build_reference(cfg, mesh)
 
-    selected = selected_couplings(cfg)
+    selected = selected_components(cfg)
     simkw = merge_keywords("BoussinesqSimulation",
-                           (coupling_name(C) => sim_options(C, cfg, mesh, coupling_options(C, cfg))
+                           (component_name(C) => sim_options(C, cfg, mesh, component_options(C, cfg))
                             for C in selected))
     icore = findfirst(C -> slot(C) === :core, selected)
     sim = icore === nothing ? boussinesq_core(cfg, mesh; simkw...) :
@@ -189,7 +183,7 @@ function build_case(cfg::CaseConfig)
 
     clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0)
     case = Case(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
-                AbstractCoupling[], Dict{Symbol,Vector{ScheduleEntry}}(), clock,
+                UrbanComponent[], nothing, clock,
                 nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
                 top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
     # a building the box edge cuts is solid on the open faces (#262): zero
@@ -221,19 +215,20 @@ function build_case(cfg::CaseConfig)
     ensure_tracer!(case, :qr; units = "kg kg-1", long_name = "rain water")
 
     for C in selected
-        push!(case.couplings, build(C, case, coupling_options(C, cfg)))
+        push!(case.couplings, build(C, case, component_options(C, cfg)))
     end
     for c in sort(case.couplings; by = c -> init_priority(typeof(c)))   # stable: registry order
         init!(c, case)
     end
-    build_schedule!(case)
+    reset_budgets!(case)
+    build_domain!(case)
 
     sfc = geom.sfc
     @debug("$(cfg.name): built", subsystem = :urban, domain = current_domain(), event = :built,
            case = cfg.name, grid = (case.mesh.Nx, case.mesh.Ny, case.mesh.Nz),
            buildings = length(geom.city.buildings), solid = count(geom.sm.mask),
            wall = count(==(SURFACE_WALL), sfc), glass = count(==(UInt8(6)), sfc),
-           couplings = join(string.(coupling_name.(case.couplings)), ","))
+           couplings = join(string.(component_name.(case.couplings)), ","))
     return case
 end
 
@@ -241,23 +236,23 @@ end
     describe(case) -> String
 
 The enabled couplings with their slot and provider, and the stage
-schedule, one line each.
+schedule of the case's `Domain`, one line per stage.
 """
 function describe(case::Case)
     io = IOBuffer()
     println(io, "Couplings:")
     for c in case.couplings
         C = typeof(c)
-        println(io, "  ", rpad(string(coupling_name(C)), 20), " slot=", slot(C),
-                slot(C) === :addon ? "" : " provider=$(provider(C))")
+        println(io, "  ", rpad(string(component_name(C)), 20), " slot=", something(slot(C), :addon),
+                slot(C) === nothing ? "" : " provider=$(provider(C))")
     end
     println(io, "Schedule:")
     for S in ALL_STAGES
-        es = get(case.schedule, S, ScheduleEntry[])
+        es = [(Components.component_name(c), st) for c in case.domain.components
+              for st in Components.stages(c) if st.name === S]
         isempty(es) && continue
         println(io, "  ", rpad(string(S), 16),
-                join(("$(coupling_name(e.coupling))@$(e.order)" *
-                      (e.cadence.period > 0 ? "/$(e.cadence.period)s" : "") for e in es), "  "))
+                join(("$(n)@$(st.order)" * (st.every > 0 ? "/$(st.every)s" : "") for (n, st) in es), "  "))
     end
     return String(take!(io))
 end

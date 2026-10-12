@@ -31,10 +31,10 @@ makedocs(
         repolink   = "https://github.com/badulion/Aeolus.jl",
         assets     = [asset("assets/favicon.svg"; class = :ico, islocal = true)],
         sidebar_sitename = true,
-        # long single pages: the KA port log (223 KiB) and the generated Berlin
-        # option reference (137 KiB, one table per coupling); Documenter's
-        # 200 KiB limit otherwise fails the build
-        size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/urban.md",
+        # long single pages: the KA port log (223 KiB) and the generated option
+        # references that hold the urban site (one table per urban component,
+        # ONE-e #454); Documenter's 200 KiB limit otherwise fails the build
+        size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/model.md",
                                  "reference/options/urban_parent.md", "api/urban_case.md"],
     ),
     pages = [
@@ -146,7 +146,7 @@ makedocs(
             "Run configuration"    => "api/config.md",
             "Example run types"    => "api/run_drivers.md",
             "Input drivers"        => "api/input_drivers.md",
-            "Urban run type"       => "api/urban_case.md",
+            "Urban site"           => "api/urban_case.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [

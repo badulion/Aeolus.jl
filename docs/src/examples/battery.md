@@ -71,7 +71,7 @@ from 800 m to 1275 m.
     (see [Real Berlin — Alexanderplatz OSM run](@ref) and the
     [Berlin case design page](../design/berlin_case.md)). The synthetic
     sample city runs through the same case with
-    `examples/urban/configs/berlin_mitte_sample.toml`. The setup and numbers below are the
+    `examples/urban/berlin_mitte_sample.toml`. The setup and numbers below are the
     old script's and are kept as a record.
 
 `examples/urban/urban_diurnal.jl` (removed) — the "everything on"
@@ -191,12 +191,12 @@ with:
 
 `examples/urban/alexanderplatz_animation.jl` is a **pure renderer**. It
 runs no physics at all: it reads the NetCDF output of the flagship run
-(`examples/urban/configs/berlin_summer.toml`) and stitches an
+(`examples/urban/berlin_summer.toml`) and stitches an
 8-panel mosaic into a **single self-contained APNG** that plays in any
 modern browser (Chrome, Firefox, Safari) or in macOS Preview.
 
 ```bash
-$ julia --project -m Aeolus run examples/urban/configs/berlin_summer.toml --set output.cadence=600
+$ julia --project -m Aeolus run examples/urban/berlin_summer.toml --set output.cadence=600
 $ julia --project=. examples/urban/alexanderplatz_animation.jl # ~1.5 s
 ```
 
@@ -281,14 +281,14 @@ public entry points you can compose:
 
 ## Real Berlin — Alexanderplatz OSM run
 
-`examples/urban/configs/berlin_summer.toml` is **the** simulation, run by
+`examples/urban/berlin_summer.toml` is **the** simulation, run by
 `julia --project -m Aeolus run`: no script in `examples/urban` integrates
 the equations (#438). The run type is `Aeolus.UrbanCase` (the `urban`
 driver; `src/UrbanCase.jl`), with every physics coupling in its own file
 under `src/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
 describes the registry, the stage loop and how to add a coupling.
-Its configuration is `examples/urban/configs/berlin_summer.toml`;
-`--set clock.nsteps=…` sets the number of steps and `--set output.cadence=…`
+Its configuration is `examples/urban/berlin_summer.toml`;
+`--set time.nsteps=…` sets the number of steps and `--set output.cadence=…`
 the seconds between NetCDF records. It runs
 the full physics against the static driver made from `alexanderplatz_real.osm`
 (AeolusPrep.jl's `data/berlin/`) — an actual Overpass-API
@@ -298,7 +298,7 @@ download of a 1 km × 1 km box around Alexanderplatz, Berlin
 ```bash
 # in an AeolusPrep.jl checkout
 $ julia --project -m AeolusPrep fetch-osm --box 52.518,13.402,52.526,13.418 --out data/berlin/alexanderplatz_real.osm
-$ julia --project -m AeolusPrep static <aeolus>/examples/urban/configs/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
+$ julia --project -m AeolusPrep static <aeolus>/examples/urban/berlin_summer.toml --source data/berlin/alexanderplatz_real.osm
 ```
 
 (Uses the public `overpass-api.de/api/interpreter` endpoint. Retry if

@@ -19,8 +19,8 @@ Slot `:momentum_advection`, provider `:centered` (default): the built-in
 the Boussinesq core; on the anelastic / pseudo-incompressible cores their
 own ρ̄- / ρ̄θ̄-weighted centred flux form, which takes no keyword.
 """
-struct MomentumCentered <: AbstractCoupling end
-coupling_name(::Type{MomentumCentered}) = :momentum_centered
+struct MomentumCentered <: UrbanComponent end
+component_name(::Type{MomentumCentered}) = :momentum_centered
 slot(::Type{MomentumCentered}) = :momentum_advection
 provider(::Type{MomentumCentered}) = :centered
 modules_used(::Type{MomentumCentered}) = (:Operators,)
@@ -35,13 +35,12 @@ centered_momentum_options(::Aeolus.Anelastic.MassWeightedSimulation) = (;)
 Slot `:momentum_advection`, provider `:weno_z`:
 `momentum_advect_weno_z!(…; order)` (option `order = 5`).
 """
-struct MomentumWENOZ <: AbstractCoupling
+struct MomentumWENOZ <: UrbanComponent
     order::Int
 end
-coupling_name(::Type{MomentumWENOZ}) = :momentum_weno_z
+component_name(::Type{MomentumWENOZ}) = :momentum_weno_z
 slot(::Type{MomentumWENOZ}) = :momentum_advection
 provider(::Type{MomentumWENOZ}) = :weno_z
-is_default(::Type{MomentumWENOZ}) = false
 modules_used(::Type{MomentumWENOZ}) = (:AdvectionSchemes,)
 default_options(::Type{MomentumWENOZ}) = (order = 5,)
 function build(::Type{MomentumWENOZ}, case, o)
@@ -79,5 +78,3 @@ smoke_variants(::Type{MomentumWENOZ}) =
     ((label = "WENO-Z momentum in the closed (periodic) box",
       physics = Dict(:momentum_advection => :weno_z, :nesting => false)),)
 
-register!(MomentumCentered)
-register!(MomentumWENOZ)

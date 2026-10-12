@@ -45,7 +45,7 @@ Outputs `T_soil1` (top layer, 7 mm), `G_soil` (ground heat flux of the
 last surface step) and `theta_soil1` (top-layer liquid water); NaN where
 the column is not soil.
 """
-struct GroundSoil{H,P} <: AbstractCoupling
+struct GroundSoil{H,P} <: UrbanComponent
     classes::Vector{UInt8}
     θ0::Dict{UInt8,Float64}
     hydraulics::H
@@ -54,7 +54,7 @@ struct GroundSoil{H,P} <: AbstractCoupling
     cols::Vector{CartesianIndex{2}}
 end
 
-coupling_name(::Type{<:GroundSoil}) = :ground_soil
+component_name(::Type{<:GroundSoil}) = :ground_soil
 slot(::Type{<:GroundSoil}) = :ground
 provider(::Type{<:GroundSoil}) = :soil_column
 modules_used(::Type{<:GroundSoil}) = (:SoilColumn,)
@@ -171,4 +171,3 @@ function smoke_check(c::GroundSoil, case)
                 all(I -> case.bus.surface[I].T_skin == Ts[I], c.cols)]
 end
 
-register!(GroundSoil)

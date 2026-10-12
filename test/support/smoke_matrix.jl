@@ -5,9 +5,9 @@
 # runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.UrbanCase`
 # and loads Aeolus, `interior_view` and `Random.Xoshiro`.
 #
-# Every run is examples/urban/configs/berlin_smoke.toml with `--set`
+# Every run is examples/urban/berlin_smoke.toml with `--set`
 # overrides (CFG-c, #358): `smoke_specs` derives what each run changes
-# from the registry, `smoke_overrides` writes it as overrides, and
+# from the urban components (`URBAN_COMPONENTS`), `smoke_overrides` writes it as overrides, and
 # `smoke_matrix` loads the configs.
 
 using Aeolus: load_run_config
@@ -43,19 +43,26 @@ function file_overrides(path, base)
             for k in sort!(collect(keys(f))) if !isequal(get(b, k, nothing), f[k])]
 end
 
+"The provider of urban slot `s` in the reference selection (`URBAN_DEFAULTS`)."
+default_provider(s) = BC.provider(only(C for C in BC.URBAN_DEFAULTS if BC.slot(C) === s))
+
 """
     smoke_overrides(spec) -> Vector{String}
 
 The `--set` overrides of `berlin_smoke.toml` for a run of
-[`smoke_specs`](@ref): `physics.<slot or addon>`, every option as
-`physics.options.<coupling>.<key>` (the nest parent's as
-`physics.options.nesting.parent.<key>`), every `CaseConfig` field by its
-TOML key (`BC.CASE_FIELDS`), then the spec's raw overrides.
+[`smoke_specs`](@ref): per urban slot, `<provider>.enabled` of the
+provider the run selects on and every other provider of the slot off; per
+additive component `<name>.enabled`; every option as `<component>.<key>`
+(the nest parent's as `nesting.parent.<key>`); every `CaseConfig` field
+by its key of the model (`BC.CASE_FIELDS`); then the spec's raw overrides.
 """
 function smoke_overrides(spec)
     out = String[]
-    for k in sort!(collect(keys(spec.physics)))
-        push!(out, "physics.$k=" * BC.toml_literal(spec.physics[k]))
+    for C in BC.URBAN_COMPONENTS
+        s = BC.slot(C)
+        on = s === nothing ? spec.physics[BC.component_name(C)] :
+                            BC.provider(C) === Symbol(get(spec.physics, s, default_provider(s)))
+        push!(out, "$(BC.component_name(C)).enabled=" * BC.toml_literal(on))
     end
     # berlin_summer.toml turns [checkpoint] on, and only the Boussinesq
     # core can be checkpointed (#269): a run on another core turns it off
@@ -64,92 +71,91 @@ function smoke_overrides(spec)
     for c in sort!(collect(keys(spec.options))), (k, v) in pairs(spec.options[c])
         if c === :nesting && k === :parent
             for (pk, pv) in pairs(v)
-                push!(out, "physics.options.nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
+                push!(out, "nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
             end
         else
-            push!(out, "physics.options.$c.$k=" * BC.toml_literal(v))
+            push!(out, "$c.$(BC.option_key(k))=" * BC.toml_literal(v))
         end
     end
     for (f, v) in pairs(spec.fields)
         keys_ = BC.CASE_FIELDS[f]
         length(keys_) == 1 || error("smoke_overrides: the field $f is made of several options ($(join(keys_, ", ")))")
-        push!(out, keys_[1] * "=" * BC.toml_literal(v))
+        # the domain's driver paths are top-level keys of a one-domain config
+        push!(out, replace(keys_[1], r"^domain\." => "") * "=" * BC.toml_literal(v))
     end
     return vcat(out, spec.extra)
 end
 
 "The `CaseConfig` of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
-smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec),
-                                                   schema = BC.urban_schema()))
+smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec)))
 
 """
-    smoke_matrix(registry = BC.REGISTRY) -> Vector{Pair{String,CaseConfig}}
+    smoke_matrix(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,CaseConfig}}
 
 The smoke-test configurations: [`smoke_config`](@ref) of every run of
 [`smoke_specs`](@ref).
 """
-smoke_matrix(registry = BC.REGISTRY) = [label => smoke_config(spec) for (label, spec) in smoke_specs(registry)]
+smoke_matrix(components = BC.URBAN_COMPONENTS) = [label => smoke_config(spec) for (label, spec) in smoke_specs(components)]
 
 """
-    smoke_specs(registry = BC.REGISTRY) -> Vector{Pair{String,NamedTuple}}
+    smoke_specs(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,NamedTuple}}
 
-The smoke runs derived from `registry` (see the smoke section of
+The smoke runs derived from `components` (see the smoke section of
 docs/src/design/berlin_ledgers.md), each `label => (physics, options, fields, extra)`:
-the `[physics]` selection, the per-coupling options, `CaseConfig` field
+the selection (per urban slot the provider, per additive component on/off), the per-component options, `CaseConfig` field
 values and raw overrides that run sets over `berlin_smoke.toml`. Every
 run has every additive coupling on; a run that selects a coupling
 declared incompatible with an additive one switches that additive
 coupling off, and one incompatible with the default provider of another
-slot switches that slot to its first compatible provider (registry
+slot switches that slot to its first compatible provider (`URBAN_COMPONENTS`
 order).
 """
-function smoke_specs(registry = BC.REGISTRY)
-    name = BC.coupling_name
-    addons = [C for C in registry if BC.slot(C) === :addon]
+function smoke_specs(components = BC.URBAN_COMPONENTS)
+    name = BC.component_name
+    addons = [C for C in components if BC.slot(C) === nothing]
     defaults = Dict{Symbol,Symbol}()
-    for C in registry
-        BC.slot(C) !== :addon && BC.is_default(C) && (defaults[BC.slot(C)] = BC.provider(C))
+    for C in components
+        BC.slot(C) !== nothing && (C in BC.URBAN_DEFAULTS) && (defaults[BC.slot(C)] = BC.provider(C))
     end
     base_options() = Dict{Symbol,Any}(
         # the flagship stacks are all outside the smoke window: put one in
         # it, 40 m up (above the tallest roof, 31 m), so the source is used
         :pollutant => (stacks = [(0.0, -312.5, 40.0)],))
-    hits(C, D) = any(x -> x isa Pair ? (BC.slot(D) === x.first && BC.provider(D) === x.second) :
-                                        name(D) === x, BC.incompatible(C))
+    hits(C, D) = D in BC.incompatible(C)
     function mk(label; physics = Dict{Symbol,Any}(), options = Dict{Symbol,Any}(), extra = String[], kw...)
         phys = Dict{Symbol,Any}(name(C) => true for C in addons)
         merge!(phys, physics)
         # The selection this physics makes. A coupling it conflicts with
         # that the run did not ask for gives way: an addon is switched
         # off, a slot's default provider is replaced by the slot's first
-        # provider (registry order) compatible with the rest (e.g. core =
+        # provider (`URBAN_COMPONENTS` order) compatible with the rest (e.g. core =
         # anelastic brings pressure_solver = density_weighted_cg and
         # timestepper = fixed along).
-        selection() = [C for C in registry if (BC.slot(C) === :addon ? phys[name(C)] :
+        selection() = [C for C in components if (BC.slot(C) === nothing ? phys[name(C)] :
                        BC.provider(C) === get(phys, BC.slot(C), defaults[BC.slot(C)]))]
         clash(C, D) = hits(C, D) || hits(D, C)
-        for _ in 1:length(registry)
+        for _ in 1:length(components)
             sel = selection()
             changed = false
             for C in sel, D in sel
                 clash(C, D) || continue
                 for X in (C, D)
                     s = BC.slot(X)
-                    if s === :addon
+                    if s === nothing
                         haskey(physics, name(X)) || (phys[name(X)] = false; changed = true)
                     elseif !haskey(physics, s)
                         others = [Y for Y in sel if BC.slot(Y) !== s]
                         fits(P, Ys) = BC.slot(P) === s && !any(Y -> clash(P, Y), Ys)
-                        i = findfirst(P -> fits(P, others), registry)
+                        i = findfirst(P -> fits(P, others), components)
                         # none fits everything: take one that fits what the run
                         # asked for, and let the next pass move the slots that
                         # now clash with it (pressure_solver = density_weighted_cg
                         # brings a sound-proof core, which brings the fixed stepper)
-                        asked = [Y for Y in others if BC.slot(Y) === :addon ? haskey(physics, name(Y)) :
+                        asked = [Y for Y in others if BC.slot(Y) === nothing ? haskey(physics, name(Y)) :
                                                                               haskey(physics, BC.slot(Y))]
-                        i === nothing && (i = findfirst(P -> fits(P, asked), registry))
+                        i === nothing && (i = findfirst(P -> fits(P, asked), components))
                         i === nothing && error("smoke run \"$label\": no provider of slot :$s is compatible with the selection")
-                        phys[s] = BC.provider(registry[i]); changed = true
+                        phys[s] = BC.provider(components[i]); changed = true
                     end
                 end
                 changed && break
@@ -160,7 +166,7 @@ function smoke_specs(registry = BC.REGISTRY)
         left = [(name(C), name(D)) for C in sel, D in sel if hits(C, D)]
         isempty(left) || error("smoke run \"$label\": the selection still clashes: $left")
         opts = base_options()
-        haskey(opts, :pollutant) && !any(C -> name(C) === :pollutant, registry) && delete!(opts, :pollutant)
+        haskey(opts, :pollutant) && !any(C -> name(C) === :pollutant, components) && delete!(opts, :pollutant)
         merge!(opts, options)
         return label => (physics = phys, options = opts, fields = (; kw...), extra = String[extra...])
     end
@@ -171,12 +177,12 @@ function smoke_specs(registry = BC.REGISTRY)
             # scenario's idealised profile replaced by the summer default
             # sounding (Lindenberg, 29 June 2019, interpolated to noon)
             mk("summer sounding, everything on"; sounding = BC.CaseConfig(berlin_toml("summer")).sounding)]
-    for C in registry
-        (BC.slot(C) === :addon || BC.is_default(C)) && continue
+    for C in components
+        (BC.slot(C) === nothing || (C in BC.URBAN_DEFAULTS)) && continue
         push!(runs, mk("$(BC.slot(C)) = $(BC.provider(C))";
                        physics = Dict{Symbol,Any}(BC.slot(C) => BC.provider(C))))
     end
-    for C in registry, v in BC.smoke_variants(C)
+    for C in components, v in BC.smoke_variants(C)
         label = string(name(C), ": ", get(v, :label, "variant"))
         kw = Base.structdiff(v, NamedTuple{(:label, :physics, :options)})
         push!(runs, mk(label; physics = Dict{Symbol,Any}(get(v, :physics, Dict{Symbol,Any}())),

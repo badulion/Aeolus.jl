@@ -31,7 +31,7 @@ produced the irradiance. The shade is therefore applied exactly once to
 each radiation field: over the park, `bus.sw / sw_base = exp(−k_leaf·LAI)`
 on every step.
 """
-mutable struct SWModifiers <: AbstractCoupling
+mutable struct SWModifiers <: UrbanComponent
     veg_mask::BitMatrix
     LAI::Matrix{Float64}
     k_leaf::Float64
@@ -39,7 +39,7 @@ mutable struct SWModifiers <: AbstractCoupling
     sw_out::Matrix{Float64}    # what this coupling wrote to bus.sw last step
 end
 
-coupling_name(::Type{SWModifiers}) = :sw_modifiers
+component_name(::Type{SWModifiers}) = :sw_modifiers
 default_options(::Type{SWModifiers}) = (k_leaf = 0.5,)
 stages(::Type{SWModifiers}) = ((:sw_modifiers, 10, EVERY_STEP),)
 
@@ -82,4 +82,3 @@ function smoke_check(c::SWModifiers, case)
             "unmodified irradiance kept ≥ bus.sw" => all(c.sw_base .>= sw)]
 end
 
-register!(SWModifiers)
