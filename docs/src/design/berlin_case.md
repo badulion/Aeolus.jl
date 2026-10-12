@@ -196,8 +196,8 @@ src/
   urban/couplings/     one file per coupling, each ending in register!(Type)
   urban/parent/        the nest parent: land-use surface, ParentConfig, the parent case
 examples/urban/
-  configs/             berlin_summer.toml (every option), _winter, _smoke, _mitte_sample, _parent, _parent_coarse
-  configs/input/       the static and dynamic drivers (made by AeolusPrep.jl: aeolusprep static / dynamic)
+  berlin_summer.toml   (every option), _winter, _smoke, _mitte_sample, _parent, _parent_coarse
+  input/               the static and dynamic drivers (made by AeolusPrep.jl: aeolusprep static / dynamic)
   data/                what a run may read in memory: the parent land-use table, the sounding
                        (the OSM extracts are AeolusPrep's, ONE-h #457)
   alexanderplatz_animation.jl            renderer (reads the NetCDF only)

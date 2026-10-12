@@ -466,6 +466,49 @@ moved into `src/` (EX-a, #438) they are `test/urban_checks.jl` (full
 tier), and every urban run writes its ledger closure to
 `output/results.toml`.
 
+### One model; examples are configuration
+
+There is one model ([`docs/src/design/single_model.md`](src/design/single_model.md),
+agreed with the maintainer on 2026-10-09). A run is a TOML configuration
+plus its static and dynamic input drivers; `aeolus run config.toml`
+always runs the same model, and what runs in it is the set of components
+its sections enable.
+
+- **New physics** goes in its physics module, with its module tests. It
+  reaches a run through a thin component adapter in `src/components/`
+  (its TOML section, the stages it attaches to, its outputs, checks and
+  checkpoint state; [Components](src/design/components.md)). If a
+  component file contains an equation, that equation belongs in the
+  physics module.
+- **No run types, no case code.** A case-specific Julia driver, a
+  wrapper script or a run type is not added, however small. If a case
+  needs something the schema cannot say, extend a component, the schema
+  or the input drivers. The legacy run types that remain
+  (`[run] legacy`) are being ported and their list only shrinks.
+- **An example is a case directory**, `examples/<case>/`: `<case>.toml`
+  and its variants, its drivers in `input/` (written by AeolusPrep.jl),
+  its reference data in `data/`, and optional scripts that read a
+  finished run folder and plot or tabulate it. Each TOML file carries a
+  `[test]` table with its smoke size; `test/config_roundtrip.jl` finds it
+  by globbing, validates it and replays it bit for bit.
+- **The rule is a test.** `test/examples_enforcement.jl` parses every
+  `.jl` under `examples/` and fails on a call that builds or steps a
+  model (any Aeolus function whose name ends in `!`, a constructor of a
+  grid, field, simulation, domain, model, component, nest, solver or run
+  type, `run_config`, `Aeolus.main`, `Config.build`,
+  `register_driver!`) or that includes a file outside `examples/`, and on
+  a file out of the case layout. There is no exemption list. The
+  forbidden names are read from the package, so a new entry point is
+  covered without editing the test.
+
+*History.* The maintainer's rule of 2026-10-09 (epic #443) moved the
+model code out of `examples/` into `src/` run types; the single-model
+epic (#459) then replaced the run types by components of one model.
+Before ONE-i (#458) two legacy cases were still Julia files under
+`examples/` (`column`, `dns_decay`), loaded on first use through
+`Config.DRIVER_FILES`; they and the loader are gone, and the coverage
+test with its (empty) exemption lists became the enforcement test.
+
 ### Minimal dependencies
 
 The maintainer replaced the former "no binary dependencies" rule on

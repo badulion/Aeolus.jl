@@ -13,8 +13,8 @@ Berlin scenarios are bit for bit those of before the move.
 
 The Berlin (Alexanderplatz) case is now configuration only:
 `examples/urban/berlin_*.toml`, its static drivers
-(`configs/input/*_static.nc`: the OpenStreetMap buildings and the parent's
-land-use tiles), its dynamic driver (`configs/input/berlin_20190629_dynamic.nc`:
+(`input/*_static.nc`: the OpenStreetMap buildings and the parent's
+land-use tiles), its dynamic driver (`input/berlin_20190629_dynamic.nc`:
 the Lindenberg sounding) and the source data in `examples/urban/data/`.
 
 ## Run drivers

@@ -1,15 +1,17 @@
 # Examples battery
 
 Aeolus ships a three-tier battery of examples that together exercise
-every physics module in the stack. An example is a TOML config (plus its
-input drivers) under `examples/<tier>/configs/`, run with `aeolus run`;
-the `plot_<case>.jl` script beside it reads the finished run folder
-(`diagnostics.csv`, `diagnostics.nc`, `output/`) and writes its figures
-into the run's `output/` (EX-d, #441):
+every physics module in the stack. An example is a case directory,
+`examples/<case>/`: its TOML config `<case>.toml`, its input drivers in
+`input/`, run with `aeolus run`; the `plot_<case>.jl` script beside it
+reads the finished run folder (`diagnostics.csv`, `diagnostics.nc`,
+`output/`) and writes its figures into the run's `output/` (EX-d, #441;
+ONE-i, #458). No script builds or steps a model
+(`test/examples_enforcement.jl`):
 
 ```bash
-$ julia --project -m Aeolus run examples/<tier>/configs/<case>.toml
-$ julia --project=. examples/<tier>/plot_<case>.jl runs/<date>_<case>_<id>
+$ julia --project -m Aeolus run examples/<case>/<case>.toml
+$ julia --project=. examples/<case>/plot_<case>.jl runs/<date>_<case>_<id>
 ```
 
 The plotting stack is pure Julia (no C-library dependencies) — see
@@ -19,8 +21,10 @@ ImageMagick if you want to view them in most browsers:
 `convert file.ppm file.png`.
 
 Each config reproduces the script it replaced bit for bit
-(`test/config_run_drivers.jl`), except `coupled/dcbl_radiation_lsm`, see
-below. The couplings are sections of the model's config
+(`test/config_run_drivers.jl`), except `dcbl_radiation_lsm`, see below,
+and `cloud_spinup`, whose Kessler box runs on the model in fixed steps of
+60 s since ONE-i (#458) (the `column` run type took 60, 60, 120, 120 and
+120 s). The couplings are sections of the model's config
 (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
 `[obstacles]`; `aeolus options`).
 
@@ -28,12 +32,12 @@ below. The couplings are sections of the model's config
 
 Seconds-to-run cases, each highlighting one mechanism.
 
-| Config (`kernels/configs/`) | Physics                                          |
+| Config (`examples/<case>/`) | Physics                                          |
 | :-------------------------- | :----------------------------------------------- |
 | `tgv_energy_decay.toml`     | Taylor-Green vortex + analytic `exp(-6νt)` overlay |
 | `decaying_hit.toml`         | Random-init decaying isotropic turbulence (`[initial] velocity_perturbation`) |
 | `channel_flow.toml`         | Wall-bounded channel + `⟨u⟩(z)` mean profile      |
-| `cloud_spinup.toml`         | Kessler warm-rain: `ql → qr → fallout` (the `column` driver) |
+| `cloud_spinup.toml`         | Kessler warm-rain: `ql → qr → fallout` in a box at rest (`[microphysics]`) |
 | `pollution_plume.toml`      | Point-source tracer with linear-decay chemistry (`[tracer]`) |
 | `particle_trail.toml`       | Lagrangian particles in a Taylor-Green vortex (`[particles]`) |
 
@@ -46,7 +50,7 @@ next to the sources (negative values included).
 
 Combine several physics modules in one run.
 
-| Config (`coupled/configs/`) | Combines                                             |
+| Config (`examples/<case>/`) | Combines                                             |
 | :-------------------------- | :--------------------------------------------------- |
 | `dcbl_radiation_lsm.toml`   | DCBL + radiative cooling + `SlabLand` (3 h; `[forcing]`, `[surface] model = "slab"`) |
 | `moist_convection.toml`     | Moist LES with initial cloud puff + Kessler (`[microphysics]`) |

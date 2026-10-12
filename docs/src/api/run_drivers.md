@@ -2,11 +2,11 @@
 
 `Aeolus.RunDrivers` (EX-d, #441) holds the run types of the example cases
 that the bare `simulation` driver ([`Aeolus.SimulationDriver`](@ref)) does
-not cover. An example is a TOML file in an `examples/**/configs/`
-directory (plus its static or dynamic input driver), run with
+not cover. An example is a case directory `examples/<case>/` with its
+TOML file (plus its static or dynamic input driver in `input/`), run with
 
 ```bash
-julia --project -m Aeolus run examples/<dir>/configs/<case>.toml
+julia --project -m Aeolus run examples/<case>/<case>.toml
 ```
 
 Each run type writes its numbers to `output/results.toml` (and, where a

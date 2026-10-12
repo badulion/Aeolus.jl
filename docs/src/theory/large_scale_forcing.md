@@ -231,7 +231,7 @@ surface descending from the 18 LT inversion (856.0 m, 1039.7 m and
 on the model, ONE-g #456, 0.88 Δz). The θ ledger closes to
 8.1 × 10⁻¹³ of the column content.
 
-At 48 × 48 × 80 (Δx = 50 m, Δz = 20 m, `configs/cases99_closures.toml` read by `examples/sbl/gabls2.jl`,
+At 48 × 48 × 80 (Δx = 50 m, Δz = 20 m, `examples/sbl/cases99_closures.toml` read by `examples/sbl/gabls2.jl`,
 Brown et al. 1994 closure, 16-54 h, 3607 s / 3691 s wall), the inversion
 at 06 LT 24 October is 842.1 m with subsidence and 1059.2 m without
 (−217.1 m). A passive surface leaving the 18 LT inversion (1033.8 m)
