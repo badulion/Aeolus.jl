@@ -197,7 +197,7 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            70 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl and other module tests, 106,776 fast-tier
+test/           runtests.jl + era*_*.jl and other module tests, 121,573 fast-tier
                 assertions; run.jl = parallel runner, test_tags.toml = tiers
 examples/       one directory per case: <case>.toml + input/*.nc + data/ + output
                 analysis scripts; examples/urban/ (Berlin) is the flagship
