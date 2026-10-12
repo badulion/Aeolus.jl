@@ -50,19 +50,24 @@ default_provider(s) = BC.provider(only(C for C in BC.URBAN_DEFAULTS if BC.slot(C
     smoke_overrides(spec) -> Vector{String}
 
 The `--set` overrides of `berlin_smoke.toml` for a run of
-[`smoke_specs`](@ref): per urban slot, `<provider>.enabled` of the
-provider the run selects on and every other provider of the slot off; per
-additive component `<name>.enabled`; every option as `<component>.<key>`
-(the nest parent's as `nesting.parent.<key>`); every field of the site's options
-by its key of the model (`BC.SITE_FIELDS`); then the spec's raw overrides.
+[`smoke_specs`](@ref): per urban slot the selector of its slot section,
+`<section>.<key>="<provider>"` (ONE-m, #476: a provider other than the
+file's takes its own options, the file's options of the old one are
+dropped); per additive component `<name>.enabled`; every option as
+`<section>.<key>` (the nest parent's as `nesting.parent.<key>`); every
+field of the site's options by its key of the model (`BC.SITE_FIELDS`);
+then the spec's raw overrides.
 """
 function smoke_overrides(spec)
     out = String[]
     for C in BC.URBAN_COMPONENTS
         s = BC.slot(C)
-        on = s === nothing ? spec.physics[BC.component_name(C)] :
-                            BC.provider(C) === Symbol(get(spec.physics, s, default_provider(s)))
-        push!(out, "$(BC.component_name(C)).enabled=" * BC.toml_literal(on))
+        if s === nothing
+            push!(out, "$(BC.component_name(C)).enabled=" * BC.toml_literal(spec.physics[BC.component_name(C)]))
+        elseif BC.provider(C) === Symbol(get(spec.physics, s, default_provider(s)))
+            sec, key = BC.URBAN_SLOT_SECTIONS[s]
+            push!(out, "$sec.$key=" * BC.toml_literal(BC.provider(C)))
+        end
     end
     # berlin_summer.toml turns [checkpoint] on, and only the Boussinesq
     # core can be checkpointed (#269): a run on another core turns it off
@@ -74,7 +79,7 @@ function smoke_overrides(spec)
                 push!(out, "nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
             end
         else
-            push!(out, "$c.$(BC.option_key(k))=" * BC.toml_literal(v))
+            push!(out, "$(Aeolus.Components.section(BC.component_type(c))).$(BC.option_key(k))=" * BC.toml_literal(v))
         end
     end
     for (f, v) in pairs(spec.fields)

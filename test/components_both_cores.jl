@@ -62,7 +62,7 @@ bc_weights(sim) = sim isa BoussinesqSimulation ? (ones(size(sim.θ.data, 3)), on
 "Σ_k W[k] Σ_ij f[i,j,k] over the interior levels of a centre-located field."
 bc_wsum(f, W, H) = sum(W[H+k] * sum(interior_view(f)[:, :, k]) for k in 1:size(interior_view(f), 3))
 
-const BC_SGS = (closure = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :none)
+const BC_SGS = (model = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :none)
 
 @testset "the weighted SGS and surface fluxes: W ≡ 1 is the unweighted operator, bit for bit" begin
     sim = bc_state!(bc_core(:anelastic))
@@ -148,7 +148,7 @@ const BC_CFG = joinpath(pkgdir(Aeolus), "examples", "dry_convective_bl", "dry_co
 bc_cbl_cfg(core, n; extra = String[]) =
     load_run_config(BC_CFG; overrides = vcat(["grid.size=[16,16,16]", "time.duration=\"none\"",
                                               "time.nsteps=$n", "fftw.planner=\"estimate\""],
-                                             core === :anelastic ? ["dynamics.core=\"anelastic\""] : String[], extra))
+                                             core === :anelastic ? ["core.model=\"anelastic\""] : String[], extra))
 bc_run(cfg; kw...) = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir(), kw...)
 
 "The θ budget of a `simulation` run of the DCBL config: (Σ W δθ ΔV, W_bot F t A)."
@@ -166,7 +166,7 @@ end
 
 @testset "dry CBL on both cores: the θ budget closes to round-off (euler, rk3, adaptive)" begin
     for core in (:boussinesq, :anelastic),
-        (sch, extra) in (("euler", String[]), ("rk3", ["time.scheme=\"rk3\""]),
+        (sch, extra) in (("euler", String[]), ("rk3", ["timestep.scheme=\"rk3\""]),
                          ("adaptive", ["time.dt=\"adaptive\"", "time.cfl=0.3", "time.dt_max=5.0"]))
         b = bc_budget(core, 12; extra = extra)
         err = (b.got - b.expected) / b.expected
@@ -300,7 +300,7 @@ end
 
 @testset "the simulation run type: an anelastic run resumes bitwise from its checkpoint ($label)" for
         (label, extra) in (("euler", String[]),
-                           ("rk3 adaptive", ["time.scheme=\"rk3\"", "time.dt=\"adaptive\"", "time.cfl=0.3",
+                           ("rk3 adaptive", ["timestep.scheme=\"rk3\"", "time.dt=\"adaptive\"", "time.cfl=0.3",
                                              "time.dt_max=5.0"]))
     # checkpoints of the anelastic core were refused by the config before ONE-j
     cfg = bc_cbl_cfg(:anelastic, 20; extra = vcat(extra, "checkpoint.every_steps=10"))
@@ -489,7 +489,7 @@ end
 # kinematic flow and the fringe
 # ---------------------------------------------------------------------------
 
-const BC_TKE = (closure = :tke, c_s = nothing, pr_t = 1 / 3, stability = :none, stress = :laplacian,
+const BC_TKE = (model = :tke, c_s = nothing, pr_t = 1 / 3, stability = :none, stress = :laplacian,
                 e_min = 1e-3, surface_factor = 3.9, wall_cap = true)
 const BC_STATS = (enabled = true, start = 0.0, tau_avg = 600.0, refine = (2, 2, 4), depth = 1000.0)
 
@@ -503,7 +503,7 @@ function bc_tke_domain(core; scheme = :euler, cfl = nothing, stats = true)
     return Domain(d0; components = (CentredAdvection(), BCC.build_components(specs, d0)...))
 end
 
-@testset "[sgs] closure = \"tke\" on both cores: the surface buoyancy of the components' wall flux ($core)" for
+@testset "[sgs] model = \"tke\" on both cores: the surface buoyancy of the components' wall flux ($core)" for
         core in (:boussinesq, :anelastic)
     # at rest over a uniform θ (N² = 0) the TKE closure's buoyant production
     # is the floor flux's half-face share in every first-level cell,

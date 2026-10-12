@@ -478,7 +478,7 @@ end
 
 # ---------------------------------------------------------------------------
 # examples/cbl_tke/cbl_tke.toml, examples/cbl_inflow_statistics/cbl_inflow_statistics.toml
-# ([sgs] closure = "tke", [inflow_statistics]; ONE-l: the `cbl` run type's
+# ([sgs] model = "tke", [inflow_statistics]; ONE-l: the `cbl` run type's
 # harness tke_cbl, a test fixture, bit for bit)
 # ---------------------------------------------------------------------------
 
