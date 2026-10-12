@@ -73,7 +73,7 @@ using ..Aeolus.Output: Output, OutputVariable, check_catalogue
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics
 using Printf
-using Dates: Dates, DateTime, Millisecond
+using Dates: Dates, Date, DateTime, Millisecond
 using Statistics: mean
 import Random
 

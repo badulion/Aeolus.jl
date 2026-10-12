@@ -131,12 +131,21 @@ section(::Type{<:LargeScale}) = "large_scale_forcing"
 
 schema(::Type{<:LargeScale}) =
     Config.section("large_scale_forcing";
-                   doc = "Large-scale forcing (LargeScaleForcing): the geostrophic pressure gradient, and the domain " *
-                         "dynamic driver's advective tendencies, subsidence and nudging (its ls_* tables).") do s
+                   doc = "Large-scale forcing (LargeScaleForcing): the geostrophic pressure gradient, the domain " *
+                         "dynamic driver's advective tendencies, subsidence and nudging (its ls_* tables), and the " *
+                         "forcing of a deep boundary-layer domain from a sounding driver (NEST-p3, #483: the " *
+                         "urban nest parent's of #259): nudging toward the sounding with a boundary-layer-dependent " *
+                         "weight, subsidence of a large-scale divergence, θ damping over the top.") do s
         for (k, c) in (("u_g", "u"), ("v_g", "v"))
-            Config.option!(s, k, Config.OneOf(Float64, Symbol); default = 0.0, allowed = [:driver], units = "m s^-1",
-                           doc = "the geostrophic wind $c: a number, or \"driver\": the dynamic driver's ls_$k table (height, time)")
+            Config.option!(s, k, Config.OneOf(Float64, Symbol); default = 0.0, allowed = [:driver, :sounding],
+                           units = "m s^-1",
+                           doc = "the geostrophic wind $c: a number; \"driver\": the dynamic driver's ls_$k table " *
+                                 "(height, time); \"sounding\": the sounding driver's wind (ls_profile_$c) at max(z, z_g), " *
+                                 "the wind above the boundary layer taken as geostrophic")
         end
+        Config.option!(s, "z_g", Float64; default = NaN, units = "m",
+                       doc = "with \"sounding\": the height of the geostrophic wind; nan: 1.2 × the largest parcel " *
+                             "boundary-layer height of the sounding's launches")
         Config.option!(s, "advective_tendencies", Bool; default = false,
                        doc = "the dynamic driver's advective tendencies ls_u_adv, ls_v_adv, ls_theta_adv, ls_qv_adv (AdvectiveTendencies)")
         Config.option!(s, "subsidence", Bool; default = false,
@@ -144,21 +153,91 @@ schema(::Type{<:LargeScale}) =
                              "driver's attributes subsidence_fields, subsidence_form)")
         Config.option!(s, "nudging", Bool; default = false,
                        doc = "nudging toward the dynamic driver's ls_nudge_* targets (ProfileNudging, time scale nudging_tau)")
+        Config.option!(s, "sounding_nudging_tau", Float64; default = Inf, range = (0, Inf), open_lower = true, units = "s",
+                       doc = "nudging of θ (and qv) toward the sounding driver's profiles (ls_profile_theta, ls_profile_qv, " *
+                             "linear in time between the launches) with this time scale, above nudging_factor × the " *
+                             "running maximum of the domain's boundary-layer height (at least the sounding's); inf: off")
+        Config.option!(s, "nudging_factor", Float64; default = 1.2, range = (0, Inf), open_lower = true, units = "1",
+                       doc = "the sounding nudging acts above nudging_factor × the tracked boundary-layer height")
+        Config.option!(s, "nudging_depth", Float64; default = 200.0, range = (0, Inf), units = "m",
+                       doc = "depth of the sounding nudging's ramp (sin²) above that height")
+        Config.option!(s, "divergence", Float64; default = 0.0, units = "s^-1",
+                       doc = "large-scale divergence D of the subsidence w_s = -D z (local form, on θ and qv); 0: off")
+        Config.option!(s, "damping_rate", Float64; default = 0.0, range = (0, Inf), units = "s^-1",
+                       doc = "θ reference damping (ReferenceDamping) at this largest rate over the top damping_frac of the domain; 0: off")
+        Config.option!(s, "damping_frac", Float64; default = 0.25, range = (0, 1), open_lower = true, units = "1",
+                       doc = "the damping acts over the top damping_frac of the domain (the sponge profile)")
+        Config.option!(s, "damping_target", Symbol; default = :initial, allowed = [:initial, :sounding],
+                       doc = "the θ the damping relaxes toward: the domain's initial profile, or the sounding driver's (ls_profile_theta)")
     end
 
 _lsf_geostrophic(opts) = opts.u_g != 0 || opts.v_g != 0
+_lsf_sounding(opts) = opts.u_g === :sounding || opts.v_g === :sounding || isfinite(opts.sounding_nudging_tau) ||
+                      (opts.damping_rate > 0 && opts.damping_target === :sounding)
 "Whether the `[large_scale_forcing]` options read the domain's dynamic driver."
 lsf_reads_driver(opts) = opts.u_g === :driver || opts.v_g === :driver || opts.advective_tendencies ||
-                         opts.subsidence || opts.nudging
-enabled(::Type{<:LargeScale}, opts) = _lsf_geostrophic(opts) || lsf_reads_driver(opts)
+                         opts.subsidence || opts.nudging || _lsf_sounding(opts)
+enabled(::Type{<:LargeScale}, opts) = _lsf_geostrophic(opts) || lsf_reads_driver(opts) || opts.divergence != 0 ||
+                                      opts.damping_rate > 0
+
+# a sounding table of the dynamic driver (on the model time: shifted by the run's start t0)
+function _sounding_table(dyn, k::Symbol, t0)
+    tab = get(dyn.tables, k, nothing)
+    tab === nothing && throw(ConfigError("large_scale_forcing", "the dynamic driver has no ls_$k: a sounding driver " *
+                                                                "(AeolusPrep.jl: aeolusprep dynamic --from-sounding)"))
+    return t0 == 0 ? tab : shift_table(tab, t0)
+end
+
+"""
+    sounding_zi_max(θ, qv) -> m
+
+The largest parcel boundary-layer height (`boundary_layer_height`,
+`:parcel`, on θ_v) of the launches of a sounding (the time levels of its
+θ and qv tables, `ForcingTable`s): 1356 m over the six Lindenberg
+launches of 29/30 June 2019 in `berlin_20190629_dynamic.nc` (#247; the
+10:45 UTC release alone gives 1171 m).
+"""
+function sounding_zi_max(θ, qv)
+    zi = 0.0
+    for t in θ.t
+        θv = [virtual_temperature(forcing_value(θ, z, t), PhasePartition(forcing_value(qv, z, t))) for z in θ.z]
+        zi = max(zi, boundary_layer_height(θ.z, θv; method = :parcel))
+    end
+    return zi
+end
+
+"""
+    sounding_geostrophic(dyn, z_g; t0 = 0) -> (U_g, V_g)
+
+The geostrophic wind of a sounding driver `dyn`, functions `(z, t)` of
+the model time (the driver's times less `t0`, the run's start): its wind
+(`ls_profile_u`, `ls_profile_v`, linear in time between the launches) at
+``\\max(z, z_g)`` — the wind above the boundary layer is taken as
+geostrophic and held constant with height below `z_g` (no thermal wind
+inside the boundary layer); `z_g = NaN` is 1.2 × [`sounding_zi_max`](@ref).
+The one definition of a domain's sounding geostrophic wind (the nest
+parent of #259 and its urban child's `[geostrophic]`).
+"""
+function sounding_geostrophic(dyn, z_g::Real; t0::Real = 0.0)
+    Tu, Tv = _sounding_table(dyn, :profile_u, t0), _sounding_table(dyn, :profile_v, t0)
+    isnan(z_g) && (z_g = 1.2 * sounding_zi_max(_sounding_table(dyn, :profile_theta, t0), _sounding_table(dyn, :profile_qv, t0)))
+    zg = Float64(z_g)
+    return ((z, t) -> forcing_value(Tu, max(z, zg), t), (z, t) -> forcing_value(Tv, max(z, zg), t))
+end
+
+# the domain height (m) above its ground
+_domain_height(m) = hasproperty(m, :zf) ? m.zf[m.Hz+m.Nz+1] - m.zf[m.Hz+1] : m.Lz
 
 function build(::Type{<:LargeScale}, opts, domain)
     dyn = get(domain.drivers, :dynamic, nothing)
     lsf_reads_driver(opts) && dyn === nothing &&
         throw(ConfigError("large_scale_forcing", "reads the domain's dynamic driver, which the domain has not (set dynamic_driver)"))
-    F = dyn === nothing ? nothing : dynamic_forcing(dyn; t0 = clock(domain))
+    t0 = clock(domain)
+    F = dyn === nothing ? nothing : dynamic_forcing(dyn; t0 = t0)
+    sg = (opts.u_g === :sounding || opts.v_g === :sounding) ? sounding_geostrophic(dyn, opts.z_g; t0 = t0) : nothing
     function quantity(k)
         v = getproperty(opts, Symbol(k))
+        v === :sounding && return k == "u_g" ? sg[1] : sg[2]
         v === :driver || return Float64(v)
         q = getproperty(F, Symbol(uppercase(k[1:1]) * k[2:end]))
         q === nothing && throw(ConfigError("large_scale_forcing.$k", "the dynamic driver has no ls_$k table"))
@@ -174,7 +253,38 @@ function build(::Type{<:LargeScale}, opts, domain)
         x === nothing && throw(ConfigError("large_scale_forcing", "the dynamic driver has no $what"))
         push!(extra, F.extra[x])
     end
-    return LargeScale(GeostrophicPressureGradient(U, V), Tuple(extra), U, V, Ref(clock(domain)))
+    # the forcing of a deep boundary-layer domain (the urban nest parent of
+    # #259): sounding nudging above the tracked boundary layer, subsidence of
+    # a large-scale divergence, θ damping over the top
+    sim = domain.state
+    moist = hasproperty(sim, :has_moisture) && sim.has_moisture
+    zi = nothing
+    if isfinite(opts.sounding_nudging_tau)
+        Tθ, Tq = _sounding_table(dyn, :profile_theta, t0), _sounding_table(dyn, :profile_qv, t0)
+        zi = BoundaryLayerTracker(; floor = sounding_zi_max(Tθ, Tq), every = 10)
+        targets = moist ? (θ = Tθ, qv = Tq) : (θ = Tθ,)
+        push!(extra, ProfileNudging(targets, opts.sounding_nudging_tau;
+                                    weight = NudgingWeight(_ -> nudging_height(zi); factor = opts.nudging_factor,
+                                                           depth = opts.nudging_depth)))
+    end
+    D = opts.divergence
+    D != 0 && push!(extra, Subsidence((z, t) -> -D * z; form = :local))
+    if opts.damping_rate > 0
+        H = _domain_height(grid(domain))
+        target = if opts.damping_target === :sounding
+            _sounding_table(dyn, :profile_theta, t0)
+        else
+            θf = get(domain.drivers, :theta_profile, nothing)
+            θf === nothing && throw(ConfigError("large_scale_forcing.damping_target",
+                                                "the domain has no initial θ profile to damp toward"))
+            (z, t) -> θf(z)
+        end
+        push!(extra, ReferenceDamping(:θ, sponge_profile(opts.damping_rate, (1 - opts.damping_frac) * H, H), target))
+    end
+    # (a zero geostrophic wind with the driver's ls_* forcing keeps its no-op term, as before #483)
+    geo = _lsf_geostrophic(opts) || opts.advective_tendencies || opts.subsidence || opts.nudging ?
+          GeostrophicPressureGradient(U, V) : nothing
+    return LargeScale(geo, Tuple(extra); U_g = U, V_g = V, zi = zi, t0 = t0)
 end
 
 stages(c::LargeScale) = c.zi === nothing ? (Stage(:clock), Stage(:body_force)) :

@@ -300,15 +300,43 @@ the cell centres, integrated from [`case_surface_pressure`](@ref) with
 `Aeolus.MoistThermodynamics` and `g = cfg.g`.
 """
 function build_reference(cfg::NamedTuple, mesh)
+    θ0 = initial_θ(cfg)
+    return domain_reference(mesh, z -> θ0(0.0, 0.0, z), case_surface_pressure(cfg); g = cfg.g)
+end
+
+"""
+    domain_reference(mesh, θ, p_surface; g = 9.81) -> CaseReference
+
+The hydrostatic reference state of a domain on `mesh` (a regular or a
+stretched grid): the potential-temperature profile `θ(z)` (a function of
+the height above the ground) integrated from `p_surface` (Pa) with
+`Aeolus.Anelastic.reference_from_profile` and the dry-air constants of
+`Aeolus.MoistThermodynamics`. The one construction of the urban site's
+reference ([`build_reference`](@ref)) and of a model domain whose
+components convert fluxes with one (`[surface] model = "tiles"`,
+`[radiation] scheme = "mean_column"` on the Boussinesq core, NEST-p3).
+"""
+function domain_reference(mesh::StretchedGrid, θ, ps::Real; g::Real = 9.81)
+    # a stretched grid: the pressure of the continuous hydrostatic profile at
+    # the level centres (`hydrostatic_pressure`; the nest parent's since #259)
     c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
     R_d = c.gas_constant / c.molmass_dry
-    θ0 = initial_θ(cfg)
-    ps = case_surface_pressure(cfg)
-    state = Aeolus.Anelastic.reference_from_profile(mesh, z -> θ0(0.0, 0.0, z), ps;
+    κ = R_d / c.cp_dry
+    zc = Float64[mesh.zc[mesh.Hz+k] - mesh.zf[mesh.Hz+1] for k in 1:mesh.Nz]
+    p̄ = hydrostatic_pressure(θ, zc, ps; g = g)
+    θ̄ = θ.(zc)
+    π̄ = (p̄ ./ c.p_ref) .^ κ
+    T̄ = θ̄ .* π̄
+    return CaseReference(p̄, p̄ ./ (R_d .* T̄), θ̄, T̄, π̄, nothing, Float64(ps), Float64(c.cp_dry))
+end
+function domain_reference(mesh, θ, ps::Real; g::Real = 9.81)
+    c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
+    R_d = c.gas_constant / c.molmass_dry
+    state = Aeolus.Anelastic.reference_from_profile(mesh, θ, ps;
                                                     R_d = R_d, cp = c.cp_dry, p₀ = c.p_ref,
-                                                    g_accel = cfg.g)
+                                                    g_accel = g)
     return CaseReference(copy(state.p̄), copy(state.ρ̄), copy(state.θ̄), copy(state.T̄),
-                         copy(state.π̄), state, ps, Float64(c.cp_dry))
+                         copy(state.π̄), state, Float64(ps), Float64(c.cp_dry))
 end
 
 "Reference pressure (Pa) at the centre of level `k`, or the whole profile."

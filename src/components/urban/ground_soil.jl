@@ -63,10 +63,13 @@ default_options(::Type{<:GroundSoil}) =
      θ0 = Dict(SURFACE_STREET => 0.10, SURFACE_WALL => 0.10, SURFACE_PARK => 0.25),
      texture = :loam, sand = 40, clay = 20, nlayers = 10)
 
+"The soil of the options `o` of the `:ground` slot's `soil_column` provider (no columns yet)."
+ground_soil(o) = GroundSoil(UInt8[o.classes...], Dict{UInt8,Float64}(o.θ0),
+                            carsel_parrish_texture(o.texture), clm_soil_thermal_properties(o.sand, o.clay),
+                            o.nlayers, CartesianIndex{2}[])
+
 function build(::Type{<:GroundSoil}, case, o)
-    c = GroundSoil(UInt8[o.classes...], Dict{UInt8,Float64}(o.θ0),
-                   carsel_parrish_texture(o.texture), clm_soil_thermal_properties(o.sand, o.clay),
-                   o.nlayers, CartesianIndex{2}[])
+    c = ground_soil(o)
     for cls in c.classes
         register_surface_factory!(case, cls, :ground_soil, (cs, site) -> soil_surface(c, cs, site))
     end
@@ -83,17 +86,27 @@ recorded in `c.cols` (its outputs and checks); a parent tile
 (`site.column === nothing`) is not.
 """
 function soil_surface(c::GroundSoil, case, site::SurfaceSite)
-    cls = site.class
-    p, T0 = case.bus.params, case.cfg.T_soil0
-    z0m, z0h = class_roughness(case, site)
-    water = SoilWaterColumn(clm_exponential_soil_grid(c.nlayers), c.hydraulics;
-                            θ = get(c.θ0, cls, 0.2))
-    col = SoilThermalColumn(water, c.thermal; T_soil = T0, T_skin = site.T_skin,
-                            bottom = Aeolus.SoilColumn.BottomTemperature(T0),
-                            albedo = p.albedo[cls], emissivity = p.emissivity[cls],
-                            z0m = z0m, z0h = z0h, hydrology = true)
+    col = soil_surface(c, case.bus.params, case.cfg.T_soil0, class_roughness(case, site)..., site)
     site.column === nothing || push!(c.cols, site.column)
     return col
+end
+
+"""
+    soil_surface(c::GroundSoil, params::SurfaceParams, T0, z0m, z0h, site) -> SoilThermalColumn
+
+The soil column of class `site.class` (the one construction; the urban
+site's columns and the tiles of a tiled surface, [`TileClasses`](@ref)):
+`c`'s soil, the class's albedo and emissivity of `params`, soil and base
+temperature `T0` (K), the roughness lengths `z0m`, `z0h` (m).
+"""
+function soil_surface(c::GroundSoil, p::SurfaceParams, T0::Real, z0m::Real, z0h::Real, site::SurfaceSite)
+    cls = site.class
+    water = SoilWaterColumn(clm_exponential_soil_grid(c.nlayers), c.hydraulics;
+                            θ = get(c.θ0, cls, 0.2))
+    return SoilThermalColumn(water, c.thermal; T_soil = T0, T_skin = site.T_skin,
+                             bottom = Aeolus.SoilColumn.BottomTemperature(T0),
+                             albedo = p.albedo[cls], emissivity = p.emissivity[cls],
+                             z0m = z0m, z0h = z0h, hydrology = true)
 end
 soil_surface(c::GroundSoil, case, I::CartesianIndex{2}) =
     soil_surface(c, case, SurfaceSite(case.geom.sfc[I]; T_skin = case.bus.Ts[I], column = I))

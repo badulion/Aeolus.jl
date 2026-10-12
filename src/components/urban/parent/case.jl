@@ -204,32 +204,6 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    coarsen_landuse(pl, b) -> ParentLanduse
-
-The parent land-use table on a grid `b` times coarser per axis (for the
-reduced-resolution parents of the tests): class counts summed over each
-`b × b` block (`r` becomes `b r`), frontal area density averaged, the
-mean height roof-area weighted, the maximum height the block maximum.
-"""
-function coarsen_landuse(pl::ParentLanduse, b::Integer)
-    b == 1 && return pl
-    (pl.nx % b == 0 && pl.ny % b == 0) || error("coarsen_landuse: $(pl.nx) × $(pl.ny) not divisible by $b")
-    nx, ny = pl.nx ÷ b, pl.ny ÷ b
-    counts = zeros(Int, nx, ny, size(pl.counts, 3))
-    λf, hm, hx = zeros(nx, ny), zeros(nx, ny), zeros(nx, ny)
-    for J in 1:ny, I in 1:nx
-        is, js = (I-1)*b+1:I*b, (J-1)*b+1:J*b
-        counts[I, J, :] .= vec(sum(view(pl.counts, is, js, :); dims = (1, 2)))
-        λf[I, J] = sum(view(pl.λf, is, js)) / b^2
-        w = view(pl.counts, is, js, SURFACE_ROOF)
-        hm[I, J] = sum(w) > 0 ? sum(w .* view(pl.hmean, is, js)) / sum(w) : 0.0
-        hx[I, J] = maximum(view(pl.hmax, is, js))
-    end
-    return ParentLanduse(nx, ny, pl.dx * b, pl.x0, pl.y0, pl.r * b, counts, λf, hm, hx,
-                         vcat(pl.header, "# coarsened by $b × $b (coarsen_landuse)"))
-end
-
-"""
     crop_landuse(pl, pc::ParentConfig) -> ParentLanduse
     crop_landuse(pl, Is, Js) -> ParentLanduse
 
@@ -252,14 +226,6 @@ function crop_landuse(pl::ParentLanduse, pc::ParentConfig)
     (first(Is) >= 1 && first(Js) >= 1 && last(Is) <= pl.nx && last(Js) <= pl.ny) ||
         error("crop_landuse: the parent box ($Is, $Js) leaves the land-use table (1:$(pl.nx), 1:$(pl.ny))")
     return crop_landuse(pl, Is, Js)
-end
-
-function crop_landuse(pl::ParentLanduse, Is::AbstractUnitRange, Js::AbstractUnitRange)
-    (Is == 1:pl.nx && Js == 1:pl.ny) && return pl
-    return ParentLanduse(length(Is), length(Js), pl.dx, pl.x0 + (first(Is) - 1) * pl.dx,
-                         pl.y0 + (first(Js) - 1) * pl.dx, pl.r,
-                         pl.counts[Is, Js, :], pl.λf[Is, Js], pl.hmean[Is, Js], pl.hmax[Is, Js],
-                         vcat(pl.header, "# cropped to cells $Is × $Js (crop_landuse)"))
 end
 
 """

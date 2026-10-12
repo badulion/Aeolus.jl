@@ -415,9 +415,11 @@ function class_roughness(case, site::SurfaceSite)
 end
 
 "The `SlabLand` for a site of a class nobody registered a factory for."
-function fallback_slab(case, site::SurfaceSite)
-    p, cls = case.bus.params, site.class
-    z0m, z0h = class_roughness(case, site)
+fallback_slab(case, site::SurfaceSite) = fallback_slab(case.bus.params, class_roughness(case, site)..., site)
+
+"The `SlabLand` of class `site.class` with the class's `params` and the roughness lengths `z0m`, `z0h` (m)."
+function fallback_slab(p::SurfaceParams, z0m::Real, z0h::Real, site::SurfaceSite)
+    cls = site.class
     return SlabLand(; T = site.T_skin, C_s = p.C_s[cls], albedo = p.albedo[cls],
                     emissivity = p.emissivity[cls], z0m = z0m, z0h = z0h,
                     β = cls == SURFACE_WATER ? 1.0 : 0.0)

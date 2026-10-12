@@ -66,6 +66,82 @@ struct ParentLanduse
     header::Vector{String}
 end
 
+"""
+    coarsen_landuse(pl, b) -> ParentLanduse
+
+The parent land-use table on a grid `b` times coarser per axis (for the
+reduced-resolution parents of the tests): class counts summed over each
+`b × b` block (`r` becomes `b r`), frontal area density averaged, the
+mean height roof-area weighted, the maximum height the block maximum.
+"""
+function coarsen_landuse(pl::ParentLanduse, b::Integer)
+    b == 1 && return pl
+    (pl.nx % b == 0 && pl.ny % b == 0) || error("coarsen_landuse: $(pl.nx) × $(pl.ny) not divisible by $b")
+    nx, ny = pl.nx ÷ b, pl.ny ÷ b
+    counts = zeros(Int, nx, ny, size(pl.counts, 3))
+    λf, hm, hx = zeros(nx, ny), zeros(nx, ny), zeros(nx, ny)
+    for J in 1:ny, I in 1:nx
+        is, js = (I-1)*b+1:I*b, (J-1)*b+1:J*b
+        counts[I, J, :] .= vec(sum(view(pl.counts, is, js, :); dims = (1, 2)))
+        λf[I, J] = sum(view(pl.λf, is, js)) / b^2
+        w = view(pl.counts, is, js, SURFACE_ROOF)
+        hm[I, J] = sum(w) > 0 ? sum(w .* view(pl.hmean, is, js)) / sum(w) : 0.0
+        hx[I, J] = maximum(view(pl.hmax, is, js))
+    end
+    return ParentLanduse(nx, ny, pl.dx * b, pl.x0, pl.y0, pl.r * b, counts, λf, hm, hx,
+                         vcat(pl.header, "# coarsened by $b × $b (coarsen_landuse)"))
+end
+
+"""
+    crop_landuse(pl, Is, Js) -> ParentLanduse
+
+The cells `Is × Js` of the land-use table `pl`, with `x0`, `y0` moved to
+the corner of the first one.
+"""
+function crop_landuse(pl::ParentLanduse, Is::AbstractUnitRange, Js::AbstractUnitRange)
+    (Is == 1:pl.nx && Js == 1:pl.ny) && return pl
+    return ParentLanduse(length(Is), length(Js), pl.dx, pl.x0 + (first(Is) - 1) * pl.dx,
+                         pl.y0 + (first(Js) - 1) * pl.dx, pl.r,
+                         pl.counts[Is, Js, :], pl.λf[Is, Js], pl.hmean[Is, Js], pl.hmax[Is, Js],
+                         vcat(pl.header, "# cropped to cells $Is × $Js (crop_landuse)"))
+end
+
+"""
+    landuse_static_tiles(pl::ParentLanduse, mesh; origin_lat, origin_lon, origin_x, origin_y) -> StaticTiles
+
+The tile form of the static driver (`STATIC_TILES_SCHEMA`) of a domain on
+`mesh` from the land-use table `pl` (its cells relative to the anchor at
+`origin_lat`, `origin_lon`, which sits at `(origin_x, origin_y)` in the
+mesh's coordinates): `pl` cropped to the mesh's box
+([`crop_landuse`](@ref)) and coarsened to its cells
+([`coarsen_landuse`](@ref)). What AeolusPrep.jl's `aeolusprep static`
+writes for a `[[domain]]` with `[surface] model = "tiles"`, and what that
+domain's [`TiledUrbanSurface`](@ref) reads back. An error when the box is
+not on the table's cell faces, leaves it, or is not a whole number of
+table cells per mesh cell.
+"""
+function landuse_static_tiles(pl::ParentLanduse, mesh; origin_lat::Real, origin_lon::Real,
+                              origin_x::Real, origin_y::Real)
+    fi = (mesh.x0 - origin_x - pl.x0) / pl.dx
+    fj = (mesh.y0 - origin_y - pl.y0) / pl.dx
+    ni, nj = mesh.Lx / pl.dx, mesh.Ly / pl.dx
+    all(x -> abs(x - round(x)) < 1e-9, (fi, fj, ni, nj)) ||
+        error("landuse_static_tiles: the domain's box is not on the land-use cell faces ($fi, $fj, $ni, $nj cells)")
+    I0, J0 = round(Int, fi) + 1, round(Int, fj) + 1
+    Is, Js = I0:I0+round(Int, ni)-1, J0:J0+round(Int, nj)-1
+    (first(Is) >= 1 && first(Js) >= 1 && last(Is) <= pl.nx && last(Js) <= pl.ny) ||
+        error("landuse_static_tiles: the domain's box ($Is, $Js) leaves the land-use table (1:$(pl.nx), 1:$(pl.ny))")
+    c = crop_landuse(pl, Is, Js)
+    b = c.nx ÷ mesh.Nx
+    (b * mesh.Nx == c.nx && b * mesh.Ny == c.ny && c.dx * b ≈ mesh.dx) ||
+        error("landuse_static_tiles: the land use ($(c.nx) cells of $(c.dx) m) does not coarsen to $(mesh.Nx) cells of $(mesh.dx) m")
+    q = coarsen_landuse(c, b)
+    return StaticTiles(collect(Float64, Aeolus.Grids.xnodes(mesh, CellCenter())),
+                       collect(Float64, Aeolus.Grids.ynodes(mesh, CellCenter())),
+                       q.dx, q.dx, Float64(origin_lat), Float64(origin_lon), Float64(origin_x), Float64(origin_y),
+                       q.x0, q.y0, q.r, Int32.(q.counts), q.λf, q.hmean, q.hmax, q.header, Dict{String,Any}())
+end
+
 read_parent_landuse(::Nothing) =
     error("[geometry] landuse is \"none\": the tiled parent surface needs a land-use table " *
           "(AeolusPrep.jl: `aeolusprep fetch-landuse`) or [geometry] parent_static")
@@ -269,13 +345,14 @@ end
 
 Build the parent's tiled surface.
 
-* `case` — a built Berlin case: its registry provides the one
-  class-to-surface factory ([`class_surface`](@ref)), the per-class
-  parameters, roughness table and initial temperatures (`cfg.Ts0`,
-  water `+ cfg.Ts_water_offset`).
-* `child` — the child case whose class map fills the parent under its
-  footprint ([`parent_fractions`](@ref)), or `nothing` for the OSM table
-  everywhere.
+* `case` — the class-to-surface factory: a built urban site (its
+  registry's [`class_surface`](@ref), per-class parameters, roughness
+  table and initial temperatures, `cfg.Ts0`, water `+ cfg.Ts_water_offset`)
+  or the [`TileClasses`](@ref) of a tiled surface's own options.
+* `child` — the urban site whose class map fills the parent under its
+  footprint ([`parent_fractions`](@ref)): `case` when it is a site (the
+  tests of #249), else `nothing`, the land use everywhere (a domain's
+  static driver holds the child's classes under its footprint).
 * `columns` — `:all`, or the `CartesianIndex`es / a `CartesianIndices`
   range of the columns to build (the whole parent is 36 864 columns of
   up to six tiles; building only a subset is how the tests stay cheap).
@@ -313,7 +390,7 @@ Reference: Kanda, M., Kanega, M., Kawai, T., Moriwaki, R. & Sugawara, H.
 urban scale models. *J. Appl. Meteorol. Climatol.*, 46, 1067-1079.
 """
 function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse(case.cfg.landuse);
-                              child = case, columns = :all,
+                              child = case isa UrbanSite ? case : nothing, columns = :all,
                               z_centres = 12.5:25.0:2987.5, window::Integer = 8,
                               blending = nothing, macdonald::NamedTuple = (;),
                               unresolved::Bool = true)
@@ -327,13 +404,12 @@ function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse(case
     zc = collect(Float64, z_centres)
     cols = Matrix{Union{Nothing,ParentColumn}}(nothing, pl.nx, pl.ny)
     idx = columns === :all ? CartesianIndices((pl.nx, pl.ny)) : columns
-    cfg = case.cfg
     for I in idx
         present = [c for c in 1:size(frac, 3) if frac[I, c] > 0]
         tiles = AbstractSurface[]
         dd = Float64[]
         for c in present
-            Ts = cfg.Ts0 + (c == SURFACE_WATER ? cfg.Ts_water_offset : 0.0)
+            Ts = tile_skin(case, c)
             built = is_built_class(c)
             z0c, z0hc = class_roughness(case, SurfaceSite(c; T_skin = Ts))
             site = built ? SurfaceSite(c; T_skin = Ts, z0m = max(z0[I], z0c), z0h = z0hc) :
@@ -349,6 +425,9 @@ function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse(case
     end
     return ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols)
 end
+
+"The initial skin temperature (K) of a tile of class `c`: the site's `Ts0`, water `+ Ts_water_offset`."
+tile_skin(case::UrbanSite, c::Integer) = case.cfg.Ts0 + (c == SURFACE_WATER ? case.cfg.Ts_water_offset : 0.0)
 
 _mosaic(col::ParentColumn{<:SurfaceMosaic}) = col.surface
 _mosaic(col::ParentColumn{<:BlendedMosaic}) = col.surface.mosaic

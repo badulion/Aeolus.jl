@@ -24,9 +24,12 @@ using Random: Xoshiro, randn
 using ..Grids: RegularGrid, CellCenter
 using ..Operators: PassotPouquetSpectrum, isotropic_turbulence_field!, spectrum_wavenumbers
 using ..Fields: Field, set!, interior_view
-using ..BoundaryConditions: FieldBoundaryConditions, open_boundary_conditions, open_boundary_states,
+using ..BoundaryConditions: FieldBoundaryConditions, FluxBC, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!
-using ..InputDrivers: InputDrivers, read_dynamic_driver, check_planes, check_coverage
+using ..InputDrivers: InputDrivers, read_dynamic_driver, check_planes, check_coverage, read_static_tiles,
+                      dynamic_forcing
+using ..LargeScaleForcing: forcing_value
+using ..StretchedGrids: surface_refined_faces
 using ..Simulations: Simulations, BoussinesqSimulation, step!
 using ..TimeIntegration: CFLConstraints, _project!
 using ..StretchedGrids: StretchedGrid
@@ -93,13 +96,16 @@ The component types of the model whose sections the configuration schema
 generates from their [`schema`](@ref Aeolus.Components.schema), in the
 order of the option reference: the `:advection` and `:sgs` slots,
 Coriolis, the sponge, the surface θ flux, the large-scale forcing, the
-Monin–Obukhov surface layer (the `:surface` slot) and the virtual towers
-(ONE-g, #456). (The EX-d couplings are one
+Monin–Obukhov surface layer (the `:surface` slot), the virtual towers
+(ONE-g, #456), and the deep boundary-layer domain's tiled urban surface,
+prescribed surface fluxes and column radiation of the plane-mean column
+(NEST-p3, #483: the urban nest parent's physics). (The EX-d couplings are one
 component, [`SimulationCouplings`](@ref), with six sections, until their
 port to components, ONE-e #454.)
 """
 const COMPONENTS = (CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers,
-                    ParentStatistics, KinematicFlow, Fringe)
+                    ParentStatistics, KinematicFlow, Fringe,
+                    Urban.TiledUrbanSurface, Urban.PrescribedSurfaceFlux, Urban.MeanColumnRadiation)
 
 _isnum(x) = x isa Real && !(x isa Bool)
 
@@ -120,13 +126,14 @@ const _PROFILE_KEYS = Dict("constant" => ["value"],
                            "box" => ["value", "x", "y", "z"],
                            "gaussian" => ["value", "amplitude", "center", "sigma"],
                            "tanh" => ["value", "amplitude", "center", "thickness"],
-                           "seed_mode" => ["amplitude", "wavenumber", "center", "thickness"])
+                           "seed_mode" => ["amplitude", "wavenumber", "center", "thickness"],
+                           "geostrophic" => String[])
 
 # the profile kinds of each variable: the vertical ones for all, the
 # Taylor–Green field for u and v, a box for the cloud water (EX-d, #441)
 _profile_kinds(var) = var == "w" ? ["seed_mode"] :
     sort!(vcat(["constant", "exponential", "mixed_layer_lapse", "table"],
-               var in ("u", "v") ? ["taylor_green"] : String[], var == "ql" ? ["box"] : String[],
+               var in ("u", "v") ? ["taylor_green", "geostrophic"] : String[], var == "ql" ? ["box"] : String[],
                var == "theta" ? ["gaussian"] : String[], var in ("u", "v", "theta") ? ["tanh"] : String[]))
 
 "The validator of the profile table of variable `var` (an empty table: the default profile)."
@@ -374,10 +381,19 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "halo", NTuple{3,Int}; default = (2, 2, 2), range = (1, 8),
                 doc = "halo cells per side")
         option!(s, "stretching", Symbol; default = :uniform,
-                allowed = [:uniform, :geometric, :tanh, :tanh_both],
-                doc = "vertical spacing (StretchedGrid): uniform (a RegularGrid), geometric (dz[k+1] = r dz[k]), tanh (clustered at the bottom), tanh_both (at both walls)")
+                allowed = [:uniform, :geometric, :tanh, :tanh_both, :surface_refined],
+                doc = "vertical spacing (StretchedGrid): uniform (a RegularGrid), geometric (dz[k+1] = r dz[k]), tanh (clustered at the bottom), tanh_both (at both walls), " *
+                      "surface_refined (dz_surface up to z_uniform, then × stretching_parameter per level up to dz_max: StretchedGrids.surface_refined_faces; size[3] is its level count)")
         option!(s, "stretching_parameter", Float64; units = "1", default = 1.0, range = (0, Inf), open_lower = true,
-                doc = "r of geometric, β of tanh / tanh_both; unused for uniform")
+                doc = "r of geometric and surface_refined, β of tanh / tanh_both; unused for uniform")
+        option!(s, "dz_surface", Float64; default = NaN, units = "m",
+                doc = "surface_refined: the uniform spacing of the lowest levels")
+        option!(s, "z_uniform", Float64; default = NaN, units = "m",
+                doc = "surface_refined: the top of the uniform levels")
+        option!(s, "dz_max", Float64; default = Inf, range = (0, Inf), open_lower = true, units = "m",
+                doc = "surface_refined: the largest spacing")
+        option!(s, "origin", NTuple{2,Float64}; default = (0.0, 0.0), units = "m",
+                doc = "the root domain's lower-left corner (x, y); a nested domain's is its parent's plus its domain.origin")
     end
     core = slot_section("core"; key = "model", doc = "The dynamical core.") do s
         provider!(s, "boussinesq"; default = [:model], doc = "BoussinesqSimulation.")
@@ -392,6 +408,10 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "gravitational acceleration")
         option!(s, "moisture", Bool; default = false,
                 doc = "carry the water-vapour mixing ratio qv (boussinesq only)")
+        option!(s, "p_surface", Optional{Float64}; range = (0, Inf), open_lower = true, units = "Pa",
+                doc = "the ground pressure of the hydrostatic reference state of the components that convert fluxes " *
+                      "with one on the boussinesq core ([surface] model = \"tiles\" or \"prescribed\", [radiation]); " *
+                      "\"none\": the dynamic driver's, else 101325 Pa")
     end
     bnd = section("boundaries"; doc = "Boundary conditions per axis.") do s
         for ax in ("x", "y", "z")
@@ -400,6 +420,9 @@ function Config.driver_sections(::SimulationDriverType)
                     doc = "the $ax faces: periodic, free_slip (impermeable, stress free) or noslip (z only); θ and qv have no flux through a wall, except the prescribed θ fluxes ([surface_theta_flux])" *
                           (ax == "z" ? "" : "; open: the boundary planes of the domain's dynamic_driver, blended linearly in time (boussinesq, uniform grid, z walls)"))
         end
+        option!(s, "theta_top", Symbol; default = :noflux, allowed = [:noflux, :initial_gradient],
+                doc = "θ at a top wall: noflux, or initial_gradient: the fixed gradient of the initial θ profile at the top face " *
+                      "(a flux condition, the deep domain's top of #254)")
     end
     ini = section("initial"; doc = "The initial state.") do s
         for (v, d) in (("u", "0"), ("v", "0"), ("theta", "theta0 (anelastic: the base state)"), ("qv", "0"))
@@ -408,7 +431,9 @@ function Config.driver_sections(::SimulationDriverType)
                           "{kind = \"table\", z, values}" *
                           (v == "theta" ? ", {kind = \"gaussian\", value, amplitude, center = [x₀, y₀], sigma} (value + amplitude exp(−((x − x₀)² + (y − y₀)²)/(2σ²)), a column)" : "") *
                           (v == "qv" ? "" : ", {kind = \"tanh\", value, amplitude, center, thickness} (value + amplitude tanh((z − center)/thickness), a shear layer)") *
-                          (v in ("u", "v") ? ", or {kind = \"taylor_green\", amplitude, k} (u = A sin kx cos ky cos kz, v = -A cos kx sin ky cos kz)" : "") *
+                          (v in ("u", "v") ? ", {kind = \"taylor_green\", amplitude, k} (u = A sin kx cos ky cos kz, v = -A cos kx sin ky cos kz), " *
+                                             "or {kind = \"geostrophic\"} (the [large_scale_forcing] geostrophic wind at the start)" : "") *
+                          (v in ("theta", "qv") ? "; with a sounding driver as the domain's dynamic_driver, {} is its profile at the start" : "") *
                           "; {} (the default): $d")
         end
         option!(s, "w", OpenTable(_profile_validator("w")),
@@ -794,11 +819,59 @@ simulation(r::SimulationRun) = first(Components.domains(r.model)).state
 _domain(r::SimulationRun) = first(Components.domains(r.model))
 
 function _mesh(g)
+    o = (g.origin..., 0.0)
     if g.stretching === :uniform
-        return RegularGrid(; size = g.size, extent = g.extent, halo = g.halo)
+        return RegularGrid(; size = g.size, extent = g.extent, halo = g.halo, origin = o)
+    elseif g.stretching === :surface_refined
+        return StretchedGrid(; size = g.size, extent = g.extent, halo = g.halo, origin = o,
+                             stretching = (:custom, _surface_refined_faces(g)))
     end
-    return StretchedGrid(; size = g.size, extent = g.extent, halo = g.halo,
+    return StretchedGrid(; size = g.size, extent = g.extent, halo = g.halo, origin = o,
                          stretching = (g.stretching, g.stretching_parameter))
+end
+
+"The interior face heights of a `[grid] stretching = \"surface_refined\"` grid (`StretchedGrids.surface_refined_faces`)."
+_surface_refined_faces(g) = surface_refined_faces(; dz_surface = g.dz_surface, z_uniform = g.z_uniform, z_top = g.extent[3],
+                                                  ratio = g.stretching_parameter, dz_max = g.dz_max)
+
+"Whether `dyn` (a `DynamicInputs` or `nothing`) is a sounding driver (`aeolusprep dynamic --from-sounding`)."
+_sounding(dyn) = dyn !== nothing && get(dyn.attributes, "dynamic_source", "") == "sounding"
+
+"""
+    initial_theta_profile(cfg, dyn) -> z -> θ
+
+The initial potential-temperature profile of a domain (before the noise):
+its `[initial] theta` profile, the sounding driver's at the start
+(`ls_profile_theta`), or `dynamics.theta0`. What the reference state of the
+domain's components, the fixed-gradient θ top and the damping toward the
+initial profile read.
+"""
+function initial_theta_profile(cfg, dyn)
+    p = cfg.initial.theta
+    !isempty(p) && get(p, "kind", "") in ("constant", "mixed_layer_lapse", "table", "exponential", "tanh") &&
+        return z -> profile_value(p, z)
+    if isempty(p) && _sounding(dyn)
+        tab = dyn.tables[:profile_theta]
+        return z -> forcing_value(tab, z, 0.0)
+    end
+    θ0 = Float64(cfg.dynamics.theta0)
+    return z -> θ0
+end
+
+# The geostrophic wind of the domain's [large_scale_forcing] at the start, functions of z
+function _geostrophic_at_start(cfg, dyn)
+    ls = cfg.large_scale_forcing; t0 = cfg.time.start
+    sg = (ls.u_g === :sounding || ls.v_g === :sounding) ?
+         Components.sounding_geostrophic(dyn, ls.z_g; t0 = t0) : nothing
+    F = (ls.u_g === :driver || ls.v_g === :driver) ? dynamic_forcing(dyn; t0 = t0) : nothing
+    function q(k, i)
+        v = ls[k]
+        v isa Real && return z -> Float64(v)
+        v === :sounding && return z -> sg[i](z, t0)
+        tab = i == 1 ? F.U_g : F.V_g
+        return z -> forcing_value(tab, z, t0)
+    end
+    return q("u_g", 1), q("v_g", 2)
 end
 
 _bc(s::Symbol) = s === :free_slip ? :wall : s
@@ -857,7 +930,10 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
         set_boundary_data!(bcs, feed.data)
     else
         bcs = FieldBoundaryConditions(_bc(b.x), _bc(b.y), _bc(b.z); top = _top_bc(cfg, mesh))
-        θ_bcs = FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y), _scalar_bc(b.z))
+        θ_bcs = b.theta_top === :initial_gradient ?
+                FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y); bottom = :noflux,
+                                        top = FluxBC(_initial_top_gradient(initial_theta_profile(cfg, dyn), mesh))) :
+                FieldBoundaryConditions(_scalar_bc(b.x), _scalar_bc(b.y), _scalar_bc(b.z))
     end
     # the core carries the dynamics only: SGS, advection, Coriolis, the
     # surface θ flux and the sponge are its domain's components (ONE-a)
@@ -869,13 +945,14 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
         BoussinesqSimulation(mesh; θ₀ = d.theta0, moisture = d.moisture, kw...)
     end
     couplings = _couplings(cfg, mesh)
-    _initialise!(sim, cfg)
+    _initialise!(sim, cfg, dyn)
     dyn === nothing || _initialise_dynamic!(sim, dyn, cfg)
     sim.t = cfg.time.start
     couplings.water === nothing || isempty(cfg.initial.ql) || _set_profile!(couplings.water.ql, cfg.initial.ql, :ql)
     t = cfg.time
     cfl = _adaptive(cfg) ? CFLConstraints(; C_advective = t.cfl, dt_max = t.dt_max) : nothing
-    drivers = merge(feed === nothing ? (;) : (; boundary = feed), dyn === nothing ? (;) : (; dynamic = dyn))
+    drivers = merge(feed === nothing ? (;) : (; boundary = feed), dyn === nothing ? (;) : (; dynamic = dyn),
+                    _domain_inputs(cfg, mesh, sim, dyn))
     d0 = Domain(sim; id = cfg.domain.id, scheme = cfg.timestep.scheme, cfl = cfl, validate = false, drivers = drivers)
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
@@ -884,6 +961,48 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
     qs = unique!(vcat(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())],
                       Components.check_budgets(_published_enabled(cfg))))
     return Components.with_budgets(Domain(d0; components = comps), qs)
+end
+
+# The fixed gradient (K m⁻¹) of the initial profile θ(z) at the top face of
+# `mesh` (#254): across the top face, over one top-level thickness.
+function _initial_top_gradient(θf, mesh)
+    m = mesh
+    dz, H = hasproperty(m, :zf) ? (m.zf[m.Hz+m.Nz+1] - m.zf[m.Hz+m.Nz], m.zf[m.Hz+m.Nz+1] - m.zf[m.Hz+1]) : (m.dz, m.Lz)
+    return (θf(H + dz / 2) - θf(H - dz / 2)) / dz
+end
+
+# The domain's inputs the components read besides its dynamic driver
+# (NEST-p3): its initial θ profile (`theta_profile`), the hydrostatic
+# reference state of a Boussinesq domain whose components convert fluxes
+# with one (`reference`), and the tile form of its static driver
+# (`static_tiles`, for [surface] model = "tiles").
+function _domain_inputs(cfg, mesh, sim, dyn)
+    θf = initial_theta_profile(cfg, dyn)
+    out = (; theta_profile = θf)
+    enabled = enabled_components(cfg)
+    needs_ref = any(C -> C in enabled, (Urban.TiledUrbanSurface, Urban.PrescribedSurfaceFlux, Urban.MeanColumnRadiation))
+    if needs_ref && sim isa BoussinesqSimulation
+        ps = cfg.dynamics.p_surface
+        ps === nothing && (ps = dyn === nothing || dyn.p_surface === nothing ? 101325.0 : dyn.p_surface)
+        out = merge(out, (; reference = Urban.domain_reference(mesh, θf, ps; g = cfg.dynamics.g)))
+    end
+    if Urban.TiledUrbanSurface in enabled
+        path = cfg.domain.static_driver
+        path === nothing &&
+            throw(ConfigError("surface.model", "\"tiles\" reads the tile form of the domain's static_driver, which is \"none\" " *
+                                               "(AeolusPrep.jl: aeolusprep static)"))
+        out = merge(out, (; static_tiles = _read_tiles(path, mesh)))
+    end
+    return out
+end
+
+# the tile form of a static driver on `mesh`, at the anchor it records
+function _read_tiles(path, mesh)
+    a = InputDrivers.NCDatasets.NCDataset(path) do ds
+        Dict{String,Any}(k => v for (k, v) in ds.attrib)
+    end
+    return read_static_tiles(path; mesh = mesh, origin_lat = a["origin_lat"], origin_lon = a["origin_lon"],
+                             origin_x = a["origin_x"], origin_y = a["origin_y"])
 end
 
 # The initial profiles of a dynamic driver (linear in z, constant beyond
@@ -929,17 +1048,29 @@ function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
     return f
 end
 
-function _initialise!(sim, cfg)
+function _initialise!(sim, cfg, dyn = nothing)
     ini = cfg.initial
-    isempty(ini.u) || _set_profile!(sim.u, ini.u, :u)
-    isempty(ini.v) || _set_profile!(sim.v, ini.v, :v)
+    geo = any(p -> get(p, "kind", "") == "geostrophic", (ini.u, ini.v)) ? _geostrophic_at_start(cfg, dyn) : nothing
+    for (k, f, i) in (("u", sim.u, 1), ("v", sim.v, 2))
+        p = ini[k]
+        isempty(p) && continue
+        get(p, "kind", "") == "geostrophic" ? (g = geo[i]; set!(f, (x, y, z) -> g(z))) : _set_profile!(f, p, Symbol(k))
+    end
     isempty(ini.w) || _set_profile!(sim.w, ini.w, :w)
     if !isempty(ini.theta)
         _set_profile!(sim.θ, ini.theta, :theta)
+    elseif _sounding(dyn)                # a sounding driver: its profiles at the start (before the noise)
+        tab = dyn.tables[:profile_theta]
+        set!(sim.θ, (x, y, z) -> forcing_value(tab, z, 0.0))
     elseif sim isa BoussinesqSimulation && cfg.dynamics.theta0 != 0
         set!(sim.θ, (x, y, z) -> cfg.dynamics.theta0)
     end                                  # anelastic: the constructor set θ = θ̄(z)
-    isempty(ini.qv) || _set_profile!(sim.qv, ini.qv, :qv)
+    if !isempty(ini.qv)
+        _set_profile!(sim.qv, ini.qv, :qv)
+    elseif _sounding(dyn) && cfg.dynamics.moisture
+        tab = dyn.tables[:profile_qv]
+        set!(sim.qv, (x, y, z) -> forcing_value(tab, z, 0.0))
+    end
     isempty(ini.field) || initial_field!(sim, ini.field, cfg.run.seed)
     a = ini.perturbation_amplitude
     rng = Xoshiro(cfg.run.seed)

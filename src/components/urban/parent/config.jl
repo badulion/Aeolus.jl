@@ -305,4 +305,5 @@ function parent_mesh(pc::ParentConfig)
 end
 
 "Level-centre heights (m) of the interior levels of a mesh."
-level_centres(m) = Float64[m.zc[m.Hz+k] for k in 1:m.Nz]
+level_centres(m) = hasproperty(m, :zc) ? Float64[m.zc[m.Hz+k] for k in 1:m.Nz] :
+                   Float64[m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]
