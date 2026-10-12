@@ -135,7 +135,7 @@ The largest parcel boundary-layer height (`boundary_layer_height`,
 `:parcel`, on θ_v) of the launches of the child's sounding: 1171 m for the
 10:45 UTC release of 29 June 2019 (#247). 0 without a sounding.
 """
-function sounding_zi_max(cfg::CaseConfig)
+function sounding_zi_max(cfg::NamedTuple)
     S = case_sounding(cfg)
     S === nothing && return 0.0
     MT = Aeolus.MoistThermodynamics

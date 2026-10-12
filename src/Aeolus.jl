@@ -1199,7 +1199,7 @@ export Model, Domain
 
 # EX-a (#438), ONE-e (#454): the urban site of the model (`[urban] enabled`;
 # the Berlin case is examples/urban/berlin_*.toml). A submodule, not
-# exported: its names (CaseConfig, build_case, …) stay under Aeolus.UrbanCase.
+# exported: its names (site_options, build_case, …) stay under Aeolus.UrbanCase.
 include("UrbanCase.jl")
 
 # CFG-b (#357): the model's configuration and run (needs the dynamical

@@ -252,7 +252,7 @@ function component_type(name::Symbol)
 end
 
 """
-    selected_components(cfg::CaseConfig) -> Vector{Type}
+    selected_components(cfg::NamedTuple) -> Vector{Type}
 
 The urban component types `cfg` enables (`cfg.components`), in the order
 of [`URBAN_COMPONENTS`](@ref).
@@ -260,7 +260,7 @@ of [`URBAN_COMPONENTS`](@ref).
 selected_components(cfg) = Type[C for C in URBAN_COMPONENTS if haskey(cfg.components, component_name(C))]
 
 """
-    component_options(C, cfg::CaseConfig) -> NamedTuple
+    component_options(C, cfg::NamedTuple) -> NamedTuple
 
 The options of urban component type `C` under `cfg`: those of its section
 when `cfg` enables it, else its `default_options`.

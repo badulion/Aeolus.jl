@@ -58,7 +58,7 @@ layer and its nudging see the observed profile above the domain.
 const SOUNDING_TABLE_TOP = 4000.0
 
 "The model start of `cfg` as the ISO-8601 UTC `init_time` of a dynamic driver."
-case_init_time(cfg::CaseConfig) = init_time_string(cfg.date..., cfg.start_h - cfg.utc_offset)
+case_init_time(cfg::NamedTuple) = init_time_string(cfg.date..., cfg.start_h - cfg.utc_offset)
 
 """
     initial_driver(cfg) -> path or nothing
@@ -68,7 +68,7 @@ unless the nest is fed offline from it (`parent_driver = :offline`: then
 `cfg.dynamic` is the parent-made driver of the nest faces, and the
 initial profile is `cfg.sounding`'s).
 """
-function initial_driver(cfg::CaseConfig)
+function initial_driver(cfg::NamedTuple)
     cfg.dynamic === nothing && return nothing
     nest_offline(cfg) && return nothing
     return cfg.dynamic
@@ -87,7 +87,7 @@ pressure at the start reduced hypsometrically from the launch site
 ([`surface_pressure_at`](@ref)). What AeolusPrep.jl's `aeolusprep dynamic
 --from-sounding` writes, and what a case reading the CSV uses in memory.
 """
-function case_dynamic_inputs(cfg::CaseConfig)
+function case_dynamic_inputs(cfg::NamedTuple)
     cfg.sounding === nothing && error("case_dynamic_inputs: the case has no sounding (cfg.sounding = nothing)")
     snd = read_sounding(cfg.sounding)
     ztop = max(SOUNDING_TABLE_TOP, cfg.extent[3])
@@ -109,7 +109,7 @@ CSV in memory (`cfg.dynamic` is ignored: the file being written is not
 read). The one writer of a sounding driver: AeolusPrep.jl's `aeolusprep
 dynamic --from-sounding` and the tests call it.
 """
-function write_sounding_driver(cfg::CaseConfig, path::AbstractString; preprocessor::AbstractString)
+function write_sounding_driver(cfg::NamedTuple, path::AbstractString; preprocessor::AbstractString)
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     ox, oy = anchor_xy(cfg, mesh)
     d = case_dynamic_inputs(cfg)
@@ -117,7 +117,7 @@ function write_sounding_driver(cfg::CaseConfig, path::AbstractString; preprocess
           origin_x = ox, origin_y = oy)
     mkpath(dirname(abspath(path)))
     if !case_nested(cfg) && cfg.lateral === :open
-        cfg0 = deepcopy(cfg); cfg0.dynamic = nothing
+        cfg0 = merge(cfg, (; dynamic = nothing))
         st = only(open_boundary_states(case_boundary_conditions(cfg0, mesh).bcs))
         boundary_values!(st.planes, st.data, 0.0)
         record_boundary!(NestBoundaryRecorder(path, st.planes, mesh; inputs = d, kw...), 0.0, NaN,
@@ -147,7 +147,7 @@ recomputed at its own start ([`surface_pressure_at`](@ref), as the
 preprocessor does); at the driver's `init_time` it is the stored
 `init_p_surface`. Read once per source and cached.
 """
-function case_sounding(cfg::CaseConfig)
+function case_sounding(cfg::NamedTuple)
     path = initial_driver(cfg)
     path === nothing && cfg.sounding === nothing && return nothing
     it = case_init_time(cfg)
@@ -194,7 +194,7 @@ The case start (`cfg.date`, local hour `cfg.start_h`, local = UTC +
 06:00 CEST on 29 June 2019 is 04:00 UTC, 14400 s, between the 22:45 and
 04:45 UTC releases.
 """
-function case_start_time(cfg::CaseConfig)
+function case_start_time(cfg::NamedTuple)
     S = case_sounding(cfg)
     S === nothing && error("case_start_time: the case has no sounding (cfg.sounding = nothing)")
     return S.t0
@@ -224,7 +224,7 @@ uses the same reference, follows).
   sounding yet) and `:smoke` (its checks need a capping inversion inside
   a 100 m box).
 """
-function initial_θ(cfg::CaseConfig)
+function initial_θ(cfg::NamedTuple)
     S = case_sounding(cfg)
     if S === nothing
         θs, zi, Γ = cfg.θ_surface, cfg.θ_inversion_z, cfg.θ_lapse
@@ -243,7 +243,7 @@ start (``q_v`` with ``e = e_s(T_d)``, `MoistThermodynamics`), or for
 the idealised profile ``q_v = q_{v0} e^{-z/H_q}`` (`cfg.qv0`,
 `cfg.qv_scale`).
 """
-function initial_qv(cfg::CaseConfig)
+function initial_qv(cfg::NamedTuple)
     S = case_sounding(cfg)
     if S === nothing
         qv0, Hq = cfg.qv0, cfg.qv_scale
@@ -263,7 +263,7 @@ the initial virtual potential temperature on the sounding's height grid.
 At 06 CEST on 29 June 2019 the surface-based inversion gives z_i = 0
 (stable from the ground); at noon the mixed layer reaches about 1.2 km.
 """
-function initial_inversion_height(cfg::CaseConfig)
+function initial_inversion_height(cfg::NamedTuple)
     S = case_sounding(cfg)
     S === nothing && return cfg.θ_inversion_z
     MT = Aeolus.MoistThermodynamics
@@ -283,7 +283,7 @@ launch site (112 m) to `cfg.elevation` (34 m) with the surface virtual
 temperature ([`surface_pressure_at`](@ref)); for the idealised profile
 101325 Pa.
 """
-function case_surface_pressure(cfg::CaseConfig)
+function case_surface_pressure(cfg::NamedTuple)
     cfg.p_surface === nothing || return cfg.p_surface
     S = case_sounding(cfg)
     S === nothing && return 101325.0
@@ -299,7 +299,7 @@ the cell centres, integrated from [`case_surface_pressure`](@ref) with
 `Aeolus.Anelastic.reference_from_profile`, the dry-air constants of
 `Aeolus.MoistThermodynamics` and `g = cfg.g`.
 """
-function build_reference(cfg::CaseConfig, mesh)
+function build_reference(cfg::NamedTuple, mesh)
     c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS
     R_d = c.gas_constant / c.molmass_dry
     θ0 = initial_θ(cfg)
@@ -368,7 +368,7 @@ interpolated). The discrete balance of the ReferenceState is exact on
 the grid by construction; this measures how far that grid balance is
 from the continuous atmosphere.
 """
-function hydrostatic_check(cfg::CaseConfig, ref::CaseReference, mesh; nsub::Int = 1000)
+function hydrostatic_check(cfg::NamedTuple, ref::CaseReference, mesh; nsub::Int = 1000)
     θ0 = initial_θ(cfg)
     zc = [(k - 0.5) * mesh.dz for k in 1:mesh.Nz]
     p = hydrostatic_pressure(z -> θ0(0.0, 0.0, z), zc, ref.p_surface; g = cfg.g, nsub = nsub)

@@ -269,7 +269,8 @@ function laminar_flow_νt(closure, case)
     m = case.mesh; sim = case.sim; cfg = case.cfg
     # a horizontally uniform flow: a laterally periodic scratch core, also
     # for an open (#262) or nested (#265) case
-    pcfg = deepcopy(cfg); pcfg.lateral = :periodic; delete!(pcfg.components, :nesting)
+    comps = copy(cfg.components); delete!(comps, :nesting)
+    pcfg = merge(cfg, (; lateral = :periodic, components = comps))
     s = boussinesq_core(pcfg, m)
     fill!(s.θ.data, cfg.θ₀)
     ui = interior_view(sim.u); vi = interior_view(sim.v)

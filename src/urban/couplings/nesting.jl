@@ -155,7 +155,7 @@ The parent of the nested case `cfg`: [`ParentConfig`](@ref)`(cfg)` with
 `options[:nesting].parent` (the `:smoke` scenario's small parent, or
 the #259 default), centred on the child.
 """
-function nest_parent_config(cfg::CaseConfig)
+function nest_parent_config(cfg::NamedTuple)
     o = component_options(NestingCoupling, cfg)
     return ParentConfig(cfg; o.parent...)
 end
@@ -168,7 +168,7 @@ The geostrophic wind of the parent of the nested case `cfg`, functions
 nested child is driven by it, so the large-scale pressure gradient is one
 field across the nest.
 """
-nest_geostrophic_wind(cfg::CaseConfig) = parent_geostrophic(nest_parent_config(cfg))
+nest_geostrophic_wind(cfg::NamedTuple) = parent_geostrophic(nest_parent_config(cfg))
 
 """
     nest_case_bcs(cfg, mesh) -> FieldBoundaryConditions
@@ -181,7 +181,7 @@ scheme needs at a face. The one definition of the nested case's faces:
 the coupling's `sim_options` pass it to the core, the pressure-solver
 couplings derive their axes from it.
 """
-function nest_case_bcs(cfg::CaseConfig, mesh)
+function nest_case_bcs(cfg::NamedTuple, mesh)
     sa = component_options(ScalarAdvection, cfg)
     H = Aeolus.AdvectionSchemes.required_halo(Aeolus.AdvectionSchemes.advection_scheme(sa.scheme))
     return nest_bcs(mesh; bottom = :wall, top = :nest, outflow = cfg.outflow, halo = H)
@@ -223,7 +223,7 @@ Whether the nested case `cfg` replays its parent from the parent-made
 dynamic driver `cfg.dynamic` (`options[:nesting].parent_driver =
 :offline`, CFG-g #362) instead of running it.
 """
-nest_offline(cfg::CaseConfig) = case_nested(cfg) && component_options(NestingCoupling, cfg).parent_driver === :offline
+nest_offline(cfg::NamedTuple) = case_nested(cfg) && component_options(NestingCoupling, cfg).parent_driver === :offline
 
 "Whether the nest feeds the child back onto the parent (`mode = :two_way`, #267)."
 two_way(c::NestingCoupling) = c.mode === :two_way

@@ -1,4 +1,4 @@
-# Geometry of the Berlin case: `build_geometry`, which turns a CaseConfig
+# Geometry of the Berlin case: `build_geometry`, which turns the site's options
 # into the solid mask, the surface-class map and the radiosity scene with
 # its view factors.
 #

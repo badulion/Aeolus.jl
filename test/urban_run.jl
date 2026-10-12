@@ -92,7 +92,7 @@ end
 @testset "urban run type: the GeoJSON ground from its static driver" begin
     Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
     cfg = load_run_config(SMALL_CITY)
-    cc = UC.CaseConfig(cfg)
+    cc = UC.site_options(cfg)
     case = UC.build_case(cc)
     m, g = case.mesh, case.geom
     # the ground is the GeoJSON's: the 40 m and 20 m blocks are solid to
@@ -109,7 +109,7 @@ end
     st = UC.case_state(case)
     @test all(a -> all(isfinite, a), values(st))
     # no static driver at all is an error, not a flat city
-    @test_throws ErrorException UC.build_case(UC.CaseConfig(SMALL_CITY; static = nothing))
+    @test_throws ErrorException UC.build_case(site_config(SMALL_CITY; static = nothing))
     # run_results reads the state only: the digests do not move
     d0 = Dict(k => digest(v) for (k, v) in pairs(UC.case_state(case)))
     r = UC.run_results(case)

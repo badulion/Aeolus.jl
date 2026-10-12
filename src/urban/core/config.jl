@@ -1,30 +1,28 @@
-# CaseConfig — everything that defines one urban run.
+# The options of an urban site — everything that defines one urban run.
 #
-# A config is plain data: grid, geometry window, clock, dynamics
-# parameters, initial state, cadences (in SECONDS, never in steps, so the
-# schedule survives a change of dt or an adaptive stepper) and the urban
-# components it enables with their options (`components`). Its defaults and its TOML form are the urban
-# site's sections of the model's schema (core/config_schema.jl, CFG-c #358,
-# ONE-e #454); the Berlin case is the TOML files examples/urban/berlin_*.toml.
+# They are plain data: grid, geometry window, clock, dynamics parameters,
+# initial state, cadences (in SECONDS, never in steps, so the schedule
+# survives a change of dt or an adaptive stepper) and the urban components
+# it enables with their options (`components`). They are read from the
+# model's resolved configuration (`site_options`, core/config_schema.jl);
+# their defaults and their TOML form are the urban site's sections of the
+# model's schema (CFG-c #358, ONE-e #454); the Berlin case is the TOML files
+# examples/urban/berlin_*.toml.
 
 """
-    CaseConfig(; kwargs...)
-    CaseConfig(path::AbstractString; overrides = String[], kwargs...)
-    CaseConfig(cfg::RunConfig)
+    site_options(cfg::RunConfig) -> NamedTuple
 
-Configuration of an urban case (the urban site of a model config), the
-struct [`build_case`](@ref) consumes. Its defaults are those of the urban
-site's sections of the model's schema (`core/config_schema.jl`, CFG-c
-#358, ONE-e #454; [`CASE_FIELDS`](@ref) gives the key of every field and
-`aeolus options` lists them): the first
-form is the all-defaults config with `kwargs` set on top (it has no
-ground: set `static`). The second loads a run
-configuration file (the Berlin case: `examples/urban/berlin_*.toml`;
-the components are enabled and configured by its sections, or by
-`overrides` such as `"nesting.enabled=false"`) and then applies `kwargs`. The third converts a loaded
-[`RunConfig`](@ref Aeolus.Config.RunConfig) of an urban site.
+The options of the urban site of the model's resolved configuration
+`cfg` (`[urban] enabled`, its one domain), what [`build_case`](@ref)
+consumes: a `NamedTuple` (ONE-k, #474;
+formerly the `CaseConfig` struct with Julia-side defaults and
+constructors). Its values are those of the urban site's sections of the
+model's schema (`core/config_schema.jl`, CFG-c #358, ONE-e #454;
+[`SITE_FIELDS`](@ref) gives the key of every field and `aeolus options`
+lists them); a run changes them in its TOML file or with `--set`
+overrides.
 
-Groups of fields:
+Groups of fields (`site_options(cfg).<field>`):
 
 * **grid** — `size`, `extent` (m), `halo`. The default child is
   1 km × 1 km × 400 m on 64 × 64 × 64 cells (15.6 m × 6.25 m): deepened
@@ -126,87 +124,11 @@ Groups of fields:
   it; `CPUBackend(serial = true)` is the single-task reference of the
   thread-invariance tests.
 """
-mutable struct CaseConfig
-    name::Symbol
-    scenario::Symbol
-    # grid
-    size::NTuple{3,Int}
-    extent::NTuple{3,Float64}         # 400 m deep: the nested child (#246)
-    halo::NTuple{3,Int}               # 3: WENO-Z5 moisture transport
-    # geometry
-    static::Union{Nothing,String}
-    parent_static::Union{Nothing,String}
-    lat0::Float64
-    lon0::Float64
-    offset::NTuple{2,Float64}
-    elevation::Float64
-    wall_subdivisions::Int
-    landuse::Union{Nothing,String}    # the nest parent's land-use table (#249)
-    # clock
-    date::NTuple{3,Int}               # 2019-06-29: clear-sky heat-wave day (#247)
-    utc_offset::Float64               # local = UTC + 2 h (CEST)
-    start_h::Float64
-    dt::Float64
-    nsteps::Int
-    cadence::Dict{Symbol,Float64}
-    # dynamics
-    ν::Float64
-    θ₀::Float64
-    g::Float64
-    f_coriolis::Float64
-    C_s::Float64
-    Pr_t::Float64
-    sgs_stability::Symbol
-    sponge_α_max::Float64
-    sponge_frac::Float64
-    θ_top::Union{Symbol,Float64}
-    # lateral boundaries (N-open-d, #262)
-    lateral::Symbol
-    outflow::Symbol
-    boundary_frame::Int
-    θ_relaxation::Bool
-    analysis_buffer::Float64          # m: left out of the observation diagnostics (#268)
-    # initial state: the observed sounding (#247) …
-    sounding::Union{Nothing,String}
-    # the dynamic driver (CFG-g, #362): the sounding's (replaces `sounding`)
-    # or, for the offline nest, the parent-made one
-    dynamic::Union{Nothing,String}
-    # … or, with sounding = nothing, the idealised profile
-    θ_surface::Float64
-    θ_inversion_z::Float64
-    θ_lapse::Float64
-    u0::Float64
-    qv0::Float64
-    qv_scale::Float64
-    Ts0::Float64
-    Ts_water_offset::Float64
-    T_soil0::Float64
-    p_surface::Union{Nothing,Float64}  # nothing: from the sounding
-    # the enabled urban components and their options
-    components::Dict{Symbol,Any}
-    # output
-    canopy_top::Float64
-    child_boundaries::Union{Nothing,String}   # the parent-made dynamic driver to write (CFG-g, #362)
-    # compute backend (KA-a, #294)
-    backend::AbstractBackend
-end
-
-# The defaults live in the `berlin` configuration schema
-# (core/config_schema.jl), the one place they are written: `CaseConfig(;
-# kw...)` is the all-defaults config with `kw` set on top.
-function CaseConfig(; kw...)
-    c = CaseConfig(default_run_config())
-    for (k, v) in kw
-        hasfield(CaseConfig, k) || throw(ArgumentError("CaseConfig has no field $k" *
-            " (fields: $(join(string.(fieldnames(CaseConfig)), ", ")))"))
-        setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
-    end
-    return c
-end
+function site_options end
 
 "Cadence period (s) named `key` in `cfg`; errors if the config has none."
-function cadence_period(cfg::CaseConfig, key::Symbol)
+function cadence_period(cfg::NamedTuple, key::Symbol)
     haskey(cfg.cadence, key) ||
-        error("CaseConfig has no cadence :$key (known: $(join(sort!(collect(keys(cfg.cadence))), ", ")))")
+        error("the site has no cadence :$key (known: $(join(sort!(collect(keys(cfg.cadence))), ", ")))")
     return cfg.cadence[key]
 end

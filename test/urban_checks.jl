@@ -46,7 +46,7 @@ include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "smoke_matrix.jl"))
 
 """
-    berlin_default(; kw...) -> CaseConfig
+    berlin_default(; kw...) -> NamedTuple
 
 The Berlin summer case with its ground from its static driver, and the
 parent land use and sounding read from their sources in memory (no
@@ -55,7 +55,7 @@ test/input_dynamic.jl), so that a parent of any refinement can be built;
 no NetCDF output. (Before ONE-h, #457, the ground was rasterised from the
 OSM file in memory too: the same rasters, test/input_static.jl.)
 """
-berlin_default(; kw...) = BC.CaseConfig(berlin_toml("summer"); parent_static = nothing,
+berlin_default(; kw...) = site_config(berlin_toml("summer"); parent_static = nothing,
                                         dynamic = nothing, kw...)
 
 allfinite(x) = all(isfinite, x)

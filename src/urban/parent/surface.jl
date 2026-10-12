@@ -114,7 +114,7 @@ The parent cells covered by the child domain of `cfg` (centred
 `cfg.offset` m from the anchor). Errors unless the child grid nests:
 ``Δx_{parent} = r Δx_{child}``, the child's edges on parent cell faces.
 """
-function child_footprint(pl::ParentLanduse, cfg::CaseConfig)
+function child_footprint(pl::ParentLanduse, cfg::NamedTuple)
     dxc = cfg.extent[1] / cfg.size[1]
     (cfg.extent[1] / cfg.size[1] == cfg.extent[2] / cfg.size[2] && pl.dx == pl.r * dxc) ||
         error("child_footprint: parent Δx $(pl.dx) m ≠ r·Δx_child = $(pl.r) × $dxc m")
@@ -414,7 +414,7 @@ its own per tile.
 Reference: Brutsaert, W. (1975). On a derivable formula for long-wave
 radiation from clear skies. *Water Resour. Res.*, 11, 742-744.
 """
-function parent_offline_forcing(cfg::CaseConfig, hour::Real; U::Real = 3.0, q_air::Real = 0.008,
+function parent_offline_forcing(cfg::NamedTuple, hour::Real; U::Real = 3.0, q_air::Real = 0.008,
                                 T_mean::Real = 295.0, T_amp::Real = 6.0)
     sp = solar_position_at(cfg, mod(hour, 24))
     sw = clear_sky_irradiance(sp, BirdClearSky()).ghi

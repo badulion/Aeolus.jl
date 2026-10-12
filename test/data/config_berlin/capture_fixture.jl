@@ -5,8 +5,8 @@
 #
 #   julia --project=. test/data/config_berlin/capture_fixture.jl
 #
-# It records, per scenario, toml_value(CaseConfig(s)) and
-# toml_value(nest_parent_config(CaseConfig(s))) (the parent the case runs),
+# It records, per scenario, toml_value(site_options(s)) and
+# toml_value(nest_parent_config(site_options(s))) (the parent the case runs),
 # and the fnv1a64 digests of the :smoke case's state after 12 steps
 # (FFTW planner "estimate"). Normalisation (shared with
 # test/config_berlin.jl): the package directory in a path is written
@@ -22,11 +22,11 @@ include(joinpath(@__DIR__, "..", "..", "support", "berlin_fixture.jl"))
 
 out = Dict{String,Any}("commit" => readchomp(`git -C $(@__DIR__) rev-parse HEAD`))
 for s in (:summer, :winter, :smoke, :mitte_sample)
-    cfg = BC.CaseConfig(berlin_toml(s))
+    cfg = site_config(berlin_toml(s))
     out[string(s)] = Dict{String,Any}("case" => normalise(cfg), "parent" => normalise(BC.nest_parent_config(cfg)))
 end
 Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
-case = BC.build_case(BC.CaseConfig(berlin_toml("smoke")))
+case = BC.build_case(site_config(berlin_toml("smoke")))
 BC.run_case!(case)
 out["smoke_digests"] = Dict{String,Any}(string(k) => digest(v) for (k, v) in pairs(berlin_state(case)))
 out["smoke_digests_threads"] = Threads.nthreads()

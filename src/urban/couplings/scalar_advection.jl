@@ -318,7 +318,7 @@ function build(::Type{<:ScalarAdvection}, case, o)
     scheme = Aeolus.AdvectionSchemes.advection_scheme(o.scheme)
     H = Aeolus.AdvectionSchemes.required_halo(scheme)
     min(mesh.Hx, mesh.Hy, mesh.Hz) >= H ||
-        error("scalar_advection: scheme :$(o.scheme) needs halo ≥ $H, the case has $((mesh.Hx, mesh.Hy, mesh.Hz)) (set CaseConfig halo)")
+        error("scalar_advection: scheme :$(o.scheme) needs halo ≥ $H, the case has $((mesh.Hx, mesh.Hy, mesh.Hz)) (set [grid] halo)")
     o.positivity && !(o.scheme in POSITIVE_SCHEMES) &&
         error("scalar_advection: the positivity limiter takes one of $(POSITIVE_SCHEMES), not :$(o.scheme); set positivity = false")
     wt = o.weighted ? transport_weighting(case.sim, mesh) : nothing

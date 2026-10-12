@@ -1,13 +1,13 @@
 # The urban site on the model (ONE-e, #454; formerly the `urban` run
 # driver, CFG-c #358, EX-a #438): its sections of the model's configuration
-# schema (`[urban]` and one per urban component), their conversion to the
-# CaseConfig that build_case consumes, and the run of an urban site under
-# `aeolus run`:
+# schema (`[urban]` and one per urban component), the site's options
+# build_case consumes (`site_options`), and the build of an urban site
+# under `aeolus run` (`build_model`):
 #
 #   julia --project -m Aeolus run examples/urban/berlin_summer.toml [--set time.nsteps=…]
 #
 # One source of truth for the defaults: the schema holds them.
-# `CaseConfig(; kw...)` and `ParentConfig(; kw...)` start from them, and
+# `site_options(default_run_config())` and `ParentConfig(; kw...)` start from them, and
 # the per-component options are typed and checked against the components'
 # `default_options` (the key set is closed, the form of a value is the
 # form of its default), so no second schema has to be kept in step with
@@ -20,19 +20,19 @@ using ..Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, o
 using Dates: Date, year, month, day
 
 # ---------------------------------------------------------------------------
-# CaseConfig fields ↔ the model's options
+# the site's options ↔ the model's options
 # ---------------------------------------------------------------------------
 
 """
-    CASE_FIELDS
+    SITE_FIELDS
 
-Every [`CaseConfig`](@ref) field and the dotted keys of the model's
-schema it is made of (`components` is the `enabled` key of every urban
-component's section and their other keys). The options that make a
-`CaseConfig` are exactly the union of these keys, each used once
+Every field of [`site_options`](@ref) and the dotted keys of the
+model's schema it is made of (`components` is the `enabled` key of every
+urban component's section and their other keys). The options that make
+the site's options are exactly the union of these keys, each used once
 (`test/config_berlin.jl`).
 """
-const CASE_FIELDS = (
+const SITE_FIELDS = (
     name = ("run.name",), scenario = ("urban.scenario",),
     size = ("grid.size",), extent = ("grid.extent",), halo = ("grid.halo",),
     static = ("domain.static_driver",), parent_static = ("urban.parent_static",),
@@ -781,7 +781,7 @@ end
     urban_components(cfg) -> Dict{Symbol,Any}
 
 The urban components a resolved model config enables, `component_name =>`
-their options (the `components` of [`CaseConfig`](@ref)); a problem of
+their options (the `components` of [`site_options`](@ref)); a problem of
 the selection or of an option's form is a `ConfigError`.
 """
 function urban_components(cfg)
@@ -844,20 +844,20 @@ an urban site takes a fixed `[time] dt` with `nsteps` (duration = \"none\"), a u
 `[urban] theta_top` is `\"initial_gradient\"`, `\"noflux\"` or a gradient in K/m; `[checkpoint]` needs the Boussinesq core"""
 
 """
-    CaseConfig(cfg::RunConfig)
+    site_options(cfg::RunConfig) -> NamedTuple
 
 The urban site of the model's config `cfg` (`[urban] enabled`; its one
-domain) as the [`CaseConfig`](@ref) `build_case` consumes: the grid of
-`[grid]`, the ground of the domain's `static_driver`, the dynamic driver
-of its `dynamic_driver`, `ν`, `θ₀`, `g` of `[dynamics]`, `dt` and
-`nsteps` of `[time]`, the output cadence of `[output]`, every other field
-of `[urban]`, and the urban components the sections enable with their
-options (`components`, [`urban_components`](@ref)). Its output is the
-run's writer's (`[output]`).
+domain): the grid of `[grid]`, the ground of the domain's
+`static_driver`, the dynamic driver of its `dynamic_driver`, `ν`, `θ₀`,
+`g` of `[dynamics]`, `dt` and `nsteps` of `[time]`, the output cadence
+of `[output]`, every other field of `[urban]`, and the urban components
+the sections enable with their options (`components`,
+[`urban_components`](@ref)). Its fields are documented at
+[`site_options`](@ref) (core/config.jl).
 """
-function CaseConfig(cfg::RunConfig)
+function site_options(cfg::RunConfig)
     config_schema(cfg).name in (Config.MODEL, "urban_parent") ||
-        throw(ArgumentError("CaseConfig: the config is for \"$(config_schema(cfg).name)\", not the model"))
+        throw(ArgumentError("site_options: the config is for \"$(config_schema(cfg).name)\", not the model"))
     u = cfg.urban
     components = urban_components(cfg)
     g, t, dyn, out, dom = cfg.grid, cfg.time, cfg.dynamics, cfg.output, cfg.domain
@@ -865,37 +865,30 @@ function CaseConfig(cfg::RunConfig)
     cad = Dict{Symbol,Float64}(:radiation => u.radiation_period, :soil => u.soil_period, :output => out.cadence)
     u.surface_period === nothing || (cad[:surface] = u.surface_period)
     d = u.date
-    return CaseConfig(Symbol(cfg.run.name), u.scenario, g.size, g.extent, g.halo,
-                      dom.static_driver, u.parent_static, u.lat0, u.lon0, u.offset, u.elevation,
-                      u.wall_subdivisions, u.landuse,
-                      (year(d), month(d), day(d)), u.utc_offset, u.start_h, Float64(t.dt),
-                      something(t.nsteps, 0), cad,
-                      dyn.nu, dyn.theta0, dyn.g, u.f_coriolis, u.c_s, u.pr_t, u.sgs_stability,
-                      u.sponge_alpha_max, u.sponge_frac, u.theta_top,
-                      u.lateral, u.outflow, u.boundary_frame, u.theta_relaxation, u.analysis_buffer,
-                      u.sounding, dom.dynamic_driver, u.theta_surface, u.theta_inversion_z, u.theta_lapse, u.u0,
-                      u.qv0, u.qv_scale, u.ts0, u.ts_water_offset, u.t_soil0, u.p_surface,
-                      components, u.canopy_top, u.child_boundaries,
-                      CPUBackend(; serial = u.serial))
+    f64(x) = Float64(x)
+    return (name = Symbol(cfg.run.name), scenario = Symbol(u.scenario),
+            size = NTuple{3,Int}(g.size), extent = NTuple{3,Float64}(g.extent), halo = NTuple{3,Int}(g.halo),
+            static = _path(dom.static_driver), parent_static = _path(u.parent_static),
+            lat0 = f64(u.lat0), lon0 = f64(u.lon0), offset = NTuple{2,Float64}(u.offset),
+            elevation = f64(u.elevation), wall_subdivisions = Int(u.wall_subdivisions), landuse = _path(u.landuse),
+            date = (year(d), month(d), day(d)), utc_offset = f64(u.utc_offset), start_h = f64(u.start_h),
+            dt = f64(t.dt), nsteps = Int(something(t.nsteps, 0)), cadence = cad,
+            ν = f64(dyn.nu), θ₀ = f64(dyn.theta0), g = f64(dyn.g), f_coriolis = f64(u.f_coriolis),
+            C_s = f64(u.c_s), Pr_t = f64(u.pr_t), sgs_stability = Symbol(u.sgs_stability),
+            sponge_α_max = f64(u.sponge_alpha_max), sponge_frac = f64(u.sponge_frac),
+            θ_top = u.theta_top isa Real ? f64(u.theta_top) : Symbol(u.theta_top),
+            lateral = Symbol(u.lateral), outflow = Symbol(u.outflow), boundary_frame = Int(u.boundary_frame),
+            θ_relaxation = Bool(u.theta_relaxation), analysis_buffer = f64(u.analysis_buffer),
+            sounding = _path(u.sounding), dynamic = _path(dom.dynamic_driver),
+            θ_surface = f64(u.theta_surface), θ_inversion_z = f64(u.theta_inversion_z), θ_lapse = f64(u.theta_lapse),
+            u0 = f64(u.u0), qv0 = f64(u.qv0), qv_scale = f64(u.qv_scale), Ts0 = f64(u.ts0),
+            Ts_water_offset = f64(u.ts_water_offset), T_soil0 = f64(u.t_soil0),
+            p_surface = u.p_surface === nothing ? nothing : f64(u.p_surface),
+            components = components, canopy_top = f64(u.canopy_top), child_boundaries = _path(u.child_boundaries),
+            backend = CPUBackend(; serial = u.serial))
 end
-
-"""
-    CaseConfig(path::AbstractString; overrides = String[], kwargs...)
-
-Load the model configuration `path` (an urban site's TOML file,
-`overrides` as `--set` gives them) and convert it
-([`CaseConfig`](@ref)`(cfg::RunConfig)`), then set the fields `kwargs`
-on top (the components and their options are the file's sections: change
-them with `overrides`, `"nesting.enabled=false"`).
-"""
-function CaseConfig(path::AbstractString; overrides = String[], kwargs...)
-    c = CaseConfig(load_run_config(path; overrides = overrides))
-    for (k, v) in kwargs
-        hasfield(CaseConfig, k) || throw(ArgumentError("CaseConfig has no field $k"))
-        setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
-    end
-    return c
-end
+_path(::Nothing) = nothing
+_path(p) = String(p)
 
 """
     default_run_config() -> RunConfig
@@ -903,7 +896,8 @@ end
 The model's config of an urban site with every option at its default,
 the components of [`URBAN_DEFAULTS`](@ref) enabled, and the former `urban` run type's grid (64³ on 1 km × 1 km ×
 400 m, halo 3), `ν = 2`, `θ₀ = 293 K`, 43 200 steps of 2 s and output
-every 1800 s: what `CaseConfig(; kw...)` starts from.
+every 1800 s: the generic site (`site_options(default_run_config())`,
+the child of `ParentConfig(; kw...)`).
 """
 function default_run_config()
     io = IOBuffer()
@@ -918,13 +912,14 @@ function default_run_config()
 end
 
 """
-    urban_input_problems(cfg) -> CaseConfig
+    urban_input_problems(cfg) -> NamedTuple
 
 Refuse, before a run folder exists, an urban site whose static or
-dynamic driver file is missing, naming the command that makes it.
+dynamic driver file is missing, naming the command that makes it;
+otherwise its [`site_options`](@ref).
 """
 function urban_input_problems(cfg::RunConfig)
-    cc = CaseConfig(cfg)
+    cc = site_options(cfg)
     src = first(config_sources(cfg)["files"])
     for (f, key) in ((cc.static, "domain.static_driver"), (cc.parent_static, "urban.parent_static"))
         (f === nothing || isfile(f)) && continue

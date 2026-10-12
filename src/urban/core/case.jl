@@ -59,8 +59,8 @@ takes the domain's core step with its `:timestepper` component
 (core/stages.jl). `model` is the `Model` of its domain; `step!(model)`
 advances the site.
 """
-mutable struct UrbanSite{M, S, G<:Geometry} <: AbstractComponent
-    cfg::CaseConfig
+mutable struct UrbanSite{M, S, G<:Geometry, O<:NamedTuple} <: AbstractComponent
+    cfg::O
     mesh::M
     sim::S
     geom::G
@@ -89,7 +89,7 @@ function find_coupling(case::UrbanSite, name::Symbol)
 end
 
 "Local hour of day at simulation time `t` (s)."
-hour_of_day(cfg::CaseConfig, t::Real) = (cfg.start_h + t / 3600) % 24.0
+hour_of_day(cfg::NamedTuple, t::Real) = (cfg.start_h + t / 3600) % 24.0
 
 """
     case_weekday(cfg) -> 1 … 7
@@ -97,7 +97,7 @@ hour_of_day(cfg::CaseConfig, t::Real) = (cfg.start_h + t / 3600) % 24.0
 Day of the week of `cfg.date` (1 = Monday … 7 = Sunday, the convention
 of `BuildingEnergy.WeeklySchedule`): 29 June 2019 is a Saturday (6).
 """
-case_weekday(cfg::CaseConfig) =
+case_weekday(cfg::NamedTuple) =
     mod(Aeolus.LargeScaleForcing._days_from_civil(cfg.date...) + 3, 7) + 1   # 1970-01-01: Thursday
 
 """
@@ -112,7 +112,7 @@ of 13:07 on 29 June 2019). A local hour before `utc_offset` is a UTC hour
 of the previous day (a negative hour of `cfg.date`; the Julian day handles
 it).
 """
-function solar_position_at(cfg::CaseConfig, hour::Real)
+function solar_position_at(cfg::NamedTuple, hour::Real)
     hour = hour - cfg.utc_offset
     hh = floor(Int, hour)
     mi = floor(Int, (hour - hh) * 60)
@@ -137,7 +137,7 @@ enter as tendencies) and [`θ_top_bc`](@ref)`(cfg)` at the top
 (`cfg.θ_top`; default the fixed-gradient top, #254). For `:open`, the
 open boundary set and the sponge target of its open top.
 """
-core_parameters(cfg::CaseConfig, mesh) = (
+core_parameters(cfg::NamedTuple, mesh) = (
     ν              = cfg.ν,
     g_accel        = cfg.g,
     f_coriolis     = cfg.f_coriolis,
@@ -148,7 +148,7 @@ core_parameters(cfg::CaseConfig, mesh) = (
     case_boundary_conditions(cfg, mesh)...)
 
 "The dry Boussinesq core of the case (buoyancy about the constant `cfg.θ₀`)."
-boussinesq_core(cfg::CaseConfig, mesh; kw...) =
+boussinesq_core(cfg::NamedTuple, mesh; kw...) =
     BoussinesqSimulation(mesh; core_parameters(cfg, mesh)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 """
@@ -163,7 +163,7 @@ constructed with `build(C, case, opts)`, then every `init!` runs
 finally the stage schedule is assembled. The setup summary (buildings,
 surface classes, couplings) is a `Debug` record (`subsystem = :urban`).
 """
-function build_case(cfg::CaseConfig)
+function build_case(cfg::NamedTuple)
     # The run's compute backend (KA-a, #294): the default for every field
     # allocated below, BLAS pinned to one thread when Julia is threaded.
     init_threads!(cfg.backend)

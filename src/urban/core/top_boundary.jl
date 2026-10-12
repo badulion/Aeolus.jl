@@ -33,7 +33,7 @@ level). `H` and `dz` (the top and the thickness of the top cell) default
 to the child's grid; the nesting parent (#259) passes its own 3 km top
 and top-cell thickness.
 """
-function θ_top_gradient(cfg::CaseConfig; H::Real = cfg.extent[3], dz::Real = H / cfg.size[3])
+function θ_top_gradient(cfg::NamedTuple; H::Real = cfg.extent[3], dz::Real = H / cfg.size[3])
     θi = initial_θ(cfg)
     return (θi(0.0, 0.0, H + dz / 2) - θi(0.0, 0.0, H - dz / 2)) / dz
 end
@@ -45,12 +45,12 @@ The θ boundary condition of the top face for `cfg.θ_top`: `FluxBC(Γ)` with
 `Γ =` [`θ_top_gradient`](@ref)`(cfg)` for `:initial_gradient`, `NoFlux()`
 for `:noflux`, `FluxBC(x)` for a number `x` (K/m).
 """
-function θ_top_bc(cfg::CaseConfig)
+function θ_top_bc(cfg::NamedTuple)
     t = cfg.θ_top
     t isa Real && return FluxBC(Float64(t))
     t === :initial_gradient && return FluxBC(θ_top_gradient(cfg))
     t === :noflux && return NoFlux()
-    error("CaseConfig.θ_top must be :initial_gradient, :noflux or a gradient in K/m, got $(repr(t))")
+    error("the site's θ_top must be :initial_gradient, :noflux or a gradient in K/m, got $(repr(t))")
 end
 
 """
@@ -70,7 +70,7 @@ mutable struct TopHeatFlux
 end
 
 "The top-flux meter of `case` (`nothing` unless the θ top is a `FluxBC`)."
-function top_heat_flux(cfg::CaseConfig, sim, ref)
+function top_heat_flux(cfg::NamedTuple, sim, ref)
     bc = sim.θ_bcs.top
     bc isa FluxBC || return nothing
     Nz = length(ref.ρ̄)

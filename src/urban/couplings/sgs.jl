@@ -52,7 +52,7 @@
 # Operators.StabilityCorrected (P55-e, #187), on by default for these
 # providers: νh = ν ℓh, νv = ν ℓv f_m(Ri_g), κh = ν ℓh/Prₜ,
 # κv = ν ℓv f_h(Ri_g)/Prₜ with the TurbulenceStability functions
-# (`CaseConfig.sgs_stability`: `:brown94` default, Brown et al. 1994;
+# (`[urban] sgs_stability`: `:brown94` default, Brown et al. 1994;
 # `:lilly`, `:long_tail`, `:short_tail`, `:most`; `:none` = the uncorrected
 # closure, the pre-P55-e run bit for bit) and the anisotropic length scales
 # Δh = √(dx dy), Δv = dz (dx/dz = 2.5: ℓh = 1.842, ℓv = 0.2947). Ri_g uses
@@ -106,7 +106,7 @@ const SGS_SCALAR_DEFAULT = (scalar_tensor = :diagonal, diapycnal = nothing, slop
 """
     sgs_stability_scheme(name::Symbol) -> AbstractRiStability
 
-The TurbulenceStability family of `CaseConfig.sgs_stability` (`:brown94`,
+The TurbulenceStability family of `[urban] sgs_stability` (`:brown94`,
 `:lilly`, `:long_tail`, `:short_tail`, `:most`; the names of the
 `turbulence_diag` option, with `:brown94` for its `:brown`).
 """

@@ -18,3 +18,26 @@ urban_site(r) = urban_site(r.model)
 
 "Run a built site `case` for `case.cfg.nsteps · case.cfg.dt` of model time, as the run loop does (`Components.run_to!`)."
 run_site!(case) = (Aeolus.Components.run_to!(case.model, case.sim.t + case.cfg.nsteps * case.cfg.dt); case)
+
+"""
+    site_config(path; overrides = String[], kw...) -> NamedTuple
+
+The urban site's options (`UrbanCase.site_options`, ONE-k #474) of the
+config `path` with `overrides` and the fields `kw` set through their keys
+of the model (`UrbanCase.SITE_FIELDS`; the driver paths as the top-level
+keys of a one-domain config, `backend` as `urban.serial`): every value
+goes through the config's validation, as `--set` does.
+"""
+function site_config(path; overrides = String[], kw...)
+    U = Aeolus.UrbanCase
+    ovr = String[overrides...]
+    for (f, v) in kw
+        if f === :backend
+            push!(ovr, "urban.serial=" * U.toml_literal(v.serial))
+        else
+            key = only(U.SITE_FIELDS[f])
+            push!(ovr, replace(key, r"^domain\." => "") * "=" * U.toml_literal(v))
+        end
+    end
+    return U.site_options(load_run_config(path; overrides = ovr))
+end

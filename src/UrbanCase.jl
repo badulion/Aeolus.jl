@@ -117,7 +117,7 @@ allunique(map(component_name, URBAN_COMPONENTS)) || error("two urban components 
 The reference selection of the urban site: one component per urban slot
 and every additive one, what the Berlin configurations enable (each
 `examples/urban/berlin_*.toml` states its selection in full) and what
-`CaseConfig(; kw...)` starts from. The smoke matrix varies one slot of it
+`default_run_config()` enables. The smoke matrix varies one slot of it
 at a time.
 """
 const URBAN_DEFAULTS = Type[
@@ -141,7 +141,7 @@ include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / r
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
-export CaseConfig, UrbanParentDriver, build_model, run_results, parent_results, case_state, build_case, describe,
+export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, parent_results, case_state, build_case, describe,
        UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_DEFAULTS, selected_components, component_options,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,

@@ -60,7 +60,7 @@ mutable struct UrbanParentRun
 end
 
 function Config.build(::UrbanParentDriver, cfg::RunConfig)
-    cc = CaseConfig(cfg)
+    cc = site_options(cfg)
     f = cc.parent_static
     if f !== nothing && !isfile(f)
         src = first(config_sources(cfg)["files"])

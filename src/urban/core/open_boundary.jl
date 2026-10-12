@@ -55,12 +55,12 @@
 Whether `cfg` runs the `:nesting` coupling (the default, #265): its sides
 and top are then the nest faces of the parent run.
 """
-case_nested(cfg::CaseConfig) = haskey(cfg.components, :nesting)
+case_nested(cfg::NamedTuple) = haskey(cfg.components, :nesting)
 
 "Whether the lateral boundaries of `cfg` are open: nested (the default) or `cfg.lateral = :open`."
-function lateral_open(cfg::CaseConfig)
+function lateral_open(cfg::NamedTuple)
     cfg.lateral in (:periodic, :open) ||
-        error("CaseConfig.lateral must be :periodic or :open, got $(repr(cfg.lateral))")
+        error("the site's lateral must be :periodic or :open, got $(repr(cfg.lateral))")
     return cfg.lateral === :open || case_nested(cfg)
 end
 
@@ -99,7 +99,7 @@ developing over a fetch (N-inflow-d #266, N-inflow-e #268), so a column
 inside it is not the equilibrium flow over its own surface. Every side
 is cut, not only the current inflow faces: the wind turns over the day.
 """
-function analysis_columns(cfg::CaseConfig, m)
+function analysis_columns(cfg::NamedTuple, m)
     b = Float64(cfg.analysis_buffer)
     A = trues(m.Nx, m.Ny)
     (lateral_open(cfg) && b > 0) || return A
@@ -118,7 +118,7 @@ The boundary data of the `:open` case: `u = U_g`, `v = V_g` (the
 `:geostrophic` coupling's options, also when it is switched off), `w = 0`
 and θ the initial profile [`initial_θ`](@ref) of `cfg`.
 """
-function case_boundary_data(cfg::CaseConfig)
+function case_boundary_data(cfg::NamedTuple)
     g = component_options(GeostrophicCoupling, cfg)
     θi = initial_θ(cfg)
     return ProfileBoundaryData(u = Float64(g.U_g), v = Float64(g.V_g), w = 0.0,
@@ -134,7 +134,7 @@ builds one open-boundary set, shared by `bcs` and `θ_bcs`. A nested case
 (the default) gets none here: the `:nesting` coupling's `sim_options`
 are the one definition of its nest faces (couplings/nesting.jl).
 """
-function case_boundary_conditions(cfg::CaseConfig, mesh)
+function case_boundary_conditions(cfg::NamedTuple, mesh)
     case_nested(cfg) && return (;)
     if !lateral_open(cfg)
         return (bcs   = FieldBoundaryConditions(:periodic, :periodic, :wall),
@@ -151,7 +151,7 @@ end
 # (CFG-g, #362: `aeolusprep dynamic --from-sounding` of an open
 # config writes them, AeolusPrep.jl), when the driver has planes. The sponge and θ
 # relaxation keep the profile data's targets.
-function _open_planes_from_driver!(b, cfg::CaseConfig, mesh)
+function _open_planes_from_driver!(b, cfg::NamedTuple, mesh)
     path = initial_driver(cfg)
     path === nothing && return b
     ox, oy = anchor_xy(cfg, mesh)
@@ -177,7 +177,7 @@ case; for an open one the mirror (zero-gradient) halo on every face — a
 tracer without boundary data leaves with its own value and enters with
 the value next to the face, and a mask does not wrap across the box.
 """
-case_scalar_bcs(cfg::CaseConfig) = lateral_open(cfg) ? FieldBoundaryConditions(:noflux) :
+case_scalar_bcs(cfg::NamedTuple) = lateral_open(cfg) ? FieldBoundaryConditions(:noflux) :
                                    FieldBoundaryConditions(:periodic, :periodic, :noflux)
 
 """
@@ -230,7 +230,7 @@ mutable struct OpenBoundaryHeat{D}
 end
 
 "The open-boundary heat meter of `case` (`nothing` for a periodic case)."
-function open_boundary_heat(cfg::CaseConfig, sim, ref)
+function open_boundary_heat(cfg::NamedTuple, sim, ref)
     has_open_boundaries(sim) || return nothing
     m = sim.mesh
     Nz, Hz = m.Nz, m.Hz

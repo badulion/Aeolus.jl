@@ -13,7 +13,7 @@ Aeolus.Operators.set_fftw_policy!(; planner = :estimate)   # the round trip's pl
 include(joinpath(ARGS[1], "test", "support", "berlin_fixture.jl"))
 
 out = Dict{String,Any}()
-cfg = BC.CaseConfig(berlin_toml("summer"))
+cfg = site_config(berlin_toml("summer"))
 mesh = Aeolus.Grids.RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
 zc = [mesh.z0 + (k - 0.5) * mesh.dz for k in 1:mesh.Nz]
 θ0 = BC.initial_θ(cfg); q0 = BC.initial_qv(cfg)
@@ -34,7 +34,7 @@ out["summer_ug"] = digest([Ug(z, t) for z in zf[1:40:end], t in (0.0, 17.3, 3600
 out["summer_vg"] = digest([Vg(z, t) for z in zf[1:40:end], t in (0.0, 17.3, 3600.0, 40000.5)])
 
 # the smoke "summer sounding" run, 12 steps
-c = BC.CaseConfig(berlin_toml("smoke"); sounding = BC.CaseConfig(berlin_toml("summer")).sounding)
+c = site_config(berlin_toml("smoke"); sounding = site_config(berlin_toml("summer")).sounding)
 case = BC.build_case(c)
 BC.run_case!(case)
 st = berlin_state(case)

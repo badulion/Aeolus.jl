@@ -7,10 +7,10 @@
 # per level to at most 100 m at 3 km (53 levels, `surface_refined_faces`
 # of #151). Everything the parent shares with the child — the date, the
 # clock, the location, θ₀, f, the initial state and its sounding — comes
-# from the child's `CaseConfig`.
+# from the child's site options (`site_options`).
 
 """
-    ParentConfig(child::CaseConfig = CaseConfig(); kwargs...)
+    ParentConfig(child::NamedTuple = site_options(default_run_config()); kwargs...)
 
 Configuration of the Berlin nesting parent. The defaults are those of
 the parent's configuration schema (`[nesting] parent` of an urban
@@ -105,7 +105,7 @@ What is printed is the installed logger's choice (#347): the build summary
 is a `Debug` record, each output of [`run_parent!`](@ref) an `Info` one.
 """
 mutable struct ParentConfig
-    child::CaseConfig
+    child::NamedTuple
     # placement
     center::Union{Nothing,NTuple{2,Float64}}   # nothing: on the child
     # grid
@@ -155,7 +155,7 @@ end
 # The defaults live in the parent's configuration schema
 # (`parent_section` in core/config_schema.jl), the one place they are
 # written; `ParentConfig(; kw...)` starts from them.
-function ParentConfig(; child::CaseConfig = CaseConfig(), kw...)
+function ParentConfig(; child::NamedTuple = site_options(default_run_config()), kw...)
     d = parent_defaults()
     for (k, v) in kw
         k === :child && continue
@@ -166,7 +166,7 @@ function ParentConfig(; child::CaseConfig = CaseConfig(), kw...)
     return ParentConfig(child, (d[f] for f in fieldnames(ParentConfig)[2:end])...)
 end
 
-ParentConfig(child::CaseConfig; kw...) = ParentConfig(; child = child, kw...)
+ParentConfig(child::NamedTuple; kw...) = ParentConfig(; child = child, kw...)
 
 """
     ConstantForcing(value)

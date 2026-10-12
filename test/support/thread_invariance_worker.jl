@@ -348,7 +348,7 @@ function section_smoke()
 end
 
 function section_flagship()
-    cfg = BC.CaseConfig(berlin_toml("summer"); backend = BACKEND)
+    cfg = site_config(berlin_toml("summer"); backend = BACKEND)
     run_hashed!("flagship", cfg; seed = false, nsteps = 1)
 end
 
@@ -547,7 +547,7 @@ function section_columns()
     # emitted terms added), threaded the column_sum launch (a 3-tuple per
     # column, zeros included); equal hashes across the counts mean the two
     # paths give the same fields and totals
-    ac = BC.build_case(BC.CaseConfig(berlin_toml("smoke")))
+    ac = BC.build_case(site_config(berlin_toml("smoke")))
     aq = BC.find_coupling(ac, :aq_chem)
     BC._aq_sun!(aq, ac)
     with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)
