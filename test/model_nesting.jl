@@ -3,7 +3,7 @@
 #
 #   * the self-nesting default is two-way (NestedRun, add_nest!, [[domain]]);
 #   * a config with several [[domain]] blocks is one model: the graph is
-#     validated (parents, sizes, placement, faces, a fixed dt, no budgets);
+#     validated (parents, sizes, placement, faces, no budgets);
 #   * each domain runs its own stage pipeline inside the nest: a child's
 #     stages run once per substep, its in-core stages once per stage;
 #   * one-way: the parent is bit for bit the parent run alone;
@@ -117,11 +117,9 @@ end
     # inside the parent
     e = mn_error(() -> mn_cfg(mn_two(; origin = "[1000.0, 400.0]")))
     @test occursin("outside its parent", keyed(e)["domain[2].domain.origin"])
-    # the faces are the nest's; a fixed dt; no budgets; no couplings in a child
+    # the faces are the nest's; no budgets; no couplings in a child
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.boundaries]\nx = \"free_slip\"\n"))
     @test occursin("keeps its parent's faces", keyed(e)["domain[2].boundaries.x"])
-    e = mn_error(() -> mn_cfg(mn_two(); overrides = ["time.dt=\"adaptive\""]))
-    @test occursin("fixed dt", keyed(e)["time.dt"])
     e = mn_error(() -> mn_cfg(mn_two(); overrides = ["output.variables=[\"budget_energy\"]"]))
     @test occursin("measures no budgets", keyed(e)["output.variables"])
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.forcing]\nradiative_cooling = -1e-5\n"))
@@ -362,4 +360,180 @@ end
     c = r.model.domains[2].state
     @test ck[:t] == 4.0 && c.t == 4.0 && all(isfinite, interior_view(c.θ))
     @test isempty(Aeolus.IO.component_nonfinite_fields(r.model.nest))
+end
+
+# ---------------------------------------------------------------------------
+# adaptive steps and window retries (NEST-p2, #482)
+# ---------------------------------------------------------------------------
+
+using Aeolus.TimeIntegration: CFLConstraints, adaptive_dt
+
+# Arms a failure: the next stage-11 entry of the component's domain while
+# armed puts a NaN into θ (the arm lives outside the model, so the window
+# restore does not re-arm it).
+const MN_ARM = Dict{String,Int}()
+struct MNFragile <: AbstractComponent
+    id::String
+end
+MNC.component_name(::Type{MNFragile}) = :fragile
+MNC.section(::Type{MNFragile}) = "fragile"
+MNC.stages(::MNFragile) = (Stage(:surface_update),)
+function MNC.run_stage!(c::MNFragile, d, ::Val{:surface_update}, dt)
+    if get(MN_ARM, c.id, 0) > 0
+        MN_ARM[c.id] -= 1
+        d.state.θ.data[d.state.mesh.Hx + 3, d.state.mesh.Hy + 3, d.state.mesh.Hz + 2] = NaN
+    end
+    return nothing
+end
+
+# an adaptive pair: a 2 m/s parent wind, and in the child a jet of up to
+# 2 + jet m/s away from its faces (so the child needs more than r substeps)
+function mn_adaptive(; feedback = :two_way, jet = 4.0, scheme = :rk3, C = 0.5, growth = 1.5, extra = ())
+    pm = RegularGrid(; size = (16, 16, 8), extent = (1600.0, 1600.0, 800.0))
+    nest = nested_grid(pm, ((400.0, 1200.0), (400.0, 1200.0), (0.0, 400.0)), 2)
+    wall = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    p = BoussinesqSimulation(pm; θ₀ = 300.0, bcs = wall, θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    c = BoussinesqSimulation(nest.child_mesh; θ₀ = 300.0, bcs = nest_bcs(nest.child_mesh; bottom = :wall))
+    for s in (p, c)
+        set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.1sin(2π * x / 800))
+        set!(s.u, (x, y, z) -> 2.0)
+    end
+    set!(c.u, (x, y, z) -> 2.0 + jet * exp(-((x - 800)^2 + (y - 800)^2) / (2 * 120.0^2)))
+    cfl = CFLConstraints(; C_advective = C, dt_max = 30.0, growth_max = growth)
+    dp = Domain(p; id = "p", scheme = scheme, cfl = cfl, components = (CentredAdvection(), MNFragile("p")))
+    dc = Domain(c; id = "c", scheme = scheme, cfl = cfl, components = (CentredAdvection(), MNFragile("c"), extra...))
+    return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)])
+end
+
+@testset "adaptive nest: the root's own step, the child's smallest stable whole number of equal substeps" begin
+    m = mn_adaptive()
+    L = nest_link(m, "c")
+    c = m.domains[2]
+    @test_throws ArgumentError step!(m, 1.0)          # an adaptive nest steps adaptively
+    pattern = Tuple{Float64,Int}[]
+    for w in 1:8
+        n0 = L.stats.child_substeps
+        lim_p = Aeolus.Components.nest_domain_limit(m.nest, 1)
+        _, Δt, retries = step_adaptive!(m)
+        @test retries == 0
+        @test Δt == lim_p                                # the root's own limit
+        n = L.stats.child_substeps - n0
+        push!(pattern, (Δt, n))
+        @test n == L.stats.n_last
+        # equal substeps: every substep of the window is Δt/n
+        @test L.stats.dt_child_max ≈ L.stats.dt_child_min || w > 1
+        # the smallest stable n: Δt/n within the child's limit, Δt/(n-1) not
+        # (the child's limit as its first substep picked it, from the window start)
+        @test n >= 2
+    end
+    @info "adaptive nest: (root step, child substeps) per window" pattern
+    @test first(pattern)[2] > 2                           # the jet makes the child need more than r = 2 at first
+    @test length(unique(last.(pattern))) >= 2             # and n follows the child's state, window by window
+    @test m.domains[1].state.t ≈ sum(first.(pattern)) && m.domains[2].state.t == m.domains[1].state.t
+    @test all(isfinite, interior_view(c.state.u))
+end
+
+# the child's own stability limit at the start of each of its steps,
+# computed here from its state (no growth limit: growth_max is large)
+const MN_LIMITS = Tuple{Float64,Float64}[]
+struct MNLimit <: AbstractComponent end
+MNC.component_name(::Type{MNLimit}) = :limit_log
+MNC.section(::Type{MNLimit}) = "limit_log"
+MNC.stages(::MNLimit) = (Stage(:clock),)
+MNC.run_stage!(::MNLimit, d, ::Val{:clock}, dt) =
+    (push!(MN_LIMITS, (Float64(d.state.t), Float64(adaptive_dt(d.state, d.cfl)))); nothing)
+
+@testset "adaptive nest: n is the smallest whole number with Δt/n inside the child's limit" begin
+    m = mn_adaptive(; growth = 1e6, extra = (MNLimit(),))
+    L = nest_link(m, "c")
+    ns = Int[]
+    for _ in 1:8
+        empty!(MN_LIMITS)
+        t0 = m.domains[1].state.t
+        _, Δt, _ = step_adaptive!(m)
+        n = L.stats.n_last
+        push!(ns, n)
+        lim = last(only(filter(e -> first(e) == t0, MN_LIMITS)))
+        @test Δt / n <= lim * (1 + 1e-9)                 # stable
+        @test n == 1 || Δt / (n - 1) > lim               # and the fewest substeps that are
+        @test length(MN_LIMITS) == n                      # n substeps, equal ones
+        @test all(k -> MN_LIMITS[k+1][1] - MN_LIMITS[k][1] ≈ Δt / n, 1:n-1)
+    end
+    @info "adaptive nest, no growth limit: child substeps per window" ns
+end
+
+@testset "window retry: a failing root redoes the window with half the step, bit for bit" begin
+    a = mn_adaptive(); b = mn_adaptive()
+    MN_ARM["p"] = 1
+    _, Δt, retries = step_adaptive!(a)
+    @test retries == 1 && a.nest.retries == 1
+    _, Δt1, _ = step_adaptive!(b)                        # the twin, unarmed
+    @test Δt == Δt1 / 2
+    # the twin at the halved step from the same start: same state, budgets, components
+    c = mn_adaptive()
+    _, Δtc, rc = step_adaptive!(c; t_end = Δt)
+    @test Δtc == Δt && rc == 0
+    @test mn_state_equal(a, c)
+    @test nest_link(a, "c").stats.child_substeps == nest_link(c, "c").stats.child_substeps
+    @test nest_link(a, "c").stats.parent_retries == 1
+end
+
+@testset "window retry: a failing child redoes its window with twice the substeps ($fb)" for fb in (:one_way, :two_way)
+    a = mn_adaptive(; feedback = fb); b = mn_adaptive(; feedback = fb)
+    _, Δtb, _ = step_adaptive!(b)
+    nb = nest_link(b, "c").stats.n_last
+    MN_ARM["c"] = 1
+    _, Δt, retries = step_adaptive!(a)
+    La = nest_link(a, "c")
+    @test retries == 1 && La.stats.child_retries == 1
+    @test Δt == Δtb                                       # the root step is kept
+    @test La.stats.n_last == 2nb                          # the child doubled its substeps
+    @test La.stats.child_substeps == 2nb                  # the failed attempt left no count behind
+    @test all(isfinite, interior_view(a.domains[2].state.θ))
+    # one-way: the parent never sees the child: bit for bit the unarmed twin
+    fb === :one_way && @test all(f -> interior_view(getproperty(a.domains[1].state, f)) ==
+                                      interior_view(getproperty(b.domains[1].state, f)), (:u, :v, :w, :θ, :p))
+    # a child that keeps failing: an error after max_retries, the window start restored
+    MN_ARM["c"] = 100
+    t0 = a.domains[1].state.t
+    @test_throws ErrorException step_adaptive!(a)
+    @test a.domains[1].state.t == t0 && a.domains[2].state.t == t0
+    @test all(isfinite, interior_view(a.domains[2].state.θ))
+    MN_ARM["c"] = 0
+end
+
+@testset "adaptive two-way nest with retries conserves the composite θ" begin
+    m = mn_adaptive()
+    h = m.nest.hierarchy
+    I0 = composite_integral(h, :θ)
+    MN_ARM["c"] = 1
+    for _ in 1:3
+        step_adaptive!(m)
+    end
+    MN_ARM["p"] = 1
+    for _ in 1:3
+        step_adaptive!(m)
+    end
+    @test m.nest.retries == 2
+    rel = abs(composite_integral(h, :θ) - I0) / abs(I0)
+    @info "adaptive two-way nest with 2 retried windows: composite θ relative change over 6 windows $rel"
+    @test rel < 1e-13
+    @test max_divergence(m.domains[1].state) < 1e-9 && max_divergence(m.domains[2].state) < 1e-9
+end
+
+@testset "an adaptive nested config: runs, lands on its duration, resumes bit for bit" begin
+    cfg = mn_cfg(mn_two(); overrides = ["time.dt=\"adaptive\"", "time.nsteps=6", "time.cfl=0.5",
+                                        "checkpoint.every_steps=3"])
+    full = mn_run(cfg)
+    m = full.obj.model
+    @test m.nest.adaptive && all(d -> d.state.t == m.domains[1].state.t, m.domains)
+    L = nest_link(m, "inner")
+    @test L.stats.parent_steps == 6 && L.stats.n_min >= 2
+    root = mktempdir()
+    stop = (r, n) -> n == 4 && throw(InterruptException())
+    @test_throws InterruptException run_config(cfg; root = root, console = false, repo = mktempdir(), callback = stop)
+    folder = only(readdir(root; join = true))
+    resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
+    a = state_fields(full.obj); b = state_fields(resumed.obj)
+    @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
 end

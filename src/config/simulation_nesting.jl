@@ -9,7 +9,7 @@
 const _NEST_CHECKS_DOC = """
 the first domain is the root (no `parent`); every later domain names an earlier one as its `parent`
 a root has no `origin` or `refinement`, and `feedback` stays two_way (it has no parent); a nested domain gives both
-a nested model takes a fixed `time.dt` (the children subcycle max(refinement) substeps per parent step) and measures no budgets (no `budget_*` output, no closure check)
+a nested model steps every domain with `time.dt`: a fixed dt (each child takes max(refinement) substeps per step of its parent) or adaptive (the root picks its step, each child the smallest whole number of equal substeps that keeps it stable; a failed step retries the window); it measures no budgets (no `budget_*` output, no closure check)
 every domain of a nested model runs the boussinesq core on a uniform grid between z walls
 a nested domain lies inside its parent (origin ≥ 0, origin + grid.extent within the parent's extent, its height at most the parent's), with `grid.size` = `grid.extent` / parent spacing × `refinement`
 a nested domain keeps its parent's `[boundaries]` and `dynamics.moisture`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
@@ -66,8 +66,6 @@ function _nest_checks(cfg)
         end
     end
     n == 1 && return e
-    cfg.time.dt === :adaptive &&
-        push!(e, ConfigError("time.dt", "a nested model takes a fixed dt: each child subcycles max(refinement) substeps per step of its parent"))
     for v in cfg.output.variables
         haskey(Components.BUDGET_OUTPUTS, v) &&
             push!(e, ConfigError("output.variables", "$v: a nested model measures no budgets (the two-way feedback is outside every stage)"))

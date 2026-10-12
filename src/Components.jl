@@ -68,7 +68,7 @@ using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weig
                       stage_budget
 using ..Output: OutputVariable, check_catalogue, cell_centres
 using ..Checks: Check, ReferenceProfile, reference_check
-using ..IO: NonFiniteField, nonfinite_fields, structural_state, restore_structural_state!
+using ..IO: NonFiniteField, nonfinite_fields, structural_state, restore_structural_state!, refresh_structural_state!
 using ..Nesting: Nesting, NestHierarchy, add_nest!, step_nested!, domain_advance
 import ..IO: checkpoint_state, restore_checkpoint_state!, component_nonfinite_fields
 import ..TimeSteppers: step!

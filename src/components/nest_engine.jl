@@ -332,7 +332,7 @@ end
 
 # The window-start state into the arrays of the previous one (the graph does
 # not change between windows; a fresh record when it did).
-_resnapshot!(s, h) = structural_state(h)
+_resnapshot!(s, h) = refresh_structural_state!(s, h)
 
 """
     step!(m::Model{<:Tuple,<:ModelNest}, dt) -> m
