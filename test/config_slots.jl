@@ -28,9 +28,11 @@ sl_section(cfg, n) = getfield(getproperty(cfg, Symbol(n)), :values)
     cfg = load_run_config(IOBuffer("[sgs]\nmodel = \"amd\"\n"))
     @test sl_section(cfg, "sgs") == Dict("model" => :amd, "c_s" => 0.3, "pr_t" => 1 / 3, "stress" => :laplacian)
     cfg = load_run_config(IOBuffer("[sgs]\nmodel = \"tke\"\ne_min = 1e-4\n"))
-    @test Set(keys(sl_section(cfg, "sgs"))) == Set(["model", "e_min", "surface_factor", "wall_cap", "stress"])
+    @test Set(keys(sl_section(cfg, "sgs"))) == Set(["model", "e_min", "surface_factor", "wall_cap", "wall_cap_top",
+                                                     "surface_value", "stress"])
     @test cfg.sgs.e_min == 1e-4
-    @test occursin("[domain.sgs]\ne_min = 0.0001\nmodel = \"tke\"\nstress = \"laplacian\"\nsurface_factor = 3.9\nwall_cap = false\n",
+    @test occursin("[domain.sgs]\ne_min = 0.0001\nmodel = \"tke\"\nstress = \"laplacian\"\nsurface_factor = 3.9\n" *
+                   "surface_value = false\nwall_cap = false\nwall_cap_top = true\n",
                    config_text(cfg))
     @test load_run_config(IOBuffer(config_text(cfg))) == cfg                  # the resolved text reloads to itself
     # every model slot has its default: the bare config

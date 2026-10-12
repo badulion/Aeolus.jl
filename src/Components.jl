@@ -43,6 +43,7 @@ using ..PrognosticSGS: TKEClosure, initialize_tke!
 using ..IBM: SolidMask, first_level_cells, wall_distance
 using ..BoundaryConditions: Periodic, NoSlipWall
 using ..Grids: CellCenter
+using ..StretchedGrids: StretchedGrid
 using ..BoundaryConditions: fill_halos!
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, BusingerDyerBeljaarsHoltslag,
                          solve_surface_layer, kinematic_heat_flux, similarity_theta, similarity_wind, obukhov_length
@@ -77,7 +78,7 @@ export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
        CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
        CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model,
-       BoundaryLayerTracker, nudging_height, parcel_zi
+       BoundaryLayerTracker, nudging_height, parcel_zi, surface_friction_velocity
 
 include("components/interface.jl")
 include("components/pipeline.jl")
