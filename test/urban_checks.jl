@@ -337,8 +337,7 @@ end
 "parent: the parent smoke run and the idealised validations."
 function berlin_parent_checks()
     @testset "Berlin parent smoke: every forcing, 12 steps, ledgers close (#259)" begin
-        child = berlin_default()
-        child.start_h = 10.0                       # sun up, convective
+        child = berlin_default(; start_h = 10.0)   # sun up, convective
         # subsidence is off by default (divergence = 0, #312): on here at D = 3e-6 s⁻¹
         p = BC.build_parent(BC.ParentConfig(child; refinement = (16, 16, 8), divergence = 3e-6))
         @test all(f -> f !== nothing, values(p.forcing))

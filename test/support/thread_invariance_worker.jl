@@ -342,8 +342,7 @@ end
 
 function section_smoke()
     for (label, cfg) in smoke_matrix()
-        cfg.backend = BACKEND
-        run_hashed!("smoke[$label]", cfg)
+        run_hashed!("smoke[$label]", merge(cfg, (; backend = BACKEND)))
     end
 end
 
