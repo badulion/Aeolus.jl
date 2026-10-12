@@ -291,7 +291,10 @@ end
 # the problems of one section's table `tbl` against its spec `s`: typed values
 # into `vals`, origins into `vorig`; `prefix` is the key prefix of messages
 # ("" or "domain[i].") and `korig(k)` the origin of key "section.k"
-function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf)
+function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf;
+                         tables = nothing, rank = k -> (korig(k) in (OVERRIDE_ORIGIN, WITH_ORIGIN) ? 2 : 0))
+    s.selector === nothing ||
+        return _check_slot_section!(probs, vals, vorig, s, tbl, korig, prefix, leaf, tables, rank)
     keys_ = [o.key for o in s.options]
     for k in sort!(collect(keys(tbl)))
         k in keys_ && continue
@@ -300,7 +303,71 @@ function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, lea
         push!(probs, ConfigProblem(prefix * full, korig(full),
               why === nothing ? "unknown key in [$(s.name)]" * _suggest(k, keys_) : why))
     end
-    for o in s.options
+    return _check_options!(probs, vals, vorig, s.name, s.options, tbl, korig, prefix, leaf)
+end
+
+# A slot section (ONE-m, #476): the selector names a provider of the
+# domain's kind; the other keys are options of that provider (or shared
+# options of the section). An option of another provider set below the
+# selector (`rank`: 0 the file's run-level section, 1 a [[domain]] block,
+# 2 an override) is dropped: a higher-level selector replaces the provider.
+function _check_slot_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf, tables, rank)
+    sel = s.selector
+    kind = domain_kind(s, tables === nothing ? Dict{String,Any}() : tables)
+    provs = providers(s, kind)
+    if isempty(provs)
+        on = unique(reduce(vcat, (p.kinds for p in sel.providers)))
+        for k in sort!(collect(keys(tbl)))
+            full = "$(s.name).$k"
+            push!(probs, ConfigProblem(prefix * full, korig(full),
+                  "[$(s.name)] has no provider on $(kind_text(s, kind)); it configures " *
+                  join((kind_text(s, x) for x in on), " or ")))
+        end
+        return vals
+    end
+    skey = "$(s.name).$(sel.key)"
+    names = [p.name for p in provs]
+    pname = sel.defaults[kind]
+    if haskey(tbl, sel.key)
+        raw = tbl[sel.key]; org = korig(skey)
+        vorig[prefix * skey] = org
+        name = raw isa Union{AbstractString,Symbol} ? String(raw) : nothing
+        if name === nothing || !(name in names)
+            other = name === nothing ? nothing :
+                    findfirst(p -> p.name == name, sel.providers)
+            push!(probs, ConfigProblem(prefix * skey, org,
+                  "expected one of " * join(repr.(names), ", ") * " on $(kind_text(s, kind)), got $(_show_raw(raw))" *
+                  (other === nothing ? (name === nothing ? "" : _suggest(name, names)) :
+                   " (a provider on " * join((kind_text(s, x) for x in sel.providers[other].kinds), " and ") * " only)")))
+            return vals
+        end
+        pname = name
+    else
+        vorig[prefix * skey] = DEFAULT_ORIGIN
+    end
+    vals[sel.key] = Symbol(pname)
+    p = find_provider(s, kind, pname)
+    opts = vcat(s.options, p.options)
+    keys_ = [o.key for o in opts]
+    srank = rank(skey)
+    for k in sort!(collect(keys(tbl)))
+        (k == sel.key || k in keys_) && continue
+        full = "$(s.name).$k"
+        owners = unique([q.name for q in sel.providers if any(o -> o.key == k, q.options)])
+        !isempty(owners) && rank(full) < srank && continue         # replaced with its provider
+        push!(probs, ConfigProblem(prefix * full, korig(full),
+              isempty(owners) ?
+                  "unknown key in [$(s.name)] for $(sel.key) = \"$pname\"" * _suggest(k, keys_) *
+                  (isempty(keys_) ? " (it has no options)" : " (its options: " * join(keys_, ", ") * ")") :
+                  "an option of $(sel.key) = " * join(repr.(owners), " or ") * ", not of $(sel.key) = \"$pname\"" *
+                  (isempty(keys_) ? " (it has no options)" : " (its options: " * join(keys_, ", ") * ")")))
+    end
+    return _check_options!(probs, vals, vorig, s.name, opts, tbl, korig, prefix, leaf)
+end
+
+function _check_options!(probs, vals, vorig, sname, options, tbl, korig, prefix, leaf)
+    s = (; name = sname)
+    for o in options
         key = "$(s.name).$(o.key)"
         if haskey(tbl, o.key)
             org = korig(key)
@@ -346,7 +413,10 @@ function _resolve(raw, origins, sources, schema, probs::Vector{ConfigProblem}, l
                                        "expected a table [$(s.name)], got $(_show_raw(tbl))"))
             tbl = Dict{String,Any}()
         end
-        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf)
+        # a run-level slot section ([timestep]) tells the domain kind from the
+        # run-level tables and, with one domain, its block's
+        kt = s.selector === nothing ? raw : (length(blocks === nothing ? () : blocks) == 1 ? merge(raw, blocks[1]) : raw)
+        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf; tables = kt)
     end
     domains = Vector{Dict{String,Dict{String,Any}}}()
     if !isempty(dsec)
@@ -439,7 +509,8 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
         s = _section(sch, name)
         p = ConfigProblem[]
         v = Dict{String,Any}()
-        _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf)
+        _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf; tables = merged,
+                        rank = k -> korig(k) == OVERRIDE_ORIGIN ? 2 : k in fromblock ? 1 : 0)
         # a problem of a run-level value is reported under its own key (once:
         # the caller drops duplicates), one of the block's under domain[i]
         for q in p
