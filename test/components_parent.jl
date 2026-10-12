@@ -194,6 +194,12 @@ end
         sim.t = 10.0
         Components.run_stage!(rad, d, Val(:surface_flux), 10.0)
         @test rad.model.ncalls == 1
+        # its checkpoint: the last call's fluxes and heating, the next call's time
+        st = checkpoint_state(rad)
+        h = copy(rad.model.heat); sw = rad.sw_down[]
+        rad.model.heat .= 0; rad.t_rad[] = 0.0; rad.sw_down[] = -1.0
+        restore_checkpoint_state!(rad, st)
+        @test rad.model.heat == h && rad.t_rad[] == 600.0 && rad.sw_down[] == sw
     end
 end
 

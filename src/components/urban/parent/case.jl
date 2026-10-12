@@ -629,8 +629,10 @@ _stage_weight(p::ParentCase, s::Int) = p.pc.stepper === :rk3 ? _RK3_WEIGHTS[s] :
 
 const _BOOKED = (:θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence)
 
-# the θ (and qv) forcings, each one's per-level tendency sum recorded and
-# accumulated with the stage weight
+# Stage 7 of the parent's LargeScale component (its forcings, `p.forcing`,
+# applied in its order on its `clock = :core`: what `run_stage!` of the
+# component does) with each θ (and qv) forcing's per-level tendency sum
+# recorded between them and accumulated with the stage weight, for the ledgers
 function _parent_body_force!(p::ParentCase, sim, Δt)
     F, L = p.forcing, p.lev
     stage = (p.stage[] += 1)
@@ -727,9 +729,9 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     budget_begin_step!(p.heat, θ, hour)
     pc.moisture && budget_begin_step!(p.water, q, hour)
 
-    # stage 3: the surface, then the radiation (which sees the surface it
-    # has just stepped), then the u* of the TKE closure; each component's
-    # entry in its ledger context
+    # stage 3 in the pipeline's order: the surface, the TKE closure's u*
+    # (the SGS component), then the radiation (which sees the surface it
+    # has just stepped); each entry that changes the air in its ledger context
     d = p.domain
     t1 = time_ns()
     budget_open!(p.heat, :surface_flux, pc.surface, θ)
