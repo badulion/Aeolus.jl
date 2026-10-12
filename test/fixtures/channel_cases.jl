@@ -30,6 +30,7 @@ using Aeolus.SurfaceExchange
 using Aeolus.SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
                               SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman, grav
 using Aeolus.WallModels
+using Aeolus.WallModels: _uv_means
 import Aeolus.IO: checkpoint_state, restore_checkpoint_state!
 using Aeolus.IO: fieldwise_checkpoint_state, restore_fieldwise!, resume!, maybe_checkpoint!
 import Aeolus.RunLog: diagnostics
@@ -922,18 +923,6 @@ function _form_drag!(sim, dr::DynamicRoughness)
         τ -= ax
     end
     return τ / (Nx * Ny)
-end
-
-# plane means of the interior of u and v
-function _uv_means(sim)
-    g = sim.mesh
-    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
-    um = zeros(Nz); vm = zeros(Nz)
-    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
-        um[k] += sim.u.data[Hx+i, Hy+j, Hz+k]
-        vm[k] += sim.v.data[Hx+i, Hy+j, Hz+k]
-    end
-    return um ./ (Nx * Ny), vm ./ (Nx * Ny)
 end
 
 # phi_m_profile(case): the instantaneous Φ_m profile, with the case's u_star
