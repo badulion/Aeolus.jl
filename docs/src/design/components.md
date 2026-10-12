@@ -381,7 +381,7 @@ other limits are on [Run configuration](run_configuration.md).
   self-contained physics found there, now live in their physics modules,
   and the couplings call them, bit for bit:
 
-  | from `src/urban/couplings/` | now |
+  | from `src/components/urban/` | now |
   | :-- | :-- |
   | `moist_buoyancy.jl` | `Operators.moist_buoyancy_perturbation!`, `add_moist_buoyancy!` |
   | `traffic_heat.jl` | `BuildingEnergy.traffic_heat_flux`, `add_traffic_heat!` |
@@ -396,7 +396,7 @@ other limits are on [Run configuration](run_configuration.md).
   | `column_radiation.jl` | the module `ColumnRadiation`: `ColumnRadiationModel`, `column_radiation_solver`, `stitched_column`, `column_radiation!`, `column_heating_kday` (the nest parent uses it too) |
   | `surface_exchange.jl` | `SurfaceExchange.deliver_surface_fluxes!` (the held H and E into the first air cell) |
   | `radiosity_sun.jl` | `Radiosity.surface_irradiance!` (plan-area fluxes to per-surface irradiance) |
-  | `core/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration), `MoistThermodynamics.θ_per_heat` (the heat-to-θ conversion ``1/(ρ c_p Π)``) |
+  | `site/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration), `MoistThermodynamics.θ_per_heat` (the heat-to-θ conversion ``1/(ρ c_p Π)``) |
 
   Two couplings measurably did nothing and were deleted rather than
   moved: `snow_legacy.jl` (a snow flag that nothing read, and that could
@@ -414,7 +414,7 @@ other limits are on [Run configuration](run_configuration.md).
 * **ONE-e (#454), second part: the urban case on the pipeline and on the
   model's configuration.**
   - **The stage loop is gone.** A built case is a `Domain` of the
-    pipeline (`case.domain`; `UrbanCase.build_domain!`): the case's own
+    pipeline (`case.domain`; `Urban.build_domain!`): the case's own
     component `UrbanCore` (the local hour and the budgets' snapshot first
     in `:clock`; the heat captures of the fixed-gradient top and the open
     faces, with the open faces' θ relaxation, in `:tendencies`) and one
@@ -435,7 +435,7 @@ other limits are on [Run configuration](run_configuration.md).
     configs: `[urban] enabled` makes the domain an urban site, and every
     urban component has a section of the model's schema, generated from
     its `default_options` (`enabled`, default `false`, and its options).
-    `aeolus run` builds and runs the site (`UrbanCase.run_urban!`); the
+    `aeolus run` builds and runs the site (then `UrbanCase.run_urban!`); the
     `urban` run type, its schema and `[physics]` are gone. The configs of
     the four scenarios resolve, field for field and bitwise, to the
     `CaseConfig`s of the fixture (`test/config_berlin.jl`).
@@ -461,22 +461,64 @@ other limits are on [Run configuration](run_configuration.md).
     smoke matrix's 54 runs hash bit for bit as before (3809 hashes of
     the thread-invariance worker's `smoke` section).
 
-  What is still the urban case's own, for the rest of ONE-e: the
-  components run through the `UrbanEntry` adapter (one concrete type,
-  so a selection does not compile the domain anew; their methods take
-  the case, `run_stage!(c, case, Val(S), dt)`, since they read its
-  shared state); `CaseConfig`
-  is the site's resolved configuration that `build_case` reads; the case
-  builds its own core (the Coriolis force, the Smagorinsky coefficient and
-  the sponge in the core's constructor, not the model's `Coriolis`,
-  `SGS` and `Sponge` components) and steps it with its `:timestepper`
-  provider (its adaptive step covers the step it picked in pieces, and
-  the nest shortens it to land on the parent's window), and writes its
-  output, results and diagnostics itself. Its nest parent (`ParentCase`,
-  `ParentConfig`, the `urban_parent` run type) becomes the root
-  `[[domain]]` of the Berlin config once the parent's physics (the tiled
-  surface, the column radiation, TKE, the large-scale forcing) is a set of
-  components: nesting by domains (ONE-f, #455) is built.
+* **ONE-k (#474): the urban site on the model.**
+  - **A component takes the core step.** A component may take its
+    domain's core step itself: `takes_core_step(c)`, `advance_core!(c, d,
+    dt)` (with the pipeline's hooks), `next_dt(c, d)` (its step) and
+    `check_dt(c, d, dt)` (an explicit step it refuses). `step!(d, dt)`
+    runs it in place of the core's `step!`/`step_rk3!`; `pick_dt(model)`
+    and `step!(model)` take the step it picks. The stages after the core
+    see `t0 + dt` (an adaptive step's retried pieces sum to it only to
+    round-off). The urban site is that component: the case object became
+    `UrbanSite <: AbstractComponent`, the first component of its domain,
+    with the site's shared state (its options, geometry, surface bus,
+    tracers, budgets and reference state); its `:timestepper` component
+    takes the step (fixed, adaptive with retried pieces, IMEX). Its
+    sanity check is its `:budgets` entry (a blowup throws, and the run
+    monitor diagnoses it), its frame log its first `:output` entry.
+    `step_case!` and the case's own step are gone.
+  - **The run loop is the model's.** The run loop of `aeolus run`
+    (`SimulationDriver`) asks the component that takes the core step for
+    the run's horizon and steps (`run_begin!`, `run_continues`,
+    `run_end!`; the urban nest prefetches its parent's next window within
+    it, SC-c), the diagnostics row (`step_report`, `run_diagnostics`),
+    the numbers it adds to `results.toml` (`run_results`) and its state
+    arrays for the bitwise comparisons (`state_arrays`).
+    `Components.run_to!(model, t_end)` is the same loop without output,
+    monitor and checkpoints. Gone: `run_case!`, `run_urban!`,
+    `UrbanSiteRun`, the site's NetCDF writer and its restart: the run's
+    writer writes the variables `[output] variables` selects from the
+    domain's catalogue (the site publishes its frame series, tracers,
+    surface maps and the components' fields, and `static_outputs` its
+    geometry), and the site is checkpoint component `urban` of the run's
+    `resume!`.
+  - **The configuration is the model's.** `CaseConfig` (a mutable struct
+    with Julia-side defaults, a keyword and a path constructor) is gone:
+    the site's options are `site_options(cfg)`, a `NamedTuple` read from
+    the resolved model config, changed in TOML or with `--set`.
+  - **The module and its files.** `Aeolus.UrbanCase` is `Aeolus.Urban`,
+    its files under `src/components/urban/` (the components),
+    `src/components/urban/site/` (the site) and
+    `src/components/urban/parent/` (the nest parent).
+
+  Measured: the 54 runs of the smoke matrix (`seed_fog!`, 24 s each)
+  are bit for bit those of the branch base in every state digest (the
+  child, every tracer, Ts, the nest parent), step count, heat closure,
+  water residual and air-heat term, after every commit of ONE-k.
+
+  What is still the site's own: the urban components run through the
+  `UrbanEntry` adapter (one concrete type, so a selection does not
+  compile the domain anew; their methods take the site, `run_stage!(c,
+  case, Val(S), dt)`, since they read its shared state); the site builds
+  its own core (the Coriolis force, the Smagorinsky coefficient and the
+  sponge in the core's constructor, not the model's `Coriolis`, `SGS` and
+  `Sponge` components); and its nest parent (`ParentCase`,
+  `ParentConfig`, run by the `:nesting` component, and alone by the
+  `urban_parent` run type) is not yet a `[[domain]]`: that needs the
+  parent's physics (the tiled surface, the column radiation, TKE on the
+  stretched grid, the large-scale forcing and nudging) as components of a
+  core domain, and the Berlin nest (one-way with the prefetched parent
+  window, two-way, the synthetic inflow) as the model's `ModelNest`.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the

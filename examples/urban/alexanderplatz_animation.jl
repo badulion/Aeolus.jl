@@ -47,8 +47,11 @@ isfile(NCPATH) || error("""
 ncf   = NCDataset(NCPATH)
 nrec  = ncf.dim["time"]
 nrec > 0 || error("$NCPATH contains no time levels — did the run finish?")
-hours = Array(ncf["hour"])
-elevs = Array(ncf["solar_elevation"])
+# the frame's hour and solar elevation are time series (on time_series);
+# each record takes the sample written with it (the same model time)
+at_records(v) = (ts = Array(ncf["time_series"]); [Array(ncf[v])[argmin(abs.(ts .- t))] for t in Array(ncf["time"])])
+hours = at_records("hour")
+elevs = at_records("solar_elevation")
 zc    = Array(ncf["z"])
 hb    = Array(ncf["building_height"])
 k_slice = argmin(abs.(zc .- parse(Float64, get(ENV, "AEOLUS_SLICE_Z", "10"))))

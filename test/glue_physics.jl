@@ -3,36 +3,36 @@
 # function at module level, independent of any case:
 #
 #   * Operators.moist_buoyancy_perturbation! / add_moist_buoyancy!
-#     (from couplings/moist_buoyancy.jl): θ_ρ − θ = θ (0.608 q_v − q_c),
+#     (from components/urban/moist_buoyancy.jl): θ_ρ − θ = θ (0.608 q_v − q_c),
 #     zero level mean over the fluid, the w-face average;
 #   * BuildingEnergy.traffic_heat_flux / add_traffic_heat! (from
-#     couplings/traffic_heat.jl): the heat released equals Q_V × area × dt,
+#     components/urban/traffic_heat.jl): the heat released equals Q_V × area × dt,
 #     on both dynamical cores;
-#   * PlantCanopy.vegetation_canopy_drag (from couplings/veg_drag.jl): each
+#   * PlantCanopy.vegetation_canopy_drag (from components/urban/veg_drag.jl): each
 #     crown integrates to its LAI over k_height layers, the implicit factor;
-#   * Chemistry.traffic_profile (from couplings/aq_chem.jl): floor, peaks;
-#   * SurfaceExchange.aerodynamic_resistance (from couplings/aq_chem.jl):
+#   * Chemistry.traffic_profile (from components/urban/aq_chem.jl): floor, peaks;
+#   * SurfaceExchange.aerodynamic_resistance (from components/urban/aq_chem.jl):
 #     r_a = 1/(C_H U), the neutral log-law value;
-#   * PlantCanopy.apply_tree_shade! (from couplings/sw_modifiers.jl): e^{-kΛ};
+#   * PlantCanopy.apply_tree_shade! (from components/urban/sw_modifiers.jl): e^{-kΛ};
 #   * UrbanSurface.glazing_areal_heat_capacity / glazing_solar_transmittance
-#     (from couplings/glass.jl): Σρcd, R + T + ΣA = 1;
+#     (from components/urban/glass.jl): Σρcd, R + T + ΣA = 1;
 #   * BuildingEnergy.city_buildings / step_city_buildings! /
-#     apply_building_heat! (from couplings/buildings_citymean.jl): the grid
+#     apply_building_heat! (from components/urban/buildings_citymean.jl): the grid
 #     maps carry the zone's release exactly, the air gets it exactly;
-#   * RadiationFog.dew_exchange_columns! (from couplings/fog_dew.jl): water
+#   * RadiationFog.dew_exchange_columns! (from components/urban/fog_dew.jl): water
 #     and latent heat conserved per column, at the column's own air cell;
 #   * Radiosity.direct_absorbed_share! and SolarGeometry.shade_direct_beam!
-#     (from couplings/cloud_shadow.jl): flat ground, sun only, share 1;
-#   * Microphysics.clamp_booked! (from couplings/micro_kessler.jl): the
+#     (from components/urban/cloud_shadow.jl): flat ground, sun only, share 1;
+#   * Microphysics.clamp_booked! (from components/urban/micro_kessler.jl): the
 #     clamp's removal, ρ-weighted;
-#   * Anelastic.hydrostatic_pressure (from core/reference_state.jl): the
+#   * Anelastic.hydrostatic_pressure (from site/reference_state.jl): the
 #     exact isentropic atmosphere, RK4 convergence;
-#   * ColumnRadiation (from couplings/column_radiation.jl): the stitched
+#   * ColumnRadiation (from components/urban/column_radiation.jl): the stitched
 #     column, energy closure of the heating, the TOA insolation, fog, night;
 #   * SurfaceExchange.deliver_surface_fluxes! and MoistThermodynamics.θ_per_heat
-#     (from couplings/surface_exchange.jl, core/reference_state.jl): the air
+#     (from components/urban/surface_exchange.jl, site/reference_state.jl): the air
 #     receives exactly H τ and E τ;
-#   * Radiosity.surface_irradiance! (from couplings/radiosity_sun.jl): the
+#   * Radiosity.surface_irradiance! (from components/urban/radiosity_sun.jl): the
 #     column's shortwave energy and net longwave spread over its surface.
 
 using Test

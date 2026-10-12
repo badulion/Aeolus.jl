@@ -266,7 +266,8 @@ examples/     <case>/<case>.toml + input/*.nc (+ reference data) + optional outp
 test/         module tests, component contract tests, end-to-end tiny configs
 ```
 
-These disappear: `src/urban/` (the `UrbanCase` framework), `src/sbl/` (the
+These disappear: `src/urban/` (the `UrbanCase` framework; gone since ONE-k,
+#474: the urban components are `src/components/urban/`), `src/sbl/` (the
 run type; its case physics becomes components), the run-driver registry, and
 `src/urban/preprocess.jl` and `src/preprocess/` (moved to AeolusPrep.jl).
 
@@ -286,6 +287,22 @@ Every step that is not a physics change must reproduce today's results bit for
 bit, checked on the config digests, the Berlin smoke and the thread-invariance
 harness. Re-captures are allowed only with a stated reason, and assertions are
 never weakened.
+
+**The urban site after ONE-k (#474).** The site is a `Model` of one domain
+stepped by `step!(::Model)` and run by the model's run loop: the
+`UrbanSite` is the domain's first component and its `:timestepper`
+component takes the core step (`Components.takes_core_step`); its output
+is the run's writer's (the site publishes its catalogue), its restart the
+run's checkpoints, its options `site_options(cfg)` of the model's config.
+`UrbanCase`, `CaseConfig`, the case run loop and the site's own output
+and restart are gone; `Aeolus.Urban` lives in `src/components/urban/`.
+Still open for the urban site: its nest parent (`ParentCase`, run by the
+`:nesting` component and alone by the `urban_parent` run type) is not a
+`[[domain]]` yet, because the parent's physics (the tiled surface, the
+column radiation, TKE on the stretched grid, the large-scale forcing and
+nudging) is not yet a set of components of a core domain; and the site
+still builds its own core (Coriolis, Smagorinsky and sponge in the core's
+constructor) instead of using the model's components.
 
 ## Resolved questions (2026-10-09)
 

@@ -32,8 +32,12 @@ _finite_mean(v) = (w = filter(isfinite, v); isempty(w) ? NaN : sum(w) / length(w
 
 function summarize(path)
     f = NCDataset(path)
-    hour = Float64.(Array(f["hour"]))
-    elev = Float64.(Array(f["solar_elevation"]))
+    # the hour and solar elevation are time series (on time_series): the
+    # sample written with each record (the same model time)
+    ts = Array(f["time_series"])
+    rec(v) = [Float64(Array(f[v])[argmin(abs.(ts .- t))]) for t in Array(f["time"])]
+    hour = rec("hour")
+    elev = rec("solar_elevation")
     sfc  = round.(Int, Array(f["surface_class"]))
     Ts   = Array(f["Ts"])
     has_soil = haskey(f, "T_soil1")

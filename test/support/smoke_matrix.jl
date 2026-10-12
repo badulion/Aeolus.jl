@@ -2,7 +2,7 @@
 # by the urban run-type tests (test/urban_run.jl, EX-a #438; formerly the
 # by-hand examples/urban/berlin_checks.jl) and the thread-invariance
 # harness (test/thread_invariance.jl, KA-a #294), which hashes the same
-# runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.UrbanCase`
+# runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.Urban`
 # and loads Aeolus, `interior_view` and `Random.Xoshiro`.
 #
 # Every run is examples/urban/berlin_smoke.toml with `--set`
@@ -53,8 +53,8 @@ The `--set` overrides of `berlin_smoke.toml` for a run of
 [`smoke_specs`](@ref): per urban slot, `<provider>.enabled` of the
 provider the run selects on and every other provider of the slot off; per
 additive component `<name>.enabled`; every option as `<component>.<key>`
-(the nest parent's as `nesting.parent.<key>`); every `CaseConfig` field
-by its key of the model (`BC.CASE_FIELDS`); then the spec's raw overrides.
+(the nest parent's as `nesting.parent.<key>`); every field of the site's options
+by its key of the model (`BC.SITE_FIELDS`); then the spec's raw overrides.
 """
 function smoke_overrides(spec)
     out = String[]
@@ -78,7 +78,7 @@ function smoke_overrides(spec)
         end
     end
     for (f, v) in pairs(spec.fields)
-        keys_ = BC.CASE_FIELDS[f]
+        keys_ = BC.SITE_FIELDS[f]
         length(keys_) == 1 || error("smoke_overrides: the field $f is made of several options ($(join(keys_, ", ")))")
         # the domain's driver paths are top-level keys of a one-domain config
         push!(out, replace(keys_[1], r"^domain\." => "") * "=" * BC.toml_literal(v))
@@ -86,11 +86,11 @@ function smoke_overrides(spec)
     return vcat(out, spec.extra)
 end
 
-"The `CaseConfig` of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
-smoke_config(spec) = BC.CaseConfig(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec)))
+"The site's options (`site_options`) of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
+smoke_config(spec) = BC.site_options(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec)))
 
 """
-    smoke_matrix(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,CaseConfig}}
+    smoke_matrix(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,NamedTuple}}
 
 The smoke-test configurations: [`smoke_config`](@ref) of every run of
 [`smoke_specs`](@ref).
@@ -102,7 +102,7 @@ smoke_matrix(components = BC.URBAN_COMPONENTS) = [label => smoke_config(spec) fo
 
 The smoke runs derived from `components` (see the smoke section of
 docs/src/design/berlin_ledgers.md), each `label => (physics, options, fields, extra)`:
-the selection (per urban slot the provider, per additive component on/off), the per-component options, `CaseConfig` field
+the selection (per urban slot the provider, per additive component on/off), the per-component options, site option
 values and raw overrides that run sets over `berlin_smoke.toml`. Every
 run has every additive coupling on; a run that selects a coupling
 declared incompatible with an additive one switches that additive
@@ -176,7 +176,7 @@ function smoke_specs(components = BC.URBAN_COMPONENTS)
             # the observed initial state of the flagship (#247): the smoke
             # scenario's idealised profile replaced by the summer default
             # sounding (Lindenberg, 29 June 2019, interpolated to noon)
-            mk("summer sounding, everything on"; sounding = BC.CaseConfig(berlin_toml("summer")).sounding)]
+            mk("summer sounding, everything on"; sounding = site_config(berlin_toml("summer")).sounding)]
     for C in components
         (BC.slot(C) === nothing || (C in BC.URBAN_DEFAULTS)) && continue
         push!(runs, mk("$(BC.slot(C)) = $(BC.provider(C))";

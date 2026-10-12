@@ -599,7 +599,7 @@ does not affect.
 ## Not here yet
 
 The Berlin output file
-(`src/urban/core/output.jl`) does not carry the provenance
+(`src/components/urban/site/output.jl`) does not carry the provenance
 attributes yet: it is not written inside a run folder.
 
 ## Reference

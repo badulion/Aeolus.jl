@@ -13,13 +13,15 @@
 # 256³ c2r transform under MEASURE segfaults intermittently at 10-14
 # threads (#397), so run `kernels` and `dns` with AEOLUS_FFTW_PLANNER=estimate.
 #
-# flagship: the Berlin case `CaseConfig("…/berlin_summer.toml")`: 64 × 64 × 64 child, nested
+# flagship: the Berlin case `examples/urban/berlin_summer.toml`: 64 × 64 × 64 child, nested
 #   in its Aeolus parent (the #265 default), no output file. `nwarm` steps
-#   (compilation), then `nsteps` timed steps. Per step: `step_dt(case)` and
-#   `step_case!` timed around the call (min and mean), and every
-#   `timing_report` entry (`case.timing`) as ms per timed step. "driver" is
-#   `step_case!` minus the entries it contains (the stage loop, the cadence
-#   tests, the sanity check). Entries whose cadence did not fire in the
+#   (compilation), then `nsteps` timed steps. Per step: the pick
+#   (`Components.pick_dt(model)`) and the step (`step!(model, dt)`, the
+#   urban site's step through the pipeline, ONE-k #474; `step_case!`
+#   before) timed around the call (min and mean), and every stage entry's
+#   wall time (`site.timing`) as ms per timed step. "driver" is the step
+#   minus the entries it contains (the pipeline, the cadence tests, the
+#   sanity check). Entries whose cadence did not fire in the
 #   timed window (radiation, soil, ...) are then timed per call: two more
 #   calls each, the minimum. The issue asked for 300 + 300 steps; the
 #   default case fails near step 12 (#392) and long Berlin runs are paused,
@@ -44,8 +46,8 @@
 #   (threshold = 0) over 1 to 4096 rows, against the serial loop.
 #
 # AEOLUS_BENCH_PREFETCH=1 (flagship, SC-c #403): the nest's parent step of
-#   the next window runs on its own task while the child steps (what
-#   `run_case!` does). It is started after the warm-up — `run_case!` would
+#   the next window runs on its own task while the child steps (what a
+#   run does). It is started after the warm-up — a run would
 #   start it when the open window opened, during step 1's compilation —
 #   and the run's horizon ends with that window, so the timed steps hold
 #   the same parent work as the sequential run: one parent step, here
@@ -83,16 +85,19 @@ end
 # ---------------------------------------------------------------------------
 
 function bench_berlin(mode; nwarm = 2, nsteps = 9)
-    BC = Aeolus.UrbanCase
-    kw = mode == "child" ? (physics = Dict{Symbol,Any}(:nesting => false),) : NamedTuple()
-    cfg = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"); output_path = nothing, kw...)
+    BC = Aeolus.Urban
+    CP = Aeolus.Components
+    ovr = mode == "child" ? ["nesting.enabled=false"] : String[]
+    cfg = BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml");
+                                          overrides = vcat(ovr, "output.variables=[]")))
     tb = @elapsed case = BC.build_case(cfg)
+    model, d = case.model, case.domain
     m = case.mesh
     @printf("%s: %d × %d × %d child, -t %d, build %.1f s\n", mode, m.Nx, m.Ny, m.Nz, NT, tb)
     dtw = 0.0
     for _ in 1:nwarm
-        dtw = BC.step_dt(case)
-        BC.step_case!(case, dtw) || error("blowup in warm-up")
+        dtw = CP.pick_dt(model)
+        step!(model, dtw; checked = false)
     end
     nest = BC.find_coupling(case, :nesting)
     wp0 = nest === nothing ? 0.0 : nest.wall_parent
@@ -110,20 +115,20 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
     empty!(case.timing)
     for _ in 1:nsteps
         dt = 0.0
-        push!(t_dt, @elapsed dt = BC.step_dt(case))
+        push!(t_dt, @elapsed dt = CP.pick_dt(model))
         t_old = case.sim.t
-        for (S, es) in case.schedule, e in es
-            BC.fires(e.cadence, case.clock.n + 1, t_old, t_old + dt) || continue
-            k = (S, BC.coupling_name(e.coupling))
+        for c in d.components, st in CP.stages(c)
+            CP._due(st, t_old, t_old + dt) || continue
+            k = (st.name, CP.component_name(c))
             fired[k] = get(fired, k, 0) + 1
         end
-        push!(t_step, @elapsed(BC.step_case!(case, dt) || error("blowup at step $(case.clock.n)")))
+        push!(t_step, @elapsed(step!(model, dt; checked = false)))
     end
     n = case.clock.n - n0
     @printf("  %d timed steps (steps %d-%d), simulated %.2f s\n", n, n0 + 1, case.clock.n, case.sim.t)
     ms(v) = 1e3 * v
-    @printf("  %-34s min %9.2f  mean %9.2f ms\n", "step_dt", ms(minimum(t_dt)), ms(sum(t_dt) / n))
-    @printf("  %-34s min %9.2f  mean %9.2f ms\n", "step_case!", ms(minimum(t_step)), ms(sum(t_step) / n))
+    @printf("  %-34s min %9.2f  mean %9.2f ms\n", "pick_dt", ms(minimum(t_dt)), ms(sum(t_dt) / n))
+    @printf("  %-34s min %9.2f  mean %9.2f ms\n", "step!(model)", ms(minimum(t_step)), ms(sum(t_step) / n))
     row(mode, "step_dt", ms(sum(t_dt) / n), "ms")
     row(mode, "step_dt_min", ms(minimum(t_dt)), "ms")
     row(mode, "step_case", ms(sum(t_step) / n), "ms")
@@ -139,7 +144,7 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
     drv = sum(t_step) - inside
     # the air-heat ledger time of the :body_force / :post_predictor hooks is
     # inside (:dynamics, :step!) and in (:ledger, :air_heat): counted twice
-    @printf("  %-34s %9.3f ms/step\n", "driver (step_case! − entries)", ms(drv / n))
+    @printf("  %-34s %9.3f ms/step\n", "driver (step! − entries)", ms(drv / n))
     row(mode, "driver", ms(drv / n), "ms")
     nest === nothing || wait_parent_step!(nest.run)     # the parent may be read now
     if nest !== nothing
@@ -166,10 +171,12 @@ function bench_berlin(mode; nwarm = 2, nsteps = 9)
     # the warm-up did not take; the radiosity then reuses its factorisations,
     # so its per-call cost is measured on its own: KA-n, ka_port.md)
     dt = BC.step_dt(case)
-    for (S, es) in case.schedule, e in es
-        k = (S, BC.coupling_name(e.coupling))
-        (get(fired, k, 0) > 0 || S in (:body_force, :post_predictor)) && continue
-        t = tmin(() -> BC.timed_run!(case, e, S, dt), 2; warm = 1)
+    for e in d.components, st in CP.stages(e)
+        S = st.name
+        e isa BC.UrbanEntry || continue
+        k = (S, CP.component_name(e))
+        (get(fired, k, 0) > 0 || S in (:tendencies, :body_force, :post_predictor)) && continue
+        t = tmin(() -> CP.run_stage!(e, d, Val(S), dt), 2; warm = 1)
         @printf("  per call %-16s %-17s %9.2f ms\n", S, k[2], ms(t))
         row(mode, "call:$(S)/$(k[2])", ms(t), "ms")
     end
@@ -180,17 +187,17 @@ const N_THREADED = Threads.Atomic{Int}(0)
 const N_SERIAL = Threads.Atomic{Int}(0)
 
 function count_launches(; nwarm = 2, nsteps = 9)
-    BC = Aeolus.UrbanCase
-    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"); output_path = nothing))
+    BC = Aeolus.Urban
+    case = BC.build_case(BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"))))
     for _ in 1:nwarm
-        BC.step_case!(case, BC.step_dt(case))
+        step!(case.model)
     end
     # count every decision from here on (the method is replaced for this process)
     @eval Aeolus.Backends runs_serially(b::CPUBackend, npoints::Integer = typemax(Int)) =
         (s = b.serial || Threads.nthreads() == 1 || npoints < b.threshold;
          Threads.atomic_add!(s ? $N_SERIAL : $N_THREADED, 1); s)
     for _ in 1:nsteps
-        Base.invokelatest(BC.step_case!, case, Base.invokelatest(BC.step_dt, case))
+        Base.invokelatest(step!, case.model)
     end
     @printf("launches per flagship step (-t %d, %d steps): threaded %.0f, serial %.0f\n",
             NT, nsteps, N_THREADED[] / nsteps, N_SERIAL[] / nsteps)

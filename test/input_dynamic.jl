@@ -3,7 +3,7 @@
 # the large-scale and surface forcing; sounding, case-table and
 # Aeolus-parent drivers. The preprocessors that write the sounding drivers
 # are AeolusPrep.jl's since ONE-h (#457); they call Aeolus's writer
-# (`UrbanCase.write_sounding_driver`), which the tests here call too
+# (`Urban.write_sounding_driver`), which the tests here call too
 # (`write_sounding_driver` below), and check what a run reads. The
 # case-table drivers of the SBL configs are committed
 # (examples/sbl/input/, ONE-g #456).
@@ -51,7 +51,7 @@ using Aeolus.NCIO: NCDataset
 using Aeolus.IO: read_run_toml
 import NCDatasets
 
-const BCD = Aeolus.UrbanCase
+const BCD = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
@@ -62,8 +62,8 @@ const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
 const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.csv"))
 
-"The sounding driver of the urban run `cfg` at `out` (`UrbanCase.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
-write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.CaseConfig(cfg), out; preprocessor = "test/input_dynamic.jl")
+"The sounding driver of the urban run `cfg` at `out` (`Urban.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
+write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.site_options(cfg), out; preprocessor = "test/input_dynamic.jl")
 
 
 # A synthetic boundary snapshot: every field has the value `val` everywhere.
@@ -196,15 +196,15 @@ end
     # a case starting at another time than the sounding driver (08 instead
     # of 06 CEST): the same series with the axis moved and the ground
     # pressure at its own start, bitwise the CSV read in memory
-    a = BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"); start_h = 8.0))
-    b = BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"); start_h = 8.0, dynamic = nothing))
+    a = BCD.case_sounding(site_config(berlin_toml("summer"); start_h = 8.0))
+    b = BCD.case_sounding(site_config(berlin_toml("summer"); start_h = 8.0, dynamic = nothing))
     @test a.inputs.init_time == "2019-06-29T04:00:00Z" && b.inputs.init_time == "2019-06-29T06:00:00Z"
     @test a.t0 == b.t0 == 6 * 3600.0 && isequal(a.p_surface, b.p_surface) && a.times == b.times
     @test all(k -> (x = getproperty(a.profiles, k); y = getproperty(b.profiles, k);
                     x.z == y.z && x.t == y.t && isequal(x.values, y.values)), (:θ, :qv, :u, :v, :p))
-    @test a.p_surface != BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"))).p_surface
+    @test a.p_surface != BCD.case_sounding(site_config(berlin_toml("summer"))).p_surface
     # the parent-made driver offered as the initial state of a case without the offline nest
-    msg = errmsg(() -> BCD.case_sounding(BCD.CaseConfig(berlin_toml("summer"); dynamic = p)))
+    msg = errmsg(() -> BCD.case_sounding(site_config(berlin_toml("summer"); dynamic = p)))
     @test occursin("not a sounding driver", msg)
 end
 
@@ -302,10 +302,10 @@ end
             "summer_zi" => BCD.initial_inversion_height(cfg), "summer_zi_max" => BCD.sounding_zi_max(cfg),
             "summer_ug" => digest([Ug(z, t) for (z, t) in tz]), "summer_vg" => digest([Vg(z, t) for (z, t) in tz]))
     end
-    file = BCD.CaseConfig(berlin_toml("summer"))
+    file = site_config(berlin_toml("summer"))
     @test file.dynamic == joinpath(berlin_configs_dir(), "input", "berlin_20190629_dynamic.nc")
     @test BCD.case_sounding(file).inputs.attributes["dynamic_source"] == "sounding"
-    for (label, cfg) in (("sounding driver", file), ("CSV in memory", BCD.CaseConfig(berlin_toml("summer"); dynamic = nothing)))
+    for (label, cfg) in (("sounding driver", file), ("CSV in memory", site_config(berlin_toml("summer"); dynamic = nothing)))
         got = initial_digests(cfg)
         bad = sort!([k for (k, v) in got if !isequal(M[k], v)])
         isempty(bad) || @info "initial state from the $label differs from master" bad
@@ -316,7 +316,7 @@ end
 end
 
 @testset "InputDrivers dynamic: the committed summer sounding driver" begin
-    cc = BCD.CaseConfig(berlin_toml("summer"))
+    cc = site_config(berlin_toml("summer"))
     @test filesize(cc.dynamic) <= 2 * 1024^2
     @test isempty(check_driver(cc.dynamic, DYNAMIC_SCHEMA))
     NCDataset(cc.dynamic) do ds
@@ -354,7 +354,7 @@ end
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
     @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(out)
-    case = r.runs[1].obj.case
+    case = urban_site(r.runs[1].obj)
     @test BCD.case_sounding(case.cfg) !== nothing && case.cfg.sounding === nothing
     # the CSV path, run the same way in this process. The 12-step state is
     # compared here rather than against digests captured on master: the CSV
@@ -364,7 +364,7 @@ end
     # matched every time.
     csv = load_run_config(ID_SMOKE; overrides = ["urban.sounding=\"$ID_CSV\"", "time.nsteps=12",
                                                  "fftw.planner=\"estimate\""])
-    ref = run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj.case
+    ref = urban_site(run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj)
     want, got = berlin_state(ref), berlin_state(case)
     @test sort(collect(keys(got))) == sort(collect(keys(want))) == sort(Symbol.(keys(ID_MASTER["smoke_sounding_state"])))
     bad = sort!([k for k in keys(want) if !isequal(got[k], want[k])])
@@ -388,15 +388,15 @@ end
         # driver, so an offline child cannot replay them (it would add its own)
         t0 = time()
         nogen = ["inflow_turbulence.enabled=false"]
-        online = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen, output_path = nothing,
+        online = BCD.build_case(site_config(berlin_toml("smoke"); overrides = nogen,
                                                child_boundaries = drv))
-        BCD.run_case!(online)
+        run_site!(online)
         t_online = time() - t0
         nc = BCD.find_coupling(online, :nesting)
         st_on = berlin_state(online)
         # recording does not change the run: the same case without the recorder
-        plain = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen, output_path = nothing))
-        BCD.run_case!(plain)
+        plain = BCD.build_case(site_config(berlin_toml("smoke"); overrides = nogen))
+        run_site!(plain)
         st_plain = berlin_state(plain)
         @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
         d = read_dynamic_driver(drv; mesh = online.mesh)
@@ -414,7 +414,7 @@ end
         @test r.fields_equal && r.diagnostics_equal && r.config_equal
         rec = read_run_toml(r.runs[1].folder.path)
         @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv)
-        off = r.runs[1].obj.case
+        off = urban_site(r.runs[1].obj)
         oc = BCD.find_coupling(off, :nesting)
         @test BCD.offline(oc) && oc.parent === nothing && oc.windows == nc.windows
         st_off = berlin_state(off)
@@ -441,9 +441,9 @@ end
     d = read_dynamic_driver(out; mesh = m)
     @test d.boundary !== nothing && length(d.boundary.time) == 1 && haskey(d.tables, :profile_theta)
     @test d.attributes["dynamic_source"] == "sounding"
-    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = ["nesting.enabled=false"], output_path = nothing,
+    run(dyn) = (c = BCD.build_case(site_config(berlin_toml("smoke"); overrides = ["nesting.enabled=false"],
                                                   lateral = :open, sounding = ID_CSV, dynamic = dyn));
-                BCD.run_case!(c); c)
+                run_site!(c); c)
     a, b = run(nothing), run(out)
     @test all(st -> st.data isa ProfileBoundaryData, open_boundary_states(a.sim))
     @test all(st -> st.data isa FileBoundaryData, open_boundary_states(b.sim))

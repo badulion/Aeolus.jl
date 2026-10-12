@@ -1,13 +1,13 @@
 # The Berlin case configured from TOML (CFG-c, #358): the urban site of the
-# model (src/urban/core/config_schema.jl, EX-a #438, ONE-e #454) and the
+# model (src/components/urban/site/config_schema.jl, EX-a #438, ONE-e #454) and the
 # configs examples/urban/berlin_*.toml.
 #
 # Acceptance tests of the issue covered here:
-#   * field for field: CaseConfig(load_run_config("berlin_<s>.toml")) equals
+#   * field for field: site_options(load_run_config("berlin_<s>.toml")) equals
 #     the fixture captured from the Julia-built scenarios before SCENARIOS
 #     was deleted (test/data/config_berlin/fixture.toml), floats bitwise,
 #     for the case and the nest parent it runs;
-#   * one source of truth: CaseConfig and ParentConfig fields map one to
+#   * one source of truth: the site's options and ParentConfig fields map one to
 #     one onto the schema's options, and their defaults are the schema's;
 #   * bit-identical to the Julia-built case: berlin_smoke.toml run 12 steps
 #     through run_config gives the fixture's state digests (child, tracers,
@@ -32,7 +32,7 @@ using Aeolus.IO: read_run_toml, diagnostics_path
 using Aeolus.Fields: interior_view
 using Logging
 
-const BCC = Aeolus.UrbanCase
+const BCC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
@@ -76,14 +76,14 @@ as_toml(x) = TOML.parse(sprint(TOML.print, x))
 @testset "Config berlin: the four scenarios equal the Julia-built ones, field for field" begin
     for s in ("summer", "winter", "smoke", "mitte_sample")
         cfg = load_run_config(berlin_toml(s))
-        cc = BCC.CaseConfig(cfg)
+        cc = BCC.site_options(cfg)
         d_case = table_diff(BERLIN_FIXTURE[s]["case"], as_toml(normalise(cc)), "case")
         d_par = table_diff(BERLIN_FIXTURE[s]["parent"], as_toml(normalise(BCC.nest_parent_config(cc))), "parent")
         isempty(d_case) && isempty(d_par) || @info "berlin_$s.toml differs from the fixture" d_case d_par
         @test isempty(d_case)
         @test isempty(d_par)
-        # CaseConfig(path) loads the same file
-        @test isempty(table_diff(as_toml(normalise(BCC.CaseConfig(berlin_toml(s)))), as_toml(normalise(cc))))
+        # site_config(path) (the tests' helper over --set overrides) loads the same file
+        @test isempty(table_diff(as_toml(normalise(site_config(berlin_toml(s)))), as_toml(normalise(cc))))
     end
     # winter is a complete file of its own (no extends, ONE-b #451); its
     # difference from the summer file, stated explicitly (its ts_water_offset
@@ -98,17 +98,17 @@ as_toml(x) = TOML.parse(sprint(TOML.print, x))
                  "domain[1].dynamics.theta0", "domain[1].urban.sounding", "domain[1].dynamic_driver",
                  "domain[1].urban.theta_surface", "domain[1].urban.qv0", "domain[1].urban.ts0",
                  "domain[1].urban.t_soil0"])
-    @test_throws ConfigError BCC.CaseConfig(berlin_toml("autumn"))
+    @test_throws ConfigError load_run_config(berlin_toml("autumn"))
 end
 
 @testset "Config berlin: one source of truth for the defaults" begin
     sch = driver_schema("model")
     sec(n) = sch.sections[findfirst(x -> x.name == n, sch.sections)]
-    # every CaseConfig field is made of the model's options, each used once
-    @test collect(keys(BCC.CASE_FIELDS)) == collect(fieldnames(BCC.CaseConfig))
+    # every field of the site's options is made of the model's options, each used once
+    @test collect(keys(BCC.SITE_FIELDS)) == collect(keys(BCC.site_options(BCC.default_run_config())))
     used = String[]
     names = [String(BCC.component_name(C)) for C in BCC.URBAN_COMPONENTS]
-    for keys_ in values(BCC.CASE_FIELDS), k in keys_
+    for keys_ in values(BCC.SITE_FIELDS), k in keys_
         s_, o = split(k, '.')
         if s_ == "*"                 # every urban component's section: enabled and its options (components)
             for n in names, x in sec(n).options
@@ -144,7 +144,7 @@ end
     @test collect(keys(BCC.PARENT_FIELDS)) == collect(fieldnames(BCC.ParentConfig))[2:end]
     @test sort(collect(values(BCC.PARENT_FIELDS))) == sort([o.key for o in ps.options])
     # the struct defaults are the schema's
-    c = BCC.CaseConfig()
+    c = BCC.site_options(BCC.default_run_config())
     dflt = BCC.default_run_config()
     @test c.size == dflt.grid.size && c.ν === dflt.dynamics.nu && c.θ_top === :initial_gradient
     @test c.cadence == Dict(:radiation => 600.0, :soil => 30.0, :output => 1800.0)
@@ -156,16 +156,15 @@ end
     @test p.extent == (6000.0, 6000.0, 3000.0) && p.refinement == (2, 2, 4) && isnan(p.z_g)
     @test p.Q_surface isa BCC.ConstantForcing && p.Q_surface(3600.0) == 0.0
     @test p.u_init === :geostrophic && p.θ_init === nothing
-    # a field that does not exist is an error, not silently ignored
-    @test_throws ArgumentError BCC.CaseConfig(; nstep = 3)
+    # a key that does not exist is an error, not silently ignored
+    @test_throws ConfigError load_run_config(berlin_toml("smoke"); overrides = ["urban.nstep=3"])
     @test_throws ArgumentError BCC.ParentConfig(c; refinment = (2, 2, 2))
     # a component's options change with an override of its section (the
     # smoke file's nest parent survives one of another component's); the
-    # components are not CaseConfig keywords (ONE-e, #454)
-    sm = BCC.CaseConfig(berlin_toml("smoke"); overrides = ["pollutant.tau=60.0"])
+    # components are not fields of the site's options (ONE-e, #454)
+    sm = site_config(berlin_toml("smoke"); overrides = ["pollutant.tau=60.0"])
     @test sm.components[:pollutant].tau == 60.0
     @test sm.components[:nesting].parent.refinement == (4, 4, 8)
-    @test_throws ArgumentError BCC.CaseConfig(berlin_toml("smoke"); physics = Dict(:nesting => false))
     # every urban component is off until its section enables it: a model
     # config without [urban] is no urban site, and enables none of them
     bare = load_run_config(IOBuffer(""))
@@ -173,20 +172,20 @@ end
 end
 
 @testset "Config berlin: the analysis buffer of the observation diagnostics (#268)" begin
-    @test BCC.CaseConfig().analysis_buffer == BCC.ANALYSIS_BUFFER_DEFAULT == 140.0
-    sm = BCC.CaseConfig(berlin_toml("smoke"))
+    @test BCC.site_options(BCC.default_run_config()).analysis_buffer == BCC.ANALYSIS_BUFFER_DEFAULT == 140.0
+    sm = site_config(berlin_toml("smoke"))
     m = RegularGrid(; size = sm.size, extent = sm.extent, halo = sm.halo)
     A = BCC.analysis_columns(sm, m)            # 31.25 m = 2 cells of 15.6 m from each nest face
     @test sm.analysis_buffer == 31.25 && size(A) == (16, 16) && count(A) == 12 * 12
     @test all(A[3:14, 3:14]) && !any(A[1:2, :]) && !any(A[:, 15:16])
     # the periodic box has no inflow face: every column counts
-    pb = BCC.CaseConfig(berlin_toml("smoke"); overrides = ["nesting.enabled=false"])
+    pb = site_config(berlin_toml("smoke"); overrides = ["nesting.enabled=false"])
     @test all(BCC.analysis_columns(pb, m))
 end
 
 @testset "Config berlin: the components' sections and their options" begin
     smoke = berlin_toml("smoke")
-    ld(ovr...) = BCC.CaseConfig(load_run_config(smoke; overrides = String[ovr...]))
+    ld(ovr...) = BCC.site_options(load_run_config(smoke; overrides = String[ovr...]))
     # the form of an option is the form of its default
     c = ld("geostrophic.mode=\"nudging\"", "geostrophic.u_g=3",
            "geostrophic.tau=900.0",                    # τ: its ASCII key
@@ -231,16 +230,15 @@ end
     f = t -> 1e-3 * sin(t)
     cfg2 = with(cfg, "nesting.parent" => Dict("q_surface" => f))
     @test !isempty(nonreplayable_keys(cfg2)) && all(k -> occursin("nesting", k), nonreplayable_keys(cfg2))
-    @test BCC.nest_parent_config(BCC.CaseConfig(cfg2)).Q_surface === f
+    @test BCC.nest_parent_config(BCC.site_options(cfg2)).Q_surface === f
     @test BCC.toml_literal(BCC.SeriesForcing([0.0, 1.0], [2.0, 3.0])) ==
           "{kind = \"series\", t = [0.0, 1.0], value = [2.0, 3.0]}"
     @test_throws ArgumentError BCC.toml_form(f)
-    # [urban] netcdf in [output] path; "none" → no file; the run folder's output/ under run_config
-    c = BCC.CaseConfig(load_run_config(berlin_toml("summer")))
-    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "output", "alexanderplatz.nc"))
-    c = BCC.CaseConfig(load_run_config(berlin_toml("summer"); overrides = ["output.path=\"none\""]); run_output = "/tmp/x")
-    @test c.output_path == "/tmp/x/alexanderplatz.nc"
-    @test ld().output_path === nothing
+    # the NetCDF file is the run's writer's ([output] netcdf in [output] path,
+    # ONE-k #474): the flagship's for the renderers, none for the smoke run
+    su = load_run_config(berlin_toml("summer"))
+    @test su.output.netcdf == "alexanderplatz.nc" && "Ts" in su.output.variables && "H_sfc" in su.output.variables
+    @test isempty(load_run_config(smoke).output.variables)
     # the periods
     @test ld("urban.surface_period=2.0").cadence[:surface] == 2.0
     @test !haskey(ld().cadence, :surface)
@@ -277,7 +275,7 @@ end
     e = err("nesting.z_anterp=\"roof\"")
     @test occursin("z_anterp", errtext(e)) && occursin("canopy", errtext(e))
     # θ top: a name or a number
-    @test BCC.CaseConfig(load_run_config(smoke; overrides = ["urban.theta_top=0.003"])).θ_top === 0.003
+    @test BCC.site_options(load_run_config(smoke; overrides = ["urban.theta_top=0.003"])).θ_top === 0.003
     @test occursin("theta_top", errtext(err("urban.theta_top=\"lid\"")))
     # checkpoints (#269): on with the Boussinesq core; the sound-proof cores have none
     @test load_run_config(smoke; overrides = ["checkpoint.every_steps=5"]).checkpoint.every_steps == 5
@@ -304,11 +302,11 @@ end
     @test r.fields_equal
     isempty(r.fields_differing) || @info "fields differing in the round trip" r.fields_differing
     @test r.diagnostics_equal && r.config_equal
-    case = r.runs[1].obj.case
+    case = urban_site(r.runs[1].obj)
     st = BCC.case_state(case)
     # the nest is on: the parent's fields are compared too
     @test :parent_θ in keys(st) && :parent_qv in keys(st) && :qv in keys(st)
-    # bit-identical to build_case(CaseConfig(:smoke)) on master (the fixture's digests; ESTIMATE),
+    # bit-identical to the Julia-built smoke case on master (the fixture's digests; ESTIMATE),
     # apart from the named one-time change of KA-m (#301), the fused-exponential
     # saturation vapour pressure, for which the 13 child digests were re-recorded
     want = BERLIN_FIXTURE["smoke_digests"]
@@ -385,11 +383,11 @@ end
 end
 
 @testset "Config berlin: the log events are structured and carry the diagnostics' values (#338)" begin
-    cc = BCC.CaseConfig(load_run_config(berlin_toml("smoke"); overrides = ["fftw.planner=\"estimate\""]))
+    cc = BCC.site_options(load_run_config(berlin_toml("smoke"); overrides = ["fftw.planner=\"estimate\""]))
     case = BCC.build_case(cc)
     tl = Test.TestLogger(min_level = Logging.Info)
     with_logger(tl) do
-        BCC.run_case!(case)
+        run_site!(case)
     end
     recs = filter(r -> get(r.kwargs, :subsystem, nothing) === :urban, tl.logs)
     ev(e) = filter(r -> get(r.kwargs, :event, nothing) === e, recs)
@@ -437,16 +435,16 @@ end
     @test all(p -> length(Aeolus.RunLog.evaluate_profile(p)) == case.mesh.Nz, ps)
 end
 
-# #392: step_case!(case, cfg.dt) on the default case overrode the adaptive
+# #392: step!(model, cfg.dt) on the default case overrode the adaptive
 # step (2 s against a stable step of 0.09-0.47 s); the dynamics guard does
 # not test the CFL number, so the run amplified (|v| 7.8 -> 49 m/s) and
 # failed at step 16. A dt above the stepper's stable_dt is now rejected
 # before any stage runs. The 20-step default-case run is the "flagship"
 # part of test/urban_checks.jl.
-@testset "Config berlin: step_case! rejects a dt above the adaptive stable step (#392)" begin
-    case = BCC.build_case(BCC.CaseConfig(berlin_toml("smoke")))
+@testset "Config berlin: step!(model, dt) rejects a dt above the adaptive stable step (#392)" begin
+    case = BCC.build_case(site_config(berlin_toml("smoke")))
     for _ in 1:2
-        @test BCC.step_case!(case)
+        @test (step!(case.model); !case.clock.blowup)
     end
     ts = BCC.timestepper(case)
     @test BCC.variable_dt(typeof(ts))
@@ -465,7 +463,7 @@ end
     # rejected before any stage runs: clock, time and state unchanged
     n0, t0, u0 = case.clock.n, case.sim.t, copy(interior_view(case.sim.u))
     err = try
-        BCC.step_case!(case, 1.5lim); nothing
+        step!(case.model, 1.5lim); nothing
     catch e
         e
     end
@@ -474,7 +472,7 @@ end
     # an explicit dt within it is taken (the nest needs the stepper's own pick:
     # it lands on the parent window): one piece, no retry, CFL ≤ C_advective
     p0, r0 = s.pieces, s.retries
-    @test BCC.step_case!(case, dt_ok)
+    @test (step!(case.model, dt_ok); !case.clock.blowup)
     @test case.sim.t ≈ t0 + dt_ok && s.pieces == p0 + 1 && s.retries == r0
     @test dt_ok * ts.rate <= ts.constraints.C_advective + 1e-9
 end

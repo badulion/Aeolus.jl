@@ -287,9 +287,9 @@ public entry points you can compose:
 
 `examples/urban/berlin_summer.toml` is **the** simulation, run by
 `julia --project -m Aeolus run`: no script in `examples/urban` integrates
-the equations (#438). The run type is `Aeolus.UrbanCase` (the `urban`
-driver; `src/UrbanCase.jl`), with every physics coupling in its own file
-under `src/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
+the equations (#438). The run type is `Aeolus.Urban` (the `urban`
+driver; `src/Urban.jl`), with every physics coupling in its own file
+under `src/components/urban/`. The [Berlin case design page](../design/berlin_case.md)
 describes the registry, the stage loop and how to add a coupling.
 Its configuration is `examples/urban/berlin_summer.toml`;
 `--set time.nsteps=…` sets the number of steps and `--set output.cadence=…`
@@ -369,8 +369,8 @@ building-adjacent and park column's surface *is* a `SoilThermalColumn`,
 stepped by the Berlin case's surface exchange with Monin–Obukhov fluxes
 from the first air cell, with its soil water (`hydrology = true`), so β
 follows the top layer. Roofs, water and glass are `Radiation.SlabLand`
-surfaces. `UrbanSoil` / `step_soil!` and `couplings/soil_urban.jl` are
-gone; `couplings/ground_soil.jl` registers the soil columns. See
+surfaces. `UrbanSoil` / `step_soil!` and `components/urban/soil_urban.jl` are
+gone; `components/urban/ground_soil.jl` registers the soil columns. See
 `docs/src/design/berlin_surface_radiation.md` for the design and the measured
 effect. The rest of this section describes the #18 arrangement and its
 measurements.
@@ -378,7 +378,7 @@ measurements.
 Below each non-water cell's surface slab the run carried one
 `SoilThermalColumn` from `Aeolus.SoilColumn` (Phase 46, #18). It replaces
 a three-layer explicit soil that was written into the example. The
-example's `UrbanSoil` / `step_soil!` (in `couplings/soil_urban.jl`) only
+example's `UrbanSoil` / `step_soil!` (in `components/urban/soil_urban.jl`) only
 couples that column to the slab, and does no soil physics of its own:
 
 - **The column.** It uses the 10 CLM2–4.5 exponential layers down to

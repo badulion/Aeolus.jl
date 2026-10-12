@@ -1,4 +1,4 @@
-# The urban site of the model (EX-a #438, ONE-e #454): Aeolus.UrbanCase,
+# The urban site of the model (EX-a #438, ONE-e #454): Aeolus.Urban,
 # a model config with `[urban] enabled`, and the `urban_parent` run driver.
 # Small synthetic setups:
 #
@@ -22,7 +22,7 @@ using Aeolus.Config
 using Aeolus.Fields: interior_view
 using Aeolus.IO: read_run_toml
 
-const UC = Aeolus.UrbanCase
+const UC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))     # digest, berlin_state
 
@@ -92,7 +92,7 @@ end
 @testset "urban run type: the GeoJSON ground from its static driver" begin
     Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
     cfg = load_run_config(SMALL_CITY)
-    cc = UC.CaseConfig(cfg)
+    cc = UC.site_options(cfg)
     case = UC.build_case(cc)
     m, g = case.mesh, case.geom
     # the ground is the GeoJSON's: the 40 m and 20 m blocks are solid to
@@ -105,11 +105,11 @@ end
     @test g.sfc[floor(Int, 175.0 / m.dx) + 1, floor(Int, 150.0 / m.dy) + 1] == UC.SURFACE_WATER
     @test length(g.city.buildings) == 2
     @test endswith(cc.static, joinpath("input", "small_city_static.nc"))
-    UC.run_case!(case)
+    run_site!(case)
     st = UC.case_state(case)
     @test all(a -> all(isfinite, a), values(st))
     # no static driver at all is an error, not a flat city
-    @test_throws ErrorException UC.build_case(UC.CaseConfig(SMALL_CITY; static = nothing))
+    @test_throws ErrorException UC.build_case(site_config(SMALL_CITY; static = nothing))
     # run_results reads the state only: the digests do not move
     d0 = Dict(k => digest(v) for (k, v) in pairs(UC.case_state(case)))
     r = UC.run_results(case)
@@ -158,7 +158,7 @@ end
         endswith(f, ".jl") && push!(jl, joinpath(dir, f))
     end
     # the model is never built or run from a script
-    forbidden = r"UrbanCase|BerlinCase|build_case|run_case!|step_case!|build_parent|run_parent!|step_parent!|CaseConfig|\brun_config\b|Aeolus\.main|load_run_config\([^)]*\)\s*\|>\s*run"
+    forbidden = r"Aeolus\.Urban\b|\bUrban\.|UrbanCase|BerlinCase|build_case|build_model|run_case!|step_case!|run_to!|build_parent|run_parent!|step_parent!|CaseConfig|site_options|\brun_config\b|Aeolus\.main|load_run_config\([^)]*\)\s*\|>\s*run"
     offenders = String[]
     for f in jl, (i, l) in enumerate(readlines(f))
         startswith(lstrip(l), "#") && continue
