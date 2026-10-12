@@ -7,7 +7,7 @@ SSP-RK3 of `Aeolus.TimeSteppers` and the advection kernels of
 `Aeolus.Operators`. No dynamics: the velocity never changes. It is the
 end-to-end check of the mesh, the fields, the halo fill, an advection
 kernel and the time stepper (formerly `examples/scalar_advection_2d.jl`;
-config `examples/configs/scalar_advection_2d.toml`).
+config `examples/scalar_advection_2d/scalar_advection_2d.toml`).
 
 `results.toml`: the time series `t`, `mass` (∫ϕ dV) and `max` (max ϕ),
 every `nsteps ÷ records` steps,

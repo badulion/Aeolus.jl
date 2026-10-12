@@ -18,7 +18,7 @@ the reference's statistics and mean). Formerly
 bulk ratio, the extra pressure gradient, the injected KE flux, the
 development lengths (10 % and 20 %, against its own source and against
 the reference) at the two `heights`, and `x`, TKE(x), −u'w'(x) there
-(normalised by the reference). Config: `examples/nesting/configs/inflow_fetch.toml`.
+(normalised by the reference). Config: `examples/inflow_fetch/inflow_fetch.toml`.
 """
 module InflowFetchDriver
 

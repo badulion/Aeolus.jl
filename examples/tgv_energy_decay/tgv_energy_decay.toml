@@ -1,0 +1,47 @@
+# Kernel demo 01 — Taylor–Green vortex energy decay (formerly
+# examples/kernels/01_tgv_energy_decay.jl): the 3-D TGV of
+# examples/taylor_green_vortex/taylor_green_vortex.toml (32³ on [0, 2π]³, ν = 1e-2,
+# dt = 0.4 Δx/U₀) run to t = 4. In the linear limit the kinetic energy
+# decays as KE₀ exp(−6νt).
+#
+#   julia --project -m Aeolus run examples/tgv_energy_decay/tgv_energy_decay.toml
+#   julia --project=. examples/tgv_energy_decay/plot_tgv_energy_decay.jl runs/<date>_tgv_energy_decay_<id>
+#
+# The plot reads ke_mean from the run's diagnostics.csv.
+
+schema_version = 2
+
+[run]
+name = "tgv_energy_decay"
+
+[grid]
+size = [32, 32, 32]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[dynamics]
+nu = 0.01
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
+
+[sgs]
+closure = "none"
+
+[initial]
+u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+
+[time]
+scheme = "euler"
+dt = 0.07853981633974483        # 0.4 dx / U₀ (the viscous limit 0.4 dx²/2ν is larger)
+duration = 4.0                  # 51 steps of 4/51
+
+[logging]
+diagnostics_cadence = 0.07      # a row every step
+
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
+[test]
+overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]

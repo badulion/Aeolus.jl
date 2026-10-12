@@ -22,7 +22,7 @@ and rms streamwise velocity per (x, z), and from them (all
 integrated to the δ₉₉.₅ edge against Mayle (1991) and Abu-Ghannam & Shaw
 (1980), the downstream ``c_f`` against ``0.0576\\,Re_x^{-1/5}``, the shape
 factor H(x) and the free-stream Tu(x). `results.toml` holds the numbers
-and the plate profiles. Config: `examples/transition/configs/flat_plate_t3a.toml`.
+and the plate profiles. Config: `examples/flat_plate_t3a/flat_plate_t3a.toml`.
 """
 module FlatPlateDriver
 

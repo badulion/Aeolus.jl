@@ -333,7 +333,7 @@ end
     mk(joinpath(model, "docs"), nothing)                        # a Project.toml without a name is not a package
     src_here = joinpath(model, "examples", "data", "s.csv"); mkpath(dirname(src_here)); write(src_here, "x")
     src_prep = joinpath(prep, "data", "berlin", "a.osm"); mkpath(dirname(src_prep)); write(src_prep, "x")
-    out = joinpath(model, "examples", "configs", "input", "d.nc")
+    out = joinpath(model, "examples", "case", "input", "d.nc")
     # the same package: relative to the driver's directory, as before
     @test ref(src_here, out) == "../../data/s.csv"
     # another package: its name and the path in it, wherever it is checked out

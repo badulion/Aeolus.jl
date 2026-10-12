@@ -452,8 +452,7 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
 end
 "The default of `o`, evaluated (a function is called) and checked."
 function _default(o::Option, key)
-    # invokelatest: a driver loaded from DRIVER_FILES during this load is newer than the caller's world
-    d = o.default isa Function ? Base.invokelatest(o.default) : o.default
+    d = o.default isa Function ? o.default() : o.default
     ok, v, why = _coerce(o, d, true, pwd(), key)
     ok || return (false, nothing, "the default $(_show_raw(d)) is invalid: $why")
     return (true, v, "")

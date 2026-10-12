@@ -2224,6 +2224,98 @@ stepped at its own dt; the failure was the forced step.
 **Open after these blocks**: #397 (FFTW MEASURE segfault);
 #238 (implausible Berlin nights).
 
+### One model: core code, configuration and input drivers (epic #459) — not complete
+
+The target is `docs/src/design/single_model.md` (PR #449, agreed with the
+maintainer on 2026-10-09): one model, a run is a TOML configuration plus
+its static and dynamic drivers, physics reaches a run as a component of a
+fixed stage pipeline, and examples are configuration. It supersedes epic
+#443 (EX-a … EX-e) and PRs #447/#448. **Not marked shipped**: the nest
+parent of an urban site and seven validation run types are still legacy
+cases, and the urban site steps its core itself (see "Open" below).
+
+What was built, in the epic's order:
+- **ONE-a (#450 / PR #462)**: `Aeolus.Components`: the component
+  interface, the fixed stage pipeline (stages 6–8 inside the core through
+  concretely typed hooks), `Domain` and `Model`; advection, SGS,
+  Coriolis, surface θ flux and sponge as components. 28 config variants
+  reproduce master's state digests bit for bit through `Model`.
+- **ONE-b (#451 / PR #466)**: schema version 2: no run types for the
+  model, one section per component, `[[domain]]` with per-domain
+  overrides, slot/requires/incompatible validation, a bare config is a
+  minimal dry LES, no `extends`.
+- **ONE-c (#452 / PR #467)**: one budget system (`Aeolus.BudgetSystem`)
+  and one output writer selecting from component catalogues.
+- **ONE-d (#453 / PR #468)**: `[checks]`, `results.toml` and exit code 3.
+  Dry CBL at 16³: energy closure 4.5e-14 W m⁻², momentum 6.2e-25 Pa.
+- **ONE-j (#460 / PR #464)**: every component on both cores, with
+  checkpointing. Anelastic θ budget of the dry CBL, 32³, 30 min:
+  −1.36e-3 → −2.5e-14 of the surface input.
+- **ONE-h (#457 / PR #463)**: preprocessing moved to AeolusPrep.jl; it
+  regenerates all 11 committed drivers bit for bit in their data.
+- **ONE-e part 1 (#454 / PR #469)**: every equation out of the urban glue
+  into its module (54-run smoke matrix, 1245 digests, 0 differ).
+- **ONE-e part 2 (#454 / PR #472)**: the urban couplings are components of
+  an urban site of the model (`[urban] enabled`, one section per
+  component); `CaseConfig`'s physics/options, the coupling registry, the
+  urban stage loop and the `urban` run type are gone; the Berlin configs
+  are self-contained TOML in `examples/urban/`. The open faces' θ
+  relaxation was booked twice in the air-heat budget (−119.015 J m⁻² as
+  urban tendencies, +119.607 J m⁻² as transport over the 12-step smoke run);
+  booked once since.
+- **ONE-f (#455 / PR #470)**: nesting by `[[domain]]`, two-way self-nesting
+  by default; the blow-up guard checks every domain.
+- **ONE-g (#456 / PR #471)**: GABLS1–4 and CASES-99 as configurations of
+  the model; the column, channel and DNS a-priori cases dropped; the
+  a-posteriori DNS-vs-LES example (dynamic Smagorinsky closest: max
+  |ΔK|/K 0.079).
+- **ONE-i (#458)**: examples are case directories,
+  `examples/<case>/<case>.toml` + `input/` + `data/` + scripts that read
+  output; `test/examples_enforcement.jl` fails on any `.jl` under
+  `examples/` that builds or steps a model, with no exemptions (the
+  forbidden names are read from the package: 46 assertions, each rule
+  also fired on synthetic files); the `column` and `dns_decay` legacy
+  cases that lived in `examples/` are gone (the Kessler box is a model
+  configuration; `sgs_decay` loads the P56-c fixture itself) with
+  `Config.DRIVER_FILES` and `run_configs`. The dry CBL of the README,
+  32³, 60 steps of 5 s: energy closure 3.4e-13 W m⁻² of 279.98 W m⁻²
+  stored, momentum closure 2.4e-21 kg m⁻¹ s⁻².
+
+**Expectations that were wrong** (recorded in the PRs): ONE-g's GABLS3
+jet-height bound was narrower than the scatter between realisations
+(five seeds: 89.5–99.3 m, σ = 0.5 Δz), widened to 1.5 Δz; a contract-test
+tolerance of 1e-9 was below the round-off of the measured change
+(1.7e-7); ONE-i's cloud_spinup test expected a diagnostics row at
+t = 0, which the run monitor never writes (rows at 60 … 480 s). **Bugs the tests caught**: a nested run's guard snapshot held
+the root at t = 4 s and the child at t = 0 (ONE-f); a `mean` writer's
+open averaging intervals were not checkpointed (ONE-g: u* 0.5027 vs
+0.5083 after a resume).
+
+**Open**:
+- the nest parent of an urban site alone (`[run] legacy = "urban_parent"`,
+  `Aeolus.UrbanCase.ParentCase`), which the design replaces by a
+  `[[domain]]` of its own;
+- the urban site steps its core in its own loop (`UrbanCase.step_case!`):
+  it runs the pipeline's stages and passes its domain's hooks
+  (`Components.core_hooks`) to `step!`, `step_adaptive!` or `step_imex!`
+  itself, instead of being stepped by `step!(::Model, dt)`;
+- the seven validation run types of `Aeolus.RunDrivers` (`advection`,
+  `cbl`, `inflow_fetch`, `obstacle_channel`, `shear_layer`, `flat_plate`,
+  `sgs_decay`) as configurations: they need components the model does
+  not have yet (a prescribed kinematic flow, the prognostic SGS TKE
+  closure in `[sgs]`, a bulk-velocity controller, a fringe with
+  free-stream turbulence, synthetic inflow on a single domain, the
+  parent's inflow statistics) and output-catalogue entries for the
+  numbers they compute;
+- the core's step keywords (`body_force!`, `post_predictor!`, `sgs` on
+  `step!` / `step_rk3!` / `step_adaptive!` / `step_imex!`): in a run of
+  the model only `Components` and the nest it builds (`Nesting`'s
+  `DomainAdvance`) pass them, as the pipeline's hooks; their other
+  callers are the three items above, the wall-bounded benchmark harness
+  of `WallModels` (`advance_channel!`, which four wall-model module tests
+  and `inflow_fetch` use) and the module tests (56 test files). They can
+  become private once those are ported.
+
 ---
 
 # Era VII — High-fidelity chemistry and aerosol

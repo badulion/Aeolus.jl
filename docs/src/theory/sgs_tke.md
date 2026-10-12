@@ -255,7 +255,7 @@ CFL step.
 | :-- | --: | --: | --: | --: | --: |
 | 24³, Δ = 50 m, 1 h (CI) | 900 m | −0.157 | 0.203 | 75 m (0.08 ``z_i``) | 0.50 ``w_*^2`` at 0.31 ``z_i`` |
 | 24³ with the ``κ d_{wall}`` cap | 850 m | −0.083 | 0.308 | 125 m (0.15 ``z_i``) | 0.34 ``w_*^2`` at 0.38 ``z_i`` |
-| 64³, 50 × 50 × 25 m, 2 h (`examples/sgs/configs/cbl_tke.toml`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
+| 64³, 50 × 50 × 25 m, 2 h (`examples/cbl_tke/cbl_tke.toml`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
 
 Lenschow, Wyngaard & Pennell (1980): ``σ_w^2/w_*^2 = 1.8(z/z_i)^{2/3}(1 − 0.8z/z_i)^2``,
 maximum 0.466 at ``z/z_i = 0.31``; the 64³ run is 0.035 RMS from it over
@@ -495,9 +495,9 @@ Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
 not in this branch's stack). Fixture: the `sgs_decay` run type
 ([`Aeolus.RunDrivers.SGSDecayDriver`](@ref), formerly `test/fixtures/sgs_validation.jl`);
 CI test: `test/era6_sgs_validation.jl`; example at 96³:
-`examples/sgs/configs/rotating_stratified_decay.toml` (tables and figure:
-`examples/sgs/plot_rotating_stratified_decay.jl`); a wall-bounded case:
-`examples/sgs/configs/surface_mounted_cube_closures.toml` (below).
+`examples/rotating_stratified_decay/rotating_stratified_decay.toml` (tables and figure:
+`examples/rotating_stratified_decay/plot_rotating_stratified_decay.jl`); a wall-bounded case:
+`examples/surface_mounted_cube/surface_mounted_cube_closures.toml` (below).
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
 spun up from a fixed seed to ``t_0 = 2``; see
@@ -637,10 +637,10 @@ stress starts much closer to the isotropic corner.
 
 ### Surface-mounted cube (example)
 
-`examples/sgs/configs/surface_mounted_cube_closures.toml` (the
+`examples/surface_mounted_cube/surface_mounted_cube_closures.toml` (the
 `obstacle_channel` run type, a sweep over the closures; the cube is the
 static driver `input/surface_mounted_cube_static.nc`, and
-`examples/sgs/plot_surface_mounted_cube.jl` draws the figure from the run
+`examples/surface_mounted_cube/plot_surface_mounted_cube.jl` draws the figure from the run
 folders) compares the three closures on
 the wall-bounded case of Martinuzzi & Tropea (1993): a cube of height
 ``H`` in a channel of height ``2H`` at ``\mathrm{Re}_H = 40\,000``, where

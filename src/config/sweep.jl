@@ -27,7 +27,7 @@ end
 
 _sweep_error(file, n) = ConfigError("sweep", "this file is a sweep of $n members: run it with " *
                                     "`aeolus run` (every member, or --member k) or load it with " *
-                                    "load_sweep / run_configs"; file = file)
+                                    "load_sweep"; file = file)
 
 _label_text(v) = v isa AbstractString ? String(v) : v isa Bool ? string(v) :
                  v isa Integer ? string(v) : v isa AbstractFloat ? _emit_float(Float64(v)) :
@@ -176,29 +176,3 @@ function _load_member(path, ovr)
 end
 
 _member_arg(opts) = haskey(opts, "member") ? something(tryparse(Int, opts["member"]), opts["member"]) : nothing
-
-"""
-    run_configs(path, args = String[]; callback = nothing, console = stderr,
-                repo = …) -> Vector{RunResult}
-
-Run the config file `path`, or every member of the sweep it defines, the
-way `aeolus run` does, with the command-line arguments `args` of an
-example script: `--set key=value` (repeatable), `--member k` (one member
-of a sweep, by index or label), `--root DIR` and `--allow-uncommitted`.
-Returns one [`RunResult`](@ref) per run, in the sweep's order; an
-example script runs its config(s) with `run_configs(path, ARGS)` and then
-analyses `result.obj`. `callback(obj, step)` is passed to every
-[`run_config`](@ref).
-"""
-function run_configs(path::AbstractString, args::AbstractVector = String[]; callback = nothing,
-                     console = stderr, repo::AbstractString = IO.aeolus_source_dir())
-    pos, sets, opts, fl = _parse_args(String[a for a in args], ("set", "root", "member"),
-                                      ("allow-uncommitted",))
-    isempty(pos) || throw(UsageError("unexpected argument(s) $(join(pos, " ")); " *
-                                     "configure the run with --set key=value"))
-    runs = load_sweep(path; overrides = sets, member = _member_arg(opts))
-    root = get(opts, "root", nothing)
-    allow = "allow-uncommitted" in fl ? true : nothing
-    return RunResult[run_config(cfg; root = root, allow_uncommitted = allow, console = console,
-                                repo = repo, callback = callback) for (_, cfg) in runs]
-end

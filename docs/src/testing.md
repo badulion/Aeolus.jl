@@ -32,8 +32,8 @@ the patchy-surface LES. Each has a one-line reason in
 `test/test_tags.toml` naming the fast file that keeps its module
 covered. Every `src` module keeps fast coverage (checked by searching
 each module's name and exports in the fast files). The Berlin example
-has no tests of its own (#320); the urban run type it configures
-(`Aeolus.UrbanCase`, #438) is tested in `urban_run.jl` (fast: a
+has no tests of its own (#320); the urban site of the model it configures
+(`Aeolus.UrbanCase`, #438, #454) is tested in `urban_run.jl` (fast: a
 synthetic city) and `urban_checks.jl` (full: the end-to-end runs on the
 Berlin configs, formerly the by-hand `examples/urban/berlin_checks.jl`).
 

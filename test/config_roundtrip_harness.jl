@@ -3,7 +3,7 @@
 # run.toml, must give the same run.
 #
 #   include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
-#   r = roundtrip_check("examples/configs/taylor_green_vortex.toml"; nsteps = 20,
+#   r = roundtrip_check("examples/taylor_green_vortex/taylor_green_vortex.toml"; nsteps = 20,
 #                       overrides = ["grid.size=[16,16,16]"])
 #   @test r.fields_equal && r.diagnostics_equal && r.config_equal
 #

@@ -9,8 +9,8 @@ canonical form from which the run can be rebuilt. The loader, the
 all build on it. The guide is [Run configuration](../design/run_configuration.md).
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml   # Julia ≥ 1.12
-bin/aeolus run examples/configs/taylor_green_vortex.toml                  # any Julia
+julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml   # Julia ≥ 1.12
+bin/aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml                  # any Julia
 ```
 
 ## Quick reference
@@ -167,7 +167,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
-cases [`urban_parent`](../reference/options/urban_parent.md), [`dns_decay`](../reference/options/dns_decay.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+cases [`urban_parent`](../reference/options/urban_parent.md), [`cbl`](../reference/options/cbl.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -207,39 +207,34 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Legacy cases that live under `examples/` are loaded on first use:
-[`DRIVER_FILES`](@ref Aeolus.Config.DRIVER_FILES) maps their names to
-files relative to the package directory, and the first config that names
-one includes the file into a fresh module. The stable-boundary-layer
-cases (the former `sbl` run type) are configurations of the model since
-ONE-g (#456); the validation run types `dns`, `channel`, `cbc_decay` and
-`patchy_surface` and the single-column cases went with their cases
-(maintainer decisions of 2026-10-09). The Berlin case's driver is no longer
-an example file: it is the package's urban run type, `urban` (below; EX-a #438).
+Every legacy case is code in `src/` (`urban_parent`, the nest parent of
+an urban site alone, and the validation run types of [`Aeolus.RunDrivers`](@ref)); nothing is loaded
+from `examples/`. The stable-boundary-layer cases (the former `sbl` run
+type) are configurations of the model since ONE-g (#456); the validation
+run types `dns`, `channel`, `cbc_decay` and `patchy_surface` and the
+single-column cases went with their cases (maintainer decisions of
+2026-10-09). The two legacy cases that were Julia files under `examples/`
+are gone (ONE-i #458): the Kessler box of the kernel demos (`column`) is
+the configuration `examples/cloud_spinup/cloud_spinup.toml` of the model,
+and `sgs_decay` includes the shared P56-c fixture
+`test/fixtures/dns_decay.jl` itself instead of the `dns_decay` run type.
 
-### The example legacy cases (CFG-e, #360)
-
-| `[run] legacy` | file | builds and runs | configs |
-| :-- | :-- | :-- | :-- |
-| `column` | `examples/kernels/column_driver.jl` | `[column] case = "kessler_box"` (Kessler microphysics, no dynamics) | `kernels/configs/cloud_spinup.toml` |
-| `dns_decay` | `examples/validation/dns_driver.jl` | `dns_decay` (the decaying DNS of P56-c, which the `sgs_decay` run type starts from) | — |
-
-Each example script is now "run the config(s), then analyse or plot":
-`run_configs(path, ARGS)` takes the script's command line (`--set`,
-`--member`, `--root`, `--allow-uncommitted`) and returns one
-[`RunResult`](@ref Aeolus.Config.RunResult) per run. A driver gets a new
-section only where the case has structure of its own; a driver with a
-`case` switch keeps one section per case and refuses a key set in the
-section of a case that is not selected
+A legacy case gets a new section only where the case has structure of its
+own; a driver with a `case` switch keeps one section per case and refuses
+a key set in the section of a case that is not selected
 ([`selected_case_sections`](@ref Aeolus.Config.selected_case_sections)).
 A section whose options are the fields of a keyword struct is made with
 [`kwdef_section`](@ref Aeolus.Config.kwdef_section) (the struct's
 defaults are the schema's) and read back with
 [`kwdef_value`](@ref Aeolus.Config.kwdef_value).
+`run_configs`, which ran a config from an example script's command line,
+is gone with those scripts (ONE-i #458): `aeolus run` runs a config or
+every member of a sweep.
 
-`test/config_examples.jl` lists every example that calls a stepping entry
-point and requires a config or a reasoned exemption (`EXEMPT`, empty since
-ONE-g #456).
+No `.jl` file under `examples/` builds or steps a model:
+`test/examples_enforcement.jl` parses each one and fails on a call into
+the model's construction or stepping API, with no exemptions (see
+[Run configuration](../design/run_configuration.md#Where-the-shipped-configs-live)).
 
 ## Sweeps
 
@@ -306,10 +301,10 @@ A config without `[run] legacy` runs the model
 Aeolus.Components.Model) of the Boussinesq or the anelastic core on a box
 with its components. A bare config is a minimal dry LES (32³ on 3.2 km ×
 3.2 km × 1.6 km, free-slip z walls, θ₀ = 300 K, Smagorinsky, adaptive
-RK3, one hour). The configs of `examples/configs/`, `examples/kernels/`
-and `examples/coupled/` replace the scripts that built these runs in code
-(EX-d, #441). The run types of the other example cases are legacy cases
-in [`Aeolus.RunDrivers`](@ref).
+RK3, one hour). The example cases (`examples/<case>/<case>.toml`) replace
+the scripts that built these runs in code (EX-d, #441; ONE-i, #458). The
+run types of the other example cases are legacy cases in
+[`Aeolus.RunDrivers`](@ref).
 
 ```toml
 schema_version = 2
@@ -411,7 +406,7 @@ This config is, bit for bit, the simulation the script built before
     sponge). AeolusPrep.jl writes one from ERA5 (`aeolusprep dynamic
     --from-era5 <files…> --config <config.toml> --lat … --lon …`;
     [Input drivers](input_drivers.md), CFG-h #363);
-    `examples/configs/lindenberg_era5.toml` is the example, with its
+    `examples/lindenberg_era5/lindenberg_era5.toml` is the example, with its
     committed driver.
 
 Its options, every key with type, default, units, range and doc: [Options: the model](../reference/options/model.md) (generated from the schema; `aeolus options` prints the same).
@@ -511,7 +506,7 @@ Its options, the component sections and `[nesting.parent]` included: [Options: t
 
 ## The stable-boundary-layer cases
 
-GABLS1-4 and CASES-99 (`examples/sbl/configs/`) are configurations of the
+GABLS1-4 and CASES-99 (`examples/sbl/`) are configurations of the
 model since ONE-g (#456): the geostrophic forcing and the dynamic driver's
 large-scale tables are `[large_scale_forcing]`
 ([`LargeScale`](@ref Aeolus.Components.LargeScale)), the Monin-Obukhov
@@ -519,7 +514,7 @@ surface layer over the prescribed surface temperature `[surface_layer]`
 ([`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer)), the sponge
 retargeted at the geostrophic wind or the plane mean `[sponge] target`,
 the CASES-99 towers `[towers]` ([`Towers`](@ref Aeolus.Components.Towers)).
-Their case tables are dynamic drivers (`examples/sbl/configs/input/`), their
+Their case tables are dynamic drivers (`examples/sbl/input/`), their
 initial profiles TOML tables (with a `log` or `linear` tail below the
 lowest height), their comparisons with the intercomparisons
 `[checks.reference]` (`results.toml`), and the scripts of `examples/sbl/`

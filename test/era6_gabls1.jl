@@ -1,5 +1,5 @@
 # P55-f (#191), ONE-g (#456): GABLS1 (Beare et al. 2006, BLM 118, 247) on
-# the one model — the configuration examples/sbl/configs/gabls1.toml with
+# the one model — the configuration examples/sbl/gabls1.toml with
 # its components: the geostrophic forcing (`LargeScale`), the
 # Monin-Obukhov surface layer (`SurfaceLayer`), the retargeted sponge and
 # Smagorinsky with the Brown et al. (1994) stability correction in the
@@ -15,7 +15,7 @@ using Aeolus.Components: Components, LargeScale, SurfaceLayer, Sponge, SGS, step
 using Aeolus.Fields: interior_view
 using Statistics: mean
 
-const GABLS1_TOML = joinpath(pkgdir(Aeolus), "examples", "sbl", "configs", "gabls1.toml")
+const GABLS1_TOML = joinpath(pkgdir(Aeolus), "examples", "sbl", "gabls1.toml")
 
 # Reduced CI run: 32³ (Δ = 12.5 m), 0-1.25 h, statistics over 1.0-1.25 h
 # (after the spin-up of the initial neutral layer: u* peaks at 0.43 m/s

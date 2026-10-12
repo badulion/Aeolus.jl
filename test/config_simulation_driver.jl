@@ -27,8 +27,8 @@ using Aeolus.NCIO: NCDataset
 
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
-const CFGS_DIR = joinpath(pkgdir(Aeolus), "examples", "configs")
-cfgs(name) = joinpath(CFGS_DIR, name * ".toml")
+const CFGS_DIR = joinpath(pkgdir(Aeolus), "examples")
+cfgs(name) = joinpath(CFGS_DIR, name, name * ".toml")
 const SIMD = SimulationDriverType()
 
 "Load a shipped config with the ESTIMATE planner and `n` steps."

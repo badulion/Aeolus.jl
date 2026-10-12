@@ -1,0 +1,68 @@
+# Coupled example 02 — moist LES with a cloud puff and Kessler rain
+# (formerly examples/coupled/02_moist_convection.jl). 3200 × 3200 × 2400 m
+# on 24 × 24 × 32, free-slip walls in z, a surface heat flux of
+# 0.05 K m/s, Smagorinsky-Lilly (C_s = 0.15), a sponge above 1920 m.
+# θ = 300 K to 1500 m, +4 K/km above, 0.03 K noise; qv = 12 g/kg e^(−z/1500 m).
+# A cloud puff of ql = 2 g/kg fills 800–2400 m in x and y between 1.0 and
+# 1.4 km; Kessler microphysics turns it into rain that falls out
+# (ql and qr are not advected). 20 min.
+#
+#   julia --project -m Aeolus run examples/moist_convection/moist_convection.toml
+#   julia --project=. examples/moist_convection/plot_moist_convection.jl runs/<date>_moist_convection_<id>
+
+schema_version = 2
+
+[run]
+name = "moist_convection"
+seed = 3
+
+[grid]
+size = [24, 24, 32]
+extent = [3200.0, 3200.0, 2400.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.81
+moisture = true
+
+[boundaries]
+z = "free_slip"
+
+[sgs]
+closure = "smagorinsky"
+c_s = 0.15
+pr_t = 0.3333333333333333
+
+[surface_theta_flux]
+bottom = 0.05
+
+[sponge]
+alpha_max = 0.02
+z_start = 1920.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 1500.0, lapse = 0.004 }
+perturbation_amplitude = 0.03
+qv = { kind = "exponential", value = 0.012, scale_height = 1500.0 }
+ql = { kind = "box", value = 2e-3, x = [800.0, 2400.0], y = [800.0, 2400.0], z = [1000.0, 1400.0] }
+
+[microphysics]
+scheme = "kessler"
+
+[time]
+scheme = "euler"
+dt = 5.0
+duration = 1200.0
+
+[output]
+variables = ["ql", "qr"]
+cadence = 1200.0
+
+[logging]
+diagnostics_cadence = 60.0
+
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
+[test]
+overrides = ["grid.size=[12,12,16]", "time.duration=\"none\"", "time.nsteps=10"]

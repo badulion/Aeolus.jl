@@ -110,8 +110,12 @@ Aeolus.jl/
 ├── README.md                 short summary + roadmap
 ├── src/                      module sources (see above)
 ├── test/runtests.jl          37 unit tests
-├── examples/                 example cases: TOML configs + input drivers
-│   └── configs/              (aeolus run <file>.toml; plotting scripts read the output)
+├── examples/                 one directory per case (ONE-i #458)
+│   ├── <case>/<case>.toml    the configuration: aeolus run examples/<case>/<case>.toml
+│   ├── <case>/input/         its static and dynamic drivers (NetCDF)
+│   ├── <case>/data/          reference data for its [checks.reference]
+│   ├── <case>/*.jl           optional scripts that read the run's output (never build or step a model)
+│   └── viz/                  the plotting library of those scripts
 ├── benchmarks/               BenchmarkTools.jl scripts
 │   ├── bench_operators.jl
 │   ├── bench_poisson.jl

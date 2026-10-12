@@ -18,7 +18,7 @@ instantaneous and cumulative from `rif_from`.
 `results.toml`: the series, the growth-rate fit, the saturation and the
 cumulative ``Ri_f``; `output/vorticity.nc`: the spanwise vorticity
 ``ω_y(x, z)`` at the `snapshots` times. Config:
-`examples/transition/configs/kelvin_helmholtz.toml`.
+`examples/kelvin_helmholtz/kelvin_helmholtz.toml`.
 """
 module ShearLayerDriver
 
