@@ -649,3 +649,62 @@ const MN_TREE = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
     @test nest_link(con, "g").stats.child_substeps == nest_link(seq, "g").stats.child_substeps > 0
     @info "concurrent nest (adaptive $ad) on $(Threads.nthreads()) threads: identical to sequential"
 end
+
+# ---------------------------------------------------------------------------
+# synthetic inflow turbulence on a nest child (#268), two-way (#418/#419)
+# ---------------------------------------------------------------------------
+
+using Aeolus.Transition: InflowTurbulence, added_mass_flux, inflow_perturbation, feedback_exclude_width
+using Aeolus.BoundaryConditions: open_boundary_states
+
+mn_inflow(; feedback = "two_way") = mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child(; feedback = feedback) *
+                                           "[domain.inflow_turbulence]\nenabled = true\nstatistics_interval = 4.0\n")
+
+@testset "inflow turbulence on a nest child: the parent's statistics, no added mass, conservation ($fb)" for fb in ("one_way", "two_way")
+    r = Config.build(SimulationDriverType(), mn_inflow(; feedback = fb))
+    m = r.model
+    c = m.domains[2].state
+    it = only(filter(!isnothing, m.nest.inflow))
+    @test it isa InflowTurbulence && all(st -> st.data === it, open_boundary_states(c))
+    @test it.parent === m.domains[1].state                              # statistics measured on the parent
+    h = m.nest.hierarchy
+    I0 = composite_integral(h, :θ)
+    n0 = first(it.faces).stats.nsamples
+    for _ in 1:6
+        step!(m, 4.0)
+    end
+    @test first(it.faces).stats.nsamples >= n0 + 5                      # folded at every window opening
+    @test maximum(a.relative for a in added_mass_flux(it)) <= 1e-12     # no added mass flux
+    @test any(f -> any(!iszero, inflow_perturbation(it, f.side)[1]), it.faces)
+    @test max_divergence(c) < 1e-9
+    L = nest_link(m, "inner")
+    if fb == "two_way"
+        need = ceil(Int, feedback_exclude_width(it) / 100.0 - 1e-9)
+        @test L.twoway.exclude_width >= need                            # the feedback skips the inflow band
+        @test L.nest.ledger[:mass] < 1e-12                              # the interface fluxes agree without the synthetic part (#418)
+        rel = abs(composite_integral(h, :θ) - I0) / abs(I0)
+        @info "two-way nest with inflow turbulence: composite θ relative change over 6 windows $rel"
+        @test rel < 1e-13
+    end
+end
+
+@testset "inflow turbulence: config rules, and a bit-identical resume with the generator" begin
+    keyed(e) = Dict(p.key => p.message for p in e.problems)
+    e = mn_error(() -> mn_cfg(MN_HEAD * "[inflow_turbulence]\nenabled = true\n[[domain]]\nid = \"outer\"\n" * mn_child() *
+                                  "[domain.inflow_turbulence]\nenabled = true\n"))
+    @test occursin("the root has none", keyed(e)["domain[1].inflow_turbulence.enabled"])
+    e = mn_error(() -> mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child() *
+                                  "[domain.inflow_turbulence]\nenabled = true\nstatistics = \"parametrized\"\n"))
+    @test occursin("parent_resolved", keyed(e)["domain[2].inflow_turbulence.statistics"])
+    cfg = mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child() *
+                 "[domain.inflow_turbulence]\nenabled = true\nstatistics_interval = 4.0\n";
+                 overrides = ["checkpoint.every_steps=3"])
+    full = mn_run(cfg)
+    root = mktempdir()
+    stop = (r, n) -> n == 4 && throw(InterruptException())
+    @test_throws InterruptException run_config(cfg; root = root, console = false, repo = mktempdir(), callback = stop)
+    folder = only(readdir(root; join = true))
+    resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
+    a = state_fields(full.obj); b = state_fields(resumed.obj)
+    @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+end

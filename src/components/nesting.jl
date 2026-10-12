@@ -47,27 +47,57 @@ for the SGS scalar flux at the interface).
 pipeline_advance(d::Domain) = domain_advance(PipelineCore(d); sgs = sgs_closure(d))
 
 """
-    NestLink(child, parent, nest; feedback = :two_way)
+    NestLink(child, parent, nest; feedback = :two_way, inflow = nothing)
 
 One parent–child pair of a nested model: the domain numbers `child` and
 `parent` (the parent listed first), their `Nesting.NestedGrid` `nest`
 (whose child mesh is the child domain's grid, built with
-`Nesting.nest_bcs`) and the `feedback`, `:two_way` (the self-nesting
-default, the design's decision of 2026-10-09) or `:one_way`.
+`Nesting.nest_bcs`), the `feedback`, `:two_way` (the self-nesting
+default, the design's decision of 2026-10-09) or `:one_way`, and
+`inflow`: `nothing` (the default) or the options of synthetic inflow
+turbulence on the child's lateral nest faces ([`NEST_INFLOW_DEFAULTS`](@ref),
+installed by [`nested_model`](@ref)).
 """
 struct NestLink{N}
     child::Int
     parent::Int
     nest::N
     feedback::Symbol
-    function NestLink(child::Integer, parent::Integer, nest; feedback::Symbol = :two_way)
+    inflow::Union{Nothing,NamedTuple}
+    function NestLink(child::Integer, parent::Integer, nest; feedback::Symbol = :two_way, inflow = nothing)
         feedback in (:one_way, :two_way) ||
             throw(ArgumentError("NestLink: feedback is :one_way or :two_way, got :$feedback"))
         parent < child || throw(ArgumentError("NestLink: a parent is listed before its child " *
                                               "(parent $parent, child $child)"))
-        return new{typeof(nest)}(Int(child), Int(parent), nest, feedback)
+        if inflow !== nothing
+            inflow = merge(NEST_INFLOW_DEFAULTS, NamedTuple(inflow))
+            bad = setdiff(keys(inflow), keys(NEST_INFLOW_DEFAULTS))
+            isempty(bad) || throw(ArgumentError("NestLink: unknown inflow options $(collect(bad)) " *
+                                                "(the options: $(join(keys(NEST_INFLOW_DEFAULTS), ", ")))"))
+            inflow.generator in (:digital_filter, :fsd) ||
+                throw(ArgumentError("NestLink: inflow generator is :digital_filter or :fsd, got :$(inflow.generator)"))
+        end
+        return new{typeof(nest)}(Int(child), Int(parent), nest, feedback, inflow)
     end
 end
+
+"""
+    NEST_INFLOW_DEFAULTS
+
+The options of a nest child's synthetic inflow turbulence (the
+`[inflow_turbulence]` of its `[[domain]]` block; N-inflow-e #268, as the
+urban site's): `generator` (`:digital_filter`, Xie & Castro 2008, or
+`:fsd`, the random-mode field swept at the parent's mean wind), `u_min`
+(m s⁻¹, the inflow ramp), `seed` (face `q` takes `seed + q − 1`),
+`statistics_interval` (s of parent time between two folds of the
+parent's resolved statistics into the running means) and
+`length_interval` (s between two rebuilds of the generator's lengths).
+The statistics are always the parent's own (`Transition.ParentResolvedStatistics`
+in scale-gap mode with the nest's refinement, #268): the parent is a
+running domain of the model.
+"""
+const NEST_INFLOW_DEFAULTS = (generator = :digital_filter, u_min = 0.5, seed = 1,
+                              statistics_interval = 60.0, length_interval = 3600.0)
 
 """
     ModelNest
@@ -122,12 +152,14 @@ mutable struct ModelNest{H}
     retries::Int
     last_retries::Int
     snapshot::Any                             # the window-start state (IO.StructuralState), or nothing
+    inflow::Vector{Any}                       # per hierarchy link: its Transition.InflowTurbulence, or nothing
 end
 
 ModelNest(h, links::Vector{NestLink}; adaptive::Bool = false, validate::Bool = adaptive,
           concurrent::Bool = Threads.nthreads() > 1, max_retries::Integer = 3) =
     ModelNest(h, links, adaptive, validate, concurrent, Int(max_retries), zeros(Int, length(h.links)),
-              zeros(Int, length(h.links)), Union{Nothing,Float64}[nothing for _ in h.domains], 0, 0, nothing)
+              zeros(Int, length(h.links)), Union{Nothing,Float64}[nothing for _ in h.domains], 0, 0, nothing,
+              Any[nothing for _ in h.links])
 
 """
     nested_model(domains::Tuple, links; max_retries = 3) -> Model
@@ -197,7 +229,13 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
             throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
         end
     end
-    return Model(domains, ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries, concurrent = concurrent))
+    mn = ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries, concurrent = concurrent)
+    for l in ls
+        l.inflow === nothing && continue
+        k = h.domains[l.child].up
+        mn.inflow[k] = _install_inflow!(h.links[k], domains[l.parent], domains[l.child], l.inflow)
+    end
+    return Model(domains, mn)
 end
 
 """
@@ -212,6 +250,34 @@ Nesting.nest_link(m::Model{<:Tuple,<:ModelNest}, id::AbstractString) = Nesting.n
 # A checkpoint of a nested model holds the whole hierarchy: every domain's
 # core and components, both parent time levels of every link, the flux
 # registers and statistics (the structural walk of #269).
+# Synthetic inflow turbulence on the lateral nest faces of a child (#268),
+# with the parent's resolved statistics. They are folded where the parent is
+# at rest, when the engine opens the child's window (statistics_interval =
+# Inf for the faces' own refresh); a two-way feedback skips the inflow band
+# the generator needs (exclude_inflow_feedback!), and leaves the generator's
+# normal perturbation out of the parent's interface faces (#418/#419: the
+# feedback's synthetic_normal_velocity).
+function _install_inflow!(run, pd::Domain, cd::Domain, o::NamedTuple)
+    gen = if o.generator === :digital_filter
+        DigitalFilterGenerator
+    else
+        p = pd.state
+        U = hypot(sum(interior_view(p.u)) / length(interior_view(p.u)),
+                  sum(interior_view(p.v)) / length(interior_view(p.v)))
+        free_stream_generator(; U∞ = max(U, o.u_min))
+    end
+    it = try
+        InflowTurbulence(run; generator = gen, u_min = o.u_min, seed = o.seed,
+                         length_interval = o.length_interval, statistics_interval = Inf,
+                         statistics_kwargs = (closure = sgs_closure(pd),))
+    catch e
+        e isa ArgumentError || rethrow()
+        throw(ArgumentError("nested_model: inflow turbulence on domain $(cd.id): " * e.msg))
+    end
+    exclude_inflow_feedback!(run, it)
+    return it
+end
+
 # The engine's own memory (each domain's last step, the retry counters)
 # travels with it, so an adaptive nest resumes bit for bit.
 checkpoint_state(n::ModelNest) = (hierarchy = structural_state(n.hierarchy), dt_prev = copy(n.dt_prev),

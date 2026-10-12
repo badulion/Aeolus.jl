@@ -53,7 +53,8 @@ using ..Transition: TowerSampler, tower_sampler, sample_towers!, reset_segment!,
                     ParentResolvedStatistics, update_inflow_statistics!, inflow_stress_parts,
                     turbulent_fraction, flux_richardson, FringeRegion, blasius_target, blasius_freestream,
                     FreeStreamDisturbance, blasius_solution, disturbance_fringe_update, set_blasius!, add_fringe!,
-                    skin_friction, default_blasius
+                    skin_friction, default_blasius, InflowTurbulence, DigitalFilterGenerator,
+                    free_stream_generator, exclude_inflow_feedback!, fold_inflow_statistics!
 using ..Anelastic: MassWeightedSimulation
 using ..TimeIntegration: TimeIntegration, CFLConstraints, adaptive_dt
 import ..TimeIntegration: step_adaptive!
@@ -77,7 +78,7 @@ export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
        CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
        CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model, nest_window!, NestStepFailure,
-       NEST_EXCHANGE, nest_exchange
+       NEST_EXCHANGE, nest_exchange, NEST_INFLOW_DEFAULTS
 
 include("components/interface.jl")
 include("components/pipeline.jl")

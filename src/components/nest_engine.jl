@@ -200,11 +200,27 @@ function _nest_children!(mn::ModelNest, i::Int, t0::Float64, Δt::Float64)
     hd = h.domains[i]
     sim = _ndom(mn, i).state
     t_end = Float64(sim.t)
-    ws = [_open_window!(h.links[l], t0, t_end, Δt, hd.m0[n]) for (n, l) in enumerate(hd.links)]
+    ws = _nest_open_windows!(mn, i, t0, t_end, Δt)
     _nest_windows!(mn, i, ws)
     _nest_feedback!(mn, i, ws)
     return nothing
 end
+
+# Open the windows of domain i's children over its step [t0, t1] (the
+# boundary data at t1), and fold the parent's statistics into the children's
+# inflow turbulence (the parent is at rest here, #268).
+function _nest_open_windows!(mn::ModelNest, i::Int, t0::Float64, t1::Float64, Δt::Float64)
+    h = mn.hierarchy
+    hd = h.domains[i]
+    ws = [_open_window!(h.links[l], t0, t1, Δt, hd.m0[n]) for (n, l) in enumerate(hd.links)]
+    for l in hd.links
+        it = mn.inflow[l]
+        it === nothing || fold_inflow_statistics!(it; interval = _nest_inflow_interval(mn, l))
+    end
+    return ws
+end
+_nest_inflow_interval(mn::ModelNest, l::Int) =
+    mn.links[findfirst(k -> mn.hierarchy.domains[k.child].up == l, mn.links)].inflow.statistics_interval
 
 # The children's windows of domain i (opened, `ws`): the siblings in
 # parallel when the nest is concurrent (they read only their own boundary
@@ -353,7 +369,7 @@ function _nest_subcycle_ahead!(mn::ModelNest, l::Int, n::Int, t_end::Float64)
     t0, t1 = _nest_own_step!(mn, ci, hs)
     n_rem = n
     while true
-        ws = [_open_window!(h.links[k], t0, t1, hs, hd.m0[m]) for (m, k) in enumerate(hd.links)]
+        ws = _nest_open_windows!(mn, ci, t0, t1, hs)
         _nest_finish!(d, hs, t0, t1)                  # one-way children: no feedback into ci
         _nest_substep_stats!(L, hs, cfl)
         n_rem -= 1

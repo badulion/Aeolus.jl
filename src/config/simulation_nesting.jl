@@ -12,6 +12,7 @@ a root has no `origin` or `refinement`, and `feedback` stays two_way (it has no 
 a nested model steps every domain with `time.dt`: a fixed dt (each child takes max(refinement) substeps per step of its parent) or adaptive (the root picks its step, each child the smallest whole number of equal substeps that keeps it stable; a failed step retries the window); with `[nesting] budget_exchange = "off"` it measures no budgets (no `budget_*` output, no closure check); with `"exchange_term"` (the default) each domain closes its own, with one nest-exchange term per quantity
 every domain of a nested model runs the boussinesq core on a uniform grid between z walls
 a nested domain lies inside its parent (origin ≥ 0, origin + grid.extent within the parent's extent, its height at most the parent's), with `grid.size` = `grid.extent` / parent spacing × `refinement`
+a nested domain may enable `[inflow_turbulence]` (synthetic turbulence on its lateral nest faces, with its parent's resolved statistics: `statistics = "parent_resolved"`, no `length_scale`); the root may not
 a nested domain keeps its parent's `[boundaries]` and `dynamics.moisture`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
 
 "Whether `cfg` is a nested model (several domains)."
@@ -21,6 +22,15 @@ _nested(cfg) = length(config_domains(cfg)) > 1
 function _nest_domain_checks(cfg)
     e = ConfigError[]
     dom = cfg.domain
+    it = cfg.inflow_turbulence
+    if it.enabled
+        dom.parent === nothing &&
+            push!(e, ConfigError("inflow_turbulence.enabled", "synthetic inflow turbulence perturbs a nested domain's lateral nest faces; the root has none"))
+        it.statistics === :parent_resolved ||
+            push!(e, ConfigError("inflow_turbulence.statistics", "a nested domain's inflow statistics are its parent's resolved ones (parent_resolved)"))
+        isnan(it.length_scale) ||
+            push!(e, ConfigError("inflow_turbulence.length_scale", "belongs to the parametrized statistics; a nested domain measures its lengths on its parent"))
+    end
     if dom.parent === nothing
         dom.origin === nothing ||
             push!(e, ConfigError("domain.origin", "the root domain (no parent) has no origin in a parent"))
@@ -163,7 +173,11 @@ function _build_nested(cfg)
         nest = _nest_grid(v, Components.grid(doms[j]))
         bcs = _nest_child_bcs(v, domain_view(cfg, j), nest)
         push!(doms, _build_domain(v; mesh = nest.child_mesh, bcs = bcs))
-        push!(links, Components.NestLink(i, j, nest; feedback = v.domain.feedback))
+        it = v.inflow_turbulence
+        inflow = it.enabled ? (generator = it.generator, u_min = it.u_min, seed = it.seed,
+                               statistics_interval = it.statistics_interval, length_interval = it.length_interval) :
+                 nothing
+        push!(links, Components.NestLink(i, j, nest; feedback = v.domain.feedback, inflow = inflow))
     end
     return try
         Components.nested_model(Tuple(doms), links; budget_exchange = ds[1].nesting.budget_exchange)
