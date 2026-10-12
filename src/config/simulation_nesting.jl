@@ -13,7 +13,8 @@ a nested model steps every domain with `time.dt`: a fixed dt (each child takes m
 every domain of a nested model runs the boussinesq core on a uniform grid between z walls
 a nested domain lies inside its parent (origin ≥ 0, origin + grid.extent within the parent's extent, its height at most the parent's), with `grid.size` = `grid.extent` / parent spacing × `refinement`
 a nested domain may enable `[inflow_turbulence]` (synthetic turbulence on its lateral nest faces, with its parent's resolved statistics: `statistics = "parent_resolved"`, no `length_scale`); the root may not
-a nested domain keeps its parent's `[boundaries]` and `dynamics.moisture`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
+every field the nest exchanges (`qv`, the Kessler `ql`, `qr`, the tracer) exists in a nested domain exactly when it exists in its parent (the PALM rule; a nested domain could carry an extra field only with its own dynamic driver giving its boundary values, and has none yet)
+a nested domain keeps its parent's `[boundaries]`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
 
 "Whether `cfg` is a nested model (several domains)."
 _nested(cfg) = length(config_domains(cfg)) > 1
@@ -117,10 +118,84 @@ function _nest_checks(cfg)
                 push!(e, ConfigError(key(i, "boundaries.$ax"), "a nested domain keeps its parent's faces ($(p.boundaries[ax])): " *
                                                               "its lateral faces are nest faces, its ground the parent's"))
         end
-        d.dynamics.moisture == p.dynamics.moisture ||
-            push!(e, ConfigError(key(i, "dynamics.moisture"), "a nested domain carries qv exactly when its parent does"))
+        # the PALM rule (Hellsten et al. 2021, §3.1), with the driver exception
+        fc = _exchanged_fields(domain_view(cfg, i)); fp = _exchanged_fields(domain_view(cfg, j))
+        for (f, k) in fp
+            haskey(fc, f) ||
+                push!(e, ConfigError(key(i, k), "domain \"$(ids[i])\" carries no $f, its parent \"$(ids[j])\" does: every field " *
+                                                "the nest exchanges exists in the parent and the child (the PALM rule)"))
+        end
+        for (f, k) in fc
+            haskey(fp, f) ||
+                push!(e, ConfigError(key(i, k), "domain \"$(ids[i])\" carries $f, its parent \"$(ids[j])\" does not: a nested domain " *
+                                                "carries a field its parent lacks only when its own dynamic driver gives that " *
+                                                "field's boundary values (a nested domain has no dynamic driver yet)"))
+        end
     end
     return e
+end
+
+"""
+    _exchanged_fields(v) -> Dict{String,String}
+
+The fields the nest exchanges besides `u, v, w, θ` for the domain view
+`v`, each with the config key that switches it on: `qv`
+(`dynamics.moisture`), the Kessler water `ql`, `qr` (`[microphysics]`)
+and the passive tracer (`[tracer]`). The nest checks them against the
+parent's (the PALM rule).
+"""
+function _exchanged_fields(v)
+    out = Dict{String,String}()
+    v.dynamics.moisture && (out["qv"] = "dynamics.moisture")
+    if _microphysics(v) !== :none
+        out["ql"] = "microphysics.model"; out["qr"] = "microphysics.model"
+    end
+    v.tracer.enabled && (out["tracer"] = "tracer.enabled")
+    return out
+end
+
+"""
+    NEST_SMOOTH_RATIO
+
+The horizontal refinement from which a nested domain's parent counts as
+much smoother than the domain (3): the parent resolves none of the
+eddies between its spacing and three of the child's, so without synthetic
+inflow turbulence the child's inflow enters laminar and needs a long fetch
+to develop them (Kadasch et al. 2021, §2.4; Hellsten et al. 2021, §3.3).
+"""
+const NEST_SMOOTH_RATIO = 3
+
+"""
+    nest_handover_warnings(cfg) -> Vector{String}
+
+The subgrid handover warnings of a nested config (NEST-p2, #482): a
+nested domain with a lateral nest face that refines its parent
+horizontally by [`NEST_SMOOTH_RATIO`](@ref) or more and has no
+`[inflow_turbulence]`. The build logs each with `@warn`. (The nest passes
+resolved fields only; the SGS model may differ per domain: a TKE field on
+one side only is not exchanged — the child's `e` takes a zero-gradient
+value at its nest faces, a parent's `e` under the child is not fed back.)
+"""
+function nest_handover_warnings(cfg)
+    ds = config_domains(cfg)
+    out = String[]
+    for i in 2:length(ds)
+        d = domain_view(cfg, i)
+        r = d.domain.refinement
+        r === nothing && continue
+        pv = domain_view(cfg, findfirst(x -> x.domain.id == d.domain.parent, ds))
+        # a lateral nest face: an axis the domain does not span (or one its parent does not wrap)
+        lateral = any(a -> d.grid.extent[a] < pv.grid.extent[a] * (1 - 1e-12) ||
+                           pv.boundaries[("x", "y")[a]] !== :periodic, 1:2)
+        rh = max(r[1], r[2])
+        if lateral && rh >= NEST_SMOOTH_RATIO && !d.inflow_turbulence.enabled
+            push!(out, "domain \"$(d.domain.id)\" refines its parent \"$(d.domain.parent)\" by $rh horizontally " *
+                       "(its sgs model $(d.sgs.model), the parent's $(pv.sgs.model)) " *
+                       "and has no [inflow_turbulence]: the parent is much smoother, and the inflow enters without " *
+                       "the eddies between the two spacings (enable [inflow_turbulence] in its [[domain]] block)")
+        end
+    end
+    return out
 end
 
 # ---------------------------------------------------------------------------
@@ -158,6 +233,7 @@ end
 # be (its own [initial], components and couplings), the children on their
 # nests' child meshes with nest faces, coupled by Components.nested_model.
 function _build_nested(cfg)
+    foreach(w -> @warn(w), nest_handover_warnings(cfg))
     ds = config_domains(cfg)
     n = length(ds)
     ids = [d.domain.id for d in ds]

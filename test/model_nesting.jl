@@ -21,6 +21,7 @@ using Aeolus.Config
 using Aeolus.Components
 const MNC = Aeolus.Components
 using Aeolus.SimulationDriver: SimulationDriverType, simulation
+const SimulationDriver_warn = Aeolus.SimulationDriver.nest_handover_warnings
 using Aeolus.Nesting: NestedRun, NestHierarchy, add_nest!, nested_grid, nest_bcs, composite_integral, nest_link,
                       step_nested!
 using Aeolus.Grids: RegularGrid
@@ -707,4 +708,59 @@ end
     resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
     a = state_fields(full.obj); b = state_fields(resumed.obj)
     @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+end
+
+# ---------------------------------------------------------------------------
+# exchanged fields (the PALM rule) and the subgrid handover
+# ---------------------------------------------------------------------------
+
+@testset "exchanged fields: the PALM rule, naming both domains" begin
+    keyed(e) = Dict(p.key => p.message for p in e.problems)
+    # (a --set override applies to every domain: the run-level sections are written out)
+    runlevel(sec) = replace(mn_two(), "[[domain]]\nid = \"outer\"\n" => sec * "[[domain]]\nid = \"outer\"\n"; count = 1)
+    moist = mn_cfg(runlevel("[dynamics]\nmoisture = true\n"))                # both moist: fine
+    @test length(config_domains(moist)) == 2
+    e = mn_error(() -> mn_cfg(runlevel("[dynamics]\nmoisture = true\n") * "[domain.dynamics]\nmoisture = false\n"))
+    msg = keyed(e)["domain[2].dynamics.moisture"]
+    @test occursin("\"inner\" carries no qv", msg) && occursin("\"outer\" does", msg) && occursin("PALM", msg)
+    e = mn_error(() -> mn_cfg(mn_two() * "[domain.dynamics]\nmoisture = true\n"))
+    msg = keyed(e)["domain[2].dynamics.moisture"]
+    @test occursin("\"inner\" carries qv", msg) && occursin("dynamic driver", msg)
+    # a tracer of the parent that the child does not carry
+    e = mn_error(() -> mn_cfg(MN_HEAD * "[tracer]\nenabled = true\n[[domain]]\nid = \"outer\"\n" * mn_child() *
+                                  "[domain.tracer]\nenabled = false\n"))
+    @test occursin("carries no tracer", keyed(e)["domain[2].tracer.enabled"])
+end
+
+@testset "subgrid handover: the models may differ per domain; TKE on one side only; the smoothness warning" begin
+    # a TKE child in a Smagorinsky parent (and the reverse): runs, its e is
+    # zero-gradient at the nest faces, nothing of e is exchanged
+    for (pm, cm) in (("smagorinsky", "tke"), ("tke", "smagorinsky"))
+        text = replace(mn_two(), "[[domain]]\nid = \"outer\"\n" => "[sgs]\nmodel = \"$pm\"\n[[domain]]\nid = \"outer\"\n"; count = 1)
+        cfg = mn_cfg(text * "[domain.sgs]\nmodel = \"$cm\"\n")
+        @test MNC.sgs_closure(Config.build(SimulationDriverType(), cfg).model.domains[2]) isa
+              (cm == "tke" ? Aeolus.PrognosticSGS.TKEClosure : Aeolus.Operators.StaticSmagorinsky)
+        r = Config.build(SimulationDriverType(), cfg)
+        m = r.model
+        for _ in 1:4
+            step!(m, 4.0)
+        end
+        tke = cm == "tke" ? m.domains[2] : m.domains[1]
+        e = MNC.sgs_closure(tke).e
+        @test all(isfinite, interior_view(e)) && minimum(interior_view(e)) >= 0
+        if cm == "tke"
+            g = m.domains[2].state.mesh
+            Aeolus.BoundaryConditions.fill_halos!(e, Aeolus.BoundaryConditions.passive_scalar_bcs(m.domains[2].state.θ_bcs))
+            @test e.data[g.Hx, g.Hy+3, g.Hz+2] == e.data[g.Hx+1, g.Hy+3, g.Hz+2]          # west nest face: zero gradient
+            @test e.data[g.Hx+g.Nx+1, g.Hy+3, g.Hz+2] == e.data[g.Hx+g.Nx, g.Hy+3, g.Hz+2]
+        end
+        @test all(d -> all(isfinite, interior_view(d.state.u)), m.domains)
+    end
+    # the warning: a parent much smoother than the child, no inflow turbulence
+    fine = mn_two(; size = "[32, 32, 8]", refinement = "[4, 4, 2]")
+    @test isempty(SimulationDriver_warn(mn_cfg(mn_two())))
+    w = SimulationDriver_warn(mn_cfg(fine))
+    @test length(w) == 1 && occursin("\"inner\" refines its parent \"outer\" by 4", only(w))
+    @test_logs (:warn, r"refines its parent \"outer\" by 4") match_mode = :any Config.build(SimulationDriverType(), mn_cfg(fine))
+    @test isempty(SimulationDriver_warn(mn_cfg(fine * "[domain.inflow_turbulence]\nenabled = true\n")))
 end
