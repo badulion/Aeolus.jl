@@ -72,52 +72,93 @@ end
 """
     ModelNest
 
-The nest coupling of a [`Model`](@ref) with several domains:
-`hierarchy`, the `Nesting.NestHierarchy` whose domains are the model's
-cores (domain `i` of the model is domain `i` of the hierarchy, with the
-model's id), and `links`, the [`NestLink`](@ref)s it was built from.
+The nest coupling of a [`Model`](@ref) with several domains, and the one
+nest engine that steps it (NEST-p2, #482; the design is
+`docs/src/design/single_model.md`, "Nesting"): `hierarchy`, the
+`Nesting.NestHierarchy` whose domains are the model's cores (domain `i`
+of the model is domain `i` of the hierarchy, with the model's id) and
+whose links carry the boundary data, flux registers, feedback and
+statistics of every parent–child pair, and `links`, the
+[`NestLink`](@ref)s it was built from.
 
-One `step!(model, dt)` is one root step of the hierarchy (Berger & Oliger
-1984): the root steps through its pipeline, the boundary data of each
-child are prolongated at both ends of that step, every child subcycles
-through its own pipeline to land on the step's end (`max(r)` substeps for
-a refinement `r`, recursively for its own children), and the two-way
-children feed back (anterpolation, interface flux correction,
-Berger–Colella refluxing, re-projection of the parent). The design's
-stages `:nest_sync` (1) and `:nest_feedback` (12) are these two halves of
-the coupling, run by the model around the domains' pipelines.
+One `step!(model, dt)` (or `step_adaptive!(model)`) is one **window**,
+one step of the root (Berger & Oliger 1984), taken by the engine
+([`nest_window!`](@ref)):
+
+ 1. each domain steps through stages 1–11 of its own pipeline;
+ 2. the boundary data of each child are prolongated at both ends of that
+    step, and every child takes `n` equal substeps to land on its end,
+    recursively for its own children (`n` the largest refinement for a
+    fixed step; adaptive, the smallest whole number that keeps the child
+    within its own stability limit, chosen at every window);
+ 3. the two-way children feed back (anterpolation, interface flux
+    correction, Berger–Colella refluxing, one re-projection of the
+    parent): stage 12, `:nest_feedback`;
+ 4. the domain finishes its step with stage 13 (`:budgets`, `:checks`,
+    `:output`), so its budgets close and its checks and output see the
+    state after the feedback.
+
+Engine state: `adaptive` (the root steps adaptively and every child
+picks its `n`), `validate` (a step is checked and a failure retries the
+window, [`nest_window!`](@ref)), `max_retries`, the window-start
+snapshot, the per-link `n` of the current window and the floor a retry
+puts on it, each domain's previous step (the growth limit of its
+adaptive pick), and the counters `retries` (windows redone over the run)
+and `last_retries` (in the last window).
 """
-struct ModelNest{H}
+mutable struct ModelNest{H}
     hierarchy::H
     links::Vector{NestLink}
+    adaptive::Bool
+    validate::Bool
+    max_retries::Int
+    nfloor::Vector{Int}                       # per hierarchy link: n at least this (a retry)
+    nused::Vector{Int}                        # per hierarchy link: n of the current window
+    dt_prev::Vector{Union{Nothing,Float64}}   # per domain: its last accepted step
+    retries::Int
+    last_retries::Int
+    snapshot::Any                             # the window-start state (IO.StructuralState), or nothing
 end
 
+ModelNest(h, links::Vector{NestLink}; adaptive::Bool = false, validate::Bool = adaptive,
+          max_retries::Integer = 3) =
+    ModelNest(h, links, adaptive, validate, Int(max_retries), zeros(Int, length(h.links)),
+              zeros(Int, length(h.links)), Union{Nothing,Float64}[nothing for _ in h.domains], 0, 0, nothing)
+
 """
-    nested_model(domains::Tuple, links) -> Model
+    nested_model(domains::Tuple, links; max_retries = 3) -> Model
 
 The model of `domains` (the root first) coupled by `links` (a
 [`NestLink`](@ref) per child, in domain order): a [`ModelNest`](@ref)
-whose hierarchy steps every domain through its own pipeline
-([`pipeline_advance`](@ref)), with fixed steps (the root's `dt`; each
-child `max(r)` substeps per step of its parent) and no step rejection (a
-blow-up is the run's sanity check: the blow-up guard inspects every
-domain, [`component_nonfinite_fields`](@ref Aeolus.IO.component_nonfinite_fields),
-a one-way child too). Refused with an `ArgumentError` that
-names the domains: a domain that measures budgets (not attributed across
-the nest's feedback yet), an adaptive domain, a child without a link or
-with two, a child that is not properly nested in its parent, overlapping
-siblings, or a two-way pair without a conservation box or of mixed cores
-(those of `Nesting.add_nest!`).
+whose engine steps every domain through its own pipeline. With fixed
+steps (every domain's `cfl === nothing`) each child takes `max(r)`
+substeps per step of its parent and no step is checked (a blow-up is
+the run's sanity check: the blow-up guard inspects every domain,
+[`component_nonfinite_fields`](@ref Aeolus.IO.component_nonfinite_fields),
+a one-way child too). Adaptive (every domain has a `cfl`), the root
+picks its step and each child the number of substeps it needs, a failed
+step retries the window (up to `max_retries` times,
+[`nest_window!`](@ref)). Refused with an `ArgumentError` that names the
+domains: a mix of fixed and adaptive domains, a domain that measures
+budgets (not attributed across the nest's feedback yet), a child without
+a link or with two, a child that is not properly nested in its parent,
+overlapping siblings, or a two-way pair without a conservation box or of
+mixed cores (those of `Nesting.add_nest!`).
 """
-function nested_model(domains::Tuple, links)
+function nested_model(domains::Tuple, links; max_retries::Integer = 3)
     length(domains) >= 2 || throw(ArgumentError("nested_model: a nest needs two domains or more"))
     n = length(domains)
     for d in domains
         d.budgets === nothing ||
             throw(ArgumentError("nested_model: domain $(d.id) measures budgets; budgets across a nest " *
                                 "(the two-way feedback is outside every stage) are not attributed yet"))
-        d.cfl === nothing ||
-            throw(ArgumentError("nested_model: domain $(d.id) steps adaptively; a nested model takes fixed steps"))
+    end
+    adaptive = domains[1].cfl !== nothing
+    for d in domains
+        (d.cfl !== nothing) == adaptive ||
+            throw(ArgumentError("nested_model: domain $(d.id) " * (adaptive ? "takes fixed steps" : "steps adaptively") *
+                                " and domain $(domains[1].id) " * (adaptive ? "adaptively" : "fixed steps") *
+                                "; the domains of a nest step all adaptively or all with a fixed step"))
     end
     ls = NestLink[links...]
     sort(Int[l.child for l in ls]) == collect(2:n) ||
@@ -138,10 +179,8 @@ function nested_model(domains::Tuple, links)
             throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
         end
     end
-    return Model(domains, ModelNest(h, ls))
+    return Model(domains, ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries))
 end
-
-step!(m::Model{<:Tuple,<:ModelNest}, dt::Real) = (step_nested!(m.nest.hierarchy; dt = Float64(dt)); m)
 
 """
     Nesting.nest_link(m::Model, id::AbstractString) -> Nesting.NestedRun
@@ -155,8 +194,16 @@ Nesting.nest_link(m::Model{<:Tuple,<:ModelNest}, id::AbstractString) = Nesting.n
 # A checkpoint of a nested model holds the whole hierarchy: every domain's
 # core and components, both parent time levels of every link, the flux
 # registers and statistics (the structural walk of #269).
-checkpoint_state(n::ModelNest) = structural_state(n.hierarchy)
-restore_checkpoint_state!(n::ModelNest, s) = (restore_structural_state!(n.hierarchy, s); n)
+# The engine's own memory (each domain's last step, the retry counters)
+# travels with it, so an adaptive nest resumes bit for bit.
+checkpoint_state(n::ModelNest) = (hierarchy = structural_state(n.hierarchy), dt_prev = copy(n.dt_prev),
+                                  retries = n.retries)
+function restore_checkpoint_state!(n::ModelNest, s)
+    restore_structural_state!(n.hierarchy, s.hierarchy)
+    copyto!(n.dt_prev, s.dt_prev)
+    n.retries = s.retries
+    return n
+end
 
 # The blow-up guard inspects the run's root core; the child domains are
 # the nest's, so it reports theirs (a one-way child feeds nothing back,

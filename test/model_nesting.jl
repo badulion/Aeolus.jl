@@ -21,7 +21,8 @@ using Aeolus.Config
 using Aeolus.Components
 const MNC = Aeolus.Components
 using Aeolus.SimulationDriver: SimulationDriverType, simulation
-using Aeolus.Nesting: NestedRun, NestHierarchy, add_nest!, nested_grid, nest_bcs, composite_integral, nest_link
+using Aeolus.Nesting: NestedRun, NestHierarchy, add_nest!, nested_grid, nest_bcs, composite_integral, nest_link,
+                      step_nested!
 using Aeolus.Grids: RegularGrid
 using Aeolus.Fields: interior_view, set!
 using Aeolus.BoundaryConditions: FieldBoundaryConditions
@@ -186,6 +187,40 @@ end
     @test_throws ArgumentError MNC.step_adaptive!(m)
     @test_throws ArgumentError NestLink(1, 2, nothing)
     @test_throws ArgumentError NestLink(2, 1, nothing; feedback = :both)
+end
+
+# the engine (NEST-p2, #482): with fixed steps every domain's prognostic
+# state is that of Nesting.step_nested!(::NestHierarchy), bit for bit
+mn_state_equal(a, b) = all(i -> all(f -> interior_view(getproperty(a.domains[i].state, f)) ==
+                                         interior_view(getproperty(b.domains[i].state, f)), (:u, :v, :w, :θ, :p)),
+                           eachindex(a.domains))
+
+@testset "the nest engine with fixed steps is Nesting.step_nested!, bit for bit ($scheme, $fb)" for scheme in (:euler, :rk3), fb in (:one_way, :two_way)
+    a, = mn_pair(; scheme = scheme, feedback = fb)
+    b, = mn_pair(; scheme = scheme, feedback = fb)
+    for _ in 1:3
+        step!(a, 5.0)
+        step_nested!(b.nest.hierarchy; dt = 5.0)
+    end
+    @test mn_state_equal(a, b)
+    @test a.domains[2].state.t == b.domains[2].state.t == 15.0
+    @test nest_link(a, "c").stats.child_substeps == 6 && nest_link(a, "c").stats.n_last == 2
+end
+
+@testset "the nest engine with three levels and a sibling is Nesting.step_nested!, bit for bit" begin
+    text = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
+           mn_child(; id = "a", origin = "[300.0, 300.0]", size = "[12, 12, 8]", extent = "[600.0, 600.0, 400.0]") *
+           mn_child(; id = "g", parent = "a", origin = "[200.0, 200.0]", size = "[8, 8, 8]",
+                    extent = "[200.0, 200.0, 200.0]") *
+           mn_child(; id = "b", origin = "[1100.0, 1100.0]", feedback = "one_way", size = "[8, 8, 4]",
+                    extent = "[400.0, 400.0, 200.0]")
+    a = Config.build(SimulationDriverType(), mn_cfg(text)).model
+    b = Config.build(SimulationDriverType(), mn_cfg(text)).model
+    for _ in 1:3
+        step!(a, 4.0)
+        step_nested!(b.nest.hierarchy; dt = 4.0)
+    end
+    @test mn_state_equal(a, b)
 end
 
 @testset "one-way: the parent is the parent run alone, bit for bit" begin
