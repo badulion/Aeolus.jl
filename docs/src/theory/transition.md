@@ -976,7 +976,7 @@ variances, which add one second-moment pass per level). With ``τ_{\rm avg}`` = 
 cadence of tens of seconds of parent time is enough.
 
 **A convective Aeolus parent** (`examples/cbl_inflow_statistics/cbl_inflow_statistics.toml`,
-the model with `[sgs] closure = "tke"` and the `[inflow_statistics]` component, ONE-l #475;
+the model with `[sgs] model = "tke"` and the `[inflow_statistics]` component, ONE-l #475;
 `examples/cbl_inflow_statistics/report_cbl_inflow_statistics.jl` prints the table from the last
 record of its `output.nc`).
 The parent is the 64³ CBL of `examples/cbl_tke/cbl_tke.toml`: ``Δx = 50`` m,

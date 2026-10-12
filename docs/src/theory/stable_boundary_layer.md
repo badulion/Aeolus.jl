@@ -24,7 +24,7 @@ folders and make the tables and figures.
 | geostrophic pressure gradient ``(-fV_g, +fU_g)`` | `LargeScale` (`[large_scale_forcing] u_g, v_g`: numbers, or `"driver"`: the dynamic driver's `ls_u_g`, `ls_v_g`), stage 7 | `LargeScaleForcing.GeostrophicPressureGradient` (#171) with the `Coriolis` component's ``f`` |
 | Coriolis term | `Coriolis` (`[coriolis] f` or `latitude`), stage 6 | `Operators.add_coriolis!`, `coriolis_parameter` |
 | large-scale advection, subsidence, nudging (P58-d) | `LargeScale` (`advective_tendencies`, `subsidence`, `nudging`: the driver's `ls_*` tables, read generically) | `AdvectiveTendencies`, `Subsidence`, `ProfileNudging` |
-| surface temperature | `SurfaceLayer` (`[surface_layer] temperature`: constant, cooling rate, or the driver's `sfc_temperature`) | `SurfaceTemperatureSeries` (#171) |
+| surface temperature | `SurfaceLayer` (`[surface] model = "most"`, `temperature`: constant, cooling rate, or the driver's `sfc_temperature`) | `SurfaceTemperatureSeries` (#171) |
 | surface heat flux ``w'θ'_0 = -u_*θ_*`` | `SurfaceLayer`, solved per column in stage 3, added in stage 6 | `SurfaceExchange.solve_surface_layer`, `kinematic_heat_flux` |
 | surface stress | `SurfaceLayer`, stage 8 (every RK3 substage) | `WallModels.MOSTWallLaw(sf, z0m, L)` with the ``L`` of that solve, `apply_wall_stress!` (the law returns the solver's ``u_*`` bit for bit) |
 | SGS closure | `SGS` (`[sgs] closure`, `stability = "brown_et_al_1994"`, `stress = "symmetric"` so that ``ν_v`` reaches the momentum) | `Operators.StabilityCorrected` (P55-e) |

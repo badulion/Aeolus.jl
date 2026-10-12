@@ -8,8 +8,11 @@ come from a sounding, a dynamic input driver or an online Aeolus nest
 parent, and whose urban physics is a set of components of the domain's
 stage pipeline (one file per component under `src/components/urban/`;
 [Components](../design/components.md)). A model config with `[urban]
-enabled = true` is an urban site, and its sections enable the
-components.
+enabled = true` is an urban site: one section per urban slot names its
+provider (`[sgs] model = "tke"`, `[pressure] solver = "cosine_fft"`,
+`[chemistry] scheme = "none"`; `URBAN_SLOT_SECTIONS`, ONE-m #476) and
+holds that provider's options, and the additive components' sections
+enable them.
 
 The site is a `Model` of one domain like any other: the
 [`UrbanSite`](@ref Aeolus.Urban.UrbanSite) is the domain's first

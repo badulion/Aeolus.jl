@@ -2,7 +2,8 @@
 
 ## Air quality: chemistry and deposition (#135)
 
-The `:chemistry` slot's default provider `:nox_o3_voc` (`aq_chem.jl`)
+The `:chemistry` slot's default provider `aq_chem` (`[chemistry] scheme =
+"aq_chem"`, `aq_chem.jl`; called `:nox_o3_voc` before ONE-m, #476)
 runs the `Aeolus.Chemistry` mechanism ([theory](../theory/urban_chemistry.md))
 on five tracers registered with `advect = true`: NO, NO2, O3, VOC and
 HNO3, in ppb. The `:transport` stage moves them. The example's toy
@@ -36,7 +37,7 @@ Since #129 (PR #158) the bus carries u* (`bus.u_star`) and every
 column's surface carries its roughness, but this coupling still runs
 its own surface-layer solve; reading them from the bus is open.
 
-`physics[:chemistry] = :off` (provider of `NoChem`) removes the species.
+`[chemistry] scheme = "none"` (the provider of `NoChem`) removes the species.
 It is not the default. The smoke matrix also runs a `night titration`
 variant (start 00:30, J = OH = 0).
 
@@ -84,8 +85,8 @@ levels 2–4: the HNO3 removed per step equals ``s[\mathrm{HNO_3}]\,(Σ q_r Δz)
 to 0.1 %. The rain sediments out in about four steps.
 
 **Cost.** On the flagship grid on master `915bd49` (600 s from 12:00,
-with and without the chemistry (`aq_chem.enabled=false`,
-`chem_off.enabled=true`), run one after the
+with and without the chemistry (then `[chemistry] scheme = "none"`,
+the provider `:off` of the time), run one after the
 other on a loaded 24-core machine, first-call compilation included; both
 runs take the same 230 adaptive steps, mean dt 2.61 s, since the
 chemistry does not feed back on the flow) the step goes from 233.7 to

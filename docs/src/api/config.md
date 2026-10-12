@@ -211,7 +211,7 @@ The one legacy case left is code in `src/` (`urban_parent`, the nest
 parent of an urban site alone); nothing is loaded from `examples/`. The
 validation run types of the former `Aeolus.RunDrivers` are configurations
 of the model since ONE-l (#475): `advection` (`[kinematic_flow]`), `cbl`
-(`[sgs] closure = "tke"`, `[inflow_statistics]`), `shear_layer` (the
+(`[sgs] model = "tke"`, `[inflow_statistics]`), `shear_layer` (the
 `tanh` and `seed_mode` initial profiles) and `flat_plate` (`[fringe]`);
 `inflow_fetch` and `obstacle_channel` (channel cases) and `sgs_decay`
 (the filtered-DNS study) were dropped, their harnesses kept as test
@@ -258,7 +258,7 @@ label = "no_feedback"
 fog = { droplet_feedback = false }
 
 [sweep]
-axis = [ { key = "sgs.closure", values = ["smagorinsky", "lasd", "lasi"] },
+axis = [ { key = "sgs.model", values = ["smagorinsky", "vreman", "amd"] },
          { key = "channel.size", values = [[32, 32, 32], [48, 48, 48]] } ]
 ```
 
@@ -329,14 +329,16 @@ theta0 = 0.0                    # no buoyancy
 z = "periodic"
 
 [sgs]
-closure = "none"
+model = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.07853981633974483        # shortened to duration / ceil(duration / dt) = 2/26
 duration = 2.0
 ```
@@ -352,8 +354,23 @@ This config is, bit for bit, the simulation the script built before
     `[advection]`, `[sgs]`, `[coriolis]` (`f` or `latitude`), `[sponge]`
     (`alpha_max`, `z_start`, `target`), `[surface_theta_flux]` (`bottom`,
     `top`), and the boundary-layer components of the SBL cases (ONE-g,
-    #456): `[large_scale_forcing]`, `[surface_layer]` and `[towers]`
-    ([The stable-boundary-layer cases](@ref)).
+    #456): `[large_scale_forcing]`, `[surface] model = "most"` and
+    `[towers]` ([The stable-boundary-layer cases](@ref)).
+  * **One section per exclusive slot** (ONE-m, #476): `[core] model`
+    (`boussinesq`, `anelastic`), `[timestep] scheme` (`rk3`, `euler`),
+    `[sgs] model` (`smagorinsky`, `dynamic_smagorinsky`, `vreman`,
+    `sigma`, `amd`, `tke`, `none`), `[surface] model` (`none`, `slab`,
+    `flux_map`, `most`), `[microphysics] scheme` (`none`, `kessler`) and
+    `[advection] scheme` (`centred`). The selector key names the provider;
+    the section holds that provider's options and no other's (`[sgs] model
+    = "tke"` with `e_min`, `surface_factor`, `wall_cap`, `stress`; a
+    `c_s` there is an error naming the closures that have one), and the
+    resolved config shows the provider with all its options. A selector
+    set by `--set`, `with` or a `[domain.<section>]` block replaces the
+    provider: the options set below it that the new provider does not
+    have are dropped (`--set sgs.model="vreman"` on a file with
+    `[sgs] model = "tke"`). Each provider's options are a block of the
+    option reference (`[sgs] model = "tke"`).
   * `[initial]` sets the velocity, θ and qv from vertical profiles
     (`constant`, `mixed_layer_lapse`, `table` with an optional `log` or
     `linear` tail below the lowest height, `exponential`), the Taylor–Green
@@ -368,11 +385,12 @@ This config is, bit for bit, the simulation the script built before
     seed. `[time] start` is the model time at the start (the clock on which
     the dynamic driver's tables are read).
   * `[time]`: `dt` a fixed step or `"adaptive"` (`step_adaptive!` with
-    `cfl` and `dt_max`), and `duration` or `nsteps`. `euler` is `step!`,
-    `rk3` `step_rk3!`.
+    `cfl` and `dt_max`), and `duration` or `nsteps`. `[timestep] scheme`:
+    `euler` is `step!`, `rk3` `step_rk3!`.
   * `[sgs]` selects the closure object of the `:sgs` component
-    (`Components.build_closure`); `closure = "none"` enables no SGS
-    component.
+    (`Components.build_closure`), each closure's coefficient `c_s` its
+    own default (smagorinsky and vreman 0.17, sigma 1.35, amd 0.3);
+    `model = "none"` enables no SGS component.
   * `[dynamics] nu` is also θ's (and qv's) molecular diffusivity: the
     cores have one coefficient (Prandtl number 1), so there is no separate
     `kappa`.
@@ -439,22 +457,22 @@ Each file is complete (no `extends`, ONE-b #451).
 
 ```bash
 julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800
-julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs_tke.enabled=false --set sgs_smagorinsky.enabled=true
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs.model=\"smagorinsky\"
 ```
 
 A run writes its own checks (the budgets' closure, the timing) to
 `output/results.toml`. The model's sections it takes are `[grid]` (a
-uniform grid), `[dynamics]` `nu`, `theta0`, `g` (the Boussinesq setting:
-the site picks its core with a `core_*` component), `[time]` (a fixed
-`dt` and `nsteps` with `duration = "none"`: with the `timestep_adaptive`
-component `nsteps × dt` is the simulated time), `[output]` (`path`,
+uniform grid), `[dynamics]` `nu`, `theta0`, `g`, `[time]` (a fixed
+`dt` and `nsteps` with `duration = "none"`: with `[timestep] scheme =
+"adaptive"` `nsteps × dt` is the simulated time), `[output]` (`path`,
 `cadence`) and the domain's `static_driver` (the ground, CFG-f #361, see
 [Input drivers](input_drivers.md), made by AeolusPrep.jl) and
 `dynamic_driver` (a sounding driver, or the parent-made driver of an
 offline nest). The model's own components (`[coriolis]`, `[sponge]`,
 `[surface_theta_flux]`, the EX-d couplings) are not part of an urban
-site, and `[sgs]` stays at its defaults: the site's core carries its
-Coriolis force, sponge and closure.
+site: the site's core carries its Coriolis force and sponge. The slot
+sections the site shares with the model (`[core]`, `[timestep]`, `[sgs]`,
+`[microphysics]`) offer the site's providers on it (ONE-m, #476).
 
   * **`[urban]`**: the site — the static driver of the nest parent
     (`parent_static`) and its land-use table (`landuse`), the anchor
@@ -470,22 +488,27 @@ Coriolis force, sponge and closure.
     (`child_boundaries`). The generic site points at no data of the
     example: `parent_static`, `landuse` and `sounding` default to
     `"none"`.
-  * **One section per urban component**, `[<name>]`: `enabled` (default
-    `false`) and the component's `default_options`, generated from them
-    (`coupling_section`), so a component never has to repeat itself in a
-    schema: the key set is closed, a key is the option's name in ASCII
+  * **One section per urban slot** (ONE-m, #476; `URBAN_SLOT_SECTIONS`):
+    `[core] model`, `[timestep] scheme`, `[pressure] solver`,
+    `[momentum_advection] scheme`, `[scalar_advection] model`, `[sgs]
+    model`, `[surface_exchange] model`, `[ground] model`,
+    `[surface_radiation] model`, `[column_radiation] model`, `[buildings]
+    model`, `[glazing] model`, `[immersed_boundary] method`, `[chemistry]
+    scheme` (`aq_chem` or `none`) and `[microphysics] scheme`: the
+    selector names the provider (default: the one of `URBAN_DEFAULTS`)
+    and the section holds its options (`urban_slot_section`). **One
+    section per additive component**, `[<name>]`: `enabled` (default
+    `false`) and its options. A component's options are its
+    `default_options`, generated from them (`coupling_options!`), so a
+    component never has to repeat itself in a schema: the key set is closed, a key is the option's name in ASCII
     snake case (`U_g` → `u_g`, `τ` → `tau`), and a value has its default's
     form (a `Symbol` is a string, a tuple an array of the same length, a
     `NamedTuple` a sub-table whose missing keys keep the default, a table
     by surface class has integer keys, a `nothing` default takes `"none"`
-    or a number). Every urban slot (`:core`, `:timestepper`,
-    `:pressure_solver`, `:momentum_advection`, `:scalar_advection`,
-    `:sgs`, `:surface_exchange`, `:ground`, `:surface_radiation`,
-    `:column_radiation`, `:buildings`, `:glazing`, `:chemistry`,
-    `:microphysics`, `:immersed_boundary`) has exactly one enabled
-    provider; the additive components are each on or off. The
-    components' `incompatible` declarations are cross-field checks whose
-    message carries the `incompatible_reason`.
+    or a number). The components' `incompatible` declarations are
+    cross-field checks whose message names the sections (`[core] model =
+    "anelastic" is incompatible with [pressure] solver = "cosine_fft"`)
+    and carries the `incompatible_reason`.
   * **`[nesting.parent]`** is the nest parent's own
     schema (`ParentConfig`), its keys the ASCII field names
     (`nudging_tau`, `theta_top`). The function-valued fields have TOML
@@ -517,7 +540,7 @@ GABLS1-4 and CASES-99 (`examples/sbl/`) are configurations of the
 model since ONE-g (#456): the geostrophic forcing and the dynamic driver's
 large-scale tables are `[large_scale_forcing]`
 ([`LargeScale`](@ref Aeolus.Components.LargeScale)), the Monin-Obukhov
-surface layer over the prescribed surface temperature `[surface_layer]`
+surface layer over the prescribed surface temperature `[surface] model = "most"`
 ([`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer)), the sponge
 retargeted at the geostrophic wind or the plane mean `[sponge] target`,
 the CASES-99 towers `[towers]` ([`Towers`](@ref Aeolus.Components.Towers)).
