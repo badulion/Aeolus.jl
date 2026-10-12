@@ -322,7 +322,7 @@ model's components.
 
 **The parent's physics as components (NEST-p1, #481).** The parent is a
 `Domain` of components (`Urban.parent_domain`): the tiled mosaic surface
-(`TiledSurface`, the `:surface` slot, on the tile form of the parent's
+(`TiledUrbanSurface`, the `:surface` slot, on the tile form of the parent's
 static driver, `STATIC_TILES_SCHEMA`), the prescribed surface flux of the
 idealised parents, the column radiation of the plane-mean column
 (`MeanColumnRadiation`, the `:radiation` slot), the large-scale forcing

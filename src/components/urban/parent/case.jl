@@ -48,8 +48,7 @@ and, the same objects as its components': `closure` (the SGS closure or
 `nothing`), `forcing` (named tuple of the large-scale forcings),
 `surface` (the [`ParentSurface`](@ref) or `nothing`), `rad` (the
 `Aeolus.ColumnRadiation.ColumnRadiationModel` or `nothing`), `sfc_mean`
-(the surface's domain-mean J m⁻²), `zi_run` (the running z_i of the
-nudging weight); the ledgers `heat` and `water` ([`StageBudget`](@ref)),
+(the surface's domain-mean J m⁻²); the ledgers `heat` and `water` ([`StageBudget`](@ref)),
 `top` (the [`TopHeatFlux`](@ref) or `nothing`), the time-stepping state,
 the sounding time `t0` of the start and `diag`, the diagnostics recorded
 every `output_period`.
@@ -72,14 +71,12 @@ mutable struct ParentCase{M, S, C, D}
     child::Any
     rad::Any
     sfc_mean::Dict{Symbol,Float64}
-    zi_run::Base.RefValue{Float64}   # running maximum of the diagnosed z_i (m), the nudging height
     heat::StageBudget
     water::StageBudget
     top::Union{Nothing,TopHeatFlux}
     constraints::CFLConstraints{Float64}
     dt_prev::Float64
     t0::Float64                 # sounding time (s) of the start; NaN without a sounding
-    zi_obs::Float64             # largest parcel z_i of the sounding's launches (m)
     stage::Base.RefValue{Int}   # stage of the current dynamics step (1 for Euler, 1-3 for RK3)
     top_acc::Base.RefValue{Float64}   # stage-weighted top heat flux of the step (W m⁻²)
     # per-step scratch of the dynamics hooks
@@ -332,7 +329,7 @@ end
 The tile form of the parent's static driver (`STATIC_TILES_SCHEMA`) on
 its `mesh`: the land use of [`parent_landuse`](@ref) (read from
 `pc.child.parent_static`, or made in memory from the land-use table) as
-`InputDrivers.StaticTiles`, what the parent domain's [`TiledSurface`](@ref)
+`InputDrivers.StaticTiles`, what the parent domain's [`TiledUrbanSurface`](@ref)
 reads (`drivers.static_tiles`).
 """
 parent_static_driver(pc::ParentConfig, mesh) = parent_static_tiles(parent_landuse(pc, mesh), pc, mesh)
@@ -346,7 +343,7 @@ the Coriolis parameter, the velocity sponge and the θ top of
 [`ParentConfig`](@ref), the initial state, and the parent's physics as
 components:
 
-  * the `:surface` slot — [`TiledSurface`](@ref) on the tile form of the
+  * the `:surface` slot — [`TiledUrbanSurface`](@ref) on the tile form of the
     parent's static driver ([`parent_static_driver`](@ref),
     `drivers.static_tiles`; the class-to-surface factory and the class
     map under its footprint are those of the urban site `child`, built
@@ -442,7 +439,7 @@ function parent_domain(pc::ParentConfig; child = nothing)
     # the components
     comps = Any[Components.CentredAdvection()]
     push!(comps, pc.surface === :tiles ?
-        Components.build(TiledSurface, (; classes = child, period = pc.surface_period, u_min = pc.U_min,
+        Components.build(TiledUrbanSurface, (; classes = child, period = pc.surface_period, u_min = pc.U_min,
                                          reference = ref), d0) :
         Components.build(PrescribedSurfaceFlux, (; q_surface = pc.Q_surface, e_surface = pc.E_surface,
                                                   reference = ref), d0))
@@ -526,10 +523,9 @@ function build_parent(pc::ParentConfig; child = nothing)
     lev = Dict{Symbol,Vector{Float64}}(s => zeros(Nz) for s in
               (:a, :b, :θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence,
                :acc_θnudging, :acc_θsubsidence, :acc_θdamping, :acc_qnudging, :acc_qsubsidence))
-    pcase = ParentCase(pc, mesh, sim, ref, closure, d, forcing, sfc isa TiledSurface ? sfc.surface : nothing,
+    pcase = ParentCase(pc, mesh, sim, ref, closure, d, forcing, sfc isa TiledUrbanSurface ? sfc.surface : nothing,
                        info.child, rad === nothing ? nothing : rad.model, sfc.sfc_mean,
-                       ls === nothing || ls.zi === nothing ? Ref(0.0) : ls.zi.zi,
-                       heat, water, top, d.cfl, pc.child.dt, isnan(info.t0) ? 0.0 : info.t0, info.zi_obs,
+                       heat, water, top, d.cfl, pc.child.dt, isnan(info.t0) ? 0.0 : info.t0,
                        Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w), 0, 0, Float64[], Dict{Symbol,Float64}(), Any[])
     @debug("Berlin parent built", subsystem = :urban, domain = current_domain(), event = :parent_built,
            grid = (mesh.Nx, mesh.Ny, Nz), dx = mesh.dx, dz_min = minimum(level_thickness(mesh)),
@@ -549,7 +545,7 @@ function parent_downwelling(p::ParentCase)
     r = Components.slot_component(p.domain, :radiation)
     r !== nothing && return (sw = r.sw_down[], lw = r.lw_down[])
     s = Components.slot_component(p.domain, :surface)
-    return s isa TiledSurface ? (sw = s.sw_down[], lw = s.lw_down[]) : (sw = 0.0, lw = 350.0)
+    return s isa TiledUrbanSurface ? (sw = s.sw_down[], lw = s.lw_down[]) : (sw = 0.0, lw = 350.0)
 end
 
 # ---------------------------------------------------------------------------

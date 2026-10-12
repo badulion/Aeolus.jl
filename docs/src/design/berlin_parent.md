@@ -76,7 +76,7 @@ section of the Berlin case page.
 
 Since NEST-p1 (#481) the parent is a `Components.Domain` whose components
 are these pieces ([`parent_domain`](@ref Aeolus.Urban.parent_domain)):
-the surface is the `:surface` slot's `TiledSurface` (on the tile form of
+the surface is the `:surface` slot's `TiledUrbanSurface` (on the tile form of
 the parent's static driver) or `PrescribedSurfaceFlux`, the radiation the
 `:radiation` slot's `MeanColumnRadiation`, the geostrophic wind, nudging,
 subsidence and θ damping the `LargeScale` component (its

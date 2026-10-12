@@ -4,7 +4,7 @@
 # now a component of an ordinary `Components.Domain`, built from options
 # and the domain (`Components.build`) and run by the stage pipeline:
 #
-#   TiledSurface           the `:surface` slot: the tiled urban mosaic of the
+#   TiledUrbanSurface           the `:surface` slot: the tiled urban mosaic of the
 #                          coarse columns (surface.jl, #249), whose land use
 #                          is the tile form of the parent's static driver
 #                          (`STATIC_TILES_SCHEMA`); stage 3 delivers the
@@ -62,11 +62,11 @@ _face_heights(m) = hasproperty(m, :zf) ? Float64[m.zf[m.Hz+k] for k in 1:m.Nz+1]
                                          Float64[m.z0 + (k - 1) * m.dz for k in 1:m.Nz+1]
 
 # ---------------------------------------------------------------------------
-# TiledSurface
+# TiledUrbanSurface
 # ---------------------------------------------------------------------------
 
 """
-    TiledSurface
+    TiledUrbanSurface
 
 The `:surface` slot's tiled urban mosaic (NEST-p1, #481; the parent
 surface of #249): every column of the domain is a [`ParentColumn`](@ref)
@@ -98,7 +98,7 @@ options' values until then), `sfc_mean` (domain-mean J m⁻² of `Rn`, `H`,
 `LE`, `G`, `E` and what the air received, `delivered_H`, `delivered_E`),
 and the level weights `wθ`, `wq` of the delivered amounts.
 """
-mutable struct TiledSurface{R} <: AbstractComponent
+mutable struct TiledUrbanSurface{R} <: AbstractComponent
     surface::ParentSurface
     ref::R
     period::Float64
@@ -115,10 +115,10 @@ mutable struct TiledSurface{R} <: AbstractComponent
     wq::Vector{Float64}
 end
 
-Components.component_name(::Type{<:TiledSurface}) = :tiled_surface
-Components.section(::Type{<:TiledSurface}) = "surface"
-Components.slot(::Type{<:TiledSurface}) = :surface
-Components.schema(::Type{<:TiledSurface}) =
+Components.component_name(::Type{<:TiledUrbanSurface}) = :tiled_surface
+Components.section(::Type{<:TiledUrbanSurface}) = "surface"
+Components.slot(::Type{<:TiledUrbanSurface}) = :surface
+Components.schema(::Type{<:TiledUrbanSurface}) =
     Config.slot_section("surface"; key = "model") do sec
         Config.provider!(sec, "tiles"; doc = "The tiled urban mosaic of the domain's static driver (its tile form).") do s
             Config.option!(s, "period", Float64; default = 60.0, range = (0, Inf), open_lower = true, units = "s",
@@ -135,7 +135,7 @@ Components.schema(::Type{<:TiledSurface}) =
 const _SFC_KEYS = (:Rn, :H, :LE, :G, :E, :delivered_H, :delivered_E)
 
 """
-    build(TiledSurface, opts, domain)
+    build(TiledUrbanSurface, opts, domain)
 
 The tiled surface of `domain`: its land use `opts.landuse` (a
 [`ParentLanduse`](@ref); else the domain's static driver's tile form,
@@ -145,26 +145,26 @@ class-to-surface factory `opts.classes` (a built urban site:
 or the [`ParentSurface`](@ref) `opts.surface` as built; `period`,
 `u_min`, `sw_down`, `lw_down` and `reference` ([`air_reference`](@ref)).
 """
-function Components.build(::Type{<:TiledSurface}, opts, domain)
+function Components.build(::Type{<:TiledUrbanSurface}, opts, domain)
     m = Components.grid(domain)
     ps = Components.option(opts, :surface, nothing)
     if ps === nothing
         pl = Components.option(opts, :landuse, nothing)
         if pl === nothing
             t = get(domain.drivers, :static_tiles, nothing)
-            t === nothing && throw(ArgumentError("TiledSurface: the domain has no static driver with tiles"))
+            t === nothing && throw(ArgumentError("TiledUrbanSurface: the domain has no static driver with tiles"))
             pl = landuse_of_tiles(t)
         end
         ps = build_parent_surface(opts.classes, pl; z_centres = level_centres(m))
     end
     (size(ps.columns) == (m.Nx, m.Ny)) ||
-        throw(DimensionMismatch("TiledSurface: $(size(ps.columns)) columns on a $(m.Nx) × $(m.Ny) grid"))
+        throw(DimensionMismatch("TiledUrbanSurface: $(size(ps.columns)) columns on a $(m.Nx) × $(m.Ny) grid"))
     ref = air_reference(opts, domain)
     kmax = maximum(max(1, maximum(col.ktile) - 1) for col in ps.columns if col !== nothing)
     z = zeros(m.Nx, m.Ny, kmax)
     hm = LevelMeter(m, ref.ρ̄, ref.π̄, ref.cp)
     wm = LevelMeter(m, ref.ρ̄, ones(m.Nz), 1.0)
-    return TiledSurface(ps, ref, Float64(Components.option(opts, :period, 60.0)),
+    return TiledUrbanSurface(ps, ref, Float64(Components.option(opts, :period, 60.0)),
                         Float64(Components.option(opts, :u_min, 0.5)), copy(z), copy(z), copy(z),
                         fill(NaN, m.Nx, m.Ny), Ref(-Inf), Ref(Float64(Components.option(opts, :sw_down, 0.0))),
                         Ref(Float64(Components.option(opts, :lw_down, 350.0))),
@@ -176,8 +176,8 @@ landuse_of_tiles(t::StaticTiles) =
     ParentLanduse(length(t.x), length(t.y), t.dx, t.x0, t.y0, t.refinement, Int.(t.class_count),
                   t.lambda_f, t.h_mean, t.h_max, copy(t.notes))
 
-Components.stages(::TiledSurface) = (Stage(:surface_flux), Stage(:post_predictor))
-Components.surface_friction_velocity(c::TiledSurface, d) = c.ustar
+Components.stages(::TiledUrbanSurface) = (Stage(:surface_flux), Stage(:post_predictor))
+Components.surface_friction_velocity(c::TiledUrbanSurface, d) = c.ustar
 
 """
     set_downwelling!(surface, sw, lw)
@@ -186,18 +186,18 @@ Give a surface component the downwelling short- and longwave (W m⁻²) of
 the radiation's last call; a no-op for a surface that takes none.
 """
 set_downwelling!(::Any, sw, lw) = nothing
-set_downwelling!(c::TiledSurface, sw, lw) = (c.sw_down[] = sw; c.lw_down[] = lw; nothing)
+set_downwelling!(c::TiledUrbanSurface, sw, lw) = (c.sw_down[] = sw; c.lw_down[] = lw; nothing)
 
 """
     surface_optics(surface, θ1, π̄1) -> (ε, α, T_rad)
 
 The emissivity, albedo and radiative temperature (K) of a domain's surface
-for the column radiation: the tile means of a [`TiledSurface`](@ref) (the
+for the column radiation: the tile means of a [`TiledUrbanSurface`](@ref) (the
 emissivity-weighted radiative temperature of all tiles), else 0.95, 0.15
 and the first level's air temperature ``θ_1 Π̄_1``.
 """
 surface_optics(::Any, θ1, π̄1) = (0.95, 0.15, θ1 * π̄1)
-function surface_optics(c::TiledSurface, θ1, π̄1)
+function surface_optics(c::TiledUrbanSurface, θ1, π̄1)
     cols = [col for col in c.surface.columns if col !== nothing]
     εs = [surface_emissivity(col.surface) for col in cols]
     ε = sum(εs) / length(cols)
@@ -218,13 +218,13 @@ end
 const TILE_COLUMN_WEIGHT = 4096
 
 """
-    step_tiles!(c::TiledSurface, sim, period) -> c
+    step_tiles!(c::TiledUrbanSurface, sim, period) -> c
 
 Advance every tile of every column by `period` seconds under the air of
 its column and turn the tiles' fluxes into the sources the air receives
-until the next surface step (see [`TiledSurface`](@ref)).
+until the next surface step (see [`TiledUrbanSurface`](@ref)).
 """
-function step_tiles!(c::TiledSurface, sim, period::Real)
+function step_tiles!(c::TiledUrbanSurface, sim, period::Real)
     m = sim.mesh
     zf = _face_heights(m)
     fill!(c.θsrc, 0.0); fill!(c.qsrc, 0.0); fill!(c.drag, 0.0)
@@ -276,7 +276,7 @@ function _tile_column!(I, J, c, sim, θd, qd, zf, kmax, period)
 end
 
 # add θ, qv sources (per s) over τ seconds into the canopy levels
-function _apply_sources!(c::TiledSurface, sim, τ::Real)
+function _apply_sources!(c::TiledUrbanSurface, sim, τ::Real)
     m = sim.mesh
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
     θd = sim.θ.data
@@ -298,7 +298,7 @@ end
 # stage 3: the held sources up to the end of the current surface interval,
 # then a surface step and its sources for the rest of the step (the air
 # receives exactly what the tiles gave away over the time it covers)
-function Components.run_stage!(c::TiledSurface, d, ::Val{:surface_flux}, dt)
+function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:surface_flux}, dt)
     sim = d.state
     P = c.period
     s = Float64(sim.t)
@@ -319,7 +319,7 @@ end
 # canopy levels (the mean of the two columns a face separates), along the
 # instantaneous wind: the stress magnitude held from the surface step,
 # stable for any Δt
-function Components.run_stage!(c::TiledSurface, d, ::Val{:post_predictor}, Δt)
+function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:post_predictor}, Δt)
     sim = d.state
     m = sim.mesh
     Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
@@ -346,8 +346,8 @@ function Components.run_stage!(c::TiledSurface, d, ::Val{:post_predictor}, Δt)
     return nothing
 end
 
-Aeolus.IO.checkpoint_state(c::TiledSurface) = Aeolus.IO.structural_state(c)
-Aeolus.IO.restore_checkpoint_state!(c::TiledSurface, s::Aeolus.IO.StructuralState) = Aeolus.IO.restore_structural_state!(c, s)
+Aeolus.IO.checkpoint_state(c::TiledUrbanSurface) = Aeolus.IO.structural_state(c)
+Aeolus.IO.restore_checkpoint_state!(c::TiledUrbanSurface, s::Aeolus.IO.StructuralState) = Aeolus.IO.restore_structural_state!(c, s)
 
 # ---------------------------------------------------------------------------
 # PrescribedSurfaceFlux

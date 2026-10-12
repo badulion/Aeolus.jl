@@ -1,7 +1,7 @@
 # The urban nest parent's physics as components of a domain (NEST-p1, #481),
 # on both dynamical cores:
 #
-#   * TiledSurface: the heat and vapour the air receives over a step are the
+#   * TiledUrbanSurface: the heat and vapour the air receives over a step are the
 #     tiles' area-mean fluxes × the step, exactly (the canopy levels' depth
 #     weights sum to one); u* = √(Σ fᵢ τᵢ / ρ̄₁); the drag is the implicit
 #     deceleration u/(1 + Δt a/U); a checkpoint restores the tiles bit for bit;
@@ -79,11 +79,11 @@ wsum(w, a, b) = sum(w[k] * sum(view(a, :, :, k) .- view(b, :, :, k)) for k in ea
 const NOON = (start_h = 13.0, utc_offset = 2.0, date = (2019, 6, 29), lat0 = 52.522, lon0 = 13.41, elevation = 34.0)
 const NIGHT = merge(NOON, (start_h = 1.0,))
 
-@testset "TiledSurface: the air receives the tiles' mean fluxes × Δt, u*, the implicit drag ($core)" for
+@testset "TiledUrbanSurface: the air receives the tiles' mean fluxes × Δt, u*, the implicit drag ($core)" for
         core in (:boussinesq, :anelastic)
     sim = p_state!(p_core(core))
     d0 = Domain(sim; validate = false)
-    ts = PC.build(PU.TiledSurface, p_tiles_opts(sim), d0)
+    ts = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
     d = Domain(sim; components = (CentredAdvection(), ts))
     @test Components.slot(ts) === :surface && Components.slot_component(d, :surface) === ts
     @test size(ts.θsrc, 3) == 2                          # the canopy of a tile forced at level 3
@@ -127,10 +127,10 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
     @test sim.u.data[I, J, m.Hz+3] == 5.0              # above every canopy: no drag
 end
 
-@testset "TiledSurface: a step through the pipeline on both cores, and its checkpoint ($core, $sch)" for
+@testset "TiledUrbanSurface: a step through the pipeline on both cores, and its checkpoint ($core, $sch)" for
         core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
     mk() = (s = p_state!(p_core(core)); d0 = Domain(s; scheme = sch, validate = false);
-            Domain(s; scheme = sch, components = (CentredAdvection(), PC.build(PU.TiledSurface, p_tiles_opts(s), d0))))
+            Domain(s; scheme = sch, components = (CentredAdvection(), PC.build(PU.TiledUrbanSurface, p_tiles_opts(s), d0))))
     d = mk()
     step!(d, 5.0)
     @test all(isfinite, interior_view(d.state.θ)) && all(isfinite, interior_view(d.state.u))
@@ -169,7 +169,7 @@ end
     for (cfg, day) in ((NOON, true), (NIGHT, false))
         sim = p_state!(p_core(core))
         d0 = Domain(sim; validate = false)
-        ts = PC.build(PU.TiledSurface, p_tiles_opts(sim), d0)
+        ts = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
         rad = PC.build(PU.MeanColumnRadiation, (; period = 600.0, sun = PU.SiteSun(cfg), reference = p_ref(sim)), d0)
         d = Domain(sim; components = (CentredAdvection(), ts, rad))
         # the surface first, then the radiation over it (stage 3, order 1)

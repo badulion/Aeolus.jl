@@ -161,7 +161,7 @@ export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, p
        θ_top_gradient, θ_top_bc, TopHeatFlux,
        case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
        ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
-       parent_domain, parent_static_driver, parent_downwelling, TiledSurface, PrescribedSurfaceFlux,
+       parent_domain, parent_static_driver, parent_downwelling, TiledUrbanSurface, PrescribedSurfaceFlux,
        MeanColumnRadiation, SiteSun,
        parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
 

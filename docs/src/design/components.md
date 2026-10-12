@@ -96,7 +96,7 @@ both cores, checkpointed:
 
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`TiledSurface`](@ref Aeolus.Urban.TiledSurface) | `:surface` | `[surface]` `model = "tiles"`: `period`, `u_min`, `sw_down`, `lw_down`; the land use is the tile form of the domain's static driver (`drivers.static_tiles`), the tiles those of an urban site's class-to-surface factory | `:surface_flux` (the held canopy sources, a tile step every `period`), `:post_predictor` (the implicit drag) | `SurfaceTiles` (`step_parent_column!`), [`build_parent_surface`](@ref Aeolus.Urban.build_parent_surface) |
+| [`TiledUrbanSurface`](@ref Aeolus.Urban.TiledUrbanSurface) | `:surface` | `[surface]` `model = "tiles"`: `period`, `u_min`, `sw_down`, `lw_down`; the land use is the tile form of the domain's static driver (`drivers.static_tiles`), the tiles those of an urban site's class-to-surface factory | `:surface_flux` (the held canopy sources, a tile step every `period`), `:post_predictor` (the implicit drag) | `SurfaceTiles` (`step_parent_column!`), [`build_parent_surface`](@ref Aeolus.Urban.build_parent_surface) |
 | [`PrescribedSurfaceFlux`](@ref Aeolus.Urban.PrescribedSurfaceFlux) | `:surface` | `[surface]` `model = "prescribed"` (the functions of time `q_surface`, `e_surface` are build options) | `:surface_flux` | `LargeScaleForcing.forcing_mean` |
 | [`MeanColumnRadiation`](@ref Aeolus.Urban.MeanColumnRadiation) | `:radiation` | `[radiation]` `scheme = "mean_column"`: `period`, `humid`; the sun of the site's clock ([`SiteSun`](@ref Aeolus.Urban.SiteSun)) | `:surface_flux`, order 1 (after the surface: the call every `period`, the heating every step) | `ColumnRadiation.column_radiation!`, `stitched_column` |
 
