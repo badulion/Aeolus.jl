@@ -263,6 +263,17 @@ GIS and downloader dependencies leave the model package.
   - validation of exchanged fields (the PALM rule plus the driver exception) and the subgrid-model handover.
 
   After that, `Nesting.NestedRun`'s separate Berlin path is deleted.
+
+  *Status (NEST-p2, #482):* the engine has all of the above, tested on
+  idealised nests ([Components](components.md), [Nested time
+  coupling](../theory/nesting_time.md), [Two-way
+  nesting](../theory/nesting_twoway.md)). Not yet: the parent prefetch at
+  the root (the engine prefetches a one-way parent below the root; the
+  root's next step is the model's next window, which the run loop reads
+  first), a child's extra field from its own dynamic driver (a nested
+  domain has no dynamic driver yet), and the Berlin switch: the Berlin
+  nest moves onto `ModelNest`, and `NestedRun`'s Berlin path is deleted,
+  in NEST-p3, once the parent's physics are components (NEST-p1, #481).
 - **Feedback default.** Two-way for an Aeolus parent driving an Aeolus child; one-way per child is allowed. Driving through the dynamic driver from outside data is one-way.
 
 How PALM does it, for comparison (Hellsten et al. 2021): every domain is the same PALM program with its own namelist and static driver; local modules (surface, buildings, radiation, canopy) are free per domain; exchanged fields must match in all domains; all domains share one time step (the minimum); domains run concurrently on separate MPI processes. Aeolus keeps per-domain step sizes instead of the common step, and closes budgets across the nest, which PALM does not.

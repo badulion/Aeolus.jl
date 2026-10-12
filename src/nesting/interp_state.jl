@@ -236,12 +236,16 @@ end
 # has the volume measure). One-way nesting of a mixed pair is fine: the
 # parent only provides boundary data.
 function _check_two_way_pair(p, c, what::AbstractString, s = nothing)
+    # a mixed pair with its density measure (NEST-p2, #482: NestCoreConversion)
+    !_same_core(p, c) && s !== nothing && s.measure isa NestMeasure && s.measure.kind === :mass &&
+        return nothing
     _same_core(p, c) ||
         throw(ArgumentError("$what: two-way feedback needs parent and child of the same " *
                             "core family (two BoussinesqSimulations, or two " *
                             "MassWeightedSimulations sharing one reference profile); got " *
                             "$(nameof(typeof(p))) and $(nameof(typeof(c))). A mixed pair " *
-                            "can only be nested one-way (feedback = :one_way)"))
+                            "needs its density conversion (NestedRun with boussinesq_density, " *
+                            "NestCoreConversion)"))
     s !== nothing && p isa MassWeightedSimulation && s.measure === nothing &&
         throw(ArgumentError("$what: a sound-proof pair needs the reference-mass measure; " *
                             "build the state with nest_interp_state(nest, parent, child)"))

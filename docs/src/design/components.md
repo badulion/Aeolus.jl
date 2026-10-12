@@ -398,8 +398,37 @@ parent and takes two substeps). The single-domain step is unchanged: a
 64³ RK3 step of the bare config takes 33.6 ms on the branch and 33.4 ms
 on its base (minimum of 15, two alternating runs each).
 
-The nested model takes fixed steps and does not measure budgets; the
-other limits are on [Run configuration](run_configuration.md).
+### The one nest engine (NEST-p2, #482)
+
+The nest is stepped by the model's own engine
+([`nest_window!`](@ref Aeolus.Components.nest_window!), on the links of
+the hierarchy): a domain's pipeline is split around the nest — stages
+1–11, then its children's windows and the two-way feedback (stage 12,
+`:nest_feedback`), then stage 13 — so a parent's budgets close after its
+children's feedback, which they book as its nest exchange. With fixed
+steps the prognostic state is that of `Nesting.step_nested!`, bit for
+bit; on a 64 × 64 × 32 root with a 64 × 64 × 32 child at `r = 2` (RK3,
+one thread, minimum of 4 × 5 windows) a window takes 0.0501 s two-way
+and 0.0393 s one-way, against 0.0511 s and 0.0397 s on the hierarchy's
+own path (4 threads: 0.0366 / 0.0299 s against 0.0385 / 0.0298 s). The
+engine adds adaptive steps with the smallest stable whole number of
+child substeps and window retries, per-domain budgets with a nest-exchange
+term, siblings in parallel and a one-way parent below the root stepping
+ahead of its children, synthetic inflow turbulence with the parent's
+statistics, mixed Boussinesq/anelastic cores, the PALM rule for the
+exchanged fields and the subgrid handover; the measured numbers are on
+[Nested time coupling](../theory/nesting_time.md) and
+[Two-way nesting](../theory/nesting_twoway.md), the configuration on
+[Run configuration](run_configuration.md).
+
+Measured on the nest of this section (`test/model_nesting.jl`): every
+domain's energy and momentum budgets close to `1e-12` of their content
+(one-/two-way, Euler/RK3, fixed and adaptive), and the parent's exchange
+and the child's add up to the heat the covered parent cells gained, the
+composite conservation; an adaptive two-way nest with two retried windows
+changes its composite θ by 1.8e-15 over 6 windows; with inflow turbulence
+the added mass flux is at most 1e-12 of the mean-flow flux and the
+two-way composite θ changes by 2.2e-15.
 
 ## Where the code still differs from the target
 

@@ -54,7 +54,8 @@ using ..Transition: TowerSampler, tower_sampler, sample_towers!, reset_segment!,
                     ParentResolvedStatistics, update_inflow_statistics!, inflow_stress_parts,
                     turbulent_fraction, flux_richardson, FringeRegion, blasius_target, blasius_freestream,
                     FreeStreamDisturbance, blasius_solution, disturbance_fringe_update, set_blasius!, add_fringe!,
-                    skin_friction, default_blasius
+                    skin_friction, default_blasius, InflowTurbulence, DigitalFilterGenerator,
+                    free_stream_generator, exclude_inflow_feedback!, fold_inflow_statistics!
 using ..Anelastic: MassWeightedSimulation
 using ..TimeIntegration: TimeIntegration, CFLConstraints, adaptive_dt
 import ..TimeIntegration: step_adaptive!
@@ -69,7 +70,7 @@ using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weig
                       stage_budget
 using ..Output: OutputVariable, check_catalogue, cell_centres
 using ..Checks: Check, ReferenceProfile, reference_check
-using ..IO: NonFiniteField, nonfinite_fields, structural_state, restore_structural_state!
+using ..IO: NonFiniteField, nonfinite_fields, structural_state, restore_structural_state!, refresh_structural_state!
 using ..Nesting: Nesting, NestHierarchy, add_nest!, step_nested!, domain_advance
 import ..IO: checkpoint_state, restore_checkpoint_state!, component_nonfinite_fields
 import ..TimeSteppers: step!
@@ -77,7 +78,8 @@ import ..TimeSteppers: step!
 export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
        CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
-       CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model,
+       CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model, nest_window!, NestStepFailure,
+       NEST_EXCHANGE, nest_exchange, NEST_INFLOW_DEFAULTS,
        BoundaryLayerTracker, nudging_height, parcel_zi, surface_friction_velocity
 
 include("components/interface.jl")
@@ -87,6 +89,7 @@ include("components/budgets.jl")
 include("components/outputs.jl")
 include("components/checks.jl")
 include("components/nesting.jl")
+include("components/nest_engine.jl")
 include("components/advection.jl")
 include("components/sgs.jl")
 include("components/coriolis.jl")
