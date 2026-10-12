@@ -1,5 +1,5 @@
 # GABLS4 stage 3, experiment 3 (1 m LES): the envelope of the six LES of Couvreux et al. (2020), Table 4, one-hour
-#   averages at 17 UTC 11 Dec 2009, for the in-model checks of examples/sbl/gabls4_exp3.toml
+#   averages at 17 UTC 11 Dec 2009, for the in-model checks of examples/sbl/configs/gabls4_exp3.toml
 #   ([checks.reference]). Derived from gabls4_reference.csv (its header gives the source): the rows envelope_low and
 #   envelope_high (exp3_1m), one quantity per row. No new values.
 quantity,low,high,unit,source

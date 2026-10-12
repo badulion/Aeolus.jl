@@ -30,7 +30,7 @@
 #   runs here: q is not carried, see the theory page).
 # Copied from source files, not digitised: digitisation uncertainty 0.
 # The case constants (U_g, V_g = 3, -9 m/s; f; z0m = 0.03 m, z0h = 0.003 m; p_sfc = 97200 Pa; t_start = 57600 s; the
-#   subsidence above) are the [forcing], [surface] and [initial] values of examples/sbl/gabls2.toml (CFG-d,
+#   subsidence above) are the [forcing], [surface] and [initial] values of examples/sbl/configs/gabls2.toml (CFG-d,
 #   #359); this table holds the theta sounding (z in m, theta in K).
 table,a,b
 theta,0,288.0
