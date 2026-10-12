@@ -620,7 +620,7 @@ model's own providers of the same section (`[core]`, `[timestep]`,
 """
 function urban_slot_section(sl::Symbol)
     name, key = URBAN_SLOT_SECTIONS[sl]
-    return Config.slot_section(name; key = key, doc = "") do sec
+    return Config.slot_section(name; key = key, doc = "The urban site's slot `:$sl`: its provider and that provider's options.") do sec
         for C in URBAN_COMPONENTS
             slot(C) === sl || continue
             Config.provider!(sec, String(provider(C)); kinds = [:urban],
