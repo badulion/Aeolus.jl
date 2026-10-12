@@ -14,7 +14,7 @@
 
 Configuration of the Berlin nesting parent. The defaults are those of
 the parent's configuration schema (`[nesting] parent` of an urban
-site, `core/config_schema.jl`, CFG-c #358, ONE-e #454); in TOML the
+site, `site/config_schema.jl`, CFG-c #358, ONE-e #454); in TOML the
 keys are the ASCII names of the fields (`nudging_tau`, `theta_top`,
 `q_surface`, …, `aeolus options`). The date, the clock
 (`start_h`, `utc_offset`), the location (`lat0`, `lon0`, `elevation`),
@@ -153,7 +153,7 @@ mutable struct ParentConfig
 end
 
 # The defaults live in the parent's configuration schema
-# (`parent_section` in core/config_schema.jl), the one place they are
+# (`parent_section` in site/config_schema.jl), the one place they are
 # written; `ParentConfig(; kw...)` starts from them.
 function ParentConfig(; child::NamedTuple = site_options(default_run_config()), kw...)
     d = parent_defaults()

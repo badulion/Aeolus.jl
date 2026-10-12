@@ -3,7 +3,7 @@
 # the large-scale and surface forcing; sounding, case-table and
 # Aeolus-parent drivers. The preprocessors that write the sounding drivers
 # are AeolusPrep.jl's since ONE-h (#457); they call Aeolus's writer
-# (`UrbanCase.write_sounding_driver`), which the tests here call too
+# (`Urban.write_sounding_driver`), which the tests here call too
 # (`write_sounding_driver` below), and check what a run reads. The
 # case-table drivers of the SBL configs are committed
 # (examples/sbl/input/, ONE-g #456).
@@ -51,7 +51,7 @@ using Aeolus.NCIO: NCDataset
 using Aeolus.IO: read_run_toml
 import NCDatasets
 
-const BCD = Aeolus.UrbanCase
+const BCD = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
@@ -62,7 +62,7 @@ const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
 const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.csv"))
 
-"The sounding driver of the urban run `cfg` at `out` (`UrbanCase.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
+"The sounding driver of the urban run `cfg` at `out` (`Urban.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
 write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.site_options(cfg), out; preprocessor = "test/input_dynamic.jl")
 
 

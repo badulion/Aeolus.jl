@@ -19,7 +19,7 @@
 """
     CaseReference
 
-Hydrostatic reference state of a case (see `core/reference_state.jl`).
+Hydrostatic reference state of a case (see `site/reference_state.jl`).
 
 * `p̄`, `ρ̄`, `θ̄`, `T̄`, `π̄` — cell-centred profiles, length `Nz`
   (Pa, kg m⁻³, K, K, 1), copied from `state` so that couplings see

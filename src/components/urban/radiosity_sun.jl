@@ -9,7 +9,7 @@
 # view-factor matrix.
 #
 # The ground facet of each open column carries the material of its
-# surface class (`scene_class_map` in core/geometry.jl, #128), so park
+# surface class (`scene_class_map` in site/geometry.jl, #128), so park
 # and water get their own albedo and emissivity here — including the
 # water's Fresnel zenith dependence, which the μ₀-dependent materials
 # below update at every radiation call.

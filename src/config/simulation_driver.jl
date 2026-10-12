@@ -45,7 +45,7 @@ using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Open
                 Path, section, option!, register_driver!, config_domains, domain_view, MODEL
 using ..Nesting: nested_grid, nest_bcs
 # the urban site (ONE-e, #454): its sections, its build and its run
-using ..UrbanCase: UrbanCase
+using ..Urban: Urban
 
 export SimulationDriverType, SimulationRun, simulation, profile_value
 
@@ -304,13 +304,13 @@ end
 const DOMAIN_SECTIONS = vcat(["domain", "grid", "dynamics", "boundaries", "initial"],
                              [Components.section(C) for C in COMPONENTS],
                              ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"],
-                             UrbanCase.urban_section_names())
+                             Urban.urban_section_names())
 
 Config.domain_sections(::SimulationDriverType) = DOMAIN_SECTIONS
 
 "The names of every check the model can publish: the core's and those of the component types of [`COMPONENTS`](@ref)."
 check_names_all() = vcat(collect(String, Components.CORE_CHECKS), String[n for C in COMPONENTS for n in Components.check_names(C)],
-                         UrbanCase.urban_check_names())
+                         Urban.urban_check_names())
 
 const _CHECK_DOCS = merge(
     Dict(n => "the closure of the $(join(v.qs, " and ")) budget, (|closure| + |unattributed|) / elapsed " *
@@ -319,9 +319,9 @@ const _CHECK_DOCS = merge(
     Dict("finite" => "the sanity check: the number of non-finite interior values of the prognostic fields at the " *
                      "end (default tolerance 0); a run that blows up records it failed"),
     Dict(n => "a check of [$(Components.section(C))]" for C in COMPONENTS for n in Components.check_names(C)),
-    Dict("urban_budgets" => "an urban site's budgets closed against UrbanCase.BUDGET_TOLERANCES: the largest closure relative to its tolerance (default tolerance 1)"),
-    Dict("$(UrbanCase.component_name(C))_checks" => "the smoke checks of the urban component [$(UrbanCase.component_name(C))] that fail (default tolerance 0)"
-         for C in UrbanCase.URBAN_COMPONENTS))
+    Dict("urban_budgets" => "an urban site's budgets closed against Urban.BUDGET_TOLERANCES: the largest closure relative to its tolerance (default tolerance 1)"),
+    Dict("$(Urban.component_name(C))_checks" => "the smoke checks of the urban component [$(Urban.component_name(C))] that fail (default tolerance 0)"
+         for C in Urban.URBAN_COMPONENTS))
 
 function _reference_validator(t)
     probs = String[]
@@ -466,7 +466,7 @@ function Config.driver_sections(::SimulationDriverType)
     end
     comps = Section[Components.schema(C) for C in COMPONENTS]
     return Section[tim, out, chk, dom, grid, dyn, bnd, ini, comps..., _coupling_sections()...,
-                   UrbanCase.urban_sections()...]
+                   Urban.urban_sections()...]
 end
 
 "The schema default of `section.key` of the model."
@@ -480,7 +480,7 @@ _adaptive(cfg) = cfg.time.dt === :adaptive
 enabled_components(cfg) = Any[C for C in COMPONENTS if Components.enabled(C, cfg[Components.section(C)])]
 
 function _cross_checks(cfg)
-    UrbanCase.urban_enabled(cfg) && return _urban_site_checks(cfg)
+    Urban.urban_enabled(cfg) && return _urban_site_checks(cfg)
     e = ConfigError[]
     t = cfg.time; d = cfg.dynamics; b = cfg.boundaries; s = cfg.sgs; g = cfg.grid; dom = cfg.domain
     adaptive = _adaptive(cfg)
@@ -574,7 +574,7 @@ end
 # components or couplings enabled (the site's core carries its Coriolis
 # force, sponge and closure until those are the model's components)
 function _urban_site_checks(cfg)
-    e = UrbanCase.urban_checks(cfg)
+    e = Urban.urban_checks(cfg)
     for C in (Coriolis, Sponge, SurfaceThetaFlux)
         Components.enabled(C, cfg[Components.section(C)]) || continue
         push!(e, ConfigError(Components.section(C), "an urban site carries its own $(Components.section(C)) ([urban]); the model's component is not part of it"))
@@ -588,8 +588,8 @@ function _urban_site_checks(cfg)
     # the heat of the air (its domain's budget), its budgets' and those of
     # its enabled components
     own = Set(vcat(["finite", "energy_closure", "urban_budgets"],
-                   ["$(UrbanCase.component_name(C))_checks" for C in UrbanCase.URBAN_COMPONENTS
-                    if cfg[String(UrbanCase.component_name(C))].enabled]))
+                   ["$(Urban.component_name(C))_checks" for C in Urban.URBAN_COMPONENTS
+                    if cfg[String(Urban.component_name(C))].enabled]))
     for n in _published_enabled(cfg)
         n in own || push!(e, ConfigError("checks.$n", "an urban site publishes no check $n (its checks: $(join(sort!(collect(own)), ", ")))"))
     end
@@ -689,7 +689,7 @@ every `[checks]` entry is published by the core or an enabled component (`Compon
 `[checks.reference]` comparisons need `checks.reference_file`, which must hold each quantity, and their variables are in the output catalogue; a `reference_file` without comparisons is an error"""
 
 Config.driver_checks(::SimulationDriverType) =
-    Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC * "\n" * UrbanCase.URBAN_CHECKS_DOC => _cross_checks,
+    Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC * "\n" * Urban.URBAN_CHECKS_DOC => _cross_checks,
         _NEST_CHECKS_DOC => Config.ModelCheck(_nest_checks)]
 
 # ---------------------------------------------------------------------------
@@ -746,12 +746,12 @@ end
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
 function Config.build(::SimulationDriverType, cfg::RunConfig)
-    if UrbanCase.urban_enabled(cfg)
+    if Urban.urban_enabled(cfg)
         length(config_domains(cfg)) == 1 ||
             throw(ConfigError("domain", "an urban site is one domain (its nest parent is the [nesting] component's)"))
         # the urban site (ONE-e #454, ONE-k #474): one domain, the site its
         # first component, stepped by its :timestepper component
-        return SimulationRun(UrbanCase.build_model(cfg), StepperState(:euler), cfg)
+        return SimulationRun(Urban.build_model(cfg), StepperState(:euler), cfg)
     end
     model = _nested(cfg) ? _build_nested(cfg) : Model(_build_domain(cfg))
     return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : cfg.time.scheme), cfg)
@@ -1135,8 +1135,8 @@ end
 register_driver!(SimulationDriverType())
 # the nest parent of an urban site alone (`[run] legacy = "urban_parent"`):
 # the model's sections, so registered after them (ONE-f, #455, replaces it)
-UrbanCase.MODEL_SECTIONS[] = Config.driver_sections(SimulationDriverType())
-UrbanCase.MODEL_DOMAIN_SECTIONS[] = DOMAIN_SECTIONS
-register_driver!(UrbanCase.UrbanParentDriver())
+Urban.MODEL_SECTIONS[] = Config.driver_sections(SimulationDriverType())
+Urban.MODEL_DOMAIN_SECTIONS[] = DOMAIN_SECTIONS
+register_driver!(Urban.UrbanParentDriver())
 
 end # module

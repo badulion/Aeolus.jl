@@ -87,7 +87,7 @@ g = 9.81
 
 [urban]
 # The urban site: the ground, the clock, the core's parameters, the lateral
-# boundaries, the initial state, the budgets and the output of Aeolus.UrbanCase.
+# boundaries, the initial state, the budgets and the output of Aeolus.Urban.
 # the domain is an urban site
 enabled = true
 # the scenario label (summer, winter, …): the output's comment; winter selects

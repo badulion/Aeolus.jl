@@ -1,5 +1,5 @@
 # Berlin (Alexanderplatz), summer: the flagship run, an urban site of the
-# model (Aeolus.UrbanCase; CFG-c #358, EX-a #438, ONE-e #454). Every option
+# model (Aeolus.Urban; CFG-c #358, EX-a #438, ONE-e #454). Every option
 # of the Berlin case is written out here. The other scenarios
 # (berlin_winter.toml, berlin_smoke.toml, berlin_mitte_sample.toml,
 # berlin_parent.toml) are complete files of their own (no extends, ONE-b
@@ -111,7 +111,7 @@ g = 9.81
 
 [urban]
 # The urban site: the ground, the clock, the core's parameters, the lateral
-# boundaries, the initial state, the budgets and the output of Aeolus.UrbanCase.
+# boundaries, the initial state, the budgets and the output of Aeolus.Urban.
 # the domain is an urban site
 enabled = true
 # the scenario label (summer, winter, …): the output's comment; winter selects

@@ -13,7 +13,7 @@
 #   plus the cost of an empty threaded launch (Backends.launch! with
 #   threshold 0, 8 rows of 64). The flagship and dns modes run the same measurements first, in the same process,
 #   so every kernel is compared with the bandwidth of its own thread count.
-# flagship: the Berlin case `CaseConfig("…/berlin_summer.toml")` (the 64³ child nested in
+# flagship: the Berlin case `examples/urban/berlin_summer.toml` (the 64³ child nested in
 #   its 192 × 192 × 53 parent, the #265 default), `nwarm` steps, then
 #   `nsteps` timed steps (at most 11 steps in all: #392, and long Berlin
 #   runs are paused).
@@ -384,16 +384,16 @@ end
 MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
 
 function bench_flagship(; nwarm = 2, nsteps = 9)
-    BC = Aeolus.UrbanCase
-    case = BC.build_case(BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"); output_path = nothing))
+    BC = Aeolus.Urban
+    case = BC.build_case(BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"))))
     for _ in 1:nwarm
-        BC.step_case!(case) || error("blowup in warm-up")
+        step!(case.model)
     end
     t = 0.0
     RECORDING[] = true
     g0 = Base.gc_time_ns()
     for _ in 1:nsteps
-        t += @elapsed(BC.step_case!(case) || error("blowup at step $(case.clock.n)"))
+        t += @elapsed(step!(case.model))
     end
     GC_NS[] = Base.gc_time_ns() - g0
     RECORDING[] = false

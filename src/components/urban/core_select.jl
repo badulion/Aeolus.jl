@@ -9,7 +9,7 @@
 #                           1989) — the same with the weight ρ̄θ̄.
 #
 # The sound-proof cores take the case's reference state as their base
-# state: `case.ref.state` (core/reference_state.jl, #131), the initial θ
+# state: `case.ref.state` (site/reference_state.jl, #131), the initial θ
 # profile (`initial_θ`) integrated hydrostatically from `case_surface_pressure(cfg)`
 # with the MoistThermodynamics constants. It is the same ρ̄(z) the
 # couplings convert their fluxes with and the ledger integrates water
@@ -21,7 +21,7 @@
 # so they run unchanged on either core. The time-integration providers
 # `:adaptive` and `:imex` are typed on BoussinesqSimulation in src and
 # declare themselves incompatible with the two sound-proof cores (see
-# couplings/timestepper.jl).
+# components/urban/timestepper.jl).
 #
 # The numerics slots (#132) and the sound-proof cores. A sound-proof core
 # is its own projection and its own momentum operator: the projection
@@ -52,7 +52,7 @@
 # flux form would not keep a uniform tracer uniform and would conserve
 # Σ q rather than Σ ρ̄ q. The `:scalar_advection` slot therefore advects
 # with the mass flux W u (∂(W q)/∂t = −∇·(W u q)) whenever the core is
-# sound-proof; see couplings/scalar_advection.jl.
+# sound-proof; see components/urban/scalar_advection.jl.
 
 """
     BoussinesqCore

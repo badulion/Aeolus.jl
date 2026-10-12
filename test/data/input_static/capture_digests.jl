@@ -17,7 +17,7 @@
 # reader, load_city_osm, is AeolusPrep.jl's since ONE-h, #457).
 
 using Aeolus, TOML
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_fixture.jl"))
 

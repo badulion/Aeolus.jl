@@ -3,13 +3,13 @@
 # With the `:nesting` coupling on (the default, N-berlin-nest #265) the
 # four sides and the top are the nest faces of an Aeolus parent:
 # `OpenBoundary` faces fed by `Nesting.NestBoundaryData`, built by the
-# coupling's `sim_options` (couplings/nesting.jl). `cfg.lateral` is then
+# coupling's `sim_options` (components/urban/nesting.jl). `cfg.lateral` is then
 # not consulted for the boundary conditions. With the nest switched off
 # (`[nesting] enabled = false`) `cfg.lateral` chooses them:
 #
 #   :periodic  (default) periodic in x and y, walls at the bottom and the
 #              top for the velocity; θ with the top of `cfg.θ_top`
-#              (core/top_boundary.jl). The case before #262, bit for bit.
+#              (site/top_boundary.jl). The case before #262, bit for bit.
 #   :open      the four sides and the top are open (N-open-b, #255): the
 #              normal velocity, the tangential velocity and θ of every
 #              open face come from `ProfileBoundaryData` — the geostrophic
@@ -24,7 +24,7 @@
 #              `cfg.θ_relaxation` (default), θ toward the data's profile
 #              over the same layer (`LargeScaleForcing.ReferenceDamping`).
 #              Buildings within `cfg.boundary_frame` cells of an open face
-#              are removed (core/geometry.jl); a building that still
+#              are removed (site/geometry.jl); a building that still
 #              touches a face is solid there (`mark_open_boundary_solids!`).
 #
 # The nested default feeds the same open faces from the parent run; `:open`
@@ -132,7 +132,7 @@ The boundary keywords of the case's core: `bcs` and `θ_bcs`, plus, for
 `cfg.lateral = :open`, the `sponge_target` of the open top. One call
 builds one open-boundary set, shared by `bcs` and `θ_bcs`. A nested case
 (the default) gets none here: the `:nesting` coupling's `sim_options`
-are the one definition of its nest faces (couplings/nesting.jl).
+are the one definition of its nest faces (components/urban/nesting.jl).
 """
 function case_boundary_conditions(cfg::NamedTuple, mesh)
     case_nested(cfg) && return (;)
@@ -188,7 +188,7 @@ except in a nested case, where they are the core's own open boundary set
 (`sim.θ_bcs`): a tracer of the nest's field set gets the parent's value
 (or, if the parent does not carry it, zero on inflow and its own value on
 outflow — the `:inflow` halo), every other array the mirror, as with
-`case_scalar_bcs` (couplings/nesting.jl, #265).
+`case_scalar_bcs` (components/urban/nesting.jl, #265).
 """
 tracer_bcs(case) = case_nested(case.cfg) ? case.sim.θ_bcs : case_scalar_bcs(case.cfg)
 

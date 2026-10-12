@@ -3,7 +3,7 @@
 # Every urban component of the site is one file under `couplings/`: a
 # struct `<: UrbanComponent` (an `Aeolus.Components.AbstractComponent`)
 # with the methods below for its type. The site's components are the
-# fixed list [`URBAN_COMPONENTS`](@ref) (`UrbanCase.jl`); each has a
+# fixed list [`URBAN_COMPONENTS`](@ref) (`Urban.jl`); each has a
 # section of the model's schema (`[<name>]`, `enabled` off by default,
 # its options from `default_options`), and a config enables a component
 # by its section. `build_case` builds the enabled ones in list order, and
@@ -31,7 +31,7 @@
 #   budget!(c, case, ledger)    -> energy / water terms for the ledger
 #   diagnostics(c, case)        -> Vector{Diagnostic} (Aeolus.RunLog): the scalars c reports,
 #                                  in diagnostics.csv / .nc and in its log event of each output
-#                                  record (core/diagnostics.jl); a wall-clock one is `wall.<x>`
+#                                  record (site/diagnostics.jl); a wall-clock one is `wall.<x>`
 #   profile_diagnostics(c, case)-> Vector{ProfileDiagnostic}: its vertical profiles, diagnostics.nc
 #   smoke_variants(::Type{C})   -> tuple of configs worth a smoke run
 #   smoke_check(c, case)        -> Vector{Pair{String,Bool}} (its `<name>_checks`)
@@ -69,7 +69,7 @@ const ALL_STAGES = Components._STAGE_NAMES
     UrbanComponent <: Components.AbstractComponent
 
 Supertype of every urban component of the site (ONE-e, #454; formerly
-`AbstractCoupling` of the coupling registry). See `core/components.jl`
+`AbstractCoupling` of the coupling registry). See `site/components.jl`
 for its interface and `docs/src/design/berlin_case.md` for how to add
 one. Its section is `[`[`component_name`](@ref Aeolus.Components.component_name)`]`;
 the case runs it through the pipeline in an [`UrbanEntry`](@ref).

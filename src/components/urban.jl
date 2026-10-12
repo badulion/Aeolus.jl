@@ -1,5 +1,5 @@
-# UrbanCase — the urban site of the model (ONE-e, #454; formerly the urban
-# LES run type, EX-a #438).
+# Urban — the urban site of the model and its components (ONE-e #454,
+# ONE-k #474; formerly the urban LES run type `UrbanCase`, EX-a #438).
 #
 # A 3-D LES of a city window: buildings and land use from a static input
 # driver, the initial state and the boundary forcing from a sounding, a
@@ -20,26 +20,27 @@
 # component, and its `:timestepper` component takes the core step
 # (`step!(model)`, ONE-k #474).
 #
-# Layout (src/urban/):
+# Layout (src/components/urban/):
 #
-#   core/        the case machinery — config, the component interface,
-#                geometry, the surface bus, the tracer registry, the
-#                budgets, the UrbanSite (the site's component) and its Domain on the core's stage
-#                pipeline, the output, and the site's sections of the
-#                model's configuration schema.
-#   couplings/   one file per urban component. Each defines a struct
+#   *.jl         one file per urban component. Each defines a struct
 #                `<: UrbanComponent` (an `Aeolus.Components.AbstractComponent`)
-#                and its methods (core/components.jl); `URBAN_COMPONENTS`
+#                and its methods (site/components.jl); `URBAN_COMPONENTS`
 #                lists them.
+#   site/        the site — its options, the urban component interface,
+#                geometry, the surface bus, the tracer registry, the
+#                budgets, the UrbanSite (the domain's first component: its
+#                stages, its core step, its run hooks), its output
+#                catalogue, its checkpoint, and its sections of the
+#                model's configuration schema.
 #   parent/      the nest parent: its tiled land-use surface, its config,
-#                the parent case.
+#                the parent case (run by the :nesting component).
 #
 # The physics itself lives in the other modules of `src/`. A coupling only
 # wires an implementation into the 3-D run; it never carries its own copy.
 # See docs/src/design/berlin_case.md. Moved from examples/urban/ (EX-a,
-# #438).
+# #438), from src/components/urban/ (ONE-k, #474).
 
-module UrbanCase
+module Urban
 
 using ..Aeolus
 using ..Aeolus.Fields: set!, interior_view
@@ -78,13 +79,13 @@ for f in ("config", "components", "geometry", "bus",
           "tracers", "budgets", "reference_state", "top_boundary",
           "open_boundary",
           "case", "stages", "output", "diagnostics")
-    include(joinpath(@__DIR__, "urban", "core", f * ".jl"))
+    include(joinpath(@__DIR__, "urban", "site", f * ".jl"))
 end
 
 "Urban component source files, in the order they are included."
-const COUPLING_FILES = sort!(filter(endswith(".jl"), readdir(joinpath(@__DIR__, "urban", "couplings"))))
+const COUPLING_FILES = sort!(filter(endswith(".jl"), readdir(joinpath(@__DIR__, "urban"))))
 for f in COUPLING_FILES
-    include(joinpath(@__DIR__, "urban", "couplings", f))
+    include(joinpath(@__DIR__, "urban", f))
 end
 
 """
@@ -134,12 +135,12 @@ all(s -> count(C -> slot(C) === s, URBAN_DEFAULTS) == 1, URBAN_SLOTS) ||
 include(joinpath(@__DIR__, "urban", "parent", "surface.jl"))
 include(joinpath(@__DIR__, "urban", "parent", "config.jl"))
 include(joinpath(@__DIR__, "urban", "parent", "case.jl"))
-include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / restart of the case (#269)
+include(joinpath(@__DIR__, "urban", "site", "restart.jl"))      # checkpoint / restart of the site (#269)
 
 # The site's sections of the model's schema and its run under `aeolus run`
 # (CFG-c #358, EX-a #438, ONE-e #454): built from URBAN_COMPONENTS, so it comes last
-include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
-include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
+include(joinpath(@__DIR__, "urban", "site", "config_schema.jl"))
+include(joinpath(@__DIR__, "urban", "site", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
 export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, parent_results, case_state, build_case, describe,
        UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_DEFAULTS, selected_components, component_options,
@@ -158,4 +159,4 @@ export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, p
        ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
        parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
 
-end # module UrbanCase
+end # module Urban

@@ -282,7 +282,7 @@ function section_reductions()
 end
 
 # --------------------------------------------------------------------------
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "berlin_configs.jl"))
 include(joinpath(@__DIR__, "smoke_matrix.jl"))
 

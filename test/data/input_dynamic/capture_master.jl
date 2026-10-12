@@ -7,7 +7,7 @@
 using TOML
 using Aeolus
 include(joinpath(ARGS[1], "examples", "urban", "BerlinCase.jl"))
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_configs.jl"))
 Aeolus.Operators.set_fftw_policy!(; planner = :estimate)   # the round trip's planner
 include(joinpath(ARGS[1], "test", "support", "berlin_fixture.jl"))

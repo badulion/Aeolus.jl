@@ -1,4 +1,4 @@
-# The urban site of the model (EX-a #438, ONE-e #454): Aeolus.UrbanCase,
+# The urban site of the model (EX-a #438, ONE-e #454): Aeolus.Urban,
 # a model config with `[urban] enabled`, and the `urban_parent` run driver.
 # Small synthetic setups:
 #
@@ -22,7 +22,7 @@ using Aeolus.Config
 using Aeolus.Fields: interior_view
 using Aeolus.IO: read_run_toml
 
-const UC = Aeolus.UrbanCase
+const UC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))     # digest, berlin_state
 
@@ -158,7 +158,7 @@ end
         endswith(f, ".jl") && push!(jl, joinpath(dir, f))
     end
     # the model is never built or run from a script
-    forbidden = r"UrbanCase|BerlinCase|build_case|run_case!|step_case!|build_parent|run_parent!|step_parent!|CaseConfig|\brun_config\b|Aeolus\.main|load_run_config\([^)]*\)\s*\|>\s*run"
+    forbidden = r"Aeolus\.Urban\b|\bUrban\.|UrbanCase|BerlinCase|build_case|build_model|run_case!|step_case!|run_to!|build_parent|run_parent!|step_parent!|CaseConfig|site_options|\brun_config\b|Aeolus\.main|load_run_config\([^)]*\)\s*\|>\s*run"
     offenders = String[]
     for f in jl, (i, l) in enumerate(readlines(f))
         startswith(lstrip(l), "#") && continue

@@ -78,7 +78,7 @@ function laminar_reference_νt(case, closure)
                                   buoyancy = sgs_buoyancy_parameter(sim))
     elseif closure isa VremanClosure
         compute_vreman_νt!(ν, u, v, w, closure.C_s)
-    elseif closure isa SigmaModel                      # :sigma (#184, couplings/sgs_sigma.jl)
+    elseif closure isa SigmaModel                      # :sigma (#184, components/urban/sgs_sigma.jl)
         compute_sigma_νt!(ν, u, v, w, closure.C_σ)
     else
         compute_smagorinsky_νt!(ν, u, v, w, closure)

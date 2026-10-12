@@ -33,7 +33,7 @@
 #
 # `adaptive_dt`, `step_adaptive!` and `step_imex!` are typed on
 # BoussinesqSimulation, so both providers are incompatible with the
-# anelastic and pseudo-incompressible cores (couplings/core_select.jl).
+# anelastic and pseudo-incompressible cores (components/urban/core_select.jl).
 
 _soundproof_cores() = (AnelasticCore, PseudoIncompressibleCore)
 const _SOUNDPROOF_REASON =

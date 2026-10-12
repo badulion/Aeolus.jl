@@ -32,7 +32,7 @@ using Aeolus.Grids: xnodes, znodes
 using Aeolus.NCIO: NCDataset
 import NCDatasets
 
-const BCI = Aeolus.UrbanCase
+const BCI = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 

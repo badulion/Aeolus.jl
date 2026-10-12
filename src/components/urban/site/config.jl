@@ -4,7 +4,7 @@
 # initial state, cadences (in SECONDS, never in steps, so the schedule
 # survives a change of dt or an adaptive stepper) and the urban components
 # it enables with their options (`components`). They are read from the
-# model's resolved configuration (`site_options`, core/config_schema.jl);
+# model's resolved configuration (`site_options`, site/config_schema.jl);
 # their defaults and their TOML form are the urban site's sections of the
 # model's schema (CFG-c #358, ONE-e #454); the Berlin case is the TOML files
 # examples/urban/berlin_*.toml.
@@ -17,7 +17,7 @@ The options of the urban site of the model's resolved configuration
 consumes: a `NamedTuple` (ONE-k, #474;
 formerly the `CaseConfig` struct with Julia-side defaults and
 constructors). Its values are those of the urban site's sections of the
-model's schema (`core/config_schema.jl`, CFG-c #358, ONE-e #454;
+model's schema (`site/config_schema.jl`, CFG-c #358, ONE-e #454;
 [`SITE_FIELDS`](@ref) gives the key of every field and `aeolus options`
 lists them); a run changes them in its TOML file or with `--set`
 overrides.
@@ -51,12 +51,12 @@ Groups of fields (`site_options(cfg).<field>`):
   used by a nested or open case:
   `:initial_gradient` (default), the fixed-gradient top `FluxBC(Γ)` with
   the initial ∂θ/∂z at the top face; `:noflux`, a closed lid; or a
-  gradient in K/m — see `core/top_boundary.jl`, #254),
+  gradient in K/m — see `site/top_boundary.jl`, #254),
   `sgs_stability` (the stability correction every eddy-viscosity `:sgs`
   provider wraps its closure in, `Operators.StabilityCorrected`, P55-e
   #187: `:brown94` (default, Brown et al. 1994), `:lilly`, `:long_tail`,
   `:short_tail`, `:most`, or `:none` for the uncorrected closure);
-* **lateral boundaries** (`core/open_boundary.jl`) — by default the
+* **lateral boundaries** (`site/open_boundary.jl`) — by default the
   case is **nested** (N-berlin-nest, #265): the `:nesting` coupling runs
   an Aeolus parent (its settings in `[nesting]`) whose state
   feeds the four sides and the top; `lateral` is then not used. With the
@@ -78,7 +78,7 @@ Groups of fields (`site_options(cfg).<field>`):
   case: the Lindenberg WMO 10393 launches of 29/30 June 2019,
   `examples/urban/data/lindenberg_10393_20190629.csv`), interpolated in
   time to the case start; see
-  [`initial_θ`](@ref) and `core/reference_state.jl`); `utc_offset` (h,
+  [`initial_θ`](@ref) and `site/reference_state.jl`); `utc_offset` (h,
   local clock = UTC + `utc_offset`; 2 = CEST) places the case start on
   the sounding's UTC time axis. `sounding = nothing` selects the
   **idealised** profile instead (unless `dynamic` names a sounding
@@ -106,7 +106,7 @@ Groups of fields (`site_options(cfg).<field>`):
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
 * **output** — the NetCDF output is the run's writer's (`[output]`:
-  the variables of the site's catalogue it selects, `core/output.jl`);
+  the variables of the site's catalogue it selects, `site/output.jl`);
   `child_boundaries` (`nothing`: off) — with the online nest, the dynamic
   driver the run writes the child's boundary slabs to at every parent
   step (CFG-g, #362), the file an offline child reads (`aeolus run` of
@@ -116,7 +116,7 @@ Groups of fields (`site_options(cfg).<field>`):
   output frames (with each coupling's diagnostics) and the end-of-run
   events (run, stage timing, ledgers) are `Info`, a blowup is an
   `Error`, all structured (`subsystem = :urban`, `event = …`, the
-  values as key-values; core/diagnostics.jl, #338);
+  values as key-values; site/diagnostics.jl, #338);
 * **backend** — `backend::AbstractBackend` (default `CPUBackend()`): the
   compute backend of the run (`Aeolus.Backends`, KA-a #294). The core
   coupling calls `init_threads!(cfg.backend)` before building the

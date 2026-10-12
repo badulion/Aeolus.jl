@@ -8,9 +8,9 @@
 # added where the built-in Smagorinsky adds them; its memory is committed
 # once per accepted step.
 #
-#   :tke         (default, couplings/sgs_tke.jl) PrognosticSGS.TKEClosure —
+#   :tke         (default, components/urban/sgs_tke.jl) PrognosticSGS.TKEClosure —
 #                the Deardorff/Moeng prognostic SGS TKE closure (#182).
-#   :reynolds_stress (option, couplings/sgs_reynolds_stress.jl)
+#   :reynolds_stress (option, components/urban/sgs_reynolds_stress.jl)
 #                PrognosticSGS.ReynoldsStressClosure — the Deardorff (1973)
 #                differential Reynolds-stress closure with LRR-IP (#188);
 #                its momentum flux is its own stress (no `stress` option).
@@ -34,13 +34,13 @@
 #                bit for bit (the hook is the test).
 #   :sigma       Operators.SigmaModel — the σ-model of Nicoud et al. (2011),
 #                ν_t from the singular values of the resolved gradient; in
-#                couplings/sgs_sigma.jl (#184).
+#                components/urban/sgs_sigma.jl (#184).
 #
 # Every eddy-viscosity provider (:smagorinsky, :dynamic, :mlsgs, :amd,
 # :vreman) runs its closure with the stress-form momentum divergence,
 # `sgs_stress = :symmetric` (∂ⱼ(2νᵢⱼSᵢⱼ), P55-b #175; option `stress`,
 # `:laplacian` for the pre-Era-VI ∂ⱼ(νₜ∂ⱼuᵢ)), through the one helper
-# `sgs_step_options`. The :tke provider (couplings/sgs_tke.jl) keeps the
+# `sgs_step_options`. The :tke provider (components/urban/sgs_tke.jl) keeps the
 # Laplacian form: its shear production is built as the exact discrete dual
 # of that operator (PrognosticSGS.shear_production!), which is what makes
 # the resolved-KE sink and the TKE source agree to round-off; with the
@@ -407,7 +407,7 @@ end
     SGSSmagorinsky
 
 Slot `:sgs`, provider `:smagorinsky` (the default before #182; now
-`:tke`, couplings/sgs_tke.jl): `StaticSmagorinsky(C_s)`
+`:tke`, components/urban/sgs_tke.jl): `StaticSmagorinsky(C_s)`
 with the core's `C_s` (`cfg.C_s`) and turbulent Prandtl number,
 stability-corrected (`StabilityCorrected`, `cfg.sgs_stability`, P55-e;
 with `sgs_stability = :none` the closure the cores run built in, bit for

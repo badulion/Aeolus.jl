@@ -127,7 +127,7 @@ function write_parent_surface(path::AbstractString, ps)
     nx, ny, nc = size(ps.fractions)
     dx = ps.landuse.dx
     ncf = nc_create(path; attributes = Dict("title" => "Aeolus.jl urban nest parent: tiled surface",
-                                            "references" => "src/urban/parent/surface.jl",
+                                            "references" => "src/components/urban/parent/surface.jl",
                                             "landuse_notes" => join(ps.landuse.header, "\n")))
     try
         ncf.dim["x"] = nx; ncf.dim["y"] = ny; ncf.dim["class"] = nc

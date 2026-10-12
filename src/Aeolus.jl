@@ -1197,14 +1197,15 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
 # fixed stage pipeline (the component interface: Aeolus.Components).
 export Model, Domain
 
-# EX-a (#438), ONE-e (#454): the urban site of the model (`[urban] enabled`;
-# the Berlin case is examples/urban/berlin_*.toml). A submodule, not
-# exported: its names (site_options, build_case, …) stay under Aeolus.UrbanCase.
-include("UrbanCase.jl")
+# EX-a (#438), ONE-e (#454), ONE-k (#474): the urban site of the model
+# (`[urban] enabled`; the Berlin case is examples/urban/berlin_*.toml), its
+# components under src/components/urban/. A submodule, not exported: its
+# names (site_options, build_case, …) stay under Aeolus.Urban.
+include("components/urban.jl")
 
 # CFG-b (#357): the model's configuration and run (needs the dynamical
 # cores and the components, so after them; the driver contract and the CLI
-# are in Config). After UrbanCase (ONE-e, #454): the urban site's sections
+# are in Config). After Urban (ONE-e, #454): the urban site's sections
 # and components are part of the model's schema.
 include("config/simulation_driver.jl")
 

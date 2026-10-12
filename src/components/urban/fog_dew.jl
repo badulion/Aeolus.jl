@@ -20,7 +20,7 @@
 # This file only adapts the case's fields to it.
 #
 # Pressure and density come from the case's hydrostatic reference state
-# (core/reference_state.jl, #131): fog is adjusted at p̄_k (T = θ Π̄_k),
+# (site/reference_state.jl, #131): fog is adjusted at p̄_k (T = θ Π̄_k),
 # and dew exchanges at the p̄_k and ρ̄_k of its air cell, the density the
 # ledger integrates the water with. Before #131 fog and dew used an
 # isothermal 8 km scale height from 1013.25 hPa (0.17 % off the

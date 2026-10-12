@@ -4,7 +4,7 @@
 # hooks and the integrals that need the case (its tracers, mesh and
 # reference density).
 #
-# The budgets are the case's `Domain`'s (core/stages.jl): the pipeline
+# The budgets are the case's `Domain`'s (site/stages.jl): the pipeline
 # attributes the heat of the air to every stage entry, the case's
 # `UrbanSite` snapshots the surface temperature and the water in the air at
 # the step's start and books the change of air water at its end, and

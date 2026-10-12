@@ -56,7 +56,7 @@ case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one).
 It is the first component of its domain (section `[urban]`, component
 name `:urban`): it runs the site's own work in the pipeline's stages and
 takes the domain's core step with its `:timestepper` component
-(core/stages.jl). `model` is the `Model` of its domain; `step!(model)`
+(site/stages.jl). `model` is the `Model` of its domain; `step!(model)`
 advances the site.
 """
 mutable struct UrbanSite{M, S, G<:Geometry, O<:NamedTuple} <: AbstractComponent
@@ -171,7 +171,7 @@ function build_case(cfg::NamedTuple)
     mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
     geom = build_geometry(cfg, mesh)
 
-    # Hydrostatic reference p̄, ρ̄ (core/reference_state.jl), built before
+    # Hydrostatic reference p̄, ρ̄ (site/reference_state.jl), built before
     # the core: the sound-proof cores use it as their base state, the
     # ledger integrates the water in the air with the same ρ̄ the couplings
     # use. One reference state per case.
@@ -209,7 +209,7 @@ function build_case(cfg::NamedTuple)
     # open faces and moved 14 % of the edge cells' vapour across them)
     # A nested case's faces get their data from the parent when the
     # `:nesting` coupling builds the nest, before the first stage reads them
-    # (couplings/nesting.jl, #265).
+    # (components/urban/nesting.jl, #265).
     if has_open_boundaries(sim)
         mark_open_boundary_solids!(sim.bcs, geom.sm.mask)
         if all(st -> st.data !== nothing, open_boundary_states(sim))

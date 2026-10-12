@@ -2,7 +2,7 @@
 # by the urban run-type tests (test/urban_run.jl, EX-a #438; formerly the
 # by-hand examples/urban/berlin_checks.jl) and the thread-invariance
 # harness (test/thread_invariance.jl, KA-a #294), which hashes the same
-# runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.UrbanCase`
+# runs at 1, 4 and 24 threads. The includer defines `BC = Aeolus.Urban`
 # and loads Aeolus, `interior_view` and `Random.Xoshiro`.
 #
 # Every run is examples/urban/berlin_smoke.toml with `--set`

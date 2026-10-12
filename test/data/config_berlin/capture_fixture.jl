@@ -16,7 +16,7 @@
 
 using Aeolus, TOML
 using Aeolus.IO: toml_value
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_fixture.jl"))
 

@@ -15,7 +15,7 @@
 #     child's footprint, from coarse-graining the child's own class map,
 #     so parent and child agree exactly there;
 #   * tiles — built by the case's one class-to-surface factory,
-#     `class_surface` (couplings/surface_exchange.jl): soil columns for
+#     `class_surface` (components/urban/surface_exchange.jl): soil columns for
 #     street, wall and park, a SlabLand for roof and water today, and
 #     whatever the park (#140) and water (#141) couplings register later;
 #   * unresolved buildings — the built tiles (street, roof, wall and any

@@ -3,7 +3,7 @@
 # unvalidated until the stability campaign #331).
 #
 #   parent    the deep diurnal Aeolus run of N-parent-e (#259,
-#             src/urban/parent/): Boussinesq on a StretchedGrid, the
+#             src/components/urban/parent/): Boussinesq on a StretchedGrid, the
 #             tiled urban surface (SurfaceTiles), column radiation, the
 #             geostrophic pressure gradient, θ/qv nudging, θ damping, the
 #             fixed-gradient θ top and the TKE closure — its own hooks,
@@ -111,13 +111,13 @@ zero on inflow), statistics, and `window_hooks`: functions `f(c, case)`
 called whenever a parent window opens, after the parent's step and
 before its next one starts ahead on another task — the one point where
 another coupling may read the parent's fields (the synthetic inflow's
-statistics, `couplings/inflow_turbulence.jl`, #268).
+statistics, `components/urban/inflow_turbulence.jl`, #268).
 """
 mutable struct NestingCoupling <: UrbanComponent
     mode::Symbol
     opts::Any                     # the coupling's options (the two-way keywords)
     driver::Any                   # :aeolus, or the AbstractBoundaryData that replaces the parent
-    pc::Any                       # ParentConfig (src/urban/parent/config.jl)
+    pc::Any                       # ParentConfig (src/components/urban/parent/config.jl)
     parent::Any                   # ParentCase (built by init!)
     run::Any                      # Nesting.NestedRun, or nothing
     window::Any                   # the open parent window, or nothing

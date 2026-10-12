@@ -76,12 +76,12 @@ function Components.run_stage!(e::UrbanEntry, d::Domain, v::Val{S}, dt) where {S
 end
 
 # The site's own component of its `Domain` is the [`UrbanSite`](@ref)
-# itself (core/case.jl): in `:clock` (first) the step count, the local
+# itself (site/case.jl): in `:clock` (first) the step count, the local
 # hour and the snapshot of the surface temperature and the water in the
 # air the budgets close against; in `:tendencies` (every dynamics stage,
 # before the `:body_force` entries) the heat of a fixed-gradient θ top and
 # of the open faces, and the θ relaxation of the open faces
-# (`core/top_boundary.jl`, `core/open_boundary.jl`); in `:budgets` the
+# (`site/top_boundary.jl`, `site/open_boundary.jl`); in `:budgets` the
 # sanity check; in `:output` (first) the site's record. It takes the core
 # step (its `:timestepper` component's).
 Components.component_name(::Type{<:UrbanSite}) = :urban

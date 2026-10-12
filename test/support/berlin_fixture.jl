@@ -38,7 +38,7 @@ without `components` is returned as it is.
 """
 function legacy_selection!(t::AbstractDict)
     haskey(t, "components") || return t
-    U = Aeolus.UrbanCase
+    U = Aeolus.Urban
     comps = pop!(t, "components")
     physics = Dict{String,Any}(); options = Dict{String,Any}()
     for C in U.URBAN_COMPONENTS

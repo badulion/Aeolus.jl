@@ -1,5 +1,5 @@
 # The Berlin case configured from TOML (CFG-c, #358): the urban site of the
-# model (src/urban/core/config_schema.jl, EX-a #438, ONE-e #454) and the
+# model (src/components/urban/site/config_schema.jl, EX-a #438, ONE-e #454) and the
 # configs examples/urban/berlin_*.toml.
 #
 # Acceptance tests of the issue covered here:
@@ -32,7 +32,7 @@ using Aeolus.IO: read_run_toml, diagnostics_path
 using Aeolus.Fields: interior_view
 using Logging
 
-const BCC = Aeolus.UrbanCase
+const BCC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))

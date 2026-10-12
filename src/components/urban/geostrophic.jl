@@ -33,7 +33,7 @@
 #
 # With `cfg.lateral = :open` (N-open-d, #262) the top is open and the core's
 # own sponge already relaxes toward the boundary data, whose wind is
-# (U_g, V_g) (`sponge_target`, core/open_boundary.jl): the retargeting here
+# (U_g, V_g) (`sponge_target`, site/open_boundary.jl): the retargeting here
 # is then not applied (it would double the target). The periodic case keeps
 # it, bit for bit; the open/nested default of #265 retires it.
 #
@@ -43,7 +43,7 @@
 # (`nest_geostrophic_wind`: the sounding wind above z_g, or this coupling's
 # (U_g, V_g) without a sounding) — so the large-scale pressure gradient is
 # one field across the nest. The core's sponge then relaxes toward the
-# parent's mean wind over the child (couplings/nesting.jl).
+# parent's mean wind over the child (components/urban/nesting.jl).
 
 """
     GeostrophicCoupling

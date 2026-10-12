@@ -212,7 +212,7 @@ end
     @test r.fields_equal && isempty(r.fields_differing)
     isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
     @test r.statuses == ["interrupted", "completed"]
-    site(x) = Aeolus.UrbanCase.urban_case(only(x.obj.model.domains))
+    site(x) = Aeolus.Urban.urban_case(only(x.obj.model.domains))
     c1, c2 = site(r.runs[1]), site(r.runs[2])
     @test c2.clock.n == c1.clock.n && c2.sim.t === c1.sim.t === 24.0 && c2.clock.nrecord == c1.clock.nrecord == 2
     @test any(k -> startswith(String(k), "parent_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))

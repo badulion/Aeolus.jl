@@ -605,7 +605,7 @@ end
 makes the domain an urban site: its ground from the domain's
 `static_driver`, its initial state from the sounding (the domain's
 `dynamic_driver` when that is a sounding driver) or the idealised profile,
-its dynamical core and its time stepping assembled by `Aeolus.UrbanCase`
+its dynamical core and its time stepping assembled by `Aeolus.Urban`
 from these options and the enabled urban components
 ([`coupling_section`](@ref)). The keys are those of the former `urban`
 run type's `[geometry]`, `[clock]`, `[cadence]`, `[dynamics]`,
@@ -613,7 +613,7 @@ run type's `[geometry]`, `[clock]`, `[cadence]`, `[dynamics]`,
 model's own sections do not hold.
 """
 function urban_site_section()
-    return section("urban"; doc = "The urban site of the domain (Aeolus.UrbanCase, ONE-e #454).") do s
+    return section("urban"; doc = "The urban site of the domain (Aeolus.Urban, ONE-e #454).") do s
         option!(s, "enabled", Bool; default = false, doc = "the domain is an urban site")
         option!(s, "scenario", Symbol; default = :summer,
                 doc = "the scenario label (summer, winter, …): the output's comment; winter selects the subarctic-winter humidity of the column radiation")
@@ -853,7 +853,7 @@ domain): the grid of `[grid]`, the ground of the domain's
 of `[output]`, every other field of `[urban]`, and the urban components
 the sections enable with their options (`components`,
 [`urban_components`](@ref)). Its fields are documented at
-[`site_options`](@ref) (core/config.jl).
+[`site_options`](@ref) (site/config.jl).
 """
 function site_options(cfg::RunConfig)
     config_schema(cfg).name in (Config.MODEL, "urban_parent") ||
