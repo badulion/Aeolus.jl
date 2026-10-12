@@ -691,7 +691,7 @@ function _one_l_checks(cfg)
     end
     st = cfg.inflow_statistics
     st.enabled && cfg.sgs.model === :none &&
-        push!(e, ConfigError("inflow_statistics.enabled", "the statistics' SGS part reads the domain's [sgs] closure: set one"))
+        push!(e, ConfigError("inflow_statistics.enabled", "the statistics' SGS part reads the domain's SGS closure: set [sgs] model"))
     st.enabled && g.stretching !== :uniform &&
         push!(e, ConfigError("inflow_statistics.enabled", "the inflow statistics need a uniform grid"))
     return e

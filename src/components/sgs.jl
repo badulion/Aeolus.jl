@@ -68,6 +68,14 @@ section(::Type{<:SGS}) = "sgs"
 slot(::Type{<:SGS}) = :sgs
 enabled(::Type{<:SGS}, opts) = opts.model !== :none
 
+"""
+The default coefficient `c_s` of each closure that has one (Smagorinsky-Lilly
+0.17; Vreman 0.17; σ model 1.35, Nicoud et al. 2011; AMD 0.3, Rozema et al.
+2015): the `[sgs]` schema's defaults and `build_closure`'s for options
+without a `c_s`.
+"""
+const SGS_DEFAULT_C_S = (smagorinsky = 0.17, vreman = 0.17, sigma = 1.35, amd = 0.3)
+
 function schema(::Type{<:SGS})
     return Config.slot_section("sgs"; key = "model", doc = "The subgrid-scale closure.") do s
         stab(p) = Config.option!(p, "stability", Symbol; default = :none,
@@ -78,23 +86,23 @@ function schema(::Type{<:SGS})
                                          "with which the stability correction's vertical viscosity reaches the momentum)")
         prt(p) = Config.option!(p, "pr_t", Float64; units = "1", default = 1 / 3, range = (0, Inf), open_lower = true,
                                 doc = "turbulent Prandtl number")
-        cs(p, d) = Config.option!(p, "c_s", Float64; units = "1", default = d, range = (0, Inf), open_lower = true,
+        cs(p, m) = Config.option!(p, "c_s", Float64; units = "1", default = SGS_DEFAULT_C_S[m], range = (0, Inf), open_lower = true,
                                   doc = "the closure's coefficient")
         Config.provider!(s, "none"; doc = "No SGS terms.")
         Config.provider!(s, "smagorinsky"; default = [:model], doc = "Smagorinsky-Lilly (StaticSmagorinsky).") do p
-            cs(p, 0.17); prt(p); stab(p); stress(p)
+            cs(p, :smagorinsky); prt(p); stab(p); stress(p)
         end
         Config.provider!(s, "dynamic_smagorinsky"; doc = "Germano-Lilly dynamic Smagorinsky, plane averaged (DynamicSmagorinsky).") do p
             prt(p); stab(p); stress(p)
         end
         Config.provider!(s, "vreman"; doc = "Vreman (2004) (VremanClosure).") do p
-            cs(p, 0.17); prt(p); stab(p); stress(p)
+            cs(p, :vreman); prt(p); stab(p); stress(p)
         end
         Config.provider!(s, "sigma"; doc = "σ model, Nicoud et al. (2011) (SigmaModel).") do p
-            cs(p, 1.35); prt(p); stab(p); stress(p)
+            cs(p, :sigma); prt(p); stab(p); stress(p)
         end
         Config.provider!(s, "amd"; doc = "Anisotropic minimum dissipation (AMDClosure).") do p
-            cs(p, 0.3); prt(p); stress(p)
+            cs(p, :amd); prt(p); stress(p)
         end
         Config.provider!(s, "tke"; doc = "Deardorff (1980) / Moeng (1984) prognostic SGS TKE (PrognosticSGS.TKEClosure; " *
                                          "its own Prandtl number 1/(1 + 2l/Δ)).") do p
@@ -117,8 +125,8 @@ selection of the closure from configuration).
 """
 function build_closure(s, mesh)
     m = s.model
-    cs = something(option(s, :c_s, nothing),
-                   m === :sigma ? 1.35 : m === :amd ? 0.3 : 0.17); pr = option(s, :pr_t, 1 / 3)
+    c = option(s, :c_s, nothing)
+    cs = c === nothing ? get(SGS_DEFAULT_C_S, m, nothing) : c; pr = option(s, :pr_t, 1 / 3)
     base = m === :smagorinsky ? StaticSmagorinsky(cs; Pr_t = pr) :
            m === :dynamic_smagorinsky ? DynamicSmagorinsky(mesh; Pr_t = pr) :
            m === :vreman ? VremanClosure(cs; Pr_t = pr) :
