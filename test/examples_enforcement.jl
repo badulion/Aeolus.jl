@@ -47,8 +47,9 @@ end
 
 const EF_MODULES = ef_modules()
 
-"Whether `x` (a function or type) is defined in Aeolus."
-ef_owned(x) = (pm = x isa Type ? parentmodule(x) : parentmodule(typeof(x)); pm in EF_MODULES)
+"Whether `x` (a function or type) is defined in Aeolus. A `Union` alias (`const Wall = Union{A, B}`) is no type of its own and constructs nothing."
+ef_owned(x) = Base.unwrap_unionall(x) isa Union ? false :
+              (pm = x isa Type ? parentmodule(x) : parentmodule(typeof(x)); pm in EF_MODULES)
 
 "The functions of Aeolus whose name ends in `!`: they change the state they are given."
 const EF_MUTATING = Set(s for m in EF_MODULES for s in names(m; all = true)
