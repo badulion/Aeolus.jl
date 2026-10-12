@@ -1,10 +1,11 @@
-# The run types of the example cases (EX-d, #441; src/RunDrivers.jl and the
-# simulation driver's sections added for them). Each example used to be a
-# script that built and ran its model; it is now a TOML file run by
-# `aeolus run`. For each one this file runs the config at a small size and
-# the old script's code at the same size, verbatim but for the plots and
-# the size, and asserts that the two give the same bits; then it asserts
-# the physics the example shows.
+# The example cases as configurations of the model (EX-d #441; the
+# validation cases of the former run types of Aeolus.RunDrivers since
+# ONE-l, #475). Each example used to be a script that built and ran its
+# model; it is now a TOML file run by `aeolus run`. For each one this file
+# runs the config at a small size and the old script's code at the same
+# size, verbatim but for the plots and the size, and asserts that the two
+# give the same bits (where the port is not a stated physics change); then
+# it asserts the physics the example shows.
 
 using Test
 using Aeolus
@@ -29,65 +30,47 @@ end
 "The `output/results.toml` of a finished run, parsed."
 rd_results(r) = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
 
+"The shipped config of the example case `name`, examples/<name>/<name>.toml."
+rd_case(name) = joinpath(RD_EX, name, name * ".toml")
+
 # ---------------------------------------------------------------------------
-# examples/scalar_advection_2d/scalar_advection_2d.toml (the advection driver)
+# examples/scalar_advection_2d/scalar_advection_2d.toml ([kinematic_flow], ONE-l)
 # ---------------------------------------------------------------------------
 
-@testset "advection: scalar_advection_2d.toml is the old script, bit for bit" begin
-    N = 32
-    # examples/scalar_advection_2d.jl before EX-d, verbatim but for N and the prints
-    Nx, Ny, Nz = N, N, 1
-    L = 1.0
-    mesh = RegularGrid(Float64; size=(Nx, Ny, Nz), extent=(L, L, L),
-                                halo=(2, 2, 2), origin=(-L/2, -L/2, 0.0))
+"The NetCDF output of a finished run, opened."
+rd_output(r) = NCDataset(joinpath(r.folder.path, "output", "output.nc"))
+
+@testset "scalar advection: θ in a prescribed solid-body rotation is conserved and carried around" begin
+    # a stated physics change of the port (ONE-l): the `advection` run type
+    # advected a cell-centred scalar with first-order upwind fluxes in a
+    # cell-centred velocity; on the model θ is carried by the core's centred
+    # flux form on the staggered grid, so the old bits are not reproduced
+    f = rd_case("scalar_advection_2d")
+    r = rd_run(f, config_test_table(f).overrides)        # 32², a quarter revolution (64 steps)
+    sim = rd_sim(r.obj); m = sim.mesh
+    ds = rd_output(r)
+    t = ds["time"][:]; θm = ds["theta_mean"][:]; θ = ds["theta"][:, :, 1, end]
+    x = ds["x"][:]; y = ds["y"][:]
+    close(ds)
+    # the velocity is exactly the prescribed rotation (u = −ω(y − ½), v = ω(x − ½))
     ω = 2π
-    u = Field(CellCenter(), mesh); v = Field(CellCenter(), mesh); w = Field(CellCenter(), mesh)
-    Aeolus.Fields.set!(u, (x, y, z) -> -ω * y)
-    Aeolus.Fields.set!(v, (x, y, z) ->  ω * x)
-    ϕ = Field(CellCenter(), mesh)
-    x0, y0, σ = 0.25, 0.0, 0.08
-    Aeolus.Fields.set!(ϕ, (x, y, z) -> exp(-((x-x0)^2 + (y-y0)^2) / (2σ^2)))
-    bcs = FieldBoundaryConditions(:periodic)
-    fill_halos!(u, bcs); fill_halos!(v, bcs); fill_halos!(w, bcs); fill_halos!(ϕ, bcs)
-    state = (ϕ = ϕ,)
-    stepper = RK3(state)
-    umax = ω * L / 2
-    dt = 0.4 * mesh.dx / umax
-    T_final = 1.0
-    nsteps = ceil(Int, T_final / dt); dt = T_final / nsteps
-    function tendency!(k, state, t)
-        fill!(k.ϕ.data, 0)
-        fill_halos!(state.ϕ, bcs)
-        advect_upwind!(k.ϕ, u, v, w, state.ϕ)
-        return k
-    end
-    mass0 = sum(interior_view(state.ϕ)) * mesh.dx * mesh.dy * mesh.dz
-    t = 0.0
-    for step in 1:nsteps
-        Aeolus.TimeSteppers.step!(stepper, state, tendency!, dt, t)
-        t += dt
-    end
-
-    r = rd_run(joinpath(RD_EX, "scalar_advection_2d", "scalar_advection_2d.toml"), ["grid.size=[$N,$N,1]"])
-    f = Base.invokelatest(state_fields, r.obj)
-    @test bitwise_equal(f.ϕ, ϕ.data)
-    @test r.obj.nsteps == nsteps && r.obj.dt === dt
-    res = rd_results(r)
-    # the physics: upwind on a periodic box conserves mass to round-off,
-    # its diffusion lowers the peak monotonically, and after one revolution
-    # the peak is back within two cells of where it started
-    @test all(m -> isapprox(m, mass0; rtol = 1e-13), res["mass"])
-    @test issorted(res["max"]; rev = true) && res["max"][end] < 0.8res["max"][1]
-    @test abs(res["peak_x"] - 0.25) <= 2mesh.dx && abs(res["peak_y"]) <= 2mesh.dy
-    @test res["t_end"] ≈ 1.0 && res["t"][end] <= 1.0
+    xc = collect(Aeolus.Grids.xnodes(m, CellCenter())); yc = collect(Aeolus.Grids.ynodes(m, CellCenter()))
+    @test all(interior_view(sim.u)[i, j, 1] == -ω * (yc[j] - 0.5) for i in 1:m.Nx, j in 1:m.Ny)
+    @test all(interior_view(sim.v)[i, j, 1] == ω * (xc[i] - 0.5) for i in 1:m.Nx, j in 1:m.Ny)
+    # the flux form on a periodic box conserves ∫θ to round-off
+    @test t[end] ≈ 0.25 && all(v -> isapprox(v, θm[1]; rtol = 1e-13), θm)
+    # a quarter turn counterclockwise about (½, ½) takes the peak from (¾, ½)
+    # to (½, ¾) (within a cell); the centred scheme keeps it within 7 % of
+    # its start (measured 0.952 of 0.963 at 32²)
+    I = argmax(θ)
+    @test abs(x[I[1]] - 0.5) <= m.dx && abs(y[I[2]] - 0.75) <= m.dy
+    @test 0.93 < maximum(θ) <= 1
 end
 
 # ---------------------------------------------------------------------------
 # the kernel demos: the simulation driver with its couplings
 # ---------------------------------------------------------------------------
 
-"The shipped config of the example case `name`, examples/<name>/<name>.toml."
-rd_case(name) = joinpath(RD_EX, name, name * ".toml")
 
 "The interior of a halo-padded array of `mesh`."
 rd_interior(a, mesh) = a[mesh.Hx+1:mesh.Hx+mesh.Nx, mesh.Hy+1:mesh.Hy+mesh.Ny, mesh.Hz+1:mesh.Hz+mesh.Nz]
@@ -495,177 +478,73 @@ end
 
 # ---------------------------------------------------------------------------
 # examples/cbl_tke/cbl_tke.toml, examples/cbl_inflow_statistics/cbl_inflow_statistics.toml
-# (the cbl driver: tke_cbl, formerly test/tke_cbl_driver.jl, plus the parent statistics)
+# ([sgs] closure = "tke", [inflow_statistics]; ONE-l: the `cbl` run type's
+# harness tke_cbl, a test fixture, bit for bit)
 # ---------------------------------------------------------------------------
 
-using Aeolus.RunDrivers.CBLDriver: tke_cbl
+isdefined(@__MODULE__, :TKECBL) || include(joinpath(@__DIR__, "fixtures", "tke_cbl.jl"))
+using .TKECBL: tke_cbl
+using Aeolus.Transition: ParentResolvedStatistics, update_inflow_statistics!, inflow_stress_parts
 
-@testset "cbl: the config maps onto tke_cbl and the parent statistics of the old example" begin
-    N = 12; Δ = 50.0; Δz = 25.0; T = 240.0; avg = 120.0; zi0 = 150.0
-    # what examples/nesting/cbl_inflow_statistics.jl did, verbatim but for the size
-    nlev = min(N, round(Int, 200.0 / Δz))
-    src = Ref{Any}(nothing)
+"The interior of the halo-padded storage `a` of `m`, after a halo fill (wall faces set as the run monitor sets them)."
+rd_filled(f, bcs, m) = (fill_halos!(f, bcs); rd_interior(f.data, m))
+
+@testset "cbl: the configs on the model are the tke_cbl harness and its parent statistics, bit for bit" begin
+    # the config's [test] size: 12³ on 1200 m, z_i0 = 600 m, 2 min, the
+    # statistics from 60 s, four levels (400 m)
+    N = 12; T = 120.0; nlev = 4
+    S = Ref{Any}(); C = Ref{Any}(); src = Ref{Any}(nothing)
     function fold!(sim, c, h)
-        sim.t > T - avg || return
+        S[] = sim; C[] = c
+        sim.t > 60.0 || return
         src[] === nothing && (src[] = ParentResolvedStatistics(sim; closure = c, τ_avg = 600.0, refine = (2, 2, 4),
                                                               levels = 1:nlev))
         update_inflow_statistics!(src[], h)
     end
-    r0 = tke_cbl(N; Δ = Δ, Δz = Δz, Q = 0.1, z_i0 = zi0, Γ = 0.003, T_end = T, avg = avg, on_step = fold!)
-    r = rd_run(joinpath(RD_EX, "cbl_inflow_statistics", "cbl_inflow_statistics.toml"),
-               ["grid.n=$N", "grid.spacing=$Δ", "grid.dz=$Δz", "cbl.end_time=$T", "cbl.average=$avg",
-                "cbl.z_i0=$zi0", "inflow_statistics.depth=200.0"])
-    r1 = r.obj.result
-    @test all(getproperty(r0, k) == getproperty(r1, k) for k in (:e, :kres, :w2, :flux, :sgs_flux, :θ, :zi, :steps))
-    p0 = inflow_stress_parts(src[]); p1 = inflow_stress_parts(r.obj.stats)
+    r0 = tke_cbl(N; Δ = 100.0, Δz = 100.0, Q = 0.1, z_i0 = 600.0, Γ = 0.003, T_end = T, avg = 60.0, on_step = fold!)
+    f = rd_case("cbl_inflow_statistics")
+    r = rd_run(f, config_test_table(f).overrides)
+    sim = rd_sim(r.obj); m = sim.mesh; d = first(Aeolus.Components.domains(r.obj.model))
+    @test sim.t == S[].t == T
+    @test all(rd_interior(getproperty(sim, k).data, m) == rd_interior(getproperty(S[], k).data, m) for k in (:u, :v, :w, :θ, :p))
+    clo = Aeolus.Components.sgs_closure(d)
+    @test clo isa TKEClosure && rd_interior(clo.e.data, m) == rd_interior(C[].e.data, m)
+    st = only(c for c in d.components if c isa Aeolus.Components.ParentStatistics)
+    p0 = inflow_stress_parts(src[]); p1 = inflow_stress_parts(st.stats)
     @test all(getproperty(p0, k) == getproperty(p1, k) for k in keys(p0))
-    res = rd_results(r)
-    inf = res["inflow"]
-    # the physics of the record: heat goes up through the first face, at
-    # most the floor's Q (the flux profile is normalised by Q; 4 min into the
-    # run the first cell still stores part of it: measured 0.53), e stays
-    # positive, and in scale-gap mode what the generator adds is exactly the
-    # SGS part plus the band
-    @test 0 < res["profiles"]["flux"][1] <= 1.0
-    @test res["min_e"] > 0 && res["clips"] == 0
-    @test inf["uu_generated"] ≈ inf["uu_sgs"] .+ inf["uu_band"]
-    @test length(inf["z"]) == nlev && inf["updates"] > 0
-    # without [inflow_statistics] there is no [inflow] table
-    r2 = rd_run(joinpath(RD_EX, "cbl_tke", "cbl_tke.toml"),
-                ["grid.n=$N", "grid.spacing=$Δ", "grid.dz=$Δz", "cbl.end_time=$T", "cbl.average=$avg", "cbl.z_i0=$zi0"])
-    @test !haskey(rd_results(r2), "inflow") && r2.obj.result.e == r1.e
+    # the physics of the record: e stays positive, and in scale-gap mode what
+    # the generator adds is exactly the SGS part plus the band; the outputs
+    # hold the statistics' levels and NaN above them
+    @test minimum(interior_view(clo.e)) > 0 && Aeolus.PrognosticSGS.tke_statistics(clo).clips == 0
+    ds = rd_output(r)
+    g = ds["inflow_uu_generated"][:, end]; sg = ds["inflow_uu_sgs"][:, end]; b = ds["inflow_uu_band"][:, end]
+    close(ds)
+    @test all(isfinite, g[1:nlev]) && all(isnan, g[nlev+1:end])
+    @test g[1:nlev] ≈ sg[1:nlev] .+ b[1:nlev]
+    @test Float32.(p1.generated[1, :]) == g[1:nlev]
+    # cbl_tke.toml: the same run without the statistics; its 1-min means
+    # (the [test] cadence) of the heat flux: upward through the floor at the
+    # prescribed Q = 0.1 K m/s (the bottom face) and still at most Q in the
+    # first cell after 2 min (measured 0.0846 K m/s), e and the resolved TKE ≥ 0
+    f2 = rd_case("cbl_tke")
+    r2 = rd_run(f2, config_test_table(f2).overrides)
+    @test rd_interior(rd_sim(r2.obj).θ.data, m) == rd_interior(sim.θ.data, m)
+    ds = rd_output(r2)
+    q = ds["heat_flux_profile"][:, end]; e = ds["sgs_tke_profile"][:, end]
+    kres = ds["resolved_tke_profile"][:, end]; w2 = ds["w_variance_profile"][:, end]
+    close(ds)
+    @test 0 < q[1] <= 0.1 && all(>(0), e) && all(>=(0), kres) && all(>=(0), w2)
 end
 
 # ---------------------------------------------------------------------------
-# examples/inflow_fetch/inflow_fetch.toml (the inflow_fetch driver; its
-# harness, formerly test/inflow_fetch_harness.jl, is validated by the
-# full-tier test/era6_inflow_fetch.jl)
+# examples/kelvin_helmholtz/kelvin_helmholtz.toml (tanh profiles, a seeded
+# mode; formerly the shear_layer run type) and flat_plate_t3a.toml ([fringe];
+# formerly the flat_plate run type)
 # ---------------------------------------------------------------------------
 
-using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child
+using Aeolus.Transition: turbulent_fraction, flux_richardson
 
-@testset "inflow_fetch: the config runs the harness; the generator injects turbulence, off does not" begin
-    f = joinpath(RD_EX, "inflow_fetch", "inflow_fetch.toml")
-    ov = config_test_table(f).overrides
-    r = rd_run(f, ov)
-    # the same calls by hand
-    pre = fetch_precursor(; N = (12, 6, 8), extent = (5.0, 2.5), t_spin = 0.5, t_avg = 0.5)
-    df = fetch_child(pre; generator = :df, N = (24, 12, 8), extent = (5.0, 2.5), t_spin = 0.2, t_avg = 0.5,
-                     sample_every = 4, lateral = :periodic)
-    @test r.obj.pre.U == pre.U && Dict(r.obj.runs)["df"].p.tke == df.p.tke
-    res = rd_results(r)["runs"]
-    # with the mean profile only (and no initial noise) the child stays all
-    # but laminar (measured: TKE ≤ 0.5 % of the reference over 0.5 δ/u*);
-    # the digital filter puts turbulence in at the inflow plane
-    @test maximum(res["off"]["level_1"]["tke_over_reference"]) < 0.01
-    @test res["df"]["level_1"]["tke_over_reference"][1] > 0.1
-    # the inflow carries the precursor's bulk velocity (Dirichlet mean profile)
-    @test abs(res["off"]["bulk_ratio"] - 1) < 1e-3 && abs(res["df"]["bulk_ratio"] - 1) < 0.05
-end
-
-# ---------------------------------------------------------------------------
-# examples/surface_mounted_cube/surface_mounted_cube.toml (the obstacle_channel driver)
-# ---------------------------------------------------------------------------
-
-using Aeolus.IBM: SolidMask, mark_solid!, implicit_ibm_correction!, wall_distance, first_level_cells
-
-"examples/sgs/surface_mounted_cube.jl before EX-d: build(model) and the loop of run(model), verbatim but for the times and the prints."
-function rd_cube_script(model::Symbol, T_SPIN, T_AVG)
-    NH = 16; LX, LY, LZ = 10.0, 6.0, 2.0; XC0, XC1 = 3.0, 4.0; RE_H = 40_000.0
-    h = 1 / NH
-    mesh = RegularGrid(; size = (round(Int, LX * NH), round(Int, LY * NH), round(Int, LZ * NH) + 1),
-                       extent = (LX, LY, LZ + h), origin = (0.0, 0.0, -h), halo = (3, 3, 3))
-    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
-    sim = BoussinesqSimulation(mesh; ν = 1 / RE_H, bcs = bcs)
-    sm = SolidMask(mesh)
-    yc = LY / 2
-    mark_solid!(sm, (x, y, z) -> z < 0 || (XC0 < x < XC1 && abs(y - yc) < 0.5 && z < 1))
-    mf = Field(CellCenter(), mesh)
-    mf.data .= sm.mask
-    fill_halos!(mf, FieldBoundaryConditions(:periodic, :periodic, :noflux))
-    mask = mf.data .> 0.5
-    d = wall_distance(sm; bottom = false)
-    fl = first_level_cells(sm; bottom = false)
-    closure = model === :smagorinsky ? StaticSmagorinsky(0.1) :
-              model === :tke ? TKEClosure(mesh; mask = mask, wall_distance = d, first_level = fl) :
-              ReynoldsStressClosure(mesh; mask = mask, wall_distance = d, first_level = fl)
-    rng = Random.Xoshiro(1993)
-    interior_view(sim.u) .= 1 .+ 0.1 .* randn(rng, size(interior_view(sim.u)))
-    interior_view(sim.v) .= 0.1 .* randn(rng, size(interior_view(sim.v)))
-    interior_view(sim.w) .= 0.1 .* randn(rng, size(interior_view(sim.w)))
-    implicit_ibm_correction!(sim, sm)
-    function bulk_u(sim, sm)
-        m = sim.mesh
-        s = 0.0; n = 0
-        u = sim.u.data; mk = sm.mask
-        @inbounds for k in m.Hz+1:m.Hz+m.Nz, j in m.Hy+1:m.Hy+m.Ny, i in m.Hx+1:m.Hx+m.Nx
-            mk[i, j, k] && continue
-            s += u[i, j, k]; n += 1
-        end
-        return s / n
-    end
-    m = sim.mesh
-    model === :tke && initialize_tke!(closure, sim; e_min = 1e-4)
-    model === :rsm && initialize_reynolds_stress!(closure, sim; e_min = 1e-4)
-    Fi = Ref(0.0); Fp = Ref(0.0)
-    force = (s, Δt) -> (interior_view(s.tu) .+= Fi[] + Fp[]; nothing)
-    ibm = (s, Δt) -> (implicit_ibm_correction!(s, sm); nothing)
-    kf = 2
-    jc = (m.Ny ÷ 2, m.Ny ÷ 2 + 1)
-    ufl = zeros(m.Nx); tavg = 0.0
-    while sim.t < T_SPIN + T_AVG - 1e-9
-        ub = bulk_u(sim, sm)
-        umax = maximum(f -> maximum(abs, interior_view(f)), (sim.u, sim.v, sim.w))
-        dt = min(0.4 * m.dx / umax, T_SPIN + T_AVG - sim.t)
-        Fp[] = 2.0 * (1 - ub)
-        Fi[] += 0.5 * dt * (1 - ub)
-        step_rk3!(sim, dt; sgs = closure, body_force! = force, post_predictor! = ibm)
-        if sim.t > T_SPIN
-            u = interior_view(sim.u)
-            for i in 1:m.Nx
-                ip = i == m.Nx ? 1 : i + 1
-                ufl[i] += dt * sum((u[i, j, kf] + u[ip, j, kf]) / 2 for j in jc) / 2
-            end
-            tavg += dt
-        end
-    end
-    ufl ./= tavg
-    return sim, sm, ufl
-end
-
-@testset "obstacle_channel: surface_mounted_cube.toml (cube in the static driver) is the old script, bit for bit" begin
-    T = 0.04
-    f = joinpath(RD_EX, "surface_mounted_cube", "surface_mounted_cube_closures.toml")
-    for (k, model) in enumerate((:smagorinsky, :tke))
-        sim, sm, ufl = rd_cube_script(model, T, T)
-        cfg = last(only(load_sweep(f; member = k, overrides = ["stepper.t_spin=$T", "stepper.t_avg=$T",
-                                                                "fftw.planner=\"estimate\""])))
-        r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-        @test r.obj.sm.mask == sm.mask                     # the static driver's cube and the floor = the script's mask
-        @test rd_same_state(r, sim)
-        @test r.obj.u_floor == ufl
-        res = rd_results(r)
-        @test res["x_front"] == 3.0 && res["x_rear"] == 4.0 && res["closure"] == String(model)
-        # the physics: the direct forcing nearly stops the flow inside the cube
-        # and the floor (it acts after the predictor, before the projection,
-        # which leaves a residual: measured mean |u| 0.0092 U_b, max 0.088 on
-        # the faces between two solid cells), and the controller keeps the bulk
-        # velocity at 1 within 2 %
-        m = sim.mesh
-        ui = rd_sim(r.obj).u.data
-        solid_faces = [ui[i, j, k] for k in m.Hz+1:m.Hz+m.Nz, j in m.Hy+1:m.Hy+m.Ny, i in m.Hx+2:m.Hx+m.Nx
-                       if sm.mask[i, j, k] && sm.mask[i-1, j, k]]
-        @test sum(abs, solid_faces) / length(solid_faces) < 0.02 && maximum(abs, solid_faces) < 0.1
-        @test abs(res["mean_U_b"] - 1) < 0.02
-    end
-end
-
-# ---------------------------------------------------------------------------
-# examples/kelvin_helmholtz/kelvin_helmholtz.toml (shear_layer) and
-# flat_plate_t3a.toml (flat_plate)
-# ---------------------------------------------------------------------------
-
-@testset "shear_layer: kelvin_helmholtz.toml is the old script, bit for bit; the seed grows" begin
+@testset "kelvin_helmholtz.toml is the old script, bit for bit; the seed grows" begin
     Nx, Nz, tend = 16, 32, 12.0
     # examples/transition/kelvin_helmholtz.jl before EX-d, verbatim but for the size, tend and the figures
     δ, U, Re, J, αδ = 1.0, 1.0, 1000.0, 0.05, 0.4446
@@ -682,33 +561,44 @@ end
     zc = [mesh.z0 + (k - 0.5) * mesh.dz for k in 1:Nz]
     layer = findall(z -> abs(z) < 4δ, zc)
     dt = 0.6 * dx / U; nsteps = ceil(Int, tend / dt); dt = tend / nsteps
-    every = max(1, round(Int, 1.0 / dt))
     ts, As, γm, Bs, Ps = Float64[], Float64[], Float64[], Float64[], Float64[]
     for n in 1:nsteps
         step_rk3!(sim, dt)
-        if n % every == 0 || n == nsteps
-            wi = interior_view(sim.w)
-            push!(ts, sim.t); push!(As, sqrt(sum(abs2, wi) / length(wi)))
-            γ = turbulent_fraction(sim)
-            push!(γm, sum(γ[layer]) / length(layer))
-            r = flux_richardson(sim)
-            push!(Bs, sum(r.B[layer])); push!(Ps, sum(r.P[layer]))
-        end
+        wi = interior_view(sim.w)
+        push!(ts, sim.t); push!(As, sqrt(sum(abs2, wi) / length(wi)))
+        γ = turbulent_fraction(sim)
+        push!(γm, sum(γ[layer]) / length(layer))
+        r = flux_richardson(sim)
+        push!(Bs, sum(r.B[layer])); push!(Ps, sum(r.P[layer]))
     end
-    r = rd_run(joinpath(RD_EX, "kelvin_helmholtz", "kelvin_helmholtz.toml"),
-               ["grid.nx=$Nx", "grid.nz=$Nz", "stepper.end_time=$tend", "diagnostics.snapshots=[6.0]"])
-    @test rd_same_state(r, sim)
-    s = r.obj.records
-    @test s.ts == ts && s.As == As && s.γm == γm && s.Bs == Bs && s.Ps == Ps
+    f = rd_case("kelvin_helmholtz")
+    r = rd_run(f, config_test_table(f).overrides)
+    s2 = rd_sim(r.obj)
+    # the state (the old loop's wall faces of w held the seed's 1e-102 until
+    # a halo fill zeroes them; the run's output fills them)
+    @test all(rd_filled(getproperty(s2, k), s2.bcs, mesh) == rd_filled(getproperty(sim, k), sim.bcs, mesh)
+              for k in (:u, :v, :w)) && rd_interior(s2.θ.data, mesh) == rd_interior(sim.θ.data, mesh)
+    ds = rd_output(r)
+    tser = ds["time_series"][:]; A = ds["w_rms"][:]; trec = ds["time"][:]
+    γo = ds["turbulent_fraction_profile"][:, :]; Bo = ds["buoyancy_production_profile"][:, :]
+    Po = ds["shear_production_profile"][:, :]
+    close(ds)
+    # the series: rms w at every whole δ/U (the step that reaches it), the
+    # profiles in the records, the layer sums those of the old diagnostics
+    for (k, tq) in enumerate(tser)
+        tq == 0 && continue
+        n = findfirst(t -> t >= tq * (1 - 1e-9), ts)
+        @test A[k] == As[n]
+    end
+    n = length(ts)
+    @test sum(Float64.(Bo[layer, end])) ≈ Bs[n] rtol = 1e-5
+    @test sum(Float64.(Po[layer, end])) ≈ Ps[n] rtol = 1e-5
     # the physics: the seeded mode grows (the layer is unstable, J < 1/4),
     # and the laminar layer has no turbulent fraction yet
-    @test As[end] > As[1] && all(iszero, γm)
-    ds = NCDataset(joinpath(r.folder.path, "output", "vorticity.nc"))
-    @test size(ds["omega_y"]) == (Nx, Nz, 1) && ds["t"][1] >= 6.0
-    close(ds)
+    @test As[end] > As[1] && A[end] > A[2] && all(iszero, γm) && all(iszero, γo)
 end
 
-@testset "flat_plate: flat_plate_t3a.toml is the old script, bit for bit (small grid)" begin
+@testset "flat_plate_t3a.toml is the old script, bit for bit (small grid); c_f is Blasius at the inflow" begin
     Nx, Ny, Nz, nsteps, navg = 96, 8, 16, 6, 3
     # examples/transition/flat_plate_t3a.jl before EX-d, verbatim but for the size and the steps
     Tu = 0.033; dt = 1.0
@@ -723,49 +613,28 @@ end
                                         damping = z -> Aeolus.Operators.smooth_step(z / (2δ99)))
     force! = fringe_forcing(c.fringe, target; update! = update!)
     set_blasius!(sim; x_le = c.x_le, x_min = c.x_in)
-    cf = zeros(g.Nx); ū = zeros(g.Nx, g.Nz); nacc = 0
+    cf = zeros(g.Nx); nacc = 0
     for n in 1:nsteps
         step_rk3!(sim, dt; body_force! = force!)
         if n > nsteps - navg
             nacc += 1
             cf .+= skin_friction(sim; U_e = 1.0)
-            ū .+= dropdims(sum(interior_view(sim.u); dims = 2); dims = 2) ./ g.Ny
         end
     end
-    cf ./= nacc; ū ./= nacc
-    f = joinpath(RD_EX, "flat_plate_t3a", "flat_plate_t3a.toml")
-    r = rd_run(f, config_test_table(f).overrides)
-    @test rd_same_state(r, sim)
-    @test r.obj.cf == cf && r.obj.ū == ū
-    res = rd_results(r)
-    # the physics at the inflow: the Blasius layer's skin friction, 0.664 Re_x^(-1/2);
-    # six steps are too few for transition (no onset on the plate)
-    p = res["plate"]
-    @test isnan(res["onset_re_theta"])
-    @test isapprox(p["cf"][3], p["cf_laminar"][3]; rtol = 0.15)
-    @test res["mayle"] ≈ 400 * 3.3^(-5 / 8)          # Mayle (1991): Re_θ,onset = 400 Tu^(-5/8), Tu in %
-end
-
-# ---------------------------------------------------------------------------
-# examples/rotating_stratified_decay/rotating_stratified_decay.toml (the sgs_decay driver;
-# its fixture, formerly test/fixtures/sgs_validation.jl, is validated by the
-# full-tier test/era6_sgs_validation.jl)
-# ---------------------------------------------------------------------------
-
-using Aeolus.RunDrivers.SGSDecayDriver: validation_base, run_dns_case, run_les
-
-@testset "sgs_decay: the config runs the fixture; the stratified continuation loses K + PE" begin
-    f = joinpath(RD_EX, "rotating_stratified_decay", "rotating_stratified_decay.toml")
-    r = rd_run(f, config_test_table(f).overrides)
-    base = validation_base(; N = 16, t0 = 0.2)
-    d = run_dns_case(base, :stratified; nturn = 0.2, nsave = 2)
-    dn = r.obj.dns[:stratified]
-    @test dn.K == d.K && [s.K for s in dn.snaps] == [s.K for s in d.snaps]
-    @test r.obj.les[(:stratified, :tke)].K == run_les(base, d, :tke).K
-    # the physics: the continuation's kinetic plus potential energy only
-    # decays (the exchange with the background is exact, viscosity removes)
-    E = dn.K .+ dn.PE
-    @test all(diff(E) .< 0) && all(>=(0), dn.PE)
-    res = rd_results(r)["cases"]["stratified"]
-    @test res["dns_K_ratio"] < 1 && Set(keys(res["models"])) == Set(["smagorinsky", "dynamic", "tke", "rsm"])
+    cf ./= nacc
+    f = rd_case("flat_plate_t3a")
+    r = rd_run(f, config_test_table(f).overrides)       # 6 steps, the means of steps 1–3 and 4–6
+    s2 = rd_sim(r.obj)
+    @test all(rd_filled(getproperty(s2, k), s2.bcs, g) == rd_filled(getproperty(sim, k), sim.bcs, g) for k in (:u, :v, :w))
+    @test rd_interior(s2.p.data, g) == rd_interior(sim.p.data, g)
+    ds = rd_output(r)
+    m = ds["skin_friction"][:, :, end]; t = ds["time"][:]
+    close(ds)
+    cfo = vec(sum(Float64.(m); dims = 2)) ./ Ny
+    @test t == [3.0, 6.0] && maximum(abs.(cfo .- cf)) < 1e-6 * maximum(cf)   # the Float32 record
+    # the physics at the inflow: the Blasius layer's skin friction,
+    # 0.664 Re_x^(-1/2) at Re_x = (x − x_le)/ν (measured within 4 % at the third face)
+    x = collect(Aeolus.Grids.xnodes(g, Aeolus.Grids.FaceX()))
+    Re_x = (x .- c.x_le) ./ c.ν
+    @test isapprox(cfo[3], blasius_skin_friction(Re_x[3]); rtol = 0.15)
 end

@@ -58,10 +58,11 @@ using Test
 using Printf
 using Aeolus
 
-# the fixture is the sgs_decay run type's (EX-d #441; formerly test/fixtures/sgs_validation.jl)
+# the fixture (back in test/fixtures since ONE-l #475; it was the sgs_decay run type)
 using Aeolus.Fields: interior_view
-using Aeolus.RunDrivers.SGSDecayDriver
-using Aeolus.RunDrivers.SGSDecayDriver: VAL_RO, VAL_FR
+isdefined(@__MODULE__, :SGSValidation) || include(joinpath(@__DIR__, "fixtures", "sgs_validation.jl"))
+using .SGSValidation
+using .SGSValidation: VAL_RO, VAL_FR
 import Aeolus.Operators: advance_sgs!
 
 _pcorr(a, b) = (m = isfinite.(a) .& isfinite.(b); x = a[m] .- vmean(a[m]); y = b[m] .- vmean(b[m]);

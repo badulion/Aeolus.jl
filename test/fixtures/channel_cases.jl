@@ -1,10 +1,39 @@
 # The wall-bounded benchmark harness of Era VI (P54-d, #174): the
-# pressure-driven half-channel ABL and the two-wall channel. No new wall
-# physics — the wall stress is `apply_wall_stress!` (operator.jl), the SGS
-# closure is any `AbstractSGSClosure`, the diagnostics are Operators'.
-# Every Era VI wall-bounded validation (LASD log law, log-layer mismatch,
-# stratified channel, collapse, relaminarisation) builds its case here,
-# with keyword options, instead of copying the set-up.
+# pressure-driven half-channel ABL and the two-wall channel, with their
+# checkpoint state (#245). It was `src/wall_models/channel_cases.jl` of
+# `Aeolus.WallModels`; since ONE-l (#475) it is a test fixture: the channel
+# cases are not configurations of the model (they are dropped,
+# docs/src/design/single_model.md), but the module tests of the wall models
+# and the SGS closures validate on them.
+#
+# Include it once; it defines `module ChannelCases` (export as before):
+#
+#     isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
+#     using .ChannelCases
+
+module ChannelCases
+
+using Aeolus
+using Aeolus.Grids
+using Aeolus.Grids: RegularGrid, CellCenter, FaceX, FaceY, FaceZ
+using Aeolus.Fields: Field, interior_view
+using Aeolus.BoundaryConditions: fill_halos!, Periodic, FieldBoundaryConditions, neighbor_index, NoSlipWall,
+                                 AbstractBoundaryData, open_boundary_conditions
+using Aeolus.Operators: AbstractSGSClosure, StaticSmagorinsky, compute_sgs!, box_filter!, spectral_cutoff_filter!,
+                        laplacian
+import Aeolus.Operators: phi_m_profile, total_stress_profile
+using Aeolus.Simulations: BoussinesqSimulation, step_rk3!
+using Aeolus.TimeSteppers: step!
+using Aeolus.Backends: Backends, column_sum
+using Random
+using Aeolus.SurfaceExchange
+using Aeolus.SurfaceExchange: AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
+                              SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, von_karman, grav
+using Aeolus.WallModels
+import Aeolus.IO: checkpoint_state, restore_checkpoint_state!
+using Aeolus.IO: fieldwise_checkpoint_state, restore_fieldwise!, resume!, maybe_checkpoint!
+import Aeolus.RunLog: diagnostics
+using Aeolus.RunLog: Diagnostic, prefixed
 
 export WallBoundedCase, half_channel_case, channel_case,
        advance_channel!, run_channel!, channel_dt,
@@ -1016,3 +1045,48 @@ function run_channel!(case::WallBoundedCase, t_end::Real; dt = nothing, cfl::Rea
             t = ts, τ_series = τs, nsamples = nsamp,
             nsteps = case.nsteps - n0, wall_time = time() - t0)
 end
+
+# WallBoundedCase: everything but the simulation (stored by checkpoint!
+# itself) — the closure memory, the wall model, the inputs, the roughness,
+# and the scalar fields (forcing, stresses, fluxes, counters).
+const _CASE_SCALARS = (:forcing, :u_star, :height, :τ_wall_bottom, :τ_wall_top, :nsteps,
+                       :_stage, :τ_form, :q_wall_bottom, :q_wall_top)
+
+checkpoint_state(c::WallBoundedCase) =
+    (closure = checkpoint_state(c.closure), wall = checkpoint_state(c.wall),
+     inputs = checkpoint_state(c.inputs), roughness = checkpoint_state(c.roughness),
+     scalars = fieldwise_checkpoint_state(c, _CASE_SCALARS))
+function restore_checkpoint_state!(c::WallBoundedCase, s)
+    restore_checkpoint_state!(c.closure, s.closure)
+    restore_checkpoint_state!(c.wall, s.wall)
+    restore_checkpoint_state!(c.inputs, s.inputs)
+    restore_checkpoint_state!(c.roughness, s.roughness)
+    restore_fieldwise!(c, s.scalars)
+    return c
+end
+
+# the run diagnostics of the harness (they were Aeolus.RunLog's)
+"""
+    diagnostics(case::WallBoundedCase, sim) -> Vector{Diagnostic}
+
+The wall-bounded harness: `tau_wall_bottom`, `tau_wall_top` (the
+plane-mean kinematic wall stresses the last step applied, m² s⁻²), and,
+with a scalar, `q_wall_bottom`, `q_wall_top`; plus the diagnostics of its
+wall model under `wall.` (the TBLE model's; an equilibrium model's own
+stress is already `tau_wall_*`). Pass `case.closure` separately for the
+closure's.
+"""
+function diagnostics(case::WallBoundedCase, sim)
+    ds = Diagnostic[
+        Diagnostic("tau_wall_bottom", "m2 s-2", () -> case.τ_wall_bottom; cadence = :step),
+        Diagnostic("tau_wall_top", "m2 s-2", () -> case.τ_wall_top; cadence = :step),
+    ]
+    if case.θ_walls !== nothing
+        push!(ds, Diagnostic("q_wall_bottom", "K m s-1", () -> case.q_wall_bottom; cadence = :step))
+        push!(ds, Diagnostic("q_wall_top", "K m s-1", () -> case.q_wall_top; cadence = :step))
+    end
+    case.wall isa TBLEWallModel && append!(ds, prefixed("wall", diagnostics(case.wall, case.sim)))
+    return ds
+end
+
+end # module

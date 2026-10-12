@@ -352,7 +352,7 @@ through the keywords below. Physics reaches a run as a component, never
 by passing a hook here; the hooks are the pipeline's mechanism. Their
 other callers are the module tests, the urban site's step
 (`Aeolus.UrbanCase`, which passes the pipeline's hooks of its domain)
-and the legacy validation run types of `Aeolus.RunDrivers`.
+and the wall-bounded channel harness of the tests.
 
 Two optional callbacks are supported:
 

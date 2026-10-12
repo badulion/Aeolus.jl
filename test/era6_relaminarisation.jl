@@ -24,6 +24,9 @@
 
 using Test
 using Aeolus
+# the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
+isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
+using .ChannelCases
 using Aeolus.Fields: interior_view, Field
 using Aeolus.Grids: CellCenter
 using Aeolus.BoundaryConditions: fill_halos!

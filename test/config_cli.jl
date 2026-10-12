@@ -115,7 +115,7 @@ end
                  ["run", TGV, "--set", "run.driver=\"simulation\"", "--root", root2],   # removed (ONE-b)
                  ["run", TGV, "--set", "run.legacy=\"nocase\"", "--root", root2],
                  ["check"], ["check", "/nonexistent/c.toml"], ["options", "nosection"],
-                 ["options", "nocase", "grid"], ["options", "cbl", "nosection"],
+                 ["options", "nocase", "grid"], ["options", "urban_parent", "nosection"],
                  ["preprocess", "static", TGV])                               # AeolusPrep.jl's since ONE-h (#457)
         rc, _, err = cli(args...)
         @test rc == 2
@@ -144,14 +144,14 @@ end
     end
     # [output] extended by the model; its default set (ONE-c): u, v, w, theta and the domain means
     @test occursin("variables : [string, …] = [\"u\", \"v\", \"w\", \"theta\", \"u_mean\"", out)
-    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("cbl", out) && occursin("urban", out)
+    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("urban_parent", out)
     # the cross-field checks, in words (CFG-i, #364): after the sections, one line each
     @test occursin("\ncross-field checks:\n  - exactly one of `time.duration` and `time.nsteps`", out)
     rc, out1, _ = cli("options", "grid")
     @test !occursin("cross-field checks", out1)          # one section: no checks
     # a legacy case, and one of its sections
-    rc, out, _ = cli("options", "cbl", "cbl")
-    @test rc == 0 && occursin("[cbl]", out) && occursin("the legacy case \"cbl\"", out)
+    rc, out, _ = cli("options", "urban_parent", "grid")
+    @test rc == 0 && occursin("[grid]", out) && occursin("the legacy case \"urban_parent\"", out)
     # --markdown: the docs' tables, the same text option_reference(...; format = :markdown) gives
     rc, md, _ = cli("options", "--markdown")
     @test rc == 0 && startswith(md, option_reference(; format = :markdown))
@@ -168,7 +168,8 @@ end
     # the legacy cases are exactly the schemas registered by the package
     @test legacy_cases() == sort!(filter(n -> !(n in (Config.MODEL, "common")), registered_drivers()))
     @test !isdefined(Config, :DRIVER_FILES)
-    for gone in ("column", "dns_decay")                 # their files left examples/ (ONE-i #458)
+    for gone in ("column", "dns_decay",                 # their files left examples/ (ONE-i #458)
+                 "advection", "cbl", "inflow_fetch", "obstacle_channel", "shear_layer", "flat_plate", "sgs_decay")   # ONE-l #475
         e = try load_run_config(cli_file("[run]\nlegacy = \"$gone\"\n")); nothing; catch err; err; end
         @test e isa ConfigError && occursin("unknown legacy case", sprint(showerror, e))
     end

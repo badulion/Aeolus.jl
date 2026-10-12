@@ -15,7 +15,7 @@ makedocs(
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations, Aeolus.Components,
                 Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
-                Aeolus.UrbanCase, Aeolus.RunDrivers],
+                Aeolus.UrbanCase],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -138,7 +138,6 @@ makedocs(
             "Checks"               => "api/checks.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
-            "Example run types"    => "api/run_drivers.md",
             "Input drivers"        => "api/input_drivers.md",
             "Urban site"           => "api/urban_case.md",
             "Logging"              => "api/logging.md",

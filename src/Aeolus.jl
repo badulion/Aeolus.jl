@@ -96,9 +96,6 @@ include("BudgetSystem.jl")        # the one budget system: energy, water, moment
 include("Output.jl")             # the one output writer: component catalogues, [output] variables (ONE-c, #452)
 include("Components.jl")     # the component interface, Domain/Model and the stage pipeline (ONE-a, #450)
 
-# EX-d (#441): the run types of the example cases (configured from TOML only).
-include("RunDrivers.jl")
-
 using .RunLog
 using .Grids
 using .Fields
@@ -1129,12 +1126,8 @@ export MOSTFluxWallLaw
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
        apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
-# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
-# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
-# `step_case!` / `run_case!` (Aeolus.UrbanCase, not exported).
-export WallBoundedCase, half_channel_case, channel_case,
-       advance_channel!, run_channel!, channel_dt,
-       channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
+# (P54-d's wall-bounded benchmark harness, half channel and channel, is the
+# test fixture test/fixtures/channel_cases.jl since ONE-l, #475.)
 # P57-b (#183): the wall-model input — matching height, temporal and
 # wall-parallel filters (log-layer mismatch).
 export MatchingInput, matching_distance, matching_input!, update_input_filter!,

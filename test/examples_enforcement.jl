@@ -61,7 +61,7 @@ const EF_MUTATING = Set(s for m in EF_MODULES for s in names(m; all = true)
 const EF_BUILD_MODULES = (:Grids, :StretchedGrids, :AdaptiveMesh, :Fields, :BoundaryConditions, :Simulations,
                           :Anelastic, :TimeSteppers, :TimeIntegration, :PressureSolvers, :Multigrid,
                           :Components, :Nesting, :IBM, :CutCell, :Particles, :Superdroplet, :SpectralElement,
-                          :Parallel, :Backends, :Config, :RunDrivers, :SimulationDriver, :UrbanCase)
+                          :Parallel, :Backends, :Config, :SimulationDriver, :UrbanCase)
 
 "The types of the modules that build a model: calling one constructs a part of a model."
 const EF_CONSTRUCTORS = Set(s for n in EF_BUILD_MODULES if isdefined(Aeolus, n)
