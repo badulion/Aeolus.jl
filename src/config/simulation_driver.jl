@@ -42,7 +42,8 @@ using ..Checks: Checks, CheckRunner, enabled_checks, sample_checks!, evaluate_ch
 using ..Output: OutputVariable, OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
                 close_output!, output_means, restore_output_means!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
-                Path, section, option!, register_driver!, config_domains, domain_view, MODEL
+                Path, section, option!, register_driver!, config_domains, domain_view, MODEL,
+                slot_section, provider!
 using ..Nesting: nested_grid, nest_bcs
 # the urban site (ONE-e, #454): its sections, its build and its run
 using ..Urban: Urban
@@ -317,10 +318,11 @@ end
 # ---------------------------------------------------------------------------
 
 "The per-domain sections of the model: the domain's own keys, its grid, core, boundaries, initial state and components."
-const DOMAIN_SECTIONS = vcat(["domain", "grid", "dynamics", "boundaries", "initial"],
-                             [Components.section(C) for C in COMPONENTS],
-                             ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"],
-                             Urban.urban_section_names())
+const DOMAIN_SECTIONS = setdiff(unique(vcat(["domain", "grid", "core", "dynamics", "boundaries", "initial"],
+                                            [Components.section(C) for C in COMPONENTS],
+                                            ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"],
+                                            Urban.urban_section_names())),
+                                 ["timestep"])      # run-level: the model steps every domain with one scheme
 
 Config.domain_sections(::SimulationDriverType) = DOMAIN_SECTIONS
 
@@ -378,9 +380,11 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "stretching_parameter", Float64; units = "1", default = 1.0, range = (0, Inf), open_lower = true,
                 doc = "r of geometric, β of tanh / tanh_both; unused for uniform")
     end
-    dyn = section("dynamics"; doc = "The dynamical core and its parameters.") do s
-        option!(s, "core", Symbol; default = :boussinesq, allowed = [:boussinesq, :anelastic],
-                doc = "boussinesq (BoussinesqSimulation) or anelastic (AnelasticSimulation on an isentropic base state)")
+    core = slot_section("core"; key = "model", doc = "The dynamical core.") do s
+        provider!(s, "boussinesq"; default = [:model], doc = "BoussinesqSimulation.")
+        provider!(s, "anelastic"; doc = "AnelasticSimulation on an isentropic base state (dynamics.theta0).")
+    end
+    dyn = section("dynamics"; doc = "The parameters of the dynamical core.") do s
         option!(s, "nu", Float64; default = 0.0, range = (0, Inf), units = "m^2 s^-1",
                 doc = "kinematic viscosity; θ and qv diffuse with the same coefficient (Prandtl number 1)")
         option!(s, "theta0", Float64; default = 300.0, range = (0, Inf), units = "K",
@@ -435,9 +439,11 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "perturbation_depth", Float64; default = Inf, range = (0, Inf), units = "m",
                 doc = "the noise is added below this height")
     end
-    tim = section("time"; doc = "Time stepping: a fixed dt or adaptive steps, for a duration or a number of steps.") do s
-        option!(s, "scheme", Symbol; default = :rk3, allowed = [:euler, :rk3],
-                doc = "rk3 (step_rk3!, SSP-RK3) or euler (step!, the forward-Euler projection), on either core")
+    stepping = slot_section("timestep"; key = "scheme", doc = "The time-stepping scheme.") do s
+        provider!(s, "rk3"; default = [:model], doc = "step_rk3!, SSP-RK3, on either core.")
+        provider!(s, "euler"; doc = "step!, the forward-Euler projection, on either core.")
+    end
+    tim = section("time"; doc = "The clock: a fixed dt or adaptive steps, for a duration or a number of steps.") do s
         option!(s, "dt", OneOf(Float64, Symbol); default = :adaptive, allowed = [:adaptive], range = (0, Inf),
                 open_lower = true, units = "s",
                 doc = "a fixed step (with duration it is shortened to duration / ceil(duration / dt)), or \"adaptive\" (step_adaptive!, from cfl and dt_max)")
@@ -457,7 +463,7 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "the variables written, from the output catalogues of the core and the enabled components " *
                       "(ONE-c: 3-D fields, profiles and surface maps every cadence, time series every series_cadence; " *
                       "the core's: " * join(Components.CORE_OUTPUTS, ", ") * "; the components': ql, qr, tracer, " *
-                      "[surface_layer]'s " * join(Components.output_names(SurfaceLayer, nothing), ", ") *
+                      "[surface] model = \"most\"'s " * join(Components.output_names(SurfaceLayer, nothing), ", ") *
                       ", [towers]' tower_threshold); [] : none")
         option!(s, "averaging", Symbol; default = :instant, allowed = [:instant, :mean],
                 doc = "instant: the values at each record; mean: the time mean over the interval since the previous record")
@@ -487,9 +493,33 @@ function Config.driver_sections(::SimulationDriverType)
                       "Results as check reference_<quantity>")
     end
     comps = Section[Components.schema(C) for C in COMPONENTS]
-    return Section[tim, out, chk, dom, grid, dyn, bnd, ini, comps..., _coupling_sections()...,
-                   Urban.urban_sections()...]
+    # one section per exclusive slot (ONE-m, #476): the model's providers and
+    # the urban site's of a slot pooled, each available on its domain kind
+    return Config.merge_sections(Section[tim, out, chk, dom, grid, core, stepping, dyn, bnd, ini, comps...,
+                                         _coupling_sections()..., Urban.urban_sections()...];
+                                 kind = domain_kind, kind_text = KIND_TEXT)
 end
+
+"""
+    domain_kind(tables) -> Symbol
+
+The kind of a domain from its section tables (raw or resolved), which
+decides the providers of its slot sections (ONE-m, #476): `:urban` for
+an urban site (`[urban] enabled = true`), else `:model`.
+"""
+function domain_kind(tables)
+    u = get(tables, "urban", nothing)
+    u === nothing && return :model
+    on = u isa Config.ConfigSection ? (haskey(u, "enabled") ? u["enabled"] : false) :
+         u isa AbstractDict ? get(u, "enabled", false) : false
+    return on === true ? :urban : :model
+end
+
+"How the messages name the domain kinds of [`domain_kind`](@ref)."
+const KIND_TEXT = Dict(:model => "a domain of the model's core", :urban => "an urban site ([urban] enabled = true)")
+
+"The dynamical core `[core] model` of a (one-domain) config selects: `:boussinesq` or `:anelastic` (on an urban site also `:pseudo_incompressible`)."
+_core(cfg) = cfg.core.model
 
 "The schema default of `section.key` of the model."
 _schema_default(cfg, sec, key) =
@@ -525,7 +555,7 @@ function _cross_checks(cfg)
         (b.x in (:open, :periodic) && b.y in (:open, :periodic)) ||
             push!(e, ConfigError("boundaries.$ax", "with an open axis the other lateral axis is open or periodic"))
         b.z === :periodic && push!(e, ConfigError("boundaries.z", "an open box needs z walls"))
-        d.core === :boussinesq || push!(e, ConfigError("dynamics.core", "open faces need the boussinesq core"))
+        _core(cfg) === :boussinesq || push!(e, ConfigError("core.model", "open faces need the boussinesq core"))
         g.stretching === :uniform || push!(e, ConfigError("grid.stretching", "open faces need a uniform grid"))
         cfg.sponge.alpha_max == 0 ||
             push!(e, ConfigError("sponge.alpha_max", "the sponge of an open box has no target here; use 0"))
@@ -534,7 +564,7 @@ function _cross_checks(cfg)
         all(==(:periodic), (b.x, b.y, b.z)) ||
             push!(e, ConfigError("initial.field", "isotropic turbulence needs a triply periodic box (boundaries x, y, z periodic)"))
         g.stretching === :uniform || push!(e, ConfigError("initial.field", "isotropic turbulence needs a uniform grid"))
-        d.core === :boussinesq || push!(e, ConfigError("initial.field", "isotropic turbulence initialises the boussinesq core"))
+        _core(cfg) === :boussinesq || push!(e, ConfigError("initial.field", "isotropic turbulence initialises the boussinesq core"))
         for k in ("u", "v")
             isempty(cfg.initial[k]) || push!(e, ConfigError("initial.$k", "initial.field sets the velocity: give one of the two"))
         end
@@ -545,32 +575,24 @@ function _cross_checks(cfg)
         n == "energy_spectrum" && !all(==(:periodic), (b.x, b.y, b.z)) &&
             push!(e, ConfigError("output.variables", "energy_spectrum needs a triply periodic box"))
     end
-    get(cfg.initial.velocity_perturbation, "project", false) && d.core !== :boussinesq &&
+    get(cfg.initial.velocity_perturbation, "project", false) && _core(cfg) !== :boussinesq &&
         push!(e, ConfigError("initial.velocity_perturbation", "project = true projects with the boussinesq core's projection"))
     (t.start != 0 && (b.x === :open || b.y === :open)) &&
         push!(e, ConfigError("time.start", "open faces read their boundary planes from the run start: time.start = 0"))
     (cfg.coriolis.f != 0 && cfg.coriolis.latitude !== nothing) &&
         push!(e, ConfigError("coriolis.latitude", "give coriolis.f or coriolis.latitude, not both"))
-    if d.core === :anelastic
+    if _core(cfg) === :anelastic
         b.z === :periodic && push!(e, ConfigError("boundaries.z", "the anelastic core needs z walls"))
         d.theta0 > 0 || push!(e, ConfigError("dynamics.theta0", "the anelastic core needs theta0 > 0 (its base state's θ)"))
         d.moisture && push!(e, ConfigError("dynamics.moisture", "the anelastic core has no qv"))
         g.stretching === :uniform || push!(e, ConfigError("grid.stretching", "the anelastic core needs a uniform grid"))
     end
     if g.stretching !== :uniform
-        s.closure in (:none, :smagorinsky, :tke) ||
-            push!(e, ConfigError("sgs.closure", "on a stretched grid the closure is none, smagorinsky or tke, not $(s.closure)"))
-        s.stability === :none ||
+        s.model in (:none, :smagorinsky, :tke) ||
+            push!(e, ConfigError("sgs.model", "on a stretched grid the closure is none, smagorinsky or tke, not $(s.model)"))
+        Components.option(s, :stability, :none) === :none ||
             push!(e, ConfigError("sgs.stability", "the stability correction needs a uniform grid"))
     end
-    if s.closure !== :tke
-        for k in ("e_min", "surface_factor", "wall_cap")
-            isequal(s[k], _schema_default(cfg, "sgs", k)) ||
-                push!(e, ConfigError("sgs.$k", "belongs to sgs.closure = \"tke\", not $(s.closure): it would be ignored"))
-        end
-    end
-    s.stability === :none || s.closure in (:smagorinsky, :dynamic_smagorinsky, :vreman, :sigma) ||
-        push!(e, ConfigError("sgs.stability", "the stability correction wraps smagorinsky, dynamic_smagorinsky, vreman or sigma, not $(s.closure)"))
     sp = cfg.sponge
     (sp.alpha_max != 0 && sp.z_start !== nothing && !(sp.z_start < g.extent[3])) &&
         push!(e, ConfigError("sponge.z_start", "the sponge starts below the top (grid.extent[3] = $(g.extent[3]) m), got $(sp.z_start) m"))
@@ -579,7 +601,7 @@ function _cross_checks(cfg)
     # the [output] selection against the catalogues of the core and the enabled components (ONE-c)
     for p in Components.output_problems(cfg.output.variables,
                                         [C => cfg[Components.section(C)] for C in enabled_components(cfg)];
-                                        moisture = d.moisture, theta0 = d.theta0, core = d.core,
+                                        moisture = d.moisture, theta0 = d.theta0, core = _core(cfg),
                                         published = _coupling_outputs(cfg))
         push!(e, ConfigError("output.variables", p))
     end
@@ -608,17 +630,12 @@ function _urban_site_checks(cfg)
         Components.enabled(C, cfg[Components.section(C)]) || continue
         push!(e, ConfigError(Components.section(C), "an urban site carries its own $(Components.section(C)) ([urban]); the model's component is not part of it"))
     end
-    sg = cfg.sgs
-    (sg.closure === _schema_default(cfg, "sgs", "closure") && isequal(sg.c_s, _schema_default(cfg, "sgs", "c_s")) &&
-     sg.stability === _schema_default(cfg, "sgs", "stability")) ||
-        push!(e, ConfigError("sgs", "an urban site selects its closure with an sgs_* component ([urban] c_s, sgs_stability); leave [sgs] at its defaults"))
-    _any_coupling(cfg) && push!(e, ConfigError("urban", "an urban site takes no [forcing], [surface], [microphysics], [tracer], [particles] or [obstacles]"))
+    _any_coupling(cfg) && push!(e, ConfigError("urban", "an urban site takes no [forcing], [tracer], [particles] or [obstacles]"))
     # the checks an urban site publishes: the sanity check, the closure of
     # the heat of the air (its domain's budget), its budgets' and those of
     # its enabled components
     own = Set(vcat(["finite", "energy_closure", "urban_budgets"],
-                   ["$(Urban.component_name(C))_checks" for C in Urban.URBAN_COMPONENTS
-                    if cfg[String(Urban.component_name(C))].enabled]))
+                   ["$(Urban.component_name(C))_checks" for C in Urban.URBAN_COMPONENTS if Urban.is_selected(cfg, C)]))
     for n in _published_enabled(cfg)
         n in own || push!(e, ConfigError("checks.$n", "an urban site publishes no check $n (its checks: $(join(sort!(collect(own)), ", ")))"))
     end
@@ -629,17 +646,15 @@ end
 # the boundary-layer components (ONE-g): what they need of the domain
 function _boundary_layer_checks(cfg)
     e = ConfigError[]
-    sl = cfg.surface_layer; ls = cfg.large_scale_forcing; g = cfg.grid; b = cfg.boundaries
+    sl = cfg.surface; ls = cfg.large_scale_forcing; g = cfg.grid; b = cfg.boundaries
     nodrv = cfg.domain.dynamic_driver === nothing
-    if sl.enabled
-        g.stretching === :uniform || push!(e, ConfigError("surface_layer.enabled", "the surface layer needs a uniform grid"))
-        b.z === :periodic && push!(e, ConfigError("surface_layer.enabled", "the surface layer needs z walls"))
-        cfg.surface.model === :none ||
-            push!(e, ConfigError("surface_layer.enabled", "[surface] model = \"$(cfg.surface.model)\" sets the floor's θ flux too: use one of the two"))
+    if Components.enabled(SurfaceLayer, sl)
+        g.stretching === :uniform || push!(e, ConfigError("surface.model", "the surface layer needs a uniform grid"))
+        b.z === :periodic && push!(e, ConfigError("surface.model", "the surface layer needs z walls"))
         cfg.surface_theta_flux.bottom == 0 ||
             push!(e, ConfigError("surface_theta_flux.bottom", "the surface layer sets the floor's θ flux: leave surface_theta_flux.bottom at 0"))
         get(sl.temperature, "kind", "") == "driver" && nodrv &&
-            push!(e, ConfigError("surface_layer.temperature", "kind = \"driver\" reads the domain's dynamic_driver: set it"))
+            push!(e, ConfigError("surface.temperature", "kind = \"driver\" reads the domain's dynamic_driver: set it"))
     end
     Components.lsf_reads_driver(ls) && nodrv &&
         push!(e, ConfigError("large_scale_forcing", "reads the domain's dynamic_driver (\"driver\" values, " *
@@ -675,7 +690,7 @@ function _one_l_checks(cfg)
             push!(e, ConfigError("kinematic_flow.omega", "a solid-body rotation needs omega ≠ 0"))
     end
     st = cfg.inflow_statistics
-    st.enabled && cfg.sgs.closure === :none &&
+    st.enabled && cfg.sgs.model === :none &&
         push!(e, ConfigError("inflow_statistics.enabled", "the statistics' SGS part reads the domain's [sgs] closure: set one"))
     st.enabled && g.stretching !== :uniform &&
         push!(e, ConfigError("inflow_statistics.enabled", "the inflow statistics need a uniform grid"))
@@ -694,7 +709,7 @@ function _checks_problems(cfg)
     d = cfg.dynamics; c = cfg.checks
     tops = [C => cfg[Components.section(C)] for C in enabled_components(cfg)]
     for (n, p) in Components.check_problems(_published_enabled(cfg), tops;
-                                            moisture = d.moisture, theta0 = d.theta0, core = d.core,
+                                            moisture = d.moisture, theta0 = d.theta0, core = _core(cfg),
                                             published = _coupling_outputs(cfg))
         push!(e, ConfigError("checks.$n", p))
     end
@@ -720,7 +735,7 @@ function _checks_problems(cfg)
                                                                        "(it has: $(join(sort!(collect(keys(data))), ", ")))"))
         var = get(ref[q], "variable", q)
         for p in Components.output_problems([var], tops;
-                                            moisture = d.moisture, theta0 = d.theta0, core = d.core,
+                                            moisture = d.moisture, theta0 = d.theta0, core = _core(cfg),
                                             published = _coupling_outputs(cfg))
             push!(e, ConfigError("checks.reference.$q", "variable " * p))
         end
@@ -733,11 +748,10 @@ exactly one of `time.duration` and `time.nsteps`; with a fixed `time.dt`, `time.
 `noslip` is a z-wall condition: not for `boundaries.x`, `boundaries.y`
 an open face needs a domain `dynamic_driver`, the other lateral axis open or periodic, z walls, the boussinesq core, a uniform grid and no sponge
 `initial.field` (isotropic turbulence) needs a triply periodic uniform grid and sets u, v (no `initial.u`, `initial.v`); `energy_spectrum` needs a triply periodic uniform grid, `dissipation` a uniform one; `initial.velocity_perturbation.project` needs the boussinesq core; `time.start` is 0 with open faces; `coriolis.f` and `coriolis.latitude` exclude each other
-the surface layer needs a uniform grid, z walls, `surface.model = "none"` and `surface_theta_flux.bottom = 0`; its `temperature = {kind = "driver"}` and the `[large_scale_forcing]` driver tables need the domain's `dynamic_driver`; a geostrophic wind needs `[coriolis]`; `sponge.target = "geostrophic"` needs `[large_scale_forcing]`; the towers need a uniform grid
+the surface layer (`surface.model = "most"`) needs a uniform grid, z walls and `surface_theta_flux.bottom = 0`; its `temperature = {kind = "driver"}` and the `[large_scale_forcing]` driver tables need the domain's `dynamic_driver`; a geostrophic wind needs `[coriolis]`; `sponge.target = "geostrophic"` needs `[large_scale_forcing]`; the towers need a uniform grid
 the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture and a uniform grid
 `[fringe]` needs periodic x, a no-slip floor (`boundaries.z = "noslip"`), a uniform grid, a fringe shorter than the domain with `rise + fall ≤ length`, and `dynamics.nu = velocity / inflow_reynolds`; `[kinematic_flow]` runs in a box without open faces (a rotation with `omega ≠ 0`); `[inflow_statistics]` needs an `[sgs]` closure and a uniform grid
-on a stretched grid `sgs.closure` is `none`, `smagorinsky` or `tke` and `sgs.stability` is `none`; `sgs.e_min`, `surface_factor` and `wall_cap` belong to `closure = "tke"`
-`sgs.stability` wraps `smagorinsky`, `dynamic_smagorinsky`, `vreman` or `sigma` only
+on a stretched grid `sgs.model` is `none`, `smagorinsky` or `tke` and `sgs.stability` is `none`
 `sponge.z_start` lies below the top
 an `initial.qv` profile needs `dynamics.moisture = true`
 every `output.variables` entry is in the catalogue of the core or of an enabled component (`Components.output_problems`): the `qv` ones and `budget_water` need moisture, `ql`, `qr` Kessler, `tracer` and `budget_tracer` the tracer, `budget_energy` on the boussinesq core `dynamics.theta0` > 0
@@ -822,7 +836,7 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
         return SimulationRun(Urban.build_model(cfg), StepperState(:euler), cfg)
     end
     model = _nested(cfg) ? _build_nested(cfg) : Model(_build_domain(cfg))
-    return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : cfg.time.scheme), cfg)
+    return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : cfg.timestep.scheme), cfg)
 end
 
 # One domain of the model from its config (a single-domain config, or one
@@ -848,8 +862,9 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
     end
     # the core carries the dynamics only: SGS, advection, Coriolis, the
     # surface θ flux and the sponge are its domain's components (ONE-a)
-    kw = (; ν = d.nu, g_accel = d.g, Pr_t = s.pr_t, bcs = bcs, θ_bcs = θ_bcs)
-    sim = if d.core === :anelastic
+    # (the core's Pr_t: the closure's; 1/3 for the closures without one, none and tke)
+    kw = (; ν = d.nu, g_accel = d.g, Pr_t = Components.option(s, :pr_t, 1 / 3), bcs = bcs, θ_bcs = θ_bcs)
+    sim = if _core(cfg) === :anelastic
         AnelasticSimulation(mesh; ref = isentropic_reference(mesh; θ_const = d.theta0, g_accel = d.g), kw...)
     else
         BoussinesqSimulation(mesh; θ₀ = d.theta0, moisture = d.moisture, kw...)
@@ -862,7 +877,7 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
     t = cfg.time
     cfl = _adaptive(cfg) ? CFLConstraints(; C_advective = t.cfl, dt_max = t.dt_max) : nothing
     drivers = merge(feed === nothing ? (;) : (; boundary = feed), dyn === nothing ? (;) : (; dynamic = dyn))
-    d0 = Domain(sim; id = cfg.domain.id, scheme = t.scheme, cfl = cfl, validate = false, drivers = drivers)
+    d0 = Domain(sim; id = cfg.domain.id, scheme = cfg.timestep.scheme, cfl = cfl, validate = false, drivers = drivers)
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
     # the budgets the [output] selection measures (ONE-c): off unless selected,

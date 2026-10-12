@@ -70,37 +70,41 @@ function _coupling_sections()
         option!(s, "radiative_cooling", Float64; default = 0.0, units = "K s^-1",
                 doc = "uniform heating rate of θ (negative: cooling; −2.315e-5 is −2 K/day), added as rate × dt after each step (not inside obstacles); 0: off")
     end
-    sfc = section("surface"; doc = "The lower boundary's heat source.") do s
-        option!(s, "model", Symbol; default = :none, allowed = [:none, :slab, :flux_map],
-                doc = "none (surface_theta_flux.bottom only); slab (a SlabLand whose sensible flux is the θ flux of the floor, " *
-                      "H = exchange_velocity (T_s − θ_ref)); flux_map (the θ flux of flux_patches over flux_background, " *
-                      "added to the first level as Q dt/Δz before each step)")
-        option!(s, "temperature", Float64; default = 297.0, range = (0, Inf), open_lower = true, units = "K",
-                doc = "slab: initial surface temperature T_s")
-        option!(s, "heat_capacity", Float64; default = 1e5, range = (0, Inf), open_lower = true, units = "J m^-2 K^-1",
-                doc = "slab: areal heat capacity C_s")
-        option!(s, "albedo", Float64; units = "1", default = 0.25, range = (0, 1), doc = "slab: shortwave albedo")
-        option!(s, "exchange_velocity", Float64; default = 0.01, range = (0, Inf), units = "m s^-1",
-                doc = "slab: the bulk transfer velocity c_H U of the kinematic flux Q = c (T_s − θ_ref)")
-        option!(s, "theta_ref", Optional{Float64}; units = "K",
-                doc = "slab: the air θ of the bulk flux; \"none\": dynamics.theta0")
-        option!(s, "rho_cp", Float64; default = 1005.0, range = (0, Inf), open_lower = true, units = "J m^-3 K^-1",
-                doc = "slab: ρ c_p of the air, H = ρ c_p Q (W m⁻²) cools the slab")
-        option!(s, "sw_peak", Float64; default = 800.0, range = (0, Inf), units = "W m^-2",
-                doc = "slab: downward shortwave SW = sw_peak sin(π t / sw_duration), ≥ 0")
-        option!(s, "sw_duration", Float64; default = 10800.0, range = (0, Inf), open_lower = true, units = "s",
-                doc = "slab: the length of the shortwave half-wave (the daylight)")
-        option!(s, "lw_down", Float64; default = 340.0, range = (0, Inf), units = "W m^-2",
-                doc = "slab: downward longwave")
-        option!(s, "flux_background", Float64; default = 0.0, units = "K m s^-1",
-                doc = "flux_map: the kinematic θ flux outside the patches")
-        option!(s, "flux_patches", OpenTable(_boxes_validator("value"; axes = ("x", "y")));
-                doc = "flux_map: named patches {x = [x₀, x₁], y = [y₀, y₁], value} (K m s⁻¹) over the cells whose centres are strictly inside; a later name (sorted) wins where they overlap")
+    sfc = slot_section("surface"; key = "model", doc = "The lower boundary's heat source.") do sec
+        provider!(sec, "none"; default = [:model], doc = "No surface model: surface_theta_flux.bottom only.")
+        provider!(sec, "slab"; doc = "A SlabLand whose sensible flux is the θ flux of the floor, " *
+                                     "H = exchange_velocity (T_s − θ_ref).") do s
+            option!(s, "temperature", Float64; default = 297.0, range = (0, Inf), open_lower = true, units = "K",
+                    doc = "initial surface temperature T_s")
+            option!(s, "heat_capacity", Float64; default = 1e5, range = (0, Inf), open_lower = true, units = "J m^-2 K^-1",
+                    doc = "areal heat capacity C_s")
+            option!(s, "albedo", Float64; units = "1", default = 0.25, range = (0, 1), doc = "shortwave albedo")
+            option!(s, "exchange_velocity", Float64; default = 0.01, range = (0, Inf), units = "m s^-1",
+                    doc = "the bulk transfer velocity c_H U of the kinematic flux Q = c (T_s − θ_ref)")
+            option!(s, "theta_ref", Optional{Float64}; units = "K",
+                    doc = "the air θ of the bulk flux; \"none\": dynamics.theta0")
+            option!(s, "rho_cp", Float64; default = 1005.0, range = (0, Inf), open_lower = true, units = "J m^-3 K^-1",
+                    doc = "ρ c_p of the air, H = ρ c_p Q (W m⁻²) cools the slab")
+            option!(s, "sw_peak", Float64; default = 800.0, range = (0, Inf), units = "W m^-2",
+                    doc = "downward shortwave SW = sw_peak sin(π t / sw_duration), ≥ 0")
+            option!(s, "sw_duration", Float64; default = 10800.0, range = (0, Inf), open_lower = true, units = "s",
+                    doc = "the length of the shortwave half-wave (the daylight)")
+            option!(s, "lw_down", Float64; default = 340.0, range = (0, Inf), units = "W m^-2",
+                    doc = "downward longwave")
+        end
+        provider!(sec, "flux_map"; doc = "The θ flux of flux_patches over flux_background, added to the first " *
+                                         "level as Q dt/Δz before each step.") do s
+            option!(s, "flux_background", Float64; default = 0.0, units = "K m s^-1",
+                    doc = "the kinematic θ flux outside the patches")
+            option!(s, "flux_patches", OpenTable(_boxes_validator("value"; axes = ("x", "y")));
+                    doc = "named patches {x = [x₀, x₁], y = [y₀, y₁], value} (K m s⁻¹) over the cells whose centres are strictly inside; a later name (sorted) wins where they overlap")
+        end
     end
-    mp = section("microphysics"; doc = "Cloud and rain water (with dynamics.moisture).") do s
-        option!(s, "scheme", Symbol; default = :none, allowed = [:none, :kessler],
-                doc = "none, or kessler: apply_kessler_step! on (qv, ql, qr) after each step, the Marshall–Palmer fall-speed spectrum; " *
-                      "ql and qr are not advected (stated simplification of the scripts this replaces)")
+    mp = slot_section("microphysics"; key = "scheme", doc = "Cloud and rain water.") do sec
+        provider!(sec, "none"; default = [:model], doc = "No cloud or rain water.")
+        provider!(sec, "kessler"; doc = "apply_kessler_step! on (qv, ql, qr) after each step (with dynamics.moisture), " *
+                                        "the Marshall–Palmer fall-speed spectrum; ql and qr are not advected (stated " *
+                                        "simplification of the scripts this replaces).")
     end
     tr = section("tracer"; doc = "A passive tracer (advect_centered!, forward Euler after each step, the θ boundary conditions).") do s
         option!(s, "enabled", Bool; default = false, doc = "carry the tracer `tracer` (initially 0)")
@@ -130,14 +134,27 @@ function _coupling_sections()
     return Section[frc, sfc, mp, tr, pt, ob]
 end
 
-# keys of [surface] that belong to one model
-const _SLAB_KEYS = ("temperature", "heat_capacity", "albedo", "exchange_velocity", "theta_ref", "rho_cp",
-                    "sw_peak", "sw_duration", "lw_down")
-const _FLUX_MAP_KEYS = ("flux_background", "flux_patches")
+"""
+    selected(cfg, section) -> Union{Symbol,Nothing}
+
+The provider the slot section `[section]` of the (one-domain) config
+`cfg` selects (ONE-m, #476), or `nothing` when the section has no
+provider on this domain's kind (`[surface]` on an urban site).
+"""
+function selected(cfg, sec::AbstractString)
+    s = cfg[sec]
+    key = only(x for x in Config.config_schema(cfg).sections if x.name == sec).selector.key
+    return haskey(s, key) ? s[key] : nothing
+end
+
+"The surface coupling `[surface]` selects: `:slab`, `:flux_map`, or `:none` (none, or the `most` component)."
+_surface_coupling(cfg) = (m = selected(cfg, "surface"); m in (:slab, :flux_map) ? m : :none)
+"The model's microphysics coupling: `:kessler` or `:none` (and on an urban site `:none`: the site's own)."
+_microphysics(cfg) = Urban.urban_enabled(cfg) ? :none : something(selected(cfg, "microphysics"), :none)
 
 "Whether any coupling of the model is on."
-_any_coupling(cfg) = cfg.forcing.radiative_cooling != 0 || cfg.surface.model !== :none ||
-                     cfg.microphysics.scheme !== :none || cfg.tracer.enabled || cfg.particles.count > 0 ||
+_any_coupling(cfg) = cfg.forcing.radiative_cooling != 0 || _surface_coupling(cfg) !== :none ||
+                     _microphysics(cfg) !== :none || cfg.tracer.enabled || cfg.particles.count > 0 ||
                      cfg.obstacles.enabled
 
 function _coupling_checks(cfg)
@@ -146,31 +163,24 @@ function _coupling_checks(cfg)
     if _any_coupling(cfg)
         (cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf) ||
             push!(e, ConfigError("checkpoint.every_steps", "the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles]) are not checkpointed: leave [checkpoint] off"))
-        d.core === :boussinesq || push!(e, ConfigError("dynamics.core", "the couplings run with the boussinesq core"))
+        _core(cfg) === :boussinesq || push!(e, ConfigError("core.model", "the couplings run with the boussinesq core"))
         _adaptive(cfg) && push!(e, ConfigError("time.dt", "the couplings take a fixed time.dt"))
         cfg.grid.stretching === :uniform || push!(e, ConfigError("grid.stretching", "the couplings need a uniform grid"))
         (b.x === :open || b.y === :open) && push!(e, ConfigError("boundaries.x", "the couplings run in a closed box (no open faces)"))
     end
-    defaults = Dict(o.key => o.default for o in only(x for x in getfield(cfg, :schema).sections if x.name == "surface").options)
-    for (model, keys_) in ((:slab, _SLAB_KEYS), (:flux_map, _FLUX_MAP_KEYS))
-        s.model === model && continue
-        for k in keys_
-            isequal(s[k], defaults[k]) ||
-                push!(e, ConfigError("surface.$k", "belongs to surface.model = \"$model\", not \"$(s.model)\": it would be ignored"))
-        end
-    end
-    if s.model !== :none
+    sm = _surface_coupling(cfg)
+    if sm !== :none
         b.z === :periodic && push!(e, ConfigError("surface.model", "a surface model needs z walls"))
         (cfg.surface_theta_flux.bottom == 0) ||
             push!(e, ConfigError("surface_theta_flux.bottom", "the surface model sets the floor's θ flux: leave surface_theta_flux.bottom at 0"))
     end
-    s.model === :slab && s.theta_ref === nothing && d.theta0 == 0 &&
+    sm === :slab && s.theta_ref === nothing && d.theta0 == 0 &&
         push!(e, ConfigError("surface.theta_ref", "the slab's bulk flux needs a reference θ: set theta_ref or dynamics.theta0"))
-    if cfg.microphysics.scheme !== :none
+    if _microphysics(cfg) !== :none
         d.moisture || push!(e, ConfigError("microphysics.scheme", "Kessler needs dynamics.moisture = true (qv)"))
         b.z === :periodic && push!(e, ConfigError("microphysics.scheme", "rain falls out through a floor: Kessler needs z walls"))
     end
-    !isempty(cfg.initial.ql) && cfg.microphysics.scheme === :none &&
+    !isempty(cfg.initial.ql) && _microphysics(cfg) === :none &&
         push!(e, ConfigError("initial.ql", "cloud water needs microphysics.scheme = \"kessler\""))
     (!cfg.tracer.enabled && (!isempty(cfg.tracer.sources) || cfg.tracer.decay_time != Inf)) &&
         push!(e, ConfigError("tracer.enabled", "[tracer] sources or decay_time are set but the tracer is off"))
@@ -183,7 +193,7 @@ function _coupling_checks(cfg)
         r === nothing || r[1] <= r[2] || push!(e, ConfigError("particles.$ax", "expected [lower, upper] with lower ≤ upper"))
     end
     if cfg.obstacles.enabled
-        cfg.dynamics.core === :boussinesq || push!(e, ConfigError("obstacles.enabled", "obstacles need the boussinesq core"))
+        _core(cfg) === :boussinesq || push!(e, ConfigError("obstacles.enabled", "obstacles need the boussinesq core"))
         cfg.domain.static_driver === nothing &&
             push!(e, ConfigError("obstacles.enabled", "obstacles come from the domain's static_driver: set it (AeolusPrep.jl: aeolusprep static)"))
     end
@@ -192,7 +202,7 @@ end
 
 const _COUPLING_CHECKS_DOC = """
 a run with a coupling on ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles]) has `[checkpoint]` off, the boussinesq core, a fixed `time.dt`, a uniform grid and no open faces
-a key of `[surface]` that belongs to a model `surface.model` does not select keeps its default; a surface model needs z walls and `surface_theta_flux.bottom = 0`; the slab needs `surface.theta_ref` or `dynamics.theta0`
+a surface model (`[surface] model = "slab"` or `"flux_map"`) needs z walls and `surface_theta_flux.bottom = 0`; the slab needs `surface.theta_ref` or `dynamics.theta0`
 Kessler microphysics needs `dynamics.moisture` and z walls; `initial.ql` needs it
 `[tracer]` sources or a decay time need `tracer.enabled`; particles need a triply periodic box"""
 
@@ -318,7 +328,7 @@ function _couplings(cfg, mesh)
         SlabSurface(SlabLand(; T = s.temperature, C_s = s.heat_capacity, albedo = s.albedo), s.exchange_velocity,
                     something(s.theta_ref, cfg.dynamics.theta0), s.rho_cp, s.sw_peak, s.sw_duration, s.lw_down, 0.0, 0.0) :
         nothing
-    water = cfg.microphysics.scheme === :kessler ? KesslerWater(Field(CellCenter(), mesh), Field(CellCenter(), mesh)) : nothing
+    water = _microphysics(cfg) === :kessler ? KesslerWater(Field(CellCenter(), mesh), Field(CellCenter(), mesh)) : nothing
     return SimCouplings(cfg.forcing.radiative_cooling, slab, s.model === :flux_map ? _flux_map(cfg, mesh) : nothing,
                         water, cfg.tracer.enabled ? _tracer(cfg, mesh) : nothing,
                         cfg.particles.count > 0 ? _particles(cfg, mesh) : nothing,
@@ -522,7 +532,7 @@ The output variables the couplings of `cfg` publish (the catalogue of
 [`SimulationCouplings`](@ref)): `ql`, `qr` with Kessler microphysics,
 `tracer` with the tracer.
 """
-_coupling_outputs(cfg) = vcat(cfg.microphysics.scheme !== :none ? ["ql", "qr"] : String[],
+_coupling_outputs(cfg) = vcat(_microphysics(cfg) !== :none ? ["ql", "qr"] : String[],
                               cfg.tracer.enabled ? ["tracer"] : String[])
 
 function Components.outputs(c::SimulationCouplings)
