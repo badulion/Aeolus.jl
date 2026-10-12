@@ -39,7 +39,7 @@ using ..IO: IO, RunFolder, CheckpointSchedule, StepperState, record_step!, previ
 using ..RunLog: current_domain
 using ..Checks: Checks, CheckRunner, enabled_checks, sample_checks!, evaluate_checks, stopped_checks,
                 results_table, required_failures, advisory_failures, ChecksFailed, read_reference
-using ..Output: OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
+using ..Output: OutputVariable, OutputWriter, select_variables, cell_centres, accumulate_output!, write_record!, write_series!,
                 close_output!, output_means, restore_output_means!
 using ..Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, OpenTable, OneOf, Optional,
                 Path, section, option!, register_driver!, config_domains, domain_view, MODEL
@@ -745,24 +745,13 @@ end
 
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
-"""
-    UrbanSiteRun
-
-What the model builds from the config of an urban site (`[urban] enabled`,
-ONE-e #454): the `cfg`, and the built case (`Aeolus.UrbanCase`; `nothing`
-until `run!` builds it, with its output in the run folder).
-"""
-mutable struct UrbanSiteRun
-    cfg::RunConfig
-    case::Any
-end
-
 function Config.build(::SimulationDriverType, cfg::RunConfig)
     if UrbanCase.urban_enabled(cfg)
         length(config_domains(cfg)) == 1 ||
             throw(ConfigError("domain", "an urban site is one domain (its nest parent is the [nesting] component's)"))
-        UrbanCase.urban_input_problems(cfg)        # a missing driver, before a run folder exists
-        return UrbanSiteRun(cfg, nothing)
+        # the urban site (ONE-e #454, ONE-k #474): one domain, the site its
+        # first component, stepped by its :timestepper component
+        return SimulationRun(UrbanCase.build_model(cfg), StepperState(:euler), cfg)
     end
     model = _nested(cfg) ? _build_nested(cfg) : Model(_build_domain(cfg))
     return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : cfg.time.scheme), cfg)
@@ -937,9 +926,12 @@ function _output_writer(r::SimulationRun, rf, resume_t, dom = _domain(r))
     k = any(v -> v.dims === :k, vars) ? spectrum_wavenumbers(m) : nothing
     stem, ext = splitext(o.netcdf)
     file = dom === _domain(r) ? o.netcdf : string(stem, "_", dom.id, ext)
+    # the components' static maps (the urban site's geometry), in a file that has variables
+    statics = isempty(vars) ? OutputVariable[] :
+              OutputVariable[v for c in dom.components for v in Components.static_outputs(c)]
     return OutputWriter(joinpath(dir, file); x = x, y = y, z = z, k = k,
                         records = filter(v -> v.dims !== :scalar, vars), series = filter(v -> v.dims === :scalar, vars),
-                        ctx = dom, averaging = o.averaging, resume_time = resume_t,
+                        statics = statics, ctx = dom, averaging = o.averaging, resume_time = resume_t,
                         attributes = Dict{String,Any}("title" => "Aeolus.jl — $(cfg.run.name)",
                                                       "source" => "the Aeolus model, domain $(dom.id)",
                                                       "components" => join(string.(map(Components.component_name, dom.components)), " ")))
@@ -984,11 +976,15 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     means === nothing || (comps = merge(comps, (; output_means = means)))
     resume!(ck, sim; components = comps, stepper = r.stepper)
     n = ck.last_step
+    # a domain whose core step a component takes (the urban site, ONE-k
+    # #474): it picks every step and lands on the end itself
+    taker = Components.core_taker(dom)
     adaptive = _adaptive(cfg)
     dt_fixed, nfix = adaptive ? (NaN, typemax(Int)) : _fixed_steps(st)
     nmax = adaptive ? something(st.nsteps, typemax(Int)) : nfix
     t_stop = st.duration === nothing ? nothing : st.start + st.duration   # the model time of the end
-    t_end = adaptive ? t_stop : sim.t + (nmax - n) * dt_fixed      # for the progress line
+    taker === nothing || (t_stop = st.start + nfix * dt_fixed)
+    t_end = adaptive || taker !== nothing ? t_stop : sim.t + (nmax - n) * dt_fixed      # for the progress line
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
     feed = get(dom.drivers, :boundary, nothing)
     (feed === nothing || t_end === nothing) || check_coverage(feed, sim.t, t_end)
@@ -1007,26 +1003,46 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
             foreach((w, d) -> write_series!(w, d, sim.t), ws, doms); next_ser = _next_out(sim.t, o.series_cadence)
         end
     end
-    done() = n >= nmax || (adaptive && t_stop !== nothing && sim.t >= t_stop * (1 - 1e-12))
+    m_ref = Ref{Any}(nothing)                      # the run monitor, for taken_step!
+    done() = taker !== nothing ? !Components.run_continues(taker, dom) :
+             n >= nmax || (adaptive && t_stop !== nothing && sim.t >= t_stop * (1 - 1e-12))
+    # one step of a domain whose step a component picks: its pick, what
+    # limited it and the retries it took go into the diagnostics row
+    function taken_step!()
+        dt = Components.pick_dt(r.model)
+        lim, r0 = Components.step_report(taker, dom)
+        res = monitored_step!(m_ref[], sim; step = n, limiter = lim) do
+            step!(r.model, dt; checked = false)
+            (sim, Float64(dt), Components.step_report(taker, dom)[2] - r0)
+        end
+        return res
+    end
     cpl = sim_couplings(r)
     n == 0 && _record_initial!(cpl, sim)
     # attached (#336): the step cores report every step; monitored_step!
     # turns a step that throws into a diagnosed blowup. A nest is not
     # attached: the root's step core ends before its children subcycle, so
     # the guard checks (every domain) and keeps its good state after the
-    # whole model step, never a root ahead of its children.
+    # whole model step, never a root ahead of its children. Nor is a domain
+    # whose step a component takes: one of its steps may be several core
+    # steps (retried pieces), and it reports once per step.
     mon = merge(closure === nothing ? (;) : (; sgs = closure), _coupling_components(cpl))
+    rd = taker === nothing ? nothing : Components.run_diagnostics(taker, dom)
+    monkw = rd === nothing ? (; components = mon) : (; diagnostics = rd[1], profiles = rd[2])
     try
-    with_monitor(sim; run = rf, components = mon, t_end = t_end, attach = nest === nothing,
+    with_monitor(sim; run = rf, monkw..., t_end = t_end, attach = nest === nothing && taker === nothing,
                  cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
+        m_ref[] = m
+        foreach(c -> Components.run_begin!(c, dom, t_end === nothing ? NaN : Float64(t_end)), dom.components)
         try
             mean || n > 0 || write_due!()
             while !done()
                 n += 1
-                _, dt, retries = monitored_step!(m, sim; step = n) do
-                    adaptive ? _adaptive_step!(r, t_stop) : _take_step!(r, dt_fixed)
-                end
+                _, dt, retries = taker !== nothing ? taken_step!() :
+                                 monitored_step!(m, sim; step = n) do
+                                     adaptive ? _adaptive_step!(r, t_stop) : _take_step!(r, dt_fixed)
+                                 end
                 record_step!(r.stepper, dt; retries = retries)
                 checks === nothing || sample_checks!(checks, sim.t, dt)     # stage 13: :checks, then :output
                 foreach((w, d) -> accumulate_output!(w, d, dt), ws, doms)
@@ -1035,6 +1051,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                 callback === nothing || callback(r, n)
             end
         finally
+            foreach(c -> Components.run_end!(c, dom), dom.components)
             foreach(close_output!, ws)
         end
         # the guard checks on its cadence; a run never ends `completed` with
@@ -1049,16 +1066,16 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     end
     _write_tracks(cpl, cpl.particles === nothing ? nothing :
                                cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path))
-    checks === nothing || _finish_checks(rf, cfg, evaluate_checks(checks))
+    # results.toml: the components' numbers of the run and the checks [checks] enables
+    extra = Dict{String,Any}()
+    foreach(c -> merge!(extra, Components.run_results(c, dom)), dom.components)
+    if checks !== nothing
+        _finish_checks(rf, cfg, evaluate_checks(checks); extra = extra)
+    elseif !isempty(extra)
+        Config.write_results(rf, extra; dir = cfg.output.path)
+    end
     return r
 end
-
-function Simulations.run!(::SimulationDriverType, r::UrbanSiteRun, rf::RunFolder, ck::CheckpointSchedule;
-                          callback = nothing)
-    r.case = UrbanCase.run_urban!(r.cfg, rf, ck; callback = callback === nothing ? nothing : (c, n) -> callback(r, n))
-    return r
-end
-Config.state_fields(r::UrbanSiteRun) = UrbanCase.case_state(r.case)
 
 # the enabled checks of a run: the domain's published checks and the
 # reference comparisons that [checks] enables, or nothing (ONE-d); in a
@@ -1075,11 +1092,12 @@ function _check_runner(r::SimulationRun)
     return CheckRunner(cs, settings)
 end
 
-_write_checks(rf, cfg, results) = Config.write_results(rf, results_table(results); dir = cfg.output.path)
+_write_checks(rf, cfg, results; extra = Dict{String,Any}()) =
+    Config.write_results(rf, merge(extra, results_table(results)); dir = cfg.output.path)
 
 # results.toml; an advisory failure warns, a required one ends the run (exit code 3)
-function _finish_checks(rf, cfg, results)
-    path = _write_checks(rf, cfg, results)
+function _finish_checks(rf, cfg, results; extra = Dict{String,Any}())
+    path = _write_checks(rf, cfg, results; extra = extra)
     for x in results
         @info("check $(x.name) $(x.passed ? "passed" : "FAILED")", subsystem = :checks, domain = current_domain(),
               event = :check, required = x.required, value = x.value, tolerance = x.tolerance, units = x.units)
@@ -1099,12 +1117,15 @@ The prognostic arrays with their halos, as a checkpoint stores them
 (`IO.checkpoint_fields`): `u, v, w, p, θ`, the eddy coefficients `νt, κt`
 of the last step and, on the Boussinesq core, `qv`; and those of the
 couplings: the slab temperature `T_s`, `ql`, `qr`, `tracer` and the
-particle positions (`particles`, 3 × n). Those of the root domain; in a
+particle positions (`particles`, 3 × n); and what the components carry
+(`Components.state_arrays`: the urban site's tracers, surface temperature
+and nest parent). Those of the root domain; in a
 nested model also every other domain's prognostic arrays, named
 `<id>_<name>` (`inner_u`, …).
 """
 function Config.state_fields(r::SimulationRun)
-    root = merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)))
+    root = merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)),
+                 (Components.state_arrays(c, _domain(r)) for c in _domain(r).components)...)
     doms = Components.domains(r.model)
     length(doms) == 1 && return root
     more = [Symbol(d.id, "_", k) => f.data for d in doms[2:end] for (k, f) in pairs(IO.checkpoint_fields(d.state))]

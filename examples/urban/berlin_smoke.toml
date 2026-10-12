@@ -44,11 +44,11 @@ every_seconds = 1800.0
 keep = 2
 
 [output]
-# Output: the site writes its NetCDF file ([urban] netcdf) into path.
-# output directory; "none": the run folder's output/. The flagship writes
-# examples/urban/output/alexanderplatz.nc, where the renderers
-# (alexanderplatz_animation.jl, alexanderplatz_surface_diagnostics.jl) read it
-path = "output"
+# Output: the run writes the variables it selects to its NetCDF file in path.
+# output directory; "none": the run folder's output/ (with results.toml)
+path = "none"
+# the variables of the output catalogue the run writes; none: no NetCDF file
+variables = []
 # simulated time between output files [s]
 cadence = 12.0
 
@@ -92,10 +92,6 @@ enabled = true
 scenario = "smoke"
 # CPUBackend(serial = true): the single-task reference
 serial = false
-# file name of the site's NetCDF-4 output in [output] path (the run folder's
-# output/ under aeolus run, else output/ in the working directory); "none": no
-# NetCDF
-netcdf = "none"
 # with the online nest: write the child's boundary slabs at every parent step,
 # the 3-D initial wind and the parent's mean profiles to this dynamic driver
 # (CFG-g #362; the file of an offline child); "none": not written

@@ -10,7 +10,7 @@
 """
     CaseConfig(; kwargs...)
     CaseConfig(path::AbstractString; overrides = String[], kwargs...)
-    CaseConfig(cfg::RunConfig; run_output = nothing)
+    CaseConfig(cfg::RunConfig)
 
 Configuration of an urban case (the urban site of a model config), the
 struct [`build_case`](@ref) consumes. Its defaults are those of the urban
@@ -107,9 +107,8 @@ Groups of fields:
 * **ledger** — `canopy_top` (m): top of the `:canopy` layer of the
   air-heat budget (`heat_budget(…; layer = :canopy)`); `NaN` (default)
   takes the tallest roof of the scene;
-* **output** — `output_path` (`nothing` disables NetCDF output; in TOML
-  `[urban] netcdf`, the file name, in `[output] path`, a directory: the
-  run folder's `output/` under `aeolus run`, else `output/` in the working directory);
+* **output** — the NetCDF output is the run's writer's (`[output]`:
+  the variables of the site's catalogue it selects, `core/output.jl`);
   `child_boundaries` (`nothing`: off) — with the online nest, the dynamic
   driver the run writes the child's boundary slabs to at every parent
   step (CFG-g, #362), the file an offline child reads (`aeolus run` of
@@ -187,7 +186,6 @@ mutable struct CaseConfig
     components::Dict{Symbol,Any}
     # output
     canopy_top::Float64
-    output_path::Union{Nothing,String}
     child_boundaries::Union{Nothing,String}   # the parent-made dynamic driver to write (CFG-g, #362)
     # compute backend (KA-a, #294)
     backend::AbstractBackend

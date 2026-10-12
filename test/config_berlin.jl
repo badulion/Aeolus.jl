@@ -235,12 +235,11 @@ end
     @test BCC.toml_literal(BCC.SeriesForcing([0.0, 1.0], [2.0, 3.0])) ==
           "{kind = \"series\", t = [0.0, 1.0], value = [2.0, 3.0]}"
     @test_throws ArgumentError BCC.toml_form(f)
-    # [urban] netcdf in [output] path; "none" → no file; the run folder's output/ under run_config
-    c = BCC.CaseConfig(load_run_config(berlin_toml("summer")))
-    @test c.output_path == normpath(joinpath(berlin_configs_dir(), "output", "alexanderplatz.nc"))
-    c = BCC.CaseConfig(load_run_config(berlin_toml("summer"); overrides = ["output.path=\"none\""]); run_output = "/tmp/x")
-    @test c.output_path == "/tmp/x/alexanderplatz.nc"
-    @test ld().output_path === nothing
+    # the NetCDF file is the run's writer's ([output] netcdf in [output] path,
+    # ONE-k #474): the flagship's for the renderers, none for the smoke run
+    su = load_run_config(berlin_toml("summer"))
+    @test su.output.netcdf == "alexanderplatz.nc" && "Ts" in su.output.variables && "H_sfc" in su.output.variables
+    @test isempty(load_run_config(smoke).output.variables)
     # the periods
     @test ld("urban.surface_period=2.0").cadence[:surface] == 2.0
     @test !haskey(ld().cadence, :surface)
@@ -304,7 +303,7 @@ end
     @test r.fields_equal
     isempty(r.fields_differing) || @info "fields differing in the round trip" r.fields_differing
     @test r.diagnostics_equal && r.config_equal
-    case = r.runs[1].obj.case
+    case = urban_site(r.runs[1].obj)
     st = BCC.case_state(case)
     # the nest is on: the parent's fields are compared too
     @test :parent_θ in keys(st) && :parent_qv in keys(st) && :qv in keys(st)
@@ -389,7 +388,7 @@ end
     case = BCC.build_case(cc)
     tl = Test.TestLogger(min_level = Logging.Info)
     with_logger(tl) do
-        BCC.run_case!(case)
+        run_site!(case)
     end
     recs = filter(r -> get(r.kwargs, :subsystem, nothing) === :urban, tl.logs)
     ev(e) = filter(r -> get(r.kwargs, :event, nothing) === e, recs)

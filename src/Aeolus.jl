@@ -1130,8 +1130,7 @@ export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
        apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
-# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
-# `step_case!` / `run_case!` (Aeolus.UrbanCase, not exported).
+# `advance_channel!` / `run_channel!` are the harness's own names.
 export WallBoundedCase, half_channel_case, channel_case,
        advance_channel!, run_channel!, channel_dt,
        channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel

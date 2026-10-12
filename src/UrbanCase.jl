@@ -15,8 +15,10 @@
 #
 #   julia --project -m Aeolus run examples/urban/berlin_summer.toml
 #
-# From Julia: `build_case(CaseConfig(load_run_config(path)))`, then
-# `run_case!(case)`.
+# `aeolus run` builds it as a `Model` of one domain ([`build_model`]) and
+# runs it with the model's run loop; the site is the domain's first
+# component, and its `:timestepper` component takes the core step
+# (`step!(model)`, ONE-k #474).
 #
 # Layout (src/urban/):
 #
@@ -64,7 +66,7 @@ using ..Aeolus.Components: Components, AbstractComponent, Stage, Domain, Model, 
 import ..Aeolus.Components: component_name, slot, incompatible
 using ..Aeolus.Checks: Check, CheckRunner, enabled_checks, evaluate_checks, results_table, required_failures,
                        advisory_failures, ChecksFailed
-using ..Aeolus.Output: Output, OutputVariable, OutputWriter, check_catalogue, cell_centres, write_record!
+using ..Aeolus.Output: Output, OutputVariable, check_catalogue
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics
 using Printf
@@ -75,7 +77,7 @@ import Random
 for f in ("config", "components", "geometry", "bus",
           "tracers", "budgets", "reference_state", "top_boundary",
           "open_boundary",
-          "output", "case", "stages", "diagnostics")
+          "case", "stages", "output", "diagnostics")
     include(joinpath(@__DIR__, "urban", "core", f * ".jl"))
 end
 
@@ -139,7 +141,7 @@ include(joinpath(@__DIR__, "urban", "core", "restart.jl"))      # checkpoint / r
 include(joinpath(@__DIR__, "urban", "core", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "core", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
-export CaseConfig, UrbanParentDriver, run_urban!, run_results, parent_results, case_state, build_case, run_case!, describe,
+export CaseConfig, UrbanParentDriver, build_model, run_results, parent_results, case_state, build_case, describe,
        UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_DEFAULTS, selected_components, component_options,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,

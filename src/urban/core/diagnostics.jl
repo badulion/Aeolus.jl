@@ -271,7 +271,7 @@ diagnostic_pairs(ds) =
 
 The log events of an output record, `subsystem = :urban`:
 
-* `event = :frame`: `frame`, `hour`, `wall` (s since `run_case!`
+* `event = :frame`: `frame`, `hour`, `wall` (s since the run
   started) and the values of [`frame_diagnostics`](@ref);
 * `event = :coupling`, one per coupling that declares diagnostics:
   `coupling` and the value of each of its `diagnostics(c, case)`.
@@ -299,9 +299,9 @@ end
 
 The end-of-run events, `Info`, `subsystem = :urban`:
 
-* `event = :run_end`: `steps`, `wall` (s), `records`, `output` (the
-  NetCDF path or `""`), `size_mb`, the peak heat island `peak_uhi`
-  (max − min of `Ts`, K) and `max_div` (s⁻¹);
+* `event = :run_end`: `steps`, `wall` (s), `records` (output frames),
+  the peak heat island `peak_uhi` (max − min of `Ts`, K) and `max_div`
+  (s⁻¹);
 * `event = :timing`, one per stage entry, largest first: `stage`,
   `entry`, `seconds`, `ms_per_step`;
 * `event = :budget`, `budget = :surface`, one per class (and `domain`):
@@ -314,13 +314,10 @@ The end-of-run events, `Info`, `subsystem = :urban`:
   attributed term, `term = "stage/entry"`, with its W m⁻² per layer.
 """
 function log_run_end(case; nsteps::Integer, t_wall::Real)
-    cfg, l = case.cfg, case.budgets
-    out = cfg.output_path === nothing ? "" : cfg.output_path
-    @info(isempty(out) ? "ran $nsteps steps in $(round(t_wall; digits = 1)) s (no output file)" :
-                         "ran $nsteps steps in $(round(t_wall; digits = 1)) s, $(case.clock.nrecord) records",
+    l = case.budgets
+    @info("ran $nsteps steps in $(round(t_wall; digits = 1)) s, $(case.clock.nrecord) frames",
           subsystem = :urban, domain = current_domain(), event = :run_end, steps = nsteps,
-          wall = round(t_wall; digits = 2), records = case.clock.nrecord, output = out,
-          size_mb = isempty(out) || !isfile(out) ? 0.0 : round(filesize(out) / 1e6; digits = 2),
+          wall = round(t_wall; digits = 2), records = case.clock.nrecord,
           peak_uhi = round(maximum(case.bus.Ts) - minimum(case.bus.Ts); sigdigits = 4),
           max_div = max_divergence(case.sim))
     n = max(case.clock.n, 1)

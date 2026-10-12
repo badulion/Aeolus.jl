@@ -40,7 +40,7 @@
 #                                  :timestepper provider's stepper)
 #   limit_dt(c, case, dt)       -> the next step of a variable-step stepper, shortened
 #                                  if `c` needs it (the nest: land on the parent window, #265)
-#   end_run!(c, case)           -> called by run_case! after its last step (the nest waits
+#   end_run!(c, case)           -> called after the run's last step (the nest waits
 #                                  for a parent step it started ahead, SC-c #403)
 #
 # Dynamics interface (#133), used only by the components of the two
@@ -52,7 +52,7 @@
 #   slot :timestepper  next_dt(c, case)                 -> dt (s) of the next step
 #                      advance_dynamics!(c, case, dt)   -> advance case.sim by dt, with the
 #                                                          hooks and case.step_kwargs
-#                      variable_dt(::Type{C})           -> Bool: run_case! runs to a time
+#                      variable_dt(::Type{C})           -> Bool: the run goes to a time
 #                      stable_dt(c, case)               -> the longest step the provider's
 #                                                          limits allow now (variable_dt only;
 #                                                          an explicit dt of step!(model, dt) is checked against it)
@@ -171,7 +171,7 @@ limit_dt(c::UrbanComponent, case, dt) = dt
 """
     end_run!(c, case)
 
-Called by [`run_case!`](@ref) after its last step, before the output is
+Called by the site's `Components.run_end!` after the run's last step, before the output is
 closed: a coupling that runs work ahead of the child on its own task
 finishes it here (the `:nesting` coupling waits for a prefetched parent
 step, SC-c #403). Default: nothing.

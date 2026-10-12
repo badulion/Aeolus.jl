@@ -28,7 +28,7 @@
 #             `:column_tendency`) closes the window when the child reaches it
 #             (`Nesting.end_parent_step!`; one-way: clock and statistics;
 #             two-way, `mode = :two_way`: the feedback onto the parent).
-#   ahead     (SC-c, #403) one-way, under `run_case!`: when a window opens
+#   ahead     (SC-c, #403) one-way, within a run (its horizon set): when a window opens
 #             and the run will step past its end, the parent's step of the
 #             next window starts on its own task (`Nesting.prefetch_parent_step!`)
 #             and runs while the child steps through this window; the next

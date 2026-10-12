@@ -262,6 +262,8 @@ check_dt(::AbstractComponent, d, dt) = nothing
 # the component that takes the core step, or nothing (statically: recursion over the tuple)
 _core_taker(::Tuple{}) = nothing
 _core_taker(cs::Tuple) = takes_core_step(first(cs)) ? first(cs) : _core_taker(Base.tail(cs))
+"The component of `d` that [`takes_core_step`](@ref), or `nothing`."
+core_taker(d::Domain) = _core_taker(d.components)
 
 """
     last_step_dt(dt, remaining) -> dt
@@ -343,6 +345,34 @@ One step of the length the model's domain picks ([`pick_dt`](@ref)),
 landing on `t_end`.
 """
 step!(m::Model{<:Tuple,Nothing}; t_end = nothing) = step!(m, pick_dt(m; t_end); checked = false)
+
+"""
+    run_to!(m::Model, t_end; callback = nothing) -> m
+
+Run a single-domain model whose step a component takes
+([`takes_core_step`](@ref)) to the model time `t_end`, as the run loop of
+`aeolus run` does but without its output, monitor and checkpoints: every
+component's [`run_begin!`](@ref), `step!(m)` while the stepping component
+[`run_continues`](@ref) (`callback(m, n)` after the `n`-th step), then
+every [`run_end!`](@ref), also when a step throws.
+"""
+function run_to!(m::Model{<:Tuple,Nothing}, t_end::Real; callback = nothing)
+    d = only(m.domains)
+    st = _core_taker(d.components)
+    st === nothing && throw(ArgumentError("run_to!: no component of the domain $(d.id) takes the core step"))
+    foreach(c -> run_begin!(c, d, Float64(t_end)), d.components)
+    n = 0
+    try
+        while run_continues(st, d)
+            step!(m)
+            n += 1
+            callback === nothing || callback(m, n)
+        end
+    finally
+        foreach(c -> run_end!(c, d), d.components)
+    end
+    return m
+end
 
 """
     component_limits(d::Domain) -> Tuple

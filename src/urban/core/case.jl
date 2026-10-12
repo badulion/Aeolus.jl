@@ -3,15 +3,19 @@
 """
     Clock
 
-Step counter and time state of a case: `n` (steps taken), `hour`
+Step counter and time state of a site: `n` (steps taken), `hour`
 (local hour of day at the start of the current step), `sun` (the solar
-position of the last radiation update), `blowup` (set by the `:sanity`
-stage), `nrecord` (output records written), `t_wall0` (wall-clock
-start of `run_case!`) and the run's horizon, set by `run_case!` for the
-length of its loop: a step starts at time `t` exactly when
-`t_stop - t > stop_margin` (`t_stop = NaN`: unknown, a caller steps the
-case itself). A coupling that works ahead of the child (the nest's
+position of the last radiation update), `blowup` (set by the sanity
+check of the `:budgets` stage), `nrecord` (output frames logged: the
+`:output` cadence), `t_wall0` (wall-clock start of the run) and the
+run's horizon, set by the run loop for its length
+(`Components.run_begin!`, ONE-k #474): a step starts at time `t` exactly
+when `t_stop - t > stop_margin` (`t_stop = NaN`: unknown, a caller steps
+the site itself). A coupling that works ahead of the child (the nest's
 prefetched parent step, SC-c #403) does so only for steps that will run.
+`n0`, `t0`, `θ_start` and `t_first` are the run's start (its step count,
+model time, mean θ below [`RESULTS_LAYER`](@ref)) and the wall clock at
+the end of its first step, for [`run_results`](@ref).
 """
 mutable struct Clock
     n::Int
@@ -22,9 +26,13 @@ mutable struct Clock
     t_wall0::Float64
     t_stop::Float64
     stop_margin::Float64
+    n0::Int
+    t0::Float64
+    θ_start::Float64
+    t_first::Float64
 end
 
-"Whether `run_case!` will start a step at time `t` (false when it does not know)."
+"Whether the run loop will start a step at time `t` (false when it does not know)."
 step_will_run(clk::Clock, t::Real) = clk.t_stop - t > clk.stop_margin
 
 """
@@ -38,8 +46,7 @@ slot's anelastic / pseudo-incompressible provider), `geom`
 ([`TracerRegistry`](@ref)), `budgets` ([`Budgets`](@ref Aeolus.BudgetSystem.Budgets)), the hydrostatic reference state
 `ref` ([`CaseReference`](@ref)), the enabled `couplings` (registry
 order), the `domain` (the case as a `Domain` of the core's stage pipeline,
-[`build_domain!`](@ref)), the `clock`, the
-NetCDF `output` (or `nothing`), the pipeline's
+[`build_domain!`](@ref)), the `clock`, the pipeline's
 `step!` hooks, `timing` (wall seconds per `(stage, coupling)`, the
 `wall.*` diagnostics and the `:timing` events of [`log_run_end`](@ref)), `top` — the heat flux through a
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
@@ -65,7 +72,6 @@ mutable struct UrbanSite{M, S, G<:Geometry} <: AbstractComponent
     domain::Any
     model::Any                   # Model(domain): what steps the case (ONE-k, #474)
     clock::Clock
-    output::Any
     body_force::Union{Nothing,Function}
     post_predictor::Union{Nothing,Function}
     timing::Dict{Tuple{Symbol,Symbol},Float64}
@@ -189,10 +195,11 @@ function build_case(cfg::CaseConfig)
     budgets = Budgets(; order = ALL_STAGES)
     budgets.ρ = copy(ref.ρ̄)
 
-    clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0)
+    clock = Clock(0, hour_of_day(cfg, 0.0), solar_position_at(cfg, cfg.start_h), false, 0, time(), NaN, 0.0,
+                  0, 0.0, NaN, NaN)
     case = UrbanSite(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
                 UrbanComponent[], nothing, nothing, clock,
-                nothing, nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
+                nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
                 top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
     # a building the box edge cuts is solid on the open faces (#262): zero
     # velocity there, and no mass-flux correction through it; then the open

@@ -108,20 +108,23 @@ function Components.run_stage!(case::UrbanSite, d::Domain, ::Val{:tendencies}, d
 end
 # The sanity check, after the stages that follow the core (and before the
 # budgets close): a non-finite wind or surface temperature, or a blowup a
-# coupling flagged, marks the case blown up; the step's record is then not
-# written, and the run stops after the step.
+# coupling flagged, marks the site blown up and ends the step with an
+# error (the run monitor diagnoses it and writes the crash checkpoint).
 function Components.run_stage!(case::UrbanSite, d::Domain, ::Val{:budgets}, dt)
     clk = case.clock
     if clk.blowup || any(!isfinite, interior_view(case.sim.u)) || any(!isfinite, case.bus.Ts)
-        clk.blowup || @error("blowup at step $(clk.n)", subsystem = :urban, domain = current_domain(),
-                             event = :blowup, step = clk.n)
         clk.blowup = true
+        @error("blowup at step $(clk.n)", subsystem = :urban, domain = current_domain(),
+               event = :blowup, step = clk.n)
+        error("the urban site blew up at step $(clk.n) (t = $(case.sim.t) s)")
     end
+    isnan(clk.t_first) && !isnan(clk.t_stop) && (clk.t_first = time())
     return nothing
 end
-# the case's NetCDF record and its log line, before the entries' :output
+# an output frame: its log events (the record is the run's writer's,
+# which writes the site's catalogue, Components.outputs)
 Components.run_stage!(case::UrbanSite, d::Domain, ::Val{:output}, dt) =
-    (case.clock.blowup || write_output!(case); nothing)
+    (case.clock.nrecord += 1; log_frame(case); nothing)
 # reading the state only: no term of the budgets
 Components.attributed(::UrbanSite, ::Val{:budgets}) = false
 Components.attributed(::UrbanSite, ::Val{:output}) = false
@@ -137,7 +140,15 @@ function Components.advance_core!(case::UrbanSite, d::Domain, dt)
     case.timing[(:dynamics, :step!)] = get(case.timing, (:dynamics, :step!), 0.0) + (time_ns() - t0) * 1e-9
     return nothing
 end
-Components.next_dt(case::UrbanSite, d::Domain) = step_dt(case)
+# the step the time stepper picks; within a run (its horizon set) a
+# variable step lands on the run's end
+function Components.next_dt(case::UrbanSite, d::Domain)
+    dt = step_dt(case)
+    clk = case.clock
+    isnan(clk.t_stop) && return dt
+    ts = timestepper(case)
+    return ts !== nothing && variable_dt(typeof(ts)) ? Components.last_step_dt(dt, clk.t_stop - case.sim.t) : dt
+end
 Components.check_dt(case::UrbanSite, d::Domain, dt) = check_step_dt(case, dt)
 
 # the water the air gained over the step (the budgets close after :budgets)
@@ -291,92 +302,97 @@ function check_step_dt(case, dt::Real)
     return nothing
 end
 
+# ---------------------------------------------------------------------------
+# the run (ONE-k, #474): the run loop of `aeolus run` (the core's) asks the
+# site for its horizon, its steps and its results
+# ---------------------------------------------------------------------------
+
 """
-    run_case!(case; nsteps = case.cfg.nsteps, monitor = nothing, callback = nothing,
-              t_end = case.sim.t + nsteps * case.cfg.dt, resume = false) -> case
+    Components.run_begin!(case::UrbanSite, d, t_end)
 
-Open the output (unless `cfg.output_path === nothing`), run `nsteps`
-steps (stopping early on a blow-up), close the output and log the
-summary: the run's start (`event = :run_start`) and
-[`log_run_end`](@ref) (the run, the stage timing and the ledgers), all
-structured `Info` events (`subsystem = :urban`). With a `monitor` (an
-`Aeolus.IO.RunMonitor`, the `berlin` run driver's) every step runs under
-it (`monitored_step!`: the diagnostics row with the step's dt, its
-[`step_limiter`](@ref) and retries, the progress line, the blowup guard);
-`callback(case, n)` is called after step `n`.
-
-The loop sets the run's horizon on the clock (`t_stop`, `stop_margin`)
-and calls every coupling's [`end_run!`](@ref) after it. With it a
+The run's horizon on the clock (`t_stop = t_end`; a step starts at `t`
+exactly when `t_stop - t > stop_margin`, half a step for a fixed step,
+`1e-9 dt` for a variable one, which lands on `t_end`), the run's start
+for [`run_results`](@ref) and its `:run_start` event. With the horizon a
 one-way nest steps the parent's next window on its own task while the
-child steps (SC-c, #403): between steps the nest parent may be busy, so
-a `callback` must not read it (the child is the case's own); after
-`run_case!` returns it is free.
+child steps (SC-c, #403).
 
 With a variable-step `:timestepper` provider (`variable_dt`, e.g.
-`:adaptive`) `nsteps · cfg.dt` is instead the simulated time to reach:
-each step takes `step_dt(case)`, the last one shortened to land on it.
-
-A run resumed from a checkpoint (#269) passes the remaining `nsteps`,
-the original run's end `t_end` (the horizon the nest's parent steps
-ahead to, so the resumed run starts them exactly where the uninterrupted
-run did) and `resume = true` (the NetCDF output is reopened, not
-recreated).
+`:adaptive`) `nsteps · cfg.dt` is the simulated time to reach: each step
+takes `step_dt(case)`, the last one shortened to land on it.
 """
-function run_case!(case; nsteps::Integer = case.cfg.nsteps, monitor = nothing, callback = nothing,
-                   t_end::Real = case.sim.t + nsteps * case.cfg.dt, resume::Bool = false)
-    cfg = case.cfg
-    cfg.output_path === nothing || open_output!(case; resume)
-    P = cadence_period(cfg, :output)
+function Components.run_begin!(case::UrbanSite, d::Domain, t_end)
+    cfg, clk = case.cfg, case.clock
     ts = timestepper(case)
     variable = ts !== nothing && variable_dt(typeof(ts))
-    @info(variable ? "run: $(nsteps * cfg.dt) s with a variable step (:$(provider(typeof(ts))))" :
-                     "run: $nsteps steps of $(cfg.dt) s",
-          subsystem = :urban, domain = current_domain(), event = :run_start,
-          nsteps, t_end = Float64(t_end),
-          dt = cfg.dt, variable_dt = variable,
-          records = floor(Int, nsteps * cfg.dt / P))
-    case.clock.t_wall0 = time()
-    n0 = case.clock.n
-    model = case.model
-    # one step of the model (its time stepper takes the core step, ONE-k #474)
-    stepped!(dt) = (step!(model, dt; checked = false); !case.clock.blowup)
-    function one_step(dt)
-        if monitor === nothing
-            ok = stepped!(dt)
-        else
-            # the row gets the step's dt, what limited it and its retries
-            r0 = step_retries(case)
-            ok, _, _ = Aeolus.IO.monitored_step!(monitor, case.sim; step = case.clock.n + 1,
-                                                 limiter = step_limiter(case)) do
-                (stepped!(dt), Float64(dt), step_retries(case) - r0)
-            end
-        end
-        ok && callback !== nothing && callback(case, case.clock.n)
-        return ok
-    end
-    # the horizon: a step starts at t exactly when t_stop - t > stop_margin
-    # (the fixed loop's steps start on multiples of dt, so half a step is margin)
-    clk = case.clock
     clk.t_stop = Float64(t_end)
     clk.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
-    try
-        if variable
-            t_end = clk.t_stop
-            while t_end - case.sim.t > 1e-9 * cfg.dt
-                one_step(Components.pick_dt(model; t_end)) || break
-            end
-        else
-            for _ in 1:nsteps
-                one_step(cfg.dt) || break
-            end
-        end
-    finally
-        clk.t_stop = NaN
-        foreach(c -> end_run!(c, case), case.couplings)
-    end
-    nsteps = case.clock.n - n0
-    t_wall = time() - case.clock.t_wall0
-    close_output!(case)
-    log_run_end(case; nsteps, t_wall)
-    return case
+    clk.t_wall0 = time()
+    clk.n0, clk.t0, clk.t_first = clk.n, case.sim.t, NaN
+    clk.θ_start = mean_θ_below(case, RESULTS_LAYER)
+    P = cadence_period(cfg, :output)
+    span = t_end - case.sim.t
+    @info(variable ? "run: $(span) s with a variable step (:$(provider(typeof(ts))))" :
+                     "run: $(round(Int, span / cfg.dt)) steps of $(cfg.dt) s",
+          subsystem = :urban, domain = current_domain(), event = :run_start,
+          t_end = Float64(t_end), dt = cfg.dt, variable_dt = variable,
+          records = floor(Int, span / P))
+    return nothing
 end
+
+"Whether the run loop takes another step: [`step_will_run`](@ref) at the site's time."
+Components.run_continues(case::UrbanSite, d::Domain) = step_will_run(case.clock, case.sim.t)
+
+"What limited the step the site picked last, and the time stepper's retries so far."
+Components.step_report(case::UrbanSite, d::Domain) = (step_limiter(case), step_retries(case))
+
+"""
+    Components.run_end!(case::UrbanSite, d)
+
+After the run's last step (also when it stops with an error): the
+horizon is cleared, every coupling's [`end_run!`](@ref) runs (the nest
+waits for a parent step it started ahead, SC-c #403), and the end-of-run
+events are logged ([`log_run_end`](@ref)).
+"""
+function Components.run_end!(case::UrbanSite, d::Domain)
+    clk = case.clock
+    clk.t_stop = NaN
+    foreach(c -> end_run!(c, case), case.couplings)
+    log_run_end(case; nsteps = clk.n - clk.n0, t_wall = time() - clk.t_wall0)
+    return nothing
+end
+
+"The run's diagnostics: [`case_diagnostics`](@ref) and [`case_profiles`](@ref)."
+Components.run_diagnostics(case::UrbanSite, d::Domain) = (case_diagnostics(case), case_profiles(case))
+
+"""
+    Components.run_results(case::UrbanSite, d) -> Dict
+
+What a finished run of the site writes to `results.toml`:
+[`run_results`](@ref) of the run (the budgets' closure, the mean θ below
+[`RESULTS_LAYER`](@ref) at its start and end, its timing), with the
+`:results` event and a warning when the budgets do not close.
+"""
+function Components.run_results(case::UrbanSite, d::Domain)
+    clk = case.clock
+    wall = time() - clk.t_wall0
+    res = run_results(case; θ_start = clk.θ_start, wall = wall, wall_first_step = clk.t_first - clk.t_wall0,
+                      simulated = case.sim.t - clk.t0, steps = clk.n - clk.n0)
+    led = res["budgets"]
+    @info("budgets " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
+          event = :results, surface = led["surface_max_abs_closure"], water = led["water_residual"],
+          air_heat = led["air_heat_closure"])
+    led["closed"] || @warn("the site's budgets do not close within their tolerances (results.toml)",
+                           subsystem = :urban, domain = current_domain(), event = :budgets_open)
+    return res
+end
+
+"""
+    Components.state_arrays(case::UrbanSite, d) -> NamedTuple
+
+The site's prognostic arrays besides the core's fields: every tracer,
+the surface temperature `Ts` and, with the Aeolus nest parent, the
+parent's fields ([`case_state`](@ref) without the child's `u, v, w, p, θ`).
+"""
+Components.state_arrays(case::UrbanSite, d::Domain) =
+    Base.structdiff(case_state(case), NamedTuple{(:u, :v, :w, :p, :θ)})

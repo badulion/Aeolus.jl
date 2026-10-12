@@ -354,7 +354,7 @@ end
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
     @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(out)
-    case = r.runs[1].obj.case
+    case = urban_site(r.runs[1].obj)
     @test BCD.case_sounding(case.cfg) !== nothing && case.cfg.sounding === nothing
     # the CSV path, run the same way in this process. The 12-step state is
     # compared here rather than against digests captured on master: the CSV
@@ -364,7 +364,7 @@ end
     # matched every time.
     csv = load_run_config(ID_SMOKE; overrides = ["urban.sounding=\"$ID_CSV\"", "time.nsteps=12",
                                                  "fftw.planner=\"estimate\""])
-    ref = run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj.case
+    ref = urban_site(run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj)
     want, got = berlin_state(ref), berlin_state(case)
     @test sort(collect(keys(got))) == sort(collect(keys(want))) == sort(Symbol.(keys(ID_MASTER["smoke_sounding_state"])))
     bad = sort!([k for k in keys(want) if !isequal(got[k], want[k])])
@@ -388,15 +388,15 @@ end
         # driver, so an offline child cannot replay them (it would add its own)
         t0 = time()
         nogen = ["inflow_turbulence.enabled=false"]
-        online = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen, output_path = nothing,
+        online = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen,
                                                child_boundaries = drv))
-        BCD.run_case!(online)
+        run_site!(online)
         t_online = time() - t0
         nc = BCD.find_coupling(online, :nesting)
         st_on = berlin_state(online)
         # recording does not change the run: the same case without the recorder
-        plain = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen, output_path = nothing))
-        BCD.run_case!(plain)
+        plain = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = nogen))
+        run_site!(plain)
         st_plain = berlin_state(plain)
         @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
         d = read_dynamic_driver(drv; mesh = online.mesh)
@@ -414,7 +414,7 @@ end
         @test r.fields_equal && r.diagnostics_equal && r.config_equal
         rec = read_run_toml(r.runs[1].folder.path)
         @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv)
-        off = r.runs[1].obj.case
+        off = urban_site(r.runs[1].obj)
         oc = BCD.find_coupling(off, :nesting)
         @test BCD.offline(oc) && oc.parent === nothing && oc.windows == nc.windows
         st_off = berlin_state(off)
@@ -441,9 +441,9 @@ end
     d = read_dynamic_driver(out; mesh = m)
     @test d.boundary !== nothing && length(d.boundary.time) == 1 && haskey(d.tables, :profile_theta)
     @test d.attributes["dynamic_source"] == "sounding"
-    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = ["nesting.enabled=false"], output_path = nothing,
+    run(dyn) = (c = BCD.build_case(BCD.CaseConfig(berlin_toml("smoke"); overrides = ["nesting.enabled=false"],
                                                   lateral = :open, sounding = ID_CSV, dynamic = dyn));
-                BCD.run_case!(c); c)
+                run_site!(c); c)
     a, b = run(nothing), run(out)
     @test all(st -> st.data isa ProfileBoundaryData, open_boundary_states(a.sim))
     @test all(st -> st.data isa FileBoundaryData, open_boundary_states(b.sim))

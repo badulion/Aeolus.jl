@@ -137,7 +137,7 @@ rejected step, so it commits exactly once per accepted piece.
 
 `dt_max` is further capped at the shortest period in `cfg.cadence`, so a
 step never skips a firing of a cadence (the soil and building couplings
-integrate over their period). `run_case!` runs to the simulated time
+integrate over their period). A run goes to the simulated time
 `nsteps · cfg.dt` rather than a number of steps; the first step grows
 from `cfg.dt` (at most `growth_max · cfg.dt`).
 """

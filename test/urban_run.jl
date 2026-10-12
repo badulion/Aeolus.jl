@@ -105,7 +105,7 @@ end
     @test g.sfc[floor(Int, 175.0 / m.dx) + 1, floor(Int, 150.0 / m.dy) + 1] == UC.SURFACE_WATER
     @test length(g.city.buildings) == 2
     @test endswith(cc.static, joinpath("input", "small_city_static.nc"))
-    UC.run_case!(case)
+    run_site!(case)
     st = UC.case_state(case)
     @test all(a -> all(isfinite, a), values(st))
     # no static driver at all is an error, not a flat city

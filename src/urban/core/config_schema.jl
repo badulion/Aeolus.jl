@@ -56,7 +56,7 @@ const CASE_FIELDS = (
     T_soil0 = ("urban.t_soil0",), p_surface = ("urban.p_surface",),
     components = ("*.enabled", "*.*"),
     canopy_top = ("urban.canopy_top",),
-    output_path = ("output.path", "urban.netcdf"), child_boundaries = ("urban.child_boundaries",),
+    child_boundaries = ("urban.child_boundaries",),
     backend = ("urban.serial",))
 
 """
@@ -698,8 +698,6 @@ function urban_site_section()
         # the budgets and the output
         option!(s, "canopy_top", Float64; default = NaN, units = "m",
                 doc = "top of the :canopy layer of the air-heat budget; nan: the tallest roof")
-        option!(s, "netcdf", Optional{String}; default = "urban.nc",
-                doc = "file name of the site's NetCDF-4 output in [output] path (the run folder's output/ by default); \"none\": no NetCDF")
         option!(s, "child_boundaries", Optional{Path}; input = false,
                 doc = "with the online nest: write the child's boundary slabs at every parent step, the 3-D initial wind " *
                       "and the parent's mean profiles to this dynamic driver (CFG-g #362; the file of an offline child); " *
@@ -846,7 +844,7 @@ an urban site takes a fixed `[time] dt` with `nsteps` (duration = \"none\"), a u
 `[urban] theta_top` is `\"initial_gradient\"`, `\"noflux\"` or a gradient in K/m; `[checkpoint]` needs the Boussinesq core"""
 
 """
-    CaseConfig(cfg::RunConfig; run_output = nothing)
+    CaseConfig(cfg::RunConfig)
 
 The urban site of the model's config `cfg` (`[urban] enabled`; its one
 domain) as the [`CaseConfig`](@ref) `build_case` consumes: the grid of
@@ -854,11 +852,10 @@ domain) as the [`CaseConfig`](@ref) `build_case` consumes: the grid of
 of its `dynamic_driver`, `ν`, `θ₀`, `g` of `[dynamics]`, `dt` and
 `nsteps` of `[time]`, the output cadence of `[output]`, every other field
 of `[urban]`, and the urban components the sections enable with their
-options (`components`, [`urban_components`](@ref)). The NetCDF file
-is `[urban] netcdf` in `[output] path`, else in `run_output`, else in
-`output/` of the working directory.
+options (`components`, [`urban_components`](@ref)). Its output is the
+run's writer's (`[output]`).
 """
-function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = nothing)
+function CaseConfig(cfg::RunConfig)
     config_schema(cfg).name in (Config.MODEL, "urban_parent") ||
         throw(ArgumentError("CaseConfig: the config is for \"$(config_schema(cfg).name)\", not the model"))
     u = cfg.urban
@@ -867,7 +864,6 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
     t.dt isa Real || throw(ConfigError("time.dt", "an urban site takes a fixed dt"))
     cad = Dict{Symbol,Float64}(:radiation => u.radiation_period, :soil => u.soil_period, :output => out.cadence)
     u.surface_period === nothing || (cad[:surface] = u.surface_period)
-    dir = out.path !== nothing ? out.path : run_output !== nothing ? run_output : joinpath(pwd(), "output")
     d = u.date
     return CaseConfig(Symbol(cfg.run.name), u.scenario, g.size, g.extent, g.halo,
                       dom.static_driver, u.parent_static, u.lat0, u.lon0, u.offset, u.elevation,
@@ -879,8 +875,7 @@ function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = 
                       u.lateral, u.outflow, u.boundary_frame, u.theta_relaxation, u.analysis_buffer,
                       u.sounding, dom.dynamic_driver, u.theta_surface, u.theta_inversion_z, u.theta_lapse, u.u0,
                       u.qv0, u.qv_scale, u.ts0, u.ts_water_offset, u.t_soil0, u.p_surface,
-                      components, u.canopy_top,
-                      u.netcdf === nothing ? nothing : joinpath(dir, u.netcdf), u.child_boundaries,
+                      components, u.canopy_top, u.child_boundaries,
                       CPUBackend(; serial = u.serial))
 end
 
@@ -951,76 +946,25 @@ function urban_input_problems(cfg::RunConfig)
 end
 
 """
-    run_urban!(cfg, rf, ck; callback = nothing) -> case
+    build_model(cfg::RunConfig) -> Model
 
-Run the urban site of the model's config `cfg` in the run folder `rf`
-(what `aeolus run` does for a config with `[urban] enabled`): build the
-case with its NetCDF output in the run folder's `output/` (unless
-`[output] path` says otherwise), restore the newest checkpoint of a
-resumed run, run it with [`run_case!`](@ref) under the run monitor (the
-diagnostics CSV, the blowup guard) checkpointing on `ck`, and write the
-run's own results ([`run_results`](@ref): the budgets' closure, the
-timing) into its `results.toml`, with the checks `[checks]` enables
-(ONE-d, #453: `finite`, `energy_closure` and the site's,
-[`urban_check_names`](@ref)); a failed required check ends the run with
-`Checks.ChecksFailed`. `callback(case, n)` after step `n`.
+The urban site of the model's config `cfg` (`[urban] enabled`) built as
+a `Model` of one domain, what `aeolus run` builds and runs with the
+model's run loop (ONE-k, #474): the site ([`build_case`](@ref)) is the
+domain's first component and its `:timestepper` component takes the
+core step. A missing driver is refused first
+([`urban_input_problems`](@ref)), and `[output] variables` must name
+variables of the domain's catalogue (the core's and the site's,
+[`Components.outputs`](@ref)).
 """
-function run_urban!(cfg::RunConfig, rf::RunFolder, ck::CheckpointSchedule; callback = nothing)
-    cc = CaseConfig(cfg; run_output = output_dir(rf))
-    case = build_case(cc)
-    t_end = case.sim.t + cc.nsteps * cc.dt
-    # checkpoint / restart (#269): the whole case is a checkpoint component;
-    # a resumed session restores the newest checkpoint into the fresh build
-    comps = case_checkpoint_components(case)
-    resumed = resume!(ck, case.sim; components = comps,
-                      validate = (d, path) -> check_case_checkpoint(case, d, path)) !== nothing
-    n0 = case.clock.n
-    θ_start = mean_θ_below(case, RESULTS_LAYER)
-    t_first = Ref(NaN)
-    ckcb = (c, n) -> begin
-        isnan(t_first[]) && (t_first[] = time())
-        maybe_checkpoint!(ck, case.sim; step = n, components = comps)
-        callback === nothing || callback(case, n)
-    end
-    # the case's diagnostics: the core's, the frame's, the ledgers, the stage
-    # timing and every coupling's (core/diagnostics.jl, #338); explicit rows,
-    # one per case step (a case step may be several core steps; the step
-    # record sums them, #336)
-    t0, sim_t0 = time(), case.sim.t
-    with_monitor(case.sim; run = rf, t_end = t_end, cadence = cfg.logging.diagnostics_cadence,
-                 diagnostics = case_diagnostics(case), profiles = case_profiles(case),
-                 attach = false, step0 = n0) do m
-        run_case!(case; nsteps = max(cc.nsteps - n0, 0), t_end, resume = resumed, monitor = m,
-                  callback = ckcb)
-        check_blowup!(m.guard, case.sim; step = case.clock.n, force = true)
-    end
-    case.clock.blowup && error("the urban case blew up at step $(case.clock.n)")
-    res = run_results(case; θ_start = θ_start, wall = time() - t0, wall_first_step = t_first[] - t0,
-                      simulated = case.sim.t - sim_t0, steps = case.clock.n - n0)
-    # the checks [checks] enables (ONE-d, #453): the core's and the site's
-    settings = enabled_checks(getfield(cfg.checks, :values))
-    results = isempty(settings) ? nothing :
-              evaluate_checks(CheckRunner(Components.domain_checks(case.domain), settings))
-    results === nothing || merge!(res, results_table(results))
-    Config.write_results(rf, res)
-    led = res["budgets"]
-    @info("budgets " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
-          event = :results, surface = led["surface_max_abs_closure"], water = led["water_residual"],
-          air_heat = led["air_heat_closure"])
-    led["closed"] || @warn("the case's budgets do not close within their tolerances (results.toml)",
-                           subsystem = :urban, domain = current_domain(), event = :budgets_open)
-    if results !== nothing
-        for x in results
-            @info("check $(x.name) $(x.passed ? "passed" : "FAILED")", subsystem = :checks, domain = current_domain(),
-                  event = :check, required = x.required, value = x.value, tolerance = x.tolerance, units = x.units)
-        end
-        adv = advisory_failures(results)
-        isempty(adv) || @warn("advisory checks failed: $(join((x.name for x in adv), ", "))",
-                              subsystem = :checks, domain = current_domain(), event = :checks_failed)
-        req = required_failures(results)
-        isempty(req) || throw(ChecksFailed(req))
-    end
-    return case
+function build_model(cfg::RunConfig)
+    case = build_case(urban_input_problems(cfg))
+    have = Set(v.name for v in Components.domain_catalogue(case.domain))
+    bad = [n for n in cfg.output.variables if !(n in have)]
+    isempty(bad) ||
+        throw(ConfigError("output.variables", "$(join(bad, ", ")): not in the urban site's output catalogue " *
+                                              "(it has: $(join(sort!(collect(have)), ", ")))"))
+    return case.model
 end
 
 "Height (m) below which [`run_results`](@ref) reports the fluid's mean θ."

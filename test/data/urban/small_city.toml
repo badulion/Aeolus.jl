@@ -16,6 +16,8 @@ static_driver = "input/small_city_static.nc"
 name = "small_city"
 
 [output]
+# the variables of the output catalogue the run writes; none: no NetCDF file
+variables = []
 cadence = 12.0
 
 [time]
@@ -34,7 +36,6 @@ theta0 = 293.0
 
 [urban]
 enabled = true
-netcdf = "none"
 start_h = 12.0
 radiation_period = 8.0
 soil_period = 4.0

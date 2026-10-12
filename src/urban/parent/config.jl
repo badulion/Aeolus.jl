@@ -155,7 +155,7 @@ end
 # The defaults live in the parent's configuration schema
 # (`parent_section` in core/config_schema.jl), the one place they are
 # written; `ParentConfig(; kw...)` starts from them.
-function ParentConfig(; child::CaseConfig = CaseConfig(; output_path = nothing), kw...)
+function ParentConfig(; child::CaseConfig = CaseConfig(), kw...)
     d = parent_defaults()
     for (k, v) in kw
         k === :child && continue

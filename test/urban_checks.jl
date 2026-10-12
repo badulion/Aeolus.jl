@@ -56,7 +56,7 @@ no NetCDF output. (Before ONE-h, #457, the ground was rasterised from the
 OSM file in memory too: the same rasters, test/input_static.jl.)
 """
 berlin_default(; kw...) = BC.CaseConfig(berlin_toml("summer"); parent_static = nothing,
-                                        dynamic = nothing, output_path = nothing, kw...)
+                                        dynamic = nothing, kw...)
 
 allfinite(x) = all(isfinite, x)
 
@@ -73,7 +73,7 @@ function berlin_smoke_checks()
                 t0 = time()
                 case = BC.build_case(cfg)
                 seed_fog!(case, Xoshiro(127))
-                BC.run_case!(case)
+                run_site!(case)
                 union!(exercised, BC.component_name.(case.couplings))
                 sim, bus = case.sim, case.bus
                 # nsteps·dt of simulated time (in nsteps steps, unless the
