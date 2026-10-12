@@ -167,7 +167,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
-cases [`urban`](../reference/options/urban.md), [`cbl`](../reference/options/cbl.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+cases [`urban_parent`](../reference/options/urban_parent.md), [`dns_decay`](../reference/options/dns_decay.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -411,13 +411,15 @@ This config is, bit for bit, the simulation the script built before
 
 Its options, every key with type, default, units, range and doc: [Options: the model](../reference/options/model.md) (generated from the schema; `aeolus options` prints the same).
 
-## The `urban` legacy case
+## The urban site
 
-`[run] legacy = "urban"` is the urban LES run type, `Aeolus.UrbanCase`
-(`src/urban/core/config_schema.jl`; CFG-c #358 as the `berlin` example
-driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
-`urban_parent` runs the nest parent of the same config alone. The Berlin
-(Alexanderplatz) case is shipped as files in `examples/urban/`:
+A model config with `[urban] enabled = true` is an urban site: a 3-D LES
+of a city window (`Aeolus.UrbanCase`, `src/urban/core/config_schema.jl`;
+CFG-c #358 as the `berlin` example driver, the `urban` run type of EX-a
+#438, on the model since ONE-e #454, see [Urban site](urban_case.md)).
+`[run] legacy = "urban_parent"` runs the nest parent of the same config
+alone (until ONE-f, #455). The Berlin (Alexanderplatz) case is shipped as
+files in `examples/urban/`:
 
 | file | what |
 | :-- | :-- |
@@ -431,47 +433,55 @@ driver, in the package since EX-a #438, see [Urban run type](urban_case.md)).
 Each file is complete (no `extends`, ONE-b #451).
 
 ```bash
-julia --project -m Aeolus run examples/urban/berlin_summer.toml --set clock.nsteps=1800
-julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set physics.sgs='"smagorinsky"'
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs_tke.enabled=false --set sgs_smagorinsky.enabled=true
 ```
 
-There is no wrapper script (`alexanderplatz_diurnal.jl` was removed in
-#438). The environment variables `AEOLUS_SCENARIO`, `AEOLUS_NSTEPS` and
-`AEOLUS_OUTPUT_DT` are gone: use the file and `--set clock.nsteps=…`,
-`--set output.cadence=…`. A run writes its own checks (the budgets'
-closure, the timing) to `output/results.toml`. The generic schema points
-at no data of the example: `[geometry] static` and `landuse` and
-`[initial] sounding` default to `"none"`.
+A run writes its own checks (the budgets' closure, the timing) to
+`output/results.toml`. The model's sections it takes are `[grid]` (a
+uniform grid), `[dynamics]` `nu`, `theta0`, `g` (the Boussinesq setting:
+the site picks its core with a `core_*` component), `[time]` (a fixed
+`dt` and `nsteps` with `duration = "none"`: with the `timestep_adaptive`
+component `nsteps × dt` is the simulated time), `[output]` (`path`,
+`cadence`) and the domain's `static_driver` (the ground, CFG-f #361, see
+[Input drivers](input_drivers.md), made by AeolusPrep.jl) and
+`dynamic_driver` (a sounding driver, or the parent-made driver of an
+offline nest). The model's own components (`[coriolis]`, `[sponge]`,
+`[surface_theta_flux]`, the EX-d couplings) are not part of an urban
+site, and `[sgs]` stays at its defaults: the site's core carries its
+Coriolis force, sponge and closure.
 
-The sections are `[grid]`, `[geometry]` (the site and the static
-drivers `static`, `parent_static` the ground is read from, CFG-f #361,
-see [Input drivers](input_drivers.md), made by AeolusPrep.jl, and the
-nest parent's land-use table `landuse`), `[clock]`, `[cadence]`,
-`[dynamics]`, `[boundaries]`, `[initial]`, `[budgets]` (`canopy_top`
-of the air-heat budget, ONE-c #452), `[output]` (`netcdf`, the file
-name, written by the one writer of [Output](output.md); `path`, its directory: the summer file writes
-`examples/urban/output/alexanderplatz.nc`, where the renderers read it;
-`"none"` is the run folder's `output/`) and `[run]` (`scenario`,
-`backend = "cpu"`, `serial`). Most of it is generated from the coupling
-registry, so a coupling never has to repeat itself in a schema:
-
-  * **`[cadence]`** has a key for every named period some coupling
-    declares (the `Symbol` periods of its `stages`, and its
-    `cadence_keys`). A period an enabled coupling needs must be set; a
-    period set in a file that no enabled coupling uses is an error.
-  * **`[physics]`**: `slot = "provider"` for each exclusive slot (the
-    allowed values are the registered providers) and `addon = true/false`
-    for each additive coupling. The registry's `incompatible`
-    declarations are cross-field checks whose message carries the
-    coupling's `incompatible_reason`.
-  * **`[physics.options.<coupling>]`** is validated against that
-    coupling's `default_options`: the key set is closed (an unknown key
-    lists the coupling's options), and a value has its default's type
-    (a `Symbol` is a string, a tuple an array of the same length, a
+  * **`[urban]`**: the site — the static driver of the nest parent
+    (`parent_static`) and its land-use table (`landuse`), the anchor
+    (`lat0`, `lon0`, `offset`, `elevation`), the clock (`date`,
+    `utc_offset`, `start_h`), the periods of the radiation, the soil and
+    the surfaces, the core's `f_coriolis`, `c_s`, `pr_t`,
+    `sgs_stability`, sponge and θ top, the lateral boundaries without the
+    nest, the initial state (`sounding`, or the idealised profile),
+    `canopy_top` of the air-heat budget, the NetCDF file name (`netcdf`,
+    written by the one writer of [Output](output.md) into `[output]
+    path`: the summer file writes `examples/urban/output/alexanderplatz.nc`,
+    where the renderers read it) and the child's boundary driver
+    (`child_boundaries`). The generic site points at no data of the
+    example: `parent_static`, `landuse` and `sounding` default to
+    `"none"`.
+  * **One section per urban component**, `[<name>]`: `enabled` (default
+    `false`) and the component's `default_options`, generated from them
+    (`coupling_section`), so a component never has to repeat itself in a
+    schema: the key set is closed, a key is the option's name in ASCII
+    snake case (`U_g` → `u_g`, `τ` → `tau`), and a value has its default's
+    form (a `Symbol` is a string, a tuple an array of the same length, a
     `NamedTuple` a sub-table whose missing keys keep the default, a table
     by surface class has integer keys, a `nothing` default takes `"none"`
-    or a number). Keys keep their Julia names (`τ`, `U_g`).
-  * **`[physics.options.nesting.parent]`** is the nest parent's own
+    or a number). Every urban slot (`:core`, `:timestepper`,
+    `:pressure_solver`, `:momentum_advection`, `:scalar_advection`,
+    `:sgs`, `:surface_exchange`, `:ground`, `:surface_radiation`,
+    `:column_radiation`, `:buildings`, `:glazing`, `:chemistry`,
+    `:microphysics`, `:immersed_boundary`) has exactly one enabled
+    provider; the additive components are each on or off. The
+    components' `incompatible` declarations are cross-field checks whose
+    message carries the `incompatible_reason`.
+  * **`[nesting.parent]`** is the nest parent's own
     schema (`ParentConfig`), its keys the ASCII field names
     (`nudging_tau`, `theta_top`). The function-valued fields have TOML
     forms: `q_surface` / `e_surface` take `{kind = "constant", value}` or
@@ -484,17 +494,15 @@ registry, so a coupling never has to repeat itself in a schema:
 **One source of truth for the defaults.** The schema holds them;
 `CaseConfig(; kw...)` and `ParentConfig(; kw...)` start from it (the
 structs have no `@kwdef` defaults), and `CaseConfig(cfg::RunConfig)`
-builds the struct that `build_case` consumes. `CaseConfig(:summer)` (and
-the alias `:alexanderplatz`, `:winter`, `:smoke`, `:mitte_sample`) loads
-the shipped file. `test/config_berlin.jl` checks that the struct fields
-and the schema options map one to one, that the four files give, field
-for field and bitwise, the configs the old Julia presets built
-(`test/data/config_berlin/fixture.toml`), and that `berlin_smoke.toml`
-run 12 steps gives state bitwise equal to the Julia-built smoke case and
-passes the round trip with the nest on. The Berlin case has no
-checkpoint/restart yet, so `[checkpoint]` must stay off.
+builds the struct that `build_case` consumes. `test/config_berlin.jl`
+checks that the struct fields and the model's options map one to one,
+that the four files give, field for field and bitwise, the configs the
+old Julia presets built (`test/data/config_berlin/fixture.toml`), and
+that `berlin_smoke.toml` run 12 steps gives state bitwise equal to the
+Julia-built smoke case and passes the round trip with the nest on.
+`[checkpoint]` needs the Boussinesq core.
 
-Its options, the `[physics.options.<coupling>]` tables included: [Options: legacy case `urban`](../reference/options/urban.md).
+Its options, the component sections and `[nesting.parent]` included: [Options: the model](../reference/options/model.md).
 
 ## The stable-boundary-layer cases
 

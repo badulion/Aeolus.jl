@@ -129,19 +129,19 @@ end
 Slot `:glazing`, provider `:glass_class`. At `init!` promotes a synthetic
 set of roof cells (`i % 5 == 0 && j % 4 == 0`) to [`SURFACE_GLASS`](@ref)
 and extends `bus.params` with the glass class
-([`glass_surface_params`](@ref)); every step, in `:anthropogenic` after
+([`glass_surface_params`](@ref)); every step, in `:sources` after
 the buildings and traffic, the transmitted shortwave leaves the glass
 cells' surface budget ([`apply_glass_sw_transmission!`](@ref)).
 """
-struct GlassClass{G} <: AbstractCoupling
+struct GlassClass{G} <: UrbanComponent
     glazing::G
 end
 
-coupling_name(::Type{<:GlassClass}) = :glass
+component_name(::Type{<:GlassClass}) = :glass
 slot(::Type{<:GlassClass}) = :glazing
 provider(::Type{<:GlassClass}) = :glass_class
 modules_used(::Type{<:GlassClass}) = (:UrbanSurface,)
-stages(::Type{<:GlassClass}) = ((:anthropogenic, 30, EVERY_STEP),)
+stages(::Type{<:GlassClass}) = ((:sources, 30, EVERY_STEP),)
 build(::Type{<:GlassClass}, case, o) = GlassClass(example_glazing())
 
 function init!(c::GlassClass, case)
@@ -158,7 +158,7 @@ function init!(c::GlassClass, case)
     return nothing
 end
 
-run_stage!(c::GlassClass, case, ::Val{:anthropogenic}, dt) =
+run_stage!(c::GlassClass, case, ::Val{:sources}, dt) =
     (apply_glass_sw_transmission!(case.bus.sensible, case.geom.sfc, case.bus.sw;
                                   glazing = c.glazing); nothing)
 
@@ -179,4 +179,3 @@ function smoke_check(c::GlassClass, case)
                 isapprox(opt.R + opt.T + sum(opt.A), 1; atol = 1e-9) && α == opt.R]
 end
 
-register!(GlassClass)

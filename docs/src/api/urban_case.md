@@ -1,11 +1,14 @@
-# Urban run type
+# Urban site
 
-`Aeolus.UrbanCase` (EX-a, #438) is the urban LES run type: a 3-D LES of a
+`Aeolus.UrbanCase` (EX-a #438; on the model since ONE-e #454) is the urban
+site of the model: a 3-D LES of a
 city window whose buildings and land use come from a static input driver,
 whose initial state and boundary forcing come from a sounding, a dynamic
 input driver or an online Aeolus nest parent, and whose urban physics is
-wired in through a registry of couplings (one file per coupling under
-`src/urban/couplings/`). It was the Berlin example's own code
+a set of components of the domain's stage pipeline (one file per
+coupling under `src/urban/couplings/`; [Components](../design/components.md)).
+A model config with `[urban] enabled = true` is an urban site, and its
+sections enable the components. It was the Berlin example's own code
 (`examples/urban/BerlinCase.jl`, `core/`, `couplings/`, `parent/`) and
 moved into the package unchanged in its physics: the Berlin smoke run, the
 54 runs of the smoke matrix and the resolved configurations of the four
@@ -17,30 +20,29 @@ The Berlin (Alexanderplatz) case is now configuration only:
 land-use tiles), its dynamic driver (`input/berlin_20190629_dynamic.nc`:
 the Lindenberg sounding) and the source data in `examples/urban/data/`.
 
-## Run drivers
+## Running it
 
-Both are legacy cases until the urban couplings are components (ONE-e
-#454, ONE-f #455):
-
-| `[run] legacy` | what runs | output (run folder) |
+| config | what runs | output (run folder) |
 | :-- | :-- | :-- |
-| `urban` ([`UrbanDriver`](@ref Aeolus.UrbanCase.UrbanDriver)) | the case: `build_case` + `run_case!` under the run monitor, checkpointed | `diagnostics.csv`, the NetCDF output (`[output] netcdf`), `output/results.toml` ([`run_results`](@ref Aeolus.UrbanCase.run_results)) |
-| `urban_parent` ([`UrbanParentDriver`](@ref Aeolus.UrbanCase.UrbanParentDriver)) | the case's nest parent alone, for `[physics.options.nesting.parent] hours` | `output/parent.csv`, `parent_theta.csv`, `parent_surface.nc`, `results.toml` ([`parent_results`](@ref Aeolus.UrbanCase.parent_results)) |
+| the model, `[urban] enabled` | the case: `build_case` + `run_case!` under the run monitor, checkpointed ([`run_urban!`](@ref Aeolus.UrbanCase.run_urban!)) | `diagnostics.csv`, the NetCDF output (`[urban] netcdf`), `output/results.toml` ([`run_results`](@ref Aeolus.UrbanCase.run_results)) |
+| `[run] legacy = "urban_parent"` ([`UrbanParentDriver`](@ref Aeolus.UrbanCase.UrbanParentDriver)) | the case's nest parent alone, for `[nesting.parent] hours`, until ONE-f (#455) makes the parent a domain | `output/parent.csv`, `parent_theta.csv`, `parent_surface.nc`, `results.toml` ([`parent_results`](@ref Aeolus.UrbanCase.parent_results)) |
 
-Both read the same schema (`aeolus options urban`): an `urban_parent`
-config is an urban case's file with `[run] legacy = "urban_parent"` (and
-`[checkpoint]` off); every file is complete (no `extends`, ONE-b #451). From Julia, `CaseConfig(path)` loads a config
-file into the struct `build_case` consumes.
+Both read the model's sections (`aeolus options`): an `urban_parent`
+config is an urban site's file with `[run] legacy = "urban_parent"` (and
+`[checkpoint]` off); every file is complete (no `extends`, ONE-b #451).
+From Julia, `CaseConfig(path)` loads a config file into the struct
+`build_case` consumes. The options are on [Run configuration: the urban
+site](config.md#The-urban-site).
 
 ```bash
-julia --project -m Aeolus run examples/urban/berlin_summer.toml --set clock.nsteps=1800
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800
 julia --project -m Aeolus run examples/urban/berlin_smoke.toml
 julia --project -m Aeolus run examples/urban/berlin_parent.toml
 ```
 
 ### The run's own checks: `results.toml`
 
-Every `urban` run writes `output/results.toml`: a finite state, the
+Every run of an urban site writes `output/results.toml`: a finite state, the
 surface-energy budget per class, the water residual of the air and the
 air-heat closure, each against
 [`BUDGET_TOLERANCES`](@ref Aeolus.UrbanCase.BUDGET_TOLERANCES)
@@ -60,7 +62,7 @@ AeolusPrep.jl (ONE-h, #457; [Input drivers](input_drivers.md)):
 
 | `aeolusprep` command | writes |
 | :-- | :-- |
-| `static <config.toml> --source <file.osm \| file.geojson>` | the static driver(s) of the case (CFG-f, #361), with the nest parent's tiles from `[geometry] landuse` |
+| `static <config.toml> --source <file.osm \| file.geojson>` | the static driver(s) of the case (CFG-f, #361), with the nest parent's tiles from `[urban] landuse` |
 | `dynamic --from-sounding <config.toml>` | the sounding driver (CFG-g, #362) |
 | `fetch-osm --box S,W,N,E --out file.osm` | OpenStreetMap buildings, parks and water of the box (Overpass API) |
 | `fetch-landuse <config.toml>` | the nest parent's land-use table that [`read_parent_landuse`](@ref Aeolus.UrbanCase.read_parent_landuse) reads |

@@ -42,13 +42,13 @@ operator is factorised once per run; the shortwave albedos follow μ₀,
 so the shortwave operator is refactorised whenever they change (every
 daytime call) and not solved at night.
 """
-struct RadiositySun{SK} <: AbstractCoupling
+struct RadiositySun{SK} <: UrbanComponent
     sky::SK
     sw_cache::RadiosityFactorCache{Float64}
     lw_cache::RadiosityFactorCache{Float64}
 end
 
-coupling_name(::Type{<:RadiositySun}) = :radiosity_sun
+component_name(::Type{<:RadiositySun}) = :radiosity_sun
 slot(::Type{<:RadiositySun}) = :surface_radiation
 provider(::Type{<:RadiositySun}) = :radiosity
 modules_used(::Type{<:RadiositySun}) = (:Radiosity, :SolarGeometry, :SurfaceOptics)
@@ -114,4 +114,3 @@ function smoke_check(c::RadiositySun, case)
     return checks
 end
 
-register!(RadiositySun)

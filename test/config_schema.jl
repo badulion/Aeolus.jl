@@ -164,7 +164,7 @@ end
 function cfg_shipped()
     ex = normpath(joinpath(@__DIR__, "..", "examples"))
     return sort!([joinpath(r, f) for (r, _, fs) in walkdir(ex) for f in fs
-                  if endswith(f, ".toml") && dirname(r) == ex])
+                  if endswith(f, ".toml") && dirname(r) == rstrip(ex, '/')])
 end
 
 @testset "Config: canonical fixed point (shipped + 200 random configs per schema)" begin

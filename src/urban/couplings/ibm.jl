@@ -9,11 +9,11 @@ with `τ = 0` (velocity forced to zero inside the solid) in the
 `:post_predictor` hook of `step!`. Slot `:immersed_boundary`, provider
 `:direct_forcing` (a conservative cut-cell provider is the solver issue S2).
 """
-struct IBMCoupling{SM} <: AbstractCoupling
+struct IBMCoupling{SM} <: UrbanComponent
     sm::SM
 end
 
-coupling_name(::Type{<:IBMCoupling}) = :ibm
+component_name(::Type{<:IBMCoupling}) = :ibm
 slot(::Type{<:IBMCoupling}) = :immersed_boundary
 provider(::Type{<:IBMCoupling}) = :direct_forcing
 modules_used(::Type{<:IBMCoupling}) = (:IBM,)
@@ -36,4 +36,3 @@ function smoke_check(c::IBMCoupling, case)
             "|u_h| inside the buildings < 0.3 × max outside" => u_in < 0.3 * u_out]
 end
 
-register!(IBMCoupling)

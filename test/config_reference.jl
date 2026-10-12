@@ -5,7 +5,8 @@
 #
 # Acceptance tests of the issue covered here:
 #   * the option reference has one table row per schema option, for the
-#     model and every legacy case (urban included), counted against the schema;
+#     model (the urban site's sections included) and every legacy case,
+#     counted against the schema;
 #   * every option has a doc, every float option has units ("1" for a
 #     dimensionless one), every cross-field check is described in words;
 #   * the input-format pages list every variable of the static and dynamic
@@ -78,18 +79,19 @@ end
         isempty(lines) || @test count(l -> startswith(l, "- "), split(split(md, "## Cross-field checks")[end], '\n')) ==
                                 length(lines)
     end
-    # urban (the Berlin configs): one row per option of a resolved RunConfig (its sections hold every option)
-    sch = driver_schema("urban")
+    # the urban site (the Berlin configs, ONE-e #454): one row per option of a
+    # resolved RunConfig (its sections hold every option)
+    sch = driver_schema("model")
     cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_smoke.toml"))
-    rows, _ = md_rows(option_reference("urban"; format = :markdown))
+    rows, _ = md_rows(option_reference("model"; format = :markdown))
     @test sum(length(rows[s.name]) for s in sch.sections) ==
           sum(length(getfield(getproperty(cfg, Symbol(s.name)), :values)) for s in sch.sections)
-    # the per-coupling tables of [physics.options]: aq_chem's default_options, and the parent's schema
-    @test "physics.options.aq_chem" in keys(rows) && "nox_street" in rows["physics.options.aq_chem"]
-    @test "physics.options.nesting.parent" in keys(rows) && "extent" in rows["physics.options.nesting.parent"]
+    # a component's section (aq_chem's default_options), and the nest parent's schema as [nesting.parent]
+    @test "aq_chem" in keys(rows) && "nox_street" in rows["aq_chem"] && "enabled" in rows["aq_chem"]
+    @test "nesting.parent" in keys(rows) && "extent" in rows["nesting.parent"]
     # a section asked for alone keeps its sub-tables and leaves the checks out
-    one = option_reference("urban"; section = "physics", format = :markdown)
-    @test occursin("### `[physics.options.aq_chem]`", one) && !occursin("Cross-field checks", one)
+    one = option_reference("model"; section = "nesting", format = :markdown)
+    @test occursin("### `[nesting.parent]`", one) && !occursin("Cross-field checks", one)
 end
 
 "Every `Markdown.Italic` / `Bold` node under `x` (the option docs are plain prose)."
@@ -125,20 +127,17 @@ end
                                       "t364doc: t364.n has no doc", "t364doc: t364.speed is a float without units"]
 end
 
-@testset "undocumented_keys: [physics.options] keys against the coupling tables" begin
+@testset "undocumented_keys: the nest parent's table against its schema" begin
     cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_summer.toml"))
     @test isempty(undocumented_keys(cfg))
-    @test haskey(cfg.physics.options, "aq_chem")             # the file does set coupling options
-    # the walk: a documented option (whatever its value, a table too), a documented
-    # sub-table (recursed into), and a key no table documents
-    subs = Dict(x.name => x for x in C._subtables(C._option(C._section(driver_schema("urban"), "physics"), "options")))
-    tbl = Dict{String,Any}("aq_chem" => Dict{String,Any}("background" => Dict{String,Any}("NOx" => 1.0)),
-                           "nesting" => Dict{String,Any}("buffer" => 3,
-                                         "parent" => Dict{String,Any}("q_surface" => Dict{String,Any}("kind" => "constant", "value" => 1.0),
-                                                                      "bogus" => 1)),
-                           "no_such_coupling" => Dict{String,Any}("x" => 1))
-    @test C._undocumented!(String[], "physics.options", "", tbl, subs) ==
-          ["physics.options.nesting.parent.bogus", "physics.options.no_such_coupling"]
+    @test !isempty(cfg.nesting.parent)                     # the file does set parent options
+    # the walk: a documented option (whatever its value, a table too) and a
+    # key the parent's schema does not document
+    sch = driver_schema("model")
+    subs = Dict(x.name => x for x in C._subtables(C._option(C._section(sch, "nesting"), "parent")))
+    tbl = Dict{String,Any}("q_surface" => Dict{String,Any}("kind" => "constant", "value" => 1.0), "bogus" => 1,
+                           "extent" => [1.0, 2.0, 3.0])
+    @test C._undocumented!(String[], "nesting.parent", "", tbl, subs) == ["nesting.parent.bogus"]
 end
 
 @testset "input-format reference: one row per variable of each driver schema" begin

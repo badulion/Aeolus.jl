@@ -84,7 +84,8 @@ levels 2–4: the HNO3 removed per step equals ``s[\mathrm{HNO_3}]\,(Σ q_r Δz)
 to 0.1 %. The rain sediments out in about four steps.
 
 **Cost.** On the flagship grid on master `915bd49` (600 s from 12:00,
-with and without `physics = Dict(:chemistry => :off)`, run one after the
+with and without the chemistry (`aq_chem.enabled=false`,
+`chem_off.enabled=true`), run one after the
 other on a loaded 24-core machine, first-call compilation included; both
 runs take the same 230 adaptive steps, mean dt 2.61 s, since the
 chemistry does not feed back on the flow) the step goes from 233.7 to

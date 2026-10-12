@@ -167,7 +167,7 @@ function parent_geostrophic_wind(pc::ParentConfig, t0::Real, z_g::Real)
     if S === nothing
         # no sounding: the child's own geostrophic wind (its :geostrophic
         # coupling options), so that a nest is driven by one wind
-        g = coupling_options(GeostrophicCoupling, pc.child)
+        g = component_options(GeostrophicCoupling, pc.child)
         U, V = Float64(g.U_g), Float64(g.V_g)
         return ((z, t) -> U, (z, t) -> V)
     end

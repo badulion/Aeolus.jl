@@ -38,7 +38,7 @@
 """
     FogDew
 
-Additive coupling: every step in `:fog_dew`, dew (`RadiationFog.dew_exchange!`)
+Additive coupling: every step in `:microphysics` (after the microphysics provider), dew (`RadiationFog.dew_exchange!`)
 between the first air cell of each `bus.dew_mask` column (`bus.k_air`)
 and the dew reservoir `bus.dew` at the surface temperature `bus.Ts`, then
 fog (`RadiationFog.fog_adjust!`) on θ, qv, ql. The dew's latent heat warms the surface
@@ -46,19 +46,19 @@ fog (`RadiationFog.fog_adjust!`) on θ, qv, ql. The dew's latent heat warms the 
 adjusted at the reference pressure `p̄_k`, dew at the `p̄_k` and `ρ̄_k` of
 its air cell (`case.ref`).
 """
-mutable struct FogDew <: AbstractCoupling
+mutable struct FogDew <: UrbanComponent
     H_dew::Matrix{Float64}    # this step's dew latent heat into the surface (W/m²)
     dew_start::Matrix{Float64}  # dew reservoir before this step's exchange (kg/m²)
 end
 
-coupling_name(::Type{FogDew}) = :fog_dew
+component_name(::Type{FogDew}) = :fog_dew
 modules_used(::Type{FogDew}) = (:RadiationFog, :MoistThermodynamics)
-stages(::Type{FogDew}) = ((:fog_dew, 10, EVERY_STEP),)
+stages(::Type{FogDew}) = ((:microphysics, 20, EVERY_STEP),)
 
 build(::Type{FogDew}, case, o) =
     FogDew(zeros(case.mesh.Nx, case.mesh.Ny), zeros(case.mesh.Nx, case.mesh.Ny))
 
-function run_stage!(c::FogDew, case, ::Val{:fog_dew}, dt)
+function run_stage!(c::FogDew, case, ::Val{:microphysics}, dt)
     bus = case.bus
     copyto!(c.dew_start, bus.dew)
     qv = interior_view(tracer(case, :qv))
@@ -103,4 +103,3 @@ function smoke_check(c::FogDew, case)
                          1e-9 * abs(c.H_dew[I]) + 1e-12, eachindex(Δdew))]
 end
 
-register!(FogDew)

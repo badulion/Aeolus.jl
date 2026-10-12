@@ -10,13 +10,13 @@
 Slot `:microphysics`, provider `:kessler` (default): every step
 `apply_kessler_step!(qv, ql, qr, dt; Vt = :spectrum)`, then the qv clamp.
 """
-mutable struct MicroKessler <: AbstractCoupling
+mutable struct MicroKessler <: UrbanComponent
     qv_max::Float64
     precip::Float64   # this step: water that fell out of the bottom (kg/m² of domain, ≥ 0)
     clip::Float64     # this step: vapour removed by the qv clamp (kg/m² of domain, ≥ 0)
 end
 
-coupling_name(::Type{MicroKessler}) = :micro_kessler
+component_name(::Type{MicroKessler}) = :micro_kessler
 slot(::Type{MicroKessler}) = :microphysics
 provider(::Type{MicroKessler}) = :kessler
 modules_used(::Type{MicroKessler}) = (:Microphysics,)
@@ -51,4 +51,3 @@ smoke_check(c::MicroKessler, case) =
      # column water cannot grow (round-off of ~1e-16 relative allowed)
      "precipitation ≥ 0" => c.precip >= -1e-15]
 
-register!(MicroKessler)

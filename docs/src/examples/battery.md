@@ -292,7 +292,7 @@ driver; `src/UrbanCase.jl`), with every physics coupling in its own file
 under `src/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
 describes the registry, the stage loop and how to add a coupling.
 Its configuration is `examples/urban/berlin_summer.toml`;
-`--set clock.nsteps=…` sets the number of steps and `--set output.cadence=…`
+`--set time.nsteps=…` sets the number of steps and `--set output.cadence=…`
 the seconds between NetCDF records. It runs
 the full physics against the static driver made from `alexanderplatz_real.osm`
 (AeolusPrep.jl's `data/berlin/`) — an actual Overpass-API

@@ -1,5 +1,6 @@
-# Berlin smoke run (CFG-c, #358): quick checks of every code path, not
-# physics. A 250 m × 250 m × 100 m window of the real OSM file, centred
+# Berlin smoke run (CFG-c, #358; an urban site of the model, ONE-e #454):
+# quick checks of every code path, not physics. A 250 m × 250 m × 100 m
+# window of the real OSM file, centred
 # 312.5 m south of the anchor (69 building and 50 park columns, tallest
 # roof 31 m, clear of the towers that reach 200 m), on 16 × 16 × 16 cells
 # (dx = 15.6 m) at local noon, nested in a small parent (1 km × 1 km ×
@@ -18,20 +19,23 @@
 
 schema_version = 2
 
+# The domain's input drivers (top-level keys of a one-domain config).
+# the static driver of the child (CFG-f #361; AeolusPrep.jl writes it,
+# `aeolusprep static`, from data/berlin/alexanderplatz_real.osm, buildings of
+# 8 m and more, park LAI 2.5)
+static_driver = "input/berlin_smoke_static.nc"
+# the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl,
+# `aeolusprep dynamic --from-sounding`), used instead of sounding; or, with
+# [nesting] parent_driver = "offline", the parent-made driver of the nest
+# faces ([urban] child_boundaries of the online run); "none": no driver
+dynamic_driver = "none"
+
 [run]
 # What runs and where its folder goes.
-legacy = "urban"
 # the case name: part of the run folder name runs/<date>_<name>_<id>
 name = "smoke"
 # the seed of the run's random numbers
 seed = 0
-# the scenario label (summer, winter, …): the output's comment; winter selects
-# the subarctic-winter humidity of the column radiation
-scenario = "smoke"
-# the compute backend (Aeolus.Backends)
-backend = "cpu"
-# CPUBackend(serial = true): the single-task reference
-serial = false
 
 [checkpoint]
 # Periodic checkpoints of the whole case (#269), in the run folder's
@@ -40,20 +44,24 @@ every_seconds = 1800.0
 keep = 2
 
 [output]
-# Output files.
+# Output: the site writes its NetCDF file ([urban] netcdf) into path.
 # output directory; "none": the run folder's output/. The flagship writes
 # examples/urban/output/alexanderplatz.nc, where the renderers
 # (alexanderplatz_animation.jl, alexanderplatz_surface_diagnostics.jl) read it
 path = "output"
 # simulated time between output files [s]
 cadence = 12.0
-# file name of the NetCDF-4 output in [output] path (the run folder's output/
-# under aeolus run, else output/ in the working directory); "none": no NetCDF
-netcdf = "none"
-# with the online nest: write the child's boundary slabs at every parent step,
-# the 3-D initial wind and the parent's mean profiles to this dynamic driver
-# (CFG-g #362; the file of an offline child); "none": not written
-child_boundaries = "none"
+
+[time]
+# The step and the steps run.
+# the step [s]
+dt = 2.0
+# an urban site runs nsteps steps of dt with its timestep_* component (with
+# timestep_adaptive, nsteps × dt is the simulated time and dt the first
+# step's growth reference)
+duration = "none"
+# steps to run (43200: 24 h)
+nsteps = 12
 
 [grid]
 # The child mesh (RegularGrid).
@@ -65,12 +73,33 @@ extent = [250.0, 250.0, 100.0]
 # halo cells per side (3: WENO-Z5 moisture transport)
 halo = [3, 3, 3]
 
-[geometry]
-# The ground (static drivers) and the site.
-# the static driver of the child (CFG-f #361; AeolusPrep.jl writes it,
-# `aeolusprep static`, from data/berlin/alexanderplatz_real.osm, buildings of
-# 8 m and more, park LAI 2.5)
-static = "input/berlin_smoke_static.nc"
+[dynamics]
+# Parameters of the dynamical core.
+# kinematic viscosity ν [m^2 s^-1]
+nu = 2.0
+# reference potential temperature θ₀ of the buoyancy [K]
+theta0 = 293.0
+# gravitational acceleration [m s^-2]
+g = 9.81
+
+[urban]
+# The urban site: the ground, the clock, the core's parameters, the lateral
+# boundaries, the initial state, the budgets and the output of Aeolus.UrbanCase.
+# the domain is an urban site
+enabled = true
+# the scenario label (summer, winter, …): the output's comment; winter selects
+# the subarctic-winter humidity of the column radiation
+scenario = "smoke"
+# CPUBackend(serial = true): the single-task reference
+serial = false
+# file name of the site's NetCDF-4 output in [output] path (the run folder's
+# output/ under aeolus run, else output/ in the working directory); "none": no
+# NetCDF
+netcdf = "none"
+# with the online nest: write the child's boundary slabs at every parent step,
+# the 3-D initial wind and the parent's mean profiles to this dynamic driver
+# (CFG-g #362; the file of an offline child); "none": not written
+child_boundaries = "none"
 # the static driver (land-use tiles) of the nest parent; "none": from landuse
 # in memory
 parent_static = "input/berlin_smoke_parent_static.nc"
@@ -86,38 +115,20 @@ offset = [0.0, -312.5]
 elevation = 34.0
 # wall facets per cell face of the radiosity scene
 wall_subdivisions = 1
-
-[clock]
-# Date, start and steps.
 # the local date (29 June 2019: a clear day of the heat wave, #247)
 date = 2019-06-29
 # local clock = UTC + utc_offset (2: CEST) [h]
 utc_offset = 2.0
 # local hour at t = 0 [h]
 start_h = 12.0
-# the step (with the adaptive stepper: nsteps × dt is the simulated time) [s]
-dt = 2.0
-# steps to run (43200: 24 h)
-nsteps = 12
-
-[cadence]
-# Periods (s) of the couplings' stages; [output] cadence is the output's.
-# the period named :radiation (used by buildings_citymean, cloud_shadow,
-# column_radiation, radiosity_sun) [s]
-radiation = 8.0
-# the period named :soil (used by aq_chem, surface_exchange) [s]
-soil = 4.0
-# the period named :surface (used by surface_exchange); "none": not set [s]
-surface = "none"
-
-[dynamics]
-# Parameters of the dynamical core.
-# kinematic viscosity ν [m^2 s^-1]
-nu = 2.0
-# reference potential temperature θ₀ of the buoyancy [K]
-theta0 = 293.0
-# gravitational acceleration [m s^-2]
-g = 9.81
+# the period of the radiation components (column_radiation, radiosity_sun,
+# cloud_shadow, buildings_citymean) [s]
+radiation_period = 8.0
+# the period of the soil, the surfaces' step unless surface_period is set,
+# and of the deposition (aq_chem) [s]
+soil_period = 4.0
+# the surfaces' step (surface_exchange); "none": soil_period [s]
+surface_period = "none"
 # Coriolis parameter [s^-1]
 f_coriolis = 0.0001
 # Smagorinsky coefficient C_s of the core
@@ -134,11 +145,8 @@ sponge_frac = 0.75
 # θ condition of a closed top (#254): initial_gradient, noflux or a gradient
 # in K/m [K m^-1]
 theta_top = "initial_gradient"
-
-[boundaries]
-# Lateral boundaries without the nest (N-open-d, #262).
-# the four sides when physics.nesting = false: periodic or open (fed by the
-# geostrophic wind and the initial θ)
+# the four sides without the nest ([nesting] enabled = false): periodic or open
+# (fed by the geostrophic wind and the initial θ)
 lateral = "periodic"
 # outflow condition of the open or nest faces (N-open-c, #260)
 outflow = "dirichlet"
@@ -149,18 +157,9 @@ theta_relaxation = true
 # the 140 m default would leave no column of the 250 m window to the
 # observation diagnostics (u*): two cells
 analysis_buffer = 31.25
-
-[initial]
-# The initial state: the sounding, or the idealised profile.
 # radiosonde CSV of the initial θ(z), qv(z) and surface pressure; "none": the
 # idealised profile below
 sounding = "none"
-# the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl,
-# `aeolusprep dynamic --from-sounding`), used instead of sounding; or, with
-# physics.options.nesting.parent_driver = "offline", the parent-made driver of
-# the nest faces ([output] child_boundaries of the online run); "none": no
-# driver
-dynamic = "none"
 # idealised: θ at the ground [K]
 theta_surface = 293.0
 # idealised: base of the capping inversion [m]
@@ -182,78 +181,257 @@ t_soil0 = 288.0
 # pressure at the ground; "none": from the sounding (101325 Pa for the
 # idealised profile) [Pa]
 p_surface = "none"
-
-[budgets]
-# The budgets (Aeolus.BudgetSystem).
 # top of the :canopy layer of the air-heat budget; nan: the tallest roof [m]
 canopy_top = nan
 
-[physics]
-# Which couplings run: a provider per exclusive slot, on/off per addon.
-buildings = "citymean"    # the buildings provider: citymean
-chemistry = "nox_o3_voc"    # the chemistry provider: nox_o3_voc, off
-column_radiation = "twostream"    # the column_radiation provider: twostream
-core = "boussinesq"    # the core provider: anelastic, boussinesq, pseudo_incompressible
-glazing = "glass_class"    # the glazing provider: glass_class
-ground = "soil_column"    # the ground provider: soil_column
-immersed_boundary = "direct_forcing"    # the immersed_boundary provider: direct_forcing
-microphysics = "kessler"    # the microphysics provider: kessler
-momentum_advection = "centered"    # the momentum_advection provider: centered, weno_z
-pressure_solver = "cosine_fft"    # the pressure_solver provider: cosine_fft, density_weighted_cg, density_weighted_direct, mg_cg, multigrid
-scalar_advection = "advection_schemes"    # the scalar_advection provider: advection_schemes
-sgs = "tke"    # the sgs provider: amd, dynamic, mlsgs, reynolds_stress, sigma, smagorinsky, tke, vreman
-surface_exchange = "most"    # the surface_exchange provider: most
-surface_radiation = "radiosity"    # the surface_radiation provider: radiosity
-timestepper = "adaptive"    # the timestepper provider: adaptive, fixed, imex
-cloud_shadow = true    # the additive coupling cloud_shadow on or off
-fog_dew = true    # the additive coupling fog_dew on or off
-geostrophic = true    # the additive coupling geostrophic on or off
-inflow_turbulence = true    # the additive coupling inflow_turbulence on or off
-moist_buoyancy = true    # the additive coupling moist_buoyancy on or off
-nesting = true    # the additive coupling nesting on or off
-pollutant = true    # the additive coupling pollutant on or off
-sw_modifiers = true    # the additive coupling sw_modifiers on or off
-traffic_heat = true    # the additive coupling traffic_heat on or off
-turbulence_diag = true    # the additive coupling turbulence_diag on or off
-veg_drag = true    # the additive coupling veg_drag on or off
-wall_model_facades = true    # the additive coupling wall_model_facades on or off
+# ----------------------------------------------------------------------------
+# The urban components: one provider per urban slot, then the additive ones.
+# Every component is off unless its section enables it.
+# ----------------------------------------------------------------------------
 
-[physics.options.aq_chem]
-background = {HNO3 = 0.5, NOx = 5.5, Ox = 45.0, VOC = 0.5}
-nox_street = 2.0e-9
-no2_fraction = 0.1
-isoprene_park = 3.0e-10
-OH_max = 5.0e6
-"ν" = 2.0
-z0m = [0.05, 0.05, 0.1, 0.0001, 0.05, 0.01]
-output_3d = ["NO2", "O3"]
+[core_boussinesq]
+# provider `boussinesq` of the dynamical core (slot `core`)
+enabled = true
 
-[physics.options.cloud_shadow]
-r_eff_liq = 10.0
-r_eff_ice = 30.0
+[core_anelastic]
+# provider `anelastic` of the dynamical core (slot `core`)
+enabled = false
 
-[physics.options.column_radiation]
-nz_upper = 60
-r_eff_liq = 10.0
-surface_sw = "twostream"
-p_surf = "none"
+[core_pseudo_incompressible]
+# provider `pseudo_incompressible` of the dynamical core (slot `core`)
+enabled = false
 
-[physics.options.geostrophic]
-U_g = 1.0
-V_g = 0.0
-mode = "pressure_gradient"
-"τ" = 1800.0
-sponge_to_geostrophic = true
+[timestep_adaptive]
+# provider `adaptive` of the time stepping (slot `timestepper`)
+enabled = true
+c_advective = 0.5
+c_diffusive = 0.25
+c_buoyancy = 0.5
+c_coriolis = 0.5
+dt_min = 0.01
+dt_max = 10.0
+growth_max = 1.1
+max_retries = 3
+divergence_tol = 1.0e-6
+max_velocity = 50.0
+imex = false
 
-[physics.options.ground_soil]
+[timestep_fixed]
+# provider `fixed` of the time stepping (slot `timestepper`)
+enabled = false
+
+[timestep_imex]
+# provider `imex` of the time stepping (slot `timestepper`)
+enabled = false
+tol = 1.0e-8
+maxit = 200
+
+[pressure_fft]
+# provider `cosine_fft` of the pressure solver (slot `pressure_solver`)
+enabled = true
+
+[pressure_multigrid]
+# provider `multigrid` of the pressure solver (slot `pressure_solver`)
+enabled = false
+tol = 1.0e-10
+maxcycles = 50
+cycle = "V"
+
+[pressure_mg_cg]
+# provider `mg_cg` of the pressure solver (slot `pressure_solver`)
+enabled = false
+tol = 1.0e-10
+maxit = 200
+
+[pressure_density_direct]
+# provider `density_weighted_direct` of the pressure solver (slot `pressure_solver`)
+enabled = false
+
+[pressure_density_weighted]
+# provider `density_weighted_cg` of the pressure solver (slot `pressure_solver`)
+enabled = false
+tol = 1.0e-10
+maxit = 500
+
+[momentum_centered]
+# provider `centered` of the momentum advection (slot `momentum_advection`)
+enabled = true
+
+[momentum_weno_z]
+# provider `weno_z` of the momentum advection (slot `momentum_advection`)
+enabled = false
+order = 5
+
+[scalar_advection]
+# provider `advection_schemes` of the tracers' transport (slot `scalar_advection`)
+enabled = true
+scheme = "weno_z5"
+positivity = true
+refresh_halos = true
+weighted = true
+sgs_diffusion = true
+
+[sgs_amd]
+# provider `amd` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+c = 0.3
+stress = "symmetric"
+
+[sgs_dynamic]
+# provider `dynamic` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+averaging = "lagrangian"
+scale_dependent = true
+cadence = 4
+filter_ratio = 3.0
+cs_max = 0.5
+stress = "symmetric"
+scalar_tensor = "diagonal"
+diapycnal = "none"
+slope_max = 1.0
+
+[sgs_mlsgs]
+# provider `mlsgs` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+fn = "none"
+stress = "symmetric"
+scalar_tensor = "diagonal"
+diapycnal = "none"
+slope_max = 1.0
+
+[sgs_reynolds_stress]
+# provider `reynolds_stress` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+wall_cap = true
+surface = true
+e_min = 0.0001
+
+[sgs_sigma]
+# provider `sigma` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+c_sigma = 1.35
+stress = "symmetric"
+
+[sgs_smagorinsky]
+# provider `smagorinsky` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+stress = "symmetric"
+scalar_tensor = "diagonal"
+diapycnal = "none"
+slope_max = 1.0
+
+[sgs_tke]
+# provider `tke` of the subgrid-scale closure (slot `sgs`)
+enabled = true
+wall_cap = true
+surface = true
+e_min = 0.0001
+
+[sgs_vreman]
+# provider `vreman` of the subgrid-scale closure (slot `sgs`)
+enabled = false
+c_s = "none"
+stress = "symmetric"
+
+[surface_exchange]
+# provider `most` of the surface exchange (slot `surface_exchange`)
+enabled = true
+u_min = 0.1
+z0h_ratio = 0.1
+period = "none"
+wall_formulation = "local"
+input_t_f = 10.0
+h_wm_cells = 1
+h_wm_classes = [3, 4]
+wall_model = "equilibrium"
+tble_terms = "pressure_gradient"
+dynamic_refine = 4
+dynamic_filter = "spectral"
+dynamic_c_d = 1.0
+z0m = {1 = 0.05, 2 = 0.05, 3 = 0.1, 4 = 0.0001, 5 = 0.05, 6 = 0.01}
+
+[ground_soil]
+# provider `soil_column` of the ground (slot `ground`)
+enabled = true
 classes = [1, 5, 3]
-"θ0" = {1 = 0.1, 3 = 0.25, 5 = 0.1}
+theta0 = {1 = 0.1, 3 = 0.25, 5 = 0.1}
 texture = "loam"
 sand = 40
 clay = 20
 nlayers = 10
 
-[physics.options.inflow_turbulence]
+[radiosity_sun]
+# provider `radiosity` of the surface radiation (slot `surface_radiation`)
+enabled = true
+aod380 = 0.24
+aod500 = 0.16
+precipitable_water = 2.0
+ozone = 0.33
+albedo = 0.15
+
+[column_radiation]
+# provider `twostream` of the column radiation (slot `column_radiation`)
+enabled = true
+nz_upper = 60
+r_eff_liq = 10.0
+surface_sw = "twostream"
+p_surf = "none"
+
+[buildings_citymean]
+# provider `citymean` of the buildings (slot `buildings`)
+enabled = true
+
+[glass]
+# provider `glass_class` of the glazing (slot `glazing`)
+enabled = true
+
+[aq_chem]
+# provider `nox_o3_voc` of the chemistry (slot `chemistry`)
+enabled = true
+background = {HNO3 = 0.5, NOx = 5.5, Ox = 45.0, VOC = 0.5}
+nox_street = 2.0e-9
+no2_fraction = 0.1
+isoprene_park = 3.0e-10
+oh_max = 5.0e6
+nu = 2.0
+z0m = [0.05, 0.05, 0.1, 0.0001, 0.05, 0.01]
+output_3d = ["NO2", "O3"]
+
+[chem_off]
+# provider `off` of the chemistry (slot `chemistry`)
+enabled = false
+
+[micro_kessler]
+# provider `kessler` of the microphysics (slot `microphysics`)
+enabled = true
+qv_max = 0.03
+
+[ibm]
+# provider `direct_forcing` of the immersed boundary (slot `immersed_boundary`)
+enabled = true
+
+[cloud_shadow]
+# additive
+enabled = true
+r_eff_liq = 10.0
+r_eff_ice = 30.0
+
+[fog_dew]
+# additive
+enabled = true
+
+[geostrophic]
+# additive
+enabled = true
+u_g = 1.0
+v_g = 0.0
+mode = "pressure_gradient"
+tau = 1800.0
+sponge_to_geostrophic = true
+
+[inflow_turbulence]
+# additive
+enabled = true
 generator = "digital_filter"
 statistics = "parent_resolved"
 u_min = 0.5
@@ -262,22 +440,22 @@ statistics_interval = 60.0
 length_interval = 3600.0
 length_scale = nan
 
-[physics.options.micro_kessler]
-qv_max = 0.03
+[moist_buoyancy]
+# additive
+enabled = true
 
-[physics.options.momentum_weno_z]
-order = 5
-
-[physics.options.nesting]
+[nesting]
+# additive
+enabled = true
 mode = "one_way"
 parent_driver = "aeolus"
 buffer = 2
 z_anterp = "canopy"
-"τ" = "none"
+tau = "none"
 reflux = true
 
-[physics.options.nesting.parent]
-# The nest parent (ParentConfig, #259): physics.options.nesting.parent.
+[nesting.parent]
+# The nest parent (ParentConfig, #259).
 # horizontal centre of the parent box relative to the OSM anchor; "none": on
 # the child [m]
 center = "none"
@@ -364,137 +542,43 @@ c_advective = 0.9
 # carry qv
 moisture = true
 
-[physics.options.pollutant]
+[pollutant]
+# additive
+enabled = true
 stacks = [[0.0, 0.0, 60.0], [-150.0, 150.0, 25.0], [200.0, -100.0, 40.0]]
 tau = 3600.0
 
-[physics.options.pressure_multigrid]
-tol = 1.0e-10
-maxcycles = 50
-cycle = "V"
-
-[physics.options.pressure_mg_cg]
-tol = 1.0e-10
-maxit = 200
-
-[physics.options.pressure_density_weighted]
-tol = 1.0e-10
-maxit = 500
-
-[physics.options.radiosity_sun]
-aod380 = 0.24
-aod500 = 0.16
-precipitable_water = 2.0
-ozone = 0.33
-albedo = 0.15
-
-[physics.options.scalar_advection]
-scheme = "weno_z5"
-positivity = true
-refresh_halos = true
-weighted = true
-sgs_diffusion = true
-
-[physics.options.sgs_smagorinsky]
-stress = "symmetric"
-scalar_tensor = "diagonal"
-diapycnal = "none"
-slope_max = 1.0
-
-[physics.options.sgs_dynamic]
-averaging = "lagrangian"
-scale_dependent = true
-cadence = 4
-filter_ratio = 3.0
-cs_max = 0.5
-stress = "symmetric"
-scalar_tensor = "diagonal"
-diapycnal = "none"
-slope_max = 1.0
-
-[physics.options.sgs_mlsgs]
-fn = "none"
-stress = "symmetric"
-scalar_tensor = "diagonal"
-diapycnal = "none"
-slope_max = 1.0
-
-[physics.options.sgs_amd]
-C = 0.3
-stress = "symmetric"
-
-[physics.options.sgs_vreman]
-C_s = "none"
-stress = "symmetric"
-
-[physics.options.sgs_reynolds_stress]
-wall_cap = true
-surface = true
-e_min = 0.0001
-
-[physics.options.sgs_sigma]
-"C_σ" = 1.35
-stress = "symmetric"
-
-[physics.options.sgs_tke]
-wall_cap = true
-surface = true
-e_min = 0.0001
-
-[physics.options.surface_exchange]
-U_min = 0.1
-z0h_ratio = 0.1
-period = "none"
-wall_formulation = "local"
-input_T_f = 10.0
-h_wm_cells = 1
-h_wm_classes = [3, 4]
-wall_model = "equilibrium"
-tble_terms = "pressure_gradient"
-dynamic_refine = 4
-dynamic_filter = "spectral"
-dynamic_C_d = 1.0
-z0m = {1 = 0.05, 2 = 0.05, 3 = 0.1, 4 = 0.0001, 5 = 0.05, 6 = 0.01}
-
-[physics.options.sw_modifiers]
+[sw_modifiers]
+# additive
+enabled = true
 k_leaf = 0.5
 
-[physics.options.timestep_adaptive]
-C_advective = 0.5
-C_diffusive = 0.25
-C_buoyancy = 0.5
-C_coriolis = 0.5
-dt_min = 0.01
-dt_max = 10.0
-growth_max = 1.1
-max_retries = 3
-divergence_tol = 1.0e-6
-max_velocity = 50.0
-imex = false
+[traffic_heat]
+# additive
+enabled = true
+q_urban = 8.0
 
-[physics.options.timestep_imex]
-tol = 1.0e-8
-maxit = 200
-
-[physics.options.traffic_heat]
-Q_urban = 8.0
-
-[physics.options.turbulence_diag]
+[turbulence_diag]
+# additive
+enabled = true
 stability = "brown"
 gamma_threshold = 0.2
 gamma_normalization = "plane"
-"relam_νt_ratio" = 0.01
+relam_nut_ratio = 0.01
 relam_normalization = "volume"
 
-[physics.options.veg_drag]
+[veg_drag]
+# additive
+enabled = true
 cd = 0.2
 k_height = 3
 
-# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
-# CFG-i #364): ignored by the loader, not part of the resolved config. Paths resolve
-# against this file's directory.
+[wall_model_facades]
+# additive
+enabled = true
+
 [test]
 overrides = [
-    "clock.nsteps=4",
+    "time.nsteps=4",
     "output.path=\"none\"",
 ]

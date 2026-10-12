@@ -18,7 +18,7 @@ see "Nesting by domains" below). For one
 2. the components of the stages before the core run, in
    [`PIPELINE`](@ref Aeolus.Components.PIPELINE) order: `:clock`,
    `:nest_sync`, `:radiation`, `:sw_modifiers`, `:surface_flux`,
-   `:sources`, `:chemistry`, `:microphysics`, `:tracers`;
+   `:sources`, `:chemistry`, `:transport`, `:microphysics`, `:tracers`;
 3. the core steps — `step!` (Euler) or `step_rk3!` (SSP-RK3), on either
    core — and calls the
    components of stages 6–8 from inside every (sub)step:
@@ -40,12 +40,28 @@ see "Nesting by domains" below). For one
    `:column_tendency`, `:nest_feedback`, `:budgets`, `:checks`, `:output`.
 
 A stage outside the core may have a cadence (`Stage(:radiation; every =
-60)`): it runs in the step that reaches or crosses a multiple of
-`every`. Within a stage, components run by slot first (`:advection`,
-`:sgs`, `:microphysics`, `:radiation`, `:surface`), then by
-`component_name`; the domain stores them in that order, as a concretely
-typed tuple, and the pipeline walks the tuple recursively, so every
-`run_stage!` call is statically dispatched.
+60)`): it runs in the step that crosses a multiple of `every`
+(`floor(t₁/every) > floor(t₀/every)`), and with `first = true` also in
+the step that starts at model time 0. Within a stage, components run by
+slot first (`:advection`, `:sgs`, `:microphysics`, `:radiation`,
+`:surface`), then by `component_name`, except where a component declares
+its place in a stage with `Stage(…; order)`: a lower `order` runs first.
+The orders are the components' own (never configuration); they exist for
+work that depends on another component's in the same stage — the column
+radiation's fluxes before the radiosity that distributes them, before
+the buildings that absorb them (ONE-e, #454). The domain stores its
+components in the one order that meets every stage's declared orders and
+is otherwise by slot and name (`order_components`, a topological sort;
+orders that contradict each other across stages are an error), as a
+concretely typed tuple, and the pipeline walks the tuple recursively, so
+every `run_stage!` call is statically dispatched.
+
+`:transport` (stage 5, between `:chemistry` and `:microphysics`) is the
+advection of the tracers components carry with the velocity at the step's
+start; the urban case's scalar transport runs there, as it ran in the
+urban stage loop. (The design's scalar advance after the projection,
+stage 10, would change the urban results; moving it there is a physics
+change left to the port of the tracers.)
 
 An adaptive step (`step_adaptive!(model)`, a domain with `cfl`) picks
 `dt` from the core's CFL limits and every component's
@@ -199,6 +215,10 @@ obstacles) are not air.
   times Δt (1 for Euler; 1/6, 1/6, 2/3 for the SSP-RK3 substages). A
   `:post_predictor` entry changes the predicted state, so it is measured
   on the state and scaled by the weight.
+  An entry that books what it does itself inside the dynamics' context
+  (`add_heat!`) opts out with `Components.attributed(c, Val(stage)) =
+  false`, so it is not counted twice: the urban site's open faces, whose
+  θ relaxation is `(:dynamics, :relaxation)` (ONE-e, #454).
 - **The core step** is one context (`:dynamics`). Whatever the core does
   beyond the components inside it is split into `(:dynamics, :transport)`
   (what the transport conserves; over the whole column it is the
@@ -360,69 +380,91 @@ other limits are on [Run configuration](run_configuration.md).
   formulas that remain are the radiative temperature of the surface
   ``(Σε T_s^4/Σε)^{1/4}`` (the column radiation and, summed differently,
   the nest parent), the friction velocity ``\sqrt{τ/ρ}`` of a surface step,
-  and the independent recomputations inside the `smoke_check`s. The couplings themselves,
-  `UrbanCase`, `CaseConfig`, the registry and the urban stages, ledgers
-  and output are still there: their port to components is the rest of
-  ONE-e, in the issue's sub-PRs:
+  and the independent recomputations inside the `smoke_check`s.
+* **ONE-e (#454), second part: the urban case on the pipeline and on the
+  model's configuration.**
+  - **The stage loop is gone.** A built case is a `Domain` of the
+    pipeline (`case.domain`; `UrbanCase.build_domain!`): the case's own
+    component `UrbanCore` (the local hour and the budgets' snapshot first
+    in `:clock`; the heat captures of the fixed-gradient top and the open
+    faces, with the open faces' θ relaxation, in `:tendencies`) and one
+    component `UrbanEntry` per enabled coupling, carrying the pipeline
+    stages, cadences and `order`s the coupling declares. A step is the
+    pipeline's stages around the `:timestepper` provider's core step,
+    whose hooks are the pipeline's (`core_hooks`). The urban stages became
+    the pipeline's: `:nest_parent` is `:nest_sync`, `:anthropogenic` is
+    `:sources`, `:fog_dew` the second entry of `:microphysics`,
+    `:transport` a new stage of the pipeline, and the integer orders
+    within a stage are `Stage(…; order)`, which `order_components` meets.
+    The case's ledger is the domain's budgets (`DomainBudgets` around
+    `case.budgets`, binned by the local hour). Measured: the 54 runs of
+    the smoke matrix (12 steps, `seed_fog!`, 1245 state digests of the
+    child, every tracer, Ts and the nest parent) are bit for bit those of
+    master `37053292`.
+  - **Berlin on the model.** `examples/urban/berlin_*.toml` are model
+    configs: `[urban] enabled` makes the domain an urban site, and every
+    urban component has a section of the model's schema, generated from
+    its `default_options` (`enabled`, default `false`, and its options).
+    `aeolus run` builds and runs the site (`UrbanCase.run_urban!`); the
+    `urban` run type, its schema and `[physics]` are gone. The configs of
+    the four scenarios resolve, field for field and bitwise, to the
+    `CaseConfig`s of the fixture (`test/config_berlin.jl`).
+  - **Its checks.** The site publishes checks of the one checks system
+    (ONE-d): `urban_budgets` (its budgets' closure against
+    `BUDGET_TOLERANCES`) and `<component>_checks` per enabled component
+    (its `smoke_check`s that fail), besides the core's `finite` and
+    `energy_closure` of its domain; `[checks]` enables them, the run
+    evaluates them into `results.toml`, and a failed required one ends it
+    with exit code 3.
 
-  1. **The shared state as components**, which every urban coupling reads:
-     the ground from the static driver (solid mask, surface classes,
-     vegetation, the radiosity scene), the set of tracers with their
-     scalar transport, the hydrostatic reference state of the initial
-     profile, and the surface bus, held by the urban surface component
-     the surface couplings `require`.
-  2. Surface, radiation and buildings; 3. moisture, microphysics and
-     chemistry; 4. forcing, drag, inflow and the numerics slots (the
-     urban `:core`, `:timestepper`, `:pressure_solver` and
-     `:momentum_advection` providers become the domain's core, time
-     scheme and solver options and the `:advection` slot).
-  5. Berlin as `examples/urban/berlin_*.toml` on the model, and the
-     deletion of `UrbanCase`. Its nest parent (`ParentCase`,
-     `ParentConfig`, the `urban_parent` run type) then becomes the root
-     `[[domain]]` of the Berlin config: nesting by domains (ONE-f, #455)
-     is built, but the parent's physics (the tiled surface, the column
-     radiation, TKE, the large-scale forcing) is not a set of components
-     yet, so the parent cannot be a domain until 1–4 have landed.
+  - **The coupling registry is gone.** The couplings are urban
+    components, `UrbanComponent <: AbstractComponent`, with the
+    component interface's `component_name` (their section), `slot`
+    (`nothing`, or an urban slot of `URBAN_SLOTS`) and `incompatible`
+    (component types, not `slot => provider` pairs). The site's
+    components are the fixed list `URBAN_COMPONENTS`; a config enables
+    one by its section (`enabled`), and `CaseConfig.components` holds
+    the enabled ones with all their options (the registry's `REGISTRY`,
+    `register!`, `selected_couplings`, `is_default`, `default_provider`
+    and `CaseConfig.physics`/`options` are gone; `URBAN_DEFAULTS` is the
+    reference selection of `CaseConfig()` and the smoke runs). The
+    smoke matrix's 54 runs hash bit for bit as before (3809 hashes of
+    the thread-invariance worker's `smoke` section).
 
-  Two differences between the urban stage loop and the pipeline decide
-  what "bit for bit" can mean there. The loop has stages the pipeline
-  lacks: `:transport` (the scalar advection) between `:chemistry` and
-  `:microphysics`, `:fog_dew` after `:tracers`, and `:anthropogenic`
-  where the pipeline has `:sources`. And within a stage the loop runs its
-  entries in declared integer order, the pipeline by slot, then name: in
-  `:body_force` the loop's order is `nesting` (5), `geostrophic` (10),
-  `ibm` (10) or the facade stress (12), the surface drag (15),
-  `moist_buoyancy` (20), `veg_drag` (20) and the facade stencil removal
-  (40) (berlin_case.md, the stage table); several add to the same
-  momentum tendency, so the pipeline's order changes the rounding of the
-  sum unless the component names reproduce it.
+  What is still the urban case's own, for the rest of ONE-e: the
+  components run through the `UrbanEntry` adapter (one concrete type,
+  so a selection does not compile the domain anew; their methods take
+  the case, `run_stage!(c, case, Val(S), dt)`, since they read its
+  shared state); `CaseConfig`
+  is the site's resolved configuration that `build_case` reads; the case
+  builds its own core (the Coriolis force, the Smagorinsky coefficient and
+  the sponge in the core's constructor, not the model's `Coriolis`,
+  `SGS` and `Sponge` components) and steps it with its `:timestepper`
+  provider (its adaptive step covers the step it picked in pieces, and
+  the nest shortens it to land on the parent's window), and writes its
+  output, results and diagnostics itself. Its nest parent (`ParentCase`,
+  `ParentConfig`, the `urban_parent` run type) becomes the root
+  `[[domain]]` of the Berlin config once the parent's physics (the tiled
+  surface, the column radiation, TKE, the large-scale forcing) is a set of
+  components: nesting by domains (ONE-f, #455) is built.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the
-  steps — because the urban run type, the nesting drivers and
-  many module tests still assemble the core by hand. A `Model` passes
-  these keywords; the run types that still use them directly move to
-  components in the later steps of the epic (urban couplings ONE-e #454,
-  nesting ONE-f #455), after which the keywords go. (The SBL run type is
-  gone: its cases are configurations of the model, ONE-g #456.)
-* The urban run type still selects its SGS closures itself; its
-  `:sgs` path becomes the `:sgs` component when it is ported.
-* `budget!` and `outputs` are part of the interface with empty
-  defaults (the shared budgets and the catalogue-selected output, ONE-c
-  #452); `checks` likewise, the `[checks]`/`results.toml` machinery is
-  ONE-d (#453). The budget closure becomes one of its checks.
-* The urban couplings' `smoke_check`s and the urban run type's own
-  `results.toml` closure verdict (`run_results`) are not checks yet: they
-  move to `checks(c)` when ONE-e (#454) ports that run type to
-  components. (The SBL reference comparisons are `[checks.reference]` of
-  the SBL configurations since ONE-g, #456.)
+  steps — because the urban site, the nesting drivers and many module
+  tests still assemble the core by hand. A `Model` passes these keywords;
+  the urban site moves to components in the rest of ONE-e (#454), after
+  which the keywords go. (The SBL run type is gone: its cases are
+  configurations of the model, ONE-g #456.)
+* The urban site still selects its SGS closures itself; its `:sgs` path
+  becomes the `:sgs` component when it is ported.
+* The urban site's own `results.toml` closure verdict (`run_results`) is
+  written beside the checks it publishes. (The SBL reference comparisons
+  are `[checks.reference]` of the SBL configurations since ONE-g, #456.)
 * The urban couplings report into the one `Budgets` and write through the
-  one writer, but they are still a run type of their own. Their budgets
-  keep their own step hooks (`budgets_begin_step!`/`budgets_end_step!`)
-  until ONE-e (#454) ports them to components. The particle tracks of the
-  model's couplings (`particles.csv`) are Lagrangian rows, not a gridded
-  catalogue variable, and stay a file of their own; so are the CASES-99
-  tower bins, of which the model writes the fitted threshold profile only
-  (`tower_threshold`).
-* The urban run type still refuses the anelastic core's checkpoints and
+  one writer; the urban case's budgets are its domain's (ONE-e part 2).
+  The particle tracks of the model's couplings (`particles.csv`) are
+  Lagrangian rows, not a gridded catalogue variable, and stay a file of
+  their own; so are the CASES-99 tower bins, of which the model writes the
+  fitted threshold profile only (`tower_threshold`).
+* The urban site still refuses the anelastic core's checkpoints and
   adaptive step in its own config checks.

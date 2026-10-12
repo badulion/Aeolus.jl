@@ -181,15 +181,14 @@ Rozema et al. 2015 for second-order central differences) and `stress =
 diagnostics are the canopy and free-stream mean ν_t against Smagorinsky
 with `cfg.C_s` ([`sgs_compare_diagnostics`](@ref)).
 """
-struct SGSAMD{C, S} <: AbstractCoupling
+struct SGSAMD{C, S} <: UrbanComponent
     closure::C          # the AMDClosure
     sgs::S              # what the steps run: it, zero in the solid cells
     stress::Symbol      # the form of the momentum divergence (#175)
 end
-coupling_name(::Type{<:SGSAMD}) = :sgs_amd
+component_name(::Type{<:SGSAMD}) = :sgs_amd
 slot(::Type{<:SGSAMD}) = :sgs
 provider(::Type{<:SGSAMD}) = :amd
-is_default(::Type{<:SGSAMD}) = false
 modules_used(::Type{<:SGSAMD}) = (:Operators,)
 default_options(::Type{<:SGSAMD}) = (C = 0.3, SGS_STRESS_DEFAULT...)
 function build(::Type{<:SGSAMD}, case, o)
@@ -227,14 +226,13 @@ Slot `:sgs`, provider `:vreman`: `VremanClosure(C_s)` (`c = 2.5 C_s²`,
 (`nothing`, the default, takes the case's `cfg.C_s`) and `stress`, as for
 [`SGSAMD`](@ref). Diagnostics as for [`SGSAMD`](@ref).
 """
-struct SGSVreman{C} <: AbstractCoupling
+struct SGSVreman{C} <: UrbanComponent
     closure::C
     stress::Symbol
 end
-coupling_name(::Type{<:SGSVreman}) = :sgs_vreman
+component_name(::Type{<:SGSVreman}) = :sgs_vreman
 slot(::Type{<:SGSVreman}) = :sgs
 provider(::Type{<:SGSVreman}) = :vreman
-is_default(::Type{<:SGSVreman}) = false
 modules_used(::Type{<:SGSVreman}) = (:Operators,)
 default_options(::Type{<:SGSVreman}) = (C_s = nothing, SGS_STRESS_DEFAULT...)
 build(::Type{<:SGSVreman}, case, o) =
@@ -244,5 +242,3 @@ diagnostics(c::SGSVreman, case) = sgs_compare_diagnostics(case)
 smoke_check(c::SGSVreman, case) =
     [sgs_switchoff_checks(case, c.closure); sgs_stress_checks(c.stress, case)]
 
-register!(SGSAMD)
-register!(SGSVreman)

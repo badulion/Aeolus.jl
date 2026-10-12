@@ -108,7 +108,7 @@ so `Σ W q` is conserved and a uniform tracer stays uniform. Option
 `weighted = false` uses the plain velocity there too (the pre-#133
 transport, for comparison).
 """
-struct ScalarAdvection{F, W, B, S, R} <: AbstractCoupling
+struct ScalarAdvection{F, W, B, S, R} <: UrbanComponent
     tend::F
     ws::W
     bcs::B
@@ -304,7 +304,7 @@ function mass_flux_velocity!(wt::WeightedTransport, sim)
     return wt
 end
 
-coupling_name(::Type{<:ScalarAdvection}) = :scalar_advection
+component_name(::Type{<:ScalarAdvection}) = :scalar_advection
 slot(::Type{<:ScalarAdvection}) = :scalar_advection
 provider(::Type{<:ScalarAdvection}) = :advection_schemes
 modules_used(::Type{<:ScalarAdvection}) = (:AdvectionSchemes, :Operators)
@@ -452,4 +452,3 @@ smoke_variants(::Type{<:ScalarAdvection}) =
      (label = "WENO-Z7, halo 4", options = Dict(:scalar_advection => (scheme = :weno_z7,)),
       halo = (4, 4, 4)))
 
-register!(ScalarAdvection)

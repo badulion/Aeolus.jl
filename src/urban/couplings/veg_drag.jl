@@ -11,11 +11,11 @@ in `:post_predictor` (after the IBM). Options `cd` (leaf drag
 coefficient, 0.2) and `k_height` (crown depth in layers, 3 → 18.75 m).
 The LAI is the static driver's `lai` on park columns ([`park_lai_map`](@ref)).
 """
-struct VegDrag{D} <: AbstractCoupling
+struct VegDrag{D} <: UrbanComponent
     drag::D
 end
 
-coupling_name(::Type{<:VegDrag}) = :veg_drag
+component_name(::Type{<:VegDrag}) = :veg_drag
 modules_used(::Type{<:VegDrag}) = (:PlantCanopy,)
 default_options(::Type{<:VegDrag}) = (cd = 0.2, k_height = 3)
 stages(::Type{<:VegDrag}) = ((:post_predictor, 20, EVERY_STEP),)
@@ -29,4 +29,3 @@ end
 run_stage!(c::VegDrag, case, ::Val{:post_predictor}, dt) =
     (apply_canopy_drag!(case.sim, c.drag, dt); nothing)
 
-register!(VegDrag)

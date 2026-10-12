@@ -1,6 +1,6 @@
-# The Berlin case's run configurations (examples/urban/) and input
-# data (examples/urban/data/): the shipped configurations of the `urban`
-# run driver (Aeolus.UrbanCase, EX-a #438) that the urban run-type tests
+# The Berlin case's run configurations (examples/urban/berlin_*.toml) and
+# input data (examples/urban/data/): the shipped configurations of the
+# urban site (Aeolus.UrbanCase, EX-a #438, ONE-e #454) that the urban tests
 # load. Functions, so that every test file can include this.
 
 using Aeolus

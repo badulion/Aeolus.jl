@@ -74,7 +74,7 @@ function berlin_smoke_checks()
                 case = BC.build_case(cfg)
                 seed_fog!(case, Xoshiro(127))
                 BC.run_case!(case)
-                union!(exercised, BC.coupling_name.(case.couplings))
+                union!(exercised, BC.component_name.(case.couplings))
                 sim, bus = case.sim, case.bus
                 # nsteps·dt of simulated time (in nsteps steps, unless the
                 # time stepper chooses its own step, #133)
@@ -87,7 +87,7 @@ function berlin_smoke_checks()
                 failed = String[]
                 for c in case.couplings, (what, ok) in BC.smoke_check(c, case)
                     nchecks += 1
-                    ok || push!(failed, "$(BC.coupling_name(c)): $what")
+                    ok || push!(failed, "$(BC.component_name(c)): $what")
                 end
                 @test failed == String[]
                 # the surface energy ledger closes per class
@@ -123,11 +123,19 @@ function berlin_smoke_checks()
                     @test dom.Rn > 0 && dom.dS > 0
                     # the flux-form transport conserves water (#132)
                     @test abs(get(w.sources, :transport, 0.0)) < 1e-12
+                    # and the heat of the air: the dynamics' transport term is
+                    # round-off (measured -1.1e-8 J m⁻² over the 24 s), and
+                    # the open faces' θ relaxation is booked once, as the
+                    # dynamics' (:relaxation), not also measured as the
+                    # site's :tendencies entry (which had left +119.6 J m⁻²
+                    # in the transport term to compensate)
+                    @test abs(get(hb.terms, (:dynamics, :transport), 0.0)) < 1e-6
+                    @test !haskey(hb.terms, (:tendencies, :urban))
                 end
             end
         end
         @testset "every registered coupling ran in some configuration" begin
-            @test isempty(setdiff(Set(BC.coupling_name.(BC.REGISTRY)), exercised))
+            @test isempty(setdiff(Set(BC.component_name.(BC.URBAN_COMPONENTS)), exercised))
         end
         @info @sprintf("Berlin smoke matrix: %d runs, %d coupling checks, %.1f s", length(runs), nchecks,
                        time() - t_start)

@@ -61,7 +61,7 @@ the last call (`dtu`, `dtv`, m s⁻²), the part the sponge retargeting
 added (`dtu_sp`, `dtv_sp`) and the domain-mean wind it acted on (`ū`,
 `v̄`), for the smoke checks.
 """
-mutable struct GeostrophicCoupling{F<:AbstractLargeScaleForcing,ZU,ZV} <: AbstractCoupling
+mutable struct GeostrophicCoupling{F<:AbstractLargeScaleForcing,ZU,ZV} <: UrbanComponent
     forcing::F
     mode::Symbol
     U_g::Float64                  # the (level-mean) geostrophic wind of the last call
@@ -77,7 +77,7 @@ mutable struct GeostrophicCoupling{F<:AbstractLargeScaleForcing,ZU,ZV} <: Abstra
     v̄::Float64
 end
 
-coupling_name(::Type{<:GeostrophicCoupling}) = :geostrophic
+component_name(::Type{<:GeostrophicCoupling}) = :geostrophic
 modules_used(::Type{<:GeostrophicCoupling}) = (:LargeScaleForcing,)
 default_options(::Type{<:GeostrophicCoupling}) =
     (U_g = 1.0, V_g = 0.0, mode = :pressure_gradient, τ = 1800.0, sponge_to_geostrophic = true)
@@ -252,4 +252,3 @@ function smoke_check(c::GeostrophicCoupling, case)
     end
 end
 
-register!(GeostrophicCoupling)

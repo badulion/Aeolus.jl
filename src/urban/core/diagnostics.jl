@@ -158,14 +158,15 @@ end
 """
     timing_keys(case) -> Vector{Tuple{Symbol,Symbol}}
 
-Every `(stage, entry)` the case times: each schedule entry, the dynamics
-`(:dynamics, :step!)` and the ledgers' own `(:budgets, :budgets)` and
-`(:budgets, :air_heat)`.
+Every `(stage, entry)` the case times: each coupling's stage entry and
+the dynamics `(:dynamics, :step!)`.
 """
 function timing_keys(case)
-    ks = Tuple{Symbol,Symbol}[(:dynamics, :step!), (:budgets, :budgets), (:budgets, :air_heat)]
-    for S in ALL_STAGES, e in get(case.schedule, S, ScheduleEntry[])
-        k = (S, coupling_name(e.coupling))
+    ks = Tuple{Symbol,Symbol}[(:dynamics, :step!)]
+    for S in ALL_STAGES, c in case.domain.components
+        c isa UrbanEntry || continue
+        any(st -> st.name === S, Components.stages(c)) || continue
+        k = (S, Components.component_name(c))
         k in ks || push!(ks, k)
     end
     return ks
@@ -209,7 +210,7 @@ function profile_diagnostics(case::Case, ::Case)
 end
 
 "The enabled couplings as a `NamedTuple` `name = coupling`, in registry order (the registry's component keys)."
-coupling_components(case) = (; (coupling_name(c) => c for c in case.couplings)...)
+coupling_components(case) = (; (component_name(c) => c for c in case.couplings)...)
 
 """
     case_diagnostics(case) -> Vector{Diagnostic}
@@ -287,8 +288,8 @@ function log_frame(case)
     for c in case.couplings
         ds = diagnostics(c, case)
         isempty(ds) && continue
-        @info(string(coupling_name(c)), subsystem = :urban, domain = current_domain(),
-              event = :coupling, coupling = coupling_name(c), diagnostic_pairs(ds)...)
+        @info(string(component_name(c)), subsystem = :urban, domain = current_domain(),
+              event = :coupling, coupling = component_name(c), diagnostic_pairs(ds)...)
     end
     return nothing
 end

@@ -368,8 +368,8 @@ julia --project -m Aeolus run examples/urban/berlin_summer.toml
 julia --project=. examples/urban/alexanderplatz_animation.jl
 ```
 
-Nothing in the simulation is tuned to Alexanderplatz — the run type
-(`Aeolus.UrbanCase`, `[run] legacy = "urban"`) runs any city given as a
+Nothing in the simulation is tuned to Alexanderplatz — the urban site of
+the model (`Aeolus.UrbanCase`, `[urban] enabled = true`) runs any city given as a
 TOML file plus its static and dynamic input drivers. Output is a single `.nc` file carrying the full 3-D
 state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, the NO / NO₂ / O₃ / VOC /
 HNO₃ species and the other tracers, the moist buoyancy `b_moist`) plus

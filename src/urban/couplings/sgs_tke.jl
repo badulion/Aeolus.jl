@@ -51,15 +51,14 @@ Options: `wall_cap = true` (cap ``l`` at ``κ d_{wall}``, `IBM.wall_distance`),
 from `bus.u_star`), `e_min = 1e-4` (m² s⁻²: the floor of the initial
 local-equilibrium ``e``; ``e = 0`` is a fixed point of the TKE equation).
 """
-struct SGSTKE{C, F} <: AbstractCoupling
+struct SGSTKE{C, F} <: UrbanComponent
     closure::C
     K2::F                       # 2ν_t, the diffusivity of :e in the :transport stage
     e_min::Float64
 end
-coupling_name(::Type{<:SGSTKE}) = :sgs_tke
+component_name(::Type{<:SGSTKE}) = :sgs_tke
 slot(::Type{<:SGSTKE}) = :sgs
 provider(::Type{<:SGSTKE}) = :tke
-is_default(::Type{<:SGSTKE}) = true
 modules_used(::Type{<:SGSTKE}) = (:PrognosticSGS, :IBM)
 default_options(::Type{<:SGSTKE}) = (wall_cap = true, surface = true, e_min = 1e-4)
 
@@ -194,4 +193,3 @@ smoke_variants(::Type{<:SGSTKE}) =
     ((label = "TKE without the wall cap and the surface value",
       options = Dict(:sgs_tke => (wall_cap = false, surface = false))),)
 
-register!(SGSTKE)

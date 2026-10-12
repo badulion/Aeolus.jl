@@ -16,14 +16,14 @@ and 20 h, else 0.3), then the SGS diffusion with `κt` of the
 `:scalar_advection` coupling ([`sgs_diffuse!`](@ref), #177). `stacks` are `(x, y, z)` in metres relative to the
 OSM anchor (`cfg.lat0/lon0`); stacks outside the domain are dropped.
 """
-struct PollutantCoupling{F} <: AbstractCoupling
+struct PollutantCoupling{F} <: UrbanComponent
     tend::F
     stacks::Vector{NTuple{3,Int}}
     tau::Float64
     bcs::FieldBoundaryConditions   # the tracer's halos: periodic, or zero-gradient when open (#262)
 end
 
-coupling_name(::Type{<:PollutantCoupling}) = :pollutant
+component_name(::Type{<:PollutantCoupling}) = :pollutant
 modules_used(::Type{<:PollutantCoupling}) = (:Chemistry, :Operators)
 default_options(::Type{<:PollutantCoupling}) =
     (stacks = [(0.0, 0.0, 60.0), (-150.0, 150.0, 25.0), (200.0, -100.0, 40.0)], tau = 3600.0)
@@ -77,4 +77,3 @@ function smoke_check(c::PollutantCoupling, case)
             "emits iff a stack is in the window" => (sum(p) > 0) == !isempty(c.stacks)]
 end
 
-register!(PollutantCoupling)

@@ -19,8 +19,11 @@ quantity, the fields each is measured on (`state`; a tuple for the water
 of the air: vapour and what the components carry) and the core tendency
 that the components inside the core add to (`tendency`, or `nothing`),
 and the count of the core's in-core hook calls of the current step (to
-weight the RK3 substages and to notice a retried step). Built by
-[`with_budgets`](@ref).
+weight the RK3 substages and to notice a retried step), and `hour`, the
+function of the model time that picks a step's hour-of-day bin
+(`nothing`: one bin). Built by [`with_budgets`](@ref), or around a
+`Budgets` of its own by `DomainBudgets(budgets, quantities, state,
+tendency; nsub, hour)`.
 """
 mutable struct DomainBudgets
     budgets::Budgets
@@ -30,7 +33,11 @@ mutable struct DomainBudgets
     calls::Int
     t0::Float64
     nsub::Int
+    hour::Any
 end
+DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing) =
+    DomainBudgets(b, collect(Symbol, quantities), Dict{Symbol,Any}(state), Dict{Symbol,Any}(tendency),
+                  0, 0.0, Int(nsub), hour)
 
 """
     budget_fields(c, q::Symbol) -> Tuple
@@ -122,7 +129,7 @@ function with_budgets(d::Domain, quantities)
         budget_start!(sb, m)
         b.measured[q] = sb
     end
-    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1)
+    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing)
     return Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
 end
 
@@ -133,8 +140,9 @@ budgets(d::Domain) = d.budgets === nothing ? nothing : d.budgets.budgets
 
 _budgets_begin!(::Nothing, d) = nothing
 function _budgets_begin!(b::DomainBudgets, d)
+    h = b.hour === nothing ? 0.0 : Float64(b.hour(clock(d)))
     for q in b.quantities
-        budget_begin_step!(b.budgets.measured[q], b.state[q])
+        budget_begin_step!(b.budgets.measured[q], b.state[q], h)
     end
     return nothing
 end
@@ -151,6 +159,17 @@ function _budgets_end!(b::DomainBudgets, d, dt)
     bs.nsteps += 1
     return nothing
 end
+
+"""
+    attributed(c, ::Val{stage}) -> Bool
+
+Whether the budgets measure `c`'s entry in an in-core `stage` as a context
+of its own (default `true`). `false` for an entry that books what it does
+itself inside the dynamics' context (`add_heat!`), so that it is not
+counted twice: the urban site's open faces, whose θ relaxation is the
+dynamics' term `(:dynamics, :relaxation)` (`Aeolus.UrbanCase.UrbanCore`).
+"""
+attributed(c, ::Val) = true
 
 # a component's stage entry outside the core: a context on the state
 @inline _attributed!(::Nothing, c, d, v::Val, dt) = run_stage!(c, d, v, dt)
@@ -175,6 +194,7 @@ _substage_weight(b::DomainBudgets) = b.nsub == 3 ? (1 / 6, 1 / 6, 2 / 3)[mod1(b.
 # changes the predicted state (measured on it, scaled by the weight)
 @inline _attributed_in_core!(::Nothing, c, d, v::Val, Δt) = run_stage!(c, d, v, Δt)
 function _attributed_in_core!(b::DomainBudgets, c, d, v::Val{S}, Δt) where {S}
+    attributed(c, v) || return run_stage!(c, d, v, Δt)
     n = component_name(c)
     w = _substage_weight(b)
     ontend = S !== :post_predictor

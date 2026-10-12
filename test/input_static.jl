@@ -241,7 +241,7 @@ end
     for (label, c) in ("mitte_sample" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16)),
                        "mitte_periodic" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16),
                                                           lateral = :periodic,
-                                                          physics = Dict{Symbol,Any}(:nesting => false)))
+                                                          overrides = ["nesting.enabled=false"]))
         m = meshof(c)
         ox, oy = BCI.anchor_xy(c, m)
         c.static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0, origin_lon = c.lon0,
@@ -277,8 +277,8 @@ end
     end
     # the round trip hashes the static drivers under [inputs]
     inp = config_inputs(load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml")))
-    @test inp["geometry.static"]["fnv1a64"] == content_hash(cs.static)
-    @test inp["geometry.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
+    @test inp["domain.main.static_driver"]["fnv1a64"] == content_hash(cs.static)
+    @test inp["domain.main.urban.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
     # a grid the file was not made for is refused, naming both grids and the command
     e = try
         BCI.build_geometry(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16)), meshof(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16))))
@@ -288,9 +288,9 @@ end
     end
     @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolusprep static", e)
     # a missing driver: a config error before any run folder, with the exact command
-    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["geometry.static=\"nope.nc\""])
+    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["static_driver=\"nope.nc\""])
     e = try
-        Aeolus.Config.build(BCI.UrbanDriver(), cfg); nothing
+        Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg); nothing
     catch err
         err
     end

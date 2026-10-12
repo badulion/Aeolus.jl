@@ -3,7 +3,7 @@
 # from the parent_surface.nc a run of the `urban_parent` driver writes
 # (EX-a #438; it reads the file only, runs nothing):
 #
-#   julia --project -m Aeolus run examples/urban/berlin_parent.toml --set physics.options.nesting.parent.hours=0.01
+#   julia --project -m Aeolus run examples/urban/berlin_parent.toml --set nesting.parent.hours=0.01
 #   julia --project examples/urban/plot_parent_surface.jl <run folder> [out.svg]
 #
 # writes docs/src/assets/berlin/parent_surface.svg (or `out.svg`): six

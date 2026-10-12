@@ -1,88 +1,69 @@
-# The `urban` run driver (CFG-c #358, EX-a #438): the configuration
-# schema of the urban case, its conversion to the CaseConfig that
-# build_case consumes, and the run-driver contract of CFG-b (#357), so that
+# The urban site on the model (ONE-e, #454; formerly the `urban` run
+# driver, CFG-c #358, EX-a #438): its sections of the model's configuration
+# schema (`[urban]` and one per urban component), their conversion to the
+# CaseConfig that build_case consumes, and the run of an urban site under
+# `aeolus run`:
 #
-#   julia --project -m Aeolus run examples/urban/berlin_summer.toml [--set clock.nsteps=…]
-#
-# runs the Berlin flagship. Included last in UrbanCase.jl: the schema is built
-# from the coupling registry (every slot, provider, addon and
-# default_options) and from the parent's configuration.
+#   julia --project -m Aeolus run examples/urban/berlin_summer.toml [--set time.nsteps=…]
 #
 # One source of truth for the defaults: the schema holds them.
 # `CaseConfig(; kw...)` and `ParentConfig(; kw...)` start from them, and
-# the per-coupling options are validated against the couplings'
-# `default_options` (the key set is closed, the type of a value is the
-# type of its default), so no second schema has to be kept in step with
-# the coupling files.
+# the per-component options are typed and checked against the components'
+# `default_options` (the key set is closed, the form of a value is the
+# form of its default), so no second schema has to be kept in step with
+# the component files.
 
-using ..Aeolus.Config: Config, AbstractRunDriver, RunConfig, ConfigError, Section, Option, OpenTable,
+using ..Aeolus.Config: Config, RunConfig, ConfigError, Section, Option, OpenTable,
                      Optional, OneOf, Path, section, option!, config_origin, config_schema, config_sources
 using ..Aeolus.IO: RunFolder, CheckpointSchedule, with_monitor, check_blowup!, output_dir,
                  resume!, maybe_checkpoint!
 using Dates: Date, year, month, day
 
-"""
-    UrbanDriver()
-
-The `urban` run driver ([`AbstractRunDriver`](@ref Aeolus.Config.AbstractRunDriver)):
-`[run] legacy = "urban"`. `build` makes the [`CaseConfig`](@ref) of the
-config and [`build_case`](@ref)s it; `run!` runs it with
-[`run_case!`](@ref) under the run monitor (the diagnostics CSV, the
-blowup guard), writing the NetCDF output into the run folder's `output/`
-unless `[output] path` says otherwise, and the run's checks
-([`run_results`](@ref): the ledgers' closure) into its `results.toml`.
-`aeolus options urban` prints the schema. Example configurations: the
-Berlin case, `examples/urban/berlin_*.toml`.
-"""
-struct UrbanDriver <: AbstractRunDriver end
-
-Config.driver_name(::UrbanDriver) = "urban"
-Config.driver_defaults(::UrbanDriver) = ("output.cadence" => 1800.0, "run.name" => "urban")
-
 # ---------------------------------------------------------------------------
-# CaseConfig fields ↔ schema options
+# CaseConfig fields ↔ the model's options
 # ---------------------------------------------------------------------------
 
 """
     CASE_FIELDS
 
-Every [`CaseConfig`](@ref) field and the dotted keys of the `urban`
-schema it is made of (`physics` is every key of `[physics]` but
-`options`). The options of the schema that make a `CaseConfig` are
-exactly the union of these keys, each used once (`test/config_berlin.jl`).
+Every [`CaseConfig`](@ref) field and the dotted keys of the model's
+schema it is made of (`components` is the `enabled` key of every urban
+component's section and their other keys). The options that make a
+`CaseConfig` are exactly the union of these keys, each used once
+(`test/config_berlin.jl`).
 """
 const CASE_FIELDS = (
-    name = ("run.name",), scenario = ("run.scenario",),
+    name = ("run.name",), scenario = ("urban.scenario",),
     size = ("grid.size",), extent = ("grid.extent",), halo = ("grid.halo",),
-    static = ("geometry.static",), parent_static = ("geometry.parent_static",),
-    lat0 = ("geometry.lat0",), lon0 = ("geometry.lon0",), offset = ("geometry.offset",),
-    elevation = ("geometry.elevation",), wall_subdivisions = ("geometry.wall_subdivisions",),
-    landuse = ("geometry.landuse",),
-    date = ("clock.date",), utc_offset = ("clock.utc_offset",), start_h = ("clock.start_h",),
-    dt = ("clock.dt",), nsteps = ("clock.nsteps",),
-    cadence = ("cadence.*", "output.cadence"),
+    static = ("domain.static_driver",), parent_static = ("urban.parent_static",),
+    lat0 = ("urban.lat0",), lon0 = ("urban.lon0",), offset = ("urban.offset",),
+    elevation = ("urban.elevation",), wall_subdivisions = ("urban.wall_subdivisions",),
+    landuse = ("urban.landuse",),
+    date = ("urban.date",), utc_offset = ("urban.utc_offset",), start_h = ("urban.start_h",),
+    dt = ("time.dt",), nsteps = ("time.nsteps",),
+    cadence = ("urban.radiation_period", "urban.soil_period", "urban.surface_period", "output.cadence"),
     ν = ("dynamics.nu",), θ₀ = ("dynamics.theta0",), g = ("dynamics.g",),
-    f_coriolis = ("dynamics.f_coriolis",), C_s = ("dynamics.c_s",), Pr_t = ("dynamics.pr_t",),
-    sgs_stability = ("dynamics.sgs_stability",), sponge_α_max = ("dynamics.sponge_alpha_max",),
-    sponge_frac = ("dynamics.sponge_frac",), θ_top = ("dynamics.theta_top",),
-    lateral = ("boundaries.lateral",), outflow = ("boundaries.outflow",),
-    boundary_frame = ("boundaries.boundary_frame",), θ_relaxation = ("boundaries.theta_relaxation",),
-    analysis_buffer = ("boundaries.analysis_buffer",),
-    sounding = ("initial.sounding",), dynamic = ("initial.dynamic",), θ_surface = ("initial.theta_surface",),
-    θ_inversion_z = ("initial.theta_inversion_z",), θ_lapse = ("initial.theta_lapse",),
-    u0 = ("initial.u0",), qv0 = ("initial.qv0",), qv_scale = ("initial.qv_scale",),
-    Ts0 = ("initial.ts0",), Ts_water_offset = ("initial.ts_water_offset",),
-    T_soil0 = ("initial.t_soil0",), p_surface = ("initial.p_surface",),
-    physics = ("physics.*",), options = ("physics.options",),
-    canopy_top = ("budgets.canopy_top",),
-    output_path = ("output.path", "output.netcdf"), child_boundaries = ("output.child_boundaries",),
-    backend = ("run.backend", "run.serial"))
+    f_coriolis = ("urban.f_coriolis",), C_s = ("urban.c_s",), Pr_t = ("urban.pr_t",),
+    sgs_stability = ("urban.sgs_stability",), sponge_α_max = ("urban.sponge_alpha_max",),
+    sponge_frac = ("urban.sponge_frac",), θ_top = ("urban.theta_top",),
+    lateral = ("urban.lateral",), outflow = ("urban.outflow",),
+    boundary_frame = ("urban.boundary_frame",), θ_relaxation = ("urban.theta_relaxation",),
+    analysis_buffer = ("urban.analysis_buffer",),
+    sounding = ("urban.sounding",), dynamic = ("domain.dynamic_driver",), θ_surface = ("urban.theta_surface",),
+    θ_inversion_z = ("urban.theta_inversion_z",), θ_lapse = ("urban.theta_lapse",),
+    u0 = ("urban.u0",), qv0 = ("urban.qv0",), qv_scale = ("urban.qv_scale",),
+    Ts0 = ("urban.ts0",), Ts_water_offset = ("urban.ts_water_offset",),
+    T_soil0 = ("urban.t_soil0",), p_surface = ("urban.p_surface",),
+    components = ("*.enabled", "*.*"),
+    canopy_top = ("urban.canopy_top",),
+    output_path = ("output.path", "urban.netcdf"), child_boundaries = ("urban.child_boundaries",),
+    backend = ("urban.serial",))
 
 """
     PARENT_FIELDS
 
 Every [`ParentConfig`](@ref) field but `child` and its key in
-`[physics.options.nesting.parent]` (the ASCII name of the field).
+`[nesting] parent` (the ASCII name of the field).
 """
 const PARENT_FIELDS = (
     center = "center", extent = "extent", refinement = "refinement", vertical = "vertical",
@@ -97,24 +78,6 @@ const PARENT_FIELDS = (
     perturbation = "perturbation", perturbation_depth = "perturbation_depth", seed = "seed",
     hours = "hours", output_period = "output_period",
     sgs = "sgs", stepper = "stepper", C_advective = "c_advective", moisture = "moisture")
-
-# ---------------------------------------------------------------------------
-# the cadences the couplings declare
-# ---------------------------------------------------------------------------
-
-"""
-    declared_cadences(C) -> Vector{Symbol}
-
-The named cadences (`cfg.cadence` keys) coupling `C` uses: the `Symbol`
-periods of its `stages` (required when `C` is enabled) and its
-[`cadence_keys`](@ref) (read if present). `:output` is `[output] cadence`.
-"""
-declared_cadences(C) = unique!(vcat(Symbol[st[3].period for st in stages(C) if st[3].period isa Symbol],
-                                    Symbol[cadence_keys(C)...]))
-_required_cadences(C) = Symbol[st[3].period for st in stages(C) if st[3].period isa Symbol]
-
-"The defaults (s) of the named cadences; a key without one is unset unless a file sets it."
-const CADENCE_DEFAULTS = Dict(:radiation => 600.0, :soil => 30.0)
 
 # ---------------------------------------------------------------------------
 # per-coupling options: the type of a value is the type of its default
@@ -279,64 +242,9 @@ function coupling_option_value(C, key::Symbol, x, path)
     # a value TOML cannot hold (set with `with`) is taken as it is; a table
     # holding one is still checked key by key (the parent's q_surface)
     (x isa AbstractDict || Config._toml_native(x)) || return (true, x, "")
-    f = get(get(OPTION_FORMS, coupling_name(C), Dict{Symbol,Function}()), key, nothing)
+    f = get(get(OPTION_FORMS, component_name(C), Dict{Symbol,Function}()), key, nothing)
     f === nothing || return f(x, path)
     return option_value(default_options(C)[key], x, path)
-end
-
-"""
-    coupling_options_value(C, tbl, path) -> (problems, NamedTuple)
-
-The options of coupling `C` set in the table `tbl` (`[physics.options.<name>]`)
-whose value differs from the default, and the problems found (unknown
-keys, listing `default_options(C)`'s keys, and values of the wrong type).
-"""
-function coupling_options_value(C, tbl::AbstractDict, path)
-    probs = String[]; out = Pair{Symbol,Any}[]
-    d = default_options(C)
-    for k in sort!(collect(String, keys(tbl)))
-        key = Symbol(k)
-        if !haskey(d, key)
-            push!(probs, "$path.$k: unknown option of coupling $(coupling_name(C))" *
-                         Config._suggest(k, string.(keys(d))) *
-                         (isempty(d) ? "; it has no options" : "; its options: " * join(keys(d), ", ")))
-            continue
-        end
-        ok, v, why = coupling_option_value(C, key, tbl[k], "$path.$k")
-        ok || (push!(probs, why); continue)
-        isequal(v, d[key]) || push!(out, key => v)
-    end
-    return probs, (; out...)
-end
-
-"""
-    options_value(tbl) -> (problems, Dict{Symbol,Any})
-
-`[physics.options]`: a table per coupling name, each validated by
-[`coupling_options_value`](@ref); the result holds, per coupling, the
-options that differ from its `default_options` (what `CaseConfig.options`
-holds).
-"""
-function options_value(tbl::AbstractDict)
-    probs = String[]; out = Dict{Symbol,Any}()
-    names = Dict(String(coupling_name(C)) => C for C in REGISTRY)
-    for k in sort!(collect(String, keys(tbl)))
-        C = get(names, k, nothing)
-        if C === nothing
-            push!(probs, "$k: no coupling named \"$k\"" * Config._suggest(k, keys(names)) *
-                         "; couplings: " * join(sort!(collect(keys(names))), ", "))
-            continue
-        end
-        v = tbl[k]
-        if !(v isa AbstractDict)
-            push!(probs, "$k: expected a table of the options of coupling $k, got $(_raw(v))")
-            continue
-        end
-        p, nt = coupling_options_value(C, v, k)
-        append!(probs, p)
-        isempty(nt) || (out[Symbol(k)] = nt)
-    end
-    return probs, out
 end
 
 # ---------------------------------------------------------------------------
@@ -411,14 +319,14 @@ const PARENT_FORMS = Dict{String,Function}(
 """
     parent_section() -> Section
 
-The schema of [`ParentConfig`](@ref), `[physics.options.nesting.parent]`
+The schema of [`ParentConfig`](@ref), `[nesting] parent`
 (the defaults of `ParentConfig(; kw...)`). The keys are the ASCII names of
 the fields ([`PARENT_FIELDS`](@ref)); `q_surface` / `e_surface`,
 `theta_init` / `qv_init` and `u_init` take the tables of
 [`surface_forcing_value`](@ref) and [`profile_value`](@ref).
 """
 function parent_section()
-    return section("parent"; doc = "The nest parent (ParentConfig, #259): physics.options.nesting.parent.") do s
+    return section("parent"; doc = "The nest parent (ParentConfig, #259): [nesting] parent.") do s
         option!(s, "center", Optional{NTuple{2,Float64}}; units = "m",
                 doc = "horizontal centre of the parent box relative to the OSM anchor; \"none\": on the child")
         option!(s, "extent", NTuple{3,Float64}; default = (6000.0, 6000.0, 3000.0), range = (0, Inf),
@@ -530,7 +438,7 @@ end
 """
     parent_value(x, path) -> (ok, NamedTuple, message)
 
-`[physics.options.nesting.parent]`: every key checked against the parent
+`[nesting] parent`: every key checked against the parent
 schema ([`parent_section`](@ref)); the result holds the `ParentConfig`
 keywords whose value differs from the default.
 """
@@ -558,79 +466,159 @@ function parent_value(x, path)
 end
 
 # ---------------------------------------------------------------------------
-# the schema
+# the urban site's sections of the model's schema (ONE-e, #454)
 # ---------------------------------------------------------------------------
 
-_options_problems(tbl) = options_value(tbl)[1]
-
-# the TOML form of a coupling option for the option reference (the OPTION_FORMS keys by hand)
-function _option_form_text(name::Symbol, k::Symbol, v)
-    (name, k) == (:nesting, :parent) && return "a table ([physics.options.nesting.parent])"
-    (name, k) == (:nesting, :z_anterp) && return "\"canopy\" or a number (m)"
-    (name, k) == (:nesting, :parent_driver) && return "\"aeolus\", \"profile\" or \"offline\""
-    (name, k) == (:surface_exchange, :z0m) && return "\"dynamic\" or " * _shape(v)
-    (name, k) == (:sgs_mlsgs, :fn) && return "\"none\" (a model function only from Julia)"
-    return _shape(v)
+# The Config option type of a coupling option with the default `d` (its
+# TOML form: a scalar, an array of the default's length, an array of
+# arrays, or a table checked by `option_value`).
+_scalar_spec(x) = x isa Bool ? Bool : x isa Integer ? Int : x isa AbstractFloat ? Float64 :
+                  x isa Symbol ? Symbol : x isa AbstractString ? String : nothing
+function _option_spec(C, key::Symbol, d)
+    name = component_name(C)
+    (name, key) == (:nesting, :parent) &&
+        return OpenTable(t -> _form_problems(parent_value, t, "parent");
+                         reference = () -> (p = parent_schema_section(); Section[Section("", p.doc, p.options)]))
+    (name, key) == (:nesting, :z_anterp) && return OneOf(Float64, Symbol)
+    (name, key) == (:nesting, :parent_driver) && return Symbol
+    (name, key) == (:surface_exchange, :z0m) && return OneOf(Symbol, OpenTable(t -> _form_problems(
+                        (x, p) -> option_value(default_options(SurfaceExchangeMOST).z0m, x, p), t, "z0m")))
+    (name, key) == (:sgs_mlsgs, :fn) && return Optional{Float64}
+    d === nothing && return Optional{Float64}
+    T = _scalar_spec(d)
+    T === nothing || return T
+    if d isa Tuple && !isempty(d)
+        Ts = unique(map(_scalar_spec, d))
+        length(Ts) == 1 && Ts[1] !== nothing && return NTuple{length(d),Ts[1]}
+    end
+    if d isa AbstractVector && !isempty(d) && d[1] isa Tuple
+        return Vector{Vector{Float64}}
+    end
+    (d isa Union{NamedTuple,AbstractDict}) && return OpenTable(t -> _form_problems((x, p) -> option_value(d, x, p), t, String(key)))
+    error("the option $key of the coupling $name has a default the schema cannot type: $(repr(d))")
 end
 
-"The default of a coupling option as TOML text, or what it is when TOML cannot hold it."
-function _option_default_text(v)
-    v isa ParentConfig && return "(the parent's defaults)"
-    try
-        return toml_literal(v)
-    catch err
-        err isa ArgumentError || rethrow()
-        return "(a $(nameof(typeof(v))), set from Julia)"
+# The schema default of a coupling option: its default's TOML form, typed as
+# the option (`_option_spec`)
+function _option_default(C, key::Symbol, d)
+    name = component_name(C)
+    (name, key) == (:nesting, :parent) && return Dict{String,Any}()
+    d === nothing && return nothing
+    d isa Symbol && return d
+    d isa Tuple && return Tuple(x isa Symbol ? x : x isa Integer && !(x isa Bool) ? Int(x) : x for x in d)
+    d isa AbstractVector && !isempty(d) && d[1] isa Tuple && return [Float64.(collect(x)) for x in d]
+    d isa Union{NamedTuple,AbstractDict} && return toml_form(d)
+    return d isa Integer && !(d isa Bool) ? Int(d) : d
+end
+
+"""
+    option_key(k::Symbol) -> String
+
+The TOML key of the urban component option `k` (a field of its
+`default_options`): ASCII snake_case, the Greek letters spelled out (`ν`
+→ `nu`, `θ` → `theta`, `τ` → `tau`, `σ` → `sigma`) and lower case
+(`U_g` → `u_g`, `OH_max` → `oh_max`, `C_σ` → `c_sigma`).
+"""
+function option_key(k::Symbol)
+    s = String(k)
+    for (g, a) in ("ν" => "nu", "θ" => "theta", "τ" => "tau", "σ" => "sigma")
+        s = replace(s, g => a)
+    end
+    return lowercase(s)
+end
+
+"""
+    OPTION_UNITS
+
+The units of the urban components' numeric options, `(component, key) =>
+units` ("1" for a dimensionless one), as their docstrings give them; the
+model's option reference shows them.
+"""
+const OPTION_UNITS = Dict{Tuple{Symbol,Symbol},String}(
+    (:geostrophic, :U_g) => "m s^-1", (:geostrophic, :V_g) => "m s^-1", (:geostrophic, :τ) => "s",
+    (:radiosity_sun, :aod380) => "1", (:radiosity_sun, :aod500) => "1", (:radiosity_sun, :precipitable_water) => "cm",
+    (:radiosity_sun, :ozone) => "atm-cm", (:radiosity_sun, :albedo) => "1",
+    (:column_radiation, :r_eff_liq) => "µm", (:column_radiation, :p_surf) => "Pa",
+    (:cloud_shadow, :r_eff_liq) => "µm", (:cloud_shadow, :r_eff_ice) => "µm",
+    (:sgs_amd, :C) => "1", (:sgs_vreman, :C_s) => "1", (:sgs_sigma, :C_σ) => "1",
+    (:sgs_smagorinsky, :diapycnal) => "1", (:sgs_smagorinsky, :slope_max) => "1",
+    (:sgs_dynamic, :diapycnal) => "1", (:sgs_dynamic, :slope_max) => "1", (:sgs_dynamic, :filter_ratio) => "1",
+    (:sgs_dynamic, :cs_max) => "1", (:sgs_mlsgs, :diapycnal) => "1", (:sgs_mlsgs, :slope_max) => "1",
+    (:sgs_mlsgs, :fn) => "1",
+    (:sgs_tke, :e_min) => "m^2 s^-2", (:sgs_reynolds_stress, :e_min) => "m^2 s^-2",
+    (:veg_drag, :cd) => "1", (:pollutant, :stacks) => "m", (:pollutant, :tau) => "s",
+    (:inflow_turbulence, :u_min) => "m s^-1", (:inflow_turbulence, :statistics_interval) => "s",
+    (:inflow_turbulence, :length_interval) => "s", (:inflow_turbulence, :length_scale) => "m",
+    (:traffic_heat, :Q_urban) => "W m^-2", (:micro_kessler, :qv_max) => "kg kg^-1",
+    (:aq_chem, :nox_street) => "kg m^-2 s^-1", (:aq_chem, :no2_fraction) => "1",
+    (:aq_chem, :isoprene_park) => "kg m^-2 s^-1", (:aq_chem, :OH_max) => "cm^-3", (:aq_chem, :ν) => "1",
+    (:aq_chem, :z0m) => "m",
+    (:surface_exchange, :U_min) => "m s^-1", (:surface_exchange, :z0h_ratio) => "1",
+    (:surface_exchange, :period) => "s", (:surface_exchange, :input_T_f) => "s",
+    (:surface_exchange, :dynamic_C_d) => "1", (:surface_exchange, :z0m) => "m",
+    (:sw_modifiers, :k_leaf) => "1", (:nesting, :z_anterp) => "m", (:nesting, :τ) => "s",
+    (:timestep_adaptive, :C_advective) => "1", (:timestep_adaptive, :C_diffusive) => "1",
+    (:timestep_adaptive, :C_buoyancy) => "1", (:timestep_adaptive, :C_coriolis) => "1",
+    (:timestep_adaptive, :dt_min) => "s", (:timestep_adaptive, :dt_max) => "s",
+    (:timestep_adaptive, :growth_max) => "1", (:timestep_adaptive, :divergence_tol) => "s^-1",
+    (:timestep_adaptive, :max_velocity) => "m s^-1", (:timestep_imex, :tol) => "1",
+    (:pressure_multigrid, :tol) => "1", (:pressure_mg_cg, :tol) => "1", (:pressure_density_weighted, :tol) => "1",
+    (:turbulence_diag, :gamma_threshold) => "1", (:turbulence_diag, :relam_νt_ratio) => "1")
+
+"""
+    coupling_section(C) -> Section
+
+The model's section of the urban coupling `C`, `[<component_name>]`:
+`enabled` (default `false`: every component is off until its section
+enables it) and one option per key of `default_options(C)`, typed by the
+form of its default (the per-key forms of [`OPTION_FORMS`](@ref) for the
+nest's `parent`, `z_anterp` and `parent_driver`, the surface exchange's
+`z0m` and the ML closure's `fn`).
+"""
+function coupling_section(C)
+    name = String(component_name(C))
+    s = slot(C)
+    doc = s === nothing ? "The urban component `$name` (`$(nameof(C))`)." :
+                         "The urban component `$name` (`$(nameof(C))`): `$(provider(C))` of the urban slot `$s` (a site enables one component per urban slot)."
+    return section(name; doc = doc) do sec
+        option!(sec, "enabled", Bool; default = false, doc = "run the component")
+        keys_ = [option_key(k) for k in keys(default_options(C))]
+        allunique(keys_) || error("the options of $(nameof(C)) collide as TOML keys: $keys_")
+        for (k, d) in pairs(default_options(C))
+            T = _option_spec(C, k, d)
+            kw = T === Symbol && (component_name(C), k) == (:nesting, :parent_driver) ?
+                 (; allowed = [:aeolus, :profile, :offline]) :
+                 T isa OneOf && (component_name(C), k) == (:nesting, :z_anterp) ? (; allowed = [:canopy]) :
+                 T isa OneOf ? (; allowed = [:dynamic]) : (;)
+            u = get(OPTION_UNITS, (component_name(C), k), "")
+            option!(sec, option_key(k), T; default = _option_default(C, k, d), kw..., units = u,
+                    doc = "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
+                          ": the nest parent's options, [$name.parent] (`aeolus options` lists them)" : ""))
+        end
     end
 end
 
 """
-    urban_options_reference() -> Vector{Section}
+    urban_site_section() -> Section
 
-The documented sub-tables of `[physics.options]` for the option
-reference: one per coupling with options, `[physics.options.<name>]`,
-listing its `default_options` (key, TOML form, default; generated, so it
-cannot drift), and `[physics.options.nesting.parent]`, the parent's
-schema ([`parent_section`](@ref)).
+`[urban]`: the urban site of a domain (ONE-e, #454). `enabled = true`
+makes the domain an urban site: its ground from the domain's
+`static_driver`, its initial state from the sounding (the domain's
+`dynamic_driver` when that is a sounding driver) or the idealised profile,
+its dynamical core and its time stepping assembled by `Aeolus.UrbanCase`
+from these options and the enabled urban components
+([`coupling_section`](@ref)). The keys are those of the former `urban`
+run type's `[geometry]`, `[clock]`, `[cadence]`, `[dynamics]`,
+`[boundaries]`, `[initial]`, `[budgets]` and `[output]` sections that the
+model's own sections do not hold.
 """
-function urban_options_reference()
-    out = Section[]
-    for C in sort(REGISTRY; by = C -> String(coupling_name(C)))
-        d = default_options(C)
-        isempty(d) && continue
-        name = coupling_name(C)
-        opts = [Config.reference_option(String(k),
-                    _option_form_text(name, k, v), _option_default_text(v))
-                for (k, v) in pairs(d)]
-        push!(out, Section(String(name), "The options of the coupling `$name` (`default_options(::Type{" *
-                           "$(nameof(C))})`): only these keys, each a value of its default's form; " *
-                           "their meaning is documented on the coupling (`?$(nameof(C))`).", opts))
-    end
-    p = parent_schema_section()
-    push!(out, Section("nesting.parent", p.doc, p.options))
-    return out
-end
-
-function Config.driver_sections(::UrbanDriver)
-    run = section("run") do s
+function urban_site_section()
+    return section("urban"; doc = "The urban site of the domain (Aeolus.UrbanCase, ONE-e #454).") do s
+        option!(s, "enabled", Bool; default = false, doc = "the domain is an urban site")
         option!(s, "scenario", Symbol; default = :summer,
                 doc = "the scenario label (summer, winter, …): the output's comment; winter selects the subarctic-winter humidity of the column radiation")
-        option!(s, "backend", Symbol; default = :cpu, allowed = [:cpu], doc = "the compute backend (Aeolus.Backends)")
-        option!(s, "serial", Bool; default = false,
-                doc = "CPUBackend(serial = true): the single-task reference")
-    end
-    grid = section("grid"; doc = "The child mesh (RegularGrid).") do s
-        option!(s, "size", NTuple{3,Int}; default = (64, 64, 64), range = (1, 65536), doc = "cells in x, y, z")
-        option!(s, "extent", NTuple{3,Float64}; default = (1000.0, 1000.0, 400.0), range = (0, Inf),
-                open_lower = true, units = "m",
-                doc = "domain size; 400 m deep so that the Fernsehturm fits and the top sits in the parent's uniform layers (#246)")
-        option!(s, "halo", NTuple{3,Int}; default = (3, 3, 3), range = (1, 8),
-                doc = "halo cells per side (3: WENO-Z5 moisture transport)")
-    end
-    geo = section("geometry"; doc = "The ground (static drivers) and the site.") do s
-        option!(s, "static", Optional{Path};
-                doc = "the static driver of the child (CFG-f #361; AeolusPrep.jl writes it, `aeolusprep static`); " *
-                      "\"none\": no ground (a case cannot be built)")
+        option!(s, "serial", Bool; default = false, doc = "CPUBackend(serial = true): the single-task reference")
+        # the site
         option!(s, "parent_static", Optional{Path};
                 doc = "the static driver (land-use tiles) of the nest parent; \"none\": from landuse in memory")
         option!(s, "landuse", Optional{Path};
@@ -645,37 +633,21 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "elevation", Float64; default = 34.0, units = "m", doc = "height above sea level")
         option!(s, "wall_subdivisions", Int; default = 1, range = (1, 64),
                 doc = "wall facets per cell face of the radiosity scene")
-    end
-    clock = section("clock"; doc = "Date, start and steps.") do s
+        # the clock
         option!(s, "date", Date; default = Date(2019, 6, 29),
                 doc = "the local date (29 June 2019: a clear day of the heat wave, #247)")
         option!(s, "utc_offset", Float64; default = 2.0, range = (-14, 14), units = "h",
                 doc = "local clock = UTC + utc_offset (2: CEST)")
         option!(s, "start_h", Float64; default = 6.0, range = (0, 24), units = "h", doc = "local hour at t = 0")
-        option!(s, "dt", Float64; default = 2.0, range = (0, Inf), open_lower = true, units = "s",
-                doc = "the step (with the adaptive stepper: nsteps × dt is the simulated time)")
-        option!(s, "nsteps", Int; default = 43_200, range = (0, typemax(Int)), doc = "steps to run (43200: 24 h)")
-    end
-    keys_ = sort!(unique!(filter!(!=(:output), reduce(vcat, (declared_cadences(C) for C in REGISTRY); init = Symbol[]))))
-    users(k) = join(sort!([String(coupling_name(C)) for C in REGISTRY if k in declared_cadences(C)]), ", ")
-    cad = section("cadence"; doc = "Periods (s) of the couplings' stages; [output] cadence is the output's.") do s
-        for k in keys_
-            if haskey(CADENCE_DEFAULTS, k)
-                option!(s, String(k), Float64; default = CADENCE_DEFAULTS[k], range = (0, Inf), units = "s",
-                        doc = "the period named :$k (used by $(users(k)))")
-            else
-                option!(s, String(k), Optional{Float64}; range = (0, Inf), units = "s",
-                        doc = "the period named :$k (used by $(users(k))); \"none\": not set")
-            end
-        end
-    end
-    dyn = section("dynamics"; doc = "Parameters of the dynamical core.") do s
-        option!(s, "nu", Float64; default = 2.0, range = (0, Inf), units = "m^2 s^-1", doc = "kinematic viscosity ν")
-        option!(s, "theta0", Float64; default = 293.0, range = (0, Inf), open_lower = true, units = "K",
-                doc = "reference potential temperature θ₀ of the buoyancy")
-        option!(s, "g", Float64; default = 9.81, range = (0, Inf), open_lower = true, units = "m s^-2",
-                doc = "gravitational acceleration")
-        option!(s, "f_coriolis", Float64; default = 1e-4, units = "s^-1", doc = "Coriolis parameter")
+        # the components' periods
+        option!(s, "radiation_period", Float64; default = 600.0, range = (0, Inf), units = "s",
+                doc = "the period of the radiation components (column_radiation, radiosity_sun, cloud_shadow, buildings_citymean)")
+        option!(s, "soil_period", Float64; default = 30.0, range = (0, Inf), units = "s",
+                doc = "the period of the soil (the surfaces' step unless surface_period is set) and of the deposition (aq_chem)")
+        option!(s, "surface_period", Optional{Float64}; range = (0, Inf), units = "s",
+                doc = "the surfaces' step (surface_exchange); \"none\": soil_period")
+        # the core
+        option!(s, "f_coriolis", Float64; default = 1e-4, units = "s^-1", doc = "Coriolis parameter of the site's core")
         option!(s, "c_s", Float64; units = "1", default = 0.1, range = (0, Inf), doc = "Smagorinsky coefficient C_s of the core")
         option!(s, "pr_t", Float64; units = "1", default = 1 / 3, range = (0, Inf), open_lower = true,
                 doc = "turbulent Prandtl number")
@@ -689,10 +661,9 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "theta_top", OneOf(Symbol, Float64); default = :initial_gradient,
                 allowed = [:initial_gradient, :noflux], units = "K m^-1",
                 doc = "θ condition of a closed top (#254): initial_gradient, noflux or a gradient in K/m")
-    end
-    bnd = section("boundaries"; doc = "Lateral boundaries without the nest (N-open-d, #262).") do s
+        # the lateral boundaries
         option!(s, "lateral", Symbol; default = :periodic, allowed = [:periodic, :open],
-                doc = "the four sides when physics.nesting = false: periodic or open (fed by the geostrophic wind and the initial θ)")
+                doc = "the four sides without the nest: periodic or open (fed by the geostrophic wind and the initial θ)")
         option!(s, "outflow", Symbol; default = :dirichlet, allowed = [:dirichlet, :convective, :orlanski],
                 doc = "outflow condition of the open or nest faces (N-open-c, #260)")
         option!(s, "boundary_frame", Int; default = 3, range = (0, typemax(Int)),
@@ -702,14 +673,10 @@ function Config.driver_sections(::UrbanDriver)
         option!(s, "analysis_buffer", Float64; default = ANALYSIS_BUFFER_DEFAULT, range = (0, Inf), units = "m",
                 doc = "columns closer than this to a lateral open face are left out of the diagnostics " *
                       "compared with observations (the inflow fetch, #268)")
-    end
-    ini = section("initial"; doc = "The initial state: the sounding, or the idealised profile.") do s
+        # the initial state
         option!(s, "sounding", Optional{Path};
-                doc = "radiosonde CSV of the initial θ(z), qv(z) and surface pressure; \"none\": the idealised profile below")
-        option!(s, "dynamic", Optional{Path};
-                doc = "the dynamic driver (CFG-g #362): a sounding driver (AeolusPrep.jl, `aeolusprep dynamic --from-sounding`), " *
-                      "used instead of sounding; or, with physics.options.nesting.parent_driver = \"offline\", the " *
-                      "parent-made driver of the nest faces ([output] child_boundaries of the online run); \"none\": no driver")
+                doc = "radiosonde CSV of the initial θ(z), qv(z) and surface pressure; \"none\": the idealised profile below " *
+                      "(the domain's dynamic_driver, a sounding driver, replaces it)")
         option!(s, "theta_surface", Float64; default = 293.0, range = (0, Inf), open_lower = true, units = "K",
                 doc = "idealised: θ at the ground")
         option!(s, "theta_inversion_z", Float64; default = 100.0, range = (0, Inf), units = "m",
@@ -728,226 +695,279 @@ function Config.driver_sections(::UrbanDriver)
                 doc = "initial soil temperature")
         option!(s, "p_surface", Optional{Float64}; range = (0, Inf), open_lower = true, units = "Pa",
                 doc = "pressure at the ground; \"none\": from the sounding (101325 Pa for the idealised profile)")
-    end
-    led = section("budgets"; doc = "The budgets (Aeolus.BudgetSystem).") do s
+        # the budgets and the output
         option!(s, "canopy_top", Float64; default = NaN, units = "m",
                 doc = "top of the :canopy layer of the air-heat budget; nan: the tallest roof")
-    end
-    out = section("output") do s
         option!(s, "netcdf", Optional{String}; default = "urban.nc",
-                doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ under aeolus run, else output/ in the working directory); \"none\": no NetCDF")
+                doc = "file name of the site's NetCDF-4 output in [output] path (the run folder's output/ by default); \"none\": no NetCDF")
         option!(s, "child_boundaries", Optional{Path}; input = false,
                 doc = "with the online nest: write the child's boundary slabs at every parent step, the 3-D initial wind " *
                       "and the parent's mean profiles to this dynamic driver (CFG-g #362; the file of an offline child); " *
                       "\"none\": not written")
     end
-    sp = slot_providers()
-    phys = section("physics"; doc = "Which couplings run: a provider per exclusive slot, on/off per addon.") do s
-        for sl in sort!(collect(keys(sp)))
-            ps = sort!(copy(sp[sl]))
-            option!(s, String(sl), Symbol; default = default_provider(sl), allowed = ps,
-                    doc = "the $sl provider: " * join(ps, ", "))
-        end
-        for C in REGISTRY
-            slot(C) === :addon || continue
-            option!(s, String(coupling_name(C)), Bool; default = is_default(C),
-                    doc = "the additive coupling $(coupling_name(C)) on or off")
-        end
-        option!(s, "options", OpenTable(_options_problems; reference = urban_options_reference);
-                doc = "[physics.options.<coupling>]: that coupling's options over its default_options " *
-                      "(the keys are closed, a value has its default's type); " *
-                      "[physics.options.nesting.parent] is the parent's schema")
-    end
-    return Section[run, grid, geo, clock, cad, dyn, bnd, ini, led, out, phys]
 end
 
 """
-    urban_physics(cfg::RunConfig) -> Dict{Symbol,Any}
+    urban_section_names() -> Vector{String}
 
-The `[physics]` selection of `cfg` that differs from the registry
-defaults (what `CaseConfig.physics` holds).
+The names of the urban site's per-domain sections of the model:
+`"urban"` and one per urban component (`component_name`, registry order).
 """
-function urban_physics(cfg::RunConfig)
-    p = cfg.physics
-    out = Dict{Symbol,Any}()
-    for (sl, _) in slot_providers()
-        v = p[String(sl)]
-        v === default_provider(sl) || (out[sl] = v)
+urban_section_names() = vcat(["urban"], [String(component_name(C)) for C in URBAN_COMPONENTS])
+
+"The urban site's sections of the model's schema: [`urban_site_section`](@ref) and every [`coupling_section`](@ref)."
+urban_sections() = Section[urban_site_section(), (coupling_section(C) for C in URBAN_COMPONENTS)...]
+
+"""
+    urban_enabled(cfg) -> Bool
+
+Whether the (resolved) model config `cfg` makes a domain an urban site
+(`[urban] enabled`; any of its domains, or the config itself for a legacy
+case, which has none).
+"""
+function urban_enabled(cfg)
+    ds = Config.config_domains(cfg)
+    return isempty(ds) ? cfg.urban.enabled : any(d -> d.urban.enabled, ds)
+end
+
+# A resolved option value in its TOML form (a symbol as a string, nothing as
+# "none", tuples as arrays, tables with string keys), a Julia object that
+# TOML cannot hold (set with `with`) kept as it is: what `option_value`
+# reads.
+_raw_form(x::Symbol) = String(x)
+_raw_form(::Nothing) = "none"
+_raw_form(x::Union{Tuple,AbstractVector}) = Any[_raw_form(e) for e in x]
+_raw_form(x::AbstractDict) = Dict{String,Any}(string(k) => _raw_form(v) for (k, v) in x)
+_raw_form(x) = x
+
+# the Julia value of every option of component C's resolved section: its
+# default_options with the section's values on top
+function _section_options(C, sec)
+    probs = String[]; out = Pair{Symbol,Any}[]
+    d = default_options(C)
+    name = String(component_name(C))
+    for k in keys(d)
+        raw = _raw_form(sec[option_key(k)])
+        ok, v, why = coupling_option_value(C, k, raw, "$name.$k")
+        ok || (push!(probs, why); continue)
+        isequal(v, d[k]) || push!(out, k => v)
     end
-    for C in REGISTRY
-        slot(C) === :addon || continue
-        v = p[String(coupling_name(C))]
-        v == is_default(C) || (out[coupling_name(C)] = v)
+    return probs, merge(d, (; out...))
+end
+
+# The urban components a resolved config enables (in the order of
+# URBAN_COMPONENTS), and its problems: an urban slot without exactly one
+# enabled component, two enabled components one of which declares the
+# other incompatible.
+function _urban_selection(cfg)
+    probs = ConfigError[]
+    on = Type[C for C in URBAN_COMPONENTS if cfg[String(component_name(C))].enabled]
+    for sl in URBAN_SLOTS
+        these = [C for C in on if slot(C) === sl]
+        length(these) == 1 && continue
+        names = [String(component_name(C)) for C in URBAN_COMPONENTS if slot(C) === sl]
+        push!(probs, ConfigError(isempty(these) ? names[1] : String(component_name(these[2])),
+            "the urban slot :$sl needs exactly one enabled component, of [" * join(names, "], [") * "]" *
+            (isempty(these) ? "; none is enabled" : "; enabled: " * join(String.(component_name.(these)), ", "))))
     end
+    for C in on, D in on
+        D in incompatible(C) || continue
+        why = incompatible_reason(C)
+        push!(probs, ConfigError(String(component_name(D)),
+            "[$(component_name(C))] is incompatible with [$(component_name(D))]" * (isempty(why) ? "" : ": " * why)))
+    end
+    return probs, on
+end
+
+"""
+    urban_components(cfg) -> Dict{Symbol,Any}
+
+The urban components a resolved model config enables, `component_name =>`
+their options (the `components` of [`CaseConfig`](@ref)); a problem of
+the selection or of an option's form is a `ConfigError`.
+"""
+function urban_components(cfg)
+    probs, on = _urban_selection(cfg)
+    isempty(probs) || throw(ConfigError(reduce(vcat, (p.problems for p in probs))))
+    po, out = String[], Dict{Symbol,Any}()
+    for C in URBAN_COMPONENTS
+        p, nt = _section_options(C, cfg[String(component_name(C))])
+        append!(po, p)
+        C in on && (out[component_name(C)] = nt)
+    end
+    isempty(po) || throw(ConfigError("urban", join(po, "; ")))
     return out
 end
 
-function _urban_checks(cfg::RunConfig)
-    e = ConfigError[]
-    # the declared incompatibilities, with their reasons
-    sel = try
-        selected_couplings((physics = urban_physics(cfg), options = Dict{Symbol,Any}()))
-    catch err
-        err isa ErrorException || rethrow()
-        push!(e, ConfigError("physics", err.msg))
-        return e
-    end
-    # the cadences: the ones the enabled couplings need are set, and a
-    # cadence a file sets is used by one of them
-    need = Set{Symbol}(); may = Set{Symbol}()
-    for C in sel
-        union!(need, _required_cadences(C)); union!(may, declared_cadences(C))
-    end
-    for o in config_schema(cfg).sections[findfirst(s -> s.name == "cadence", config_schema(cfg).sections)].options
-        k = Symbol(o.key); v = cfg.cadence[o.key]
-        if v === nothing
-            k in need && push!(e, ConfigError("cadence.$(o.key)", "the enabled couplings need the cadence :$k " *
-                "(used by $(join(sort!([String(coupling_name(C)) for C in sel if k in _required_cadences(C)]), ", ")))"))
-        elseif !(k in may) && config_origin(cfg, "cadence.$(o.key)") != "default"
-            push!(e, ConfigError("cadence.$(o.key)", "no enabled coupling uses the cadence :$k " *
-                "(it is used by $(join(sort!([String(coupling_name(C)) for C in REGISTRY if k in declared_cadences(C)]), ", ")))"))
+"""
+    urban_checks(cfg) -> Vector{ConfigError}
+
+The cross-field checks of an urban site (`[urban] enabled`): exactly one
+enabled provider per urban slot; the selection's declared
+incompatibilities, with their reasons; every component's options of the
+right form; a fixed `[time] dt` and `[time] nsteps` (the time stepping is
+the urban `timestep_*` provider's: with `timestep_adaptive` `nsteps × dt`
+is the simulated time); a uniform grid, the Boussinesq `[dynamics]` core
+(the site picks its core with the `core_*` providers) and no model
+component; `[checkpoint]` only with the Boussinesq core.
+"""
+function urban_checks(cfg)
+    e, on = _urban_selection(cfg)
+    for C in URBAN_COMPONENTS
+        po, _ = _section_options(C, cfg[String(component_name(C))])
+        for x in po
+            push!(e, ConfigError(first(split(x, ':')), x))
         end
     end
-    tt = cfg.dynamics.theta_top
+    t = cfg.time
+    t.dt isa Real || push!(e, ConfigError("time.dt", "an urban site takes a fixed dt (its time stepping is the enabled timestep_* component's)"))
+    (t.nsteps === nothing || t.duration !== nothing) &&
+        push!(e, ConfigError("time.nsteps", "an urban site runs nsteps steps of dt (duration = \"none\")"))
+    cfg.grid.stretching === :uniform || push!(e, ConfigError("grid.stretching", "an urban site needs a uniform grid"))
+    cfg.dynamics.core === :boussinesq ||
+        push!(e, ConfigError("dynamics.core", "an urban site picks its core with [core_boussinesq], [core_anelastic] or [core_pseudo_incompressible]"))
+    cfg.dynamics.moisture && push!(e, ConfigError("dynamics.moisture", "an urban site carries its water as tracers (qv, ql, qr)"))
+    tt = cfg.urban.theta_top
     (tt isa Real || tt in (:initial_gradient, :noflux)) ||
-        push!(e, ConfigError("dynamics.theta_top", "expected \"initial_gradient\", \"noflux\" or a gradient in K/m"))
-    # checkpoints (#269): the whole case is checkpointed with the core's
-    # fields, which `checkpoint!` takes from a Boussinesq core
+        push!(e, ConfigError("urban.theta_top", "expected \"initial_gradient\", \"noflux\" or a gradient in K/m"))
     ckon = !(cfg.checkpoint.every_steps == 0 && cfg.checkpoint.every_seconds == Inf)
-    icore = findfirst(C -> slot(C) === :core, sel)
-    (ckon && icore !== nothing && provider(sel[icore]) !== :boussinesq) &&
+    ic = findfirst(C -> slot(C) === :core, on)
+    core = ic === nothing ? :boussinesq : provider(on[ic])
+    (ckon && core !== :boussinesq) &&
         push!(e, ConfigError("checkpoint.every_steps",
-            "checkpoints of the urban case need the Boussinesq core (physics.core = \"boussinesq\"); " *
-            "the :$(provider(sel[icore])) core has none yet: keep [checkpoint] off"))
+            "checkpoints of an urban site need the Boussinesq core ([core_boussinesq]); " *
+            "the :$core core has none yet: keep [checkpoint] off"))
     return e
 end
 
-const _URBAN_CHECKS_DOC = """
-the selected couplings are compatible (the declared incompatibilities of `[physics]`, with their reasons)
-every cadence an enabled coupling needs is set, and a cadence a file sets is used by an enabled coupling
-`dynamics.theta_top` is `"initial_gradient"`, `"noflux"` or a gradient in K/m
-`[checkpoint]` needs the Boussinesq core (the whole case is checkpointed with its fields, #269)"""
-
-Config.driver_checks(::UrbanDriver) = Any[_URBAN_CHECKS_DOC => _urban_checks]
-
-const _URBAN_SCHEMA = Ref{Any}(nothing)
+const URBAN_CHECKS_DOC = """
+an urban site (`[urban] enabled`) enables exactly one provider per urban slot, a compatible selection (the declared incompatibilities, with their reasons), and options of the right form
+an urban site takes a fixed `[time] dt` with `nsteps` (duration = \"none\"), a uniform grid, `[dynamics] core = \"boussinesq\"` (its core is a `core_*` provider) and no moisture (its water is tracers)
+`[urban] theta_top` is `\"initial_gradient\"`, `\"noflux\"` or a gradient in K/m; `[checkpoint]` needs the Boussinesq core"""
 
 """
-    urban_schema() -> ConfigSchema
+    CaseConfig(cfg::RunConfig; run_output = nothing)
 
-The schema of the `urban` driver (registered when Aeolus is loaded).
+The urban site of the model's config `cfg` (`[urban] enabled`; its one
+domain) as the [`CaseConfig`](@ref) `build_case` consumes: the grid of
+`[grid]`, the ground of the domain's `static_driver`, the dynamic driver
+of its `dynamic_driver`, `ν`, `θ₀`, `g` of `[dynamics]`, `dt` and
+`nsteps` of `[time]`, the output cadence of `[output]`, every other field
+of `[urban]`, and the urban components the sections enable with their
+options (`components`, [`urban_components`](@ref)). The NetCDF file
+is `[urban] netcdf` in `[output] path`, else in `run_output`, else in
+`output/` of the working directory.
 """
-urban_schema() = _URBAN_SCHEMA[]
-
-"The all-defaults `RunConfig` of the `urban` driver (environment variables fill their defaults)."
-default_run_config() = load_run_config(IOBuffer("[run]\nlegacy = \"urban\"\n"); schema = urban_schema())
-
-# ---------------------------------------------------------------------------
-# RunConfig → CaseConfig
-# ---------------------------------------------------------------------------
-
 function CaseConfig(cfg::RunConfig; run_output::Union{Nothing,AbstractString} = nothing)
-    config_schema(cfg).name in ("urban", "urban_parent") ||
-        throw(ArgumentError("CaseConfig: the config is for the driver \"$(config_schema(cfg).name)\", not \"urban\""))
-    r, g, geo, c, dyn, b, ini, out = cfg.run, cfg.grid, cfg.geometry, cfg.clock, cfg.dynamics,
-                                      cfg.boundaries, cfg.initial, cfg.output
-    cad = Dict{Symbol,Float64}(Symbol(k) => cfg.cadence[k] for k in propertynames(cfg.cadence) .|> String
-                               if cfg.cadence[k] !== nothing)
-    cad[:output] = out.cadence
-    probs, options = options_value(cfg.physics.options)
-    isempty(probs) || throw(ConfigError("physics.options", join(probs, "; ")))
+    config_schema(cfg).name in (Config.MODEL, "urban_parent") ||
+        throw(ArgumentError("CaseConfig: the config is for \"$(config_schema(cfg).name)\", not the model"))
+    u = cfg.urban
+    components = urban_components(cfg)
+    g, t, dyn, out, dom = cfg.grid, cfg.time, cfg.dynamics, cfg.output, cfg.domain
+    t.dt isa Real || throw(ConfigError("time.dt", "an urban site takes a fixed dt"))
+    cad = Dict{Symbol,Float64}(:radiation => u.radiation_period, :soil => u.soil_period, :output => out.cadence)
+    u.surface_period === nothing || (cad[:surface] = u.surface_period)
     dir = out.path !== nothing ? out.path : run_output !== nothing ? run_output : joinpath(pwd(), "output")
-    d = c.date
-    return CaseConfig(Symbol(r.name), r.scenario, g.size, g.extent, g.halo,
-                      geo.static, geo.parent_static, geo.lat0, geo.lon0, geo.offset, geo.elevation,
-                      geo.wall_subdivisions, geo.landuse,
-                      (year(d), month(d), day(d)), c.utc_offset, c.start_h, c.dt, c.nsteps, cad,
-                      dyn.nu, dyn.theta0, dyn.g, dyn.f_coriolis, dyn.c_s, dyn.pr_t, dyn.sgs_stability,
-                      dyn.sponge_alpha_max, dyn.sponge_frac, dyn.theta_top,
-                      b.lateral, b.outflow, b.boundary_frame, b.theta_relaxation, b.analysis_buffer,
-                      ini.sounding, ini.dynamic, ini.theta_surface, ini.theta_inversion_z, ini.theta_lapse, ini.u0,
-                      ini.qv0, ini.qv_scale, ini.ts0, ini.ts_water_offset, ini.t_soil0, ini.p_surface,
-                      urban_physics(cfg), options,
-                      cfg.budgets.canopy_top,
-                      out.netcdf === nothing ? nothing : joinpath(dir, out.netcdf), out.child_boundaries,
-                      CPUBackend(; serial = r.serial))
+    d = u.date
+    return CaseConfig(Symbol(cfg.run.name), u.scenario, g.size, g.extent, g.halo,
+                      dom.static_driver, u.parent_static, u.lat0, u.lon0, u.offset, u.elevation,
+                      u.wall_subdivisions, u.landuse,
+                      (year(d), month(d), day(d)), u.utc_offset, u.start_h, Float64(t.dt),
+                      something(t.nsteps, 0), cad,
+                      dyn.nu, dyn.theta0, dyn.g, u.f_coriolis, u.c_s, u.pr_t, u.sgs_stability,
+                      u.sponge_alpha_max, u.sponge_frac, u.theta_top,
+                      u.lateral, u.outflow, u.boundary_frame, u.theta_relaxation, u.analysis_buffer,
+                      u.sounding, dom.dynamic_driver, u.theta_surface, u.theta_inversion_z, u.theta_lapse, u.u0,
+                      u.qv0, u.qv_scale, u.ts0, u.ts_water_offset, u.t_soil0, u.p_surface,
+                      components, u.canopy_top,
+                      u.netcdf === nothing ? nothing : joinpath(dir, u.netcdf), u.child_boundaries,
+                      CPUBackend(; serial = u.serial))
 end
 
 """
     CaseConfig(path::AbstractString; overrides = String[], kwargs...)
 
-Load the run configuration `path` (a TOML file of the `urban` driver,
-`overrides` as `--set` gives them) and convert it ([`CaseConfig`](@ref)`(cfg::RunConfig)`),
-then set `kwargs` on top: `physics` merges over the file's selection,
-`options` per coupling over the file's options (the nest parent of a
-file survives a caller's options for another coupling), any other field
-replaces the file's value.
+Load the model configuration `path` (an urban site's TOML file,
+`overrides` as `--set` gives them) and convert it
+([`CaseConfig`](@ref)`(cfg::RunConfig)`), then set the fields `kwargs`
+on top (the components and their options are the file's sections: change
+them with `overrides`, `"nesting.enabled=false"`).
 """
 function CaseConfig(path::AbstractString; overrides = String[], kwargs...)
-    c = CaseConfig(load_run_config(path; overrides = overrides, schema = urban_schema()))
+    c = CaseConfig(load_run_config(path; overrides = overrides))
     for (k, v) in kwargs
         hasfield(CaseConfig, k) || throw(ArgumentError("CaseConfig has no field $k"))
-        if k === :options
-            o = copy(c.options)
-            for (name, nt) in v
-                o[name] = haskey(o, name) ? merge(o[name], nt) : nt
-            end
-            c.options = o
-        elseif k === :physics
-            c.physics = merge(c.physics, Dict{Symbol,Any}(v))
-        else
-            setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
-        end
+        setfield!(c, k, convert(fieldtype(CaseConfig, k), v))
     end
     return c
 end
 
-# ---------------------------------------------------------------------------
-# the run-driver contract
-# ---------------------------------------------------------------------------
-
 """
-    UrbanRun
+    default_run_config() -> RunConfig
 
-What the `urban` driver builds: the `cfg` (`RunConfig`) and the built
-[`Case`](@ref) (`case`, `nothing` until `run!` builds it into the run
-folder).
+The model's config of an urban site with every option at its default,
+the components of [`URBAN_DEFAULTS`](@ref) enabled, and the former `urban` run type's grid (64³ on 1 km × 1 km ×
+400 m, halo 3), `ν = 2`, `θ₀ = 293 K`, 43 200 steps of 2 s and output
+every 1800 s: what `CaseConfig(; kw...)` starts from.
 """
-mutable struct UrbanRun
-    cfg::RunConfig
-    case::Any
+function default_run_config()
+    io = IOBuffer()
+    println(io, "[run]\nname = \"urban\"\n[time]\ndt = 2.0\nduration = \"none\"\nnsteps = 43200\n[output]\ncadence = 1800.0\n",
+            "[grid]\nsize = [64, 64, 64]\nextent = [1000.0, 1000.0, 400.0]\nhalo = [3, 3, 3]\n",
+            "[dynamics]\nnu = 2.0\ntheta0 = 293.0\n[urban]\nenabled = true")
+    for C in URBAN_DEFAULTS
+        println(io, "[", component_name(C), "]\nenabled = true")
+    end
+    seekstart(io)
+    return load_run_config(io)
 end
 
-# The case is built in run!: its NetCDF output goes into the run folder,
-# which build does not know yet. A missing static driver is reported here,
-# before a run folder exists, with the command that makes it.
-function Config.build(::UrbanDriver, cfg::RunConfig)
+"""
+    urban_input_problems(cfg) -> CaseConfig
+
+Refuse, before a run folder exists, an urban site whose static or
+dynamic driver file is missing, naming the command that makes it.
+"""
+function urban_input_problems(cfg::RunConfig)
     cc = CaseConfig(cfg)
     src = first(config_sources(cfg)["files"])
-    for (f, key) in ((cc.static, "geometry.static"), (cc.parent_static, "geometry.parent_static"))
+    for (f, key) in ((cc.static, "domain.static_driver"), (cc.parent_static, "urban.parent_static"))
         (f === nothing || isfile(f)) && continue
-        throw(ConfigError(key, key == "geometry.static" ?
+        throw(ConfigError(key, key == "domain.static_driver" ?
                                "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
                                "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>" :
                                "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
                                "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>\n" *
-                               "or set it to \"none\" to read [geometry] landuse in memory"))
+                               "or set it to \"none\" to read [urban] landuse in memory"))
     end
     if cc.dynamic !== nothing && !isfile(cc.dynamic)
         how = nest_offline(cc) ?
-              "run the online config with [output] child_boundaries = this file:\n  julia --project -m Aeolus run <the online config>" :
+              "run the online config with [urban] child_boundaries = this file:\n  julia --project -m Aeolus run <the online config>" :
               "make it with AeolusPrep.jl:\n  julia --project -m AeolusPrep dynamic --from-sounding $src"
-        throw(ConfigError("initial.dynamic", "the dynamic driver $(cc.dynamic) does not exist; $how\n" *
-                                             "or set it to \"none\" to read [initial] sounding in memory"))
+        throw(ConfigError("domain.dynamic_driver", "the dynamic driver $(cc.dynamic) does not exist; $how\n" *
+                                                   "or set it to \"none\" to read [urban] sounding in memory"))
     end
-    return UrbanRun(cfg, nothing)
+    return cc
 end
 
-function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::CheckpointSchedule;
-                                 callback = nothing)
-    cc = CaseConfig(r.cfg; run_output = output_dir(rf))
+"""
+    run_urban!(cfg, rf, ck; callback = nothing) -> case
+
+Run the urban site of the model's config `cfg` in the run folder `rf`
+(what `aeolus run` does for a config with `[urban] enabled`): build the
+case with its NetCDF output in the run folder's `output/` (unless
+`[output] path` says otherwise), restore the newest checkpoint of a
+resumed run, run it with [`run_case!`](@ref) under the run monitor (the
+diagnostics CSV, the blowup guard) checkpointing on `ck`, and write the
+run's own results ([`run_results`](@ref): the budgets' closure, the
+timing) into its `results.toml`, with the checks `[checks]` enables
+(ONE-d, #453: `finite`, `energy_closure` and the site's,
+[`urban_check_names`](@ref)); a failed required check ends the run with
+`Checks.ChecksFailed`. `callback(case, n)` after step `n`.
+"""
+function run_urban!(cfg::RunConfig, rf::RunFolder, ck::CheckpointSchedule; callback = nothing)
+    cc = CaseConfig(cfg; run_output = output_dir(rf))
     case = build_case(cc)
-    r.case = case
     t_end = case.sim.t + cc.nsteps * cc.dt
     # checkpoint / restart (#269): the whole case is a checkpoint component;
     # a resumed session restores the newest checkpoint into the fresh build
@@ -960,14 +980,14 @@ function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::
     ckcb = (c, n) -> begin
         isnan(t_first[]) && (t_first[] = time())
         maybe_checkpoint!(ck, case.sim; step = n, components = comps)
-        callback === nothing || callback(r, n)
+        callback === nothing || callback(case, n)
     end
     # the case's diagnostics: the core's, the frame's, the ledgers, the stage
     # timing and every coupling's (core/diagnostics.jl, #338); explicit rows,
     # one per case step (a case step may be several core steps; the step
     # record sums them, #336)
     t0, sim_t0 = time(), case.sim.t
-    with_monitor(case.sim; run = rf, t_end = t_end, cadence = r.cfg.logging.diagnostics_cadence,
+    with_monitor(case.sim; run = rf, t_end = t_end, cadence = cfg.logging.diagnostics_cadence,
                  diagnostics = case_diagnostics(case), profiles = case_profiles(case),
                  attach = false, step0 = n0) do m
         run_case!(case; nsteps = max(cc.nsteps - n0, 0), t_end, resume = resumed, monitor = m,
@@ -977,6 +997,11 @@ function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::
     case.clock.blowup && error("the urban case blew up at step $(case.clock.n)")
     res = run_results(case; θ_start = θ_start, wall = time() - t0, wall_first_step = t_first[] - t0,
                       simulated = case.sim.t - sim_t0, steps = case.clock.n - n0)
+    # the checks [checks] enables (ONE-d, #453): the core's and the site's
+    settings = enabled_checks(getfield(cfg.checks, :values))
+    results = isempty(settings) ? nothing :
+              evaluate_checks(CheckRunner(Components.domain_checks(case.domain), settings))
+    results === nothing || merge!(res, results_table(results))
     Config.write_results(rf, res)
     led = res["budgets"]
     @info("budgets " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
@@ -984,7 +1009,18 @@ function Aeolus.Simulations.run!(::UrbanDriver, r::UrbanRun, rf::RunFolder, ck::
           air_heat = led["air_heat_closure"])
     led["closed"] || @warn("the case's budgets do not close within their tolerances (results.toml)",
                            subsystem = :urban, domain = current_domain(), event = :budgets_open)
-    return r
+    if results !== nothing
+        for x in results
+            @info("check $(x.name) $(x.passed ? "passed" : "FAILED")", subsystem = :checks, domain = current_domain(),
+                  event = :check, required = x.required, value = x.value, tolerance = x.tolerance, units = x.units)
+        end
+        adv = advisory_failures(results)
+        isempty(adv) || @warn("advisory checks failed: $(join((x.name for x in adv), ", "))",
+                              subsystem = :checks, domain = current_domain(), event = :checks_failed)
+        req = required_failures(results)
+        isempty(req) || throw(ChecksFailed(req))
+    end
+    return case
 end
 
 "Height (m) below which [`run_results`](@ref) reports the fluid's mean θ."
@@ -1118,7 +1154,3 @@ function case_state(case)
     return (; out...)
 end
 
-Config.state_fields(r::UrbanRun) = case_state(r.case)
-
-register_driver!(UrbanDriver())
-_URBAN_SCHEMA[] = Config.driver_schema("urban")

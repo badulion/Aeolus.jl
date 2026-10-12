@@ -355,7 +355,7 @@ unresolved no-slip at `cfg.ν` = 2 m² s⁻¹ and Δ = 15.6 m.
 | checks | facade ``τ_w ≥ 0``; no stress written into a solid cell's face; the total facade drag and the removed stencil drag oppose the mean canopy wind |
 
 Measured in `:smoke` after 1 h (3600 s, adaptive step), on vs off
-(`physics = Dict(:wall_model_facades => false)`):
+(`wall_model_facades.enabled=false`):
 
 | | facades off | facades on |
 | :-- | --: | --: |

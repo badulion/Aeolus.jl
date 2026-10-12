@@ -6,12 +6,12 @@
 ([Budgets](../api/budgets.md), `Aeolus.BudgetSystem`, ONE-c #452: it
 replaced the case's `Ledger` and `AirHeatLedger`), integrates, step by step, the surface energy balance of
 every surface class, the water budget of the air and the heat of the
-air ([below](#The-heat-of-the-air), #253). The core calls
-`budgets_begin_step!` before `:clock` (it snapshots `bus.Ts` into
-`budgets.Ts_start` and the water in the air) and `budgets_end_step!` after
-`:sanity` (it calls every coupling's `budget!` and books the change of
-the water in the air). A coupling reports only what it did during that
-step:
+air ([below](#The-heat-of-the-air), #253). They are the budgets of the
+case's `Domain` (ONE-e, #454): the case's own component snapshots
+`bus.Ts` into `budgets.Ts_start` and the water in the air first in
+`:clock`, and after `:budgets` the pipeline calls every coupling's
+`budget!` and the case books the change of the water in the air. A
+coupling reports only what it did during that step:
 
 | call | meaning |
 | :-- | :-- |
@@ -143,13 +143,16 @@ books its heating as ``H Δt\, c_{pd}/c_p``, about 0.8 % below the
 surface's ``H Δt`` at ``q_v ≈ 0.01`` (exactly ``H Δt`` in dry air). The
 ledger still closes, because it books what it measures.
 
-**Attribution is automatic.** Couplings book nothing. Every schedule
-entry `timed_run!` runs, and the dynamics step, is an attribution
-*context* `(stage, coupling)`: the ledger measures ``H_{air}`` per level
+**Attribution is automatic.** Couplings book nothing. Every stage entry
+of the case's `Domain`, and the dynamics step, is an attribution
+*context* `(stage, coupling)` of the pipeline's budgets (ONE-c #452;
+the case's since ONE-e #454): the ledger measures ``H_{air}`` per level
 when the context closes (the value it opened with is the previous
-close) and books the difference. Contexts nest: the `:body_force` and
-`:post_predictor` entries run inside `step!` and are taken out of the
-dynamics' share. The dynamics' rest is split into
+close) and books the difference. Contexts nest: the `:tendencies`,
+`:body_force` and `:post_predictor` entries run inside `step!` and are
+taken out of the dynamics' share (the first two measured on θ's
+tendency, which the predictor applies over the step, the last on the
+predicted θ). The dynamics' rest is split into
 `(:dynamics, :transport)`, what the core's transport conserves
 (``Σ W θ ΔV``, ``W = 1`` on the Boussinesq core), whose column total is
 the numerics residual, `(:dynamics, :redistribution)`, the change of
@@ -304,7 +307,7 @@ in both places.
 
 `cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
 case open west, east, south, north and top faces fed by analytic data (with
-the nest switched off, `physics = Dict(:nesting => false)`; the nested
+the nest switched off, `nesting.enabled=false`; the nested
 default of #265 feeds the same faces from the parent, see
 [Nesting](berlin_nesting.md#Nesting-(#265))):
 
@@ -575,7 +578,8 @@ dew, fog, sedimentation and precipitation all do real work. The
 flagship's pollutant stacks are outside this window, so the smoke runs
 put one stack in it, 40 m up.
 
-The run matrix is derived from the registry (`smoke_specs()` in
+The run matrix is derived from the urban components (`URBAN_COMPONENTS`,
+the reference selection `URBAN_DEFAULTS`; `smoke_specs()` in
 `test/support/smoke_matrix.jl`, written as overrides by `smoke_overrides`):
 
 1. **summer, everything on** — every additive coupling on, including
@@ -596,8 +600,8 @@ without a blow-up, leave every field and tracer finite, pass every
 class (1e-6 W m⁻²) and the water ledger (1e-12 kg m⁻²). The first run
 also asserts that the domain gains radiative energy at noon (Rn > 0,
 ΔS > 0) and that the transport conserves water (|transport| <
-1e-12 kg m⁻²; measured ~1e-19 since #132). Finally every registered
-coupling must have run in at least one configuration. (As a test it also
+1e-12 kg m⁻²; measured ~1e-19 since #132). Finally every urban
+component must have run in at least one configuration. (As a test it also
 had to take less than 300 s; the by-hand script has no time limit.)
 
 At #127 the matrix was 2 runs (no slot had a second provider yet); #130

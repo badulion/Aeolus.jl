@@ -76,7 +76,7 @@ The velocities, θ, q_v and q_l are copied into scratch fields whose halos are
 filled with the core's boundary conditions, so the diagnostic does not
 touch the model state. `ncalls` / `seconds` time the evaluation.
 """
-mutable struct TurbulenceDiag{S<:AbstractRiStability, FU, FV, FW, FC, B, BT} <: AbstractCoupling
+mutable struct TurbulenceDiag{S<:AbstractRiStability, FU, FV, FW, FC, B, BT} <: UrbanComponent
     stability::S
     u::FU; v::FV; w::FW; θ::FC; qv::FC; ql::FC
     N2f::FC; S2f::FC; Rif::FC
@@ -105,7 +105,7 @@ mutable struct TurbulenceDiag{S<:AbstractRiStability, FU, FV, FW, FC, B, BT} <: 
     seconds::Float64
 end
 
-coupling_name(::Type{<:TurbulenceDiag}) = :turbulence_diag
+component_name(::Type{<:TurbulenceDiag}) = :turbulence_diag
 modules_used(::Type{<:TurbulenceDiag}) = (:TurbulenceStability, :Transition)
 default_options(::Type{<:TurbulenceDiag}) =
     (stability = :brown, gamma_threshold = 0.2, gamma_normalization = :plane,
@@ -269,7 +269,7 @@ function laminar_flow_νt(closure, case)
     m = case.mesh; sim = case.sim; cfg = case.cfg
     # a horizontally uniform flow: a laterally periodic scratch core, also
     # for an open (#262) or nested (#265) case
-    pcfg = deepcopy(cfg); pcfg.lateral = :periodic; pcfg.physics[:nesting] = false
+    pcfg = deepcopy(cfg); pcfg.lateral = :periodic; delete!(pcfg.components, :nesting)
     s = boussinesq_core(pcfg, m)
     fill!(s.θ.data, cfg.θ₀)
     ui = interior_view(sim.u); vi = interior_view(sim.v)
@@ -435,4 +435,3 @@ function relam_checks(c::TurbulenceDiag, case)
     return checks
 end
 
-register!(TurbulenceDiag)
