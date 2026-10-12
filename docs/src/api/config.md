@@ -363,7 +363,7 @@ This config is, bit for bit, the simulation the script built before
     `flux_map`, `most`), `[microphysics] scheme` (`none`, `kessler`) and
     `[advection] scheme` (`centred`). The selector key names the provider;
     the section holds that provider's options and no other's (`[sgs] model
-    = "tke"` with `e_min`, `surface_factor`, `wall_cap`, `stress`; a
+    = "tke"` with `e_min`, `surface_factor`, `wall_cap`, `wall_cap_top`, `surface_value`, `stress`; a
     `c_s` there is an error naming the closures that have one), and the
     resolved config shows the provider with all its options. A selector
     set by `--set`, `with` or a `[domain.<section>]` block that names

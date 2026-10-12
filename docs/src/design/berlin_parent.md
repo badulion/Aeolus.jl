@@ -10,8 +10,10 @@ boundary data, two-way feedback, the parent as default of the Berlin run
 — is N-berlin-nest (#265).
 
 Code: `src/components/urban/parent/config.jl` (`ParentConfig`),
-`src/components/urban/parent/case.jl` (`build_parent`, `step_parent!`,
-`run_parent!`), the surface `src/components/urban/parent/surface.jl` (#249),
+`src/components/urban/parent/components.jl` (its physics as components of
+its domain, NEST-p1 #481), `src/components/urban/parent/case.jl`
+(`parent_domain`, `build_parent`, `step_parent!`, `run_parent!`), the
+surface `src/components/urban/parent/surface.jl` (#249),
 the run `examples/urban/berlin_parent.toml` (the `urban_parent`
 driver, `src/components/urban/site/parent_driver.jl`, #438; figures from its output:
 `examples/urban/berlin_parent_figures.jl <run folder>`), the checks
@@ -71,6 +73,19 @@ section of the Berlin case page.
 | surface | the tiled mosaic of #249 | `build_parent_surface` with the child's class-to-surface factory; see *Surface coupling* |
 | radiation | the child's column radiation | `column_radiation!` on the parent's plane-mean column (`stitched_column` with the stretched layer thicknesses), every 600 s; the sun of the child's clock (`solar_position_at`) |
 | budgets | two `StageBudget`s (#253; `Aeolus.BudgetSystem`, ONE-c #452) | heat of the air ``Σ ρ̄c_pΠ̄θΔV/A`` and water of the air ``Σ ρ̄q_vΔV/A`` (the same meter with Π̄ = c_p = 1) |
+
+Since NEST-p1 (#481) the parent is a `Components.Domain` whose components
+are these pieces ([`parent_domain`](@ref Aeolus.Urban.parent_domain)):
+the surface is the `:surface` slot's `TiledSurface` (on the tile form of
+the parent's static driver) or `PrescribedSurfaceFlux`, the radiation the
+`:radiation` slot's `MeanColumnRadiation`, the geostrophic wind, nudging,
+subsidence and θ damping the `LargeScale` component (its
+`BoundaryLayerTracker` holds the running z_i of the nudging weight), the
+SGS `[sgs] model = "tke"` (the exact wall distance of the stretched grid,
+the bottom only; the tiles' u* as its surface value). `step_parent!`
+runs their stage entries in the pipeline's order inside the ledgers; the
+domain alone through the pipeline is the same run, bit for bit. The core
+keeps its built-in Coriolis term, Rayleigh sponge and θ top.
 
 Nothing in the parent is a copy. Four pieces of the child were factored so
 that both domains call one function: the column radiation
