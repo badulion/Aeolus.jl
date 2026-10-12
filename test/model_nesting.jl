@@ -778,7 +778,7 @@ function mn_core(kind, mesh, bcs, θbcs)
 end
 
 # a 3.2 km deep parent and a 1.6 km deep child (ρ̄ falls by 17 % over it)
-function mn_mixed(pk, ck; feedback = :two_way)
+function mn_mixed(pk, ck; feedback = :two_way, qs = (), adaptive = false)
     pm = RegularGrid(; size = (16, 16, 16), extent = (3200.0, 3200.0, 3200.0))
     nest = nested_grid(pm, ((800.0, 2400.0), (800.0, 2400.0), (0.0, 1600.0)), 2)
     p = mn_core(pk, pm, FieldBoundaryConditions(:periodic, :periodic, :wall), FieldBoundaryConditions(:periodic, :periodic, :noflux))
@@ -790,8 +790,9 @@ function mn_mixed(pk, ck; feedback = :two_way)
         set!(s.v, (x, y, z) -> 0.7)
     end
     scheme = ck === :anelastic ? :euler : :rk3                   # the anelastic RK3 step takes no open faces
-    dp = Domain(p; id = "p", scheme = scheme, components = (CentredAdvection(),))
-    dc = Domain(c; id = "c", scheme = scheme, components = (CentredAdvection(),))
+    cfl = adaptive ? CFLConstraints(; C_advective = 0.5, dt_max = 30.0) : nothing
+    dp = with_budgets(Domain(p; id = "p", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    dc = with_budgets(Domain(c; id = "c", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
     return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)]), nest
 end
 
@@ -862,4 +863,21 @@ end
         step!(m2, 4.0)
     end
     @test MNC.core(m2.domains[2]) === :anelastic && all(isfinite, interior_view(m2.domains[2].state.θ))
+end
+
+@testset "both cores: budgets close and adaptive windows run on a mixed nest ($pk parent, $ck child)" for (pk, ck) in ((:anelastic, :boussinesq), (:boussinesq, :anelastic), (:anelastic, :anelastic))
+    m, nest = mn_mixed(pk, ck; qs = (:energy, :momentum_x), adaptive = true)
+    ns = Int[]
+    for _ in 1:4
+        _, Δt, r = step_adaptive!(m)
+        push!(ns, nest_link(m, "c").stats.n_last)
+    end
+    @test all(>=(2), ns)
+    for d in m.domains, q in (:energy, :momentum_x)
+        meas = budgets(d).measured[q]
+        sb = stage_budget(meas)
+        content = abs(Aeolus.BudgetSystem.measure(meas.meter, q === :energy ? d.state.θ : d.state.u))
+        @test abs(sb.closure) <= 1e-12 * content
+    end
+    @test nest_exchange(m.domains[2], :energy) != 0 && nest_exchange(m.domains[1], :energy) != 0
 end
