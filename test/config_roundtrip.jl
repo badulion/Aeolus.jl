@@ -206,15 +206,17 @@ end
     # output's record written after the checkpoint is rewritten to the same values
     r = resume_check(joinpath(RT_EXAMPLES, "urban", "berlin_smoke.toml");
                      nsteps = 12, stop = 9, every_steps = 6, nsteps_overrides = n -> ["time.nsteps=$n"],
-                     overrides = ["urban.netcdf=\"smoke.nc\"", "output.path=\"none\""])
+                     overrides = ["output.netcdf=\"smoke.nc\"", "output.path=\"none\"",
+                                  "output.variables=[\"u\", \"theta\", \"qv\", \"Ts\", \"hour\"]"],
+                     outputs = ["smoke.nc"])
     @test r.fields_equal && isempty(r.fields_differing)
     isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
     @test r.statuses == ["interrupted", "completed"]
-    c1, c2 = r.runs[1].obj.case, r.runs[2].obj.case
+    site(x) = Aeolus.Urban.urban_case(only(x.obj.model.domains))
+    c1, c2 = site(r.runs[1]), site(r.runs[2])
     @test c2.clock.n == c1.clock.n && c2.sim.t === c1.sim.t === 24.0 && c2.clock.nrecord == c1.clock.nrecord == 2
     @test any(k -> startswith(String(k), "parent_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))
-    nc(case) = NCDatasets.NCDataset(case.cfg.output_path) do ds
-        Dict(k => Array(ds[k].var) for k in keys(ds))
-    end
-    @test c1.cfg.output_path != c2.cfg.output_path && isequal(nc(c1), nc(c2))
+    # the output (the run's writer, ONE-k #474): the record written after the
+    # checkpoint is rewritten to the same values
+    @test r.outputs_equal
 end

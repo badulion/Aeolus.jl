@@ -179,3 +179,80 @@ option(opts, key::Symbol, default) = hasproperty(opts, key) ? getproperty(opts, 
 # A stateless component: nothing to checkpoint (the IO component contract).
 checkpoint_state(::AbstractComponent) = nothing
 restore_checkpoint_state!(c::AbstractComponent, ::Nothing) = c
+
+# ---------------------------------------------------------------------------
+# the run (ONE-k, #474): what the run loop of `aeolus run` asks a component
+# ---------------------------------------------------------------------------
+
+"""
+    run_begin!(c, d::Domain, t_end)
+
+Called by the run loop of `aeolus run` once before its first step, with
+the model time `t_end` it runs to. Default: nothing. The urban site sets
+its horizon there (its nest steps the parent ahead to it, SC-c #403) and
+records the run's start.
+"""
+run_begin!(::AbstractComponent, d, t_end) = nothing
+
+"""
+    run_end!(c, d::Domain)
+
+Called by the run loop after its last step, also when the run stops with
+an error. Default: nothing. A component that works ahead of its domain on
+a task of its own finishes that work here (the urban nest's prefetched
+parent step).
+"""
+run_end!(::AbstractComponent, d) = nothing
+
+"""
+    run_continues(c, d::Domain) -> Bool
+
+For the component that [`takes_core_step`](@ref): whether the run loop
+takes another step, up to the `t_end` of [`run_begin!`](@ref).
+"""
+function run_continues end
+
+"""
+    step_report(c, d::Domain) -> (limiter::String, retries::Int)
+
+For the component that [`takes_core_step`](@ref): what limited the step
+it picked last ([`next_dt`](@ref)) and its rejected attempts so far, for
+the step's diagnostics row. Default `("", 0)`.
+"""
+step_report(::AbstractComponent, d) = ("", 0)
+
+"""
+    run_results(c, d::Domain) -> Dict{String,Any}
+
+The numbers of a finished run that `c` adds to the run's `results.toml`
+(next to the checks `[checks]` enables). Default: none.
+"""
+run_results(::AbstractComponent, d) = Dict{String,Any}()
+
+"""
+    run_diagnostics(c, d::Domain) -> Union{Nothing,Tuple}
+
+For the component that [`takes_core_step`](@ref): `nothing` (the
+default: the run monitor collects the core's and the components'
+diagnostics itself), or `(diagnostics, profiles)`, every scalar and
+profile of the run's diagnostics files (the urban site's own registry).
+"""
+run_diagnostics(::AbstractComponent, d) = nothing
+
+"""
+    state_arrays(c, d::Domain) -> NamedTuple
+
+The prognostic arrays `c` carries besides the core's fields, `name =>
+array`, for the bitwise comparisons of a run's state (`state_fields`):
+the urban site's tracers, surface temperature and nest parent. Default:
+none.
+"""
+state_arrays(::AbstractComponent, d) = (;)
+
+"""
+    static_outputs(c) -> Vector{OutputVariable}
+
+Maps `c` writes once into the domain's output file, without a time
+dimension (`:xy` or `:xyz`; the urban site's geometry). Default: none.
+"""
+static_outputs(::AbstractComponent) = OutputVariable[]

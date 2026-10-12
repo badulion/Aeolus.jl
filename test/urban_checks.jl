@@ -4,7 +4,7 @@
 # and checks 1-3 of test/berlin_parent.jl. Full tier (test_tags.toml):
 #
 #   flagship  the Berlin summer case (64³, 1 km × 1 km × 400 m, nested) for
-#           20 adaptive steps, past step 16 where step_case!(case, cfg.dt)
+#           20 adaptive steps, past step 16 where step!(model, cfg.dt)
 #           failed (#392): no retry, CFL ≤ C_advective, |u_i| < 20 m/s, θ
 #           within 2 K of its initial range; the forced 2 s step is rejected;
 #   smoke   every coupling of the run type in a short window of the real OSM
@@ -39,14 +39,14 @@ using Logging
 using Random: Xoshiro
 using Aeolus.SurfaceTiles: last_tile_fluxes, parameter_aggregate, mosaic_fractions
 
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 # smoke_matrix(registry) and seed_fog!(case, rng), shared with the
 # thread-invariance harness (KA-a, #294)
 include(joinpath(@__DIR__, "support", "smoke_matrix.jl"))
 
 """
-    berlin_default(; kw...) -> CaseConfig
+    berlin_default(; kw...) -> NamedTuple
 
 The Berlin summer case with its ground from its static driver, and the
 parent land use and sounding read from their sources in memory (no
@@ -55,8 +55,8 @@ test/input_dynamic.jl), so that a parent of any refinement can be built;
 no NetCDF output. (Before ONE-h, #457, the ground was rasterised from the
 OSM file in memory too: the same rasters, test/input_static.jl.)
 """
-berlin_default(; kw...) = BC.CaseConfig(berlin_toml("summer"); parent_static = nothing,
-                                        dynamic = nothing, output_path = nothing, kw...)
+berlin_default(; kw...) = site_config(berlin_toml("summer"); parent_static = nothing,
+                                        dynamic = nothing, kw...)
 
 allfinite(x) = all(isfinite, x)
 
@@ -73,7 +73,7 @@ function berlin_smoke_checks()
                 t0 = time()
                 case = BC.build_case(cfg)
                 seed_fog!(case, Xoshiro(127))
-                BC.run_case!(case)
+                run_site!(case)
                 union!(exercised, BC.component_name.(case.couplings))
                 sim, bus = case.sim, case.bus
                 # nsteps·dt of simulated time (in nsteps steps, unless the
@@ -337,8 +337,7 @@ end
 "parent: the parent smoke run and the idealised validations."
 function berlin_parent_checks()
     @testset "Berlin parent smoke: every forcing, 12 steps, ledgers close (#259)" begin
-        child = berlin_default()
-        child.start_h = 10.0                       # sun up, convective
+        child = berlin_default(; start_h = 10.0)   # sun up, convective
         # subsidence is off by default (divergence = 0, #312): on here at D = 3e-6 s⁻¹
         p = BC.build_parent(BC.ParentConfig(child; refinement = (16, 16, 8), divergence = 3e-6))
         @test all(f -> f !== nothing, values(p.forcing))
@@ -445,7 +444,7 @@ end
 """
 flagship: the Berlin summer case (64³, 1 km × 1 km × 400 m,
 every default coupling, the nest on), for `FLAGSHIP_STEPS` steps of the
-adaptive stepper (#392). `step_case!(case, cfg.dt)` used to force 2 s steps
+adaptive stepper (#392). `step!(model, cfg.dt)` used to force 2 s steps
 against a stable step that fell to 0.09 s: the guard passed them, |v|
 grew to 49 m/s and the run failed at step 16; that dt is now rejected,
 and the stepper's own steps run past step 16 without a retry.
@@ -460,12 +459,12 @@ function berlin_flagship_checks()
         θ0 = extrema(interior_view(sim.θ))
         ts = BC.timestepper(case)
         # the forced fixed step of the failing run is refused, nothing changed
-        @test_throws ArgumentError BC.step_case!(case, cfg.dt)
+        @test_throws ArgumentError step!(case.model, cfg.dt)
         @test case.clock.n == 0 && sim.t == 0
         t_start = time()
         vmax = 0.0
         for n in 1:FLAGSHIP_STEPS
-            @test BC.step_case!(case)
+            @test (step!(case.model); !case.clock.blowup)
             vmax = max(vmax, maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)),
                        maximum(abs, interior_view(sim.w)))
         end

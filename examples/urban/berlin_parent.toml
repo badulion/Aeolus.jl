@@ -49,11 +49,13 @@ every_seconds = inf
 keep = 2
 
 [output]
-# Output: the site writes its NetCDF file ([urban] netcdf) into path.
+# Output: the run writes the variables it selects to its NetCDF file in path.
 # output directory; "none": the run folder's output/. The flagship writes
 # examples/urban/output/alexanderplatz.nc, where the renderers
 # (alexanderplatz_animation.jl, alexanderplatz_surface_diagnostics.jl) read it
 path = "output"
+# the NetCDF-4 file of the run in path
+netcdf = "alexanderplatz.nc"
 # simulated time between output files [s]
 cadence = 1800.0
 
@@ -89,7 +91,7 @@ g = 9.81
 
 [urban]
 # The urban site: the ground, the clock, the core's parameters, the lateral
-# boundaries, the initial state, the budgets and the output of Aeolus.UrbanCase.
+# boundaries, the initial state, the budgets and the output of Aeolus.Urban.
 # the domain is an urban site
 enabled = true
 # the scenario label (summer, winter, …): the output's comment; winter selects
@@ -97,10 +99,6 @@ enabled = true
 scenario = "summer"
 # CPUBackend(serial = true): the single-task reference
 serial = false
-# file name of the site's NetCDF-4 output in [output] path (the run folder's
-# output/ under aeolus run, else output/ in the working directory); "none": no
-# NetCDF
-netcdf = "alexanderplatz.nc"
 # with the online nest: write the child's boundary slabs at every parent step,
 # the 3-D initial wind and the parent's mean profiles to this dynamic driver
 # (CFG-g #362; the file of an offline child); "none": not written

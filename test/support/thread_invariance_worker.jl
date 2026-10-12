@@ -27,7 +27,7 @@
 #               species fields they update;
 #   smoke       every run of the Berlin smoke matrix (test/support/
 #               smoke_matrix.jl), 12 steps (a variable-step run: to
-#               12 dt, as run_case! runs it): every field of the simulation,
+#               12 dt, as the run loop runs it): every field of the simulation,
 #               every tracer, every Float64 array of the surface bus, the
 #               surface / water / air-heat ledgers, the dt sequence and the
 #               pressure-solver iteration counts per step;
@@ -282,7 +282,7 @@ function section_reductions()
 end
 
 # --------------------------------------------------------------------------
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "berlin_configs.jl"))
 include(joinpath(@__DIR__, "smoke_matrix.jl"))
 
@@ -293,11 +293,11 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
     variable = ts !== nothing && BC.variable_dt(typeof(ts))
     dts = Float64[]; iters = Int[]
     t_end = case.sim.t + nsteps * cfg.dt
-    # run_case!'s loop and horizon (SC-c, #403): a one-way nest prefetches the
+    # the run loop's horizon (SC-c, #403): a one-way nest prefetches the
     # parent's next window on its own task when Julia runs threaded, so -t 4 /
     # -t 24 against -t 1 is also the prefetched against the sequential parent.
     # The loop must stop where the horizon says (a variable-step run goes to
-    # t_end, as run_case! does, not nsteps steps): a prefetch is started only
+    # t_end, as the run loop does, not nsteps steps): a prefetch is started only
     # for a window the run will reach, and the parent hashed at the end is at
     # the same window end with and without it.
     clk = case.clock
@@ -307,8 +307,9 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
     while variable ? BC.step_will_run(clk, case.sim.t) : n < nsteps
         n += 1
         t0 = case.sim.t
-        ok = variable ? BC.step_case!(case, BC.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
-                        BC.step_case!(case, cfg.dt)
+        variable ? step!(case.model, Aeolus.Components.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
+                   step!(case.model, cfg.dt)
+        ok = !case.clock.blowup
         push!(dts, case.sim.t - t0)
         append!(iters, solver_iters(case.sim))
         ok || break
@@ -341,13 +342,12 @@ end
 
 function section_smoke()
     for (label, cfg) in smoke_matrix()
-        cfg.backend = BACKEND
-        run_hashed!("smoke[$label]", cfg)
+        run_hashed!("smoke[$label]", merge(cfg, (; backend = BACKEND)))
     end
 end
 
 function section_flagship()
-    cfg = BC.CaseConfig(berlin_toml("summer"); output_path = nothing, backend = BACKEND)
+    cfg = site_config(berlin_toml("summer"); backend = BACKEND)
     run_hashed!("flagship", cfg; seed = false, nsteps = 1)
 end
 
@@ -546,7 +546,7 @@ function section_columns()
     # emitted terms added), threaded the column_sum launch (a 3-tuple per
     # column, zeros included); equal hashes across the counts mean the two
     # paths give the same fields and totals
-    ac = BC.build_case(BC.CaseConfig(berlin_toml("smoke"); output_path = nothing))
+    ac = BC.build_case(site_config(berlin_toml("smoke")))
     aq = BC.find_coupling(ac, :aq_chem)
     BC._aq_sun!(aq, ac)
     with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)

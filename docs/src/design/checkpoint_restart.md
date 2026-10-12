@@ -243,7 +243,7 @@ Run folders of the old `berlin` example driver (before #438) cannot be
 resumed: their `run.toml` names a driver that no longer exists, and their
 checkpoints hold the case's types under the example's module
 (`Main.AeolusDriver_berlin`), which Serialization cannot map to
-`Aeolus.UrbanCase`; start such a run again from its config (today a
+`Aeolus.Urban`; start such a run again from its config (today a
 model config of an urban site, ONE-e #454). Run folders of the `urban`
 run type (`[run] legacy = "urban"`, before ONE-e) cannot be resumed
 either: the type is gone (a clean break); start them again from the

@@ -32,7 +32,7 @@ using Aeolus.Grids: xnodes, znodes
 using Aeolus.NCIO: NCDataset
 import NCDatasets
 
-const BCI = Aeolus.UrbanCase
+const BCI = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
 
@@ -140,7 +140,7 @@ end
     m = geo_mesh(160.0, 10.0)
     # the cities of the committed Berlin drivers (OpenStreetMap, NaN-separated rings and the
     # OSM attributes: levels, roof shapes, materials) and the hand-written one
-    berlin(s) = (c = BCI.CaseConfig(berlin_toml(s)); BCI.case_static_inputs(c, meshof(c)).city)
+    berlin(s) = (c = site_config(berlin_toml(s)); BCI.case_static_inputs(c, meshof(c)).city)
     for (label, city) in ("summer" => berlin("summer"), "mitte_sample" => berlin("mitte_sample"),
                           "three_buildings" => three_buildings())
         p = tempname() * ".nc"
@@ -230,27 +230,27 @@ end
 
 @testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's, bit for bit" begin
     # smoke: from the committed static driver
-    cs = BCI.CaseConfig(berlin_toml("smoke"))
+    cs = site_config(berlin_toml("smoke"))
     @test endswith(cs.static, "urban/input/berlin_smoke_static.nc")
     @test geom_digests_equal("smoke", BCI.build_geometry(cs, meshof(cs)))
     # the Mitte sample at 32 × 32 × 16, nested (frame) and periodic (no frame, wrapped
     # walls): its committed driver's polygons rasterised on that grid give the
     # digests the OSM file did in memory (before ONE-h, #457)
-    full = BCI.CaseConfig(berlin_toml("mitte_sample"))
+    full = site_config(berlin_toml("mitte_sample"))
     mitte = BCI.case_static_inputs(full, meshof(full)).city
-    for (label, c) in ("mitte_sample" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16)),
-                       "mitte_periodic" => BCI.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16),
+    for (label, c) in ("mitte_sample" => site_config(berlin_toml("mitte_sample"); size = (32, 32, 16)),
+                       "mitte_periodic" => site_config(berlin_toml("mitte_sample"); size = (32, 32, 16),
                                                           lateral = :periodic,
                                                           overrides = ["nesting.enabled=false"]))
         m = meshof(c)
         ox, oy = BCI.anchor_xy(c, m)
-        c.static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0, origin_lon = c.lon0,
-                                       origin_x = ox, origin_y = oy)
+        c = merge(c, (; static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0,
+                                                     origin_lon = c.lon0, origin_x = ox, origin_y = oy)))
         @test geom_digests_equal(label, BCI.build_geometry(c, m))
         rm(c.static)
     end
     # summer, 64 × 64 × 64: masks, classes and heightmap at setup
-    c = BCI.CaseConfig(berlin_toml("summer"))
+    c = site_config(berlin_toml("summer"))
     mesh = meshof(c)
     st = BCI.case_static_inputs(c, mesh)
     @test !isempty(st.attributes)                        # read from the file
@@ -266,7 +266,7 @@ end
     @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
     # the nest parents' land use, from their static drivers and in memory
     for s in (:smoke, :summer)
-        pc = BCI.nest_parent_config(BCI.CaseConfig(berlin_toml(s)))
+        pc = BCI.nest_parent_config(site_config(berlin_toml(s)))
         pm = BCI.parent_mesh(pc)
         d = IS_DIGESTS["parent_$s"]
         for pl in (BCI.parent_landuse(pc, pm), BCI.parent_landuse_source(pc, pm))
@@ -281,7 +281,7 @@ end
     @test inp["domain.main.urban.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
     # a grid the file was not made for is refused, naming both grids and the command
     e = try
-        BCI.build_geometry(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16)), meshof(BCI.CaseConfig(berlin_toml("smoke"); size = (8, 8, 16))))
+        BCI.build_geometry(site_config(berlin_toml("smoke"); size = (8, 8, 16)), meshof(site_config(berlin_toml("smoke"); size = (8, 8, 16))))
         nothing
     catch err
         sprint(showerror, err)
@@ -297,7 +297,7 @@ end
     @test e isa ConfigError && occursin("AeolusPrep static $(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))", sprint(showerror, e))
     # no static driver at all: no ground, an error naming AeolusPrep, not a flat city
     e = try
-        BCI.build_geometry(BCI.CaseConfig(berlin_toml("smoke"); static = nothing), meshof(cs)); nothing
+        BCI.build_geometry(site_config(berlin_toml("smoke"); static = nothing), meshof(cs)); nothing
     catch err
         sprint(showerror, err)
     end
@@ -307,7 +307,7 @@ end
 @testset "InputDrivers: the committed Berlin static drivers" begin
     # AeolusPrep.jl reproduces them (its test/recipes.jl); here: small, valid
     for s in ("summer", "smoke", "mitte_sample")
-        cc = BCI.CaseConfig(berlin_toml(s))
+        cc = site_config(berlin_toml(s))
         for (f, sch) in ((cc.static, STATIC_SCHEMA), (cc.parent_static, STATIC_TILES_SCHEMA))
             @test filesize(f) <= 2 * 1024^2                 # committed: 2 MB or smaller
             @test isempty(check_driver(f, sch))

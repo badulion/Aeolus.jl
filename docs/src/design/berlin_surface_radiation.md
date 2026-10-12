@@ -2,8 +2,8 @@
 
 ## Surface exchange (#129)
 
-`couplings/surface_exchange.jl` (slot `:surface_exchange`, provider
-`:most`) and `couplings/ground_soil.jl` (slot `:ground`, provider
+`components/urban/surface_exchange.jl` (slot `:surface_exchange`, provider
+`:most`) and `components/urban/ground_soil.jl` (slot `:ground`, provider
 `:soil_column`) replaced the slab scheme of #126 (`surface_slab.jl`,
 `soil_urban.jl`).
 
@@ -231,7 +231,7 @@ magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
 The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent
 with Δx = 31.25 m and Δz = 25 m. At that resolution the buildings are
 not resolved: the parent sees Berlin as a heterogeneous surface. Its
-surface is `src/urban/parent/surface.jl`, a tiled mosaic
+surface is `src/components/urban/parent/surface.jl`, a tiled mosaic
 (`Aeolus.SurfaceTiles`, Avissar & Pielke 1989) per parent column. The
 parent case (N-parent-e, #259; [The Berlin parent](berlin_parent.md))
 couples it to the 3-D parent run under the parent's own air and radiation;
@@ -268,7 +268,7 @@ footprint's edge.
 **Tiles.** Every tile is `class_surface(case, SurfaceSite(c; T_skin,
 z0m, z0h))`, the same class-to-surface factory the surface exchange
 builds the child's columns with (factored out of
-`couplings/surface_exchange.jl`). When the park (#140) and water (#141)
+`components/urban/surface_exchange.jl`). When the park (#140) and water (#141)
 couplings register their factories, the parent changes with the child.
 
 **Unresolved buildings.** `SurfaceTiles.macdonald_roughness` (Macdonald,
@@ -339,7 +339,7 @@ Meteorol. Climatol.* 46, 1067-1079. Avissar, R. & Pielke, R. A. (1989),
 ## Facade wall model (#179)
 
 The building facades are walls of `Aeolus.WallModels`
-(`couplings/wall_model_facades.jl`, addon, on by default). Before #179
+(`components/urban/wall_model_facades.jl`, addon, on by default). Before #179
 the facades had no wall model: the direct-forcing IBM zeroes the
 velocity inside the buildings, and the facade momentum flux was the
 viscous and eddy-viscosity stencils' ``(ν + ν_t)(u - 0)/Δ`` — an

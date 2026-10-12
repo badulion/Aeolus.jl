@@ -1130,8 +1130,7 @@ export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
        apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
 # P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
-# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
-# `step_case!` / `run_case!` (Aeolus.UrbanCase, not exported).
+# `advance_channel!` / `run_channel!` are the harness's own names.
 export WallBoundedCase, half_channel_case, channel_case,
        advance_channel!, run_channel!, channel_dt,
        channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
@@ -1198,14 +1197,15 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
 # fixed stage pipeline (the component interface: Aeolus.Components).
 export Model, Domain
 
-# EX-a (#438), ONE-e (#454): the urban site of the model (`[urban] enabled`;
-# the Berlin case is examples/urban/berlin_*.toml). A submodule, not
-# exported: its names (CaseConfig, build_case, …) stay under Aeolus.UrbanCase.
-include("UrbanCase.jl")
+# EX-a (#438), ONE-e (#454), ONE-k (#474): the urban site of the model
+# (`[urban] enabled`; the Berlin case is examples/urban/berlin_*.toml), its
+# components under src/components/urban/. A submodule, not exported: its
+# names (site_options, build_case, …) stay under Aeolus.Urban.
+include("components/urban.jl")
 
 # CFG-b (#357): the model's configuration and run (needs the dynamical
 # cores and the components, so after them; the driver contract and the CLI
-# are in Config). After UrbanCase (ONE-e, #454): the urban site's sections
+# are in Config). After Urban (ONE-e, #454): the urban site's sections
 # and components are part of the model's schema.
 include("config/simulation_driver.jl")
 

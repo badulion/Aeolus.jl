@@ -15,7 +15,7 @@ makedocs(
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations, Aeolus.Components,
                 Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
-                Aeolus.UrbanCase, Aeolus.RunDrivers],
+                Aeolus.Urban, Aeolus.RunDrivers],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -29,7 +29,7 @@ makedocs(
         # references that hold the urban site (one table per urban component,
         # ONE-e #454); Documenter's 200 KiB limit otherwise fails the build
         size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/model.md",
-                                 "reference/options/urban_parent.md", "api/urban_case.md"],
+                                 "reference/options/urban_parent.md", "api/urban.md"],
     ),
     pages = [
         "Home"           => "index.md",
@@ -140,7 +140,7 @@ makedocs(
             "Run configuration"    => "api/config.md",
             "Example run types"    => "api/run_drivers.md",
             "Input drivers"        => "api/input_drivers.md",
-            "Urban site"           => "api/urban_case.md",
+            "Urban site"           => "api/urban.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [
