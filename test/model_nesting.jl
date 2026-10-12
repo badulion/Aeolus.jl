@@ -74,7 +74,30 @@ mn_child(; id = "inner", parent = "outer", origin = "[400.0, 400.0]", feedback =
     extent = $extent
     """
 mn_two(; kw...) = MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child(; kw...)
-mn_cfg(text; overrides = String[]) = load_run_config(IOBuffer(text); overrides = overrides)
+# The tests write the sections their domains share once, at run level;
+# `mn_complete` writes them into every [[domain]] block (a block's own
+# values win), the complete per-domain form the loader takes (NEST-p3), and
+# an override of a per-domain section becomes one per domain.
+const MN_PER_DOMAIN = Set(String(s) for s in Aeolus.SimulationDriver.DOMAIN_SECTIONS if s != "domain")
+_mn_merge(a, b) = (out = deepcopy(a); for (k, v) in b; out[k] = v isa AbstractDict && get(out, k, nothing) isa AbstractDict ?
+                                                            _mn_merge(out[k], v) : v; end; out)
+function mn_complete(text)
+    t = TOML.parse(text)
+    haskey(t, "domain") || return text
+    shared = Dict(k => pop!(t, k) for k in collect(keys(t)) if k in MN_PER_DOMAIN)
+    for b in t["domain"], (k, v) in shared
+        b[k] = _mn_merge(v, get(b, k, Dict{String,Any}()))
+    end
+    io = IOBuffer(); TOML.print(io, t); return String(take!(io))
+end
+function mn_overrides(text, ovr)
+    t = TOML.parse(text)
+    haskey(t, "domain") || return ovr
+    ids = [get(b, "id", "main") for b in t["domain"]]
+    return reduce(vcat, (first(split(o, '.')) in MN_PER_DOMAIN ? ["domain.$id." * o for id in ids] : [o] for o in ovr);
+                  init = String[])
+end
+mn_cfg(text; overrides = String[]) = load_run_config(IOBuffer(mn_complete(text)); overrides = mn_overrides(text, overrides))
 
 @testset "the self-nesting default is two-way" begin
     m = RegularGrid(; size = (8, 8, 8), extent = (800.0, 800.0, 800.0))

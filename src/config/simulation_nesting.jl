@@ -89,7 +89,7 @@ function _nest_checks(cfg)
     for (i, d) in enumerate(ds)
         d.core.model in (:boussinesq, :anelastic) ||
             push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq or the anelastic core"))
-        i > 1 && d.core.model === :anelastic && cfg.timestep.scheme === :rk3 &&
+        i > 1 && d.core.model === :anelastic && d.timestep.scheme === :rk3 &&
             push!(e, ConfigError(key(i, "core.model"), "an anelastic nested domain has open (nest) faces, which the anelastic SSP-RK3 step does not take: step the nest with [timestep] scheme = \"euler\""))
         d.grid.stretching === :uniform ||
             push!(e, ConfigError(key(i, "grid.stretching"), "a nested model takes uniform grids"))

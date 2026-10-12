@@ -89,23 +89,24 @@ end
     @test with(c2, "sgs.c_s" => 1.5).sgs.c_s == 1.5
     @test_throws ConfigError with(c2, "sgs.e_min" => 1e-3)
     @test_throws ConfigError with(c2, "sgs.model" => :lasd)
-    # a [[domain]] block's selector replaces the run-level provider for that domain
+    # each [[domain]] block selects its own provider, with its own options
     two = """
         [time]
         dt = 1.0
-        [sgs]
-        model = "tke"
-        e_min = 1e-4
-        [grid]
-        size = [8, 8, 8]
         [[domain]]
         id = "outer"
+        [domain.sgs]
+        model = "tke"
+        e_min = 1e-4
+        [domain.grid]
+        size = [8, 8, 8]
         [[domain]]
         id = "inner"
         parent = "outer"
         origin = [1200.0, 1200.0]
         refinement = [8, 8, 8]
         [domain.grid]
+        size = [8, 8, 8]
         extent = [400.0, 400.0, 200.0]
         [domain.sgs]
         model = "amd"
@@ -113,9 +114,12 @@ end
     ds = config_domains(load_run_config(IOBuffer(two)))
     @test [d.sgs.model for d in ds] == [:tke, :amd]
     @test ds[1].sgs.e_min == 1e-4 && !haskey(getfield(ds[2].sgs, :values), "e_min")
-    # but a block's option of a provider the run level selects for it is an error
-    e = sl_error(() -> load_run_config(IOBuffer(replace(two, "model = \"amd\"" => "c_s = 0.3"))))
-    @test haskey(sl_keys(e), "domain[2].sgs.c_s")
+    # nothing is inherited: an option of another domain's provider is not this one's
+    e = sl_error(() -> load_run_config(IOBuffer(replace(two, "model = \"amd\"" => "c_s = 0.3\ne_min = 1e-3"))))
+    @test haskey(sl_keys(e), "domain[2].sgs.e_min")
+    # an override that changes one domain's provider drops that domain's options of the old one
+    ds = config_domains(load_run_config(IOBuffer(two); overrides = ["domain.outer.sgs.model=\"vreman\""]))
+    @test [d.sgs.model for d in ds] == [:vreman, :amd] && !haskey(getfield(ds[1].sgs, :values), "e_min")
 end
 
 @testset "slot sections: the providers are those of the domain's kind" begin

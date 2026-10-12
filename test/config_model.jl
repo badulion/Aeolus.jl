@@ -7,8 +7,8 @@
 #     perturbed, θ is conserved between its no-flux walls, the SGS acts and
 #     ∇·u stays at round-off;
 #   * the component sections are generated from the component schemas;
-#   * [[domain]]: run-level values apply to every domain, a [domain.<section>]
-#     table replaces keys for its domain, --set applies over the blocks; the
+#   * [[domain]]: every domain carries its complete configuration (NEST-p3: no
+#     run-level module sections), --set domain.<id>.… addresses one; the
 #     resolved config lists every component's options per domain and reloads
 #     to itself; a single-domain config may write its domain keys at the top
 #     level, which resolves to the same config as one [[domain]] block;
@@ -112,12 +112,12 @@ const CM_TWO = """
     schema_version = 2
     [time]
     dt = 1.0
-    [sgs]
-    model = "vreman"
-    [grid]
-    size = [8, 8, 8]
     [[domain]]
     id = "outer"
+    [domain.sgs]
+    model = "vreman"
+    [domain.grid]
+    size = [8, 8, 8]
     [[domain]]
     id = "inner"
     parent = "outer"
@@ -126,24 +126,32 @@ const CM_TWO = """
     [domain.sgs]
     model = "amd"
     [domain.grid]
+    size = [8, 8, 8]
     extent = [400.0, 400.0, 200.0]
     """
 
-@testset "[[domain]]: run-level values, per-domain overrides, the resolved config" begin
+@testset "[[domain]]: complete per-domain sections, per-domain overrides, the resolved config" begin
     p = cm_file(CM_TWO)
     cfg = load_run_config(p)
     ds = config_domains(cfg)
     @test [d.domain.id for d in ds] == ["outer", "inner"]
-    @test [d.sgs.model for d in ds] == [:vreman, :amd]                      # the block replaces a key
-    @test [d.grid.size for d in ds] == [(8, 8, 8), (8, 8, 8)]                 # the run-level value, both
+    @test [d.sgs.model for d in ds] == [:vreman, :amd]                      # each block its own
+    @test [d.grid.size for d in ds] == [(8, 8, 8), (8, 8, 8)]
     @test [d.grid.extent for d in ds] == [(3200.0, 3200.0, 1600.0), (400.0, 400.0, 200.0)]
     @test config_origin(cfg, "domain[2].sgs.model") == p && config_origin(cfg, "domain[1].grid.extent") == "default"
     # per-domain sections are reached through the domains
     @test_throws ArgumentError cfg.grid
     @test domain_view(cfg, 2).sgs.model === :amd && domain_view(cfg, 2).time == cfg.time
-    # --set applies to every domain, over the blocks
-    c2 = load_run_config(p; overrides = ["sgs.model=\"sigma\""])
-    @test [d.sgs.model for d in config_domains(c2)] == [:sigma, :sigma]
+    # --set addresses one domain, by its id or its number (NEST-p3)
+    c2 = load_run_config(p; overrides = ["domain.inner.sgs.model=\"sigma\"", "domain.1.grid.halo=[3, 3, 3]"])
+    @test [d.sgs.model for d in config_domains(c2)] == [:vreman, :sigma]
+    @test [d.grid.halo for d in config_domains(c2)] == [(3, 3, 3), (2, 2, 2)]
+    @test config_origin(c2, "domain[2].sgs.model") == "--set"
+    # a run-level override of a per-domain section is refused, as a run-level section is
+    e = cm_error(() -> load_run_config(p; overrides = ["sgs.model=\"sigma\""]))
+    @test only(e.problems).key == "sgs" && occursin("[domain.sgs]", only(e.problems).message)
+    e = cm_error(() -> load_run_config(p; overrides = ["domain.middle.sgs.model=\"sigma\""]))
+    @test occursin("no [[domain]] block \"middle\"", only(e.problems).message)
     @test [d.sgs.model for d in config_domains(with(cfg, "sgs.model" => :none))] == [:none, :none]
     # the resolved config lists every component's options, per domain, and reloads to itself
     t = config_text(cfg)
@@ -179,13 +187,16 @@ end
 end
 
 @testset "validation: per domain, with the sections named" begin
-    # a block's own bad value, under domain[i]; a run-level bad value once, under its key
+    # a block's own bad value, under domain[i]; a run-level module section is refused
     e = cm_error(() -> load_run_config(IOBuffer(CM_TWO * "[domain.time]\nscheme = \"rk3\"\n")))
     @test any(p -> p.key == "domain[2].time" && occursin("unknown table [domain.time]", p.message), e.problems)
     e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "model = \"amd\"" => "model = \"amd2\""))))
     @test only(e.problems).key == "domain[2].sgs.model"
     e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "model = \"vreman\"" => "model = \"vreman2\""))))
-    @test only(e.problems).key == "sgs.model"                                # reported once
+    @test only(e.problems).key == "domain[1].sgs.model"
+    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "schema_version = 2\n" =>
+                                                            "schema_version = 2\nstatic_driver = \"s.nc\"\n[coriolis]\nf = 1e-4\n"))))
+    @test sort([p.key for p in e.problems]) == ["coriolis", "static_driver"]
     e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "id = \"inner\"" => "id = \"outer\""))))
     @test only(e.problems).key == "domain" && occursin("\"outer\" is given 2 times", only(e.problems).message)
     e = cm_error(() -> load_run_config(IOBuffer("domain = 3\n")))

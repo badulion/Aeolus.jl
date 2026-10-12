@@ -39,14 +39,19 @@ record marked `replayable = false` is refused.
 A config file is self-contained: there is no `extends` (a file that has
 one is refused). `overrides` are `"dotted.key=<TOML value>"` strings
 (`"time.nsteps=12"`, `"grid.size=[16,16,16]"`, `"run.name=\\"x\\""`),
-applied last; an override of a per-domain section applies to every domain,
-over the `[[domain]]` blocks.
+applied last. With `[[domain]]` blocks, `domain.<id>.<section>.<key>=…`
+(the block's `id`, or its number) overrides one domain's value, and a
+per-domain section written at run level is an error.
 
 The schema is `schema`, or that of the legacy case named by `[run]
 legacy`, or else the model's ([`driver_schema`](@ref)). The model's
-per-domain sections are resolved for every domain: the run-level values,
-replaced key by key by the domain's `[domain.<section>]` tables (a config
-without `[[domain]]` has one domain, `"main"`). Unknown keys, wrong types,
+per-domain sections are resolved for every domain. A config without
+`[[domain]]` blocks has one domain, `"main"`, whose sections are the
+file's top-level ones. With blocks, every domain carries its complete
+configuration in its block (`[domain.<section>]` tables; NEST-p3, the
+maintainer's decision of 2026-10-12): the run level holds only what is
+common to the run (`[run]`, `[time]`, `[output]`, `[checks]`, …), and
+nothing is shared or overridden between domains. Unknown keys, wrong types,
 values out of range or outside `allowed`, tuples of the wrong length and
 failed cross-field checks are all collected and thrown as one
 `ConfigError`.
@@ -218,9 +223,27 @@ end
 const _WAS = "\0was:"
 
 function _apply_overrides!(raw, origins, ovr, probs)
-    for (key, v) in ovr
+    for (key0, v) in ovr
+        key = key0
         parts = split(key, '.')
         t = raw; ok = true
+        # `domain.<id>.<section>.<key>` addresses one [[domain]] block (by its
+        # id, or its number): the complete per-domain configuration (NEST-p3)
+        blocks = get(raw, "domain", nothing)
+        if length(parts) >= 3 && parts[1] == "domain" && blocks isa AbstractVector
+            i = findfirst(b -> b isa AbstractDict && get(b, "id", nothing) == parts[2], blocks)
+            n = tryparse(Int, parts[2])
+            i === nothing && n !== nothing && 1 <= n <= length(blocks) && (i = n)
+            if i === nothing
+                ids = [repr(get(b, "id", "main")) for b in blocks if b isa AbstractDict]
+                push!(probs, ConfigProblem(key0, OVERRIDE_ORIGIN,
+                                           "no [[domain]] block \"$(parts[2])\" (the ids: $(join(ids, ", ")))"))
+                continue
+            end
+            t = blocks[i]
+            parts = parts[3:end]
+            key = "domain[$i]." * join(parts, ".")
+        end
         for p in parts[1:end-1]
             nxt = get!(t, p) do
                 Dict{String,Any}()
@@ -406,9 +429,17 @@ function _resolve(raw, origins, sources, schema, probs::Vector{ConfigProblem}, l
     _check_version(raw, origins, leaf)
     sch = _pick_schema(raw, schema, leaf)
     dsec = sch.domain_sections
-    blocks, base = isempty(dsec) ? (nothing, nothing) : _domain_input!(raw, origins, sch, probs, leaf)
+    blocks, base, explicit = isempty(dsec) ? (nothing, nothing, false) : _domain_input!(raw, origins, sch, probs, leaf)
     names = [s.name for s in sch.sections]          # "domain": the [[domain]] blocks
     for k in sort!(collect(keys(raw)))
+        if explicit && is_domain_section(sch, k)
+            # complete per-domain configuration: a module section lives in each block
+            push!(probs, ConfigProblem(k, _origin(origins, k, leaf),
+                  "[$k] is per domain: with [[domain]] blocks every domain carries its complete configuration; " *
+                  "write it into each block as [domain.$k] (an override: domain.<id>.$k.<key>=…)"))
+            delete!(raw, k)
+            continue
+        end
         k in names && continue
         push!(probs, ConfigProblem(k, _origin(origins, k, leaf),
               "unknown " * (raw[k] isa AbstractDict ? "table [$k]" : "key") *
@@ -434,7 +465,7 @@ function _resolve(raw, origins, sources, schema, probs::Vector{ConfigProblem}, l
     domains = Vector{Dict{String,Dict{String,Any}}}()
     if !isempty(dsec)
         for (i, blk) in enumerate(blocks)
-            push!(domains, _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, length(blocks), leaf))
+            push!(domains, _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, length(blocks), leaf, explicit))
         end
         ids = [get(d["domain"], "id", "") for d in domains]
         for id in unique(ids)
@@ -464,25 +495,34 @@ function _domain_input!(raw, origins, sch, probs, leaf)
     end
     blk = pop!(raw, "domain", nothing)
     if blk === nothing
-        return [Dict{String,Any}()], base
+        return [Dict{String,Any}()], base, false
     end
     if !(blk isa AbstractVector && !isempty(blk) && all(x -> x isa AbstractDict, blk))
         push!(probs, ConfigProblem("domain", _origin(origins, "domain", leaf),
               "expected [[domain]] blocks (an array of tables), got $(_show_raw(blk))"))
-        return [Dict{String,Any}()], base
+        return [Dict{String,Any}()], base, false
     end
-    return [Dict{String,Any}(b) for b in blk], base
+    # complete per-domain configuration (NEST-p3, the maintainer's decision of
+    # 2026-10-12): with [[domain]] blocks nothing per domain is written at run level
+    for k in sort!(collect(keys(base)))
+        push!(probs, ConfigProblem(k, _origin(origins, "domain.$k", leaf),
+              "with [[domain]] blocks every domain names its own $k in its block (no run-level value)"))
+    end
+    empty!(base)
+    return [Dict{String,Any}(b) for b in blk], base, true
 end
 
-# One domain: the run-level values of the per-domain sections, replaced key
-# by key by the block's (an override, "--set", is not replaced), validated.
-function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf)
+# One domain: a config without [[domain]] blocks is one domain whose sections
+# are the file's top-level ones; with blocks, each domain is its block alone
+# (complete per-domain configuration, NEST-p3: no run-level module sections,
+# nothing shared between domains), with its overrides (`domain.<id>.…`), validated.
+function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf, explicit::Bool = false)
     prefix = "domain[$i]."
     borg = _origin(origins, "domain", leaf)
     dorig = Dict{String,String}()
     merged = Dict{String,Any}()
     for name in sch.domain_sections
-        t = name == "domain" ? base : get(raw, name, Dict{String,Any}())
+        t = name == "domain" ? base : explicit ? Dict{String,Any}() : get(raw, name, Dict{String,Any}())
         if !(t isa AbstractDict)
             i == 1 && push!(probs, ConfigProblem(name, _origin(origins, name, leaf),
                                                  "expected a table [$name], got $(_show_raw(t))"))
@@ -505,11 +545,12 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
             end
             for (kk, vv) in v
                 get(dorig, "$k.$kk", "") == OVERRIDE_ORIGIN && continue       # --set wins over the block
-                merged[k][kk] = vv; dorig["$k.$kk"] = borg; push!(fromblock, "$k.$kk")
+                merged[k][kk] = vv; dorig["$k.$kk"] = get(origins, prefix * "$k.$kk", borg)
+                push!(fromblock, "$k.$kk")
             end
         elseif k in dkeys
             get(dorig, "domain.$k", "") == OVERRIDE_ORIGIN && continue
-            merged["domain"][k] = v; dorig["domain.$k"] = borg; push!(fromblock, "domain.$k")
+            merged["domain"][k] = v; dorig["domain.$k"] = get(origins, prefix * k, borg); push!(fromblock, "domain.$k")
         else
             push!(probs, ConfigProblem(prefix * k, borg,
                   "unknown " * (v isa AbstractDict ? "table [domain.$k]" : "key") * " in a [[domain]] block" *
@@ -524,11 +565,13 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
         v = Dict{String,Any}()
         # the level below a selector: the file's for an override (the value it
         # replaced), the run level's for a [[domain]] block
-        runlevel = get(raw, name, Dict{String,Any}())
-        lowerval(k) = korig(k) == OVERRIDE_ORIGIN ? get(origins, _WAS * k, nothing) :
+        runlevel = explicit ? Dict{String,Any}() : get(raw, name, Dict{String,Any}())
+        lowerval(k) = korig(k) == OVERRIDE_ORIGIN ? get(origins, _WAS * k, get(origins, _WAS * prefix * k, nothing)) :
                       (runlevel isa AbstractDict ? get(runlevel, split(k, '.'; limit = 2)[2], nothing) : nothing)
+        # with blocks the block is the domain's file level, below its overrides
         _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf; tables = merged,
-                        rank = k -> korig(k) == OVERRIDE_ORIGIN ? 2 : k in fromblock ? 1 : 0, lower = lowerval)
+                        rank = k -> korig(k) == OVERRIDE_ORIGIN ? 2 : (k in fromblock && !explicit) ? 1 : 0,
+                        lower = lowerval)
         # a problem of a run-level value is reported under its own key (once:
         # the caller drops duplicates), one of the block's under domain[i]
         for q in p

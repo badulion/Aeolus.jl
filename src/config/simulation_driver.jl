@@ -318,11 +318,10 @@ end
 # ---------------------------------------------------------------------------
 
 "The per-domain sections of the model: the domain's own keys, its grid, core, boundaries, initial state and components."
-const DOMAIN_SECTIONS = setdiff(unique(vcat(["domain", "grid", "core", "dynamics", "boundaries", "initial"],
-                                            [Components.section(C) for C in COMPONENTS],
-                                            ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"],
-                                            Urban.urban_section_names())),
-                                 ["timestep"])      # run-level: the model steps every domain with one scheme
+const DOMAIN_SECTIONS = unique(vcat(["domain", "grid", "core", "timestep", "dynamics", "boundaries", "initial"],
+                                    [Components.section(C) for C in COMPONENTS],
+                                    ["forcing", "surface", "microphysics", "tracer", "particles", "obstacles"],
+                                    Urban.urban_section_names()))
 
 Config.domain_sections(::SimulationDriverType) = DOMAIN_SECTIONS
 
@@ -836,7 +835,7 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
         return SimulationRun(Urban.build_model(cfg), StepperState(:euler), cfg)
     end
     model = _nested(cfg) ? _build_nested(cfg) : Model(_build_domain(cfg))
-    return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : cfg.timestep.scheme), cfg)
+    return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : config_domains(cfg)[1].timestep.scheme), cfg)
 end
 
 # One domain of the model from its config (a single-domain config, or one
