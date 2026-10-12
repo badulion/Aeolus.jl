@@ -154,10 +154,15 @@ sections involved.
 
 ## Legacy cases
 
-The run types not yet ported to components keep their own schemas until
-they are ported: the nest parent of an urban site alone (`urban_parent`;
-the urban site itself is the model's since ONE-e #454) and the seven
-validation run types of `Aeolus.RunDrivers`. The SBL cases are
+The one run type not yet ported to components keeps its own schema: the
+nest parent of an urban site alone (`urban_parent`; the urban site itself
+is the model's since ONE-e #454). The seven validation run types of the
+former `Aeolus.RunDrivers` are gone (ONE-l, #475): `advection`, `cbl`,
+`shear_layer` and `flat_plate` are configurations of the model (with the
+components `[kinematic_flow]`, `[sgs] closure = "tke"`,
+`[inflow_statistics]` and `[fringe]`), and `inflow_fetch` and
+`obstacle_channel` (channel cases) and `sgs_decay` (the filtered-DNS
+study) were dropped, their harnesses kept as test fixtures. The SBL cases are
 configurations of the model since ONE-g (#456); the channel,
 single-column and DNS a-priori validation cases are gone (maintainer
 decisions of 2026-10-09); the Kessler box of the kernel demos is a
@@ -169,7 +174,6 @@ Every legacy case is code in `src/`: nothing is loaded from `examples/`.
 | `[run] legacy` | what it runs | options |
 | :-- | :-- | :-- |
 | `urban_parent` | the nest parent of an urban site alone (the model's sections) | [urban_parent](../reference/options/urban_parent.md) |
-| `advection`, `cbl`, `inflow_fetch`, `obstacle_channel`, `shear_layer`, `flat_plate`, `sgs_decay` | the validation run types of `Aeolus.RunDrivers` | `aeolus options <case>` |
 
 ## No inheritance
 
@@ -294,12 +298,9 @@ and one LES per SGS model), `examples/urban/` (the Berlin variants).
 | `sbl` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps | `input/`: the case-table dynamic drivers; `data/`: the reference data |
 | `dns_vs_les` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence | `compare.jl` reads the runs |
 | `urban` | the model with an urban site (`[urban] enabled`, ONE-e #454): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); legacy `urban_parent`: `berlin_parent`, `berlin_parent_coarse` | `input/`: the drivers; `data/`: land use and the Lindenberg sounding |
-| `scalar_advection_2d` | legacy `advection` | one |
-| `cbl_tke`, `cbl_inflow_statistics` | legacy `cbl` | one each |
-| `rotating_stratified_decay` | legacy `sgs_decay` | one |
-| `surface_mounted_cube` | legacy `obstacle_channel` | two (`_closures`: a sweep); `input/`: the cube |
-| `inflow_fetch` | legacy `inflow_fetch` | one |
-| `kelvin_helmholtz`, `flat_plate_t3a` | legacy `shear_layer`, `flat_plate` | one each |
+| `scalar_advection_2d` | the model with a prescribed velocity (`[kinematic_flow]`, ONE-l #475) | one |
+| `cbl_tke`, `cbl_inflow_statistics` | the model with the prognostic TKE closure (`[sgs] closure = "tke"`) and, as a nest parent, `[inflow_statistics]` | one each |
+| `kelvin_helmholtz`, `flat_plate_t3a` | the model: a seeded tanh shear layer (`[initial]` `tanh`, `seed_mode`); a flat plate with the `[fringe]` | one each |
 
 An example is these files only. `test/examples_enforcement.jl` holds the
 rule with no exemptions: it parses every `.jl` under `examples/` and fails

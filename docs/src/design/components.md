@@ -77,7 +77,7 @@ on a retry.
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
 | [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability`, `stress` | called by the core in stage 6 | the closure of `Components.build_closure` |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`; `tke`, ONE-l #475), `c_s`, `pr_t`, `stability`, `stress`; `tke`: `e_min`, `surface_factor`, `wall_cap` | called by the core in stage 6; `tke` also `:surface_flux` (after the others: the wall fluxes of [`wall_theta_flux`](@ref Aeolus.Components.wall_theta_flux)) | the closure of `Components.build_closure`; `PrognosticSGS.TKEClosure`, `initialize_tke!` |
 | [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` or `latitude` | `:tendencies` | `Operators.add_coriolis!` |
 | [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
 | [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start`, `target` (`rest`, `geostrophic`, `mean`) | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
@@ -89,6 +89,32 @@ The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
 | [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables) | `:clock` (the step start), `:body_force` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``) |
 | [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface_layer]` `enabled`, `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
 | [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
+
+The components of the validation cases (ONE-l, #475; the former run
+types of `Aeolus.RunDrivers`), on both cores, checkpointed:
+
+| component | slot | section | stage | delegates to |
+| :-- | :-- | :-- | :-- | :-- |
+| [`KinematicFlow`](@ref Aeolus.Components.KinematicFlow) | — | `[kinematic_flow]` `kind` (`solid_body_rotation`, `uniform`), `omega`, `center`, `velocity` | `:clock`, `:post_predictor`, `:surface_update` (the velocity prescribed; stateless) | — (the core's scalar advection carries θ) |
+| [`ParentStatistics`](@ref Aeolus.Components.ParentStatistics) | — | `[inflow_statistics]` `enabled`, `start`, `tau_avg`, `refine`, `depth` | `:output` | `Transition.ParentResolvedStatistics`, `update_inflow_statistics!`, `inflow_stress_parts` |
+| [`Fringe`](@ref Aeolus.Components.Fringe) | — | `[fringe]` `profile` (`blasius`), `inflow_reynolds`, `velocity`, `length`, `rise`, `fall`, `lambda_max`, `top`, `tu`, … | `:body_force`; the free-stream top before the core is built ([`core_boundaries`](@ref Aeolus.Components.core_boundaries)) | `Transition.FringeRegion`, `blasius_target`, `blasius_freestream`, `FreeStreamDisturbance`, `disturbance_fringe_update`, `set_blasius!` |
+
+The validation run types they replace: `advection` is
+`examples/scalar_advection_2d/` (θ carried by `[kinematic_flow]`: the
+core's centred flux form on the staggered grid instead of the run type's
+upwind kernel on cell-centred velocities, a stated change); `cbl` is
+`examples/cbl_tke/` and `examples/cbl_inflow_statistics/`, bit for bit;
+`shear_layer` is `examples/kelvin_helmholtz/` (the `[initial]` profiles
+`tanh` and `seed_mode`, the outputs `w_rms`, `turbulent_fraction_profile`,
+`shear_production_profile`, `buoyancy_production_profile`,
+`vorticity_y`), bit for bit; `flat_plate` is `examples/flat_plate_t3a/`,
+bit for bit. The numbers the run types computed at the end of a run are
+now computed from the output by the cases' scripts. `inflow_fetch` and
+`obstacle_channel` ran on pressure-driven channels and `sgs_decay` is the
+filtered-DNS study; all three are dropped (the design drops the channel
+cases and the a-priori study), their harnesses kept as test fixtures
+(`test/fixtures/inflow_fetch.jl`, `sgs_validation.jl`), and so is the
+channel harness of `WallModels` (`test/fixtures/channel_cases.jl`).
 
 Every domain has an `:advection` provider; `[sgs] closure = "none"`
 enables no `:sgs` component. Each component has its own per-domain
@@ -258,8 +284,12 @@ Every component publishes an output catalogue (`outputs(c)`: a list of
 for its type). The core publishes `Components.CORE_OUTPUTS`:
 
 - u, v, w, p, θ, qv as 3-D fields;
-- the horizontal-mean profiles;
-- the domain means as time series;
+- the horizontal-mean profiles, and (ONE-l #475) the total heat-flux,
+  w-variance and resolved-TKE profiles and the shear-production,
+  buoyancy-flux and turbulent-fraction profiles of the transition
+  diagnostics;
+- the domain means and `w_rms` as time series; `u_squared` and
+  `vorticity_y` as 3-D fields;
 - the `budget_*` groups.
 
 `[output] variables` selects from the catalogues of the core and the

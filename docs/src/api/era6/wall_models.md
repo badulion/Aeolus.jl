@@ -24,7 +24,8 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   `CutCell.wall_shear_stress` (modelled stress at the image-point
   probe), `wall_slip_velocity` and `slip_wall_value` (the slip wall
   value of `reconstruct_wall_velocity!`).
-- **Benchmark cases** (P54-d, #174): `half_channel_case` (neutral ABL
+- **Benchmark cases** (P54-d, #174; the test fixture
+  `test/fixtures/channel_cases.jl` since ONE-l, #475): `half_channel_case` (neutral ABL
   half channel) and `channel_case` (two-wall channel at a given Re_τ),
   a `WallBoundedCase` advanced by `advance_channel!` / `run_channel!`
   (time-averaged U, Φ_m, stress budget, ⟨τ_w⟩), with the step size of

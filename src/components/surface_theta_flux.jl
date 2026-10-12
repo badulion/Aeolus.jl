@@ -35,3 +35,5 @@ function run_stage!(c::SurfaceThetaFlux, d, ::Val{:tendencies}, dt)
     add_surface_flux!(d.state.tθ, c.bottom, c.top)
     return nothing
 end
+
+wall_theta_flux(c::SurfaceThetaFlux, d) = (c.bottom, c.top)

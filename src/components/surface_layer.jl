@@ -325,12 +325,10 @@ end
 
 const _SL_OUTPUTS = ("u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "surface_temperature",
                      "theta_2m", "wind_10m", "bl_height", "jet_speed", "jet_height", "inversion_height",
-                     "wind_speed_profile", "stress_profile", "heat_flux_profile")
+                     "wind_speed_profile", "stress_profile")
 
 output_names(::Type{<:SurfaceLayer}, opts) = _SL_OUTPUTS
 
-# a face profile (Nz + 1) at the cell centres: the mean of the two faces
-_centred(f) = [(f[k] + f[k+1]) / 2 for k in 1:length(f)-1]
 
 function outputs(c::SurfaceLayer)
     sl(d) = c
@@ -361,9 +359,8 @@ function outputs(c::SurfaceLayer)
         OutputVariable("wind_speed_profile", "m s-1", "speed of the plane-mean wind", :z,
                        d -> _cached_profiles(sl(d), d).S),
         OutputVariable("stress_profile", "m2 s-2", "total (resolved + SGS) downward momentum flux magnitude, at the cell centres",
-                       :z, d -> _centred(_cached_profiles(sl(d), d).τ)),
-        OutputVariable("heat_flux_profile", "K m s-1", "total (resolved + SGS) upward heat flux, at the cell centres",
-                       :z, d -> _centred(_cached_profiles(sl(d), d).wθ))]
+                       :z, d -> _centred(_cached_profiles(sl(d), d).τ))]
+# (its total heat-flux profile is the core's heat_flux_profile, with its surface flux at the bottom face)
 end
 
 # a restart continues the surface layer of the last step bit for bit
@@ -379,3 +376,6 @@ function restore_checkpoint_state!(c::SurfaceLayer, s)
     c.nsub[] = s.nsub; c.t_surf[] = s.t_surf
     return c
 end
+
+# the plane mean of the per-column surface flux of the step (the TKE closure's surface buoyancy)
+wall_theta_flux(c::SurfaceLayer, d) = (sum(c.wθ) / length(c.wθ), 0.0)

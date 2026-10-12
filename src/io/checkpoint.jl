@@ -67,7 +67,7 @@ Methods shipped:
 | `Field`, `Array` | a copy of the data |
 | `Vector`, `Dict`, `Base.RefValue` (a driver's accumulators) | a deep copy of the contents |
 | `NamedTuple`, `Tuple` | element-wise |
-| `WallModels`: `MatchingInput`, `WallModel`, `TBLEWallModel`, `DynamicRoughness`, `WallBoundedCase` | see `src/wall_models/checkpoint.jl` |
+| `WallModels`: `MatchingInput`, `WallModel`, `TBLEWallModel`, `DynamicRoughness` | see `src/wall_models/checkpoint.jl` |
 
 | [`StructuralState`](@ref) | itself |
 | a `NestedRun` | [`nest_state`](@ref Aeolus.Nesting.nest_state) (#269) |
@@ -326,7 +326,7 @@ run bit for bit:
   legacy `f(νt, u, v, w)` function, stateless) — its memory via
   [`checkpoint_state`](@ref), i.e. the closure contract's `sgs_state`;
 * `components`: a `NamedTuple` (or `Dict`) of any other stateful objects —
-  wall models, input filters, a `WallBoundedCase`, a driver's accumulators —
+  wall models, input filters, a driver's accumulators —
   each through [`checkpoint_state`](@ref); restored by name;
 * `stepper`: a [`StepperState`](@ref); `rng`: an `AbstractRNG` the run
   draws from (e.g. `Random.default_rng()`);
@@ -549,7 +549,7 @@ end
 
 Periodic checkpoints of a long run in the folder `dir`, with automatic
 resume — the one helper the long drivers (the model's run, the urban run
-type, `WallModels.run_channel!`) hook into:
+type, the channel harness of the tests) hook into:
 
 1. **Construct it first**, before the simulation: it creates `dir` and, with
    `wisdom = true`, imports the FFTW wisdom `dir/fftw_wisdom` if a previous

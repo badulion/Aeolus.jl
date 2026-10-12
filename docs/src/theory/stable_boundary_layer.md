@@ -29,7 +29,7 @@ folders and make the tables and figures.
 | surface stress | `SurfaceLayer`, stage 8 (every RK3 substage) | `WallModels.MOSTWallLaw(sf, z0m, L)` with the ``L`` of that solve, `apply_wall_stress!` (the law returns the solver's ``u_*`` bit for bit) |
 | SGS closure | `SGS` (`[sgs] closure`, `stability = "brown_et_al_1994"`, `stress = "symmetric"` so that ``ν_v`` reaches the momentum) | `Operators.StabilityCorrected` (P55-e) |
 | top damping | `Sponge` (`[sponge] target = "geostrophic"`: toward ``U_g(z, t)`` level by level; `"mean"`: toward the plane mean, damping only the departures) | `Simulations.add_velocity_sponge!` with level-vector targets |
-| BL diagnostics | `SurfaceLayer` outputs (`u_star`, `surface_wtheta`, `surface_heat_flux`, `obukhov_length`, `bl_height`, `jet_speed`, `jet_height`, `inversion_height`, `theta_2m`, `wind_10m`, the stress and heat-flux profiles) | `Operators.total_stress_profile`, `total_heat_flux_profile`, `stress_bl_height`, `inversion_height`; `SurfaceExchange.similarity_theta`, `similarity_wind` |
+| BL diagnostics | `SurfaceLayer` outputs (`u_star`, `surface_wtheta`, `surface_heat_flux`, `obukhov_length`, `bl_height`, `jet_speed`, `jet_height`, `inversion_height`, `theta_2m`, `wind_10m`, the stress profile) and the core's `heat_flux_profile` (with the surface layer's flux at the bottom face, its `wall_theta_flux`; ONE-l #475) | `Operators.total_stress_profile`, `total_heat_flux_profile`, `stress_bl_height`, `inversion_height`; `SurfaceExchange.similarity_theta`, `similarity_wind` |
 | CASES-99 towers | `Towers` (`[towers]`), output `tower_threshold` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
 The case tables are dynamic drivers (`examples/sbl/input/`), the
@@ -494,8 +494,10 @@ The wall-resolved stratified channel of García-Villalba & del Álamo
 (2011), and the relaminarising and collapsing channels of P58-e and P59-e,
 ran on the `sbl` run type. They were removed with it (ONE-g #456;
 maintainer decision of 2026-10-09: no channel cases, no pressure-gradient
-forcing component). Their physics stays in `WallModels` (`channel_case`
-with θ walls, `stratified_channel_walls`, `MOSTFluxWallLaw`) and
+forcing component). Their physics stays in `WallModels`
+(`MOSTFluxWallLaw`), the channel harness of the tests
+(`test/fixtures/channel_cases.jl`: `channel_case` with θ walls,
+`stratified_channel_walls`) and
 `SurfaceExchange` (the maximum sustainable heat flux), tested at module
 level (`test/era6_walls.jl`, `era6_collapse.jl`); the measured channel
 results are in the history of this page before #456.
