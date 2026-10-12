@@ -414,9 +414,9 @@ Its options, every key with type, default, units, range and doc: [Options: the m
 ## The urban site
 
 A model config with `[urban] enabled = true` is an urban site: a 3-D LES
-of a city window (`Aeolus.UrbanCase`, `src/urban/core/config_schema.jl`;
+of a city window (`Aeolus.Urban`, `src/components/urban/site/config_schema.jl`;
 CFG-c #358 as the `berlin` example driver, the `urban` run type of EX-a
-#438, on the model since ONE-e #454, see [Urban site](urban_case.md)).
+#438, on the model since ONE-e #454, see [Urban site](urban.md)).
 `[run] legacy = "urban_parent"` runs the nest parent of the same config
 alone (until ONE-f, #455). The Berlin (Alexanderplatz) case is shipped as
 files in `examples/urban/`:
@@ -492,10 +492,12 @@ Coriolis force, sponge and closure.
     through `with` and makes the run `replayable = false`.
 
 **One source of truth for the defaults.** The schema holds them;
-`CaseConfig(; kw...)` and `ParentConfig(; kw...)` start from it (the
-structs have no `@kwdef` defaults), and `CaseConfig(cfg::RunConfig)`
-builds the struct that `build_case` consumes. `test/config_berlin.jl`
-checks that the struct fields and the model's options map one to one,
+`site_options(default_run_config())` and `ParentConfig(; kw...)` start
+from it (`ParentConfig` has no `@kwdef` defaults), and
+`site_options(cfg::RunConfig)` reads the site's options that
+`build_case` consumes (ONE-k, #474: there is no `CaseConfig` struct of
+its own). `test/config_berlin.jl` checks that the site's fields and the
+model's options map one to one,
 that the four files give, field for field and bitwise, the configs the
 old Julia presets built (`test/data/config_berlin/fixture.toml`), and
 that `berlin_smoke.toml` run 12 steps gives state bitwise equal to the

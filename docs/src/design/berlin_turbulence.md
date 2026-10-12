@@ -2,7 +2,7 @@
 
 ## Turbulence diagnostics (#170)
 
-`turbulence_diag` (`couplings/turbulence_diag.jl`, addon, on by default)
+`turbulence_diag` (`components/urban/turbulence_diag.jl`, addon, on by default)
 is the Berlin coupling of the Era VI stability contract
 `TurbulenceStability` (see [the theory page](../theory/turbulence_stability.md)).
 At the output cadence it evaluates, on copies of `u, v, w, θ, q_v` whose
@@ -113,7 +113,7 @@ steps is 0.139 m³ s⁻³. No Berlin coupling was switched off.
 
 ## Prognostic SGS TKE (#182)
 
-`sgs_tke` (`couplings/sgs_tke.jl`) is the `:tke` provider of the `:sgs`
+`sgs_tke` (`components/urban/sgs_tke.jl`) is the `:tke` provider of the `:sgs`
 slot and its default: `PrognosticSGS.TKEClosure`, the Deardorff (1980) /
 Moeng (1984) closure (see [the theory page](../theory/sgs_tke.md)). It is
 PALM's urban-LES default and the only closure here whose mixing responds
@@ -186,7 +186,7 @@ Smagorinsky with ``C_s = 0.194``, against the case's ``C_s = 0.1``
 
 ## Differential Reynolds stress (#188)
 
-`sgs_reynolds_stress` (`couplings/sgs_reynolds_stress.jl`) is the
+`sgs_reynolds_stress` (`components/urban/sgs_reynolds_stress.jl`) is the
 `:reynolds_stress` provider of the `:sgs` slot. It is an option, a genuine
 alternative to the default `:tke`, and it uses the same module
 (`PrognosticSGS`), so no coverage list changes. The closure is
@@ -281,7 +281,7 @@ machine, so the ratios are rough.
 
 No new physics. Both prognostic providers now add a-priori metrics to
 their diagnostics (`apriori.*`, #338; a report line before). It comes from `sgs_test_filter_metrics` in
-`couplings/sgs.jl`, which compares the closure's subfilter stress over the
+`components/urban/sgs.jl`, which compares the closure's subfilter stress over the
 canopy fluid cells with the resolved (Germano) stress at the test-filter
 scale. That stress is ``L_{ij} = \widehat{\bar u_i\bar u_j} − \hat{\bar u}_i\hat{\bar u}_j``,
 computed by `subfilter_stress!` of the LES velocity under the 3-cell

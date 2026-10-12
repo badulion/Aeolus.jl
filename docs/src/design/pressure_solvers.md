@@ -111,7 +111,7 @@ periodic gives `FFTPoissonSolver`, anything else
 before, the all-Neumann box for a nested child. The sound-proof cores
 pass the same axes to their `DirectWeightedPoissonSolver` (or
 `DensityWeightedPoissonSolver`), and the Berlin
-`:pressure_solver` providers (`src/urban/couplings/pressure_solver.jl`)
+`:pressure_solver` providers (`src/components/urban/pressure_solver.jl`)
 build every solver from the case's `bcs` the same way, with a smoke check
 that the axes match.
 

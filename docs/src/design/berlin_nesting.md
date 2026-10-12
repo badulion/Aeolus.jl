@@ -5,7 +5,7 @@
 The default case is the child of a **one-way nest** inside an Aeolus
 parent run (N-berlin-nest, #265; the Berlin half of #153). The parent is
 the deep diurnal run of [The Berlin parent](berlin_parent.md) (#259); the
-coupling is `couplings/nesting.jl` (`:nesting`, an addon, on by default),
+coupling is `components/urban/nesting.jl` (`:nesting`, an addon, on by default),
 the src machinery `Aeolus.Nesting` (N-nest-a…d) and the open faces of
 `BoundaryConditions` (N-open-a…d). Two-way nesting is an option,
 `options[:nesting].mode = :two_way` (#267), **not validated**: see
@@ -63,7 +63,7 @@ landing on the parent's windows:
 | where | what |
 | :-- | :-- |
 | `step_dt` → `limit_dt` | the child's step: `subcycle_dt(R, dt)`, `R` the time left in the open window, or the parent's next step `parent_dt` when none is open |
-| `:nest_sync` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed. One-way under `run_case!`: the parent's step of the next window starts on its own task (`prefetch_parent_step!`, SC-c #403, below) |
+| `:nest_sync` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed. One-way within a run (the model's run loop): the parent's step of the next window starts on its own task (`prefetch_parent_step!`, SC-c #403, below) |
 | dynamics (`advance_dynamics!`) | every core reads the blended parent at its stage times |
 | `:nest_feedback` (after `:column_tendency`) | the child reached the window's end: `end_parent_step!` (one-way: the clock and the statistics; two-way: also the feedback onto the parent, see below) |
 
@@ -83,7 +83,8 @@ read there (the child's step is never longer than the window, so the
 window is exactly that), or, with a fixed child step, the whole number of
 child steps. The child's and the parent's states are bit-identical to
 sequential stepping (all 22 state fields, `:smoke` scenario, 12 steps,
-adaptive and fixed steppers). Only `run_case!` enables it: it sets the
+adaptive and fixed steppers). Only a run enables it (the model's run
+loop, or `Components.run_to!`, through the site's `run_begin!`): it sets the
 run's horizon on the clock (`Clock.t_stop`, `stop_margin`: a step starts
 at ``t`` exactly when `t_stop − t > stop_margin`), so a step is prefetched
 only for a window the run will open, and its `end_run!` hook waits for a
@@ -298,7 +299,7 @@ arrive; the eddies between the two resolutions do not, and an inflow fed
 only with the parent's interpolated field enters the child too smooth
 (N-inflow-d, #266: with no generator at all, a laminar inflow stayed
 laminar for 15 boundary-layer depths). The addon `:inflow_turbulence`
-(`couplings/inflow_turbulence.jl`, on by default) adds the missing part
+(`components/urban/inflow_turbulence.jl`, on by default) adds the missing part
 on the **inflow** parts of the four lateral faces with
 [`InflowTurbulence`](@ref Aeolus.Transition.InflowTurbulence) (N-inflow-c,
 #264; theory on the [transition page](../theory/transition.md)):
@@ -370,7 +371,7 @@ The Berlin two-way nest itself is unvalidated; its campaign is #331.
 **Analysis buffer.** Behind an inflow face the turbulence is still
 developing, so the diagnostics compared with observations leave out the
 columns within `cfg.analysis_buffer` of the lateral open faces
-(`analysis_columns`, `core/open_boundary.jl`); today these are `ustar_roof` and
+(`analysis_columns`, `site/open_boundary.jl`); today these are `ustar_roof` and
 `ustar_ground` of the surface exchange (#270 adds canopy T and the heat
 island). The default, 140 m, is an **estimate**: the 1.2-turnover rule
 N-inflow-d measured, ``L = 1.2\,Uk/ε``, with neutral surface-layer
@@ -392,9 +393,9 @@ closure) and its `NestedRun`. The nest's own state is the content of
 the open window, the window itself (`c.window`), the step sizes the two
 adaptive controllers continue from, the flux registers of a two-way run,
 the run statistics, the child's boundary data and the inflow generator
-(planes, RNG, folded parent statistics). A parent step that `run_case!`
+(planes, RNG, folded parent statistics). A parent step that the run
 started ahead on its own task (SC-c, #403) is waited for, recorded and
-rebuilt on restore; the resumed `run_case!` gets the original run's end
+rebuilt on restore; the resumed run gets the original run's end
 time, so it starts the parent's next steps ahead exactly where the
 uninterrupted run did. A checkpoint is taken between two child steps,
 in the middle of a parent window as often as not.

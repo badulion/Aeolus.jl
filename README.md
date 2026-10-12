@@ -388,14 +388,14 @@ julia --project=. examples/urban/alexanderplatz_animation.jl
 ```
 
 Nothing in the simulation is tuned to Alexanderplatz — the urban site of
-the model (`Aeolus.UrbanCase`, `[urban] enabled = true`) runs any city given as a
+the model (`Aeolus.Urban`, `[urban] enabled = true`) runs any city given as a
 TOML file plus its static and dynamic input drivers. Output is a single `.nc` file carrying the full 3-D
 state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, the NO / NO₂ / O₃ / VOC /
 HNO₃ species and the other tracers, the moist buoyancy `b_moist`) plus
 surface fields (`Ts`, shortwave and longwave in, `H_sfc`, `LE_sfc`, `G_soil`,
 `u_star`, soil temperature and moisture availability, `r_a`, `vd_O3`, the
 cloud-shadow transmittance) and static geometry, at every saved time level.
-The run is assembled from one file per coupling (`src/urban/couplings/`);
+The run is assembled from one file per coupling (`src/components/urban/`);
 see [the Berlin case](docs/src/design/berlin_case.md).
 
 ---

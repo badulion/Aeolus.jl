@@ -138,7 +138,7 @@ deposit is really frost, which saturates over ice and releases
 
 ## 5. In the urban example
 
-The urban case's `fog_dew` coupling (src/urban/couplings/fog_dew.jl)
+The urban case's `fog_dew` coupling (src/components/urban/fog_dew.jl)
 delegates to these functions (`fog_adjust!`, and `dew_exchange_columns!`
 for the dew on the first air cell of each column) and is switched on. Enabling it exposed that the
 example's moisture transport, forward-Euler with centered advection,

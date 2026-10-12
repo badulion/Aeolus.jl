@@ -56,7 +56,7 @@ the cross terms explicit.
 `StabilityCorrected` ([Stability correction](../theory/sgs.md#Stability-correction)):
 ν_h = ν ℓ_h, ν_v = ν ℓ_v f_m(Ri_g), κ_h = ν ℓ_h/Pr_t,
 κ_v = ν ℓ_v f_h(Ri_g)/Pr_t, with the TurbulenceStability functions of
-`CaseConfig.sgs_stability` (`:brown94` default, `:lilly`, `:long_tail`,
+`[urban] sgs_stability` (`:brown94` default, `:lilly`, `:long_tail`,
 `:short_tail`, `:most`; `:none` = the bare closure, the pre-P55-e run),
 the anisotropic length scales Δ_h = √(dx dy), Δ_v = dz (ℓ_h = 1.842,
 ℓ_v = 0.2947 at dx/dz = 2.5), Ri_g from the θ_v of the `qv` tracer and
@@ -199,7 +199,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   the default `fn` (the Smagorinsky closure with `cfg.C_s`) the run is
   bit for bit the `:smagorinsky` run (tested over 100 smoke steps). There is no
   trained model.
-  `:amd` and `:vreman` (`couplings/sgs_amd_vreman.jl`, #176) are the
+  `:amd` and `:vreman` (`components/urban/sgs_amd_vreman.jl`, #176) are the
   anisotropic minimum-dissipation and Vreman closures (see [the SGS
   theory page](../theory/sgs.md#Anisotropic-minimum-dissipation-and-Vreman-closures)).
   AMD runs with C = 0.3, its own κ_t and the buoyancy term with the
@@ -238,7 +238,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   half of the fluid cells. From 72 m up its level means fall to
   4–25 × 10⁻⁴ m²/s, against 1.2–4.1 × 10⁻² m²/s for Smagorinsky
   (whose top levels include the sponge).
-  `:sigma` (`couplings/sgs_sigma.jl`, #184) is the σ-model of
+  `:sigma` (`components/urban/sgs_sigma.jl`, #184) is the σ-model of
   Nicoud et al. (2011), option `C_σ = 1.35`. Its ``ν_t`` vanishes in
   laminar shear and 2-D flow; the diagnostics give the canopy and free-stream
   mean ``ν_t`` next to Smagorinsky's on the same flow. After 100 smoke
@@ -256,7 +256,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   so no coverage list changes.
 * **Scalar advection.** Every tracer registered with `advect = true`;
   `positive` tracers go through the flux limiter (`advect_positive!`).
-  `:weno_z7` needs `CaseConfig(halo = (4, 4, 4))`, `:teno8` halo 5; the
+  `:weno_z7` needs `[grid] halo = [4, 4, 4]`, `:teno8` halo 5; the
   build errors otherwise. The coupling refreshes the velocity halos
   first (see [the stale-halo defect](berlin_case.md#Known-defects-kept-by-the-refactor)).
 
@@ -321,7 +321,7 @@ roughly 50–150 % to a whole step.
 ## Dynamical core and time integration
 
 Two exclusive slots select the dynamics (#133), both in
-`couplings/core_select.jl` and `couplings/timestepper.jl`:
+`components/urban/core_select.jl` and `components/urban/timestepper.jl`:
 
 | slot | provider | src | what it is |
 | :-- | :-- | :-- | :-- |
