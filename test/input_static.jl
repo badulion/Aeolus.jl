@@ -316,12 +316,28 @@ end
             NCDataset(f) do ds
                 @test ds.attrib["preprocessor"] == "aeolusprep static"
                 @test sch === STATIC_SCHEMA ? startswith(ds.attrib["source"], "AeolusPrep:data/berlin/") :
-                                              ds.attrib["source"] == "../../data/berlin_landuse_6km.csv"
+                                              ds.attrib["source"] == "../data/berlin_landuse_6km.csv"
             end
         end
     end
     smoke = joinpath(berlin_configs_dir(), "input", "berlin_mitte_sample_smoke_static.nc")
     @test filesize(smoke) <= 2 * 1024^2 && isempty(check_driver(smoke, STATIC_SCHEMA))
+end
+
+@testset "InputDrivers: every committed driver's source is where it says (#487)" begin
+    # check_driver's staleness check skips a source it cannot find: a source
+    # recorded relative to its driver must resolve, or the check is silently
+    # off (three Berlin drivers named ../../data/ after ONE-i moved them up)
+    root = pkgdir(Aeolus); n = 0
+    for top in ("examples", joinpath("test", "data")), (dir, _, files) in walkdir(joinpath(root, top))
+        basename(dir) == "input" || continue
+        for f in filter(f -> endswith(f, ".nc") && !startswith(f, "."), files)
+            p = joinpath(dir, f)
+            sp = NCDataset(ds -> Aeolus.InputDrivers.source_path(p, ds), p)
+            sp === nothing || (n += 1; @test isfile(sp))
+        end
+    end
+    @test n >= 6      # the Berlin parents' land use, the sounding, the three SBL case tables
 end
 
 @testset "InputDrivers: the source is recorded per package (ONE-h, #457)" begin
