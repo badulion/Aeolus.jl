@@ -100,7 +100,10 @@ one step of the root (Berger & Oliger 1984), taken by the engine
 
 Engine state: `adaptive` (the root steps adaptively and every child
 picks its `n`), `validate` (a step is checked and a failure retries the
-window, [`nest_window!`](@ref)), `max_retries`, the window-start
+window, [`nest_window!`](@ref)), `concurrent` (siblings step in
+parallel, and a domain whose children are all one-way steps ahead of
+them, [`nest_prefetches`](@ref); bit for bit the sequential result),
+`max_retries`, the window-start
 snapshot, the per-link `n` of the current window and the floor a retry
 puts on it, each domain's previous step (the growth limit of its
 adaptive pick), and the counters `retries` (windows redone over the run)
@@ -111,6 +114,7 @@ mutable struct ModelNest{H}
     links::Vector{NestLink}
     adaptive::Bool
     validate::Bool
+    concurrent::Bool
     max_retries::Int
     nfloor::Vector{Int}                       # per hierarchy link: n at least this (a retry)
     nused::Vector{Int}                        # per hierarchy link: n of the current window
@@ -121,8 +125,8 @@ mutable struct ModelNest{H}
 end
 
 ModelNest(h, links::Vector{NestLink}; adaptive::Bool = false, validate::Bool = adaptive,
-          max_retries::Integer = 3) =
-    ModelNest(h, links, adaptive, validate, Int(max_retries), zeros(Int, length(h.links)),
+          concurrent::Bool = Threads.nthreads() > 1, max_retries::Integer = 3) =
+    ModelNest(h, links, adaptive, validate, concurrent, Int(max_retries), zeros(Int, length(h.links)),
               zeros(Int, length(h.links)), Union{Nothing,Float64}[nothing for _ in h.domains], 0, 0, nothing)
 
 """
@@ -138,7 +142,10 @@ the run's sanity check: the blow-up guard inspects every domain,
 a one-way child too). Adaptive (every domain has a `cfl`), the root
 picks its step and each child the number of substeps it needs, a failed
 step retries the window (up to `max_retries` times,
-[`nest_window!`](@ref)). `budget_exchange` (`[nesting]
+[`nest_window!`](@ref)). `concurrent` (default: more than one Julia
+thread): siblings step in parallel and a domain below the root whose
+children are all one-way steps ahead of them ([`nest_prefetches`](@ref)),
+bit for bit the sequential result. `budget_exchange` (`[nesting]
 budget_exchange`): `:exchange_term` (the default) lets the domains
 measure budgets, each closing its own with one nest-exchange term per
 quantity ([`NEST_EXCHANGE`](@ref)); `:off` measures none in a nest.
@@ -149,7 +156,8 @@ a link or with two, a child that is not properly nested in its parent,
 overlapping siblings, or a two-way pair without a conservation box or of
 mixed cores (those of `Nesting.add_nest!`).
 """
-function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term)
+function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term,
+                      concurrent::Bool = Threads.nthreads() > 1)
     length(domains) >= 2 || throw(ArgumentError("nested_model: a nest needs two domains or more"))
     budget_exchange in (:exchange_term, :off) ||
         throw(ArgumentError("nested_model: budget_exchange is :exchange_term or :off, got :$budget_exchange"))
@@ -189,7 +197,7 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
             throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
         end
     end
-    return Model(domains, ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries))
+    return Model(domains, ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries, concurrent = concurrent))
 end
 
 """

@@ -618,3 +618,34 @@ end
     @test nest_exchange(m.domains[2], :energy) != 0
     @test_throws ArgumentError nested_model((m.domains[1], m.domains[2]), m.nest.links; budget_exchange = :off)
 end
+
+# ---------------------------------------------------------------------------
+# concurrency: siblings in parallel, a one-way parent ahead of its children
+# ---------------------------------------------------------------------------
+
+# outer ⊃ a (one-way) ⊃ {g, g2} (one-way siblings); b a two-way sibling of a
+const MN_TREE = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
+    mn_child(; id = "a", origin = "[300.0, 300.0]", size = "[12, 12, 8]", extent = "[600.0, 600.0, 400.0]",
+             feedback = "one_way") *
+    mn_child(; id = "g", parent = "a", origin = "[100.0, 100.0]", size = "[8, 8, 8]",
+             extent = "[200.0, 200.0, 200.0]", feedback = "one_way") *
+    mn_child(; id = "g2", parent = "a", origin = "[350.0, 350.0]", size = "[4, 4, 4]",
+             extent = "[100.0, 100.0, 100.0]", feedback = "one_way") *
+    mn_child(; id = "b", origin = "[1100.0, 1100.0]", size = "[8, 8, 4]", extent = "[400.0, 400.0, 200.0]")
+
+@testset "concurrent nest (siblings in parallel, a one-way parent ahead of its children) is the sequential one, bit for bit (adaptive $ad)" for ad in (false, true)
+    over = ad ? ["time.dt=\"adaptive\"", "time.cfl=0.5"] : String[]
+    seq = Config.build(SimulationDriverType(), mn_cfg(MN_TREE; overrides = over)).model
+    con = Config.build(SimulationDriverType(), mn_cfg(MN_TREE; overrides = over)).model
+    seq.nest.concurrent = false
+    con.nest.concurrent = true
+    @test Aeolus.Components.nest_prefetches(con.nest, 2)            # a: all its children one-way
+    @test !Aeolus.Components.nest_prefetches(con.nest, 1)           # the root never
+    for _ in 1:3
+        ad ? (step_adaptive!(seq); step_adaptive!(con)) : (step!(seq, 4.0); step!(con, 4.0))
+    end
+    @test mn_state_equal(seq, con)
+    @test all(d -> d.state.t == seq.domains[1].state.t, con.domains)
+    @test nest_link(con, "g").stats.child_substeps == nest_link(seq, "g").stats.child_substeps > 0
+    @info "concurrent nest (adaptive $ad) on $(Threads.nthreads()) threads: identical to sequential"
+end

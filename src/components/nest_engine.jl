@@ -27,6 +27,7 @@ using ..Nesting: _sub_prepare!, _open_window!, _end_parent_step!, _begin!, _comm
 using ..Simulations: step_record, _step_begin!, _step_end!, _step_abort!, _nmax
 using ..TimeIntegration: is_numerical_failure, _all_finite
 using ..Backends: interior_all_finite
+using ..RunLog: current_domain, with_domain
 
 "The model domain `i` of a nest (the domain its hierarchy's advance steps)."
 _ndom(mn::ModelNest, i::Int) = mn.hierarchy.advance[i].core.d
@@ -136,10 +137,21 @@ end
 function _nest_domain_step!(mn::ModelNest, i::Int, Δt::Float64)
     h = mn.hierarchy
     hd = h.domains[i]
+    _sub_prepare!(hd, Float64(_ndom(mn, i).state.t))     # every child's boundary data at t0
+    t0, t1 = _nest_own_step!(mn, i, Δt)
+    isempty(hd.links) || _nest_children!(mn, i, t0, Δt)
+    _nest_finish!(_ndom(mn, i), Δt, t0, t1)
+    return nothing
+end
+
+# Stages 1–11 of a step of domain i over Δt (its children's boundary data at
+# the step start prepared by the caller); returns its start and end time.
+function _nest_own_step!(mn::ModelNest, i::Int, Δt::Float64)
+    h = mn.hierarchy
+    hd = h.domains[i]
     d = _ndom(mn, i)
     sim = d.state
     t0 = Float64(sim.t)
-    _sub_prepare!(hd, t0)                      # every child's boundary data at t0
     up = hd.up == 0 ? nothing : h.links[hd.up]
     pp = up === nothing || up.sponge === nothing ? nothing : _SpongeHook(up)
     if up !== nothing
@@ -160,9 +172,24 @@ function _nest_domain_step!(mn::ModelNest, i::Int, Δt::Float64)
     # the scalars of a nest sponge (its velocity part ran in the core)
     up === nothing || up.sponge === nothing ||
         apply_nest_sponge!(sim, _sponge_target!(up), up.sponge; dt = Δt, velocity = false)
-    isempty(hd.links) || _nest_children!(mn, i, t0, Δt)
     mn.dt_prev[i] = Δt
-    _nest_finish!(d, Δt, t0, t1)
+    return t0, t1
+end
+
+# Run `f(k)` for k in ks on tasks of their own (each logging as `dom`), wait
+# for all, and rethrow the first failure in the order of ks (a NestStepFailure
+# unwrapped, so the window retry sees it).
+function _nest_parallel(f, ks, dom::Symbol)
+    tasks = [Threads.@spawn with_domain(() -> f(k), dom) for k in ks]
+    err = nothing
+    for t in tasks
+        try
+            wait(t)
+        catch e
+            err === nothing && (err = e isa TaskFailedException ? t.exception : e)
+        end
+    end
+    err === nothing || throw(err)
     return nothing
 end
 
@@ -174,13 +201,31 @@ function _nest_children!(mn::ModelNest, i::Int, t0::Float64, Δt::Float64)
     sim = _ndom(mn, i).state
     t_end = Float64(sim.t)
     ws = [_open_window!(h.links[l], t0, t_end, Δt, hd.m0[n]) for (n, l) in enumerate(hd.links)]
-    for (n, l) in enumerate(hd.links)
-        L = h.links[l]
-        tw = time_ns()
-        _nest_child_window!(mn, l, ws[n].t_child_end)
-        L.stats.wall_child += (time_ns() - tw) / 1e9
-    end
+    _nest_windows!(mn, i, ws)
     _nest_feedback!(mn, i, ws)
+    return nothing
+end
+
+# The children's windows of domain i (opened, `ws`): the siblings in
+# parallel when the nest is concurrent (they read only their own boundary
+# data, write their own domains and links, and feed back afterwards in link
+# order, so the result is that of stepping them one after the other, bit
+# for bit), else one after the other.
+function _nest_windows!(mn::ModelNest, i::Int, ws)
+    h = mn.hierarchy
+    links = h.domains[i].links
+    function one(n)
+        L = h.links[links[n]]
+        tw = time_ns()
+        _nest_child_window!(mn, links[n], ws[n].t_child_end)
+        L.stats.wall_child += (time_ns() - tw) / 1e9
+        return nothing
+    end
+    if mn.concurrent && length(links) > 1
+        _nest_parallel(one, eachindex(links), current_domain())
+    else
+        foreach(one, eachindex(links))
+    end
     return nothing
 end
 
@@ -235,19 +280,18 @@ function _nest_child_window!(mn::ModelNest, l::Int, t_end::Float64)
     st = L.stats
     n = nest_substeps(mn, l, t_end - Float64(c.t))
     mn.nused[l] = n
-    n_rem = n
-    while n_rem > 0
-        R = t_end - c.t
-        hs = n_rem == 1 ? R : R / n_rem
-        cfl = hs * _advective_rate(c)
-        _nest_domain_step!(mn, ci, hs)
-        n_rem -= 1
-        st.child_substeps += 1
-        st.dt_child_min = min(st.dt_child_min, hs)
-        st.dt_child_max = max(st.dt_child_max, hs)
-        st.max_child_cfl = max(st.max_child_cfl, cfl)
-        L.step_record.cfl_adv = _nmax(L.step_record.cfl_adv, cfl)
-        L.dt_prev_child = hs
+    if mn.concurrent && n > 1 && nest_prefetches(mn, ci)
+        _nest_subcycle_ahead!(mn, l, n, t_end)
+    else
+        n_rem = n
+        while n_rem > 0
+            R = t_end - c.t
+            hs = n_rem == 1 ? R : R / n_rem
+            cfl = hs * _advective_rate(c)
+            _nest_domain_step!(mn, ci, hs)
+            n_rem -= 1
+            _nest_substep_stats!(L, hs, cfl)
+        end
     end
     st.max_clock_error = max(st.max_clock_error,
                              abs(Float64(c.t) - t_end) / max(abs(t_end), floatmin(Float64)))
@@ -255,6 +299,92 @@ function _nest_child_window!(mn::ModelNest, l::Int, t_end::Float64)
     st.n_last = n
     st.n_min = min(st.n_min, n)
     st.n_max = max(st.n_max, n)
+    return nothing
+end
+
+function _nest_substep_stats!(L, hs, cfl)
+    st = L.stats
+    st.child_substeps += 1
+    st.dt_child_min = min(st.dt_child_min, hs)
+    st.dt_child_max = max(st.dt_child_max, hs)
+    st.max_child_cfl = max(st.max_child_cfl, cfl)
+    L.step_record.cfl_adv = _nmax(L.step_record.cfl_adv, cfl)
+    L.dt_prev_child = hs
+    return nothing
+end
+
+"""
+    nest_prefetches(mn::ModelNest, i) -> Bool
+
+Whether the nest's domain `i` steps ahead of its children (SC-c, #403;
+the design's decision of 2026-10-12): a domain below the root whose
+children are all one-way (and take their boundary data at a window's
+start from the end of the one before, `reuse_boundary`) needs nothing
+from them, so while they subcycle through its substep `s` it takes its
+substep `s + 1` on a task of its own ([`nest_window!`](@ref)). The root
+is not prefetched: its next step is the model's next window, and the run
+reads every domain at the end of each window (output, checks, the
+monitor, checkpoints).
+"""
+nest_prefetches(mn::ModelNest, i::Int) =
+    (h = mn.hierarchy; hd = h.domains[i];
+     i > 1 && !isempty(hd.links) &&
+     all(l -> h.links[l].feedback === :one_way && h.links[l].reuse_boundary && h.links[l].sponge === nothing, hd.links))
+
+# The n substeps of domain ci (the child of link l) to t_end, each overlapped
+# with its children's window of the substep before: substep s + 1 of ci runs
+# on a task while its one-way children subcycle through substep s. The
+# operations and the data they read are the sequential ones (the children
+# read only the boundary data prolongated before the task starts; the
+# start of their next window is the end of this one, reuse_boundary), so
+# the result is bit for bit that of the sequential steps.
+function _nest_subcycle_ahead!(mn::ModelNest, l::Int, n::Int, t_end::Float64)
+    h = mn.hierarchy
+    L = h.links[l]
+    ci = h.fine[l]
+    c = L.child
+    hd = h.domains[ci]
+    d = _ndom(mn, ci)
+    dom = current_domain()
+    step_size(n_rem) = (R = t_end - c.t; n_rem == 1 ? R : R / n_rem)
+    hs = step_size(n)
+    cfl = hs * _advective_rate(c)
+    _sub_prepare!(hd, Float64(c.t))
+    t0, t1 = _nest_own_step!(mn, ci, hs)
+    n_rem = n
+    while true
+        ws = [_open_window!(h.links[k], t0, t1, hs, hd.m0[m]) for (m, k) in enumerate(hd.links)]
+        _nest_finish!(d, hs, t0, t1)                  # one-way children: no feedback into ci
+        _nest_substep_stats!(L, hs, cfl)
+        n_rem -= 1
+        if n_rem == 0
+            _nest_windows!(mn, ci, ws)
+            _nest_feedback!(mn, ci, ws)
+            break
+        end
+        hn = step_size(n_rem)
+        cfln = hn * _advective_rate(c)
+        next = Ref((0.0, 0.0))
+        task = Threads.@spawn with_domain(() -> (next[] = _nest_own_step!(mn, ci, hn); nothing), dom)
+        err = nothing
+        try
+            _nest_windows!(mn, ci, ws)
+            _nest_feedback!(mn, ci, ws)
+        catch e
+            err = e
+        end
+        try
+            wait(task)
+        catch e
+            err === nothing && (err = e isa TaskFailedException ? task.exception : e)
+        end
+        err === nothing || throw(err)
+        # the children's boundary data at the start of the next substep: the
+        # end of this one (one-way, reuse_boundary: nothing reads ci now)
+        _sub_prepare!(hd, next[][1])
+        t0, t1 = next[]
+        hs = hn; cfl = cfln
+    end
     return nothing
 end
 
