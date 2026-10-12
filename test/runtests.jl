@@ -866,6 +866,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_slots.jl")        # ONE-m (#476): one section per exclusive slot, a selector key, the provider's options only
     include("model_nesting.jl")       # ONE-f (#455): nesting by [[domain]]: the graph, pipelines per domain, one-/two-way, restart
     include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
+    include("components_parent.jl")      # NEST-p1 (#481): the urban nest parent's physics as components, both cores
     include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
     include("glue_physics.jl")         # ONE-e (#454): the physics moved out of the urban glue into its modules
     include("config_cases.jl")        # EX-d (#441), ONE-l (#475): the example cases = the old scripts, bit for bit
