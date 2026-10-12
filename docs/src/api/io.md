@@ -64,7 +64,7 @@ while st.step < nsteps
 end
 ```
 
-`run_channel!` (WallModels) takes the schedule as its `checkpoint`
+`run_channel!` (the channel harness of the tests, `test/fixtures/channel_cases.jl`) takes the schedule as its `checkpoint`
 keyword; the model's run (`aeolus run`) uses the one of `[checkpoint]`, and
 long scripts use it by default
 ([`driver_checkpoints`](@ref): every 30 min of wall clock,

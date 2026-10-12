@@ -253,12 +253,15 @@ Aeolus.CutCell.wall_shear_stress(::Aeolus.Simulations.BoussinesqSimulation)
 Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
 shared by every Era VI benchmark. The cases that produce the flows —
 `half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
-2000) and `channel_case` (the two-wall channel) — are in
-[WallModels](era6/wall_models.md); theory and measured numbers in
+2000) and `channel_case` (the two-wall channel) — are the test fixture
+`test/fixtures/channel_cases.jl` (module `ChannelCases`; part of
+[WallModels](era6/wall_models.md) until ONE-l, #475: the channel cases
+are not configurations of the model); theory and measured numbers in
 [Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
 
 ```julia
 using Aeolus
+include("test/fixtures/channel_cases.jl"); using .ChannelCases
 hc = half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1))
 run_channel!(hc, 8.0)                                   # spin-up, H/u* = 1
 st = run_channel!(hc, 20.0; average_from = 8.0)         # st.τ_wall, st.phi_m, st.stress

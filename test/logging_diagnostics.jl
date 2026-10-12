@@ -17,6 +17,9 @@ using Test
 using Logging
 using Random
 using Aeolus
+# the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
+isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
+using .ChannelCases
 using Aeolus.Fields: interior_view, set!
 using Aeolus.Nesting
 using Aeolus.TimeIntegration: step_adaptive!, CFLConstraints, cfl_diagnostics

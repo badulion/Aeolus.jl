@@ -273,19 +273,41 @@ function disturbance_fringe_update(fst::FreeStreamDisturbance, fr::FringeRegion,
     cols = findall(i -> fringe_rate(fr, xw(xs[i])) > 0 ||
                         fringe_rate(fr, xw(xs[i] + 0.5g.dx)) > 0, eachindex(xs))
     isempty(cols) && throw(ArgumentError("disturbance_fringe_update: empty fringe"))
-    irange = first(cols):last(cols)
-    t_last = Ref(-Inf)
-    return function (target, t)
-        t - t_last[] < interval && return target
-        t_last[] = t
-        ut, vt, wt = _target3(target)
-        for i in irange
-            @views ut.data[i, :, :] .= ub.data[i, :, :]
-            @views vt.data[i, :, :] .= vb.data[i, :, :]
-            @views wt.data[i, :, :] .= wb.data[i, :, :]
-        end
-        disturbance_velocity!(ut, vt, wt, fst, t; i_range = irange, damping = damping,
-                              add = true)
-        return target
+    return DisturbanceFringeUpdate(fst, (ub, vb, wb), first(cols):last(cols), damping, Float64(interval), Ref(-Inf))
+end
+
+"""
+    DisturbanceFringeUpdate
+
+The callable `update!(target, t)` of [`disturbance_fringe_update`](@ref).
+`t_last[]` is the time of its last refresh: a call at a time less than
+`interval` after it (including an earlier time) leaves the target as it
+is. Within `step_rk3!` the first substage of a step (at the step's start
+``t``) therefore keeps the target of the previous step's last substage
+(``t + Δt``, one step ahead) when `interval = 0`. A restart that should
+continue a run bit for bit restores `t_last` and the target with it (the
+`Fringe` component of the model checkpoints both).
+"""
+struct DisturbanceFringeUpdate{B, D} <: Function
+    fst::FreeStreamDisturbance
+    base::B
+    irange::UnitRange{Int}
+    damping::D
+    interval::Float64
+    t_last::Base.RefValue{Float64}
+end
+
+function (f::DisturbanceFringeUpdate)(target, t)
+    t - f.t_last[] < f.interval && return target
+    f.t_last[] = t
+    ub, vb, wb = f.base
+    ut, vt, wt = _target3(target)
+    for i in f.irange
+        @views ut.data[i, :, :] .= ub.data[i, :, :]
+        @views vt.data[i, :, :] .= vb.data[i, :, :]
+        @views wt.data[i, :, :] .= wb.data[i, :, :]
     end
+    disturbance_velocity!(ut, vt, wt, f.fst, t; i_range = f.irange, damping = f.damping,
+                          add = true)
+    return target
 end

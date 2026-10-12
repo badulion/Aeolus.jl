@@ -1,36 +1,49 @@
 # The convective boundary layer of cbl_tke.toml, the figure and
 # the comparison with Lenschow, Wyngaard & Pennell (1980):
-# σ_w²/w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)². Reads output/results.toml only.
+# σ_w²/w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)². Reads the run's
+# output.nc only (its last record: the means over the last 30 min).
 #
 #   julia --project -m Aeolus run examples/cbl_tke/cbl_tke.toml
 #   julia --project=. examples/cbl_tke/plot_cbl_tke.jl runs/<date>_cbl_tke_<id>
 #
+# z_i is the height of the minimum of the total heat flux, w* = (g Q z_i/θ₀)^{1/3}.
 # Prints the σ_w² maximum against Lenschow et al. and the RMS difference
 # over 0.1 < z/z_i < 0.9, and writes output/cbl_tke_<N>.svg (three panels
-# against z/z_i: σ_w²/w*², the heat flux / Q with its SGS part, and the SGS
-# and resolved TKE / w*²).
+# against z/z_i: σ_w²/w*², the heat flux / Q, and the SGS and resolved
+# TKE / w*²).
 
 using Printf
 include(joinpath(@__DIR__, "..", "viz", "run_output.jl"))
 
 folder = run_folder_arg()
-res = read_results(folder)
-N = recorded_config(folder)["grid"]["n"]
-P = res["profiles"]
-r = (N = N, zi = res["zi"], w_star = res["w_star"], zc = P["zc"], zf = P["zf"], w2 = P["w2"], flux = P["flux"],
-     sgs_flux = P["sgs_flux"], e = P["e"], kres = P["kres"])
+cfg = recorded_config(folder)
+dom = recorded_domain(folder)
+N = dom["grid"]["size"][3]
+Q = dom["surface_theta_flux"]["bottom"]; θ0 = dom["dynamics"]["theta0"]; g = dom["dynamics"]["g"]
+path = output_file(folder)
+F, t = read_last_record(path)
+zc = NCDataset(path) do ds; Array(ds["z"][:]); end
+flux = F["heat_flux_profile"] ./ Q
+kmin = argmin(flux)
+zi = zc[kmin]                                    # the height of the minimum heat flux
+w_star = cbrt(g / θ0 * Q * zi)
+r = (N = N, zi = zi, w_star = w_star, zc = zc, zf = zc, w2 = F["w_variance_profile"], flux = flux,
+     e = F["sgs_tke_profile"], kres = F["resolved_tke_profile"])
 
 lenschow(x) = 1.8 * x^(2 / 3) * (1 - 0.8x)^2     # x = z/z_i ≤ 1.25
 xs = range(0.01, 1.0, length = 400)
 ipk = argmax(lenschow.(xs))
+kw = argmax(r.w2)
 @printf("Lenschow et al. (1980): σ_w² max %.3f w*² at z/z_i = %.3f\n", lenschow(xs[ipk]), xs[ipk])
-@printf("LES %d³:                 σ_w² max %.3f w*² at z/z_i = %.3f   (w* = %.2f m/s, z_i = %.0f m)\n",
-        N, res["w2max_norm"], res["z_w2max_norm"], r.w_star, r.zi)
+@printf("LES %d³ (t = %.0f s):     σ_w² max %.3f w*² at z/z_i = %.3f   (w* = %.2f m/s, z_i = %.0f m)\n",
+        N, t, r.w2[kw] / w_star^2, zc[kw] / zi, w_star, zi)
 sel = [k for k in eachindex(r.zc) if 0.1 < r.zc[k] / r.zi < 0.9]
 rms = sqrt(sum(((r.w2[k] / r.w_star^2) - lenschow(r.zc[k] / r.zi))^2 for k in sel) / length(sel))
 @printf("RMS difference of σ_w²/w*² over 0.1 < z/z_i < 0.9: %.3f\n", rms)
-@printf("min heat-flux ratio %.3f, max SGS share of TKE (0.2–0.8 z_i) %.3f, e peak at %.0f m (%.2f z_i); %d steps\n",
-        res["min_flux_ratio"], res["max_sgs_fraction"], res["z_epeak"], res["z_epeak"] / r.zi, res["steps"])
+frac = r.e ./ (r.e .+ r.kres)
+@printf("min heat-flux ratio %.3f, max SGS share of TKE (0.2–0.8 z_i) %.3f, e peak at %.0f m (%.2f z_i)\n",
+        flux[kmin], maximum(frac[[k for k in eachindex(zc) if 0.2zi < zc[k] < 0.8zi]]), zc[argmax(r.e)],
+        zc[argmax(r.e)] / zi)
 
 # --- figure: three profile panels against z/z_i --------------------------
 function write_figure(path, r)
@@ -72,9 +85,7 @@ function write_figure(path, r)
         elseif p == 2
             k = sel(zf)
             println(io, """<polyline fill="none" stroke="#c8553d" stroke-width="2.5" points="$(pts(X.(r.flux[k]), Y.(zf[k])))"/>""")
-            println(io, """<polyline fill="none" stroke="#c8553d" stroke-width="1.5" stroke-dasharray="4,3" points="$(pts(X.(r.sgs_flux[k]), Y.(zf[k])))"/>""")
             println(io, """<text x="$(x0 + pw - 8)" y="$(t + 20)" text-anchor="end" fill="#c8553d">total</text>""")
-            println(io, """<text x="$(x0 + pw - 8)" y="$(t + 38)" text-anchor="end" fill="#c8553d">SGS (dashed)</text>""")
         else
             k = sel(zc)
             println(io, """<polyline fill="none" stroke="#4a7c3a" stroke-width="2.5" points="$(pts(X.(r.e[k] ./ r.w_star^2), Y.(zc[k])))"/>""")

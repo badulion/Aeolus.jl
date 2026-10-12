@@ -306,8 +306,8 @@ neutral_prandtl(sf::LongTail) = sf.Pr_n
 Height of the top of the boundary layer from a profile sampled at the
 strictly increasing heights `z` (m). The one ``z_i`` diagnostic of the
 package: it is applied identically to radiosonde profiles
-(`LargeScaleForcing.sounding_profiles`) and to LES output (the CBL
-harness `RunDrivers.CBLDriver.tke_cbl`, the nesting epic #246).
+(`LargeScaleForcing.sounding_profiles`) and to LES output (the CBL of
+`examples/cbl_tke/`, the nesting epic #246).
 
 `method`:
 

@@ -236,7 +236,7 @@ of `x_le + x_min` carry the profile at `x_min`). Sets `u` and `w`
 measuring divergence: the sampled similarity solution is divergence-free
 only to truncation error.
 """
-function set_blasius!(sim::BoussinesqSimulation; x_le::Real, U∞::Real = 1.0,
+function set_blasius!(sim; x_le::Real, U∞::Real = 1.0,
                       ν::Real = sim.ν, x_min::Real, z_wall::Real = sim.mesh.z0)
     fill!(sim.v.data, 0)
     _fill_blasius!(sim.u, sim.w, (i, x) -> max(x - x_le, x_min), U∞, ν, z_wall)

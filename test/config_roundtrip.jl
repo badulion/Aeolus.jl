@@ -88,7 +88,9 @@ const RT_FILES = shipped_config_files()
 @testset "round-trip coverage: the docs build writes a reference page per schema and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["model", "urban_parent", "cbl"], reference_drivers())
+    @test issubset(["model", "urban_parent"], reference_drivers())
+    @test isempty(intersect(["advection", "cbl", "inflow_fetch", "obstacle_channel", "shear_layer", "flat_plate", "sgs_decay"],
+                            reference_drivers()))           # on the model or dropped (ONE-l #475)
     @test isempty(intersect(["column", "dns_decay"], reference_drivers()))   # gone (ONE-i #458)
     @test isempty(intersect(["sbl", "dns", "channel", "cbc_decay", "patchy_surface"], reference_drivers()))   # gone (ONE-g #456)
     @test !("urban" in reference_drivers())             # the urban site is the model's (ONE-e, #454)

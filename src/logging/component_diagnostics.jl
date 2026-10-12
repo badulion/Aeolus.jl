@@ -278,7 +278,7 @@ velocity of its law over the columns of the bottom wall (whole plane,
 `:local` formulation, first-cell speed), computed by
 [`apply_wall_stress!`](@ref Aeolus.WallModels.apply_wall_stress!) itself
 with a zero step. A run whose wall model is applied with a mask, an
-input filter or at the top (the Berlin ground, a `WallBoundedCase`)
+input filter or at the top (the Berlin ground, a wall-bounded channel)
 reports through its own component instead.
 """
 function diagnostics(wm::WallModels.WallModel, sim)
@@ -315,29 +315,6 @@ function diagnostics(wm::WallModels.TBLEWallModel, sim)
         push!(ds, Diagnostic(s * ".kappa_wm", "1", () -> wm.walls[side].κ_dyn;
                              description = "the wall's (dynamic) von Kármán constant"))
     end
-    return ds
-end
-
-"""
-    diagnostics(case::WallModels.WallBoundedCase, sim) -> Vector{Diagnostic}
-
-The wall-bounded harness: `tau_wall_bottom`, `tau_wall_top` (the
-plane-mean kinematic wall stresses the last step applied, m² s⁻²), and,
-with a scalar, `q_wall_bottom`, `q_wall_top`; plus the diagnostics of its
-wall model under `wall.` (the TBLE model's; an equilibrium model's own
-stress is already `tau_wall_*`). Pass `case.closure` separately for the
-closure's.
-"""
-function diagnostics(case::WallModels.WallBoundedCase, sim)
-    ds = Diagnostic[
-        Diagnostic("tau_wall_bottom", "m2 s-2", () -> case.τ_wall_bottom; cadence = :step),
-        Diagnostic("tau_wall_top", "m2 s-2", () -> case.τ_wall_top; cadence = :step),
-    ]
-    if case.θ_walls !== nothing
-        push!(ds, Diagnostic("q_wall_bottom", "K m s-1", () -> case.q_wall_bottom; cadence = :step))
-        push!(ds, Diagnostic("q_wall_top", "K m s-1", () -> case.q_wall_top; cadence = :step))
-    end
-    case.wall isa WallModels.TBLEWallModel && append!(ds, prefixed("wall", diagnostics(case.wall, case.sim)))
     return ds
 end
 

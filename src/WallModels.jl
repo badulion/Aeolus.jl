@@ -2,9 +2,8 @@
     WallModels
 
 Era VI, Phase 57: the modelled wall stress of wall-modelled LES. **Owner
-of every modelled wall stress in the code base**: the channel harness,
-the stable-boundary-layer cases, the TKE surface value and the Berlin
-ground drag all call this module rather than writing their own.
+of every modelled wall stress in the code base**: the stable-boundary-layer
+cases, the TKE surface value and the Berlin ground drag all call this module rather than writing their own.
 
 The parts, each in its own file under `src/wall_models/` so the later
 Phase 57 issues (matching height and filtering, TBLE, facades, dynamic
@@ -57,15 +56,10 @@ roughness) only add files and include lines:
      invariance of the total surface drag between the grid and the test
      filter (Anderson & Meneveau 2011), as a parameter provider for
      `RoughLogLaw` / `MOSTWallLaw` ([`with_roughness`](@ref)).
-  8. **The benchmark cases** (`channel_cases.jl`, P54-d #174) —
-     [`half_channel_case`](@ref) (the neutral ABL half channel of
-     Porté-Agel et al. 2000 / Bou-Zeid et al. 2005) and
-     [`channel_case`](@ref) (the two-wall channel at a given Re_τ), with
-     [`advance_channel!`](@ref) and [`run_channel!`](@ref): the shared
-     wall-bounded harness every Era VI closure is validated on. They add
-     no wall physics; the diagnostics they report (Φ_m, the stress budget,
-     E11) are `Operators.phi_m_profile`, `total_stress_profile` and
-     `streamwise_spectrum`.
+  8. The wall-bounded benchmark harness of P54-d (#174), the half channel
+     and the two-wall channel every Era VI closure is validated on, is a
+     test fixture since ONE-l (#475), `test/fixtures/channel_cases.jl`:
+     the channel cases are not configurations of the model.
 
 # References
 
@@ -144,7 +138,6 @@ include("wall_models/tble.jl")            # P57-c (#189): non-equilibrium (TBLE)
 include("wall_models/immersed.jl")
 include("wall_models/cutcell.jl")
 include("wall_models/dynamic_roughness.jl") # P57-e (#190): dynamic z0 of partially resolved roughness
-include("wall_models/channel_cases.jl")   # P54-d (#174): half channel, channel
 include("wall_models/checkpoint.jl")      # #245: checkpoint state of the wall models and the case
 
 end # module
