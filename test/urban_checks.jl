@@ -16,7 +16,8 @@
 #           ledgers closed (49 runs, 6494 coupling checks, 204 s measured on
 #           2026-10-07);
 #   parent  the nest parent with every forcing on for 12 steps, heat and
-#           water ledgers closed (#259); encroachment of a CBL under
+#           water ledgers closed (#259), its domain of components through the
+#           pipeline bit for bit the same run (NEST-p1, #481); encroachment of a CBL under
 #           Q(t) = 0.15 sin(πt/D) into Γ = 3 K/km (Tennekes 1973; Stull 1988
 #           Ch. 11) with the heat budget closed at every output; Wangara
 #           Day 33 (Clarke et al. 1971) against the MYNN z_i of Nakanishi &
@@ -339,12 +340,23 @@ function berlin_parent_checks()
     @testset "Berlin parent smoke: every forcing, 12 steps, ledgers close (#259)" begin
         child = berlin_default(; start_h = 10.0)   # sun up, convective
         # subsidence is off by default (divergence = 0, #312): on here at D = 3e-6 s⁻¹
-        p = BC.build_parent(BC.ParentConfig(child; refinement = (16, 16, 8), divergence = 3e-6))
+        pc = BC.ParentConfig(child; refinement = (16, 16, 8), divergence = 3e-6)
+        p = BC.build_parent(pc)
         @test all(f -> f !== nothing, values(p.forcing))
         @test p.surface !== nothing && p.rad !== nothing && p.closure isa TKEClosure && p.top !== nothing
+        # the parent's physics are components of its domain (NEST-p1, #481): the
+        # domain alone through the pipeline is the ParentCase run, bit for bit
+        d, _ = BC.parent_domain(pc; child = p.child)
+        @test Set(map(Aeolus.Components.component_name, d.components)) ==
+              Set((:advection, :sgs, :tiled_surface, :mean_column_radiation, :large_scale_forcing))
+        dt_prev = child.dt
         for _ in 1:12
             BC.step_parent!(p)
+            tn = (floor(d.state.t / pc.output_period + 1e-9) + 1) * pc.output_period
+            _, dt_prev, _ = Aeolus.Components.step_adaptive!(d; dt_prev = dt_prev, t_end = tn)
         end
+        @test all(getproperty(d.state, f).data == getproperty(p.sim, f).data for f in (:u, :v, :w, :p, :θ, :qv))
+        @test Aeolus.Components.sgs_closure(d).e.data == p.closure.e.data
         @test all(isfinite, interior_view(p.sim.θ)) && all(isfinite, interior_view(p.sim.qv))
         @test minimum(interior_view(p.closure.e)) >= 0
         hb = BC.stage_budget(p.heat)
@@ -361,7 +373,8 @@ function berlin_parent_checks()
         wscale = maximum(abs, values(wb.terms))
         @test abs(wb.closure) <= 1e-10 * wscale
         @test wb.terms[(:surface_flux, :tiles)] ≈ p.sfc_mean[:delivered_E] rtol = 1e-10
-        @test p.sw_down > 100 && 250 < p.lw_down < 450
+        rd = BC.parent_downwelling(p)
+        @test rd.sw > 100 && 250 < rd.lw < 450
         el = sum(p.heat.elapsed)
         @info @sprintf("parent smoke: %d steps, %.1f s; surface %.1f W/m², radiation %.1f, subsidence %.1f, nudging %.2f, damping %.2f, top %.3f W/m²; closure %.1e (heat) %.1e (water)",
                        p.nsteps, el, hb.terms[(:surface_flux, :tiles)] / el,
