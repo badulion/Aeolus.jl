@@ -36,6 +36,7 @@ config: `urban.offset`, `static_driver`, `time.dt`) in the config `path`:
 """
 function site_key(path, key::AbstractString)
     sd = site_domain(path)
+    startswith(key, "domain.") && return key              # already a domain's
     sec = first(split(key, '.'))
     (sd === nothing || sec in ("run", "time", "output", "checkpoint", "checks", "logging", "fftw")) && return key
     return "domain.$(sd[2]).$key"

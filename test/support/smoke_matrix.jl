@@ -9,9 +9,9 @@
 # overrides (CFG-c, #358): `smoke_specs` derives what each run changes
 # from the urban components (`URBAN_COMPONENTS`), `smoke_overrides` writes it as overrides, and
 # `smoke_matrix` loads the configs. The smoke config nests the site in its
-# parent domain (NEST-p3, #483): a site option is `domain.smoke.<key>`; a run
-# without the parent (the nest off, or its faces from boundary data) is the
-# site's block alone as a one-domain config (`site_alone_toml`).
+# parent domain (NEST-p3, #483): a site option is `domain.site.<key>`; a run
+# without the parent (the nest off, or its faces from boundary data) starts
+# from berlin_smoke_site.toml, the same site alone.
 
 using Aeolus: load_run_config
 using TOML
@@ -19,6 +19,8 @@ include(joinpath(@__DIR__, "berlin_configs.jl"))
 
 "The shipped smoke config every run starts from."
 const SMOKE_TOML = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
+"The shipped smoke site alone (no parent domain), the runs without one start from."
+const SMOKE_SITE_TOML = joinpath(berlin_configs_dir(), "berlin_smoke_site.toml")
 
 """
     file_overrides(path, base) -> Vector{String}
@@ -111,47 +113,17 @@ smoke_nested(spec) = get(spec.physics, :nesting, true) &&
                      get(get(spec.options, :nesting, (;)), :parent_driver, :aeolus) === :aeolus
 
 """
-    site_alone_toml(path) -> IOBuffer
-
-The urban site's `[[domain]]` block of the nested config `path` as a
-one-domain config (its tables at the top level, its driver paths absolute,
-the run-level sections as they are but the root's `[time] cfl`, `dt_max`):
-the site without its parent domain.
-"""
-function site_alone_toml(path)
-    t = TOML.parsefile(path)
-    i, _ = site_domain(path)
-    blk = t["domain"][i]
-    out = Dict{String,Any}(k => v for (k, v) in t if k != "domain")
-    # the root's adaptive step: no root without the parent
-    out["time"] = Dict{String,Any}(k => v for (k, v) in out["time"] if !(k in ("cfl", "dt_max")))
-    dir = dirname(path)
-    for (k, v) in blk
-        k in ("id", "parent", "origin", "refinement", "feedback") && continue
-        out[k] = k in ("static_driver", "dynamic_driver") && v != "none" ? joinpath(dir, v) : v
-    end
-    u = out["urban"]
-    for k in ("sounding",)
-        get(u, k, "none") != "none" && (u[k] = joinpath(dir, u[k]))
-    end
-    io = IOBuffer()
-    TOML.print(io, out)
-    seekstart(io)
-    return io
-end
-
-"""
     smoke_run_config(spec; serial = false) -> RunConfig
 
 The config of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its
-overrides (the site alone when the run has no parent); `serial`: the
+overrides (`berlin_smoke_site.toml` when the run has no parent); `serial`: the
 site's single-task backend (`urban.serial`).
 """
 function smoke_run_config(spec; serial::Bool = false)
     nested = smoke_nested(spec)
     ovr = smoke_overrides(spec; nested)
     serial && push!(ovr, (nested ? site_key(SMOKE_TOML, "urban.serial") : "urban.serial") * "=true")
-    return nested ? load_run_config(SMOKE_TOML; overrides = ovr) : load_run_config(site_alone_toml(SMOKE_TOML); overrides = ovr)
+    return load_run_config(nested ? SMOKE_TOML : SMOKE_SITE_TOML; overrides = ovr)
 end
 
 "The site's options (`site_options`) of a run of [`smoke_specs`](@ref)."

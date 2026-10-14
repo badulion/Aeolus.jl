@@ -63,14 +63,14 @@ _norm(v) = v
 digest(a) = string(fnv1a64(collect(reinterpret(UInt8, vec(collect(a))))); base = 16, pad = 16)
 
 """
-    berlin_state(case) -> NamedTuple-like Vector of name => array
+    berlin_state(case; parent = nothing) -> Vector{Pair{Symbol,Array{Float64}}}
 
-The prognostic state of a built Berlin case, interior cells: the child's
-u, v, w, p, θ, every tracer, the surface temperature Ts, and, with the
-Aeolus nest parent, the parent's u, v, w, p, θ (and qv).
+The prognostic state of a built Berlin site, interior cells: the site's
+u, v, w, p, θ, every tracer, the surface temperature Ts, and, with its
+`parent` domain (the nest's root, NEST-p3 #483), the parent's u, v, w, p,
+θ, qv as `parent_*`.
 """
-function berlin_state(case)
-    BCm = parentmodule(typeof(case))
+function berlin_state(case; parent = nothing)
     s = case.sim
     out = Pair{Symbol,Array{Float64}}[]
     for f in (:u, :v, :w, :p, :θ)
@@ -80,13 +80,11 @@ function berlin_state(case)
         push!(out, t.name => Array{Float64}(interior_view(t.field)))
     end
     push!(out, :Ts => Array{Float64}(case.bus.Ts))
-    c = BCm.find_coupling(case, :nesting)
-    if c !== nothing && c.parent !== nothing
-        ps = c.parent.sim
-        for f in (:u, :v, :w, :p, :θ)
+    if parent !== nothing
+        ps = parent.state
+        for f in (:u, :v, :w, :p, :θ, :qv)
             push!(out, Symbol("parent_", f) => Array{Float64}(interior_view(getproperty(ps, f))))
         end
-        c.parent.pc.moisture && push!(out, :parent_qv => Array{Float64}(interior_view(ps.qv)))
     end
-    return (; out...)
+    return out
 end
