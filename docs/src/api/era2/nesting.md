@@ -32,7 +32,10 @@ by a separate transport books its interface flux with
 [`nest_stage_weights`](@ref). The parent may be z-stretched
 (`StretchedGrid`), the operators may run in the reference-mass measure of
 a sound-proof pair ([`NestMeasure`](@ref), [`nest_measure`](@ref)), and
-restriction may be solid-aware ([`nest_fluid_mask`](@ref)). The block-structured AMR of
+restriction may be solid-aware ([`nest_fluid_mask`](@ref)). A mixed
+core pair (Boussinesq and anelastic, NEST-p2 #482) is nested with the
+density conversion of [`NestCoreConversion`](@ref)
+([`nest_core_conversion`](@ref)). The block-structured AMR of
 [`Aeolus.AdaptiveMesh`](adaptive_mesh.md) builds on these operators.
 The theory is on the [nesting theory page](../../theory/nesting.md), the
 [nested time-coupling page](../../theory/nesting_time.md), the

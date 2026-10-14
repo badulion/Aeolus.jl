@@ -350,6 +350,7 @@ buffer = 2
 z_anterp = "canopy"
 tau = "none"
 reflux = true
+budget_exchange = "exchange_term"   # budgets across a nest of [[domain]] blocks (the model's nest engine)
 
 [nesting.parent]
 # The nest parent (ParentConfig, #259).

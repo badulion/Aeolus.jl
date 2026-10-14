@@ -143,7 +143,7 @@ component_name(::Type{<:NestingCoupling}) = :nesting
 modules_used(::Type{<:NestingCoupling}) = (:Nesting, :StretchedGrids, :SurfaceTiles, :LargeScaleForcing)
 default_options(::Type{<:NestingCoupling}) =
     (mode = :one_way, parent = (;), parent_driver = :aeolus,
-     buffer = 2, z_anterp = :canopy, τ = nothing, reflux = true)
+     buffer = 2, z_anterp = :canopy, τ = nothing, reflux = true, budget_exchange = :exchange_term)
 # the child's θ booking of the two-way registers runs in every dynamics stage
 stages(::Type{<:NestingCoupling}) = ((:nest_sync, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP),
                                      (:body_force, 5, EVERY_STEP))

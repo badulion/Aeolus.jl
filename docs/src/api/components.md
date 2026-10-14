@@ -24,9 +24,12 @@ step!(model, 2.0)
 Several domains are a nest (ONE-f, #455): [`nested_model`](@ref
 Aeolus.Components.nested_model) couples them with one
 [`NestLink`](@ref Aeolus.Components.NestLink) per child (its parent, its
-`Nesting.NestedGrid` and its feedback, two-way by default), and
-`step!(model, dt)` steps the root with every child subcycling through its
-own pipeline. A config builds it from its `[[domain]]` blocks; see
+`Nesting.NestedGrid`, its feedback, two-way by default, and optional
+synthetic inflow turbulence), and `step!(model, dt)` (or
+`step_adaptive!(model)`) takes one window of the nest engine
+([`nest_window!`](@ref Aeolus.Components.nest_window!), NEST-p2 #482):
+the root steps, every child subcycles through its own pipeline, the
+two-way children feed back, and a failed step retries the window. A config builds it from its `[[domain]]` blocks; see
 [Run configuration](../design/run_configuration.md).
 
 ```@autodocs
