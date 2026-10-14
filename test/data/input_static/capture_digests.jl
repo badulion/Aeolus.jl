@@ -1,3 +1,5 @@
+# (Kept for the record: ParentConfig, nest_parent_config and parent_geostrophic went with NEST-p3, #483,
+# where the nest parent became a [[domain]] of the model; this script no longer runs.)
 # Captures test/data/input_static/digests.toml (CFG-f, #361). Run ONCE on
 # the commit before the Berlin geometry moved to the static driver (the
 # OSM file still parsed by build_geometry at every start):

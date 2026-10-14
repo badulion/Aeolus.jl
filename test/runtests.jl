@@ -875,7 +875,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
-    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent
+    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)

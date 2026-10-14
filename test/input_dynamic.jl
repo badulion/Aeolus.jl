@@ -60,10 +60,12 @@ isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data
 const ID_DATA = joinpath(@__DIR__, "data", "input_dynamic")
 const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
 const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
+# the smoke site alone (no parent domain): the offline and the open cases
+const ID_SMOKE_SITE = joinpath(berlin_configs_dir(), "berlin_smoke_site.toml")
 const ID_CSV = normpath(joinpath(berlin_data_dir(), "lindenberg_10393_20190629.csv"))
 
 "The sounding driver of the urban run `cfg` at `out` (`Urban.write_sounding_driver`, what `aeolusprep dynamic --from-sounding` calls)."
-write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.site_options(cfg), out; preprocessor = "test/input_dynamic.jl")
+write_sounding_driver(cfg, out) = BCD.write_sounding_driver(BCD.site_options(site_view(cfg)), out; preprocessor = "test/input_dynamic.jl")
 
 
 # A synthetic boundary snapshot: every field has the value `val` everywhere.
@@ -290,7 +292,8 @@ end
         zf = collect(range(0.0, 4000.0; length = 4001))
         θ0, q0 = BCD.initial_θ(cfg), BCD.initial_qv(cfg)
         ref = BCD.build_reference(cfg, mesh)
-        Ug, Vg = BCD.parent_geostrophic(BCD.ParentConfig(cfg))
+        # (the site's sounding wind, what the nest parent of #259 took: NEST-p3, #483)
+        Ug, Vg = BCD.site_geostrophic_wind(cfg, BCD.component_options(BCD.GeostrophicCoupling, cfg))
         tz = [(z, t) for z in zf[1:40:end], t in (0.0, 17.3, 3600.0, 40000.5)]
         return Dict{String,Any}("summer_theta_zc" => digest([θ0(0.0, 0.0, z) for z in zc]),
             "summer_qv_zc" => digest([q0(0.0, 0.0, z) for z in zc]),
@@ -336,24 +339,25 @@ end
 @testset "InputDrivers dynamic: a missing driver is a config error naming the command that makes it" begin
     dir = mktempdir()
     msg = errmsg(() -> Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
-                                    load_run_config(ID_SMOKE; overrides = ["dynamic_driver=\"$(joinpath(dir, "none.nc"))\""])))
+                                    load_run_config(ID_SMOKE; overrides = ["domain.site.dynamic_driver=\"$(joinpath(dir, "none.nc"))\""])))
     @test occursin("AeolusPrep dynamic --from-sounding $ID_SMOKE", msg)
     # the offline nest: the online run writes it
     msg = errmsg(() -> Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
-                                    load_run_config(ID_SMOKE; overrides = ["dynamic_driver=\"$(joinpath(dir, "none.nc"))\"",
-                                                                           "nesting.parent_driver=\"offline\""])))
+                                    load_run_config(ID_SMOKE_SITE; overrides = ["dynamic_driver=\"$(joinpath(dir, "none.nc"))\"",
+                                                                                "nesting.enabled=true",
+                                                                                "nesting.parent_driver=\"offline\""])))
     @test occursin("child_boundaries", msg)
 end
 
 @testset "InputDrivers dynamic: the smoke case from a sounding driver = the CSV path (12 steps, round trip)" begin
     dir = mktempdir()
     out = joinpath(dir, "smoke_sounding.nc")
-    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ["urban.sounding=\"$ID_CSV\""]), out)
+    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ["domain.site.urban.sounding=\"$ID_CSV\""]), out)
     r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
-                        overrides = ["dynamic_driver=\"$out\""])
+                        overrides = ["domain.site.dynamic_driver=\"$out\""])
     @test r.fields_equal && r.diagnostics_equal && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
-    @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(out)
+    @test rec["inputs"]["domain.site.dynamic_driver"]["fnv1a64"] == content_hash(out)
     case = urban_site(r.runs[1].obj)
     @test BCD.case_sounding(case.cfg) !== nothing && case.cfg.sounding === nothing
     # the CSV path, run the same way in this process. The 12-step state is
@@ -362,11 +366,15 @@ end
     # in the last bits in others (3 of 12 fresh processes on the same code;
     # cause not identified, see the PR), while the initial state above
     # matched every time.
-    csv = load_run_config(ID_SMOKE; overrides = ["urban.sounding=\"$ID_CSV\"", "time.nsteps=12",
+    csv = load_run_config(ID_SMOKE; overrides = ["domain.site.urban.sounding=\"$ID_CSV\"", "time.nsteps=12",
                                                  "fftw.planner=\"estimate\""])
-    ref = urban_site(run_config(csv; root = mktempdir(), console = false, repo = mktempdir()).obj)
-    want, got = berlin_state(ref), berlin_state(case)
-    @test sort(collect(keys(got))) == sort(collect(keys(want))) == sort(Symbol.(keys(ID_MASTER["smoke_sounding_state"])))
+    rr = run_config(csv; root = mktempdir(), console = false, repo = mktempdir())
+    ref = urban_site(rr.obj)
+    # (the site and its parent domain, NEST-p3 #483)
+    want = Dict(berlin_state(ref; parent = rr.obj.model.domains[1]))
+    got = Dict(berlin_state(case; parent = r.runs[1].obj.model.domains[1]))
+    @test sort(collect(keys(got))) == sort(collect(keys(want)))
+    @test issubset(Symbol.(keys(ID_MASTER["smoke_sounding_state"])), keys(got))
     bad = sort!([k for k in keys(want) if !isequal(got[k], want[k])])
     isempty(bad) || @info "smoke from the sounding driver: fields differing from the CSV path" bad
     @test isempty(bad) && case.clock.n == ref.clock.n && case.sim.t == ref.sim.t
@@ -387,40 +395,42 @@ end
         # drawn from the running parent's statistics and are not part of the
         # driver, so an offline child cannot replay them (it would add its own)
         t0 = time()
-        nogen = ["inflow_turbulence.enabled=false"]
-        online = BCD.build_case(site_config(berlin_toml("smoke"); overrides = nogen,
-                                               child_boundaries = drv))
-        run_site!(online)
+        nogen = ["domain.site.inflow_turbulence.enabled=false"]
+        mk(ovr) = build_config_model(load_run_config(ID_SMOKE; overrides = ovr))
+        om = mk(vcat(nogen, ["domain.site.urban.child_boundaries=\"$drv\""]))
+        online = urban_site(om)
+        run_model!(om)
         t_online = time() - t0
         nc = BCD.find_coupling(online, :nesting)
-        st_on = berlin_state(online)
+        st_on = Dict(berlin_state(online))
         # recording does not change the run: the same case without the recorder
-        plain = BCD.build_case(site_config(berlin_toml("smoke"); overrides = nogen))
-        run_site!(plain)
-        st_plain = berlin_state(plain)
+        pm = mk(nogen)
+        plain = urban_site(pm)
+        run_model!(pm)
+        st_plain = Dict(berlin_state(plain))
         @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
         d = read_dynamic_driver(drv; mesh = online.mesh)
         f = d.boundary
-        # a record per parent step from t = 0; the last window may reach past the run's end
+        # a record per parent step from t = 0; the last window lands on the run's end
         @test length(f.time) == nc.windows + 1 && f.time[1] == 0.0 && f.time[end-1] < online.sim.t <= f.time[end]
         @test isnan(f.step[1]) && all(isfinite, f.step[2:end])
         @test Set(keys(d.fields)) == Set([:u, :v, :w])
         @test haskey(d.tables, :profile_u) && size(d.tables[:profile_u].values) == (online.mesh.Nz, length(f.time))
         @info @sprintf("online smoke with child_boundaries: %d parent windows, %d records, driver %.1f MB, %.1f s",
                        nc.windows, length(f.time), filesize(drv) / 1024^2, t_online)
-        # the child alone from the file, through aeolus run and its replay
-        r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
-                            overrides = ["dynamic_driver=\"$drv\"", "nesting.parent_driver=\"offline\""])
+        # the site alone from the file, through aeolus run and its replay
+        r = roundtrip_check(ID_SMOKE_SITE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
+                            overrides = ["dynamic_driver=\"$drv\"", "nesting.enabled=true",
+                                         "nesting.parent_driver=\"offline\"", "inflow_turbulence.enabled=false"])
         @test r.fields_equal && r.diagnostics_equal && r.config_equal
         rec = read_run_toml(r.runs[1].folder.path)
         @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv)
         off = urban_site(r.runs[1].obj)
         oc = BCD.find_coupling(off, :nesting)
         @test BCD.offline(oc) && oc.parent === nothing && oc.windows == nc.windows
-        st_off = berlin_state(off)
-        @test !haskey(st_off, :parent_θ)
-        ks = [k for k in keys(st_off)]
-        @test Set(ks) == Set(k for k in keys(st_on) if !startswith(String(k), "parent_"))
+        st_off = Dict(berlin_state(off))
+        ks = collect(keys(st_off))
+        @test Set(ks) == Set(keys(st_on))
         bad = [k for k in ks if !isequal(st_off[k], st_on[k])]
         isempty(bad) || @info "offline child differs from the online child" bad
         @test isempty(bad)
@@ -435,19 +445,18 @@ end
 @testset "InputDrivers dynamic: the open case from the sounding driver's steady planes (smoke, 12 steps)" begin
     dir = mktempdir()
     out = joinpath(dir, "smoke_open.nc")
-    ov = ["urban.sounding=\"$ID_CSV\"", "nesting.enabled=false", "urban.lateral=\"open\""]
-    write_sounding_driver(load_run_config(ID_SMOKE; overrides = ov), out)
+    ov = ["urban.sounding=\"$ID_CSV\"", "urban.lateral=\"open\""]
+    write_sounding_driver(load_run_config(ID_SMOKE_SITE; overrides = ov), out)
     m = RegularGrid(; size = (16, 16, 16), extent = (250.0, 250.0, 100.0), halo = (3, 3, 3))
     d = read_dynamic_driver(out; mesh = m)
     @test d.boundary !== nothing && length(d.boundary.time) == 1 && haskey(d.tables, :profile_theta)
     @test d.attributes["dynamic_source"] == "sounding"
-    run(dyn) = (c = BCD.build_case(site_config(berlin_toml("smoke"); overrides = ["nesting.enabled=false"],
-                                                  lateral = :open, sounding = ID_CSV, dynamic = dyn));
+    run(dyn) = (c = BCD.build_case(site_config(ID_SMOKE_SITE; lateral = :open, sounding = ID_CSV, dynamic = dyn));
                 run_site!(c); c)
     a, b = run(nothing), run(out)
     @test all(st -> st.data isa ProfileBoundaryData, open_boundary_states(a.sim))
     @test all(st -> st.data isa FileBoundaryData, open_boundary_states(b.sim))
-    sa, sb = berlin_state(a), berlin_state(b)
+    sa, sb = Dict(berlin_state(a)), Dict(berlin_state(b))
     bad = [k for k in keys(sa) if !isequal(sa[k], sb[k])]
     isempty(bad) || @info "open case from the driver's planes differs from the profile data" bad
     @test isempty(bad) && b.clock.n == a.clock.n

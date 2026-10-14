@@ -104,15 +104,16 @@ end
     @test sum(documented(s) for s in sch.sections) ==
           sum(length(getfield(getproperty(cfg, Symbol(s.name)), :values)) for s in sch.sections)
     # an additive component's section, a provider's options (aq_chem's default_options
-    # under [chemistry] scheme = "aq_chem"), and the nest parent's schema as [nesting.parent]
+    # under [chemistry] scheme = "aq_chem"); the nest parent is a [[domain]] of its own
+    # (NEST-p3, #483), no [nesting.parent] table
     @test "pollutant" in keys(rows) && "enabled" in rows["pollutant"] && "stacks" in rows["pollutant"]
     @test "chemistry.scheme=aq_chem" in keys(rows) && "nox_street" in rows["chemistry.scheme=aq_chem"] &&
           rows["chemistry"] == ["scheme"]
     @test occursin("### `[chemistry]` scheme = `\"aq_chem\"`", option_reference("model"; format = :markdown))
-    @test "nesting.parent" in keys(rows) && "extent" in rows["nesting.parent"]
-    # a section asked for alone keeps its sub-tables and leaves the checks out
+    @test !("nesting.parent" in keys(rows)) && !("mode" in rows["nesting"])
+    # a section asked for alone leaves the checks out
     one = option_reference("model"; section = "nesting", format = :markdown)
-    @test occursin("### `[nesting.parent]`", one) && !occursin("Cross-field checks", one)
+    @test occursin("`[nesting]`", one) && !occursin("Cross-field checks", one)
 end
 
 "Every `Markdown.Italic` / `Bold` node under `x` (the option docs are plain prose)."
@@ -148,17 +149,12 @@ end
                                       "t364doc: t364.n has no doc", "t364doc: t364.speed is a float without units"]
 end
 
-@testset "undocumented_keys: the nest parent's table against its schema" begin
-    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_summer.toml"))
-    @test isempty(undocumented_keys(cfg))
-    @test !isempty(cfg.nesting.parent)                     # the file does set parent options
-    # the walk: a documented option (whatever its value, a table too) and a
-    # key the parent's schema does not document
-    sch = driver_schema("model")
-    subs = Dict(x.name => x for x in C._subtables(C._option(C._section(sch, "nesting"), "parent")))
-    tbl = Dict{String,Any}("q_surface" => Dict{String,Any}("kind" => "constant", "value" => 1.0), "bogus" => 1,
-                           "extent" => [1.0, 2.0, 3.0])
-    @test C._undocumented!(String[], "nesting.parent", "", tbl, subs) == ["nesting.parent.bogus"]
+@testset "undocumented_keys: the Berlin configs, parent and site domains, document every key" begin
+    for f in readdir(joinpath(@__DIR__, "..", "examples", "urban"); join = true)
+        endswith(f, ".toml") || continue
+        cfg = load_run_config(f)
+        @test isempty(undocumented_keys(cfg))
+    end
 end
 
 @testset "input-format reference: one row per variable of each driver schema" begin

@@ -226,6 +226,23 @@ function class_surface(tc::TileClasses, site::SurfaceSite)
 end
 tile_skin(tc::TileClasses, c::Integer) = tc.Ts0 + (c == SURFACE_WATER ? tc.ΔT_water : 0.0)
 
+# The tiled surface's maps, written once into its domain's output file (a
+# file with variables; the parent's surface map of plot_parent_surface.jl):
+# the area fraction of each surface class, the plan area density of the
+# morphometry window and the Macdonald roughness and displacement height of
+# the unresolved buildings (#249).
+function Components.static_outputs(c::TiledUrbanSurface)
+    ps = c.surface
+    names = ("street", "roof", "park", "water", "wall")
+    out = OutputVariable[OutputVariable("tile_fraction_$(names[k])", "1", "area fraction of the $(names[k]) tiles", :xy,
+                                        d -> ps.fractions[:, :, k]) for k in 1:min(5, size(ps.fractions, 3))]
+    append!(out, OutputVariable[
+        OutputVariable("tile_lambda_p", "1", "plan area density of the buildings (the morphometry window)", :xy, d -> ps.λp),
+        OutputVariable("tile_z0", "m", "roughness length of the unresolved buildings (Macdonald et al. 1998)", :xy, d -> ps.z0),
+        OutputVariable("tile_d", "m", "displacement height of the unresolved buildings (Macdonald et al. 1998)", :xy, d -> ps.d)])
+    return out
+end
+
 const _SFC_KEYS = (:Rn, :H, :LE, :G, :E, :delivered_H, :delivered_E)
 
 """

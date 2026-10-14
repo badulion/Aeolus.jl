@@ -238,10 +238,13 @@ end
     # digests the OSM file did in memory (before ONE-h, #457)
     full = site_config(berlin_toml("mitte_sample"))
     mitte = BCI.case_static_inputs(full, meshof(full)).city
-    for (label, c) in ("mitte_sample" => site_config(berlin_toml("mitte_sample"); size = (32, 32, 16)),
-                       "mitte_periodic" => site_config(berlin_toml("mitte_sample"); size = (32, 32, 16),
-                                                          lateral = :periodic,
-                                                          overrides = ["nesting.enabled=false"]))
+    # (at 32 × 32 × 16 the site has the parent's spacing: refinement 1; the
+    # periodic variant is the site's options without the nest component)
+    m32 = site_config(berlin_toml("mitte_sample"); size = (32, 32, 16), overrides = ["domain.site.refinement=[1, 1, 1]"])
+    per = site_config(berlin_toml("mitte_sample"); size = (32, 32, 16), lateral = :periodic,
+                      overrides = ["domain.site.refinement=[1, 1, 1]"])
+    per = merge(per, (; components = delete!(copy(per.components), :nesting)))
+    for (label, c) in ("mitte_sample" => m32, "mitte_periodic" => per)
         m = meshof(c)
         ox, oy = BCI.anchor_xy(c, m)
         c = merge(c, (; static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0,
@@ -264,31 +267,41 @@ end
     mem = static_inputs(st.city, mesh; origin_lat = c.lat0, origin_lon = c.lon0, origin_x = ox, origin_y = oy,
                         class_lai = Dict(SURFACE_PARK => 2.5))
     @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
-    # the nest parents' land use, from their static drivers and in memory
+    # the nest parents' land use: their [[domain]]'s static driver (the tile
+    # form on the parent's grid, NEST-p3 #483) and the land-use table
+    # cropped and coarsened in memory
     for s in (:smoke, :summer)
-        pc = BCI.nest_parent_config(site_config(berlin_toml(s)))
-        pm = BCI.parent_mesh(pc)
+        pv = Aeolus.Config.domain_view(load_run_config(berlin_toml(s)), 1)
+        pm = Aeolus.SimulationDriver._mesh(pv.grid)
+        t = Aeolus.SimulationDriver._read_tiles(pv.domain.static_driver, pm)
+        mem = BCI.landuse_static_tiles(BCI.read_parent_landuse(joinpath(berlin_data_dir(), "berlin_landuse_6km.csv")), pm;
+                                       origin_lat = t.origin_lat, origin_lon = t.origin_lon,
+                                       origin_x = t.origin_x, origin_y = t.origin_y)
         d = IS_DIGESTS["parent_$s"]
-        for pl in (BCI.parent_landuse(pc, pm), BCI.parent_landuse_source(pc, pm))
+        for pl in (BCI.landuse_of_tiles(t), BCI.landuse_of_tiles(mem))
             @test digest(pl.counts) == d["counts"] && digest(pl.λf) == d["lambda_f"] &&
                   digest(pl.hmean) == d["h_mean"] && digest(pl.hmax) == d["h_max"]
             @test (pl.nx, pl.ny, pl.dx, pl.x0, pl.y0, pl.r) == (d["nx"], d["ny"], d["dx"], d["x0"], d["y0"], d["r"])
         end
     end
-    # the round trip hashes the static drivers under [inputs]
-    inp = config_inputs(load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml")))
-    @test inp["domain.main.static_driver"]["fnv1a64"] == content_hash(cs.static)
-    @test inp["domain.main.urban.parent_static"]["fnv1a64"] == content_hash(cs.parent_static)
+    # the round trip hashes the static drivers under [inputs], the site's and the parent's
+    smoke_cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))
+    inp = config_inputs(smoke_cfg)
+    @test inp["domain.site.static_driver"]["fnv1a64"] == content_hash(cs.static)
+    @test inp["domain.parent.static_driver"]["fnv1a64"] ==
+          content_hash(Aeolus.Config.domain_view(smoke_cfg, 1).domain.static_driver)
     # a grid the file was not made for is refused, naming both grids and the command
+    # (the site alone: in its nest the grid's size is checked against the parent first)
+    small = site_config(berlin_toml("smoke_site"); size = (8, 8, 16))
     e = try
-        BCI.build_geometry(site_config(berlin_toml("smoke"); size = (8, 8, 16)), meshof(site_config(berlin_toml("smoke"); size = (8, 8, 16))))
+        BCI.build_geometry(small, meshof(small))
         nothing
     catch err
         sprint(showerror, err)
     end
     @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolusprep static", e)
     # a missing driver: a config error before any run folder, with the exact command
-    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["static_driver=\"nope.nc\""])
+    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["domain.site.static_driver=\"nope.nc\""])
     e = try
         Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg); nothing
     catch err
@@ -297,7 +310,7 @@ end
     @test e isa ConfigError && occursin("AeolusPrep static $(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))", sprint(showerror, e))
     # no static driver at all: no ground, an error naming AeolusPrep, not a flat city
     e = try
-        BCI.build_geometry(site_config(berlin_toml("smoke"); static = nothing), meshof(cs)); nothing
+        BCI.build_geometry(site_config(berlin_toml("smoke_site"); static = nothing), meshof(cs)); nothing
     catch err
         sprint(showerror, err)
     end
@@ -308,7 +321,8 @@ end
     # AeolusPrep.jl reproduces them (its test/recipes.jl); here: small, valid
     for s in ("summer", "smoke", "mitte_sample")
         cc = site_config(berlin_toml(s))
-        for (f, sch) in ((cc.static, STATIC_SCHEMA), (cc.parent_static, STATIC_TILES_SCHEMA))
+        ps = Aeolus.Config.domain_view(load_run_config(berlin_toml(s)), 1).domain.static_driver
+        for (f, sch) in ((cc.static, STATIC_SCHEMA), (ps, STATIC_TILES_SCHEMA))
             @test filesize(f) <= 2 * 1024^2                 # committed: 2 MB or smaller
             @test isempty(check_driver(f, sch))
             # made by AeolusPrep (ONE-h, #457): the OSM source in its package, the

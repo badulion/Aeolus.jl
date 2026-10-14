@@ -1,5 +1,6 @@
 # The urban site of the model (EX-a #438, ONE-e #454): Aeolus.Urban,
-# a model config with `[urban] enabled`, and the `urban_parent` run driver.
+# a model config with `[urban] enabled`, and its nest parent alone (a
+# domain of the model's core, NEST-p3 #483).
 # Small synthetic setups:
 #
 #   * a synthetic city (test/data/urban/small_city.toml: two buildings, a
@@ -8,8 +9,9 @@
 #     checks (the ledgers closed, a finite state, the sun's net gain), and
 #     the ground is the GeoJSON's its static driver holds (heights,
 #     classes, the shed below the minimum height dropped);
-#   * the nest parent alone (`urban_parent`, berlin_parent.toml at its
-#     smoke size): its tables, results and tiled-surface file.
+#   * the nest parent alone (berlin_parent.toml at its [test] size): a
+#     domain of the model's core with its tiled surface; its profiles,
+#     budgets and surface maps in its output file.
 # The input preprocessors (osm-sample, the IGRA2 parser, the parent's
 # land-use table) are AeolusPrep.jl's since ONE-h (#457), with their tests.
 #   * the examples policy: no script under examples/urban builds or runs the
@@ -117,33 +119,39 @@ end
     @test r["budgets"]["closed"] === true
 end
 
-@testset "urban_parent: the nest parent alone, its tables and results" begin
+@testset "the nest parent alone: berlin_parent.toml, a domain of the model's core" begin
     toml = berlin_toml("parent")
     tt = Aeolus.Config.config_test_table(toml)
-    cfg = load_run_config(toml; overrides = tt.overrides)
-    @test cfg.run.legacy == "urban_parent"
+    cfg = load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\""]))
+    @test !hasproperty(cfg.run, :legacy) && !UC.urban_enabled(cfg)
     r = run_config(cfg; root = mktempdir(), console = devnull, allow_uncommitted = true)
+    d = only(r.obj.model.domains)
+    m = d.state.mesh
+    @test (m.Nx, m.Ny, m.Nz) == (24, 24, 38) && d.state.t ≈ 180.0
+    @test map(Aeolus.Components.component_name, d.components) ==
+          (:advection, :tiled_surface, :sgs, :mean_column_radiation, :coriolis, :large_scale_forcing, :sponge)
+    @test all(isfinite, interior_view(d.state.θ)) && all(isfinite, interior_view(d.state.u))
     out = joinpath(r.folder.path, "output")
-    res = TOML.parsefile(joinpath(out, "results.toml"))
-    @test res["grid"] == [24, 24, 38] && res["finite"] === true && !haskey(res, "failure")
-    @test res["simulated_h"] ≈ 0.05 atol = 1e-9
-    @test res["closure_rel"] < 1e-10
-    @test res["dt_min"] > 0 && res["dt_max"] <= 10
-    # one record at the start and every output_period (60 s) to 180 s
-    lines = filter(l -> !startswith(l, "#"), readlines(joinpath(out, "parent.csv")))
-    @test length(lines) == 1 + 4
-    @test startswith(lines[1], "t_s,hour_LT,zi_min_flux_m")
-    @test parse(Float64, split(lines[end], ',')[1]) ≈ 180.0
-    th = filter(l -> !startswith(l, "#"), readlines(joinpath(out, "parent_theta.csv")))
-    @test length(th) == 5 && length(split(th[1], ',')) == 1 + 38
-    # the tiled surface: fractions of every cell sum to one, the child's
-    # 1 km footprint covers 4 × 4 parent cells of 250 m
-    ds = NCDataset(joinpath(out, "parent_surface.nc"))
-    f = Array(ds["fraction"]); fp = Array(ds["footprint"]); z0 = Array(ds["z0"])
+    ds = NCDataset(joinpath(out, "parent.nc"))
+    # a record at the start and every 60 s to 180 s: the θ profile on the 38 levels
+    θp = Array(ds["theta_profile"])
+    @test size(θp) == (38, 4) && all(isfinite, θp)
+    hf = Array(ds["heat_flux_profile"])
+    @test size(hf, 2) == 4
+    # the tiled surface's maps: the class fractions of every column sum to one,
+    # the unresolved buildings' roughness is positive
+    f = sum(Array(ds[v]) for v in ("tile_fraction_street", "tile_fraction_roof", "tile_fraction_park",
+                                    "tile_fraction_water", "tile_fraction_wall"))
+    z0 = Array(ds["tile_z0"])
     close(ds)
-    @test maximum(abs.(sum(f; dims = 3) .- 1)) < 1e-12
-    @test count(>(0.5), fp) == 16
+    @test maximum(abs.(f .- 1)) < 1e-6        # (written as Float32)
     @test all(z0 .> 0)
+    # the energy and water budgets close, every term attributed
+    b = d.budgets
+    for q in (:energy, :water)
+        sb = Aeolus.BudgetSystem.stage_budget(b.budgets.measured[q])
+        @test abs(sb.closure) <= 1e-10 * maximum(abs, values(sb.terms))
+    end
     @test Base.invokelatest(state_fields, r.obj).θ isa Array{Float64,3}
 end
 
@@ -170,7 +178,9 @@ end
     for f in readdir(ex; join = true)
         endswith(f, ".toml") || continue
         cfg = load_run_config(f)
-        @test cfg.urban.enabled && (!hasproperty(cfg.run, :legacy) || cfg.run.legacy == "urban_parent")
+        # an urban site (alone, or nested in its parent domain), or the parent alone (its tiles)
+        @test !hasproperty(cfg.run, :legacy) &&
+              (UC.urban_enabled(cfg) || Aeolus.Config.config_domains(cfg)[1].surface.model === :tiles)
     end
     @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
                                   "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl",
