@@ -16,7 +16,7 @@ module). Everything that **creates** a driver from outside data is the
 separate package [AeolusPrep.jl](https://github.com/badulion/AeolusPrep.jl)
 (ONE-h, #457; the single-model design, [One model](../design/single_model.md)): OpenStreetMap
 and GeoJSON footprints, the nest parent's land-use classification,
-soundings and case tables, ERA5 (GRIB2 or NetCDF), and the downloads of
+soundings, ERA5 (GRIB2 or NetCDF), and the downloads of
 those sources. It depends on Aeolus for the writers, so a file is written
 by the code that defines and checks its format, and the model itself
 never reads OpenStreetMap, GIS or reanalysis files (and does not depend
@@ -39,8 +39,26 @@ config and the source and its options (`--source`, `--min-height`,
 committed to Aeolus (`examples/**/input/`, `test/data/**/input/`) is listed
 with its command and options in AeolusPrep's `recipes.toml`, and its tests
 regenerate each one: every data variable bit for bit, every global
-attribute but `date_created` and `aeolus_commit` equal. The parent-made
-driver of an offline nest is model output, not a preprocessor (below).
+attribute but `date_created` and `aeolus_commit` equal. The exceptions
+are the case-table drivers of the SBL configs (`examples/sbl/input/`),
+written once by the former sbl run type's writer and committed here
+since ONE-g (#456) removed it; AeolusPrep lists them as not made by it,
+and `test/input_dynamic.jl` checks them against the case tables. A
+source recorded relative to its driver must exist (`test/input_static.jl`):
+[`check_driver`](@ref Aeolus.InputDrivers.check_driver) skips the
+staleness check of a source it cannot find, which a moved driver would
+otherwise switch off silently (#487). The parent-made driver of an
+offline nest is model output, not a preprocessor (below).
+
+**An Aeolus change that AeolusPrep follows runs its tests.** AeolusPrep
+calls the config (`load_run_config`, `[run] legacy`, `[urban] enabled`,
+the domain's `static_driver` and `dynamic_driver`), this module's writers
+and schemas, the urban site's options and writers
+(`Urban.site_options`, `write_sounding_driver`, the nest parent's tiles),
+the simulation's mesh and open faces, and the layout of
+`examples/<case>/`. A PR that changes any of these, or a committed
+driver, runs `julia bin/test-against <this checkout>` in an AeolusPrep.jl
+checkout and quotes the result ([Contributing](https://github.com/badulion/Aeolus.jl/blob/master/docs/CONTRIBUTING.md#aeolusprep)).
 
 ## Conventions
 
