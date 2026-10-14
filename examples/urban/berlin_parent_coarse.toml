@@ -40,7 +40,7 @@ cadence = 1800.0
 dt = "adaptive"
 cfl = 0.9
 dt_max = 10.0
-duration = "24h"
+duration = 86400.0
 
 [grid]
 size = [24, 24, 38]

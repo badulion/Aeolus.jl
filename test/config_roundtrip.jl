@@ -160,8 +160,11 @@ const RT_PLAN = smoke_plan(RT_FILES)
         @test config_text(load_run_config(IOBuffer(t1))) == t1
         # 3. every key it holds is in the option reference the docs build
         sch = config_schema(cfg)
-        for s in sch.sections, k in keys(getfield(getproperty(cfg, Symbol(s.name)), :values))
-            @test k in rows[s.name]
+        nd = length(Aeolus.Config.config_domains(cfg))
+        for v in (nd <= 1 ? [cfg] : [Aeolus.Config.domain_view(cfg, i) for i in 1:nd])     # (every domain of a nest)
+            for s in sch.sections, k in keys(getfield(getproperty(v, Symbol(s.name)), :values))
+                @test k in rows[s.name]
+            end
         end
         @test isempty(undocumented_keys(cfg))
     end

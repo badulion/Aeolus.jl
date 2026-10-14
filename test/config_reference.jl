@@ -90,7 +90,7 @@ end
     # the urban site (the Berlin configs, ONE-e #454): one row per option of a
     # resolved RunConfig (its sections hold every option)
     sch = driver_schema("model")
-    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_smoke.toml"))
+    cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_smoke_site.toml"))   # (one domain)
     rows, _ = md_rows(option_reference("model"; format = :markdown))
     # a slot section (ONE-m, #476): its selector, and the options of the provider it selects
     function documented(s)

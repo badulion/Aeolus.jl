@@ -36,7 +36,7 @@ using Aeolus.BoundaryConditions: open_boundary_snapshot
 
 const NR_θ = 300.0
 const NR_CFL = CFLConstraints(C_advective = 0.5)
-const NR_N = 20                 # child steps of the uninterrupted run
+const NR_N = 32                 # child steps of the uninterrupted run
 const NR_W = 3                  # the checkpoint: after this parent window
 
 mutable struct _NRDriver

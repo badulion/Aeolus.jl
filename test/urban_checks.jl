@@ -435,10 +435,10 @@ function berlin_parent_checks()
         # here at D = 3e-6 s⁻¹
         toml = berlin_toml("parent")
         tt = Aeolus.Config.config_test_table(toml)
-        cfg = load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\"",
+        cfg = cd(() -> load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\"",
                                                      "large_scale_forcing.divergence=3e-6", "radiation.start_hour=10.0",
                                                      "checks.energy_closure={required = false}",
-                                                     "checks.water_closure={required = false}"]))
+                                                     "checks.water_closure={required = false}"])), dirname(toml))
         m = build_config_model(cfg)
         d = only(m.domains)
         @test map(Aeolus.Components.component_name, d.components) ==

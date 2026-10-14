@@ -123,7 +123,7 @@ end
 end
 
 @testset "slot sections: the providers are those of the domain's kind" begin
-    smoke = joinpath(SL_EXAMPLES, "urban", "berlin_smoke.toml")
+    smoke = joinpath(SL_EXAMPLES, "urban", "berlin_smoke_site.toml")     # (the site alone: one domain)
     # [sgs] on an urban site offers the site's closures, on a model domain the model's
     u = load_run_config(smoke)
     @test u.sgs.model === :tke && u.sgs.e_min == 1e-4 && u.sgs.wall_cap               # the site's tke and its options

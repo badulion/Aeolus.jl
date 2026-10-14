@@ -122,7 +122,8 @@ end
 @testset "the nest parent alone: berlin_parent.toml, a domain of the model's core" begin
     toml = berlin_toml("parent")
     tt = Aeolus.Config.config_test_table(toml)
-    cfg = load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\""]))
+    # (the [test] overrides' paths are relative to the file)
+    cfg = cd(() -> load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\""])), dirname(toml))
     @test !hasproperty(cfg.run, :legacy) && !UC.urban_enabled(cfg)
     r = run_config(cfg; root = mktempdir(), console = devnull, allow_uncommitted = true)
     d = only(r.obj.model.domains)
