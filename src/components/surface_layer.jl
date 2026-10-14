@@ -6,7 +6,8 @@
 """
     SurfaceLayer
 
-The `:surface` slot's Monin–Obukhov surface layer, `[surface_layer]`:
+The `:surface` slot's Monin–Obukhov surface layer, `[surface] model =
+"most"` (ONE-m, #476; formerly `[surface_layer] enabled`):
 every column solves similarity theory (`SurfaceExchange.solve_surface_layer`)
 between the first-level wind and θ (at ``Δz/2``) and the prescribed
 surface temperature ``θ_s(t)``, with the roughness lengths `z0m`, `z0h`
@@ -56,7 +57,7 @@ struct SurfaceLayer{S<:AbstractStabilityFunctions, TS, W, L} <: AbstractComponen
 end
 
 component_name(::Type{<:SurfaceLayer}) = :surface_layer
-section(::Type{<:SurfaceLayer}) = "surface_layer"
+section(::Type{<:SurfaceLayer}) = "surface"
 slot(::Type{<:SurfaceLayer}) = :surface
 
 const _SL_TEMPERATURE_KEYS = Dict("constant" => ["value"], "cooling_rate" => ["initial", "rate_per_hour"],
@@ -95,10 +96,10 @@ function _sl_stability_problems(t)
 end
 
 schema(::Type{<:SurfaceLayer}) =
-    Config.section("surface_layer";
-                   doc = "The Monin-Obukhov surface layer over a prescribed surface temperature (SurfaceExchange, " *
-                         "WallModels.MOSTWallLaw): the heat flux and the wall stress of every column.") do s
-        Config.option!(s, "enabled", Bool; default = false, doc = "switch the surface layer on")
+    Config.slot_section("surface"; key = "model") do sec
+      Config.provider!(sec, "most";
+                       doc = "The Monin-Obukhov surface layer over a prescribed surface temperature (SurfaceExchange, " *
+                             "WallModels.MOSTWallLaw): the heat flux and the wall stress of every column.") do s
         Config.option!(s, "z0m", Float64; default = 0.1, range = (0, Inf), open_lower = true, units = "m",
                        doc = "momentum roughness length")
         Config.option!(s, "z0h", Config.Optional{Float64}; range = (0, Inf), open_lower = true, units = "m",
@@ -115,14 +116,15 @@ schema(::Type{<:SurfaceLayer}) =
                              "keys left out take the family's defaults")
         Config.option!(s, "rho_cp", Float64; default = 1206.0, range = (0, Inf), open_lower = true,
                        units = "J m^-3 K^-1", doc = "ρ c_p of the surface_heat_flux output (W m⁻²; diagnostic only)")
+      end
     end
-enabled(::Type{<:SurfaceLayer}, opts) = opts.enabled
+enabled(::Type{<:SurfaceLayer}, opts) = opts.model === :most
 
 """
     stability_functions(t::AbstractDict) -> AbstractStabilityFunctions
 
-The `SurfaceExchange` stability functions of a `[surface_layer] stability`
-table: `BusingerDyerLogLinear` (`beta` sets both slopes, `beta_m`,
+The `SurfaceExchange` stability functions of a `[surface] stability`
+table (`model = "most"`): `BusingerDyerLogLinear` (`beta` sets both slopes, `beta_m`,
 `beta_h` each) or `BusingerDyerBeljaarsHoltslag`, keys left out at the
 family's defaults.
 """
@@ -150,11 +152,11 @@ function _surface_series(t, domain)
         return SurfaceTemperatureSeries([t0, t0 + 86400.0], [T0, T0 - r * 86400])
     end
     dyn = get(domain.drivers, :dynamic, nothing)
-    dyn === nothing && throw(ConfigError("surface_layer.temperature",
+    dyn === nothing && throw(ConfigError("surface.temperature",
                                          "kind = \"driver\" reads the domain's dynamic driver, which the domain has not"))
     s = dyn.surface
     (s === nothing || s.temperature === nothing) &&
-        throw(ConfigError("surface_layer.temperature", "the dynamic driver has no sfc_temperature series"))
+        throw(ConfigError("surface.temperature", "the dynamic driver has no sfc_temperature series"))
     return SurfaceTemperatureSeries(s.t .+ t0, s.temperature)
 end
 

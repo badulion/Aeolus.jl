@@ -246,7 +246,7 @@ mask is not supported on a stretched grid.
 | 500 RK3 steps of decaying turbulence (halo 2 / stratified with walls) | ``e ≥ 0``, ``ν_t ≥ 0``, ``κ_t ≥ ν_t`` throughout; 0 clips |
 | rejected adaptive step (first try committed, then rejected) | ``e``, ``u``, ``θ`` bitwise a direct ``Δt/2`` step |
 
-**Convective boundary layer** (`examples/cbl_tke/cbl_tke.toml`, the model with `[sgs] closure = "tke"`,
+**Convective boundary layer** (`examples/cbl_tke/cbl_tke.toml`, the model with `[sgs] model = "tke"`,
 ONE-l #475; the 24³ CI case is the harness `tke_cbl` of `test/fixtures/tke_cbl.jl`, which the
 configuration reproduces bit for bit, `test/config_cases.jl`): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above

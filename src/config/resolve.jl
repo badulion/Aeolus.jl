@@ -203,7 +203,26 @@ function with(cfg::RunConfig, kvs::Pair...)
     vorig = copy(getfield(cfg, :origins))
     probs = ConfigProblem[]
     set = String[]
+    # the selectors of slot sections first (ONE-m, #476): a new provider
+    # takes the options it shares with the old one, the rest at its defaults
+    rest = Pair[]
     for (k, v) in kvs
+        key = String(k)
+        i = findfirst('.', key)
+        s = i === nothing ? nothing : _section(sch, key[1:prevind(key, i)])
+        if s === nothing || s.selector === nothing || key[nextind(key, i):end] != s.selector.key
+            push!(rest, k => v)
+            continue
+        end
+        targets = is_domain_section(sch, s.name) ? [(d, "domain[$j].") for (j, d) in enumerate(domains)] :
+                                                   [(values, "")]
+        for (tabs, prefix) in targets
+            why = _with_provider!(tabs, s, v, _kind_tables(tabs, domains))
+            why === nothing ? (vorig[prefix * key] = WITH_ORIGIN) : push!(probs, ConfigProblem(key, WITH_ORIGIN, why))
+        end
+        push!(set, key)
+    end
+    for (k, v) in rest
         key = String(k)
         i = findfirst('.', key)
         sname = i === nothing ? key : key[1:prevind(key, i)]
@@ -212,6 +231,23 @@ function with(cfg::RunConfig, kvs::Pair...)
         if s === nothing
             push!(probs, ConfigProblem(key, WITH_ORIGIN, "unknown section [$sname]" *
                                        _suggest(sname, [x.name for x in sch.sections])))
+            continue
+        end
+        if s.selector !== nothing                       # a slot section: the chosen provider's option
+            targets = is_domain_section(sch, sname) ? [(d, "domain[$j].") for (j, d) in enumerate(domains)] :
+                                                      [(values, "")]
+            for (tabs, prefix) in targets
+                o = _slot_option(s, tabs, okey, _kind_tables(tabs, domains))
+                if o === nothing
+                    push!(probs, ConfigProblem(key, WITH_ORIGIN, "not an option of [$sname] $(s.selector.key) = " *
+                                               "\"$(get(tabs[sname], s.selector.key, "?"))\""))
+                    continue
+                end
+                ok, val, why = _coerce(o, v, true, pwd(), key)
+                ok ? (tabs[sname][okey] = val; vorig[prefix * key] = WITH_ORIGIN) :
+                     push!(probs, ConfigProblem(key, WITH_ORIGIN, why))
+            end
+            push!(set, key)
             continue
         end
         o = _option(s, okey)
@@ -236,6 +272,49 @@ function with(cfg::RunConfig, kvs::Pair...)
     src = deepcopy(config_sources(cfg))
     src["with"] = unique!(vcat(String[get(src, "with", String[])...], set))
     return _finish(sch, values, domains, vorig, src)
+end
+
+# The tables that tell the kind of a domain (`with`): one domain's, or for
+# a run-level slot section the run-level ones with those of a single domain
+_kind_tables(tabs, domains) = any(d -> d === tabs, domains) || length(domains) != 1 ? tabs : merge(domains[1], tabs)
+
+# The option `okey` of the slot section `s` under the provider the tables
+# `tabs` (one domain's, or the run-level ones) choose; `nothing` if it has none.
+function _slot_option(s::Section, tabs, okey, kt = tabs)
+    o = _option(s, okey)
+    o === nothing || return o
+    v = get(tabs[s.name], s.selector.key, nothing)
+    v === nothing && return nothing
+    p = find_provider(s, domain_kind(s, kt), String(v))
+    p === nothing && return nothing
+    i = findfirst(x -> x.key == okey, p.options)
+    return i === nothing ? nothing : p.options[i]
+end
+
+# Switch the slot section `s` of the tables `tabs` to the provider `v`
+# (`with`): another provider than the current one starts from its
+# defaults (the old provider's options are dropped); the same one keeps its
+# options. A problem as a message.
+function _with_provider!(tabs, s::Section, v, kt = tabs)
+    sel = s.selector
+    kind = domain_kind(s, kt)
+    name = v isa Union{AbstractString,Symbol} ? String(v) : nothing
+    p = name === nothing ? nothing : find_provider(s, kind, name)
+    p === nothing && return "expected one of " * join(repr.([q.name for q in providers(s, kind)]), ", ") *
+                            " on $(kind_text(s, kind)), got $(_show_raw(v))"
+    old = tabs[s.name]
+    get(old, sel.key, nothing) === Symbol(name) && return nothing
+    new = Dict{String,Any}(sel.key => Symbol(name))
+    for o in s.options                              # the shared options keep their values
+        haskey(old, o.key) && (new[o.key] = old[o.key])
+    end
+    for o in p.options
+        ok, val, why = _default(o, "$(s.name).$(o.key)")
+        ok || return why
+        new[o.key] = val
+    end
+    tabs[s.name] = new
+    return nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -427,16 +506,18 @@ and set, `key => {path, fnv1a64}` (vector and tuple elements as
 function config_inputs(cfg::RunConfig)
     out = Dict{String,Any}()
     sch = config_schema(cfg)
-    for s in sch.sections, o in s.options
-        (o.input && _is_path_type(o.type)) || continue
+    for s in sch.sections, o in unique(x -> x.key, filter(x -> x.input && _is_path_type(x.type), section_options(s)))
         if is_domain_section(sch, s.name)
             for dc in getfield(cfg, :domains)
-                v = getfield(getfield(dc, :sections)[s.name], :values)[o.key]
+                vals = getfield(getfield(dc, :sections)[s.name], :values)
+                haskey(vals, o.key) || continue          # an option of a provider not chosen
+                v = vals[o.key]
                 key = "domain.$(dc.domain.id)." * (s.name == "domain" ? o.key : "$(s.name).$(o.key)")
                 _input!(out, key, v)
             end
         else
-            _input!(out, "$(s.name).$(o.key)", getfield(getfield(cfg, :sections)[s.name], :values)[o.key])
+            vals = getfield(getfield(cfg, :sections)[s.name], :values)
+            haskey(vals, o.key) && _input!(out, "$(s.name).$(o.key)", vals[o.key])
         end
     end
     return out

@@ -74,8 +74,11 @@ function reference_rows(driver)
     isfile(page) || error("the docs build writes no option reference for the schema \"$driver\"")
     for l in eachline(page)
         m = match(r"^#+ `\[(.+)\]`$", l)
-        if m !== nothing
-            cur = String(m[1]); rows[cur] = Set{String}()
+        # a provider block of a slot section (ONE-m, #476), ### `[sgs]` model = `"tke"`:
+        # its options are keys of the section [sgs]
+        p = match(r"^#+ `\[(.+?)\]` \w+ = `", l)
+        if m !== nothing || p !== nothing
+            cur = String(m !== nothing ? m[1] : p[1]); rows[cur] = get(rows, cur, Set{String}())
         elseif cur !== nothing && startswith(l, "| `")
             push!(rows[cur], String(match(r"^\| `([^`]+)` \|", l)[1]))
         end

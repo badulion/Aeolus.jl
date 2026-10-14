@@ -2,7 +2,7 @@
 # Reading the run folders of the SBL configurations for the analysis
 # scripts of examples/sbl/ (ONE-g, #456). Nothing is integrated here: a run
 # is made with `julia --project -m Aeolus run examples/sbl/<config>.toml`
-# (the model with its [large_scale_forcing], [surface_layer], [sponge] and
+# (the model with its [large_scale_forcing], [surface] model = "most", [sponge] and
 # [towers] components), and these functions read what it wrote:
 #
 #   run.toml                  the resolved config ([config]) and the sessions
@@ -145,7 +145,7 @@ end
 
 The config value `section.key` of a run: a run-level section (`time`,
 `output`, …) or a per-domain one of its (first) domain (`grid`, `sgs`,
-`surface_layer`, …; run.toml writes those under `[[config.domain]]`).
+`surface`, …; run.toml writes those under `[[config.domain]]`).
 """
 function cfgval(r, key)
     s, k = split(key, '.')

@@ -34,7 +34,7 @@ g = 9.81
 z = "free_slip"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.17
 pr_t = 0.3333333333333333
 
@@ -61,8 +61,10 @@ sw_peak = 800.0
 sw_duration = 10800.0
 lw_down = 340.0
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 5.0
 duration = 10800.0              # 3 h
 

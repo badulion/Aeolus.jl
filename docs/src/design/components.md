@@ -76,8 +76,8 @@ on a retry.
 
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`; `tke`, ONE-l #475), `c_s`, `pr_t`, `stability`, `stress`; `tke`: `e_min`, `surface_factor`, `wall_cap` | called by the core in stage 6; `tke` also `:surface_flux` (after the others: the wall fluxes of [`wall_theta_flux`](@ref Aeolus.Components.wall_theta_flux)) | the closure of `Components.build_closure`; `PrognosticSGS.TKEClosure`, `initialize_tke!` |
+| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` `scheme = "centred"` (the one provider, no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `model` (default `smagorinsky`; `tke`, ONE-l #475); per closure its options (ONE-m #476): `c_s` (smagorinsky, vreman, sigma, amd; each its default), `pr_t`, `stability` (not amd), `stress`; `tke`: `e_min`, `surface_factor`, `wall_cap`, `stress` | called by the core in stage 6; `tke` also `:surface_flux` (after the others: the wall fluxes of [`wall_theta_flux`](@ref Aeolus.Components.wall_theta_flux)) | the closure of `Components.build_closure`; `PrognosticSGS.TKEClosure`, `initialize_tke!` |
 | [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` or `latitude` | `:tendencies` | `Operators.add_coriolis!` |
 | [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
 | [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start`, `target` (`rest`, `geostrophic`, `mean`) | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
@@ -87,7 +87,7 @@ The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
 | [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables) | `:clock` (the step start), `:body_force` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``) |
-| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface_layer]` `enabled`, `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
+| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface]` `model = "most"` (ONE-m #476; the slot's other providers are the couplings `none`, `slab`, `flux_map`), `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
 | [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
 The components of the validation cases (ONE-l, #475; the former run
@@ -116,12 +116,18 @@ cases and the a-priori study), their harnesses kept as test fixtures
 (`test/fixtures/inflow_fetch.jl`, `sgs_validation.jl`), and so is the
 channel harness of `WallModels` (`test/fixtures/channel_cases.jl`).
 
-Every domain has an `:advection` provider; `[sgs] closure = "none"`
+Every domain has an `:advection` provider; `[sgs] model = "none"`
 enables no `:sgs` component. Each component has its own per-domain
 section of the model's configuration, generated from its
 [`schema`](@ref Aeolus.Components.schema)
 ([`COMPONENTS`](@ref Aeolus.SimulationDriver.COMPONENTS), ONE-b #451), and
-is switched on by it ([`enabled`](@ref Aeolus.Components.enabled)`(C,
+is switched on by it. The component of an exclusive slot is a provider of
+the slot's section instead (ONE-m, #476): its `schema` is a
+[`slot_section`](@ref Aeolus.Config.slot_section) with its provider(s),
+the model's schema merges the parts of one slot
+([`merge_sections`](@ref Aeolus.Config.merge_sections)), and `enabled`
+compares the selector with its provider name (`opts.model === :most`);
+the section holds the chosen provider's options only ([`enabled`](@ref Aeolus.Components.enabled)`(C,
 opts)`, from the options alone). Before anything is built, the enabled
 component types of every domain are checked
 ([`component_problems`](@ref Aeolus.Components.component_problems)): at
@@ -519,6 +525,25 @@ other limits are on [Run configuration](run_configuration.md).
   stretched grid, the large-scale forcing and nudging) as components of a
   core domain, and the Berlin nest (one-way with the prefetched parent
   window, two-way, the synthetic inflow) as the model's `ModelNest`.
+* **ONE-m (#476): one key per exclusive slot.** After #472/#473 a
+  non-default provider took an enable/disable pair of sections
+  (`[pressure_fft] enabled = false` with `[pressure_multigrid] enabled =
+  true`, `[aq_chem]` with `[chem_off]`; `[surface_layer] enabled` beside
+  `[surface] model`). Each exclusive slot is now one section with a
+  selector key, holding the chosen provider's options only
+  (`Config.slot_section`, `provider!`; validated and resolved by the
+  loader, `with` and the option reference): the model's `[core] model`,
+  `[timestep] scheme` (run level), `[sgs] model`, `[surface] model`
+  (`none`, `slab`, `flux_map`, `most`: the `SurfaceLayer` component),
+  `[microphysics] scheme`, `[advection] scheme`, and the urban site's
+  fifteen slots (`Urban.URBAN_SLOT_SECTIONS`; `[chemistry] scheme =
+  "aq_chem" | "none"`). A slot the model and the site share pools both
+  sets of providers, each offered on its domain kind
+  (`SimulationDriver.domain_kind`). Every shipped TOML is converted.
+  Measured: the state digests of every shipped config at its `[test]`
+  size, of the simulation-digest runs and of the smoke matrix are those
+  of the branch base; the four Berlin scenarios resolve to the fixture
+  field for field.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the

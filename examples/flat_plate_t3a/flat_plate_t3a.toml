@@ -33,8 +33,10 @@ schema_version = 2
 [run]
 name = "flat_plate_t3a"
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = 1.0
 duration = 1500.0
 
@@ -52,7 +54,7 @@ nu = 0.0033333333333333335      # U∞ δ*₀ / Re_δ*₀
 theta0 = 0.0                    # no buoyancy
 
 [sgs]
-closure = "none"
+model = "none"
 
 [fringe]
 profile = "blasius"

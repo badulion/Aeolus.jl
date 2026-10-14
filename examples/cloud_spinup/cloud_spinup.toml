@@ -31,7 +31,7 @@ moisture = true
 z = "free_slip"
 
 [sgs]
-closure = "none"
+model = "none"
 
 [initial]
 theta = { kind = "constant", value = 300.0 }
@@ -41,8 +41,10 @@ ql = { kind = "box", value = 3e-3, x = [0.0, 2000.0], y = [0.0, 2000.0], z = [12
 [microphysics]
 scheme = "kessler"
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 60.0
 duration = 480.0
 

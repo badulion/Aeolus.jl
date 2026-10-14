@@ -36,7 +36,8 @@ const AQ_SPECIES = (:NO, :NO2, :O3, :VOC, :HNO3)
 """
     AQChem
 
-Slot `:chemistry`, provider `:nox_o3_voc` (default). Every step in
+Slot `:chemistry`, provider `:aq_chem` (default; `[chemistry] scheme =
+"aq_chem"`, ONE-m #476; formerly `:nox_o3_voc`). Every step in
 `:chemistry`:
 
 1. emissions into the first air cell of each column (`k_air`, above the
@@ -79,7 +80,7 @@ end
 
 component_name(::Type{<:AQChem}) = :aq_chem
 slot(::Type{<:AQChem}) = :chemistry
-provider(::Type{<:AQChem}) = :nox_o3_voc
+provider(::Type{<:AQChem}) = :aq_chem
 modules_used(::Type{<:AQChem}) = (:Chemistry, :SurfaceExchange)
 stages(::Type{<:AQChem}) = ((:chemistry, 10, EVERY_STEP),
                             (:surface_update, 90, Cadence(:soil)))
@@ -458,18 +459,17 @@ end
 """
     NoChem
 
-Slot `:chemistry`, provider `:off`: no reactive species at all. The
+Slot `:chemistry`, provider `:none` (formerly `:off`): no reactive species at all. The
 chemistry adds about 24–31 % to the cost of a flagship step (measured on
 the 64 × 64 × 32 case on master `915bd49` with the adaptive step on a
 loaded machine: 233.7 → 289.1 ms/step, of which 50 ms is the WENO
 transport of the five species and 12 ms the `aq_chem` stage; see
 `docs/src/design/berlin_air_quality.md`), so runs that do not need air quality
-can switch it off with the sections `[aq_chem] enabled = false` and
-`[chem_off] enabled = true` (`--set aq_chem.enabled=false --set
-chem_off.enabled=true`).
+can switch it off with `[chemistry] scheme = "none"` (`--set
+chemistry.scheme="none"`; ONE-m, #476).
 """
 struct NoChem <: UrbanComponent end
 component_name(::Type{NoChem}) = :chem_off
 slot(::Type{NoChem}) = :chemistry
-provider(::Type{NoChem}) = :off
+provider(::Type{NoChem}) = :none
 

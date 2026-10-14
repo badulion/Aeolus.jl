@@ -234,7 +234,7 @@ Keywords:
 * `surface_flux` — `nothing` (the default: the simulation's prescribed
   `θ_flux_bottom`, `θ_flux_top`), or a 2-vector `(bottom, top)` of the
   kinematic θ fluxes (K m s⁻¹) through the walls that a component applies
-  instead of the core (the model's `[sgs] closure = "tke"`, ONE-l #475,
+  instead of the core (the model's `[sgs] model = "tke"`, ONE-l #475,
   fills it every step from the domain's components); their buoyant
   production enters the first and last level as above. Read at every step.
 * `transport` — advect (flux-limited, `AdvectionSchemes.advect_positive!`

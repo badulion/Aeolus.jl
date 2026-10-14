@@ -205,13 +205,13 @@ end
     e = sim_error(() -> load_run_config(cfgs("dry_convective_bl"); overrides = ["sponge.z_start=1600.0"]))
     @test any(p -> p.key == "sponge.z_start" && occursin("below the top", p.message), e.problems)
     e = sim_error(() -> load_run_config(cfgs("taylor_green_vortex");
-                                        overrides = ["dynamics.core=\"anelastic\"", "boundaries.x=\"noslip\""]))
+                                        overrides = ["core.model=\"anelastic\"", "boundaries.x=\"noslip\""]))
     keys_ = [p.key for p in e.problems]
     @test "boundaries.z" in keys_ && "dynamics.theta0" in keys_ && "boundaries.x" in keys_ &&
           "initial.u" in keys_                  # Taylor-Green needs periodic x, y
     e = sim_error(() -> load_run_config(cfgs("dry_convective_bl");
-                                        overrides = ["grid.stretching=\"tanh\"", "sgs.closure=\"sigma\""]))
-    @test any(p -> p.key == "sgs.closure", e.problems)
+                                        overrides = ["grid.stretching=\"tanh\"", "sgs.model=\"sigma\""]))
+    @test any(p -> p.key == "sgs.model", e.problems)
     e = sim_error(() -> load_run_config(cfgs("dry_convective_bl");
                                         overrides = ["initial.theta={kind=\"taylor_green\", amplitude=1.0, k=1.0}"]))
     @test any(p -> p.key == "initial.theta" && occursin("kind", p.message), e.problems)
@@ -226,7 +226,7 @@ end
 
 @testset "the model: anelastic core, stretched grid, closures, schemes" begin
     # anelastic: θ starts at the isentropic base state, ∇·(ρ̄u) stays at round-off
-    cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "dynamics.core=\"anelastic\"",
+    cfg = sim_cfg("dry_convective_bl", 6, ["grid.size=[16,16,16]", "core.model=\"anelastic\"",
                                            "initial.theta={}"])
     res = sim_run(cfg)
     sim = simulation(res.obj)
@@ -248,9 +248,9 @@ end
     b(over) = Config.build(SIMD, load_run_config(cfgs("dry_convective_bl"); overrides = over))
     clo(r) = Aeolus.Components.sgs_closure(only(r.model.domains))
     r = b(String[]); @test clo(r) isa StaticSmagorinsky && clo(r).C_s == 0.17 && simulation(r).C_s == 0
-    r = b(["sgs.closure=\"none\""]); @test clo(r) === nothing
-    r = b(["sgs.closure=\"sigma\"", "sgs.c_s=\"none\""]); @test clo(r) isa SigmaModel && clo(r).C_σ == 1.35
-    r = b(["sgs.closure=\"vreman\"", "sgs.c_s=0.07"]); @test clo(r) isa VremanClosure && clo(r).C_s == 0.07
+    r = b(["sgs.model=\"none\""]); @test clo(r) === nothing
+    r = b(["sgs.model=\"sigma\""]); @test clo(r) isa SigmaModel && clo(r).C_σ == 1.35   # its own default c_s (ONE-m)
+    r = b(["sgs.model=\"vreman\"", "sgs.c_s=0.07"]); @test clo(r) isa VremanClosure && clo(r).C_s == 0.07
     r = b(["sgs.stability=\"brown_et_al_1994\""]); @test clo(r) isa StabilityCorrected
     # under strong stable stratification (Ri ≈ 13 from N² = g/θ₀ 0.01 K/m and a
     # 0.005 s⁻¹ shear) Brown et al. (1994) switch the vertical mixing off
@@ -266,7 +266,7 @@ end
     # schemes: rk3 is another trajectory than euler, both divergence-free
     out = Dict{String,Any}()
     for sch in ("euler", "rk3")
-        res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "time.scheme=\"$sch\""]))
+        res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "timestep.scheme=\"$sch\""]))
         @test max_divergence(simulation(res.obj)) < 1e-10
         out[sch] = copy(interior_view(simulation(res.obj).w))
     end

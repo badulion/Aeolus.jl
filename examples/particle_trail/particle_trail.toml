@@ -24,14 +24,16 @@ theta0 = 0.0                    # no buoyancy
 z = "periodic"
 
 [sgs]
-closure = "none"
+model = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.05
 nsteps = 100
 duration = "none"

@@ -14,8 +14,8 @@ using Aeolus, Aeolus.Components
 mesh = RegularGrid(; size = (32, 32, 32), extent = (3200.0, 3200.0, 1600.0))
 sim  = BoussinesqSimulation(mesh; θ₀ = 300.0, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
 d0   = Domain(sim; validate = false)                 # the components need the domain to build
-comps = Components.build_components((CentredAdvection => nothing,
-                                     SGS => (closure = :smagorinsky, c_s = 0.17, pr_t = 1/3, stability = :none),
+comps = Components.build_components((CentredAdvection => (; scheme = :centred),
+                                     SGS => (model = :smagorinsky, c_s = 0.17, pr_t = 1/3, stability = :none),
                                      Coriolis => (; f = 1e-4)), d0)
 model = Model(Domain(d0; components = comps))
 step!(model, 2.0)

@@ -272,7 +272,7 @@ size = [32, 32, 32]
 extent = [3200.0, 3200.0, 1600.0]
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 
 [surface_theta_flux]
 bottom = 0.24                   # K m/s
@@ -285,8 +285,10 @@ theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 
 perturbation_amplitude = 0.1
 perturbation_depth = 100.0
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 5.0
 duration = 300.0
 

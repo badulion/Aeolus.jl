@@ -42,12 +42,12 @@ cli_file(text) = (p = joinpath(mktempdir(), "c.toml"); write(p, text); p)
         [time]
         dt = 0.1
         duration = 1.0
-        shceme = "euler"
+        durtion = 2.0
         """)
     rc, out, err = cli("check", bad)
     @test rc == 2
     @test occursin("grid.size", err) && occursin("3 integers", err)
-    @test occursin("time.shceme", err) && occursin("did you mean \"scheme\"", err)
+    @test occursin("time.durtion", err) && occursin("did you mean \"duration\"", err)
     @test occursin(bad, err)
     @test isempty(out)
     # a bad override is a config error too

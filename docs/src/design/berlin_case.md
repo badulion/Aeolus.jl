@@ -124,14 +124,16 @@ ONE-b #451), or a `--set` on the command line:
 [run]
 name = "summer_no_traffic_nox"
 
-[sgs_tke]                          # a slot: exactly one of its providers enabled
-enabled = false
-[sgs_smagorinsky]
-enabled = true
+[sgs]                              # a slot: its selector names the provider (ONE-m, #476)
+model = "smagorinsky"              # the section holds this provider's options only
+stress = "symmetric"
 
-[aq_chem]
+[chemistry]
+scheme = "aq_chem"
+nox_street = 0.0                   # a provider option, of its default_options' form
+
+[pollutant]                        # an additive component: on or off
 enabled = true
-nox_street = 0.0                   # a component option, of its default_options' form
 ```
 
 `julia --project -m Aeolus check my_berlin.toml` validates it,
@@ -146,9 +148,13 @@ resolved config, so `aeolus run <folder>/run.toml` replays the run bit for
 bit.
 
 **A coupling's `default_options` is its section.** The model's section
-`[<name>]` of an urban component (`coupling_section`) is generated from
-its `default_options` `NamedTuple`: `enabled` (default `false`: every
-component is off until its section enables it), then one option per key,
+`[<name>]` of an additive urban component (`coupling_section`) is
+generated from its `default_options` `NamedTuple`: `enabled` (default
+`false`: every additive component is off until its section enables it),
+then one option per key (`coupling_options!`); a provider of an urban
+slot is a block of the slot's section instead (`urban_slot_section`,
+ONE-m #476: `[sgs] model = "smagorinsky"` and the smagorinsky options),
+its options generated the same way:
 its TOML key ASCII snake case (`option_key`: `U_g` → `u_g`, `τ` → `tau`),
 typed by its default's form (a `Symbol` is a string, a tuple an array of
 its length, a `NamedTuple` or a table by surface class a sub-table), with
@@ -156,8 +162,11 @@ its units (`OPTION_UNITS`); the meaning of each key is documented on the
 coupling's docstring. Adding a key to `default_options` is all it takes
 to make it configurable from TOML and listed in the option reference;
 there is no separate schema to edit. Every urban slot (`:sgs`,
-`:surface_exchange`, `:core`, …) has exactly one enabled provider (a
-config error otherwise, naming the providers); the site's own options —
+`:surface_exchange`, `:core`, …) has exactly one provider, the one its
+section's selector names (`URBAN_SLOT_SECTIONS`; default: the
+`URBAN_DEFAULTS` one), and the section holds that provider's options
+only (an option of another provider is a config error naming the
+providers that have it); the site's own options —
 the ground's anchor, the clock, the periods of the radiation and the
 soil, the core's Coriolis parameter, Smagorinsky coefficient and sponge,
 the lateral boundaries and the initial state — are `[urban]`; the grid,
@@ -287,9 +296,11 @@ or stepper that cannot take a component's keyword declares that component
 with the reason instead.
 
 The config checks of an urban site (`urban_checks`, run when a config is
-loaded) report an urban slot without exactly one enabled component, a
-declared incompatibility between two enabled ones, and an option of the
-wrong form; an unknown option or section is the schema's error.
+loaded) report a declared incompatibility between two selected
+components (naming their sections, `[core] model = "anelastic" is
+incompatible with [pressure] solver = "cosine_fft"`) and an option of the
+wrong form; an unknown option or section, a selector naming no provider
+and an option of another provider are the schema's errors.
 
 **Cadences are in seconds.** `Cadence(600.0)` fires on the step that
 crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
@@ -681,9 +692,13 @@ file name); `build_case` builds the enabled components in the order of
 `URBAN_COMPONENTS`, and within a stage the case's domain runs them by
 their declared order, then by name.
 
-* **Off until a config enables it.** Every urban component's section
+* **Off until a config enables it.** An additive component's section
   has `enabled = false` by default: a config runs it only when it says
-  `[micro_p3] enabled = true` (and, in a slot, turns the other one off).
+  `[micro_p3] enabled = true`. A component of an urban slot is a
+  provider of the slot's section instead (`URBAN_SLOT_SECTIONS`, ONE-m
+  #476): a config selects it with `[microphysics] scheme = "p3"`, and
+  the section then holds its options; the slot's default provider is the
+  one of `URBAN_DEFAULTS`.
   `URBAN_DEFAULTS` is the reference selection (what
   `default_run_config()` enables and the smoke runs vary). Coupling new physics into the
   example is welcome where it makes sense, not required (the rule of

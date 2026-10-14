@@ -3,10 +3,12 @@
 # Every urban component of the site is one file under `couplings/`: a
 # struct `<: UrbanComponent` (an `Aeolus.Components.AbstractComponent`)
 # with the methods below for its type. The site's components are the
-# fixed list [`URBAN_COMPONENTS`](@ref) (`Urban.jl`); each has a
-# section of the model's schema (`[<name>]`, `enabled` off by default,
-# its options from `default_options`), and a config enables a component
-# by its section. `build_case` builds the enabled ones in list order, and
+# fixed list [`URBAN_COMPONENTS`](@ref) (`Urban.jl`). An additive one
+# has a section of the model's schema (`[<name>]`, `enabled` off by
+# default, its options from `default_options`); a slot's components are
+# the providers of the slot's section (`[sgs] model = "tke"` and the tke
+# options, `URBAN_SLOT_SECTIONS`, ONE-m #476). `build_case` builds the
+# selected ones in list order, and
 # the case's `Domain` runs them through the core's stage pipeline
 # (`stages.jl`).
 #
@@ -115,8 +117,10 @@ end
 
 # --- contract defaults -------------------------------------------------------
 
-Components.section(C::Type{<:UrbanComponent}) = String(component_name(C))
-Components.enabled(::Type{<:UrbanComponent}, opts) = opts.enabled
+Components.section(C::Type{<:UrbanComponent}) =
+    slot(C) === nothing ? String(component_name(C)) : URBAN_SLOT_SECTIONS[slot(C)][1]
+Components.enabled(C::Type{<:UrbanComponent}, opts) =
+    slot(C) === nothing ? opts.enabled : opts[URBAN_SLOT_SECTIONS[slot(C)][2]] === provider(C)
 provider(C::Type{<:UrbanComponent}) = component_name(C)
 modules_used(::Type{<:UrbanComponent}) = ()
 default_options(::Type{<:UrbanComponent}) = (;)
@@ -213,8 +217,8 @@ end
 """
     URBAN_SLOTS
 
-The exclusive slots of the urban site, each filled by exactly one enabled
-component: the dynamics (`:core`, `:timestepper`, `:pressure_solver`,
+The exclusive slots of the urban site, each filled by exactly one
+component, the provider its slot section names ([`URBAN_SLOT_SECTIONS`](@ref)): the dynamics (`:core`, `:timestepper`, `:pressure_solver`,
 `:momentum_advection`, `:scalar_advection`, `:sgs`), the surfaces and
 radiation (`:surface_exchange`, `:ground`, `:surface_radiation`,
 `:column_radiation`, `:buildings`, `:glazing`, `:immersed_boundary`) and
@@ -223,6 +227,29 @@ the air's chemistry and water (`:chemistry`, `:microphysics`).
 const URBAN_SLOTS = (:core, :timestepper, :pressure_solver, :momentum_advection, :scalar_advection, :sgs,
                      :surface_exchange, :ground, :surface_radiation, :column_radiation, :buildings, :glazing,
                      :immersed_boundary, :chemistry, :microphysics)
+
+"""
+    URBAN_SLOT_SECTIONS
+
+Per urban slot, its section of the model's configuration and the
+selector key that names the provider (ONE-m, #476): `[core] model`,
+`[timestep] scheme`, `[pressure] solver`, `[momentum_advection] scheme`,
+`[scalar_advection] model`, `[sgs] model`, `[surface_exchange] model`,
+`[ground] model`, `[surface_radiation] model`, `[column_radiation]
+model`, `[buildings] model`, `[glazing] model`, `[immersed_boundary]
+method`, `[chemistry] scheme`, `[microphysics] scheme`. The section holds
+the chosen provider's options. `[core]`, `[timestep]`, `[sgs]` and
+`[microphysics]` are also the model's own slot sections: on an urban site
+they offer the site's providers.
+"""
+const URBAN_SLOT_SECTIONS = Dict{Symbol,Tuple{String,String}}(
+    :core => ("core", "model"), :timestepper => ("timestep", "scheme"), :pressure_solver => ("pressure", "solver"),
+    :momentum_advection => ("momentum_advection", "scheme"), :scalar_advection => ("scalar_advection", "model"),
+    :sgs => ("sgs", "model"), :surface_exchange => ("surface_exchange", "model"), :ground => ("ground", "model"),
+    :surface_radiation => ("surface_radiation", "model"), :column_radiation => ("column_radiation", "model"),
+    :buildings => ("buildings", "model"), :glazing => ("glazing", "model"),
+    :immersed_boundary => ("immersed_boundary", "method"), :chemistry => ("chemistry", "scheme"),
+    :microphysics => ("microphysics", "scheme"))
 
 """
     check_urban_component(C)

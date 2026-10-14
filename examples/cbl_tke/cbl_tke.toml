@@ -2,7 +2,7 @@
 # (#182; formerly examples/sgs/cbl_tke.jl, then the `cbl` run type; on the
 # model since ONE-l, #475). Free convection over a heated free-slip floor
 # (Q = 0.1 K m/s, no mean wind) with the Deardorff (1980) / Moeng (1984)
-# closure ([sgs] closure = "tke"), compared with the vertical-velocity
+# closure ([sgs] model = "tke"), compared with the vertical-velocity
 # variance of Lenschow, Wyngaard & Pennell (1980),
 #
 #     σ_w² / w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)²,
@@ -26,8 +26,10 @@ schema_version = 2
 name = "cbl_tke"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 0.4
 dt_max = 20.0
@@ -53,7 +55,7 @@ perturbation_amplitude = 0.1
 perturbation_depth = 200.0
 
 [sgs]
-closure = "tke"
+model = "tke"
 e_min = 1e-3
 surface_factor = 3.9
 wall_cap = false

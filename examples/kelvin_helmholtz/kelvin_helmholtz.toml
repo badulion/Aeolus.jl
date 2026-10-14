@@ -24,8 +24,10 @@ schema_version = 2
 [run]
 name = "kelvin_helmholtz"
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = 0.06624478436213295        # 0.6 Δx/U
 duration = 160.0
 
@@ -44,7 +46,7 @@ theta0 = 300.0
 g = 9.81
 
 [sgs]
-closure = "none"
+model = "none"
 
 [initial]
 u = { kind = "tanh", value = 0.0, amplitude = 1.0, center = 14.132220663921697, thickness = 1.0 }

@@ -28,44 +28,46 @@ const SD_ADAPTIVE = ["time.dt=\"adaptive\"", "time.cfl=0.3", "time.dt_max=5.0"]
 "`label => (config, overrides)` of every digest variant."
 const SD_VARIANTS = [
     "tgv_euler"            => ("taylor_green_vortex", [sd_steps(8)]),
-    "tgv_rk3"              => ("taylor_green_vortex", [sd_steps(6), "time.scheme=\"rk3\""]),
+    "tgv_rk3"              => ("taylor_green_vortex", [sd_steps(6), "timestep.scheme=\"rk3\""]),
     "tgv_adaptive"         => ("taylor_green_vortex", [sd_steps(8), "time.dt=\"adaptive\"", "time.cfl=0.3",
                                                        "time.dt_max=1.0"]),
     "bc_euler"             => ("buoyant_convection", [sd_steps(8)]),
     "dcbl_euler"           => ("dry_convective_bl", [sd_steps(8)]),
-    "dcbl_rk3"             => ("dry_convective_bl", [sd_steps(6), "time.scheme=\"rk3\""]),
+    "dcbl_rk3"             => ("dry_convective_bl", [sd_steps(6), "timestep.scheme=\"rk3\""]),
     "dcbl_adaptive"        => ("dry_convective_bl", vcat([sd_steps(8)], SD_ADAPTIVE)),
-    "dcbl_rk3_adaptive"    => ("dry_convective_bl", vcat([sd_steps(6), "time.scheme=\"rk3\""], SD_ADAPTIVE)),
+    "dcbl_rk3_adaptive"    => ("dry_convective_bl", vcat([sd_steps(6), "timestep.scheme=\"rk3\""], SD_ADAPTIVE)),
     "dcbl_coriolis"        => ("dry_convective_bl", [sd_steps(8), "coriolis.f=1.0e-4", SD_WIND]),
     "dcbl_coriolis_rk3"    => ("dry_convective_bl", [sd_steps(6), "coriolis.f=1.0e-4", SD_WIND,
-                                                     "time.scheme=\"rk3\""]),
+                                                     "timestep.scheme=\"rk3\""]),
     # |f| = 0.2 s⁻¹: the Coriolis limit 0.5/|f| = 2.5 s binds the adaptive step
     "dcbl_coriolis_limit"  => ("dry_convective_bl", vcat([sd_steps(6), "coriolis.f=0.2", SD_WIND], SD_ADAPTIVE)),
     "dcbl_no_sponge"       => ("dry_convective_bl", [sd_steps(8), "sponge.alpha_max=0.0"]),
     "dcbl_top_flux"        => ("dry_convective_bl", [sd_steps(8), "surface_theta_flux.top=-0.05"]),
-    "dcbl_sgs_none"        => ("dry_convective_bl", [sd_steps(8), "sgs.closure=\"none\""]),
-    "dcbl_dynamic"         => ("dry_convective_bl", [sd_steps(8), "sgs.closure=\"dynamic_smagorinsky\""]),
-    "dcbl_vreman"          => ("dry_convective_bl", [sd_steps(8), "sgs.closure=\"vreman\""]),
-    "dcbl_sigma"           => ("dry_convective_bl", [sd_steps(8), "sgs.closure=\"sigma\""]),
-    "dcbl_amd"             => ("dry_convective_bl", [sd_steps(8), "sgs.closure=\"amd\""]),
+    "dcbl_sgs_none"        => ("dry_convective_bl", [sd_steps(8), "sgs.model=\"none\""]),
+    "dcbl_dynamic"         => ("dry_convective_bl", [sd_steps(8), "sgs.model=\"dynamic_smagorinsky\""]),
+    "dcbl_vreman"          => ("dry_convective_bl", [sd_steps(8), "sgs.model=\"vreman\""]),
+    # the file's c_s = 0.17 (smagorinsky's), which an override of the closure
+    # kept before ONE-m (#476) and now resets: stated, so the runs are the captured ones
+    "dcbl_sigma"           => ("dry_convective_bl", [sd_steps(8), "sgs.model=\"sigma\"", "sgs.c_s=0.17"]),
+    "dcbl_amd"             => ("dry_convective_bl", [sd_steps(8), "sgs.model=\"amd\"", "sgs.c_s=0.17"]),
     "dcbl_brown"           => ("dry_convective_bl", vcat([sd_steps(6), "sgs.stability=\"brown_et_al_1994\""], SD_DCBL_STABLE)),
-    "dcbl_vreman_lilly"    => ("dry_convective_bl", vcat([sd_steps(6), "sgs.closure=\"vreman\"",
+    "dcbl_vreman_lilly"    => ("dry_convective_bl", vcat([sd_steps(6), "sgs.model=\"vreman\"",
                                                      "sgs.stability=\"lilly_cutoff\""], SD_DCBL_STABLE)),
     "dcbl_moist"           => ("dry_convective_bl", [sd_steps(8), "dynamics.moisture=true",
                                                      "initial.qv={kind=\"constant\", value=0.008}"]),
-    "dcbl_moist_rk3_amd"   => ("dry_convective_bl", [sd_steps(6), "dynamics.moisture=true", "sgs.closure=\"amd\"",
+    "dcbl_moist_rk3_amd"   => ("dry_convective_bl", [sd_steps(6), "dynamics.moisture=true", "sgs.model=\"amd\"", "sgs.c_s=0.17",
                                                      "initial.qv={kind=\"table\", z=[0.0, 1600.0], values=[0.01, 0.002]}",
-                                                     "time.scheme=\"rk3\""]),
+                                                     "timestep.scheme=\"rk3\""]),
     "dcbl_stretched"       => ("dry_convective_bl", [sd_steps(6), "grid.stretching=\"tanh\"",
                                                      "grid.stretching_parameter=1.5"]),
-    "dcbl_anelastic"       => ("dry_convective_bl", [sd_steps(6), "dynamics.core=\"anelastic\"", "initial.theta={}"]),
-    "dcbl_anelastic_cor"   => ("dry_convective_bl", [sd_steps(6), "dynamics.core=\"anelastic\"", "initial.theta={}",
+    "dcbl_anelastic"       => ("dry_convective_bl", [sd_steps(6), "core.model=\"anelastic\"", "initial.theta={}"]),
+    "dcbl_anelastic_cor"   => ("dry_convective_bl", [sd_steps(6), "core.model=\"anelastic\"", "initial.theta={}",
                                                      "coriolis.f=1.0e-4", SD_WIND,
                                                      "surface_theta_flux.top=-0.05"]),
-    "dcbl_anelastic_vreman" => ("dry_convective_bl", [sd_steps(6), "dynamics.core=\"anelastic\"", "initial.theta={}",
-                                                      "sgs.closure=\"vreman\""]),
-    "dcbl_anelastic_none"  => ("dry_convective_bl", [sd_steps(6), "dynamics.core=\"anelastic\"", "initial.theta={}",
-                                                     "sgs.closure=\"none\"", "dynamics.nu=1.0"]),
+    "dcbl_anelastic_vreman" => ("dry_convective_bl", [sd_steps(6), "core.model=\"anelastic\"", "initial.theta={}",
+                                                      "sgs.model=\"vreman\""]),
+    "dcbl_anelastic_none"  => ("dry_convective_bl", [sd_steps(6), "core.model=\"anelastic\"", "initial.theta={}",
+                                                     "sgs.model=\"none\"", "dynamics.nu=1.0"]),
     "lindenberg_open_rk3"  => ("lindenberg_era5", [sd_steps(6)]),
 ]
 
@@ -75,12 +77,12 @@ const SD_VARIANTS = [
 # (simulation_digests_anelastic.toml, capture_anelastic_digests.jl): the
 # four of SD_VARIANTS, whose master digests the weighting changed, and these.
 const SD_ANELASTIC_VARIANTS = [
-    "dcbl_anelastic_rk3"      => ("dry_convective_bl", [sd_steps(6), "dynamics.core=\"anelastic\"",
-                                                        "time.scheme=\"rk3\""]),
-    "dcbl_anelastic_adaptive" => ("dry_convective_bl", vcat([sd_steps(8), "dynamics.core=\"anelastic\""], SD_ADAPTIVE)),
-    "dcbl_anelastic_rk3_adaptive_cor" => ("dry_convective_bl", vcat([sd_steps(6), "dynamics.core=\"anelastic\"",
-                                                        "time.scheme=\"rk3\"", "coriolis.f=1.0e-4", SD_WIND,
-                                                        "sgs.closure=\"dynamic_smagorinsky\""], SD_ADAPTIVE)),
+    "dcbl_anelastic_rk3"      => ("dry_convective_bl", [sd_steps(6), "core.model=\"anelastic\"",
+                                                        "timestep.scheme=\"rk3\""]),
+    "dcbl_anelastic_adaptive" => ("dry_convective_bl", vcat([sd_steps(8), "core.model=\"anelastic\""], SD_ADAPTIVE)),
+    "dcbl_anelastic_rk3_adaptive_cor" => ("dry_convective_bl", vcat([sd_steps(6), "core.model=\"anelastic\"",
+                                                        "timestep.scheme=\"rk3\"", "coriolis.f=1.0e-4", SD_WIND,
+                                                        "sgs.model=\"dynamic_smagorinsky\""], SD_ADAPTIVE)),
 ]
 "Whether a variant runs the anelastic core (its digests are ONE-j's, not master's)."
 sd_anelastic(label) = occursin("anelastic", label)
@@ -94,10 +96,10 @@ sd_anelastic(label) = occursin("anelastic", label)
 const SD_EXD_TEST = ["time.duration=\"none\"", "time.nsteps=10"]
 const SD_EXD_VARIANTS = [
     "dcbl_radiation_lsm"     => ("dcbl_radiation_lsm/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]"]),
-    "dcbl_radiation_lsm_rk3" => ("dcbl_radiation_lsm/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]", "time.scheme=\"rk3\""]),
+    "dcbl_radiation_lsm_rk3" => ("dcbl_radiation_lsm/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]", "timestep.scheme=\"rk3\""]),
     "heated_plume"           => ("heated_plume/heated_plume.toml", ["grid.size=[16,16,16]"]),
     "flow_past_cube"         => ("flow_past_cube/flow_past_cube.toml", String[]),
-    "flow_past_cube_rk3"     => ("flow_past_cube/flow_past_cube.toml", ["time.scheme=\"rk3\""]),
+    "flow_past_cube_rk3"     => ("flow_past_cube/flow_past_cube.toml", ["timestep.scheme=\"rk3\""]),
     "moist_convection"       => ("moist_convection/moist_convection.toml", ["grid.size=[12,12,16]"]),
     "channel_flow"           => ("channel_flow/channel_flow.toml", String[]),
     "decaying_hit"           => ("decaying_hit/decaying_hit.toml", ["grid.size=[16,16,16]"]),
@@ -127,7 +129,7 @@ function exd_digests(; examples = normpath(joinpath(@__DIR__, "..", "..", "examp
         # the rows without the `sgs.*` columns, and whether the closure is the
         # plain Smagorinsky (the core's built-in C_s before ONE-a, #450)
         d["diagnostics_csv_without_sgs"] = sd_digest(codeunits(join(sd_drop_sgs(rows), "\n")))
-        d["plain_smagorinsky"] = string(r.obj.cfg.sgs.closure === :smagorinsky && r.obj.cfg.sgs.stability === :none)
+        d["plain_smagorinsky"] = string(r.obj.cfg.sgs.model === :smagorinsky && get(getfield(r.obj.cfg.sgs, :values), "stability", :none) === :none)
         out[label] = d
     end
     return out

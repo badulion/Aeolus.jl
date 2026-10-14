@@ -6,7 +6,7 @@
 # then +0.01 K/m, surface cooled at 0.25 K/h, 9 h; statistics of hours 8-9.
 # The runs are the sweep examples/sbl/gabls1_closures.toml (the
 # model with its components: the geostrophic forcing [large_scale_forcing],
-# the surface heat flux and stress of [surface_layer] (SurfaceExchange,
+# the surface heat flux and stress of [surface] model = "most" (SurfaceExchange,
 # WallModels.MOSTWallLaw), the SGS closure stability-corrected by
 # Operators.StabilityCorrected), one run folder per closure: Smagorinsky
 # C_s = 0.1 with the Brown et al. 1994 correction, uncorrected, and with

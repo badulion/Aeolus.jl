@@ -161,13 +161,64 @@ sub-table named `""` documents the option's table itself).
 """
 function reference_sections(sch::ConfigSchema)
     out = Pair{String,Section}[]
+    sub!(base, opts) = for o in opts, sub in _subtables(o)
+        push!(out, (isempty(sub.name) ? "$base.$(o.key)" : "$base.$(o.key).$(sub.name)") => sub)
+    end
     for s in sch.sections
-        push!(out, s.name => s)
-        for o in s.options, sub in _subtables(o)
-            push!(out, (isempty(sub.name) ? "$(s.name).$(o.key)" : "$(s.name).$(o.key).$(sub.name)") => sub)
+        if s.selector === nothing
+            push!(out, s.name => s)
+            sub!(s.name, s.options)
+            continue
+        end
+        # a slot section (ONE-m, #476): the selector, then one block per provider
+        sel = s.selector
+        kinds = sort!(collect(keys(sel.defaults)))
+        dflt = join(["$(kind_text(s, k)): \"$(sel.defaults[k])\"" for k in kinds], "; ")
+        names = unique([p.name for p in sel.providers])
+        so = reference_option(sel.key, "string", length(kinds) == 1 ? "\"$(sel.defaults[kinds[1]])\"" : dflt;
+                              doc = "the provider: " * join(repr.(names), ", ") *
+                                    "; the section holds its options only (one block per provider below)")
+        push!(out, s.name => Section(s.name, s.doc, vcat([so], s.options)))
+        sub!(s.name, s.options)
+        for p in sel.providers
+            on = join((kind_text(s, k) for k in p.kinds), ", ")
+            label = provider_block_name(s, p)
+            doc = (isempty(p.doc) ? "" : p.doc * " ") * (length(kinds) > 1 ? "On $on." : "") *
+                  (isempty(p.options) ? " No options." : "")
+            push!(out, label => Section(s.name, strip(doc), p.options))
+            sub!(s.name, p.options)
         end
     end
     return out
+end
+
+"""
+    provider_block_name(s::Section, p::Provider) -> String
+
+The name of the option-reference block of the provider `p` of the slot
+section `s` ([`reference_sections`](@ref)): `"sgs.model=tke"`, with the
+domain kinds appended in parentheses when another provider of `s` has the
+same name (the model's `tke` closure and the urban site's).
+"""
+function provider_block_name(s::Section, p::Provider)
+    sel = s.selector
+    twin = count(q -> q.name == p.name, sel.providers) > 1
+    on = join((kind_text(s, k) for k in p.kinds), ", ")
+    return "$(s.name).$(sel.key)=$(p.name)" * (twin ? " ($on)" : "")
+end
+
+# The heading of a reference block: `[name]`, or `[sgs] model = "tke"` for a
+# provider block of a slot section ([`reference_sections`](@ref))
+function _block_heading(name, md::Bool)
+    i = findfirst('=', name)
+    i === nothing && return md ? "`[" * name * "]`" : "[" * name * "]"
+    lhs = name[1:prevind(name, i)]; rhs = name[nextind(name, i):end]
+    j = findlast('.', lhs)
+    sec = lhs[1:prevind(lhs, j)]; key = lhs[nextind(lhs, j):end]
+    k = findfirst(" (", rhs)
+    prov, note = k === nothing ? (rhs, "") : (rhs[1:prevind(rhs, first(k))], rhs[first(k):end])
+    return md ? "`[" * sec * "]` " * key * " = `\"" * prov * "\"`" * note :
+                "[" * sec * "] " * key * " = \"" * prov * "\"" * note
 end
 
 """
@@ -184,11 +235,13 @@ coverage suite requires it to be empty for every shipped config.
 function undocumented_keys(cfg::RunConfig)
     sch = config_schema(cfg)
     out = String[]
-    for s in sch.sections, o in s.options
+    for s in sch.sections, o in section_options(s)
         subs = _subtables(o)
         isempty(subs) && continue
         names = Dict(x.name => x for x in subs)
-        v = getproperty(cfg, Symbol(s.name))[o.key]
+        sec = getproperty(cfg, Symbol(s.name))
+        haskey(sec, o.key) || continue                  # an option of a provider not chosen
+        v = sec[o.key]
         v isa AbstractDict && _undocumented!(out, "$(s.name).$(o.key)", "", v, names)
     end
     return sort!(out)
@@ -238,7 +291,7 @@ function _reference_text(sch, blocks, checks)
     println(io, "# options of ", _schema_title(sch))
     for (name, s) in blocks
         d = _block_doc(sch, name, s)
-        println(io, "\n[", name, "]", isempty(d) ? "" : "  " * d)
+        println(io, "\n", _block_heading(name, false), isempty(d) ? "" : "  " * d)
         for o in s.options
             print(io, "  ", o.key, " : ", _type_text(o.type), " = ", _default_text(o))
             isempty(o.units) || print(io, "  [", o.units, "]")
@@ -290,7 +343,7 @@ function _reference_markdown(sch, blocks, checks)
             "(`Aeolus.Config.option_reference(\"", sch.name, "\"; format = :markdown)`, ",
             "`aeolus options ", m ? "" : sch.name * " ", "--markdown`). TOML has no null: `\"none\"` stands for nothing.")
     for (name, s) in blocks
-        println(io, "\n", count('.', name) == 0 ? "## " : "### ", "`[", name, "]`\n")
+        println(io, "\n", count('.', name) == 0 ? "## " : "### ", _block_heading(name, true), "\n")
         d = _block_doc(sch, name, s)
         isempty(d) || println(io, _md_prose(d), "\n")
         println(io, "| key | type | default | units | allowed / range | doc |")
