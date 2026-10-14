@@ -36,6 +36,27 @@ end
 step_will_run(clk::Clock, t::Real) = clk.t_stop - t > clk.stop_margin
 
 """
+    UrbanNest
+
+What the model gives an urban site that is a nested domain (NEST-p3,
+#483; `build_case(cfg; nest)`): its parent's `Components.Domain`
+`parent`, the nest hierarchy `hierarchy` it joins (`Components.nest_hierarchy`
+of the root, completed by `Components.nested_model`), the site's own id
+and its parent's (`id`, `parent_id`, Symbols), its `origin` (m, from the
+parent's corner) and `refinement`, and its `feedback` (`:one_way` or
+`:two_way`).
+"""
+struct UrbanNest
+    parent::Domain
+    hierarchy::Any
+    id::Symbol
+    parent_id::Symbol
+    origin::NTuple{2,Float64}
+    refinement::NTuple{3,Int}
+    feedback::Symbol
+end
+
+"""
     UrbanSite <: AbstractComponent
 
 The urban site, a component of its `Domain` (ONE-k, #474; formerly the
@@ -50,8 +71,11 @@ order), the `domain` (the case as a `Domain` of the core's stage pipeline,
 `step!` hooks, `timing` (wall seconds per `(stage, coupling)`, the
 `wall.*` diagnostics and the `:timing` events of [`log_run_end`](@ref)), `top` — the heat flux through a
 fixed-gradient θ top ([`TopHeatFlux`](@ref), `nothing` for a closed
-lid) — and `open`, the heat of the open faces of a `lateral = :open`
-case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one).
+lid) — `open`, the heat of the open faces of a `lateral = :open`
+case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one), and
+`nest`, what the model gives a site that is a nested domain
+([`UrbanNest`](@ref): its parent domain and the nest it joins), or
+`nothing`.
 
 It is the first component of its domain (section `[urban]`, component
 name `:urban`): it runs the site's own work in the pipeline's stages and
@@ -78,6 +102,7 @@ mutable struct UrbanSite{M, S, G<:Geometry, O<:NamedTuple} <: AbstractComponent
     step_kwargs::NamedTuple      # extra step! keywords from the couplings' step_options
     top::Union{Nothing,TopHeatFlux}   # the fixed-gradient θ top's heat flux (#254)
     open::Union{Nothing,OpenBoundaryHeat}   # the open faces' heat (#262)
+    nest::Union{Nothing,UrbanNest}   # the parent domain of a nested site (NEST-p3, #483), or nothing
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -152,7 +177,7 @@ boussinesq_core(cfg::NamedTuple, mesh; kw...) =
     BoussinesqSimulation(mesh; core_parameters(cfg, mesh)..., θ₀ = cfg.θ₀, moisture = false, kw...)
 
 """
-    build_case(cfg) -> UrbanSite
+    build_case(cfg; nest = nothing) -> UrbanSite
 
 Build the mesh, the geometry, the dynamical core (`build_core` of the
 provider of the `:core` slot) and its initial state,
@@ -162,8 +187,10 @@ constructed with `build(C, case, opts)`, then every `init!` runs
 (in `init_priority` order, then registry order: the nest first), and
 finally the stage schedule is assembled. The setup summary (buildings,
 surface classes, couplings) is a `Debug` record (`subsystem = :urban`).
+`nest` ([`UrbanNest`](@ref)): the site is a nested domain of the model,
+the child of `nest.parent` (its `:nesting` component links it in).
 """
-function build_case(cfg::NamedTuple)
+function build_case(cfg::NamedTuple; nest::Union{Nothing,UrbanNest} = nothing)
     # The run's compute backend (KA-a, #294): the default for every field
     # allocated below, BLAS pinned to one thread when Julia is threaded.
     init_threads!(cfg.backend)
@@ -200,7 +227,7 @@ function build_case(cfg::NamedTuple)
     case = UrbanSite(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
                 UrbanComponent[], nothing, nothing, clock,
                 nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
-                top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref))
+                top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref), nest)
     # a building the box edge cuts is solid on the open faces (#262): zero
     # velocity there, and no mass-flux correction through it; then the open
     # faces get their data before any stage reads them (the transport runs

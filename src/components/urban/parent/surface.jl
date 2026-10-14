@@ -142,10 +142,6 @@ function landuse_static_tiles(pl::ParentLanduse, mesh; origin_lat::Real, origin_
                        q.x0, q.y0, q.r, Int32.(q.counts), q.λf, q.hmean, q.hmax, q.header, Dict{String,Any}())
 end
 
-read_parent_landuse(::Nothing) =
-    error("[geometry] landuse is \"none\": the tiled parent surface needs a land-use table " *
-          "(AeolusPrep.jl: `aeolusprep fetch-landuse`) or [geometry] parent_static")
-
 """
     read_parent_landuse(path) -> ParentLanduse
 
@@ -338,7 +334,7 @@ struct ParentSurface
 end
 
 """
-    build_parent_surface(case, pl = read_parent_landuse(case.cfg.landuse); child = case,
+    build_parent_surface(case, pl::ParentLanduse; child = case,
                          columns = :all, z_centres = 12.5:25:2987.5,
                          window = 8, blending = nothing,
                          macdonald = (;)) -> ParentSurface
@@ -389,7 +385,7 @@ Reference: Kanda, M., Kanega, M., Kawai, T., Moriwaki, R. & Sugawara, H.
 (2007). Roughness lengths for momentum and heat derived from outdoor
 urban scale models. *J. Appl. Meteorol. Climatol.*, 46, 1067-1079.
 """
-function build_parent_surface(case, pl::ParentLanduse = read_parent_landuse(case.cfg.landuse);
+function build_parent_surface(case, pl::ParentLanduse;
                               child = case isa UrbanSite ? case : nothing, columns = :all,
                               z_centres = 12.5:25.0:2987.5, window::Integer = 8,
                               blending = nothing, macdonald::NamedTuple = (;),

@@ -555,6 +555,22 @@ _adaptive(cfg) = cfg.time.dt === :adaptive
 "The component types a domain's config enables (in the order of [`COMPONENTS`](@ref))."
 enabled_components(cfg) = Any[C for C in COMPONENTS if Components.enabled(C, cfg[Components.section(C)])]
 
+const _TIME_CHECKS_DOC = "with a fixed `time.dt`, `time.cfl` and `time.dt_max` keep their defaults (they belong to adaptive steps), except in a nest with an urban site, whose root steps adaptively with them while `time.dt` is the site's step"
+
+# [time] (a Config.ModelCheck: the root of an urban site's nest steps
+# adaptively with time.cfl and dt_max under the site's fixed time.dt)
+function _time_checks(cfg)
+    e = ConfigError[]
+    t = cfg.time
+    if !_adaptive(cfg) && !_urban_nest(cfg)
+        for k in ("cfl", "dt_max")
+            isequal(t[k], _schema_default(cfg, "time", k)) ||
+                push!(e, ConfigError("time.$k", "belongs to adaptive steps (time.dt = \"adaptive\"), not a fixed dt: it would be ignored"))
+        end
+    end
+    return e
+end
+
 function _cross_checks(cfg)
     Urban.urban_enabled(cfg) && return _urban_site_checks(cfg)
     e = ConfigError[]
@@ -562,12 +578,6 @@ function _cross_checks(cfg)
     adaptive = _adaptive(cfg)
     (t.duration === nothing) == (t.nsteps === nothing) &&
         push!(e, ConfigError("time.duration", "give exactly one of time.duration and time.nsteps (nsteps with duration = \"none\")"))
-    if !adaptive
-        for k in ("cfl", "dt_max")
-            isequal(t[k], _schema_default(cfg, "time", k)) ||
-                push!(e, ConfigError("time.$k", "belongs to adaptive steps (time.dt = \"adaptive\"), not a fixed dt: it would be ignored"))
-        end
-    end
     for ax in ("x", "y")
         b[ax] === :noslip &&
             push!(e, ConfigError("boundaries.$ax", "noslip is a z-wall condition; use free_slip or periodic"))
@@ -768,7 +778,7 @@ function _checks_problems(cfg)
 end
 
 const _CROSS_CHECKS_DOC = """
-exactly one of `time.duration` and `time.nsteps`; with a fixed `time.dt`, `time.cfl` and `time.dt_max` keep their defaults (they belong to adaptive steps)
+exactly one of `time.duration` and `time.nsteps`
 `noslip` is a z-wall condition: not for `boundaries.x`, `boundaries.y`
 an open face needs a domain `dynamic_driver`, the other lateral axis open or periodic, z walls, the boussinesq core, a uniform grid and no sponge
 `initial.field` (isotropic turbulence) needs a triply periodic uniform grid and sets u, v (no `initial.u`, `initial.v`); `energy_spectrum` needs a triply periodic uniform grid, `dissipation` a uniform one; `initial.velocity_perturbation.project` needs the boussinesq core; `time.start` is 0 with open faces; `coriolis.f` and `coriolis.latitude` exclude each other
@@ -786,7 +796,8 @@ every `[checks]` entry is published by the core or an enabled component (`Compon
 
 Config.driver_checks(::SimulationDriverType) =
     Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC * "\n" * Urban.URBAN_CHECKS_DOC => _cross_checks,
-        _NEST_CHECKS_DOC => Config.ModelCheck(_nest_checks)]
+        _NEST_CHECKS_DOC => Config.ModelCheck(_nest_checks),
+        _TIME_CHECKS_DOC => Config.ModelCheck(_time_checks)]
 
 # ---------------------------------------------------------------------------
 # build
@@ -900,22 +911,22 @@ end
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
 function Config.build(::SimulationDriverType, cfg::RunConfig)
-    if Urban.urban_enabled(cfg)
-        length(config_domains(cfg)) == 1 ||
-            throw(ConfigError("domain", "an urban site is one domain (its nest parent is the [nesting] component's)"))
+    if Urban.urban_enabled(cfg) && !_nested(cfg)
         # the urban site (ONE-e #454, ONE-k #474): one domain, the site its
         # first component, stepped by its :timestepper component
         return SimulationRun(Urban.build_model(cfg), StepperState(:euler), cfg)
     end
+    # several domains: the nest (an urban site among them is a child, NEST-p3 #483)
     model = _nested(cfg) ? _build_nested(cfg) : Model(_build_domain(cfg))
-    return SimulationRun(model, StepperState(_adaptive(cfg) ? :adaptive : config_domains(cfg)[1].timestep.scheme), cfg)
+    adaptive = _adaptive(cfg) || _urban_nest(cfg)
+    return SimulationRun(model, StepperState(adaptive ? :adaptive : config_domains(cfg)[1].timestep.scheme), cfg)
 end
 
 # One domain of the model from its config (a single-domain config, or one
 # domain's view of a nested one): its core on `mesh` with the faces of its
 # [boundaries] (or `bcs`, a nested domain's nest faces), its initial
 # state, components, couplings and budgets.
-function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
+function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing, cfl = :config)
     d = cfg.dynamics; b = cfg.boundaries; s = cfg.sgs; ddrv = cfg.domain.dynamic_driver
     dyn = ddrv === nothing ? nothing : read_dynamic_driver(ddrv; mesh = mesh, planes = _is_open(cfg))
     feed = nothing
@@ -950,7 +961,7 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing)
     sim.t = cfg.time.start
     couplings.water === nothing || isempty(cfg.initial.ql) || _set_profile!(couplings.water.ql, cfg.initial.ql, :ql)
     t = cfg.time
-    cfl = _adaptive(cfg) ? CFLConstraints(; C_advective = t.cfl, dt_max = t.dt_max) : nothing
+    cfl === :config && (cfl = _adaptive(cfg) ? CFLConstraints(; C_advective = t.cfl, dt_max = t.dt_max) : nothing)
     drivers = merge(feed === nothing ? (;) : (; boundary = feed), dyn === nothing ? (;) : (; dynamic = dyn),
                     _domain_inputs(cfg, mesh, sim, dyn))
     d0 = Domain(sim; id = cfg.domain.id, scheme = cfg.timestep.scheme, cfl = cfl, validate = false, drivers = drivers)
@@ -1199,11 +1210,14 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     # a domain whose core step a component takes (the urban site, ONE-k
     # #474): it picks every step and lands on the end itself
     taker = Components.core_taker(dom)
-    adaptive = _adaptive(cfg)
-    dt_fixed, nfix = adaptive ? (NaN, typemax(Int)) : _fixed_steps(st)
-    nmax = adaptive ? something(st.nsteps, typemax(Int)) : nfix
+    # a nest with an urban site (NEST-p3 #483): the root steps adaptively,
+    # the site's nsteps × dt is the run's length
+    urbannest = nest !== nothing && _urban_nest(cfg)
+    adaptive = _adaptive(cfg) || urbannest
+    dt_fixed, nfix = _adaptive(cfg) ? (NaN, typemax(Int)) : _fixed_steps(st)
+    nmax = urbannest ? typemax(Int) : adaptive ? something(st.nsteps, typemax(Int)) : nfix
     t_stop = st.duration === nothing ? nothing : st.start + st.duration   # the model time of the end
-    taker === nothing || (t_stop = st.start + nfix * dt_fixed)
+    (taker === nothing && !urbannest) || (t_stop = st.start + nfix * dt_fixed)
     t_end = adaptive || taker !== nothing ? t_stop : sim.t + (nmax - n) * dt_fixed      # for the progress line
     (t_end === nothing || t_end > sim.t) || (t_end = nothing)           # resumed at the end
     feed = get(dom.drivers, :boundary, nothing)
@@ -1247,14 +1261,16 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     # whose step a component takes: one of its steps may be several core
     # steps (retried pieces), and it reports once per step.
     mon = merge(closure === nothing ? (;) : (; sgs = closure), _coupling_components(cpl))
-    rd = taker === nothing ? nothing : Components.run_diagnostics(taker, dom)
+    # (a nest: the diagnostics of a domain whose step a component takes, the urban site)
+    idom = findfirst(d -> Components.core_taker(d) !== nothing, doms)
+    rd = idom === nothing ? nothing : Components.run_diagnostics(Components.core_taker(doms[idom]), doms[idom])
     monkw = rd === nothing ? (; components = mon) : (; diagnostics = rd[1], profiles = rd[2])
     try
     with_monitor(sim; run = rf, monkw..., t_end = t_end, attach = nest === nothing && taker === nothing,
                  cadence = cfg.logging.diagnostics_cadence, checkpoint_components = comps,
                  stepper = r.stepper, step0 = n) do m
         m_ref[] = m
-        foreach(c -> Components.run_begin!(c, dom, t_end === nothing ? NaN : Float64(t_end)), dom.components)
+        foreach(d -> foreach(c -> Components.run_begin!(c, d, t_end === nothing ? NaN : Float64(t_end)), d.components), doms)
         try
             mean || n > 0 || write_due!()
             while !done()
@@ -1271,7 +1287,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                 callback === nothing || callback(r, n)
             end
         finally
-            foreach(c -> Components.run_end!(c, dom), dom.components)
+            foreach(d -> foreach(c -> Components.run_end!(c, d), d.components), doms)
             foreach(close_output!, ws)
         end
         # the guard checks on its cadence; a run never ends `completed` with
@@ -1288,7 +1304,7 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
                                cfg.output.path === nothing ? output_dir(rf) : mkpath(cfg.output.path))
     # results.toml: the components' numbers of the run and the checks [checks] enables
     extra = Dict{String,Any}()
-    foreach(c -> merge!(extra, Components.run_results(c, dom)), dom.components)
+    foreach(d -> foreach(c -> merge!(extra, Components.run_results(c, d)), d.components), doms)
     if checks !== nothing
         _finish_checks(rf, cfg, evaluate_checks(checks); extra = extra)
     elseif !isempty(extra)
@@ -1338,25 +1354,22 @@ The prognostic arrays with their halos, as a checkpoint stores them
 of the last step and, on the Boussinesq core, `qv`; and those of the
 couplings: the slab temperature `T_s`, `ql`, `qr`, `tracer` and the
 particle positions (`particles`, 3 × n); and what the components carry
-(`Components.state_arrays`: the urban site's tracers, surface temperature
-and nest parent). Those of the root domain; in a
-nested model also every other domain's prognostic arrays, named
-`<id>_<name>` (`inner_u`, …).
+(`Components.state_arrays`: the urban site's tracers and surface
+temperature). Those of the root domain; in a nested model also every
+other domain's, named `<id>_<name>` (`inner_u`, …).
 """
 function Config.state_fields(r::SimulationRun)
     root = merge(map(f -> f.data, IO.checkpoint_fields(simulation(r))), _coupling_fields(sim_couplings(r)),
                  (Components.state_arrays(c, _domain(r)) for c in _domain(r).components)...)
     doms = Components.domains(r.model)
     length(doms) == 1 && return root
-    more = [Symbol(d.id, "_", k) => f.data for d in doms[2:end] for (k, f) in pairs(IO.checkpoint_fields(d.state))]
+    more = Pair{Symbol,Any}[Symbol(d.id, "_", k) => f.data for d in doms[2:end] for (k, f) in pairs(IO.checkpoint_fields(d.state))]
+    for d in doms[2:end], c in d.components, (k, a) in pairs(Components.state_arrays(c, d))
+        push!(more, Symbol(d.id, "_", k) => a)
+    end
     return merge(root, NamedTuple(more))
 end
 
 register_driver!(SimulationDriverType())
-# the nest parent of an urban site alone (`[run] legacy = "urban_parent"`):
-# the model's sections, so registered after them (ONE-f, #455, replaces it)
-Urban.MODEL_SECTIONS[] = Config.driver_sections(SimulationDriverType())
-Urban.MODEL_DOMAIN_SECTIONS[] = DOMAIN_SECTIONS
-register_driver!(Urban.UrbanParentDriver())
 
 end # module

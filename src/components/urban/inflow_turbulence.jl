@@ -179,7 +179,7 @@ function init!(c::InflowTurbulenceCoupling, case)
         p = nc.parent
         # folded from the nest's window hook (the parent at rest), never by the refresh
         c.it = InflowTurbulence(run; common..., statistics_interval = Inf,
-                                statistics_kwargs = (closure = p.closure,))
+                                statistics_kwargs = (closure = Components.sgs_closure(p),))
         it, iv = c.it, Float64(o.statistics_interval)
         push!(nc.window_hooks, (n, cs) -> fold_inflow_statistics!(it; interval = iv))
     else

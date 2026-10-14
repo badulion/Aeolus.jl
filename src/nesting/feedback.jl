@@ -26,7 +26,8 @@ _side_high(s::Int) = iseven(s)
 # =========================================================================
 
 """
-    NestScalarFlux(; scheme = :centered, molecular = false, sgs = :none, applied_by = :core)
+    NestScalarFlux(; scheme = :centered, molecular = false, sgs = :none, applied_by = :core,
+                   child_applied_by = applied_by)
 
 The transport of a cell-centred scalar whose interface flux a two-way
 nest books in its flux registers ([`TwoWayFeedback`](@ref)).
@@ -54,6 +55,12 @@ applies**, at the state it applies it to, by calling
 [`book_nest_flux!`](@ref) (#327, M3). `scheme`, `molecular` and `sgs` are
 then unused.
 
+`applied_by` is the parent's transport and `child_applied_by` (default:
+the same) the child's: a scalar that the parent's core transports and the
+child moves by a separate transport (the urban site's θ and qv in a model
+parent, NEST-p3 #483) is booked by the run's hook in the parent's stages
+and by `book_nest_flux!` in the child.
+
 `θ` and a core-transported `qv` get their models from the simulations; a
 tracer of the field set (also `qv` when it is a tracer, as in a moist
 sound-proof nest) is refluxed only when its owner declares how it is
@@ -64,18 +71,23 @@ struct NestScalarFlux{R}
     molecular::Bool
     sgs::Symbol
     applied_by::Symbol
+    child_applied_by::Symbol
 end
 
 function NestScalarFlux(; scheme = :centered, molecular::Bool = false, sgs::Symbol = :none,
-                        applied_by::Symbol = :core)
+                        applied_by::Symbol = :core, child_applied_by::Symbol = applied_by)
     sgs in (:none, :theta, :tracer) ||
         throw(ArgumentError("NestScalarFlux: sgs must be :none, :theta or :tracer, got :$sgs"))
-    applied_by in (:core, :transport) ||
-        throw(ArgumentError("NestScalarFlux: applied_by must be :core or :transport, got :$applied_by"))
-    return NestScalarFlux(_flux_reconstruction(scheme), molecular, sgs, applied_by)
+    for a in (applied_by, child_applied_by)
+        a in (:core, :transport) ||
+            throw(ArgumentError("NestScalarFlux: applied_by and child_applied_by are :core or :transport, got :$a"))
+    end
+    return NestScalarFlux(_flux_reconstruction(scheme), molecular, sgs, applied_by, child_applied_by)
 end
 
-_by_core(m::NestScalarFlux) = m.applied_by === :core
+# whether the core's hook books the scalar on side `which` (:parent or :child), or on either side
+_by_core(m::NestScalarFlux, which::Symbol) = (which === :parent ? m.applied_by : m.child_applied_by) === :core
+_by_core(m::NestScalarFlux) = _by_core(m, :parent) || _by_core(m, :child)
 
 """
     TwoWayFeedback(; buffer = 2, z_anterp = -Inf, τ = nothing, exclude_width = 0,
@@ -356,15 +368,16 @@ function NestFluxRegisters(nest::NestedGrid, parent, child, s::NestInterpState,
     # with every scalar booked by its transport (book_nest_flux!) any core runs
     wp = _stage_weights(ap); wc = _stage_weights(ac)
     if any(_by_core, models)
-        (wp === nothing || wc === nothing) &&
+        bp = any(m -> _by_core(m, :parent), models); bc = any(m -> _by_core(m, :child), models)
+        ((bp && wp === nothing) || (bc && wc === nothing)) &&
             throw(ArgumentError("TwoWayFeedback: refluxing needs the stage weights of each " *
                                 "domain's core (step!, step_rk3!, or a user core declaring " *
                                 "nest_stage_weights); got parent $(_core_name(ap)), child " *
                                 "$(_core_name(ac)). The IMEX cores are not supported (implicit " *
                                 "θ diffusion). Use TwoWayFeedback(reflux = false), or book " *
                                 "every scalar with book_nest_flux! (applied_by = :transport)"))
-        _check_register_closure(parent, _sgs_keywords(ap), "parent")
-        _check_register_closure(child, _sgs_keywords(ac), "child")
+        bp ? _check_register_closure(parent, _sgs_keywords(ap), "parent") : wp === nothing && (wp = ())
+        bc ? _check_register_closure(child, _sgs_keywords(ac), "child") : wc === nothing && (wc = ())
     else
         wp === nothing && (wp = ()); wc === nothing && (wc = ())
     end
@@ -464,7 +477,7 @@ function (h::_RegisterHook)(sim, Δt)
         r.cstage += 1; st = r.cstage; ws = r.cweights; planes = r.cpend; vplanes = r.cvpend
         fields = r.cfield; kw = r.csgs; scratch = r.cscratch; vst = r.cvstage
     end
-    any(_by_core, r.models) || return nothing
+    any(m -> _by_core(m, h.which), r.models) || return nothing
     st <= length(ws) || error("NestFluxRegisters: stage $st of a core with " *
                               "$(length(ws)) stages")
     w = ws[st] * Float64(Δt)
@@ -479,7 +492,7 @@ function (h::_RegisterHook)(sim, Δt)
                      sim.u, sim.v, sim.w)
     end
     for n in eachindex(r.names)
-        _by_core(r.models[n]) || continue
+        _by_core(r.models[n], h.which) || continue
         ϕ = fields[n]
         n > 1 && !(r.names[n] === :qv && _moist(sim)) && fill_halos!(ϕ, sim.θ_bcs)   # tracers
         K = _face_diffusivity(r.models[n], closure, f, sim, ϕ, scratch)
@@ -703,7 +716,7 @@ end
 function _book_entry!(r::NestFluxRegisters, which::Symbol, nest::NestedGrid, sim, name::Symbol,
                       ϕ::Field, dt::Real; scheme, diffusivity, velocity, weights, sgs)
     n = findfirst(==(name), r.names)
-    (n === nothing || _by_core(r.models[n])) && return false
+    (n === nothing || _by_core(r.models[n], which)) && return false
     par = which === :parent
     (par ? r.popen : r.copen) || return false
     W = weights === :sim ? (par ? r.pW : r.cW) : weights

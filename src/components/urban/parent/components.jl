@@ -1,8 +1,9 @@
-# The urban nest parent's physics as components of a domain (NEST-p1, #481).
+# The urban nest parent's physics as components of a domain (NEST-p1, #481;
+# NEST-p3, #483: the parent is a `[[domain]]` of the model's config).
 #
-# `ParentCase` (case.jl) used to wire its physics by hand. Each piece is
-# now a component of an ordinary `Components.Domain`, built from options
-# and the domain (`Components.build`) and run by the stage pipeline:
+# The deep boundary-layer domain of #259 is an ordinary `Components.Domain`
+# whose components its `[[domain]]` block enables, each built from its
+# section and the domain (`Components.build`) and run by the stage pipeline:
 #
 #   TiledUrbanSurface           the `:surface` slot: the tiled urban mosaic of the
 #                          coarse columns (surface.jl, #249), whose land use
@@ -24,9 +25,8 @@
 #                          of the stretched grid and the surface value of the
 #                          tiles' u*.
 #
-# Each works on both dynamical cores. `parent_domain` (case.jl) builds the
-# parent's domain from them; `step_parent!` runs the same component entries
-# in the pipeline's order inside the parent's air-heat and water ledgers.
+# Each works on both dynamical cores; the domain's budgets attribute what
+# each changes (an urban site nested in it books the nest exchange).
 # The physics is in the modules (SurfaceTiles, ColumnRadiation,
 # LargeScaleForcing, PrognosticSGS); these are the adapters.
 
@@ -660,3 +660,44 @@ end
 
 Aeolus.IO.checkpoint_state(c::MeanColumnRadiation) = Aeolus.IO.structural_state(c)
 Aeolus.IO.restore_checkpoint_state!(c::MeanColumnRadiation, s::Aeolus.IO.StructuralState) = Aeolus.IO.restore_structural_state!(c, s)
+
+"""
+    ConstantForcing(value)
+
+A prescribed surface forcing (`[surface] model = "prescribed"`) that does not change in time:
+`f(t) = value`. The TOML form `{kind = "constant", value = …}` of
+`q_surface` / `e_surface` (CFG-c, #358; NEST-p3 #483).
+"""
+struct ConstantForcing
+    value::Float64
+end
+(f::ConstantForcing)(t) = f.value
+
+"""
+    SeriesForcing(t, value)
+
+A prescribed surface forcing given at the times `t` (s, strictly
+increasing): linear in time between them, constant beyond the ends. The
+TOML form `{kind = "series", t = […], value = […]}` (CFG-c, #358).
+"""
+struct SeriesForcing
+    t::Vector{Float64}
+    value::Vector{Float64}
+end
+(f::SeriesForcing)(t) = _interp1(f.t, f.value, t)
+Base.:(==)(a::SeriesForcing, b::SeriesForcing) = a.t == b.t && a.value == b.value
+Base.isequal(a::SeriesForcing, b::SeriesForcing) = isequal(a.t, b.t) && isequal(a.value, b.value)
+Base.hash(a::SeriesForcing, h::UInt) = hash(a.value, hash(a.t, hash(:SeriesForcing, h)))
+
+"Linear interpolation of `(xs, ys)` at `x`, constant beyond the ends."
+function _interp1(xs, ys, x)
+    x <= xs[1] && return ys[1]
+    x >= xs[end] && return ys[end]
+    i = searchsortedlast(xs, x)
+    w = (x - xs[i]) / (xs[i+1] - xs[i])
+    return (1 - w) * ys[i] + w * ys[i+1]
+end
+
+"Level-centre heights (m) of the interior levels of a mesh."
+level_centres(m) = hasproperty(m, :zc) ? Float64[m.zc[m.Hz+k] for k in 1:m.Nz] :
+                   Float64[m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]

@@ -584,6 +584,16 @@ substep; a caller that drives the child itself
 """
 subcycle_dt(R::Real, lim::Real) = R / _nsub(R, lim)
 
+"""
+    nest_window_end(run::NestedRun) -> t
+
+The child time at which the window that a nest engine opened on `run`
+ends (the parent's time at the end of its step, on the parent's clock):
+where a child that picks its own steps lands ([`subcycle_dt`](@ref) of
+the time left). Read between the window's opening and its close.
+"""
+nest_window_end(run::NestedRun) = run.synced ? run.new_valid_at : run.t0 + run.Δt
+
 _advective_rate(sim) = (fill_halos!((sim.u, sim.v, sim.w), sim.bcs);
                         _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, sim.mesh))
 

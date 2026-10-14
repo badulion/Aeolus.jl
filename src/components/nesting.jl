@@ -7,6 +7,7 @@
 
 """
     PipelineCore(domain)
+    PipelineCore()
 
 The dynamical core of a nested domain as `Aeolus.Nesting` sees it: calling it, `core(sim, dt; body_force!, post_predictor!)`, takes
 one step of `domain` through its stage pipeline (the drivers, the stages
@@ -17,10 +18,34 @@ its post-predictor hook (a nest sponge) after it, as
 `Nesting.DomainAdvance` chains them. Its stage times and stage weights
 are those of the domain's scheme (`:euler`: one projection step;
 `:rk3`: SSP-RK3).
+
+`PipelineCore()` is the core of a domain that is linked into a nest while
+it is being built (an urban site joins its parent's nest in its
+`:nesting` component's `init!`, before its `Domain` exists, NEST-p3 #483);
+[`set_pipeline_domain!`](@ref) gives it the domain once built. Such a
+domain takes its core step itself ([`takes_core_step`](@ref)): one
+projection step per piece, stage weight 1.
 """
-struct PipelineCore{D<:Domain}
+mutable struct PipelineCore{D}
     d::D
 end
+PipelineCore() = PipelineCore{Any}(nothing)
+
+"""
+    set_pipeline_domain!(adv::Nesting.DomainAdvance, d::Domain) -> adv
+
+Give a deferred [`PipelineCore`](@ref) (`PipelineCore()`) its domain `d`,
+built after the domain was linked into its nest.
+"""
+function set_pipeline_domain!(adv::DomainAdvance, d::Domain)
+    adv.core isa PipelineCore{Any} ||
+        throw(ArgumentError("set_pipeline_domain!: the advance's core is not a deferred PipelineCore"))
+    adv.core.d = d
+    return adv
+end
+
+"The domain a nest advance steps (its [`PipelineCore`](@ref)'s)."
+pipeline_domain(adv::DomainAdvance) = adv.core.d
 
 function (c::PipelineCore)(sim, dt; body_force! = nothing, post_predictor! = nothing, sgs = nothing)
     d = c.d
@@ -33,9 +58,10 @@ function (c::PipelineCore)(sim, dt; body_force! = nothing, post_predictor! = not
     return sim
 end
 
+_pipeline_scheme(c::PipelineCore) = c.d === nothing ? :euler : c.d.scheme
 Nesting.nest_stage_weights(c::PipelineCore, args...) =
-    c.d.scheme === :rk3 ? (1.0 / 6, 1.0 / 6, 2.0 / 3) : (1.0,)
-Nesting._stage_times(c::PipelineCore, args) = c.d.scheme === :rk3 ? (0.0, 1.0, 0.5) : (0.0,)
+    _pipeline_scheme(c) === :rk3 ? (1.0 / 6, 1.0 / 6, 2.0 / 3) : (1.0,)
+Nesting._stage_times(c::PipelineCore, args) = _pipeline_scheme(c) === :rk3 ? (0.0, 1.0, 0.5) : (0.0,)
 
 """
     pipeline_advance(d::Domain) -> Nesting.DomainAdvance
@@ -56,7 +82,11 @@ One parent–child pair of a nested model: the domain numbers `child` and
 default, the design's decision of 2026-10-09) or `:one_way`, and
 `inflow`: `nothing` (the default) or the options of synthetic inflow
 turbulence on the child's lateral nest faces ([`NEST_INFLOW_DEFAULTS`](@ref),
-installed by [`nested_model`](@ref)).
+installed by [`nested_model`](@ref)), and `prebuilt`: the child is
+already in the hierarchy [`nested_model`](@ref) is given (an urban site,
+whose `:nesting` component calls `Nesting.add_nest!` while the site is
+built, and the domains linked before it, [`link_domain!`](@ref); NEST-p3
+#483), so the link is checked, not added.
 """
 struct NestLink{N}
     child::Int
@@ -64,7 +94,9 @@ struct NestLink{N}
     nest::N
     feedback::Symbol
     inflow::Union{Nothing,NamedTuple}
-    function NestLink(child::Integer, parent::Integer, nest; feedback::Symbol = :two_way, inflow = nothing)
+    prebuilt::Bool
+    function NestLink(child::Integer, parent::Integer, nest; feedback::Symbol = :two_way, inflow = nothing,
+                      prebuilt::Bool = false)
         feedback in (:one_way, :two_way) ||
             throw(ArgumentError("NestLink: feedback is :one_way or :two_way, got :$feedback"))
         parent < child || throw(ArgumentError("NestLink: a parent is listed before its child " *
@@ -77,7 +109,7 @@ struct NestLink{N}
             inflow.generator in (:digital_filter, :fsd) ||
                 throw(ArgumentError("NestLink: inflow generator is :digital_filter or :fsd, got :$(inflow.generator)"))
         end
-        return new{typeof(nest)}(Int(child), Int(parent), nest, feedback, inflow)
+        return new{typeof(nest)}(Int(child), Int(parent), nest, feedback, inflow, prebuilt)
     end
 end
 
@@ -162,6 +194,17 @@ ModelNest(h, links::Vector{NestLink}; adaptive::Bool = false, validate::Bool = a
               Any[nothing for _ in h.links])
 
 """
+    nest_hierarchy(root::Domain) -> Nesting.NestHierarchy
+
+The nest hierarchy of a model whose root is `root` (stepped through its
+pipeline, [`pipeline_advance`](@ref)), before any child is linked: what
+[`nested_model`](@ref) builds, or is given (`hierarchy`) when a child
+joins the nest while it is being built (the urban site, NEST-p3 #483).
+"""
+nest_hierarchy(root::Domain) =
+    NestHierarchy(root.state; id = Symbol(root.id), advance = pipeline_advance(root), cfl = nothing, validate = false)
+
+"""
     nested_model(domains::Tuple, links; max_retries = 3) -> Model
 
 The model of `domains` (the root first) coupled by `links` (a
@@ -190,9 +233,16 @@ overlapping siblings, or a two-way pair without a conservation box
 an anelastic one, either way round, either feedback) is nested with the
 conservative density conversion of `Nesting.NestCoreConversion`, the
 Boussinesq side's density `ρ₀ = p_ref / (R_d θ₀)`.
+
+`hierarchy` (default: a fresh [`nest_hierarchy`](@ref) of the root) is
+the hierarchy to complete: a child that joined it while it was built has
+a `prebuilt` [`NestLink`](@ref) and is checked, not added (the urban
+site, NEST-p3 #483). A domain whose core step a component takes (the
+urban site) picks its own substeps ([`nest_domain_limit`](@ref)) and books
+what its nest faces carry itself (no nest-exchange term).
 """
 function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term,
-                      concurrent::Bool = Threads.nthreads() > 1)
+                      concurrent::Bool = Threads.nthreads() > 1, hierarchy = nothing)
     length(domains) >= 2 || throw(ArgumentError("nested_model: a nest needs two domains or more"))
     budget_exchange in (:exchange_term, :off) ||
         throw(ArgumentError("nested_model: budget_exchange is :exchange_term or :off, got :$budget_exchange"))
@@ -203,11 +253,16 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
                                 "nothing of the nest: a nest measures budgets with budget_exchange = :exchange_term"))
     end
     # every nested domain books what the nest does to it as its nest exchange
+    # (a domain whose core step a component takes, the urban site, books
+    # what its nest faces carry itself: its open faces' heat and water)
     for d in domains[2:end]
-        d.budgets === nothing || (d.budgets.exchange = NEST_EXCHANGE)
+        d.budgets === nothing || core_taker(d) !== nothing || (d.budgets.exchange = NEST_EXCHANGE)
     end
+    # a domain whose core step a component takes picks its own steps (its
+    # substeps: the smallest whole number within its own limit, next_dt)
     adaptive = domains[1].cfl !== nothing
     for d in domains
+        core_taker(d) === nothing || continue
         (d.cfl !== nothing) == adaptive ||
             throw(ArgumentError("nested_model: domain $(d.id) " * (adaptive ? "takes fixed steps" : "steps adaptively") *
                                 " and domain $(domains[1].id) " * (adaptive ? "adaptively" : "fixed steps") *
@@ -220,18 +275,23 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
     sort!(ls; by = l -> l.child)
     ids = [Symbol(d.id) for d in domains]
     root = domains[1]
-    h = NestHierarchy(root.state; id = ids[1], advance = pipeline_advance(root), cfl = nothing,
-                      validate = false)
+    h = hierarchy === nothing ? nest_hierarchy(root) : hierarchy
+    h.domains[1].sim === root.state ||
+        throw(ArgumentError("nested_model: the hierarchy's root is not the first domain's core"))
     for l in ls
         c = domains[l.child]
-        try
-            add_nest!(h, ids[l.parent] => c.state, l.nest; id = ids[l.child], advance = pipeline_advance(c),
-                      cfl = nothing, feedback = l.feedback,
-                      boussinesq_density = _boussinesq_density(domains[l.parent], c))
-        catch e
-            e isa ArgumentError || rethrow()
-            throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
+        if l.prebuilt
+            (length(h.domains) >= l.child && h.domains[l.child].sim === c.state &&
+             h.domains[h.coarse[h.domains[l.child].up]].sim === domains[l.parent].state) ||
+                throw(ArgumentError("nested_model: the prebuilt link of domain $(c.id) is not in the hierarchy " *
+                                    "as domain $(l.child) in $(domains[l.parent].id)"))
+            continue
         end
+        link_domain!(h, domains, l)
+    end
+    for (i, d) in enumerate(domains)
+        pipeline_domain(h.advance[i]) === d ||
+            throw(ArgumentError("nested_model: domain $(d.id) is not the one its nest advance steps"))
     end
     mn = ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries, concurrent = concurrent)
     for l in ls
@@ -240,6 +300,32 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
         mn.inflow[k] = _install_inflow!(h.links[k], domains[l.parent], domains[l.child], l.inflow)
     end
     return Model(domains, mn)
+end
+
+"""
+    link_domain!(h::Nesting.NestHierarchy, domains, l::NestLink) -> h
+
+Add the child of `l`, `domains[l.child]` (stepped through its pipeline,
+[`pipeline_advance`](@ref)), to the hierarchy `h` as its domain number
+`l.child`, in `domains[l.parent]` with the link's nest grid and feedback
+(a mixed core pair with the density conversion). What
+[`nested_model`](@ref) does for every link that is not `prebuilt`; a
+config with an urban site links its domains in order while it builds them
+(the site joins the nest in its own build).
+"""
+function link_domain!(h, domains, l::NestLink)
+    c = domains[l.child]
+    length(h.domains) == l.child - 1 ||
+        throw(ArgumentError("nested_model: domain $(c.id) would be domain $(length(h.domains) + 1) of the hierarchy"))
+    try
+        add_nest!(h, Symbol(domains[l.parent].id) => c.state, l.nest; id = Symbol(c.id), advance = pipeline_advance(c),
+                  cfl = nothing, feedback = l.feedback,
+                  boussinesq_density = _boussinesq_density(domains[l.parent], c))
+    catch e
+        e isa ArgumentError || rethrow()
+        throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
+    end
+    return h
 end
 
 """

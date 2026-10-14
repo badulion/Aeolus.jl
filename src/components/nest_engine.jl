@@ -294,9 +294,12 @@ function _nest_child_window!(mn::ModelNest, l::Int, t_end::Float64)
     c = L.child
     ci = h.fine[l]
     st = L.stats
-    n = nest_substeps(mn, l, t_end - Float64(c.t))
+    taker = core_taker(_ndom(mn, ci))
+    n = taker === nothing ? nest_substeps(mn, l, t_end - Float64(c.t)) : 0
     mn.nused[l] = n
-    if mn.concurrent && n > 1 && nest_prefetches(mn, ci)
+    if taker !== nothing
+        n = _nest_taker_window!(mn, l, taker, t_end)
+    elseif mn.concurrent && n > 1 && nest_prefetches(mn, ci)
         _nest_subcycle_ahead!(mn, l, n, t_end)
     else
         n_rem = n
@@ -316,6 +319,50 @@ function _nest_child_window!(mn::ModelNest, l::Int, t_end::Float64)
     st.n_min = min(st.n_min, n)
     st.n_max = max(st.n_max, n)
     return nothing
+end
+
+# The window of a child whose core step a component takes (the urban site,
+# NEST-p3 #483): the child steps through its whole pipeline, stages 1–13
+# included, each step of the length it picks itself ([`next_dt`](@ref):
+# its own stability limit, shortened by its nest component to land on the
+# window's end, `Nesting.nest_window_end`, with the rule of
+# `Nesting.subcycle_dt`), retrying its own pieces. Returns the steps taken.
+function _nest_taker_window!(mn::ModelNest, l::Int, taker, t_end::Float64)
+    L = mn.hierarchy.links[l]
+    c = L.child
+    d = _ndom(mn, mn.hierarchy.fine[l])
+    tol = 1e-9 * max(t_end - Float64(c.t), floatmin(Float64))
+    n = 0
+    while t_end - Float64(c.t) > tol
+        dt = Float64(next_dt(taker, d))
+        cfl = dt * _advective_rate(c)
+        step!(d, dt; checked = false)
+        n += 1
+        _nest_substep_stats!(L, dt, cfl)
+    end
+    return n
+end
+
+"""
+    window_dt(c, d::Domain, Δt) -> Δt′
+
+The step `Δt′ ≤ Δt` of the parent window that `d`, a child whose core
+step `c` takes ([`takes_core_step`](@ref)), can land on: `Δt` for a
+child that picks its own steps (the default), a whole number of its steps
+for a child with a fixed step (the urban site's fixed and IMEX time
+steppers; at least one step). The root of a nest takes the smallest over
+its children ([`step_adaptive!`](@ref)).
+"""
+window_dt(::AbstractComponent, d, Δt) = Δt
+
+function _root_window_dt(mn::ModelNest, Δt::Float64)
+    h = mn.hierarchy
+    for l in h.domains[1].links
+        d = _ndom(mn, h.fine[l])
+        st = core_taker(d)
+        st === nothing || (Δt = Float64(window_dt(st, d, Δt)))
+    end
+    return Δt
 end
 
 function _nest_substep_stats!(L, hs, cfl)
@@ -514,9 +561,35 @@ function step_adaptive!(m::Model{<:Tuple,<:ModelNest}; dt_prev = nothing, t_end 
     dt_prev === nothing || (mn.dt_prev[1] = Float64(dt_prev))
     root = m.domains[1]
     foreach(sync_drivers!, m.domains)
-    dt = nest_domain_limit(mn, 1)
+    dt = _root_window_dt(mn, nest_domain_limit(mn, 1))
     t_end === nothing || (dt = min(dt, Float64(t_end) - Float64(clock(root))))
     dt > 0 || throw(ArgumentError("step_adaptive!: the nest is at its end t = $(clock(root))"))
     Δt, tries = nest_window!(mn, dt; dt_min = Float64(root.cfl.dt_min))
     return (root.state, Δt, tries)
+end
+
+"""
+    run_to!(m::Model{<:Tuple,<:ModelNest}, t_end; callback = nothing) -> m
+
+Run an adaptive nest to the model time `t_end` as the run loop of `aeolus
+run` does, without its output, monitor and checkpoints: every domain's
+components' [`run_begin!`](@ref), adaptive windows
+([`step_adaptive!`](@ref)) landing on `t_end` (`callback(m, n)` after the
+`n`-th), then every [`run_end!`](@ref), also when a window throws.
+"""
+function run_to!(m::Model{<:Tuple,<:ModelNest}, t_end::Real; callback = nothing)
+    doms = m.domains
+    te = Float64(t_end)
+    foreach(d -> foreach(c -> run_begin!(c, d, te), d.components), doms)
+    n = 0
+    try
+        while Float64(clock(doms[1])) < te * (1 - 1e-12)
+            step_adaptive!(m; t_end = te)
+            n += 1
+            callback === nothing || callback(m, n)
+        end
+    finally
+        foreach(d -> foreach(c -> run_end!(c, d), d.components), doms)
+    end
+    return m
 end

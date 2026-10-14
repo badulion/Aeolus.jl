@@ -83,10 +83,57 @@ default_options(::Type{<:GeostrophicCoupling}) =
     (U_g = 1.0, V_g = 0.0, mode = :pressure_gradient, τ = 1800.0, sponge_to_geostrophic = true)
 stages(::Type{<:GeostrophicCoupling}) = ((:body_force, 10, EVERY_STEP),)
 
+"""
+    sounding_zi_max(cfg) -> m
+
+The largest parcel boundary-layer height (`boundary_layer_height`,
+`:parcel`, on θ_v) of the launches of the site's sounding: 1171 m for the
+10:45 UTC release of 29 June 2019 (#247). 0 without a sounding.
+"""
+function sounding_zi_max(cfg::NamedTuple)
+    S = case_sounding(cfg)
+    S === nothing && return 0.0
+    MT = Aeolus.MoistThermodynamics
+    P = S.profiles
+    zi = 0.0
+    for t in S.times                                     # the launches
+        θv = [MT.virtual_temperature(forcing_value(P.θ, z, t), MT.PhasePartition(forcing_value(P.qv, z, t)))
+              for z in P.z]
+        zi = max(zi, boundary_layer_height(P.z, θv; method = :parcel))
+    end
+    return zi
+end
+
+"""
+    site_geostrophic_wind(cfg) -> (U_g, V_g)
+
+The geostrophic wind of a site whose faces take boundary data instead of
+a parent domain's (`[nesting] parent_driver = "profile"` or `"offline"`),
+functions `(z, t)` of the model time: its sounding's wind (linear in time
+between the launches) at ``\\max(z, z_g)``, ``z_g`` = 1.2 ×
+[`sounding_zi_max`](@ref) (the wind above the boundary layer taken as
+geostrophic, as the parent domain of an online nest takes it,
+`Components.sounding_geostrophic`); without a sounding the constant
+`(U_g, V_g)` of the coupling's options.
+"""
+function site_geostrophic_wind(cfg::NamedTuple, o)
+    S = case_sounding(cfg)
+    if S === nothing
+        U, V = Float64(o.U_g), Float64(o.V_g)
+        return ((z, t) -> U, (z, t) -> V)
+    end
+    P = S.profiles
+    t0, z_g = case_start_time(cfg), 1.2 * sounding_zi_max(cfg)
+    return ((z, t) -> forcing_value(P.u, max(z, z_g), t0 + t),
+            (z, t) -> forcing_value(P.v, max(z, z_g), t0 + t))
+end
+
 function build(::Type{<:GeostrophicCoupling}, case, o)
-    # nested: the parent's geostrophic wind, U_g(z, t) and V_g(z, t) (#265)
-    Ug, Vg = o.mode === :pressure_gradient && case_nested(case.cfg) ?
-             nest_geostrophic_wind(case.cfg) : (o.U_g, o.V_g)
+    # nested: the parent domain's geostrophic wind, U_g(z, t) and V_g(z, t)
+    # (#265, NEST-p3 #483); faces from boundary data: the site's sounding wind
+    Ug, Vg = o.mode !== :pressure_gradient ? (o.U_g, o.V_g) :
+             case.nest !== nothing ? nest_geostrophic_wind(case) :
+             case_nested(case.cfg) ? site_geostrophic_wind(case.cfg, o) : (o.U_g, o.V_g)
     F = o.mode === :pressure_gradient ? GeostrophicPressureGradient(Ug, Vg) :
         o.mode === :nudging           ? GeostrophicNudging(o.U_g, o.V_g, o.τ) :
         error("geostrophic: mode must be :pressure_gradient or :nudging, got :$(o.mode)")

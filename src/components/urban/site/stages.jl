@@ -150,6 +150,16 @@ function Components.next_dt(case::UrbanSite, d::Domain)
     return ts !== nothing && variable_dt(typeof(ts)) ? Components.last_step_dt(dt, clk.t_stop - case.sim.t) : dt
 end
 Components.check_dt(case::UrbanSite, d::Domain, dt) = check_step_dt(case, dt)
+# a nested site with a fixed step (the :fixed and :imex time steppers) lands
+# on its parent's window when the window is a whole number of its steps
+# (at least one); a variable step lands on any window (its :nesting
+# component's limit_dt)
+function Components.window_dt(case::UrbanSite, d::Domain, Δt)
+    ts = timestepper(case)
+    ts !== nothing && variable_dt(typeof(ts)) && return Δt
+    dt = case.cfg.dt
+    return dt * max(1, floor(Int, Δt / dt * (1 + 1e-9)))
+end
 
 # the water the air gained over the step (the budgets close after :budgets)
 Components.budget!(case::UrbanSite, d::Domain, b) = (b.water_air += air_water(case) - b.W_start; nothing)
