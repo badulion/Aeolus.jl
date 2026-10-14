@@ -267,9 +267,8 @@ end
     mem = static_inputs(st.city, mesh; origin_lat = c.lat0, origin_lon = c.lon0, origin_x = ox, origin_y = oy,
                         class_lai = Dict(SURFACE_PARK => 2.5))
     @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
-    # the nest parents' land use: their [[domain]]'s static driver (the tile
-    # form on the parent's grid, NEST-p3 #483) and the land-use table
-    # cropped and coarsened in memory
+    # the nest parents' land use: the land-use table cropped and coarsened to
+    # their [[domain]]'s grid (NEST-p3 #483), and their static driver
     for s in (:smoke, :summer)
         pv = Aeolus.Config.domain_view(load_run_config(berlin_toml(s)), 1)
         pm = Aeolus.SimulationDriver._mesh(pv.grid)
@@ -278,11 +277,24 @@ end
                                        origin_lat = t.origin_lat, origin_lon = t.origin_lon,
                                        origin_x = t.origin_x, origin_y = t.origin_y)
         d = IS_DIGESTS["parent_$s"]
-        for pl in (BCI.landuse_of_tiles(t), BCI.landuse_of_tiles(mem))
-            @test digest(pl.counts) == d["counts"] && digest(pl.λf) == d["lambda_f"] &&
-                  digest(pl.hmean) == d["h_mean"] && digest(pl.hmax) == d["h_max"]
-            @test (pl.nx, pl.ny, pl.dx, pl.x0, pl.y0, pl.r) == (d["nx"], d["ny"], d["dx"], d["x0"], d["y0"], d["r"])
-        end
+        pl = BCI.landuse_of_tiles(mem)
+        @test digest(pl.counts) == d["counts"] && digest(pl.λf) == d["lambda_f"] &&
+              digest(pl.hmean) == d["h_mean"] && digest(pl.hmax) == d["h_max"]
+        @test (pl.nx, pl.ny, pl.dx, pl.x0, pl.y0, pl.r) == (d["nx"], d["ny"], d["dx"], d["x0"], d["y0"], d["r"])
+        # the file (AeolusPrep.jl): the table's land use, and under the site's
+        # footprint the site's own classes (#249: the parent sees the site there)
+        sc = site_config(berlin_toml(s))
+        sm = meshof(sc)
+        sfc = BCI.build_geometry(sc, sm).sfc
+        fp = BCI.landuse_of_tiles(t)
+        @test fp.λf == pl.λf && fp.hmean == pl.hmean && fp.hmax == pl.hmax
+        r = pl.r
+        Is = round(Int, (sm.x0 - pm.x0) / pl.dx) .+ (1:size(sfc, 1) ÷ r)
+        Js = round(Int, (sm.y0 - pm.y0) / pl.dx) .+ (1:size(sfc, 2) ÷ r)
+        under = falses(pl.nx, pl.ny); under[Is, Js] .= true
+        @test all(fp.counts[I, :] == pl.counts[I, :] for I in CartesianIndices(under) if !under[I])
+        @test all(fp.counts[I, J, c] == count(==(c), sfc[(a - 1) * r + 1:a * r, (b - 1) * r + 1:b * r])
+                  for (b, J) in enumerate(Js), (a, I) in enumerate(Is), c in 1:5)
     end
     # the round trip hashes the static drivers under [inputs], the site's and the parent's
     smoke_cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))
