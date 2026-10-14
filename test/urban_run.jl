@@ -184,6 +184,6 @@ end
               (UC.urban_enabled(cfg) || Aeolus.Config.config_domains(cfg)[1].surface.model === :tiles)
     end
     @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
-                                  "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl",
+                                  "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl", "parent_output.jl",
                                   "plot_parent_surface.jl"]
 end

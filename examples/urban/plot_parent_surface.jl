@@ -1,15 +1,17 @@
 # Map of the Berlin parent's surface (N-parent-d, #249): the class
 # fractions of the 6 km box and the unresolved-building roughness, drawn
-# from the parent_surface.nc a run of the `urban_parent` driver writes
-# (EX-a #438; it reads the file only, runs nothing):
+# from the tiled surface's maps in the parent.nc a run of the parent alone
+# writes (berlin_parent.toml; NEST-p3 #483: a domain of the model's core;
+# it reads the file and the run's static driver only, runs nothing):
 #
-#   julia --project -m Aeolus run examples/urban/berlin_parent.toml --set nesting.parent.hours=0.01
+#   julia --project -m Aeolus run examples/urban/berlin_parent.toml --set time.duration=60.0
 #   julia --project examples/urban/plot_parent_surface.jl <run folder> [out.svg]
 #
 # writes docs/src/assets/berlin/parent_surface.svg (or `out.svg`): six
 # panels (192 × 192 cells of 31.25 m for the default refinement) — roof,
 # park and water fraction, the morphometry window's λp, and Macdonald et
-# al. (1998) z0 and d — with the child's 1 km footprint outlined. The
+# al. (1998) z0 and d — with the site's 1 km footprint outlined (the
+# columns its static driver holds the site's classes in). The
 # rasters are PNGs (the in-package encoder of examples/viz/apng.jl)
 # embedded in the SVG; all text is SVG text, so no bitmap font is involved.
 
@@ -21,18 +23,22 @@ out = length(ARGS) >= 2 ? ARGS[2] :
       joinpath(@__DIR__, "..", "..", "docs", "src", "assets", "berlin", "parent_surface.svg")
 mkpath(dirname(out))
 
-ds = NCDataset(joinpath(ARGS[1], "output", "parent_surface.nc"))
-f = Array(ds["fraction"])
-λp, z0, d = Array(ds["lambda_p"]), Array(ds["z0"]), Array(ds["d"])
-fp = Array(ds["footprint"]) .> 0.5
+ds = NCDataset(joinpath(ARGS[1], "output", "parent.nc"))
+const ROOF, PARK, WATER = 2, 3, 4                     # the surface classes (InputDrivers)
+f = cat((Float64.(Array(ds["tile_fraction_$c"])) for c in ("street", "roof", "park", "water", "wall"))...; dims = 3)
+λp, z0, d = Float64.(Array(ds["tile_lambda_p"])), Float64.(Array(ds["tile_z0"])), Float64.(Array(ds["tile_d"]))
 xc = Array(ds["x"])
-notes = ds.attrib["landuse_notes"]
 close(ds)
+# the run's static driver: the land-use provenance, and the columns of the site's footprint
+static = load_run_config(ARGS[1]).domain.static_driver
+notes, fpline = NCDataset(static) do s
+    n = s.attrib["source_notes"]
+    n, match(r"under its footprint, columns (\d+):(\d+) × (\d+):(\d+)", n)
+end
 nx, ny = size(λp)
 dxp = xc[2] - xc[1]                                   # m, the parent cell
-Is, Js = findfirst(any(fp; dims = 2)[:, 1]):findlast(any(fp; dims = 2)[:, 1]),
-         findfirst(any(fp; dims = 1)[1, :]):findlast(any(fp; dims = 1)[1, :])
-const ROOF, PARK, WATER = 2, 3, 4                     # the surface classes (InputDrivers)
+Is, Js = fpline === nothing ? (1:0, 1:0) :
+         (parse(Int, fpline[1]):parse(Int, fpline[2]), parse(Int, fpline[3]):parse(Int, fpline[4]))
 
 # RFC 4648 base64 (Base64 is not a dependency of the project)
 const _B64 = collect("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
@@ -80,17 +86,19 @@ for (p, (title, Z, lo, hi, llo, lhi)) in enumerate(panels)
     x0, y0 = 20 + col * 420, 50 + row * 470
     println(io, """<text x="$x0" y="$(y0 + 14)">$title</text>""")
     println(io, """<image x="$x0" y="$(y0 + 22)" width="384" height="384" style="image-rendering:pixelated" href="data:image/png;base64,$(panel_png(Z, lo, hi))"/>""")
-    # the child's footprint: cells Is × Js (J north, so the top edge is Js[end])
+    # the site's footprint: cells Is × Js (J north, so the top edge is Js[end])
+    isempty(Is) || begin
     fx = x0 + (first(Is) - 1) * scale
     fy = y0 + 22 + (ny - last(Js)) * scale
     println(io, """<rect x="$fx" y="$fy" width="$(length(Is) * scale)" height="$(length(Js) * scale)" fill="none" stroke="red" stroke-width="1.5"/>""")
+    end
     # colour bar
     cy = y0 + 22 + 392
     println(io, """<rect x="$x0" y="$cy" width="384" height="10" fill="url(#vir)"/>""")
     println(io, """<text x="$x0" y="$(cy + 24)">$llo</text>""")
     println(io, """<text x="$(x0 + 384)" y="$(cy + 24)" text-anchor="end">$lhi</text>""")
 end
-println(io, """<text x="20" y="$(H - 14)" font-size="12">Red: the child's 1 km footprint, where the parent fractions are the child's own class map, coarse-grained. North up; x east. Data © OpenStreetMap contributors (ODbL).</text>""")
+println(io, """<text x="20" y="$(H - 14)" font-size="12">Red: the site's 1 km footprint, where the parent fractions are the site's own class map, coarse-grained. North up; x east. Data © OpenStreetMap contributors (ODbL).</text>""")
 println(io, "</svg>")
 write(out, take!(io))
 @printf("wrote %s (%.0f kB); z0 %.3f–%.2f m, d 0–%.1f m, box-mean roof fraction %.3f\n",

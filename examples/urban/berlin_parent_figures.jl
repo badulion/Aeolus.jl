@@ -1,8 +1,8 @@
-# Figures of the Berlin parent run (N-parent-e, #259), drawn from the tables
-# the `urban_parent` driver writes into a run folder's output/ (EX-a #438):
+# Figures of the Berlin parent run (N-parent-e, #259), drawn from the
+# output of a run of the parent alone (NEST-p3 #483: a domain of the
+# model's core; parent_output.jl reads it):
 #
-#     <run folder>/output/parent.csv        (z_i, ledger terms)
-#     <run folder>/output/parent_theta.csv  (θ profiles)
+#     <run folder>/output/parent.nc   (θ, qv and heat-flux profiles, the energy budget)
 #
 #   docs/src/assets/berlin/parent_theta_zi.svg  θ(z, t) with z_i(t)
 #   docs/src/assets/berlin/parent_ledger.svg    the air-heat ledger terms
@@ -15,14 +15,7 @@
 using Aeolus, Printf
 isdefined(Main, :write_png) || include(joinpath(@__DIR__, "..", "viz", "apng.jl"))
 isdefined(Main, :svg_figure) || include(joinpath(@__DIR__, "..", "sbl", "svgplot.jl"))
-
-"Read a comma table with one `#` comment line and a header; returns (header, rows)."
-function _read_table(path)
-    lines = [l for l in readlines(path) if !startswith(l, "#")]
-    header = split(lines[1], ',')
-    rows = [parse.(Float64, split(l, ',')) for l in lines[2:end]]
-    return header, rows
-end
+isdefined(Main, :read_parent_output) || include(joinpath(@__DIR__, "parent_output.jl"))
 
 const _B64 = collect("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 function _b64(data::Vector{UInt8})
@@ -41,21 +34,17 @@ end
     parent_figures(run; assets, label)
 
 Draw `parent_theta_zi.svg` and `parent_ledger.svg` into `assets` from
-`parent.csv` and `parent_theta.csv` in the run folder `run`'s `output/`.
+the parent's output in the run folder `run` ([`read_parent_output`](@ref)).
 `label` (e.g. "96 × 96 × 60, D = 0") goes into the titles.
 """
 function parent_figures(run; assets = joinpath(@__DIR__, "..", "..", "docs", "src", "assets", "berlin"),
                         label = basename(rstrip(run, '/')))
-    outdir = joinpath(run, "output")
-    hd, rows = _read_table(joinpath(outdir, "parent.csv"))
-    col(name) = [r[findfirst(==(name), hd)] for r in rows]
-    th = col("t_s") ./ 3600
+    P = read_parent_output(run)
+    th = P.t ./ 3600
     hours = th[end]
-    zi, zip_ = col("zi_min_flux_m"), col("zi_parcel_m")
-    thd, trows = _read_table(joinpath(outdir, "parent_theta.csv"))
-    zc = [parse(Float64, s[2:end]) for s in thd[2:end]]
-    θrows = [r[2:end] for r in trows]
-    length(θrows) == length(th) || error("the θ table and the ledger table have different outputs")
+    zi, zip_ = P.zi_min_flux, P.zi_parcel
+    zc = P.z
+    θrows = [P.θ[:, n] for n in eachindex(P.t)]
     mkpath(assets)
     lt(h) = mod(6 + h, 24)
 
@@ -108,14 +97,15 @@ function parent_figures(run; assets = joinpath(@__DIR__, "..", "..", "docs", "sr
     println(io, "</svg>")
     write(joinpath(assets, "parent_theta_zi.svg"), take!(io))
 
-    # the air-heat ledger: cumulative terms (column) in MJ/m²
+    # the energy budget of the air: cumulative terms (column) in MJ/m², the
+    # large-scale forcing one term (geostrophic work, nudging, subsidence, damping)
     fig = svg_figure(900, 480, "Berlin parent ($label): heat of the air, 0-3 km column, cumulative")
-    names = ["storage", "surface (tiles)", "column radiation", "subsidence", "nudging", "θ damping",
-             "top flux", "redistribution"]
-    keys_ = ["storage_J_m2", "surface_flux_tiles", "column_tendency_column_radiation", "dynamics_subsidence",
-             "dynamics_nudging", "dynamics_damping", "dynamics_top_flux", "dynamics_redistribution"]
-    cols = (1, 2, 3, 4, 5, 7, 8, 6)
-    series = [col(k) ./ 1e6 for k in keys_]
+    names = ["storage", "surface (tiles)", "column radiation", "large-scale forcing", "transport", "redistribution"]
+    keys_ = ["storage", "surface_flux__tiled_surface", "surface_flux__mean_column_radiation",
+             "body_force__large_scale_forcing", "dynamics__transport", "dynamics__redistribution"]
+    cols = (1, 2, 3, 5, 8, 6)
+    th = P.ts ./ 3600
+    series = [get(P.energy, k, zeros(length(P.ts))) ./ 1e6 for k in keys_]
     keep = [i for i in eachindex(series) if i == 1 || maximum(abs, series[i]) > 0]   # D = 0: no subsidence curve
     lo = minimum(minimum.(series)); hi = maximum(maximum.(series))
     step = hi - lo > 12 ? 4.0 : hi - lo > 6 ? 2.0 : 1.0
