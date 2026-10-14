@@ -64,7 +64,7 @@ dt_max = 10.0
 # boundary layer the urban site is nested in. Its land-use tiles are its static
 # driver (AeolusPrep.jl: `aeolusprep static`, the tile form); its initial θ, qv and wind and its large-scale forcing come from the sounding driver.
 id = "parent"
-static_driver = "input/berlin_summer_parent_static.nc"
+static_driver = "input/berlin_mitte_sample_parent_static.nc"
 dynamic_driver = "input/berlin_20190629_dynamic.nc"
 
   [domain.grid]

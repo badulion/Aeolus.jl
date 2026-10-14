@@ -114,14 +114,17 @@ The tile form of the static driver (`STATIC_TILES_SCHEMA`) of a domain on
 `origin_lat`, `origin_lon`, which sits at `(origin_x, origin_y)` in the
 mesh's coordinates): `pl` cropped to the mesh's box
 ([`crop_landuse`](@ref)) and coarsened to its cells
-([`coarsen_landuse`](@ref)). What AeolusPrep.jl's `aeolusprep static`
+([`coarsen_landuse`](@ref)). With `child = (sfc, x0, y0)` (a nested urban
+site's class map and its corner in the mesh's coordinates) the columns
+under the site's footprint hold the site's own classes, as the parent's
+surface of #249 had them. What AeolusPrep.jl's `aeolusprep static`
 writes for a `[[domain]]` with `[surface] model = "tiles"`, and what that
 domain's [`TiledUrbanSurface`](@ref) reads back. An error when the box is
 not on the table's cell faces, leaves it, or is not a whole number of
 table cells per mesh cell.
 """
 function landuse_static_tiles(pl::ParentLanduse, mesh; origin_lat::Real, origin_lon::Real,
-                              origin_x::Real, origin_y::Real)
+                              origin_x::Real, origin_y::Real, child = nothing)
     fi = (mesh.x0 - origin_x - pl.x0) / pl.dx
     fj = (mesh.y0 - origin_y - pl.y0) / pl.dx
     ni, nj = mesh.Lx / pl.dx, mesh.Ly / pl.dx
@@ -136,10 +139,42 @@ function landuse_static_tiles(pl::ParentLanduse, mesh; origin_lat::Real, origin_
     (b * mesh.Nx == c.nx && b * mesh.Ny == c.ny && c.dx * b ≈ mesh.dx) ||
         error("landuse_static_tiles: the land use ($(c.nx) cells of $(c.dx) m) does not coarsen to $(mesh.Nx) cells of $(mesh.dx) m")
     q = coarsen_landuse(c, b)
+    counts, notes = child === nothing ? (Int32.(q.counts), q.header) : _footprint_counts(q, mesh, child)
     return StaticTiles(collect(Float64, Aeolus.Grids.xnodes(mesh, CellCenter())),
                        collect(Float64, Aeolus.Grids.ynodes(mesh, CellCenter())),
                        q.dx, q.dx, Float64(origin_lat), Float64(origin_lon), Float64(origin_x), Float64(origin_y),
-                       q.x0, q.y0, q.r, Int32.(q.counts), q.λf, q.hmean, q.hmax, q.header, Dict{String,Any}())
+                       q.x0, q.y0, q.r, counts, q.λf, q.hmean, q.hmax, notes, Dict{String,Any}())
+end
+
+# The class counts of the coarsened table `q` on `mesh` with the columns
+# under a nested urban site's footprint taken from the site's own class map
+# (`child = (sfc, x0, y0)`: its built surface classes, its corner in the
+# mesh's coordinates): each covered column holds the classes of its
+# r × r site cells (the site's cells are the table's subcells), so the
+# parent sees the site's surface there, glass (6) included (#249; NEST-p3
+# #483: data of the parent's static driver).
+function _footprint_counts(q::ParentLanduse, mesh, child)
+    sfc = child.sfc
+    r = q.r
+    nI, nJ = size(sfc, 1) ÷ r, size(sfc, 2) ÷ r
+    (nI * r == size(sfc, 1) && nJ * r == size(sfc, 2)) ||
+        error("landuse_static_tiles: the site's $(size(sfc)) cells are not whole parent columns of $r × $r cells")
+    fi, fj = (child.x0 - mesh.x0) / q.dx, (child.y0 - mesh.y0) / q.dx
+    all(x -> abs(x - round(x)) < 1e-9, (fi, fj)) ||
+        error("landuse_static_tiles: the site's corner is not on a parent cell face ($fi, $fj)")
+    Is, Js = round(Int, fi) .+ (1:nI), round(Int, fj) .+ (1:nJ)
+    (first(Is) >= 1 && first(Js) >= 1 && last(Is) <= q.nx && last(Js) <= q.ny) ||
+        error("landuse_static_tiles: the site's footprint ($Is, $Js) leaves the domain")
+    nclass = max(size(q.counts, 3), Int(maximum(sfc)))
+    counts = zeros(Int32, q.nx, q.ny, nclass)
+    counts[:, :, 1:size(q.counts, 3)] .= q.counts
+    for (b, J) in enumerate(Js), (a, I) in enumerate(Is)
+        blk = view(sfc, (a - 1) * r + 1:a * r, (b - 1) * r + 1:b * r)
+        for c in 1:nclass
+            counts[I, J, c] = count(==(c), blk)
+        end
+    end
+    return counts, vcat(q.header, "# the site's surface classes under its footprint, columns $Is × $Js")
 end
 
 """
@@ -219,8 +254,9 @@ build, e.g. glass, 6). `nclass` is raised to the largest class of
 function parent_fractions(pl::ParentLanduse; child_sfc = nothing, footprint = nothing,
                           nclass::Integer = 5)
     child_sfc === nothing || (nclass = max(nclass, Int(maximum(child_sfc))))
+    nclass = max(nclass, size(pl.counts, 3))          # (a static driver's counts may carry glass, 6)
     f = zeros(pl.nx, pl.ny, nclass)
-    f[:, :, 1:5] .= pl.counts ./ pl.r^2
+    f[:, :, 1:size(pl.counts, 3)] .= pl.counts ./ pl.r^2
     if child_sfc !== nothing
         footprint === nothing && error("parent_fractions: child_sfc needs its footprint")
         Is, Js = footprint
