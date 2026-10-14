@@ -326,7 +326,7 @@ end
         @test ds["init_p_surface"].var[] == ID_MASTER["summer_p_surface"]
         # made by AeolusPrep (ONE-h, #457) from the CSV in Aeolus, hashed
         @test ds.attrib["preprocessor"] == "aeolusprep dynamic --from-sounding"
-        @test ds.attrib["source"] == "../../data/lindenberg_10393_20190629.csv"
+        @test ds.attrib["source"] == "../data/lindenberg_10393_20190629.csv"
     end
     # a driver written now from the CSV holds the committed tables, value for value
     out = joinpath(mktempdir(), "summer.nc")
