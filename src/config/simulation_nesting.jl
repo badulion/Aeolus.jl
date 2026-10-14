@@ -316,6 +316,12 @@ function _build_nested(cfg)
         err isa ArgumentError || rethrow()
         throw(ConfigError("domain", err.msg))
     end
+    # every [output] variable in the catalogue of some domain (each writes those it has)
+    if urban
+        have = Set(v.name for d in doms for v in Components.domain_catalogue(d))
+        bad = [x for x in cfg.output.variables if !(x in have)]
+        isempty(bad) || throw(ConfigError("output.variables", "$(join(bad, ", ")): in the catalogue of no domain of the nest"))
+    end
     # the root's first step grows from the site's step, as the site's own does
     urban && (model.nest.dt_prev[1] = Float64(cfg.time.dt))
     return model

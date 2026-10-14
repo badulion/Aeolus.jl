@@ -792,8 +792,9 @@ variables of the domain's catalogue (the core's and the site's,
 """
 function build_model(cfg::RunConfig; nest::Union{Nothing,UrbanNest} = nothing)
     case = build_case(urban_input_problems(cfg); nest = nest)
+    # (a nested site writes the variables it has; the nest checks the rest)
     have = Set(v.name for v in Components.domain_catalogue(case.domain))
-    bad = [n for n in cfg.output.variables if !(n in have)]
+    bad = nest === nothing ? [n for n in cfg.output.variables if !(n in have)] : String[]
     isempty(bad) ||
         throw(ConfigError("output.variables", "$(join(bad, ", ")): not in the urban site's output catalogue " *
                                               "(it has: $(join(sort!(collect(have)), ", ")))"))

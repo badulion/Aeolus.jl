@@ -555,7 +555,36 @@ _adaptive(cfg) = cfg.time.dt === :adaptive
 "The component types a domain's config enables (in the order of [`COMPONENTS`](@ref))."
 enabled_components(cfg) = Any[C for C in COMPONENTS if Components.enabled(C, cfg[Components.section(C)])]
 
+const _OUTPUT_CHECKS_DOC = "every `output.variables` entry is in the catalogue of the core or of an enabled component (`Components.output_problems`): the `qv` ones and `budget_water` need moisture, `ql`, `qr` Kessler, `tracer` and `budget_tracer` the tracer, `budget_energy` on the boussinesq core `dynamics.theta0` > 0; in a nest, of at least one domain (each domain writes those it has)"
+
 const _TIME_CHECKS_DOC = "with a fixed `time.dt`, `time.cfl` and `time.dt_max` keep their defaults (they belong to adaptive steps), except in a nest with an urban site, whose root steps adaptively with them while `time.dt` is the site's step"
+
+# the [output] selection of a model domain's view against the catalogues of
+# its core and its enabled components (ONE-c): per variable, its problem
+_output_problems(v) =
+    Dict(p => split(p, ':')[1] for p in Components.output_problems(v.output.variables,
+                                        [C => v[Components.section(C)] for C in enabled_components(v)];
+                                        moisture = v.dynamics.moisture, theta0 = v.dynamics.theta0, core = _core(v),
+                                        published = _coupling_outputs(v)))
+
+# [output] variables (a Config.ModelCheck): each against the catalogues of
+# the core and the enabled components of a model domain (ONE-c). In a nest
+# every domain writes the variables of the selection it has (one file per
+# domain), and a variable is a problem when no domain has it: when every
+# model domain reports it and no urban site is among the domains (whose
+# catalogue the build checks, `Urban.build_model`, NEST-p3 #483).
+function _output_checks(cfg)
+    e = ConfigError[]
+    n = length(config_domains(cfg))
+    views = n <= 1 ? [cfg] : [domain_view(cfg, i) for i in 1:n]
+    Urban.urban_enabled(views[1]) && n <= 1 && return e
+    any(Urban.urban_enabled, views) && return e
+    per = [Set(values(_output_problems(v))) => _output_problems(v) for v in views]
+    for (msg, var) in last(per[1])
+        all(x -> var in first(x), per) && push!(e, ConfigError("output.variables", msg))
+    end
+    return e
+end
 
 # [time] (a Config.ModelCheck: the root of an urban site's nest steps
 # adaptively with time.cfl and dt_max under the site's fixed time.dt)
@@ -632,13 +661,6 @@ function _cross_checks(cfg)
         push!(e, ConfigError("sponge.z_start", "the sponge starts below the top (grid.extent[3] = $(g.extent[3]) m), got $(sp.z_start) m"))
     (!d.moisture && !isempty(cfg.initial.qv)) &&
         push!(e, ConfigError("initial.qv", "a qv profile needs dynamics.moisture = true"))
-    # the [output] selection against the catalogues of the core and the enabled components (ONE-c)
-    for p in Components.output_problems(cfg.output.variables,
-                                        [C => cfg[Components.section(C)] for C in enabled_components(cfg)];
-                                        moisture = d.moisture, theta0 = d.theta0, core = _core(cfg),
-                                        published = _coupling_outputs(cfg))
-        push!(e, ConfigError("output.variables", p))
-    end
     for (k, p) in (("u", cfg.initial.u), ("v", cfg.initial.v))
         (get(p, "kind", "") == "taylor_green" && (b.x !== :periodic || b.y !== :periodic)) &&
             push!(e, ConfigError("initial.$k", "the Taylor-Green field needs periodic x and y"))
@@ -788,7 +810,6 @@ the anelastic core needs z walls, `dynamics.theta0` > 0, no moisture and a unifo
 on a stretched grid `sgs.model` is `none`, `smagorinsky` or `tke` and `sgs.stability` is `none`
 `sponge.z_start` lies below the top
 an `initial.qv` profile needs `dynamics.moisture = true`
-every `output.variables` entry is in the catalogue of the core or of an enabled component (`Components.output_problems`): the `qv` ones and `budget_water` need moisture, `ql`, `qr` Kessler, `tracer` and `budget_tracer` the tracer, `budget_energy` on the boussinesq core `dynamics.theta0` > 0
 a Taylor-Green initial `u` or `v` needs periodic x and y
 the enabled components hold at most one component per slot and an `:advection` provider, and meet each other's `requires` and `incompatible` (`Components.component_problems`)
 every `[checks]` entry is published by the core or an enabled component (`Components.check_problems`): a closure check has the requirements of its `budget_*` output
@@ -797,7 +818,8 @@ every `[checks]` entry is published by the core or an enabled component (`Compon
 Config.driver_checks(::SimulationDriverType) =
     Any[_CROSS_CHECKS_DOC * "\n" * _COUPLING_CHECKS_DOC * "\n" * Urban.URBAN_CHECKS_DOC => _cross_checks,
         _NEST_CHECKS_DOC => Config.ModelCheck(_nest_checks),
-        _TIME_CHECKS_DOC => Config.ModelCheck(_time_checks)]
+        _TIME_CHECKS_DOC => Config.ModelCheck(_time_checks),
+        _OUTPUT_CHECKS_DOC => Config.ModelCheck(_output_checks)]
 
 # ---------------------------------------------------------------------------
 # build
@@ -1149,7 +1171,11 @@ _adaptive_step!(r::SimulationRun, t_end) =
 # file per domain, the root's `netcdf` and `<stem>_<id>.nc` for the others
 function _output_writer(r::SimulationRun, rf, resume_t, dom = _domain(r))
     cfg = r.cfg; o = cfg.output
-    vars = select_variables(Components.domain_catalogue(dom), o.variables)
+    cat = Components.domain_catalogue(dom)
+    # a nest: each domain writes the selected variables it has
+    names = length(Components.domains(r.model)) == 1 ? o.variables :
+            (have = Set(v.name for v in cat); [n for n in o.variables if n in have])
+    vars = select_variables(cat, names)
     dir = o.path === nothing ? output_dir(rf) : mkpath(o.path)
     m = dom.state.mesh
     x, y, z = cell_centres(m)

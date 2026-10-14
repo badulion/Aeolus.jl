@@ -783,5 +783,5 @@ smoke_variants(::Type{<:NestingCoupling}) =
     ((label = "two-way", feedback = :two_way, options = Dict(:nesting => (buffer = 1, z_anterp = 0.0))),
      (label = "convective outflow", outflow = :convective),
      (label = "parent_driver: analytic boundary data in place of the parent (the #58 interface)",
-      options = Dict(:nesting => (parent_driver = :profile,)), parent = false),
-     (label = "nest off: the periodic box", physics = Dict(:nesting => false), parent = false))
+      options = Dict(:nesting => (parent_driver = :profile,))),
+     (label = "nest off: the periodic box", physics = Dict(:nesting => false)))
