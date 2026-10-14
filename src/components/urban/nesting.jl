@@ -526,7 +526,7 @@ function _covered_profile!(out::AbstractVector, f, nest, zc)
     a = interior_view(f)
     n = length(cx) * length(cy)
     prof = [sum(view(a, cx, cy, K)) / n for K in 1:pm.Nz]
-    zp = Float64[pm.zc[pm.Hz+K] for K in 1:pm.Nz]
+    zp = level_centres(pm)
     @inbounds for k in eachindex(out)
         z = zc[k]
         K = searchsortedlast(zp, z)
