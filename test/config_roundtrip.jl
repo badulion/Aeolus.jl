@@ -208,22 +208,23 @@ end
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.stepper.step == 20 &&
           Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
-    # the urban site (#269, ONE-e #454): berlin_smoke.toml, nested, every component on, 24 s (15 adaptive
-    # steps), a checkpoint every 6 steps, interrupted after step 9 and resumed from step 6;
-    # the state of the child, every tracer, Ts and the nest parent bitwise, and the NetCDF
+    # the urban site (#269, ONE-e #454): berlin_smoke.toml, nested in its parent domain
+    # (NEST-p3 #483), every component on, 24 s (8 windows of the parent, 11 adaptive site
+    # steps), a checkpoint every 3 windows, interrupted after window 5 and resumed from
+    # window 3; the state of the site, every tracer, Ts and the parent domain bitwise, and the NetCDF
     # output's record written after the checkpoint is rewritten to the same values
     r = resume_check(joinpath(RT_EXAMPLES, "urban", "berlin_smoke.toml");
-                     nsteps = 12, stop = 9, every_steps = 6, nsteps_overrides = n -> ["time.nsteps=$n"],
+                     nsteps = 12, stop = 5, every_steps = 3, nsteps_overrides = n -> ["time.nsteps=$n"],
                      overrides = ["output.netcdf=\"smoke.nc\"", "output.path=\"none\"",
                                   "output.variables=[\"u\", \"theta\", \"qv\", \"Ts\", \"hour\"]"],
                      outputs = ["smoke.nc"])
     @test r.fields_equal && isempty(r.fields_differing)
     isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
     @test r.statuses == ["interrupted", "completed"]
-    site(x) = Aeolus.Urban.urban_case(only(x.obj.model.domains))
+    site(x) = Aeolus.Urban.urban_case(x.obj.model.domains[2])
     c1, c2 = site(r.runs[1]), site(r.runs[2])
     @test c2.clock.n == c1.clock.n && c2.sim.t === c1.sim.t === 24.0 && c2.clock.nrecord == c1.clock.nrecord == 2
-    @test any(k -> startswith(String(k), "parent_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))
+    @test any(k -> startswith(String(k), "site_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))
     # the output (the run's writer, ONE-k #474): the record written after the
     # checkpoint is rewritten to the same values
     @test r.outputs_equal
