@@ -364,29 +364,37 @@ z_uniform = 500.0
 # nested case; the same 13 child digests re-captured (the parent's 6 and the
 # three zero tracers did not move: the nest is one-way). With
 # physics.inflow_turbulence = false the 22 digests are the KA-l capture.
+# NEST-p3 (#483): the 22 digests re-captured. The nest parent is a [[domain]]
+# of the model's core (berlin_smoke.toml): its forcing takes the step's mean
+# clock and its Coriolis term and sponge are components (round-off against
+# ParentCase, 3e-9 K in θ over six coarse steps), its tiles are its static
+# driver's (AeolusPrep.jl, the site's classes under its footprint), and the
+# root's last window lands on the run's end (the site takes 11 steps, not 15,
+# in the parent's 8 windows: ParentCase overshot 24 s and the site halved its
+# last steps to stop there). The previous capture is in git history.
 [smoke_digests]
-HNO3 = "79f9962a8c3d5ad8"
-NO = "c498b9c544531b0e"
-NO2 = "0935dabe59f04017"
-O3 = "28bd0c05ec588012"
-Ts = "cfa1eac663717043"
-VOC = "f339cda65ace31b5"
-e = "cb75db6e23a565f1"
-p = "02bcc88f29315bfb"
-parent_p = "a20144242790aaea"
-parent_qv = "ea52a59b9bec07f1"
-parent_u = "3b6d738234a763bd"
-parent_v = "ed3d31e263be1438"
-parent_w = "5c2c0fabed842a86"
-"parent_θ" = "51103da606055c46"
+HNO3 = "cc0bdc3578390144"
+NO = "ab6136f6046c170d"
+NO2 = "f363e628a1c9d016"
+O3 = "f1b8aaaf2bf33ec0"
+Ts = "7d40834160f66895"
+VOC = "b3b2b0581f3a0a86"
+e = "43468f4350381192"
+p = "1816f7df79d7387f"
+parent_p = "ee9d99999acd0e12"
+parent_qv = "edf4aa79f4edcebb"
+parent_u = "df6e275c300c99ab"
+parent_v = "edcce4c413d4c683"
+parent_w = "a32f55f4015748be"
+"parent_θ" = "933ce1d3764b769b"
 pollutant = "8f6955bf94ec2325"
 ql = "8f6955bf94ec2325"
 qr = "8f6955bf94ec2325"
-qv = "9362d715e2304bc7"
-u = "708c17b57fa6fc40"
-v = "b03163d513bd16c1"
-w = "3b8f3136cf6b4593"
-"θ" = "d7d7fb89ea3c2fc4"
+qv = "5e76a9cb5142efdb"
+u = "4350ea9f87a619a4"
+v = "00189c780eb2028c"
+w = "2eca8d16fcb861a5"
+"θ" = "d6e1ee31011a31cd"
 
 [summer.case]
 C_s = 0.1
