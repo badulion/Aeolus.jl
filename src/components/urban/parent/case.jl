@@ -42,42 +42,41 @@
 
 A built Berlin parent run: `pc` ([`ParentConfig`](@ref)), `mesh`, `sim`
 (the Boussinesq core), `ref` (the hydrostatic reference state, a
-[`CaseReference`](@ref)), `closure` (the SGS closure or `nothing`),
-`forcing` (named tuple of the large-scale forcings), `surface` (the
-[`ParentSurface`](@ref) or `nothing`), `rad` (the `Aeolus.ColumnRadiation.ColumnRadiationModel` state
-or `nothing`), the ledgers `heat` and `water` ([`StageBudget`](@ref)),
+[`CaseReference`](@ref)), `domain` (the parent's
+`Components.Domain`: its physics as components, [`parent_domain`](@ref)),
+and, the same objects as its components': `closure` (the SGS closure or
+`nothing`), `forcing` (named tuple of the large-scale forcings),
+`surface` (the [`ParentSurface`](@ref) or `nothing`), `rad` (the
+`Aeolus.ColumnRadiation.ColumnRadiationModel` or `nothing`), `sfc_mean`
+(the surface's domain-mean J m⁻²); the ledgers `heat` and `water` ([`StageBudget`](@ref)),
 `top` (the [`TopHeatFlux`](@ref) or `nothing`), the time-stepping state,
-the surface-flux state, the sounding time `t0` of the start and `diag`,
-the diagnostics recorded every `output_period`.
+the sounding time `t0` of the start and `diag`, the diagnostics recorded
+every `output_period`.
+
+`ParentCase` is the shell the nest and the `urban_parent` run type step
+([`step_parent!`](@ref): the components' stage entries in the pipeline's
+order inside the parent's ledgers); the domain alone runs through the
+model's pipeline (`Components.step_adaptive!`) bit for bit the same
+(NEST-p1, #481).
 """
-mutable struct ParentCase{M, S, C}
+mutable struct ParentCase{M, S, C, D}
     pc::ParentConfig
     mesh::M
     sim::S
     ref::CaseReference
     closure::C
+    domain::D
     forcing::NamedTuple
     surface::Any
     child::Any
     rad::Any
+    sfc_mean::Dict{Symbol,Float64}
     heat::StageBudget
     water::StageBudget
     top::Union{Nothing,TopHeatFlux}
     constraints::CFLConstraints{Float64}
     dt_prev::Float64
     t0::Float64                 # sounding time (s) of the start; NaN without a sounding
-    zi_obs::Float64             # largest parcel z_i of the sounding's launches (m)
-    zi_run::Base.RefValue{Float64}   # running maximum of the diagnosed z_i (m), the nudging height
-    # surface state
-    θsrc::Array{Float64,3}      # K/s per column and canopy level, held between surface steps
-    qsrc::Array{Float64,3}      # kg kg⁻¹ s⁻¹
-    drag::Array{Float64,3}      # m s⁻² (kinematic stress / canopy depth)
-    ustar::Matrix{Float64}
-    t_surf::Float64             # end of the current surface interval (s)
-    sfc_mean::Dict{Symbol,Float64}    # domain-mean J m⁻² of Rn, H, LE, G since the start
-    sw_down::Float64
-    lw_down::Float64
-    t_rad::Float64              # time (s) of the next radiation call
     stage::Base.RefValue{Int}   # stage of the current dynamics step (1 for Euler, 1-3 for RK3)
     top_acc::Base.RefValue{Float64}   # stage-weighted top heat flux of the step (W m⁻²)
     # per-step scratch of the dynamics hooks
@@ -325,16 +324,52 @@ function parent_static_tiles(pl::ParentLanduse, pc::ParentConfig, mesh)
 end
 
 """
-    build_parent(pc::ParentConfig; child = nothing) -> ParentCase
+    parent_static_driver(pc, mesh) -> StaticTiles
 
-Build the parent: the mesh ([`parent_mesh`](@ref)), the reference state,
-the Boussinesq core with the sponge and the θ top, the initial state, the
-SGS closure, the large-scale forcings, the surface (for `:tiles` the child
-case `child` — built from `pc.child` if not given — provides the
-class-to-surface factory and the class map under its footprint), the
-column radiation and the ledgers.
+The tile form of the parent's static driver (`STATIC_TILES_SCHEMA`) on
+its `mesh`: the land use of [`parent_landuse`](@ref) (read from
+`pc.child.parent_static`, or made in memory from the land-use table) as
+`InputDrivers.StaticTiles`, what the parent domain's [`TiledUrbanSurface`](@ref)
+reads (`drivers.static_tiles`).
 """
-function build_parent(pc::ParentConfig; child = nothing)
+parent_static_driver(pc::ParentConfig, mesh) = parent_static_tiles(parent_landuse(pc, mesh), pc, mesh)
+
+"""
+    parent_domain(pc::ParentConfig; child = nothing) -> (domain, info)
+
+The parent of `pc` as a `Components.Domain` (NEST-p1, #481): the mesh
+([`parent_mesh`](@ref)), the reference state, the Boussinesq core with
+the Coriolis parameter, the velocity sponge and the θ top of
+[`ParentConfig`](@ref), the initial state, and the parent's physics as
+components:
+
+  * the `:surface` slot — [`TiledUrbanSurface`](@ref) on the tile form of the
+    parent's static driver ([`parent_static_driver`](@ref),
+    `drivers.static_tiles`; the class-to-surface factory and the class
+    map under its footprint are those of the urban site `child`, built
+    from `pc.child` if not given), or [`PrescribedSurfaceFlux`](@ref);
+  * the `:radiation` slot — [`MeanColumnRadiation`](@ref) (`pc.radiation`)
+    at the sun of the child's clock ([`SiteSun`](@ref));
+  * `Components.LargeScale` — the geostrophic pressure gradient of the
+    sounding wind ([`parent_geostrophic`](@ref)), the `ProfileNudging` of
+    θ, qv toward the sounding with the `NudgingWeight` above
+    `nudging_factor` × the tracked z_i (`Components.BoundaryLayerTracker`
+    with the sounding's z_i as its floor), the `Subsidence` ``w_s = -D z``
+    and the `ReferenceDamping` of θ, on the core's substage clock
+    (`clock = :core`);
+  * the `:sgs` slot — `[sgs] model = "tke"`: `Components.SGS` with the
+    wall cap at the exact level heights of the stretched grid (bottom
+    only) and the surface value of the tiles' u*, ``e_{min} = 10^{-4}``;
+    with `sgs = :smagorinsky` the core's own Smagorinsky closure;
+  * the `:advection` slot — `Components.CentredAdvection`.
+
+The domain steps adaptively (`cfl`: the child's `AdaptiveStep`
+constraints with `C_advective`, `dt_max` capped at the shortest period)
+with `pc.stepper`. `info` holds `ref`, `θtop` (the core's θ top
+condition), `t0` (the sounding time of the start, NaN without a sounding),
+`zi_obs` and `child`.
+"""
+function parent_domain(pc::ParentConfig; child = nothing)
     cfg = pc.child
     mesh = parent_mesh(pc)
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
@@ -348,6 +383,9 @@ function build_parent(pc::ParentConfig; child = nothing)
         FluxBC((parent_θ_init(pc)(H + dzc[end] / 2) - parent_θ_init(pc)(H - dzc[end] / 2)) / dzc[end]) :
         pc.θ_top === :noflux ? NoFlux() :
         error("ParentConfig.θ_top must be :initial_gradient or :noflux, got $(repr(pc.θ_top))")
+    pc.surface in (:tiles, :prescribed) ||
+        error("ParentConfig.surface must be :tiles or :prescribed, got $(repr(pc.surface))")
+    pc.sgs in (:tke, :smagorinsky) || error("ParentConfig.sgs must be :tke or :smagorinsky, got $(repr(pc.sgs))")
     z_damp = (1 - pc.damping_frac) * H
     sim = BoussinesqSimulation(mesh; ν = 0.0, θ₀ = cfg.θ₀, g_accel = cfg.g, f_coriolis = cfg.f_coriolis,
                                C_s = pc.sgs === :smagorinsky ? cfg.C_s : 0.0, Pr_t = cfg.Pr_t,
@@ -361,7 +399,6 @@ function build_parent(pc::ParentConfig; child = nothing)
     S = case_sounding(cfg)
     t0 = S === nothing ? NaN : case_start_time(cfg)
     zi_obs = sounding_zi_max(cfg)
-    z_g = parent_z_g(pc)
     Ug, Vg = parent_geostrophic(pc)
 
     # initial state
@@ -384,59 +421,7 @@ function build_parent(pc::ParentConfig; child = nothing)
         end
     end
 
-    # forcings (θ, qv: the tendencies they add are booked from inside the step)
-    sounding = S !== nothing
-    geo = pc.geostrophic ? GeostrophicPressureGradient(Ug, Vg) : nothing
-    zi_run = Ref(0.0)
-    nudge = isfinite(pc.nudging_τ) && sounding ?
-        ProfileNudging(pc.moisture ? (θ = sounding_target(pc, t0, :θ), qv = sounding_target(pc, t0, :qv)) :
-                                     (θ = sounding_target(pc, t0, :θ),),
-                       pc.nudging_τ;
-                       weight = NudgingWeight(s -> max(zi_obs, zi_run[]); factor = pc.nudging_factor,
-                                              depth = pc.nudging_depth)) : nothing
-    D = pc.divergence
-    subs = D != 0 ? Subsidence((z, t) -> -D * z; form = :local) : nothing
-    damp = pc.damping_rate > 0 ?
-        ReferenceDamping(:θ, Aeolus.Operators.sponge_profile(pc.damping_rate, z_damp, H),
-                         sounding && pc.θ_init === nothing ? sounding_target(pc, t0, :θ) :
-                         (z, t) -> θf(z)) : nothing
-    forcing = (geostrophic = geo, nudging = nudge, subsidence = subs, damping = damp)
-
-    # surface
-    surface = nothing
-    if pc.surface === :tiles
-        child === nothing && (child = build_case(cfg))
-        pl = parent_landuse(pc, mesh)
-        surface = build_parent_surface(child, pl; z_centres = zc)
-    elseif pc.surface !== :prescribed
-        error("ParentConfig.surface must be :tiles or :prescribed, got $(repr(pc.surface))")
-    end
-    kmax = surface === nothing ? 1 :
-        maximum(max(1, maximum(col.ktile) - 1) for col in surface.columns if col !== nothing)
-    ustar = fill(NaN, Nx, Ny)
-
-    # SGS: the child's default provider, the TKE closure
-    closure = nothing
-    if pc.sgs === :tke
-        wd = [zc[k] for i in 1:Nx, j in 1:Ny, k in 1:Nz]          # l ≤ κ z
-        fl = falses(Nx, Ny, Nz); fl[:, :, 1] .= true                # Moeng's c_ε factor
-        closure = TKEClosure(mesh; wall_distance = wd, first_level = fl,
-                             surface = surface === nothing ? nothing : (u_star = ustar, k = ones(Int, Nx, Ny)),
-                             transport = true)
-        initialize_tke!(closure, sim; e_min = 1e-4)
-    elseif pc.sgs !== :smagorinsky
-        error("ParentConfig.sgs must be :tke or :smagorinsky, got $(repr(pc.sgs))")
-    end
-
-    rad = pc.radiation ? column_radiation_solver(Nz, ref.p_surface) : nothing
-
-    # ledgers: heat of the air, water of the air
-    hm = LevelMeter(mesh, ref.ρ̄, ref.π̄, ref.cp)
-    wm = LevelMeter(mesh, ref.ρ̄, ones(Nz), 1.0)
-    heat = budget_start!(StageBudget(; order = ALL_STAGES), hm; canopy_top = 100.0)
-    water = budget_start!(StageBudget(; order = ALL_STAGES), wm; canopy_top = 100.0)
-    top = θtop isa FluxBC ? TopHeatFlux(Float64(θtop.f), ref.ρ̄[Nz] * ref.cp * ref.π̄[Nz], 0.0, 0.0) : nothing
-
+    # the adaptive step: the child's AdaptiveStep constraints, dt_max at most the shortest period
     o = default_options(AdaptiveStep)
     periods = filter(isfinite, [pc.surface === :tiles ? pc.surface_period : Inf,
                                 pc.radiation ? pc.radiation_period : Inf, pc.output_period])
@@ -444,31 +429,131 @@ function build_parent(pc::ParentConfig; child = nothing)
                        C_buoyancy = o.C_buoyancy, C_coriolis = o.C_coriolis, dt_min = o.dt_min,
                        dt_max = min(o.dt_max, minimum(periods; init = Inf)), growth_max = o.growth_max)
 
+    drivers = (;)
+    if pc.surface === :tiles
+        child === nothing && (child = build_case(cfg))
+        drivers = (; static_tiles = parent_static_driver(pc, mesh))
+    end
+    d0 = Domain(sim; id = "parent", scheme = pc.stepper, cfl = k, drivers = drivers, validate = false)
+
+    # the components
+    comps = Any[Components.CentredAdvection()]
+    push!(comps, pc.surface === :tiles ?
+        Components.build(TiledUrbanSurface, (; classes = child, period = pc.surface_period, u_min = pc.U_min,
+                                         reference = ref), d0) :
+        Components.build(PrescribedSurfaceFlux, (; q_surface = pc.Q_surface, e_surface = pc.E_surface,
+                                                  reference = ref), d0))
+    pc.radiation &&
+        push!(comps, Components.build(MeanColumnRadiation, (; period = pc.radiation_period, humid = season_humidity(cfg),
+                                                             sun = SiteSun(cfg), reference = ref), d0))
+    ls = parent_large_scale(pc, (; Ug, Vg, t0, zi_obs, z_damp, θf))
+    ls === nothing || push!(comps, ls)
+    pc.sgs === :tke &&
+        push!(comps, Components.build(Components.SGS, (; model = :tke, e_min = 1e-4, surface_factor = 3.9,
+                                                        wall_cap = true, wall_cap_top = false,
+                                                        surface_value = pc.surface === :tiles,
+                                                        stress = :laplacian), d0))
+    d = Domain(sim; id = "parent", scheme = pc.stepper, cfl = k, drivers = drivers, components = Tuple(comps))
+    return d, (; ref, θtop, t0, zi_obs, child)
+end
+
+"""
+    parent_large_scale(pc, s) -> Union{Nothing,Components.LargeScale}
+
+The large-scale forcing of the parent `pc` (see [`parent_domain`](@ref);
+`s` holds the geostrophic wind `Ug`, `Vg`, the sounding time `t0`,
+`zi_obs`, the damping start `z_damp` and the initial θ profile `θf`), or
+`nothing` when every forcing is off.
+"""
+function parent_large_scale(pc::ParentConfig, s)
+    sounding = case_sounding(pc.child) !== nothing
+    t0 = isnan(s.t0) ? 0.0 : s.t0
+    geo = pc.geostrophic ? GeostrophicPressureGradient(s.Ug, s.Vg) : nothing
+    zi = nothing
+    nudge = nothing
+    if isfinite(pc.nudging_τ) && sounding
+        zi = Components.BoundaryLayerTracker(; floor = s.zi_obs, every = 10)
+        targets = pc.moisture ? (θ = sounding_target(pc, t0, :θ), qv = sounding_target(pc, t0, :qv)) :
+                                (θ = sounding_target(pc, t0, :θ),)
+        nudge = ProfileNudging(targets, pc.nudging_τ;
+                               weight = NudgingWeight(_ -> Components.nudging_height(zi); factor = pc.nudging_factor,
+                                                      depth = pc.nudging_depth))
+    end
+    D = pc.divergence
+    subs = D != 0 ? Subsidence((z, t) -> -D * z; form = :local) : nothing
+    damp = pc.damping_rate > 0 ?
+        ReferenceDamping(:θ, Aeolus.Operators.sponge_profile(pc.damping_rate, s.z_damp, pc.extent[3]),
+                         sounding && pc.θ_init === nothing ? sounding_target(pc, t0, :θ) :
+                         (z, t) -> s.θf(z)) : nothing
+    extra = Tuple(f for f in (nudge, subs, damp) if f !== nothing)
+    geo === nothing && isempty(extra) && return nothing
+    return Components.LargeScale(geo, extra; U_g = s.Ug, V_g = s.Vg, clock = :core, zi = zi)
+end
+
+_component(d, ::Type{T}) where {T} = (i = findfirst(c -> c isa T, d.components); i === nothing ? nothing : d.components[i])
+
+"""
+    build_parent(pc::ParentConfig; child = nothing) -> ParentCase
+
+Build the parent: its domain of components ([`parent_domain`](@ref)) and
+the shell that steps it inside the air-heat and water ledgers.
+"""
+function build_parent(pc::ParentConfig; child = nothing)
+    d, info = parent_domain(pc; child = child)
+    sim = d.state
+    mesh = sim.mesh
+    Nz = mesh.Nz
+    ref = info.ref
+    sfc = Components.slot_component(d, :surface)
+    rad = Components.slot_component(d, :radiation)
+    ls = _component(d, Components.LargeScale)
+    extra(T) = ls === nothing ? nothing : (i = findfirst(f -> f isa T, ls.extra); i === nothing ? nothing : ls.extra[i])
+    forcing = (geostrophic = ls === nothing ? nothing : ls.geostrophic, nudging = extra(ProfileNudging),
+               subsidence = extra(Subsidence), damping = extra(ReferenceDamping))
+    closure = Components.sgs_closure(d)
+
+    # ledgers: heat of the air, water of the air
+    hm = LevelMeter(mesh, ref.ρ̄, ref.π̄, ref.cp)
+    wm = LevelMeter(mesh, ref.ρ̄, ones(Nz), 1.0)
+    heat = budget_start!(StageBudget(; order = ALL_STAGES), hm; canopy_top = 100.0)
+    water = budget_start!(StageBudget(; order = ALL_STAGES), wm; canopy_top = 100.0)
+    θtop = info.θtop
+    top = θtop isa FluxBC ? TopHeatFlux(Float64(θtop.f), ref.ρ̄[Nz] * ref.cp * ref.π̄[Nz], 0.0, 0.0) : nothing
+
     lev = Dict{Symbol,Vector{Float64}}(s => zeros(Nz) for s in
               (:a, :b, :θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence,
                :acc_θnudging, :acc_θsubsidence, :acc_θdamping, :acc_qnudging, :acc_qsubsidence))
-    pcase = ParentCase(pc, mesh, sim, ref, closure, forcing, surface, child, rad, heat, water, top,
-                       k, cfg.dt, isnan(t0) ? 0.0 : t0, zi_obs, zi_run,
-                       zeros(Nx, Ny, kmax), zeros(Nx, Ny, kmax), zeros(Nx, Ny, kmax), ustar,
-                       -Inf, Dict{Symbol,Float64}(:Rn => 0.0, :H => 0.0, :LE => 0.0, :G => 0.0, :E => 0.0,
-                                            :delivered_H => 0.0, :delivered_E => 0.0),
-                       0.0, 350.0, 0.0, Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w),
-                       0, 0, Float64[], Dict{Symbol,Float64}(), Any[])
+    pcase = ParentCase(pc, mesh, sim, ref, closure, d, forcing, sfc isa TiledUrbanSurface ? sfc.surface : nothing,
+                       info.child, rad === nothing ? nothing : rad.model, sfc.sfc_mean,
+                       heat, water, top, d.cfl, pc.child.dt, isnan(info.t0) ? 0.0 : info.t0,
+                       Ref(0), Ref(0.0), lev, copy(hm.w), copy(wm.w), 0, 0, Float64[], Dict{Symbol,Float64}(), Any[])
     @debug("Berlin parent built", subsystem = :urban, domain = current_domain(), event = :parent_built,
-           grid = (Nx, Ny, Nz), dx = mesh.dx, dz_min = minimum(dzc), dz_max = maximum(dzc),
-           surface = pc.surface, sgs = pc.sgs, z_g, zi_obs)
+           grid = (mesh.Nx, mesh.Ny, Nz), dx = mesh.dx, dz_min = minimum(level_thickness(mesh)),
+           dz_max = maximum(level_thickness(mesh)), surface = pc.surface, sgs = pc.sgs,
+           components = map(Components.component_name, d.components), z_g = parent_z_g(pc), info.zi_obs)
     return pcase
+end
+
+"""
+    parent_downwelling(p) -> (sw, lw)
+
+The downwelling short- and longwave (W m⁻²) at the parent's ground of the
+last radiation call (0 and 350 W m⁻² before it, and without radiation the
+surface's own).
+"""
+function parent_downwelling(p::ParentCase)
+    r = Components.slot_component(p.domain, :radiation)
+    r !== nothing && return (sw = r.sw_down[], lw = r.lw_down[])
+    s = Components.slot_component(p.domain, :surface)
+    return s isa TiledUrbanSurface ? (sw = s.sw_down[], lw = s.lw_down[]) : (sw = 0.0, lw = 350.0)
 end
 
 # ---------------------------------------------------------------------------
 # Horizontal means, z_i
 # ---------------------------------------------------------------------------
 
-"Plane means of the interior of a cell-centred field, per level."
-function plane_mean(f)
-    a = interior_view(f)
-    return [sum(view(a, :, :, k)) / (size(a, 1) * size(a, 2)) for k in axes(a, 3)]
-end
+# the plane means per level: Components.plane_mean (one definition)
+const plane_mean = Components.plane_mean
 
 """
     mean_heat_flux(sim, κ) -> (zf, flux)
@@ -520,226 +605,8 @@ function parent_zi(p::ParentCase; method::Symbol = :min_flux)
         zf, fl = parent_heat_flux(p)
         return boundary_layer_height(zf, fl; method = :min_flux)
     end
-    θ = plane_mean(p.sim.θ)
-    q = p.pc.moisture ? plane_mean(p.sim.qv) : zeros(length(θ))
-    MT = Aeolus.MoistThermodynamics
-    θv = [MT.virtual_temperature(θ[k], MT.PhasePartition(max(q[k], 0.0))) for k in eachindex(θ)]
-    return boundary_layer_height(level_centres(p.mesh), θv; method = method)
-end
-
-# ---------------------------------------------------------------------------
-# Surface: tiles under the parent's air, or a prescribed flux
-# ---------------------------------------------------------------------------
-
-function _cell_speed(sim, i, j, k)
-    m = sim.mesh
-    I, J, K = m.Hx + i, m.Hy + j, m.Hz + k
-    return hypot(0.5 * (sim.u.data[I, J, K] + sim.u.data[I+1, J, K]),
-                 0.5 * (sim.v.data[I, J, K] + sim.v.data[I, J+1, K]))
-end
-
-"""
-    step_parent_surface!(p, period) -> p
-
-Advance every tile of every parent column by `period` seconds under the
-parent's air (its own column: ``T = θ Π̄_k``, ``q_v``, the cell-centred wind
-speed, ``p̄_k`` at each tile's forcing level, `parent_tile_forcings`) and
-the radiation of the last radiation call, and turn the tiles' fluxes into
-the sources the air receives until the next surface step. A tile forced at
-level ``k_i`` (the first level above its roofs; 1 for park and water)
-releases its heat, vapour and momentum flux into the levels below it,
-``1 … \\max(1, k_i - 1)`` — the canopy air of the unresolved buildings —
-uniformly per volume over their depth ``Z_i``:
-``\\dot θ_k = f_i H_i / (Z_i ρ̄_k c_p Π̄_k)`` (the `ref_θ_per_heat`
-conversion of the child), ``\\dot q_k = f_i E_i / (Z_i ρ̄_k)``, and a
-deceleration ``f_i τ_i/(Z_i ρ̄_k)`` along the wind. u* (for the TKE surface
-value) is ``\\sqrt{Σ f_i τ_i / ρ̄_1}``.
-"""
-function step_parent_surface!(p::ParentCase, period::Real)
-    ps, sim, m, ref = p.surface, p.sim, p.mesh, p.ref
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    zf = Float64[m.zf[Hz+k] for k in 1:m.Nz+1]
-    fill!(p.θsrc, 0.0); fill!(p.qsrc, 0.0); fill!(p.drag, 0.0)
-    kmax = size(p.θsrc, 3)
-    U_min = p.pc.U_min
-    θd = sim.θ.data
-    qd = p.pc.moisture ? sim.qv.data : nothing
-    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
-    # one work item per parent column (KA-m, #301): a column steps its own
-    # tiles and writes only its own sources and u*; the area sums of its
-    # fluxes are its partials, folded in column-major order (the old
-    # loop's order, so the same bits at every thread count)
-    sRn, sH, sLE, sG, sE = column_sum(Aeolus.Backends.backend(p.θsrc), _parent_surface_column!,
-                                      (1:m.Nx, 1:m.Ny), p, ps, sim, ref, θd, qd, zf, kmax, U_min,
-                                      period; weight = PARENT_COLUMN_WEIGHT)
-    n = m.Nx * m.Ny
-    for (key, v) in ((:Rn, sRn), (:H, sH), (:LE, sLE), (:G, sG), (:E, sE))
-        p.sfc_mean[key] += v / n * period
-    end
-    return p
-end
-
-# the work of one parent column (up to six tiles, each a surface step) in
-# grid-point equivalents, for the launch's serial threshold
-const PARENT_COLUMN_WEIGHT = 4096
-
-function _parent_surface_column!(I, J, p, ps, sim, ref, θd, qd, zf, kmax, U_min, period)
-    m = p.mesh
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    col = ps.columns[I, J]
-    kf = maximum(col.ktile)
-    air = [SurfaceForcing(; sw_down = p.sw_down, lw_down = p.lw_down,
-                          T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
-                          q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
-                          U = max(_cell_speed(sim, I, J, k), U_min), p = ref.p̄[k], z_ref = 10.0)
-           for k in 1:kf]
-    agg = step_parent_column!(ps, col, air, period; U_min = U_min)
-    tf = last_tile_fluxes(_mosaic(col))
-    fr = mosaic_fractions(col.surface)
-    τsum = 0.0
-    for (n, f) in enumerate(tf)
-        nl = max(1, col.ktile[n] - 1)
-        Z = zf[nl+1]
-        for k in 1:min(nl, kmax)
-            p.θsrc[I, J, k] += fr[n] * f.H / (Z * ref.ρ̄[k] * ref.cp * ref.π̄[k])
-            p.qsrc[I, J, k] += fr[n] * f.E / (Z * ref.ρ̄[k])
-            p.drag[I, J, k] += fr[n] * f.τ / (Z * ref.ρ̄[k])
-        end
-        τsum += fr[n] * f.τ
-    end
-    p.ustar[I, J] = sqrt(max(τsum, 0.0) / ref.ρ̄[1])
-    return (agg.Rn, agg.H, agg.LE, agg.G, agg.E)
-end
-
-# add θ, qv sources (per s) over τ seconds into the canopy levels
-function _apply_sources!(p::ParentCase, τ::Real)
-    m = p.mesh
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    θd = p.sim.θ.data
-    qd = p.pc.moisture ? p.sim.qv.data : nothing
-    @inbounds for k in axes(p.θsrc, 3)
-        sθ = 0.0; sq = 0.0
-        for j in 1:m.Ny, i in 1:m.Nx
-            θd[Hx+i, Hy+j, Hz+k] += p.θsrc[i, j, k] * τ
-            qd === nothing || (qd[Hx+i, Hy+j, Hz+k] += p.qsrc[i, j, k] * τ)
-            sθ += p.θsrc[i, j, k]; sq += p.qsrc[i, j, k]
-        end
-        # what the sources delivered, by the ledger's weights (J m⁻², kg m⁻²)
-        p.sfc_mean[:delivered_H] += p.wθ[k] * sθ * τ
-        p.sfc_mean[:delivered_E] += p.wq[k] * sq * τ
-    end
-    return p
-end
-
-"""
-    parent_surface_stage!(p, dt) -> p
-
-Deliver the surface fluxes over the step `[t, t + dt]`: the held tile
-sources up to the end of the current surface interval, then a surface
-step ([`step_parent_surface!`](@ref)) and its sources for the rest (the
-air receives exactly what the tiles gave away over the time it covers);
-for `surface = :prescribed`, the step mean of `Q_surface(t)` and
-`E_surface(t)` (`forcing_mean`) into the lowest level.
-"""
-function parent_surface_stage!(p::ParentCase, dt::Real)
-    sim, m = p.sim, p.mesh
-    t = sim.t
-    if p.pc.surface === :prescribed
-        dz1 = level_thickness(m)[1]
-        Q = forcing_mean((z, s) -> p.pc.Q_surface(s), 0.0, t, t + dt)
-        E = p.pc.moisture ? forcing_mean((z, s) -> p.pc.E_surface(s), 0.0, t, t + dt) : 0.0
-        a = view(interior_view(sim.θ), :, :, 1)
-        a .+= Q * dt / dz1
-        p.pc.moisture && (view(interior_view(sim.qv), :, :, 1) .+= E * dt / dz1)
-        p.sfc_mean[:H] += Q * dt * p.ref.ρ̄[1] * p.ref.cp * p.ref.π̄[1]
-        return p
-    end
-    P = p.pc.surface_period
-    s = t
-    te = t + dt
-    while s < te - 1e-9 * dt
-        if s >= p.t_surf - 1e-9 * P
-            step_parent_surface!(p, P)
-            p.t_surf = s + P
-        end
-        τ = min(te, p.t_surf) - s
-        _apply_sources!(p, τ)
-        s += τ
-    end
-    return p
-end
-
-"""
-    apply_parent_drag!(p, sim, Δt) -> p
-
-The post-predictor hook: the momentum flux of the tiles as an implicit
-deceleration of the canopy levels, ``u ← u / (1 + Δt\\,a/U)`` with
-``a`` the per-volume kinematic stress of [`step_parent_surface!`](@ref)
-(the mean of the two columns a face separates) and ``U ≥ U_{min}`` the
-local speed: the stress magnitude held from the surface step, along the
-instantaneous wind, stable for any Δt.
-"""
-function apply_parent_drag!(p::ParentCase, sim, Δt)
-    m = p.mesh
-    Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
-    ud, vd = sim.u.data, sim.v.data
-    a = p.drag
-    U_min = p.pc.U_min
-    @inbounds for k in axes(a, 3)
-        K = Hz + k
-        for j in 1:Ny, i in 1:Nx
-            im = i == 1 ? Nx : i - 1
-            jm = j == 1 ? Ny : j - 1
-            I, J = Hx + i, Hy + j
-            # u at the west face of (i, j): v averaged to it
-            au = 0.5 * (a[im, j, k] + a[i, j, k])
-            vf = 0.25 * (vd[I-1, J, K] + vd[I, J, K] + vd[I-1, J+1, K] + vd[I, J+1, K])
-            Uu = max(hypot(ud[I, J, K], vf), U_min)
-            ud[I, J, K] /= 1 + Δt * au / Uu
-            av = 0.5 * (a[i, jm, k] + a[i, j, k])
-            uf = 0.25 * (ud[I, J-1, K] + ud[I+1, J-1, K] + ud[I, J, K] + ud[I+1, J, K])
-            Uv = max(hypot(vd[I, J, K], uf), U_min)
-            vd[I, J, K] /= 1 + Δt * av / Uv
-        end
-    end
-    return p
-end
-
-# ---------------------------------------------------------------------------
-# Radiation
-# ---------------------------------------------------------------------------
-
-"""
-    parent_radiation!(p) -> p
-
-One call of the child's column radiation ([`column_radiation!`](@ref)) on
-the parent's plane-mean column ([`stitched_column`](@ref) with the
-stretched layer thicknesses), at the sun of the child's clock: the
-surface is the tile-mean emissivity and albedo and the emissivity-weighted
-radiative temperature of all tiles. The downwelling shortwave and
-longwave at the ground force the tiles until the next call.
-"""
-function parent_radiation!(p::ParentCase)
-    c, m, cfg = p.rad, p.mesh, p.pc.child
-    hour = hour_of_day(cfg, p.sim.t)
-    sp = solar_position_at(cfg, hour)
-    θ = plane_mean(p.sim.θ)
-    qv = p.pc.moisture ? plane_mean(p.sim.qv) : zeros(m.Nz)
-    if p.surface === nothing
-        ε, α, Trad = 0.95, 0.15, θ[1] * p.ref.π̄[1]
-    else
-        cols = [col for col in p.surface.columns if col !== nothing]
-        εs = [surface_emissivity(col.surface) for col in cols]
-        ε = sum(εs) / length(cols)
-        α = sum(surface_albedo(col.surface) for col in cols) / length(cols)
-        Trad = (sum(e * surface_temperature(col.surface)^4 for (e, col) in zip(εs, cols)) / sum(εs))^(1 / 4)
-    end
-    dz = level_thickness(m)
-    col = stitched_column(c, θ, qv, zeros(m.Nz), dz; T_rad = Trad, humid = season_humidity(cfg))
-    column_radiation!(c, col, sp, ε, α)
-    p.lw_down = c.flw.flux_dn[1]
-    p.sw_down = c.fsw_clear === nothing ? 0.0 : c.fsw_clear.flux_dn[1]
-    return p
+    method === :parcel || throw(ArgumentError("parent_zi: method is :min_flux or :parcel, got :$method"))
+    return Components.parcel_zi(p.sim)
 end
 
 # ---------------------------------------------------------------------------
@@ -758,8 +625,10 @@ _stage_weight(p::ParentCase, s::Int) = p.pc.stepper === :rk3 ? _RK3_WEIGHTS[s] :
 
 const _BOOKED = (:θnudging, :θsubsidence, :θdamping, :qnudging, :qsubsidence)
 
-# the θ (and qv) forcings, each one's per-level tendency sum recorded and
-# accumulated with the stage weight
+# Stage 7 of the parent's LargeScale component (its forcings, `p.forcing`,
+# applied in its order on its `clock = :core`: what `run_stage!` of the
+# component does) with each θ (and qv) forcing's per-level tendency sum
+# recorded between them and accumulated with the stage weight, for the ledgers
 function _parent_body_force!(p::ParentCase, sim, Δt)
     F, L = p.forcing, p.lev
     stage = (p.stage[] += 1)
@@ -856,26 +725,25 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     budget_begin_step!(p.heat, θ, hour)
     pc.moisture && budget_begin_step!(p.water, q, hour)
 
-    # surface
+    # stage 3 in the pipeline's order: the surface, the TKE closure's u*
+    # (the SGS component), then the radiation (which sees the surface it
+    # has just stepped); each entry that changes the air in its ledger context
+    d = p.domain
     t1 = time_ns()
     budget_open!(p.heat, :surface_flux, pc.surface, θ)
     pc.moisture && budget_open!(p.water, :surface_flux, pc.surface, q)
-    parent_surface_stage!(p, dt)
+    Components.run_stage!(Components.slot_component(d, :surface), d, Val(:surface_flux), dt)
     budget_close!(p.heat, θ)
     pc.moisture && budget_close!(p.water, q)
+    sgs = Components.slot_component(d, :sgs)
+    sgs === nothing || Components.run_stage!(sgs, d, Val(:surface_flux), dt)
     p.timing[:surface] = get(p.timing, :surface, 0.0) + (time_ns() - t1) * 1e-9
-
-    # radiation
-    if p.rad !== nothing
+    rad = Components.slot_component(d, :radiation)
+    if rad !== nothing
         t1 = time_ns()
-        if t >= p.t_rad - 1e-6
-            parent_radiation!(p)
-            p.t_rad = (floor(t / pc.radiation_period + 1e-9) + 1) * pc.radiation_period
-        end
         budget_open!(p.heat, :column_tendency, :column_radiation, θ)
-        Aeolus.Radiation.apply_radiative_cooling!(sim.θ, p.rad.heat .* dt ./ p.ref.π̄)
+        Components.run_stage!(rad, d, Val(:surface_flux), dt)
         budget_close!(p.heat, θ)
-        p.rad.dt_applied = dt
         p.timing[:radiation] = get(p.timing, :radiation, 0.0) + (time_ns() - t1) * 1e-9
     end
 
@@ -886,7 +754,7 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     bf = body_force! === nothing ? (s, Δt) -> _parent_body_force!(p, s, Δt) :
          (s, Δt) -> (_parent_body_force!(p, s, Δt);
                      body_force!(s, Δt, _stage_weight(p, p.stage[])); s)
-    pp = p.surface === nothing ? nothing : (s, Δt) -> apply_parent_drag!(p, s, Δt)
+    pp = Components.core_hooks(d).post_predictor!       # the tiles' drag (stage 8)
     # every attempt (a retry too) starts its stage count afresh
     stepper = pc.stepper === :rk3 ?
         ((s, h; kw...) -> (p.stage[] = 0; step_rk3!(s, h; kw..., sgs = p.closure))) :
@@ -915,10 +783,10 @@ function step_parent!(p::ParentCase, dt::Real; body_force! = nothing)
     p.nsteps += 1
     push!(p.dt_hist, dt)
     p.timing[:total] = get(p.timing, :total, 0.0) + (time_ns() - tw) * 1e-9
-    # the nudging height follows the boundary layer (cheap: one profile)
-    if p.forcing.nudging !== nothing && (p.nsteps % 10 == 0)
-        p.zi_run[] = max(p.zi_run[], parent_zi(p; method = :parcel))
-    end
+    # stage 11: the nudging height follows the boundary layer (every 10
+    # steps; cheap: one profile)
+    ls = _component(d, Components.LargeScale)
+    (ls === nothing || ls.zi === nothing) || Components.run_stage!(ls, d, Val(:column_tendency), dt)
     return dt
 end
 
@@ -941,7 +809,7 @@ function parent_record!(p::ParentCase)
          u = plane_mean(sim.u), v = plane_mean(sim.v),
          sfc = copy(p.sfc_mean), heat = hb, water = wb,
          nsteps = p.nsteps, retries = p.retries, wall = get(p.timing, :total, 0.0),
-         sw_down = p.sw_down, lw_down = p.lw_down)
+         sw_down = parent_downwelling(p).sw, lw_down = parent_downwelling(p).lw)
     push!(p.diag, r)
     return r
 end

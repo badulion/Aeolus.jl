@@ -31,7 +31,15 @@ fixed point). Its buoyant production at the walls takes the θ fluxes
 that the domain's components apply there ([`wall_theta_flux`](@ref)),
 gathered in stage 3 (`:surface_flux`, after the components that compute
 them); its memory ``e`` is checkpointed. On the anelastic core its
-buoyancy reference is the base state's θ̄ at the first level.
+buoyancy reference is the base state's θ̄ at the first level. On a
+`StretchedGrid` the wall distance is the exact height of each level
+centre above the bottom face (and below the top face): `IBM.wall_distance`
+assumes uniform levels (NEST-p1, #481). `wall_cap_top = false` caps at the
+bottom only (a free-slip lid under a sponge is no rough wall: the urban
+nest parent). With `surface_value`, ``e`` in the first level is the
+surface value of the u* of the domain's `:surface` component
+([`surface_friction_velocity`](@ref); `PrognosticSGS.tke_surface_value`),
+copied in stage 3 after that component has computed it.
 """
 struct SGS{C<:AbstractSGSClosure, F} <: AbstractComponent
     closure::C
@@ -52,6 +60,16 @@ sum over the domain's components.
 """
 wall_theta_flux(::AbstractComponent, domain) = (0.0, 0.0)
 
+"""
+    surface_friction_velocity(c, domain) -> Union{Nothing,Matrix{Float64}}
+
+The friction velocity u* (m s⁻¹) per column of the surface that component
+`c` computes in the current step (stage 3, `:surface_flux`), or `nothing`
+(the default). The TKE closure of [`SGS`](@ref) with `surface_value` sets
+its first-level ``e`` from that of the domain's `:surface` component.
+"""
+surface_friction_velocity(::AbstractComponent, domain) = nothing
+
 _sum_wall_flux(::Tuple{}, d) = (0.0, 0.0)
 _sum_wall_flux(cs::Tuple, d) = (a = wall_theta_flux(first(cs), d); b = _sum_wall_flux(Base.tail(cs), d);
                                 (a[1] + b[1], a[2] + b[2]))
@@ -60,6 +78,19 @@ stages(c::SGS) = c.wall_flux === nothing ? () : (Stage(:surface_flux; order = 1)
 function run_stage!(c::SGS, d, ::Val{:surface_flux}, dt)
     b, t = _sum_wall_flux(d.components, d)
     c.wall_flux[1] = b; c.wall_flux[2] = t
+    _copy_surface_ustar!(c.closure, d)
+    return nothing
+end
+
+# the first-level e of the TKE closure from the :surface component's u* (surface_value)
+_copy_surface_ustar!(::AbstractSGSClosure, d) = nothing
+function _copy_surface_ustar!(c::TKEClosure, d)
+    c.surface === nothing && return nothing
+    s = slot_component(d, :surface)
+    us = s === nothing ? nothing : surface_friction_velocity(s, d)
+    us === nothing &&
+        throw(ArgumentError("[sgs] surface_value: the domain $(d.id) has no :surface component that computes u*"))
+    copyto!(c.surface.u_star, us)
     return nothing
 end
 
@@ -112,6 +143,10 @@ function schema(::Type{<:SGS})
                            doc = "Moeng's (1984) factor of c_ε in the first level above a z wall")
             Config.option!(p, "wall_cap", Bool; default = false,
                            doc = "cap the mixing length at κ × the distance to the z walls")
+            Config.option!(p, "wall_cap_top", Bool; default = true,
+                           doc = "with wall_cap: the top wall caps too; false: the bottom only")
+            Config.option!(p, "surface_value", Bool; default = false,
+                           doc = "e in the first level from the u* of the domain's :surface component (its surface value)")
             stress(p)
         end
     end
@@ -153,16 +188,33 @@ end
 function _tke_sgs(opts, domain, stress)
     sim = domain.state; m = grid(domain)
     bottom = !(sim.bcs.bottom isa Periodic); top = !(sim.bcs.top isa Periodic)
-    sm = SolidMask(m)
-    fl = bottom ? first_level_cells(sm; bottom = true) : nothing
-    wd = option(opts, :wall_cap, false) && (bottom || top) ? wall_distance(sm; bottom = bottom, top = top) : nothing
+    sm = m isa StretchedGrid ? nothing : SolidMask(m)     # no obstacles on a stretched grid
+    fl = bottom ? _first_level(m, sm) : nothing
+    top = top && option(opts, :wall_cap_top, true)
+    wd = option(opts, :wall_cap, false) && (bottom || top) ? _wall_distance(m, sm, bottom, top) : nothing
     flux = zeros(2)
     θ₀ = sim isa BoussinesqSimulation ? nothing : sim.ref.θ̄[1]
+    sv = option(opts, :surface_value, false) ? (u_star = fill(NaN, m.Nx, m.Ny), k = ones(Int, m.Nx, m.Ny)) : nothing
     c = TKEClosure(m; wall_distance = wd, first_level = fl, surface_factor = option(opts, :surface_factor, 3.9),
-                   θ₀ = θ₀, g_accel = sim.g_accel, surface_flux = flux)
+                   θ₀ = θ₀, g_accel = sim.g_accel, surface_flux = flux, surface = sv)
     initialize_tke!(c, sim; e_min = option(opts, :e_min, 1e-3))
     return SGS(c, stress, flux)
 end
+
+# the distance (m) of every cell centre to the nearest z wall: IBM's on a
+# regular grid; on a stretched grid (no obstacles on a model domain) the
+# exact heights of the level centres above the bottom face and below the top
+_wall_distance(m, sm, bottom, top) = wall_distance(sm; bottom = bottom, top = top)
+function _wall_distance(m::StretchedGrid, ::Nothing, bottom, top)
+    Hz = m.Hz
+    zb, zt = m.zf[Hz+1], m.zf[Hz+m.Nz+1]
+    d(k) = min(bottom ? m.zc[Hz+k] - zb : Inf, top ? zt - m.zc[Hz+k] : Inf)
+    return [d(k) for _ in 1:m.Nx, _ in 1:m.Ny, k in 1:m.Nz]
+end
+
+# the cells of the first level above the bottom wall
+_first_level(m, sm) = first_level_cells(sm; bottom = true)
+_first_level(m::StretchedGrid, ::Nothing) = (f = zeros(Bool, m.Nx, m.Ny, m.Nz); f[:, :, 1] .= true; f)
 
 # the closure's memory, under its type's name (a restart into another closure is refused)
 checkpoint_state(c::SGS) = (closure = string(nameof(typeof(c.closure))), state = checkpoint_state(c.closure))

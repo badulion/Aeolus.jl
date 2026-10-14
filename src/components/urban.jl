@@ -34,6 +34,7 @@
 #                catalogue, its checkpoint, and its sections of the
 #                model's configuration schema.
 #   parent/      the nest parent: its tiled land-use surface, its config,
+#                its physics as components of its domain (NEST-p1, #481),
 #                the parent case (run by the :nesting component).
 #
 # The physics itself lives in the other modules of `src/`. A coupling only
@@ -136,6 +137,7 @@ all(s -> count(C -> slot(C) === s, URBAN_DEFAULTS) == 1, URBAN_SLOTS) ||
 # parent case (#259)
 include(joinpath(@__DIR__, "urban", "parent", "surface.jl"))
 include(joinpath(@__DIR__, "urban", "parent", "config.jl"))
+include(joinpath(@__DIR__, "urban", "parent", "components.jl"))   # its physics as components (NEST-p1, #481)
 include(joinpath(@__DIR__, "urban", "parent", "case.jl"))
 include(joinpath(@__DIR__, "urban", "site", "restart.jl"))      # checkpoint / restart of the site (#269)
 
@@ -159,6 +161,8 @@ export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, p
        θ_top_gradient, θ_top_bc, TopHeatFlux,
        case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
        ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
+       parent_domain, parent_static_driver, parent_downwelling, TiledUrbanSurface, PrescribedSurfaceFlux,
+       MeanColumnRadiation, SiteSun,
        parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
 
 end # module Urban

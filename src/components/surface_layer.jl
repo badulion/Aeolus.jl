@@ -206,6 +206,9 @@ function run_stage!(c::SurfaceLayer, d, ::Val{:surface_flux}, dt)
     return nothing
 end
 
+# the u* of the step's solve: the surface value of a TKE closure ([sgs] surface_value)
+surface_friction_velocity(c::SurfaceLayer, d) = c.ustar
+
 # stage 6: the heat flux into the first level, every (sub)step
 function run_stage!(c::SurfaceLayer, d, ::Val{:tendencies}, dt)
     s = d.state; m = s.mesh

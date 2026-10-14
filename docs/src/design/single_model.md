@@ -327,11 +327,26 @@ run's checkpoints, its options `site_options(cfg)` of the model's config.
 and restart are gone; `Aeolus.Urban` lives in `src/components/urban/`.
 Still open for the urban site: its nest parent (`ParentCase`, run by the
 `:nesting` component and alone by the `urban_parent` run type) is not a
-`[[domain]]` yet, because the parent's physics (the tiled surface, the
-column radiation, TKE on the stretched grid, the large-scale forcing and
-nudging) is not yet a set of components of a core domain; and the site
-still builds its own core (Coriolis, Smagorinsky and sponge in the core's
-constructor) instead of using the model's components.
+`[[domain]]` yet; and the site still builds its own core (Coriolis,
+Smagorinsky and sponge in the core's constructor) instead of using the
+model's components.
+
+**The parent's physics as components (NEST-p1, #481).** The parent is a
+`Domain` of components (`Urban.parent_domain`): the tiled mosaic surface
+(`TiledUrbanSurface`, the `:surface` slot, on the tile form of the parent's
+static driver, `STATIC_TILES_SCHEMA`), the prescribed surface flux of the
+idealised parents, the column radiation of the plane-mean column
+(`MeanColumnRadiation`, the `:radiation` slot), the large-scale forcing
+(`LargeScale`: the geostrophic pressure gradient, the nudging with the
+boundary-layer-dependent weight of a `BoundaryLayerTracker`, subsidence
+and damping) and `[sgs] model = "tke"` with the wall distance of the
+stretched grid and the tiles' u*. Each works on both cores. `ParentCase`
+keeps the parent's ledgers around the components' entries for the nest
+and the `urban_parent` run; the domain alone through the pipeline is that
+run bit for bit. The parent's core keeps its built-in Coriolis term and
+sponge, and its forcing the core's RK3 substage clock: moving either to
+the configuration's form changes the summation order or the forcing
+window, a re-capture for the issue that makes the parent a `[[domain]]`.
 
 **One key per exclusive slot (ONE-m, #476).** The enable/disable pairs
 that #472 and #473 left (`[pressure_fft] enabled = false` with
