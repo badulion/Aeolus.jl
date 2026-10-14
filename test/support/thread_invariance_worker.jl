@@ -32,9 +32,9 @@
 #               surface / water / air-heat ledgers, the dt sequence and the
 #               pressure-solver iteration counts per step;
 #   flagship    one dt (2 s: two adaptive steps, the second in the parent's
-#               prefetched window when threaded) of the Berlin summer config (the 64×64×64
+#               parent's window) of the Berlin summer config (the 64×64×64
 #               Alexanderplatz run), hashed the same way;
-#   nested      nested runs (KA-f, #297): one-way (also with the parent prefetched, SC-c #403), two-way with a sponge,
+#   nested      nested runs (KA-f, #297): one-way, two-way with a sponge,
 #               two-way with Orlanski outflow faces (16³ parent, 16³
 #               child at r = 2, 3 steps) and an anelastic two-way pair
 #               (4 steps): every field of parent and child.
@@ -286,44 +286,46 @@ const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "berlin_configs.jl"))
 include(joinpath(@__DIR__, "smoke_matrix.jl"))
 
-function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
-    case = BC.build_case(cfg)
+function run_hashed!(label, cfg; seed = true, nsteps = nothing)
+    m = build_config_model(cfg)
+    case = urban_site(m)
     seed && seed_fog!(case, Xoshiro(127))
     ts = BC.timestepper(case)
     variable = ts !== nothing && BC.variable_dt(typeof(ts))
     dts = Float64[]; iters = Int[]
-    t_end = case.sim.t + nsteps * cfg.dt
-    # the run loop's horizon (SC-c, #403): a one-way nest prefetches the
-    # parent's next window on its own task when Julia runs threaded, so -t 4 /
-    # -t 24 against -t 1 is also the prefetched against the sequential parent.
-    # The loop must stop where the horizon says (a variable-step run goes to
-    # t_end, as the run loop does, not nsteps steps): a prefetch is started only
-    # for a window the run will reach, and the parent hashed at the end is at
-    # the same window end with and without it.
-    clk = case.clock
-    clk.t_stop = t_end
-    clk.stop_margin = variable ? 1e-9 * cfg.dt : 0.5 * cfg.dt
-    n = 0
-    while variable ? BC.step_will_run(clk, case.sim.t) : n < nsteps
-        n += 1
-        t0 = case.sim.t
-        variable ? step!(case.model, Aeolus.Components.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
-                   step!(case.model, cfg.dt)
-        ok = !case.clock.blowup
-        push!(dts, case.sim.t - t0)
-        append!(iters, solver_iters(case.sim))
-        ok || break
+    t_end = case.sim.t + something(nsteps, case.cfg.nsteps) * case.cfg.dt
+    if length(m.domains) > 1
+        # the site nested in its parent (NEST-p3 #483): the model's nest
+        # engine, one window per root step, landing on t_end; the dt
+        # sequence is the site's steps
+        t_prev = Ref(case.sim.t)
+        n_prev = Ref(case.clock.n)
+        Aeolus.Components.run_to!(m, t_end; callback = (m, k) -> begin
+            push!(dts, case.sim.t - t_prev[]); t_prev[] = case.sim.t
+            append!(iters, solver_iters(case.sim))
+        end)
+        record_sim!("$label/nest_parent", m.domains[1].state)
+    else
+        # the run loop's horizon: a variable-step run goes to t_end, as the
+        # run loop does, not nsteps steps
+        clk = case.clock
+        clk.t_stop = t_end
+        clk.stop_margin = variable ? 1e-9 * case.cfg.dt : 0.5 * case.cfg.dt
+        n = 0
+        while variable ? BC.step_will_run(clk, case.sim.t) : n < something(nsteps, case.cfg.nsteps)
+            n += 1
+            t0 = case.sim.t
+            variable ? step!(case.model, Aeolus.Components.last_step_dt(BC.step_dt(case), t_end - case.sim.t)) :
+                       step!(case.model, case.cfg.dt)
+            ok = !case.clock.blowup
+            push!(dts, case.sim.t - t0)
+            append!(iters, solver_iters(case.sim))
+            ok || break
+        end
+        case.clock.t_stop = NaN
+        foreach(c -> BC.end_run!(c, case), case.couplings)
     end
-    case.clock.t_stop = NaN
-    foreach(c -> BC.end_run!(c, case), case.couplings)
     record_sim!(label, case.sim)
-    nest = BC.find_coupling(case, :nesting)
-    if nest !== nothing && nest.parent !== nothing
-        record_sim!("$label/nest_parent", nest.parent.sim)
-        # not hashed (0 at -t 1): that the threaded runs did prefetch
-        nest.run isa Aeolus.Nesting.NestedRun && nest.run.stats.prefetched > 0 &&
-            println(stderr, "  $label: $(nest.run.stats.prefetched) parent windows prefetched, $n steps")
-    end
     for t in case.tracers.list
         record!("$label/tracer.$(t.name)", t.field.data)
     end
@@ -341,13 +343,14 @@ function run_hashed!(label, cfg; seed = true, nsteps = cfg.nsteps)
 end
 
 function section_smoke()
-    for (label, cfg) in smoke_matrix()
-        run_hashed!("smoke[$label]", merge(cfg, (; backend = BACKEND)))
+    for (label, cfg) in smoke_matrix(; serial = MODE == "serial")
+        run_hashed!("smoke[$label]", cfg)
     end
 end
 
 function section_flagship()
-    cfg = site_config(berlin_toml("summer"); backend = BACKEND)
+    f = berlin_toml("summer")
+    cfg = load_run_config(f; overrides = [site_key(f, "urban.serial") * "=" * string(MODE == "serial")])
     run_hashed!("flagship", cfg; seed = false, nsteps = 1)
 end
 
@@ -407,12 +410,6 @@ function section_nested()
         record_sim!("nested[$label]/parent", run.parent)
         record_sim!("nested[$label]/child", run.child)
     end
-    # SC-c (#403): the one-way run with the parent's next step prefetched on
-    # its own task (step_nested!(run, n)): the same bits at every thread count
-    run = nested_boussinesq(:one_way)
-    step_nested!(run, 3; dt = 2e-3, concurrent = true)
-    record_sim!("nested[one_way_concurrent]/parent", run.parent)
-    record_sim!("nested[one_way_concurrent]/child", run.child)
 end
 
 # --------------------------------------------------------------------------

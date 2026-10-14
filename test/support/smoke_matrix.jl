@@ -140,21 +140,32 @@ function site_alone_toml(path)
     return io
 end
 
-"The config of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides (the site alone when the run has no parent)."
-smoke_run_config(spec) = smoke_nested(spec) ? load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec)) :
-                         load_run_config(site_alone_toml(SMOKE_TOML); overrides = smoke_overrides(spec; nested = false))
+"""
+    smoke_run_config(spec; serial = false) -> RunConfig
+
+The config of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its
+overrides (the site alone when the run has no parent); `serial`: the
+site's single-task backend (`urban.serial`).
+"""
+function smoke_run_config(spec; serial::Bool = false)
+    nested = smoke_nested(spec)
+    ovr = smoke_overrides(spec; nested)
+    serial && push!(ovr, (nested ? site_key(SMOKE_TOML, "urban.serial") : "urban.serial") * "=true")
+    return nested ? load_run_config(SMOKE_TOML; overrides = ovr) : load_run_config(site_alone_toml(SMOKE_TOML); overrides = ovr)
+end
 
 "The site's options (`site_options`) of a run of [`smoke_specs`](@ref)."
 smoke_config(spec) = BC.site_options(site_view(smoke_run_config(spec)))
 
 """
-    smoke_matrix(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,RunConfig}}
+    smoke_matrix(components = BC.URBAN_COMPONENTS; serial = false) -> Vector{Pair{String,RunConfig}}
 
 The smoke-test configurations: [`smoke_run_config`](@ref) of every run of
 [`smoke_specs`](@ref) (build one with `build_config_model`, its site is
 `urban_site` of the model).
 """
-smoke_matrix(components = BC.URBAN_COMPONENTS) = [label => smoke_run_config(spec) for (label, spec) in smoke_specs(components)]
+smoke_matrix(components = BC.URBAN_COMPONENTS; serial::Bool = false) =
+    [label => smoke_run_config(spec; serial) for (label, spec) in smoke_specs(components)]
 
 """
     smoke_specs(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,NamedTuple}}
