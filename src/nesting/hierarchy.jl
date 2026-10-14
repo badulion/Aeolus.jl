@@ -168,8 +168,9 @@ Refused with an `ArgumentError` that names the domains involved:
     cover intersect); two two-way siblings whose conservation boxes are
     less than one parent cell apart (a cell refluxed by one would be
     anterpolated by the other);
-  * two-way feedback of a mixed core pair or without a conservation box
-    (as for a `NestedRun`).
+  * two-way feedback without a conservation box (as for a `NestedRun`); a
+    mixed core pair needs the `boussinesq_density` keyword of its
+    `NestedRun` ([`nest_core_conversion`](@ref)).
 
 Overlapping siblings are refused rather than ranked: a priority rule needs
 the higher-priority sibling as boundary data of the other, which is a
@@ -434,18 +435,22 @@ domain's over the conservation box of its own link (the strip between a
 child's edge and its box belongs to the parent). `quantity` is `:θ`
 (`:theta`), `:qv`, or a scalar of the links' field sets (`:co2`, …),
 weighted by each domain's reference mass for the sound-proof cores
-(`∫ W φ dV`). The quantity a two-way hierarchy with refluxing conserves to
-round-off.
+(`∫ W φ dV`), and in a hierarchy with a mixed core pair the Boussinesq
+domains by their density `ρ₀` (NEST-p2, #482). The quantity a two-way
+hierarchy with refluxing conserves to round-off.
 """
 function composite_integral(h::NestHierarchy, quantity::Symbol)
     total = 0.0
+    # a hierarchy with a mixed core pair weights its Boussinesq domains by ρ₀
+    i0 = findfirst(L -> L.conv !== nothing, h.links)
+    ρ0 = i0 === nothing ? nothing : h.links[i0].conv.ρ0
     for (i, d) in enumerate(h.domains)
         f = _hfield(h, i, quantity)
         m = d.sim.mesh
         own = d.up == 0 ? (1:m.Nx, 1:m.Ny, 1:m.Nz) :
               map(a -> a.cbox, h.links[d.up].nest.axes)
         excl = NTuple{3,UnitRange{Int}}[nest_covered_range(h.links[l].nest) for l in d.links]
-        total += _own_sum(f.data, m, own, excl, _level_mass(d.sim))
+        total += _own_sum(f.data, m, own, excl, _level_mass(d.sim, ρ0))
     end
     return total
 end
@@ -473,10 +478,10 @@ function _in_boxes(excl::Vector{NTuple{3,UnitRange{Int}}}, i::Int, j::Int, k::In
 end
 
 # Per-level cell thickness (or reference mass W Δz) of a domain, interior-indexed.
-function _level_mass(sim)
+function _level_mass(sim, ρ0 = nothing)
     m = sim.mesh
     dz = [_dzp(m, k) for k in 1:m.Nz]
-    sim isa MassWeightedSimulation || return dz
+    sim isa MassWeightedSimulation || return ρ0 === nothing ? dz : ρ0 .* dz
     W = constraint_weights(sim)[1]
     return [W[m.Hz + k] * dz[k] for k in 1:m.Nz]
 end

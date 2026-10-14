@@ -341,6 +341,32 @@ end
     @test err isa ArgumentError && occursin(".tag", sprint(showerror, err))
 end
 
+@testset "structural state refreshed in place: the record of now, in the arrays of then (#482)" begin
+    r = _ss_node()
+    r.b = r.a
+    r.bound[r.a] = :a
+    r.d[:k] = [7.0]
+    s = structural_state(r)
+    rec_a = s.root.fields[1].a
+    # the run moves on; the record is refreshed into its own arrays
+    r.a .= (5.0, 6.0); r.n = 11; r.d[:k][1] = 8.0; rand(r.rng)
+    want = rand(copy(r.rng))
+    s2 = Aeolus.IO.refresh_structural_state!(s, r)
+    @test s2.root === s.root && s2.root.fields[1].a === rec_a      # nothing re-allocated
+    # and restores exactly as a fresh record of now does
+    r.a .= 0.0; r.n = -1; r.d[:k][1] = 0.0; rand(r.rng, 3)
+    restore_structural_state!(r, s2)
+    @test r.a == [5.0, 6.0] && r.b === r.a && r.n == 11 && r.d[:k] == [8.0]
+    @test r.bound[r.a] === :a && rand(r.rng) == want
+    # a changed graph (a dictionary with another key) falls back to a fresh record
+    r.d[:new] = 1
+    s3 = Aeolus.IO.refresh_structural_state!(s2, r)
+    @test s3.root !== s2.root
+    r.d[:new] = 2
+    restore_structural_state!(r, s3)
+    @test r.d[:new] == 1
+end
+
 @testset "CheckpointSchedule: keep-K, resume, wisdom" begin
     dir = mktempdir()
     function run!(stop_at; nsteps = 10)

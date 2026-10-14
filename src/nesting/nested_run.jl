@@ -144,14 +144,16 @@ Keywords:
   * `record` (true) — write the two-way conservation ledger
     ([`nest_conservation_error`](@ref)).
 
-Two-way feedback needs parent and child of the same core family (two
-Boussinesq sims, or two `MassWeightedSimulation`s of one sound-proof
-system sharing one `ReferenceState`, whose transfers then use the
-reference-mass measure [`nest_measure`](@ref)); a mixed pair can only be
-nested one-way, and asking for two-way throws an `ArgumentError` (a
-Boussinesq/sound-proof pair has no consistent measure: the restriction
-would weight by volume where the sound-proof grid needs its reference
-mass, and the flux registers would mix volume and mass fluxes).
+A same-core pair (two Boussinesq sims, or two `MassWeightedSimulation`s
+of one sound-proof system sharing one `ReferenceState`, whose transfers
+then use the reference-mass measure [`nest_measure`](@ref)) needs nothing
+more. A **mixed pair** — a Boussinesq domain and an anelastic one, either
+way round, one-way or two-way (NEST-p2, #482) — needs
+`boussinesq_density`, the Boussinesq side's constant density
+(`p_ref / (R_d θ₀)`): the transfers then measure each side with its own
+density and convert the velocities so that the mass flux through the
+interface, and with it every scalar flux, is the same on both sides
+([`NestCoreConversion`](@ref), [`nest_core_conversion`](@ref)).
 
 **Boundary conditions.** The child must be built with
 [`nest_bcs`](@ref)`(child_mesh, …; moisture, scalars)` naming the same
@@ -223,6 +225,7 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     retry_mark::Int                # parent + child retries at the start of the window
     s_spare::Union{Nothing,S}      # the state a prefetched parent step prolongates into (SC-c, #403)
     ahead::Union{Nothing,_ParentAhead{S}}   # the prefetched parent step, or nothing
+    conv::Union{Nothing,NestCoreConversion} # a mixed core pair's density conversion (NEST-p2, #482)
 end
 
 # Scratch of the two-way feedback, allocated once (#329, item 6): the
@@ -264,7 +267,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                    validate::Bool = true,
                    reuse_boundary::Bool = true,
                    record::Bool = true,
-                   check_clocks::Bool = true)
+                   check_clocks::Bool = true,
+                   boussinesq_density::Real = NaN)
     twoway = feedback isa TwoWayFeedback ? feedback :
              feedback === :two_way ? TwoWayFeedback() :
              feedback === :one_way ? nothing :
@@ -273,7 +277,8 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     feedback = twoway === nothing ? :one_way : :two_way
     sync in (:subcycle, :shared_min_dt) ||
         error("NestedRun: sync must be :subcycle or :shared_min_dt, got :$sync")
-    feedback === :two_way && _check_two_way_pair(parent, child, "NestedRun")
+    conv = nest_core_conversion(nest, parent, child; rho0 = boussinesq_density)
+    feedback === :two_way && conv === nothing && _check_two_way_pair(parent, child, "NestedRun")
     sync === :shared_min_dt && (cfl_parent === nothing || cfl_child === nothing) &&
         error("NestedRun: sync = :shared_min_dt needs cfl_parent and cfl_child")
     size(parent.θ.data) == totalsize(nest.parent_mesh) ||
@@ -289,8 +294,10 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
     # without a sponge only the child's open-boundary points are read: the
     # three field sets keep their halo slabs only (#329, item 4)
     storage = sponge === nothing ? :shell : :full
-    s_old, s_new, s_bc = state === nothing ?
-        ntuple(_ -> nest_interp_state(nest, parent, child; scalars, storage), 3) : state
+    s_old, s_new, s_bc = state !== nothing ? state :
+        conv === nothing ? ntuple(_ -> nest_interp_state(nest, parent, child; scalars, storage), 3) :
+        ntuple(_ -> nest_interp_state(nest; scalars = (_mixed_moisture(parent, child)..., scalars...),
+                                      measure = _conversion_measure(nest, conv), storage), 3)
     sponge === nothing || all(st -> nest_storage(st) === :full, (s_old, s_new, s_bc)) ||
         throw(ArgumentError("NestedRun: a sponge needs storage = :full states (it relaxes " *
                             "the child interior toward them)"))
@@ -302,14 +309,14 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
          NestSponge{Float64}(sponge.width, sponge.α_max, sponge.profile,
                              sponge.sides .& nest_open_sides(child))
     # the child's boundary: the parent prolongated now, attached to its open faces
-    interpolate_parent_state!(s_old, parent, nest; order, region, limit_scalars, limit_theta,
-                              limit_momentum)
+    _prolongate_conv!(s_old, parent, nest, conv; order, region, limit_scalars, limit_theta,
+                      limit_momentum)
     _mark_nest_solids!(child, solid)
     data = nest_boundary_data(s_old, s_new; t0 = child.t, Δt = 0.0)
     _attach_nest_data!(child, data)
     fill_nest_halos!(child, s_old)
     regs = twoway !== nothing && twoway.reflux ?
-           NestFluxRegisters(nest, parent, child, s_bc, twoway, advance_parent, advance_child) :
+           NestFluxRegisters(nest, parent, child, s_bc, twoway, advance_parent, advance_child, conv) :
            nothing
     run = NestedRun(parent, child, nest, s_old, s_new, s_bc, advance_parent, advance_child,
                     cfl_parent, cfl_child, feedback, sync, order, region,
@@ -322,7 +329,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     _Rollback(parent, advance_parent, s_bc.parent),
                     _Rollback(child, advance_child, s_bc.child),
                     twoway === nothing ? nothing : _two_way_work(nest, s_bc), StepRecord(), 0,
-                    nothing, nothing)
+                    nothing, nothing, conv)
     if run.regs !== nothing                  # separate transports book through the sims
         _register_booker!(parent, run.regs, :parent, nest)
         _register_booker!(child, run.regs, :child, nest)
@@ -379,12 +386,32 @@ function boundary_time(run::NestedRun, t::Real)
     return run.s_bc
 end
 
-# The parent field set prolongated into one of the run's states.
+# The parent field set prolongated into one of the run's states (a mixed
+# core pair: the parent's velocity in the child's density, NestCoreConversion).
 _prolongate!(run::NestedRun, s::NestInterpState) =
-    interpolate_parent_state!(s, run.parent, run.nest; order = run.order, region = run.region,
-                              limit_scalars = run.limit_scalars,
-                              limit_theta = run.limit_theta,
-                              limit_momentum = run.limit_momentum)
+    _prolongate_conv!(s, run.parent, run.nest, run.conv; order = run.order, region = run.region,
+                      limit_scalars = run.limit_scalars,
+                      limit_theta = run.limit_theta,
+                      limit_momentum = run.limit_momentum)
+
+_prolongate_conv!(s, parent, nest, ::Nothing; kw...) = interpolate_parent_state!(s, parent, nest; kw...)
+function _prolongate_conv!(s, parent, nest, cv::NestCoreConversion; kw...)
+    _scale_parent!(parent, cv)
+    try
+        interpolate_parent_state!(s, parent, nest; kw...)
+    finally
+        _restore_parent!(parent, cv)
+    end
+    return s
+end
+
+# qv of a mixed pair: only when both carry it (the sound-proof core has none)
+function _mixed_moisture(p, c)
+    _moist(p) == _moist(c) ||
+        throw(ArgumentError("NestedRun: the parent carries qv = $(_moist(p)), the child $(_moist(c)); " *
+                            "a nest carries qv on both domains or on neither"))
+    return _moist(p) ? (:qv => (c.qv, p.qv),) : ()
+end
 
 # Point the child's boundary data at the current parent-step window and
 # refresh its open boundaries at the child's time (B(t₀) of the new window:
@@ -1252,6 +1279,8 @@ function two_way_feedback!(run::NestedRun; reproject::Bool = true)
     end
     _feedback_mask!(wk.mask, nest, fb, c)
     run.sponge_τ = NaN                         # the sponge target is re-blended after this
+    cv = run.conv
+    cv === nothing || _scale_parent!(p, cv)    # a mixed pair: the parent's velocity in the child's density
     anterpolate!(p, c, nest, run.s_bc; mask = wk.mask, α, solid = run.fluid,
                  scratch = wk.anterp)
     sides = nest_open_sides(c)
@@ -1275,13 +1304,15 @@ function two_way_feedback!(run::NestedRun; reproject::Bool = true)
         _clear_registers!(r)
     end
     e_after = _interface_imbalance(p, c, nest, meas)
+    cv === nothing || _unscale_parent!(p, cv)  # the mass fluxes back in the parent's own density
     proj = fb.reproject && reproject
     proj && _reproject!(p)
     if run.record
         nest.ledger[:mass] = e_after
         nest.ledger[:mass_before_correction] = e_before
         nest.ledger[:mass_after_projection] =
-            proj ? _interface_imbalance(p, c, nest, meas) : e_after
+            !proj ? e_after : cv === nothing ? _interface_imbalance(p, c, nest, meas) :
+            (_scale_parent!(p, cv); e = _interface_imbalance(p, c, nest, meas); _restore_parent!(p, cv); e)
     end
     _restore_synthetic_normal!(syn)
     return run

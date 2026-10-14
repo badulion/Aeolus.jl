@@ -161,15 +161,48 @@ domain (the value is the worst, each domain's under its id in
 `results.toml`; the reference comparisons are the root's), and a
 checkpoint holds the whole nest, so a resumed run continues bit for bit.
 
+The nest engine (NEST-p2, #482; [nested time coupling](../theory/nesting_time.md)):
+
+- **Steps.** `time.dt` fixed: each child takes `max(refinement)` substeps
+  per step of its parent. `time.dt = "adaptive"`: the root takes its own
+  stability limit, each child the smallest whole number of equal
+  substeps that keeps it stable, chosen every window, and a failed step
+  retries the window (half the root step, or twice the failing child's
+  substeps).
+- **Budgets.** `[nesting] budget_exchange = "exchange_term"` (the
+  default): every domain closes its own budgets, with one nest-exchange
+  term per quantity, `(:nest_feedback, :nest_exchange)` — what crossed a
+  child's nest faces, and in a parent its children's two-way feedback.
+  `"off"`: a nest measures no budgets (no `budget_*` output, no closure
+  check).
+- **Cores.** Every domain runs the Boussinesq or the anelastic core,
+  mixed freely, two-way included (a conservative density conversion in the
+  boundary data and the feedback). An anelastic nested domain needs
+  `[timestep] scheme = "euler"`, and one nested in an anelastic parent
+  the same `dynamics.theta0` and `g`.
+- **Exchanged fields** (the PALM rule): `qv`, the Kessler `ql` and `qr`,
+  and the tracer exist in a nested domain exactly when they exist in its
+  parent; the check names both domains. (A child could carry an extra
+  field only with its own dynamic driver giving its boundary values; a
+  nested domain has no dynamic driver yet.)
+- **Inflow turbulence.** A nested domain's `[inflow_turbulence] enabled =
+  true` puts synthetic turbulence on its lateral nest faces, with its
+  parent's resolved statistics (`statistics = "parent_resolved"`);
+  two-way, the feedback skips the generator's inflow band.
+- **Subgrid model.** It may differ per domain (`[domain.sgs]`); the nest
+  passes resolved fields only (a TKE field on one side only is not
+  exchanged: the child's `e` is zero-gradient at its nest faces). A child
+  that refines its parent horizontally by 3 or more without
+  `[inflow_turbulence]` is warned about when the model is built.
+
 What a nested model does not do yet, each refused by the configuration
-with its reason: an adaptive `time.dt`, budgets (the two-way feedback is
-outside every stage, so it is not attributed), the anelastic core and
-stretched grids, a child's `dynamic_driver`, and the EX-d couplings
-(`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
-`[obstacles]`) in a child, whose fields have no nest faces. The urban run
-type's Berlin nest (`ParentCase`, the `urban_parent` run type) is still
-its own until the urban couplings are components (ONE-e, #454); it then
-becomes a `[[domain]]` config.
+with its reason: stretched grids, a child's `dynamic_driver`, and the
+EX-d couplings (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
+`[particles]`, `[obstacles]`) in a child, whose fields have no nest
+faces. The urban site's Berlin nest (`ParentCase`, run by the site's
+`[nesting]` component) still steps on `Nesting.NestedRun`; it moves onto
+the model's nest engine once the parent's physics are components
+(NEST-p1, #481), in NEST-p3.
 
 The enabled components of a domain are validated before anything is
 built: at most one per exclusive slot (`:advection`, `:sgs`,

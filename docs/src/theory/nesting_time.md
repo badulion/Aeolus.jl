@@ -346,6 +346,78 @@ the per-cell CFL sum weighs more. The two-way case now runs with the
 interface flux correction: N-nest-c had to switch it off, because it
 forced the parent's flux through the child's wall lid to ``w = 0``.
 
+## The model's nest engine (NEST-p2, #482)
+
+A model of several `[[domain]]` blocks is stepped by one engine,
+[`ModelNest`](@ref Aeolus.Components.ModelNest) and
+[`nest_window!`](@ref Aeolus.Components.nest_window!), built on the links
+of a `NestHierarchy` (the operators, boundary data, registers and
+feedback above). One model step is one **window**, a step of the root:
+
+1. a domain steps through stages 1–11 of its own pipeline;
+2. the boundary data of each child are prolongated at both ends of that
+   step, and each child takes ``n`` equal substeps to land on its end,
+   recursively (Berger & Oliger 1984);
+3. the two-way children feed back (stage 12, `:nest_feedback`);
+4. the domain finishes with stage 13 (`:budgets`, `:checks`, `:output`),
+   so its budgets close after the feedback and its checks and output see
+   the state after it.
+
+**Step sizes.** With a fixed `dt` a child takes ``n = \max r``
+substeps; the engine is then the hierarchy's `step_nested!`, bit for bit
+(tested on one level, Euler and RK3, one- and two-way, and on three levels
+with a sibling). Adaptive, the root takes its own stability limit (its
+CFL limits, its components' limits, the growth limit from its last step;
+`step_adaptive!(model)`), and each child, at the start of every window of
+its own, the smallest whole number of equal substeps that keeps it within
+its limit,
+
+```math
+n = \left\lceil \Delta t_p / \Delta t_c^{\max} \right\rceil ,
+```
+
+chosen once per window from the child's state at the window start (after
+the window opening). Measured on the 16 × 16 × 8 / 16 × 16 × 8 nest with a
+jet in the child: ``n = 4, 2, 2, 2, 3, 3, 3, 3`` over eight windows of
+12–25 s; on a 64 × 64 × 32 root with a 64 × 64 × 32 child at ``r = 2`` the
+root takes 8 s windows with ``n = 3`` (fixed: 2 s with ``n = 2``), at
+0.065 s per window against 0.050 s for the fixed one, so 6.1 times
+cheaper per simulated second.
+
+**Window retries.** A step that fails (a non-finite core or nest-bound
+field, or a numerical failure, `is_numerical_failure`) redoes the window
+from the state saved at its start: with half the root step when the root
+failed, with twice the failing child's substeps when a child did (the
+floor holds for the rest of the window), up to `max_retries` (3), after
+which the window start is restored and an error raised. The saved state
+is the structural record of the whole hierarchy (every core, component,
+budget, register, statistic and generator), refreshed in place every
+window (`IO.refresh_structural_state!`): 9.7 ms and 0.5 MiB allocated on
+the 64 × 64 × 32 + 64 × 64 × 32 nest, against 72 ms for a fresh record.
+The restore is complete: a window whose root failed once is bit for bit
+the window taken at the halved step from the same start, and a one-way
+parent is bit for bit unaffected by its child's retry. A child's retry
+repeats its parent's step too (the parent is restored with everything
+else), which costs one parent step but changes nothing.
+
+**Concurrency.** With more than one thread, sibling children step in
+parallel (they read only their own boundary data, write their own
+domains and links, and feed back afterwards in link order), and a domain
+below the root whose children are all one-way steps ahead of them: its
+substep ``s + 1`` runs on a task while they subcycle through substep
+``s`` ([`nest_prefetches`](@ref Aeolus.Components.nest_prefetches)).
+Both are bit for bit the sequential result (tested at 1 and 4 threads,
+fixed and adaptive). Measured on a 64 × 64 × 32 root (minimum of 4 × 5
+windows): two one-way 48 × 48 × 32 siblings ×1.25, ×1.37 and ×1.41 at 2,
+4 and 8 threads; a three-level one-way nest ×1.08 to ×1.12. The root
+itself is not prefetched: its next step is the model's next window, and
+the run reads every domain at the end of each window (output, checks,
+the monitor, checkpoints).
+
+**Mixed cores.** A Boussinesq domain and an anelastic one may be nested
+either way round, two-way included; the density conversion is on
+[two-way nesting](nesting_twoway.md#Mixed-cores).
+
 ## Current limits
 
 These are owned by other issues of the nesting epic (#246).

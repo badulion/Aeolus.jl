@@ -33,7 +33,7 @@ export CHECKPOINT_VERSION, read_checkpoint, checkpoint_state, restore_checkpoint
        latest_checkpoint, checkpoint_path, wisdom_path,
        driver_checkpoints, finish_checkpoints!
 # #269: the structural state of an object graph (io/structural_state.jl)
-export StructuralState, structural_state, restore_structural_state!, checkpoint_opaque,
+export StructuralState, structural_state, restore_structural_state!, refresh_structural_state!, checkpoint_opaque,
        structural_save_begin, structural_save_end, structural_restore_begin, structural_restore_end
 # #335: blowup guard and run monitor (io/blowup.jl, io/run_monitor.jl)
 export checkpoint_payload, write_checkpoint,
