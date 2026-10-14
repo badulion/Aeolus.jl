@@ -322,7 +322,8 @@ end
     total_heat_flux_profile(w, θ, κ; surface = 0) -> (z, resolved, sgs, total)
 
 The plane-mean vertical kinematic flux of `θ` (K m s⁻¹, positive upward)
-at the `Nz + 1` w-faces ``z = (k-1)Δz``: on the interior faces the
+at the `Nz + 1` w-faces ``z = (k-1)Δz`` (on a stretched grid its face
+heights above the ground, the gradient over the centre spacing): on the interior faces the
 resolved ``⟨w θ_f⟩`` (``θ`` averaged in z to the face) plus the SGS
 ``-⟨κ_f ∂θ/∂z⟩`` (``κ`` averaged in z), the stencils of the centred
 scalar advection and the eddy-diffusion z-flux; the surface face holds
@@ -337,10 +338,12 @@ function total_heat_flux_profile(w::Field{FaceZ}, θ::Field{CellCenter}, κ::Fie
     Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
     T = eltype(θ.data)
     wd, θd, κd = w.data, θ.data, κ.data
-    idz = 1 / g.dz
+    # (a stretched grid, NEST-p3 #483: the centre spacing across each face)
+    stretched = hasproperty(g, :zf)
     res = zeros(T, Nz + 1); sgs = zeros(T, Nz + 1)
     @inbounds for k in 2:Nz
         K = Hz + k
+        idz = stretched ? 1 / (g.zc[K] - g.zc[K-1]) : 1 / g.dz
         sr = zero(T); ss = zero(T)
         for j in 1:Ny, i in 1:Nx
             I, J = Hx + i, Hy + j
@@ -351,7 +354,7 @@ function total_heat_flux_profile(w::Field{FaceZ}, θ::Field{CellCenter}, κ::Fie
     end
     total = res .+ sgs
     total[1] = surface
-    z = T[(k - 1) * g.dz for k in 1:Nz+1]
+    z = stretched ? T[g.zf[Hz+k] - g.zf[Hz+1] for k in 1:Nz+1] : T[(k - 1) * g.dz for k in 1:Nz+1]
     return (z = z, resolved = res, sgs = sgs, total = total)
 end
 
