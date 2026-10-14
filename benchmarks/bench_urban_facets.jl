@@ -3,7 +3,7 @@
 #
 # Run: julia --project=. benchmarks/bench_urban_facets.jl [wall_subdivisions] [blas_threads]
 #
-# Builds the flagship geometry (CaseConfig defaults: 64×64×32 cells over
+# Builds the flagship geometry (the site's defaults: 64×64×32 cells over
 # 1000 m × 1000 m × 200 m, the real OSM file), gives every radiosity facet
 # its own UrbanFacet column, and advances 6 steps of 600 s (the radiation
 # cadence) around local noon on 20 June with the Bird clear-sky sun, once
@@ -14,14 +14,15 @@
 using Aeolus, Printf, LinearAlgebra
 using Aeolus.UrbanSurface, Aeolus.SurfaceExchange, Aeolus.Radiosity
 using Aeolus.SolarGeometry: BirdClearSky, clear_sky_irradiance
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 const US = Aeolus.UrbanSurface
 
 ws  = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 1
 nth = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1
 BLAS.set_num_threads(nth)
 
-cfg  = BC.CaseConfig(joinpath(pkgdir(Aeolus), "examples", "urban", "configs", "berlin_summer.toml"); wall_subdivisions = ws)
+cfg  = BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml");
+                                       overrides = ["urban.wall_subdivisions=$ws"]))
 mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
 geom = BC.build_geometry(cfg, mesh)
 sc, vf = geom.scene, geom.vfac

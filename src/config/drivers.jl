@@ -128,59 +128,14 @@ function register_driver!(d::AbstractRunDriver)
 end
 
 """
-    DRIVER_FILES
-
-Legacy cases that live under `examples/`, loaded the first time a config
-names them (`[run] legacy`): `name => path` relative to the package
-directory. The file is included into a fresh module and must call
-[`register_driver!`](@ref) for `name`. (The urban run type, formerly the
-`berlin` entry, is part of the package since EX-a #438: `Aeolus.UrbanCase`.)
-"""
-const DRIVER_FILES = Dict{String,String}(
-    # CFG-e (#360): the decaying-turbulence DNS of P56-c, which the `sgs_decay`
-    # run type builds on. (ONE-g #456: the SBL cases are configurations of the
-    # model; the channel, single-column, filtered-DNS record, CBC and
-    # patchy-surface validation run types are gone with their cases.)
-    "dns_decay" => "examples/validation/dns_driver.jl",
-    # the Kessler box of the kernel demo (cloud_spinup.toml); the column
-    # validation cases it also ran are gone (ONE-g #456)
-    "column" => "examples/kernels/column_driver.jl",
-)
-
-const _PKG_DIR = normpath(joinpath(@__DIR__, "..", ".."))
-
-"Load the example legacy case `name` from [`DRIVER_FILES`](@ref) if it is listed and not yet registered."
-function _ensure_driver(name::AbstractString)
-    (haskey(_DRIVERS, name) || !haskey(DRIVER_FILES, name)) && return nothing
-    path = joinpath(_PKG_DIR, DRIVER_FILES[name])
-    isfile(path) || throw(ConfigError("run.legacy", "the legacy case \"$name\" is listed in " *
-                                      "DRIVER_FILES but $path does not exist"))
-    sym = Symbol("AeolusDriver_", name)
-    m = Module(sym)
-    # bound in Main, where its name says it is: Serialization finds a type
-    # by its module path, and a checkpoint holds the driver's own types
-    # (the Berlin case's structural state, #269)
-    isdefined(Main, sym) || Core.eval(Main, :(const $sym = $m))
-    # what `module` defines for its body: include (relative to the file) and eval
-    Core.eval(m, :(include(p::AbstractString) = Base.include($m, p)))
-    Core.eval(m, :(eval(x) = Core.eval($m, x)))
-    Base.include(m, path)
-    haskey(_DRIVERS, name) ||
-        throw(ConfigError("run.legacy", "$path did not register the legacy case \"$name\""))
-    return nothing
-end
-
-"""
     run_driver(name) -> AbstractRunDriver
     run_driver(cfg::RunConfig) -> AbstractRunDriver
 
-What runs: the model (`name = "model"`) or the legacy case `name`, loading
-it from [`DRIVER_FILES`](@ref) on first use; for a config, the one its
-schema names ([`config_case`](@ref)). A [`ConfigError`](@ref) for a name
+What runs: the model (`name = "model"`) or the legacy case `name`; for a
+config, the one its schema names ([`config_case`](@ref)). A [`ConfigError`](@ref) for a name
 that has a schema but nothing to run it (`"common"`), or none at all.
 """
 function run_driver(name::AbstractString)
-    _ensure_driver(name)
     haskey(_RUN_DRIVERS, name) && return _RUN_DRIVERS[name]
     throw(ConfigError("run.legacy", (haskey(_DRIVERS, name) ?
         "the schema \"$name\" cannot be run" :

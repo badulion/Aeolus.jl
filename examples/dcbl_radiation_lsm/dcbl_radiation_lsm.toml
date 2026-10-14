@@ -1,0 +1,78 @@
+# Coupled example 01 — a dry convective boundary layer over a slab land
+# surface with radiative cooling (formerly
+# examples/coupled/01_dcbl_radiation_lsm.jl). 3200 × 3200 × 1600 m on 32³,
+# periodic laterally, free-slip walls in z, a Rayleigh sponge above
+# 1200 m, Smagorinsky-Lilly. θ = 300 K mixed to 800 m, +3 K/km above,
+# 0.05 K noise. The air cools at 2 K/day; the ground is a SlabLand
+# (T_s = 297 K, C_s = 1e5 J m⁻² K⁻¹, albedo 0.25) warmed by a shortwave
+# half-wave of 800 W m⁻² over the 3 h and 340 W m⁻² of longwave, and it
+# heats the air with the bulk flux Q = 0.01 m/s (T_s − 300 K).
+#
+#   julia --project -m Aeolus run examples/dcbl_radiation_lsm/dcbl_radiation_lsm.toml
+#   julia --project=. examples/dcbl_radiation_lsm/plot_dcbl_radiation_lsm.jl runs/<date>_dcbl_radiation_lsm_<id>
+#
+# The script this replaces set the flux on a simulation built with
+# θ_flux_bottom = 0, whose surface-flux flag is frozen off at construction,
+# so its land never heated the air; the run type applies the flux (EX-d,
+# #441; test/config_cases.jl).
+
+schema_version = 2
+
+[run]
+name = "dcbl_radiation_lsm"
+seed = 1
+
+[grid]
+size = [32, 32, 32]
+extent = [3200.0, 3200.0, 1600.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.81
+
+[boundaries]
+z = "free_slip"
+
+[sgs]
+model = "smagorinsky"
+c_s = 0.17
+pr_t = 0.3333333333333333
+
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_amplitude = 0.05
+
+[forcing]
+radiative_cooling = -2.315e-5   # −2 K/day
+
+[surface]
+model = "slab"
+temperature = 297.0
+heat_capacity = 1e5
+albedo = 0.25
+exchange_velocity = 0.01
+theta_ref = 300.0
+rho_cp = 1005.0
+sw_peak = 800.0
+sw_duration = 10800.0
+lw_down = 340.0
+
+[timestep]
+scheme = "euler"
+
+[time]
+dt = 5.0
+duration = 10800.0              # 3 h
+
+[logging]
+diagnostics_cadence = 360.0     # 30 rows
+
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
+[test]
+overrides = ["grid.size=[16,16,16]", "time.duration=\"none\"", "time.nsteps=10"]

@@ -18,8 +18,8 @@ using Aeolus
 using Aeolus.Config
 using Aeolus.IO: read_run_toml
 
-const CLI_CFGS = joinpath(pkgdir(Aeolus), "examples", "configs")
-const TGV = joinpath(CLI_CFGS, "taylor_green_vortex.toml")
+const CLI_EX = joinpath(pkgdir(Aeolus), "examples")
+const TGV = joinpath(CLI_EX, "taylor_green_vortex", "taylor_green_vortex.toml")
 const SMALL = ["--set", "grid.size=[8,8,8]", "--set", "time.duration=\"none\"",
                "--set", "time.nsteps=4", "--set", "fftw.planner=\"estimate\""]
 
@@ -42,12 +42,12 @@ cli_file(text) = (p = joinpath(mktempdir(), "c.toml"); write(p, text); p)
         [time]
         dt = 0.1
         duration = 1.0
-        shceme = "euler"
+        durtion = 2.0
         """)
     rc, out, err = cli("check", bad)
     @test rc == 2
     @test occursin("grid.size", err) && occursin("3 integers", err)
-    @test occursin("time.shceme", err) && occursin("did you mean \"scheme\"", err)
+    @test occursin("time.durtion", err) && occursin("did you mean \"duration\"", err)
     @test occursin(bad, err)
     @test isempty(out)
     # a bad override is a config error too
@@ -115,7 +115,7 @@ end
                  ["run", TGV, "--set", "run.driver=\"simulation\"", "--root", root2],   # removed (ONE-b)
                  ["run", TGV, "--set", "run.legacy=\"nocase\"", "--root", root2],
                  ["check"], ["check", "/nonexistent/c.toml"], ["options", "nosection"],
-                 ["options", "nocase", "grid"], ["options", "cbl", "nosection"],
+                 ["options", "nocase", "grid"], ["options", "urban_parent", "nosection"],
                  ["preprocess", "static", TGV])                               # AeolusPrep.jl's since ONE-h (#457)
         rc, _, err = cli(args...)
         @test rc == 2
@@ -144,14 +144,14 @@ end
     end
     # [output] extended by the model; its default set (ONE-c): u, v, w, theta and the domain means
     @test occursin("variables : [string, …] = [\"u\", \"v\", \"w\", \"theta\", \"u_mean\"", out)
-    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("cbl", out) && occursin("urban", out)
+    @test occursin("legacy cases (aeolus options <case>): ", out) && occursin("urban_parent", out)
     # the cross-field checks, in words (CFG-i, #364): after the sections, one line each
     @test occursin("\ncross-field checks:\n  - exactly one of `time.duration` and `time.nsteps`", out)
     rc, out1, _ = cli("options", "grid")
     @test !occursin("cross-field checks", out1)          # one section: no checks
     # a legacy case, and one of its sections
-    rc, out, _ = cli("options", "cbl", "cbl")
-    @test rc == 0 && occursin("[cbl]", out) && occursin("the legacy case \"cbl\"", out)
+    rc, out, _ = cli("options", "urban_parent", "grid")
+    @test rc == 0 && occursin("[grid]", out) && occursin("the legacy case \"urban_parent\"", out)
     # --markdown: the docs' tables, the same text option_reference(...; format = :markdown) gives
     rc, md, _ = cli("options", "--markdown")
     @test rc == 0 && startswith(md, option_reference(; format = :markdown))
@@ -163,43 +163,18 @@ end
     @test_throws ArgumentError option_reference(; format = :html)
 end
 
-@testset "example legacy cases are loaded on first use (DRIVER_FILES)" begin
-    dir = mktempdir()
-    drv = joinpath(dir, "toy_driver.jl")
-    write(drv, """
-        using Aeolus, Aeolus.Config
-        struct ToyDriver <: Config.AbstractRunDriver end
-        mutable struct ToyRun; x::Vector{Float64}; n::Int; end
-        Config.driver_name(::ToyDriver) = "cfgtest_toy"
-        Config.driver_sections(::ToyDriver) = [section("toy") do s
-            option!(s, "steps", Int; default = 3, range = (0, 100))
-        end]
-        Config.build(::ToyDriver, cfg) = ToyRun([1.0], cfg.toy.steps)
-        function Aeolus.run!(::ToyDriver, r::ToyRun, rf, ck; callback = nothing)
-            for _ in 1:r.n; r.x[1] *= 2; end
-            return r
-        end
-        Config.state_fields(r::ToyRun) = (x = r.x,)
-        register_driver!(ToyDriver())
-        """)
-    Config.DRIVER_FILES["cfgtest_toy"] = drv            # absolute: joinpath keeps it
-    try
-        @test !("cfgtest_toy" in registered_drivers())
-        p = cli_file("[run]\nlegacy = \"cfgtest_toy\"\n[toy]\nsteps = 5\n")
-        cfg = load_run_config(p)                        # the schema lookup loads the file
-        @test "cfgtest_toy" in registered_drivers()
-        @test cfg.toy.steps == 5
-        res = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-        @test Base.invokelatest(state_fields, res.obj).x == [32.0]   # defined after this testset compiled
-        # a listed file that registers nothing is a config error
-        Config.DRIVER_FILES["cfgtest_none"] = cli_file("x = 1")
-        e = try load_run_config(cli_file("[run]\nlegacy = \"cfgtest_none\"\n")); catch err; err; end
-        @test e isa ConfigError && occursin("did not register", sprint(showerror, e))
-        # "common" has a schema but nothing runs it
-        @test_throws ConfigError run_driver("common")
-    finally
-        delete!(Config.DRIVER_FILES, "cfgtest_toy"); delete!(Config.DRIVER_FILES, "cfgtest_none")
+@testset "a legacy case is a registered schema; nothing is loaded from examples/" begin
+    # no file under examples/ registers a case or builds a model (ONE-i #458):
+    # the legacy cases are exactly the schemas registered by the package
+    @test legacy_cases() == sort!(filter(n -> !(n in (Config.MODEL, "common")), registered_drivers()))
+    @test !isdefined(Config, :DRIVER_FILES)
+    for gone in ("column", "dns_decay",                 # their files left examples/ (ONE-i #458)
+                 "advection", "cbl", "inflow_fetch", "obstacle_channel", "shear_layer", "flat_plate", "sgs_decay")   # ONE-l #475
+        e = try load_run_config(cli_file("[run]\nlegacy = \"$gone\"\n")); nothing; catch err; err; end
+        @test e isa ConfigError && occursin("unknown legacy case", sprint(showerror, e))
     end
+    # "common" has a schema but nothing runs it
+    @test_throws ConfigError run_driver("common")
 end
 
 @testset "aeolus as a subprocess" begin

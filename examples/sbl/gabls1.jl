@@ -4,9 +4,9 @@
 #
 # 400 m cube, U_g = 8 m/s, f = 1.39e-4 s⁻¹, z0 = 0.1 m, θ = 265 K to 100 m
 # then +0.01 K/m, surface cooled at 0.25 K/h, 9 h; statistics of hours 8-9.
-# The runs are the sweep examples/sbl/configs/gabls1_closures.toml (the
+# The runs are the sweep examples/sbl/gabls1_closures.toml (the
 # model with its components: the geostrophic forcing [large_scale_forcing],
-# the surface heat flux and stress of [surface_layer] (SurfaceExchange,
+# the surface heat flux and stress of [surface] model = "most" (SurfaceExchange,
 # WallModels.MOSTWallLaw), the SGS closure stability-corrected by
 # Operators.StabilityCorrected), one run folder per closure: Smagorinsky
 # C_s = 0.1 with the Brown et al. 1994 correction, uncorrected, and with
@@ -17,8 +17,8 @@
 # low-level jet with the intercomparison ranges of
 # examples/sbl/data/gabls1_reference.csv and makes the figure.
 #
-#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml   # 64³: hours per closure
-#   julia --project -m Aeolus run examples/sbl/configs/gabls1_closures.toml --set grid.size=[32,32,32]
+#   julia --project -m Aeolus run examples/sbl/gabls1_closures.toml   # 64³: hours per closure
+#   julia --project -m Aeolus run examples/sbl/gabls1_closures.toml --set grid.size=[32,32,32]
 #   julia --project examples/sbl/gabls1.jl runs/*gabls1*                       # the table and the figure
 #
 # writes examples/sbl/output/gabls1_N<N>.svg and gabls1_N<N>_profiles.csv

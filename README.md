@@ -38,7 +38,7 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **106,776 assertions in the fast tier (135 jobs)**, run by CI on every
+- **121,573 assertions in the fast tier (147 jobs)**, run by CI on every
   pull request; the full tier adds the validation mini-simulations.
   104,000 lines of source, 72,000 lines of tests.
 - **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
@@ -47,9 +47,12 @@ building height · resolved vertical velocity at 30 m.</sub>
 - **Single-node CPU, multithreaded** through KernelAbstractions, with
   results bit-identical at every thread count. MPI and GPU are planned,
   not present.
-- **Every run is a TOML file**: `julia -m Aeolus run config.toml`, strict
-  validation, and a run folder whose `run.toml` replays the run bit for
-  bit.
+- **One model; every run is a TOML file plus input drivers**:
+  `julia -m Aeolus run config.toml` runs the same model every time, its
+  sections switch components on, validation is strict, and the run
+  folder's `run.toml` replays the run bit for bit. Examples are
+  configuration only: `examples/<case>/<case>.toml` with its NetCDF
+  drivers, and no script builds or steps a model.
 
 ---
 
@@ -254,43 +257,71 @@ depend on the thread count.
 
 ## Quick start
 
-A dry convective boundary layer — warm below, cool above, left to overturn:
+A run is a configuration plus its input drivers. A dry convective
+boundary layer — a heated surface under a capped mixed layer — ships as
+`examples/dry_convective_bl/dry_convective_bl.toml` (abridged):
 
-```julia
-using Aeolus, Printf
-using Aeolus.Fields: set!
+```toml
+schema_version = 2
 
-L, θ₀, Δθ = 1000.0, 300.0, 2.0
-mesh = RegularGrid(; size = (48, 48, 48), extent = (L, L, L), halo = (2, 2, 2))
-sim  = BoussinesqSimulation(mesh; θ₀ = θ₀, g_accel = 9.81,
-                                  C_s = 0.17, Pr_t = 1/3)
+[run]
+name = "dry_convective_bl"
 
-# unstable stratification plus a small perturbation to break symmetry
-set!(sim.θ, (x, y, z) -> θ₀ + Δθ * (0.5 - z/L) + 1e-3 * Δθ * (rand() - 0.5))
+[grid]
+size = [32, 32, 32]
+extent = [3200.0, 3200.0, 1600.0]
 
-w_star = sqrt(9.81 * Δθ / θ₀ * L)          # free-fall velocity scale
-dt     = 0.3 * mesh.dx / w_star            # CFL
+[sgs]
+model = "smagorinsky"
 
-for _ in 1:400
-    step!(sim, dt)
-end
+[surface_theta_flux]
+bottom = 0.24                   # K m/s
 
-@printf("KE = %.1f   max|div u| = %.2e   max nu_t = %.4f\n",
-        kinetic_energy(sim), max_divergence(sim), max_νt(sim))
+[sponge]
+z_start = 1200.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_amplitude = 0.1
+perturbation_depth = 100.0
+
+[timestep]
+scheme = "euler"
+
+[time]
+dt = 5.0
+duration = 300.0
+
+[checks]                        # results.toml; exit code 3 if a required check fails
+finite = { required = true }
+energy_closure = { required = true }
+momentum_closure = { required = true }
 ```
-
-```
-KE = 24701.0   max|div u| = 2.80e-17   max nu_t = 0.0337
-```
-
-Divergence stays at machine precision: the fractional-step projection is
-doing its job. Run the full test suite with `Pkg.test()`, or a worked case
-directly:
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml
-julia --project -m Aeolus run examples/configs/buoyant_convection.toml
+julia --project -m Aeolus run examples/dry_convective_bl/dry_convective_bl.toml
 ```
+
+The run folder (`runs/<date>_dry_convective_bl_<id>/`) holds `run.toml`,
+which replays the run bit for bit, the log, `diagnostics.csv`, the NetCDF
+output and `output/results.toml` with the checks. Measured on one thread
+(60 steps of 5 s, 29 s wall):
+
+```
+check energy_closure passed    value=3.39545e-13  tolerance=1.0e-6  W m-2
+check finite passed            value=0.0
+check momentum_closure passed  value=2.41648e-21  tolerance=1.0e-9  kg m-1 s-2
+```
+
+The air gained 279.98 W m⁻² of heat, the surface flux of 0.24 K m s⁻¹
+times ρ c_p, and every watt of it is attributed to a stage of the
+pipeline.
+
+Every example is a directory `examples/<case>/` like this one — the
+Taylor-Green vortex, decaying turbulence, a cloud spinning up rain, a
+plume behind a cube, GABLS1–4, DNS against LES, Berlin. A bare file with
+no sections at all is a minimal dry LES; `aeolus options` lists every
+section and key.
 
 ---
 
@@ -359,14 +390,14 @@ julia --project=. examples/urban/alexanderplatz_animation.jl
 ```
 
 Nothing in the simulation is tuned to Alexanderplatz — the urban site of
-the model (`Aeolus.UrbanCase`, `[urban] enabled = true`) runs any city given as a
+the model (`Aeolus.Urban`, `[urban] enabled = true`) runs any city given as a
 TOML file plus its static and dynamic input drivers. Output is a single `.nc` file carrying the full 3-D
 state (`u`, `v`, `w`, `θ`, `p`, `qv`, `ql`, `qr`, the NO / NO₂ / O₃ / VOC /
 HNO₃ species and the other tracers, the moist buoyancy `b_moist`) plus
 surface fields (`Ts`, shortwave and longwave in, `H_sfc`, `LE_sfc`, `G_soil`,
 `u_star`, soil temperature and moisture availability, `r_a`, `vd_O3`, the
 cloud-shadow transmittance) and static geometry, at every saved time level.
-The run is assembled from one file per coupling (`src/urban/couplings/`);
+The run is assembled from one file per coupling (`src/components/urban/`);
 see [the Berlin case](docs/src/design/berlin_case.md).
 
 ---
@@ -392,7 +423,9 @@ julia --project=docs docs/make.jl     # build locally (never deploys)
 - **Run configuration** — guide, generated option reference for every
   driver, input-format specifications
 - **API reference** — generated from the docstrings, module by module
-- **Examples** — worked cases with validation output
+- **Examples** — one directory per case (`examples/<case>/`): the
+  configuration, its input drivers, its reference data and scripts that
+  read the output
 
 ---
 

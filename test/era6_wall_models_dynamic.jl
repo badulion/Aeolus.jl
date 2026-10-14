@@ -24,6 +24,9 @@ using Random
 using Statistics
 using FFTW: ifft
 using Aeolus
+# the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
+isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
+using .ChannelCases
 using Aeolus.WallModels
 
 const _WM = Aeolus.WallModels
@@ -261,7 +264,7 @@ end
     us = Dict(k => Float64[] for k in (:d32, :d16, :f16)); αs = Dict(k => Float64[] for k in (:a32, :a16))
     for t in (4.0, 5.0, 6.0)
         run_channel!(case, t)
-        uc, vc = _WM._first_cell_velocity(case.sim)
+        uc, vc = ChannelCases._first_cell_velocity(case.sim)
         u16, v16 = _blockmean(uc, 2), _blockmean(vc, 2)
         a32, c32 = dynamic_alpha(dr32, uc, vc, z)
         a16, c16 = dynamic_alpha(dr16, u16, v16, z)

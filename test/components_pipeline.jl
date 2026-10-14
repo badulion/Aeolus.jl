@@ -34,7 +34,7 @@ const CP_DIGESTS = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simu
 # gains the three `sgs.*` columns every other closure already had; the other
 # columns are the master bytes.
 const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
-                               if n != "taylor_green_vortex" && !any(x -> startswith(x, "sgs.closure"), o) &&
+                               if n != "taylor_green_vortex" && !any(x -> startswith(x, "sgs.model"), o) &&
                                   !any(x -> startswith(x, "sgs.stability"), o))
 
 @testset "pipeline acceptance: every simulation-config variant reproduces master's digests ($(length(SD_VARIANTS)) runs, 16³)" begin
@@ -44,7 +44,7 @@ const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
     inputs = sd_made_inputs()
     for (label, (name, ovr)) in SD_VARIANTS
         sd_anelastic(label) && continue      # new physics in ONE-j (#460): see the next testset
-        cfg = load_run_config(joinpath(SD_CONFIGS, name * ".toml");
+        cfg = load_run_config(sd_config(name);
                               overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))
         r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
         @test r.obj.model isa Model
@@ -104,10 +104,10 @@ end
         @test (label, d[key]) == (label, ref[label]["diagnostics_csv"])
     end
     # the couplings are one component of the domain, attached where they acted before
-    cfg = load_run_config(joinpath(SD_CONFIGS, "..", "coupled", "configs", "flow_past_cube.toml");
+    cfg = load_run_config(sd_config("flow_past_cube");
                           overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\""))
     r = cd(() -> Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg),
-           joinpath(SD_CONFIGS, "..", "coupled", "configs"))
+           joinpath(SD_EXAMPLES, "flow_past_cube"))
     c = only(x for x in only(r.model.domains).components if x isa Aeolus.SimulationDriver.SimulationCouplings)
     @test map(st -> st.name, CPC.stages(c)) == (:surface_flux, :body_force, :surface_update)
 end
@@ -185,7 +185,7 @@ cp_bits(sim) = [reinterpret(UInt64, vec(copy(f.data))) for f in (sim.u, sim.v, s
 const CP_COR = (; f = 1.0e-3)                                  # [coriolis]
 const CP_SPO = (alpha_max = 0.02, z_start = 250.0)             # [sponge]
 const CP_BND = (bottom = 0.1, top = -0.03)                     # [surface_theta_flux]
-const CP_SGS = (closure = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :none)
+const CP_SGS = (model = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :none)
 
 # ---------------------------------------------------------------------------
 
@@ -479,10 +479,10 @@ end
     @test maximum(interior_view(sim.νt)) > 0                      # the :sgs component ran
     # the closures of [sgs]
     bc(o) = CPC.sgs_closure(cp_domain(cp_core(c), SGS => merge(CP_SGS, o)))
-    @test bc((; closure = :vreman, c_s = nothing)) isa VremanClosure
-    @test bc((; closure = :amd, c_s = nothing)).C == 0.3
+    @test bc((; model = :vreman, c_s = nothing)) isa VremanClosure
+    @test bc((; model = :amd, c_s = nothing)).C == 0.3
     @test bc((; stability = :brown_et_al_1994)) isa StabilityCorrected
-    @test bc((; closure = :none)) === nothing
+    @test bc((; model = :none)) === nothing
 end
 
 @testset "checkpoint round trip: a restart through the components is the uninterrupted run ($c)" for c in (:boussinesq, :anelastic)

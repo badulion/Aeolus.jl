@@ -78,7 +78,7 @@ type and the component names are always checked.
 `CheckpointSchedule(dir; every_steps, every_seconds, keep)` writes
 `dir/checkpoint_<step>.jls` every M steps or S seconds of wall clock,
 keeps the newest K, and `resume!` restores the newest one at start. The
-shared run loop `run_channel!` takes it as a keyword and also writes a
+shared run loop `run_channel!` of the tests' channel harness takes it as a keyword and also writes a
 final checkpoint, so re-running a finished phase is instant; the model's
 run takes the one of `[checkpoint]`. (The `sbl_run!` loop, the
 relaminarisation sweep and `dns256_generate.jl` that used it went with
@@ -243,7 +243,7 @@ Run folders of the old `berlin` example driver (before #438) cannot be
 resumed: their `run.toml` names a driver that no longer exists, and their
 checkpoints hold the case's types under the example's module
 (`Main.AeolusDriver_berlin`), which Serialization cannot map to
-`Aeolus.UrbanCase`; start such a run again from its config (today a
+`Aeolus.Urban`; start such a run again from its config (today a
 model config of an urban site, ONE-e #454). Run folders of the `urban`
 run type (`[run] legacy = "urban"`, before ONE-e) cannot be resumed
 either: the type is gone (a clean break); start them again from the

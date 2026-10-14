@@ -42,8 +42,9 @@ const MN_HEAD = """
     seed = 7
     [fftw]
     planner = "estimate"
-    [time]
+    [timestep]
     scheme = "rk3"
+    [time]
     dt = 4.0
     duration = "none"
     nsteps = 6
@@ -124,8 +125,8 @@ end
     @test occursin("measures no budgets", keyed(e)["output.variables"])
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.forcing]\nradiative_cooling = -1e-5\n"))
     @test occursin("not nested", keyed(e)["domain[2].domain.parent"])
-    e = mn_error(() -> mn_cfg(mn_two() * "[domain.dynamics]\ncore = \"anelastic\"\n"))
-    @test occursin("boussinesq", keyed(e)["domain[2].dynamics.core"])
+    e = mn_error(() -> mn_cfg(mn_two() * "[domain.core]\nmodel = \"anelastic\"\n"))
+    @test occursin("boussinesq", keyed(e)["domain[2].core.model"])
     # placement the stencils cannot take is refused at build, naming the domain
     cfg = mn_cfg(mn_two(; origin = "[0.0, 400.0]"); overrides = ["boundaries.x=\"free_slip\""])
     e = mn_error(() -> Config.build(SimulationDriverType(), cfg))

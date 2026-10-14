@@ -1,9 +1,9 @@
 # Filtered-DNS fixture of Era VI (P56-c, #178): decaying isotropic
 # turbulence computed by Aeolus itself, from a fixed seed.
 #
-# Included by test/era6_apriori_sgs.jl, the thread-invariance worker and the
-# `dns_decay` run type (examples/validation/dns_driver.jl) that the `sgs_decay`
-# run type builds on.
+# Included by test/era6_apriori_sgs.jl, the thread-invariance worker, the
+# benchmarks and the SGS validation fixture test/fixtures/sgs_validation.jl,
+# which starts from this DNS (it was the `sgs_decay` run type until ONE-l, #475).
 #
 # Set-up. A triply periodic 2π box at N³ (96³ in the test and the
 # example; 48³ was the test's size before the review of #208) is filled
@@ -115,8 +115,7 @@ the simulation `sim` on the triply periodic 2π box at `N`³ filled by
 to u' = 1, and its history `hist = (t, K, ε, S, budget_err)` (one entry per
 step, the initial one included). Advance it with [`dns_step!`](@ref)
 while [`dns_running`](@ref); [`dns_summary`](@ref) is the result of
-[`dns_decay`](@ref). The `dns_decay` run type (examples/validation/dns_driver.jl)
-runs the same steps.
+[`dns_decay`](@ref).
 """
 function dns_start(; N::Integer = 48, seed::Integer = 1, ν::Real = DNS_NU48 * (48 / N)^(4 / 3),
                    spectrum = _dns_spectrum)

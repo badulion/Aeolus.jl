@@ -1,10 +1,10 @@
 # P58-d (#194), ONE-g (#456): GABLS3 (Cabauw, 2 July 2006; Basu 2008 case
 # description, Bosveld et al. 2014a,b) on the one model — the configuration
-# examples/sbl/configs/gabls3.toml with its dynamic driver (the geostrophic
+# examples/sbl/gabls3.toml with its dynamic driver (the geostrophic
 # wind, the advective tendencies, the 0.25 m θ series), reduced to
 # 16 × 16 × 48 (Δx = 25 m, Δz = 8.3 m on 400 × 400 × 400 m) for CI. The full
 # runs (6.25 m and finer, GABLS2, GABLS4, the CASES-99 hockey stick) are the
-# configs of examples/sbl/configs/.
+# configs of examples/sbl/.
 
 using Test
 using Aeolus

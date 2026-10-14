@@ -24,7 +24,7 @@ tested at are in
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
 - [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
 - σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
-- The stable-boundary-layer cases (GABLS1-4, CASES-99) are configurations of the model since ONE-g (#456): `examples/sbl/configs/`, run with the components `LargeScale`, `SurfaceLayer`, the retargeted `Sponge` and `Towers` ([Components](../components.md); [theory](../theory/stable_boundary_layer.md)). The `sbl` run type (`Aeolus.StableBoundaryLayer`) and its channel cases are gone.
+- The stable-boundary-layer cases (GABLS1-4, CASES-99) are configurations of the model since ONE-g (#456): `examples/sbl/`, run with the components `LargeScale`, `SurfaceLayer`, the retargeted `Sponge` and `Towers` ([Components](../components.md); [theory](../theory/stable_boundary_layer.md)). The `sbl` run type (`Aeolus.StableBoundaryLayer`) and its channel cases are gone.
 
 ## Shared contract — SGS closures (P54-a)
 
@@ -253,12 +253,15 @@ Aeolus.CutCell.wall_shear_stress(::Aeolus.Simulations.BoussinesqSimulation)
 Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
 shared by every Era VI benchmark. The cases that produce the flows —
 `half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
-2000) and `channel_case` (the two-wall channel) — are in
-[WallModels](era6/wall_models.md); theory and measured numbers in
+2000) and `channel_case` (the two-wall channel) — are the test fixture
+`test/fixtures/channel_cases.jl` (module `ChannelCases`; part of
+[WallModels](era6/wall_models.md) until ONE-l, #475: the channel cases
+are not configurations of the model); theory and measured numbers in
 [Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
 
 ```julia
 using Aeolus
+include("test/fixtures/channel_cases.jl"); using .ChannelCases
 hc = half_channel_case(; N = 24, closure = StaticSmagorinsky(0.1))
 run_channel!(hc, 8.0)                                   # spin-up, H/u* = 1
 st = run_channel!(hc, 20.0; average_from = 8.0)         # st.τ_wall, st.phi_m, st.stress

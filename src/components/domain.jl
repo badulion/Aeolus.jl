@@ -215,40 +215,164 @@ function _core_step!(sim::MassWeightedSimulation, d::Domain, dt, bf = nothing, p
     return sim
 end
 
+# ---------------------------------------------------------------------------
+# a component that takes the core step (ONE-k, #474)
+# ---------------------------------------------------------------------------
+
 """
-    step!(d::Domain, dt) -> d
-    step!(m::Model, dt) -> m
+    takes_core_step(c) -> Bool
+
+Whether component `c` takes its domain's core step itself
+([`advance_core!`](@ref)) and picks its length ([`next_dt`](@ref)),
+instead of the domain's `scheme` and `cfl`: the urban site's time
+stepper (fixed, adaptive with retried pieces, or IMEX; ONE-k, #474).
+Default `false`. A domain holds at most one such component; the first
+in its order is used.
+"""
+takes_core_step(::AbstractComponent) = false
+
+"""
+    advance_core!(c, d::Domain, dt)
+
+The core step of `d` over `dt` (stages 6–10) taken by `c`, a component
+that [`takes_core_step`](@ref); it calls the core's step with the
+pipeline's hooks of [`core_hooks`](@ref) (or the equivalent).
+"""
+function advance_core! end
+
+"""
+    next_dt(c, d::Domain) -> dt
+
+The length of the next step of `d` that `c`, the component that
+[`takes_core_step`](@ref), picks: a fixed `dt` or its own stability
+limit.
+"""
+function next_dt end
+
+"""
+    check_dt(c, d::Domain, dt)
+
+Throw an `ArgumentError` when `c` cannot take an explicit step of `dt`
+on `d` (`step!(d, dt)`, before any stage runs); default: nothing. The
+urban site's adaptive stepper refuses a `dt` above its stability limit
+(#392).
+"""
+check_dt(::AbstractComponent, d, dt) = nothing
+
+# the component that takes the core step, or nothing (statically: recursion over the tuple)
+_core_taker(::Tuple{}) = nothing
+_core_taker(cs::Tuple) = takes_core_step(first(cs)) ? first(cs) : _core_taker(Base.tail(cs))
+"The component of `d` that [`takes_core_step`](@ref), or `nothing`."
+core_taker(d::Domain) = _core_taker(d.components)
+
+"""
+    last_step_dt(dt, remaining) -> dt
+
+The step to take when `remaining` seconds are left: `dt`, or all of
+`remaining` when it is no longer than `dt`, or half of it when it is
+shorter than `2dt` (so a run does not end on a sliver of a step).
+"""
+last_step_dt(dt, remaining) = remaining <= dt ? remaining : remaining < 2dt ? remaining / 2 : dt
+
+"""
+    step!(d::Domain, dt; checked = true) -> d
+    step!(m::Model, dt; checked = true) -> m
 
 One fixed step of `dt` through the pipeline ([`PIPELINE`](@ref)): the
-drivers advance (stage 1), the stages before the core run, the core steps
-(`step!` or `step_rk3!`) with the components of stages 6–8 called from
-inside it, then the stages after the core.
+drivers advance (stage 1), the stages before the core run, the core
+steps (`step!` or `step_rk3!`, or [`advance_core!`](@ref) of the
+component that [`takes_core_step`](@ref)) with the components of stages
+6–8 called from inside it, then the stages after the core. With
+`checked`, every component's [`check_dt`](@ref) is asked first.
 """
-function step!(d::Domain, dt::Real)
+function step!(d::Domain, dt::Real; checked::Bool = true)
     d.cfl === nothing || throw(ArgumentError("step!: the domain $(d.id) steps adaptively (step_adaptive!)"))
+    checked && foreach(c -> check_dt(c, d, dt), d.components)
     sync_drivers!(d)
     t0 = clock(d)
     _budgets_begin!(d.budgets, d)
     _run_stages!(d, PRE_CORE, dt, t0, t0 + dt)
     _dynamics_open!(d.budgets, d)
-    _core_step!(d.state, d, dt)
-    _dynamics_close!(d.budgets, d)
-    _post_core!(d, dt, t0)
+    st = _core_taker(d.components)
+    if st === nothing
+        _core_step!(d.state, d, dt)
+        _dynamics_close!(d.budgets, d)
+        _post_core!(d, dt, t0, clock(d))
+    else
+        advance_core!(st, d, dt)
+        _dynamics_close!(d.budgets, d)
+        # the stages after the core see the step the component was given
+        # (its pieces may sum to it only to round-off)
+        _post_core!(d, dt, t0, t0 + dt)
+    end
     return d
 end
 
 # stages 11-13: the budgets close after :budgets, before :checks and :output
-function _post_core!(d::Domain, dt, t0)
+function _post_core!(d::Domain, dt, t0, t1)
     if d.budgets === nothing
-        _run_stages!(d, POST_CORE, dt, t0, clock(d))
+        _run_stages!(d, POST_CORE, dt, t0, t1)
     else
-        _run_stages!(d, _POST_CORE_BUDGETS, dt, t0, clock(d))
+        _run_stages!(d, _POST_CORE_BUDGETS, dt, t0, t1)
         _budgets_end!(d.budgets, d, dt)
-        _run_stages!(d, _POST_BUDGETS, dt, t0, clock(d))
+        _run_stages!(d, _POST_BUDGETS, dt, t0, t1)
     end
     return d
 end
-step!(m::Model{<:Tuple,Nothing}, dt::Real) = (foreach(d -> step!(d, dt), m.domains); m)
+step!(m::Model{<:Tuple,Nothing}, dt::Real; checked::Bool = true) =
+    (foreach(d -> step!(d, dt; checked), m.domains); m)
+
+"""
+    pick_dt(m::Model; t_end = nothing) -> dt
+
+The length of the next step of a single-domain model whose domain has a
+component that [`takes_core_step`](@ref): its [`next_dt`](@ref),
+shortened by [`last_step_dt`](@ref) to land on `t_end`.
+"""
+function pick_dt(m::Model{<:Tuple,Nothing}; t_end = nothing)
+    d = only(m.domains)
+    st = _core_taker(d.components)
+    st === nothing && throw(ArgumentError("pick_dt: no component of the domain $(d.id) takes the core step " *
+                                          "(step!(model, dt) or step_adaptive!(model))"))
+    dt = next_dt(st, d)
+    return t_end === nothing ? dt : last_step_dt(dt, t_end - clock(d))
+end
+
+"""
+    step!(m::Model; t_end = nothing) -> m
+
+One step of the length the model's domain picks ([`pick_dt`](@ref)),
+landing on `t_end`.
+"""
+step!(m::Model{<:Tuple,Nothing}; t_end = nothing) = step!(m, pick_dt(m; t_end); checked = false)
+
+"""
+    run_to!(m::Model, t_end; callback = nothing) -> m
+
+Run a single-domain model whose step a component takes
+([`takes_core_step`](@ref)) to the model time `t_end`, as the run loop of
+`aeolus run` does but without its output, monitor and checkpoints: every
+component's [`run_begin!`](@ref), `step!(m)` while the stepping component
+[`run_continues`](@ref) (`callback(m, n)` after the `n`-th step), then
+every [`run_end!`](@ref), also when a step throws.
+"""
+function run_to!(m::Model{<:Tuple,Nothing}, t_end::Real; callback = nothing)
+    d = only(m.domains)
+    st = _core_taker(d.components)
+    st === nothing && throw(ArgumentError("run_to!: no component of the domain $(d.id) takes the core step"))
+    foreach(c -> run_begin!(c, d, Float64(t_end)), d.components)
+    n = 0
+    try
+        while run_continues(st, d)
+            step!(m)
+            n += 1
+            callback === nothing || callback(m, n)
+        end
+    finally
+        foreach(c -> run_end!(c, d), d.components)
+    end
+    return m
+end
 
 """
     component_limits(d::Domain) -> Tuple
@@ -287,7 +411,7 @@ function step_adaptive!(d::Domain; dt_prev = nothing, t_end = nothing)
     res = step_adaptive!(sim, c; dt = dt, sgs = closure, sgs_stress = stress, stepper = stepper,
                                          body_force! = h.body_force!, post_predictor! = h.post_predictor!)
     _dynamics_close!(d.budgets, d)
-    _post_core!(d, res[2], t0)
+    _post_core!(d, res[2], t0, clock(d))
     return res
 end
 step_adaptive!(m::Model{<:Tuple,Nothing}; kw...) = step_adaptive!(only(m.domains); kw...)

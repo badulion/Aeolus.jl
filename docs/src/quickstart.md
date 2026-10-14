@@ -1,42 +1,97 @@
 # Quick start
 
-Aeolus.jl gives you a small, composable set of building blocks. The
-canonical entry point is [`BoussinesqSimulation`](@ref
-Aeolus.Simulations.BoussinesqSimulation), which owns a mesh, boundary
-conditions, a pressure solver, and the prognostic state
-`(u, v, w, p, θ)`.
+Aeolus is **one model** ([One model](design/single_model.md)). A run is a
+configuration — a TOML file that says which modules run and how they are
+set up — plus its static and dynamic input drivers (NetCDF). `aeolus run`
+always runs the same model; the sections of the file switch its
+components on.
 
-## The 20-line Taylor–Green vortex
+## Run an example
 
-```julia
-using Aeolus
+Every example is a case directory, `examples/<case>/`, holding its
+configuration `<case>.toml` (and the drivers in `input/` it needs):
 
-# 1. Mesh
-mesh = RegularGrid(; size=(32,32,32), extent=(2π,2π,2π), halo=(2,2,2))
-
-# 2. Simulation (triply periodic, molecular viscosity only)
-sim = BoussinesqSimulation(mesh; ν = 1e-2)
-
-# 3. Initial condition — the 3D Taylor–Green vortex
-Aeolus.Fields.set!(sim.u, (x,y,z) ->  sin(x)*cos(y)*cos(z))
-Aeolus.Fields.set!(sim.v, (x,y,z) -> -cos(x)*sin(y)*cos(z))
-Aeolus.Fields.set!(sim.w, (x,y,z) ->  0.0)
-
-# 4. Choose a stable dt (viscous + convective CFL)
-dx = mesh.dx
-dt = min(0.4dx / 1.0, 0.4dx^2 / (2sim.ν))
-
-# 5. Advance
-for n in 1:100
-    step!(sim, dt)
-end
-
-@show sim.t, kinetic_energy(sim), max_divergence(sim)
+```bash
+julia --project -m Aeolus run examples/dry_convective_bl/dry_convective_bl.toml
 ```
 
-The full example is the config `examples/configs/taylor_green_vortex.toml`:
-`julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml`
-writes the diagnostics every 0.1 s to the run folder.
+The configuration, abridged (the file comments every choice):
+
+```toml
+schema_version = 2
+
+[run]
+name = "dry_convective_bl"
+seed = 1
+
+[grid]
+size = [32, 32, 32]
+extent = [3200.0, 3200.0, 1600.0]
+
+[boundaries]
+z = "free_slip"
+
+[sgs]
+model = "smagorinsky"
+c_s = 0.17
+
+[surface_theta_flux]
+bottom = 0.24                   # K m/s
+
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_amplitude = 0.1
+perturbation_depth = 100.0
+
+[timestep]
+scheme = "euler"
+
+[time]
+dt = 5.0
+duration = 300.0
+
+[checks]
+finite = { required = true }
+energy_closure = { required = true }
+momentum_closure = { required = true }
+```
+
+RUN_FOLDER_PLACEHOLDER
+
+## Write your own
+
+A file with no sections at all is a minimal dry LES (32³ on 3.2 km ×
+3.2 km × 1.6 km, Smagorinsky, adaptive RK3, one hour); every other module
+is off until its section enables it. Unknown keys are errors, with a
+suggestion:
+
+```bash
+julia --project -m Aeolus check my_case.toml       # validate only
+julia --project -m Aeolus resolve my_case.toml     # print the resolved file: every option of every component
+julia --project -m Aeolus options sgs              # the option reference of one section
+julia --project -m Aeolus run my_case.toml --set grid.size=[16,16,16]
+```
+
+Geometry and forcing that TOML cannot hold (buildings, land use, boundary
+planes, large-scale forcing tables) come from the static and dynamic
+drivers, which the companion package AeolusPrep.jl writes; see
+[Run configuration](design/run_configuration.md). A script that analyses
+a run reads its folder (`run.toml`, `diagnostics.csv`/`.nc`,
+`output/output.nc`, `output/results.toml`); it never builds or steps the
+model (`test/examples_enforcement.jl`).
+
+## Under the hood: the dynamical core
+
+A run's `Model` holds one `Domain` per grid; each domain holds its core,
+a [`BoussinesqSimulation`](@ref Aeolus.Simulations.BoussinesqSimulation)
+or an `AnelasticSimulation`, and steps it through the fixed stage
+pipeline ([Components and the stage pipeline](design/components.md)). The
+physics modules' tests drive the core directly; the rest of this page
+describes it for that use, not as the way to set up a run.
 
 ## Anatomy of a `BoussinesqSimulation`
 

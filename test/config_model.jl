@@ -38,10 +38,10 @@ cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktemp
     cfg = load_run_config(IOBuffer(""))
     @test Config.config_case(cfg) == "model" && cfg.run.name == "aeolus"
     @test cfg.grid.size == (32, 32, 32) && cfg.grid.extent == (3200.0, 3200.0, 1600.0)
-    @test cfg.dynamics.core === :boussinesq && cfg.dynamics.theta0 == 300.0 && !cfg.dynamics.moisture
+    @test cfg.core.model === :boussinesq && cfg.dynamics.theta0 == 300.0 && !cfg.dynamics.moisture
     @test (cfg.boundaries.x, cfg.boundaries.y, cfg.boundaries.z) == (:periodic, :periodic, :free_slip)
-    @test cfg.sgs.closure === :smagorinsky
-    @test cfg.time.scheme === :rk3 && cfg.time.dt === :adaptive && cfg.time.cfl == 0.5 &&
+    @test cfg.sgs.model === :smagorinsky
+    @test cfg.timestep.scheme === :rk3 && cfg.time.dt === :adaptive && cfg.time.cfl == 0.5 &&
           cfg.time.dt_max == 10.0 && cfg.time.duration == 3600.0 && cfg.time.nsteps === nothing
     # the components: the advection and the SGS, nothing else until a section enables it
     @test enabled_components(cfg) == Any[CentredAdvection, SGS]
@@ -82,17 +82,27 @@ end
     sch = driver_schema()
     for C in COMPONENTS
         s = only(x for x in sch.sections if x.name == CMC.section(C))
-        @test [(o.key, o.default) for o in s.options] == [(o.key, o.default) for o in CMC.schema(C).options]
+        own = CMC.schema(C)
+        if own.selector === nothing
+            @test [(o.key, o.default) for o in s.options] == [(o.key, o.default) for o in own.options]
+        else        # a slot section (ONE-m, #476): the component's providers are those of the merged section
+            for p in own.selector.providers
+                q = only(x for x in s.selector.providers if x.name == p.name && x.kinds == p.kinds)
+                @test [(o.key, o.default) for o in q.options] == [(o.key, o.default) for o in p.options]
+            end
+        end
         @test is_domain_section(sch, s.name)
     end
     @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux",
-                                                   "large_scale_forcing", "surface_layer", "towers"]   # ONE-g #456
+                                                   "large_scale_forcing", "surface", "towers",   # ONE-g #456, ONE-m #476
+                                                   "inflow_statistics", "kinematic_flow", "fringe"]    # ONE-l #475
     @test Set(sch.domain_sections) == Set(DOMAIN_SECTIONS)
-    # run-level sections: the common ones and time, output, checks (no preprocess: AeolusPrep.jl, ONE-h)
+    # run-level sections: the common ones and time, timestep (one scheme steps every domain, ONE-m #476),
+    # output, checks (no preprocess: AeolusPrep.jl, ONE-h)
     @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==
-          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "checks"])
+          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "timestep", "checks"])
     # a component is enabled by its own section
-    cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sponge]\nalpha_max = 0.01\nz_start = 1200.0\n[sgs]\nclosure = \"none\"\n"))
+    cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sponge]\nalpha_max = 0.01\nz_start = 1200.0\n[sgs]\nmodel = \"none\"\n"))
     @test enabled_components(cfg) == Any[CentredAdvection, Coriolis, Sponge]
     d = only(Config.build(SimulationDriverType(), cfg).model.domains)
     @test map(CMC.component_name, d.components) == (:advection, :coriolis, :sponge)
@@ -103,7 +113,7 @@ const CM_TWO = """
     [time]
     dt = 1.0
     [sgs]
-    closure = "vreman"
+    model = "vreman"
     [grid]
     size = [8, 8, 8]
     [[domain]]
@@ -114,7 +124,7 @@ const CM_TWO = """
     origin = [1200.0, 1200.0]
     refinement = [8, 8, 8]
     [domain.sgs]
-    closure = "amd"
+    model = "amd"
     [domain.grid]
     extent = [400.0, 400.0, 200.0]
     """
@@ -124,17 +134,17 @@ const CM_TWO = """
     cfg = load_run_config(p)
     ds = config_domains(cfg)
     @test [d.domain.id for d in ds] == ["outer", "inner"]
-    @test [d.sgs.closure for d in ds] == [:vreman, :amd]                      # the block replaces a key
+    @test [d.sgs.model for d in ds] == [:vreman, :amd]                      # the block replaces a key
     @test [d.grid.size for d in ds] == [(8, 8, 8), (8, 8, 8)]                 # the run-level value, both
     @test [d.grid.extent for d in ds] == [(3200.0, 3200.0, 1600.0), (400.0, 400.0, 200.0)]
-    @test config_origin(cfg, "domain[2].sgs.closure") == p && config_origin(cfg, "domain[1].grid.extent") == "default"
+    @test config_origin(cfg, "domain[2].sgs.model") == p && config_origin(cfg, "domain[1].grid.extent") == "default"
     # per-domain sections are reached through the domains
     @test_throws ArgumentError cfg.grid
-    @test domain_view(cfg, 2).sgs.closure === :amd && domain_view(cfg, 2).time == cfg.time
+    @test domain_view(cfg, 2).sgs.model === :amd && domain_view(cfg, 2).time == cfg.time
     # --set applies to every domain, over the blocks
-    c2 = load_run_config(p; overrides = ["sgs.closure=\"sigma\""])
-    @test [d.sgs.closure for d in config_domains(c2)] == [:sigma, :sigma]
-    @test [d.sgs.closure for d in config_domains(with(cfg, "sgs.closure" => :none))] == [:none, :none]
+    c2 = load_run_config(p; overrides = ["sgs.model=\"sigma\""])
+    @test [d.sgs.model for d in config_domains(c2)] == [:sigma, :sigma]
+    @test [d.sgs.model for d in config_domains(with(cfg, "sgs.model" => :none))] == [:none, :none]
     # the resolved config lists every component's options, per domain, and reloads to itself
     t = config_text(cfg)
     @test count("\n[[domain]]\n", t) == 2
@@ -147,7 +157,7 @@ const CM_TWO = """
     @test !occursin("\n[sgs]\n", t) && !occursin("\n[grid]\n", t)            # only per domain
     c3 = load_run_config(IOBuffer(t))
     @test c3 == cfg && config_text(c3) == t
-    @test [d.sgs.closure for d in config_domains(c3)] == [:vreman, :amd]
+    @test [d.sgs.model for d in config_domains(c3)] == [:vreman, :amd]
     # a run record keeps it: replayed from run.toml, the same config
     rf = start_run(cfg; root = mktempdir(), repo = mktempdir(), console = false); finish_run!(rf)
     @test load_run_config(rf.path) == cfg
@@ -158,8 +168,8 @@ const CM_TWO = """
 end
 
 @testset "[[domain]]: one block is the top-level form" begin
-    top = load_run_config(IOBuffer("dynamic_driver = \"d.nc\"\n[sgs]\nclosure = \"amd\"\n"))
-    one = load_run_config(IOBuffer("[[domain]]\nid = \"main\"\ndynamic_driver = \"d.nc\"\n[domain.sgs]\nclosure = \"amd\"\n"))
+    top = load_run_config(IOBuffer("dynamic_driver = \"d.nc\"\n[sgs]\nmodel = \"amd\"\n"))
+    one = load_run_config(IOBuffer("[[domain]]\nid = \"main\"\ndynamic_driver = \"d.nc\"\n[domain.sgs]\nmodel = \"amd\"\n"))
     @test config_text(top) == config_text(one)
     @test top.domain.dynamic_driver == joinpath(pwd(), "d.nc")
     # the domain's input drivers are hashed under [inputs] per domain
@@ -172,10 +182,10 @@ end
     # a block's own bad value, under domain[i]; a run-level bad value once, under its key
     e = cm_error(() -> load_run_config(IOBuffer(CM_TWO * "[domain.time]\nscheme = \"rk3\"\n")))
     @test any(p -> p.key == "domain[2].time" && occursin("unknown table [domain.time]", p.message), e.problems)
-    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "closure = \"amd\"" => "closure = \"amd2\""))))
-    @test only(e.problems).key == "domain[2].sgs.closure"
-    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "closure = \"vreman\"" => "closure = \"vreman2\""))))
-    @test only(e.problems).key == "sgs.closure"                                # reported once
+    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "model = \"amd\"" => "model = \"amd2\""))))
+    @test only(e.problems).key == "domain[2].sgs.model"
+    e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "model = \"vreman\"" => "model = \"vreman2\""))))
+    @test only(e.problems).key == "sgs.model"                                # reported once
     e = cm_error(() -> load_run_config(IOBuffer(replace(CM_TWO, "id = \"inner\"" => "id = \"outer\""))))
     @test only(e.problems).key == "domain" && occursin("\"outer\" is given 2 times", only(e.problems).message)
     e = cm_error(() -> load_run_config(IOBuffer("domain = 3\n")))

@@ -863,13 +863,15 @@ using Aeolus.Fields: set!, interior_view
     include("budgets_output.jl")       # ONE-c (#452): the one budget system and the one output writer
     include("checks.jl")               # ONE-d (#453): in-model checks: [checks], results.toml, exit code 3
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
+    include("config_slots.jl")        # ONE-m (#476): one section per exclusive slot, a selector key, the provider's options only
     include("model_nesting.jl")       # ONE-f (#455): nesting by [[domain]]: the graph, pipelines per domain, one-/two-way, restart
     include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
     include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
     include("glue_physics.jl")         # ONE-e (#454): the physics moved out of the urban glue into its modules
-    include("config_run_drivers.jl")  # EX-d (#441): the example run types = the old scripts, bit for bit
+    include("config_cases.jl")        # EX-d (#441), ONE-l (#475): the example cases = the old scripts, bit for bit
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
-    include("config_examples.jl")     # CFG-e (#360): [sweep] expansion, example coverage
+    include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
+    include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier

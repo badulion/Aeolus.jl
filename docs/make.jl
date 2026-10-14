@@ -3,12 +3,6 @@ using Aeolus
 
 DocMeta.setdocmeta!(Aeolus, :DocTestSetup, :(using Aeolus); recursive=true)
 
-# The example drivers (DRIVER_FILES: dns, ...) are loaded to
-# document their options and `using FFTW` etc. at top level: give them the
-# package's own environment, whose dependencies the docs environment does
-# not list directly.
-push!(LOAD_PATH, normpath(joinpath(@__DIR__, "..")))
-
 # The option reference of the model and of every legacy case, and the input-format specifications,
 # generated from the schemas into docs/src/reference/ (CFG-i, #364; not committed).
 include(joinpath(@__DIR__, "generate_reference.jl"))
@@ -21,7 +15,7 @@ makedocs(
                 Aeolus.Operators, Aeolus.TimeSteppers,
                 Aeolus.PressureSolvers, Aeolus.Simulations, Aeolus.Components,
                 Aeolus.SimulationDriver, Aeolus.Config, Aeolus.InputDrivers,
-                Aeolus.UrbanCase, Aeolus.RunDrivers],
+                Aeolus.Urban],
     sitename = "Aeolus.jl",
     authors  = "Andrzej Dulny",
     format   = Documenter.HTML(
@@ -35,7 +29,7 @@ makedocs(
         # references that hold the urban site (one table per urban component,
         # ONE-e #454); Documenter's 200 KiB limit otherwise fails the build
         size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/model.md",
-                                 "reference/options/urban_parent.md", "api/urban_case.md"],
+                                 "reference/options/urban_parent.md", "api/urban.md"],
     ),
     pages = [
         "Home"           => "index.md",
@@ -144,9 +138,8 @@ makedocs(
             "Checks"               => "api/checks.md",
             "I/O and checkpoints"  => "api/io.md",
             "Run configuration"    => "api/config.md",
-            "Example run types"    => "api/run_drivers.md",
             "Input drivers"        => "api/input_drivers.md",
-            "Urban site"           => "api/urban_case.md",
+            "Urban site"           => "api/urban.md",
             "Logging"              => "api/logging.md",
             "Physics modules"      => "api/physics.md",
             "Era II — numerics" => [

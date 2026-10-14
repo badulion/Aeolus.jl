@@ -55,7 +55,7 @@ reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary ou
 tier = "full"
 weight = "heavy"
 seconds = 700
-reason = "end-to-end runs of the urban run type on the Berlin configs (49-run smoke matrix, 20-step 64^3 flagship, parent encroachment/Wangara/24 h tiled-surface runs; formerly the by-hand examples/urban/berlin_checks.jl); the run type stays fast in urban_run.jl, config_berlin.jl"
+reason = "end-to-end runs of the urban site on the Berlin configs (49-run smoke matrix, 20-step 64^3 flagship, parent encroachment/Wangara/24 h tiled-surface runs; formerly the by-hand examples/urban/berlin_checks.jl); the urban site stays fast in urban_run.jl, config_berlin.jl"
 
 ["era6_gabls2.jl"]
 tier = "full"

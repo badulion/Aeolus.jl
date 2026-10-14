@@ -21,7 +21,7 @@ import Aeolus.Config as C
 import NCDatasets
 import Markdown
 
-const REF_DRIVERS = sort!(unique!(vcat("model", collect(keys(C.DRIVER_FILES)))))
+const REF_DRIVERS = ["model"]
 const REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "input"))
 
 "The keys of the table rows of a Markdown option reference, per `[table]` heading."
@@ -29,8 +29,11 @@ function md_rows(md::AbstractString)
     rows = Dict{String,Vector{String}}(); order = String[]; cur = nothing
     for l in split(md, '\n')
         m = match(r"^#+ `\[(.+)\]`$", l)
-        if m !== nothing
-            cur = String(m[1]); rows[cur] = String[]; push!(order, cur)
+        # a provider block of a slot section (ONE-m, #476): ### `[sgs]` model = `"tke"` (kinds)
+        p = match(r"^#+ `\[(.+?)\]` (\w+) = `\"(.+?)\"`(.*)$", l)
+        if m !== nothing || p !== nothing
+            cur = m !== nothing ? String(m[1]) : "$(p[1]).$(p[2])=$(p[3])$(p[4])"
+            rows[cur] = String[]; push!(order, cur)
         elseif cur !== nothing && startswith(l, "| `")
             push!(rows[cur], String(match(r"^\| `([^`]+)` \|", l)[1]))
         end
@@ -69,7 +72,12 @@ end
             @test rows[name] == [o.key for o in s.options]
         end
         # the count the issue asks for: rows of the schema's sections = its options
-        @test sum(length(rows[s.name]) for s in sch.sections) == sum(length(s.options) for s in sch.sections)
+        # (a slot section: its selector and shared options, then one block per provider)
+        @test sum(length(rows[s.name]) for s in sch.sections) ==
+              sum(length(s.options) + (s.selector === nothing ? 0 : 1) for s in sch.sections)
+        @test sum(length(rows[provider_block_name(s, p)]) for s in sch.sections if s.selector !== nothing
+                  for p in s.selector.providers) ==
+              sum(length(p.options) for s in sch.sections if s.selector !== nothing for p in s.selector.providers)
         # every row is a well-formed six-cell row (a `|` in a cell is escaped)
         for t in filter(x -> x isa Markdown.Table, Markdown.parse(md).content)
             @test all(r -> length(r) == 6, t.rows)
@@ -84,10 +92,23 @@ end
     sch = driver_schema("model")
     cfg = load_run_config(joinpath(@__DIR__, "..", "examples", "urban", "berlin_smoke.toml"))
     rows, _ = md_rows(option_reference("model"; format = :markdown))
-    @test sum(length(rows[s.name]) for s in sch.sections) ==
+    # a slot section (ONE-m, #476): its selector, and the options of the provider it selects
+    function documented(s)
+        n = length(rows[s.name])
+        s.selector === nothing && return n
+        vals = getfield(getproperty(cfg, Symbol(s.name)), :values)
+        haskey(vals, s.selector.key) || return 0
+        p = only(p for p in s.selector.providers if p.name == String(vals[s.selector.key]) && :urban in p.kinds)
+        return n + length(rows[provider_block_name(s, p)])
+    end
+    @test sum(documented(s) for s in sch.sections) ==
           sum(length(getfield(getproperty(cfg, Symbol(s.name)), :values)) for s in sch.sections)
-    # a component's section (aq_chem's default_options), and the nest parent's schema as [nesting.parent]
-    @test "aq_chem" in keys(rows) && "nox_street" in rows["aq_chem"] && "enabled" in rows["aq_chem"]
+    # an additive component's section, a provider's options (aq_chem's default_options
+    # under [chemistry] scheme = "aq_chem"), and the nest parent's schema as [nesting.parent]
+    @test "pollutant" in keys(rows) && "enabled" in rows["pollutant"] && "stacks" in rows["pollutant"]
+    @test "chemistry.scheme=aq_chem" in keys(rows) && "nox_street" in rows["chemistry.scheme=aq_chem"] &&
+          rows["chemistry"] == ["scheme"]
+    @test occursin("### `[chemistry]` scheme = `\"aq_chem\"`", option_reference("model"; format = :markdown))
     @test "nesting.parent" in keys(rows) && "extent" in rows["nesting.parent"]
     # a section asked for alone keeps its sub-tables and leaves the checks out
     one = option_reference("model"; section = "nesting", format = :markdown)

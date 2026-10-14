@@ -76,8 +76,8 @@ function _nest_checks(cfg)
         push!(e, ConfigError("checks", "the closure checks measure budgets, which a nested model does not (:$c)"))
     end
     for (i, d) in enumerate(ds)
-        d.dynamics.core === :boussinesq ||
-            push!(e, ConfigError(key(i, "dynamics.core"), "a nested model runs the boussinesq core (the anelastic children would share their parent's reference profile)"))
+        d.core.model === :boussinesq ||
+            push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq core (the anelastic children would share their parent's reference profile)"))
         d.grid.stretching === :uniform ||
             push!(e, ConfigError(key(i, "grid.stretching"), "a nested model takes uniform grids"))
         d.boundaries.z === :periodic &&

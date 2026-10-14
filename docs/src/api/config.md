@@ -9,8 +9,8 @@ canonical form from which the run can be rebuilt. The loader, the
 all build on it. The guide is [Run configuration](../design/run_configuration.md).
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml   # Julia ≥ 1.12
-bin/aeolus run examples/configs/taylor_green_vortex.toml                  # any Julia
+julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml   # Julia ≥ 1.12
+bin/aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml                  # any Julia
 ```
 
 ## Quick reference
@@ -167,7 +167,7 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
 reference: [the model](../reference/options/model.md), and of the legacy
-cases [`urban_parent`](../reference/options/urban_parent.md), [`dns_decay`](../reference/options/dns_decay.md), [`column`](../reference/options/column.md) and the others; the guide is [Run configuration](../design/run_configuration.md). A section named
+case [`urban_parent`](../reference/options/urban_parent.md); the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -207,39 +207,40 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-Legacy cases that live under `examples/` are loaded on first use:
-[`DRIVER_FILES`](@ref Aeolus.Config.DRIVER_FILES) maps their names to
-files relative to the package directory, and the first config that names
-one includes the file into a fresh module. The stable-boundary-layer
-cases (the former `sbl` run type) are configurations of the model since
-ONE-g (#456); the validation run types `dns`, `channel`, `cbc_decay` and
-`patchy_surface` and the single-column cases went with their cases
-(maintainer decisions of 2026-10-09). The Berlin case's driver is no longer
-an example file: it is the package's urban run type, `urban` (below; EX-a #438).
+The one legacy case left is code in `src/` (`urban_parent`, the nest
+parent of an urban site alone); nothing is loaded from `examples/`. The
+validation run types of the former `Aeolus.RunDrivers` are configurations
+of the model since ONE-l (#475): `advection` (`[kinematic_flow]`), `cbl`
+(`[sgs] model = "tke"`, `[inflow_statistics]`), `shear_layer` (the
+`tanh` and `seed_mode` initial profiles) and `flat_plate` (`[fringe]`);
+`inflow_fetch` and `obstacle_channel` (channel cases) and `sgs_decay`
+(the filtered-DNS study) were dropped, their harnesses kept as test
+fixtures (`test/fixtures/`). The stable-boundary-layer cases (the former `sbl` run
+type) are configurations of the model since ONE-g (#456); the validation
+run types `dns`, `channel`, `cbc_decay` and `patchy_surface` and the
+single-column cases went with their cases (maintainer decisions of
+2026-10-09). The two legacy cases that were Julia files under `examples/`
+are gone (ONE-i #458): the Kessler box of the kernel demos (`column`) is
+the configuration `examples/cloud_spinup/cloud_spinup.toml` of the model,
+and the `dns_decay` run type is the shared P56-c fixture
+`test/fixtures/dns_decay.jl`.
 
-### The example legacy cases (CFG-e, #360)
-
-| `[run] legacy` | file | builds and runs | configs |
-| :-- | :-- | :-- | :-- |
-| `column` | `examples/kernels/column_driver.jl` | `[column] case = "kessler_box"` (Kessler microphysics, no dynamics) | `kernels/configs/cloud_spinup.toml` |
-| `dns_decay` | `examples/validation/dns_driver.jl` | `dns_decay` (the decaying DNS of P56-c, which the `sgs_decay` run type starts from) | — |
-
-Each example script is now "run the config(s), then analyse or plot":
-`run_configs(path, ARGS)` takes the script's command line (`--set`,
-`--member`, `--root`, `--allow-uncommitted`) and returns one
-[`RunResult`](@ref Aeolus.Config.RunResult) per run. A driver gets a new
-section only where the case has structure of its own; a driver with a
-`case` switch keeps one section per case and refuses a key set in the
-section of a case that is not selected
+A legacy case gets a new section only where the case has structure of its
+own; a driver with a `case` switch keeps one section per case and refuses
+a key set in the section of a case that is not selected
 ([`selected_case_sections`](@ref Aeolus.Config.selected_case_sections)).
 A section whose options are the fields of a keyword struct is made with
 [`kwdef_section`](@ref Aeolus.Config.kwdef_section) (the struct's
 defaults are the schema's) and read back with
 [`kwdef_value`](@ref Aeolus.Config.kwdef_value).
+`run_configs`, which ran a config from an example script's command line,
+is gone with those scripts (ONE-i #458): `aeolus run` runs a config or
+every member of a sweep.
 
-`test/config_examples.jl` lists every example that calls a stepping entry
-point and requires a config or a reasoned exemption (`EXEMPT`, empty since
-ONE-g #456).
+No `.jl` file under `examples/` builds or steps a model:
+`test/examples_enforcement.jl` parses each one and fails on a call into
+the model's construction or stepping API, with no exemptions (see
+[Run configuration](../design/run_configuration.md#Where-the-shipped-configs-live)).
 
 ## Sweeps
 
@@ -257,7 +258,7 @@ label = "no_feedback"
 fog = { droplet_feedback = false }
 
 [sweep]
-axis = [ { key = "sgs.closure", values = ["smagorinsky", "lasd", "lasi"] },
+axis = [ { key = "sgs.model", values = ["smagorinsky", "vreman", "amd"] },
          { key = "channel.size", values = [[32, 32, 32], [48, 48, 48]] } ]
 ```
 
@@ -306,10 +307,9 @@ A config without `[run] legacy` runs the model
 Aeolus.Components.Model) of the Boussinesq or the anelastic core on a box
 with its components. A bare config is a minimal dry LES (32³ on 3.2 km ×
 3.2 km × 1.6 km, free-slip z walls, θ₀ = 300 K, Smagorinsky, adaptive
-RK3, one hour). The configs of `examples/configs/`, `examples/kernels/`
-and `examples/coupled/` replace the scripts that built these runs in code
-(EX-d, #441). The run types of the other example cases are legacy cases
-in [`Aeolus.RunDrivers`](@ref).
+RK3, one hour). The example cases (`examples/<case>/<case>.toml`) replace
+the scripts that built these runs in code (EX-d, #441; ONE-i, #458), and
+the validation run types (ONE-l, #475).
 
 ```toml
 schema_version = 2
@@ -329,14 +329,16 @@ theta0 = 0.0                    # no buoyancy
 z = "periodic"
 
 [sgs]
-closure = "none"
+model = "none"
 
 [initial]
 u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.07853981633974483        # shortened to duration / ceil(duration / dt) = 2/26
 duration = 2.0
 ```
@@ -352,8 +354,23 @@ This config is, bit for bit, the simulation the script built before
     `[advection]`, `[sgs]`, `[coriolis]` (`f` or `latitude`), `[sponge]`
     (`alpha_max`, `z_start`, `target`), `[surface_theta_flux]` (`bottom`,
     `top`), and the boundary-layer components of the SBL cases (ONE-g,
-    #456): `[large_scale_forcing]`, `[surface_layer]` and `[towers]`
-    ([The stable-boundary-layer cases](@ref)).
+    #456): `[large_scale_forcing]`, `[surface] model = "most"` and
+    `[towers]` ([The stable-boundary-layer cases](@ref)).
+  * **One section per exclusive slot** (ONE-m, #476): `[core] model`
+    (`boussinesq`, `anelastic`), `[timestep] scheme` (`rk3`, `euler`),
+    `[sgs] model` (`smagorinsky`, `dynamic_smagorinsky`, `vreman`,
+    `sigma`, `amd`, `tke`, `none`), `[surface] model` (`none`, `slab`,
+    `flux_map`, `most`), `[microphysics] scheme` (`none`, `kessler`) and
+    `[advection] scheme` (`centred`). The selector key names the provider;
+    the section holds that provider's options and no other's (`[sgs] model
+    = "tke"` with `e_min`, `surface_factor`, `wall_cap`, `stress`; a
+    `c_s` there is an error naming the closures that have one), and the
+    resolved config shows the provider with all its options. A selector
+    set by `--set`, `with` or a `[domain.<section>]` block that names
+    another provider replaces it: the options set below it are dropped
+    and the new provider starts from its defaults (`--set
+    sgs.model="vreman"` on a file with `[sgs] model = "tke"`). Each provider's options are a block of the
+    option reference (`[sgs] model = "tke"`).
   * `[initial]` sets the velocity, θ and qv from vertical profiles
     (`constant`, `mixed_layer_lapse`, `table` with an optional `log` or
     `linear` tail below the lowest height, `exponential`), the Taylor–Green
@@ -368,11 +385,12 @@ This config is, bit for bit, the simulation the script built before
     seed. `[time] start` is the model time at the start (the clock on which
     the dynamic driver's tables are read).
   * `[time]`: `dt` a fixed step or `"adaptive"` (`step_adaptive!` with
-    `cfl` and `dt_max`), and `duration` or `nsteps`. `euler` is `step!`,
-    `rk3` `step_rk3!`.
+    `cfl` and `dt_max`), and `duration` or `nsteps`. `[timestep] scheme`:
+    `euler` is `step!`, `rk3` `step_rk3!`.
   * `[sgs]` selects the closure object of the `:sgs` component
-    (`Components.build_closure`); `closure = "none"` enables no SGS
-    component.
+    (`Components.build_closure`), each closure's coefficient `c_s` its
+    own default (smagorinsky and vreman 0.17, sigma 1.35, amd 0.3);
+    `model = "none"` enables no SGS component.
   * `[dynamics] nu` is also θ's (and qv's) molecular diffusivity: the
     cores have one coefficient (Prandtl number 1), so there is no separate
     `kappa`.
@@ -411,7 +429,7 @@ This config is, bit for bit, the simulation the script built before
     sponge). AeolusPrep.jl writes one from ERA5 (`aeolusprep dynamic
     --from-era5 <files…> --config <config.toml> --lat … --lon …`;
     [Input drivers](input_drivers.md), CFG-h #363);
-    `examples/configs/lindenberg_era5.toml` is the example, with its
+    `examples/lindenberg_era5/lindenberg_era5.toml` is the example, with its
     committed driver.
 
 Its options, every key with type, default, units, range and doc: [Options: the model](../reference/options/model.md) (generated from the schema; `aeolus options` prints the same).
@@ -419,9 +437,9 @@ Its options, every key with type, default, units, range and doc: [Options: the m
 ## The urban site
 
 A model config with `[urban] enabled = true` is an urban site: a 3-D LES
-of a city window (`Aeolus.UrbanCase`, `src/urban/core/config_schema.jl`;
+of a city window (`Aeolus.Urban`, `src/components/urban/site/config_schema.jl`;
 CFG-c #358 as the `berlin` example driver, the `urban` run type of EX-a
-#438, on the model since ONE-e #454, see [Urban site](urban_case.md)).
+#438, on the model since ONE-e #454, see [Urban site](urban.md)).
 `[run] legacy = "urban_parent"` runs the nest parent of the same config
 alone (until ONE-f, #455). The Berlin (Alexanderplatz) case is shipped as
 files in `examples/urban/`:
@@ -439,22 +457,22 @@ Each file is complete (no `extends`, ONE-b #451).
 
 ```bash
 julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800
-julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs_tke.enabled=false --set sgs_smagorinsky.enabled=true
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs.model=\"smagorinsky\"
 ```
 
 A run writes its own checks (the budgets' closure, the timing) to
 `output/results.toml`. The model's sections it takes are `[grid]` (a
-uniform grid), `[dynamics]` `nu`, `theta0`, `g` (the Boussinesq setting:
-the site picks its core with a `core_*` component), `[time]` (a fixed
-`dt` and `nsteps` with `duration = "none"`: with the `timestep_adaptive`
-component `nsteps × dt` is the simulated time), `[output]` (`path`,
+uniform grid), `[dynamics]` `nu`, `theta0`, `g`, `[time]` (a fixed
+`dt` and `nsteps` with `duration = "none"`: with `[timestep] scheme =
+"adaptive"` `nsteps × dt` is the simulated time), `[output]` (`path`,
 `cadence`) and the domain's `static_driver` (the ground, CFG-f #361, see
 [Input drivers](input_drivers.md), made by AeolusPrep.jl) and
 `dynamic_driver` (a sounding driver, or the parent-made driver of an
 offline nest). The model's own components (`[coriolis]`, `[sponge]`,
 `[surface_theta_flux]`, the EX-d couplings) are not part of an urban
-site, and `[sgs]` stays at its defaults: the site's core carries its
-Coriolis force, sponge and closure.
+site: the site's core carries its Coriolis force and sponge. The slot
+sections the site shares with the model (`[core]`, `[timestep]`, `[sgs]`,
+`[microphysics]`) offer the site's providers on it (ONE-m, #476).
 
   * **`[urban]`**: the site — the static driver of the nest parent
     (`parent_static`) and its land-use table (`landuse`), the anchor
@@ -470,22 +488,27 @@ Coriolis force, sponge and closure.
     (`child_boundaries`). The generic site points at no data of the
     example: `parent_static`, `landuse` and `sounding` default to
     `"none"`.
-  * **One section per urban component**, `[<name>]`: `enabled` (default
-    `false`) and the component's `default_options`, generated from them
-    (`coupling_section`), so a component never has to repeat itself in a
-    schema: the key set is closed, a key is the option's name in ASCII
+  * **One section per urban slot** (ONE-m, #476; `URBAN_SLOT_SECTIONS`):
+    `[core] model`, `[timestep] scheme`, `[pressure] solver`,
+    `[momentum_advection] scheme`, `[scalar_advection] model`, `[sgs]
+    model`, `[surface_exchange] model`, `[ground] model`,
+    `[surface_radiation] model`, `[column_radiation] model`, `[buildings]
+    model`, `[glazing] model`, `[immersed_boundary] method`, `[chemistry]
+    scheme` (`aq_chem` or `none`) and `[microphysics] scheme`: the
+    selector names the provider (default: the one of `URBAN_DEFAULTS`)
+    and the section holds its options (`urban_slot_section`). **One
+    section per additive component**, `[<name>]`: `enabled` (default
+    `false`) and its options. A component's options are its
+    `default_options`, generated from them (`coupling_options!`), so a
+    component never has to repeat itself in a schema: the key set is closed, a key is the option's name in ASCII
     snake case (`U_g` → `u_g`, `τ` → `tau`), and a value has its default's
     form (a `Symbol` is a string, a tuple an array of the same length, a
     `NamedTuple` a sub-table whose missing keys keep the default, a table
     by surface class has integer keys, a `nothing` default takes `"none"`
-    or a number). Every urban slot (`:core`, `:timestepper`,
-    `:pressure_solver`, `:momentum_advection`, `:scalar_advection`,
-    `:sgs`, `:surface_exchange`, `:ground`, `:surface_radiation`,
-    `:column_radiation`, `:buildings`, `:glazing`, `:chemistry`,
-    `:microphysics`, `:immersed_boundary`) has exactly one enabled
-    provider; the additive components are each on or off. The
-    components' `incompatible` declarations are cross-field checks whose
-    message carries the `incompatible_reason`.
+    or a number). The components' `incompatible` declarations are
+    cross-field checks whose message names the sections (`[core] model =
+    "anelastic" is incompatible with [pressure] solver = "cosine_fft"`)
+    and carries the `incompatible_reason`.
   * **`[nesting.parent]`** is the nest parent's own
     schema (`ParentConfig`), its keys the ASCII field names
     (`nudging_tau`, `theta_top`). The function-valued fields have TOML
@@ -497,10 +520,12 @@ Coriolis force, sponge and closure.
     through `with` and makes the run `replayable = false`.
 
 **One source of truth for the defaults.** The schema holds them;
-`CaseConfig(; kw...)` and `ParentConfig(; kw...)` start from it (the
-structs have no `@kwdef` defaults), and `CaseConfig(cfg::RunConfig)`
-builds the struct that `build_case` consumes. `test/config_berlin.jl`
-checks that the struct fields and the model's options map one to one,
+`site_options(default_run_config())` and `ParentConfig(; kw...)` start
+from it (`ParentConfig` has no `@kwdef` defaults), and
+`site_options(cfg::RunConfig)` reads the site's options that
+`build_case` consumes (ONE-k, #474: there is no `CaseConfig` struct of
+its own). `test/config_berlin.jl` checks that the site's fields and the
+model's options map one to one,
 that the four files give, field for field and bitwise, the configs the
 old Julia presets built (`test/data/config_berlin/fixture.toml`), and
 that `berlin_smoke.toml` run 12 steps gives state bitwise equal to the
@@ -511,15 +536,15 @@ Its options, the component sections and `[nesting.parent]` included: [Options: t
 
 ## The stable-boundary-layer cases
 
-GABLS1-4 and CASES-99 (`examples/sbl/configs/`) are configurations of the
+GABLS1-4 and CASES-99 (`examples/sbl/`) are configurations of the
 model since ONE-g (#456): the geostrophic forcing and the dynamic driver's
 large-scale tables are `[large_scale_forcing]`
 ([`LargeScale`](@ref Aeolus.Components.LargeScale)), the Monin-Obukhov
-surface layer over the prescribed surface temperature `[surface_layer]`
+surface layer over the prescribed surface temperature `[surface] model = "most"`
 ([`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer)), the sponge
 retargeted at the geostrophic wind or the plane mean `[sponge] target`,
 the CASES-99 towers `[towers]` ([`Towers`](@ref Aeolus.Components.Towers)).
-Their case tables are dynamic drivers (`examples/sbl/configs/input/`), their
+Their case tables are dynamic drivers (`examples/sbl/input/`), their
 initial profiles TOML tables (with a `log` or `linear` tail below the
 lowest height), their comparisons with the intercomparisons
 `[checks.reference]` (`results.toml`), and the scripts of `examples/sbl/`

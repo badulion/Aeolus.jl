@@ -8,7 +8,7 @@ const _PKG = normpath(joinpath(@__DIR__, "..", ".."))
 
 """
 `toml_value(x)` with the package directory written `<pkg>` and functions as
-their values at 0, 3600, 43200 s; a CaseConfig's `components` (ONE-e,
+their values at 0, 3600, 43200 s; the site options' `components` (ONE-e,
 #454) in the form the fixture was captured in, before the coupling
 registry went ([`legacy_selection!`](@ref)).
 """
@@ -28,7 +28,7 @@ _norm(v::AbstractDict) = legacy_selection!(Dict{String,Any}(k => _norm(x) for (k
 """
     legacy_selection!(t) -> t
 
-A CaseConfig as a TOML table (`t`, with its `components`: the enabled urban
+The site's options as a TOML table (`t`, with its `components`: the enabled urban
 components and all their options) in the form of the fixture, captured
 when the case had a coupling registry: `physics`, per urban slot the
 provider and per additive component on/off where they differ from the
@@ -38,7 +38,7 @@ without `components` is returned as it is.
 """
 function legacy_selection!(t::AbstractDict)
     haskey(t, "components") || return t
-    U = Aeolus.UrbanCase
+    U = Aeolus.Urban
     comps = pop!(t, "components")
     physics = Dict{String,Any}(); options = Dict{String,Any}()
     for C in U.URBAN_COMPONENTS

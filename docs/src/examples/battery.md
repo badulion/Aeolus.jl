@@ -1,15 +1,17 @@
 # Examples battery
 
 Aeolus ships a three-tier battery of examples that together exercise
-every physics module in the stack. An example is a TOML config (plus its
-input drivers) under `examples/<tier>/configs/`, run with `aeolus run`;
-the `plot_<case>.jl` script beside it reads the finished run folder
-(`diagnostics.csv`, `diagnostics.nc`, `output/`) and writes its figures
-into the run's `output/` (EX-d, #441):
+every physics module in the stack. An example is a case directory,
+`examples/<case>/`: its TOML config `<case>.toml`, its input drivers in
+`input/`, run with `aeolus run`; the `plot_<case>.jl` script beside it
+reads the finished run folder (`diagnostics.csv`, `diagnostics.nc`,
+`output/`) and writes its figures into the run's `output/` (EX-d, #441;
+ONE-i, #458). No script builds or steps a model
+(`test/examples_enforcement.jl`):
 
 ```bash
-$ julia --project -m Aeolus run examples/<tier>/configs/<case>.toml
-$ julia --project=. examples/<tier>/plot_<case>.jl runs/<date>_<case>_<id>
+$ julia --project -m Aeolus run examples/<case>/<case>.toml
+$ julia --project=. examples/<case>/plot_<case>.jl runs/<date>_<case>_<id>
 ```
 
 The plotting stack is pure Julia (no C-library dependencies) — see
@@ -19,8 +21,10 @@ ImageMagick if you want to view them in most browsers:
 `convert file.ppm file.png`.
 
 Each config reproduces the script it replaced bit for bit
-(`test/config_run_drivers.jl`), except `coupled/dcbl_radiation_lsm`, see
-below. The couplings are sections of the model's config
+(`test/config_cases.jl`), except `dcbl_radiation_lsm`, see below,
+and `cloud_spinup`, whose Kessler box runs on the model in fixed steps of
+60 s since ONE-i (#458) (the `column` run type took 60, 60, 120, 120 and
+120 s). The couplings are sections of the model's config
 (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
 `[obstacles]`; `aeolus options`).
 
@@ -28,12 +32,12 @@ below. The couplings are sections of the model's config
 
 Seconds-to-run cases, each highlighting one mechanism.
 
-| Config (`kernels/configs/`) | Physics                                          |
+| Config (`examples/<case>/`) | Physics                                          |
 | :-------------------------- | :----------------------------------------------- |
 | `tgv_energy_decay.toml`     | Taylor-Green vortex + analytic `exp(-6νt)` overlay |
 | `decaying_hit.toml`         | Random-init decaying isotropic turbulence (`[initial] velocity_perturbation`) |
 | `channel_flow.toml`         | Wall-bounded channel + `⟨u⟩(z)` mean profile      |
-| `cloud_spinup.toml`         | Kessler warm-rain: `ql → qr → fallout` (the `column` driver) |
+| `cloud_spinup.toml`         | Kessler warm-rain: `ql → qr → fallout` in a box at rest (`[microphysics]`) |
 | `pollution_plume.toml`      | Point-source tracer with linear-decay chemistry (`[tracer]`) |
 | `particle_trail.toml`       | Lagrangian particles in a Taylor-Green vortex (`[particles]`) |
 
@@ -46,7 +50,7 @@ next to the sources (negative values included).
 
 Combine several physics modules in one run.
 
-| Config (`coupled/configs/`) | Combines                                             |
+| Config (`examples/<case>/`) | Combines                                             |
 | :-------------------------- | :--------------------------------------------------- |
 | `dcbl_radiation_lsm.toml`   | DCBL + radiative cooling + `SlabLand` (3 h; `[forcing]`, `[surface] model = "slab"`) |
 | `moist_convection.toml`     | Moist LES with initial cloud puff + Kessler (`[microphysics]`) |
@@ -283,9 +287,9 @@ public entry points you can compose:
 
 `examples/urban/berlin_summer.toml` is **the** simulation, run by
 `julia --project -m Aeolus run`: no script in `examples/urban` integrates
-the equations (#438). The run type is `Aeolus.UrbanCase` (the `urban`
-driver; `src/UrbanCase.jl`), with every physics coupling in its own file
-under `src/urban/couplings/`. The [Berlin case design page](../design/berlin_case.md)
+the equations (#438). The run type is `Aeolus.Urban` (the `urban`
+driver; `src/Urban.jl`), with every physics coupling in its own file
+under `src/components/urban/`. The [Berlin case design page](../design/berlin_case.md)
 describes the registry, the stage loop and how to add a coupling.
 Its configuration is `examples/urban/berlin_summer.toml`;
 `--set time.nsteps=…` sets the number of steps and `--set output.cadence=…`
@@ -365,8 +369,8 @@ building-adjacent and park column's surface *is* a `SoilThermalColumn`,
 stepped by the Berlin case's surface exchange with Monin–Obukhov fluxes
 from the first air cell, with its soil water (`hydrology = true`), so β
 follows the top layer. Roofs, water and glass are `Radiation.SlabLand`
-surfaces. `UrbanSoil` / `step_soil!` and `couplings/soil_urban.jl` are
-gone; `couplings/ground_soil.jl` registers the soil columns. See
+surfaces. `UrbanSoil` / `step_soil!` and `components/urban/soil_urban.jl` are
+gone; `components/urban/ground_soil.jl` registers the soil columns. See
 `docs/src/design/berlin_surface_radiation.md` for the design and the measured
 effect. The rest of this section describes the #18 arrangement and its
 measurements.
@@ -374,7 +378,7 @@ measurements.
 Below each non-water cell's surface slab the run carried one
 `SoilThermalColumn` from `Aeolus.SoilColumn` (Phase 46, #18). It replaces
 a three-layer explicit soil that was written into the example. The
-example's `UrbanSoil` / `step_soil!` (in `couplings/soil_urban.jl`) only
+example's `UrbanSoil` / `step_soil!` (in `components/urban/soil_urban.jl`) only
 couples that column to the slab, and does no soil physics of its own:
 
 - **The column.** It uses the 10 CLM2–4.5 exponential layers down to

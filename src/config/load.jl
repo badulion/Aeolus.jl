@@ -214,6 +214,9 @@ function _parse_overrides(overrides)
     return out, probs
 end
 
+"The prefix of the origin entries that keep the file's value of an overridden string key."
+const _WAS = "\0was:"
+
 function _apply_overrides!(raw, origins, ovr, probs)
     for (key, v) in ovr
         parts = split(key, '.')
@@ -229,6 +232,10 @@ function _apply_overrides!(raw, origins, ovr, probs)
             t = nxt
         end
         ok || continue
+        # the value it replaces, for a slot section's selector (ONE-m, #476):
+        # an override that changes the provider resets its options
+        old = get(t, parts[end], nothing)
+        old isa AbstractString && !haskey(origins, _WAS * key) && (origins[_WAS * key] = String(old))
         _forget!(origins, key)
         if v isa AbstractDict
             t[parts[end]] = Dict{String,Any}()
@@ -291,7 +298,11 @@ end
 # the problems of one section's table `tbl` against its spec `s`: typed values
 # into `vals`, origins into `vorig`; `prefix` is the key prefix of messages
 # ("" or "domain[i].") and `korig(k)` the origin of key "section.k"
-function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf)
+function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf;
+                         tables = nothing, rank = k -> (korig(k) in (OVERRIDE_ORIGIN, WITH_ORIGIN) ? 2 : 0),
+                         lower = k -> nothing)
+    s.selector === nothing ||
+        return _check_slot_section!(probs, vals, vorig, s, tbl, korig, prefix, leaf, tables, rank, lower)
     keys_ = [o.key for o in s.options]
     for k in sort!(collect(keys(tbl)))
         k in keys_ && continue
@@ -300,7 +311,75 @@ function _check_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, lea
         push!(probs, ConfigProblem(prefix * full, korig(full),
               why === nothing ? "unknown key in [$(s.name)]" * _suggest(k, keys_) : why))
     end
-    for o in s.options
+    return _check_options!(probs, vals, vorig, s.name, s.options, tbl, korig, prefix, leaf)
+end
+
+# A slot section (ONE-m, #476): the selector names a provider of the
+# domain's kind; the other keys are options of that provider (or shared
+# options of the section). A selector set above the section's other keys
+# (`rank`: 0 the file's run-level section, 1 a [[domain]] block, 2 an
+# override) that names another provider than the level below it (`lower`:
+# that level's raw value, `nothing` for the default) replaces the
+# provider: the options set below it are dropped.
+function _check_slot_section!(probs, vals, vorig, s::Section, tbl, korig, prefix, leaf, tables, rank, lower)
+    sel = s.selector
+    kind = domain_kind(s, tables === nothing ? Dict{String,Any}() : tables)
+    provs = providers(s, kind)
+    if isempty(provs)
+        on = unique(reduce(vcat, (p.kinds for p in sel.providers)))
+        for k in sort!(collect(keys(tbl)))
+            full = "$(s.name).$k"
+            push!(probs, ConfigProblem(prefix * full, korig(full),
+                  "[$(s.name)] has no provider on $(kind_text(s, kind)); it configures " *
+                  join((kind_text(s, x) for x in on), " or ")))
+        end
+        return vals
+    end
+    skey = "$(s.name).$(sel.key)"
+    names = [p.name for p in provs]
+    pname = sel.defaults[kind]
+    if haskey(tbl, sel.key)
+        raw = tbl[sel.key]; org = korig(skey)
+        vorig[prefix * skey] = org
+        name = raw isa Union{AbstractString,Symbol} ? String(raw) : nothing
+        if name === nothing || !(name in names)
+            other = name === nothing ? nothing :
+                    findfirst(p -> p.name == name, sel.providers)
+            push!(probs, ConfigProblem(prefix * skey, org,
+                  "expected one of " * join(repr.(names), ", ") * " on $(kind_text(s, kind)), got $(_show_raw(raw))" *
+                  (other === nothing ? (name === nothing ? "" : _suggest(name, names)) :
+                   " (a provider on " * join((kind_text(s, x) for x in sel.providers[other].kinds), " and ") * " only)")))
+            return vals
+        end
+        pname = name
+    else
+        vorig[prefix * skey] = DEFAULT_ORIGIN
+    end
+    vals[sel.key] = Symbol(pname)
+    p = find_provider(s, kind, pname)
+    opts = vcat(s.options, p.options)
+    keys_ = [o.key for o in opts]
+    srank = rank(skey)
+    low = srank == 0 ? pname : lower(skey)
+    replaced = srank > 0 && String(something(low, sel.defaults[kind])) != pname
+    tbl = replaced ? Dict{String,Any}(k => v for (k, v) in tbl if k == sel.key || rank("$(s.name).$k") >= srank) : tbl
+    for k in sort!(collect(keys(tbl)))
+        (k == sel.key || k in keys_) && continue
+        full = "$(s.name).$k"
+        owners = unique([q.name for q in sel.providers if any(o -> o.key == k, q.options)])
+        push!(probs, ConfigProblem(prefix * full, korig(full),
+              isempty(owners) ?
+                  "unknown key in [$(s.name)] for $(sel.key) = \"$pname\"" * _suggest(k, keys_) *
+                  (isempty(keys_) ? " (it has no options)" : " (its options: " * join(keys_, ", ") * ")") :
+                  "an option of $(sel.key) = " * join(repr.(owners), " or ") * ", not of $(sel.key) = \"$pname\"" *
+                  (isempty(keys_) ? " (it has no options)" : " (its options: " * join(keys_, ", ") * ")")))
+    end
+    return _check_options!(probs, vals, vorig, s.name, opts, tbl, korig, prefix, leaf)
+end
+
+function _check_options!(probs, vals, vorig, sname, options, tbl, korig, prefix, leaf)
+    s = (; name = sname)
+    for o in options
         key = "$(s.name).$(o.key)"
         if haskey(tbl, o.key)
             org = korig(key)
@@ -346,7 +425,11 @@ function _resolve(raw, origins, sources, schema, probs::Vector{ConfigProblem}, l
                                        "expected a table [$(s.name)], got $(_show_raw(tbl))"))
             tbl = Dict{String,Any}()
         end
-        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf)
+        # a run-level slot section ([timestep]) tells the domain kind from the
+        # run-level tables and, with one domain, its block's
+        kt = s.selector === nothing ? raw : (length(blocks === nothing ? () : blocks) == 1 ? merge(raw, blocks[1]) : raw)
+        values[s.name] = _check_section!(probs, Dict{String,Any}(), vorig, s, tbl, korig, "", leaf; tables = kt,
+                                         lower = k -> get(origins, _WAS * k, nothing))
     end
     domains = Vector{Dict{String,Dict{String,Any}}}()
     if !isempty(dsec)
@@ -439,7 +522,13 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
         s = _section(sch, name)
         p = ConfigProblem[]
         v = Dict{String,Any}()
-        _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf)
+        # the level below a selector: the file's for an override (the value it
+        # replaced), the run level's for a [[domain]] block
+        runlevel = get(raw, name, Dict{String,Any}())
+        lowerval(k) = korig(k) == OVERRIDE_ORIGIN ? get(origins, _WAS * k, nothing) :
+                      (runlevel isa AbstractDict ? get(runlevel, split(k, '.'; limit = 2)[2], nothing) : nothing)
+        _check_section!(p, v, vorig, s, merged[name], korig, "domain[$i].", leaf; tables = merged,
+                        rank = k -> korig(k) == OVERRIDE_ORIGIN ? 2 : k in fromblock ? 1 : 0, lower = lowerval)
         # a problem of a run-level value is reported under its own key (once:
         # the caller drops duplicates), one of the block's under domain[i]
         for q in p
@@ -452,8 +541,7 @@ function _resolve_domain!(probs, vorig, sch, raw, base, origins, blk, i, n, leaf
 end
 "The default of `o`, evaluated (a function is called) and checked."
 function _default(o::Option, key)
-    # invokelatest: a driver loaded from DRIVER_FILES during this load is newer than the caller's world
-    d = o.default isa Function ? Base.invokelatest(o.default) : o.default
+    d = o.default isa Function ? o.default() : o.default
     ok, v, why = _coerce(o, d, true, pwd(), key)
     ok || return (false, nothing, "the default $(_show_raw(d)) is invalid: $why")
     return (true, v, "")

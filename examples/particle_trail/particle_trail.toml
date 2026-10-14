@@ -1,0 +1,53 @@
+# Kernel demo 06 — Lagrangian particles in a Taylor–Green vortex (formerly
+# examples/kernels/06_particle_trail.jl): 24 particles seeded uniformly in
+# the plane z = π of the TGV of examples/taylor_green_vortex/taylor_green_vortex.toml,
+# advanced with the flow (trilinear velocity, forward Euler) for 100 steps
+# of 0.05. Their positions go to output/particles.csv every step.
+#
+#   julia --project -m Aeolus run examples/particle_trail/particle_trail.toml
+#   julia --project=. examples/particle_trail/plot_particle_trail.jl runs/<date>_particle_trail_<id>
+
+schema_version = 2
+
+[run]
+name = "particle_trail"
+
+[grid]
+size = [32, 32, 32]
+extent = [6.283185307179586, 6.283185307179586, 6.283185307179586]
+
+[dynamics]
+nu = 0.01
+theta0 = 0.0                    # no buoyancy
+
+[boundaries]
+z = "periodic"
+
+[sgs]
+model = "none"
+
+[initial]
+u = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+v = { kind = "taylor_green", amplitude = 1.0, k = 1.0 }
+
+[timestep]
+scheme = "euler"
+
+[time]
+dt = 0.05
+nsteps = 100
+duration = "none"
+
+[logging]
+diagnostics_cadence = 1.0
+
+[particles]
+count = 24
+seed = 7
+z = [3.141592653589793, 3.141592653589793]   # the plane z = π (L/2)
+
+[checks]                        # results.toml; aeolus run exits with 3 if a required check fails
+finite = { required = true }    # the sanity check: no NaN or Inf in the state
+
+[test]
+overrides = ["grid.size=[16,16,16]", "time.nsteps=10"]

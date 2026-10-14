@@ -82,7 +82,7 @@ and evaluated at every record.
 Methods shipped (see the Logging API page for the full table):
 `BoussinesqSimulation`, `MassWeightedSimulation`, every
 `AbstractSGSClosure` (and `TKEClosure` adds its energy),
-`WallModel`, `TBLEWallModel`, `WallBoundedCase`, `NestedRun`.
+`WallModel`, `TBLEWallModel`, `NestedRun`.
 """
 diagnostics(component, sim) = Diagnostic[]
 diagnostics(sim) = diagnostics(sim, sim)

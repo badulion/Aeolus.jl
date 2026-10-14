@@ -72,7 +72,7 @@ they are; symbols as strings; dicts, named tuples and structs as tables
 `nothing` as `"nothing"`; long arrays and anything else as a short
 summary string. Used for the `[config]` and `[seeds]` tables of
 `run.toml`, so any configuration object (a `Dict`, a `NamedTuple`, a
-`CaseConfig`) is recorded in full.
+struct) is recorded in full.
 """
 function toml_value(x; depth::Int = 0)
     depth > 8 && return _summary(x)

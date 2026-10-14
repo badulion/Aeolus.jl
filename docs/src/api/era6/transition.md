@@ -105,7 +105,7 @@ Development length (N-inflow-d, #266): `FetchStatistics`,
 an inflow–outflow domain over y and time per streamwise column;
 `development_length` is the distance from the inflow plane beyond which
 a profile stays within a band around its target. The inflow–outflow half
-channel is `half_channel_case(; extent, inflow, outflow)` (WallModels),
+channel is `half_channel_case(; extent, inflow, outflow)` (the test fixture `test/fixtures/channel_cases.jl`),
 the x band of the total stress `total_stress_profile(…; irange)`
 (Operators). Theory and measured fetches in
 [Development length](../../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d)).

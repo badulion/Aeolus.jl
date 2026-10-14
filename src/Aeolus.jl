@@ -96,9 +96,6 @@ include("BudgetSystem.jl")        # the one budget system: energy, water, moment
 include("Output.jl")             # the one output writer: component catalogues, [output] variables (ONE-c, #452)
 include("Components.jl")     # the component interface, Domain/Model and the stage pipeline (ONE-a, #450)
 
-# EX-d (#441): the run types of the example cases (configured from TOML only).
-include("RunDrivers.jl")
-
 using .RunLog
 using .Grids
 using .Fields
@@ -266,8 +263,8 @@ export RunConfig, ConfigError, load_run_config, with, to_toml, write_config, con
 # CFG-b (#357): the driver contract, run_config, the model (Aeolus.SimulationDriver).
 # `Aeolus.main` (the `julia -m Aeolus` entry point) is not exported.
 export AbstractRunDriver, run_config, state_fields
-# CFG-e (#360): sweeps; the example scripts run their configs with run_configs
-export run_configs, load_sweep
+# CFG-e (#360): sweeps (aeolus run runs every member)
+export load_sweep
 # #334: run folder and provenance
 export RunFolder, start_run, finish_run!, with_run, run_checkpoints, UncommittedCodeError,
        provenance, git_state, read_run_toml, latest_run, run_log_path, run_toml_path,
@@ -1129,12 +1126,8 @@ export MOSTFluxWallLaw
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
        apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!,
        wall_slip_velocity, slip_wall_value
-# P54-d (#174): the wall-bounded benchmark harness (half channel, channel).
-# `advance_channel!` / `run_channel!` do not collide with the Berlin case's
-# `step_case!` / `run_case!` (Aeolus.UrbanCase, not exported).
-export WallBoundedCase, half_channel_case, channel_case,
-       advance_channel!, run_channel!, channel_dt,
-       channel_richardson, stratified_channel_walls   # P55-f (#191): stratified channel
+# (P54-d's wall-bounded benchmark harness, half channel and channel, is the
+# test fixture test/fixtures/channel_cases.jl since ONE-l, #475.)
 # P57-b (#183): the wall-model input — matching height, temporal and
 # wall-parallel filters (log-layer mismatch).
 export MatchingInput, matching_distance, matching_input!, update_input_filter!,
@@ -1198,14 +1191,15 @@ export SubfilterHeight, subfilter_height, DynamicRoughness,
 # fixed stage pipeline (the component interface: Aeolus.Components).
 export Model, Domain
 
-# EX-a (#438), ONE-e (#454): the urban site of the model (`[urban] enabled`;
-# the Berlin case is examples/urban/berlin_*.toml). A submodule, not
-# exported: its names (CaseConfig, build_case, …) stay under Aeolus.UrbanCase.
-include("UrbanCase.jl")
+# EX-a (#438), ONE-e (#454), ONE-k (#474): the urban site of the model
+# (`[urban] enabled`; the Berlin case is examples/urban/berlin_*.toml), its
+# components under src/components/urban/. A submodule, not exported: its
+# names (site_options, build_case, …) stay under Aeolus.Urban.
+include("components/urban.jl")
 
 # CFG-b (#357): the model's configuration and run (needs the dynamical
 # cores and the components, so after them; the driver contract and the CLI
-# are in Config). After UrbanCase (ONE-e, #454): the urban site's sections
+# are in Config). After Urban (ONE-e, #454): the urban site's sections
 # and components are part of the model's schema.
 include("config/simulation_driver.jl")
 

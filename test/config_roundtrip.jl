@@ -1,10 +1,8 @@
 # The round-trip coverage suite (CFG-i, #364): every shipped config stays
 # valid, canonical, documented and replayable bit for bit.
 #
-# Every `examples/**/configs/*.toml` (and so `examples/configs/*.toml`) and
-# every config of a case directory, `examples/<case>/*.toml` (the Berlin
-# case, examples/urban/berlin_*.toml, ONE-e #454), is found by globbing the
-# tree, not from a list, and each one must carry its own smoke size, a
+# Every config of an example case, `examples/<case>/*.toml` (ONE-i #458), is
+# found by globbing the tree, not from a list, and each one must carry its own smoke size, a
 # `[test]` table:
 #
 #   [test]
@@ -21,7 +19,7 @@
 #   4. it replays: run at its smoke size, then re-run from the first run's
 #      run.toml; the state fields, diagnostics.csv, results.toml and
 #      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
-# A configs/*.toml without a [test] table fails the suite with a message
+# A shipped config without a [test] table fails the suite with a message
 # naming the file. Resume: for the model (the SBL components among them) and the urban legacy case, a run
 # interrupted after its middle checkpoint and resumed the way
 # `aeolus run <folder> --resume` does is bitwise the uninterrupted run
@@ -38,16 +36,14 @@ include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 const RT_EXAMPLES = normpath(joinpath(@__DIR__, "..", "examples"))
 
 """
-Every shipped config: the `.toml` files directly in a directory named
-`configs` anywhere under `root` (`examples/configs/`, `examples/sbl/configs/`, …),
-and those directly in a case directory `root/<case>/` (`examples/urban/`,
-ONE-e #454).
+Every shipped config: the `.toml` files directly in a case directory
+`root/<case>/` (`examples/taylor_green_vortex/`, `examples/sbl/`, …).
 """
 function shipped_config_files(root::AbstractString = RT_EXAMPLES)
     out = String[]
-    for (dir, _, files) in walkdir(root)
-        (basename(dir) == "configs" || dirname(dir) == rstrip(root, '/')) || continue
-        append!(out, joinpath(dir, f) for f in files if endswith(f, ".toml"))
+    for case in readdir(root; join = true)
+        isdir(case) || continue
+        append!(out, joinpath(case, f) for f in readdir(case) if endswith(f, ".toml"))
     end
     return sort!(out)
 end
@@ -78,8 +74,11 @@ function reference_rows(driver)
     isfile(page) || error("the docs build writes no option reference for the schema \"$driver\"")
     for l in eachline(page)
         m = match(r"^#+ `\[(.+)\]`$", l)
-        if m !== nothing
-            cur = String(m[1]); rows[cur] = Set{String}()
+        # a provider block of a slot section (ONE-m, #476), ### `[sgs]` model = `"tke"`:
+        # its options are keys of the section [sgs]
+        p = match(r"^#+ `\[(.+?)\]` \w+ = `", l)
+        if m !== nothing || p !== nothing
+            cur = String(m !== nothing ? m[1] : p[1]); rows[cur] = get(rows, cur, Set{String}())
         elseif cur !== nothing && startswith(l, "| `")
             push!(rows[cur], String(match(r"^\| `([^`]+)` \|", l)[1]))
         end
@@ -92,7 +91,10 @@ const RT_FILES = shipped_config_files()
 @testset "round-trip coverage: the docs build writes a reference page per schema and the input pages" begin
     @test Set(basename.(RT_PAGES)) ==
           Set(vcat([d * ".md" for d in reference_drivers()], "input_static.md", "input_dynamic.md"))
-    @test issubset(["model", "urban_parent", "cbl", "dns_decay", "column"], reference_drivers())
+    @test issubset(["model", "urban_parent"], reference_drivers())
+    @test isempty(intersect(["advection", "cbl", "inflow_fetch", "obstacle_channel", "shear_layer", "flat_plate", "sgs_decay"],
+                            reference_drivers()))           # on the model or dropped (ONE-l #475)
+    @test isempty(intersect(["column", "dns_decay"], reference_drivers()))   # gone (ONE-i #458)
     @test isempty(intersect(["sbl", "dns", "channel", "cbc_decay", "patchy_surface"], reference_drivers()))   # gone (ONE-g #456)
     @test !("urban" in reference_drivers())             # the urban site is the model's (ONE-e, #454)
     # every option page is the schema's generated Markdown, verbatim after its header
@@ -112,14 +114,14 @@ end
 @testset "round-trip coverage: every shipped config is found and has a [test] table" begin
     @test length(RT_FILES) >= 25
     @test all(f -> startswith(f, RT_EXAMPLES), RT_FILES)
-    @test joinpath(RT_EXAMPLES, "configs", "taylor_green_vortex.toml") in RT_FILES
+    @test joinpath(RT_EXAMPLES, "taylor_green_vortex", "taylor_green_vortex.toml") in RT_FILES
     plan = smoke_plan(RT_FILES)
     @test length(plan) == length(RT_FILES)
     # a config without [test] fails, naming the file
-    dir = mkpath(joinpath(mktempdir(), "examples", "new", "configs"))
+    dir = mkpath(joinpath(mktempdir(), "examples", "new"))
     write(joinpath(dir, "fresh.toml"), "[run]\nname = \"fresh\"\n")
     write(joinpath(dir, "tested.toml"), "[run]\nname = \"fresh\"\n\n[test]\noverrides = []\n")
-    files = shipped_config_files(dirname(dirname(dir)))
+    files = shipped_config_files(dirname(dir))
     @test length(files) == 2
     e = try
         smoke_plan(files); nothing
@@ -179,7 +181,7 @@ end
 @testset "resume: interrupted after the middle checkpoint, resumed, bitwise the uninterrupted run" begin
     # the model: buoyant_convection at 16³, 20 steps (dry_convective_bl and the
     # adaptive TGV resume in config_simulation_driver.jl)
-    r = resume_check(joinpath(RT_EXAMPLES, "configs", "buoyant_convection.toml");
+    r = resume_check(joinpath(RT_EXAMPLES, "buoyant_convection", "buoyant_convection.toml");
                      overrides = ["grid.size=[16,16,16]", "output.series_cadence=0.0", "output.cadence=0.2"],
                      outputs = ["output.nc"])
     @test r.fields_equal && isempty(r.fields_differing)
@@ -193,7 +195,7 @@ end
     # layer's state, the towers' segments and bins and the output.nc series are restored too;
     # averaging = "mean": the open averaging intervals straddle the checkpoint (step 10, t = 57700 s;
     # records at 57720 s), so the means are restored from it too
-    r = resume_check(joinpath(RT_EXAMPLES, "sbl", "configs", "cases99.toml");
+    r = resume_check(joinpath(RT_EXAMPLES, "sbl", "cases99.toml");
                      overrides = ["grid.size=[16,16,32]", "towers.hours=[0.0,24.0]", "towers.window=30.0",
                                   "output.series_cadence=60.0", "output.cadence=120.0",
                                   "checks.reference={}", "checks.reference_file=\"none\""],
@@ -209,15 +211,17 @@ end
     # output's record written after the checkpoint is rewritten to the same values
     r = resume_check(joinpath(RT_EXAMPLES, "urban", "berlin_smoke.toml");
                      nsteps = 12, stop = 9, every_steps = 6, nsteps_overrides = n -> ["time.nsteps=$n"],
-                     overrides = ["urban.netcdf=\"smoke.nc\"", "output.path=\"none\""])
+                     overrides = ["output.netcdf=\"smoke.nc\"", "output.path=\"none\"",
+                                  "output.variables=[\"u\", \"theta\", \"qv\", \"Ts\", \"hour\"]"],
+                     outputs = ["smoke.nc"])
     @test r.fields_equal && isempty(r.fields_differing)
     isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
     @test r.statuses == ["interrupted", "completed"]
-    c1, c2 = r.runs[1].obj.case, r.runs[2].obj.case
+    site(x) = Aeolus.Urban.urban_case(only(x.obj.model.domains))
+    c1, c2 = site(r.runs[1]), site(r.runs[2])
     @test c2.clock.n == c1.clock.n && c2.sim.t === c1.sim.t === 24.0 && c2.clock.nrecord == c1.clock.nrecord == 2
     @test any(k -> startswith(String(k), "parent_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))
-    nc(case) = NCDatasets.NCDataset(case.cfg.output_path) do ds
-        Dict(k => Array(ds[k].var) for k in keys(ds))
-    end
-    @test c1.cfg.output_path != c2.cfg.output_path && isequal(nc(c1), nc(c2))
+    # the output (the run's writer, ONE-k #474): the record written after the
+    # checkpoint is rewritten to the same values
+    @test r.outputs_equal
 end

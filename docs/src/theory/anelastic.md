@@ -61,7 +61,7 @@ correction is negligible at molecular ``ν``.
 
 Before ONE-j the SGS fluxes were in the Boussinesq form on the sound-proof
 cores. In the dry convective boundary layer of
-`examples/configs/dry_convective_bl.toml` (32³, 30 min, anelastic,
+`examples/dry_convective_bl/dry_convective_bl.toml` (32³, 30 min, anelastic,
 isentropic 300 K base state) the ``\bar ρ``-weighted θ budget then missed
 the surface input by ``1.4 × 10^{-3}`` of it; in the weighted form it
 closes to ``2.5 × 10^{-14}``.

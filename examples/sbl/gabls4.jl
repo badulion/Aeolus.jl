@@ -3,7 +3,7 @@
 # Antarctic Plateau (Dome C, 11 Dec 2009; Couvreux et al. 2020, BLM 176,
 # 369-400), P58-d (#194)
 #
-# The runs are the sweep examples/sbl/configs/gabls4_closures.toml
+# The runs are the sweep examples/sbl/gabls4_closures.toml
 # (gabls4_exp3.toml; the model), one run folder per closure: from
 # 10 UTC, the experiment-2 ensemble-mean profiles, U_g = (1.25, 4.5) m/s,
 # f = 2Ω sin(-75.1°), the official case file's surface temperature (θ at
@@ -21,7 +21,7 @@
 #
 # This script only reads the run folders (output/output.nc, run.toml).
 #
-#   julia --project -m Aeolus run examples/sbl/configs/gabls4_closures.toml     # 2 m
+#   julia --project -m Aeolus run examples/sbl/gabls4_closures.toml     # 2 m
 #   julia --project examples/sbl/gabls4.jl runs/*gabls4*
 #
 # writes examples/sbl/output/gabls4_<tag>.svg, _series.csv, _profiles.csv
@@ -41,7 +41,7 @@ const TAG = "nx$(NX)_nz$(NZ)_L$(round(Int, LX))x$(round(Int, LZ))"
 const OUTDIR = mkpath(SBL_OUT)
 
 results = map(RUNS) do r
-    st = r.stats; stab = cfgval(r, "sgs.stability"); ρcp = cfgval(r, "surface_layer.rho_cp")
+    st = r.stats; stab = cfgval(r, "sgs.stability"); ρcp = cfgval(r, "surface.rho_cp")
     series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
                θ2 = s.θ_screen, U10 = s.U_screen, θs = s.T_s) for s in r.series]          # every 300 s
     θst = mean(-s.H / ρcp / s.u_star for s in series if s.t >= T_AVG)

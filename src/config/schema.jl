@@ -171,16 +171,54 @@ reference_option(key::AbstractString, type_text::AbstractString, default_text::A
            nothing, nothing, false, false, false, false)
 
 """
+    Provider
+
+One provider of a slot section ([`slot_section`](@ref)): its `name` (the
+value of the section's selector key that chooses it), `doc`, the domain
+`kinds` it is a provider on, and its own `options`, built with
+[`provider!`](@ref).
+"""
+struct Provider
+    name::String
+    doc::String
+    kinds::Vector{Symbol}
+    options::Vector{Option}
+end
+
+"""
+    Selector
+
+The selector of a slot section ([`slot_section`](@ref)): the selector
+`key` (`"model"`, `"solver"`, `"scheme"`), the `providers`, the default
+provider per domain kind (`defaults`), `kind(tables)`, which tells the
+kind of a domain from its section tables (raw or resolved: `tables[name]`
+is the table of section `name`), and `kind_text`, how a message names a
+kind.
+"""
+struct Selector
+    key::String
+    providers::Vector{Provider}
+    defaults::Dict{Symbol,String}
+    kind::Any
+    kind_text::Dict{Symbol,String}
+end
+
+"""
     Section
 
 A named table of [`Option`](@ref)s, built with [`section`](@ref) and
-[`option!`](@ref).
+[`option!`](@ref); or a **slot section** with a selector key
+([`slot_section`](@ref), `selector` set): one exclusive choice among
+providers, each with its own options.
 """
 struct Section
     name::String
     doc::String
     options::Vector{Option}
+    selector::Union{Nothing,Selector}
 end
+Section(name::AbstractString, doc::AbstractString, options::Vector{Option}) =
+    Section(String(name), String(doc), options, nothing)
 
 const _KEY_RE = r"^[a-z][a-z0-9_]*$"
 
@@ -205,6 +243,192 @@ function section(f, name::AbstractString; doc::AbstractString = "")
     f(s)
     return s
 end
+
+"""
+    slot_section(f, name; key, kind = tables -> :model, kind_text = Dict(), doc = "") -> Section
+
+An **exclusive slot** as one configuration section `[name]` (ONE-m, #476):
+the selector `key` names the provider, and the section holds that
+provider's options and no other's.
+
+```julia
+slot_section("pressure"; key = "solver", doc = "The pressure solver.") do s
+    provider!(s, "cosine_fft"; default = [:model])
+    provider!(s, "multigrid") do p
+        option!(p, "tol", Float64; default = 1e-10, doc = "relative residual")
+    end
+end
+```
+
+```toml
+[pressure]
+solver = "multigrid"
+tol = 1e-8
+```
+
+`f(s)` declares the providers with [`provider!`](@ref) (and options every
+provider shares with [`option!`](@ref) on `s`). A provider is available
+on the domain `kinds` it lists; `kind(tables)` tells the kind of a domain
+from its section tables (the model's: `:urban` for an urban site, else
+`:model`), and every kind with a provider has exactly one default
+provider (checked when the schema is made: the parts of one slot may be
+declared apart and merged, [`merge_sections`](@ref)). On a kind with no provider the section takes no key.
+
+Validation ([`load_run_config`](@ref)): the selector must name a provider
+of the domain's kind; every other key must be an option of the chosen
+provider (a key of another provider is an error that names it). The
+resolved config holds the selector and the chosen provider's options,
+defaults included, and nothing else. A selector set at a higher level —
+an override (`--set`, [`with`](@ref)) over the file, or a
+`[domain.<name>]` block over the run-level section — that names another
+provider than the level below replaces the provider: the lower level's
+options of the section are dropped (the new provider starts from its
+defaults and the options set at the selector's level). Naming the same
+provider changes nothing.
+"""
+function slot_section(f, name::AbstractString; key::AbstractString, kind = _ -> :model,
+                      kind_text = Dict{Symbol,String}(), doc::AbstractString = "")
+    occursin(_KEY_RE, name) ||
+        throw(ArgumentError("section name \"$name\" is not ASCII snake_case"))
+    occursin(_KEY_RE, key) ||
+        throw(ArgumentError("[$name]: the selector key \"$key\" is not ASCII snake_case"))
+    sel = Selector(String(key), Provider[], Dict{Symbol,String}(), kind,
+                   Dict{Symbol,String}(k => String(v) for (k, v) in kind_text))
+    s = Section(String(name), String(doc), Option[], sel)
+    f(s)
+    isempty(sel.providers) && throw(ArgumentError("[$name]: a slot section needs a provider"))
+    any(o -> o.key == sel.key, s.options) &&
+        throw(ArgumentError("[$name]: the option \"$(sel.key)\" is the selector key"))
+    return s
+end
+
+"""
+    check_slot_section(s::Section) -> s
+
+What a slot section of a schema must satisfy (checked by
+[`ConfigSchema`](@ref), after the parts of one slot are merged,
+[`merge_sections`](@ref)): one default provider on every domain kind it
+has providers on.
+"""
+function check_slot_section(s::Section)
+    sel = s.selector
+    sel === nothing && return s
+    for k in unique(reduce(vcat, (p.kinds for p in sel.providers)))
+        haskey(sel.defaults, k) || throw(ArgumentError("[$(s.name)]: no default provider on the domain kind :$k"))
+    end
+    return s
+end
+
+"""
+    provider!(s::Section, name; kinds = [:model], default = Symbol[], doc = "") -> Provider
+    provider!(f, s::Section, name; …)
+
+Declare the provider `name` of the slot section `s` ([`slot_section`](@ref)),
+available on the domain `kinds`, the default provider of the kinds in
+`default`; `f(p)` declares its options with [`option!`](@ref) on `p`.
+"""
+provider!(s::Section, name::AbstractString; kw...) = provider!(_ -> nothing, s, name; kw...)
+function provider!(f, s::Section, name::AbstractString; kinds = [:model], default = Symbol[],
+                   doc::AbstractString = "")
+    sel = s.selector
+    sel === nothing && throw(ArgumentError("[$(s.name)] is not a slot section"))
+    occursin(_KEY_RE, name) ||
+        throw(ArgumentError("[$(s.name)]: the provider name \"$name\" is not ASCII snake_case"))
+    any(p -> p.name == name && !isempty(intersect(p.kinds, kinds)), sel.providers) &&
+        throw(ArgumentError("[$(s.name)]: the provider \"$name\" is declared twice"))
+    p = Section("$(s.name)", String(doc), Option[])
+    f(p)
+    for o in p.options
+        (o.key == sel.key || any(x -> x.key == o.key, s.options)) &&
+            throw(ArgumentError("[$(s.name)] $name: the option \"$(o.key)\" is the selector or a shared option"))
+    end
+    for k in default
+        k in kinds || throw(ArgumentError("[$(s.name)] $name: default on :$k, which is not one of its kinds"))
+        haskey(sel.defaults, k) && throw(ArgumentError("[$(s.name)]: two default providers on :$k"))
+        sel.defaults[k] = String(name)
+    end
+    pr = Provider(String(name), String(doc), Symbol[kinds...], p.options)
+    push!(sel.providers, pr)
+    return pr
+end
+
+"""
+    merge_sections(sections; kind = nothing, kind_text = nothing) -> Vector{Section}
+
+`sections` with the slot sections of the same name merged into one (their
+providers, defaults and shared options pooled; the selector keys must
+agree), in the order of first appearance. Two parts of a schema can so
+declare providers of one slot: the model's SGS component its closures and
+the urban site its own. `kind` and `kind_text`, when given, become every
+slot section's (see [`slot_section`](@ref)). Two plain sections of one name,
+two providers of one name on one kind or two defaults on one kind are an
+`ArgumentError`.
+"""
+function merge_sections(secs; kind = nothing, kind_text = nothing)
+    out = Section[]
+    for s in secs
+        i = findfirst(x -> x.name == s.name, out)
+        if i === nothing
+            push!(out, s)
+            continue
+        end
+        a = out[i]
+        (a.selector === nothing || s.selector === nothing) &&
+            throw(ArgumentError("section [$(s.name)] is declared twice"))
+        a.selector.key == s.selector.key ||
+            throw(ArgumentError("[$(s.name)]: two selector keys, \"$(a.selector.key)\" and \"$(s.selector.key)\""))
+        for p in s.selector.providers, q in a.selector.providers
+            p.name == q.name && !isempty(intersect(p.kinds, q.kinds)) &&
+                throw(ArgumentError("[$(s.name)]: the provider \"$(p.name)\" is declared twice"))
+        end
+        for k in intersect(keys(a.selector.defaults), keys(s.selector.defaults))
+            throw(ArgumentError("[$(s.name)]: two default providers on :$k"))
+        end
+        sel = Selector(a.selector.key, vcat(a.selector.providers, s.selector.providers),
+                       merge(a.selector.defaults, s.selector.defaults), a.selector.kind,
+                       merge(a.selector.kind_text, s.selector.kind_text))
+        out[i] = Section(a.name, isempty(a.doc) ? s.doc : a.doc, vcat(a.options, s.options), sel)
+    end
+    kind === nothing && kind_text === nothing && return out
+    return Section[s.selector === nothing ? s :
+                   Section(s.name, s.doc, s.options,
+                           Selector(s.selector.key, s.selector.providers, s.selector.defaults,
+                                    something(kind, s.selector.kind),
+                                    kind_text === nothing ? s.selector.kind_text :
+                                                            Dict{Symbol,String}(k => String(v) for (k, v) in kind_text)))
+                   for s in out]
+end
+
+"The providers of the slot section `s` on the domain kind `kind`."
+providers(s::Section, kind::Symbol) = Provider[p for p in s.selector.providers if kind in p.kinds]
+
+"The provider `name` of the slot section `s` on the domain kind `kind`, or `nothing`."
+function find_provider(s::Section, kind::Symbol, name::AbstractString)
+    i = findfirst(p -> p.name == name && kind in p.kinds, s.selector.providers)
+    return i === nothing ? nothing : s.selector.providers[i]
+end
+
+"""
+    section_options(s::Section) -> Vector{Option}
+
+Every option `s` can hold: its own and, for a slot section, those of every
+provider (a key two providers share appears once per provider).
+"""
+section_options(s::Section) =
+    s.selector === nothing ? s.options : vcat(s.options, (p.options for p in s.selector.providers)...)
+
+"The kind of a domain whose section tables are `tables`, for the slot section `s` (`:model` on error)."
+function domain_kind(s::Section, tables)
+    k = try
+        s.selector.kind(tables)
+    catch
+        :model
+    end
+    return k isa Symbol ? k : :model
+end
+
+"How a message names the domain kind `k` of slot section `s`."
+kind_text(s::Section, k::Symbol) = get(s.selector.kind_text, k, "a domain of kind :$k")
 
 """
     option!(s::Section, key, T; default, doc = "", units = "", allowed = nothing,
@@ -291,6 +515,7 @@ struct ConfigSchema
     domain_sections::Vector{String}
     function ConfigSchema(name::String, sections::Vector{Section}, checks, domain_sections = String[])
         names = [s.name for s in sections]
+        foreach(check_slot_section, sections)
         for d in domain_sections
             d in names || throw(ArgumentError("schema \"$name\": the domain section [$d] is not a section"))
         end
@@ -396,12 +621,10 @@ end
 """
     driver_schema(name = "model") -> ConfigSchema
 
-The schema registered as `name` ([`register_driver!`](@ref)): the model's,
-or a legacy case's (an example case listed in [`DRIVER_FILES`](@ref) is
-loaded on first use).
+The schema registered as `name` ([`register_driver!`](@ref)): the model's
+or a legacy case's.
 """
 function driver_schema(name::AbstractString = MODEL)
-    _ensure_driver(name)              # an example case is loaded on first use (CFG-b)
     haskey(_DRIVERS, name) || throw(ConfigError("run.legacy",
         "unknown legacy case \"$name\"" * _suggest(name, legacy_cases()) *
         "; legacy cases: " * join(repr.(legacy_cases()), ", ")))
@@ -419,11 +642,10 @@ registered_drivers() = sort!(collect(keys(_DRIVERS)))
 """
     legacy_cases() -> Vector{String}
 
-The legacy cases `[run] legacy` may name: the registered ones and those of
-[`DRIVER_FILES`](@ref), sorted.
+The legacy cases `[run] legacy` may name (the registered schemas but the
+model's and `"common"`), sorted.
 """
-legacy_cases() = sort!(unique!(vcat(filter(n -> !(n in (MODEL, "common")), collect(keys(_DRIVERS))),
-                                    collect(keys(DRIVER_FILES)))))
+legacy_cases() = sort!(filter(n -> !(n in (MODEL, "common")), collect(keys(_DRIVERS))))
 
 # ---------------------------------------------------------------------------
 # value checks

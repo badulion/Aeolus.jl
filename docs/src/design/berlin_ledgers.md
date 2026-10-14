@@ -102,7 +102,7 @@ water went. Since #129 both act on the first air cell (`bus.k_air`), and
 the surface exchange's smoke check counts writes into solid cells
 (zero).
 
-`run_case!` logs the ledgers at the end of the run as `Info` events
+The site logs the ledgers at the end of the run (`Components.run_end!`) as `Info` events
 (`event = :budget`, one per class, the water and each air-heat layer and
 term, the values as key-values; #338), and the run monitor writes their
 means and closures to `diagnostics.csv` as `budgets.*`
@@ -254,7 +254,7 @@ no-flux lid, still available as `θ_top = :noflux` (a number sets Γ in
 K m⁻¹). The physics is `src/` (`BoundaryConditions.FluxBC`, the halo fill
 of `src/boundary_conditions/gradient_top.jl`; theory in
 [Large-scale forcing](../theory/large_scale_forcing.md#The-fixed-gradient-top));
-the case code is `core/top_boundary.jl`. `qv` and the tracers keep their
+the case code is `site/top_boundary.jl`. `qv` and the tracers keep their
 no-flux top.
 
 **Ledger.** The heat the top face carries is booked as
@@ -305,7 +305,7 @@ in both places.
 
 ### Open boundaries
 
-`cfg.lateral = :open` (N-open-d, #262; `core/open_boundary.jl`) gives the
+`cfg.lateral = :open` (N-open-d, #262; `site/open_boundary.jl`) gives the
 case open west, east, south, north and top faces fed by analytic data (with
 the nest switched off, `nesting.enabled=false`; the nested
 default of #265 feeds the same faces from the parent, see

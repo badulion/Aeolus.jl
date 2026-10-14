@@ -1,0 +1,60 @@
+# Passive scalar advection in a prescribed 2-D solid-body rotation
+# (formerly examples/scalar_advection_2d.jl, the Phase 0 end-to-end check,
+# then the `advection` run type; on the model since ONE-l, #475): the mesh,
+# the fields, the halo fill, the core's centred flux-form scalar advection
+# and SSP-RK3, with the velocity prescribed ([kinematic_flow]). A Gaussian
+# column of θ at (0.75, 0.5), σ = 0.08, on the unit square × 1 cell
+# (128 × 128 × 1), is carried once around the centre (ω = 2π: one
+# revolution per unit time) at CFL 0.4; its integral is conserved to
+# round-off (flux form on a periodic box) and its peak returns to its start.
+#
+#   julia --project -m Aeolus run examples/scalar_advection_2d/scalar_advection_2d.toml
+#
+# output.nc: θ every 1/8 revolution and the time series of its domain mean.
+
+schema_version = 2
+
+[run]
+name = "scalar_advection_2d"
+
+[timestep]
+scheme = "rk3"
+
+[time]
+dt = 0.000994718394324346       # 0.4 Δx / (ω L/2): CFL 0.4 at the box edge
+duration = 1.0                  # one revolution
+
+[grid]
+size = [128, 128, 1]
+extent = [1.0, 1.0, 1.0]
+
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "periodic"
+
+[dynamics]
+theta0 = 0.0                    # no buoyancy: θ is a passive scalar
+nu = 0.0
+
+[sgs]
+model = "none"
+
+[initial]
+theta = { kind = "gaussian", value = 0.0, amplitude = 1.0, center = [0.75, 0.5], sigma = 0.08 }
+
+[kinematic_flow]
+kind = "solid_body_rotation"
+omega = 6.283185307179586       # 2π: one revolution per unit time
+center = [0.5, 0.5]
+
+[output]
+variables = ["theta", "theta_mean"]
+cadence = 0.125
+series_cadence = 0.125
+
+[checks]
+finite = { required = true }
+
+[test]
+overrides = ["grid.size=[32,32,1]", "time.dt=0.003978873577297384", "time.duration=0.25"]

@@ -28,8 +28,10 @@ dynamic_driver = "input/lindenberg_era5_dynamic.nc"   # the domain's input drive
 name = "dcbl"
 seed = 1
 
-[time]                 # run level: one clock for every domain
+[timestep]             # run level: one scheme steps every domain
 scheme = "rk3"
+
+[time]                 # run level: one clock for every domain
 dt = "adaptive"        # or a fixed step in seconds
 cfl = 0.5
 dt_max = 10.0
@@ -39,8 +41,9 @@ duration = 3600.0      # or nsteps, with duration = "none"
 size = [32, 32, 32]
 extent = [3200.0, 3200.0, 1600.0]
 
-[sgs]                  # one section per component; the :sgs slot
-closure = "smagorinsky"
+[sgs]                  # an exclusive slot: one section, a selector key
+model = "smagorinsky"  # the provider; the section holds its options only
+c_s = 0.17
 
 [surface_theta_flux]   # a component is enabled by its own section
 bottom = 0.24
@@ -56,13 +59,34 @@ The sections:
 
 | level | sections |
 | :-- | :-- |
-| run | `[run]`, `[time]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]` |
-| per domain | `[grid]`, `[dynamics]` (the core), `[boundaries]`, `[initial]`, and one section per component, generated from its schema: `[advection]`, `[sgs]`, `[coriolis]`, `[sponge]`, `[surface_theta_flux]`; the EX-d couplings `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]` (one component today, split in ONE-e); the urban site's `[urban]` and one section per urban component (ONE-e #454) |
+| run | `[run]`, `[time]`, `[timestep]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]` |
+| per domain | `[grid]`, `[core]`, `[dynamics]` (the core's parameters), `[boundaries]`, `[initial]`, and one section per component, generated from its schema: `[advection]`, `[sgs]`, `[coriolis]`, `[sponge]`, `[surface_theta_flux]`; the EX-d couplings `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]` (one component today, split in ONE-e); the urban site's `[urban]`, one section per urban slot and one per additive urban component (ONE-e #454, ONE-m #476) |
 | the domain itself | `id`, `static_driver`, `dynamic_driver` (top level for one domain, else in each `[[domain]]` block); a nested domain's `parent`, `origin`, `refinement`, `feedback` (ONE-f, #455) |
 
-`[checks]` takes one key per check the enabled components publish; none
-publishes one yet (ONE-d, #453), so any key is an error. The component
-interface and the stage pipeline are on [Components](components.md).
+`[checks]` takes one key per check the core and the enabled components
+publish (ONE-d, #453). The component interface and the stage pipeline are
+on [Components](components.md).
+
+**Exclusive slots: one section, a selector key** (ONE-m, #476). A slot
+that holds exactly one of several providers is one section whose
+selector key names the provider: `[core] model`, `[timestep] scheme`,
+`[sgs] model`, `[surface] model`, `[microphysics] scheme`, `[advection]
+scheme`, and on an urban site also `[pressure] solver`,
+`[momentum_advection] scheme`, `[chemistry] scheme` and the rest of its
+slots. The section holds the chosen provider's options and nothing
+else: a key of another provider is an error that names the providers
+that have it, and the resolved config shows the provider with every
+option it has. There are no `enabled` pairs to keep consistent: an
+additive component (on or off, any number of them) keeps its `enabled`
+key. A slot section the model and the urban site share offers each
+domain the providers of its kind (`[sgs] model = "tke"` is the model's
+TKE closure on a model domain, the site's on an urban site). A selector
+set at a higher level that names another provider replaces the
+provider: `--set sgs.model="vreman"` on a file with `[sgs] model =
+"tke"` drops the file's `[sgs]` options, and the vreman closure starts
+from its defaults and the other overrides (a `[domain.sgs]` block's
+selector does the same for its domain, and `with` from Julia). Naming
+the provider the file names changes nothing.
 
 Conventions: keys are ASCII `snake_case`; values are SI and durations are
 in seconds; `"none"` stands for nothing (TOML has no null); a path is
@@ -83,7 +107,7 @@ domain:
 dt = 1.0                   # a nest takes a fixed step
 
 [sgs]
-closure = "vreman"         # every domain …
+model = "vreman"           # every domain …
 
 [grid]
 size = [8, 8, 8]           # the parent: 3200 × 3200 × 1600 m, Δ = 400 × 400 × 200 m
@@ -99,7 +123,8 @@ refinement = [8, 8, 8]     # Δ = 50 × 50 × 25 m: grid.size = extent / parent 
 feedback = "two_way"       # the default; "one_way" per child
 static_driver = "input/inner_static.nc"
   [domain.sgs]
-  closure = "amd"          # … but this one
+  model = "amd"            # … but this one (another provider: the run level's
+                           # [sgs] options, if any were set, are dropped)
   [domain.grid]
   extent = [400.0, 400.0, 200.0]
 ```
@@ -154,21 +179,26 @@ sections involved.
 
 ## Legacy cases
 
-The run types not yet ported to components keep their own schemas until
-the epic step that ports them: the nest parent of an urban site alone
-(`urban_parent`; the urban site itself is the model's since ONE-e #454)
-and the example run types (ONE-i #458). The SBL cases are configurations
-of the model since ONE-g (#456); the channel, single-column and DNS
-a-priori validation cases are gone (maintainer decisions of 2026-10-09).
-A config selects a legacy case with `[run]
-legacy = "<case>"`; it has no domains.
+The one run type not yet ported to components keeps its own schema: the
+nest parent of an urban site alone (`urban_parent`; the urban site itself
+is the model's since ONE-e #454). The seven validation run types of the
+former `Aeolus.RunDrivers` are gone (ONE-l, #475): `advection`, `cbl`,
+`shear_layer` and `flat_plate` are configurations of the model (with the
+components `[kinematic_flow]`, `[sgs] model = "tke"`,
+`[inflow_statistics]` and `[fringe]`), and `inflow_fetch` and
+`obstacle_channel` (channel cases) and `sgs_decay` (the filtered-DNS
+study) were dropped, their harnesses kept as test fixtures. The SBL cases are
+configurations of the model since ONE-g (#456); the channel,
+single-column and DNS a-priori validation cases are gone (maintainer
+decisions of 2026-10-09); the Kessler box of the kernel demos is a
+configuration of the model, and the `column` and `dns_decay` run types,
+which were Julia files under `examples/`, are gone (ONE-i #458). A config
+selects a legacy case with `[run] legacy = "<case>"`; it has no domains.
+Every legacy case is code in `src/`: nothing is loaded from `examples/`.
 
 | `[run] legacy` | what it runs | options |
 | :-- | :-- | :-- |
 | `urban_parent` | the nest parent of an urban site alone (the model's sections) | [urban_parent](../reference/options/urban_parent.md) |
-| `column` | the Kessler box of the kernel demo (no dynamics) | [column](../reference/options/column.md) |
-| `dns_decay` | the decaying DNS of P56-c that `sgs_decay` starts from | [dns_decay](../reference/options/dns_decay.md) |
-| `advection`, `cbl`, `inflow_fetch`, `obstacle_channel`, `shear_layer`, `flat_plate`, `sgs_decay` | the example run types of `Aeolus.RunDrivers` | `aeolus options <case>` |
 
 ## No inheritance
 
@@ -186,8 +216,8 @@ On the command line an override is `--set dotted.key=<TOML value>`.
 Strings are quoted, arrays are TOML arrays:
 
 ```bash
-julia --project -m Aeolus run examples/configs/taylor_green_vortex.toml --set grid.size=[16,16,16]
-julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs_tke.enabled=false --set sgs_smagorinsky.enabled=true
+julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml --set grid.size=[16,16,16]
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs.model='"smagorinsky"'   # another provider
 julia --project -m Aeolus check my_case.toml --set time.nsteps=10 --set time.duration='"none"'   # validate only
 julia --project -m Aeolus resolve my_case.toml                            # print the canonical TOML
 julia --project -m Aeolus options sgs                                     # the model's option reference, one section
@@ -207,7 +237,7 @@ Scripts can build or change a config in Julia:
 
 ```julia
 using Aeolus
-cfg  = load_run_config("examples/configs/dry_convective_bl.toml"; overrides = ["grid.size=[32,32,32]"])
+cfg  = load_run_config("examples/dry_convective_bl/dry_convective_bl.toml"; overrides = ["grid.size=[32,32,32]"])
 cfg2 = with(cfg, "run.seed" => 7)          # a new, validated config
 res  = run_config(cfg2)                    # what `aeolus run` does
 ```
@@ -261,7 +291,7 @@ The dynamic driver (initial profiles, large-scale forcing, surface
 series, boundary planes) is written from a sounding, a case table or
 ERA5, or by a recording parent run, and is read from the domain's
 `dynamic_driver` (the model; its large-scale tables by
-`[large_scale_forcing]`, its surface series by `[surface_layer]`) or
+`[large_scale_forcing]`, its surface series by `[surface] model = "most"`) or
 `[initial] dynamic` (urban).
 Their variables, dimensions, units and attributes are listed on the
 [static](../reference/input_static.md) and
@@ -270,21 +300,43 @@ Their variables, dimensions, units and attributes are listed on the
 
 ## Where the shipped configs live
 
-| directory | configs |
-| :-- | :-- |
-| `examples/configs/` | the model: `taylor_green_vortex`, `dry_convective_bl`, `buoyant_convection`, `lindenberg_era5`; `advection`: `scalar_advection_2d` |
-| `examples/urban/` | the model, urban sites (`Aeolus.UrbanCase`, ONE-e #454): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); `urban_parent`: `berlin_parent`, `berlin_parent_coarse`; `input/` holds their driver files |
-| `examples/sbl/configs/` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps (`input/`: the case-table dynamic drivers) |
-| `examples/dns_vs_les/configs/` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence |
-| `examples/kernels/configs/` | `column`: `cloud_spinup`; the model: `tgv_energy_decay`, `decaying_hit`, `channel_flow`, `pollution_plume`, `particle_trail` |
-| `examples/coupled/configs/` | the model with the EX-d couplings: `dcbl_radiation_lsm`, `moist_convection`, `heated_plume`, `flow_past_cube` (`input/`: the cube's GeoJSON and static driver) |
-| `examples/sgs/configs/` | `cbl`: `cbl_tke`; `sgs_decay`: `rotating_stratified_decay`; `obstacle_channel`: `surface_mounted_cube`, `surface_mounted_cube_closures` (`input/`: the cube) |
-| `examples/nesting/configs/` | `cbl`: `cbl_inflow_statistics`; `inflow_fetch`: `inflow_fetch` |
-| `examples/transition/configs/` | `shear_layer`: `kelvin_helmholtz`; `flat_plate`: `flat_plate_t3a` |
+An example is a **case directory**, `examples/<case>/` (ONE-i #458):
 
-An example is these files only: the `.jl` files next to a `configs/`
-directory read a finished run folder and plot or tabulate it; none builds
-or steps a model (EX-d, #441).
+```
+examples/<case>/<case>.toml        the configuration (and its variants, <case>_<variant>.toml)
+examples/<case>/input/*.nc         its static and dynamic drivers (made by AeolusPrep.jl)
+examples/<case>/data/*.csv         reference data its [checks.reference] compares against
+examples/<case>/*.jl               optional scripts that read a finished run folder
+examples/viz/                      the plotting library those scripts share
+```
+
+A case family that shares its drivers and data is one directory:
+`examples/sbl/` (GABLS1–4 and CASES-99), `examples/dns_vs_les/` (the DNS
+and one LES per SGS model), `examples/urban/` (the Berlin variants).
+
+| case | runs on | configs |
+| :-- | :-- | :-- |
+| `taylor_green_vortex`, `buoyant_convection`, `dry_convective_bl` | the model | one each |
+| `lindenberg_era5` | the model, open boundaries from `input/lindenberg_era5_dynamic.nc` | one |
+| `tgv_energy_decay`, `decaying_hit`, `channel_flow`, `pollution_plume`, `particle_trail`, `cloud_spinup` | the model (the kernel demos) | one each |
+| `dcbl_radiation_lsm`, `moist_convection`, `heated_plume`, `flow_past_cube` | the model with the EX-d couplings (`flow_past_cube/input/`: the cube's static driver) | one each |
+| `sbl` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps | `input/`: the case-table dynamic drivers; `data/`: the reference data |
+| `dns_vs_les` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence | `compare.jl` reads the runs |
+| `urban` | the model with an urban site (`[urban] enabled`, ONE-e #454): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); legacy `urban_parent`: `berlin_parent`, `berlin_parent_coarse` | `input/`: the drivers; `data/`: land use and the Lindenberg sounding |
+| `scalar_advection_2d` | the model with a prescribed velocity (`[kinematic_flow]`, ONE-l #475) | one |
+| `cbl_tke`, `cbl_inflow_statistics` | the model with the prognostic TKE closure (`[sgs] model = "tke"`) and, as a nest parent, `[inflow_statistics]` | one each |
+| `kelvin_helmholtz`, `flat_plate_t3a` | the model: a seeded tanh shear layer (`[initial]` `tanh`, `seed_mode`); a flat plate with the `[fringe]` | one each |
+
+An example is these files only. `test/examples_enforcement.jl` holds the
+rule with no exemptions: it parses every `.jl` under `examples/` and fails
+on any call that builds or steps a model (a function of Aeolus whose name
+ends in `!`, a constructor of a grid, field, simulation, domain, model,
+component, nest, solver or run type, `run_config`, `Aeolus.main`,
+`Config.build`, `register_driver!`) or includes a file outside
+`examples/`; and it fails on a file out of the layout above (a
+`configs/` directory, a TOML file below a case's top level, a driver
+outside `input/`, data outside `data/`). The forbidden names are read from
+the package, so a new entry point is caught without editing the test.
 
 Each shipped config carries a `[test]` table with its smoke size:
 
@@ -296,7 +348,7 @@ member = "lasd_32x32x32"     # sweeps only: the member replayed (default: the fi
 
 The loader ignores `[test]` (it checks only its shape): it is not part of
 the resolved config, of `run.toml` or of the config hash. `test/config_roundtrip.jl` finds every
-`configs/*.toml` under `examples/` and checks that it validates, that
+`examples/<case>/*.toml` and checks that it validates, that
 resolving it is a fixed point, that every key it uses is in the option
 reference, and that its smoke run replays bit for bit from its `run.toml`.
 A new config without a `[test]` table fails that suite with a message

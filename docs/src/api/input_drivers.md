@@ -28,7 +28,7 @@ julia --project -m AeolusPrep static <aeolus>/examples/urban/berlin_summer.toml 
       --source data/berlin/alexanderplatz_real.osm --min-height 8 --park-lai 2.5
 julia --project -m AeolusPrep dynamic --from-sounding <aeolus>/examples/urban/berlin_summer.toml
 julia --project -m AeolusPrep dynamic --from-era5 data/era5/era5_lindenberg_20190629_*.nc \
-      --config <aeolus>/examples/configs/lindenberg_era5.toml --lat 52.2085 --lon 14.118
+      --config <aeolus>/examples/lindenberg_era5/lindenberg_era5.toml --lat 52.2085 --lon 14.118
 julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed driver, reproduced?
 ```
 
@@ -201,14 +201,14 @@ pressure reduced from the launch site ([`surface_pressure_at`](@ref Aeolus.Input
 [`forcing_dynamic_inputs`](@ref Aeolus.InputDrivers.forcing_dynamic_inputs)
 holds the `ForcingTable`s of a case's forcing (GABLS, CASES-99); a number
 stays in the case's config. The committed drivers of the SBL
-configurations (`examples/sbl/configs/input/*_dynamic.nc`: GABLS2 and
+configurations (`examples/sbl/input/*_dynamic.nc`: GABLS2 and
 CASES-99 the surface θ series and the subsidence, GABLS3 the geostrophic
 wind, the advective tendencies and the 0.25 m θ series, GABLS4 the surface
 θ series) were written from the case tables by the former `sbl` run type
 (ONE-g, #456). The model reads the large-scale tables generically: the
 `[large_scale_forcing]` component (`u_g = "driver"`, `advective_tendencies`,
 `subsidence`, `nudging`; [`dynamic_forcing`](@ref Aeolus.InputDrivers.dynamic_forcing))
-and the `[surface_layer]` `temperature = {kind = "driver"}`, the times read
+and the `[surface] model = "most"` `temperature = {kind = "driver"}`, the times read
 at the model time minus `[time] start`; a driver with no initial profiles
 initialises nothing (the profiles stay in `[initial]`).
 
@@ -247,7 +247,7 @@ its profiles set the initial u, v, θ (and qv), and lateral faces set to
 `boundaries.x`/`y = "open"` take its boundary planes through a
 [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed), blended
 linearly in time (boussinesq core, uniform grid, z walls).
-`examples/configs/lindenberg_era5.toml` is a 16³ open box over
+`examples/lindenberg_era5/lindenberg_era5.toml` is a 16³ open box over
 Lindenberg reading the committed `input/lindenberg_era5_dynamic.nc`
 (1.4 MB; ERA5 of 2019-06-29 00–12 UTC at 52.2085 N, 14.118 E); the file is
 hashed under `[inputs]` of `run.toml`, and 20 steps round-trip bit for bit

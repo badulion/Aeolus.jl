@@ -27,7 +27,7 @@ them.
 | Topic | Decision |
 | :-- | :-- |
 | Run types | **Exactly one model.** `aeolus run config.toml` always runs it. There are no run types and no `[run] driver` key. Ensembles, parameter sweeps and spin-up chains are repeated `aeolus run` calls made by the user, not model features. |
-| Module switching | **Explicit only.** Every module has its own TOML section and is enabled there. There are no presets and no mode switches. |
+| Module switching | **Explicit only.** Every module has its own TOML section and is enabled there. There are no presets and no mode switches. An exclusive slot is **one section with a selector key** (`[sgs] model = "tke"`) that holds the chosen provider's options; an additive module is on or off (`enabled`). |
 | Bare-config default | **Minimal dry LES**: dynamics, SGS, pressure solve and dry θ. Every other module is off until enabled. |
 | Coupling in a step | **A fixed, documented stage pipeline.** Modules implement one component interface and attach to named stages. |
 | Nesting | **One TOML with several `[[domain]]` blocks.** Each domain has its own static and dynamic driver, and one `aeolus run` steps all of them. |
@@ -180,8 +180,8 @@ cadence = "60s"
 enabled = true
 materials = { concrete = { conductivity = 1.51, heat_capacity = 2.0e6 } }   # TOML table allowed
 
-[chemistry]
-enabled = true
+[chemistry]                  # exclusive slot: the selector names the provider
+scheme = "aq_chem"
 
 [output]
 variables = ["u", "v", "w", "theta", "qv", "t_surface", "budget_energy"]
@@ -214,6 +214,7 @@ Rules:
 - **Complete per domain.** Each `[[domain]]` block contains all of that domain's module sections as `[domain.<section>]` tables, the parent included. Nothing is inherited from run level or from another domain. (The example above still shows module sections at run level; under this rule they move into each domain block.)
 - **Resolved config.** It lists, for every domain, every component with every option (resolved), so a run is fully described by its `run.toml`.
 - **Validation.** Unknown keys are errors. Slot conflicts, missing requirements and incompatibilities are reported with the section names involved.
+- **Exclusive slots** (ONE-m, #476). Every exclusive slot is one section with a selector key: `[core] model`, `[timestep] scheme`, `[sgs] model`, `[surface] model`, `[microphysics] scheme`, `[advection] scheme`, and the urban site's `[pressure] solver`, `[momentum_advection] scheme`, `[chemistry] scheme = "none" | "aq_chem"` and the rest (`Urban.URBAN_SLOT_SECTIONS`). The section holds the chosen provider's options and no other's: an option of another provider is an error naming the providers that have it, and the resolved config shows the provider with all its options. A selector set at a higher level (`--set`, a `[domain.<section>]` block, `with`) that names another provider replaces it: the lower level's options are dropped and the new provider starts from its defaults. A section the model and the urban site share offers each domain the providers of its kind. There are no `enabled` pairs for a choice: `enabled` is for additive components.
 - **Self-contained.** There is no `extends` and no inheritance. Every shipped TOML contains every option it relies on, apart from the model defaults. A change that must reach several variants is made in each file, and the round-trip tests show the diffs between variants explicitly.
 
 ### Input
@@ -283,7 +284,8 @@ examples/     <case>/<case>.toml + input/*.nc (+ reference data) + optional outp
 test/         module tests, component contract tests, end-to-end tiny configs
 ```
 
-These disappear: `src/urban/` (the `UrbanCase` framework), `src/sbl/` (the
+These disappear: `src/urban/` (the `UrbanCase` framework; gone since ONE-k,
+#474: the urban components are `src/components/urban/`), `src/sbl/` (the
 run type; its case physics becomes components), the run-driver registry, and
 `src/urban/preprocess.jl` and `src/preprocess/` (moved to AeolusPrep.jl).
 
@@ -303,6 +305,37 @@ Every step that is not a physics change must reproduce today's results bit for
 bit, checked on the config digests, the Berlin smoke and the thread-invariance
 harness. Re-captures are allowed only with a stated reason, and assertions are
 never weakened.
+
+**The urban site after ONE-k (#474).** The site is a `Model` of one domain
+stepped by `step!(::Model)` and run by the model's run loop: the
+`UrbanSite` is the domain's first component and its `:timestepper`
+component takes the core step (`Components.takes_core_step`); its output
+is the run's writer's (the site publishes its catalogue), its restart the
+run's checkpoints, its options `site_options(cfg)` of the model's config.
+`UrbanCase`, `CaseConfig`, the case run loop and the site's own output
+and restart are gone; `Aeolus.Urban` lives in `src/components/urban/`.
+Still open for the urban site: its nest parent (`ParentCase`, run by the
+`:nesting` component and alone by the `urban_parent` run type) is not a
+`[[domain]]` yet, because the parent's physics (the tiled surface, the
+column radiation, TKE on the stretched grid, the large-scale forcing and
+nudging) is not yet a set of components of a core domain; and the site
+still builds its own core (Coriolis, Smagorinsky and sponge in the core's
+constructor) instead of using the model's components.
+
+**One key per exclusive slot (ONE-m, #476).** The enable/disable pairs
+that #472 and #473 left (`[pressure_fft] enabled = false` with
+`[pressure_multigrid] enabled = true`, `[aq_chem]` with `[chem_off]`,
+`[surface_layer] enabled` beside `[surface] model`) are gone: each slot is
+one section with a selector (`Config.slot_section`), the model's and the
+urban site's providers of a slot pooled in one section and offered by
+domain kind (`[sgs] model = "tke"`: the model's TKE closure on a model
+domain, the site's on an urban site). `[dynamics] core` became `[core]
+model`, `[time] scheme` the run-level `[timestep] scheme`, `[sgs]
+closure` `[sgs] model` (with a coefficient default per closure in place
+of `c_s = "none"`), `[surface_layer] enabled` `[surface] model = "most"`.
+Every shipped TOML is converted; the resolved configs mean what they
+meant (the simulation digests, the Berlin fixture and the smoke-matrix
+hashes are unchanged).
 
 ## Resolved questions (2026-10-09)
 

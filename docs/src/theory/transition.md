@@ -205,7 +205,7 @@ complement within the fluid, and solid cells are never turbulent.
 `normalization = :volume` divides by the domain-mean ``|ω|`` instead.
 Use it when the levels of interest have very different vorticity levels.
 
-In the Kelvin–Helmholtz billow of `examples/transition/configs/kelvin_helmholtz.toml`
+In the Kelvin–Helmholtz billow of `examples/kelvin_helmholtz/kelvin_helmholtz.toml`
 (the `shear_layer` run type; the config reproduces the script it replaced
 bit for bit, figures included)
 (``J = 0.05``, ``Re = 1000``, free base state), ``γ`` of the layer
@@ -429,7 +429,7 @@ Blasius comparison uses filtered ``c_f``. The grids of the 2-D laminar
 plate (``Δx = 2``) and of the T3A-like example (``Δx = 1.04``) are fine
 enough not to need it.
 
-The T3A-like example (`examples/transition/configs/flat_plate_t3a.toml`, the
+The T3A-like example (`examples/flat_plate_t3a/flat_plate_t3a.toml`, the
 `flat_plate` run type, bitwise the former script on a small grid; Tu = 3.3 %
 as in Roach & Brierley 1992) runs 576 × 64 × 96 cells on
 600 × 36 × 24 ``δ^*_0`` (``Re_x`` = 3.0e4 to 1.9e5; ``Δx = 1.04``,
@@ -975,10 +975,11 @@ parent, it takes 65 ms on one core (57 ms before the native-point
 variances, which add one second-moment pass per level). With ``τ_{\rm avg}`` = 600 s, a
 cadence of tens of seconds of parent time is enough.
 
-**A convective Aeolus parent** (`examples/nesting/configs/cbl_inflow_statistics.toml`,
-the `cbl` run type with `[inflow_statistics]`; `examples/nesting/report_cbl_inflow_statistics.jl`
-prints the table from its `results.toml`).
-The parent is the 64³ CBL of `examples/sgs/configs/cbl_tke.toml`: ``Δx = 50`` m,
+**A convective Aeolus parent** (`examples/cbl_inflow_statistics/cbl_inflow_statistics.toml`,
+the model with `[sgs] model = "tke"` and the `[inflow_statistics]` component, ONE-l #475;
+`examples/cbl_inflow_statistics/report_cbl_inflow_statistics.jl` prints the table from the last
+record of its `output.nc`).
+The parent is the 64³ CBL of `examples/cbl_tke/cbl_tke.toml`: ``Δx = 50`` m,
 ``Δz = 25`` m, ``Q = 0.1`` K m/s, Deardorff–Moeng TKE, 2 h, ``z_i = 1175`` m,
 ``w_* = 1.57`` m/s. The last 30 min are folded into the running mean
 (τ_avg = 600 s, refine (2, 2, 4), so the band is 100–200 m). Values at
@@ -1211,10 +1212,12 @@ The orderings DF < FSD in both moments and in the total stress, and
 |bias| DF < FSD < off, held in every realisation, and they are what the
 CI case asserts.
 
-Example (`examples/nesting/configs/inflow_fetch.toml`, the `inflow_fetch` run type;
-`examples/nesting/plot_inflow_fetch.jl` prints the tables and writes the figures; 15δ child, spanwise
-periodic, averaged ``10δ/u_*``, about 11 min), ratios to the child-grid reference and
-development lengths (δ) to 10 % / 20 %:
+The former example (the `inflow_fetch` run type, dropped with the channel
+cases in ONE-l #475: it ran on the periodic, pressure-driven half channel;
+its harness is the test fixture `test/fixtures/inflow_fetch.jl` of
+`test/era6_inflow_fetch.jl`; 15δ child, spanwise periodic, averaged
+``10δ/u_*``, about 11 min) gave these ratios to the child-grid reference
+and development lengths (δ) to 10 % / 20 %:
 
 | run | TKE 0.22δ at x = 1, 3, 5, 10, 14δ | TKE 0.47δ | L₁₀ TKE 0.22δ / 0.47δ | L₁₀ −u'w' 0.22δ / 0.47δ |
 | :-- | :-- | :-- | :-- | :-- |

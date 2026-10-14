@@ -76,8 +76,8 @@ on a retry.
 
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability`, `stress` | called by the core in stage 6 | the closure of `Components.build_closure` |
+| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` `scheme = "centred"` (the one provider, no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `model` (default `smagorinsky`; `tke`, ONE-l #475); per closure its options (ONE-m #476): `c_s` (smagorinsky, vreman, sigma, amd; each its default), `pr_t`, `stability` (not amd), `stress`; `tke`: `e_min`, `surface_factor`, `wall_cap`, `stress` | called by the core in stage 6; `tke` also `:surface_flux` (after the others: the wall fluxes of [`wall_theta_flux`](@ref Aeolus.Components.wall_theta_flux)) | the closure of `Components.build_closure`; `PrognosticSGS.TKEClosure`, `initialize_tke!` |
 | [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` or `latitude` | `:tendencies` | `Operators.add_coriolis!` |
 | [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
 | [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start`, `target` (`rest`, `geostrophic`, `mean`) | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
@@ -87,15 +87,47 @@ The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
 | [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables) | `:clock` (the step start), `:body_force` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``) |
-| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface_layer]` `enabled`, `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
+| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface]` `model = "most"` (ONE-m #476; the slot's other providers are the couplings `none`, `slab`, `flux_map`), `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
 | [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
-Every domain has an `:advection` provider; `[sgs] closure = "none"`
+The components of the validation cases (ONE-l, #475; the former run
+types of `Aeolus.RunDrivers`), on both cores, checkpointed:
+
+| component | slot | section | stage | delegates to |
+| :-- | :-- | :-- | :-- | :-- |
+| [`KinematicFlow`](@ref Aeolus.Components.KinematicFlow) | — | `[kinematic_flow]` `kind` (`solid_body_rotation`, `uniform`), `omega`, `center`, `velocity` | `:clock`, `:post_predictor`, `:surface_update` (the velocity prescribed; stateless) | — (the core's scalar advection carries θ) |
+| [`ParentStatistics`](@ref Aeolus.Components.ParentStatistics) | — | `[inflow_statistics]` `enabled`, `start`, `tau_avg`, `refine`, `depth` | `:output` | `Transition.ParentResolvedStatistics`, `update_inflow_statistics!`, `inflow_stress_parts` |
+| [`Fringe`](@ref Aeolus.Components.Fringe) | — | `[fringe]` `profile` (`blasius`), `inflow_reynolds`, `velocity`, `length`, `rise`, `fall`, `lambda_max`, `top`, `tu`, … | `:body_force`; the free-stream top before the core is built ([`core_boundaries`](@ref Aeolus.Components.core_boundaries)) | `Transition.FringeRegion`, `blasius_target`, `blasius_freestream`, `FreeStreamDisturbance`, `disturbance_fringe_update`, `set_blasius!` |
+
+The validation run types they replace: `advection` is
+`examples/scalar_advection_2d/` (θ carried by `[kinematic_flow]`: the
+core's centred flux form on the staggered grid instead of the run type's
+upwind kernel on cell-centred velocities, a stated change); `cbl` is
+`examples/cbl_tke/` and `examples/cbl_inflow_statistics/`, bit for bit;
+`shear_layer` is `examples/kelvin_helmholtz/` (the `[initial]` profiles
+`tanh` and `seed_mode`, the outputs `w_rms`, `turbulent_fraction_profile`,
+`shear_production_profile`, `buoyancy_production_profile`,
+`vorticity_y`), bit for bit; `flat_plate` is `examples/flat_plate_t3a/`,
+bit for bit. The numbers the run types computed at the end of a run are
+now computed from the output by the cases' scripts. `inflow_fetch` and
+`obstacle_channel` ran on pressure-driven channels and `sgs_decay` is the
+filtered-DNS study; all three are dropped (the design drops the channel
+cases and the a-priori study), their harnesses kept as test fixtures
+(`test/fixtures/inflow_fetch.jl`, `sgs_validation.jl`), and so is the
+channel harness of `WallModels` (`test/fixtures/channel_cases.jl`).
+
+Every domain has an `:advection` provider; `[sgs] model = "none"`
 enables no `:sgs` component. Each component has its own per-domain
 section of the model's configuration, generated from its
 [`schema`](@ref Aeolus.Components.schema)
 ([`COMPONENTS`](@ref Aeolus.SimulationDriver.COMPONENTS), ONE-b #451), and
-is switched on by it ([`enabled`](@ref Aeolus.Components.enabled)`(C,
+is switched on by it. The component of an exclusive slot is a provider of
+the slot's section instead (ONE-m, #476): its `schema` is a
+[`slot_section`](@ref Aeolus.Config.slot_section) with its provider(s),
+the model's schema merges the parts of one slot
+([`merge_sections`](@ref Aeolus.Config.merge_sections)), and `enabled`
+compares the selector with its provider name (`opts.model === :most`);
+the section holds the chosen provider's options only ([`enabled`](@ref Aeolus.Components.enabled)`(C,
 opts)`, from the options alone). Before anything is built, the enabled
 component types of every domain are checked
 ([`component_problems`](@ref Aeolus.Components.component_problems)): at
@@ -258,8 +290,12 @@ Every component publishes an output catalogue (`outputs(c)`: a list of
 for its type). The core publishes `Components.CORE_OUTPUTS`:
 
 - u, v, w, p, θ, qv as 3-D fields;
-- the horizontal-mean profiles;
-- the domain means as time series;
+- the horizontal-mean profiles, and (ONE-l #475) the total heat-flux,
+  w-variance and resolved-TKE profiles and the shear-production,
+  buoyancy-flux and turbulent-fraction profiles of the transition
+  diagnostics;
+- the domain means and `w_rms` as time series; `u_squared` and
+  `vorticity_y` as 3-D fields;
 - the `budget_*` groups.
 
 `[output] variables` selects from the catalogues of the core and the
@@ -351,7 +387,7 @@ other limits are on [Run configuration](run_configuration.md).
   self-contained physics found there, now live in their physics modules,
   and the couplings call them, bit for bit:
 
-  | from `src/urban/couplings/` | now |
+  | from `src/components/urban/` | now |
   | :-- | :-- |
   | `moist_buoyancy.jl` | `Operators.moist_buoyancy_perturbation!`, `add_moist_buoyancy!` |
   | `traffic_heat.jl` | `BuildingEnergy.traffic_heat_flux`, `add_traffic_heat!` |
@@ -366,7 +402,7 @@ other limits are on [Run configuration](run_configuration.md).
   | `column_radiation.jl` | the module `ColumnRadiation`: `ColumnRadiationModel`, `column_radiation_solver`, `stitched_column`, `column_radiation!`, `column_heating_kday` (the nest parent uses it too) |
   | `surface_exchange.jl` | `SurfaceExchange.deliver_surface_fluxes!` (the held H and E into the first air cell) |
   | `radiosity_sun.jl` | `Radiosity.surface_irradiance!` (plan-area fluxes to per-surface irradiance) |
-  | `core/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration), `MoistThermodynamics.θ_per_heat` (the heat-to-θ conversion ``1/(ρ c_p Π)``) |
+  | `site/reference_state.jl` | `Anelastic.hydrostatic_pressure` (the continuous hydrostatic integration), `MoistThermodynamics.θ_per_heat` (the heat-to-θ conversion ``1/(ρ c_p Π)``) |
 
   Two couplings measurably did nothing and were deleted rather than
   moved: `snow_legacy.jl` (a snow flag that nothing read, and that could
@@ -384,7 +420,7 @@ other limits are on [Run configuration](run_configuration.md).
 * **ONE-e (#454), second part: the urban case on the pipeline and on the
   model's configuration.**
   - **The stage loop is gone.** A built case is a `Domain` of the
-    pipeline (`case.domain`; `UrbanCase.build_domain!`): the case's own
+    pipeline (`case.domain`; `Urban.build_domain!`): the case's own
     component `UrbanCore` (the local hour and the budgets' snapshot first
     in `:clock`; the heat captures of the fixed-gradient top and the open
     faces, with the open faces' θ relaxation, in `:tendencies`) and one
@@ -405,7 +441,7 @@ other limits are on [Run configuration](run_configuration.md).
     configs: `[urban] enabled` makes the domain an urban site, and every
     urban component has a section of the model's schema, generated from
     its `default_options` (`enabled`, default `false`, and its options).
-    `aeolus run` builds and runs the site (`UrbanCase.run_urban!`); the
+    `aeolus run` builds and runs the site (then `UrbanCase.run_urban!`); the
     `urban` run type, its schema and `[physics]` are gone. The configs of
     the four scenarios resolve, field for field and bitwise, to the
     `CaseConfig`s of the fixture (`test/config_berlin.jl`).
@@ -431,22 +467,83 @@ other limits are on [Run configuration](run_configuration.md).
     smoke matrix's 54 runs hash bit for bit as before (3809 hashes of
     the thread-invariance worker's `smoke` section).
 
-  What is still the urban case's own, for the rest of ONE-e: the
-  components run through the `UrbanEntry` adapter (one concrete type,
-  so a selection does not compile the domain anew; their methods take
-  the case, `run_stage!(c, case, Val(S), dt)`, since they read its
-  shared state); `CaseConfig`
-  is the site's resolved configuration that `build_case` reads; the case
-  builds its own core (the Coriolis force, the Smagorinsky coefficient and
-  the sponge in the core's constructor, not the model's `Coriolis`,
-  `SGS` and `Sponge` components) and steps it with its `:timestepper`
-  provider (its adaptive step covers the step it picked in pieces, and
-  the nest shortens it to land on the parent's window), and writes its
-  output, results and diagnostics itself. Its nest parent (`ParentCase`,
-  `ParentConfig`, the `urban_parent` run type) becomes the root
-  `[[domain]]` of the Berlin config once the parent's physics (the tiled
-  surface, the column radiation, TKE, the large-scale forcing) is a set of
-  components: nesting by domains (ONE-f, #455) is built.
+* **ONE-k (#474): the urban site on the model.**
+  - **A component takes the core step.** A component may take its
+    domain's core step itself: `takes_core_step(c)`, `advance_core!(c, d,
+    dt)` (with the pipeline's hooks), `next_dt(c, d)` (its step) and
+    `check_dt(c, d, dt)` (an explicit step it refuses). `step!(d, dt)`
+    runs it in place of the core's `step!`/`step_rk3!`; `pick_dt(model)`
+    and `step!(model)` take the step it picks. The stages after the core
+    see `t0 + dt` (an adaptive step's retried pieces sum to it only to
+    round-off). The urban site is that component: the case object became
+    `UrbanSite <: AbstractComponent`, the first component of its domain,
+    with the site's shared state (its options, geometry, surface bus,
+    tracers, budgets and reference state); its `:timestepper` component
+    takes the step (fixed, adaptive with retried pieces, IMEX). Its
+    sanity check is its `:budgets` entry (a blowup throws, and the run
+    monitor diagnoses it), its frame log its first `:output` entry.
+    `step_case!` and the case's own step are gone.
+  - **The run loop is the model's.** The run loop of `aeolus run`
+    (`SimulationDriver`) asks the component that takes the core step for
+    the run's horizon and steps (`run_begin!`, `run_continues`,
+    `run_end!`; the urban nest prefetches its parent's next window within
+    it, SC-c), the diagnostics row (`step_report`, `run_diagnostics`),
+    the numbers it adds to `results.toml` (`run_results`) and its state
+    arrays for the bitwise comparisons (`state_arrays`).
+    `Components.run_to!(model, t_end)` is the same loop without output,
+    monitor and checkpoints. Gone: `run_case!`, `run_urban!`,
+    `UrbanSiteRun`, the site's NetCDF writer and its restart: the run's
+    writer writes the variables `[output] variables` selects from the
+    domain's catalogue (the site publishes its frame series, tracers,
+    surface maps and the components' fields, and `static_outputs` its
+    geometry), and the site is checkpoint component `urban` of the run's
+    `resume!`.
+  - **The configuration is the model's.** `CaseConfig` (a mutable struct
+    with Julia-side defaults, a keyword and a path constructor) is gone:
+    the site's options are `site_options(cfg)`, a `NamedTuple` read from
+    the resolved model config, changed in TOML or with `--set`.
+  - **The module and its files.** `Aeolus.UrbanCase` is `Aeolus.Urban`,
+    its files under `src/components/urban/` (the components),
+    `src/components/urban/site/` (the site) and
+    `src/components/urban/parent/` (the nest parent).
+
+  Measured: the 54 runs of the smoke matrix (`seed_fog!`, 24 s each)
+  are bit for bit those of the branch base in every state digest (the
+  child, every tracer, Ts, the nest parent), step count, heat closure,
+  water residual and air-heat term, after every commit of ONE-k.
+
+  What is still the site's own: the urban components run through the
+  `UrbanEntry` adapter (one concrete type, so a selection does not
+  compile the domain anew; their methods take the site, `run_stage!(c,
+  case, Val(S), dt)`, since they read its shared state); the site builds
+  its own core (the Coriolis force, the Smagorinsky coefficient and the
+  sponge in the core's constructor, not the model's `Coriolis`, `SGS` and
+  `Sponge` components); and its nest parent (`ParentCase`,
+  `ParentConfig`, run by the `:nesting` component, and alone by the
+  `urban_parent` run type) is not yet a `[[domain]]`: that needs the
+  parent's physics (the tiled surface, the column radiation, TKE on the
+  stretched grid, the large-scale forcing and nudging) as components of a
+  core domain, and the Berlin nest (one-way with the prefetched parent
+  window, two-way, the synthetic inflow) as the model's `ModelNest`.
+* **ONE-m (#476): one key per exclusive slot.** After #472/#473 a
+  non-default provider took an enable/disable pair of sections
+  (`[pressure_fft] enabled = false` with `[pressure_multigrid] enabled =
+  true`, `[aq_chem]` with `[chem_off]`; `[surface_layer] enabled` beside
+  `[surface] model`). Each exclusive slot is now one section with a
+  selector key, holding the chosen provider's options only
+  (`Config.slot_section`, `provider!`; validated and resolved by the
+  loader, `with` and the option reference): the model's `[core] model`,
+  `[timestep] scheme` (run level), `[sgs] model`, `[surface] model`
+  (`none`, `slab`, `flux_map`, `most`: the `SurfaceLayer` component),
+  `[microphysics] scheme`, `[advection] scheme`, and the urban site's
+  fifteen slots (`Urban.URBAN_SLOT_SECTIONS`; `[chemistry] scheme =
+  "aq_chem" | "none"`). A slot the model and the site share pools both
+  sets of providers, each offered on its domain kind
+  (`SimulationDriver.domain_kind`). Every shipped TOML is converted.
+  Measured: the state digests of every shipped config at its `[test]`
+  size, of the simulation-digest runs and of the smoke matrix are those
+  of the branch base; the four Berlin scenarios resolve to the fixture
+  field for field.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the

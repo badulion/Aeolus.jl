@@ -246,7 +246,9 @@ mask is not supported on a stretched grid.
 | 500 RK3 steps of decaying turbulence (halo 2 / stratified with walls) | ``e ≥ 0``, ``ν_t ≥ 0``, ``κ_t ≥ ν_t`` throughout; 0 clips |
 | rejected adaptive step (first try committed, then rejected) | ``e``, ``u``, ``θ`` bitwise a direct ``Δt/2`` step |
 
-**Convective boundary layer** ([`tke_cbl`](@ref Aeolus.RunDrivers.CBLDriver.tke_cbl), the `cbl` run type): free convection
+**Convective boundary layer** (`examples/cbl_tke/cbl_tke.toml`, the model with `[sgs] model = "tke"`,
+ONE-l #475; the 24³ CI case is the harness `tke_cbl` of `test/fixtures/tke_cbl.jl`, which the
+configuration reproduces bit for bit, `test/config_cases.jl`): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above
 ``z_{i0}``, periodic laterally, sponge in the top quarter, SSP-RK3 at the
 CFL step.
@@ -255,7 +257,7 @@ CFL step.
 | :-- | --: | --: | --: | --: | --: |
 | 24³, Δ = 50 m, 1 h (CI) | 900 m | −0.157 | 0.203 | 75 m (0.08 ``z_i``) | 0.50 ``w_*^2`` at 0.31 ``z_i`` |
 | 24³ with the ``κ d_{wall}`` cap | 850 m | −0.083 | 0.308 | 125 m (0.15 ``z_i``) | 0.34 ``w_*^2`` at 0.38 ``z_i`` |
-| 64³, 50 × 50 × 25 m, 2 h (`examples/sgs/configs/cbl_tke.toml`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
+| 64³, 50 × 50 × 25 m, 2 h (`examples/cbl_tke/cbl_tke.toml`) | 1175 m | −0.115 | 0.162 | 38 m (0.03 ``z_i``) | 0.459 ``w_*^2`` at 0.35 ``z_i`` |
 
 Lenschow, Wyngaard & Pennell (1980): ``σ_w^2/w_*^2 = 1.8(z/z_i)^{2/3}(1 − 0.8z/z_i)^2``,
 maximum 0.466 at ``z/z_i = 0.31``; the 64³ run is 0.035 RMS from it over
@@ -492,12 +494,16 @@ Further tests:
 The TKE closure and the Reynolds-stress closure are compared *a priori in
 time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
 Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
-not in this branch's stack). Fixture: the `sgs_decay` run type
-([`Aeolus.RunDrivers.SGSDecayDriver`](@ref), formerly `test/fixtures/sgs_validation.jl`);
-CI test: `test/era6_sgs_validation.jl`; example at 96³:
-`examples/sgs/configs/rotating_stratified_decay.toml` (tables and figure:
-`examples/sgs/plot_rotating_stratified_decay.jl`); a wall-bounded case:
-`examples/sgs/configs/surface_mounted_cube_closures.toml` (below).
+not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`
+(module `SGSValidation`; it was the `sgs_decay` run type from EX-d #441
+to ONE-l #475); CI test: `test/era6_sgs_validation.jl`. The 96³ example
+and the wall-bounded surface-mounted cube (below) were run types of
+`Aeolus.RunDrivers`; they are not configurations of the model and were
+dropped with it (ONE-l, #475): the filtered-DNS study is the a-priori
+study the single-model design drops (the a-posteriori comparison is
+`examples/dns_vs_les/`), and the cube is a channel case (a periodic
+channel held at its bulk velocity). Their numbers below are the record
+of the runs made before.
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
 spun up from a fixed seed to ``t_0 = 2``; see
@@ -626,7 +632,7 @@ and 60–83 s per continuation, LES 0.4–5 s):
   stress), so both closures are outside 2×. At this Re the DNS flux
   spends more of the run counter-gradient.
 
-The figure the example writes (`rotating_stratified_decay_96.svg` in the run folder's `output/`)
+The figure the example wrote (`rotating_stratified_decay_96.svg`)
 has one row per case. The panels are the resolved KE, the SGS energy,
 and the Lumley-triangle trajectory ``(ξ, η) = ((III/6)^{1/3}, (II/6)^{1/2})``
 of the mean invariants. The exact stress sits close to the axisymmetric
@@ -637,11 +643,9 @@ stress starts much closer to the isotropic corner.
 
 ### Surface-mounted cube (example)
 
-`examples/sgs/configs/surface_mounted_cube_closures.toml` (the
-`obstacle_channel` run type, a sweep over the closures; the cube is the
-static driver `input/surface_mounted_cube_static.nc`, and
-`examples/sgs/plot_surface_mounted_cube.jl` draws the figure from the run
-folders) compares the three closures on
+The former `obstacle_channel` run type (EX-d #441 to ONE-l #475, a
+sweep over the closures; dropped with the channel cases) compared the
+three closures on
 the wall-bounded case of Martinuzzi & Tropea (1993): a cube of height
 ``H`` in a channel of height ``2H`` at ``\mathrm{Re}_H = 40\,000``, where
 the mean flow reattaches behind the cube at ``x_R/H = 1.612`` (from the
@@ -710,7 +714,7 @@ for Smagorinsky, 1.46–1.80 for TKE and 1.90–1.97 for Reynolds stress.
 
 ## Berlin coupling
 
-`src/urban/couplings/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
+`src/components/urban/sgs_tke.jl`, provider `:tke` of the `:sgs` slot
 (see [the Berlin case](../design/berlin_numerics.md#Numerics-slots)), with ``e``
 the advected tracer `:e`, the wall cap from the building mask, the
 surface value from the MOST friction velocity, and the facade walls of
@@ -719,7 +723,7 @@ stress times the resolved shear (#232; on the summer flagship the
 stencil production it replaces was 27 % of the canopy ``Σ P_s V``, and
 near-facade ``ν_t`` rises by 5.3 %: see the facade section of
 [the Berlin case](../design/berlin_surface_radiation.md#Facade-wall-model-(#179))). The Reynolds-stress closure
-is the option `:reynolds_stress` (`src/urban/couplings/sgs_reynolds_stress.jl`):
+is the option `:reynolds_stress` (`src/components/urban/sgs_reynolds_stress.jl`):
 the six stresses are the advected tracers `:tau11 … :tau23`, with the same
 wall cap and an LRR-IP surface value. Both providers report a-priori
 metrics at the test-filter scale (P56-e): the closure's subfilter energy

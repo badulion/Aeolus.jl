@@ -7,29 +7,37 @@ test suite of its own (#320): the physics it couples is tested in the
 module tests, and its end-to-end runs are `test/urban_checks.jl` (full
 tier). Since #126 it is not a script but a small framework, built so that
 many couplings can be added independently and at the same time; since
-EX-a (#438) that framework is part of the package, `Aeolus.UrbanCase` in
-`src/UrbanCase.jl` and `src/urban/`; since ONE-e (#454) it is the urban
-site of the model (a model config with `[urban] enabled` and one section
-per urban component, see [Urban site](../api/urban_case.md)), stepped
-through the core's stage pipeline, and the Berlin case is configuration
-only: `examples/urban/berlin_*.toml`, its
+EX-a (#438) that framework is part of the package; since ONE-e (#454)
+it is the urban site of the model (a model config with `[urban] enabled`
+and one section per urban component, see [Urban site](../api/urban.md)),
+stepped through the core's stage pipeline; since ONE-k (#474) it is
+`Aeolus.Urban` in `src/components/urban.jl` and `src/components/urban/`,
+the site a component of its domain (`UrbanSite`), stepped by
+`step!(model)` and run by the model's run loop. The Berlin case is
+configuration only: `examples/urban/berlin_*.toml`, its
 static drivers (OpenStreetMap buildings, the parent's land use) and its
 dynamic driver (the Lindenberg sounding).
 
+```bash
+julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800   # 1 h at dt = 2 s
+```
+
+From Julia (the tests do this):
+
 ```julia
 using Aeolus
-const UC = Aeolus.UrbanCase
+const UC = Aeolus.Urban
 
-cfg  = UC.CaseConfig("examples/urban/berlin_summer.toml"; nsteps = 1800)   # 1 h at dt = 2 s
-case = UC.build_case(cfg)
-print(UC.describe(case))                            # couplings and schedule
-UC.run_case!(case)                                  # NetCDF + log events (frames, timing, ledgers)
+cfg  = UC.site_options(load_run_config("examples/urban/berlin_summer.toml"; overrides = ["time.nsteps=1800"]))
+site = UC.build_case(cfg)                            # the UrbanSite, the first component of site.model's domain
+print(UC.describe(site))                             # couplings and schedule
+Aeolus.Components.run_to!(site.model, cfg.nsteps * cfg.dt)   # log events (frames, timing, ledgers); no NetCDF
 ```
 
 What the case prints is the installed logger's choice (#347; there is no
 `verbose` setting and no `io` keyword): every line is a structured log
 record with `subsystem = :urban` (`:berlin` before #438), an `event` key
-and its values as key-values (#338; the code is `src/urban/core/diagnostics.jl`):
+and its values as key-values (#338; the code is `src/components/urban/site/diagnostics.jl`):
 
 | event | level | key-values |
 | :-- | :-- | :-- |
@@ -37,7 +45,7 @@ and its values as key-values (#338; the code is `src/urban/core/diagnostics.jl`)
 | `:run_start` | `Info` | `nsteps`, `t_end`, `dt`, `variable_dt`, `records` |
 | `:frame` | `Info` | each output record: `frame`, `wall` and the frame diagnostics (`hour`, `solar_elevation`, `Ts_min`/`Ts_max`, `sw_min`/`sw_max`, `theta1_min`/`theta1_max`, `qv1_min`, `dew_max`, `ql1_max`) |
 | `:coupling` | `Info` | with each frame, one per coupling that declares diagnostics: `coupling` and its values |
-| `:run_end` | `Info` | `steps`, `wall`, `records`, `output`, `size_mb`, `peak_uhi`, `max_div` |
+| `:run_end` | `Info` | `steps`, `wall`, `records` (frames), `peak_uhi`, `max_div` |
 | `:timing` | `Info` | one per stage entry, largest first: `stage`, `entry`, `seconds`, `ms_per_step` |
 | `:ledger` | `Info` | `ledger = :surface` per class (`Rn`, `H`, `LE`, `G`, `dS`, `residual`, the extra terms, `closure`, W m⁻²); `:water` (`storage`, the sources, `residual`, kg m⁻²); `:heat` per layer (`storage`, `closure`, W m⁻²); `:heat_term` per attributed term (W m⁻² per layer) |
 | `:blowup` | `Error` | `step` |
@@ -99,9 +107,11 @@ julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nstep
 with no wrapper script (#438). The run folder (`runs/<date>_<name>_<id>/`)
 holds `run.toml`, the log, `diagnostics.csv` and `output/results.toml`
 (the run's own checks: the ledgers' closure, the timing); the NetCDF
-output still goes to `examples/urban/output/alexanderplatz.nc` (`[output]
-path`). See [the urban site](../api/config.md#The-urban-site) for
-the schema; `CaseConfig(path)` in Julia loads the same file.
+output (the variables of `[output] variables`) still goes to
+`examples/urban/output/alexanderplatz.nc` (`[output] path` and
+`netcdf`). See [the urban site](../api/config.md#The-urban-site) for
+the schema; `site_options(load_run_config(path))` in Julia reads the
+same file.
 
 ### Configuring with TOML
 
@@ -114,20 +124,22 @@ ONE-b #451), or a `--set` on the command line:
 [run]
 name = "summer_no_traffic_nox"
 
-[sgs_tke]                          # a slot: exactly one of its providers enabled
-enabled = false
-[sgs_smagorinsky]
-enabled = true
+[sgs]                              # a slot: its selector names the provider (ONE-m, #476)
+model = "smagorinsky"              # the section holds this provider's options only
+stress = "symmetric"
 
-[aq_chem]
+[chemistry]
+scheme = "aq_chem"
+nox_street = 0.0                   # a provider option, of its default_options' form
+
+[pollutant]                        # an additive component: on or off
 enabled = true
-nox_street = 0.0                   # a component option, of its default_options' form
 ```
 
 `julia --project -m Aeolus check my_berlin.toml` validates it,
 `resolve` prints every option it resolves to, and `run` starts it. In
-Julia, `CaseConfig(load_run_config("my_berlin.toml"))` gives the
-`CaseConfig` that `build_case` takes. Every key, with its type, default,
+Julia, `site_options(load_run_config("my_berlin.toml"))` gives the
+site's options that `build_case` takes. Every key, with its type, default,
 units and range, is in the generated
 [option reference of the model](../reference/options/model.md);
 the guide to files, overrides, replays and `--resume` is
@@ -136,9 +148,13 @@ resolved config, so `aeolus run <folder>/run.toml` replays the run bit for
 bit.
 
 **A coupling's `default_options` is its section.** The model's section
-`[<name>]` of an urban component (`coupling_section`) is generated from
-its `default_options` `NamedTuple`: `enabled` (default `false`: every
-component is off until its section enables it), then one option per key,
+`[<name>]` of an additive urban component (`coupling_section`) is
+generated from its `default_options` `NamedTuple`: `enabled` (default
+`false`: every additive component is off until its section enables it),
+then one option per key (`coupling_options!`); a provider of an urban
+slot is a block of the slot's section instead (`urban_slot_section`,
+ONE-m #476: `[sgs] model = "smagorinsky"` and the smagorinsky options),
+its options generated the same way:
 its TOML key ASCII snake case (`option_key`: `U_g` → `u_g`, `τ` → `tau`),
 typed by its default's form (a `Symbol` is a string, a tuple an array of
 its length, a `NamedTuple` or a table by surface class a sub-table), with
@@ -146,8 +162,11 @@ its units (`OPTION_UNITS`); the meaning of each key is documented on the
 coupling's docstring. Adding a key to `default_options` is all it takes
 to make it configurable from TOML and listed in the option reference;
 there is no separate schema to edit. Every urban slot (`:sgs`,
-`:surface_exchange`, `:core`, …) has exactly one enabled provider (a
-config error otherwise, naming the providers); the site's own options —
+`:surface_exchange`, `:core`, …) has exactly one provider, the one its
+section's selector names (`URBAN_SLOT_SECTIONS`; default: the
+`URBAN_DEFAULTS` one), and the section holds that provider's options
+only (an option of another provider is a config error naming the
+providers that have it); the site's own options —
 the ground's anchor, the clock, the periods of the radiation and the
 soil, the core's Coriolis parameter, Smagorinsky coefficient and sponge,
 the lateral boundaries and the initial state — are `[urban]`; the grid,
@@ -184,30 +203,31 @@ long-range roadmap, without marking a phase shipped.
 
 ```
 src/
-  UrbanCase.jl         module Aeolus.UrbanCase: includes urban/core/*, then every urban/couplings/*.jl in sorted order;
+  components/urban.jl  module Aeolus.Urban: includes urban/site/*, then every urban/*.jl in sorted order;
                        URBAN_COMPONENTS (the site's components), URBAN_DEFAULTS (the reference selection)
-  urban/core/
-    config.jl          CaseConfig — grid, window, clock, cadences (s), the enabled components and their options
+  components/urban/site/
+    config.jl          site_options — grid, window, clock, cadences (s), the enabled components and their options
     config_schema.jl   the urban site in the model's schema: [urban] and the component sections
-                       (defaults), RunConfig → CaseConfig, CaseConfig(path), run_urban!,
+                       (defaults), RunConfig → site_options, build_model (what aeolus run builds),
                        run_results (results.toml)
     parent_driver.jl   the `urban_parent` run driver: the nest parent alone, its tables
-    components.jl      UrbanComponent, its interface, Cadence, URBAN_SLOTS, the selection of a CaseConfig
+    components.jl      UrbanComponent, its interface, Cadence, URBAN_SLOTS, the selection of the site's options
     geometry.jl        build_geometry: the static driver → mask, classes, radiosity scene,
                        view factors; the reader, classes and rasterisation are
                        Aeolus.InputDrivers (src/input_drivers/, CFG-f #361)
     bus.jl             SurfaceBus (incl. the per-column surfaces), SurfaceParams, surface factories
     tracers.jl         tracer registry (ensure_tracer!)
-    ledger.jl          energy/water budget ledger (surface energy per class, water in the air)
+    budgets.jl         energy/water budget ledger (surface energy per class, water in the air)
     reference_state.jl hydrostatic reference p̄, ρ̄, T̄, Π̄ (CaseReference)
     open_boundary.jl   cfg.lateral (:periodic / :open), the open faces' data and heat (#262)
-    output.jl          NetCDF output of the case and its components
-    case.jl            Case, build_case
-    stages.jl          the case as a Domain of the core's stage pipeline (UrbanCore, UrbanEntry):
-                       step_case!, run_case!
-    diagnostics.jl     the case's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
-  urban/couplings/     one file per urban component
-  urban/parent/        the nest parent: land-use surface, ParentConfig, the parent case
+    case.jl            UrbanSite (the domain's first component), build_case
+    stages.jl          the site in the core's stage pipeline (its stages, UrbanEntry), its core step
+                       and its run hooks (run_begin!, run_continues, run_end!, run_results, …)
+    output.jl          the site's output catalogue (Components.outputs, static_outputs)
+    restart.jl         the site's checkpoint state
+    diagnostics.jl     the site's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
+  components/urban/*.jl     one file per urban component
+  components/urban/parent/  the nest parent: land-use surface, ParentConfig, the parent case
 examples/urban/
   berlin_summer.toml   every option; berlin_winter, _smoke, _mitte_sample, _parent, _parent_coarse.toml
   input/               the static and dynamic drivers (made by AeolusPrep.jl: aeolusprep static / dynamic)
@@ -266,8 +286,8 @@ Two slots drive the dynamics itself and have four more methods
 | `build_core(::Type{C}, cfg, mesh, ref, simkw)` | slot `:core`: construct the dynamical-core simulation (`case.sim`) on the case's reference state `ref` with the merged `sim_options` keywords `simkw`; a keyword it does not take is an error |
 | `next_dt(c, case)` | slot `:timestepper`: the length of the next step (default `cfg.dt`) |
 | `advance_dynamics!(c, case, dt)` | slot `:timestepper`: advance `case.sim` by `dt` with the composed `:body_force` / `:post_predictor` hooks and the numerics slots' `case.step_kwargs` (default `dynamics_step!`: one `step!`) |
-| `variable_dt(::Type{C})` | slot `:timestepper`: `true` if `next_dt` varies; `run_case!` then runs to the simulated time `nsteps · cfg.dt` |
-| `stable_dt(c, case)` | slot `:timestepper`, `variable_dt` providers: the longest step the provider's stability limits (CFL, diffusion, buoyancy, Coriolis) and `dt_max` allow from the current flow, without the growth limit and without side effects (default `Inf`). `step_case!(case, dt)` throws an `ArgumentError` for a `dt` above it, before any stage runs (#392) |
+| `variable_dt(::Type{C})` | slot `:timestepper`: `true` if `next_dt` varies; the run then goes to the simulated time `nsteps · cfg.dt`, its last step landing on it |
+| `stable_dt(c, case)` | slot `:timestepper`, `variable_dt` providers: the longest step the provider's stability limits (CFL, diffusion, buoyancy, Coriolis) and `dt_max` allow from the current flow, without the growth limit and without side effects (default `Inf`). `step!(model, dt)` throws an `ArgumentError` for a `dt` above it, before any stage runs (#392; `check_step_dt`) |
 
 A keyword from `sim_options` or `step_options` is never dropped: every
 time stepper passes `case.step_kwargs` to the step it takes, and a core
@@ -276,9 +296,11 @@ or stepper that cannot take a component's keyword declares that component
 with the reason instead.
 
 The config checks of an urban site (`urban_checks`, run when a config is
-loaded) report an urban slot without exactly one enabled component, a
-declared incompatibility between two enabled ones, and an option of the
-wrong form; an unknown option or section is the schema's error.
+loaded) report a declared incompatibility between two selected
+components (naming their sections, `[core] model = "anelastic" is
+incompatible with [pressure] solver = "cosine_fft"`) and an option of the
+wrong form; an unknown option or section, a selector naming no provider
+and an option of another provider are the schema's errors.
 
 **Cadences are in seconds.** `Cadence(600.0)` fires on the step that
 crosses a multiple of 600 s, `floor(t_new/P) > floor(t_old/P)`;
@@ -303,17 +325,20 @@ with `ledger.dt`, the current step's length, never `cfg.dt`.
 ## The stage loop
 
 One step of the case is one step of its `Domain` through the core's
-stage pipeline (`Aeolus.Components`, ONE-a #450; since ONE-e #454): the
-case's own component (`UrbanCore`: the local hour and the budgets'
+stage pipeline (`Aeolus.Components`, ONE-a #450; since ONE-e #454),
+`step!(model)` (ONE-k, #474): the site itself (`UrbanSite`, the domain's
+first component: the step count, the local hour and the budgets'
 start-of-step snapshot in `:clock`, the captures of the fixed-gradient
-top and the open faces in `:tendencies`) and one component per enabled
+top and the open faces in `:tendencies`, the sanity check in `:budgets`,
+the frame's log events in `:output`; it takes the core step with its
+`:timestepper` component) and one component per enabled
 coupling (`UrbanEntry`), each with the pipeline stages, cadences and
 places in a stage (`Stage(…; order)`) its coupling declares. Within a
 stage the entries run in that order:
 
 | stage | entries (order) in the default case |
 | :-- | :-- |
-| `:clock` | the local hour, the budgets' snapshot (`UrbanCore`, first) |
+| `:clock` | the step count, the local hour, the budgets' snapshot (`UrbanSite`, first) |
 | `:nest_sync` | `nesting` (10): opens a parent window when the child has reached the last one — the parent takes its step, the child's nest faces point at the new window (see [Nesting](berlin_nesting.md#Nesting-(#265))) |
 | `:radiation` (600 s, and step 1) | `column_radiation` (5), `radiosity_sun` (10), `cloud_shadow` (15), `buildings_citymean` (20) |
 | `:sw_modifiers` | `sw_modifiers` (10, tree shade) |
@@ -323,12 +348,12 @@ stage the entries run in that order:
 | `:transport` | `scalar_advection` (10) |
 | `:microphysics` | `micro_kessler` (10), `fog_dew` (20) |
 | `:tracers` | `pollutant` (10) |
-| the core: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:tendencies`, `:body_force` and `:post_predictor` called from its hooks | `:tendencies`: the top and open-face captures (`UrbanCore`); `:body_force`: `nesting` (5: the two-way θ booking, a no-op one-way, #267), `geostrophic` (10), `moist_buoyancy` (20), `wall_model_facades` stencil-flux removal (40); `:post_predictor`: `ibm` (10), `wall_model_facades` facade stress (12), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
+| the core: `advance_dynamics!` of the `:timestepper` provider (default one `step!`) with `:tendencies`, `:body_force` and `:post_predictor` called from its hooks | `:tendencies`: the top and open-face captures (`UrbanSite`); `:body_force`: `nesting` (5: the two-way θ booking, a no-op one-way, #267), `geostrophic` (10), `moist_buoyancy` (20), `wall_model_facades` stencil-flux removal (40); `:post_predictor`: `ibm` (10), `wall_model_facades` facade stress (12), `surface_exchange` drag (15), `veg_drag` (20); the `step_options` of the numerics slots |
 | `:surface_update` | `surface_exchange` (10: collects `bus.sensible`; every surface period steps all surfaces, soil included), `aq_chem` r_a / v_d refresh (90, every 30 s) |
 | `:column_tendency` | `column_radiation` (10) |
 | `:nest_feedback` | `nesting` (10): closes the window when the child reaches its end (one-way: clock and statistics; `mode = :two_way`, #267: also the feedback onto the parent, see [Nesting](berlin_nesting.md#Two-way-option-(#267))) |
-| `:budgets` | the core finiteness check, then the budgets close: every coupling's `budget!`, and the change of water in the air (`UrbanCore`) |
-| `:output` (1800 s) | NetCDF record and log events (the case), then `turbulence_diag` (10) |
+| `:budgets` | the site's finiteness check (a blowup throws), then the budgets close: every coupling's `budget!`, and the change of water in the air (`UrbanSite`) |
+| `:output` (1800 s) | the frame's log events (the site), then `turbulence_diag` (10); the NetCDF record is the run's writer's, after the step |
 
 The order is that of the urban stage loop the pipeline replaced (ONE-e,
 #454: the 54 runs of the smoke matrix reproduce its state bit for bit),
@@ -347,7 +372,7 @@ included (#126). The surface exchange (#129) replaced the slab, whose
 latent flux sat at the end of `:anthropogenic` (now `:sources`) and whose
 Ts clamp ran in `:sanity` only to keep that order; see [Surface exchange](berlin_surface_radiation.md#Surface-exchange-(#129)).
 
-`run_case!` logs the wall time of every entry (the `:timing` events and
+The site logs the wall time of every entry at the run's end (the `:timing` events and
 the `wall.*` diagnostics). At
 #126, in the 1 h flagship run (1800 steps, first-call compilation
 included), the largest entry was the WENO-Z5 scalar transport, about
@@ -488,7 +513,7 @@ geopotential heights are used only as a check: below 3 km the computed
 heights match them to RMS 0.8–4.3 m per launch, within the ±4.7 m that
 the whole-hPa surface pressure of the GTS message allows.
 
-**The case** (`core/reference_state.jl`). `initial_θ(cfg)` remains the
+**The case** (`site/reference_state.jl`). `initial_θ(cfg)` remains the
 one definition of the initial θ: `forcing_value` of the θ table at the
 case start, 06:00 CEST = 04:00 UTC, which lies between the 22:45 and
 04:45 UTC releases (weight 0.875 on the later one). `initial_qv(cfg)`
@@ -549,7 +574,7 @@ suite run.
 
 **The boundary-layer height.** z_i comes from
 `TurbulenceStability.boundary_layer_height` everywhere: soundings, the
-CBL harness (`tke_cbl` of the `cbl` run type, formerly `test/tke_cbl_driver.jl`) and the nesting diagnostics. It is
+CBL harness (`tke_cbl`, the test fixture `test/fixtures/tke_cbl.jl`) and the nesting diagnostics. It is
 the only z_i diagnostic in the package; see [Stability functions and the
 gradient Richardson number](../theory/turbulence_stability.md).
 
@@ -559,7 +584,7 @@ The Boussinesq core carries neither pressure nor density, and before
 #131 each coupling assumed its own: fog and dew an isothermal 8 km
 scale height from 1013.25 hPa, the surface, building and traffic
 fluxes and the ledger `ρ = 1` (`ρcp = 1005`). Since #131
-`core/reference_state.jl` builds one hydrostatic profile per case,
+`site/reference_state.jl` builds one hydrostatic profile per case,
 `Aeolus.Anelastic.reference_from_profile` of the initial θ(z) (see the
 initial-state section above) from
 `case_surface_pressure(cfg)` (1018.4 hPa at the ground on the summer
@@ -584,7 +609,7 @@ in summer, 1.30 in winter.
 | the ledger | `ledger.ρ = ρ̄`: the water in the air is integrated with the density the couplings use, so the water ledger still closes |
 | `moist_buoyancy` | `Π̄_1`, `p̄_1` for the RH and dew point it reports |
 
-**Moist buoyancy** (`couplings/moist_buoyancy.jl`, on by default). The
+**Moist buoyancy** (`components/urban/moist_buoyancy.jl`, on by default). The
 core adds only the dry buoyancy `g (θ − θ₀)/θ₀` (`sim.moisture = false`:
 the water lives in the tracer registry). In `:body_force` the coupling
 adds the rest of the density-potential-temperature buoyancy,
@@ -626,9 +651,9 @@ implementation into the 3-D run. If the physics is missing, add it to
 the right src module with its own tests first. Never copy it into the
 example.
 
-**2. Write `src/urban/couplings/<name>.jl`.** One struct and the
+**2. Write `src/components/urban/<name>.jl`.** One struct and the
 interface methods it needs; then add the type to `URBAN_COMPONENTS`
-(`src/UrbanCase.jl`):
+(`src/Urban.jl`):
 
 ```julia
 # P3 microphysics (Aeolus.P3Microphysics) in the :microphysics slot.
@@ -667,11 +692,15 @@ file name); `build_case` builds the enabled components in the order of
 `URBAN_COMPONENTS`, and within a stage the case's domain runs them by
 their declared order, then by name.
 
-* **Off until a config enables it.** Every urban component's section
+* **Off until a config enables it.** An additive component's section
   has `enabled = false` by default: a config runs it only when it says
-  `[micro_p3] enabled = true` (and, in a slot, turns the other one off).
-  `URBAN_DEFAULTS` is the reference selection (what `CaseConfig()`
-  starts from and the smoke runs vary). Coupling new physics into the
+  `[micro_p3] enabled = true`. A component of an urban slot is a
+  provider of the slot's section instead (`URBAN_SLOT_SECTIONS`, ONE-m
+  #476): a config selects it with `[microphysics] scheme = "p3"`, and
+  the section then holds its options; the slot's default provider is the
+  one of `URBAN_DEFAULTS`.
+  `URBAN_DEFAULTS` is the reference selection (what
+  `default_run_config()` enables and the smoke runs vary). Coupling new physics into the
   example is welcome where it makes sense, not required (the rule of
   #123 was dropped on 2026-10-06); quote the cost per step from
   the `:timing` events in the PR.
@@ -682,7 +711,7 @@ their declared order, then by name.
   `:post_predictor`) must run every step.
 * **Shared state** goes through the bus, the tracer registry and the
   geometry, never a private copy (see above). If you need a bus field
-  that does not exist, add it to `core/bus.jl` additively and say so
+  that does not exist, add it to `site/bus.jl` additively and say so
   in the PR.
 * **Replacing a coupling.** Delete the old file (the issue says which)
   and move its `budget!` terms and checks over. The ledger closure of
@@ -708,8 +737,9 @@ smoke_variants(::Type{<:MicroP3}) =
 ```
 
 Each variant is a `NamedTuple`: `label`, then `physics` and `options`
-(merged into the everything-on configuration), then any `CaseConfig`
-field (`nsteps = 30`, `size = …`). Write `smoke_check`s that assert
+(merged into the everything-on configuration), then any field of the
+site's options (`nsteps = 30`, `size = …`; written as the `--set`
+override of its key, `SITE_FIELDS`). Write `smoke_check`s that assert
 physics: a conservation or a budget, a bound that follows from the
 equations (a maximum principle, positivity, a range set by the
 thermostat), a sign that follows from the physics. "It ran" is already
@@ -750,7 +780,7 @@ later issue.
 | defect | file | fixed by |
 | :-- | :-- | :-- |
 | tree shade and cloud shadow multiply `bus.sw` in place every step, so they compound between radiation updates | `sw_modifiers.jl` | #128 (fixed) |
-| no `class_map` in the radiosity scene (park/water facets get street material) | `core/geometry.jl` | #128 (fixed) |
+| no `class_map` in the radiosity scene (park/water facets get street material) | `site/geometry.jl` | #128 (fixed) |
 | slab: constant C_h and U, flux clamps, roof fluxes into solid k = 1, no surface drag | `surface_slab.jl`, `fog_dew.jl` | #129 (fixed: `surface_exchange.jl`, `ground_soil.jl`) |
 | `qr` sedimented but not advected; qv clamp | `micro_kessler.jl` | #143 |
 | glass is a synthetic roof mask | `glass.jl` | #144 |

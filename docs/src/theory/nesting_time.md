@@ -215,7 +215,7 @@ pattern. The thread-invariance harness (`test/thread_invariance.jl`)
 hashes the Berlin smoke matrix and the flagship, nest parent included,
 at 1/4/12/24 threads: the threaded runs prefetch, the 1-thread run does
 not, and all hashes agree. Its loop runs a variable-step case to the
-horizon it sets, as `run_case!` does; a loop that stops short of its
+horizon it sets, as the run loop does; a loop that stops short of its
 own horizon (it did, at first) leaves the threaded parent one window
 ahead of the sequential one — the child agreed bit for bit, the parent
 did not.
@@ -238,7 +238,8 @@ parent belongs to the task: the caller must not read or change it, the
 parent's hooks run on the task, and `end_parent_step!` takes the parent's
 clock and limiter from the window instead of reading the parent. A run
 that stops after a prefetch has its parent one window ahead. The Berlin
-case prefetches only under `run_case!`, which knows the run's end
+case prefetches only within a run (the model's run loop, or
+`Components.run_to!`), which knows the run's end
 ([berlin_nesting.md](../design/berlin_nesting.md)).
 
 **Measured** on the Berlin flagship (`CaseConfig(:summer)`: 64 × 64 × 64
@@ -292,7 +293,7 @@ normal velocity enters, the zero-gradient mirror where it leaves.
   previous one. A mixed core pair (Boussinesq with sound-proof) and a child
   without a conservation box can only be nested one-way, and so is a
   child driven offline, by a dynamic driver instead of a running parent.
-  The urban run type's Berlin nest (`[physics.options.nesting] mode`)
+  The urban site's Berlin nest (`[nesting] mode`)
   keeps one-way as its default until it becomes a `[[domain]]` config:
   its two-way validation is #331.
 

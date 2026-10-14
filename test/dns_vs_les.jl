@@ -15,7 +15,7 @@ using Aeolus.Fields: interior_view
 using Aeolus.Grids: xnodes, ynodes, znodes
 using FFTW: fft, ifft, fftfreq
 
-const DVL = joinpath(pkgdir(Aeolus), "examples", "dns_vs_les", "configs")
+const DVL = joinpath(pkgdir(Aeolus), "examples", "dns_vs_les")
 
 "The sharp spectral truncation of the staggered field `f` (on `gf`) to the modes of `gc`, at the positions of `gc`."
 function dvl_truncate(f, gf, gc, loc)

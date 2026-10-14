@@ -9,11 +9,11 @@ from, how it is validated, and what it costs. The nest itself — one-way
 boundary data, two-way feedback, the parent as default of the Berlin run
 — is N-berlin-nest (#265).
 
-Code: `src/urban/parent/config.jl` (`ParentConfig`),
-`src/urban/parent/case.jl` (`build_parent`, `step_parent!`,
-`run_parent!`), the surface `src/urban/parent/surface.jl` (#249),
+Code: `src/components/urban/parent/config.jl` (`ParentConfig`),
+`src/components/urban/parent/case.jl` (`build_parent`, `step_parent!`,
+`run_parent!`), the surface `src/components/urban/parent/surface.jl` (#249),
 the run `examples/urban/berlin_parent.toml` (the `urban_parent`
-driver, `src/urban/core/parent_driver.jl`, #438; figures from its output:
+driver, `src/components/urban/site/parent_driver.jl`, #438; figures from its output:
 `examples/urban/berlin_parent_figures.jl <run folder>`), the checks
 `test/urban_checks.jl` (the smoke run, checks 1–3 and the parent surface;
 `test/berlin_parent.jl`, `test/berlin_parent_smoke.jl` and
@@ -38,7 +38,7 @@ decision of 2026-10-05: uniform 25 m up to 500 m, so that the child,
 deepened to ~400 m, lies entirely in the uniform part. The lateral
 boundaries are periodic (an idealised parent), with the child's footprint
 centred. `ParentConfig(child)` takes the date, clock, location, θ₀, f,
-the sounding and the initial state from the child's `CaseConfig`.
+the sounding and the initial state from the child's options (`site_options`).
 
 **Placement (#265).** `ParentConfig.center` (default: the child's centre,
 `child.offset`) places the parent box; the parent mesh is built at

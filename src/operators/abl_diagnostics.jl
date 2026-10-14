@@ -20,6 +20,8 @@ export resolved_tke_profile
 # ONE-g (#456): the stable-boundary-layer diagnostics of the SBL cases (moved
 # from the `sbl` run type: P55-f #191, P58-d #194)
 export total_heat_flux_profile, stress_bl_height, inversion_height
+# ONE-l (#475): the vertical-velocity variance of the convective boundary layer
+export w_variance_profile
 
 # plane means of the interior of a field, one per level k = 1..Nz, in the
 # canonical (thread-invariant) order of `Backends.plane_partials!` (KA-b, #296)
@@ -283,6 +285,37 @@ function resolved_tke_profile(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ})
         e .+= s2 ./ (2n)
     end
     return e
+end
+
+"""
+    w_variance_profile(w::Field{FaceZ}) -> σ²
+
+The plane variance of the vertical velocity at the cell centres,
+``σ_w^2(z_k) = ⟨w_c^2⟩_k − ⟨w_c⟩_k^2`` (m² s⁻²), with ``w_c`` the mean of
+the two faces of each cell: the profile the convective-boundary-layer
+similarity of Lenschow, Wyngaard & Pennell (1980) describes,
+``σ_w^2/w_*^2 = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)^2``. The face values
+must be current (the wall faces hold zero).
+
+Reference: Lenschow, D. H., Wyngaard, J. C. & Pennell, W. T. (1980),
+J. Atmos. Sci. 37, 1313–1326.
+"""
+function w_variance_profile(w::Field{FaceZ})
+    g = mesh(w)
+    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
+    T = float(eltype(w.data))
+    wd = w.data
+    n = Nx * Ny
+    out = zeros(T, Nz)
+    @inbounds for k in 1:Nz
+        s1 = zero(T); s2 = zero(T)
+        for j in 1:Ny, i in 1:Nx
+            wc = (wd[Hx+i, Hy+j, Hz+k] + wd[Hx+i, Hy+j, Hz+k+1]) / 2
+            s1 += wc; s2 += wc * wc
+        end
+        out[k] = s2 / n - (s1 / n)^2
+    end
+    return out
 end
 
 """

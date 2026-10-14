@@ -1,0 +1,82 @@
+# Convective boundary layer with the prognostic SGS TKE closure — P56-b
+# (#182; formerly examples/sgs/cbl_tke.jl, then the `cbl` run type; on the
+# model since ONE-l, #475). Free convection over a heated free-slip floor
+# (Q = 0.1 K m/s, no mean wind) with the Deardorff (1980) / Moeng (1984)
+# closure ([sgs] model = "tke"), compared with the vertical-velocity
+# variance of Lenschow, Wyngaard & Pennell (1980),
+#
+#     σ_w² / w*² = 1.8 (z/z_i)^{2/3} (1 − 0.8 z/z_i)²,
+#
+# maximum 0.466 w*² at z/z_i = 0.31. 64³ on 3200 × 3200 × 1600 m
+# (Δx = 50 m, Δz = 25 m), θ uniform up to z_i0 = 800 m, Γ = 3 K/km above,
+# 0.1 K of white noise below 200 m, a Rayleigh sponge in the top quarter;
+# adaptive SSP-RK3 steps (CFL 0.4, at most 20 s) for 2 h. The profiles are
+# averaged over the last 30 min (the one record of [output]).
+#
+#   julia --project -m Aeolus run examples/cbl_tke/cbl_tke.toml
+#   julia --project=. examples/cbl_tke/plot_cbl_tke.jl runs/<date>_cbl_tke_<id>
+#
+# output.nc: the 30-min means of the SGS TKE, the resolved TKE, σ_w², θ and
+# the total heat flux per level; plot_cbl_tke.jl derives z_i (the height of
+# the minimum heat flux), w* and the σ_w² maximum from them.
+
+schema_version = 2
+
+[run]
+name = "cbl_tke"
+seed = 1
+
+[timestep]
+scheme = "rk3"
+
+[time]
+dt = "adaptive"
+cfl = 0.4
+dt_max = 20.0
+duration = 7200.0
+
+[grid]
+size = [64, 64, 64]
+extent = [3200.0, 3200.0, 1600.0]
+halo = [3, 3, 3]                # the TKE transport is WENO-Z5 with three halo cells
+
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "free_slip"
+
+[dynamics]
+theta0 = 300.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_kind = "uniform"
+perturbation_amplitude = 0.1
+perturbation_depth = 200.0
+
+[sgs]
+model = "tke"
+e_min = 1e-3
+surface_factor = 3.9
+wall_cap = false
+
+[surface_theta_flux]
+bottom = 0.1
+
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0
+
+[output]
+variables = ["sgs_tke_profile", "resolved_tke_profile", "w_variance_profile", "theta_profile", "heat_flux_profile"]
+averaging = "mean"
+cadence = 1800.0                # the last record is the mean over the last 30 min
+series_cadence = 1800.0
+
+[checks]
+finite = { required = true }
+
+[test]
+overrides = ["grid.size=[12,12,12]", "grid.extent=[1200.0,1200.0,1200.0]", "time.duration=120.0",
+             "output.cadence=60.0", "initial.theta={kind=\"mixed_layer_lapse\",value=300.0,z_i=600.0,lapse=0.003}",
+             "sponge.z_start=900.0"]

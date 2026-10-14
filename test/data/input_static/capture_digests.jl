@@ -17,7 +17,7 @@
 # reader, load_city_osm, is AeolusPrep.jl's since ONE-h, #457).
 
 using Aeolus, TOML
-const BC = Aeolus.UrbanCase
+const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "..", "..", "support", "berlin_fixture.jl"))
 
@@ -29,13 +29,13 @@ function geomdig(g)
                      "svf" => digest(g.svf), "buildings" => length(g.city.buildings),
                      "patches" => length(g.city.patches), "nfacets" => length(g.vfac.area))
 end
-for (label, cfg) in ("smoke" => BC.CaseConfig(berlin_toml("smoke")),
-                     "mitte_periodic" => BC.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16), lateral = :periodic,
+for (label, cfg) in ("smoke" => site_config(berlin_toml("smoke")),
+                     "mitte_periodic" => site_config(berlin_toml("mitte_sample"); size = (32, 32, 16), lateral = :periodic,
                                                        overrides = ["nesting.enabled=false"]),
-                     "mitte_sample" => BC.CaseConfig(berlin_toml("mitte_sample"); size = (32, 32, 16)))
+                     "mitte_sample" => site_config(berlin_toml("mitte_sample"); size = (32, 32, 16)))
     out[label] = geomdig(BC.build_geometry(cfg, meshof(cfg)))
 end
-let cfg = BC.CaseConfig(berlin_toml("summer")), mesh = meshof(cfg)
+let cfg = site_config(berlin_toml("summer")), mesh = meshof(cfg)
     city = BC.load_city_osm(cfg.osm_path; lat0 = cfg.lat0, lon0 = cfg.lon0,
                             x_shift = mesh.Lx / 2 - cfg.offset[1], y_shift = mesh.Ly / 2 - cfg.offset[2],
                             min_height = cfg.min_height)
@@ -46,7 +46,7 @@ let cfg = BC.CaseConfig(berlin_toml("summer")), mesh = meshof(cfg)
                                      "buildings" => length(city.buildings), "patches" => length(city.patches))
 end
 for s in (:smoke, :summer)
-    pc = BC.nest_parent_config(BC.CaseConfig(berlin_toml(s)))
+    pc = BC.nest_parent_config(site_config(berlin_toml(s)))
     Nx = BC.parent_size(pc)[1]
     pl = BC.crop_landuse(BC.read_parent_landuse(pc.child.landuse), pc)
     pl = BC.coarsen_landuse(pl, pl.nx ÷ Nx)
@@ -55,7 +55,7 @@ for s in (:smoke, :summer)
         "dx" => pl.dx, "x0" => pl.x0, "y0" => pl.y0, "r" => pl.r)
 end
 Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
-case = BC.build_case(BC.CaseConfig(berlin_toml("smoke")))
+case = BC.build_case(site_config(berlin_toml("smoke")))
 out["smoke_case"] = Dict{String,Any}("mask" => digest(case.geom.sm.mask), "sfc" => digest(case.geom.sfc))
 BC.run_case!(case)
 out["smoke_state"] = Dict{String,Any}(string(k) => digest(v) for (k, v) in pairs(berlin_state(case)))

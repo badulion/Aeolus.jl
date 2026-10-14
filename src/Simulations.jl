@@ -342,7 +342,19 @@ end
           momentum_advection = momentum_advect!, sgs = nothing,
           sgs_stress = :laplacian)
 
-Advance `sim` by `dt`. Two optional callbacks are supported:
+Advance `sim` by `dt`: the Boussinesq core's step.
+
+A run does not call this: a run is a configuration of the one model, and
+[`Components.Model`](@ref Aeolus.Components.Model) steps each domain
+through the stage pipeline, which hands its stages 7 and 8
+(`:body_force`, `:post_predictor`) and the `[sgs]` closure to the core
+through the keywords below. Physics reaches a run as a component, never
+by passing a hook here; the hooks are the pipeline's mechanism. Their
+other callers are the module tests, the urban site's step
+(`Aeolus.Urban`, which passes the pipeline's hooks of its domain)
+and the wall-bounded channel harness of the tests.
+
+Two optional callbacks are supported:
 
   * `body_force!(sim, Δt)` — invoked *after* the built-in tendencies
     are assembled and *before* the predictor step. Explicit source terms
