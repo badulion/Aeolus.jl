@@ -6,7 +6,7 @@
 # =========================================================================
 
 import ..IO: checkpoint_state, restore_checkpoint_state!
-using ..IO: fieldwise_checkpoint_state, restore_fieldwise!, resume!, maybe_checkpoint!   # run_channel!'s hook
+using ..IO: fieldwise_checkpoint_state, restore_fieldwise!
 
 # MatchingInput: the temporal filter's state (`work` is scratch).
 checkpoint_state(mi::MatchingInput) = (uf = copy(mi.uf), vf = copy(mi.vf), primed = mi.primed)
@@ -37,21 +37,3 @@ checkpoint_state(dr::DynamicRoughness) =
     fieldwise_checkpoint_state(dr, (:α, :converged, :z0, :nsolves, :nfail))
 restore_checkpoint_state!(dr::DynamicRoughness, s) = restore_fieldwise!(dr, s)
 
-# WallBoundedCase: everything but the simulation (stored by checkpoint!
-# itself) — the closure memory, the wall model, the inputs, the roughness,
-# and the scalar fields (forcing, stresses, fluxes, counters).
-const _CASE_SCALARS = (:forcing, :u_star, :height, :τ_wall_bottom, :τ_wall_top, :nsteps,
-                       :_stage, :τ_form, :q_wall_bottom, :q_wall_top)
-
-checkpoint_state(c::WallBoundedCase) =
-    (closure = checkpoint_state(c.closure), wall = checkpoint_state(c.wall),
-     inputs = checkpoint_state(c.inputs), roughness = checkpoint_state(c.roughness),
-     scalars = fieldwise_checkpoint_state(c, _CASE_SCALARS))
-function restore_checkpoint_state!(c::WallBoundedCase, s)
-    restore_checkpoint_state!(c.closure, s.closure)
-    restore_checkpoint_state!(c.wall, s.wall)
-    restore_checkpoint_state!(c.inputs, s.inputs)
-    restore_checkpoint_state!(c.roughness, s.roughness)
-    restore_fieldwise!(c, s.scalars)
-    return c
-end

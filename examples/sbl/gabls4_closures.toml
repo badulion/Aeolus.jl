@@ -15,8 +15,10 @@ dynamic_driver = "input/gabls4_exp3_dynamic.nc"
 name = "gabls4_exp3"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 1.2
 start = 36000.0                # 10 UTC
@@ -47,8 +49,8 @@ latitude = -75.1
 u_g = 1.25
 v_g = 4.5
 
-[surface_layer]
-enabled = true
+[surface]
+model = "most"
 z0m = 1e-3
 z0h = 1e-4
 temperature = {kind = "driver"}
@@ -56,7 +58,7 @@ stability = {family = "businger_dyer_log_linear", beta_m = 4.8, beta_h = 7.8}
 rho_cp = 957.6626330727378     # 65100/(287.05 × 238) × 1005
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.1
 pr_t = 0.3333333333333333
 stability = "brown_et_al_1994"

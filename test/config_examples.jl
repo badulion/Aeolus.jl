@@ -35,7 +35,7 @@ end
 @testset "sweeps: expansion order, labels, run names, precedence" begin
     p = ex_file(tgv_with("""
         [sweep]
-        axis = [ { key = "sgs.closure", values = ["none", "vreman", "amd"] },
+        axis = [ { key = "sgs.model", values = ["none", "vreman", "amd"] },
                  { key = "grid.size", values = [[8, 8, 8], [16, 16, 16]] } ]
         """))
     ms = sweep_members(p)
@@ -43,9 +43,9 @@ end
     # first axis outermost, the last fastest: the order of `for a in A for b in B`
     @test [m.label for m in ms] == ["none_8x8x8", "none_16x16x16", "vreman_8x8x8",
                                     "vreman_16x16x16", "amd_8x8x8", "amd_16x16x16"]
-    @test ms[3].overrides == ["sgs.closure=\"vreman\"", "grid.size=[8, 8, 8]"]
+    @test ms[3].overrides == ["sgs.model=\"vreman\"", "grid.size=[8, 8, 8]"]
     runs = load_sweep(p)
-    @test [c.sgs.closure for (_, c) in runs] == [:none, :none, :vreman, :vreman, :amd, :amd]
+    @test [c.sgs.model for (_, c) in runs] == [:none, :none, :vreman, :vreman, :amd, :amd]
     @test [c.grid.size for (_, c) in runs] == repeat([(8, 8, 8), (16, 16, 16)], 3)
     @test [c.run.name for (_, c) in runs] == ["taylor_green_vortex_" * m.label for m in ms]
     # every member carries no [sweep]: its canonical text has no such table
@@ -54,7 +54,7 @@ end
     runs = load_sweep(p; overrides = ["grid.size=[4,4,4]", "run.name=\"x\""])
     @test all(c.grid.size == (4, 4, 4) && c.run.name == "x" for (_, c) in runs)
     # one member by index or label
-    @test only(load_sweep(p; member = 4))[2].sgs.closure === :vreman
+    @test only(load_sweep(p; member = 4))[2].sgs.model === :vreman
     @test only(load_sweep(p; member = "amd_8x8x8"))[1].index == 5
     e = ex_error(() -> load_sweep(p; member = 7))
     @test occursin("no member 7", sprint(showerror, e)) && occursin("amd_16x16x16", sprint(showerror, e))
@@ -69,22 +69,22 @@ end
         label = "viscous"
         dynamics = { nu = 0.02 }
         [[sweep.member]]
-        sgs.closure = "vreman"
+        sgs.model = "vreman"
         sgs.c_s = 0.2
         [sweep]
-        axis = [ { key = "time.scheme", values = ["euler", "rk3"] } ]
+        axis = [ { key = "timestep.scheme", values = ["euler", "rk3"] } ]
         """))
     runs = load_sweep(p)
     @test [m.label for (m, _) in runs] == ["viscous_euler", "viscous_rk3", "2_euler", "2_rk3"]
     @test [c.dynamics.nu for (_, c) in runs] == [0.02, 0.02, 0.01, 0.01]
-    @test runs[3][2].sgs.c_s == 0.2 && runs[3][2].time.scheme === :euler
+    @test runs[3][2].sgs.c_s == 0.2 && runs[3][2].timestep.scheme === :euler
     # a member that is invalid is reported with its key
     bad = ex_file(tgv_with("""
         [[sweep.member]]
-        sgs = { closure = "smagorinksy" }
+        sgs = { model = "smagorinksy" }
         """))
     e = ex_error(() -> load_sweep(bad))
-    @test occursin("sgs.closure", sprint(showerror, e)) && occursin("smagorinsky", sprint(showerror, e))
+    @test occursin("sgs.model", sprint(showerror, e)) && occursin("smagorinsky", sprint(showerror, e))
     # malformed sweep tables
     e = ex_error(() -> sweep_members(ex_file("[sweep]\naxis = [ { key = \"nu\", values = [1] } ]\nmembers = 1\n")))
     s = sprint(showerror, e)

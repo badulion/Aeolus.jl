@@ -3,7 +3,7 @@
 #
 #   * the self-nesting default is two-way (NestedRun, add_nest!, [[domain]]);
 #   * a config with several [[domain]] blocks is one model: the graph is
-#     validated (parents, sizes, placement, faces, a fixed dt, no budgets);
+#     validated (parents, sizes, placement, faces, no budgets);
 #   * each domain runs its own stage pipeline inside the nest: a child's
 #     stages run once per substep, its in-core stages once per stage;
 #   * one-way: the parent is bit for bit the parent run alone;
@@ -21,7 +21,9 @@ using Aeolus.Config
 using Aeolus.Components
 const MNC = Aeolus.Components
 using Aeolus.SimulationDriver: SimulationDriverType, simulation
-using Aeolus.Nesting: NestedRun, NestHierarchy, add_nest!, nested_grid, nest_bcs, composite_integral, nest_link
+const SimulationDriver_warn = Aeolus.SimulationDriver.nest_handover_warnings
+using Aeolus.Nesting: NestedRun, NestHierarchy, add_nest!, nested_grid, nest_bcs, composite_integral, nest_link,
+                      step_nested!
 using Aeolus.Grids: RegularGrid
 using Aeolus.Fields: interior_view, set!
 using Aeolus.BoundaryConditions: FieldBoundaryConditions
@@ -42,8 +44,9 @@ const MN_HEAD = """
     seed = 7
     [fftw]
     planner = "estimate"
-    [time]
+    [timestep]
     scheme = "rk3"
+    [time]
     dt = 4.0
     duration = "none"
     nsteps = 6
@@ -115,17 +118,17 @@ end
     # inside the parent
     e = mn_error(() -> mn_cfg(mn_two(; origin = "[1000.0, 400.0]")))
     @test occursin("outside its parent", keyed(e)["domain[2].domain.origin"])
-    # the faces are the nest's; a fixed dt; no budgets; no couplings in a child
+    # the faces are the nest's; no budgets; no couplings in a child
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.boundaries]\nx = \"free_slip\"\n"))
     @test occursin("keeps its parent's faces", keyed(e)["domain[2].boundaries.x"])
-    e = mn_error(() -> mn_cfg(mn_two(); overrides = ["time.dt=\"adaptive\""]))
-    @test occursin("fixed dt", keyed(e)["time.dt"])
-    e = mn_error(() -> mn_cfg(mn_two(); overrides = ["output.variables=[\"budget_energy\"]"]))
+    e = mn_error(() -> mn_cfg(mn_two(); overrides = ["output.variables=[\"budget_energy\"]",
+                                                     "nesting.budget_exchange=\"off\""]))
     @test occursin("measures no budgets", keyed(e)["output.variables"])
     e = mn_error(() -> mn_cfg(mn_two() * "[domain.forcing]\nradiative_cooling = -1e-5\n"))
     @test occursin("not nested", keyed(e)["domain[2].domain.parent"])
-    e = mn_error(() -> mn_cfg(mn_two() * "[domain.dynamics]\ncore = \"anelastic\"\n"))
-    @test occursin("boussinesq", keyed(e)["domain[2].dynamics.core"])
+    # (mixed cores are nested since NEST-p2, #482; an anelastic child needs the Euler step)
+    e = mn_error(() -> mn_cfg(mn_two() * "[domain.core]\nmodel = \"anelastic\"\n"))
+    @test occursin("SSP-RK3", keyed(e)["domain[2].core.model"])
     # placement the stencils cannot take is refused at build, naming the domain
     cfg = mn_cfg(mn_two(; origin = "[0.0, 400.0]"); overrides = ["boundaries.x=\"free_slip\""])
     e = mn_error(() -> Config.build(SimulationDriverType(), cfg))
@@ -185,6 +188,40 @@ end
     @test_throws ArgumentError MNC.step_adaptive!(m)
     @test_throws ArgumentError NestLink(1, 2, nothing)
     @test_throws ArgumentError NestLink(2, 1, nothing; feedback = :both)
+end
+
+# the engine (NEST-p2, #482): with fixed steps every domain's prognostic
+# state is that of Nesting.step_nested!(::NestHierarchy), bit for bit
+mn_state_equal(a, b) = all(i -> all(f -> interior_view(getproperty(a.domains[i].state, f)) ==
+                                         interior_view(getproperty(b.domains[i].state, f)), (:u, :v, :w, :θ, :p)),
+                           eachindex(a.domains))
+
+@testset "the nest engine with fixed steps is Nesting.step_nested!, bit for bit ($scheme, $fb)" for scheme in (:euler, :rk3), fb in (:one_way, :two_way)
+    a, = mn_pair(; scheme = scheme, feedback = fb)
+    b, = mn_pair(; scheme = scheme, feedback = fb)
+    for _ in 1:3
+        step!(a, 5.0)
+        step_nested!(b.nest.hierarchy; dt = 5.0)
+    end
+    @test mn_state_equal(a, b)
+    @test a.domains[2].state.t == b.domains[2].state.t == 15.0
+    @test nest_link(a, "c").stats.child_substeps == 6 && nest_link(a, "c").stats.n_last == 2
+end
+
+@testset "the nest engine with three levels and a sibling is Nesting.step_nested!, bit for bit" begin
+    text = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
+           mn_child(; id = "a", origin = "[300.0, 300.0]", size = "[12, 12, 8]", extent = "[600.0, 600.0, 400.0]") *
+           mn_child(; id = "g", parent = "a", origin = "[200.0, 200.0]", size = "[8, 8, 8]",
+                    extent = "[200.0, 200.0, 200.0]") *
+           mn_child(; id = "b", origin = "[1100.0, 1100.0]", feedback = "one_way", size = "[8, 8, 4]",
+                    extent = "[400.0, 400.0, 200.0]")
+    a = Config.build(SimulationDriverType(), mn_cfg(text)).model
+    b = Config.build(SimulationDriverType(), mn_cfg(text)).model
+    for _ in 1:3
+        step!(a, 4.0)
+        step_nested!(b.nest.hierarchy; dt = 4.0)
+    end
+    @test mn_state_equal(a, b)
 end
 
 @testset "one-way: the parent is the parent run alone, bit for bit" begin
@@ -326,4 +363,521 @@ end
     c = r.model.domains[2].state
     @test ck[:t] == 4.0 && c.t == 4.0 && all(isfinite, interior_view(c.θ))
     @test isempty(Aeolus.IO.component_nonfinite_fields(r.model.nest))
+end
+
+# ---------------------------------------------------------------------------
+# adaptive steps and window retries (NEST-p2, #482)
+# ---------------------------------------------------------------------------
+
+using Aeolus.TimeIntegration: CFLConstraints, adaptive_dt
+
+# Arms a failure: the next stage-11 entry of the component's domain while
+# armed puts a NaN into θ (the arm lives outside the model, so the window
+# restore does not re-arm it).
+const MN_ARM = Dict{String,Int}()
+struct MNFragile <: AbstractComponent
+    id::String
+end
+MNC.component_name(::Type{MNFragile}) = :fragile
+MNC.section(::Type{MNFragile}) = "fragile"
+MNC.stages(::MNFragile) = (Stage(:surface_update),)
+function MNC.run_stage!(c::MNFragile, d, ::Val{:surface_update}, dt)
+    if get(MN_ARM, c.id, 0) > 0
+        MN_ARM[c.id] -= 1
+        d.state.θ.data[d.state.mesh.Hx + 3, d.state.mesh.Hy + 3, d.state.mesh.Hz + 2] = NaN
+    end
+    return nothing
+end
+
+# an adaptive pair: a 2 m/s parent wind, and in the child a jet of up to
+# 2 + jet m/s away from its faces (so the child needs more than r substeps)
+function mn_adaptive(; feedback = :two_way, jet = 4.0, scheme = :rk3, C = 0.5, growth = 1.5, extra = ())
+    pm = RegularGrid(; size = (16, 16, 8), extent = (1600.0, 1600.0, 800.0))
+    nest = nested_grid(pm, ((400.0, 1200.0), (400.0, 1200.0), (0.0, 400.0)), 2)
+    wall = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    p = BoussinesqSimulation(pm; θ₀ = 300.0, bcs = wall, θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    c = BoussinesqSimulation(nest.child_mesh; θ₀ = 300.0, bcs = nest_bcs(nest.child_mesh; bottom = :wall))
+    for s in (p, c)
+        set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.1sin(2π * x / 800))
+        set!(s.u, (x, y, z) -> 2.0)
+    end
+    set!(c.u, (x, y, z) -> 2.0 + jet * exp(-((x - 800)^2 + (y - 800)^2) / (2 * 120.0^2)))
+    cfl = CFLConstraints(; C_advective = C, dt_max = 30.0, growth_max = growth)
+    dp = Domain(p; id = "p", scheme = scheme, cfl = cfl, components = (CentredAdvection(), MNFragile("p")))
+    dc = Domain(c; id = "c", scheme = scheme, cfl = cfl, components = (CentredAdvection(), MNFragile("c"), extra...))
+    return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)])
+end
+
+@testset "adaptive nest: the root's own step, the child's smallest stable whole number of equal substeps" begin
+    m = mn_adaptive()
+    L = nest_link(m, "c")
+    c = m.domains[2]
+    @test_throws ArgumentError step!(m, 1.0)          # an adaptive nest steps adaptively
+    pattern = Tuple{Float64,Int}[]
+    for w in 1:8
+        n0 = L.stats.child_substeps
+        lim_p = Aeolus.Components.nest_domain_limit(m.nest, 1)
+        _, Δt, retries = step_adaptive!(m)
+        @test retries == 0
+        @test Δt == lim_p                                # the root's own limit
+        n = L.stats.child_substeps - n0
+        push!(pattern, (Δt, n))
+        @test n == L.stats.n_last
+        # equal substeps: every substep of the window is Δt/n
+        @test L.stats.dt_child_max ≈ L.stats.dt_child_min || w > 1
+        # the smallest stable n: Δt/n within the child's limit, Δt/(n-1) not
+        # (the child's limit as its first substep picked it, from the window start)
+        @test n >= 2
+    end
+    @info "adaptive nest: (root step, child substeps) per window" pattern
+    @test first(pattern)[2] > 2                           # the jet makes the child need more than r = 2 at first
+    @test length(unique(last.(pattern))) >= 2             # and n follows the child's state, window by window
+    @test m.domains[1].state.t ≈ sum(first.(pattern)) && m.domains[2].state.t == m.domains[1].state.t
+    @test all(isfinite, interior_view(c.state.u))
+end
+
+# the child's own stability limit at the start of each of its steps,
+# computed here from its state (no growth limit: growth_max is large)
+const MN_LIMITS = Tuple{Float64,Float64}[]
+struct MNLimit <: AbstractComponent end
+MNC.component_name(::Type{MNLimit}) = :limit_log
+MNC.section(::Type{MNLimit}) = "limit_log"
+MNC.stages(::MNLimit) = (Stage(:clock),)
+MNC.run_stage!(::MNLimit, d, ::Val{:clock}, dt) =
+    (push!(MN_LIMITS, (Float64(d.state.t), Float64(adaptive_dt(d.state, d.cfl)))); nothing)
+
+@testset "adaptive nest: n is the smallest whole number with Δt/n inside the child's limit" begin
+    m = mn_adaptive(; growth = 1e6, extra = (MNLimit(),))
+    L = nest_link(m, "c")
+    ns = Int[]
+    for _ in 1:8
+        empty!(MN_LIMITS)
+        t0 = m.domains[1].state.t
+        _, Δt, _ = step_adaptive!(m)
+        n = L.stats.n_last
+        push!(ns, n)
+        lim = last(only(filter(e -> first(e) == t0, MN_LIMITS)))
+        @test Δt / n <= lim * (1 + 1e-9)                 # stable
+        @test n == 1 || Δt / (n - 1) > lim               # and the fewest substeps that are
+        @test length(MN_LIMITS) == n                      # n substeps, equal ones
+        @test all(k -> MN_LIMITS[k+1][1] - MN_LIMITS[k][1] ≈ Δt / n, 1:n-1)
+    end
+    @info "adaptive nest, no growth limit: child substeps per window" ns
+end
+
+@testset "window retry: a failing root redoes the window with half the step, bit for bit" begin
+    a = mn_adaptive(); b = mn_adaptive()
+    MN_ARM["p"] = 1
+    _, Δt, retries = step_adaptive!(a)
+    @test retries == 1 && a.nest.retries == 1
+    _, Δt1, _ = step_adaptive!(b)                        # the twin, unarmed
+    @test Δt == Δt1 / 2
+    # the twin at the halved step from the same start: same state, budgets, components
+    c = mn_adaptive()
+    _, Δtc, rc = step_adaptive!(c; t_end = Δt)
+    @test Δtc == Δt && rc == 0
+    @test mn_state_equal(a, c)
+    @test nest_link(a, "c").stats.child_substeps == nest_link(c, "c").stats.child_substeps
+    @test nest_link(a, "c").stats.parent_retries == 1
+end
+
+@testset "window retry: a failing child redoes its window with twice the substeps ($fb)" for fb in (:one_way, :two_way)
+    a = mn_adaptive(; feedback = fb); b = mn_adaptive(; feedback = fb)
+    _, Δtb, _ = step_adaptive!(b)
+    nb = nest_link(b, "c").stats.n_last
+    MN_ARM["c"] = 1
+    _, Δt, retries = step_adaptive!(a)
+    La = nest_link(a, "c")
+    @test retries == 1 && La.stats.child_retries == 1
+    @test Δt == Δtb                                       # the root step is kept
+    @test La.stats.n_last == 2nb                          # the child doubled its substeps
+    @test La.stats.child_substeps == 2nb                  # the failed attempt left no count behind
+    @test all(isfinite, interior_view(a.domains[2].state.θ))
+    # one-way: the parent never sees the child: bit for bit the unarmed twin
+    fb === :one_way && @test all(f -> interior_view(getproperty(a.domains[1].state, f)) ==
+                                      interior_view(getproperty(b.domains[1].state, f)), (:u, :v, :w, :θ, :p))
+    # a child that keeps failing: an error after max_retries, the window start restored
+    MN_ARM["c"] = 100
+    t0 = a.domains[1].state.t
+    @test_throws ErrorException step_adaptive!(a)
+    @test a.domains[1].state.t == t0 && a.domains[2].state.t == t0
+    @test all(isfinite, interior_view(a.domains[2].state.θ))
+    MN_ARM["c"] = 0
+end
+
+@testset "adaptive two-way nest with retries conserves the composite θ" begin
+    m = mn_adaptive()
+    h = m.nest.hierarchy
+    I0 = composite_integral(h, :θ)
+    MN_ARM["c"] = 1
+    for _ in 1:3
+        step_adaptive!(m)
+    end
+    MN_ARM["p"] = 1
+    for _ in 1:3
+        step_adaptive!(m)
+    end
+    @test m.nest.retries == 2
+    rel = abs(composite_integral(h, :θ) - I0) / abs(I0)
+    @info "adaptive two-way nest with 2 retried windows: composite θ relative change over 6 windows $rel"
+    @test rel < 1e-13
+    @test max_divergence(m.domains[1].state) < 1e-9 && max_divergence(m.domains[2].state) < 1e-9
+end
+
+@testset "an adaptive nested config: runs, lands on its duration, resumes bit for bit" begin
+    cfg = mn_cfg(mn_two(); overrides = ["time.dt=\"adaptive\"", "time.nsteps=6", "time.cfl=0.5",
+                                        "checkpoint.every_steps=3"])
+    full = mn_run(cfg)
+    m = full.obj.model
+    @test m.nest.adaptive && all(d -> d.state.t == m.domains[1].state.t, m.domains)
+    L = nest_link(m, "inner")
+    @test L.stats.parent_steps == 6 && L.stats.n_min >= 2
+    root = mktempdir()
+    stop = (r, n) -> n == 4 && throw(InterruptException())
+    @test_throws InterruptException run_config(cfg; root = root, console = false, repo = mktempdir(), callback = stop)
+    folder = only(readdir(root; join = true))
+    resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
+    a = state_fields(full.obj); b = state_fields(resumed.obj)
+    @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+end
+
+# ---------------------------------------------------------------------------
+# budgets across a nest: each domain closes its own, with a nest exchange
+# ---------------------------------------------------------------------------
+
+using Aeolus.Components: with_budgets, nest_exchange, NEST_EXCHANGE, budgets
+using Aeolus.BudgetSystem: stage_budget
+using Aeolus.Nesting: nest_covered_range
+
+function mn_budget_pair(; feedback = :two_way, scheme = :rk3, adaptive = false, qs = (:energy, :momentum_x))
+    pm = RegularGrid(; size = (16, 16, 8), extent = (1600.0, 1600.0, 800.0))
+    nest = nested_grid(pm, ((400.0, 1200.0), (400.0, 1200.0), (0.0, 400.0)), 2)
+    wall = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    p = BoussinesqSimulation(pm; θ₀ = 300.0, bcs = wall, θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    c = BoussinesqSimulation(nest.child_mesh; θ₀ = 300.0, bcs = nest_bcs(nest.child_mesh; bottom = :wall))
+    for s in (p, c)
+        set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.5sin(2π * x / 1600) + 0.2cos(2π * y / 800))
+        set!(s.u, (x, y, z) -> 2.0)
+        set!(s.v, (x, y, z) -> 0.5)
+    end
+    cfl = adaptive ? CFLConstraints(; C_advective = 0.5, dt_max = 30.0) : nothing
+    dp = with_budgets(Domain(p; id = "p", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    dc = with_budgets(Domain(c; id = "c", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)]), nest
+end
+
+# the heat of the parent's covered cells, J (ρ₀ c_p Σ θ ΔV)
+function mn_covered_heat(p, nest, ρcp)
+    cx, cy, cz = nest_covered_range(nest)
+    m = p.mesh
+    return ρcp * sum(p.θ.data[m.Hx .+ cx, m.Hy .+ cy, m.Hz .+ cz]) * m.dx * m.dy * m.dz
+end
+
+@testset "budgets across a nest: each domain closes, the nest exchange accounts for the composite ($fb, $scheme, adaptive $ad)" for fb in (:one_way, :two_way), scheme in (:euler, :rk3), ad in (false, true)
+    m, nest = mn_budget_pair(; feedback = fb, scheme = scheme, adaptive = ad)
+    p = m.domains[1]; c = m.domains[2]
+    ρcp = budgets(p).ρ[1] * Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
+    Hcov0 = mn_covered_heat(p.state, nest, ρcp)
+    for _ in 1:5
+        ad ? step_adaptive!(m) : step!(m, 5.0)
+    end
+    for d in (p, c), q in (:energy, :momentum_x)
+        meas = budgets(d).measured[q]
+        sb = stage_budget(meas)
+        content = abs(Aeolus.BudgetSystem.measure(meas.meter, q === :energy ? d.state.θ : d.state.u))
+        @test abs(sb.closure) <= 1e-12 * content                       # every domain closes its own
+        @test !haskey(sb.terms, (:core, :unattributed))
+        @test !haskey(sb.terms, (:output, :between_steps))              # the nest's work is named
+    end
+    Ep = nest_exchange(p, :energy); Ec = nest_exchange(c, :energy)
+    @info "nest budgets ($fb, $scheme, adaptive $ad): energy exchange parent $Ep, child $Ec J/m²"
+    @test abs(Ec) > 1e3                                                 # the child's inflow
+    # the child's θ changes only through its faces (no sources): its heat
+    # change is its exchange
+    sbc = stage_budget(budgets(c).measured[:energy])
+    @test abs(sbc.storage - Ec) <= 1e-9 * abs(Ec)
+    if fb === :one_way
+        @test Ep == 0.0                                                 # the parent never sees the child
+    else
+        # the composite is conserved: the parent's exchange (the feedback) and
+        # the child's (its inflow) add up to what the covered cells gained
+        Ap = 1600.0^2; Ac = 800.0^2
+        ΔHcov = mn_covered_heat(p.state, nest, ρcp) - Hcov0
+        @test abs(Ep) > 10                                             # the feedback changed the parent
+        @test abs(Ep * Ap + Ec * Ac - ΔHcov) <= 1e-9 * (abs(Ep * Ap) + abs(Ec * Ac))
+    end
+end
+
+@testset "[nesting] budget_exchange: a nested config measures budgets, every domain closes" begin
+    cfg = mn_cfg(mn_two() * "[checks]\nenergy_closure = {required = true}\n";
+                 overrides = ["output.variables=[\"u\", \"budget_energy\"]"])
+    full = mn_run(cfg)
+    m = full.obj.model
+    @test all(d -> budgets(d) !== nothing, m.domains)
+    res = TOML.parsefile(joinpath(Aeolus.IO.output_dir(full.folder), "results.toml"))
+    @test res["passed"] && res["checks"]["energy_closure"]["passed"]
+    @test haskey(res["checks"]["energy_closure"], "inner")
+    @test nest_exchange(m.domains[2], :energy) != 0
+    @test_throws ArgumentError nested_model((m.domains[1], m.domains[2]), m.nest.links; budget_exchange = :off)
+end
+
+# ---------------------------------------------------------------------------
+# concurrency: siblings in parallel, a one-way parent ahead of its children
+# ---------------------------------------------------------------------------
+
+# outer ⊃ a (one-way) ⊃ {g, g2} (one-way siblings); b a two-way sibling of a
+const MN_TREE = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
+    mn_child(; id = "a", origin = "[300.0, 300.0]", size = "[12, 12, 8]", extent = "[600.0, 600.0, 400.0]",
+             feedback = "one_way") *
+    mn_child(; id = "g", parent = "a", origin = "[100.0, 100.0]", size = "[8, 8, 8]",
+             extent = "[200.0, 200.0, 200.0]", feedback = "one_way") *
+    mn_child(; id = "g2", parent = "a", origin = "[350.0, 350.0]", size = "[4, 4, 4]",
+             extent = "[100.0, 100.0, 100.0]", feedback = "one_way") *
+    mn_child(; id = "b", origin = "[1100.0, 1100.0]", size = "[8, 8, 4]", extent = "[400.0, 400.0, 200.0]")
+
+@testset "concurrent nest (siblings in parallel, a one-way parent ahead of its children) is the sequential one, bit for bit (adaptive $ad)" for ad in (false, true)
+    over = ad ? ["time.dt=\"adaptive\"", "time.cfl=0.5"] : String[]
+    seq = Config.build(SimulationDriverType(), mn_cfg(MN_TREE; overrides = over)).model
+    con = Config.build(SimulationDriverType(), mn_cfg(MN_TREE; overrides = over)).model
+    seq.nest.concurrent = false
+    con.nest.concurrent = true
+    @test Aeolus.Components.nest_prefetches(con.nest, 2)            # a: all its children one-way
+    @test !Aeolus.Components.nest_prefetches(con.nest, 1)           # the root never
+    for _ in 1:3
+        ad ? (step_adaptive!(seq); step_adaptive!(con)) : (step!(seq, 4.0); step!(con, 4.0))
+    end
+    @test mn_state_equal(seq, con)
+    @test all(d -> d.state.t == seq.domains[1].state.t, con.domains)
+    @test nest_link(con, "g").stats.child_substeps == nest_link(seq, "g").stats.child_substeps > 0
+    @info "concurrent nest (adaptive $ad) on $(Threads.nthreads()) threads: identical to sequential"
+end
+
+# ---------------------------------------------------------------------------
+# synthetic inflow turbulence on a nest child (#268), two-way (#418/#419)
+# ---------------------------------------------------------------------------
+
+using Aeolus.Transition: InflowTurbulence, added_mass_flux, inflow_perturbation, feedback_exclude_width
+using Aeolus.BoundaryConditions: open_boundary_states
+
+mn_inflow(; feedback = "two_way") = mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child(; feedback = feedback) *
+                                           "[domain.inflow_turbulence]\nenabled = true\nstatistics_interval = 4.0\n")
+
+@testset "inflow turbulence on a nest child: the parent's statistics, no added mass, conservation ($fb)" for fb in ("one_way", "two_way")
+    r = Config.build(SimulationDriverType(), mn_inflow(; feedback = fb))
+    m = r.model
+    c = m.domains[2].state
+    it = only(filter(!isnothing, m.nest.inflow))
+    @test it isa InflowTurbulence && all(st -> st.data === it, open_boundary_states(c))
+    @test it.parent === m.domains[1].state                              # statistics measured on the parent
+    h = m.nest.hierarchy
+    I0 = composite_integral(h, :θ)
+    n0 = first(it.faces).stats.nsamples
+    for _ in 1:6
+        step!(m, 4.0)
+    end
+    @test first(it.faces).stats.nsamples >= n0 + 5                      # folded at every window opening
+    @test maximum(a.relative for a in added_mass_flux(it)) <= 1e-12     # no added mass flux
+    @test any(f -> any(!iszero, inflow_perturbation(it, f.side)[1]), it.faces)
+    @test max_divergence(c) < 1e-9
+    L = nest_link(m, "inner")
+    if fb == "two_way"
+        need = ceil(Int, feedback_exclude_width(it) / 100.0 - 1e-9)
+        @test L.twoway.exclude_width >= need                            # the feedback skips the inflow band
+        @test L.nest.ledger[:mass] < 1e-12                              # the interface fluxes agree without the synthetic part (#418)
+        rel = abs(composite_integral(h, :θ) - I0) / abs(I0)
+        @info "two-way nest with inflow turbulence: composite θ relative change over 6 windows $rel"
+        @test rel < 1e-13
+    end
+end
+
+@testset "inflow turbulence: config rules, and a bit-identical resume with the generator" begin
+    keyed(e) = Dict(p.key => p.message for p in e.problems)
+    e = mn_error(() -> mn_cfg(MN_HEAD * "[inflow_turbulence]\nenabled = true\n[[domain]]\nid = \"outer\"\n" * mn_child() *
+                                  "[domain.inflow_turbulence]\nenabled = true\n"))
+    @test occursin("the root has none", keyed(e)["domain[1].inflow_turbulence.enabled"])
+    e = mn_error(() -> mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child() *
+                                  "[domain.inflow_turbulence]\nenabled = true\nstatistics = \"parametrized\"\n"))
+    @test occursin("parent_resolved", keyed(e)["domain[2].inflow_turbulence.statistics"])
+    cfg = mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"\n" * mn_child() *
+                 "[domain.inflow_turbulence]\nenabled = true\nstatistics_interval = 4.0\n";
+                 overrides = ["checkpoint.every_steps=3"])
+    full = mn_run(cfg)
+    root = mktempdir()
+    stop = (r, n) -> n == 4 && throw(InterruptException())
+    @test_throws InterruptException run_config(cfg; root = root, console = false, repo = mktempdir(), callback = stop)
+    folder = only(readdir(root; join = true))
+    resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
+    a = state_fields(full.obj); b = state_fields(resumed.obj)
+    @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+end
+
+# ---------------------------------------------------------------------------
+# exchanged fields (the PALM rule) and the subgrid handover
+# ---------------------------------------------------------------------------
+
+@testset "exchanged fields: the PALM rule, naming both domains" begin
+    keyed(e) = Dict(p.key => p.message for p in e.problems)
+    # (a --set override applies to every domain: the run-level sections are written out)
+    runlevel(sec) = replace(mn_two(), "[[domain]]\nid = \"outer\"\n" => sec * "[[domain]]\nid = \"outer\"\n"; count = 1)
+    moist = mn_cfg(runlevel("[dynamics]\nmoisture = true\n"))                # both moist: fine
+    @test length(config_domains(moist)) == 2
+    e = mn_error(() -> mn_cfg(runlevel("[dynamics]\nmoisture = true\n") * "[domain.dynamics]\nmoisture = false\n"))
+    msg = keyed(e)["domain[2].dynamics.moisture"]
+    @test occursin("\"inner\" carries no qv", msg) && occursin("\"outer\" does", msg) && occursin("PALM", msg)
+    e = mn_error(() -> mn_cfg(mn_two() * "[domain.dynamics]\nmoisture = true\n"))
+    msg = keyed(e)["domain[2].dynamics.moisture"]
+    @test occursin("\"inner\" carries qv", msg) && occursin("dynamic driver", msg)
+    # a tracer of the parent that the child does not carry
+    e = mn_error(() -> mn_cfg(MN_HEAD * "[tracer]\nenabled = true\n[[domain]]\nid = \"outer\"\n" * mn_child() *
+                                  "[domain.tracer]\nenabled = false\n"))
+    @test occursin("carries no tracer", keyed(e)["domain[2].tracer.enabled"])
+end
+
+@testset "subgrid handover: the models may differ per domain; TKE on one side only; the smoothness warning" begin
+    # a TKE child in a Smagorinsky parent (and the reverse): runs, its e is
+    # zero-gradient at the nest faces, nothing of e is exchanged
+    for (pm, cm) in (("smagorinsky", "tke"), ("tke", "smagorinsky"))
+        text = replace(mn_two(), "[[domain]]\nid = \"outer\"\n" => "[sgs]\nmodel = \"$pm\"\n[[domain]]\nid = \"outer\"\n"; count = 1)
+        cfg = mn_cfg(text * "[domain.sgs]\nmodel = \"$cm\"\n")
+        @test MNC.sgs_closure(Config.build(SimulationDriverType(), cfg).model.domains[2]) isa
+              (cm == "tke" ? Aeolus.PrognosticSGS.TKEClosure : Aeolus.Operators.StaticSmagorinsky)
+        r = Config.build(SimulationDriverType(), cfg)
+        m = r.model
+        for _ in 1:4
+            step!(m, 4.0)
+        end
+        tke = cm == "tke" ? m.domains[2] : m.domains[1]
+        e = MNC.sgs_closure(tke).e
+        @test all(isfinite, interior_view(e)) && minimum(interior_view(e)) >= 0
+        if cm == "tke"
+            g = m.domains[2].state.mesh
+            Aeolus.BoundaryConditions.fill_halos!(e, Aeolus.BoundaryConditions.passive_scalar_bcs(m.domains[2].state.θ_bcs))
+            @test e.data[g.Hx, g.Hy+3, g.Hz+2] == e.data[g.Hx+1, g.Hy+3, g.Hz+2]          # west nest face: zero gradient
+            @test e.data[g.Hx+g.Nx+1, g.Hy+3, g.Hz+2] == e.data[g.Hx+g.Nx, g.Hy+3, g.Hz+2]
+        end
+        @test all(d -> all(isfinite, interior_view(d.state.u)), m.domains)
+    end
+    # the warning: a parent much smoother than the child, no inflow turbulence
+    fine = mn_two(; size = "[32, 32, 8]", refinement = "[4, 4, 2]")
+    @test isempty(SimulationDriver_warn(mn_cfg(mn_two())))
+    w = SimulationDriver_warn(mn_cfg(fine))
+    @test length(w) == 1 && occursin("\"inner\" refines its parent \"outer\" by 4", only(w))
+    @test_logs (:warn, r"refines its parent \"outer\" by 4") match_mode = :any Config.build(SimulationDriverType(), mn_cfg(fine))
+    @test isempty(SimulationDriver_warn(mn_cfg(fine * "[domain.inflow_turbulence]\nenabled = true\n")))
+end
+
+# ---------------------------------------------------------------------------
+# mixed cores: a Boussinesq domain and an anelastic one, either way round
+# ---------------------------------------------------------------------------
+
+using Aeolus.Anelastic: AnelasticSimulation, isentropic_reference, constraint_weights
+
+function mn_core(kind, mesh, bcs, θbcs)
+    kind === :boussinesq ? BoussinesqSimulation(mesh; θ₀ = 300.0, bcs = bcs, θ_bcs = θbcs) :
+        AnelasticSimulation(mesh; ref = isentropic_reference(mesh; θ_const = 300.0, g_accel = 9.81), bcs = bcs, θ_bcs = θbcs)
+end
+
+# a 3.2 km deep parent and a 1.6 km deep child (ρ̄ falls by 17 % over it)
+function mn_mixed(pk, ck; feedback = :two_way, qs = (), adaptive = false)
+    pm = RegularGrid(; size = (16, 16, 16), extent = (3200.0, 3200.0, 3200.0))
+    nest = nested_grid(pm, ((800.0, 2400.0), (800.0, 2400.0), (0.0, 1600.0)), 2)
+    p = mn_core(pk, pm, FieldBoundaryConditions(:periodic, :periodic, :wall), FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    cb = nest_bcs(nest.child_mesh; bottom = :wall)
+    c = mn_core(ck, nest.child_mesh, cb, cb)
+    for s in (p, c)
+        set!(s.θ, (x, y, z) -> 300.0 + 0.003z + 0.3sin(2π * x / 1600))
+        set!(s.u, (x, y, z) -> 2.0 + 0.5cos(2π * z / 3200))
+        set!(s.v, (x, y, z) -> 0.7)
+    end
+    scheme = ck === :anelastic ? :euler : :rk3                   # the anelastic RK3 step takes no open faces
+    cfl = adaptive ? CFLConstraints(; C_advective = 0.5, dt_max = 30.0) : nothing
+    dp = with_budgets(Domain(p; id = "p", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    dc = with_budgets(Domain(c; id = "c", scheme = scheme, cfl = cfl, components = (CentredAdvection(),)), qs)
+    return nested_model((dp, dc), [NestLink(2, 1, nest; feedback = feedback)]), nest
+end
+
+# the cell density weights of a core (ρ₀ of the Boussinesq one)
+mn_W(sim, ρ0) = sim isa BoussinesqSimulation ? fill(ρ0, size(sim.θ.data, 3)) : constraint_weights(sim)[1]
+
+@testset "mixed cores ($pk parent, $ck child): the boundary data carry the parent's mass flux" for (pk, ck) in ((:anelastic, :boussinesq), (:boussinesq, :anelastic))
+    m, nest = mn_mixed(pk, ck; feedback = :one_way)
+    step!(m, 10.0)
+    L = nest_link(m, "c")
+    @test L.conv !== nothing
+    p = m.domains[1].state; c = m.domains[2].state
+    ρ0 = L.conv.ρ0
+    Wp = mn_W(p, ρ0); Wc = mn_W(c, ρ0)
+    pm = p.mesh; cm = c.mesh
+    # the west interface plane: parent face (ix) against the child's boundary faces in B(t_end)
+    ub = L.s_new.u.data
+    worst = 0.0; Fp = 0.0; Fc = 0.0; naive = 0.0
+    for K in 1:nest.nz, J in 1:nest.ny
+        Kp = nest.iz + K - 1; Jp = nest.iy + J - 1
+        fp = Wp[pm.Hz + Kp] * p.u.data[pm.Hx + nest.ix, pm.Hy + Jp, pm.Hz + Kp] * pm.dy * pm.dz
+        fc = 0.0; fv = 0.0
+        for k in (K - 1) * nest.rz + 1:K * nest.rz, j in (J - 1) * nest.ry + 1:J * nest.ry
+            fc += Wc[cm.Hz + k] * ub[cm.Hx + 1, cm.Hy + j, cm.Hz + k] * cm.dy * cm.dz
+            fv += Wp[pm.Hz + Kp] * ub[cm.Hx + 1, cm.Hy + j, cm.Hz + k] * cm.dy * cm.dz
+        end
+        worst = max(worst, abs(fc - fp) / abs(fp))
+        Fp += fp; Fc += fc; naive += fv
+    end
+    ratio = maximum(abs(Wp[pm.Hz + nest.iz + K - 1] / Wc[cm.Hz + 2K] - 1) for K in 1:nest.nz)
+    @info "mixed cores ($pk → $ck): west-plane mass flux, worst patch relative error $worst; the density ratios differ from 1 by up to $ratio"
+    @test worst < 1e-12                       # every parent face patch: the same mass flux on both sides
+    @test abs(Fc - Fp) <= 1e-12 * abs(Fp)
+    @test ratio > 0.01                        # (and the conversion is not a no-op: ρ̄/ρ₀ ≠ 1 there)
+end
+
+@testset "mixed cores ($pk parent, $ck child), two-way: the composite heat and the interface mass flux are conserved" for (pk, ck) in ((:anelastic, :boussinesq), (:boussinesq, :anelastic))
+    m, nest = mn_mixed(pk, ck)
+    h = m.nest.hierarchy
+    I0 = composite_integral(h, :θ)
+    for _ in 1:6
+        step!(m, 10.0)
+    end
+    rel = abs(composite_integral(h, :θ) - I0) / abs(I0)
+    L = nest_link(m, "c")
+    @info "mixed cores ($pk → $ck) two-way: composite ∫Wθ relative change over 6 windows $rel; interface mass-flux imbalance $(L.nest.ledger[:mass]) (before the correction $(L.nest.ledger[:mass_before_correction]))"
+    @test rel < 1e-13
+    @test L.nest.ledger[:mass] < 1e-12
+    @test all(d -> all(isfinite, interior_view(d.state.θ)), m.domains)
+    # the parent sees the child (the feedback converted the velocity back to its own density)
+    @test max_divergence(m.domains[2].state) < (ck === :boussinesq ? 1e-9 : Inf)
+end
+
+@testset "mixed cores in a config: an anelastic root with a Boussinesq child, and the reverse" begin
+    text = replace(mn_two(), "[[domain]]\nid = \"outer\"\n" => "[core]\nmodel = \"anelastic\"\n[[domain]]\nid = \"outer\"\n"; count = 1) *
+           "[domain.core]\nmodel = \"boussinesq\"\n"
+    r = Config.build(SimulationDriverType(), mn_cfg(text))
+    m = r.model
+    @test MNC.core(m.domains[1]) === :anelastic && MNC.core(m.domains[2]) === :boussinesq
+    I0 = composite_integral(m.nest.hierarchy, :θ)
+    for _ in 1:3
+        step!(m, 4.0)
+    end
+    @test abs(composite_integral(m.nest.hierarchy, :θ) - I0) / abs(I0) < 1e-13
+    rev = mn_cfg(mn_two() * "[domain.core]\nmodel = \"anelastic\"\n"; overrides = ["timestep.scheme=\"euler\""])
+    m2 = Config.build(SimulationDriverType(), rev).model
+    for _ in 1:3
+        step!(m2, 4.0)
+    end
+    @test MNC.core(m2.domains[2]) === :anelastic && all(isfinite, interior_view(m2.domains[2].state.θ))
+end
+
+@testset "both cores: budgets close and adaptive windows run on a mixed nest ($pk parent, $ck child)" for (pk, ck) in ((:anelastic, :boussinesq), (:boussinesq, :anelastic), (:anelastic, :anelastic))
+    m, nest = mn_mixed(pk, ck; qs = (:energy, :momentum_x), adaptive = true)
+    ns = Int[]
+    for _ in 1:4
+        _, Δt, r = step_adaptive!(m)
+        push!(ns, nest_link(m, "c").stats.n_last)
+    end
+    @test all(>=(2), ns)
+    for d in m.domains, q in (:energy, :momentum_x)
+        meas = budgets(d).measured[q]
+        sb = stage_budget(meas)
+        content = abs(Aeolus.BudgetSystem.measure(meas.meter, q === :energy ? d.state.θ : d.state.u))
+        @test abs(sb.closure) <= 1e-12 * content
+    end
+    @test nest_exchange(m.domains[2], :energy) != 0 && nest_exchange(m.domains[1], :energy) != 0
 end

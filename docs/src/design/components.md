@@ -76,8 +76,8 @@ on a retry.
 
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` (no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
-| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `closure` (default `smagorinsky`), `c_s`, `pr_t`, `stability`, `stress` | called by the core in stage 6 | the closure of `Components.build_closure` |
+| [`CentredAdvection`](@ref Aeolus.Components.CentredAdvection) | `:advection` | `[advection]` `scheme = "centred"` (the one provider, no options) | called by the core in stage 6 | `Operators.momentum_advect!` (Boussinesq, fused with diffusion), `weighted_momentum_advect!` (anelastic) |
+| [`SGS`](@ref Aeolus.Components.SGS) | `:sgs` | `[sgs]` `model` (default `smagorinsky`; `tke`, ONE-l #475); per closure its options (ONE-m #476): `c_s` (smagorinsky, vreman, sigma, amd; each its default), `pr_t`, `stability` (not amd), `stress`; `tke`: `e_min`, `surface_factor`, `wall_cap`, `wall_cap_top`, `surface_value` (NEST-p1 #481), `stress` | called by the core in stage 6; `tke` also `:surface_flux` (after the others: the wall fluxes of [`wall_theta_flux`](@ref Aeolus.Components.wall_theta_flux), and with `surface_value` the u* of the `:surface` component, [`surface_friction_velocity`](@ref Aeolus.Components.surface_friction_velocity)) | the closure of `Components.build_closure`; `PrognosticSGS.TKEClosure`, `initialize_tke!` |
 | [`Coriolis`](@ref Aeolus.Components.Coriolis) | — | `[coriolis]` `f` or `latitude` | `:tendencies` | `Operators.add_coriolis!` |
 | [`SurfaceThetaFlux`](@ref Aeolus.Components.SurfaceThetaFlux) | — | `[surface_theta_flux]` `bottom`, `top` | `:tendencies` | `Operators.add_surface_flux!` |
 | [`Sponge`](@ref Aeolus.Components.Sponge) | — | `[sponge]` `alpha_max`, `z_start`, `target` (`rest`, `geostrophic`, `mean`) | `:body_force` | `Simulations.add_velocity_sponge!` → `Operators.add_sponge!` |
@@ -86,16 +86,69 @@ The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
 
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables) | `:clock` (the step start), `:body_force` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``) |
-| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface_layer]` `enabled`, `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
+| [`LargeScale`](@ref Aeolus.Components.LargeScale) | — | `[large_scale_forcing]` `u_g`, `v_g` (numbers or `"driver"`), `advective_tendencies`, `subsidence`, `nudging` (the dynamic driver's `ls_*` tables); built in code also with `clock` and a [`BoundaryLayerTracker`](@ref Aeolus.Components.BoundaryLayerTracker) (NEST-p1 #481) | `:clock` (the step start), `:body_force`, with a tracker `:column_tendency` | `LargeScaleForcing.apply_forcing!` (`GeostrophicPressureGradient` with the `Coriolis` component's ``f``, else the core's) |
+| [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface]` `model = "most"` (ONE-m #476; the slot's other providers are the couplings `none`, `slab`, `flux_map`), `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
 | [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
-Every domain has an `:advection` provider; `[sgs] closure = "none"`
+The urban nest parent's physics (NEST-p1, #481), components of the
+parent's domain ([`parent_domain`](@ref Aeolus.Urban.parent_domain)), on
+both cores, checkpointed:
+
+| component | slot | section | stage | delegates to |
+| :-- | :-- | :-- | :-- | :-- |
+| [`TiledUrbanSurface`](@ref Aeolus.Urban.TiledUrbanSurface) | `:surface` | `[surface]` `model = "tiles"`: `period`, `u_min`, `sw_down`, `lw_down`; the land use is the tile form of the domain's static driver (`drivers.static_tiles`), the tiles those of an urban site's class-to-surface factory | `:surface_flux` (the held canopy sources, a tile step every `period`), `:post_predictor` (the implicit drag) | `SurfaceTiles` (`step_parent_column!`), [`build_parent_surface`](@ref Aeolus.Urban.build_parent_surface) |
+| [`PrescribedSurfaceFlux`](@ref Aeolus.Urban.PrescribedSurfaceFlux) | `:surface` | `[surface]` `model = "prescribed"` (the functions of time `q_surface`, `e_surface` are build options) | `:surface_flux` | `LargeScaleForcing.forcing_mean` |
+| [`MeanColumnRadiation`](@ref Aeolus.Urban.MeanColumnRadiation) | `:radiation` | `[radiation]` `scheme = "mean_column"`: `period`, `humid`; the sun of the site's clock ([`SiteSun`](@ref Aeolus.Urban.SiteSun)) | `:surface_flux`, order 1 (after the surface: the call every `period`, the heating every step) | `ColumnRadiation.column_radiation!`, `stitched_column` |
+
+The parent's large-scale forcing is the `LargeScale` component on the
+core's substage clock (`clock = :core`: the windows the parent's
+forcing has used since #259; the step mean of the configuration is a
+physics change for a later issue) with a `BoundaryLayerTracker` for its
+nudging weight, and its closure `[sgs] model = "tke"` with the exact wall
+distance of the stretched grid (`wall_cap_top = false`) and the tiles'
+surface value. These three sections are not yet in the model's
+configuration schema: the parent is built from `[nesting.parent]`
+(`ParentConfig`) until it is a `[[domain]]` of its own (NEST-p2/p3), and
+the tiles need an urban site's class tables.
+
+The components of the validation cases (ONE-l, #475; the former run
+types of `Aeolus.RunDrivers`), on both cores, checkpointed:
+
+| component | slot | section | stage | delegates to |
+| :-- | :-- | :-- | :-- | :-- |
+| [`KinematicFlow`](@ref Aeolus.Components.KinematicFlow) | — | `[kinematic_flow]` `kind` (`solid_body_rotation`, `uniform`), `omega`, `center`, `velocity` | `:clock`, `:post_predictor`, `:surface_update` (the velocity prescribed; stateless) | — (the core's scalar advection carries θ) |
+| [`ParentStatistics`](@ref Aeolus.Components.ParentStatistics) | — | `[inflow_statistics]` `enabled`, `start`, `tau_avg`, `refine`, `depth` | `:output` | `Transition.ParentResolvedStatistics`, `update_inflow_statistics!`, `inflow_stress_parts` |
+| [`Fringe`](@ref Aeolus.Components.Fringe) | — | `[fringe]` `profile` (`blasius`), `inflow_reynolds`, `velocity`, `length`, `rise`, `fall`, `lambda_max`, `top`, `tu`, … | `:body_force`; the free-stream top before the core is built ([`core_boundaries`](@ref Aeolus.Components.core_boundaries)) | `Transition.FringeRegion`, `blasius_target`, `blasius_freestream`, `FreeStreamDisturbance`, `disturbance_fringe_update`, `set_blasius!` |
+
+The validation run types they replace: `advection` is
+`examples/scalar_advection_2d/` (θ carried by `[kinematic_flow]`: the
+core's centred flux form on the staggered grid instead of the run type's
+upwind kernel on cell-centred velocities, a stated change); `cbl` is
+`examples/cbl_tke/` and `examples/cbl_inflow_statistics/`, bit for bit;
+`shear_layer` is `examples/kelvin_helmholtz/` (the `[initial]` profiles
+`tanh` and `seed_mode`, the outputs `w_rms`, `turbulent_fraction_profile`,
+`shear_production_profile`, `buoyancy_production_profile`,
+`vorticity_y`), bit for bit; `flat_plate` is `examples/flat_plate_t3a/`,
+bit for bit. The numbers the run types computed at the end of a run are
+now computed from the output by the cases' scripts. `inflow_fetch` and
+`obstacle_channel` ran on pressure-driven channels and `sgs_decay` is the
+filtered-DNS study; all three are dropped (the design drops the channel
+cases and the a-priori study), their harnesses kept as test fixtures
+(`test/fixtures/inflow_fetch.jl`, `sgs_validation.jl`), and so is the
+channel harness of `WallModels` (`test/fixtures/channel_cases.jl`).
+
+Every domain has an `:advection` provider; `[sgs] model = "none"`
 enables no `:sgs` component. Each component has its own per-domain
 section of the model's configuration, generated from its
 [`schema`](@ref Aeolus.Components.schema)
 ([`COMPONENTS`](@ref Aeolus.SimulationDriver.COMPONENTS), ONE-b #451), and
-is switched on by it ([`enabled`](@ref Aeolus.Components.enabled)`(C,
+is switched on by it. The component of an exclusive slot is a provider of
+the slot's section instead (ONE-m, #476): its `schema` is a
+[`slot_section`](@ref Aeolus.Config.slot_section) with its provider(s),
+the model's schema merges the parts of one slot
+([`merge_sections`](@ref Aeolus.Config.merge_sections)), and `enabled`
+compares the selector with its provider name (`opts.model === :most`);
+the section holds the chosen provider's options only ([`enabled`](@ref Aeolus.Components.enabled)`(C,
 opts)`, from the options alone). Before anything is built, the enabled
 component types of every domain are checked
 ([`component_problems`](@ref Aeolus.Components.component_problems)): at
@@ -258,8 +311,12 @@ Every component publishes an output catalogue (`outputs(c)`: a list of
 for its type). The core publishes `Components.CORE_OUTPUTS`:
 
 - u, v, w, p, θ, qv as 3-D fields;
-- the horizontal-mean profiles;
-- the domain means as time series;
+- the horizontal-mean profiles, and (ONE-l #475) the total heat-flux,
+  w-variance and resolved-TKE profiles and the shear-production,
+  buoyancy-flux and turbulent-fraction profiles of the transition
+  diagnostics;
+- the domain means and `w_rms` as time series; `u_squared` and
+  `vorticity_y` as 3-D fields;
 - the `budget_*` groups.
 
 `[output] variables` selects from the catalogues of the core and the
@@ -341,8 +398,37 @@ parent and takes two substeps). The single-domain step is unchanged: a
 64³ RK3 step of the bare config takes 33.6 ms on the branch and 33.4 ms
 on its base (minimum of 15, two alternating runs each).
 
-The nested model takes fixed steps and does not measure budgets; the
-other limits are on [Run configuration](run_configuration.md).
+### The one nest engine (NEST-p2, #482)
+
+The nest is stepped by the model's own engine
+([`nest_window!`](@ref Aeolus.Components.nest_window!), on the links of
+the hierarchy): a domain's pipeline is split around the nest — stages
+1–11, then its children's windows and the two-way feedback (stage 12,
+`:nest_feedback`), then stage 13 — so a parent's budgets close after its
+children's feedback, which they book as its nest exchange. With fixed
+steps the prognostic state is that of `Nesting.step_nested!`, bit for
+bit; on a 64 × 64 × 32 root with a 64 × 64 × 32 child at `r = 2` (RK3,
+one thread, minimum of 4 × 5 windows) a window takes 0.0501 s two-way
+and 0.0393 s one-way, against 0.0511 s and 0.0397 s on the hierarchy's
+own path (4 threads: 0.0366 / 0.0299 s against 0.0385 / 0.0298 s). The
+engine adds adaptive steps with the smallest stable whole number of
+child substeps and window retries, per-domain budgets with a nest-exchange
+term, siblings in parallel and a one-way parent below the root stepping
+ahead of its children, synthetic inflow turbulence with the parent's
+statistics, mixed Boussinesq/anelastic cores, the PALM rule for the
+exchanged fields and the subgrid handover; the measured numbers are on
+[Nested time coupling](../theory/nesting_time.md) and
+[Two-way nesting](../theory/nesting_twoway.md), the configuration on
+[Run configuration](run_configuration.md).
+
+Measured on the nest of this section (`test/model_nesting.jl`): every
+domain's energy and momentum budgets close to `1e-12` of their content
+(one-/two-way, Euler/RK3, fixed and adaptive), and the parent's exchange
+and the child's add up to the heat the covered parent cells gained, the
+composite conservation; an adaptive two-way nest with two retried windows
+changes its composite θ by 1.8e-15 over 6 windows; with inflow turbulence
+the added mass flux is at most 1e-12 of the mean-flow flux and the
+two-way composite θ changes by 2.2e-15.
 
 ## Where the code still differs from the target
 
@@ -485,10 +571,48 @@ other limits are on [Run configuration](run_configuration.md).
   `Sponge` components); and its nest parent (`ParentCase`,
   `ParentConfig`, run by the `:nesting` component, and alone by the
   `urban_parent` run type) is not yet a `[[domain]]`: that needs the
-  parent's physics (the tiled surface, the column radiation, TKE on the
-  stretched grid, the large-scale forcing and nudging) as components of a
-  core domain, and the Berlin nest (one-way with the prefetched parent
-  window, two-way, the synthetic inflow) as the model's `ModelNest`.
+  Berlin nest (one-way with the prefetched parent window, two-way, the
+  synthetic inflow) as the model's `ModelNest`. Its physics are
+  components of a core domain since NEST-p1 (#481, below).
+* **NEST-p1 (#481): the parent's physics as components.** The tiled
+  surface, the prescribed surface flux, the column radiation, the
+  large-scale forcing with its boundary-layer-dependent nudging weight and
+  the TKE closure on the stretched grid are components of the parent's
+  `Domain` ([`parent_domain`](@ref Aeolus.Urban.parent_domain)); the
+  hand-wired code of `ParentCase` that they replace is gone. `ParentCase`
+  is the shell the nest and the `urban_parent` run type step: its ledgers
+  (air heat, water) around the components' stage entries, in the
+  pipeline's order. The domain alone through the pipeline
+  (`step_adaptive!(domain)`) is that run bit for bit. Measured (FFTW
+  `:estimate`): five parents of the branch base (the 24 × 24 × 38 tiled
+  smoke parent with and without subsidence, 12 steps; the encroachment,
+  Wangara-like and Smagorinsky/Euler idealised parents, 20 steps) give
+  the same bits in every field, through `ParentCase` and through the
+  pipeline; the step of the 96 × 96 × 38 tiled parent took 0.0742 s
+  before, 0.0757 s through `ParentCase` and 0.0711 s through the pipeline
+  (median of 12). Two findings: the model's `[sgs] model = "tke"` could
+  not be built on a `StretchedGrid` (fixed: the exact wall distance), and
+  the parent's forcing on the core's RK3 clock leads the step mean by
+  3Δt/2 (kept, `clock = :core`; tested).
+* **ONE-m (#476): one key per exclusive slot.** After #472/#473 a
+  non-default provider took an enable/disable pair of sections
+  (`[pressure_fft] enabled = false` with `[pressure_multigrid] enabled =
+  true`, `[aq_chem]` with `[chem_off]`; `[surface_layer] enabled` beside
+  `[surface] model`). Each exclusive slot is now one section with a
+  selector key, holding the chosen provider's options only
+  (`Config.slot_section`, `provider!`; validated and resolved by the
+  loader, `with` and the option reference): the model's `[core] model`,
+  `[timestep] scheme` (run level), `[sgs] model`, `[surface] model`
+  (`none`, `slab`, `flux_map`, `most`: the `SurfaceLayer` component),
+  `[microphysics] scheme`, `[advection] scheme`, and the urban site's
+  fifteen slots (`Urban.URBAN_SLOT_SECTIONS`; `[chemistry] scheme =
+  "aq_chem" | "none"`). A slot the model and the site share pools both
+  sets of providers, each offered on its domain kind
+  (`SimulationDriver.domain_kind`). Every shipped TOML is converted.
+  Measured: the state digests of every shipped config at its `[test]`
+  size, of the simulation-digest runs and of the smoke matrix are those
+  of the branch base; the four Berlin scenarios resolve to the fixture
+  field for field.
 * The low-level cores keep their keyword interface — `f_coriolis`,
   `C_s`, the sponge and the θ fluxes in the constructors, and
   `body_force!`, `post_predictor!`, `sgs`, `momentum_advection` on the

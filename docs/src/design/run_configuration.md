@@ -28,8 +28,10 @@ dynamic_driver = "input/lindenberg_era5_dynamic.nc"   # the domain's input drive
 name = "dcbl"
 seed = 1
 
-[time]                 # run level: one clock for every domain
+[timestep]             # run level: one scheme steps every domain
 scheme = "rk3"
+
+[time]                 # run level: one clock for every domain
 dt = "adaptive"        # or a fixed step in seconds
 cfl = 0.5
 dt_max = 10.0
@@ -39,8 +41,9 @@ duration = 3600.0      # or nsteps, with duration = "none"
 size = [32, 32, 32]
 extent = [3200.0, 3200.0, 1600.0]
 
-[sgs]                  # one section per component; the :sgs slot
-closure = "smagorinsky"
+[sgs]                  # an exclusive slot: one section, a selector key
+model = "smagorinsky"  # the provider; the section holds its options only
+c_s = 0.17
 
 [surface_theta_flux]   # a component is enabled by its own section
 bottom = 0.24
@@ -56,13 +59,34 @@ The sections:
 
 | level | sections |
 | :-- | :-- |
-| run | `[run]`, `[time]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]` |
-| per domain | `[grid]`, `[dynamics]` (the core), `[boundaries]`, `[initial]`, and one section per component, generated from its schema: `[advection]`, `[sgs]`, `[coriolis]`, `[sponge]`, `[surface_theta_flux]`; the EX-d couplings `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]` (one component today, split in ONE-e); the urban site's `[urban]` and one section per urban component (ONE-e #454) |
+| run | `[run]`, `[time]`, `[timestep]`, `[output]`, `[checks]`, `[checkpoint]`, `[fftw]`, `[logging]` |
+| per domain | `[grid]`, `[core]`, `[dynamics]` (the core's parameters), `[boundaries]`, `[initial]`, and one section per component, generated from its schema: `[advection]`, `[sgs]`, `[coriolis]`, `[sponge]`, `[surface_theta_flux]`; the EX-d couplings `[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]` (one component today, split in ONE-e); the urban site's `[urban]`, one section per urban slot and one per additive urban component (ONE-e #454, ONE-m #476) |
 | the domain itself | `id`, `static_driver`, `dynamic_driver` (top level for one domain, else in each `[[domain]]` block); a nested domain's `parent`, `origin`, `refinement`, `feedback` (ONE-f, #455) |
 
-`[checks]` takes one key per check the enabled components publish; none
-publishes one yet (ONE-d, #453), so any key is an error. The component
-interface and the stage pipeline are on [Components](components.md).
+`[checks]` takes one key per check the core and the enabled components
+publish (ONE-d, #453). The component interface and the stage pipeline are
+on [Components](components.md).
+
+**Exclusive slots: one section, a selector key** (ONE-m, #476). A slot
+that holds exactly one of several providers is one section whose
+selector key names the provider: `[core] model`, `[timestep] scheme`,
+`[sgs] model`, `[surface] model`, `[microphysics] scheme`, `[advection]
+scheme`, and on an urban site also `[pressure] solver`,
+`[momentum_advection] scheme`, `[chemistry] scheme` and the rest of its
+slots. The section holds the chosen provider's options and nothing
+else: a key of another provider is an error that names the providers
+that have it, and the resolved config shows the provider with every
+option it has. There are no `enabled` pairs to keep consistent: an
+additive component (on or off, any number of them) keeps its `enabled`
+key. A slot section the model and the urban site share offers each
+domain the providers of its kind (`[sgs] model = "tke"` is the model's
+TKE closure on a model domain, the site's on an urban site). A selector
+set at a higher level that names another provider replaces the
+provider: `--set sgs.model="vreman"` on a file with `[sgs] model =
+"tke"` drops the file's `[sgs]` options, and the vreman closure starts
+from its defaults and the other overrides (a `[domain.sgs]` block's
+selector does the same for its domain, and `with` from Julia). Naming
+the provider the file names changes nothing.
 
 Conventions: keys are ASCII `snake_case`; values are SI and durations are
 in seconds; `"none"` stands for nothing (TOML has no null); a path is
@@ -83,7 +107,7 @@ domain:
 dt = 1.0                   # a nest takes a fixed step
 
 [sgs]
-closure = "vreman"         # every domain …
+model = "vreman"           # every domain …
 
 [grid]
 size = [8, 8, 8]           # the parent: 3200 × 3200 × 1600 m, Δ = 400 × 400 × 200 m
@@ -99,7 +123,8 @@ refinement = [8, 8, 8]     # Δ = 50 × 50 × 25 m: grid.size = extent / parent 
 feedback = "two_way"       # the default; "one_way" per child
 static_driver = "input/inner_static.nc"
   [domain.sgs]
-  closure = "amd"          # … but this one
+  model = "amd"            # … but this one (another provider: the run level's
+                           # [sgs] options, if any were set, are dropped)
   [domain.grid]
   extent = [400.0, 400.0, 200.0]
 ```
@@ -136,15 +161,48 @@ domain (the value is the worst, each domain's under its id in
 `results.toml`; the reference comparisons are the root's), and a
 checkpoint holds the whole nest, so a resumed run continues bit for bit.
 
+The nest engine (NEST-p2, #482; [nested time coupling](../theory/nesting_time.md)):
+
+- **Steps.** `time.dt` fixed: each child takes `max(refinement)` substeps
+  per step of its parent. `time.dt = "adaptive"`: the root takes its own
+  stability limit, each child the smallest whole number of equal
+  substeps that keeps it stable, chosen every window, and a failed step
+  retries the window (half the root step, or twice the failing child's
+  substeps).
+- **Budgets.** `[nesting] budget_exchange = "exchange_term"` (the
+  default): every domain closes its own budgets, with one nest-exchange
+  term per quantity, `(:nest_feedback, :nest_exchange)` — what crossed a
+  child's nest faces, and in a parent its children's two-way feedback.
+  `"off"`: a nest measures no budgets (no `budget_*` output, no closure
+  check).
+- **Cores.** Every domain runs the Boussinesq or the anelastic core,
+  mixed freely, two-way included (a conservative density conversion in the
+  boundary data and the feedback). An anelastic nested domain needs
+  `[timestep] scheme = "euler"`, and one nested in an anelastic parent
+  the same `dynamics.theta0` and `g`.
+- **Exchanged fields** (the PALM rule): `qv`, the Kessler `ql` and `qr`,
+  and the tracer exist in a nested domain exactly when they exist in its
+  parent; the check names both domains. (A child could carry an extra
+  field only with its own dynamic driver giving its boundary values; a
+  nested domain has no dynamic driver yet.)
+- **Inflow turbulence.** A nested domain's `[inflow_turbulence] enabled =
+  true` puts synthetic turbulence on its lateral nest faces, with its
+  parent's resolved statistics (`statistics = "parent_resolved"`);
+  two-way, the feedback skips the generator's inflow band.
+- **Subgrid model.** It may differ per domain (`[domain.sgs]`); the nest
+  passes resolved fields only (a TKE field on one side only is not
+  exchanged: the child's `e` is zero-gradient at its nest faces). A child
+  that refines its parent horizontally by 3 or more without
+  `[inflow_turbulence]` is warned about when the model is built.
+
 What a nested model does not do yet, each refused by the configuration
-with its reason: an adaptive `time.dt`, budgets (the two-way feedback is
-outside every stage, so it is not attributed), the anelastic core and
-stretched grids, a child's `dynamic_driver`, and the EX-d couplings
-(`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`, `[particles]`,
-`[obstacles]`) in a child, whose fields have no nest faces. The urban run
-type's Berlin nest (`ParentCase`, the `urban_parent` run type) is still
-its own until the urban couplings are components (ONE-e, #454); it then
-becomes a `[[domain]]` config.
+with its reason: stretched grids, a child's `dynamic_driver`, and the
+EX-d couplings (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
+`[particles]`, `[obstacles]`) in a child, whose fields have no nest
+faces. The urban site's Berlin nest (`ParentCase`, run by the site's
+`[nesting]` component) still steps on `Nesting.NestedRun`; it moves onto
+the model's nest engine once the parent's physics are components
+(NEST-p1, #481), in NEST-p3.
 
 The enabled components of a domain are validated before anything is
 built: at most one per exclusive slot (`:advection`, `:sgs`,
@@ -154,10 +212,15 @@ sections involved.
 
 ## Legacy cases
 
-The run types not yet ported to components keep their own schemas until
-they are ported: the nest parent of an urban site alone (`urban_parent`;
-the urban site itself is the model's since ONE-e #454) and the seven
-validation run types of `Aeolus.RunDrivers`. The SBL cases are
+The one run type not yet ported to components keeps its own schema: the
+nest parent of an urban site alone (`urban_parent`; the urban site itself
+is the model's since ONE-e #454). The seven validation run types of the
+former `Aeolus.RunDrivers` are gone (ONE-l, #475): `advection`, `cbl`,
+`shear_layer` and `flat_plate` are configurations of the model (with the
+components `[kinematic_flow]`, `[sgs] model = "tke"`,
+`[inflow_statistics]` and `[fringe]`), and `inflow_fetch` and
+`obstacle_channel` (channel cases) and `sgs_decay` (the filtered-DNS
+study) were dropped, their harnesses kept as test fixtures. The SBL cases are
 configurations of the model since ONE-g (#456); the channel,
 single-column and DNS a-priori validation cases are gone (maintainer
 decisions of 2026-10-09); the Kessler box of the kernel demos is a
@@ -169,7 +232,6 @@ Every legacy case is code in `src/`: nothing is loaded from `examples/`.
 | `[run] legacy` | what it runs | options |
 | :-- | :-- | :-- |
 | `urban_parent` | the nest parent of an urban site alone (the model's sections) | [urban_parent](../reference/options/urban_parent.md) |
-| `advection`, `cbl`, `inflow_fetch`, `obstacle_channel`, `shear_layer`, `flat_plate`, `sgs_decay` | the validation run types of `Aeolus.RunDrivers` | `aeolus options <case>` |
 
 ## No inheritance
 
@@ -188,7 +250,7 @@ Strings are quoted, arrays are TOML arrays:
 
 ```bash
 julia --project -m Aeolus run examples/taylor_green_vortex/taylor_green_vortex.toml --set grid.size=[16,16,16]
-julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs_tke.enabled=false --set sgs_smagorinsky.enabled=true
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs.model='"smagorinsky"'   # another provider
 julia --project -m Aeolus check my_case.toml --set time.nsteps=10 --set time.duration='"none"'   # validate only
 julia --project -m Aeolus resolve my_case.toml                            # print the canonical TOML
 julia --project -m Aeolus options sgs                                     # the model's option reference, one section
@@ -262,7 +324,7 @@ The dynamic driver (initial profiles, large-scale forcing, surface
 series, boundary planes) is written from a sounding, a case table or
 ERA5, or by a recording parent run, and is read from the domain's
 `dynamic_driver` (the model; its large-scale tables by
-`[large_scale_forcing]`, its surface series by `[surface_layer]`) or
+`[large_scale_forcing]`, its surface series by `[surface] model = "most"`) or
 `[initial] dynamic` (urban).
 Their variables, dimensions, units and attributes are listed on the
 [static](../reference/input_static.md) and
@@ -294,12 +356,9 @@ and one LES per SGS model), `examples/urban/` (the Berlin variants).
 | `sbl` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps | `input/`: the case-table dynamic drivers; `data/`: the reference data |
 | `dns_vs_les` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence | `compare.jl` reads the runs |
 | `urban` | the model with an urban site (`[urban] enabled`, ONE-e #454): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); legacy `urban_parent`: `berlin_parent`, `berlin_parent_coarse` | `input/`: the drivers; `data/`: land use and the Lindenberg sounding |
-| `scalar_advection_2d` | legacy `advection` | one |
-| `cbl_tke`, `cbl_inflow_statistics` | legacy `cbl` | one each |
-| `rotating_stratified_decay` | legacy `sgs_decay` | one |
-| `surface_mounted_cube` | legacy `obstacle_channel` | two (`_closures`: a sweep); `input/`: the cube |
-| `inflow_fetch` | legacy `inflow_fetch` | one |
-| `kelvin_helmholtz`, `flat_plate_t3a` | legacy `shear_layer`, `flat_plate` | one each |
+| `scalar_advection_2d` | the model with a prescribed velocity (`[kinematic_flow]`, ONE-l #475) | one |
+| `cbl_tke`, `cbl_inflow_statistics` | the model with the prognostic TKE closure (`[sgs] model = "tke"`) and, as a nest parent, `[inflow_statistics]` | one each |
+| `kelvin_helmholtz`, `flat_plate_t3a` | the model: a seeded tanh shear layer (`[initial]` `tanh`, `seed_mode`); a flat plate with the `[fringe]` | one each |
 
 An example is these files only. `test/examples_enforcement.jl` holds the
 rule with no exemptions: it parses every `.jl` under `examples/` and fails

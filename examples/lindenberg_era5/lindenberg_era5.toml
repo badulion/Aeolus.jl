@@ -36,13 +36,15 @@ y = "open"
 z = "free_slip"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.17
 
 [initial]
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = 2.0
 duration = 600.0
 

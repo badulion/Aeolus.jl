@@ -226,7 +226,7 @@ wind, the advective tendencies and the 0.25 m θ series, GABLS4 the surface
 (ONE-g, #456). The model reads the large-scale tables generically: the
 `[large_scale_forcing]` component (`u_g = "driver"`, `advective_tendencies`,
 `subsidence`, `nudging`; [`dynamic_forcing`](@ref Aeolus.InputDrivers.dynamic_forcing))
-and the `[surface_layer]` `temperature = {kind = "driver"}`, the times read
+and the `[surface] model = "most"` `temperature = {kind = "driver"}`, the times read
 at the model time minus `[time] start`; a driver with no initial profiles
 initialises nothing (the profiles stay in `[initial]`).
 

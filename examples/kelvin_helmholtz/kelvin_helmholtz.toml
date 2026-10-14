@@ -1,47 +1,67 @@
 # Kelvin–Helmholtz billow — Era VI, Phase 59 (P59-c, #180; formerly
-# examples/transition/kelvin_helmholtz.jl). A weakly stratified tanh shear
-# layer (u = U tanh(z/δ), θ = θ₀ + Δθ tanh(z/δ), minimum Ri_g = J = 0.05
-# at the centre, Re = Uδ/ν = 1000) in 2-D (128 × 1 × 256) with free-slip
-# walls at z = ±14δ, seeded at the most unstable wavelength αδ = 0.4446 with
-# w′ = 1e-4 U. Unlike the linear test (test/era6_transition_kh.jl) the base
-# state is free to diffuse and the billow runs into its nonlinear stage.
+# examples/transition/kelvin_helmholtz.jl, then the `shear_layer` run type;
+# on the model since ONE-l, #475). A weakly stratified tanh shear layer
+# (u = U tanh((z − z_c)/δ), θ = θ₀ + Δθ tanh((z − z_c)/δ), minimum
+# Ri_g = J = g Δθ δ/(θ₀ U²) = 0.05 at the centre, Re = Uδ/ν = 1000) in 2-D
+# (128 × 1 × 256, square cells) between free-slip walls 14.1δ above and
+# below it, seeded at the most unstable wavenumber of the inviscid tanh
+# layer, αδ = 0.4446 (L_x = 2πδ/α), with w′ = 1e-4 U sin(αx) exp(−((z − z_c)/δ)²).
+# δ = U = 1, θ₀ = 300 K; Δθ = J U² θ₀/(g δ) = 1.529 K. Unlike the linear test
+# (test/era6_transition_kh.jl) the base state is free to diffuse and the
+# billow runs into its nonlinear stage. SSP-RK3 at dt = 0.6 Δx/U, no SGS model.
 #
 #   julia --project -m Aeolus run examples/kelvin_helmholtz/kelvin_helmholtz.toml
 #   julia --project=. examples/kelvin_helmholtz/plot_kelvin_helmholtz.jl runs/<date>_kelvin_helmholtz_<id>
 #
-# results.toml: the growth rate of rms w, the saturation, the cumulative
-# flux Richardson number, the series; output/vorticity.nc: ω_y at t = 60,
-# 90, 140 δ/U.
+# output.nc: every δ/U the rms of w (the mode's amplitude), and the plane
+# profiles of the turbulent fraction γ and of the shear production P and
+# buoyancy flux B of the resolved TKE, and ω_y. plot_kelvin_helmholtz.jl
+# fits the growth rate, finds the saturation and forms the flux Richardson
+# number Ri_f = −B/P of the layer |z − z_c| < 4δ.
 
 schema_version = 2
 
 [run]
-legacy = "shear_layer"
 name = "kelvin_helmholtz"
 
-[layer]
-delta = 1.0
-velocity = 1.0
-re = 1000.0
-richardson = 0.05
-theta0 = 300.0
-g = 9.81
-alpha = 0.4446
-seed_amplitude = 1e-4
+[timestep]
+scheme = "rk3"
+
+[time]
+dt = 0.06624478436213295        # 0.6 Δx/U
+duration = 160.0
 
 [grid]
-nx = 128
-nz = 256
+size = [128, 1, 256]
+extent = [14.132220663921697, 0.11040797393688825, 28.264441327843393]   # L_x = 2πδ/α, one Δx, 256 Δx
 
-[stepper]
-cfl = 0.6
-end_time = 160.0
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "free_slip"
 
-[diagnostics]
-every = 1.0
-layer = 4.0
-rif_from = 10.0
-snapshots = [60.0, 90.0, 140.0]
+[dynamics]
+nu = 0.001                      # U δ / Re
+theta0 = 300.0
+g = 9.81
+
+[sgs]
+model = "none"
+
+[initial]
+u = { kind = "tanh", value = 0.0, amplitude = 1.0, center = 14.132220663921697, thickness = 1.0 }
+theta = { kind = "tanh", value = 300.0, amplitude = 1.529051987767584, center = 14.132220663921697, thickness = 1.0 }
+w = { kind = "seed_mode", amplitude = 0.0001, wavenumber = 0.4446, center = 14.132220663921697, thickness = 1.0 }
+
+[output]
+variables = ["w_rms", "turbulent_fraction_profile", "shear_production_profile", "buoyancy_production_profile",
+             "vorticity_y"]
+cadence = 1.0
+series_cadence = 1.0
+
+[checks]
+finite = { required = true }
 
 [test]
-overrides = ["grid.nx=16", "grid.nz=32", "stepper.end_time=12.0", "diagnostics.snapshots=[6.0]"]
+overrides = ["grid.size=[16,1,32]", "grid.extent=[14.132220663921697,0.883263791495106,28.264441327843393]",
+             "time.dt=0.5299582748970636", "time.duration=12.0"]

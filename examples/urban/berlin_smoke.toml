@@ -181,25 +181,18 @@ p_surface = "none"
 canopy_top = nan
 
 # ----------------------------------------------------------------------------
-# The urban components: one provider per urban slot, then the additive ones.
-# Every component is off unless its section enables it.
+# The urban components: one section per urban slot, whose selector key names
+# the provider and which holds that provider's options (ONE-m, #476), then
+# the additive components, each off unless its section enables it.
 # ----------------------------------------------------------------------------
 
-[core_boussinesq]
-# provider `boussinesq` of the dynamical core (slot `core`)
-enabled = true
+[core]
+# the dynamical core (urban slot): provider `boussinesq`
+model = "boussinesq"
 
-[core_anelastic]
-# provider `anelastic` of the dynamical core (slot `core`)
-enabled = false
-
-[core_pseudo_incompressible]
-# provider `pseudo_incompressible` of the dynamical core (slot `core`)
-enabled = false
-
-[timestep_adaptive]
-# provider `adaptive` of the time stepping (slot `timestepper`)
-enabled = true
+[timestep]
+# the time stepping (urban slot): provider `adaptive`
+scheme = "adaptive"
 c_advective = 0.5
 c_diffusive = 0.25
 c_buoyancy = 0.5
@@ -212,126 +205,33 @@ divergence_tol = 1.0e-6
 max_velocity = 50.0
 imex = false
 
-[timestep_fixed]
-# provider `fixed` of the time stepping (slot `timestepper`)
-enabled = false
+[pressure]
+# the pressure solver (urban slot): provider `cosine_fft`
+solver = "cosine_fft"
 
-[timestep_imex]
-# provider `imex` of the time stepping (slot `timestepper`)
-enabled = false
-tol = 1.0e-8
-maxit = 200
-
-[pressure_fft]
-# provider `cosine_fft` of the pressure solver (slot `pressure_solver`)
-enabled = true
-
-[pressure_multigrid]
-# provider `multigrid` of the pressure solver (slot `pressure_solver`)
-enabled = false
-tol = 1.0e-10
-maxcycles = 50
-cycle = "V"
-
-[pressure_mg_cg]
-# provider `mg_cg` of the pressure solver (slot `pressure_solver`)
-enabled = false
-tol = 1.0e-10
-maxit = 200
-
-[pressure_density_direct]
-# provider `density_weighted_direct` of the pressure solver (slot `pressure_solver`)
-enabled = false
-
-[pressure_density_weighted]
-# provider `density_weighted_cg` of the pressure solver (slot `pressure_solver`)
-enabled = false
-tol = 1.0e-10
-maxit = 500
-
-[momentum_centered]
-# provider `centered` of the momentum advection (slot `momentum_advection`)
-enabled = true
-
-[momentum_weno_z]
-# provider `weno_z` of the momentum advection (slot `momentum_advection`)
-enabled = false
-order = 5
+[momentum_advection]
+# the momentum advection (urban slot): provider `centered`
+scheme = "centered"
 
 [scalar_advection]
-# provider `advection_schemes` of the tracers' transport (slot `scalar_advection`)
-enabled = true
+# the tracers' transport (urban slot): provider `advection_schemes`
+model = "advection_schemes"
 scheme = "weno_z5"
 positivity = true
 refresh_halos = true
 weighted = true
 sgs_diffusion = true
 
-[sgs_amd]
-# provider `amd` of the subgrid-scale closure (slot `sgs`)
-enabled = false
-c = 0.3
-stress = "symmetric"
-
-[sgs_dynamic]
-# provider `dynamic` of the subgrid-scale closure (slot `sgs`)
-enabled = false
-averaging = "lagrangian"
-scale_dependent = true
-cadence = 4
-filter_ratio = 3.0
-cs_max = 0.5
-stress = "symmetric"
-scalar_tensor = "diagonal"
-diapycnal = "none"
-slope_max = 1.0
-
-[sgs_mlsgs]
-# provider `mlsgs` of the subgrid-scale closure (slot `sgs`)
-enabled = false
-fn = "none"
-stress = "symmetric"
-scalar_tensor = "diagonal"
-diapycnal = "none"
-slope_max = 1.0
-
-[sgs_reynolds_stress]
-# provider `reynolds_stress` of the subgrid-scale closure (slot `sgs`)
-enabled = false
+[sgs]
+# the subgrid-scale closure (urban slot): provider `tke`
+model = "tke"
 wall_cap = true
 surface = true
 e_min = 0.0001
-
-[sgs_sigma]
-# provider `sigma` of the subgrid-scale closure (slot `sgs`)
-enabled = false
-c_sigma = 1.35
-stress = "symmetric"
-
-[sgs_smagorinsky]
-# provider `smagorinsky` of the subgrid-scale closure (slot `sgs`)
-enabled = false
-stress = "symmetric"
-scalar_tensor = "diagonal"
-diapycnal = "none"
-slope_max = 1.0
-
-[sgs_tke]
-# provider `tke` of the subgrid-scale closure (slot `sgs`)
-enabled = true
-wall_cap = true
-surface = true
-e_min = 0.0001
-
-[sgs_vreman]
-# provider `vreman` of the subgrid-scale closure (slot `sgs`)
-enabled = false
-c_s = "none"
-stress = "symmetric"
 
 [surface_exchange]
-# provider `most` of the surface exchange (slot `surface_exchange`)
-enabled = true
+# the surface exchange (urban slot): provider `most`
+model = "most"
 u_min = 0.1
 z0h_ratio = 0.1
 period = "none"
@@ -346,9 +246,9 @@ dynamic_filter = "spectral"
 dynamic_c_d = 1.0
 z0m = {1 = 0.05, 2 = 0.05, 3 = 0.1, 4 = 0.0001, 5 = 0.05, 6 = 0.01}
 
-[ground_soil]
-# provider `soil_column` of the ground (slot `ground`)
-enabled = true
+[ground]
+# the ground (urban slot): provider `soil_column`
+model = "soil_column"
 classes = [1, 5, 3]
 theta0 = {1 = 0.1, 3 = 0.25, 5 = 0.1}
 texture = "loam"
@@ -356,9 +256,9 @@ sand = 40
 clay = 20
 nlayers = 10
 
-[radiosity_sun]
-# provider `radiosity` of the surface radiation (slot `surface_radiation`)
-enabled = true
+[surface_radiation]
+# the surface radiation (urban slot): provider `radiosity`
+model = "radiosity"
 aod380 = 0.24
 aod500 = 0.16
 precipitable_water = 2.0
@@ -366,24 +266,24 @@ ozone = 0.33
 albedo = 0.15
 
 [column_radiation]
-# provider `twostream` of the column radiation (slot `column_radiation`)
-enabled = true
+# the column radiation (urban slot): provider `twostream`
+model = "twostream"
 nz_upper = 60
 r_eff_liq = 10.0
 surface_sw = "twostream"
 p_surf = "none"
 
-[buildings_citymean]
-# provider `citymean` of the buildings (slot `buildings`)
-enabled = true
+[buildings]
+# the buildings (urban slot): provider `citymean`
+model = "citymean"
 
-[glass]
-# provider `glass_class` of the glazing (slot `glazing`)
-enabled = true
+[glazing]
+# the glazing (urban slot): provider `glass_class`
+model = "glass_class"
 
-[aq_chem]
-# provider `nox_o3_voc` of the chemistry (slot `chemistry`)
-enabled = true
+[chemistry]
+# the chemistry (urban slot): provider `aq_chem`
+scheme = "aq_chem"
 background = {HNO3 = 0.5, NOx = 5.5, Ox = 45.0, VOC = 0.5}
 nox_street = 2.0e-9
 no2_fraction = 0.1
@@ -393,18 +293,14 @@ nu = 2.0
 z0m = [0.05, 0.05, 0.1, 0.0001, 0.05, 0.01]
 output_3d = ["NO2", "O3"]
 
-[chem_off]
-# provider `off` of the chemistry (slot `chemistry`)
-enabled = false
-
-[micro_kessler]
-# provider `kessler` of the microphysics (slot `microphysics`)
-enabled = true
+[microphysics]
+# the microphysics (urban slot): provider `kessler`
+scheme = "kessler"
 qv_max = 0.03
 
-[ibm]
-# provider `direct_forcing` of the immersed boundary (slot `immersed_boundary`)
-enabled = true
+[immersed_boundary]
+# the immersed boundary (urban slot): provider `direct_forcing`
+method = "direct_forcing"
 
 [cloud_shadow]
 # additive
@@ -449,6 +345,7 @@ buffer = 2
 z_anterp = "canopy"
 tau = "none"
 reflux = true
+budget_exchange = "exchange_term"   # budgets across a nest of [[domain]] blocks (the model's nest engine)
 
 [nesting.parent]
 # The nest parent (ParentConfig, #259).

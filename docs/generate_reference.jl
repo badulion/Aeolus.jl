@@ -18,8 +18,7 @@ import Aeolus.InputDrivers as AeolusInput
 Every schema the option reference documents: the model's (`"model"`) and
 every legacy case's.
 """
-reference_drivers() = sort!(unique!(vcat(AeolusConfig.MODEL, "urban_parent",
-                                         Aeolus.RunDrivers.DRIVER_NAMES)))
+reference_drivers() = sort!(unique!([AeolusConfig.MODEL, "urban_parent"]))
 
 const _REF_INPUT = normpath(joinpath(@__DIR__, "..", "examples", "urban", "input"))
 

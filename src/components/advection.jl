@@ -9,14 +9,18 @@ of the momentum and scalar advection `−∂ⱼ(uⱼϕ)` on the staggered grid
 core, run fused with the molecular diffusion, SC-d #404; the
 `ρ̄`-weighted flux form `weighted_momentum_advect!` on the anelastic
 core). The core calls it inside stage 6 of the pipeline; it attaches to no
-stage itself. Every domain has an `:advection` provider.
+stage itself. Every domain has an `:advection` provider: `[advection]
+scheme = "centred"` (the default and only one).
 """
 struct CentredAdvection <: AbstractComponent end
 
 component_name(::Type{CentredAdvection}) = :advection
 section(::Type{CentredAdvection}) = "advection"
-schema(::Type{CentredAdvection}) = Config.section(_ -> nothing, "advection";
-                                                  doc = "The momentum and scalar advection (centred, second order).")
+schema(::Type{CentredAdvection}) =
+    Config.slot_section("advection"; key = "scheme", doc = "The momentum and scalar advection.") do s
+        Config.provider!(s, "centred"; default = [:model], doc = "The second-order centred flux form.")
+    end
+enabled(::Type{CentredAdvection}, opts) = opts.scheme === :centred
 slot(::Type{CentredAdvection}) = :advection
 build(::Type{CentredAdvection}, opts, domain) = CentredAdvection()
 

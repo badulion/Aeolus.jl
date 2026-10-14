@@ -34,11 +34,15 @@
 using Test
 using Printf
 using Aeolus
+# the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
+isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
+using .ChannelCases
 using Aeolus.Fields: interior_view
 using Aeolus.BoundaryConditions: fill_halos!
 
-# the harness is the inflow_fetch run type's (EX-d #441; formerly test/inflow_fetch_harness.jl)
-using Aeolus.RunDrivers.InflowFetchDriver: fetch_precursor, fetch_child, pressure_gradient_bias, nearest_level
+# the harness (a test fixture since ONE-l #475; formerly the inflow_fetch run type)
+isdefined(@__MODULE__, :InflowFetch) || include(joinpath(@__DIR__, "fixtures", "inflow_fetch.jl"))
+using .InflowFetch: fetch_precursor, fetch_child, pressure_gradient_bias, nearest_level
 
 @testset "N-inflow-d: inflow fetch (#266)" begin
 

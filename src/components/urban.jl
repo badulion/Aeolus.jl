@@ -10,8 +10,9 @@
 #   [urban]
 #   enabled = true
 #
-# and one section per urban component it enables (`aeolus options` lists
-# them). The Berlin (Alexanderplatz) case is one configuration of it:
+# one slot section per urban slot naming its provider (`[sgs] model =
+# "tke"`, `[pressure] solver = "cosine_fft"`, ...; ONE-m #476) and one
+# section per additive component it enables (`aeolus options` lists them). The Berlin (Alexanderplatz) case is one configuration of it:
 #
 #   julia --project -m Aeolus run examples/urban/berlin_summer.toml
 #
@@ -33,6 +34,7 @@
 #                catalogue, its checkpoint, and its sections of the
 #                model's configuration schema.
 #   parent/      the nest parent: its tiled land-use surface, its config,
+#                its physics as components of its domain (NEST-p1, #481),
 #                the parent case (run by the :nesting component).
 #
 # The physics itself lives in the other modules of `src/`. A coupling only
@@ -96,8 +98,9 @@ registry), in the order `build_case` builds them (and of the `init!`
 calls of equal `init_priority`); within a stage the case's domain orders
 them by their declared stage order, then by name. Per slot the
 alternatives, in the order the smoke matrix tries them when it moves a
-slot to its first compatible component. Each has a section of the model's schema; a config enables it
-there.
+slot to its first compatible component. A slot's components are the providers of its slot section
+([`URBAN_SLOT_SECTIONS`](@ref): a config names one with the section's selector key, ONE-m #476); an
+additive component has a section of its own, which enables it.
 """
 const URBAN_COMPONENTS = Type[
     AQChem, NoChem, CityMeanBuildings, CloudShadow, ColumnRadiation,
@@ -134,6 +137,7 @@ all(s -> count(C -> slot(C) === s, URBAN_DEFAULTS) == 1, URBAN_SLOTS) ||
 # parent case (#259)
 include(joinpath(@__DIR__, "urban", "parent", "surface.jl"))
 include(joinpath(@__DIR__, "urban", "parent", "config.jl"))
+include(joinpath(@__DIR__, "urban", "parent", "components.jl"))   # its physics as components (NEST-p1, #481)
 include(joinpath(@__DIR__, "urban", "parent", "case.jl"))
 include(joinpath(@__DIR__, "urban", "site", "restart.jl"))      # checkpoint / restart of the site (#269)
 
@@ -143,7 +147,7 @@ include(joinpath(@__DIR__, "urban", "site", "config_schema.jl"))
 include(joinpath(@__DIR__, "urban", "site", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
 export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, parent_results, case_state, build_case, describe,
-       UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_DEFAULTS, selected_components, component_options,
+       UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_SLOT_SECTIONS, URBAN_DEFAULTS, selected_components, component_options,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,
        register_surface_factory!,
@@ -157,6 +161,8 @@ export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, p
        θ_top_gradient, θ_top_bc, TopHeatFlux,
        case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
        ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
+       parent_domain, parent_static_driver, parent_downwelling, TiledUrbanSurface, PrescribedSurfaceFlux,
+       MeanColumnRadiation, SiteSun,
        parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
 
 end # module Urban

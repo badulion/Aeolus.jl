@@ -14,7 +14,7 @@
 # The script this replaces set the flux on a simulation built with
 # θ_flux_bottom = 0, whose surface-flux flag is frozen off at construction,
 # so its land never heated the air; the run type applies the flux (EX-d,
-# #441; test/config_run_drivers.jl).
+# #441; test/config_cases.jl).
 
 schema_version = 2
 
@@ -34,7 +34,7 @@ g = 9.81
 z = "free_slip"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.17
 pr_t = 0.3333333333333333
 
@@ -61,8 +61,10 @@ sw_peak = 800.0
 sw_duration = 10800.0
 lw_down = 340.0
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 5.0
 duration = 10800.0              # 3 h
 

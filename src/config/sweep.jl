@@ -5,7 +5,7 @@
 # those overrides and no [sweep], so it replays as a single run.
 #
 #   [sweep]
-#   axis = [ { key = "sgs.closure", values = ["smagorinsky", "lasd"] },
+#   axis = [ { key = "sgs.model", values = ["smagorinsky", "vreman"] },
 #            { key = "grid.n",      values = [32, 48] } ]          # product
 #
 #   [[sweep.member]]                                  # explicit members

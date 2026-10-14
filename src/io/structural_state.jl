@@ -237,6 +237,142 @@ structural_save_begin(x) = nothing
 @doc (@doc structural_save_begin) structural_restore_begin(x, extra) = nothing
 @doc (@doc structural_save_begin) structural_restore_end(x, extra) = nothing
 
+# --- refresh: a new record into the arrays of the previous one -----------------------
+
+struct _Mismatch <: Exception end
+
+mutable struct _RefreshCtx
+    ids::IdDict{Any,Int}
+    seen::Dict{Int,Any}
+    n::Int
+    deferred::Vector{Any}          # (live IdDict, its record)
+end
+
+"""
+    refresh_structural_state!(state, x) -> StructuralState
+
+The [`structural_state`](@ref) of `x` now, written into the arrays of
+`state`, an earlier record of the same object graph: the walk is the
+same, every array is copied into the record's copy of it, and nothing is
+allocated for an unchanged graph (what a nest's window-start snapshot
+needs every window, NEST-p2 #482). When the graph changed (an array
+resized or replaced, a member swapped, a dictionary with other keys),
+a fresh `structural_state(x)` is returned instead. Either way the result
+restores exactly as `structural_state(x)` would.
+"""
+function refresh_structural_state!(s::StructuralState, x)
+    string(typeof(x)) == s.type || return structural_state(x)
+    c = _RefreshCtx(IdDict{Any,Int}(), Dict{Int,Any}(), s.objects, Any[])
+    try
+        _refresh(x, s.root, c) === s.root || return structural_state(x)
+        # the identity dictionaries: their entries re-recorded against the walk
+        sc = _SaveCtx(c.ids, c.n, 0, Any[])
+        for (d, e) in c.deferred
+            empty!(e.pairs)
+            for (k, v) in d
+                push!(e.pairs, (_save(k, sc), _save(v, sc)))
+            end
+        end
+        i = 0
+        while i < length(sc.deferred)              # an entry that reached a new identity dictionary
+            i += 1
+            d, e = sc.deferred[i]
+            for (k, v) in d
+                push!(e.pairs, (_save(k, sc), _save(v, sc)))
+            end
+        end
+        return StructuralState(s.format, s.type, s.root, sc.n, s.bytes + sc.bytes)
+    catch err
+        err isa _Mismatch || rethrow()
+        return structural_state(x)
+    end
+end
+
+# the record node of the live value `x` at the place of record `e` (`e`
+# itself, refreshed in place; a leaf may be a new one); throws _Mismatch
+function _claim_live!(c::_RefreshCtx, id::Int, x)
+    get(c.ids, x, id) == id || throw(_Mismatch())
+    haskey(c.seen, id) && throw(_Mismatch())
+    c.ids[x] = id; c.seen[id] = x
+    return nothing
+end
+
+function _refresh(x, e::_SLeaf, c::_RefreshCtx)
+    (x isa Ptr || !_leaf(x)) && throw(_Mismatch())
+    return isequal(x, e.v) && typeof(x) === typeof(e.v) ? e : _SLeaf(x)
+end
+_refresh(x, e::_SOpaque, c::_RefreshCtx) =
+    x isa Ptr || (!_leaf(x) && checkpoint_opaque(x)) ? e : throw(_Mismatch())
+_refresh(x, e::_SUndef, c::_RefreshCtx) = throw(_Mismatch())
+function _refresh(x, e::_SRef, c::_RefreshCtx)
+    get(c.seen, e.id, nothing) === x || throw(_Mismatch())
+    return e
+end
+function _refresh(x, e::_SPlain, c::_RefreshCtx)
+    (x isa Array && typeof(x) === typeof(e.a) && size(x) == size(e.a)) || throw(_Mismatch())
+    _claim_live!(c, e.id, x)
+    copyto!(e.a, x)
+    return e
+end
+function _refresh(x, e::_SArray, c::_RefreshCtx)
+    (typeof(x) === e.T && size(x) == e.dims) || throw(_Mismatch())
+    _claim_live!(c, e.id, x)
+    for i in eachindex(e.elems)
+        el = e.elems[i]
+        if !isassigned(x, i)
+            el isa _SUndef || throw(_Mismatch())
+            continue
+        end
+        el isa _SUndef && throw(_Mismatch())
+        e.elems[i] = _refresh(x[i], el, c)
+    end
+    return e
+end
+function _refresh(x, e::_SDict, c::_RefreshCtx)
+    typeof(x) === e.T || throw(_Mismatch())
+    (length(x) == length(e.keys) && all(k -> haskey(x, k), e.keys)) || throw(_Mismatch())
+    _claim_live!(c, e.id, x)
+    for i in eachindex(e.keys)
+        e.vals[i] = _refresh(x[e.keys[i]], e.vals[i], c)
+    end
+    return e
+end
+function _refresh(x, e::_SIdDict, c::_RefreshCtx)
+    typeof(x) === e.T || throw(_Mismatch())
+    _claim_live!(c, e.id, x)
+    push!(c.deferred, (x, e))
+    return e
+end
+function _refresh(x, e::_SStruct, c::_RefreshCtx)
+    T = typeof(x)
+    T === e.T || throw(_Mismatch())
+    if e.id == 0
+        ismutable(x) && throw(_Mismatch())
+    else
+        _claim_live!(c, e.id, x)
+    end
+    mut = ismutable(x)
+    extra = mut ? structural_save_begin(x) : nothing
+    try
+        isequal(extra, e.extra) || throw(_Mismatch())
+        for i in eachindex(e.fields)
+            fe = e.fields[i]
+            if !isdefined(x, i)
+                fe isa _SUndef || throw(_Mismatch())
+                continue
+            end
+            if fe isa _SOpaque && mut && Base.isfieldatomic(T, i)
+                continue
+            end
+            fe isa _SUndef && throw(_Mismatch())
+            e.fields[i] = _refresh(getfield(x, i), fe, c)
+        end
+    finally
+        mut && structural_save_end(x, extra)
+    end
+    return e
+end
+
 # --- restore ------------------------------------------------------------------------
 
 mutable struct _RestoreCtx

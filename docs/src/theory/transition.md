@@ -976,8 +976,9 @@ variances, which add one second-moment pass per level). With ``τ_{\rm avg}`` = 
 cadence of tens of seconds of parent time is enough.
 
 **A convective Aeolus parent** (`examples/cbl_inflow_statistics/cbl_inflow_statistics.toml`,
-the `cbl` run type with `[inflow_statistics]`; `examples/cbl_inflow_statistics/report_cbl_inflow_statistics.jl`
-prints the table from its `results.toml`).
+the model with `[sgs] model = "tke"` and the `[inflow_statistics]` component, ONE-l #475;
+`examples/cbl_inflow_statistics/report_cbl_inflow_statistics.jl` prints the table from the last
+record of its `output.nc`).
 The parent is the 64³ CBL of `examples/cbl_tke/cbl_tke.toml`: ``Δx = 50`` m,
 ``Δz = 25`` m, ``Q = 0.1`` K m/s, Deardorff–Moeng TKE, 2 h, ``z_i = 1175`` m,
 ``w_* = 1.57`` m/s. The last 30 min are folded into the running mean
@@ -1211,10 +1212,12 @@ The orderings DF < FSD in both moments and in the total stress, and
 |bias| DF < FSD < off, held in every realisation, and they are what the
 CI case asserts.
 
-Example (`examples/inflow_fetch/inflow_fetch.toml`, the `inflow_fetch` run type;
-`examples/inflow_fetch/plot_inflow_fetch.jl` prints the tables and writes the figures; 15δ child, spanwise
-periodic, averaged ``10δ/u_*``, about 11 min), ratios to the child-grid reference and
-development lengths (δ) to 10 % / 20 %:
+The former example (the `inflow_fetch` run type, dropped with the channel
+cases in ONE-l #475: it ran on the periodic, pressure-driven half channel;
+its harness is the test fixture `test/fixtures/inflow_fetch.jl` of
+`test/era6_inflow_fetch.jl`; 15δ child, spanwise periodic, averaged
+``10δ/u_*``, about 11 min) gave these ratios to the child-grid reference
+and development lengths (δ) to 10 % / 20 %:
 
 | run | TKE 0.22δ at x = 1, 3, 5, 10, 14δ | TKE 0.47δ | L₁₀ TKE 0.22δ / 0.47δ | L₁₀ −u'w' 0.22δ / 0.47δ |
 | :-- | :-- | :-- | :-- | :-- |

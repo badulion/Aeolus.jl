@@ -6,7 +6,8 @@
 """
     SurfaceLayer
 
-The `:surface` slot's Monin–Obukhov surface layer, `[surface_layer]`:
+The `:surface` slot's Monin–Obukhov surface layer, `[surface] model =
+"most"` (ONE-m, #476; formerly `[surface_layer] enabled`):
 every column solves similarity theory (`SurfaceExchange.solve_surface_layer`)
 between the first-level wind and θ (at ``Δz/2``) and the prescribed
 surface temperature ``θ_s(t)``, with the roughness lengths `z0m`, `z0h`
@@ -56,7 +57,7 @@ struct SurfaceLayer{S<:AbstractStabilityFunctions, TS, W, L} <: AbstractComponen
 end
 
 component_name(::Type{<:SurfaceLayer}) = :surface_layer
-section(::Type{<:SurfaceLayer}) = "surface_layer"
+section(::Type{<:SurfaceLayer}) = "surface"
 slot(::Type{<:SurfaceLayer}) = :surface
 
 const _SL_TEMPERATURE_KEYS = Dict("constant" => ["value"], "cooling_rate" => ["initial", "rate_per_hour"],
@@ -95,10 +96,10 @@ function _sl_stability_problems(t)
 end
 
 schema(::Type{<:SurfaceLayer}) =
-    Config.section("surface_layer";
-                   doc = "The Monin-Obukhov surface layer over a prescribed surface temperature (SurfaceExchange, " *
-                         "WallModels.MOSTWallLaw): the heat flux and the wall stress of every column.") do s
-        Config.option!(s, "enabled", Bool; default = false, doc = "switch the surface layer on")
+    Config.slot_section("surface"; key = "model") do sec
+      Config.provider!(sec, "most";
+                       doc = "The Monin-Obukhov surface layer over a prescribed surface temperature (SurfaceExchange, " *
+                             "WallModels.MOSTWallLaw): the heat flux and the wall stress of every column.") do s
         Config.option!(s, "z0m", Float64; default = 0.1, range = (0, Inf), open_lower = true, units = "m",
                        doc = "momentum roughness length")
         Config.option!(s, "z0h", Config.Optional{Float64}; range = (0, Inf), open_lower = true, units = "m",
@@ -115,14 +116,15 @@ schema(::Type{<:SurfaceLayer}) =
                              "keys left out take the family's defaults")
         Config.option!(s, "rho_cp", Float64; default = 1206.0, range = (0, Inf), open_lower = true,
                        units = "J m^-3 K^-1", doc = "ρ c_p of the surface_heat_flux output (W m⁻²; diagnostic only)")
+      end
     end
-enabled(::Type{<:SurfaceLayer}, opts) = opts.enabled
+enabled(::Type{<:SurfaceLayer}, opts) = opts.model === :most
 
 """
     stability_functions(t::AbstractDict) -> AbstractStabilityFunctions
 
-The `SurfaceExchange` stability functions of a `[surface_layer] stability`
-table: `BusingerDyerLogLinear` (`beta` sets both slopes, `beta_m`,
+The `SurfaceExchange` stability functions of a `[surface] stability`
+table (`model = "most"`): `BusingerDyerLogLinear` (`beta` sets both slopes, `beta_m`,
 `beta_h` each) or `BusingerDyerBeljaarsHoltslag`, keys left out at the
 family's defaults.
 """
@@ -150,11 +152,11 @@ function _surface_series(t, domain)
         return SurfaceTemperatureSeries([t0, t0 + 86400.0], [T0, T0 - r * 86400])
     end
     dyn = get(domain.drivers, :dynamic, nothing)
-    dyn === nothing && throw(ConfigError("surface_layer.temperature",
+    dyn === nothing && throw(ConfigError("surface.temperature",
                                          "kind = \"driver\" reads the domain's dynamic driver, which the domain has not"))
     s = dyn.surface
     (s === nothing || s.temperature === nothing) &&
-        throw(ConfigError("surface_layer.temperature", "the dynamic driver has no sfc_temperature series"))
+        throw(ConfigError("surface.temperature", "the dynamic driver has no sfc_temperature series"))
     return SurfaceTemperatureSeries(s.t .+ t0, s.temperature)
 end
 
@@ -203,6 +205,9 @@ function run_stage!(c::SurfaceLayer, d, ::Val{:surface_flux}, dt)
     c.τ[3] = 0.0; c.τ[4] = 0.0; c.nsub[] = 0
     return nothing
 end
+
+# the u* of the step's solve: the surface value of a TKE closure ([sgs] surface_value)
+surface_friction_velocity(c::SurfaceLayer, d) = c.ustar
 
 # stage 6: the heat flux into the first level, every (sub)step
 function run_stage!(c::SurfaceLayer, d, ::Val{:tendencies}, dt)
@@ -325,12 +330,10 @@ end
 
 const _SL_OUTPUTS = ("u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "surface_temperature",
                      "theta_2m", "wind_10m", "bl_height", "jet_speed", "jet_height", "inversion_height",
-                     "wind_speed_profile", "stress_profile", "heat_flux_profile")
+                     "wind_speed_profile", "stress_profile")
 
 output_names(::Type{<:SurfaceLayer}, opts) = _SL_OUTPUTS
 
-# a face profile (Nz + 1) at the cell centres: the mean of the two faces
-_centred(f) = [(f[k] + f[k+1]) / 2 for k in 1:length(f)-1]
 
 function outputs(c::SurfaceLayer)
     sl(d) = c
@@ -361,9 +364,8 @@ function outputs(c::SurfaceLayer)
         OutputVariable("wind_speed_profile", "m s-1", "speed of the plane-mean wind", :z,
                        d -> _cached_profiles(sl(d), d).S),
         OutputVariable("stress_profile", "m2 s-2", "total (resolved + SGS) downward momentum flux magnitude, at the cell centres",
-                       :z, d -> _centred(_cached_profiles(sl(d), d).τ)),
-        OutputVariable("heat_flux_profile", "K m s-1", "total (resolved + SGS) upward heat flux, at the cell centres",
-                       :z, d -> _centred(_cached_profiles(sl(d), d).wθ))]
+                       :z, d -> _centred(_cached_profiles(sl(d), d).τ))]
+# (its total heat-flux profile is the core's heat_flux_profile, with its surface flux at the bottom face)
 end
 
 # a restart continues the surface layer of the last step bit for bit
@@ -379,3 +381,6 @@ function restore_checkpoint_state!(c::SurfaceLayer, s)
     c.nsub[] = s.nsub; c.t_surf[] = s.t_surf
     return c
 end
+
+# the plane mean of the per-column surface flux of the step (the TKE closure's surface buoyancy)
+wall_theta_flux(c::SurfaceLayer, d) = (sum(c.wθ) / length(c.wθ), 0.0)

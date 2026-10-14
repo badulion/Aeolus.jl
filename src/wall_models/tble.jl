@@ -797,3 +797,15 @@ function _dynamic_kappa!(wm, w, sim, side, mask, Δt)
     wm.κ_feedback && (w.κ = w.κ_dyn)
     return w
 end
+
+# plane means of the interior of u and v
+function _uv_means(sim)
+    g = sim.mesh
+    Nx, Ny, Nz, Hx, Hy, Hz = g.Nx, g.Ny, g.Nz, g.Hx, g.Hy, g.Hz
+    um = zeros(Nz); vm = zeros(Nz)
+    @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
+        um[k] += sim.u.data[Hx+i, Hy+j, Hz+k]
+        vm[k] += sim.v.data[Hx+i, Hy+j, Hz+k]
+    end
+    return um ./ (Nx * Ny), vm ./ (Nx * Ny)
+end

@@ -27,7 +27,7 @@ theta0 = 0.0                    # no buoyancy
 z = "free_slip"
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.17
 pr_t = 0.3333333333333333
 
@@ -35,8 +35,10 @@ pr_t = 0.3333333333333333
 u = { kind = "constant", value = 1.0 }
 velocity_perturbation = { kind = "uniform", amplitude = 0.05 }
 
-[time]
+[timestep]
 scheme = "euler"
+
+[time]
 dt = 0.015625                   # min(0.3 Δx / 1.2, 0.4 Δz² / 2ν)
 duration = 2.0
 

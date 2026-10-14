@@ -9,10 +9,12 @@
 const _NEST_CHECKS_DOC = """
 the first domain is the root (no `parent`); every later domain names an earlier one as its `parent`
 a root has no `origin` or `refinement`, and `feedback` stays two_way (it has no parent); a nested domain gives both
-a nested model takes a fixed `time.dt` (the children subcycle max(refinement) substeps per parent step) and measures no budgets (no `budget_*` output, no closure check)
-every domain of a nested model runs the boussinesq core on a uniform grid between z walls
+a nested model steps every domain with `time.dt`: a fixed dt (each child takes max(refinement) substeps per step of its parent) or adaptive (the root picks its step, each child the smallest whole number of equal substeps that keeps it stable; a failed step retries the window); with `[nesting] budget_exchange = "off"` it measures no budgets (no `budget_*` output, no closure check); with `"exchange_term"` (the default) each domain closes its own, with one nest-exchange term per quantity
+every domain of a nested model runs the boussinesq or the anelastic core (mixed freely, two-way included: a conservative density conversion in the boundary data and the feedback) on a uniform grid between z walls; an anelastic nested domain needs [timestep] scheme = "euler" (its SSP-RK3 step takes no open faces), and one nested in an anelastic parent the same dynamics.theta0 and g (one reference profile)
 a nested domain lies inside its parent (origin ≥ 0, origin + grid.extent within the parent's extent, its height at most the parent's), with `grid.size` = `grid.extent` / parent spacing × `refinement`
-a nested domain keeps its parent's `[boundaries]` and `dynamics.moisture`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
+a nested domain may enable `[inflow_turbulence]` (synthetic turbulence on its lateral nest faces, with its parent's resolved statistics: `statistics = "parent_resolved"`, no `length_scale`); the root may not
+every field the nest exchanges (`qv`, the Kessler `ql`, `qr`, the tracer) exists in a nested domain exactly when it exists in its parent (the PALM rule; a nested domain could carry an extra field only with its own dynamic driver giving its boundary values, and has none yet)
+a nested domain keeps its parent's `[boundaries]`, has no `dynamic_driver` and none of the couplings ([forcing], [surface], [microphysics], [tracer], [particles], [obstacles])"""
 
 "Whether `cfg` is a nested model (several domains)."
 _nested(cfg) = length(config_domains(cfg)) > 1
@@ -21,6 +23,15 @@ _nested(cfg) = length(config_domains(cfg)) > 1
 function _nest_domain_checks(cfg)
     e = ConfigError[]
     dom = cfg.domain
+    it = cfg.inflow_turbulence
+    if it.enabled
+        dom.parent === nothing &&
+            push!(e, ConfigError("inflow_turbulence.enabled", "synthetic inflow turbulence perturbs a nested domain's lateral nest faces; the root has none"))
+        it.statistics === :parent_resolved ||
+            push!(e, ConfigError("inflow_turbulence.statistics", "a nested domain's inflow statistics are its parent's resolved ones (parent_resolved)"))
+        isnan(it.length_scale) ||
+            push!(e, ConfigError("inflow_turbulence.length_scale", "belongs to the parametrized statistics; a nested domain measures its lengths on its parent"))
+    end
     if dom.parent === nothing
         dom.origin === nothing ||
             push!(e, ConfigError("domain.origin", "the root domain (no parent) has no origin in a parent"))
@@ -66,18 +77,20 @@ function _nest_checks(cfg)
         end
     end
     n == 1 && return e
-    cfg.time.dt === :adaptive &&
-        push!(e, ConfigError("time.dt", "a nested model takes a fixed dt: each child subcycles max(refinement) substeps per step of its parent"))
-    for v in cfg.output.variables
-        haskey(Components.BUDGET_OUTPUTS, v) &&
-            push!(e, ConfigError("output.variables", "$v: a nested model measures no budgets (the two-way feedback is outside every stage)"))
-    end
-    for c in Components.check_budgets(_published_enabled(cfg)) |> unique
-        push!(e, ConfigError("checks", "the closure checks measure budgets, which a nested model does not (:$c)"))
+    if ds[1].nesting.budget_exchange === :off
+        for v in cfg.output.variables
+            haskey(Components.BUDGET_OUTPUTS, v) &&
+                push!(e, ConfigError("output.variables", "$v: with [nesting] budget_exchange = \"off\" a nested model measures no budgets"))
+        end
+        for c in Components.check_budgets(_published_enabled(cfg)) |> unique
+            push!(e, ConfigError("checks", "the closure checks measure budgets, which a nested model with [nesting] budget_exchange = \"off\" does not (:$c)"))
+        end
     end
     for (i, d) in enumerate(ds)
-        d.dynamics.core === :boussinesq ||
-            push!(e, ConfigError(key(i, "dynamics.core"), "a nested model runs the boussinesq core (the anelastic children would share their parent's reference profile)"))
+        d.core.model in (:boussinesq, :anelastic) ||
+            push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq or the anelastic core"))
+        i > 1 && d.core.model === :anelastic && cfg.timestep.scheme === :rk3 &&
+            push!(e, ConfigError(key(i, "core.model"), "an anelastic nested domain has open (nest) faces, which the anelastic SSP-RK3 step does not take: step the nest with [timestep] scheme = \"euler\""))
         d.grid.stretching === :uniform ||
             push!(e, ConfigError(key(i, "grid.stretching"), "a nested model takes uniform grids"))
         d.boundaries.z === :periodic &&
@@ -102,15 +115,94 @@ function _nest_checks(cfg)
         end
         g.extent[3] <= pg.extent[3] * (1 + 1e-12) ||
             push!(e, ConfigError(key(i, "grid.extent"), "the domain is $(g.extent[3]) m high, its parent $(pg.extent[3]) m"))
+        # two anelastic domains share one reference profile (their transfers use its mass measure)
+        (d.core.model === :anelastic && p.core.model === :anelastic &&
+         (d.dynamics.theta0 != p.dynamics.theta0 || d.dynamics.g != p.dynamics.g)) &&
+            push!(e, ConfigError(key(i, "dynamics.theta0"), "an anelastic domain nested in an anelastic parent shares its reference profile: " *
+                                                           "the same dynamics.theta0 and dynamics.g (parent $(p.dynamics.theta0), $(p.dynamics.g))"))
         for ax in ("x", "y", "z")
             d.boundaries[ax] === p.boundaries[ax] ||
                 push!(e, ConfigError(key(i, "boundaries.$ax"), "a nested domain keeps its parent's faces ($(p.boundaries[ax])): " *
                                                               "its lateral faces are nest faces, its ground the parent's"))
         end
-        d.dynamics.moisture == p.dynamics.moisture ||
-            push!(e, ConfigError(key(i, "dynamics.moisture"), "a nested domain carries qv exactly when its parent does"))
+        # the PALM rule (Hellsten et al. 2021, §3.1), with the driver exception
+        fc = _exchanged_fields(domain_view(cfg, i)); fp = _exchanged_fields(domain_view(cfg, j))
+        for (f, k) in fp
+            haskey(fc, f) ||
+                push!(e, ConfigError(key(i, k), "domain \"$(ids[i])\" carries no $f, its parent \"$(ids[j])\" does: every field " *
+                                                "the nest exchanges exists in the parent and the child (the PALM rule)"))
+        end
+        for (f, k) in fc
+            haskey(fp, f) ||
+                push!(e, ConfigError(key(i, k), "domain \"$(ids[i])\" carries $f, its parent \"$(ids[j])\" does not: a nested domain " *
+                                                "carries a field its parent lacks only when its own dynamic driver gives that " *
+                                                "field's boundary values (a nested domain has no dynamic driver yet)"))
+        end
     end
     return e
+end
+
+"""
+    _exchanged_fields(v) -> Dict{String,String}
+
+The fields the nest exchanges besides `u, v, w, θ` for the domain view
+`v`, each with the config key that switches it on: `qv`
+(`dynamics.moisture`), the Kessler water `ql`, `qr` (`[microphysics]`)
+and the passive tracer (`[tracer]`). The nest checks them against the
+parent's (the PALM rule).
+"""
+function _exchanged_fields(v)
+    out = Dict{String,String}()
+    v.dynamics.moisture && (out["qv"] = "dynamics.moisture")
+    if _microphysics(v) !== :none
+        out["ql"] = "microphysics.model"; out["qr"] = "microphysics.model"
+    end
+    v.tracer.enabled && (out["tracer"] = "tracer.enabled")
+    return out
+end
+
+"""
+    NEST_SMOOTH_RATIO
+
+The horizontal refinement from which a nested domain's parent counts as
+much smoother than the domain (3): the parent resolves none of the
+eddies between its spacing and three of the child's, so without synthetic
+inflow turbulence the child's inflow enters laminar and needs a long fetch
+to develop them (Kadasch et al. 2021, §2.4; Hellsten et al. 2021, §3.3).
+"""
+const NEST_SMOOTH_RATIO = 3
+
+"""
+    nest_handover_warnings(cfg) -> Vector{String}
+
+The subgrid handover warnings of a nested config (NEST-p2, #482): a
+nested domain with a lateral nest face that refines its parent
+horizontally by [`NEST_SMOOTH_RATIO`](@ref) or more and has no
+`[inflow_turbulence]`. The build logs each with `@warn`. (The nest passes
+resolved fields only; the SGS model may differ per domain: a TKE field on
+one side only is not exchanged — the child's `e` takes a zero-gradient
+value at its nest faces, a parent's `e` under the child is not fed back.)
+"""
+function nest_handover_warnings(cfg)
+    ds = config_domains(cfg)
+    out = String[]
+    for i in 2:length(ds)
+        d = domain_view(cfg, i)
+        r = d.domain.refinement
+        r === nothing && continue
+        pv = domain_view(cfg, findfirst(x -> x.domain.id == d.domain.parent, ds))
+        # a lateral nest face: an axis the domain does not span (or one its parent does not wrap)
+        lateral = any(a -> d.grid.extent[a] < pv.grid.extent[a] * (1 - 1e-12) ||
+                           pv.boundaries[("x", "y")[a]] !== :periodic, 1:2)
+        rh = max(r[1], r[2])
+        if lateral && rh >= NEST_SMOOTH_RATIO && !d.inflow_turbulence.enabled
+            push!(out, "domain \"$(d.domain.id)\" refines its parent \"$(d.domain.parent)\" by $rh horizontally " *
+                       "(its sgs model $(d.sgs.model), the parent's $(pv.sgs.model)) " *
+                       "and has no [inflow_turbulence]: the parent is much smoother, and the inflow enters without " *
+                       "the eddies between the two spacings (enable [inflow_turbulence] in its [[domain]] block)")
+        end
+    end
+    return out
 end
 
 # ---------------------------------------------------------------------------
@@ -148,6 +240,7 @@ end
 # be (its own [initial], components and couplings), the children on their
 # nests' child meshes with nest faces, coupled by Components.nested_model.
 function _build_nested(cfg)
+    foreach(w -> @warn(w), nest_handover_warnings(cfg))
     ds = config_domains(cfg)
     n = length(ds)
     ids = [d.domain.id for d in ds]
@@ -163,10 +256,14 @@ function _build_nested(cfg)
         nest = _nest_grid(v, Components.grid(doms[j]))
         bcs = _nest_child_bcs(v, domain_view(cfg, j), nest)
         push!(doms, _build_domain(v; mesh = nest.child_mesh, bcs = bcs))
-        push!(links, Components.NestLink(i, j, nest; feedback = v.domain.feedback))
+        it = v.inflow_turbulence
+        inflow = it.enabled ? (generator = it.generator, u_min = it.u_min, seed = it.seed,
+                               statistics_interval = it.statistics_interval, length_interval = it.length_interval) :
+                 nothing
+        push!(links, Components.NestLink(i, j, nest; feedback = v.domain.feedback, inflow = inflow))
     end
     return try
-        Components.nested_model(Tuple(doms), links)
+        Components.nested_model(Tuple(doms), links; budget_exchange = ds[1].nesting.budget_exchange)
     catch err
         err isa ArgumentError || rethrow()
         throw(ConfigError("domain", err.msg))

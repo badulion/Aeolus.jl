@@ -26,8 +26,10 @@ dynamic_driver = "input/gabls2_dynamic.nc"
 name = "gabls2"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 1.2
 start = 57600.0                # 16 LT 22 Oct (s after 00 LT)
@@ -59,8 +61,8 @@ u_g = 3.0
 v_g = -9.0
 subsidence = true
 
-[surface_layer]
-enabled = true
+[surface]
+model = "most"
 z0m = 0.03
 z0h = 0.003
 temperature = {kind = "driver"}
@@ -68,7 +70,7 @@ stability = {family = "businger_dyer_log_linear", beta = 5.0}
 rho_cp = 1194.0703526801676    # 97200/(287.05 × 285) × 1005
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.1
 pr_t = 0.3333333333333333
 stability = "brown_et_al_1994"

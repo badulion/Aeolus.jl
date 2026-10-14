@@ -17,8 +17,10 @@ dynamic_driver = "input/gabls2_dynamic.nc"
 name = "cases99"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 1.2
 start = 57600.0                # 16 LT 22 Oct (s after 00 LT)
@@ -50,8 +52,8 @@ u_g = 3.0
 v_g = -9.0
 subsidence = true
 
-[surface_layer]
-enabled = true
+[surface]
+model = "most"
 z0m = 0.03
 z0h = 0.003
 temperature = {kind = "driver"}
@@ -64,7 +66,7 @@ window = 300.0
 hours = [18.0, 6.0]
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.1
 pr_t = 0.3333333333333333
 stability = "brown_et_al_1994"

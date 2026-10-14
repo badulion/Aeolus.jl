@@ -47,77 +47,171 @@ for the SGS scalar flux at the interface).
 pipeline_advance(d::Domain) = domain_advance(PipelineCore(d); sgs = sgs_closure(d))
 
 """
-    NestLink(child, parent, nest; feedback = :two_way)
+    NestLink(child, parent, nest; feedback = :two_way, inflow = nothing)
 
 One parent–child pair of a nested model: the domain numbers `child` and
 `parent` (the parent listed first), their `Nesting.NestedGrid` `nest`
 (whose child mesh is the child domain's grid, built with
-`Nesting.nest_bcs`) and the `feedback`, `:two_way` (the self-nesting
-default, the design's decision of 2026-10-09) or `:one_way`.
+`Nesting.nest_bcs`), the `feedback`, `:two_way` (the self-nesting
+default, the design's decision of 2026-10-09) or `:one_way`, and
+`inflow`: `nothing` (the default) or the options of synthetic inflow
+turbulence on the child's lateral nest faces ([`NEST_INFLOW_DEFAULTS`](@ref),
+installed by [`nested_model`](@ref)).
 """
 struct NestLink{N}
     child::Int
     parent::Int
     nest::N
     feedback::Symbol
-    function NestLink(child::Integer, parent::Integer, nest; feedback::Symbol = :two_way)
+    inflow::Union{Nothing,NamedTuple}
+    function NestLink(child::Integer, parent::Integer, nest; feedback::Symbol = :two_way, inflow = nothing)
         feedback in (:one_way, :two_way) ||
             throw(ArgumentError("NestLink: feedback is :one_way or :two_way, got :$feedback"))
         parent < child || throw(ArgumentError("NestLink: a parent is listed before its child " *
                                               "(parent $parent, child $child)"))
-        return new{typeof(nest)}(Int(child), Int(parent), nest, feedback)
+        if inflow !== nothing
+            inflow = merge(NEST_INFLOW_DEFAULTS, NamedTuple(inflow))
+            bad = setdiff(keys(inflow), keys(NEST_INFLOW_DEFAULTS))
+            isempty(bad) || throw(ArgumentError("NestLink: unknown inflow options $(collect(bad)) " *
+                                                "(the options: $(join(keys(NEST_INFLOW_DEFAULTS), ", ")))"))
+            inflow.generator in (:digital_filter, :fsd) ||
+                throw(ArgumentError("NestLink: inflow generator is :digital_filter or :fsd, got :$(inflow.generator)"))
+        end
+        return new{typeof(nest)}(Int(child), Int(parent), nest, feedback, inflow)
     end
 end
 
 """
+    NEST_INFLOW_DEFAULTS
+
+The options of a nest child's synthetic inflow turbulence (the
+`[inflow_turbulence]` of its `[[domain]]` block; N-inflow-e #268, as the
+urban site's): `generator` (`:digital_filter`, Xie & Castro 2008, or
+`:fsd`, the random-mode field swept at the parent's mean wind), `u_min`
+(m s⁻¹, the inflow ramp), `seed` (face `q` takes `seed + q − 1`),
+`statistics_interval` (s of parent time between two folds of the
+parent's resolved statistics into the running means) and
+`length_interval` (s between two rebuilds of the generator's lengths).
+The statistics are always the parent's own (`Transition.ParentResolvedStatistics`
+in scale-gap mode with the nest's refinement, #268): the parent is a
+running domain of the model.
+"""
+const NEST_INFLOW_DEFAULTS = (generator = :digital_filter, u_min = 0.5, seed = 1,
+                              statistics_interval = 60.0, length_interval = 3600.0)
+
+"""
     ModelNest
 
-The nest coupling of a [`Model`](@ref) with several domains:
-`hierarchy`, the `Nesting.NestHierarchy` whose domains are the model's
-cores (domain `i` of the model is domain `i` of the hierarchy, with the
-model's id), and `links`, the [`NestLink`](@ref)s it was built from.
+The nest coupling of a [`Model`](@ref) with several domains, and the one
+nest engine that steps it (NEST-p2, #482; the design is
+`docs/src/design/single_model.md`, "Nesting"): `hierarchy`, the
+`Nesting.NestHierarchy` whose domains are the model's cores (domain `i`
+of the model is domain `i` of the hierarchy, with the model's id) and
+whose links carry the boundary data, flux registers, feedback and
+statistics of every parent–child pair, and `links`, the
+[`NestLink`](@ref)s it was built from.
 
-One `step!(model, dt)` is one root step of the hierarchy (Berger & Oliger
-1984): the root steps through its pipeline, the boundary data of each
-child are prolongated at both ends of that step, every child subcycles
-through its own pipeline to land on the step's end (`max(r)` substeps for
-a refinement `r`, recursively for its own children), and the two-way
-children feed back (anterpolation, interface flux correction,
-Berger–Colella refluxing, re-projection of the parent). The design's
-stages `:nest_sync` (1) and `:nest_feedback` (12) are these two halves of
-the coupling, run by the model around the domains' pipelines.
+One `step!(model, dt)` (or `step_adaptive!(model)`) is one **window**,
+one step of the root (Berger & Oliger 1984), taken by the engine
+([`nest_window!`](@ref)):
+
+ 1. each domain steps through stages 1–11 of its own pipeline;
+ 2. the boundary data of each child are prolongated at both ends of that
+    step, and every child takes `n` equal substeps to land on its end,
+    recursively for its own children (`n` the largest refinement for a
+    fixed step; adaptive, the smallest whole number that keeps the child
+    within its own stability limit, chosen at every window);
+ 3. the two-way children feed back (anterpolation, interface flux
+    correction, Berger–Colella refluxing, one re-projection of the
+    parent): stage 12, `:nest_feedback`;
+ 4. the domain finishes its step with stage 13 (`:budgets`, `:checks`,
+    `:output`), so its budgets close and its checks and output see the
+    state after the feedback.
+
+Engine state: `adaptive` (the root steps adaptively and every child
+picks its `n`), `validate` (a step is checked and a failure retries the
+window, [`nest_window!`](@ref)), `concurrent` (siblings step in
+parallel, and a domain whose children are all one-way steps ahead of
+them, [`nest_prefetches`](@ref); bit for bit the sequential result),
+`max_retries`, the window-start
+snapshot, the per-link `n` of the current window and the floor a retry
+puts on it, each domain's previous step (the growth limit of its
+adaptive pick), and the counters `retries` (windows redone over the run)
+and `last_retries` (in the last window).
 """
-struct ModelNest{H}
+mutable struct ModelNest{H}
     hierarchy::H
     links::Vector{NestLink}
+    adaptive::Bool
+    validate::Bool
+    concurrent::Bool
+    max_retries::Int
+    nfloor::Vector{Int}                       # per hierarchy link: n at least this (a retry)
+    nused::Vector{Int}                        # per hierarchy link: n of the current window
+    dt_prev::Vector{Union{Nothing,Float64}}   # per domain: its last accepted step
+    retries::Int
+    last_retries::Int
+    snapshot::Any                             # the window-start state (IO.StructuralState), or nothing
+    inflow::Vector{Any}                       # per hierarchy link: its Transition.InflowTurbulence, or nothing
 end
 
+ModelNest(h, links::Vector{NestLink}; adaptive::Bool = false, validate::Bool = adaptive,
+          concurrent::Bool = Threads.nthreads() > 1, max_retries::Integer = 3) =
+    ModelNest(h, links, adaptive, validate, concurrent, Int(max_retries), zeros(Int, length(h.links)),
+              zeros(Int, length(h.links)), Union{Nothing,Float64}[nothing for _ in h.domains], 0, 0, nothing,
+              Any[nothing for _ in h.links])
+
 """
-    nested_model(domains::Tuple, links) -> Model
+    nested_model(domains::Tuple, links; max_retries = 3) -> Model
 
 The model of `domains` (the root first) coupled by `links` (a
 [`NestLink`](@ref) per child, in domain order): a [`ModelNest`](@ref)
-whose hierarchy steps every domain through its own pipeline
-([`pipeline_advance`](@ref)), with fixed steps (the root's `dt`; each
-child `max(r)` substeps per step of its parent) and no step rejection (a
-blow-up is the run's sanity check: the blow-up guard inspects every
-domain, [`component_nonfinite_fields`](@ref Aeolus.IO.component_nonfinite_fields),
-a one-way child too). Refused with an `ArgumentError` that
-names the domains: a domain that measures budgets (not attributed across
-the nest's feedback yet), an adaptive domain, a child without a link or
-with two, a child that is not properly nested in its parent, overlapping
-siblings, or a two-way pair without a conservation box or of mixed cores
-(those of `Nesting.add_nest!`).
+whose engine steps every domain through its own pipeline. With fixed
+steps (every domain's `cfl === nothing`) each child takes `max(r)`
+substeps per step of its parent and no step is checked (a blow-up is
+the run's sanity check: the blow-up guard inspects every domain,
+[`component_nonfinite_fields`](@ref Aeolus.IO.component_nonfinite_fields),
+a one-way child too). Adaptive (every domain has a `cfl`), the root
+picks its step and each child the number of substeps it needs, a failed
+step retries the window (up to `max_retries` times,
+[`nest_window!`](@ref)). `concurrent` (default: more than one Julia
+thread): siblings step in parallel and a domain below the root whose
+children are all one-way steps ahead of them ([`nest_prefetches`](@ref)),
+bit for bit the sequential result. `budget_exchange` (`[nesting]
+budget_exchange`): `:exchange_term` (the default) lets the domains
+measure budgets, each closing its own with one nest-exchange term per
+quantity ([`NEST_EXCHANGE`](@ref)); `:off` measures none in a nest.
+Refused with an `ArgumentError` that names the domains: a mix of fixed
+and adaptive domains, a domain that measures budgets under
+`budget_exchange = :off`, a child without
+a link or with two, a child that is not properly nested in its parent,
+overlapping siblings, or a two-way pair without a conservation box
+(those of `Nesting.add_nest!`). A mixed core pair (a Boussinesq domain and
+an anelastic one, either way round, either feedback) is nested with the
+conservative density conversion of `Nesting.NestCoreConversion`, the
+Boussinesq side's density `ρ₀ = p_ref / (R_d θ₀)`.
 """
-function nested_model(domains::Tuple, links)
+function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term,
+                      concurrent::Bool = Threads.nthreads() > 1)
     length(domains) >= 2 || throw(ArgumentError("nested_model: a nest needs two domains or more"))
+    budget_exchange in (:exchange_term, :off) ||
+        throw(ArgumentError("nested_model: budget_exchange is :exchange_term or :off, got :$budget_exchange"))
     n = length(domains)
     for d in domains
-        d.budgets === nothing ||
-            throw(ArgumentError("nested_model: domain $(d.id) measures budgets; budgets across a nest " *
-                                "(the two-way feedback is outside every stage) are not attributed yet"))
-        d.cfl === nothing ||
-            throw(ArgumentError("nested_model: domain $(d.id) steps adaptively; a nested model takes fixed steps"))
+        budget_exchange === :off && d.budgets !== nothing &&
+            throw(ArgumentError("nested_model: domain $(d.id) measures budgets, and budget_exchange = :off books " *
+                                "nothing of the nest: a nest measures budgets with budget_exchange = :exchange_term"))
+    end
+    # every nested domain books what the nest does to it as its nest exchange
+    for d in domains[2:end]
+        d.budgets === nothing || (d.budgets.exchange = NEST_EXCHANGE)
+    end
+    adaptive = domains[1].cfl !== nothing
+    for d in domains
+        (d.cfl !== nothing) == adaptive ||
+            throw(ArgumentError("nested_model: domain $(d.id) " * (adaptive ? "takes fixed steps" : "steps adaptively") *
+                                " and domain $(domains[1].id) " * (adaptive ? "adaptively" : "fixed steps") *
+                                "; the domains of a nest step all adaptively or all with a fixed step"))
     end
     ls = NestLink[links...]
     sort(Int[l.child for l in ls]) == collect(2:n) ||
@@ -132,16 +226,21 @@ function nested_model(domains::Tuple, links)
         c = domains[l.child]
         try
             add_nest!(h, ids[l.parent] => c.state, l.nest; id = ids[l.child], advance = pipeline_advance(c),
-                      cfl = nothing, feedback = l.feedback)
+                      cfl = nothing, feedback = l.feedback,
+                      boussinesq_density = _boussinesq_density(domains[l.parent], c))
         catch e
             e isa ArgumentError || rethrow()
             throw(ArgumentError("nested_model: domain $(c.id) in $(domains[l.parent].id): " * e.msg))
         end
     end
-    return Model(domains, ModelNest(h, ls))
+    mn = ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries, concurrent = concurrent)
+    for l in ls
+        l.inflow === nothing && continue
+        k = h.domains[l.child].up
+        mn.inflow[k] = _install_inflow!(h.links[k], domains[l.parent], domains[l.child], l.inflow)
+    end
+    return Model(domains, mn)
 end
-
-step!(m::Model{<:Tuple,<:ModelNest}, dt::Real) = (step_nested!(m.nest.hierarchy; dt = Float64(dt)); m)
 
 """
     Nesting.nest_link(m::Model, id::AbstractString) -> Nesting.NestedRun
@@ -155,8 +254,49 @@ Nesting.nest_link(m::Model{<:Tuple,<:ModelNest}, id::AbstractString) = Nesting.n
 # A checkpoint of a nested model holds the whole hierarchy: every domain's
 # core and components, both parent time levels of every link, the flux
 # registers and statistics (the structural walk of #269).
-checkpoint_state(n::ModelNest) = structural_state(n.hierarchy)
-restore_checkpoint_state!(n::ModelNest, s) = (restore_structural_state!(n.hierarchy, s); n)
+# The density of the Boussinesq side of a mixed core pair (NaN for a
+# same-core pair): ρ₀ = p_ref / (R_d θ₀), the density its budgets give it.
+_boussinesq_density(p::Domain, c::Domain) =
+    core(p) === core(c) ? NaN : _reference_profiles((core(p) === :boussinesq ? p : c).state).ρ̄[1]
+
+# Synthetic inflow turbulence on the lateral nest faces of a child (#268),
+# with the parent's resolved statistics. They are folded where the parent is
+# at rest, when the engine opens the child's window (statistics_interval =
+# Inf for the faces' own refresh); a two-way feedback skips the inflow band
+# the generator needs (exclude_inflow_feedback!), and leaves the generator's
+# normal perturbation out of the parent's interface faces (#418/#419: the
+# feedback's synthetic_normal_velocity).
+function _install_inflow!(run, pd::Domain, cd::Domain, o::NamedTuple)
+    gen = if o.generator === :digital_filter
+        DigitalFilterGenerator
+    else
+        p = pd.state
+        U = hypot(sum(interior_view(p.u)) / length(interior_view(p.u)),
+                  sum(interior_view(p.v)) / length(interior_view(p.v)))
+        free_stream_generator(; U∞ = max(U, o.u_min))
+    end
+    it = try
+        InflowTurbulence(run; generator = gen, u_min = o.u_min, seed = o.seed,
+                         length_interval = o.length_interval, statistics_interval = Inf,
+                         statistics_kwargs = (closure = sgs_closure(pd),))
+    catch e
+        e isa ArgumentError || rethrow()
+        throw(ArgumentError("nested_model: inflow turbulence on domain $(cd.id): " * e.msg))
+    end
+    exclude_inflow_feedback!(run, it)
+    return it
+end
+
+# The engine's own memory (each domain's last step, the retry counters)
+# travels with it, so an adaptive nest resumes bit for bit.
+checkpoint_state(n::ModelNest) = (hierarchy = structural_state(n.hierarchy), dt_prev = copy(n.dt_prev),
+                                  retries = n.retries)
+function restore_checkpoint_state!(n::ModelNest, s)
+    restore_structural_state!(n.hierarchy, s.hierarchy)
+    copyto!(n.dt_prev, s.dt_prev)
+    n.retries = s.retries
+    return n
+end
 
 # The blow-up guard inspects the run's root core; the child domains are
 # the nest's, so it reports theirs (a one-way child feeds nothing back,

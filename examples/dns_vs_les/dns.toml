@@ -21,8 +21,10 @@ schema_version = 2
 name = "dns"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 1.0
 dt_max = 0.05
@@ -45,7 +47,7 @@ nu = 2.0e-3
 field = {kind = "isotropic_turbulence", spectrum = "passot_pouquet", u_rms = 1.0, k_peak = 1.5, seed = 1}
 
 [sgs]
-closure = "none"
+model = "none"
 
 [output]
 variables = ["kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum"]

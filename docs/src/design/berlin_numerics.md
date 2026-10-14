@@ -3,11 +3,15 @@
 ## Numerics slots
 
 Four exclusive slots swap the numerics of the dynamical core and the
-transport (#132). Each provider is a component with a section of its
-own (the component name in parentheses below): enable the one you want
-and disable the slot's default, e.g. `[pressure_fft] enabled = false`
-and `[pressure_multigrid] enabled = true`; its options are keys of the
-same section (`--set pressure_multigrid.tol=1e-8` on the command line).
+transport (#132). Each slot is one section whose selector key names the
+provider (ONE-m, #476; the component name of each provider in
+parentheses below): `[pressure] solver = "multigrid"`, `[sgs] model =
+"smagorinsky"`, `[momentum_advection] scheme = "weno_z"`,
+`[scalar_advection] model = "advection_schemes"`. The section holds the
+chosen provider's options and no other's (`--set
+pressure.solver="multigrid" --set pressure.tol=1e-8` on the command
+line: a selector set by `--set` drops the file's options of the old
+provider).
 
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
@@ -322,6 +326,9 @@ roughly 50–150 % to a whole step.
 
 Two exclusive slots select the dynamics (#133), both in
 `components/urban/core_select.jl` and `components/urban/timestepper.jl`:
+`[core] model` and `[timestep] scheme` (ONE-m, #476; on an urban site
+these sections offer the providers below, on a domain of the model's
+core `boussinesq` / `anelastic` and `rk3` / `euler`):
 
 | slot | provider | src | what it is |
 | :-- | :-- | :-- | :-- |
@@ -336,12 +343,11 @@ Two exclusive slots select the dynamics (#133), both in
 # a sound-proof core brings its solver (and has no checkpoints yet)
 julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800 \
     --set checkpoint.every_seconds=inf \
-    --set core_boussinesq.enabled=false --set core_anelastic.enabled=true \
-    --set pressure_fft.enabled=false --set pressure_density_direct.enabled=true \
-    --set timestep_adaptive.enabled=false --set timestep_fixed.enabled=true
+    --set core.model=\"anelastic\" --set pressure.solver=\"density_weighted_direct\" \
+    --set timestep.scheme=\"fixed\"
 # 1 h of simulated time with the adaptive step's limits set
 julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800 \
-    --set timestep_adaptive.c_advective=0.5 --set timestep_adaptive.dt_max=10.0
+    --set timestep.c_advective=0.5 --set timestep.dt_max=10.0
 ```
 
 **Stretched vertical grid (#151): a stated exception.** The

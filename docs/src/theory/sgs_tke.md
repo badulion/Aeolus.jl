@@ -246,7 +246,9 @@ mask is not supported on a stretched grid.
 | 500 RK3 steps of decaying turbulence (halo 2 / stratified with walls) | ``e ≥ 0``, ``ν_t ≥ 0``, ``κ_t ≥ ν_t`` throughout; 0 clips |
 | rejected adaptive step (first try committed, then rejected) | ``e``, ``u``, ``θ`` bitwise a direct ``Δt/2`` step |
 
-**Convective boundary layer** ([`tke_cbl`](@ref Aeolus.RunDrivers.CBLDriver.tke_cbl), the `cbl` run type): free convection
+**Convective boundary layer** (`examples/cbl_tke/cbl_tke.toml`, the model with `[sgs] model = "tke"`,
+ONE-l #475; the 24³ CI case is the harness `tke_cbl` of `test/fixtures/tke_cbl.jl`, which the
+configuration reproduces bit for bit, `test/config_cases.jl`): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above
 ``z_{i0}``, periodic laterally, sponge in the top quarter, SSP-RK3 at the
 CFL step.
@@ -492,12 +494,16 @@ Further tests:
 The TKE closure and the Reynolds-stress closure are compared *a priori in
 time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
 Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
-not in this branch's stack). Fixture: the `sgs_decay` run type
-([`Aeolus.RunDrivers.SGSDecayDriver`](@ref), formerly `test/fixtures/sgs_validation.jl`);
-CI test: `test/era6_sgs_validation.jl`; example at 96³:
-`examples/rotating_stratified_decay/rotating_stratified_decay.toml` (tables and figure:
-`examples/rotating_stratified_decay/plot_rotating_stratified_decay.jl`); a wall-bounded case:
-`examples/surface_mounted_cube/surface_mounted_cube_closures.toml` (below).
+not in this branch's stack). Fixture: `test/fixtures/sgs_validation.jl`
+(module `SGSValidation`; it was the `sgs_decay` run type from EX-d #441
+to ONE-l #475); CI test: `test/era6_sgs_validation.jl`. The 96³ example
+and the wall-bounded surface-mounted cube (below) were run types of
+`Aeolus.RunDrivers`; they are not configurations of the model and were
+dropped with it (ONE-l, #475): the filtered-DNS study is the a-priori
+study the single-model design drops (the a-posteriori comparison is
+`examples/dns_vs_les/`), and the cube is a channel case (a periodic
+channel held at its bulk velocity). Their numbers below are the record
+of the runs made before.
 
 **Method.** The P56-c DNS of decaying isotropic turbulence (2π box,
 spun up from a fixed seed to ``t_0 = 2``; see
@@ -626,7 +632,7 @@ and 60–83 s per continuation, LES 0.4–5 s):
   stress), so both closures are outside 2×. At this Re the DNS flux
   spends more of the run counter-gradient.
 
-The figure the example writes (`rotating_stratified_decay_96.svg` in the run folder's `output/`)
+The figure the example wrote (`rotating_stratified_decay_96.svg`)
 has one row per case. The panels are the resolved KE, the SGS energy,
 and the Lumley-triangle trajectory ``(ξ, η) = ((III/6)^{1/3}, (II/6)^{1/2})``
 of the mean invariants. The exact stress sits close to the axisymmetric
@@ -637,11 +643,9 @@ stress starts much closer to the isotropic corner.
 
 ### Surface-mounted cube (example)
 
-`examples/surface_mounted_cube/surface_mounted_cube_closures.toml` (the
-`obstacle_channel` run type, a sweep over the closures; the cube is the
-static driver `input/surface_mounted_cube_static.nc`, and
-`examples/surface_mounted_cube/plot_surface_mounted_cube.jl` draws the figure from the run
-folders) compares the three closures on
+The former `obstacle_channel` run type (EX-d #441 to ONE-l #475, a
+sweep over the closures; dropped with the channel cases) compared the
+three closures on
 the wall-bounded case of Martinuzzi & Tropea (1993): a cube of height
 ``H`` in a channel of height ``2H`` at ``\mathrm{Re}_H = 40\,000``, where
 the mean flow reattaches behind the cube at ``x_R/H = 1.612`` (from the

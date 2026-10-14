@@ -248,7 +248,7 @@ with the same γ, so the two families agree exactly for ``ζ < 0``.
   * ``β_m = 4.8``, ``β_h = 7.8`` — the surface-layer functions prescribed
     by the GABLS1 LES intercomparison (Beare et al. 2006, BLM 118, 247;
     quoted by Basu & Porté-Agel 2006, JAS 63, 2074, §4a), the
-    `[surface_layer] stability` of examples/sbl/gabls1.toml.
+    `[surface] stability` (`model = "most"`) of examples/sbl/gabls1.toml.
 """
 struct BusingerDyerLogLinear{T<:AbstractFloat} <: AbstractStabilityFunctions
     γ_m::T

@@ -82,7 +82,7 @@ using ..Simulations: BoussinesqSimulation, step_rk3!, _dzf, _project_velocity!,
 import ..Simulations: step_record
 using ..RunLog: current_domain, with_domain
 using ..StretchedGrids: StretchedGrid, zfaces, cell_thickness
-using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights,
+using ..Anelastic: MassWeightedSimulation, ReferenceState, constraint_weights, AnelasticWeighting,
                    _project_mass_weighted!
 using ..IBM: SolidMask
 using ..Operators: sgs_closure, sgs_state, restore_sgs_state!, sgs_fields,
@@ -119,7 +119,7 @@ export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        NestHierarchy, add_nest!, nest_domain, nest_link, proper_nesting_violations,
        TwoWayFeedback, NestScalarFlux, NestFluxRegisters, two_way_feedback!,
        anterpolate!, feedback_mask, book_nest_flux!, nest_stage_weights,
-       nest_state, restore_nest_state!, NEST_STATE_VERSION
+       nest_state, restore_nest_state!, NEST_STATE_VERSION, NestCoreConversion, nest_core_conversion
 
 "Simulations a nest can couple: the Boussinesq core (uniform or z-stretched) and the sound-proof `MassWeightedSimulation`s (anelastic, pseudo-incompressible)."
 const _NestSim = Union{BoussinesqSimulation, MassWeightedSimulation}
@@ -133,6 +133,7 @@ include("nesting/measure.jl")
 include("nesting/shell.jl")
 include("nesting/operators.jl")
 include("nesting/interp_state.jl")
+include("nesting/mixed_cores.jl")
 include("nesting/boundary_data.jl")
 include("nesting/step.jl")
 include("nesting/domain_advance.jl")

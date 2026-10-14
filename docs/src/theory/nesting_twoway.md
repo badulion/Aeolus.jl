@@ -321,6 +321,46 @@ the benchmark applies "last hour within 20 % of the hour before" to hours
 25 % between windows (one-way as well), so the neutral criterion uses
 20-turnover windows.
 
+## Mixed cores
+
+A Boussinesq domain and an anelastic one may be nested either way round,
+one-way or two-way (NEST-p2, #482;
+[`NestCoreConversion`](@ref Aeolus.Nesting.NestCoreConversion)). The two
+cores conserve different things: the Boussinesq core the volume flux
+(``\nabla\cdot\mathbf{u} = 0``, its mass ``ρ_0 V`` with the constant
+``ρ_0 = p_{\rm ref}/(R_d θ_0)``), the anelastic core the mass flux
+(``\nabla\cdot(\bar ρ\mathbf{u}) = 0``). Across the interface the
+conserved quantity is the mass flux, and a scalar's flux is that mass flux
+times the (intensive) scalar. The nest therefore measures each side with
+its own density ``W`` (``ρ_0`` or ``\bar ρ(z)``), so that an intensive
+scalar is prolongated and restricted as a mass-weighted mean and a
+constant stays that constant, and converts the velocity. A covered parent
+layer ``K`` of mass ``W_{p,K}\,Δz_K`` with child mass
+``M_{c,K} = \sum W_c Δz_c`` sends the child
+
+```math
+\sum_{c \in K} W_c\, u_c\, Δz_c = W_{p,K}\, u_K\, Δz_K ,
+```
+
+the parent velocity scaled by ``r_K = W_{p,K} Δz_K / M_{c,K}`` before the
+conservative prolongation (``r_f = W_{p,f}/W_{c,f}`` at a horizontal face
+for ``w``), and takes back ``u_K = \sum W_c u_c Δz_c / (W_{p,K} Δz_K)`` in
+the anterpolation and the interface flux correction (the inverse scaling
+around the feedback; a face the feedback leaves alone keeps its value bit
+for bit). The flux registers of both sides book mass fluxes (the
+Boussinesq side's weighted by ``ρ_0``), so the refluxing conserves the
+composite ``\sum W θ V``.
+
+Measured (`test/model_nesting.jl`; a 3.2 km deep parent, 16³ at
+Δ = 200 m, with a 1.6 km deep child at ``r = 2``, where ``\bar ρ/ρ_0``
+differs from 1 by up to 12 % (anelastic parent) and 14 % (anelastic
+child)): the mass flux the boundary data carry through the west plane
+matches the parent's per face patch to ``7\times10^{-16}`` (relative);
+two-way, the composite ``\sum Wθ V`` changes by ``1.0\times10^{-14}``
+and ``8.0\times10^{-15}`` over six windows and the interface mass-flux
+imbalance after the correction is 0. An anelastic child steps with the
+Euler step (the anelastic SSP-RK3 step takes no open faces).
+
 ## Current limits
 
 * Refluxing needs a core with known stage weights in both domains:

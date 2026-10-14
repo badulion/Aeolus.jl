@@ -16,8 +16,10 @@ schema_version = 2
 name = "gabls1"
 seed = 1
 
-[time]
+[timestep]
 scheme = "rk3"
+
+[time]
 dt = "adaptive"
 cfl = 1.2
 duration = 32400.0             # 9 h
@@ -45,8 +47,8 @@ f = 1.39e-4
 u_g = 8.0
 v_g = 0.0
 
-[surface_layer]
-enabled = true
+[surface]
+model = "most"
 z0m = 0.1
 z0h = 0.1
 temperature = {kind = "cooling_rate", initial = 265.0, rate_per_hour = 0.25}
@@ -54,7 +56,7 @@ stability = {family = "businger_dyer_log_linear", beta_m = 4.8, beta_h = 7.8}
 rho_cp = 1306.5                # 1.3 kg m-3 x 1005 J kg-1 K-1 near 263 K
 
 [sgs]
-closure = "smagorinsky"
+model = "smagorinsky"
 c_s = 0.1
 pr_t = 0.3333333333333333
 stability = "brown_et_al_1994" # Brown et al. (1994)
