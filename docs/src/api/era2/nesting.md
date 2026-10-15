@@ -12,13 +12,9 @@ Berger–Colella refluxing, the [`NestSponge`](@ref), the field-set
 [`NestInterpState`](@ref) (velocities, θ, `qv`, extra scalars), and the
 time coupling: [`NestedRun`](@ref), the per-domain
 [`domain_advance`](@ref) closures, [`boundary_time`](@ref) and
-[`step_nested!`](@ref) — or, for a caller that advances the child itself
-(the Berlin case, #265), [`begin_parent_step!`](@ref),
-[`subcycle_dt`](@ref) and [`end_parent_step!`](@ref), with each child
-step bracketed by [`begin_child_step!`](@ref) and [`end_child_step!`](@ref)
-in a two-way run (#267); a one-way parent's next step may run on its own
-task while the child steps ([`prefetch_parent_step!`](@ref),
-[`wait_parent_step!`](@ref), `step_nested!(run, n)`; SC-c #403) — and the child's boundary conditions:
+[`step_nested!`](@ref) — a child that picks its own steps in a window
+of the model's nest engine (the urban site, NEST-p3 #483) lands on
+[`nest_window_end`](@ref) with [`subcycle_dt`](@ref) — and the child's boundary conditions:
 [`nest_bcs`](@ref) (`OpenBoundary` nest faces) fed by
 [`NestBoundaryData`](@ref) (the nest parent as a two-snapshot
 [`WindowedBoundaryData`](@ref Aeolus.BoundaryConditions.WindowedBoundaryData)),

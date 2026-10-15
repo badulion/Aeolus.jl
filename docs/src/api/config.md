@@ -166,8 +166,8 @@ check!(schema, cfg -> cfg.grid.size[3] > cfg.grid.size[1] ?
 
 `[run] legacy = "cbl"` then selects this schema; `"common"` (the common
 sections only) is always registered. The options are in the generated
-reference: [the model](../reference/options/model.md), and of the legacy
-case [`urban_parent`](../reference/options/urban_parent.md); the guide is [Run configuration](../design/run_configuration.md). A section named
+reference: [the model](../reference/options/model.md) (no legacy case is
+left since NEST-p3, #483); the guide is [Run configuration](../design/run_configuration.md). A section named
 like a common one adds its options to it (the model's `[output]
 variables`, `averaging`, `series_cadence`, `netcdf`); redeclaring a
 common option is an error.
@@ -207,8 +207,9 @@ imports the folder's FFTW wisdom before it plans), `build`, `run!`, then
 rethrown). It returns a [`RunResult`](@ref Aeolus.Config.RunResult)
 (`folder`, `obj`).
 
-The one legacy case left is code in `src/` (`urban_parent`, the nest
-parent of an urban site alone); nothing is loaded from `examples/`. The
+No legacy case is left: the last one, `urban_parent` (the nest parent
+of an urban site alone), went with NEST-p3 (#483), where the parent became
+a `[[domain]]` of the model; nothing is loaded from `examples/`. The
 validation run types of the former `Aeolus.RunDrivers` are configurations
 of the model since ONE-l (#475): `advection` (`[kinematic_flow]`), `cbl`
 (`[sgs] model = "tke"`, `[inflow_statistics]`), `shear_layer` (the
@@ -440,31 +441,33 @@ A model config with `[urban] enabled = true` is an urban site: a 3-D LES
 of a city window (`Aeolus.Urban`, `src/components/urban/site/config_schema.jl`;
 CFG-c #358 as the `berlin` example driver, the `urban` run type of EX-a
 #438, on the model since ONE-e #454, see [Urban site](urban.md)).
-`[run] legacy = "urban_parent"` runs the nest parent of the same config
-alone (until ONE-f, #455). The Berlin (Alexanderplatz) case is shipped as
-files in `examples/urban/`:
+In a nest it is the child of a domain of the model's core (NEST-p3,
+#483: its parent's `[[domain]]` block configures the parent completely).
+The Berlin (Alexanderplatz) case is shipped as files in `examples/urban/`:
 
 | file | what |
 | :-- | :-- |
-| `berlin_summer.toml` | the flagship, **every option written out** |
-| `berlin_winter.toml` | 15 January 2024, idealised cold profile (summer's file with 11 keys changed) |
-| `berlin_smoke.toml` | 16³ window at noon, small nest parent, 12 steps, no NetCDF |
-| `berlin_mitte_sample.toml` | the synthetic OSM sample |
-| `berlin_parent.toml` | `legacy = "urban_parent"`: the 6 km nest parent alone, 24 h |
+| `berlin_summer.toml` | the flagship: the 6 km parent `[[domain]]` and the site nested in it, **every option of the site written out** |
+| `berlin_winter.toml` | 15 January 2024, idealised cold profile (summer's file with the site's 11 keys and the parent's initial state, sun and forcing changed) |
+| `berlin_smoke.toml` | 16³ window at noon in a small parent domain, 12 steps, no NetCDF |
+| `berlin_smoke_site.toml` | the smoke site alone, a periodic box (the smoke runs without a parent start from it) |
+| `berlin_mitte_sample.toml` | the synthetic OSM sample in the 6 km parent |
+| `berlin_parent.toml` | the 6 km nest parent alone, 24 h (a domain of the model's core) |
 | `berlin_parent_coarse.toml` | the coarse 24 × 24 × 38 parent (the Lindenberg checks) |
 
 Each file is complete (no `extends`, ONE-b #451).
 
 ```bash
 julia --project -m Aeolus run examples/urban/berlin_summer.toml --set time.nsteps=1800
-julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set sgs.model=\"smagorinsky\"
+julia --project -m Aeolus run examples/urban/berlin_smoke.toml --set domain.site.sgs.model=\"smagorinsky\"
 ```
 
 A run writes its own checks (the budgets' closure, the timing) to
 `output/results.toml`. The model's sections it takes are `[grid]` (a
 uniform grid), `[dynamics]` `nu`, `theta0`, `g`, `[time]` (a fixed
 `dt` and `nsteps` with `duration = "none"`: with `[timestep] scheme =
-"adaptive"` `nsteps × dt` is the simulated time), `[output]` (`path`,
+"adaptive"` `nsteps × dt` is the simulated time; in a nest `[time] cfl`
+and `dt_max` are the root's adaptive step), `[output]` (`path`,
 `cadence`) and the domain's `static_driver` (the ground, CFG-f #361, see
 [Input drivers](input_drivers.md), made by AeolusPrep.jl) and
 `dynamic_driver` (a sounding driver, or the parent-made driver of an
@@ -474,8 +477,7 @@ site: the site's core carries its Coriolis force and sponge. The slot
 sections the site shares with the model (`[core]`, `[timestep]`, `[sgs]`,
 `[microphysics]`) offer the site's providers on it (ONE-m, #476).
 
-  * **`[urban]`**: the site — the static driver of the nest parent
-    (`parent_static`) and its land-use table (`landuse`), the anchor
+  * **`[urban]`**: the site — the anchor
     (`lat0`, `lon0`, `offset`, `elevation`), the clock (`date`,
     `utc_offset`, `start_h`), the periods of the radiation, the soil and
     the surfaces, the core's `f_coriolis`, `c_s`, `pr_t`,
@@ -486,8 +488,7 @@ sections the site shares with the model (`[core]`, `[timestep]`, `[sgs]`,
     path`: the summer file writes `examples/urban/output/alexanderplatz.nc`,
     where the renderers read it) and the child's boundary driver
     (`child_boundaries`). The generic site points at no data of the
-    example: `parent_static`, `landuse` and `sounding` default to
-    `"none"`.
+    example: `sounding` defaults to `"none"`.
   * **One section per urban slot** (ONE-m, #476; `URBAN_SLOT_SECTIONS`):
     `[core] model`, `[timestep] scheme`, `[pressure] solver`,
     `[momentum_advection] scheme`, `[scalar_advection] model`, `[sgs]
@@ -509,30 +510,26 @@ sections the site shares with the model (`[core]`, `[timestep]`, `[sgs]`,
     cross-field checks whose message names the sections (`[core] model =
     "anelastic" is incompatible with [pressure] solver = "cosine_fft"`)
     and carries the `incompatible_reason`.
-  * **`[nesting.parent]`** is the nest parent's own
-    schema (`ParentConfig`), its keys the ASCII field names
-    (`nudging_tau`, `theta_top`). The function-valued fields have TOML
-    forms: `q_surface` / `e_surface` take `{kind = "constant", value}` or
-    `{kind = "series", t = […], value = […]}` (linear in time),
-    `theta_init` / `qv_init` take `"sounding"` or a table
-    `{kind = "table", z = […], values = […]}`, and `u_init` takes
-    `"geostrophic"`, a constant or a table. Any other Julia function goes
-    through `with` and makes the run `replayable = false`.
+  * **`[nesting]`**: the site's nest (`parent_driver`: `"aeolus"`, its
+    parent `[[domain]]`; `"profile"` or `"offline"` for a site alone; the
+    two-way options). Whether it feeds back is its `[[domain]]` block's
+    `feedback`. The parent is a domain of the model's core, configured in
+    its own block (NEST-p3, #483).
 
 **One source of truth for the defaults.** The schema holds them;
-`site_options(default_run_config())` and `ParentConfig(; kw...)` start
-from it (`ParentConfig` has no `@kwdef` defaults), and
+`site_options(default_run_config())` starts from it, and
 `site_options(cfg::RunConfig)` reads the site's options that
 `build_case` consumes (ONE-k, #474: there is no `CaseConfig` struct of
 its own). `test/config_berlin.jl` checks that the site's fields and the
 model's options map one to one,
-that the four files give, field for field and bitwise, the configs the
-old Julia presets built (`test/data/config_berlin/fixture.toml`), and
-that `berlin_smoke.toml` run 12 steps gives state bitwise equal to the
-Julia-built smoke case and passes the round trip with the nest on.
+that the four files give, field for field and bitwise, the sites the
+old Julia presets built and their parent `[[domain]]` the nest parent
+they ran (`test/data/config_berlin/fixture.toml`), and that
+`berlin_smoke.toml` run 12 steps gives the fixture's state digests and
+passes the round trip with the nest on.
 `[checkpoint]` needs the Boussinesq core.
 
-Its options, the component sections and `[nesting.parent]` included: [Options: the model](../reference/options/model.md).
+Its options, the component sections included: [Options: the model](../reference/options/model.md).
 
 ## The stable-boundary-layer cases
 
