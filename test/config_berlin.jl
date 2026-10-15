@@ -407,6 +407,8 @@ end
     @test r.diagnostics_equal && r.config_equal
     m = r.runs[1].obj.model
     case = urban_site(m)
+    # the nest does not save its windows (the site retries its own pieces)
+    @test m.nest.adaptive && !m.nest.validate && m.nest.snapshot === nothing
     st = berlin_state(case; parent = m.domains[1])
     # the nest is on: the parent domain's fields are compared too
     @test all(k -> k in first.(st), (:parent_θ, :parent_qv, :qv))

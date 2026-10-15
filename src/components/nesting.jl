@@ -239,7 +239,10 @@ the hierarchy to complete: a child that joined it while it was built has
 a `prebuilt` [`NestLink`](@ref) and is checked, not added (the urban
 site, NEST-p3 #483). A domain whose core step a component takes (the
 urban site) picks its own substeps ([`nest_domain_limit`](@ref)) and books
-what its nest faces carry itself (no nest-exchange term).
+what its nest faces carry itself (no nest-exchange term); such a nest
+does not save and retry its windows (`validate = false`: the snapshot of
+the root alone cost the Berlin summer nest 3.5-4.4 s per window of 1.5 s),
+the site retries its own pieces and a failed step is the run's blow-up.
 """
 function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_exchange::Symbol = :exchange_term,
                       concurrent::Bool = Threads.nthreads() > 1, hierarchy = nothing)
@@ -293,7 +296,14 @@ function nested_model(domains::Tuple, links; max_retries::Integer = 3, budget_ex
         pipeline_domain(h.advance[i]) === d ||
             throw(ArgumentError("nested_model: domain $(d.id) is not the one its nest advance steps"))
     end
-    mn = ModelNest(h, ls; adaptive = adaptive, max_retries = max_retries, concurrent = concurrent)
+    # a nest with a child whose core step a component takes (the urban site,
+    # which retries its own pieces) does not save and retry its windows: the
+    # structural snapshot of the root alone took 3.5-4.4 s per window of the
+    # Berlin summer nest, whose windows take 1.5 s (NEST-p3 #483); a failed
+    # step there is the run's blow-up
+    takers = any(d -> core_taker(d) !== nothing, domains[2:end])
+    mn = ModelNest(h, ls; adaptive = adaptive, validate = adaptive && !takers, max_retries = max_retries,
+                   concurrent = concurrent)
     for l in ls
         l.inflow === nothing && continue
         k = h.domains[l.child].up
