@@ -196,13 +196,23 @@ The nest engine (NEST-p2, #482; [nested time coupling](../theory/nesting_time.md
   `[inflow_turbulence]` is warned about when the model is built.
 
 What a nested model does not do yet, each refused by the configuration
-with its reason: stretched grids, a child's `dynamic_driver`, and the
-EX-d couplings (`[forcing]`, `[surface]`, `[microphysics]`, `[tracer]`,
-`[particles]`, `[obstacles]`) in a child, whose fields have no nest
-faces. The urban site's Berlin nest (`ParentCase`, run by the site's
-`[nesting]` component) still steps on `Nesting.NestedRun`; it moves onto
-the model's nest engine once the parent's physics are components
-(NEST-p1, #481), in NEST-p3.
+with its reason: stretched grids (but in the parent of urban sites), a
+model child's `dynamic_driver`, and the EX-d couplings (`[forcing]`,
+`[surface]`, `[microphysics]`, `[tracer]`, `[particles]`, `[obstacles]`)
+in a child, whose fields have no nest faces.
+
+**An urban site in a nest** (NEST-p3, #483) is a `[[domain]]` block with
+`[domain.urban] enabled = true`, nested in a domain of the model's core
+(its `parent`; not the root, with no children of its own) at its `origin`
+and `refinement`. Its parent's `[grid] origin` is minus the site's origin
+(the site stands at its own corner), its `[domain.nesting]` is enabled
+with `parent_driver = "aeolus"`, and its `feedback` is the block's. The
+run-level `[time]`: `dt` and `nsteps` are the site's (`nsteps × dt` the
+run), `cfl` and `dt_max` the root's adaptive step. The site keeps its
+own field set (qv and TKE from the parent, its other tracers zero on
+inflow), not the PALM rule of the model's domains. In a nest each domain
+writes the `[output] variables` it has, one file per domain. The Berlin
+configs are written this way (`examples/urban/berlin_*.toml`).
 
 The enabled components of a domain are validated before anything is
 built: at most one per exclusive slot (`:advection`, `:sgs`,
@@ -212,9 +222,10 @@ sections involved.
 
 ## Legacy cases
 
-The one run type not yet ported to components keeps its own schema: the
-nest parent of an urban site alone (`urban_parent`; the urban site itself
-is the model's since ONE-e #454). The seven validation run types of the
+No legacy case is left: the last, `urban_parent` (the nest parent of an
+urban site alone), went with NEST-p3 (#483), where the parent became a
+`[[domain]]` of the model; the urban site itself is the model's since
+ONE-e #454. The seven validation run types of the
 former `Aeolus.RunDrivers` are gone (ONE-l, #475): `advection`, `cbl`,
 `shear_layer` and `flat_plate` are configurations of the model (with the
 components `[kinematic_flow]`, `[sgs] model = "tke"`,
@@ -225,13 +236,9 @@ configurations of the model since ONE-g (#456); the channel,
 single-column and DNS a-priori validation cases are gone (maintainer
 decisions of 2026-10-09); the Kessler box of the kernel demos is a
 configuration of the model, and the `column` and `dns_decay` run types,
-which were Julia files under `examples/`, are gone (ONE-i #458). A config
-selects a legacy case with `[run] legacy = "<case>"`; it has no domains.
-Every legacy case is code in `src/`: nothing is loaded from `examples/`.
-
-| `[run] legacy` | what it runs | options |
-| :-- | :-- | :-- |
-| `urban_parent` | the nest parent of an urban site alone (the model's sections) | [urban_parent](../reference/options/urban_parent.md) |
+which were Julia files under `examples/`, are gone (ONE-i #458). The
+mechanism stays (`[run] legacy = "<case>"`, a schema registered in
+`src/`) with no case registered.
 
 ## No inheritance
 
@@ -355,7 +362,7 @@ and one LES per SGS model), `examples/urban/` (the Berlin variants).
 | `dcbl_radiation_lsm`, `moist_convection`, `heated_plume`, `flow_past_cube` | the model with the EX-d couplings (`flow_past_cube/input/`: the cube's static driver) | one each |
 | `sbl` | the model: `gabls1`–`gabls4_exp3`, `cases99` and their `*_closures` sweeps | `input/`: the case-table dynamic drivers; `data/`: the reference data |
 | `dns_vs_les` | the model: `dns` (256³) and `les_<model>` (64³) of decaying isotropic turbulence | `compare.jl` reads the runs |
-| `urban` | the model with an urban site (`[urban] enabled`, ONE-e #454): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete); legacy `urban_parent`: `berlin_parent`, `berlin_parent_coarse` | `input/`: the drivers; `data/`: land use and the Lindenberg sounding |
+| `urban` | the model with an urban site (`[urban] enabled`, ONE-e #454): `berlin_summer`, `berlin_winter`, `berlin_smoke`, `berlin_mitte_sample` (each complete: the parent `[[domain]]` and the site), `berlin_smoke_site` (the site alone); the parent alone: `berlin_parent`, `berlin_parent_coarse` | `input/`: the drivers; `data/`: land use and the Lindenberg sounding |
 | `scalar_advection_2d` | the model with a prescribed velocity (`[kinematic_flow]`, ONE-l #475) | one |
 | `cbl_tke`, `cbl_inflow_statistics` | the model with the prognostic TKE closure (`[sgs] model = "tke"`) and, as a nest parent, `[inflow_statistics]` | one each |
 | `kelvin_helmholtz`, `flat_plate_t3a` | the model: a seeded tanh shear layer (`[initial]` `tanh`, `seed_mode`); a flat plate with the `[fringe]` | one each |

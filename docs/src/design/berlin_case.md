@@ -210,7 +210,6 @@ src/
     config_schema.jl   the urban site in the model's schema: [urban] and the component sections
                        (defaults), RunConfig → site_options, build_model (what aeolus run builds),
                        run_results (results.toml)
-    parent_driver.jl   the `urban_parent` run driver: the nest parent alone, its tables
     components.jl      UrbanComponent, its interface, Cadence, URBAN_SLOTS, the selection of the site's options
     geometry.jl        build_geometry: the static driver → mask, classes, radiosity scene,
                        view factors; the reader, classes and rasterisation are
@@ -227,16 +226,18 @@ src/
     restart.jl         the site's checkpoint state
     diagnostics.jl     the site's diagnostics and log events (case_diagnostics, log_frame, log_run_end)
   components/urban/*.jl     one file per urban component
-  components/urban/parent/  the nest parent: land-use surface, ParentConfig, the parent case
+  components/urban/parent/  the nest parent's physics as components (the tiled surface, the column
+                            radiation); the parent is a [[domain]] of the model (NEST-p3 #483)
 examples/urban/
-  berlin_summer.toml   every option; berlin_winter, _smoke, _mitte_sample, _parent, _parent_coarse.toml
+  berlin_summer.toml   the parent [[domain]] and the site, every site option; berlin_winter, _smoke,
+                       _smoke_site (the site alone), _mitte_sample; _parent, _parent_coarse.toml (the parent alone)
   input/               the static and dynamic drivers (made by AeolusPrep.jl: aeolusprep static / dynamic)
   data/                what a run may read in memory: the parent land-use table, the sounding
                        (the OSM extracts are AeolusPrep's, ONE-h #457)
   alexanderplatz_animation.jl            renderer (reads the NetCDF only)
   alexanderplatz_surface_diagnostics.jl  per-class diurnal summary (NetCDF only)
-  berlin_parent_figures.jl, berlin_parent_lindenberg_check.jl, plot_parent_surface.jl
-                                         analysis of an urban_parent run's output
+  berlin_parent_figures.jl, berlin_parent_lindenberg_check.jl, plot_parent_surface.jl,
+  parent_output.jl                       analysis of the output of a run of the parent alone
 ```
 
 Adding a component means adding one file under `couplings/` (picked up

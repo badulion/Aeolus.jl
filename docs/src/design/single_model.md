@@ -274,6 +274,19 @@ GIS and downloader dependencies leave the model package.
   domain has no dynamic driver yet), and the Berlin switch: the Berlin
   nest moves onto `ModelNest`, and `NestedRun`'s Berlin path is deleted,
   in NEST-p3, once the parent's physics are components (NEST-p1, #481).
+
+  *Status (NEST-p3, #483):* the Berlin parent is a `[[domain]]` of the
+  model's core, configured in full in its block, and the urban site its
+  nested child on `ModelNest`; `ParentCase`, `ParentConfig`, the
+  `urban_parent` run type and `NestedRun`'s window API (and with it the
+  prefetch of its Berlin path) are deleted. The parent's tiles are its
+  static driver's (AeolusPrep.jl writes the site's own classes under its
+  footprint). A nest with an urban site steps the site through its own
+  pipeline in each window, each step of the site's own length, and does
+  not save and retry its windows (the snapshot of the 6 km parent alone
+  took 3.5–4.4 s per 1.5 s window). Not yet: the root prefetch (above);
+  the site's extra tracers enter with zero inflow (the site's rule, not
+  the PALM rule); a root failure is the run's blow-up.
 - **Feedback default.** Two-way for an Aeolus parent driving an Aeolus child; one-way per child is allowed. Driving through the dynamic driver from outside data is one-way.
 
 How PALM does it, for comparison (Hellsten et al. 2021): every domain is the same PALM program with its own namelist and static driver; local modules (surface, buildings, radiation, canopy) are free per domain; exchanged fields must match in all domains; all domains share one time step (the minimum); domains run concurrently on separate MPI processes. Aeolus keeps per-domain step sizes instead of the common step, and closes budgets across the nest, which PALM does not.
@@ -326,8 +339,8 @@ run's checkpoints, its options `site_options(cfg)` of the model's config.
 `UrbanCase`, `CaseConfig`, the case run loop and the site's own output
 and restart are gone; `Aeolus.Urban` lives in `src/components/urban/`.
 Still open for the urban site: its nest parent (`ParentCase`, run by the
-`:nesting` component and alone by the `urban_parent` run type) is not a
-`[[domain]]` yet; and the site still builds its own core (Coriolis,
+`:nesting` component and alone by the `urban_parent` run type) was not a
+`[[domain]]` yet (NEST-p3, below); and the site still builds its own core (Coriolis,
 Smagorinsky and sponge in the core's constructor) instead of using the
 model's components.
 
@@ -347,6 +360,23 @@ run bit for bit. The parent's core keeps its built-in Coriolis term and
 sponge, and its forcing the core's RK3 substage clock: moving either to
 the configuration's form changes the summation order or the forcing
 window, a re-capture for the issue that makes the parent a `[[domain]]`.
+
+**The parent as its own `[[domain]]` (NEST-p3, #483).** With `[[domain]]`
+blocks every domain carries all its sections (no run-level module
+sections; `--set domain.<id>.<section>.<key>`). The parent's physics is
+configured in TOML: `[grid] stretching = "surface_refined"`, `[surface]
+model = "tiles"` (its static driver's tiles) or `"prescribed"`,
+`[radiation] scheme = "mean_column"`, `[large_scale_forcing]` from the
+sounding driver, `[initial] u = {kind = "geostrophic"}`, `[boundaries]
+theta_top = "initial_gradient"`. The urban site is its nested child on
+`ModelNest` (it joins the nest in its build; the engine steps it through
+its own pipeline). The Berlin configs describe parent and site
+completely; `berlin_parent.toml` and `berlin_parent_coarse.toml` are the
+parent alone. `ParentCase`, `ParentConfig`, `urban_parent` and
+`NestedRun`'s window API are deleted. The nested runs are re-captured
+(the parent's forcing clock and its Coriolis and sponge components move
+it at round-off; the root's last window lands on the run's end); the
+runs without a parent are bit for bit the base.
 
 **One key per exclusive slot (ONE-m, #476).** The enable/disable pairs
 that #472 and #473 left (`[pressure_fft] enabled = false` with
