@@ -1,18 +1,22 @@
-# The `simulation`-config digests of the component pipeline (ONE-a, #450).
-#
-# Each variant is a shipped `examples/<case>/<case>.toml` with overrides that
-# switch on one or more of the core's pieces (the SGS closures, Coriolis, the
-# sponge, the surface θ flux, the advection), on both cores and with every
-# stepper (euler, rk3, adaptive). `simulation_digests()` runs every variant
-# at 16³ and returns the fnv1a64 digest of every array of `state_fields`
-# and of the clock. test/data/components/simulation_digests.toml holds the
-# digests captured on master `ead7b986`, before the core's step was run
-# through `Aeolus.Components` (capture_simulation_digests.jl); the test
-# test/components_pipeline.jl asserts the pipeline reproduces them bit for bit.
+# The simulation-config fingerprints of the component pipeline (ONE-a, #450;
+# fingerprints in place of digests since #495). The variants: the four shipped
+# configs at 16³ with every SGS closure, Coriolis, the sponge, the surface θ
+# flux, both cores and every stepper (SD_VARIANTS, SD_ANELASTIC_VARIANTS),
+# and the EX-d configs with their couplings at their own smoke size
+# (SD_EXD_VARIANTS). `variant_fingerprints` runs one and returns the
+# fingerprint (test/support/agreement.jl) of every array of `state_fields`,
+# the clock, and the fingerprint of every numeric column of its
+# diagnostics.csv. test/data/components/simulation_fingerprints.toml holds
+# them (capture_simulation_fingerprints.jl); test/components_pipeline.jl
+# asserts every run reproduces them within ROUNDOFF_RTOL. The digests they
+# replace (, captured on master ead7b986 before the pipeline, on the
+# ONE-j branch for the anelastic weighting and on master a22b57ba for EX-d)
+# are in git history: the fingerprints were captured from code that
+# reproduced every one of those digests.
 
 using Aeolus
 using Aeolus.Config
-using Aeolus.IO: fnv1a64
+include(joinpath(@__DIR__, "agreement.jl"))
 
 const SD_EXAMPLES = normpath(joinpath(@__DIR__, "..", "..", "examples"))
 "The shipped config of the example case `name`, `examples/<name>/<name>.toml`."
@@ -73,9 +77,7 @@ const SD_VARIANTS = [
 
 # The anelastic variants: new physics in ONE-j (#460) — the SGS and surface
 # fluxes in the ρ̄-weighted flux form, SSP-RK3 and the adaptive step on the
-# anelastic core. Their digests are captured on the ONE-j branch
-# (simulation_digests_anelastic.toml, capture_anelastic_digests.jl): the
-# four of SD_VARIANTS, whose master digests the weighting changed, and these.
+# anelastic core (the four of SD_VARIANTS on that core, and these).
 const SD_ANELASTIC_VARIANTS = [
     "dcbl_anelastic_rk3"      => ("dry_convective_bl", [sd_steps(6), "core.model=\"anelastic\"",
                                                         "timestep.scheme=\"rk3\""]),
@@ -84,15 +86,13 @@ const SD_ANELASTIC_VARIANTS = [
                                                         "timestep.scheme=\"rk3\"", "coriolis.f=1.0e-4", SD_WIND,
                                                         "sgs.model=\"dynamic_smagorinsky\""], SD_ADAPTIVE)),
 ]
-"Whether a variant runs the anelastic core (its digests are ONE-j's, not master's)."
-sd_anelastic(label) = occursin("anelastic", label)
 
 # The simulation configs EX-d (#441) added with their couplings around the
 # step ([forcing], [surface], [microphysics], [tracer], [particles],
 # [obstacles]): `label => (config path under examples/, overrides)`, at
 # their own [test] smoke size, plus RK3 runs of the couplings that act
 # inside the step (the IBM obstacles, the slab's floor flux). Captured on
-# master a22b57ba (simulation_digests_exd.toml).
+# master a22b57ba.
 const SD_EXD_TEST = ["time.duration=\"none\"", "time.nsteps=10"]
 const SD_EXD_VARIANTS = [
     "dcbl_radiation_lsm"     => ("dcbl_radiation_lsm/dcbl_radiation_lsm.toml", ["grid.size=[16,16,16]"]),
@@ -105,70 +105,6 @@ const SD_EXD_VARIANTS = [
     "decaying_hit"           => ("decaying_hit/decaying_hit.toml", ["grid.size=[16,16,16]"]),
     "pollution_plume"        => ("pollution_plume/pollution_plume.toml", String[]),
 ]
-
-"""
-    exd_digests(; examples = <this checkout's examples/>, only = nothing) -> Dict
-
-The digests of `SD_EXD_VARIANTS` (as [`simulation_digests`](@ref)), each
-run from its config's directory (relative input paths).
-"""
-function exd_digests(; examples = normpath(joinpath(@__DIR__, "..", "..", "examples")), only = nothing)
-    out = Dict{String,Dict{String,String}}()
-    for (label, (rel, ovr)) in SD_EXD_VARIANTS
-        only === nothing || label in only || continue
-        path = joinpath(examples, rel)
-        r = cd(dirname(path)) do
-            cfg = load_run_config(path; overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\"", ovr))
-            run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-        end
-        s = Base.invokelatest(state_fields, r.obj)
-        d = Dict{String,String}(string(k) => sd_digest(v) for (k, v) in pairs(s))
-        d["t"] = sd_digest([Base.invokelatest(sd_clock, r.obj)])
-        rows = sd_diagnostics(r.folder)
-        d["diagnostics_csv"] = sd_digest(codeunits(join(rows, "\n")))
-        # the rows without the `sgs.*` columns, and whether the closure is the
-        # plain Smagorinsky (the core's built-in C_s before ONE-a, #450)
-        d["diagnostics_csv_without_sgs"] = sd_digest(codeunits(join(sd_drop_sgs(rows), "\n")))
-        d["plain_smagorinsky"] = string(r.obj.cfg.sgs.model === :smagorinsky && get(getfield(r.obj.cfg.sgs, :values), "stability", :none) === :none)
-        out[label] = d
-    end
-    return out
-end
-
-"`rows` of a diagnostics.csv without its `sgs.*` columns."
-function sd_drop_sgs(rows)
-    isempty(rows) && return rows
-    keep = findall(h -> !startswith(h, "sgs."), split(rows[1], ','))
-    return [join(split(l, ',')[keep], ',') for l in rows]
-end
-
-"fnv1a64 of the bytes of an array, as 16 hex digits."
-sd_digest(a) = string(fnv1a64(collect(reinterpret(UInt8, vec(collect(a))))); base = 16, pad = 16)
-
-"""
-    simulation_digests(; inputs = Dict(), only = nothing) -> Dict{String,Dict{String,String}}
-
-Run every variant of `variants` (default `SD_VARIANTS`; or those in `only`) and return
-`label => (field => digest)`, the fields of `state_fields` plus `t`.
-`inputs` maps a config name to extra overrides (the made dynamic driver of
-`lindenberg_era5`).
-"""
-function simulation_digests(; inputs = Dict{String,Vector{String}}(), only = nothing,
-                            variants = SD_VARIANTS)
-    out = Dict{String,Dict{String,String}}()
-    for (label, (name, ovr)) in variants
-        only === nothing || label in only || continue
-        cfg = load_run_config(sd_config(name);
-                              overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))
-        r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-        s = Base.invokelatest(state_fields, r.obj)
-        d = Dict{String,String}(string(k) => sd_digest(v) for (k, v) in pairs(s))
-        d["t"] = sd_digest([Base.invokelatest(sd_clock, r.obj)])
-        d["diagnostics_csv"] = sd_digest(codeunits(join(sd_diagnostics(r.folder), "\n")))
-        out[label] = d
-    end
-    return out
-end
 
 "The rows of a run's diagnostics.csv without the machine columns (wall clock, process)."
 function sd_diagnostics(folder)
@@ -189,7 +125,40 @@ sd_clock(obj) = hasproperty(obj, :sim) ? obj.sim.t : Aeolus.Components.clock(obj
 
 Extra overrides of made input drivers. Since ONE-h (#457) `lindenberg_era5`
 reads its committed dynamic driver (`input/lindenberg_era5_dynamic.nc`,
-written by AeolusPrep, data variables bitwise those `aeolus preprocess`
-wrote when the digests were captured), so there are none.
+written by AeolusPrep), so there are none.
 """
 sd_made_inputs() = Dict{String,Vector{String}}()
+
+"""
+    SD_ALL -> Vector
+
+Every variant as `label => (config path, overrides, run directory)`: the
+16³ variants (`SD_SMALL` plus their own overrides, run from the working
+directory) and the EX-d configs (`SD_EXD_TEST`, run from their config's
+directory, whose relative input paths they use).
+"""
+const SD_ALL = vcat(
+    [l => (sd_config(n), vcat(SD_SMALL, o), nothing) for (l, (n, o)) in vcat(SD_VARIANTS, SD_ANELASTIC_VARIANTS)],
+    [l => (joinpath(SD_EXAMPLES, rel), vcat(SD_EXD_TEST, "fftw.planner=\"estimate\"", o), dirname(joinpath(SD_EXAMPLES, rel)))
+     for (l, (rel, o)) in SD_EXD_VARIANTS])
+
+"""
+    variant_fingerprints(spec) -> Dict{String,Any}
+
+Run one variant of `SD_ALL` (`label => (path, overrides, dir)`) and return
+`"fields"` (name => fingerprint of every array of `state_fields`), `"t"`
+(the clock) and `"diagnostics"` (column => fingerprint of every numeric
+column of its diagnostics.csv, the machine columns left out).
+"""
+function variant_fingerprints(spec)
+    _, (path, ovr, dir) = spec
+    go() = run_config(load_run_config(path; overrides = vcat(ovr, get(sd_made_inputs(), basename(dirname(path)), String[])));
+                      root = mktempdir(), console = false, repo = mktempdir())
+    r = dir === nothing ? go() : cd(go, dir)
+    s = Base.invokelatest(state_fields, r.obj)
+    rows = sd_diagnostics(r.folder)
+    return Dict{String,Any}("fields" => Dict{String,Any}(string(k) => fingerprint(v) for (k, v) in pairs(s)),
+                            "t" => Float64(Base.invokelatest(sd_clock, r.obj)),
+                            "diagnostics" => isempty(rows) ? Dict{String,Any}() :
+                                             Dict{String,Any}(k => fingerprint(v) for (k, v) in diagnostics_columns(rows)))
+end
