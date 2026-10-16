@@ -115,13 +115,17 @@ function _flux_richardson(d)
     return flux_richardson(s.u, s.v, s.w, s.θ; θ₀ = θ0, g = s.g_accel, νt = sgs ? s.νt : nothing, Pr_t = s.Pr_t)
 end
 
-# ω_y at the cell centres (`Operators._vorticity_at`)
+# ω_y at the cell centres (`Operators._vorticity_at`; on a StretchedGrid with
+# the per-level vertical metrics of the Smagorinsky kernel, #505)
 function _vorticity_y(d)
     s = _fill_velocity!(d.state); m = s.mesh
+    gm = FiniteVolume.grid_metrics(m)
     ω = Array{Float64}(undef, m.Nx, m.Ny, m.Nz)
     for k in 1:m.Nz, j in 1:m.Ny, i in 1:m.Nx
-        ω[i, j, k] = Operators._vorticity_at(s.u.data, s.v.data, s.w.data, m.Hx + i, m.Hy + j, m.Hz + k,
-                                             1 / m.dx, 1 / m.dy, 1 / m.dz)[2]
+        K = m.Hz + k
+        ω[i, j, k] = Operators._vorticity_at(s.u.data, s.v.data, s.w.data, m.Hx + i, m.Hy + j, K,
+                                             1 / m.dx, 1 / m.dy, FiniteVolume._idz(gm, K),
+                                             FiniteVolume._idz_off(gm, K))[2]
     end
     return ω
 end

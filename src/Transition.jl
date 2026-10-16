@@ -68,6 +68,7 @@ using ..Fields: Field, interior_view, mesh
 using ..BoundaryConditions: fill_halos!, NoSlipWall, FreeStreamBoundary, FieldBoundaryConditions
 using ..BoundaryConditions: Periodic                                       # N-inflow-d
 using ..Operators: _vorticity_at, _strain_at
+using ..Operators.FiniteVolume: grid_metrics, _idz, _idz_off          # the vertical metrics (#505)
 using ..Operators: DampingProfile, NordstromRamp, damping_rate, smooth_step, _add_damping!   # P59-d
 using ..Simulations: BoussinesqSimulation
 import Random
@@ -166,7 +167,8 @@ function turbulent_indicator!(ind::AbstractArray{Bool,3}, u::Field, v::Field, w:
     m = mesh(u)
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
     size(ind) == (Nx, Ny, Nz) || throw(DimensionMismatch("ind must be $((Nx, Ny, Nz))"))
-    idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
+    idx = 1 / m.dx; idy = 1 / m.dy
+    gm = grid_metrics(m)    # per level on a StretchedGrid (#505)
     ud, vd, wd = u.data, v.data, w.data
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
     ωx = zeros(Nx, Ny); ωy = zeros(Nx, Ny); ωz = zeros(Nx, Ny)
@@ -174,7 +176,8 @@ function turbulent_indicator!(ind::AbstractArray{Bool,3}, u::Field, v::Field, w:
     mω = zeros(3, Nz); mabs = zeros(Nz); cnt = zeros(Int, Nz)
     @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
         _fluid_ok(fluid, i, j, k) || continue
-        a, b, c = _vorticity_at(ud, vd, wd, Hx + i, Hy + j, Hz + k, idx, idy, idz)
+        a, b, c = _vorticity_at(ud, vd, wd, Hx + i, Hy + j, Hz + k, idx, idy,
+                                _idz(gm, Hz + k), _idz_off(gm, Hz + k))
         mω[1, k] += a; mω[2, k] += b; mω[3, k] += c
         mabs[k] += sqrt(a^2 + b^2 + c^2); cnt[k] += 1
     end
@@ -191,7 +194,8 @@ function turbulent_indicator!(ind::AbstractArray{Bool,3}, u::Field, v::Field, w:
                 ind[i, j, k] = false
                 continue
             end
-            a, b, c = _vorticity_at(ud, vd, wd, Hx + i, Hy + j, Hz + k, idx, idy, idz)
+            a, b, c = _vorticity_at(ud, vd, wd, Hx + i, Hy + j, Hz + k, idx, idy,
+                                    _idz(gm, Hz + k), _idz_off(gm, Hz + k))
             ind[i, j, k] = sqrt((a - mω[1, k])^2 + (b - mω[2, k])^2 + (c - mω[3, k])^2) > thr
         end
     end
@@ -330,9 +334,13 @@ field) the SGS parts
 ```
 
 are added (``S_{ij}`` from the Smagorinsky stencil `Operators._strain_at`,
-``∂θ/∂z`` centred over ``2Δz``, as in `add_eddy_diffusion_scalar!`).
-Resolved fluxes use `u, v, w` interpolated to the cell centre;
-``∂U/∂z`` is centred (one-sided at the first and last level).
+``∂θ/∂z`` centred over the two neighbouring centres, as in
+`add_eddy_diffusion_scalar!`). Resolved fluxes use `u, v, w` interpolated
+to the cell centre; ``∂U/∂z`` is centred (one-sided at the first and last
+level). On a `StretchedGrid` every vertical difference spans the local
+distance: the centre heights for ``∂U/∂z`` and ``∂θ/∂z``, and the strain
+the per-level metrics of the Smagorinsky kernel (`grid_metrics`), so a
+linear profile is differenced exactly on any spacing.
 
 Returns profiles: `Ri_f` (`NaN` where ``P = 0``), `B`, `P` and the total
 kinematic fluxes `uw`, `vw`, `wθ`. Halos of `u, v, w, θ` (and `νt`) must
@@ -345,7 +353,8 @@ function flux_richardson(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
     m = mesh(u)
     Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
+    idx = 1 / m.dx; idy = 1 / m.dy
+    gm = grid_metrics(m)    # per level on a StretchedGrid (#505)
     ud, vd, wd, θd = u.data, v.data, w.data, θ.data
     nd = νt === nothing ? nothing : νt.data
     n = Nx * Ny
@@ -366,11 +375,12 @@ function flux_richardson(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
         wc = 0.5 * (wd[I, J, K] + wd[I, J, K+1]) - W[k]
         uw[k] += uc * wc; vw[k] += vc * wc; wθ[k] += wc * (θd[I, J, K] - Θ[k])
         if nd !== nothing
-            S = _strain_at(ud, vd, wd, I, J, K, idx, idy, idz)
+            idz_off = _idz_off(gm, K)
+            S = _strain_at(ud, vd, wd, I, J, K, idx, idy, _idz(gm, K), idz_off)
             ν = nd[I, J, K]
             uw[k] -= 2ν * S[5]
             vw[k] -= 2ν * S[6]
-            wθ[k] -= ν / Pr_t * (θd[I, J, K+1] - θd[I, J, K-1]) * (0.5 * idz)
+            wθ[k] -= ν / Pr_t * (θd[I, J, K+1] - θd[I, J, K-1]) * (0.5 * idz_off)
         end
     end
     uw ./= n; vw ./= n; wθ ./= n
@@ -379,12 +389,17 @@ function flux_richardson(u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
     @inbounds for k in 1:Nz
         kl = max(k - 1, 1); kh = min(k + 1, Nz)
         kh == kl && continue
-        dz = (kh - kl) * m.dz
+        dz = _centre_distance(m, kl, kh)
         P[k] = -uw[k] * (U[kh] - U[kl]) / dz - vw[k] * (V[kh] - V[kl]) / dz
     end
     Ri_f = [P[k] == 0 ? NaN : -B[k] / P[k] for k in 1:Nz]
     return (Ri_f = Ri_f, B = B, P = P, uw = uw, vw = vw, wθ = wθ)
 end
+
+# the distance between the cell centres of interior levels kl < kh: on a
+# StretchedGrid from its centre heights `zc` (#505)
+_centre_distance(m, kl, kh) =
+    hasproperty(m, :zc) ? m.zc[m.Hz+kh] - m.zc[m.Hz+kl] : (kh - kl) * m.dz
 
 function flux_richardson(sim::BoussinesqSimulation)
     sim.has_buoyancy ||

@@ -21,6 +21,12 @@
 #                    at second order through the full projected RK3 step.
 #   6. Closures    — Smagorinsky ν_t of a linear shear with the local
 #                    filter width; the adaptive dt sees the thinnest cell.
+#   7. Diagnostics — the transition diagnostics behind the core outputs
+#                    `shear_production_profile`, `buoyancy_production_profile`,
+#                    `turbulent_fraction_profile`, `vorticity_y` (#505):
+#                    analytic shear production, buoyancy flux and vorticity
+#                    on a surface-refined grid; a `:uniform` StretchedGrid
+#                    reproduces the RegularGrid values.
 
 using Test
 using Random
@@ -32,6 +38,9 @@ using Aeolus.BoundaryConditions: fill_halos!
 using Aeolus.Operators: divergence, momentum_advect!, advect_centered!
 
 const FV151  = Aeolus.Operators.FiniteVolume
+using Aeolus.Transition: flux_richardson, turbulent_fraction
+using Aeolus.Grids: FaceX, FaceY, FaceZ, CellCenter
+using Printf
 const SIM151 = Aeolus.Simulations
 
 # the parent grid of the nesting epic (maintainer decision 2026-10-05:
@@ -338,5 +347,79 @@ end
         @test_throws ArgumentError BoussinesqSimulation(
             StretchedGrid(; size = (4, 4, 8), extent = (1.0, 1.0, 1.0), stretching = (:geometric, 1.1));
             bcs = FieldBoundaryConditions(:periodic))
+    end
+
+    @testset "transition diagnostics: analytic on a surface-refined grid (#505)" begin
+        # u = S z + a sin kx, w = b sin kx, θ = θ₀ + Γ z + c sin kx and a
+        # constant ν_t, set at every storage point (halos included) from the
+        # grid's own heights. On the C grid u′ at the centre is
+        # a cos(kΔx/2) sin kx, so ⟨u′w′⟩ = ab cos(kΔx/2)/2 − ν_t S and
+        # ⟨w′θ′⟩ = bc/2 − (ν_t/Pr_t) Γ; ∂U/∂z = S on every level, whatever
+        # the spacing, so P = −⟨u′w′⟩ S and B = (g/θ₀)⟨w′θ′⟩.
+        zf = surface_refined_faces(dz_surface = 10, z_uniform = 50, z_top = 800, ratio = 1.15, dz_max = 60)
+        Nx, Ny, Nz = 32, 4, length(zf) - 1
+        g = StretchedGrid(; size = (Nx, Ny, Nz), extent = (1000.0, 125.0, 800.0), halo = (2, 2, 2),
+                          stretching = (:custom, zf))
+        @test grid_stretching_ratio(g) > 1.1                      # really stretched: 10 m to 60 m
+        S, a, b, c, Γ, k = 0.02, 0.3, 0.2, -0.5, 0.01, 2π / 1000.0
+        νt0, Pr, θ₀, gr = 1.7, 0.7, 300.0, 9.81
+        fill_analytic!(f, fn, xs, zs) =
+            (for K in axes(f.data, 3), J in axes(f.data, 2), I in axes(f.data, 1)
+                 f.data[I, J, K] = fn(xs(I), zs(K))
+             end; f)
+        xf(I) = _xface(g, I); xc(I) = _xcent(g, I); zc(K) = g.zc[K]; zw(K) = g.zf[K]
+        u = fill_analytic!(Field(FaceX(), g), (x, z) -> S * z + a * sin(k * x), xf, zc)
+        v = Field(FaceY(), g)
+        w = fill_analytic!(Field(FaceZ(), g), (x, z) -> b * sin(k * x), xc, zw)
+        θ = fill_analytic!(Field(CellCenter(), g), (x, z) -> θ₀ + Γ * z + c * sin(k * x), xc, zc)
+        νt = Field(CellCenter(), g); fill!(νt.data, νt0)
+        r = flux_richardson(u, v, w, θ; θ₀ = θ₀, g = gr, νt = νt, Pr_t = Pr)
+        uw = a * b * cos(k * g.dx / 2) / 2 - νt0 * S
+        wθ = b * c / 2 - νt0 / Pr * Γ
+        @test agree(r.uw, fill(uw, Nz))
+        @test agree(r.wθ, fill(wθ, Nz))
+        @test agree(r.P, fill(-uw * S, Nz))
+        @test agree(r.B, fill(gr / θ₀ * wθ, Nz))
+        @printf("    stretched (Δz %.0f–%.0f m): P = %.6e (analytic %.6e), B = %.6e (analytic %.6e), max rel. err %.1e\n",
+                minimum(diff(zf)), maximum(diff(zf)), r.P[Nz ÷ 2], -uw * S, r.B[Nz ÷ 2], gr / θ₀ * wθ,
+                max(field_rel_diff(r.P, fill(-uw * S, Nz)), field_rel_diff(r.B, fill(gr / θ₀ * wθ, Nz))))
+
+        # ω_y = ∂u/∂z − ∂w/∂x at the cell centres (the core output
+        # `vorticity_y`): S − b cos(k x) sin(kΔx)/Δx with the centred ∂w/∂x;
+        # the walls set the halos, so the levels whose stencil stays inside
+        bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)
+        sim = BoussinesqSimulation(g; ν = 1e-3, θ₀ = θ₀, bcs = bcs)
+        sim.u.data .= u.data; sim.w.data .= w.data
+        ω = Aeolus.Components._vorticity_y((state = sim,))
+        ωa = [S - b * cos(k * _xcent(g, g.Hx + i)) * sin(k * g.dx) / g.dx for i in 1:Nx, j in 1:Ny, kk in 2:Nz-1]
+        @test agree(ω[:, :, 2:Nz-1], ωa)
+        # a pure linear shear has no vorticity fluctuation: γ = 0 inside
+        sim.w.data .= 0
+        @test all(iszero, turbulent_fraction(sim)[2:Nz-1])
+    end
+
+    @testset "transition diagnostics: :uniform StretchedGrid = RegularGrid (#505)" begin
+        kw = (size = (12, 10, 16), extent = (600.0, 500.0, 400.0))
+        rg = RegularGrid(; kw...)
+        sg = StretchedGrid(; kw..., stretching = :uniform)
+        Random.seed!(505)
+        fs = Dict{Symbol,Any}()
+        for (name, loc) in ((:u, FaceX()), (:v, FaceY()), (:w, FaceZ()), (:θ, CellCenter()), (:νt, CellCenter()))
+            A = randn(size(Field(loc, rg).data))
+            name === :θ && (A .= 300 .+ 0.2 .* A)
+            name === :νt && (A .= abs.(A))
+            fr = Field(loc, rg); fr.data .= A
+            fs_ = Field(loc, sg); fs_.data .= A
+            fs[name] = (fr, fs_)
+        end
+        rr, rs = (flux_richardson(fs[:u][i], fs[:v][i], fs[:w][i], fs[:θ][i]; θ₀ = 300.0, g = 9.81,
+                                  νt = fs[:νt][i], Pr_t = 1 / 3) for i in 1:2)
+        for q in (:uw, :vw, :wθ, :B, :P, :Ri_f)
+            @test agree(getproperty(rs, q), getproperty(rr, q))
+        end
+        @test agree(turbulent_fraction(fs[:u][2], fs[:v][2], fs[:w][2]),
+                    turbulent_fraction(fs[:u][1], fs[:v][1], fs[:w][1]))
+        @printf("    :uniform StretchedGrid vs RegularGrid: P %.1e, B %.1e (relative)\n",
+                field_rel_diff(rs.P, rr.P), field_rel_diff(rs.B, rr.B))
     end
 end

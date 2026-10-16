@@ -52,6 +52,7 @@ using ..LargeScaleForcing: GeostrophicPressureGradient, AdvectiveTendencies, Sub
                            SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature, _zc,
                            forcing_value, NudgingWeight, ReferenceDamping
 using ..Operators: sponge_profile
+using ..Operators: FiniteVolume                                      # the vertical metrics of ω_y (#505)
 using ..InputDrivers: shift_table
 using ..Transition: TowerSampler, tower_sampler, sample_towers!, reset_segment!, tower_thresholds,
                     ParentResolvedStatistics, update_inflow_statistics!, inflow_stress_parts,
