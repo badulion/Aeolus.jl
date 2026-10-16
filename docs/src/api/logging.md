@@ -154,7 +154,7 @@ started from a [`RunConfig`](config.md) (every `aeolus run`, every shipped
 config), `[config]` is the canonical resolved TOML: every option written
 out (every domain's sections under `[[domain]]`), paths absolute, floats bit-exact. It is what
 `load_run_config(folder)` reads, what `aeolus run <folder>/run.toml`
-replays bit for bit and what `aeolus run <folder> --resume` continues; the
+replays and what `aeolus run <folder> --resume` continues; the
 free-form `config` of a run started from a `Dict` or a struct is kept for
 provenance only and cannot be replayed. See
 [Run configuration](../design/run_configuration.md).

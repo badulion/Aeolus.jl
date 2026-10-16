@@ -1,10 +1,13 @@
 # Checkpoint / restart and FFT planning
 
-A restart is only useful if it is *exact*: a run checkpointed at step N
-and continued must be the run that never stopped, bit for bit. Anything
-less makes a restarted validation run a different experiment, and makes
-"did my change alter the answer?" unanswerable for long jobs. This page
-records how Aeolus gets there (#245) and the decisions behind it. The API
+A restart continues the run: a run checkpointed at step N and continued
+takes the steps the run that never stopped would take, from the same
+state. It need not match it bit for bit (maintainer decision 2026-10-16,
+epic #493: speed over bit-identity; FFT plans, BLAS and thread counts may
+round differently after a restart), but a checkpoint that misses state
+would make a restarted run a different experiment. This page records
+what a checkpoint holds (#245) and the decisions behind it; the sections
+on bitwise restarts and FFTW planning below are the history of #245. The API
 is on [I/O, checkpoints and restart](../api/io.md).
 
 ## What a step reads
@@ -26,7 +29,7 @@ cores, since ONE-j #460, the same without `qv`, plus their base state):
 | a driver's running averages and series | its run loop | `checkpoint_components` (any `Vector`, `Dict`, `Ref`, struct with a method) |
 
 Tendencies and scratch buffers are not stored: every core writes them
-before reading them. The bitwise tests prove this rather than assume it —
+before reading them. The restart tests prove this rather than assume it —
 the restarted simulation's scratch buffers are filled with `NaN` before
 the restart, so a single stale read would make the result non-finite.
 

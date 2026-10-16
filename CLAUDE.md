@@ -188,6 +188,17 @@ weaken an assertion to get green without stating that the original
 expectation was physically incorrect. Quote measured numbers, not
 adjectives.
 
+**Speed over bit-identity.** Results need not be bit-identical — not
+across thread counts (Julia, BLAS, FFTW), machines, restarts or
+refactors (maintainer decision, 2026-10-16, epic #493). Never trade speed
+for bitwise reproducibility. Tests assert physics: a tolerance with its
+reason (round-off growth, chaotic divergence, sampling error),
+conservation, statistics, analytic limits — no hashes of simulated
+fields, no `==` on simulated floats. Exact equality stays only where
+data is copied, not computed (a checkpoint read back, a config parsed,
+a driver file regenerated from the same input). A refactor is checked by
+agreement within a stated tolerance.
+
 **Look at what you produce.** Figures, animations and output files get
 opened and inspected before they are committed. A missing-glyph bug
 silently rendered "surface temperature" as "sur a e te erature" for
