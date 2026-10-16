@@ -466,14 +466,15 @@ uniform stencil is unchanged, bit for bit.
 end
 
 """
-    _vorticity_at(u, v, w, i, j, k, idx, idy, idz) -> (ω_x, ω_y, ω_z)
+    _vorticity_at(u, v, w, i, j, k, idx, idy, idz[, idz_off]) -> (ω_x, ω_y, ω_z)
 
 Vorticity `ω = ∇×u` at the centre of cell `(i, j, k)`, from the same
 [`_velocity_gradient_at`](@ref) tensor as the strain rate (`ω_x = ∂w/∂y −
-∂v/∂z`, …). Used by `Transition` (turbulent fraction γ(z)).
+∂v/∂z`, …; `idz_off` as there, for a stretched grid). Used by
+`Transition` (turbulent fraction γ(z)).
 """
-@inline function _vorticity_at(u, v, w, i, j, k, idx, idy, idz)
-    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz)
+@inline function _vorticity_at(u, v, w, i, j, k, idx, idy, idz, idz_off = idz)
+    g = _velocity_gradient_at(u, v, w, i, j, k, idx, idy, idz, idz_off)
     return g[3][2] - g[2][3], g[1][3] - g[3][1], g[2][1] - g[1][2]
 end
 
