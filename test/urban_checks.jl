@@ -175,7 +175,7 @@ function idealised_parent(; surface, theta, qv = nothing)
         dt = "adaptive"
         cfl = 0.9
         dt_max = 10.0
-        duration = "24h"
+        duration = 86400.0
         [grid]
         size = [32, 32, 53]
         extent = [4000.0, 4000.0, 3000.0]
@@ -210,7 +210,8 @@ function idealised_parent(; surface, theta, qv = nothing)
         e_min = 1e-4
         wall_cap = true
         wall_cap_top = false
-        surface_value = true
+        # a prescribed flux reports no u* to the TKE closure (#491): no surface value
+        surface_value = false
         [surface]
         $surface
         [large_scale_forcing]
