@@ -38,8 +38,18 @@ The AMD numerators and denominators at one point from the velocity gradient
 `g[a][b] = ∂u_a/∂x_b`, the θ gradient `gθ`, the squared spacings `d2 =
 (δx², δy², δz²)` and the buoyancy parameter `βg = g/θ₀`:
 
-    ν_num = −(δ_k∂_k u_i)(δ_k∂_k u_j)S_ij + βg (δ_k∂_k w)(δ_k∂_k θ),  ν_den = ∂_l u_m ∂_l u_m
-    κ_num = −(δ_k∂_k u_i)(δ_k∂_k θ)∂_i θ,                           κ_den = ∂_l θ ∂_l θ
+    ν_num = −(δ_k∂_k u_i)(δ_k∂_k u_j)S_ij + βg (δ_k∂_k w)(δ_k∂_k θ) · min(1, 1/Ri_∇)
+    ν_den = ∂_l u_m ∂_l u_m,   Ri_∇ = |βg| |∇θ| / ∂_l u_m ∂_l u_m
+    κ_num = −(δ_k∂_k u_i)(δ_k∂_k θ)∂_i θ,   κ_den = ∂_l θ ∂_l θ
+
+The buoyancy term is weighted by `min(1, 1/Ri_∇)` (#504): it is the only
+term of `ν_num/ν_den` that does not vanish with the velocity gradient
+(degree −1 in `∇u`, the shear term is degree 1), so without the weight
+`ν_t ∝ 1/|∇u|` in quiescent stratified air. The weight is exactly 1
+wherever `Ri_∇ ≤ 1`: `∂_l u_m ∂_l u_m ≥ (∂_z u)² + (∂_z v)²`, so `Ri_∇`
+is at most the gradient Richardson number, and resolved shear turbulence
+lives at `Ri_g` below about 1/4 (Miles–Howard). There the published model
+is evaluated unchanged (the weight is exactly 1). See [`compute_amd_coefficients!`](@ref).
 """
 @inline function _amd_point(g, gθ, d2, βg)
     S12 = 0.5 * (g[1][2] + g[2][1])
@@ -51,8 +61,11 @@ The AMD numerators and denominators at one point from the velocity gradient
         2 * (_sdot(g[1], g[2], d2) * S12 + _sdot(g[1], g[3], d2) * S13 +
              _sdot(g[2], g[3], d2) * S23)
     B = βg * _sdot(g[3], gθ, d2)
+    D = _gsq(g)
+    N2 = abs(βg) * sqrt(gθ[1]^2 + gθ[2]^2 + gθ[3]^2)    # |βg||∇θ|, s⁻²
+    Bw = D >= N2 ? B : B * (D / N2)                        # B·min(1, 1/Ri_∇), #504
     κn, κd = _amd_scalar_point(g, gθ, d2)
-    return (-P + B, _gsq(g), κn, κd)
+    return (-P + Bw, D, κn, κd)
 end
 
 # The AMD scalar numerator −(δ_k∂_k u_i)(δ_k∂_k ϕ)∂_i ϕ and denominator ∂_lϕ ∂_lϕ
@@ -112,6 +125,30 @@ with `δ_k = (Δx, Δy, Δz)` (summation over the repeated `k` inside each
 product) and `S_ij` the resolved strain rate. Where `∂_l θ ∂_l θ = 0` (no
 resolved θ gradient) `κ_t = ν_t/Pr_t`; where `∂_l u_m ∂_l u_m = 0`,
 `ν_t = 0`.
+
+**Quiescent stratified air (#504).** The shear term of the ratio is of
+degree 1 in the velocity gradient and vanishes with it, but the buoyancy
+term is of degree 1 over degree 2: as published, `ν_t` grows like
+`1/|∇u|` where the air is at rest and θ is stratified (5.7e6 m²/s at the
+first step of a convective boundary layer started from rest, with
+`|u| ≈ 0.01` m/s). The buoyancy term is therefore multiplied by
+`min(1, 1/Ri_∇)`, with `Ri_∇ = (g/θ₀)|∇θ| / (∂_l u_m ∂_l u_m)` a
+gradient Richardson number (`|g/θ₀||∇θ|` is `|N²|` for a vertical θ
+gradient). This changes nothing where `Ri_∇ ≤ 1`: `Ri_∇` is at most the
+gradient Richardson number `N²/((∂_z u)² + (∂_z v)²)`, and the
+Miles–Howard threshold of shear instability is `Ri_g = 1/4`, so resolved
+shear turbulence keeps the published model (measured in
+test/era6_amd_vreman.jl: on a decaying-turbulence field at bulk Richardson
+number 0.1, 0.53 % of the cells have `Ri_∇ > 1` and the AMD dissipation
+`⟨2ν_t S_ij S_ij⟩` changes by −2.4e-5, relative). Where
+`Ri_∇ > 1` the buoyancy contribution becomes
+`C (g/θ₀)(δ_k∂_k w)(δ_k∂_k θ) / ((g/θ₀)|∇θ|) ≤ C δ_max² |∇w|`, which
+vanishes with the velocity gradient, and in every regime it is bounded by
+`C δ_max² N_∇` with `N_∇ = √(|g/θ₀||∇θ|)` (Cauchy–Schwarz on the
+δ-weighted product). Neither Rozema et al. (2015) nor Abkar & Moin (2017)
+regularise the denominator; Oceananigans' AMD guards only
+`∂_l u_m ∂_l u_m = 0` and leaves the buoyancy term off by default as
+unvalidated.
 
 * `C` — the modified Poincaré constant; 0.3 for a second-order central
   discretisation (Rozema et al. 2015, their decaying-turbulence tests;
