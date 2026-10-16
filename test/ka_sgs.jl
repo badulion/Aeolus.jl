@@ -291,7 +291,7 @@ sgs_grid() = RegularGrid(Float64; size = (13, 11, 9), extent = (1.3, 1.7, 0.8), 
             ref = Field(CellCenter(), gg)
             LegacySGS.dual_strain!(ref.data, uu.data, vv.data, ww.data, bc, gg)
             scale = maximum(abs, interior_view(ref))
-            got = Dict{String,Vector{UInt64}}()
+            got = Dict{String,Array{Float64,3}}()
             for (bname, b) in SGS_BACKENDS
                 D = Field(CellCenter(), gg); D.data .= randn(rng, size(D.data))
                 with_backend(b) do
