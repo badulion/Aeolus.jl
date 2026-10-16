@@ -405,7 +405,10 @@ function smoke_check(c::TurbulenceDiag, case)
     zs = [(k - 0.5) * case.mesh.dz for k in 1:case.mesh.Nz]
     above = [k for k in eachindex(zs)
              if zi + case.mesh.dz < zs[k] < cfg.sponge_frac * cfg.extent[3]]
-    inv = isempty(above) ?
+    # A sounding without a capping inversion (initial z_i = 0: no parcel
+    # inversion, e.g. the 06:00 Lindenberg launch, #490) has none to test.
+    inv = zi <= 0 ? ("no capping inversion in the initial profile (z_i = 0 m)" => true) :
+          isempty(above) ?
         (@sprintf("no capping inversion inside the box (initial z_i = %.0f m above %.0f m)",
                   zi, cfg.sponge_frac * cfg.extent[3]) => zi + case.mesh.dz >= cfg.sponge_frac * cfg.extent[3]) :
         ("stable above the capping inversion: plane-mean N² > 0, Ri_g > 0, f_m < 1" =>
