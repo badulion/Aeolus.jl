@@ -93,9 +93,10 @@ The planner of every FFT plan is set in one place,
 opt-in), or from the
 environment (`AEOLUS_FFTW_PLANNER`, `AEOLUS_FFTW_THREADS`) or a namelist
 `[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.Config.apply_fftw_config!)). `fftw_policy()` reports
-the planner, the thread count, whether wisdom was loaded and whether the
-run is bitwise reproducible; every checkpoint records it, and
-`save_fftw_wisdom` / `load_fftw_wisdom!` keep a restart on the same plans.
+the planner, the thread count and whether wisdom was loaded; every
+checkpoint records it, and `save_fftw_wisdom` / `load_fftw_wisdom!` let a
+restart reuse the plans instead of planning again. Bitwise reproducibility
+is not a goal (epic #493).
 The suite runs with `AEOLUS_FFTW_PLANNER=estimate`. These functions are
 documented with [Operators](operators.md#FFT-planning-policy).
 

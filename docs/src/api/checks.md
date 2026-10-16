@@ -27,7 +27,7 @@ The "unattributed" part is the change that no stage entry booked:
 `(:core, :unattributed)` and `(:output, :between_steps)`. A closure check
 therefore also fails when something changed the air outside the
 pipeline. The budgets measure the state without changing it: a run with
-checks is bit for bit the run without them.
+checks steps the same state as the run without them.
 
 ```toml
 [checks]

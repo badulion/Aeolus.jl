@@ -5,7 +5,7 @@ and parallel-decomposition machinery.
 
 ## I/O and checkpointing
 
-Full-state checkpoints, bitwise restart and periodic checkpoints have
+Full-state checkpoints, restart and periodic checkpoints have
 their own page: [I/O, checkpoints and restart](io.md).
 
 ## NetCDF output

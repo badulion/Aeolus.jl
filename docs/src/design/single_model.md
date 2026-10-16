@@ -52,6 +52,7 @@ them.
 | Dynamical cores | **Every component supports both cores**, Boussinesq and anelastic, checkpointing included. There is no core-specific component and no "Boussinesq only" declaration. |
 | Self-nesting feedback | **Two-way by default** for an Aeolus parent driving an Aeolus child (as in PALM). One-way stays available per child. Driving from reanalysis or a mesoscale model (offline, through the dynamic driver) is one-way by nature. |
 | Compatibility | **Clean break.** All shipped configs are converted in the same PRs; old names, old run folders and old checkpoints are not supported. |
+| Reproducibility | **Speed over bit-identity** (2026-10-16, epic #493). Results may differ in the last bits between thread counts (Julia, BLAS, FFTW), machines, restarts and refactors. Tests compare with stated tolerances, conservation, statistics and analytic limits; exact equality only for copied data (checkpoint read-back, config parsing, regenerated drivers). |
 
 ## What exists today, and why it changes
 
@@ -118,7 +119,7 @@ interface (`Aeolus.Components`, in the core) is:
 | `budget!(c, domain, budgets)` | Its terms in the shared budgets (energy, water, mass, momentum, tracers). |
 | `outputs(c)` | Its output catalogue: names, units, dimensions, how each is computed. |
 | `checks(c)` | The checks it offers: name, tolerance default, evaluation. |
-| `checkpoint_state(c)` | Everything it needs for a bit-identical restart. |
+| `checkpoint_state(c)` | Everything the next step reads (a restart continues the run). |
 
 Physics lives in the physics modules (`SurfaceExchange`, `Radiation`,
 `Microphysics`, `Chemistry`, …). A component is a thin adapter from the
@@ -325,10 +326,11 @@ The order of the epic:
 7. The preprocessing split.
 8. Examples, docs and the enforcement test.
 
-Every step that is not a physics change must reproduce today's results bit for
+Every step that is not a physics change had to reproduce the results bit for
 bit, checked on the config digests, the Berlin smoke and the thread-invariance
-harness. Re-captures are allowed only with a stated reason, and assertions are
-never weakened.
+harness, with re-captures only for a stated reason. That rule held for the
+whole epic (#459); since 2026-10-16 (epic #493) results need not be
+bit-identical, and a refactor is checked within a stated tolerance.
 
 **The urban site after ONE-k (#474).** The site is a `Model` of one domain
 stepped by `step!(::Model)` and run by the model's run loop: the

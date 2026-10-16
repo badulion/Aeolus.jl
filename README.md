@@ -44,13 +44,14 @@ building height · resolved vertical velocity at 30 m.</sub>
 - **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
   NCDatasets). PNG, Mie scattering, error and Bessel functions are
   written in the package.
-- **Single-node CPU, multithreaded** through KernelAbstractions, with
-  results bit-identical at every thread count. MPI and GPU are planned,
+- **Single-node CPU, multithreaded** through KernelAbstractions; speed
+  comes before bitwise reproducibility (results may differ in the last
+  bits between thread counts and machines). MPI and GPU are planned,
   not present.
 - **One model; every run is a TOML file plus input drivers**:
   `julia -m Aeolus run config.toml` runs the same model every time, its
   sections switch components on, validation is strict, and the run
-  folder's `run.toml` replays the run bit for bit. Examples are
+  folder's `run.toml` replays the run. Examples are
   configuration only: `examples/<case>/<case>.toml` with its NetCDF
   drivers, and no script builds or steps a model.
 
@@ -303,7 +304,7 @@ julia --project -m Aeolus run examples/dry_convective_bl/dry_convective_bl.toml
 ```
 
 The run folder (`runs/<date>_dry_convective_bl_<id>/`) holds `run.toml`,
-which replays the run bit for bit, the log, `diagnostics.csv`, the NetCDF
+which replays the run, the log, `diagnostics.csv`, the NetCDF
 output and `output/results.toml` with the checks. Measured on one thread
 (60 steps of 5 s, 29 s wall):
 
