@@ -38,7 +38,7 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **121,573 assertions in the fast tier (147 jobs)**, run by CI on every
+- **120,748 assertions in the fast tier (149 jobs)**, run by CI on every
   pull request; the full tier adds the validation mini-simulations.
   104,000 lines of source, 72,000 lines of tests.
 - **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
