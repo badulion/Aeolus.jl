@@ -101,7 +101,7 @@ module Radiosity
 # for bit.
 
 using LinearAlgebra
-using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!
+using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!, with_dense_blas
 using ..Grids
 using ..Grids: RegularGrid
 using ..RadiationCore
@@ -1736,7 +1736,8 @@ diffuse_sky_irradiance(vf::ViewFactors{T}, dhi::Real) where {T} =
 The factorisation of the radiosity operator `M = I − diag(ρ)F`, kept between
 calls of [`solve_radiosity_direct`](@ref) (and of [`solve_shortwave`](@ref) /
 [`solve_longwave`](@ref) with `cache = c`). A dense LU of `M` costs `O(n³)`
-— 1.9 s for the 5639 facets of the Berlin scene on one BLAS thread — while
+— 1.67 s for the 5639 facets of the Berlin scene on one BLAS thread, 0.20 s
+on the 12 of `Backends.dense_blas_threads()` (#496) — while
 solving with a stored LU costs `O(n²)`. The factorisation depends on the view
 factors `F` and on the reflectance `ρ` only, not on the source `E`, so it can
 be reused for as long as both are unchanged (KA-n, #305):
@@ -1748,10 +1749,9 @@ be reused for as long as both are unchanged (KA-n, #305):
 
 The cache is keyed on the identity of `F` (`===`; `F` must not be mutated in
 place while it is cached) and on the **values** of `ρ` (`==`). On a hit the
-solve is the same LAPACK `getrs` on the same factors as a refactorisation, so
-a cached solve gives exactly the bits of an uncached one at the same BLAS
-thread count (`init_threads!` pins BLAS to one thread when Julia runs
-threaded). `nfactor` counts the factorisations. Use one cache per band: a
+solve is the same LAPACK `getrs` on the same factors as a refactorisation.
+The factorisations and solves run on `Backends.dense_blas_threads()` BLAS
+threads (`with_dense_blas`, #496). `nfactor` counts the factorisations. Use one cache per band: a
 shortwave and a longwave solve sharing one cache would refactorise every time.
 The cache holds one `n × n` matrix (254 MB at n = 5639).
 """
@@ -1795,7 +1795,7 @@ function _radiosity_factorize(F::AbstractMatrix{T}, ρ::AbstractVector{T}) where
     elseif istriu(M)
         return UpperTriangular(M)
     end
-    return lu!(M)
+    return with_dense_blas(() -> lu!(M))
 end
 
 """
@@ -1833,7 +1833,7 @@ function solve_radiosity_direct(F::AbstractMatrix{T}, ρ::AbstractVector{T},
     length(ρ) == n ||
         error("solve_radiosity_direct: ρ has $(length(ρ)) entries, expected $n")
     fac = cache === nothing ? _radiosity_factorize(F, ρ) : _cached_factor!(cache, F, ρ)
-    return fac \ collect(E)
+    return with_dense_blas(() -> fac \ collect(E))
 end
 
 """
@@ -2334,7 +2334,7 @@ function longwave_response(s::RadiosityScene{T}, vf::ViewFactors{T}) where {T}
     @inbounds for j in 1:n, i in 1:n
         M[i, j] = (i == j ? one(T) : zero(T)) - vf.F[i, j] * (one(T) - ε[j])
     end
-    X = lu!(M) \ hcat(vf.F, vf.F_sky)
+    X = with_dense_blas(() -> lu!(M) \ hcat(vf.F, vf.F_sky))
     J = ε .* X[:, 1:n]
     @inbounds for i in 1:n
         J[i, i] -= one(T)

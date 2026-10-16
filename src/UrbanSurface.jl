@@ -90,7 +90,7 @@ using ..Radiosity: Radiosity, RadiosityScene, ViewFactors, Facet, LongwaveRespon
 import ..Radiosity: facet_temperatures, nfacets
 using LinearAlgebra: I, lu!, mul!, dot, norm
 using ..TimeIntegration: NumericalFailure   # a diverged solver (#327 M6)
-using ..Backends: AbstractBackend, backend, foreach_column!
+using ..Backends: Backends, AbstractBackend, backend, foreach_column!
 
 export ThermalMaterial, thermal_material, thermal_material_names,
        volumetric_heat_capacity, thermal_diffusivity, thermal_admittance,
@@ -1367,7 +1367,7 @@ function _solve_scene_direct(s::_SceneStep{T}, lhs, R, pinned, y, Φ) where {T}
             M[n + k, n + k] += A * s.g[i]
         end
     end
-    sol = n + m == 0 ? T[] : lu!(M) \ rhs
+    sol = n + m == 0 ? T[] : Backends.with_dense_blas(() -> lu!(M) \ rhs)
     x = sol[1:n]
     yy = T[pinned[k] ? T(y[k]) : sol[n + k] for k in 1:m]
     ΦΦ = T[pinned[k] ? sol[n + k] : T(Φ[k]) for k in 1:m]
