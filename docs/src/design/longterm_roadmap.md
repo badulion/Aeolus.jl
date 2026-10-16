@@ -2224,15 +2224,27 @@ stepped at its own dt; the failure was the forced step.
 **Open after these blocks**: #397 (FFTW MEASURE segfault);
 #238 (implausible Berlin nights).
 
-### One model: core code, configuration and input drivers (epic #459) — not complete
+### One model: core code, configuration and input drivers (epic #459) — ✅ SHIPPED
 
 The target is `docs/src/design/single_model.md` (PR #449, agreed with the
 maintainer on 2026-10-09): one model, a run is a TOML configuration plus
 its static and dynamic drivers, physics reaches a run as a component of a
 fixed stage pipeline, and examples are configuration. It supersedes epic
-#443 (EX-a … EX-e) and PRs #447/#448. **Not marked shipped**: the nest
-parent of an urban site and seven validation run types are still legacy
-cases, and the urban site steps its core itself (see "Open" below).
+#443 (EX-a … EX-e) and PRs #447/#448 (closed 2026-10-16). Shipped
+2026-10-16 with NEST-p3 (#497): one model, one nest engine, one
+assembly path (`aeolus run` → `SimulationDriver` → `Model`); the urban
+site, its nest parent and the former validation run types are
+configurations of it.
+
+**Sizes, before → after**: urban code 16,600 lines (`src/UrbanCase.jl` +
+`src/urban/`, before ONE-e) → 12,961 (`src/components/urban.jl` +
+`src/components/urban/`); `src/sbl/` 2,277 → 0 (GABLS/CASES-99 are
+configurations); `Aeolus.RunDrivers` and the `ParentCase`/`ParentConfig`/
+`urban_parent` parent gone; three assembly paths (the model, the urban
+case, the run types) → one; `src/config/simulation_driver.jl` 630 →
+1,401 lines, the one builder (nesting, the urban site and its parent
+included). All of `src/`: 127,813 lines. Fast tier on master after the
+last merge: 149 jobs, 120,748 pass, 0 fail.
 
 What was built, in the epic's order:
 - **ONE-a (#450 / PR #462)**: `Aeolus.Components`: the component
@@ -2280,6 +2292,44 @@ What was built, in the epic's order:
   `Config.DRIVER_FILES` and `run_configs`. The dry CBL of the README,
   32³, 60 steps of 5 s: energy closure 3.4e-13 W m⁻² of 279.98 W m⁻²
   stored, momentum closure 2.4e-21 kg m⁻¹ s⁻².
+- **ONE-k (#474 / PR #478)**: the urban site is a component of its
+  domain (`UrbanSite`), stepped by `step!(::Model)` through the model's
+  run loop; `UrbanCase`'s run loop, `CaseConfig`, its NetCDF writer and
+  restart are gone, and `Aeolus.UrbanCase` is `Aeolus.Urban` under
+  `src/components/urban/` (14,083 → 13,889 lines). 54 smoke runs, 1137
+  digests, unchanged.
+- **ONE-l (#475 / PR #477)**: the seven `Aeolus.RunDrivers` run types
+  ported to configurations or dropped (`inflow_fetch`, `obstacle_channel`:
+  channel cases), `Aeolus.RunDrivers` deleted; the channel harness moved
+  to `test/fixtures/channel_cases.jl`. KH, flat plate and CBL-TKE match
+  the old scripts; `scalar_advection_2d` is a stated physics change
+  (centred flux form on the staggered grid), mean θ constant to every
+  digit over 1006 steps.
+- **ONE-m (#476 / PR #479)**: one key per exclusive slot (`[core] model`,
+  `[timestep] scheme`, `[sgs] model`, `[surface] model`, `[microphysics]
+  scheme`, `[advection] scheme`); no enable/disable pairs.
+- **NEST-p2 (#482 / PR #485)**: one nest engine (`ModelNest`): windows,
+  adaptive root steps with the smallest stable whole number of child
+  substeps, a failed window retried from a snapshot, siblings in
+  parallel. Adaptive windows 6.1× cheaper per simulated second than
+  fixed ones on the 64×64×32 test nest (8 s windows, n = 3, 0.065 s).
+- **NEST-p1 (#481 / PR #486)**: the Berlin parent's physics as
+  components (tiled surface, prescribed flux, mean-column radiation,
+  forcing); the 96×96×38 tiled parent steps in 0.0711 s through the
+  pipeline against 0.0742 s before.
+- **NEST-p3 (#483 / PR #497)**: complete per-domain configs
+  (`--set domain.<id>.<section>.<key>`); the Berlin parent is a
+  `[[domain]]` with its own static driver (AeolusPrep.jl writes its
+  tiles, the site's classes under the site's footprint); the site is a
+  child of `ModelNest`; `ParentCase`, `ParentConfig`, `urban_parent`
+  and NestedRun's window API deleted (`src/components/urban` 14,204 →
+  12,950 lines). Berlin smoke, 48 s on one thread: 2,175 → 1,947 s
+  wall per simulated hour, 0.97 → 0.79 s per site step; a nest with an
+  urban site no longer snapshots its windows (3.5–4.4 s per 1.5 s
+  window measured).
+- **PREP-fix (#487 / PR #488)**: AeolusPrep.jl's suite green against
+  Aeolus again (132/17/10 → 243/0/0), and `bin/test-against <checkout>`
+  in AeolusPrep runs it against any Aeolus branch.
 
 **Expectations that were wrong** (recorded in the PRs): ONE-g's GABLS3
 jet-height bound was narrower than the scatter between realisations
@@ -2289,32 +2339,21 @@ tolerance of 1e-9 was below the round-off of the measured change
 t = 0, which the run monitor never writes (rows at 60 … 480 s). **Bugs the tests caught**: a nested run's guard snapshot held
 the root at t = 4 s and the child at t = 0 (ONE-f); a `mean` writer's
 open averaging intervals were not checkpointed (ONE-g: u* 0.5027 vs
-0.5083 after a resume).
+0.5083 after a resume). Later: `[sgs] model = "tke"` could not be built
+on a stretched grid (NEST-p1); an earlier NEST-p3 commit silently
+dropped the site's footprint from the parent's tiles (restored as
+driver data); the Berlin smoke digests depended on the BLAS thread
+count, not on load (#489: the radiosity LU). Expectations that proved
+wrong in NEST-p3: the smoke checks' Bird tolerance at μ₀ = 0.148
+(−15.2 %, outside the calibrated μ₀ ≥ 0.27) and the stability check
+on a profile with no capping inversion (#490).
 
-**Open**:
-- the nest parent of an urban site alone (`[run] legacy = "urban_parent"`,
-  `Aeolus.UrbanCase.ParentCase`), which the design replaces by a
-  `[[domain]]` of its own;
-- the urban site steps its core in its own loop (`UrbanCase.step_case!`):
-  it runs the pipeline's stages and passes its domain's hooks
-  (`Components.core_hooks`) to `step!`, `step_adaptive!` or `step_imex!`
-  itself, instead of being stepped by `step!(::Model, dt)`;
-- the seven validation run types of `Aeolus.RunDrivers` (`advection`,
-  `cbl`, `inflow_fetch`, `obstacle_channel`, `shear_layer`, `flat_plate`,
-  `sgs_decay`) as configurations: they need components the model does
-  not have yet (a prescribed kinematic flow, the prognostic SGS TKE
-  closure in `[sgs]`, a bulk-velocity controller, a fringe with
-  free-stream turbulence, synthetic inflow on a single domain, the
-  parent's inflow statistics) and output-catalogue entries for the
-  numbers they compute;
-- the core's step keywords (`body_force!`, `post_predictor!`, `sgs` on
-  `step!` / `step_rk3!` / `step_adaptive!` / `step_imex!`): in a run of
-  the model only `Components` and the nest it builds (`Nesting`'s
-  `DomainAdvance`) pass them, as the pipeline's hooks; their other
-  callers are the three items above, the wall-bounded benchmark harness
-  of `WallModels` (`advance_channel!`, which four wall-model module tests
-  and `inflow_fetch` use) and the module tests (56 test files). They can
-  become private once those are ported.
+**Left for #498**: the run-driver registry and `[run] legacy` hold one
+entry (the model) and go; the core's step keywords (`body_force!`,
+`post_predictor!`, `sgs`) become private once the wall-model channel
+harness, the flat plate, the immersed-boundary path and the urban time
+stepper pass the pipeline's hooks. #484 (attributed budget exchange
+across nests) and #461 (external LES validation) are separate.
 
 ---
 
