@@ -10,6 +10,12 @@ using Random
 # comparisons hold across processes, and planning is fast). Set before
 # `using Aeolus`; subprocesses the tests start inherit it.
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
+# #489: and every BLAS call on one thread. With one Julia thread the model
+# leaves BLAS at its default (the machine's core count), and the radiosity
+# solve's LU rounds differently per BLAS thread count, so a digest would be
+# machine-dependent; test/run.jl's workers already run OPENBLAS_NUM_THREADS=1.
+using LinearAlgebra: BLAS
+BLAS.set_num_threads(1)
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
