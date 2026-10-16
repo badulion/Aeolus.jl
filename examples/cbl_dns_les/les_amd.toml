@@ -1,0 +1,79 @@
+# Convective boundary layer, DNS against LES (#503): the LES with the
+# `amd` closure. The setup of dns.toml (Q = 0.1 K m/s, Γ = 3 K/km,
+# ν = 1.333 m²/s: Re₀ = 25, no-slip z walls, 2 h) on the LES grid:
+# 64 × 64 × 64 cells, Δx = 40 m, Δz = 25 m (the DNS: 256 × 256 × 189,
+# Δx = 10 m, Δz = 2.5-10 m). The molecular viscosity is kept, so the LES
+# and the DNS simulate the same flow; the closure adds the subgrid part.
+#
+#   julia --project -t 12 -m Aeolus run examples/cbl_dns_les/les_amd.toml
+
+schema_version = 2
+
+[run]
+name = "cbl_les_amd"
+seed = 1
+
+[grid]
+size = [64, 64, 64]
+extent = [2560.0, 2560.0, 1600.0]
+
+[dynamics]
+theta0 = 300.0
+g = 9.81
+nu = 1.333
+
+[boundaries]
+x = "periodic"
+y = "periodic"
+z = "noslip"
+theta_top = "initial_gradient"
+
+[sgs]
+model = "amd"
+
+[surface_theta_flux]
+bottom = 0.1
+
+[sponge]
+alpha_max = 0.01
+z_start = 1300.0
+
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 0.0, lapse = 0.003 }
+perturbation_amplitude = 0.1
+perturbation_depth = 50.0
+
+[timestep]
+scheme = "rk3"
+
+[time]
+dt = "adaptive"
+cfl = 0.5
+dt_max = 5.0
+duration = 7200.0
+
+[output]
+variables = ["theta_profile", "heat_flux_profile", "w_variance_profile", "resolved_tke_profile",
+             "w", "theta", "kinetic_energy"]
+averaging = "instant"
+cadence = 600.0
+series_cadence = 60.0
+
+[logging]
+diagnostics_cadence = 60.0
+
+[checks]
+finite = { required = true }
+energy_closure = { required = false }
+
+[fftw]
+planner = "estimate"
+
+# The smoke size of this file for the round-trip coverage suite (test/config_roundtrip.jl,
+# CFG-i #364): ignored by the loader, not part of the resolved config.
+[test]
+overrides = [
+    "grid.size=[16,16,16]",
+    "time.duration=\"none\"",
+    "time.nsteps=5",
+]
