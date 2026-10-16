@@ -332,6 +332,15 @@ end
         r2 = init_threads!(CPUBackend(); fftw_threads = 2)
         @test r2.fftw_threads == 2 == Aeolus.fftw_policy().threads == nfftw()  # through the policy
         @test init_threads!(CPUBackend()).fftw_threads == 2
+        # NBI-c (#496): the dense solves run on dense_blas_threads() (here the
+        # explicit blas_threads) for their duration, and the count is restored,
+        # after an error too
+        init_threads!(CPUBackend(); blas_threads = 2)
+        @test Aeolus.Backends.dense_blas_threads() == 2
+        BLAS.set_num_threads(1)
+        @test Aeolus.Backends.with_dense_blas(() -> BLAS.get_num_threads()) == 2 && BLAS.get_num_threads() == 1
+        @test_throws ErrorException Aeolus.Backends.with_dense_blas(() -> error("in the solve"))
+        @test BLAS.get_num_threads() == 1
         init_threads!(CPUBackend(); fftw_threads = fftw0, blas_threads = blas0)
         st.threads_explicit = explicit0
         @test Aeolus.fftw_policy().threads == fftw0 && BLAS.get_num_threads() == blas0

@@ -22,6 +22,7 @@ using Random: AbstractRNG
 
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
+       dense_blas_threads, with_dense_blas,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
@@ -203,10 +204,10 @@ that thread on their own. Call it before the simulation (and so its FFT
 plans) is built: an FFTW plan keeps the thread count it was made with.
 
   * **BLAS** is pinned to one thread when Julia runs threaded
-    (`Threads.nthreads() > 1`; maintainer decision on #294): BLAS threads
-    would compete with the kernel tasks, and a threaded BLAS may split a
-    reduction differently at different thread counts. `blas_threads`
-    overrides.
+    (`Threads.nthreads() > 1`; #294): idle BLAS threads would compete with
+    the kernel tasks. The dense solves, which run while the kernels wait
+    (the radiosity LU), take [`dense_blas_threads`](@ref) for their duration
+    ([`with_dense_blas`](@ref)). `blas_threads` sets both.
   * **FFTW** runs on `Threads.nthreads()` threads (KA-h, #298; maintainer
     decision on #291): FFTW's threaded plans split the independent 1-D
     transforms between threads without changing any of them, so a solve
@@ -225,8 +226,10 @@ function init_threads!(b::AbstractBackend = default_backend();
                        blas_threads::Union{Nothing,Integer} = nothing)
     set_default_backend!(b)
     nt = Threads.nthreads()
+    _blas_default!()
     if blas_threads !== nothing
         BLAS.set_num_threads(Int(blas_threads))
+        _DENSE_BLAS[] = Int(blas_threads)
     elseif nt > 1
         BLAS.set_num_threads(1)
     end
@@ -238,6 +241,44 @@ function init_threads!(b::AbstractBackend = default_backend();
     return (backend = b, julia_threads = nt, blas_threads = BLAS.get_num_threads(),
             fftw_threads = _fftw_threads())
 end
+# The BLAS thread count OpenBLAS starts with (OPENBLAS_NUM_THREADS, else its
+# physical-core count), read once before anything changes it.
+const _BLAS_DEFAULT = Ref(0)
+const _DENSE_BLAS = Ref(0)
+_blas_default!() = (_BLAS_DEFAULT[] == 0 && (_BLAS_DEFAULT[] = BLAS.get_num_threads()); _BLAS_DEFAULT[])
+__init__() = (_blas_default!(); nothing)
+
+"""
+    dense_blas_threads() -> Int
+
+The BLAS thread count of the dense LAPACK solves (the radiosity LU and its
+solves, `with_dense_blas`): `blas_threads` of [`init_threads!`](@ref) if it
+was given, else the count OpenBLAS starts with (`OPENBLAS_NUM_THREADS`, else
+its physical-core count). They run while the kernel threads wait, so they
+use the cores (#496). Measured, the LU of the Berlin scene's 5639 facets:
+1.670 s on 1 thread, 0.453 s on 4, 0.204 s on 12 (OpenBLAS's default on the
+12-core, 24-thread development machine) and 0.986 s on 24 (hyperthreads).
+"""
+dense_blas_threads() = _DENSE_BLAS[] > 0 ? _DENSE_BLAS[] : _blas_default!()
+
+"""
+    with_dense_blas(f) -> f()
+
+Run `f` (a dense LAPACK solve) with BLAS on [`dense_blas_threads`](@ref)
+threads, then restore the count it had.
+"""
+function with_dense_blas(f)
+    n0 = BLAS.get_num_threads()
+    n = dense_blas_threads()
+    n == n0 && return f()
+    BLAS.set_num_threads(n)
+    try
+        return f()
+    finally
+        BLAS.set_num_threads(n0)
+    end
+end
+
 # The FFTW thread count as the policy reports it (Operators adds the method).
 function _fftw_threads end
 

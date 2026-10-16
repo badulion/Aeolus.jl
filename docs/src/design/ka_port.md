@@ -300,10 +300,14 @@ quotes its size.
   out, plan, in)` between kernel launches, never inside a kernel, so a GPU
   backend can put cuFFT behind the same call (Phase 81).
 * **BLAS** is pinned to one thread whenever Julia runs threaded (the
-  accepted default on #294). BLAS threads would oversubscribe the cores
-  next to the kernel tasks, and a threaded BLAS may split a reduction
-  differently at different thread counts. Under `-t 1` the BLAS setting
-  is left alone.
+  accepted default on #294): BLAS threads would oversubscribe the cores
+  next to the kernel tasks. The dense solves (the radiosity LU and its
+  solves, the direct facet solve), which run while the kernels wait, use
+  `Backends.dense_blas_threads()` for their duration (#496; OpenBLAS's
+  default, its physical-core count, unless `blas_threads` or
+  `OPENBLAS_NUM_THREADS` says otherwise). Under `-t 1` the BLAS setting is
+  left alone. (Bit-identity across BLAS thread counts is not a goal since
+  epic #493.)
 
 ## The thread-invariance harness
 
@@ -1364,10 +1368,10 @@ fft, fv, pcg, radiation, advection) are identical at 4 and 24 threads to
   five classes change, from 0.140 / 0.268 / 0.293 / 0.359 / 0.272 at
   μ₀ = 0.1 to 0.121 / 0.204 / 0.186 / 0.031 / 0.217 at 0.9), so the
   shortwave operator is still refactorised on every daytime call.
-* *BLAS.* Pinned to one thread when Julia runs threaded (KA-a). LAPACK's
-  bits depend on the BLAS thread count, so the harness section pins it
-  too. Under `-t 1` the BLAS setting is left alone, and a cached solve
-  equals an uncached one at whatever count is set.
+* *BLAS.* Pinned to one thread when Julia runs threaded (KA-a); the
+  LU and its solves run on `dense_blas_threads()` since #496 (1.773 →
+  0.358 s for the 5639 facets with the threaded assembly, 12 threads).
+  LAPACK rounds differently per BLAS thread count, within round-off.
 * *View factors and aggregation.* `view_factors` is one
   `launch_weighted!` over pairs of upper-triangle rows `(p, n − p)`, each
   writing `F[i, j]` and `F[j, i]` of its own rows. The Gauss nodes are
