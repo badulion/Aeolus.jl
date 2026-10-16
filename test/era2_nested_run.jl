@@ -599,7 +599,8 @@ end
         sa = boundary_time(a, a.t0 + 0.4a.Δt); sb = boundary_time(b, b.t0 + 0.4b.Δt)
         ii, jj, kk = interior(cm)
         halo = [I for I in CartesianIndices(sb.θ.data) if !(I[1] in ii && I[2] in jj && I[3] in kk)]
-        @test agree(sa.θ[halo], sb.θ[halo]) && agree(sa.u[halo], sb.u[halo])
+        at(f) = [f[I[1], I[2], I[3]] for I in halo]
+        @test agree(at(sa.θ), at(sb.θ)) && agree(at(sa.u), at(sb.u))
         if fb === :one_way
             bytes(r) = sum(st -> sum(Aeolus.Nesting._data_bytes(getproperty(st, f).data)
                                      for f in (:u, :v, :w, :θ)), (r.s_old, r.s_new, r.s_bc))
