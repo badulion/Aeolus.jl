@@ -90,26 +90,36 @@ The boundary-layer components of the SBL cases (ONE-g, #456), on both cores:
 | [`SurfaceLayer`](@ref Aeolus.Components.SurfaceLayer) | `:surface` | `[surface]` `model = "most"` (ONE-m #476; the slot's other providers are the couplings `none`, `slab`, `flux_map`), `z0m`, `z0h`, `temperature`, `stability`, `rho_cp` | `:surface_flux` (the solve), `:tendencies` (heat flux), `:post_predictor` (wall stress) | `SurfaceExchange.solve_surface_layer`, `WallModels.MOSTWallLaw`, `apply_wall_stress!` |
 | [`Towers`](@ref Aeolus.Components.Towers) | — | `[towers]` `below`, `window`, `hours` | `:output` | `Transition.TowerSampler`, `hockey_stick_threshold` |
 
-The urban nest parent's physics (NEST-p1, #481), components of the
-parent's domain ([`parent_domain`](@ref Aeolus.Urban.parent_domain)), on
-both cores, checkpointed:
+The urban nest parent's physics (NEST-p1, #481), components of a model
+domain that its `[[domain]]` block enables (NEST-p3, #483), on both
+cores, checkpointed:
 
 | component | slot | section | stage | delegates to |
 | :-- | :-- | :-- | :-- | :-- |
-| [`TiledUrbanSurface`](@ref Aeolus.Urban.TiledUrbanSurface) | `:surface` | `[surface]` `model = "tiles"`: `period`, `u_min`, `sw_down`, `lw_down`; the land use is the tile form of the domain's static driver (`drivers.static_tiles`), the tiles those of an urban site's class-to-surface factory | `:surface_flux` (the held canopy sources, a tile step every `period`), `:post_predictor` (the implicit drag) | `SurfaceTiles` (`step_parent_column!`), [`build_parent_surface`](@ref Aeolus.Urban.build_parent_surface) |
-| [`PrescribedSurfaceFlux`](@ref Aeolus.Urban.PrescribedSurfaceFlux) | `:surface` | `[surface]` `model = "prescribed"` (the functions of time `q_surface`, `e_surface` are build options) | `:surface_flux` | `LargeScaleForcing.forcing_mean` |
-| [`MeanColumnRadiation`](@ref Aeolus.Urban.MeanColumnRadiation) | `:radiation` | `[radiation]` `scheme = "mean_column"`: `period`, `humid`; the sun of the site's clock ([`SiteSun`](@ref Aeolus.Urban.SiteSun)) | `:surface_flux`, order 1 (after the surface: the call every `period`, the heating every step) | `ColumnRadiation.column_radiation!`, `stitched_column` |
+| [`TiledUrbanSurface`](@ref Aeolus.Urban.TiledUrbanSurface) | `:surface` | `[surface]` `model = "tiles"`: `period`, `u_min`, `sw_down`, `lw_down` and the class options (`ts0`, `z0m`, the soil, …: `TileClasses`, the urban site's defaults); the land use is the tile form of the domain's static driver (`drivers.static_tiles`); its maps are static outputs | `:surface_flux` (the held canopy sources, a tile step every `period`), `:post_predictor` (the implicit drag) | `SurfaceTiles` (`step_parent_column!`), [`build_parent_surface`](@ref Aeolus.Urban.build_parent_surface) |
+| [`PrescribedSurfaceFlux`](@ref Aeolus.Urban.PrescribedSurfaceFlux) | `:surface` | `[surface]` `model = "prescribed"`: `q_surface`, `e_surface`, functions of time (`{kind = "constant"}` or `{kind = "series"}`) | `:surface_flux` | `LargeScaleForcing.forcing_mean` |
+| [`MeanColumnRadiation`](@ref Aeolus.Urban.MeanColumnRadiation) | `:radiation` | `[radiation]` `scheme = "mean_column"`: `period`, `humid`, the place and clock of the sun (`latitude`, `longitude`, `elevation`, `date`, `utc_offset`, `start_hour`; [`SiteSun`](@ref Aeolus.Urban.SiteSun)) | `:surface_flux`, order 1 (after the surface: the call every `period`, the heating every step) | `ColumnRadiation.column_radiation!`, `stitched_column` |
 
-The parent's large-scale forcing is the `LargeScale` component on the
-core's substage clock (`clock = :core`: the windows the parent's
-forcing has used since #259; the step mean of the configuration is a
-physics change for a later issue) with a `BoundaryLayerTracker` for its
-nudging weight, and its closure `[sgs] model = "tke"` with the exact wall
-distance of the stretched grid (`wall_cap_top = false`) and the tiles'
-surface value. These three sections are not yet in the model's
-configuration schema: the parent is built from `[nesting.parent]`
-(`ParentConfig`) until it is a `[[domain]]` of its own (NEST-p2/p3), and
-the tiles need an urban site's class tables.
+The parent's large-scale forcing is the `LargeScale` component of
+`[large_scale_forcing]` (NEST-p3, #483: `u_g`, `v_g = "sounding"` above
+`z_g`, `sounding_nudging_tau` above the tracked boundary layer with its
+`BoundaryLayerTracker`, `divergence`, `damping_rate` toward the initial
+profile or the sounding) on the step-mean clock, and its closure `[sgs]
+model = "tke"` with the exact wall distance of the stretched grid
+(`wall_cap_top = false`) and the tiles' surface value.
+
+**The urban site in a nest (NEST-p3, #483).** An urban site is a
+`[[domain]]` nested in a domain of the model's core: it joins its
+parent's nest hierarchy while it is built (its `:nesting` component's
+`init!`, `Nesting.add_nest!`, a `prebuilt` [`NestLink`](@ref
+Aeolus.Components.NestLink); [`link_domain!`](@ref
+Aeolus.Components.link_domain!) links the domains before it), and the
+engine steps it through its own pipeline in each window, every step of
+the length the site picks (`next_dt`, landing on
+`Nesting.nest_window_end`); a fixed-step site makes the root's window a
+whole number of its steps ([`window_dt`](@ref Aeolus.Components.window_dt)).
+Such a nest does not save and retry its windows: the site retries its own
+pieces.
 
 The components of the validation cases (ONE-l, #475; the former run
 types of `Aeolus.RunDrivers`), on both cores, checkpointed:
@@ -568,19 +578,15 @@ two-way composite θ changes by 2.2e-15.
   case, Val(S), dt)`, since they read its shared state); the site builds
   its own core (the Coriolis force, the Smagorinsky coefficient and the
   sponge in the core's constructor, not the model's `Coriolis`, `SGS` and
-  `Sponge` components); and its nest parent (`ParentCase`,
-  `ParentConfig`, run by the `:nesting` component, and alone by the
-  `urban_parent` run type) is not yet a `[[domain]]`: that needs the
-  Berlin nest (one-way with the prefetched parent window, two-way, the
-  synthetic inflow) as the model's `ModelNest`. Its physics are
-  components of a core domain since NEST-p1 (#481, below).
+  `Sponge` components); and its nest parent was not yet a `[[domain]]`
+  (until NEST-p3, #483, below).
 * **NEST-p1 (#481): the parent's physics as components.** The tiled
   surface, the prescribed surface flux, the column radiation, the
   large-scale forcing with its boundary-layer-dependent nudging weight and
   the TKE closure on the stretched grid are components of the parent's
-  `Domain` ([`parent_domain`](@ref Aeolus.Urban.parent_domain)); the
-  hand-wired code of `ParentCase` that they replace is gone. `ParentCase`
-  is the shell the nest and the `urban_parent` run type step: its ledgers
+  `Domain`; the hand-wired code of `ParentCase` that they replace is gone.
+  `ParentCase` was the shell the nest and the `urban_parent` run type
+  stepped (until NEST-p3, #483): its ledgers
   (air heat, water) around the components' stage entries, in the
   pipeline's order. The domain alone through the pipeline
   (`step_adaptive!(domain)`) is that run bit for bit. Measured (FFTW

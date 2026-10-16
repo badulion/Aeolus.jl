@@ -6,6 +6,7 @@ using Aeolus.Nesting
 using Aeolus.StretchedGrids: StretchedGrid, zfaces, cell_thickness, surface_refined_faces
 using Aeolus.Grids: interior
 using Aeolus.Fields: set!, interior_view, location
+include(joinpath(@__DIR__, "support", "berlin_configs.jl"))  # site_view
 
 # =========================================================================
 # N-nest-b (#256): nesting operators on a z-stretched parent, in the
@@ -612,7 +613,7 @@ end
 # would make that parent value NaN.
 @testset "solid-aware restriction on the real Berlin solid field" begin
     BC = Aeolus.Urban
-    cfg = BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml")))
+    cfg = BC.site_options(site_view(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"))))
     pm = RegularGrid(Float64; size=(32, 32, 20), extent=(1000.0, 1000.0, 500.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.0, 1000.0), (0.0, 1000.0), (0.0, 400.0)), (2, 2, 4);
                        halo=(3, 3, 3))

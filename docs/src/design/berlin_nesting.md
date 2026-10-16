@@ -1,35 +1,42 @@
 # The Berlin case: nesting
 
-## Nesting (#265)
+## Nesting (#265; NEST-p3, #483)
 
 The default case is the child of a **one-way nest** inside an Aeolus
-parent run (N-berlin-nest, #265; the Berlin half of #153). The parent is
-the deep diurnal run of [The Berlin parent](berlin_parent.md) (#259); the
-coupling is `components/urban/nesting.jl` (`:nesting`, an addon, on by default),
-the src machinery `Aeolus.Nesting` (N-nest-a…d) and the open faces of
-`BoundaryConditions` (N-open-a…d). Two-way nesting is an option,
-`options[:nesting].mode = :two_way` (#267), **not validated**: see
+parent (N-berlin-nest, #265; the Berlin half of #153). Since NEST-p3
+(#483) the parent is a `[[domain]]` of the model's config, a domain of
+the model's core, and the site is the next `[[domain]]` block, nested in
+it at its `origin` and `refinement`; one engine steps both (the model's
+`Components.ModelNest`, NEST-p2 #482). The coupling of the site is
+`components/urban/nesting.jl` (`:nesting`, an addon), the src machinery
+`Aeolus.Nesting` (N-nest-a…d) and the open faces of `BoundaryConditions`
+(N-open-a…d). Two-way nesting is an option (`feedback = "two_way"` in the
+site's block, #267), **not validated**: see
 [Two-way option](#Two-way-option-(#267)) below.
 
-**Parent.** `options[:nesting].parent` holds `ParentConfig` keywords:
-empty for `:summer` (6 km × 6 km × 3 km, refinement (2, 2, 4): Δx =
-31.25 m, Δz = 25 m to 500 m, 192 × 192 × 53), the `:smoke` scenario
-sets a 1 km × 1 km × 500 m parent at (4, 4, 8) (16 × 16 × 10 cells of
-62.5 m × 50 m, the land use a crop of the 6 km table). The parent keeps
-all of its own physics — the tiled surface (`SurfaceTiles`), column
-radiation, the geostrophic pressure gradient, θ/qv nudging, θ damping,
-the fixed-gradient θ top, the TKE closure, SSP-RK3 under
-`step_adaptive!` — and its two ledgers; `step_parent!(p, h)` is the
-`NestedRun`'s `advance_parent` closure (`domain_advance`). The parent is
-centred on the child and placed in the child mesh's coordinates, so the
-child (64 × 64 × 64, 1 km × 1 km × 400 m, deepened for the nest) nests at
-its own origin: parent cells 81–112 in x and y, layers 1–16.
+**Parent.** The parent's block configures its whole physics ([The Berlin
+parent](berlin_parent.md), #259): `berlin_summer.toml`'s is 6 km × 6 km ×
+3 km on 192 × 192 × 53 cells (Δx = 31.25 m, Δz = 25 m to 500 m, then ×
+1.08 per level up to 100 m: `[grid] stretching = "surface_refined"`), the
+site at refinement (2, 2, 4); `berlin_smoke.toml`'s 1 km × 1 km × 500 m
+on 16 × 16 × 10 cells of 62.5 m × 50 m at refinement (4, 4, 8). Its
+components: the tiled urban surface of its static driver (`[surface]
+model = "tiles"`; the site's own classes under its footprint, AeolusPrep.jl),
+the column radiation of the plane-mean column (`[radiation] scheme =
+"mean_column"`), the geostrophic pressure gradient, θ/qv nudging and θ
+damping from the sounding driver (`[large_scale_forcing]`), the Coriolis
+force and velocity sponge, the TKE closure (`[sgs] model = "tke"`), the
+fixed-gradient θ top, SSP-RK3 at the root's adaptive step (`[time] cfl`,
+`dt_max`). The parent's corner is at minus the site's origin, so the
+site (64 × 64 × 64, 1 km × 1 km × 400 m) stands at its own corner (0, 0):
+parent cells 81–112 in x and y, layers 1–16.
 
-**Pluggable parent.** `options[:nesting].parent_driver` is `:aeolus` (the
-parent run) or any `AbstractBoundaryData` — the interface a mesoscale
-reader (#58) or reanalysis (#57) implements — which then feeds the same
-nest faces with no parent run (`:profile`, the analytic
-`case_boundary_data`, is the smoke variant of that path).
+**Pluggable parent.** A site alone (no parent `[[domain]]`) takes its
+faces from boundary data instead (`[nesting] parent_driver`): `"profile"`,
+the analytic `case_boundary_data`, `"offline"`, the parent-made dynamic
+driver of an online run (`[urban] child_boundaries`), or from Julia any
+`AbstractBoundaryData` — the interface a mesoscale reader (#58) or
+reanalysis (#57) implements.
 
 **Faces.** The coupling's `sim_options` give the core its boundary
 conditions (`nest_case_bcs`: a ground wall, the four sides and the top
@@ -38,71 +45,65 @@ default): `case_boundary_conditions` defines none for a nested case, so
 the periodic box and the θ `:initial_gradient` top are not built and
 nothing runs alongside. The default `:pressure_fft` provider reads the
 all-Neumann axes from them (`case_poisson_axes`). The `NestBoundaryData`
-of the run fills the faces at every stage time of every core
+of the link fills the faces at every stage time of every core
 (`update_open_boundaries!`) with the parent's field set prolongated at the
 two ends of the parent step and blended linearly in time, and the single
 mass-flux correction of N-open-b. Building faces inside solids keep
-`u·n = 0` (the child's mask). The core's velocity sponge and the θ
+`u·n = 0` (the site's mask). The core's velocity sponge and the θ
 relaxation over the same layer (`cfg.θ_relaxation`) relax toward the
-parent's mean profile over the child (`_covered_profile!`, refreshed at
+parent's mean profile over the site (`_covered_profile!`, refreshed at
 every window).
 
 **Field set.** θ, and every advected tracer, ql and qr. qv and the TKE
-`e` (`:sgs => :tke`) take the parent's values; the tracers the parent does
-not carry (ql, qr, the chemistry species, the pollutant if advected) get
-the `:inflow` halo — zero where the face's wind enters, their own value
-where it leaves (`add_open_scalars!`, after the couplings registered
-them). The tracers' halos are the core's open set (`tracer_bcs`). The
-child's initial wind is the parent's, prolongated (a wind that differs
-from the faces' makes ``∇·u ≠ 0`` in the boundary cells, and the first
-flux-form θ step then moves θ by ``-θ∇·uΔt``).
+`e` (the parent's `[sgs] model = "tke"`) take the parent's values; the
+tracers the parent does not carry (ql, qr, the chemistry species, the
+pollutant if advected) get the `:inflow` halo — zero where the face's
+wind enters, their own value where it leaves (`add_open_scalars!`, after
+the couplings registered them). This is the site's rule, not the model's
+PALM rule (a nested model domain carries exactly its parent's fields): the
+site's extra tracers are not its dynamic driver's either; the nest checks
+leave an urban child's fields to its `:nesting` component. The tracers'
+halos are the core's open set (`tracer_bcs`). The site's initial wind is
+the parent's, prolongated (a wind that differs from the faces' makes
+``∇·u ≠ 0`` in the boundary cells, and the first flux-form θ step then
+moves θ by ``-θ∇·uΔt``).
 
-**Time.** The child steps are the case's own (the `:adaptive` stepper),
-landing on the parent's windows:
+**Time.** One window of the nest engine is one step of the parent; the
+site's steps are its own (the `:adaptive` stepper, retrying its own
+pieces), landing on the window's end:
 
 | where | what |
 | :-- | :-- |
-| `step_dt` → `limit_dt` | the child's step: `subcycle_dt(R, dt)`, `R` the time left in the open window, or the parent's next step `parent_dt` when none is open |
-| `:nest_sync` (after `:clock`) | no window open: `begin_parent_step!` — the parent takes its step (a fixed child step: a whole number of child steps), prolongation at both ends, the faces point at the window; the relaxation targets are refreshed. One-way within a run (the model's run loop): the parent's step of the next window starts on its own task (`prefetch_parent_step!`, SC-c #403, below) |
+| the engine | the parent takes its adaptive step (the growth from the site's `[time] dt` at the first; with a fixed site step, a whole number of the site's steps, `Components.window_dt`), the window opens (prolongation at both ends, the faces point at it), the site steps to its end (`step!` of the site's domain, its whole pipeline), the window closes (one-way: the clock and the statistics; two-way: also the feedback onto the parent, see below); the last window lands on the run's end |
+| `step_dt` → `limit_dt` | the site's step: `subcycle_dt(R, dt)`, `R` the time left in the window (`Nesting.nest_window_end`) |
+| `:nest_sync` (after `:clock`) | the site's first step in a new window: the relaxation targets are refreshed, the boundary recorder writes, the window hooks run (the parent is at rest) |
 | dynamics (`advance_dynamics!`) | every core reads the blended parent at its stage times |
-| `:nest_feedback` (after `:column_tendency`) | the child reached the window's end: `end_parent_step!` (one-way: the clock and the statistics; two-way: also the feedback onto the parent, see below) |
+| `:nest_feedback` (after `:column_tendency`) | two-way: the step's bookings are committed |
 
-The nest is built in `init!` before the other couplings
+The site joins the nest in its `init!`, before the other couplings
 (`init_priority = -1`): they initialise from the faces' data and the
-child's wind.
+site's wind. The nest does not save and retry its windows (the site
+retries its own pieces; the structural snapshot of the parent alone cost
+the summer nest 3.5–4.4 s per window of 1.5 s): a failed step is the
+run's blow-up.
 
-**The parent ahead (SC-c, #403).** A one-way parent never sees the child,
-so its step of window ``n+1`` needs only the parent at the end of window
-``n``. When `:nest_sync` opens window ``n`` and the run will step past
-its end, it starts that step on its own task
-([`prefetch_parent_step!`](@ref)) and the child steps through window
-``n`` meanwhile; the next `:nest_sync` takes the step
-([`begin_parent_step!`](@ref)). The step size is the sequential one:
-`parent_dt` of the parent at the window start, which `limit_dt` would
-read there (the child's step is never longer than the window, so the
-window is exactly that), or, with a fixed child step, the whole number of
-child steps. The child's and the parent's states are bit-identical to
-sequential stepping (all 22 state fields, `:smoke` scenario, 12 steps,
-adaptive and fixed steppers). Only a run enables it (the model's run
-loop, or `Components.run_to!`, through the site's `run_begin!`): it sets the
-run's horizon on the clock (`Clock.t_stop`, `stop_margin`: a step starts
-at ``t`` exactly when `t_stop − t > stop_margin`), so a step is prefetched
-only for a window the run will open, and its `end_run!` hook waits for a
-step left over by a run stopped early (a blow-up; the parent is then one
-window ahead). A caller that steps the case itself leaves the horizon
-unknown and the nest sequential; nothing may read the parent while a
-step is prefetched. Two-way nests stay sequential (the next parent step
-needs the window's feedback), and so does a 1-thread run. `wall.parent`
-is then the time the child still waited for the parent; the parent's own
-time is `run.stats.wall_parent`.
+**No parent ahead.** NestedRun's prefetch of the parent's next window
+while the child stepped (SC-c, #403, one-way under several threads) went
+with NEST-p3: the engine prefetches a one-way parent below the root
+only (the root's next step is the model's next window). The flagship
+measured 1.17–1.36× from it at 4–24 threads (the history is on the
+[nested time-coupling page](../theory/nesting_time.md)).
 
 **Ledgers.** The heat and water the faces carry are N-open-d's terms:
 `(:dynamics, :boundary_heat)`, `(:dynamics, :mass_correction)` and
 `(:dynamics, :relaxation)` in the air-heat ledger, `:boundary` in the
 water ledger (booked with the face fluxes the transport used, the
-positivity-limited ones included). The parent's own heat and water
-ledgers close separately. The nesting smoke checks assert both parent
-closures (≤ 1e-10 of the largest term), the child's net boundary volume
+positivity-limited ones included; the site books what its faces carry
+itself, no nest-exchange term). The parent's energy and water budgets
+(its domain's, when it measures them) close separately, a two-way
+feedback booked as its nest exchange. The nesting smoke checks assert
+both parent closures (≤ 1e-10 of the largest term) when it measures
+them, the child's net boundary volume
 flux after the correction (≤ 1e-12 ``UA``) and ``|∇·u|``, one geostrophic
 wind in both domains (the child's `:geostrophic` coupling takes the
 parent's ``U_g(z,t)``, ``V_g(z,t)``), the tile mosaic and the field set;
@@ -110,7 +111,7 @@ every smoke run closes the child's surface, water and air-heat ledgers.
 The individual side and lid terms carry the through-flow of ≈ 293 K air
 and largely cancel; the heat the box exchanges is their sum.
 
-**Measured** (`examples/urban/berlin_nest_check.jl`, commit `e4b34e7`; since #438
+**Measured** (with the ParentCase parent before NEST-p3; `examples/urban/berlin_nest_check.jl`, commit `e4b34e7`; since #438
 these runs are `aeolus run examples/urban/berlin_summer.toml` with
 `--set` overrides — the start hour, `nesting.enabled=false`, the parent's
 refinement — and the numbers below are in each run's `output/results.toml`:
@@ -162,8 +163,8 @@ and the box no longer keeps its own air. The full evening and night are
 the 24 h validation of #270.
 
 **Tests.** The physics of the nest is tested on synthetic boxes in
-`test/era2_nest_external.jl` (rule of #321): the split of `step_nested!`
-is bit for bit; uniform state, Galilean invariance, mass, the warm-bubble
+`test/era2_nest_external.jl` (rule of #321): a window driven from outside
+is `step_nested!`'s bit for bit; uniform state, Galilean invariance, mass, the warm-bubble
 export and the hooks in both domains (numbers on the [nested time-coupling
 page](../theory/nesting_time.md)). The Berlin wiring is checked by the
 coupling's smoke checks in every smoke run (47 runs, 188 s with the
@@ -191,7 +192,7 @@ blocks, not the nest).
     self-nesting (Aeolus parent → Aeolus child), as in PALM. Driving from
     a mesoscale model or reanalysis (#58) stays one-way.
 
-`options[:nesting].mode = :two_way` feeds the child back onto the parent
+`feedback = "two_way"` (the site's block) feeds the site back onto the parent
 at the end of every parent window, with [`TwoWayFeedback`](@ref) (its
 physics, and the synthetic tests it is validated by, are on the
 [two-way nesting page](../theory/nesting_twoway.md)):
@@ -210,40 +211,43 @@ physics, and the synthetic tests it is validated by, are on the
 4. **refluxing** of θ and qv (`reflux = true`, default) from
    Berger–Colella flux registers;
 5. the **re-projection** of the parent. At the next window the child is
-   projected onto its new boundary data (`begin_parent_step!`).
+   projected onto its new boundary data (when the window opens).
 
 | option | default | |
 | :-- | :-- | :-- |
-| `mode` | `:one_way` | `:two_way` turns the feedback on |
+| `feedback` (the site's `[[domain]]` block) | `"one_way"` | `"two_way"` turns the feedback on |
 | `buffer` | 2 | parent cells next to the open faces left out |
 | `z_anterp` | `:canopy` | the canopy restriction (m) |
 | `τ` | `nothing` | relaxation time of the anterpolation (s) |
 | `reflux` | `true` | refluxing of θ and qv |
 
-**Bookings.** Neither core is stepped by the `NestedRun` (the parent by
-its own `step_parent!`, the child by the stage loop), so the run's hooks
-cannot book the flux registers. Every refluxed scalar is booked by the
-code that transports it, with [`book_nest_flux!`](@ref) and
-`NestScalarFlux(applied_by = :transport)`:
+**Bookings.** The parent is a domain of the model's core: the link's
+register hook books its θ and qv in every stage of its core's step with
+the stage weights (SSP-RK3: 1/6, 1/6, 2/3). The site moves its θ in its
+core's step pieces and qv in its `:scalar_advection` slot, and books both
+itself with [`book_nest_flux!`](@ref): the link's
+`NestScalarFlux(child_applied_by = :transport)` (NEST-p3, #483; before,
+the parent's bookings were explicit too):
 
 | scalar | domain | booked by | flux |
 | :-- | :-- | :-- | :-- |
-| θ | parent | `step_parent!`'s `body_force!`, every dynamics stage × the stage weight (SSP-RK3: 1/6, 1/6, 2/3) | centred advection + molecular and SGS diffusion (`diffusivity = :theta`) |
-| qv | parent | the same | centred advection + the core's tracer diffusion (`diffusivity = :tracer`) |
+| θ | parent | the link's register hook, every stage of the core × the stage weight | centred advection + molecular and SGS diffusion |
+| qv | parent | the same | centred advection + the core's tracer diffusion |
 | θ | child | the coupling's `:body_force` entry (order 5; a no-op one-way), every stage of `step!` | centred advection + the closure's θ diffusion |
 | qv | child | the `:scalar_advection` slot, before its update (#327 M3) | the slot's scheme (WENO-Z5) with the velocity it uses, then the SGS diffusion with the tracer's κ |
 
-Each child step is bracketed by `begin_child_step!` (in `:nest_sync`)
-and `end_child_step!` (in `:nest_feedback`), so the slot's and the
+Each site step is bracketed by the link's `_begin!` (in `:nest_sync`)
+and `_commit!` (in `:nest_feedback`), so the slot's and the
 dynamics' bookings of the step land in its registers. The other tracers
 are anterpolated but not refluxed; a tracer the parent does not carry
 gets a parent field of its own in a two-way run (the anterpolation
 writes into it; it is not transported in the parent).
 
-**Ledgers.** The feedback is a zero-length step of the parent's two
-ledgers: its heat is booked as `(:nest_feedback, :feedback_heat)` in the
-parent's air-heat ledger and its water as `(:nest_feedback,
-:feedback_water)` in the parent's water ledger, so both still close. The
+**Ledgers.** The feedback is booked in the parent's budgets (when it
+measures them) as its nest exchange, `(:nest_feedback, :nest_exchange)`
+(`Components.NEST_EXCHANGE`), so they still close (before NEST-p3 the
+ParentCase ledgers named it `(:nest_feedback, :feedback_heat)` and
+`:feedback_water`). The
 child's ledgers are untouched (the feedback changes only the parent).
 The composite (the parent outside the child plus the child) is **not**
 conserved exactly in the Berlin case, and no test asserts it: the child's
@@ -256,12 +260,12 @@ residuals below. The synthetic conservation tests are in
 `z_anterp = 0`: the smoke child covers only 4 × 4 × 2 parent cells, so
 the default buffer of 2 would leave nothing to anterpolate) runs 12
 steps with every coupling on. Besides every run's closed child ledgers it
-checks that the feedback ran and named a non-zero `feedback_heat`, that
-both parent ledgers close (≤ 1e-10 of their largest term), the interface
+checks that the feedback ran, that the parent's budgets close (≤ 1e-10 of
+their largest term) when it measures them, the interface
 mass-flux mismatch after the flux correction (≤ 1e-12 of ``UA``) and the
 re-projected parent's ``\max|∇·u|`` (≤ 1e-8 s⁻¹).
 
-*Measured* (the smoke variant, 12 child steps = 24 s, 8 parent windows,
+*Measured* (the ParentCase parent before NEST-p3; the smoke variant, 12 child steps = 24 s, 8 parent windows,
 7 feedbacks): parent heat-ledger closure 0.0 and water 1.6e-16 of the
 largest term; child air-heat closure 3.4e-13 W m⁻², water residual
 1.9e-15 kg m⁻²; the feedback put +96.7 J m⁻² of heat and
@@ -271,8 +275,8 @@ footprint at 0–100 m (two levels) was 293.0066 K two-way against
 says the coupling acts, in the expected direction (the warmer urban child
 warms the parent above it); it says nothing about stability.
 
-**Refused.** `mode = :two_way` with a `parent_driver` other than
-`:aeolus` (boundary data cannot take a feedback); refluxing with an IMEX
+**Refused.** A site alone takes no feedback (boundary data cannot take
+one); refluxing with an IMEX
 stepper (its θ diffusion is implicit, the bookings are explicit; use
 `reflux = false`); a sound-proof child core (a Boussinesq parent and a
 sound-proof child have no common measure, #327 M1).
@@ -319,12 +323,9 @@ step core is touched.
 | `length_interval` | 3600 s | rebuild of the digital-filter kernels from the current lengths |
 | `length_scale` | `NaN` | `:parametrized` only: the single length (NaN: 8 child spacings) |
 
-**The parent is read only at rest.** One-way under several threads, the
-nest steps the parent of the next window on its own task while the child
-steps through this one (SC-c, #403). The parent statistics are therefore
-folded from a new hook of the nesting coupling (`window_hooks`, called
-when a window opens, after the parent's step and before the next one
-starts ahead), with [`fold_inflow_statistics!`](@ref
+**The parent is read only at rest.** The parent statistics are folded
+from a hook of the nesting coupling (`window_hooks`, called at the
+site's first step in a window, after the parent's step), with [`fold_inflow_statistics!`](@ref
 Aeolus.Transition.fold_inflow_statistics!); the child's boundary refresh
 never reads the parent.
 
@@ -351,7 +352,7 @@ parent's faces, not the online child's perturbations, which are drawn
 from the running parent; `test/input_dynamic.jl`'s bit-for-bit
 online/offline round trip therefore runs with the addon off.
 
-**Two-way.** With `mode = :two_way` the feedback skips an inflow band of
+**Two-way.** With `feedback = "two_way"` the feedback skips an inflow band of
 ``⌈2\max L_s/Δx_p⌉`` parent cells (`exclude_inflow_feedback!`). The
 interface flux correction gives the parent the child's flux minus the
 generator's normal perturbation (`synthetic_normal_velocity`, #418).
@@ -385,26 +386,23 @@ paused when this was written.
 
 ## Checkpoint / restart (#269)
 
-The nested case is checkpointed whole: `checkpoint_state(case)` is the
-structural state of the built case, which reaches the `:nesting`
-coupling's `ParentCase` (the parent core, its surface tiles, nudging and
-closure) and its `NestedRun`. The nest's own state is the content of
-`Nesting.nest_state`: both parent time levels prolongated at the ends of
-the open window, the window itself (`c.window`), the step sizes the two
-adaptive controllers continue from, the flux registers of a two-way run,
-the run statistics, the child's boundary data and the inflow generator
-(planes, RNG, folded parent statistics). A parent step that the run
-started ahead on its own task (SC-c, #403) is waited for, recorded and
-rebuilt on restore; the resumed run gets the original run's end
-time, so it starts the parent's next steps ahead exactly where the
-uninterrupted run did. A checkpoint is taken between two child steps,
-in the middle of a parent window as often as not.
+The nest is checkpointed whole, at the end of a window (where the run
+loop checkpoints): the model's nest (`Components.ModelNest`) records its
+hierarchy with the structural walk, which reaches every domain — the
+parent's core and components (its surface tiles, radiation, forcing,
+closure), the site (`checkpoint_state(case)`: its core, every coupling,
+the surfaces, the ledgers) — and every link: both parent time levels,
+the step sizes the adaptive controllers continue from, the flux
+registers of a two-way run, the statistics, the site's boundary data and
+the inflow generator (planes, RNG, folded parent statistics).
 
 `[checkpoint]` is on in `berlin_summer.toml` (every 30 min of wall clock,
 the newest 2 kept); `aeolus run <folder> --resume` continues the run.
-Module-level proof: `test/nest_restart.jl` (bitwise, one-way, one-way with
-the parent ahead, two-way, 1 and 12 threads); the case-level resume of
-`berlin_smoke.toml` is in `test/config_roundtrip.jl`. The 24 h flagship
+Module-level proof: `test/nest_restart.jl` (bitwise, one-way and
+two-way, a checkpoint at a window's end); the resume of the nested
+`berlin_smoke.toml` (a checkpoint every 3 windows, interrupted after 5,
+the site, its tracers and the parent domain bitwise) is in
+`test/config_roundtrip.jl`. The 24 h flagship
 restart (22:00 resumed to 23:00) waits for the long Berlin runs, paused
 when this was written. Design and limits: [Checkpoint /
 restart](checkpoint_restart.md#The-Berlin-case).

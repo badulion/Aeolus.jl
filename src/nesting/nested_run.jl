@@ -28,12 +28,6 @@ Bookkeeping of a [`NestedRun`](@ref) (all times in seconds):
 | `max_child_cfl` | largest advective CFL `dt_c · max_cell Σ|uᵢ|/Δxᵢ` of an accepted child substep, at its start |
 | `max_clock_error` | largest `|t_child − t_parent| / t_parent` before the child clock is snapped to the parent's |
 | `wall_parent`, `wall_child`, `wall_boundary`, `wall_feedback` | wall time in the parent step, the child substeps, the prolongation of boundary data, the two-way feedback |
-| `prefetched`, `wall_parent_wait` | parent steps taken concurrently with the child ([`prefetch_parent_step!`](@ref)), and the wall time the run then still waited for them |
-
-With prefetched parent steps `wall_parent` and the prolongation at the
-window end in `wall_boundary` are the time the parent's task spent on
-them, hidden behind the child's substeps; `wall_parent_wait` is the part
-that was not hidden.
 """
 mutable struct NestRunStats
     parent_steps::Int
@@ -53,29 +47,10 @@ mutable struct NestRunStats
     wall_child::Float64
     wall_boundary::Float64
     wall_feedback::Float64
-    prefetched::Int
-    wall_parent_wait::Float64
 end
 
 NestRunStats() = NestRunStats(0, 0, 0, 0, 0, typemax(Int), 0, Inf, 0.0, Inf, 0.0,
-                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0)
-
-# A prefetched parent step: the task, the window it opens (`t_p`, the
-# accepted `Δt`, `t_end`, the parent's limiter), the `dt` it was asked for
-# (`nothing`: the parent's adaptive step), the state it prolongated into,
-# and what it booked (merged into the run's statistics when it is taken).
-mutable struct _ParentAhead{S}
-    task::Union{Nothing,Task}
-    t_p::Float64
-    dt::Union{Nothing,Float64}
-    s::S
-    Δt::Float64
-    t_end::Float64
-    limiter::Symbol
-    parent_retries::Int
-    wall_parent::Float64
-    wall_boundary::Float64
-end
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 """
     NestedRun(parent, child, nest; kwargs...)
@@ -223,8 +198,6 @@ mutable struct NestedRun{P<:_NestSim, C<:_NestSim, N<:NestedGrid, S<:NestInterpS
     work::W                        # two-way scratch (nothing in a one-way run)
     step_record::StepRecord        # the run's per-step record and diagnostics hook (#336)
     retry_mark::Int                # parent + child retries at the start of the window
-    s_spare::Union{Nothing,S}      # the state a prefetched parent step prolongates into (SC-c, #403)
-    ahead::Union{Nothing,_ParentAhead{S}}   # the prefetched parent step, or nothing
     conv::Union{Nothing,NestCoreConversion} # a mixed core pair's density conversion (NEST-p2, #482)
 end
 
@@ -328,8 +301,7 @@ function NestedRun(parent::_NestSim, child::_NestSim, nest::NestedGrid;
                     Float64(child.t), 0.0, NaN, NestRunStats(), twoway, regs,
                     _Rollback(parent, advance_parent, s_bc.parent),
                     _Rollback(child, advance_child, s_bc.child),
-                    twoway === nothing ? nothing : _two_way_work(nest, s_bc), StepRecord(), 0,
-                    nothing, nothing, conv)
+                    twoway === nothing ? nothing : _two_way_work(nest, s_bc), StepRecord(), 0, conv)
     if run.regs !== nothing                  # separate transports book through the sims
         _register_booker!(parent, run.regs, :parent, nest)
         _register_booker!(child, run.regs, :child, nest)
@@ -342,8 +314,7 @@ end
 
 The run's own [`StepRecord`](@ref Aeolus.Simulations.StepRecord) (#336),
 completed at the end of every parent step
-([`end_parent_step!`](@ref), so also when a caller drives the child
-itself): `dt` the parent step, `limiter` the parent's, `retries` the
+(a nest engine's window too): `dt` the parent step, `limiter` the parent's, `retries` the
 rejected parent steps and child substeps of the window, `cfl_adv` the
 largest advective CFL number of a child substep (at its start), the wall
 time of the whole window; its hook ([`set_step_hook!`](@ref
@@ -579,10 +550,20 @@ left, for a child whose own step limit is `limit`: `remaining / n`,
 `n = ⌈remaining / limit⌉` (a ratio that is an integer up to 1e-9 relative
 is not rounded up), so the substeps land exactly on the window end. The
 rule [`step_nested!`](@ref)'s subcycling re-evaluates before every
-substep; a caller that drives the child itself
-([`begin_parent_step!`](@ref)) uses it to pick its steps.
+substep; a child that picks its own steps in a nest engine's window
+(the urban site, [`nest_window_end`](@ref)) uses it to pick them.
 """
 subcycle_dt(R::Real, lim::Real) = R / _nsub(R, lim)
+
+"""
+    nest_window_end(run::NestedRun) -> t
+
+The child time at which the window that a nest engine opened on `run`
+ends (the parent's time at the end of its step, on the parent's clock):
+where a child that picks its own steps lands ([`subcycle_dt`](@ref) of
+the time left). Read between the window's opening and its close.
+"""
+nest_window_end(run::NestedRun) = run.synced ? run.new_valid_at : run.t0 + run.Δt
 
 _advective_rate(sim) = (fill_halos!((sim.u, sim.v, sim.w), sim.bcs);
                         _max_advective_rate(sim.u.data, sim.v.data, sim.w.data, sim.mesh))
@@ -633,58 +614,15 @@ function step_nested!(run::NestedRun; dt = nothing)
     tw = time_ns()
     _subcycle_child!(run, w.t_child_end)
     run.stats.wall_child += (time_ns() - tw) / 1e9
-    end_parent_step!(run, w)
+    _end_parent_step!(run, w, true)
     return run
 end
-
-"""
-    begin_parent_step!(run::NestedRun; dt = nothing) -> window
-
-Steps 1–4 of [`step_nested!`](@ref)`(run)`: pick the parent step `Δt_p`
-(or take `dt`), prolongate the parent field set at `t_p` (reused from the
-previous step in a one-way run), advance the parent (with its retries),
-prolongate at `t_p + Δt_p`, and point the child's open faces at the new
-window `[t_p, t_p + Δt_p]`. The child is **not** advanced: a caller that
-drives the child itself — the Berlin case, whose child step is a whole
-stage loop (`examples/urban`, N-berlin-nest #265) — then takes any child
-steps that land on `window.t_child_end` (the child's open faces read the
-time-blended parent at every stage time, [`boundary_time`](@ref)) and
-closes the window with [`end_parent_step!`](@ref).
-
-Returns `window = (t_child_end, Δt, I0, m0)`: the child time the window
-ends at, the parent step taken, and (two-way runs that record) the
-composite integrals at the start (the run's scratch vector, in the
-order of the scalar ledger keys), which `end_parent_step!` compares.
-
-`step_nested!(run)` is exactly `begin_parent_step!`, the run's own child
-subcycling (`advance_child`), `end_parent_step!`.
-
-A run with a [`NestSponge`](@ref) is refused (`ArgumentError`): the
-sponge relaxes the child inside the run's own subcycling (the velocity
-on every stage's predicted velocity, the scalars after each substep), so
-an externally driven child would silently get none (#349). Drive a
-sponged run with [`step_nested!`](@ref), or relax the externally driven
-child with the core's own sponge (the Berlin case's top sponge).
-"""
-function begin_parent_step!(run::NestedRun; dt = nothing)
-    _refuse_external_sponge(run, "begin_parent_step!")
-    return _begin_parent_step!(run; dt)
-end
-
-# An externally driven child never runs the NestSponge (#349): refuse it.
-_refuse_external_sponge(run::NestedRun, who) =
-    run.sponge === nothing ||
-    throw(ArgumentError("$who: this NestedRun has a NestSponge, which only the run's own " *
-                        "child subcycling (step_nested!) applies; an externally driven child " *
-                        "would get no sponge. Build the run with sponge = nothing (and relax " *
-                        "the child with its core's own sponge) or step it with step_nested!"))
 
 function _begin_parent_step!(run::NestedRun; dt = nothing)
     p = run.parent; c = run.child; nest = run.nest; st = run.stats
     rr = run.step_record                      # the window's record (#336)
     rr.t_wall0 = time_ns(); rr.t_sim0 = run.t
     run.retry_mark = st.parent_retries + st.child_retries
-    run.ahead === nothing || return _open_prefetched_window!(run, dt)
     t_p = Float64(p.t)
 
     # --- 1. parent step size ---------------------------------------------
@@ -770,18 +708,6 @@ function _open_window!(run::NestedRun, t_p::Float64, t_end::Float64, Δt::Float6
             I0 = run.work === nothing ? _NO_LEDGER : run.work.I0, m0 = m0,
             t_parent = t_end, limiter = limiter)
 end
-
-"""
-    end_parent_step!(run::NestedRun, window) -> run
-
-Close the parent-step window opened by [`begin_parent_step!`](@ref): the
-child must have reached `window.t_child_end` (to `1e-9 Δt_p`; its clock
-is then set to it exactly, the discrepancy recorded in
-`run.stats.max_clock_error`); a two-way run applies the feedback
-(step 6 of [`step_nested!`](@ref)) and records the conservation ledger;
-the parent-step statistics and the run clock are updated.
-"""
-end_parent_step!(run::NestedRun, w::NamedTuple) = _end_parent_step!(run, w, true)
 
 # `reproject = false` (a nest hierarchy, #328): the two-way feedback leaves
 # the parent's re-projection to the caller, which projects once after the
@@ -975,256 +901,6 @@ function _subcycle_child_pieces!(run::NestedRun, t_end::Float64, rec::StepRecord
     st.n_last = n_taken
     st.n_min = min(st.n_min, n_taken)
     st.n_max = max(st.n_max, n_taken)
-    return run
-end
-
-"""
-    begin_child_step!(run::NestedRun) -> hook
-    end_child_step!(run::NestedRun) -> run
-
-The child-step bracket of a caller that advances the child itself between
-[`begin_parent_step!`](@ref) and [`end_parent_step!`](@ref) (the Berlin
-case, whose child step is a whole stage loop, #265 / #267): the flux
-registers of a refluxing two-way run book a child step only inside it.
-`begin_child_step!` opens the step's bookings and returns the register
-hook of the scalars the child's core transports (`nothing` in a one-way
-run, without refluxing, or when every scalar is booked by its transport),
-to be chained into the core's `body_force!` at every stage; the separate
-transports of the step call [`book_nest_flux!`](@ref) in between.
-`end_child_step!` commits them. [`step_nested!`](@ref)'s own subcycling
-does the same around each child substep. Both are no-ops for the
-registers of a one-way run. A run with a [`NestSponge`](@ref) is refused
-(`ArgumentError`, as by [`begin_parent_step!`](@ref)): its sponge acts
-only inside [`step_nested!`](@ref)'s subcycling.
-"""
-function begin_child_step!(run::NestedRun)
-    _refuse_external_sponge(run, "begin_child_step!")
-    run.sub_t0 = Float64(run.child.t)
-    _begin!(run, :child)
-    return run.regs === nothing || !any(_by_core, run.regs.models) ? nothing : _hook(run, :child)
-end
-
-"""
-    end_child_step!(run::NestedRun) -> run
-
-Commit the bookings of the child step opened by
-[`begin_child_step!`](@ref) into the flux registers of a refluxing
-two-way run (a no-op otherwise).
-"""
-function end_child_step!(run::NestedRun)
-    _commit!(run, :child)
-    return run
-end
-
-# =========================================================================
-# The parent stepped concurrently with the child (SC-c, #403)
-# =========================================================================
-#
-# In a one-way run the parent never sees the child, so the parent step of
-# window n + 1 depends on nothing but the parent at the end of window n:
-# it can run on its own task while the child subcycles through window n.
-# The data still move only at the existing synchronisation points: the
-# prefetched step prolongates the parent at its end into a spare state,
-# which the next begin_parent_step! takes as the window's B(t_p + Δt_p);
-# B(t_p) is the previous window's end state (the reuse_boundary path).
-# Every operation is the one the sequential run does, on the same data, so
-# the result is bit-identical.
-
-
-"""
-    prefetch_parent_step!(run::NestedRun, window; dt = nothing) -> run
-
-Start the parent step of the **next** window on its own task, while the
-caller advances the child through the current `window` (the one
-[`begin_parent_step!`](@ref) returned; SC-c, #403). The next
-[`begin_parent_step!`](@ref)`(run; dt)` takes the prefetched step instead
-of stepping the parent, so the parent's cost is hidden behind the child's
-substeps. The threads are shared between the two tasks: every launch of
-either domain spreads over Julia's thread pool, which the scheduler
-divides between them.
-
-Only a one-way run can be prefetched — the parent never sees the child, so
-the parent step of window ``n+1`` needs nothing but the parent at the end
-of window ``n``. The boundary data still move only at the existing
-synchronisation points: the task prolongates the parent at the end of its
-step into a spare state, which the next window takes as its end state
-(its start state is the current window's end, as with
-`reuse_boundary`). The child's results, and the parent's at every window
-end, are **bit-identical** to sequential stepping.
-
-`dt` is the next window's parent step, as the next `begin_parent_step!`
-will ask for it (`nothing`: the parent's [`adaptive_dt`](@ref) from its
-state at the end of `window`, with `window.Δt` as the previous step);
-that call must pass the same `dt`, or it throws.
-
-Refused (`ArgumentError`) for a two-way run (the parent step of the next
-window needs this window's feedback), for `sync = :shared_min_dt` (the
-step size needs the child), while another step is prefetched, and when the
-parent is no longer at the end of `window`.
-
-**Until the next `begin_parent_step!` (or [`wait_parent_step!`](@ref))
-the parent belongs to the task**: the caller must not read or change it,
-and the parent's hooks (its step record's hook, `advance_parent`'s
-`body_force!`) run on the task. Diagnostics of the run that read the
-parent between windows must come before this call. A run that stops
-after a prefetch has its parent one window ahead of the child.
-"""
-function prefetch_parent_step!(run::NestedRun, w::NamedTuple; dt = nothing)
-    why = _prefetch_refusal(run, dt)
-    why === nothing || throw(ArgumentError("prefetch_parent_step!: $why"))
-    run.ahead === nothing ||
-        throw(ArgumentError("prefetch_parent_step!: a parent step is already prefetched"))
-    p = run.parent
-    t_p = Float64(p.t)
-    t_p == w.t_parent ||
-        throw(ArgumentError("prefetch_parent_step!: the parent is at t = $t_p, not at the end " *
-                            "$(w.t_parent) of the window"))
-    _prefetch!(run, Float64(w.Δt), dt === nothing ? nothing : Float64(dt))
-    return run
-end
-
-# Why the run cannot prefetch its parent step (nothing: it can).
-function _prefetch_refusal(run::NestedRun, dt)
-    run.feedback === :two_way &&
-        return "a two-way run feeds the child back before the next parent step"
-    run.sync === :shared_min_dt &&
-        return "sync = :shared_min_dt takes the next step size from the child as well"
-    dt === nothing && run.cfl_parent === nothing &&
-        return "the run has no cfl_parent; pass dt"
-    return nothing
-end
-
-function _prefetch!(run::NestedRun, dt_prev::Float64, dt::Union{Nothing,Float64})
-    s = run.s_spare === nothing ? (run.s_spare = _spare_state(run.s_new)) : run.s_spare
-    run.s_spare = nothing                          # the task's until the window is opened
-    a = _ParentAhead(nothing, Float64(run.parent.t), dt, s, NaN, NaN, :none, 0, 0.0, 0.0)
-    dom = current_domain()
-    a.task = Threads.@spawn with_domain(() -> _ahead_step!(run, a, dt_prev), dom)
-    run.ahead = a
-    return a
-end
-
-# The prefetched parent step (on its own task): the step size (the
-# parent's adaptive dt from its state now, as the sequential
-# begin_parent_step! picks it), the step with its retries, the
-# prolongation at its end into the spare state.
-function _ahead_step!(run::NestedRun, a::_ParentAhead, dt_prev::Float64)
-    p = run.parent
-    tw = time_ns()
-    Δt = a.dt !== nothing ? a.dt :
-         _dt_limit(p, run.advance_parent, run.cfl_parent, dt_prev)
-    Δt > 0 || error("step_nested!: parent step must be > 0, got $Δt")
-    Δt = _advance_parent!(run, Δt, nothing, a)
-    a.wall_parent = (time_ns() - tw) / 1e9
-    tb = time_ns()
-    _prolongate!(run, a.s)
-    a.wall_boundary = (time_ns() - tb) / 1e9
-    a.Δt = Δt
-    a.t_end = Float64(p.t)
-    a.limiter = step_record(p).limiter
-    return nothing
-end
-
-# A state like `s` (same members, bound fields and measure) with buffers of
-# its own.
-function _spare_state(s::NestInterpState)
-    nf(f) = _state_field(location(f), f.mesh, nest_storage(s))
-    return NestInterpState(nf(s.u), nf(s.v), nf(s.w), nf(s.θ), s.names,
-                           [nf(b) for b in s.bufs], s.child, s.parent, s.measure)
-end
-
-"""
-    wait_parent_step!(run::NestedRun) -> run
-
-Wait for a parent step started by [`prefetch_parent_step!`](@ref) (a
-no-op if none is pending), so that the parent may be read: it is then at
-the end of the next window, whose boundary data the next
-[`begin_parent_step!`](@ref) takes. An error of the prefetched step is
-rethrown here (or by that `begin_parent_step!`).
-"""
-function wait_parent_step!(run::NestedRun)
-    a = run.ahead
-    a === nothing && return run
-    try
-        wait(a.task::Task)
-    catch err
-        # the step failed: the run cannot take it (the parent is where the
-        # failed step left it, as after a failed sequential step)
-        run.ahead = nothing
-        run.s_spare = a.s
-        err isa TaskFailedException ? throw(err.task.exception) : rethrow()
-    end
-    return run
-end
-
-# The next window from the prefetched parent step: the boundary data at its
-# start are the previous window's end (one-way: the parent has not changed
-# since it was prolongated there), at its end the task's state.
-function _open_prefetched_window!(run::NestedRun, dt)
-    st = run.stats
-    a = run.ahead
-    tw = time_ns()
-    wait_parent_step!(run)
-    st.wall_parent_wait += (time_ns() - tw) / 1e9
-    run.ahead = nothing
-    st.prefetched += 1
-    st.parent_retries += a.parent_retries
-    st.wall_parent += a.wall_parent
-    st.wall_boundary += a.wall_boundary
-    want = dt === nothing ? nothing : Float64(dt)
-    isequal(want, a.dt) ||
-        error("begin_parent_step!: the parent step of this window was prefetched with " *
-              "dt = $(a.dt) (nothing: adaptive), but dt = $want was asked for; the parent " *
-              "is already at t = $(a.t_end)")
-    (a.t_p == run.t && run.new_valid_at == a.t_p) ||
-        error("begin_parent_step!: the prefetched parent step starts at t = $(a.t_p), but the " *
-              "run is at t = $(run.t) (close the previous window with end_parent_step! first)")
-    # B(t_p) is the previous window's end; the task prolongated B(t_p + Δt_p)
-    spare = run.s_old
-    run.s_old = run.s_new
-    run.s_new = a.s
-    run.s_spare = spare
-    run.new_valid_at = NaN
-    return _open_window!(run, a.t_p, a.t_end, a.Δt, 0.0; prolongated = true,
-                         limiter = a.limiter)
-end
-
-"""
-    step_nested!(run::NestedRun, n::Integer; dt = nothing,
-                 concurrent = Threads.nthreads() > 1) -> run
-
-Advance `run` by `n` parent steps: `n` calls of
-[`step_nested!`](@ref)`(run; dt)`. With `concurrent = true` the parent
-step of each window but the first runs on its own task while the child
-subcycles through the window before it ([`prefetch_parent_step!`](@ref);
-SC-c, #403), bit-identical to sequential stepping. Only a one-way run
-with `sync = :subcycle` is stepped this way; any other run is stepped
-sequentially. At return both domains are at the end of the `n`-th
-window. In a concurrent run the run's step hook ([`step_record`](@ref))
-is called while the parent takes its next step: it must not read the
-parent.
-"""
-function step_nested!(run::NestedRun, n::Integer; dt = nothing,
-                      concurrent::Bool = Threads.nthreads() > 1)
-    n >= 0 || throw(ArgumentError("step_nested!: n must be ≥ 0, got $n"))
-    ahead = concurrent && _prefetch_refusal(run, dt) === nothing
-    st = run.stats
-    for i in 1:n
-        w = _begin_parent_step!(run; dt)
-        try
-            ahead && i < n && _prefetch!(run, Float64(w.Δt), dt === nothing ? nothing : Float64(dt))
-            tw = time_ns()
-            _subcycle_child!(run, w.t_child_end)
-            st.wall_child += (time_ns() - tw) / 1e9
-        catch
-            # the child failed: the parent task may still be stepping (the
-            # parent is then one window ahead); wait for it, keep the error
-            a = run.ahead
-            a === nothing || (try wait(a.task::Task) catch end; run.ahead = nothing)
-            rethrow()
-        end
-        end_parent_step!(run, w)
-    end
     return run
 end
 

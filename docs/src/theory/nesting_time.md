@@ -135,29 +135,33 @@ stage against the analytic value. The maximum relative error was
 ARK2 and ``4.4\times10^{-16}`` for Rosenbrock2. `boundary_time` reached
 ``3.8\times10^{-16}``.
 
-## A child driven by its caller (N-berlin-nest, #265)
+## A child that picks its own steps (N-berlin-nest, #265; NEST-p3, #483)
 
-The Berlin case advances its child through a whole stage loop (surfaces,
-radiation, chemistry, transport, then the dynamics), so it cannot hand
-the child to the run's own subcycling. `step_nested!(run)` is therefore
-three calls, and a caller can take the middle one itself:
+The urban site advances its child through a whole stage loop (surfaces,
+radiation, chemistry, transport, then the dynamics) and picks every step
+itself (its adaptive time stepper retries its own pieces), so it does not
+take the run's own subcycling. The model's nest engine
+(`Components.ModelNest`) steps it in the same window as any child, and
+lets it take its own steps inside:
 
-1. [`begin_parent_step!`](@ref)`(run; dt)` — the parent step ``Δt_p`` (its
-   own pick, or `dt`), the prolongation at ``t_p`` (reused in a one-way
-   run) and at ``t_p + Δt_p``, and the child's boundary window
-   ``[t_p, t_p + Δt_p]``; it returns `window`, with `window.t_child_end`;
-2. the caller's child steps, which must land on `window.t_child_end`:
+1. the parent takes its step ``Δt_p`` (its own adaptive pick; for a site
+   with a fixed step, a whole number of the site's steps,
+   `Components.window_dt`), and the window opens: the prolongation at
+   ``t_p`` (reused in a one-way run) and at ``t_p + Δt_p``, the child's
+   boundary window ``[t_p, t_p + Δt_p]``;
+2. the site's steps, which land on [`nest_window_end`](@ref)`(run)`:
    [`subcycle_dt`](@ref)`(R, limit)` is the rule above (``R/n``,
    ``n = \lceil R/\mathrm{limit}\rceil`` with the ``10^{-9}`` tolerance), and
-   every core reads the blended parent at its own stage times;
-3. [`end_parent_step!`](@ref)`(run, window)` — the clock check and snap,
-   the two-way feedback, the statistics.
+   every core reads the blended parent at its own stage times; a two-way
+   site books each step between the link's `_begin!` and `_commit!`;
+3. the window closes: the clock check and snap, the two-way feedback, the
+   statistics.
 
-`step_nested!(run)` is exactly these with the run's own subcycling in
-between; `test/era2_nest_external.jl` checks the two are bit-identical
-(one- and two-way, four windows of three substeps). The same file runs
-the physics of an externally driven child on synthetic boxes, with
-adaptive child steps that do not divide the window (limit
+`test/era2_nest_external.jl` drives a window this way (the engine's
+internals of `Aeolus.Nesting`) and checks that it is `step_nested!(run)`
+bit for bit (one- and two-way, four windows of three substeps). The same
+file runs the physics of a child that picks its own steps on synthetic
+boxes, with adaptive child steps that do not divide the window (limit
 ``0.37\,Δt_p``): a parent at rest with a hydrostatic θ(z) leaves the child
 at rest (max ``|u|`` = 1.0e-14 m/s after 12 steps, θ unchanged); a parent
 at (2, 1) m/s leaves the child at (2, 1) m/s exactly; the net boundary
@@ -167,82 +171,27 @@ loses 5.0 % of its heat through the faces in 80 s and the time integral of
 `boundary_scalar_flux` books it to 8.9e-12 of the anomaly's heat (the
 periodic box keeps it to 6.8e-12); the parent's geostrophic tendency is
 exactly ``(-fV_g, fU_g)`` and the child's IBM hook runs in every child step.
+The urban site's link has no [`NestSponge`](@ref) (which acts only
+inside the run's own subcycling); the site relaxes toward the parent's
+mean profile with its core's own top sponge.
 
-A run with a [`NestSponge`](@ref) cannot be driven this way (#349): the
-sponge relaxes the child inside the run's own subcycling (the velocity on
-every stage's predicted velocity, the scalars after each substep), so an
-externally driven child would get none, and nothing would say so.
-`begin_parent_step!` and `begin_child_step!` refuse such a run with an
-`ArgumentError` before either domain is touched; an externally driven
-child is relaxed by its core's own sponge instead (the Berlin case's top
-sponge toward the parent's mean profile).
+## The parent stepped concurrently (SC-c, #403; NEST-p3, #483)
 
-## The parent stepped concurrently (SC-c, #403)
+In a one-way run the parent step of window ``n+1`` reads nothing but the
+parent at the end of window ``n``: it does not wait for the child, so it
+can run on its own task while the child subcycles through window ``n``.
+The model's nest engine does this for a one-way parent below the root
+([`Components.nest_prefetches`](@ref Aeolus.Components.nest_prefetches),
+NEST-p2 #482), bit for bit the sequential run. The root is not
+prefetched (its next step is the model's next window, and the run reads
+every domain at every window's end), so the Berlin nest, whose parent is
+the root, steps its parent and its site one after the other since NEST-p3
+(#483), where `NestedRun`'s own window API and its prefetch
+(`prefetch_parent_step!`, the Berlin path of SC-c) went.
 
-In a one-way run the data dependencies between the two domains are
-
-```
-parent step n ──► B(t_n+1) ──► child substeps of window n
-      │
-      └──► parent step n+1 ──► B(t_n+2) ──► child substeps of window n+1
-```
-
-The parent step of window ``n+1`` reads nothing but the parent at the end
-of window ``n``: it does not wait for the child. So it can run on its own
-task while the child subcycles through window ``n``:
-[`prefetch_parent_step!`](@ref)`(run, window; dt)` starts it (after
-[`begin_parent_step!`](@ref) has opened window ``n``), and the next
-`begin_parent_step!` takes it instead of stepping the parent.
-[`step_nested!`](@ref)`(run, n)` steps ``n`` windows this way, prefetching
-every window but the first.
-
-The exchange stays at the existing synchronisation points. The task
-prolongates the parent at the end of its step into a spare state; when
-the next window opens, its start state ``B(t_p)`` is the current window's
-end state (the parent has not changed since: the `reuse_boundary` path)
-and its end state is the task's. While the task runs, the child reads only
-the current window's two states, which nothing writes. The step size is
-the sequential one (the parent's `adaptive_dt` from its state at the end
-of window ``n`` with ``Δt_n`` as the previous step, or the `dt` the caller
-will ask for, which `begin_parent_step!` checks). Every operation is the
-sequential run's, on the same data, so the result is **bit-identical**:
-`test/era2_nest_concurrent.jl` checks child, parent, bound scalars,
-clocks, statistics and step records against window-by-window stepping
-over 5 windows with fixed and adaptive parent steps, SSP-RK3 and the
-projection step, a moist pair with a tracer, a sponged child and a
-z-stretched parent, and the externally driven child of the Berlin
-pattern. The thread-invariance harness (`test/thread_invariance.jl`)
-hashes the Berlin smoke matrix and the flagship, nest parent included,
-at 1/4/12/24 threads: the threaded runs prefetch, the 1-thread run does
-not, and all hashes agree. Its loop runs a variable-step case to the
-horizon it sets, as the run loop does; a loop that stops short of its
-own horizon (it did, at first) leaves the threaded parent one window
-ahead of the sequential one — the child agreed bit for bit, the parent
-did not.
-
-The threads are shared between the two tasks: each domain's launches
-spread over Julia's thread pool, and the scheduler divides it between
-them. What can be prefetched, and what cannot:
-
-* **one-way, `sync = :subcycle`** (or a fixed `dt`): prefetched;
-* **two-way**: not — the parent step of window ``n+1`` needs the
-  feedback of window ``n``, and the child's window ``n`` needs
-  ``B(t_{n+1})`` from the parent step ``n``: the chain is strictly serial.
-  `prefetch_parent_step!` refuses it (`ArgumentError`) and
-  `step_nested!(run, n)` steps it sequentially;
-* **`sync = :shared_min_dt`**: not — the step size needs the child's
-  limit as well.
-
-Until the next `begin_parent_step!` (or [`wait_parent_step!`](@ref)) the
-parent belongs to the task: the caller must not read or change it, the
-parent's hooks run on the task, and `end_parent_step!` takes the parent's
-clock and limiter from the window instead of reading the parent. A run
-that stops after a prefetch has its parent one window ahead. The Berlin
-case prefetches only within a run (the model's run loop, or
-`Components.run_to!`), which knows the run's end
-([berlin_nesting.md](../design/berlin_nesting.md)).
-
-**Measured** on the Berlin flagship (`CaseConfig(:summer)`: 64 × 64 × 64
+Measured on the Berlin flagship with NestedRun's prefetch (SC-c, before
+NEST-p3; the history of the gain the root prefetch would have):
+(`CaseConfig(:summer)`: 64 × 64 × 64
 child in its 192 × 192 × 53 parent, one parent window of 280–310 ms at 4–24
 threads per nine child steps), `benchmarks/bench_ka_scaling.jl flagship`
 (2 warm-up and 9 timed steps; `AEOLUS_BENCH_PREFETCH=1` starts the

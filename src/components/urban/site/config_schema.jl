@@ -7,7 +7,7 @@
 #   julia --project -m Aeolus run examples/urban/berlin_summer.toml [--set time.nsteps=…]
 #
 # One source of truth for the defaults: the schema holds them.
-# `site_options(default_run_config())` and `ParentConfig(; kw...)` start from them, and
+# `site_options(default_run_config())` starts from them, and
 # the per-component options are typed and checked against the components'
 # `default_options` (the key set is closed, the form of a value is the
 # form of its default), so no second schema has to be kept in step with
@@ -36,10 +36,9 @@ the site's options are exactly the union of these keys, each used once
 const SITE_FIELDS = (
     name = ("run.name",), scenario = ("urban.scenario",),
     size = ("grid.size",), extent = ("grid.extent",), halo = ("grid.halo",),
-    static = ("domain.static_driver",), parent_static = ("urban.parent_static",),
+    static = ("domain.static_driver",),
     lat0 = ("urban.lat0",), lon0 = ("urban.lon0",), offset = ("urban.offset",),
     elevation = ("urban.elevation",), wall_subdivisions = ("urban.wall_subdivisions",),
-    landuse = ("urban.landuse",),
     date = ("urban.date",), utc_offset = ("urban.utc_offset",), start_h = ("urban.start_h",),
     dt = ("time.dt",), nsteps = ("time.nsteps",),
     cadence = ("urban.radiation_period", "urban.soil_period", "urban.surface_period", "output.cadence"),
@@ -59,26 +58,6 @@ const SITE_FIELDS = (
     canopy_top = ("urban.canopy_top",),
     child_boundaries = ("urban.child_boundaries",),
     backend = ("urban.serial",))
-
-"""
-    PARENT_FIELDS
-
-Every [`ParentConfig`](@ref) field but `child` and its key in
-`[nesting] parent` (the ASCII name of the field).
-"""
-const PARENT_FIELDS = (
-    center = "center", extent = "extent", refinement = "refinement", vertical = "vertical",
-    z_uniform = "z_uniform", ratio = "ratio", dz_max = "dz_max", halo = "halo",
-    surface = "surface", Q_surface = "q_surface", E_surface = "e_surface",
-    surface_period = "surface_period", U_min = "u_min",
-    radiation = "radiation", radiation_period = "radiation_period",
-    geostrophic = "geostrophic", z_g = "z_g", nudging_τ = "nudging_tau",
-    nudging_factor = "nudging_factor", nudging_depth = "nudging_depth", divergence = "divergence",
-    damping_rate = "damping_rate", damping_frac = "damping_frac", θ_top = "theta_top",
-    θ_init = "theta_init", qv_init = "qv_init", u_init = "u_init",
-    perturbation = "perturbation", perturbation_depth = "perturbation_depth", seed = "seed",
-    hours = "hours", output_period = "output_period",
-    sgs = "sgs", stepper = "stepper", C_advective = "c_advective", moisture = "moisture")
 
 # ---------------------------------------------------------------------------
 # per-coupling options: the type of a value is the type of its default
@@ -185,8 +164,8 @@ end
 The TOML form of a Julia option value, the inverse of
 [`option_value`](@ref): a `Symbol` as a string, `nothing` as `"none"`,
 tuples and vectors as arrays, a `NamedTuple` as a table, a table by
-surface class with string keys, [`ConstantForcing`](@ref),
-[`SeriesForcing`](@ref) and [`ProfileTable`](@ref) as their tables. A
+surface class with string keys, [`ConstantForcing`](@ref) and
+[`SeriesForcing`](@ref) as their tables. A
 value TOML cannot hold (a function) is an `ArgumentError`.
 """
 toml_form(x::Bool) = x
@@ -200,7 +179,6 @@ toml_form(x::NamedTuple) = Dict{String,Any}(string(k) => toml_form(v) for (k, v)
 toml_form(x::AbstractDict) = Dict{String,Any}(string(k) => toml_form(v) for (k, v) in x)
 toml_form(f::ConstantForcing) = Dict{String,Any}("kind" => "constant", "value" => f.value)
 toml_form(f::SeriesForcing) = Dict{String,Any}("kind" => "series", "t" => copy(f.t), "value" => copy(f.value))
-toml_form(p::ProfileTable) = Dict{String,Any}("kind" => "table", "z" => copy(p.z), "values" => copy(p.values))
 toml_form(x) = throw(ArgumentError("toml_form: $(typeof(x)) has no TOML form (set it from Julia with `with`)"))
 
 """
@@ -217,7 +195,6 @@ toml_literal(x) = Config._emit_value(toml_form(x))
 The per-coupling options whose TOML form is not the type of their
 default: `coupling => option => f(x, path) -> (ok, value, message)`.
 
-  * `nesting.parent`: the parent's own schema ([`parent_section`](@ref));
   * `nesting.z_anterp`: `"canopy"` or a height in m;
   * `nesting.parent_driver`: `"aeolus"`, `"profile"` or `"offline"` (an
     `AbstractBoundaryData` only from Julia);
@@ -226,7 +203,6 @@ default: `coupling => option => f(x, path) -> (ok, value, message)`.
 """
 const OPTION_FORMS = Dict{Symbol,Dict{Symbol,Function}}(
     :nesting => Dict{Symbol,Function}(
-        :parent => (x, path) -> parent_value(x, path),
         :z_anterp => (x, path) -> x == "canopy" ? (true, :canopy, "") : _isnum(x) ? (true, Float64(x), "") :
                                  (false, nothing, "$path: expected \"canopy\" or a height in m, got $(_raw(x))"),
         :parent_driver => (x, path) -> x in ("aeolus", "profile", "offline") ? (true, Symbol(x), "") :
@@ -241,7 +217,7 @@ const OPTION_FORMS = Dict{Symbol,Dict{Symbol,Function}}(
 "The Julia value of option `key` of coupling `C` from the TOML value `x`."
 function coupling_option_value(C, key::Symbol, x, path)
     # a value TOML cannot hold (set with `with`) is taken as it is; a table
-    # holding one is still checked key by key (the parent's q_surface)
+    # holding one is still checked key by key
     (x isa AbstractDict || Config._toml_native(x)) || return (true, x, "")
     f = get(get(OPTION_FORMS, component_name(C), Dict{Symbol,Function}()), key, nothing)
     f === nothing || return f(x, path)
@@ -249,13 +225,12 @@ function coupling_option_value(C, key::Symbol, x, path)
 end
 
 # ---------------------------------------------------------------------------
-# the parent's schema
+# a function of time in TOML (the prescribed surface fluxes, `[surface]
+# model = "prescribed"`)
 # ---------------------------------------------------------------------------
 
 const _FORCING_DOC = "a function of the simulation time t (s): {kind = \"constant\", value} or " *
                      "{kind = \"series\", t = […], value = […]} (linear in t, constant beyond the ends)"
-const _PROFILE_DOC = "{kind = \"constant\", value} or {kind = \"table\", z = […], values = […]} " *
-                     "(linear in z, constant beyond the ends)"
 
 "Check a strictly increasing, non-empty array of numbers and a matching value array."
 function _series_problem(xs, vs, xname, vname)
@@ -287,184 +262,7 @@ function surface_forcing_value(x, path)
     return (true, SeriesForcing(Float64.(x["t"]), Float64.(x["value"])), "")
 end
 
-"An initial profile from its TOML form: `special` (`\"sounding\"` / `\"geostrophic\"`) or a table."
-function profile_value(x, path, special::String, special_value)
-    Config._toml_native(x) || return (true, x, "")
-    x == special && return (true, special_value, "")
-    x isa AbstractDict || return (false, nothing, "$path: expected \"$special\" or $_PROFILE_DOC, got $(_raw(x))")
-    kind = get(x, "kind", nothing)
-    want = kind == "constant" ? ["kind", "value"] : kind == "table" ? ["kind", "z", "values"] : nothing
-    want === nothing && return (false, nothing, "$path.kind: expected \"constant\" or \"table\", got $(_raw(kind))")
-    extra = setdiff(collect(keys(x)), want)
-    isempty(extra) || return (false, nothing, "$path: unknown key $(repr(first(sort!(extra)))) for kind = $(repr(kind)) (keys: $(join(want, ", ")))")
-    for k in want
-        haskey(x, k) || return (false, nothing, "$path.$k: required for kind = $(repr(kind))")
-    end
-    if kind == "constant"
-        _isnum(x["value"]) || return (false, nothing, "$path.value: expected a number, got $(_raw(x["value"]))")
-        v = Float64(x["value"])
-        return (true, special == "geostrophic" ? v : ProfileTable([0.0], [v]), "")
-    end
-    why = _series_problem(x["z"], x["values"], "$path.z", "$path.values")
-    isempty(why) || return (false, nothing, why)
-    return (true, ProfileTable(Float64.(x["z"]), Float64.(x["values"])), "")
-end
-
-"The parent options whose TOML form is not a schema type: `key => f(x, path)`."
-const PARENT_FORMS = Dict{String,Function}(
-    "q_surface" => surface_forcing_value, "e_surface" => surface_forcing_value,
-    "theta_init" => (x, path) -> profile_value(x, path, "sounding", nothing),
-    "qv_init" => (x, path) -> profile_value(x, path, "sounding", nothing),
-    "u_init" => (x, path) -> profile_value(x, path, "geostrophic", :geostrophic))
-
-"""
-    parent_section() -> Section
-
-The schema of [`ParentConfig`](@ref), `[nesting] parent`
-(the defaults of `ParentConfig(; kw...)`). The keys are the ASCII names of
-the fields ([`PARENT_FIELDS`](@ref)); `q_surface` / `e_surface`,
-`theta_init` / `qv_init` and `u_init` take the tables of
-[`surface_forcing_value`](@ref) and [`profile_value`](@ref).
-"""
-function parent_section()
-    return section("parent"; doc = "The nest parent (ParentConfig, #259): [nesting] parent.") do s
-        option!(s, "center", Optional{NTuple{2,Float64}}; units = "m",
-                doc = "horizontal centre of the parent box relative to the OSM anchor; \"none\": on the child")
-        option!(s, "extent", NTuple{3,Float64}; default = (6000.0, 6000.0, 3000.0), range = (0, Inf),
-                open_lower = true, units = "m", doc = "the parent box")
-        option!(s, "refinement", NTuple{3,Int}; default = (2, 2, 4), range = (1, 64),
-                doc = "a parent cell is rx × ry × rz child cells")
-        option!(s, "vertical", Symbol; default = :stretched, allowed = [:stretched, :uniform],
-                doc = "stretched: Δz uniform up to z_uniform, then × ratio per level up to dz_max; uniform: Δz everywhere")
-        option!(s, "z_uniform", Float64; default = 500.0, range = (0, Inf), open_lower = true, units = "m",
-                doc = "top of the uniform layers (stretched)")
-        option!(s, "ratio", Float64; units = "1", default = 1.08, range = (1, Inf), doc = "growth of Δz per level (stretched)")
-        option!(s, "dz_max", Float64; default = 100.0, range = (0, Inf), open_lower = true, units = "m",
-                doc = "largest Δz (stretched)")
-        option!(s, "halo", NTuple{3,Int}; default = (2, 2, 2), range = (1, 8), doc = "halo cells per side")
-        option!(s, "surface", Symbol; default = :tiles, allowed = [:tiles, :prescribed],
-                doc = "tiles: the tiled urban mosaic (#249); prescribed: the kinematic fluxes q_surface, e_surface")
-        option!(s, "q_surface", OpenTable(t -> _form_problems(surface_forcing_value, t, "q_surface"));
-                default = Dict{String,Any}("kind" => "constant", "value" => 0.0), units = "K m s^-1",
-                doc = "prescribed kinematic heat flux, " * _FORCING_DOC)
-        option!(s, "e_surface", OpenTable(t -> _form_problems(surface_forcing_value, t, "e_surface"));
-                default = Dict{String,Any}("kind" => "constant", "value" => 0.0), units = "kg kg^-1 m s^-1",
-                doc = "prescribed kinematic moisture flux, " * _FORCING_DOC)
-        option!(s, "surface_period", Float64; default = 60.0, range = (0, Inf), open_lower = true,
-                units = "s", doc = "step of the surface tiles")
-        option!(s, "u_min", Float64; default = 0.5, range = (0, Inf), units = "m s^-1",
-                doc = "wind floor of the surface layer")
-        option!(s, "radiation", Bool; default = true, doc = "column radiation on the parent's mean column")
-        option!(s, "radiation_period", Float64; default = 600.0, range = (0, Inf), open_lower = true,
-                units = "s", doc = "period of the column radiation")
-        option!(s, "geostrophic", Bool; default = true,
-                doc = "the geostrophic pressure gradient of the sounding wind above z_g")
-        option!(s, "z_g", Float64; default = NaN, units = "m",
-                doc = "height of the geostrophic wind; nan: 1.2 × the sounding's largest z_i")
-        option!(s, "nudging_tau", Float64; default = 6 * 3600.0, range = (0, Inf), open_lower = true,
-                units = "s", doc = "θ/qv nudging time scale; inf: off")
-        option!(s, "nudging_factor", Float64; units = "1", default = 1.2, range = (0, Inf),
-                doc = "the nudging acts above nudging_factor × the running maximum of z_i")
-        option!(s, "nudging_depth", Float64; default = 200.0, range = (0, Inf), units = "m",
-                doc = "depth of the nudging weight's ramp")
-        option!(s, "divergence", Float64; default = 0.0, units = "s^-1",
-                doc = "large-scale divergence of the subsidence w_s = -D z (3e-6 diverges by day, #312)")
-        option!(s, "damping_rate", Float64; default = 0.01, range = (0, Inf), units = "s^-1",
-                doc = "θ reference damping and velocity sponge rate")
-        option!(s, "damping_frac", Float64; units = "1", default = 0.25, range = (0, 1),
-                doc = "the damping acts over the top damping_frac of the domain")
-        option!(s, "theta_top", Symbol; default = :initial_gradient, allowed = [:initial_gradient, :noflux],
-                doc = "the θ top: the fixed initial gradient (#254) or no flux")
-        option!(s, "theta_init", Symbol; default = :sounding,
-                doc = "initial θ(z): \"sounding\" (the child's) or " * _PROFILE_DOC)
-        option!(s, "qv_init", Symbol; default = :sounding,
-                doc = "initial qv(z): \"sounding\" (the child's) or " * _PROFILE_DOC)
-        option!(s, "u_init", Symbol; default = :geostrophic,
-                doc = "initial u(z): \"geostrophic\" or " * _PROFILE_DOC)
-        option!(s, "perturbation", Float64; default = 0.2, range = (0, Inf), units = "K",
-                doc = "uniform random θ amplitude in the lowest perturbation_depth")
-        option!(s, "perturbation_depth", Float64; default = 100.0, range = (0, Inf), units = "m",
-                doc = "depth of the initial θ perturbation")
-        option!(s, "seed", Int; default = 259, range = (0, typemax(Int)), doc = "seed of the perturbation")
-        option!(s, "hours", Float64; default = 24.0, range = (0, Inf), units = "h",
-                doc = "simulated length of a stand-alone parent run")
-        option!(s, "output_period", Float64; default = 600.0, range = (0, Inf), open_lower = true,
-                units = "s", doc = "cadence of the parent's diagnostics")
-        option!(s, "sgs", Symbol; default = :tke, allowed = [:tke, :smagorinsky],
-                doc = "the parent's closure: tke (Deardorff) or smagorinsky (the core's)")
-        option!(s, "stepper", Symbol; default = :rk3, allowed = [:rk3, :euler],
-                doc = "rk3 (SSP-RK3 under step_adaptive!) or euler")
-        option!(s, "c_advective", Float64; units = "1", default = 0.9, range = (0, Inf), open_lower = true,
-                doc = "advective Courant number of the parent's step pick")
-        option!(s, "moisture", Bool; default = true, doc = "carry qv")
-    end
-end
-
 _form_problems(f, t, key) = (r = f(t, key); r[1] ? String[] : String[r[3]])
-
-const _PARENT_SECTION = Ref{Any}(nothing)
-"The parent schema section, built once."
-function parent_schema_section()
-    _PARENT_SECTION[] === nothing && (_PARENT_SECTION[] = parent_section())
-    return _PARENT_SECTION[]
-end
-
-"The Julia value of parent option `o` from `x` (TOML or Julia)."
-function _parent_option_value(o::Option, x, path)
-    f = get(PARENT_FORMS, o.key, nothing)
-    f === nothing || return f(x, path)
-    ok, v, why = Config._coerce(o, x, true, pwd(), path)
-    return ok ? (true, v, "") : (false, nothing, "$path: $why")
-end
-
-"""
-    parent_defaults() -> Dict{Symbol,Any}
-
-The default of every [`ParentConfig`](@ref) field but `child`, from the
-parent schema ([`parent_section`](@ref)), as Julia values.
-"""
-function parent_defaults()
-    s = parent_schema_section()
-    d = Dict{Symbol,Any}()
-    for (f, key) in pairs(PARENT_FIELDS)
-        o = Config._option(s, key)
-        ok, v, why = _parent_option_value(o, o.key in keys(PARENT_FORMS) && o.default isa Symbol ?
-                                                String(o.default) : o.default, key)
-        ok || error("parent schema: the default of $key is invalid: $why")
-        d[f] = v
-    end
-    return d
-end
-
-"""
-    parent_value(x, path) -> (ok, NamedTuple, message)
-
-`[nesting] parent`: every key checked against the parent
-schema ([`parent_section`](@ref)); the result holds the `ParentConfig`
-keywords whose value differs from the default.
-"""
-function parent_value(x, path)
-    (x isa Union{AbstractDict,NamedTuple} || Config._toml_native(x)) || return (true, x, "")
-    x isa Union{AbstractDict,NamedTuple} || return (false, nothing, "$path: expected a table of the parent's options, got $(_raw(x))")
-    t = x isa NamedTuple ? Dict(string(k) => v for (k, v) in pairs(x)) : x
-    s = parent_schema_section()
-    field = Dict(v => k for (k, v) in pairs(PARENT_FIELDS))
-    defaults = parent_defaults()
-    probs = String[]; out = Pair{Symbol,Any}[]
-    for k in sort!(collect(String, keys(t)))
-        o = Config._option(s, k)
-        if o === nothing
-            push!(probs, "$path.$k: unknown option of the parent" * Config._suggest(k, [p.key for p in s.options]) *
-                         "; its options: " * join((p.key for p in s.options), ", "))
-            continue
-        end
-        ok, v, why = _parent_option_value(o, t[k], "$path.$k")
-        ok || (push!(probs, why); continue)
-        isequal(v, defaults[field[k]]) || push!(out, field[k] => v)
-    end
-    isempty(probs) || return (false, nothing, join(probs, "; "))
-    return (true, (; out...), "")
-end
 
 # ---------------------------------------------------------------------------
 # the urban site's sections of the model's schema (ONE-e, #454)
@@ -477,9 +275,6 @@ _scalar_spec(x) = x isa Bool ? Bool : x isa Integer ? Int : x isa AbstractFloat 
                   x isa Symbol ? Symbol : x isa AbstractString ? String : nothing
 function _option_spec(C, key::Symbol, d)
     name = component_name(C)
-    (name, key) == (:nesting, :parent) &&
-        return OpenTable(t -> _form_problems(parent_value, t, "parent");
-                         reference = () -> (p = parent_schema_section(); Section[Section("", p.doc, p.options)]))
     (name, key) == (:nesting, :z_anterp) && return OneOf(Float64, Symbol)
     (name, key) == (:nesting, :parent_driver) && return Symbol
     (name, key) == (:surface_exchange, :z0m) && return OneOf(Symbol, OpenTable(t -> _form_problems(
@@ -503,7 +298,6 @@ end
 # the option (`_option_spec`)
 function _option_default(C, key::Symbol, d)
     name = component_name(C)
-    (name, key) == (:nesting, :parent) && return Dict{String,Any}()
     d === nothing && return nothing
     d isa Symbol && return d
     d isa Tuple && return Tuple(x isa Symbol ? x : x isa Integer && !(x isa Bool) ? Int(x) : x for x in d)
@@ -568,7 +362,7 @@ const OPTION_UNITS = Dict{Tuple{Symbol,Symbol},String}(
 
 # The options of the urban component `C`, declared on `sec` (a section or a
 # provider): one option per key of `default_options(C)`, typed by the form of
-# its default (the per-key forms of `OPTION_FORMS` for the nest's `parent`,
+# its default (the per-key forms of `OPTION_FORMS` for the nest's
 # `z_anterp` and `parent_driver`, the surface exchange's `z0m` and the ML
 # closure's `fn`).
 function coupling_options!(sec, C)
@@ -588,8 +382,7 @@ function coupling_options!(sec, C)
                 doc = (component_name(C), k) == (:nesting, :budget_exchange) ?
                       "budgets across a nest of [[domain]] blocks (NEST-p2, #482): exchange_term (each domain closes its " *
                       "own budgets with one nest-exchange term per quantity) or off (a nest measures no budgets)" :
-                      "see `?$(nameof(C))`" * ((component_name(C), k) == (:nesting, :parent) ?
-                      ": the nest parent's options, [$name.parent] (`aeolus options` lists them)" : ""))
+                      "see `?$(nameof(C))`")
     end
     return sec
 end
@@ -658,11 +451,6 @@ function urban_site_section()
                 doc = "the scenario label (summer, winter, …): the output's comment; winter selects the subarctic-winter humidity of the column radiation")
         option!(s, "serial", Bool; default = false, doc = "CPUBackend(serial = true): the single-task reference")
         # the site
-        option!(s, "parent_static", Optional{Path};
-                doc = "the static driver (land-use tiles) of the nest parent; \"none\": from landuse in memory")
-        option!(s, "landuse", Optional{Path};
-                doc = "the nest parent's land-use table (`aeolusprep fetch-landuse` writes it); \"none\": no table " *
-                      "(a tiled parent surface then needs parent_static)")
         option!(s, "lat0", Float64; default = 52.5220, range = (-90, 90), units = "degree",
                 doc = "latitude of the OSM projection's anchor (and of the solar position)")
         option!(s, "lon0", Float64; default = 13.4100, range = (-180, 180), units = "degree",
@@ -906,7 +694,7 @@ the sections enable with their options (`components`,
 [`site_options`](@ref) (site/config.jl).
 """
 function site_options(cfg::RunConfig)
-    config_schema(cfg).name in (Config.MODEL, "urban_parent") ||
+    config_schema(cfg).name == Config.MODEL ||
         throw(ArgumentError("site_options: the config is for \"$(config_schema(cfg).name)\", not the model"))
     u = cfg.urban
     components = urban_components(cfg)
@@ -918,9 +706,9 @@ function site_options(cfg::RunConfig)
     f64(x) = Float64(x)
     return (name = Symbol(cfg.run.name), scenario = Symbol(u.scenario),
             size = NTuple{3,Int}(g.size), extent = NTuple{3,Float64}(g.extent), halo = NTuple{3,Int}(g.halo),
-            static = _path(dom.static_driver), parent_static = _path(u.parent_static),
+            static = _path(dom.static_driver),
             lat0 = f64(u.lat0), lon0 = f64(u.lon0), offset = NTuple{2,Float64}(u.offset),
-            elevation = f64(u.elevation), wall_subdivisions = Int(u.wall_subdivisions), landuse = _path(u.landuse),
+            elevation = f64(u.elevation), wall_subdivisions = Int(u.wall_subdivisions),
             date = (year(d), month(d), day(d)), utc_offset = f64(u.utc_offset), start_h = f64(u.start_h),
             dt = f64(t.dt), nsteps = Int(something(t.nsteps, 0)), cadence = cad,
             ν = f64(dyn.nu), θ₀ = f64(dyn.theta0), g = f64(dyn.g), f_coriolis = f64(u.f_coriolis),
@@ -946,8 +734,7 @@ _path(p) = String(p)
 The model's config of an urban site with every option at its default,
 the components of [`URBAN_DEFAULTS`](@ref) enabled, and the former `urban` run type's grid (64³ on 1 km × 1 km ×
 400 m, halo 3), `ν = 2`, `θ₀ = 293 K`, 43 200 steps of 2 s and output
-every 1800 s: the generic site (`site_options(default_run_config())`,
-the child of `ParentConfig(; kw...)`).
+every 1800 s: the generic site (`site_options(default_run_config())`).
 """
 function default_run_config()
     io = IOBuffer()
@@ -976,15 +763,10 @@ otherwise its [`site_options`](@ref).
 function urban_input_problems(cfg::RunConfig)
     cc = site_options(cfg)
     src = first(config_sources(cfg)["files"])
-    for (f, key) in ((cc.static, "domain.static_driver"), (cc.parent_static, "urban.parent_static"))
-        (f === nothing || isfile(f)) && continue
-        throw(ConfigError(key, key == "domain.static_driver" ?
-                               "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
-                               "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>" :
-                               "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
-                               "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>\n" *
-                               "or set it to \"none\" to read [urban] landuse in memory"))
-    end
+    f = cc.static
+    (f === nothing || isfile(f)) ||
+        throw(ConfigError("domain.static_driver", "the static driver $f does not exist; make it with AeolusPrep.jl:\n" *
+                                                  "  julia --project -m AeolusPrep static $src --source <file.osm | file.geojson>"))
     if cc.dynamic !== nothing && !isfile(cc.dynamic)
         how = nest_offline(cc) ?
               "run the online config with [urban] child_boundaries = this file:\n  julia --project -m Aeolus run <the online config>" :
@@ -996,10 +778,11 @@ function urban_input_problems(cfg::RunConfig)
 end
 
 """
-    build_model(cfg::RunConfig) -> Model
+    build_model(cfg::RunConfig; nest = nothing) -> Model
 
 The urban site of the model's config `cfg` (`[urban] enabled`) built as
-a `Model` of one domain, what `aeolus run` builds and runs with the
+a `Model` of one domain (`nest`: a nested site's [`UrbanNest`](@ref), its
+parent domain and the nest it joins; the model's config builds the nest), what `aeolus run` builds and runs with the
 model's run loop (ONE-k, #474): the site ([`build_case`](@ref)) is the
 domain's first component and its `:timestepper` component takes the
 core step. A missing driver is refused first
@@ -1007,10 +790,11 @@ core step. A missing driver is refused first
 variables of the domain's catalogue (the core's and the site's,
 [`Components.outputs`](@ref)).
 """
-function build_model(cfg::RunConfig)
-    case = build_case(urban_input_problems(cfg))
+function build_model(cfg::RunConfig; nest::Union{Nothing,UrbanNest} = nothing)
+    case = build_case(urban_input_problems(cfg); nest = nest)
+    # (a nested site writes the variables it has; the nest checks the rest)
     have = Set(v.name for v in Components.domain_catalogue(case.domain))
-    bad = [n for n in cfg.output.variables if !(n in have)]
+    bad = nest === nothing ? [n for n in cfg.output.variables if !(n in have)] : String[]
     isempty(bad) ||
         throw(ConfigError("output.variables", "$(join(bad, ", ")): not in the urban site's output catalogue " *
                                               "(it has: $(join(sort!(collect(have)), ", ")))"))
@@ -1076,7 +860,7 @@ they were the by-hand checks of the Berlin example):
 * `theta_mean_below_100m_start` / `_end` (K, [`mean_θ_below`](@ref));
 * `[timing]`: steps, simulated seconds, wall seconds of the run, of its
   first step (compilation), wall seconds per simulated hour without the
-  first step, and, nested, the wall seconds of the parent's steps.
+  first step.
 
 Reading the state only: computing it changes nothing.
 """
@@ -1105,8 +889,6 @@ function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, si
     rest = steps > 1 && sim_h > 0 ? (wall - wall_first_step) / (sim_h * (steps - 1) / steps) : NaN
     timing = Dict{String,Any}("steps" => steps, "simulated_s" => simulated, "wall_s" => wall,
                               "wall_first_step_s" => wall_first_step, "wall_s_per_simulated_h" => rest)
-    nest = find_coupling(case, :nesting)
-    nest === nothing || nest.parent === nothing || (timing["wall_parent_s"] = nest.wall_parent)
     out = Dict{String,Any}("finite" => finite, "budgets" => budgets, "air_heat" => air,
                            "theta_mean_below_100m_start" => θ_start,
                            "theta_mean_below_100m_end" => mean_θ_below(case, RESULTS_LAYER),
@@ -1123,8 +905,7 @@ end
 
 The prognostic state of a built urban case, interior cells as
 `Array{Float64}`: the child's `u, v, w, p, θ`, every tracer, the surface
-temperature `Ts`, and, with the Aeolus nest parent, the parent's
-`parent_u, …, parent_θ` (and `parent_qv`). What the bitwise round trip
+temperature `Ts` (a nested site's parent is a domain of its own). What the bitwise round trip
 compares ([`state_fields`](@ref Aeolus.Config.state_fields)).
 """
 function case_state(case)
@@ -1137,14 +918,6 @@ function case_state(case)
         push!(out, t.name => Array{Float64}(interior_view(t.field)))
     end
     push!(out, :Ts => Array{Float64}(case.bus.Ts))
-    c = find_coupling(case, :nesting)
-    if c !== nothing && c.parent !== nothing
-        ps = c.parent.sim
-        for f in (:u, :v, :w, :p, :θ)
-            push!(out, Symbol("parent_", f) => Array{Float64}(interior_view(getproperty(ps, f))))
-        end
-        c.parent.pc.moisture && push!(out, :parent_qv => Array{Float64}(interior_view(ps.qv)))
-    end
     return (; out...)
 end
 

@@ -10,6 +10,12 @@ using Random
 # comparisons hold across processes, and planning is fast). Set before
 # `using Aeolus`; subprocesses the tests start inherit it.
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
+# #489: and every BLAS call on one thread. With one Julia thread the model
+# leaves BLAS at its default (the machine's core count), and the radiosity
+# solve's LU rounds differently per BLAS thread count, so a digest would be
+# machine-dependent; test/run.jl's workers already run OPENBLAS_NUM_THREADS=1.
+using LinearAlgebra: BLAS
+BLAS.set_num_threads(1)
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
@@ -865,6 +871,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
     include("config_slots.jl")        # ONE-m (#476): one section per exclusive slot, a selector key, the provider's options only
     include("model_nesting.jl")       # ONE-f (#455): nesting by [[domain]]: the graph, pipelines per domain, one-/two-way, restart
+    include("config_parent_domain.jl")  # NEST-p3 (#483): the urban nest parent's physics as a model domain in TOML
     include("components_both_cores.jl")  # ONE-j (#460): both dynamical cores for every component, anelastic checkpoints
     include("components_parent.jl")      # NEST-p1 (#481): the urban nest parent's physics as components, both cores
     include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
@@ -874,7 +881,7 @@ using Aeolus.Fields: set!, interior_view
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
-    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, urban_parent
+    include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
@@ -956,7 +963,6 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
     include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
     include("era2_nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
-    include("era2_nest_concurrent.jl") # #403      nest parent stepped concurrently with the child (SC-c)
     include("nest_restart.jl")       # #269        checkpoint / restart of a nested run, bitwise (nest_state)
     include("era2_nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
     include("era2_nest_twoway_longrun.jl") # Phase 30 two-way long runs: CBL, neutral, vortex (#263)

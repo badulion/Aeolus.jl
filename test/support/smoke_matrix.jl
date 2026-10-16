@@ -8,7 +8,10 @@
 # Every run is examples/urban/berlin_smoke.toml with `--set`
 # overrides (CFG-c, #358): `smoke_specs` derives what each run changes
 # from the urban components (`URBAN_COMPONENTS`), `smoke_overrides` writes it as overrides, and
-# `smoke_matrix` loads the configs.
+# `smoke_matrix` loads the configs. The smoke config nests the site in its
+# parent domain (NEST-p3, #483): a site option is `domain.site.<key>`; a run
+# without the parent (the nest off, or its faces from boundary data) starts
+# from berlin_smoke_site.toml, the same site alone.
 
 using Aeolus: load_run_config
 using TOML
@@ -16,6 +19,8 @@ include(joinpath(@__DIR__, "berlin_configs.jl"))
 
 "The shipped smoke config every run starts from."
 const SMOKE_TOML = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
+"The shipped smoke site alone (no parent domain), the runs without one start from."
+const SMOKE_SITE_TOML = joinpath(berlin_configs_dir(), "berlin_smoke_site.toml")
 
 """
     file_overrides(path, base) -> Vector{String}
@@ -31,7 +36,11 @@ function _flat_toml!(out, t, prefix)
     for k in keys(t)
         key = isempty(prefix) ? k : prefix * "." * k
         key in ("schema_version", "run.name", "test") && continue
-        t[k] isa AbstractDict ? _flat_toml!(out, t[k], key) : (out[key] = t[k])
+        if key == "domain" && t[k] isa AbstractVector           # [[domain]] blocks: domain.<id>.…
+            foreach(b -> _flat_toml!(out, b, "domain." * b["id"]), t[k])
+        else
+            t[k] isa AbstractDict ? _flat_toml!(out, t[k], key) : (out[key] = t[k])
+        end
     end
     return out
 end
@@ -42,6 +51,15 @@ function file_overrides(path, base)
     return [k * "=" * Aeolus.Config._emit_value(Aeolus.Config._toml_out(f[k]))
             for k in sort!(collect(keys(f))) if !isequal(get(b, k, nothing), f[k])]
 end
+
+"The overrides that make the smoke parent read the summer sounding driver (the run \"summer sounding\")."
+const SOUNDING_PARENT = ["domain.parent.dynamic_driver=" * repr(joinpath(berlin_configs_dir(), "input", "berlin_20190629_dynamic.nc")),
+                         "domain.parent.initial.theta={}", "domain.parent.initial.qv={}",
+                         "domain.parent.large_scale_forcing.u_g=\"sounding\"",
+                         "domain.parent.large_scale_forcing.v_g=\"sounding\"",
+                         "domain.parent.large_scale_forcing.sounding_nudging_tau=21600.0",
+                         "domain.parent.large_scale_forcing.damping_target=\"sounding\"",
+                         "domain.parent.radiation.start_hour=6.0"]
 
 "The provider of urban slot `s` in the reference selection (`URBAN_DEFAULTS`)."
 default_provider(s) = BC.provider(only(C for C in BC.URBAN_DEFAULTS if BC.slot(C) === s))
@@ -58,15 +76,16 @@ dropped); per additive component `<name>.enabled`; every option as
 field of the site's options by its key of the model (`BC.SITE_FIELDS`);
 then the spec's raw overrides.
 """
-function smoke_overrides(spec)
+function smoke_overrides(spec; nested::Bool = true)
     out = String[]
+    sk(k) = nested ? site_key(SMOKE_TOML, k) : k
     for C in BC.URBAN_COMPONENTS
         s = BC.slot(C)
         if s === nothing
-            push!(out, "$(BC.component_name(C)).enabled=" * BC.toml_literal(spec.physics[BC.component_name(C)]))
+            push!(out, sk("$(BC.component_name(C)).enabled") * "=" * BC.toml_literal(spec.physics[BC.component_name(C)]))
         elseif BC.provider(C) === Symbol(get(spec.physics, s, default_provider(s)))
             sec, key = BC.URBAN_SLOT_SECTIONS[s]
-            push!(out, "$sec.$key=" * BC.toml_literal(BC.provider(C)))
+            push!(out, sk("$sec.$key") * "=" * BC.toml_literal(BC.provider(C)))
         end
     end
     # berlin_summer.toml turns [checkpoint] on, and only the Boussinesq
@@ -74,33 +93,51 @@ function smoke_overrides(spec)
     core = get(spec.physics, :core, :boussinesq)
     Symbol(core) === :boussinesq || push!(out, "checkpoint.every_seconds=" * BC.toml_literal(Inf))
     for c in sort!(collect(keys(spec.options))), (k, v) in pairs(spec.options[c])
-        if c === :nesting && k === :parent
-            for (pk, pv) in pairs(v)
-                push!(out, "nesting.parent.$(BC.PARENT_FIELDS[pk])=" * BC.toml_literal(pv))
-            end
-        else
-            push!(out, "$(Aeolus.Components.section(BC.component_type(c))).$(BC.option_key(k))=" * BC.toml_literal(v))
-        end
+        push!(out, sk("$(Aeolus.Components.section(BC.component_type(c))).$(BC.option_key(k))") * "=" * BC.toml_literal(v))
     end
     for (f, v) in pairs(spec.fields)
+        f === :feedback && continue
         keys_ = BC.SITE_FIELDS[f]
         length(keys_) == 1 || error("smoke_overrides: the field $f is made of several options ($(join(keys_, ", ")))")
-        # the domain's driver paths are top-level keys of a one-domain config
-        push!(out, replace(keys_[1], r"^domain\." => "") * "=" * BC.toml_literal(v))
+        # the domain's driver paths are the domain's keys
+        push!(out, sk(replace(keys_[1], r"^domain\." => "")) * "=" * BC.toml_literal(v))
     end
-    return vcat(out, spec.extra)
+    # two-way: the site's block's feedback
+    haskey(spec.fields, :feedback) && push!(out, sk("feedback") * "=" * BC.toml_literal(spec.fields.feedback))
+    return vcat(out, nested ? spec.extra : [replace(x, r"^domain\.site\." => "") for x in spec.extra
+                                           if !startswith(x, "domain.parent.")])
 end
 
-"The site's options (`site_options`) of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its overrides."
-smoke_config(spec) = BC.site_options(load_run_config(SMOKE_TOML; overrides = smoke_overrides(spec)))
+"Whether a run of [`smoke_specs`](@ref) nests the site in its parent domain (the nest on, its faces from the parent)."
+smoke_nested(spec) = get(spec.physics, :nesting, true) &&
+                     get(get(spec.options, :nesting, (;)), :parent_driver, :aeolus) === :aeolus
 
 """
-    smoke_matrix(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,NamedTuple}}
+    smoke_run_config(spec; serial = false) -> RunConfig
 
-The smoke-test configurations: [`smoke_config`](@ref) of every run of
-[`smoke_specs`](@ref).
+The config of a run of [`smoke_specs`](@ref): `berlin_smoke.toml` with its
+overrides (`berlin_smoke_site.toml` when the run has no parent); `serial`: the
+site's single-task backend (`urban.serial`).
 """
-smoke_matrix(components = BC.URBAN_COMPONENTS) = [label => smoke_config(spec) for (label, spec) in smoke_specs(components)]
+function smoke_run_config(spec; serial::Bool = false)
+    nested = smoke_nested(spec)
+    ovr = smoke_overrides(spec; nested)
+    serial && push!(ovr, (nested ? site_key(SMOKE_TOML, "urban.serial") : "urban.serial") * "=true")
+    return load_run_config(nested ? SMOKE_TOML : SMOKE_SITE_TOML; overrides = ovr)
+end
+
+"The site's options (`site_options`) of a run of [`smoke_specs`](@ref)."
+smoke_config(spec) = BC.site_options(site_view(smoke_run_config(spec)))
+
+"""
+    smoke_matrix(components = BC.URBAN_COMPONENTS; serial = false) -> Vector{Pair{String,RunConfig}}
+
+The smoke-test configurations: [`smoke_run_config`](@ref) of every run of
+[`smoke_specs`](@ref) (build one with `build_config_model`, its site is
+`urban_site` of the model).
+"""
+smoke_matrix(components = BC.URBAN_COMPONENTS; serial::Bool = false) =
+    [label => smoke_run_config(spec; serial) for (label, spec) in smoke_specs(components)]
 
 """
     smoke_specs(components = BC.URBAN_COMPONENTS) -> Vector{Pair{String,NamedTuple}}
@@ -181,7 +218,10 @@ function smoke_specs(components = BC.URBAN_COMPONENTS)
             # the observed initial state of the flagship (#247): the smoke
             # scenario's idealised profile replaced by the summer default
             # sounding (Lindenberg, 29 June 2019, interpolated to noon)
-            mk("summer sounding, everything on"; sounding = site_config(berlin_toml("summer")).sounding)]
+            # (at 06:00, the start of the sounding driver the parent reads: its
+            # initial state, its geostrophic wind, nudging and damping)
+            mk("summer sounding, everything on"; sounding = site_config(berlin_toml("summer")).sounding,
+               start_h = 6.0, extra = SOUNDING_PARENT)]
     for C in components
         (BC.slot(C) === nothing || (C in BC.URBAN_DEFAULTS)) && continue
         push!(runs, mk("$(BC.slot(C)) = $(BC.provider(C))";

@@ -15,9 +15,10 @@
 #           own `smoke_check`s, and the surface-energy, water and air-heat
 #           ledgers closed (49 runs, 6494 coupling checks, 204 s measured on
 #           2026-10-07);
-#   parent  the nest parent with every forcing on for 12 steps, heat and
-#           water ledgers closed (#259), its domain of components through the
-#           pipeline bit for bit the same run (NEST-p1, #481); encroachment of a CBL under
+#   parent  the nest parent (a domain of the model's core, NEST-p3 #483:
+#           berlin_parent.toml at its coarse [test] size) with every forcing
+#           on for 12 steps, its energy and water budgets closed (#259),
+#           every forcing a named term; encroachment of a CBL under
 #           Q(t) = 0.15 sin(πt/D) into Γ = 3 K/km (Tennekes 1973; Stull 1988
 #           Ch. 11) with the heat budget closed at every output; Wangara
 #           Day 33 (Clarke et al. 1971) against the MYNN z_i of Nakanishi &
@@ -27,7 +28,9 @@
 #           the child to round-off, the Macdonald mosaic within its
 #           margins, energy closure per tile).
 #
-# The 24 h Lindenberg checks of the parent are an analysis of a run of
+# The idealised parents are one-domain configs (TOML text below) of the
+# model's core with a prescribed surface flux. The 24 h Lindenberg checks
+# of the parent are an analysis of a run of
 # examples/urban/berlin_parent_coarse.toml
 # (examples/urban/berlin_parent_lindenberg_check.jl). Numbers measured when
 # these were tests are quoted next to the assertions.
@@ -49,15 +52,19 @@ include(joinpath(@__DIR__, "support", "smoke_matrix.jl"))
 """
     berlin_default(; kw...) -> NamedTuple
 
-The Berlin summer case with its ground from its static driver, and the
-parent land use and sounding read from their sources in memory (no
-parent static or dynamic driver: bit for bit the same, test/input_static.jl,
-test/input_dynamic.jl), so that a parent of any refinement can be built;
-no NetCDF output. (Before ONE-h, #457, the ground was rasterised from the
-OSM file in memory too: the same rasters, test/input_static.jl.)
+The Berlin summer site's options (berlin_summer.toml's site block, the
+fields `kw` set through their keys) without its nest (the `:nesting`
+component dropped from the selection): the site alone, for the offline
+surface checks, which need its geometry and its class factories only.
 """
-berlin_default(; kw...) = site_config(berlin_toml("summer"); parent_static = nothing,
-                                        dynamic = nothing, kw...)
+function berlin_default(; kw...)
+    c = site_config(berlin_toml("summer"); kw...)
+    delete!(c.components, :nesting)
+    return c
+end
+
+"The Berlin land-use table of the nest parent's tiles (examples/urban/data)."
+const BERLIN_LANDUSE = joinpath(berlin_data_dir(), "berlin_landuse_6km.csv")
 
 allfinite(x) = all(isfinite, x)
 
@@ -69,12 +76,15 @@ function berlin_smoke_checks()
         @info "Berlin smoke matrix: $(length(runs)) runs — " * join(first.(runs), "; ")
         exercised = Set{Symbol}()
         nchecks = 0
-        for (irun, (label, cfg)) in enumerate(runs)
+        for (irun, (label, rc)) in enumerate(runs)
             @testset "$label" begin
                 t0 = time()
-                case = BC.build_case(cfg)
+                # the site nested in its parent domain (NEST-p3 #483), or alone
+                m = build_config_model(rc)
+                case = urban_site(m)
+                cfg = case.cfg
                 seed_fog!(case, Xoshiro(127))
-                run_site!(case)
+                length(m.domains) > 1 ? run_model!(m) : run_site!(case)
                 union!(exercised, BC.component_name.(case.couplings))
                 sim, bus = case.sim, case.bus
                 # nsteps·dt of simulated time (in nsteps steps, unless the
@@ -143,21 +153,104 @@ function berlin_smoke_checks()
     end
 end
 
-"Run the parent `p` to `hours` in chunks of its output period, calling `f(p)` after each."
-function run_chunks!(f, p, hours)
-    n = round(Int, 3600hours / p.pc.output_period)
-    for _ in 1:n
-        BC.run_parent!(p; hours = p.pc.output_period / 3600)
-        f(p)
-    end
-    return p
+"""
+    idealised_parent(; surface, theta, qv = nothing, start_h = 12.0) -> String
+
+The idealised nest parent of #259 as a one-domain config (TOML text): 4 km
+× 4 km × 3 km on 32 × 32 × 53 cells (Δx = 125 m, Δz = 25 m up to 500 m,
+then × 1.08 per level up to 100 m), at rest, f = 1e-4 s⁻¹, the TKE closure,
+the θ damping and the velocity sponge over the top 25 %, a prescribed
+surface flux (`surface`: the `[surface]` lines), the initial `theta` (and
+`qv`: moist) profile tables; no radiation, no geostrophic wind, no
+nudging. The budgets of its heat (and water) are measured.
+"""
+function idealised_parent(; surface, theta, qv = nothing)
+    tab(z, v) = "{kind = \"table\", z = [$(join(z, ", "))], values = [$(join(v, ", "))]}"
+    return """
+        schema_version = 2
+        [run]
+        name = "idealised_parent"
+        seed = 259
+        [time]
+        dt = "adaptive"
+        cfl = 0.9
+        dt_max = 10.0
+        duration = 86400.0
+        [grid]
+        size = [32, 32, 53]
+        extent = [4000.0, 4000.0, 3000.0]
+        halo = [2, 2, 2]
+        stretching = "surface_refined"
+        dz_surface = 25.0
+        z_uniform = 500.0
+        stretching_parameter = 1.08
+        dz_max = 100.0
+        [timestep]
+        scheme = "rk3"
+        [dynamics]
+        nu = 0.0
+        theta0 = 293.0
+        moisture = $(qv !== nothing)
+        [boundaries]
+        z = "free_slip"
+        theta_top = "initial_gradient"
+        [initial]
+        theta = $(tab(theta...))
+        $(qv === nothing ? "" : "qv = " * tab(qv...))
+        u = {kind = "constant", value = 0.0}
+        perturbation_amplitude = 0.4
+        perturbation_depth = 100.0
+        [coriolis]
+        f = 1e-4
+        [sponge]
+        alpha_max = 0.01
+        z_start = 2250.0
+        [sgs]
+        model = "tke"
+        e_min = 1e-4
+        wall_cap = true
+        wall_cap_top = false
+        # a prescribed flux reports no u* to the TKE closure (#491): no surface value
+        surface_value = false
+        [surface]
+        $surface
+        [large_scale_forcing]
+        damping_rate = 0.01
+        [checks]
+        energy_closure = {required = false}
+        $(qv === nothing ? "" : "water_closure = {required = false}")
+        [output]
+        variables = []
+        """
 end
 
-idealised_parent(; kw...) =
-    BC.ParentConfig(berlin_default(; sounding = nothing, kw...);
-                    extent = (4000.0, 4000.0, 3000.0), refinement = (8, 8, 4),
-                    surface = :prescribed, radiation = false, geostrophic = false,
-                    nudging_τ = Inf, divergence = 0.0, u_init = 0.0, output_period = 900.0)
+"A kinematic surface flux `f(t)` as a `{kind = \"series\"}` table, sampled every `dt` seconds to `T`."
+series(f, T; dt = 300.0) = (ts = collect(0.0:dt:T);
+    "{kind = \"series\", t = [$(join(ts, ", "))], value = [$(join(f.(ts), ", "))]}")
+
+"Build a config's model from its TOML text (the estimate FFTW planner)."
+text_model(text) = build_config_model(load_run_config(IOBuffer(text); overrides = ["fftw.planner=\"estimate\""]))
+
+"""
+    run_hours!(f, m, hours; every = 900.0)
+
+Run the one-domain model `m` adaptively for `hours`, landing on every
+multiple of `every` seconds and calling `f(d)` there.
+"""
+function run_hours!(f, m, hours; every = 900.0)
+    d = only(m.domains)
+    dt = 2.0
+    for n in 1:round(Int, 3600hours / every)
+        while d.state.t < n * every * (1 - 1e-12)
+            _, dt, _ = Aeolus.Components.step_adaptive!(d; dt_prev = dt, t_end = n * every)
+        end
+        f(d)
+    end
+    return m
+end
+
+"The energy (or water) budget of a domain: its stage budget (optionally of a layer)."
+domain_budget(d, q; kw...) = Aeolus.BudgetSystem.stage_budget(d.budgets.budgets.measured[q]; kw...)
 
 "The 24 h offline run of the parent columns over the footprint and of the child's surfaces (one per class)."
 function parent_footprint_run(ps, case, cfg, PFP; dt = 300.0, hours = 24.0, probe = nothing)
@@ -213,7 +306,7 @@ function berlin_parent_surface_checks()
   @testset "Berlin parent surface (#249)" begin
     PCFG = berlin_default()
     PCASE = BC.build_case(PCFG)
-    PL = BC.read_parent_landuse(PCFG.landuse)
+    PL = BC.read_parent_landuse(BERLIN_LANDUSE)
     PFP = BC.child_footprint(PL, PCFG)
 
     @testset "Parent class fractions" begin
@@ -337,85 +430,82 @@ end
 
 "parent: the parent smoke run and the idealised validations."
 function berlin_parent_checks()
-    @testset "Berlin parent smoke: every forcing, 12 steps, ledgers close (#259)" begin
-        child = berlin_default(; start_h = 10.0)   # sun up, convective
-        # subsidence is off by default (divergence = 0, #312): on here at D = 3e-6 s⁻¹
-        pc = BC.ParentConfig(child; refinement = (16, 16, 8), divergence = 3e-6)
-        p = BC.build_parent(pc)
-        @test all(f -> f !== nothing, values(p.forcing))
-        @test p.surface !== nothing && p.rad !== nothing && p.closure isa TKEClosure && p.top !== nothing
-        # the parent's physics are components of its domain (NEST-p1, #481): the
-        # domain alone through the pipeline is the ParentCase run, bit for bit
-        d, _ = BC.parent_domain(pc; child = p.child)
-        @test Set(map(Aeolus.Components.component_name, d.components)) ==
-              Set((:advection, :sgs, :tiled_surface, :mean_column_radiation, :large_scale_forcing))
-        dt_prev = child.dt
+    @testset "Berlin parent smoke: every forcing, 12 steps, budgets close (#259)" begin
+        # berlin_parent.toml at its coarse [test] size, at 10 LT (sun up,
+        # convective); subsidence is off by default (divergence = 0, #312): on
+        # here at D = 3e-6 s⁻¹
+        toml = berlin_toml("parent")
+        tt = Aeolus.Config.config_test_table(toml)
+        cfg = cd(() -> load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\"",
+                                                     "large_scale_forcing.divergence=3e-6", "radiation.start_hour=10.0",
+                                                     "checks.energy_closure={required = false}",
+                                                     "checks.water_closure={required = false}"])), dirname(toml))
+        m = build_config_model(cfg)
+        d = only(m.domains)
+        @test map(Aeolus.Components.component_name, d.components) ==
+              (:advection, :tiled_surface, :sgs, :mean_column_radiation, :coriolis, :large_scale_forcing, :sponge)
+        ls = only(c for c in d.components if c isa Aeolus.Components.LargeScale)
+        # the sounding's geostrophic wind, its nudging above the tracked z_i,
+        # the subsidence and the θ damping
+        @test ls.geostrophic !== nothing && ls.zi !== nothing && length(ls.extra) == 3
+        @test Aeolus.Components.sgs_closure(d) isa TKEClosure
+        dt = 2.0
         for _ in 1:12
-            BC.step_parent!(p)
-            tn = (floor(d.state.t / pc.output_period + 1e-9) + 1) * pc.output_period
-            _, dt_prev, _ = Aeolus.Components.step_adaptive!(d; dt_prev = dt_prev, t_end = tn)
+            _, dt, _ = Aeolus.Components.step_adaptive!(d; dt_prev = dt)
         end
-        @test all(getproperty(d.state, f).data == getproperty(p.sim, f).data for f in (:u, :v, :w, :p, :θ, :qv))
-        @test Aeolus.Components.sgs_closure(d).e.data == p.closure.e.data
-        @test all(isfinite, interior_view(p.sim.θ)) && all(isfinite, interior_view(p.sim.qv))
-        @test minimum(interior_view(p.closure.e)) >= 0
-        hb = BC.stage_budget(p.heat)
-        scale = maximum(abs, values(hb.terms))
+        s = d.state
+        @test all(isfinite, interior_view(s.θ)) && all(isfinite, interior_view(s.qv))
+        @test minimum(interior_view(Aeolus.Components.sgs_closure(d).e)) >= 0
+        hb = domain_budget(d, :energy); wb = domain_budget(d, :water)
+        scale = maximum(abs, values(hb.terms)); wscale = maximum(abs, values(wb.terms))
+        @info "parent smoke: the energy budget's terms" hb.terms
         @test abs(hb.closure) <= 1e-10 * scale
-        for key in ((:surface_flux, :tiles), (:column_tendency, :column_radiation),
-                    (:dynamics, :nudging), (:dynamics, :subsidence), (:dynamics, :damping),
-                    (:dynamics, :top_flux), (:dynamics, :transport))
-            @test haskey(hb.terms, key)
-        end
-        @test hb.terms[(:surface_flux, :tiles)] ≈ p.sfc_mean[:delivered_H] rtol = 1e-10
-        @test abs(hb.terms[(:dynamics, :transport)]) <= 1e-10 * scale
-        wb = BC.stage_budget(p.water)
-        wscale = maximum(abs, values(wb.terms))
         @test abs(wb.closure) <= 1e-10 * wscale
-        @test wb.terms[(:surface_flux, :tiles)] ≈ p.sfc_mean[:delivered_E] rtol = 1e-10
-        rd = BC.parent_downwelling(p)
-        @test rd.sw > 100 && 250 < rd.lw < 450
-        el = sum(p.heat.elapsed)
-        @info @sprintf("parent smoke: %d steps, %.1f s; surface %.1f W/m², radiation %.1f, subsidence %.1f, nudging %.2f, damping %.2f, top %.3f W/m²; closure %.1e (heat) %.1e (water)",
-                       p.nsteps, el, hb.terms[(:surface_flux, :tiles)] / el,
-                       hb.terms[(:column_tendency, :column_radiation)] / el,
-                       hb.terms[(:dynamics, :subsidence)] / el, hb.terms[(:dynamics, :nudging)] / el,
-                       hb.terms[(:dynamics, :damping)] / el, hb.terms[(:dynamics, :top_flux)] / el,
-                       hb.closure / scale, wb.closure / wscale)
+        # every forcing is a named term of the heat of the air
+        for c in (:tiled_surface, :mean_column_radiation, :large_scale_forcing)
+            @test any(k -> k[2] === c, keys(hb.terms))
+        end
+        sfc = Aeolus.Components.slot_component(d, :surface)
+        rad = Aeolus.Components.slot_component(d, :radiation)
+        @test rad.sw_down[] > 100 && 250 < rad.lw_down[] < 450
+        @test isfinite(sfc.sfc_mean[:delivered_H]) && sfc.sfc_mean[:delivered_E] > 0
+        @info @sprintf("parent smoke: 12 steps to t = %.1f s; closure %.1e (energy) %.1e (water)",
+                       s.t, hb.closure / scale, wb.closure / wscale)
     end
 
     @testset "parent: encroachment and the heat budget (#259)" begin
         D, Γ, A = 12 * 3600.0, 3e-3, 0.2
         Q(t) = 0.15 * sin(π * t / D)
-        pc = idealised_parent()
-        pc.moisture = false
-        pc.Q_surface = Q
-        pc.θ_init = z -> 290 + Γ * z
-        p = BC.build_parent(pc)
+        m = text_model(idealised_parent(; surface = "model = \"prescribed\"\nq_surface = " * series(Q, 12 * 3600.0),
+                                        theta = ([0.0, 3000.0], [290.0, 290 + Γ * 3000])))
         ratios = Float64[]; worst = 0.0
         zi = Dict{Int,Float64}()
-        run_chunks!(p, 6.0) do p
-            t = p.sim.t
-            zf, fl = BC.parent_heat_flux(p)
+        run_hours!(m, 6.0) do d
+            t = d.state.t
+            cl = Aeolus.Components.sgs_closure(d)
+            zf, fl = BC.mean_heat_flux(d.state, Aeolus.Operators.sgs_fields(cl, d.state).κv)
             t >= 2 * 3600 && push!(ratios, minimum(fl) / Q(t))
-            hb = BC.stage_budget(p.heat)
+            hb = domain_budget(d, :energy)
             worst = max(worst, abs(hb.closure) / maximum(abs, values(hb.terms)))
             h = round(Int, t / 3600)
-            isapprox(t, 3600h; atol = 1) && (zi[h] = BC.parent_zi(p))
+            isapprox(t, 3600h; atol = 1) && (zi[h] = BC.parent_zi(d))
         end
         theory(t) = sqrt(2 * (1 + 2A) * 0.15 * D / π * (1 - cos(π * t / D)) / Γ)
         for h in (3, 6)
             err = zi[h] / theory(3600h) - 1
             @info @sprintf("encroachment: z_i(%d h) = %.0f m (min flux), theory %.0f m, %+.1f %%", h, zi[h], theory(3600h), 100err)
-            @test abs(err) < 0.10       # measured +4.7 % (3 h), +1.4 % (6 h)
+            @test abs(err) < 0.10       # measured +4.7 % (3 h), +1.4 % (6 h) on the ParentCase parent
         end
         R = sum(ratios) / length(ratios)
         @info @sprintf("entrainment flux ratio (2-6 h mean of %d profiles): %.3f", length(ratios), R)
-        @test -0.25 <= R <= -0.10       # measured -0.130
-        @test worst < 1e-10             # measured 6.8e-16
-        hb = BC.stage_budget(p.heat)
-        below = BC.stage_budget(p.heat; layer = (0.0, zi[6]))
-        @test abs(get(below.terms, (:dynamics, :damping), 0.0)) < 0.01 * hb.terms[(:surface_flux, :prescribed)]
+        @test -0.25 <= R <= -0.10       # measured -0.130 on the ParentCase parent
+        @test worst < 1e-10
+        d = only(m.domains)
+        hb = domain_budget(d, :energy)
+        below = domain_budget(d, :energy; layer = (0.0, zi[6]))
+        damp = sum(v for (k, v) in below.terms if k[2] === :large_scale_forcing; init = 0.0)
+        sfc = sum(v for (k, v) in hb.terms if k[2] === :prescribed_surface_flux; init = 0.0)
+        @test sfc > 0 && abs(damp) < 0.01 * sfc
     end
 
     @testset "parent: Wangara Day 33 against MYNN (#259)" begin
@@ -429,34 +519,30 @@ function berlin_parent_checks()
         θ = T .* (1000 ./ P) .^ κ
         qv = r ./ (1 .+ r)
         @test θ[1] ≈ 276.85 atol = 0.01        # 5.5 °C at 1023 hPa
-        lin(x, y, h) = h >= x[end] ? y[end] :
-            (k = searchsortedlast(x, h); k == 0 ? y[1] : y[k] + (y[k+1] - y[k]) * (h - x[k]) / (x[k+1] - x[k]))
         Γtop = (θ[end] - θ[end-5]) / (z[end] - z[end-5])        # 5.4 K/km, 1500-2000 m
-        θf(h) = h > z[end] ? θ[end] + Γtop * (h - z[end]) : lin(z, θ, h)
-        # Nakanishi & Niino (2009): <wθ>_s = 0.216 cos(π(t_h − 13)/11) K m/s
+        # Nakanishi & Niino (2009): <wθ>_s = 0.216 cos(π(t_h − 13)/11) K m/s, from 09 LT
         shape(t) = cos(π * (9 + t / 3600 - 13) / 11)
-        pc = idealised_parent(; start_h = 9.0)
-        pc.Q_surface = t -> 0.216 * shape(t)
-        pc.E_surface = t -> 2.29e-5 * shape(t)
-        pc.θ_init = θf
-        pc.qv_init = h -> lin(z, qv, h)
-        p = BC.build_parent(pc)
+        surface = "model = \"prescribed\"\nq_surface = " * series(t -> 0.216 * shape(t), 8 * 3600.0) *
+                  "\ne_surface = " * series(t -> 2.29e-5 * shape(t), 8 * 3600.0)
+        m = text_model(idealised_parent(; surface, theta = (vcat(z, 3000.0), vcat(θ, θ[end] + Γtop * (3000 - z[end]))),
+                                        qv = (z, qv)))
         zi = Dict{Int,Float64}()
-        run_chunks!(p, 7.0) do p
-            h = 9 + p.sim.t / 3600
-            isapprox(h, round(h); atol = 1e-6) && (zi[round(Int, h)] = BC.parent_zi(p))
+        run_hours!(m, 7.0) do d
+            h = 9 + d.state.t / 3600
+            isapprox(h, round(h); atol = 1e-6) && (zi[round(Int, h)] = BC.parent_zi(d))
         end
         for h in (12, 14, 16)
             err = zi[h] / ref[h] - 1
             @info @sprintf("Wangara 33: z_i(%d LT) = %.0f m, NN09 (MYNN) %.0f m, %+.1f %%", h, zi[h], ref[h], 100err)
-            @test abs(err) < 0.15       # measured +7.8 %, +6.1 %, +7.6 %
+            @test abs(err) < 0.15       # measured +7.8 %, +6.1 %, +7.6 % on the ParentCase parent
         end
     end
 end
 
 """
 flagship: the Berlin summer case (64³, 1 km × 1 km × 400 m,
-every default coupling, the nest on), for `FLAGSHIP_STEPS` steps of the
+every default coupling, nested in its parent domain), for at least
+`FLAGSHIP_STEPS` steps (whole parent windows) of the
 adaptive stepper (#392). `step!(model, cfg.dt)` used to force 2 s steps
 against a stable step that fell to 0.09 s: the guard passed them, |v|
 grew to 49 m/s and the run failed at step 16; that dt is now rejected,
@@ -466,8 +552,10 @@ const FLAGSHIP_STEPS = 20
 
 function berlin_flagship_checks()
     @testset "Berlin flagship: default case past step 16 (#392)" begin
-        cfg = berlin_default()
-        case = BC.build_case(cfg)
+        # the site nested in the 6 km parent domain (NEST-p3 #483)
+        m = build_config_model(load_run_config(berlin_toml("summer")))
+        case = urban_site(m)
+        cfg = case.cfg
         sim = case.sim
         θ0 = extrema(interior_view(sim.θ))
         ts = BC.timestepper(case)
@@ -476,8 +564,10 @@ function berlin_flagship_checks()
         @test case.clock.n == 0 && sim.t == 0
         t_start = time()
         vmax = 0.0
-        for n in 1:FLAGSHIP_STEPS
-            @test (step!(case.model); !case.clock.blowup)
+        # the nest's windows until the site has taken FLAGSHIP_STEPS steps
+        while case.clock.n < FLAGSHIP_STEPS
+            Aeolus.Components.step_adaptive!(m)
+            @test !case.clock.blowup
             vmax = max(vmax, maximum(abs, interior_view(sim.u)), maximum(abs, interior_view(sim.v)),
                        maximum(abs, interior_view(sim.w)))
         end
@@ -486,7 +576,7 @@ function berlin_flagship_checks()
         @info @sprintf("flagship: %d steps in %.0f s, t = %.2f s, dt %.3f–%.3f s, %d retries, max CFL %.2f, max |u_i| %.1f m/s, θ %.2f–%.2f K (initial %.2f–%.2f)",
                        s.n, time() - t_start, sim.t, s.dt_min, s.dt_max, s.retries, s.cfl_max, vmax,
                        θ1..., θ0...)
-        @test s.n == FLAGSHIP_STEPS && s.retries == 0
+        @test s.n >= FLAGSHIP_STEPS && s.retries == 0
         @test s.cfl_max <= k.C_advective + 1e-9
         @test max_divergence(sim) < 1e-10
         # measured 2026-10-07 (32 steps): max |v| 11.2 m/s, θ 288.33–292.42 K

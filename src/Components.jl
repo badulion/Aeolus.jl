@@ -49,7 +49,10 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, Busi
                          solve_surface_layer, kinematic_heat_flux, similarity_theta, similarity_wind, obukhov_length
 using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!
 using ..LargeScaleForcing: GeostrophicPressureGradient, AdvectiveTendencies, Subsidence, ProfileNudging,
-                           SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature, _zc
+                           SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature, _zc,
+                           forcing_value, NudgingWeight, ReferenceDamping
+using ..Operators: sponge_profile
+using ..InputDrivers: shift_table
 using ..Transition: TowerSampler, tower_sampler, sample_towers!, reset_segment!, tower_thresholds,
                     ParentResolvedStatistics, update_inflow_statistics!, inflow_stress_parts,
                     turbulent_fraction, flux_richardson, FringeRegion, blasius_target, blasius_freestream,
@@ -71,7 +74,7 @@ using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weig
 using ..Output: OutputVariable, check_catalogue, cell_centres
 using ..Checks: Check, ReferenceProfile, reference_check
 using ..IO: NonFiniteField, nonfinite_fields, structural_state, restore_structural_state!, refresh_structural_state!
-using ..Nesting: Nesting, NestHierarchy, add_nest!, step_nested!, domain_advance
+using ..Nesting: Nesting, NestHierarchy, add_nest!, step_nested!, domain_advance, DomainAdvance
 import ..IO: checkpoint_state, restore_checkpoint_state!, component_nonfinite_fields
 import ..TimeSteppers: step!
 

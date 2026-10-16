@@ -34,8 +34,11 @@ julia --project -m AeolusPrep regenerate <aeolus> --check     # every committed 
 
 `aeolusprep static` reads the run's grid and anchor from the Aeolus
 config and the source and its options (`--source`, `--min-height`,
-`--park-lai`) from the command line; for a nested urban run it also writes
-`[urban] parent_static` from `[urban] landuse`. Every driver
+`--park-lai`) from the command line; for an urban site nested in a parent
+`[[domain]]` with a tiled surface it also writes that domain's
+`static_driver` from the land-use table `--landuse` (the site's own
+classes under its footprint, NEST-p3 #483), and for a tiled domain alone
+(the nest parent alone) its tiles from `--landuse`. Every driver
 committed to Aeolus (`examples/**/input/`, `test/data/**/input/`) is listed
 with its command and options in AeolusPrep's `recipes.toml`, and its tests
 regenerate each one: every data variable bit for bit, every global
@@ -274,7 +277,7 @@ hashed under `[inputs]` of `run.toml`, and 20 steps round-trip bit for bit
 ## The Berlin case
 
 `examples/urban/berlin_<s>.toml` name their drivers in
-the domain's `static_driver` and `[urban] parent_static` (relative to the config, hashed
+each domain's `static_driver` (the site's and its parent's, relative to the config, hashed
 under `[inputs]` of `run.toml`); the generated files are committed in
 `examples/urban/input/` (all of them together 790 KB; each is
 under the 2 MB limit for committed drivers) with their source hashes.
@@ -282,8 +285,7 @@ A missing file is a configuration error before any run folder is made,
 and it prints the `aeolusprep static <config>` command that makes it.
 There is no in-memory ground: a grid no file was made for needs its
 driver made first (`aeolusprep static <config> --set grid.size=…
---out …`); `parent_static = "none"` still reads `[urban] landuse` in
-memory for a different parent box. The Mitte sample at the smoke size of
+--out …`). The Mitte sample at the smoke size of
 its `[test]` overrides and the synthetic city of `test/urban_run.jl` have
 committed drivers of their own.
 

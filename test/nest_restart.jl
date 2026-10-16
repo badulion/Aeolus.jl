@@ -3,10 +3,11 @@
 # structural walk of src/io/structural_state.jl.
 #
 # The assertion is **bitwise**: a parent + child pair driven the way the
-# Berlin case drives it (the parent window opened by begin_parent_step!,
-# the child stepped by the caller with subcycle_dt, the window closed by
-# end_parent_step!), checkpointed between two child steps in the middle of
-# a parent window, written to disk and restored into a freshly built run,
+# model's nest engine drives an urban site (the parent window opened, the
+# child stepped by itself with subcycle_dt, the window closed: the engine's
+# internals of Aeolus.Nesting, NEST-p3 #483), checkpointed at a window
+# boundary (where the run loop checkpoints), written to disk and restored
+# into a freshly built run,
 # continues across the following window boundaries identical to the
 # uninterrupted run, bit for bit, in every field of both domains (with
 # halos), the closures' memory, the parent time levels, the child's open
@@ -14,9 +15,8 @@
 # steps in both domains (refinement 3: about 3 child steps per parent
 # step), SGS closures with memory in both domains (prognostic TKE in the
 # parent, Lagrangian-dynamic in the child), the synthetic inflow generator
-# on (DigitalFilterGenerator, parent-resolved statistics); one-way
-# (sequential, and with the parent step started ahead on its own task,
-# SC-c #403) and two-way (refluxing, inflow band). The suite runs at one
+# on (DigitalFilterGenerator, parent-resolved statistics); one-way and
+# two-way (refluxing, inflow band). The suite runs at one
 # thread; the same file at 12 threads (`test/run.jl --threads 12 --only
 # nest_restart.jl`) is quoted in #269's PR.
 #
@@ -36,22 +36,21 @@ using Aeolus.BoundaryConditions: open_boundary_snapshot
 
 const NR_θ = 300.0
 const NR_CFL = CFLConstraints(C_advective = 0.5)
-const NR_N = 20                 # child steps of the uninterrupted run
-const NR_K = 10                 # the checkpoint: after this child step
+const NR_N = 32                 # child steps of the uninterrupted run
+const NR_W = 3                  # the checkpoint: after this parent window
 
 mutable struct _NRDriver
     run::Any
     it::Any
     pc::Any                      # the parent's closure
     cc::Any                      # the child's closure
-    prefetch::Bool
     window::Any                  # the open parent window, or nothing
     n::Int                       # child steps taken
     dtc::Union{Nothing,Float64}  # the child's last step
     windows::Int                 # windows closed
 end
 
-function _nr_build(feedback::Symbol; prefetch::Bool = false, seed = 2)
+function _nr_build(feedback::Symbol; seed = 2)
     pm = RegularGrid(Float64; size = (16, 16, 8), extent = (1600.0, 1600.0, 800.0), halo = (3, 3, 3))
     p = BoussinesqSimulation(pm; θ₀ = NR_θ, C_s = 0.17, θ_flux_bottom = 0.1,
                              bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
@@ -84,26 +83,28 @@ function _nr_build(feedback::Symbol; prefetch::Bool = false, seed = 2)
     # as the Berlin nest does: a parent step running ahead must not be read
     it = InflowTurbulence(run; statistics_kwargs = (τ_avg = 60.0,), statistics_interval = Inf)
     feedback === :two_way && exclude_inflow_feedback!(run, it)
-    return _NRDriver(run, it, pc, cc, prefetch, nothing, 0, nothing, 0)
+    return _NRDriver(run, it, pc, cc, nothing, 0, nothing, 0)
 end
 
-# One child step, opening and closing parent windows as the Berlin case does.
+# One child step, opening and closing parent windows as the nest engine
+# does for a child that picks its own steps (the urban site).
 function _nr_step!(d::_NRDriver)
+    NX = Aeolus.Nesting
     run = d.run; c = run.child
     if d.window === nothing
-        d.window = begin_parent_step!(run)
+        d.window = NX._begin_parent_step!(run)
         fold_inflow_statistics!(d.it; interval = 10.0)
-        d.prefetch && prefetch_parent_step!(run, d.window)
     end
     w = d.window
     lim = adaptive_dt(c, NR_CFL; dt_prev = d.dtc, sgs = d.cc)
-    h = subcycle_dt(w.t_child_end - c.t, lim)
-    hook = begin_child_step!(run)
-    run.advance_child(c, h; body_force! = hook)
-    end_child_step!(run)
+    h = subcycle_dt(nest_window_end(run) - c.t, lim)
+    run.sub_t0 = Float64(c.t)
+    NX._begin!(run, :child)
+    run.advance_child(c, h; body_force! = NX._hook(run, :child))
+    NX._commit!(run, :child)
     d.dtc = h; d.n += 1
     if w.t_child_end - c.t <= 1e-9 * w.Δt
-        end_parent_step!(run, w)
+        NX._end_parent_step!(run, w, true)
         d.window = nothing; d.windows += 1
     end
     return d
@@ -112,11 +113,9 @@ end
 # a parent time level: a full array, or the halo slabs of a :shell state
 _nr_data(a) = a isa Array ? copy(a) : map(copy, Aeolus.Nesting._slabs(a))
 
-# Everything a later step reads, for the bitwise comparison (the parent
-# waited for when it is a step ahead).
+# Everything a later step reads, for the bitwise comparison.
 function _nr_digest(d::_NRDriver)
     run = d.run
-    wait_parent_step!(run)
     p, c = run.parent, run.child
     out = Pair{String,Any}[]
     for (nm, s) in (("parent", p), ("child", c)), (k, f) in pairs(checkpoint_fields(s))
@@ -142,36 +141,36 @@ _nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb &&
     fftw0 = fftw_policy().planner
     set_fftw_policy!(; planner = :estimate)
     dir = mktempdir()
-    for (feedback, prefetch) in ((:one_way, false), (:one_way, true), (:two_way, false))
-        label = "$feedback$(prefetch ? ", parent step ahead" : "")"
+    for feedback in (:one_way, :two_way)
+        label = "$feedback"
         @testset "$label" begin
             # the uninterrupted run
-            A = _nr_build(feedback; prefetch)
+            A = _nr_build(feedback)
             for _ in 1:NR_N
                 _nr_step!(A)
             end
-            # the interrupted run: checkpoint after child step NR_K, mid-window
-            B = _nr_build(feedback; prefetch)
-            for _ in 1:NR_K
+            # the interrupted run: checkpoint at the end of parent window NR_W
+            B = _nr_build(feedback)
+            while B.windows < NR_W
                 _nr_step!(B)
             end
-            @test B.window !== nothing                         # mid parent window
-            @test B.run.child.t < B.window.t_child_end
-            path = joinpath(dir, "nest_$(feedback)_$(prefetch).jls")
-            t_w = @elapsed serialize(path, (nest = nest_state(B.run; window = B.window),
+            K = B.n
+            @test B.window === nothing && 0 < K < NR_N - 4
+            path = joinpath(dir, "nest_$(feedback).jls")
+            t_w = @elapsed serialize(path, (nest = nest_state(B.run),
                                             driver = (n = B.n, dtc = B.dtc, windows = B.windows)))
             mb = filesize(path) / 2^20
             # B goes on: the checkpoint did not disturb it
-            for _ in NR_K+1:NR_N
+            for _ in K+1:NR_N
                 _nr_step!(B)
             end
             # restarted from the file into a freshly built run
-            C = _nr_build(feedback; prefetch)
+            C = _nr_build(feedback)
             ck = deserialize(path)
-            t_r = @elapsed (C.window = restore_nest_state!(C.run, ck.nest))
+            t_r = @elapsed restore_nest_state!(C.run, ck.nest)
             C.n, C.dtc, C.windows = ck.driver.n, ck.driver.dtc, ck.driver.windows
             w0 = C.windows
-            for _ in NR_K+1:NR_N
+            for _ in K+1:NR_N
                 _nr_step!(C)
             end
             dA, dB, dC = _nr_digest(A), _nr_digest(B), _nr_digest(C)
@@ -188,18 +187,17 @@ _nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb &&
 
             # the two simulations alone (IO checkpoint!, closures included),
             # without the nest state: the continuation is not the run's
-            D = _nr_build(feedback; prefetch)
-            for _ in 1:NR_K
+            D = _nr_build(feedback)
+            while D.windows < NR_W
                 _nr_step!(D)
             end
-            wait_parent_step!(D.run)
             pp, cp = joinpath(dir, "p.jls"), joinpath(dir, "c.jls")
             checkpoint!(D.run.parent, pp; sgs = D.pc); checkpoint!(D.run.child, cp; sgs = D.cc)
-            E = _nr_build(feedback; prefetch)
+            E = _nr_build(feedback)
             restart!(E.run.parent, pp; sgs = E.pc); restart!(E.run.child, cp; sgs = E.cc)
             E.n, E.dtc = D.n, D.dtc
             dE = try
-                for _ in NR_K+1:NR_N
+                for _ in K+1:NR_N
                     _nr_step!(E)
                 end
                 _nr_differing(dA, _nr_digest(E))
@@ -217,7 +215,7 @@ _nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb &&
         for _ in 1:4
             _nr_step!(A)
         end
-        s = nest_state(A.run; window = A.window)
+        s = nest_state(A.run)
         T = _nr_build(:two_way)
         @test_throws ArgumentError restore_nest_state!(T.run, s)         # one-way state, two-way run
         F = _nr_build(:one_way)

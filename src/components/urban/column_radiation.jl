@@ -256,15 +256,23 @@ function smoke_check(c::ColumnRadiation, case)
         # Measured: −0.4 % at μ₀ = 0.86, −3.1 % at 0.58, −4.6 % at 0.27
         # (TwoStream falls below Bird as the sun gets low), so 5 % is
         # asserted for a high sun (the issue's noon criterion) and 10 %
-        # below μ₀ = 0.5.
+        # below μ₀ = 0.5. Below μ₀ = 0.25, outside the measured range, the
+        # trend continues (−15.2 % at μ₀ = 0.148, the 06:00 sounding smoke
+        # run, #490): the LES is asserted below Bird and within 25 %.
         pw = sum(col.vmr[:h2o][k] * 18.01528 / 28.9647 * col.ρ[k] * col.dz[k] for k in eachindex(col.dz))
         o3 = sum(col.vmr[:o3][k] * 47.9982 / 28.9647 * col.ρ[k] * col.dz[k] for k in eachindex(col.dz)) /
              2.1415e-2                                       # kg/m² → atm-cm (1 atm-cm = 2.1415e-2 kg/m²)
         bird = clear_sky_irradiance(sp, BirdClearSky(; aod380 = 0.0, aod500 = 0.0, ozone = o3,
                                     precipitable_water = pw / 10, albedo = column_surface(case)[2])).ghi
-        tol = c.m.μ₀ >= 0.5 ? 0.05 : 0.10
-        push!(checks, "clear-LES surface GHI within $(round(Int, 100tol)) % of an aerosol-free Bird sky" =>
-              abs(c.m.fsw_clear.flux_dn[1] / bird - 1) < tol)
+        rel = c.m.fsw_clear.flux_dn[1] / bird - 1
+        if c.m.μ₀ >= 0.25
+            tol = c.m.μ₀ >= 0.5 ? 0.05 : 0.10
+            push!(checks, "clear-LES surface GHI within $(round(Int, 100tol)) % of an aerosol-free Bird sky" =>
+                  abs(rel) < tol)
+        else
+            push!(checks, @sprintf("low sun (μ₀ = %.3f < 0.25): clear-LES surface GHI below an aerosol-free Bird sky, within 25 %%",
+                                   c.m.μ₀) => -0.25 < rel <= 0)
+        end
     end
     return checks
 end

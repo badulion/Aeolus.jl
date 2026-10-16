@@ -1,57 +1,41 @@
-# The Berlin nest (N-berlin-nest, #265): the case runs inside an Aeolus
-# parent, one-way by default; two-way is an option (N-berlin-twoway, #267,
-# unvalidated until the stability campaign #331).
+# The urban site as a nested domain (N-berlin-nest, #265; NEST-p3, #483).
 #
-#   parent    the deep diurnal Aeolus run of N-parent-e (#259,
-#             src/components/urban/parent/): Boussinesq on a StretchedGrid, the
-#             tiled urban surface (SurfaceTiles), column radiation, the
-#             geostrophic pressure gradient, θ/qv nudging, θ damping, the
-#             fixed-gradient θ top and the TKE closure — its own hooks,
-#             passed to the nest as the parent's `advance!` closure
-#             (`Nesting.domain_advance`). `:summer`: the 6 km × 6 km × 3 km
-#             default, refinement (2, 2, 4); `:smoke`: 1 km × 1 km × 500 m on
-#             16 × 16 × 10 cells, refinement (4, 4, 8) (the scenario's
-#             `options[:nesting].parent`, keywords of `ParentConfig`).
-#   faces     the child's four sides and its top are `OpenBoundary` faces fed
-#             by a `Nesting.NestBoundaryData` (N-nest-d #261): `sim_options`
-#             returns them (`nest_bcs`), so `case.jl` keeps one definition
-#             of the core and the periodic box and the θ `:initial_gradient`
-#             top are not built at all. The outflow condition is
-#             `cfg.outflow` (Dirichlet from the parent by default).
-#   time      `:nest_sync` (after `:clock`) opens a parent window
-#             `[t_p, t_p + Δt_p]` (`Nesting.begin_parent_step!`): the parent
-#             takes its own adaptive step, its field set is prolongated at
-#             both ends; the child's stepper lands on the window end
-#             (`limit_dt` → `Nesting.subcycle_dt`) and every core refreshes
-#             the nest faces at its stage times (`update_open_boundaries!`,
-#             the parent blended linearly in time). `:nest_feedback` (after
-#             `:column_tendency`) closes the window when the child reaches it
-#             (`Nesting.end_parent_step!`; one-way: clock and statistics;
-#             two-way, `mode = :two_way`: the feedback onto the parent).
-#   ahead     (SC-c, #403) one-way, within a run (its horizon set): when a window opens
-#             and the run will step past its end, the parent's step of the
-#             next window starts on its own task (`Nesting.prefetch_parent_step!`)
-#             and runs while the child steps through this window; the next
-#             `:nest_sync` takes it. Its step size is the one the
-#             sequential run picks there (`parent_dt` of the parent at the
-#             window end; a fixed child step: the whole number of child
-#             steps), and the result is bit-identical. `wall.parent` is then
-#             the time the child still waited for the parent.
-#   two-way   (#267) the child's field set is anterpolated onto the covered
-#             parent cells outside a buffer of `buffer` parent cells next to
-#             the open faces and above `z_anterp` (`:canopy`: the mean
-#             height of the built columns), the parent's interface faces
-#             take the child's flux, θ and qv are refluxed from flux
-#             registers and the parent is re-projected
-#             (`Nesting.TwoWayFeedback`). Both cores are driven by the case
-#             (the parent's `step_parent!`, the child's stage loop), so every
-#             refluxed scalar is booked by its transport
-#             (`book_nest_flux!`): the parent's θ and qv from its dynamics
-#             stages, the child's θ from a `:body_force` entry, the child's
-#             qv by the `:scalar_advection` slot; each child step is bracketed
-#             by `begin_child_step!` / `end_child_step!`. The parent ledgers
-#             book the feedback as `(:nest_feedback, :feedback_heat)` and
-#             `(:nest_feedback, :feedback_water)`.
+# The site is the child of its parent `[[domain]]` of the model: a domain of
+# the model's core with its own components (the deep boundary-layer domain
+# of #259: a stretched grid, the tiled urban surface, the column radiation,
+# the large-scale forcing, TKE) and its own static and dynamic driver. One
+# nest engine steps both (`Components.ModelNest`): the parent takes its
+# adaptive step, the site steps through its own pipeline to the end of the
+# parent's step, each step of the length it picks (the window), and a
+# two-way site is fed back onto the parent (#267). This component wires the
+# site into that nest:
+#
+#   faces     the site's four sides and its top are `OpenBoundary` faces fed
+#             by the link's `Nesting.NestBoundaryData` (N-nest-d #261):
+#             `sim_options` returns them (`nest_bcs`). The outflow condition
+#             is `cfg.outflow` (Dirichlet from the parent by default).
+#   link      `init!` links the site into the parent's nest hierarchy
+#             (`Nesting.add_nest!`, before every other component's `init!`:
+#             they initialise from the faces' data and the site's wind,
+#             which come from the parent): the `Nesting.NestedGrid` at the
+#             block's `origin` and `refinement`, the field set (θ, every
+#             advected tracer, ql and qr), the solid mask on the faces, and
+#             the feedback of the block's `feedback` key.
+#   time      `limit_dt` shortens the site's step to land on the end of the
+#             parent's step (`Nesting.nest_window_end`, `subcycle_dt`);
+#             `:nest_sync` notes a new window (the relaxation targets, the
+#             boundary recorder, the window hooks: the parent is at rest).
+#   two-way   (#267) the engine feeds the site back at the end of the
+#             parent's step (anterpolation outside a buffer of `buffer`
+#             parent cells next to the open faces and above `z_anterp`,
+#             `:canopy`: the mean height of the built columns; the interface
+#             flux correction; Berger–Colella refluxing; the re-projection),
+#             booked in the parent's budgets as its nest exchange. The
+#             parent's θ and qv fluxes through the interface are booked by
+#             its core's stages, the site's by its transports
+#             (`book_nest_flux!`): θ from a `:body_force` entry, qv by the
+#             `:scalar_advection` slot; each site step is bracketed by
+#             `:nest_sync` / `:nest_feedback`.
 #   scalars   qv (and the TKE `e` of the `:tke` SGS provider) take the
 #             parent's values; every other advected tracer, and ql and qr,
 #             is zero on inflow and leaves with its own value
@@ -62,113 +46,101 @@
 #             ledger.
 #   targets   the core's velocity sponge (top 25 %) and the θ relaxation over
 #             the same layer relax toward the parent's mean profile over the
-#             child, refreshed every window.
+#             site, refreshed every window.
 #
-# The parent and the nest are built in `init!`, after every coupling is
-# built, so every tracer the couplings register is in the nest's field set,
-# and the built case is the whole initial state (the child's wind is the
-# parent's). Measured: 2.9 s and ≈ 1.5 GB for the 6 km parent of the
-# flagship (after compilation), 0.2–0.4 s for the smoke parent.
+# Without a parent domain the faces take boundary data instead
+# (`parent_driver`): `:profile`, the analytic data of the site (the
+# geostrophic wind and the initial θ); `:offline`, the parent-made dynamic
+# driver an online run wrote (`[urban] child_boundaries`, CFG-g #362); or
+# any `AbstractBoundaryData` (the interface a mesoscale reader of #58 or a
+# reanalysis of #57 implements).
 
 """
     NestingCoupling
 
-Additive coupling `:nesting` (on by default): the case is the child of a
-nest inside the Berlin parent run, one-way by default (see the file
+Additive coupling `:nesting`: the site is a nested domain (see the file
 header and `docs/src/design/berlin_nesting.md`). Options:
 
-* `mode` — `:one_way` (default) or `:two_way` (#267; **unvalidated**: the
-  long-run stability campaign is #331, and only after it validates
-  two-way does it become the default): the child is fed back onto the
-  parent once per parent window (`Nesting.TwoWayFeedback`);
-* `buffer` — two-way: parent cells next to every open face of the child
+* `parent_driver` — `:aeolus` (default: the site's parent `[[domain]]`,
+  stepped by the model's nest engine), `:profile` (the analytic
+  `case_boundary_data` of the site), `:offline` (the parent-made dynamic
+  driver of `[initial] dynamic`), or any `AbstractBoundaryData`;
+* `buffer` — two-way: parent cells next to every open face of the site
   that are not anterpolated (default 2, PALM's);
 * `z_anterp` — two-way: parent cells whose lower face lies below it are
   not anterpolated (the canopy restriction); `:canopy` (default) is the
-  mean height of the child's built columns, or a height in m (`-Inf`:
+  mean height of the site's built columns, or a height in m (`-Inf`:
   none);
 * `τ` — two-way: relaxation time of the anterpolation (`nothing`,
   default: direct replacement, as in PALM);
 * `reflux` — two-way: Berger–Colella refluxing of θ and qv (default
   `true`);
-* `parent` — a `NamedTuple` of [`ParentConfig`](@ref) keywords (empty:
-  the #259 default, 6 km × 6 km × 3 km at refinement (2, 2, 4); the
-  `:smoke` scenario sets the 1 km × 1 km × 500 m parent at (4, 4, 8));
-* `parent_driver` — `:aeolus` (default: the Aeolus parent run), or any
-  `AbstractBoundaryData` (the interface a mesoscale reader of #58 or a
-  reanalysis of #57 implements), which then feeds the same nest faces
-  instead of a parent run (no windows; the tracers keep their mirror
-  halos); `:profile` is the analytic `case_boundary_data` of the case
-  (the geostrophic wind and the initial θ), the smoke variant of this
-  path.
+* `budget_exchange` — the nest's budgets (`[nesting] budget_exchange` of
+  the root domain, `Components.nested_model`).
 
-Fields: the parent configuration `pc`, the [`ParentCase`](@ref) `parent`
-and the `NestedRun` `run` (built by `init!`), the open
-parent `window` (`begin_parent_step!`'s result, or `nothing`), the parent
-step `pending` that `limit_dt` picked for the next window, the tracer
-names of the field set (`from_parent`: carried by the parent; `inflow`:
-zero on inflow), statistics, and `window_hooks`: functions `f(c, case)`
-called whenever a parent window opens, after the parent's step and
-before its next one starts ahead on another task — the one point where
-another coupling may read the parent's fields (the synthetic inflow's
+Whether the site feeds back is its `[[domain]]` block's `feedback`
+(`"one_way"` or `"two_way"`; the Berlin nest is one-way until the
+two-way campaign #331 validates it).
+
+Fields: `mode` (`:one_way` or `:two_way`), the options, the faces'
+`driver`, the parent's `Components.Domain` `parent` and the hierarchy's
+link `run` (a `Nesting.NestedRun`; built by `init!`), the end of the
+parent window the site steps in (`window_end`), the tracer names of the
+field set (`from_parent`: carried by the parent; `inflow`: zero on
+inflow), the windows seen, the relaxation `targets`, the offline replay
+(`feed`, `inputs`, `k`, `set`, `window`), the boundary `recorder`, and
+`window_hooks`: functions `f(c, case)` called at the site's first step in
+every parent window — the parent at rest — the one point where another
+component may read the parent's fields (the synthetic inflow's
 statistics, `components/urban/inflow_turbulence.jl`, #268).
 """
 mutable struct NestingCoupling <: UrbanComponent
     mode::Symbol
     opts::Any                     # the coupling's options (the two-way keywords)
-    driver::Any                   # :aeolus, or the AbstractBoundaryData that replaces the parent
-    pc::Any                       # ParentConfig (src/components/urban/parent/config.jl)
-    parent::Any                   # ParentCase (built by init!)
-    run::Any                      # Nesting.NestedRun, or nothing
-    window::Any                   # the open parent window, or nothing
-    pending::Float64              # Δt_p picked for the next window (NaN: none)
+    driver::Any                   # :aeolus, :offline, or the AbstractBoundaryData that replaces the parent
+    parent::Any                   # the parent's Components.Domain (online), or nothing
+    run::Any                      # the hierarchy's link (online), the driver or the feed, or nothing
+    window_end::Float64           # online: the end of the parent window the site steps in (NaN: none yet)
+    window::Any                   # offline: the open record window, or nothing
     from_parent::Vector{Symbol}
     inflow::Vector{Symbol}
     windows::Int
-    wall_parent::Float64          # s in the parent's steps
-    wall_build::Float64           # s building the parent and the nest
+    wall_build::Float64           # s building the link
     targets::Any                  # (u, v, θ) level vectors the relaxations use, or nothing
-    feedback::Dict{Symbol,Float64}   # two-way: what the feedbacks did (J m⁻², kg m⁻², counts)
     feed::Any                     # offline: the FileBoundaryFeed of cfg.dynamic, or nothing
     inputs::Any                   # offline: the DynamicInputs of cfg.dynamic
     k::Int                        # offline: the record the next window starts from
     set::Vector{Any}              # offline: the child fields of the field set's tracers, in order
     recorder::Any                 # online with cfg.child_boundaries: the NestBoundaryRecorder
-    ahead_step::Float64           # the child step a prefetched fixed-step window was sized for (NaN: none)
-    ahead_window::Float64         # that window's parent step
-    window_hooks::Vector{Any}     # f(c, case) at every window opening, the parent at rest (#268)
+    window_hooks::Vector{Any}     # f(c, case) at every window's first site step, the parent at rest (#268)
 end
 
 component_name(::Type{<:NestingCoupling}) = :nesting
-modules_used(::Type{<:NestingCoupling}) = (:Nesting, :StretchedGrids, :SurfaceTiles, :LargeScaleForcing)
+modules_used(::Type{<:NestingCoupling}) = (:Nesting,)
 default_options(::Type{<:NestingCoupling}) =
-    (mode = :one_way, parent = (;), parent_driver = :aeolus,
-     buffer = 2, z_anterp = :canopy, τ = nothing, reflux = true, budget_exchange = :exchange_term)
+    (parent_driver = :aeolus, buffer = 2, z_anterp = :canopy, τ = nothing, reflux = true,
+     budget_exchange = :exchange_term)
 # the child's θ booking of the two-way registers runs in every dynamics stage
 stages(::Type{<:NestingCoupling}) = ((:nest_sync, 10, EVERY_STEP), (:nest_feedback, 10, EVERY_STEP),
                                      (:body_force, 5, EVERY_STEP))
 
 """
-    nest_parent_config(cfg) -> ParentConfig
+    nest_geostrophic_wind(case) -> (U_g, V_g)
 
-The parent of the nested case `cfg`: [`ParentConfig`](@ref)`(cfg)` with
-`options[:nesting].parent` (the `:smoke` scenario's small parent, or
-the #259 default), centred on the child.
+The geostrophic wind of the parent domain of the nested site `case`: the
+`U_g`, `V_g` of its `[large_scale_forcing]` component (numbers, tables or
+functions `(z, t)`, as `LargeScaleForcing.forcing_value` reads them).
+The `:geostrophic` coupling of a nested site is driven by it, so the
+large-scale pressure gradient is one field across the nest.
 """
-function nest_parent_config(cfg::NamedTuple)
-    o = component_options(NestingCoupling, cfg)
-    return ParentConfig(cfg; o.parent...)
+function nest_geostrophic_wind(case)
+    p = case.nest.parent
+    i = findfirst(c -> c isa Components.LargeScale, p.components)
+    i === nothing && error("nesting: the parent domain $(p.id) has no [large_scale_forcing]: the nested " *
+                           "site's [geostrophic] mode = \"pressure_gradient\" takes the parent's geostrophic wind")
+    ls = p.components[i]
+    return ls.U_g, ls.V_g
 end
-
-"""
-    nest_geostrophic_wind(cfg) -> (U_g, V_g)
-
-The geostrophic wind of the parent of the nested case `cfg`, functions
-`(z, t)` ([`parent_geostrophic`](@ref)): the `:geostrophic` coupling of a
-nested child is driven by it, so the large-scale pressure gradient is one
-field across the nest.
-"""
-nest_geostrophic_wind(cfg::NamedTuple) = parent_geostrophic(nest_parent_config(cfg))
 
 """
     nest_case_bcs(cfg, mesh) -> FieldBoundaryConditions
@@ -188,11 +160,6 @@ function nest_case_bcs(cfg::NamedTuple, mesh)
 end
 
 function sim_options(::Type{<:NestingCoupling}, cfg, mesh, o)
-    o.mode in (:one_way, :two_way) ||
-        error("nesting: mode = :$(o.mode); use :one_way (default) or :two_way")
-    o.mode === :two_way && o.parent_driver !== :aeolus &&
-        error("nesting: mode = :two_way needs the Aeolus parent (parent_driver = :aeolus): " *
-              "boundary data from $(repr(o.parent_driver)) cannot take a feedback")
     b = nest_case_bcs(cfg, mesh)
     # the sponge below the open top relaxes toward the parent's mean wind
     # over the child: level vectors, filled at every parent window
@@ -202,15 +169,26 @@ end
 
 function build(::Type{<:NestingCoupling}, case, o)
     d = o.parent_driver
+    nx = case.nest
+    if d === :aeolus
+        nx === nothing &&
+            error("nesting: parent_driver = \"aeolus\" nests the site in its parent [[domain]] of the model; " *
+                  "this site has none (give its [[domain]] block a parent, or set [nesting] parent_driver " *
+                  "to \"profile\" or \"offline\")")
+    else
+        nx === nothing ||
+            error("nesting: the site is nested in the domain $(nx.parent_id): its faces take the parent's data " *
+                  "(parent_driver = \"aeolus\"), not $(repr(d))")
+    end
     driver = d in (:aeolus, :offline) ? d : d === :profile ? case_boundary_data(case.cfg) :
              d isa AbstractBoundaryData ? d :
              error("nesting: parent_driver must be :aeolus, :profile, :offline or an AbstractBoundaryData, got $(repr(d))")
-    return NestingCoupling(o.mode, o, driver, nest_parent_config(case.cfg), nothing, nothing, nothing, NaN,
-                           Symbol[], Symbol[], 0, 0.0, 0.0, nothing, Dict{Symbol,Float64}(),
-                           nothing, nothing, 1, Any[], nothing, NaN, NaN, Any[])
+    mode = nx === nothing ? :one_way : nx.feedback
+    return NestingCoupling(mode, o, driver, nx === nothing ? nothing : nx.parent, nothing, NaN, nothing,
+                           Symbol[], Symbol[], 0, 0.0, nothing, nothing, nothing, 1, Any[], nothing, Any[])
 end
 
-"Whether the nest's faces are fed by boundary data other than the Aeolus parent or its file (`parent_driver`)."
+"Whether the nest's faces are fed by boundary data other than the parent domain or its file (`parent_driver`)."
 external_driver(c::NestingCoupling) = !(c.driver in (:aeolus, :offline))
 
 "Whether the nest's faces replay a parent-made dynamic driver (`parent_driver = :offline`, CFG-g #362)."
@@ -225,7 +203,7 @@ dynamic driver `cfg.dynamic` (`options[:nesting].parent_driver =
 """
 nest_offline(cfg::NamedTuple) = case_nested(cfg) && component_options(NestingCoupling, cfg).parent_driver === :offline
 
-"Whether the nest feeds the child back onto the parent (`mode = :two_way`, #267)."
+"Whether the nest feeds the child back onto the parent (the `[[domain]]` block's `feedback = \"two_way\"`, #267)."
 two_way(c::NestingCoupling) = c.mode === :two_way
 
 """
@@ -244,11 +222,12 @@ function nest_z_anterp(case, z::Union{Symbol,Real})
     return isempty(h) ? -Inf : sum(h) / length(h)
 end
 
-# The two-way feedback of the Berlin nest. Both cores are driven by the
-# case, so every refluxed scalar is booked by its transport: θ (and the
-# moist parent's qv) by the dynamics stages, the child's qv by the
-# :scalar_advection slot.
-function _berlin_feedback(c::NestingCoupling, case, p)
+# The two-way feedback of the site. The parent's θ and qv are transported
+# inside its core's stages, so the run's register hook books them there
+# (`applied_by = :core`); the site moves θ in its core's step pieces and qv
+# by its :scalar_advection slot, and books both itself (`child_applied_by =
+# :transport`, book_nest_flux!).
+function _berlin_feedback(c::NestingCoupling, case, p::Domain)
     o = c.opts
     if o.reflux
         ts = timestepper(case)
@@ -256,21 +235,12 @@ function _berlin_feedback(c::NestingCoupling, case, p)
             error("nesting: two-way refluxing books the explicit θ diffusion of the child's " *
                   "step!; the IMEX stepper's is implicit. Use reflux = false with it")
     end
-    tf = (p.pc.moisture && :qv in c.from_parent) ? (:qv => NestScalarFlux(applied_by = :transport),) : ()
+    tf = (_moist(p.state) && :qv in c.from_parent) ?
+         (:qv => NestScalarFlux(; molecular = true, sgs = :tracer, child_applied_by = :transport),) : ()
     return TwoWayFeedback(; buffer = o.buffer, z_anterp = nest_z_anterp(case, o.z_anterp), τ = o.τ,
-                          reflux = o.reflux, theta_flux = NestScalarFlux(applied_by = :transport),
+                          reflux = o.reflux,
+                          theta_flux = NestScalarFlux(; molecular = true, sgs = :theta, child_applied_by = :transport),
                           tracer_fluxes = tf)
-end
-
-# The parent's share of the two-way bookings, at every dynamics stage of
-# step_parent! with the stage's weight: its θ and qv, centred advection and
-# the core's diffusion with the parent's closure (a no-op outside a child
-# window of a refluxing run).
-function _book_parent!(p, s, Δt, w)
-    book_nest_flux!(s, :θ, s.θ, w * Δt; scheme = :centered, diffusivity = :theta, sgs = p.closure)
-    p.pc.moisture &&
-        book_nest_flux!(s, :qv, s.qv, w * Δt; scheme = :centered, diffusivity = :tracer, sgs = p.closure)
-    return nothing
 end
 
 init!(c::NestingCoupling, case) = (ensure_nest!(c, case); nothing)
@@ -279,28 +249,29 @@ init!(c::NestingCoupling, case) = (ensure_nest!(c, case); nothing)
 init_priority(::Type{<:NestingCoupling}) = -1
 
 # The parent field a child tracer takes its boundary values from, or nothing.
-function _parent_scalar(p, name::Symbol)
-    name === :qv && return p.pc.moisture ? p.sim.qv : nothing
-    name === :e && return p.closure isa TKEClosure ? p.closure.e : nothing
+function _parent_scalar(p::Domain, name::Symbol)
+    s = p.state
+    name === :qv && return _moist(s) ? s.qv : nothing
+    if name === :e
+        cl = Components.sgs_closure(p)
+        return cl isa TKEClosure ? cl.e : nothing
+    end
     return nothing
 end
-
-# The child's dynamics over h (the :timestepper provider's advance_dynamics!).
-_child_advance!(case, h) =
-    (ts = timestepper(case); ts === nothing ? dynamics_step!(case, h) : advance_dynamics!(ts, case, h))
 
 """
     ensure_nest!(c::NestingCoupling, case) -> c
 
-Build the parent and the nest (once; `init!`): the [`ParentCase`](@ref)
-(`build_parent`, with this case as the child of its tiled surface), the
-`Nesting.NestedGrid` (the child at its own origin, the parent placed by
-`parent_origin`), the field set (θ and every advected tracer, ql and qr;
-the planes of the tracers added to the nest faces with
-`add_open_scalars!`), and the `Nesting.NestedRun` (one-way, no step
-validation — the parent's `step_parent!` retries its own pieces — the
-child's solid mask on the faces), which attaches the parent's
-`NestBoundaryData` to the child's faces and fills their halos.
+Link the site into its parent's nest (once; `init!`): the
+`Nesting.NestedGrid` (the site at its own origin, the parent's corner at
+its `[grid] origin`, the site at the block's `origin` in it), the field
+set (θ and every advected tracer, ql and qr; the planes of the tracers
+added to the nest faces with `add_open_scalars!`), and the link
+(`Nesting.add_nest!` on the model's hierarchy: the site's solid mask on
+the faces, the feedback of its block), which attaches the parent's
+`NestBoundaryData` to the site's faces and fills their halos. The site's
+initial wind is the parent's, prolongated. Without a parent domain:
+the offline replay or the external driver's faces.
 """
 function ensure_nest!(c::NestingCoupling, case)
     c.run === nothing || return c
@@ -325,10 +296,18 @@ function ensure_nest!(c::NestingCoupling, case)
         c.wall_build += (time_ns() - t0) * 1e-9
         return c
     end
-    p = build_parent(c.pc; child = case)
-    pm, cm = p.mesh, case.mesh
-    off = (round(Int, (cm.x0 - pm.x0) / pm.dx) + 1, round(Int, (cm.y0 - pm.y0) / pm.dy) + 1, 1)
-    nest = NestedGrid(pm, cm; refinement = c.pc.refinement, offset = off)
+    nx = case.nest
+    p = nx.parent
+    pm, cm = Components.grid(p), case.mesh
+    # the site's mesh starts at its own corner (0, 0); its parent's corner
+    # (its [grid] origin) is then at -origin
+    (isapprox(pm.x0, cm.x0 - nx.origin[1]; atol = 1e-9 * pm.dx) &&
+     isapprox(pm.y0, cm.y0 - nx.origin[2]; atol = 1e-9 * pm.dy)) ||
+        error("nesting: the site's corner is at ($(cm.x0), $(cm.y0)) m and its origin in $(nx.parent_id) is " *
+              "$(nx.origin) m, so the parent's [grid] origin is $((cm.x0 - nx.origin[1], cm.y0 - nx.origin[2])), " *
+              "not ($(pm.x0), $(pm.y0))")
+    off = (round(Int, nx.origin[1] / pm.dx) + 1, round(Int, nx.origin[2] / pm.dy) + 1, 1)
+    nest = NestedGrid(pm, cm; refinement = nx.refinement, offset = off)
     # the field set: θ (always), and the tracers
     zp = Field(CellCenter(), pm)                     # the value of a tracer the parent lacks
     pairs = Pair{Symbol,Any}[]
@@ -345,13 +324,12 @@ function ensure_nest!(c::NestingCoupling, case)
     isempty(c.inflow) || add_open_scalars!(sim.bcs, c.inflow; mode = :inflow)
     state = ntuple(_ -> nest_interp_state(nest; scalars = pairs), 3)
     fb = two_way(c) ? _berlin_feedback(c, case, p) : :one_way
-    bookp = two_way(c) && c.opts.reflux ? (s, Δt, w) -> _book_parent!(p, s, Δt, w) : nothing
-    run = NestedRun(p.sim, sim, nest;
-                    advance_parent = domain_advance((s, h; kw...) -> (step_parent!(p, h; body_force! = bookp); s)),
-                    advance_child = domain_advance((s, h; kw...) -> (_child_advance!(case, h); s)),
-                    cfl_parent = nothing, cfl_child = nothing, feedback = fb,
-                    solid = case.geom.sm, state = state, validate = false)
-    c.parent, c.run = p, run
+    h = nx.hierarchy
+    Aeolus.Nesting.add_nest!(h, nx.parent_id => sim, nest; id = nx.id,
+                             advance = Aeolus.Nesting.domain_advance(Components.PipelineCore()),
+                             cfl = nothing, feedback = fb, solid = case.geom.sm, state = state)
+    run = h.links[h.domains[end].up]
+    c.run = run
     # the child's initial wind is the parent's, prolongated over the whole
     # child: an initial wind that differs from the faces' (the case's u0
     # against a sounding's geostrophic wind) makes ∇·u ≠ 0 in the boundary
@@ -360,7 +338,7 @@ function ensure_nest!(c::NestingCoupling, case)
     # sounding: 1 m/s inside, 3.4 m/s on the faces). At t = 0 the parent's
     # wind is horizontally uniform, so the prolongated wind is divergence-free.
     s = run.s_new
-    interpolate_parent_state!(s, p.sim, nest; order = run.order, region = :all)
+    interpolate_parent_state!(s, p.state, nest; order = run.order, region = :all)
     for (cf, sf) in ((sim.u, s.u), (sim.v, s.v), (sim.w, s.w))
         interior_view(cf) .= interior_view(sf)
     end
@@ -376,6 +354,59 @@ function ensure_nest!(c::NestingCoupling, case)
     return c
 end
 
+"""
+    mean_heat_flux(sim, κ) -> (zf, flux)
+
+The plane-mean total kinematic heat flux (K m s⁻¹) of any core `sim` at
+its interior w-faces (heights `zf` above the bottom): resolved
+``⟨w'θ'⟩`` (θ averaged to the face) plus the SGS ``−⟨κ_v ∂θ/∂z⟩`` with the
+cell-centred diffusivity `κ` (the centre spacing of a stretched grid in
+the gradient) — the profile whose minimum is the `:min_flux` z_i
+(Sullivan et al. 1998). Works on a `RegularGrid` and a `StretchedGrid`.
+"""
+function mean_heat_flux(sim, κ)
+    m = sim.mesh
+    Hx, Hy, Hz, Nx, Ny, Nz = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny, m.Nz
+    θd, wd, κd = sim.θ.data, sim.w.data, κ.data
+    zfk(K) = hasproperty(m, :zf) ? m.zf[K] - m.z0 : (K - Hz - 1) * m.dz
+    dzfk(K) = hasproperty(m, :dzf) ? m.dzf[K] : m.dz
+    zf = Float64[zfk(Hz + k) for k in 2:Nz]
+    flux = zeros(Nz - 1)
+    n = Nx * Ny
+    @inbounds for k in 2:Nz
+        K = Hz + k
+        sw = 0.0; sθ = 0.0; swθ = 0.0; sg = 0.0
+        idz = 1 / dzfk(K)
+        for j in Hy+1:Hy+Ny, i in Hx+1:Hx+Nx
+            θf = 0.5 * (θd[i, j, K-1] + θd[i, j, K])
+            w = wd[i, j, K]
+            sw += w; sθ += θf; swθ += w * θf
+            sg -= 0.5 * (κd[i, j, K-1] + κd[i, j, K]) * (θd[i, j, K] - θd[i, j, K-1]) * idz
+        end
+        flux[k-1] = swθ / n - (sw / n) * (sθ / n) + sg / n
+    end
+    return zf, flux
+end
+
+"""
+    parent_zi(p::Domain; method = :min_flux) -> m
+
+The boundary-layer height of the domain `p` (a nested site's parent) now:
+`:min_flux`, the height of the minimum of [`mean_heat_flux`](@ref) with
+the vertical κ of its SGS closure (the CBL definition), or `:parcel` (on
+the plane-mean θ_v), both `boundary_layer_height`.
+"""
+function parent_zi(p::Domain; method::Symbol = :min_flux)
+    s = p.state
+    if method === :min_flux
+        cl = Components.sgs_closure(p)
+        zf, fl = mean_heat_flux(s, cl === nothing ? s.κt : sgs_fields(cl, s).κv)
+        return boundary_layer_height(zf, fl; method = :min_flux)
+    end
+    method === :parcel || throw(ArgumentError("parent_zi: method is :min_flux or :parcel, got :$method"))
+    return Components.parcel_zi(s)
+end
+
 # --- the parent-made dynamic driver (CFG-g, #362) ----------------------------
 
 # The mean-profile targets as the recorder's `profiles` (only those the case relaxes toward).
@@ -388,7 +419,7 @@ _target_profiles(c::NestingCoupling) =
 # starts from.
 function _start_recorder!(c::NestingCoupling, case)
     two_way(c) && error("nesting: [output] child_boundaries records a one-way nest (the offline child " *
-                        "cannot feed back); mode = :two_way")
+                        "cannot feed back); feedback = \"two_way\"")
     cfg, sim, m = case.cfg, case.sim, case.mesh
     planes = [p for st in open_boundary_states(sim) for p in st.planes]
     ox, oy = anchor_xy(cfg, m)
@@ -397,7 +428,7 @@ function _start_recorder!(c::NestingCoupling, case)
         fields = fields, profiles = collect(keys(_target_profiles(c))),
         attributes = Dict{String,Any}("nest_from_parent" => join(String.(c.from_parent), " "),
                                       "nest_inflow" => join(String.(c.inflow), " "),
-                                      "nest_refinement" => collect(Int, c.pc.refinement)),
+                                      "nest_refinement" => collect(Int, case.nest.refinement)),
         preprocessor = "aeolus run ([output] child_boundaries)",
         origin_lat = cfg.lat0, origin_lon = cfg.lon0, origin_x = ox, origin_y = oy)
     record_boundary!(c.recorder, sim.t, NaN, c.run.data.a; profiles = _target_profiles(c))
@@ -408,7 +439,6 @@ end
 # the parent-made driver, in the order the online ensure_nest! sets them.
 function _ensure_offline!(c::NestingCoupling, case)
     cfg, sim, m = case.cfg, case.sim, case.mesh
-    two_way(c) && error("nesting: parent_driver = :offline replays a one-way nest; mode = :two_way needs the parent")
     path = cfg.dynamic
     path === nothing && error("nesting: parent_driver = :offline reads the nest faces from [initial] dynamic, " *
                               "which is \"none\" (the online run writes one: [output] child_boundaries)")
@@ -496,7 +526,7 @@ function _covered_profile!(out::AbstractVector, f, nest, zc)
     a = interior_view(f)
     n = length(cx) * length(cy)
     prof = [sum(view(a, cx, cy, K)) / n for K in 1:pm.Nz]
-    zp = Float64[pm.zc[pm.Hz+K] for K in 1:pm.Nz]
+    zp = level_centres(pm)
     @inbounds for k in eachindex(out)
         z = zc[k]
         K = searchsortedlast(zp, z)
@@ -513,31 +543,28 @@ function _update_targets!(c::NestingCoupling, case)
     tg === nothing && return c
     m = case.mesh
     zc = Float64[m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]
-    p, nest = c.parent, c.run.nest
-    tg.u === nothing || _covered_profile!(tg.u, p.sim.u, nest, zc)
-    tg.v === nothing || _covered_profile!(tg.v, p.sim.v, nest, zc)
-    tg.θ === nothing || _covered_profile!(tg.θ, p.sim.θ, nest, zc)
+    ps, nest = c.parent.state, c.run.nest
+    tg.u === nothing || _covered_profile!(tg.u, ps.u, nest, zc)
+    tg.v === nothing || _covered_profile!(tg.v, ps.v, nest, zc)
+    tg.θ === nothing || _covered_profile!(tg.θ, ps.θ, nest, zc)
     return c
 end
 
-# A fixed child step: the window is a whole number of child steps, at most
-# the parent's own limit (at least one child step).
-_fixed_window(c::NestingCoupling, dt) =
-    dt * max(1, floor(Int, parent_dt(c.parent) / dt * (1 + 1e-9)))
-
+# Online: the site's step lands on the end of the parent window it is in
+# (the nest engine opened it; a fixed step lands there by itself, the
+# window being a whole number of its steps: `Components.window_dt`).
 function limit_dt(c::NestingCoupling, case, dt)
     ensure_nest!(c, case)
     external_driver(c) && return dt
-    if c.window === nothing
-        if offline(c)
+    if offline(c)
+        if c.window === nothing
             c.k < length(c.feed.time) || return dt          # past the records: run_stage! reports it
             R = c.feed.step[c.k + 1]
         else
-            isnan(c.pending) && (c.pending = parent_dt(c.parent))
-            R = c.pending
+            R = c.window.t_child_end - case.sim.t
         end
     else
-        R = c.window.t_child_end - case.sim.t
+        R = Aeolus.Nesting.nest_window_end(c.run) - case.sim.t
     end
     R > 0 || return dt
     return subcycle_dt(R, dt)
@@ -547,86 +574,40 @@ function run_stage!(c::NestingCoupling, case, ::Val{:nest_sync}, dt)
     ensure_nest!(c, case)
     external_driver(c) && return nothing
     t = case.sim.t
-    if c.window === nothing && offline(c)
-        _open_offline_window!(c, case)
-    elseif c.window === nothing
-        Δt_p = _window_dt(c, dt)
-        tw = time_ns()
-        c.window = begin_parent_step!(c.run; dt = Δt_p)
-        c.wall_parent += (time_ns() - tw) * 1e-9
-        c.pending = NaN
+    if offline(c)
+        c.window === nothing && _open_offline_window!(c, case)
+        w = c.window
+        t + dt <= w.t_child_end + 1e-9 * w.Δt ||
+            error("nesting: the child step [$t, $(t + dt)] crosses the end of the record window $(w.t_child_end)")
+        return nothing
+    end
+    L = c.run
+    we = Aeolus.Nesting.nest_window_end(L)
+    isfinite(we) ||
+        error("nesting: the site steps outside a window of its parent $(c.parent.id); a nested site is " *
+              "stepped by the model's nest engine (step_adaptive!(model))")
+    if we != c.window_end
+        # the first step of the site in a new parent window: the parent is at rest
+        c.window_end = we
         c.windows += 1
         _update_targets!(c, case)
         c.recorder === nothing ||
-            record_boundary!(c.recorder, c.window.t_child_end, c.window.Δt, c.run.data.b;
-                             profiles = _target_profiles(c))
+            record_boundary!(c.recorder, we, L.Δt, L.data.b; profiles = _target_profiles(c))
         # what reads the parent between its steps (the inflow statistics, #268)
         for f in c.window_hooks
             f(c, case)
         end
-        # the last reads of the parent of this window are done: its next step may start
-        _prefetch_parent!(c, case, dt)
     end
-    w = c.window
-    t + dt <= w.t_child_end + 1e-9 * w.Δt ||
-        error("nesting: the child step [$t, $(t + dt)] crosses the end of the parent window " *
-              "$(w.t_child_end); with a fixed step, dt must divide the window (it does when " *
-              "the windows start on a child step: use the adaptive stepper otherwise)")
+    t + dt <= we + 1e-9 * L.Δt ||
+        error("nesting: the site's step [$t, $(t + dt)] crosses the end of the parent window $we; " *
+              "with a fixed step, dt must divide the window (the root's window is a whole number of the " *
+              "site's fixed steps)")
     # two-way: the child step's interface fluxes are booked between here and
     # :nest_feedback (the :scalar_advection slot, the :body_force entry)
-    two_way(c) && begin_child_step!(c.run)
-    return nothing
-end
-
-# The parent step of the window that opens now, as the sequential run
-# picks it: `parent_dt` of the parent at the window start (`c.pending`, set
-# by `limit_dt` under a variable step), or a whole number of fixed child
-# steps. A prefetched step was sized by the same rule when it started
-# (the parent has moved on since), and `begin_parent_step!` checks the two
-# agree.
-function _window_dt(c::NestingCoupling, dt)
-    if c.run.ahead !== nothing && isnan(c.pending)
-        dt == c.ahead_step ||
-            error("nesting: the parent step of this window was prefetched for a fixed child step " *
-                  "of $(c.ahead_step) s; this step is $dt s")
-        return c.ahead_window
+    if two_way(c)
+        L.sub_t0 = Float64(t)
+        Aeolus.Nesting._begin!(L, :child)
     end
-    return isnan(c.pending) ? _fixed_window(c, dt) : max(c.pending, dt)
-end
-
-# SC-c (#403): start the parent's step of the next window on its own task,
-# when it is certain to be taken (one-way, the Aeolus parent, a run whose
-# loop goes past this window's end), sized as _window_dt will size it:
-# under a variable step limit_dt sets `pending` from the parent at the
-# window start and the child's step is never longer (subcycle_dt ≤ R), so
-# the window is `pending`; under a fixed step it is _fixed_window of the
-# fixed step.
-function _prefetch_parent!(c::NestingCoupling, case, dt)
-    two_way(c) && return nothing
-    Threads.nthreads() > 1 || return nothing
-    w = c.window
-    step_will_run(case.clock, w.t_child_end) || return nothing
-    ts = timestepper(case)
-    if ts !== nothing && variable_dt(typeof(ts))
-        c.pending = parent_dt(c.parent)
-        Δt_next = c.pending
-        c.ahead_step = NaN
-    else
-        Δt_next = _fixed_window(c, dt)
-        c.ahead_step = Float64(dt); c.ahead_window = Δt_next
-    end
-    prefetch_parent_step!(c.run, w; dt = Δt_next)
-    return nothing
-end
-
-"""
-    end_run!(c::NestingCoupling, case)
-
-Wait for a parent step prefetched for a window the run did not reach (a
-run stopped early by a blow-up): the parent is then one window ahead.
-"""
-function end_run!(c::NestingCoupling, case)
-    c.run isa NestedRun && wait_parent_step!(c.run)
     return nothing
 end
 
@@ -643,24 +624,24 @@ end
 
 function run_stage!(c::NestingCoupling, case, ::Val{:nest_feedback}, dt)
     external_driver(c) && return nothing
-    w = c.window
-    w === nothing && return nothing
-    two_way(c) && end_child_step!(c.run)
-    if abs(case.sim.t - w.t_child_end) <= 1e-9 * w.Δt
-        if offline(c)                       # end_parent_step!'s clock: the child lands on the record
-            case.sim.t = w.t_child_end
+    if offline(c)
+        w = c.window
+        w === nothing && return nothing
+        if abs(case.sim.t - w.t_child_end) <= 1e-9 * w.Δt
+            case.sim.t = w.t_child_end              # the child lands on the record
             c.k += 1
-        else
-            two_way(c) ? _feedback!(c, case, w) : end_parent_step!(c.run, w)
+            c.window = nothing
         end
-        c.window = nothing
+        return nothing
     end
+    # the engine closes the window (and feeds back) when the site reaches its end
+    two_way(c) && Aeolus.Nesting._commit!(c.run, :child)
     return nothing
 end
 
-# Offline: open the window from record k to k + 1 (begin_parent_step!'s
-# window: t0 the child's clock, Δt = time_bc[k+1] − time_bc[k]), refresh the
-# faces at its start and the targets to its end, as the online nest does.
+# Offline: open the window from record k to k + 1 (t0 the child's clock,
+# Δt = time_bc[k+1] − time_bc[k]), refresh the faces at its start and the
+# targets to its end, as the online nest does.
 function _open_offline_window!(c::NestingCoupling, case)
     f, k, sim = c.feed, c.k, case.sim
     k < length(f.time) || check_coverage(f, sim.t, sim.t + case.cfg.dt)
@@ -676,49 +657,17 @@ function _open_offline_window!(c::NestingCoupling, case)
     return c
 end
 
-# Close a two-way window: the feedback onto the parent, its heat and water
-# booked in the parent's ledgers as (:nest_feedback, :feedback_heat) and
-# (:nest_feedback, :feedback_water) — a zero-length ledger step around it,
-# so the parent ledgers close with the feedback named.
-function _feedback!(c::NestingCoupling, case, w)
-    p = c.parent
-    sim = p.sim
-    moist = p.pc.moisture
-    hour = hour_of_day(p.pc.child, sim.t)
-    budget_begin_step!(p.heat, sim.θ, hour)
-    moist && budget_begin_step!(p.water, sim.qv, hour)
-    budget_open!(p.heat, :nest_feedback, :feedback_heat, sim.θ)
-    moist && budget_open!(p.water, :nest_feedback, :feedback_water, sim.qv)
-    H0 = sum(p.heat.H_now)
-    W0 = moist ? sum(p.water.H_now) : 0.0
-    tw = time_ns()
-    end_parent_step!(c.run, w)
-    c.feedback[:wall] = get(c.feedback, :wall, 0.0) + (time_ns() - tw) * 1e-9
-    budget_close!(p.heat, sim.θ)
-    moist && budget_close!(p.water, sim.qv)
-    budget_end_step!(p.heat, sim.θ, 0.0)
-    moist && budget_end_step!(p.water, sim.qv, 0.0)
-    c.feedback[:heat] = get(c.feedback, :heat, 0.0) + (sum(p.heat.H_now) - H0)
-    c.feedback[:water] = get(c.feedback, :water, 0.0) + (moist ? sum(p.water.H_now) - W0 : 0.0)
-    c.feedback[:n] = get(c.feedback, :n, 0.0) + 1
-    led = c.run.nest.ledger
-    c.feedback[:mass] = max(get(c.feedback, :mass, 0.0), get(led, :mass, 0.0))
-    return c
-end
-
 """
     diagnostics(c::NestingCoupling, case)
 
-With the Aeolus parent: `parent_windows` (parent steps begun),
-`dt_parent_min` / `dt_parent_max` (s); the heat the open faces carried,
-`boundary_heat_sides` / `boundary_heat_top` (W m⁻², mean over the run)
-and the largest normal-velocity correction `delta_max` (m s⁻¹); a
-two-way nest adds `feedback_count`, `feedback_heat` (J m⁻², into the
-parent) and `feedback_water` (kg m⁻²). The wall time of the parent run
-`wall.parent` and of the feedback `wall.feedback` (s, cumulative). An
-offline nest (`parent_driver = :offline`, #362): `parent_windows`
-(windows replayed) and `boundary_records` (records read from the
-dynamic driver). None for an external `parent_driver`.
+Nested in a parent domain: `parent_windows` (parent windows the site
+stepped in), `dt_parent_min` / `dt_parent_max` (s); the heat the open
+faces carried, `boundary_heat_sides` / `boundary_heat_top` (W m⁻², mean
+over the run) and the largest normal-velocity correction `delta_max`
+(m s⁻¹); a two-way nest adds `feedback_count`. An offline nest
+(`parent_driver = :offline`, #362): `parent_windows` (windows replayed)
+and `boundary_records` (records read from the dynamic driver). None for
+an external `parent_driver`.
 """
 function diagnostics(c::NestingCoupling, case)
     offline(c) && return Diagnostic[
@@ -731,8 +680,7 @@ function diagnostics(c::NestingCoupling, case)
     ob = case.open
     perrun(x) = () -> ob === nothing ? NaN : x(ob) / max(case.sim.t, eps())
     ds = Diagnostic[
-        Diagnostic("parent_windows", "1", () -> st().parent_steps + (c.window === nothing ? 0 : 1);
-                   cadence = :step),
+        Diagnostic("parent_windows", "1", () -> c.windows; cadence = :step),
         Diagnostic("dt_parent_min", "s", () -> st().dt_parent_min),
         Diagnostic("dt_parent_max", "s", () -> st().dt_parent_max),
         Diagnostic("boundary_heat_sides", "W m-2", perrun(o -> o.lateral);
@@ -740,28 +688,13 @@ function diagnostics(c::NestingCoupling, case)
         Diagnostic("boundary_heat_top", "W m-2", perrun(o -> o.top);
                    description = "heat through the top face, mean over the run"),
         Diagnostic("delta_max", "m s-1", () -> ob === nothing ? NaN : ob.δmax;
-                   description = "largest normal-velocity correction of the open faces"),
-        Diagnostic("wall.parent", "s", () -> c.wall_parent; description = "wall time of the parent run")]
-    if two_way(c)
-        append!(ds, [Diagnostic("feedback_count", "1", () -> get(c.feedback, :n, 0.0)),
-                     Diagnostic("feedback_heat", "J m-2", () -> get(c.feedback, :heat, 0.0);
-                                description = "heat the feedback put into the parent"),
-                     Diagnostic("feedback_water", "kg m-2", () -> get(c.feedback, :water, 0.0);
-                                description = "water the feedback put into the parent"),
-                     Diagnostic("wall.feedback", "s", () -> get(c.feedback, :wall, 0.0);
-                                description = "wall time of the feedback")])
-    end
+                   description = "largest normal-velocity correction of the open faces")]
+    two_way(c) && push!(ds, Diagnostic("feedback_count", "1", () -> st().parent_steps;
+                                       description = "feedbacks onto the parent"))
     return ds
 end
 
 # --- smoke checks ------------------------------------------------------------
-
-"Relative closure of an `StageBudget` (|closure| / largest term)."
-function _ledger_closure(hl)
-    b = stage_budget(hl)
-    scale = maximum(abs, values(b.terms); init = 0.0)
-    return scale == 0 ? 0.0 : abs(b.closure) / scale
-end
 
 function smoke_check(c::NestingCoupling, case)
     c.run === nothing && return ["the nest was built" => false]
@@ -785,60 +718,61 @@ function smoke_check(c::NestingCoupling, case)
     geo = find_coupling(case, :geostrophic)
     zc = [m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]
     tw = sim.t
+    Ug, Vg = nest_geostrophic_wind(case)
     geo_same = geo === nothing || !(geo.forcing isa GeostrophicPressureGradient) ||
-               p.forcing.geostrophic === nothing ||
-               all(z -> forcing_value(geo.forcing.U_g, z, tw) == forcing_value(p.forcing.geostrophic.U_g, z, tw) &&
-                        forcing_value(geo.forcing.V_g, z, tw) == forcing_value(p.forcing.geostrophic.V_g, z, tw), zc)
-    tiles = p.surface === nothing ||
+               all(z -> forcing_value(geo.forcing.U_g, z, tw) == forcing_value(Ug, z, tw) &&
+                        forcing_value(geo.forcing.V_g, z, tw) == forcing_value(Vg, z, tw), zc)
+    sfc = Components.slot_component(p, :surface)
+    tiles = !(sfc isa TiledUrbanSurface) ||
             all(col -> col === nothing || isapprox(sum(mosaic_fractions(col.surface)), 1; atol = 1e-12),
-                p.surface.columns)
-    w = c.window
+                sfc.surface.columns)
+    we = c.window_end
     checks = two_way(c) ? _two_way_checks(c, case) : Pair{String,Bool}[]
-    return [checks...,
-            "the parent ran: ≥ 1 window, the child inside the last one" =>
-                c.windows >= 1 && (w === nothing ? abs(sim.t - run.t) <= 1e-9 * max(run.Δt, 1.0) :
-                                   w.t_child_end - w.Δt - 1e-9 <= sim.t <= w.t_child_end + 1e-9),
-            "the parent is the StretchedGrid run of #259, nested at refinement $(c.pc.refinement)" =>
-                p.mesh isa StretchedGrid && refinement_ratio(run.nest) == c.pc.refinement,
-            "every advected tracer (and ql, qr) is in the nest's field set" =>
-                Set(vcat(c.from_parent, c.inflow)) ==
-                Set(t.name for t in case.tracers if t.advect || t.name in (:ql, :qr)),
-            "qv takes the parent's values" => :qv in c.from_parent,
-            "parent heat ledger closes (≤ 1e-10 of its largest term)" => _ledger_closure(p.heat) <= 1e-10,
-            "parent water ledger closes (≤ 1e-10 of its largest term)" =>
-                !p.pc.moisture || _ledger_closure(p.water) <= 1e-10,
-            "child: net boundary volume flux after the correction ≤ 1e-12 U A" =>
-                abs(led.residual) <= 1e-12 * U * A,
-            # (the sound-proof cores constrain ∇·(W u); their solver coupling checks it)
-            "child: max|∇·u| ≤ 1e-8 s⁻¹ (Boussinesq core)" =>
-                !(sim isa BoussinesqSimulation) || max_divergence(sim) <= 1e-8,
-            "child and parent are driven by one geostrophic wind" => geo_same,
-            "the parent's surface is the tile mosaic (fractions sum to 1)" => tiles,
-            "the sponge targets the parent's mean wind over the child" =>
-                c.targets === nothing || c.targets.u === nothing ||
-                (sim.sponge_target.u === c.targets.u && any(!iszero, c.targets.u))]
+    out = [checks...,
+           "the parent ran: ≥ 1 window, the site at the end of the last one" =>
+               c.windows >= 1 && abs(sim.t - we) <= 1e-9 * max(run.Δt, 1.0),
+           "the parent is the domain $(p.id), nested at refinement $(case.nest.refinement)" =>
+               refinement_ratio(run.nest) == case.nest.refinement && run.parent === p.state,
+           "every advected tracer (and ql, qr) is in the nest's field set" =>
+               Set(vcat(c.from_parent, c.inflow)) ==
+               Set(t.name for t in case.tracers if t.advect || t.name in (:ql, :qr)),
+           "qv takes the parent's values" => !_moist(p.state) || :qv in c.from_parent,
+           "child: net boundary volume flux after the correction ≤ 1e-12 U A" =>
+               abs(led.residual) <= 1e-12 * U * A,
+           # (the sound-proof cores constrain ∇·(W u); their solver coupling checks it)
+           "child: max|∇·u| ≤ 1e-8 s⁻¹ (Boussinesq core)" =>
+               !(sim isa BoussinesqSimulation) || max_divergence(sim) <= 1e-8,
+           "child and parent are driven by one geostrophic wind" => geo_same,
+           "the parent's tiled surface: fractions sum to 1 in every column" => tiles,
+           "the sponge targets the parent's mean wind over the child" =>
+               c.targets === nothing || c.targets.u === nothing ||
+               (sim.sponge_target.u === c.targets.u && any(!iszero, c.targets.u))]
+    # the parent's budgets close with the nest exchange named (when it measures them)
+    b = p.budgets
+    if b !== nothing
+        for q in intersect(b.quantities, (:energy, :water))
+            sb = stage_budget(b.budgets.measured[q])
+            scale = maximum(abs, values(sb.terms); init = 0.0)
+            push!(out, "the parent's $q budget closes (≤ 1e-10 of its largest term)" =>
+                       scale == 0 || abs(sb.closure) <= 1e-10 * scale)
+        end
+    end
+    return out
 end
 
-# The two-way checks (#267): the feedback ran and changed the parent, its
-# heat and water are named terms of the parent ledgers (whose closure the
-# checks above assert), the interface mass flux matches after the flux
-# correction, and the re-projected parent is divergence-free.
+# The two-way checks (#267): the feedback ran, the interface mass flux
+# matches after the flux correction, and the re-projected parent is
+# divergence-free.
 function _two_way_checks(c::NestingCoupling, case)
     p, run = c.parent, c.run
-    hb = stage_budget(p.heat)
-    wb = p.pc.moisture ? stage_budget(p.water) : nothing
-    return ["two-way: the run is two-way, with the transport-booked registers of θ and qv" =>
+    return ["two-way: the run is two-way, with the registers of θ and qv" =>
                 run.feedback === :two_way && (!c.opts.reflux || (run.regs !== nothing &&
-                    run.regs.names == (p.pc.moisture ? [:θ, :qv] : [:θ]))),
-            "two-way: ≥ 1 feedback, which changed the parent's θ" =>
-                get(c.feedback, :n, 0.0) >= 1 && haskey(hb.terms, (:nest_feedback, :feedback_heat)) &&
-                hb.terms[(:nest_feedback, :feedback_heat)] != 0,
-            "two-way: the parent water ledger names the feedback" =>
-                wb === nothing || haskey(wb.terms, (:nest_feedback, :feedback_water)),
+                    run.regs.names == (_moist(p.state) ? [:θ, :qv] : [:θ]))),
+            "two-way: ≥ 1 feedback" => run.stats.parent_steps >= 1,
             "two-way: interface mass-flux mismatch after the flux correction ≤ 1e-12 (of U A)" =>
-                get(c.feedback, :mass, Inf) <= 1e-12,
+                get(run.nest.ledger, :mass, Inf) <= 1e-12,
             "two-way: the re-projected parent's max|∇·u| ≤ 1e-8 s⁻¹" =>
-                max_divergence(p.sim) <= 1e-8]
+                max_divergence(p.state) <= 1e-8]
 end
 
 # The outflow options of the nest faces (N-open-c, #260), and the two-way
@@ -846,9 +780,8 @@ end
 # which covers only 4 × 4 × 2 parent cells, is anterpolated at all); every
 # coupling on.
 smoke_variants(::Type{<:NestingCoupling}) =
-    ((label = "two-way", options = Dict(:nesting => (mode = :two_way, buffer = 1, z_anterp = 0.0))),
+    ((label = "two-way", feedback = :two_way, options = Dict(:nesting => (buffer = 1, z_anterp = 0.0))),
      (label = "convective outflow", outflow = :convective),
      (label = "parent_driver: analytic boundary data in place of the parent (the #58 interface)",
       options = Dict(:nesting => (parent_driver = :profile,))),
      (label = "nest off: the periodic box", physics = Dict(:nesting => false)))
-

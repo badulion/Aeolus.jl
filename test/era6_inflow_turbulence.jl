@@ -459,10 +459,10 @@ end
     @test abs(kinetic_energy(two.p) / kinetic_energy(one.p) - 1) < 0.01   # measured ×0.999 (×1.025 before)
     # the feedback gives the child's faces back bit for bit
     run = two.run
-    w = begin_parent_step!(run)
+    w = Aeolus.Nesting._begin_parent_step!(run)
     Aeolus.Nesting._subcycle_child!(run, w.t_child_end)
     u0 = copy(two.c.u.data); v0 = copy(two.c.v.data)
-    end_parent_step!(run, w)
+    Aeolus.Nesting._end_parent_step!(run, w, true)
     @test two.c.u.data == u0 && two.c.v.data == v0
 end
 

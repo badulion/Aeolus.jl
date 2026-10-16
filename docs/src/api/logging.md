@@ -504,8 +504,8 @@ the current state at the last dt, one fused sweep: the CFL of a
 fixed-step run, which makes no pick), and the process's memory
 (`proc.mem_live_mb`, `proc.mem_maxrss_mb`, `proc.gc_time`,
 [`process_diagnostics`](@ref Aeolus.RunLog.process_diagnostics)). A
-nested run reports per parent step (its own record, completed in
-`end_parent_step!`): `cfl_adv` the largest child-substep CFL of the
+nested run reports per parent step (its own record, completed when the
+window closes): `cfl_adv` the largest child-substep CFL of the
 window, `wall_step`, and for a two-way run with a ledger the relative
 conservation errors `ledger_<quantity>`; each domain's record counts its
 accepted steps. The ledger residuals of the Berlin couplings come with

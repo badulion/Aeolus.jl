@@ -16,8 +16,8 @@
 #   * [sgs] model = "tke": the exact wall distance of a stretched grid
 #     (bottom only, or both walls), and the surface value u*²/√(c_k c_ε) of
 #     the :surface component's u*;
-#   * the parent's domain through the pipeline is ParentCase's run, bit for
-#     bit (the idealised parent; the tiled Berlin parent is in
+#   * (the parent as a [[domain]] of the model's config, NEST-p3 #483:
+#     test/config_parent_domain.jl; the tiled Berlin parent is in
 #     urban_checks.jl, full tier).
 
 using Test
@@ -296,32 +296,4 @@ end
     s2 = PC.build(SGS, (; model = :tke, e_min = 1e-4, surface_factor = 3.9, wall_cap = false, wall_cap_top = true,
                          surface_value = true, stress = :laplacian), Domain(sim2; validate = false))
     @test_throws ArgumentError step!(Domain(sim2; components = (CentredAdvection(), s2)), 2.0)
-end
-
-@testset "the parent's domain through the pipeline is ParentCase's run, bit for bit (idealised parent)" begin
-    child = site_config(berlin_toml("summer"); parent_static = nothing, dynamic = nothing, sounding = nothing)
-    mk() = PU.ParentConfig(child; extent = (2000.0, 2000.0, 1500.0), refinement = (16, 16, 4), surface = :prescribed,
-                           radiation = false, geostrophic = false, nudging_τ = Inf, u_init = 1.0, output_period = 900.0,
-                           Q_surface = PU.ConstantForcing(0.15), E_surface = PU.ConstantForcing(3e-5),
-                           θ_init = PU.ProfileTable([0.0, 1500.0], [290.0, 295.0]))
-    p = PU.build_parent(mk())
-    names = map(Components.component_name, p.domain.components)
-    @test Set(names) == Set((:advection, :sgs, :prescribed_surface_flux, :large_scale_forcing))
-    @test findfirst(==(:prescribed_surface_flux), names) < findfirst(==(:sgs), names)   # u* after the surface
-    @test p.closure === Components.sgs_closure(p.domain) && p.forcing.damping !== nothing
-    d, _ = PU.parent_domain(mk())
-    sim = d.state
-    dt_prev = child.dt
-    for _ in 1:8
-        PU.step_parent!(p)
-        tn = (floor(sim.t / 900.0 + 1e-9) + 1) * 900.0
-        _, dt_prev, _ = Components.step_adaptive!(d; dt_prev = dt_prev, t_end = tn)
-    end
-    @test sim.t == p.sim.t
-    for f in (:u, :v, :w, :θ, :qv, :p)
-        @test getproperty(sim, f).data == getproperty(p.sim, f).data
-    end
-    @test Components.sgs_closure(d).e.data == p.closure.e.data
-    hb = Aeolus.BudgetSystem.stage_budget(p.heat)
-    @test abs(hb.closure) <= 1e-10 * maximum(abs, values(hb.terms))
 end

@@ -45,13 +45,9 @@
 # launch: the KA launch overhead: a no-op body launched threaded
 #   (threshold = 0) over 1 to 4096 rows, against the serial loop.
 #
-# AEOLUS_BENCH_PREFETCH=1 (flagship, SC-c #403): the nest's parent step of
-#   the next window runs on its own task while the child steps (what a
-#   run does). It is started after the warm-up — a run would
-#   start it when the open window opened, during step 1's compilation —
-#   and the run's horizon ends with that window, so the timed steps hold
-#   the same parent work as the sequential run: one parent step, here
-#   alongside the child's steps.
+# flagship (NEST-p3 #483): the site nested in its 6 km parent domain, timed
+#   per window of the model's nest engine (the parent's step, the site's
+#   steps to its end); child: the site alone (its nest off).
 #
 # Each mode prints readable lines and machine-readable `ROW` lines
 # (`ROW <mode> <threads> <name> <value> <unit>`).
@@ -68,7 +64,6 @@ const MODE = get(ARGS, 1, "launch")
 MODE == "dns" && include(joinpath(@__DIR__, "..", "test", "fixtures", "dns_decay.jl"))
 
 const NT = Threads.nthreads()
-const PREFETCH = get(ENV, "AEOLUS_BENCH_PREFETCH", "0") == "1"
 row(mode, name, v, unit) = @printf("ROW %s %d %s %.6g %s\n", mode, NT, name, v, unit)
 
 function tmin(f, n; warm = 2)
@@ -84,101 +79,58 @@ end
 # Berlin flagship
 # ---------------------------------------------------------------------------
 
+"The Berlin summer config's model: the site nested in its parent (`flagship`), or the site alone (`child`)."
+function berlin_model(mode)
+    BC = Aeolus.Urban
+    cfg = load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml");
+                          overrides = ["output.variables=[]"])
+    if mode == "child"
+        # the site's options without its nest component: the periodic box
+        c = BC.site_options(Aeolus.Config.domain_view(cfg, 2))
+        c = merge(c, (; components = delete!(copy(c.components), :nesting)))
+        return BC.build_case(c).model
+    end
+    return Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
+end
+
 function bench_berlin(mode; nwarm = 2, nsteps = 9)
     BC = Aeolus.Urban
     CP = Aeolus.Components
-    ovr = mode == "child" ? ["nesting.enabled=false"] : String[]
-    cfg = BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml");
-                                          overrides = vcat(ovr, "output.variables=[]")))
-    tb = @elapsed case = BC.build_case(cfg)
-    model, d = case.model, case.domain
+    tb = @elapsed model = berlin_model(mode)
+    nested = length(model.domains) > 1
+    d = model.domains[end]
+    case = BC.urban_case(d)
     m = case.mesh
-    @printf("%s: %d × %d × %d child, -t %d, build %.1f s\n", mode, m.Nx, m.Ny, m.Nz, NT, tb)
-    dtw = 0.0
+    @printf("%s: %d × %d × %d site, -t %d, build %.1f s\n", mode, m.Nx, m.Ny, m.Nz, NT, tb)
+    # one step: a site step alone, a window of the nest
+    stepper() = nested ? CP.step_adaptive!(model) : step!(model, CP.pick_dt(model); checked = false)
     for _ in 1:nwarm
-        dtw = CP.pick_dt(model)
-        step!(model, dtw; checked = false)
+        stepper()
     end
-    nest = BC.find_coupling(case, :nesting)
-    wp0 = nest === nothing ? 0.0 : nest.wall_parent
-    nw0 = nest === nothing ? 0 : nest.windows
-    pt0 = nest === nothing ? Dict{Symbol,Float64}() : copy(nest.parent.timing)
-    if PREFETCH && nest !== nothing && nest.window !== nothing
-        case.clock.t_stop = Inf; case.clock.stop_margin = 0.0
-        BC._prefetch_parent!(nest, case, dtw)
-        nest.run.ahead === nothing || (case.clock.t_stop = nest.window.t_child_end + nest.run.ahead.dt)
-        @printf("  parent's next window prefetched: %s\n", nest.run.ahead !== nothing)
-    end
+    L = nested ? Aeolus.Nesting.nest_link(model, d.id) : nothing
+    wc0 = nested ? L.stats.wall_child : 0.0
     n0 = case.clock.n
-    fired = Dict{Tuple{Symbol,Symbol},Int}()
-    t_dt = Float64[]; t_step = Float64[]
     empty!(case.timing)
+    t_step = Float64[]
     for _ in 1:nsteps
-        dt = 0.0
-        push!(t_dt, @elapsed dt = CP.pick_dt(model))
-        t_old = case.sim.t
-        for c in d.components, st in CP.stages(c)
-            CP._due(st, t_old, t_old + dt) || continue
-            k = (st.name, CP.component_name(c))
-            fired[k] = get(fired, k, 0) + 1
-        end
-        push!(t_step, @elapsed(step!(model, dt; checked = false)))
+        push!(t_step, @elapsed stepper())
     end
     n = case.clock.n - n0
-    @printf("  %d timed steps (steps %d-%d), simulated %.2f s\n", n, n0 + 1, case.clock.n, case.sim.t)
     ms(v) = 1e3 * v
-    @printf("  %-34s min %9.2f  mean %9.2f ms\n", "pick_dt", ms(minimum(t_dt)), ms(sum(t_dt) / n))
-    @printf("  %-34s min %9.2f  mean %9.2f ms\n", "step!(model)", ms(minimum(t_step)), ms(sum(t_step) / n))
-    row(mode, "step_dt", ms(sum(t_dt) / n), "ms")
-    row(mode, "step_dt_min", ms(minimum(t_dt)), "ms")
-    row(mode, "step_case", ms(sum(t_step) / n), "ms")
-    row(mode, "step_case_min", ms(minimum(t_step)), "ms")
-    inside = 0.0
+    @printf("  %d timed %s, %d site steps, simulated %.2f s\n", nsteps, nested ? "windows" : "steps", n, case.sim.t)
+    @printf("  %-34s min %9.2f  mean %9.2f ms\n", nested ? "window" : "step!(model)", ms(minimum(t_step)),
+            ms(sum(t_step) / nsteps))
+    row(mode, nested ? "window" : "step_case", ms(sum(t_step) / nsteps), "ms")
+    row(mode, "site_step", ms(sum(t_step) / n), "ms")
     for ((S, name), t) in sort!(collect(case.timing); by = last, rev = true)
-        # :body_force / :post_predictor run inside (:dynamics, :step!)
-        S in (:body_force, :post_predictor) || (inside += t)
-        @printf("  %-16s %-17s %9.3f ms/step  (%d calls)\n", S, name, ms(t / n),
-                S in (:dynamics, :ledger, :body_force, :post_predictor) ? n : get(fired, (S, name), 0))
+        @printf("  %-16s %-17s %9.3f ms/site step\n", S, name, ms(t / n))
         row(mode, "$(S)/$(name)", ms(t / n), "ms")
     end
-    drv = sum(t_step) - inside
-    # the air-heat ledger time of the :body_force / :post_predictor hooks is
-    # inside (:dynamics, :step!) and in (:ledger, :air_heat): counted twice
-    @printf("  %-34s %9.3f ms/step\n", "driver (step! − entries)", ms(drv / n))
-    row(mode, "driver", ms(drv / n), "ms")
-    nest === nothing || wait_parent_step!(nest.run)     # the parent may be read now
-    if nest !== nothing
-        st = nest.run.stats
-        @printf("  parent steps prefetched %d, waited for %.3f s\n", st.prefetched, st.wall_parent_wait)
-        row(mode, "parent_prefetched", st.prefetched, "count")
-        nw = nest.windows - nw0
-        @printf("  %-34s %9.2f ms/step, %d parent windows opened\n", "parent steps (nest.wall_parent)",
-                ms((nest.wall_parent - wp0) / n), nw)
-        row(mode, "parent_steps", ms((nest.wall_parent - wp0) / n), "ms")
-        row(mode, "parent_windows", nw, "count")
-        nw > 0 && row(mode, "parent_per_window", ms((nest.wall_parent - wp0) / nw), "ms")
-        pm = nest.parent.mesh
-        pw = [k => ms((get(nest.parent.timing, k, 0.0) - get(pt0, k, 0.0)) / max(nw, 1))
-              for k in (:total, :dynamics, :surface, :radiation)]
-        @printf("  parent %d × %d × %d, per window (ms):%s\n", pm.Nx, pm.Ny, pm.Nz,
-                join((@sprintf(" %s %.1f", k, v) for (k, v) in pw)))
-        for (k, v) in pw
-            row(mode, "parent_$(k)_per_window", v, "ms")
-        end
-    end
-    # the cadenced entries that did not fire in the window: per call, the
-    # minimum of two after one untimed call (a first call may compile a path
-    # the warm-up did not take; the radiosity then reuses its factorisations,
-    # so its per-call cost is measured on its own: KA-n, ka_port.md)
-    dt = BC.step_dt(case)
-    for e in d.components, st in CP.stages(e)
-        S = st.name
-        e isa BC.UrbanEntry || continue
-        k = (S, CP.component_name(e))
-        (get(fired, k, 0) > 0 || S in (:tendencies, :body_force, :post_predictor)) && continue
-        t = tmin(() -> CP.run_stage!(e, d, Val(S), dt), 2; warm = 1)
-        @printf("  per call %-16s %-17s %9.2f ms\n", S, k[2], ms(t))
-        row(mode, "call:$(S)/$(k[2])", ms(t), "ms")
+    if nested
+        # the parent's share of a window: the window less the site's steps
+        wc = L.stats.wall_child - wc0
+        @printf("  %-34s %9.2f ms/window\n", "parent (window − site steps)", ms((sum(t_step) - wc) / nsteps))
+        row(mode, "parent_per_window", ms((sum(t_step) - wc) / nsteps), "ms")
     end
     return nothing
 end
@@ -188,7 +140,7 @@ const N_SERIAL = Threads.Atomic{Int}(0)
 
 function count_launches(; nwarm = 2, nsteps = 9)
     BC = Aeolus.Urban
-    case = BC.build_case(BC.site_options(load_run_config(joinpath(pkgdir(Aeolus), "examples", "urban", "berlin_summer.toml"))))
+    case = BC.urban_case(only(berlin_model("child").domains))
     for _ in 1:nwarm
         step!(case.model)
     end

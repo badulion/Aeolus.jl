@@ -364,29 +364,42 @@ z_uniform = 500.0
 # nested case; the same 13 child digests re-captured (the parent's 6 and the
 # three zero tracers did not move: the nest is one-way). With
 # physics.inflow_turbulence = false the 22 digests are the KA-l capture.
+# NEST-p3 (#483): the 22 digests re-captured. The nest parent is a [[domain]]
+# of the model's core (berlin_smoke.toml): its forcing takes the step's mean
+# clock and its Coriolis term and sponge are components (round-off against
+# ParentCase, 3e-9 K in θ over six coarse steps), its tiles are its static
+# driver's (AeolusPrep.jl, the site's classes under its footprint), and the
+# root's last window lands on the run's end (the site takes 11 steps, not 15,
+# in the parent's 8 windows: ParentCase overshot 24 s and the site halved its
+# last steps to stop there). The previous capture is in git history.
+# #489: the 13 child digests re-captured on one BLAS thread (the suite's
+# BLAS.set_num_threads(1), test/runtests.jl; test/run.jl's workers run
+# OPENBLAS_NUM_THREADS=1). The NEST-p3 capture was taken at the machine's
+# default BLAS thread count, and the site's radiosity LU rounds differently
+# per BLAS thread count; the parent's 6 and the 3 zero tracers did not move.
 [smoke_digests]
-HNO3 = "79f9962a8c3d5ad8"
-NO = "c498b9c544531b0e"
-NO2 = "0935dabe59f04017"
-O3 = "28bd0c05ec588012"
-Ts = "cfa1eac663717043"
-VOC = "f339cda65ace31b5"
-e = "cb75db6e23a565f1"
-p = "02bcc88f29315bfb"
-parent_p = "a20144242790aaea"
-parent_qv = "ea52a59b9bec07f1"
-parent_u = "3b6d738234a763bd"
-parent_v = "ed3d31e263be1438"
-parent_w = "5c2c0fabed842a86"
-"parent_θ" = "51103da606055c46"
+HNO3 = "e48a8c3e10f993de"
+NO = "fe0b9bb6be206fdf"
+NO2 = "e5ca9a689ade56f3"
+O3 = "80a2c6874b2027a3"
+Ts = "4a889d7b6c39d488"
+VOC = "bb263fbceddaca52"
+e = "1dffd19b5c87a5e4"
+p = "34d1d670121fd95f"
+parent_p = "ee9d99999acd0e12"
+parent_qv = "edf4aa79f4edcebb"
+parent_u = "df6e275c300c99ab"
+parent_v = "edcce4c413d4c683"
+parent_w = "a32f55f4015748be"
+"parent_θ" = "933ce1d3764b769b"
 pollutant = "8f6955bf94ec2325"
 ql = "8f6955bf94ec2325"
 qr = "8f6955bf94ec2325"
-qv = "9362d715e2304bc7"
-u = "708c17b57fa6fc40"
-v = "b03163d513bd16c1"
-w = "3b8f3136cf6b4593"
-"θ" = "d7d7fb89ea3c2fc4"
+qv = "855125c3f2bee9f7"
+u = "b162a7c86e2dc98d"
+v = "9af7e3b016c45c55"
+w = "7f546532112c200b"
+"θ" = "c2b8df9b587eef38"
 
 [summer.case]
 C_s = 0.1

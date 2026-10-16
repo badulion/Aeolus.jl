@@ -1,12 +1,15 @@
-# N-berlin-nest (#265, epic #246): a nest whose child is driven by its
-# caller. The Berlin case advances its child through a whole stage loop,
-# so it cannot hand the child to `step_nested!`'s own subcycling; it opens
-# a parent-step window with `begin_parent_step!`, takes child steps that
-# land on the window end (`subcycle_dt`) and closes it with
-# `end_parent_step!`. These tests run that pattern on synthetic boxes (no
-# Berlin geometry, rule of #321):
+# N-berlin-nest (#265, epic #246): a nest whose child picks its own steps.
+# The urban site advances its child through a whole stage loop, so the
+# model's nest engine (Components.ModelNest, NEST-p3 #483) does not hand it
+# `step_nested!`'s subcycling: it opens a parent-step window (the parent's
+# step, the boundary data at both ends), lets the child take steps that land
+# on the window end (`subcycle_dt`, `nest_window_end`), books a two-way
+# child's steps between `_begin!` and `_commit!`, and closes the window
+# (`_end_parent_step!`). These tests run that pattern (`_nx_window!`, the
+# engine's internals; the public window API of NestedRun is gone since
+# NEST-p3) on synthetic boxes (no Berlin geometry, rule of #321):
 #
-#   1. the split is exact: the externally driven child equals
+#   1. the split is exact: the window driven from outside equals
 #      `step_nested!(run)` bit for bit (one- and two-way);
 #   2. a parent at rest with a hydrostatic θ(z) leaves a calm child at rest
 #      with the parent's profile (adaptive child steps that do not divide
@@ -56,19 +59,24 @@ child steps of at most `h_lim` placed by `subcycle_dt`, and `each(h)`
 called after every child step. Returns the number of child steps.
 """
 function _nx_window!(run, adv, Δt_p, h_lim; each = h -> nothing)
-    w = begin_parent_step!(run; dt = Δt_p)
+    NX = Aeolus.Nesting
+    w = NX._begin_parent_step!(run; dt = Δt_p)
+    @assert nest_window_end(run) == w.t_child_end
     c = run.child
     n = 0
     while w.t_child_end - c.t > 1e-9 * Δt_p
         h = subcycle_dt(w.t_child_end - c.t, h_lim)
         # the child-step bracket: a refluxing two-way run books the step
-        hook = begin_child_step!(run)
+        run.sub_t0 = Float64(c.t)
+        NX._begin!(run, :child)
+        hook = run.regs === nothing || !any(m -> NX._by_core(m, :child), run.regs.models) ? nothing :
+               NX._hook(run, :child)
         adv(c, h; body_force! = hook)
-        end_child_step!(run)
+        NX._commit!(run, :child)
         each(h)
         n += 1
     end
-    end_parent_step!(run, w)
+    NX._end_parent_step!(run, w, true)
     return n
 end
 
@@ -153,7 +161,7 @@ end
 @testset "Era II — externally driven nest child (N-berlin-nest, #265)" begin
 
 # -------------------------------------------------------------------------
-@testset "begin/end_parent_step! + subcycle_dt == step_nested!(run), bit for bit" begin
+@testset "a window driven from outside + subcycle_dt == step_nested!(run), bit for bit" begin
     for feedback in (:one_way, :two_way)
         rng = Xoshiro(265)
         runs = map(1:2) do _
@@ -520,7 +528,7 @@ end
 # -------------------------------------------------------------------------
 # The Berlin two-way pattern (#267): an externally driven child whose core θ
 # and tracer qv, and the moist parent's θ and qv, are all booked by their
-# transports (book_nest_flux!, inside begin/end_child_step!). Composite ∫θ
+# transports (book_nest_flux!, inside the child-step bracket). Composite ∫θ
 # and ∫qv must be conserved to round-off per parent window; without the
 # bookings they drift. A moist parent may declare qv a transport-booked
 # tracer when the child carries it as a tracer.
@@ -537,56 +545,9 @@ end
     @test all(isfinite, run.child.u.data) && all(isfinite, run.parent.θ.data)
     # outside a child-step bracket nothing is booked
     @test !book_nest_flux!(run.child, :θ, run.child.θ, 1.0; scheme = :centered)
-    begin_child_step!(run)
+    Aeolus.Nesting._begin!(run, :child)
     @test_throws ArgumentError book_nest_flux!(run.child, :θ, run.child.θ, 1.0; diffusivity = :nope)
-    end_child_step!(run)
-end
-
-# -------------------------------------------------------------------------
-# #349: a NestSponge acts only inside step_nested!'s own subcycling (the
-# velocity on every stage's predicted velocity, the scalars after each
-# substep). An externally driven child (begin_parent_step! / the child
-# stage loop / end_parent_step!) would get no sponge, silently; the run
-# refuses to be driven that way, before it touches either domain.
-@testset "a sponged run refuses to be driven externally (#349)" begin
-    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
-    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
-    cm = nest_child_mesh(nest)
-    function pair(sponge)
-        rng = Xoshiro(349)
-        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
-        for f in (psim.u, psim.v, psim.w, psim.θ)
-            interior_view(f) .= randn(rng, size(interior_view(f)))
-        end
-        step!(psim, 1e-10); psim.t = 0.0          # project the random parent
-        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
-        _nx_init_child!(csim, psim, nest)
-        return NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing, sponge)
-    end
-    run = pair(NestSponge(; width = 3, α_max = 20.0))
-    p, c = run.parent, run.child
-    pu, pθ, cu = copy(p.u.data), copy(p.θ.data), copy(c.u.data)
-    @test_throws ArgumentError begin_parent_step!(run; dt = 2e-3)
-    @test_throws ArgumentError begin_child_step!(run)
-    err = try begin_parent_step!(run; dt = 2e-3); nothing catch e; e end
-    @test occursin("NestSponge", err.msg) && occursin("step_nested!", err.msg)
-    # refused before anything moved: neither domain, nor the run's clock
-    @test p.u.data == pu && p.θ.data == pθ && c.u.data == cu
-    @test p.t == 0.0 && run.t == 0.0 && run.stats.parent_steps == 0
-    # the run's own subcycling still applies the sponge: the same step with
-    # and without it leaves different children (the relaxation an external
-    # driver would have missed)
-    plain = pair(nothing)
-    @test begin_parent_step!(plain; dt = 2e-3) isa NamedTuple     # no sponge: allowed
-    plain = pair(nothing)
-    step_nested!(run; dt = 2e-3); step_nested!(plain; dt = 2e-3)
-    du = maximum(abs, interior_view(run.child.u) .- interior_view(plain.child.u))
-    dθ = maximum(abs, interior_view(run.child.θ) .- interior_view(plain.child.θ))
-    @printf("  sponged vs unsponged child after one step_nested!: max|Δu| %.2e, max|Δθ| %.2e\n",
-            du, dθ)
-    @test run.stats.parent_steps == 1
-    @test du > 1e-6 && dθ > 1e-6
-    @test p.u.data != pu                          # the parent did step this time
+    Aeolus.Nesting._commit!(run, :child)
 end
 
 end

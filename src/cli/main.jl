@@ -276,7 +276,7 @@ end
 "`the model` or `the legacy case \"x\"`."
 _schema_title(sch) = sch.name == MODEL ? "the model" : "the legacy case \"$(sch.name)\""
 
-const _PER_DOMAIN = "Per domain: the run-level value applies to every domain; a [[domain]] block's table overrides it."
+const _PER_DOMAIN = "Per domain: at the top level of a single-domain config, or as [domain.<section>] in each [[domain]] block (every domain carries its complete configuration; no run-level value with blocks)."
 const _DOMAIN_KEYS = "The domain's own keys: at the top level of a single-domain config, or in each [[domain]] block."
 
 "The doc of a reference block, with the per-domain note of a per-domain section."

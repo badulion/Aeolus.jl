@@ -1,3 +1,5 @@
+# (Kept for the record: ParentConfig, nest_parent_config and parent_geostrophic went with NEST-p3, #483,
+# where the nest parent became a [[domain]] of the model; this script no longer runs.)
 # Captured on the code before CFG-g (#362) with (first on master + #380, commit
 # c33d292a; re-captured on master 5b488e11 after KA-m's fused saturation vapour
 # pressure (ff7073e7) moved summer_qv_* in the last bits)

@@ -1,8 +1,9 @@
-# The urban nest parent's physics as components of a domain (NEST-p1, #481).
+# The urban nest parent's physics as components of a domain (NEST-p1, #481;
+# NEST-p3, #483: the parent is a `[[domain]]` of the model's config).
 #
-# `ParentCase` (case.jl) used to wire its physics by hand. Each piece is
-# now a component of an ordinary `Components.Domain`, built from options
-# and the domain (`Components.build`) and run by the stage pipeline:
+# The deep boundary-layer domain of #259 is an ordinary `Components.Domain`
+# whose components its `[[domain]]` block enables, each built from its
+# section and the domain (`Components.build`) and run by the stage pipeline:
 #
 #   TiledUrbanSurface           the `:surface` slot: the tiled urban mosaic of the
 #                          coarse columns (surface.jl, #249), whose land use
@@ -24,9 +25,8 @@
 #                          of the stretched grid and the surface value of the
 #                          tiles' u*.
 #
-# Each works on both dynamical cores. `parent_domain` (case.jl) builds the
-# parent's domain from them; `step_parent!` runs the same component entries
-# in the pipeline's order inside the parent's air-heat and water ledgers.
+# Each works on both dynamical cores; the domain's budgets attribute what
+# each changes (an urban site nested in it books the nest exchange).
 # The physics is in the modules (SurfaceTiles, ColumnRadiation,
 # LargeScaleForcing, PrognosticSGS); these are the adapters.
 
@@ -42,12 +42,16 @@
     air_reference(opts, domain) -> reference
 
 The reference profiles (`p̄`, `ρ̄`, `π̄` per level and `cp`) a surface or
-radiation component converts its fluxes with: `opts.reference` (the
-parent's [`CaseReference`](@ref)), or on the anelastic core its base state
-(`sim.ref`). A Boussinesq domain needs `reference`.
+radiation component converts its fluxes with: `opts.reference` (a
+[`CaseReference`](@ref)), else the domain's (`domain.drivers.reference`:
+the hydrostatic state of a Boussinesq domain's initial θ profile,
+[`domain_reference`](@ref)), or on the anelastic core its base state
+(`sim.ref`).
 """
 function air_reference(opts, domain)
     r = Components.option(opts, :reference, nothing)
+    r !== nothing && return r
+    r = get(domain.drivers, :reference, nothing)
     r !== nothing && return r
     s = domain.state
     s isa BoussinesqSimulation &&
@@ -120,7 +124,8 @@ Components.section(::Type{<:TiledUrbanSurface}) = "surface"
 Components.slot(::Type{<:TiledUrbanSurface}) = :surface
 Components.schema(::Type{<:TiledUrbanSurface}) =
     Config.slot_section("surface"; key = "model") do sec
-        Config.provider!(sec, "tiles"; doc = "The tiled urban mosaic of the domain's static driver (its tile form).") do s
+        Config.provider!(sec, "tiles"; doc = "The tiled urban mosaic of the domain's static driver (its tile form, " *
+                                             "STATIC_TILES_SCHEMA), one tile per land-use class of each column.") do s
             Config.option!(s, "period", Float64; default = 60.0, range = (0, Inf), open_lower = true, units = "s",
                            doc = "step of the surface tiles")
             Config.option!(s, "u_min", Float64; default = 0.5, range = (0, Inf), units = "m s^-1",
@@ -129,33 +134,134 @@ Components.schema(::Type{<:TiledUrbanSurface}) =
                            doc = "downwelling shortwave without a :radiation component (and before its first call)")
             Config.option!(s, "lw_down", Float64; default = 350.0, units = "W m^-2",
                            doc = "downwelling longwave without a :radiation component (and before its first call)")
+            for (k, (key, doc, units)) in TILE_CLASS_OPTIONS
+                d = tile_class_defaults()[k]
+                Config.option!(s, key, _option_spec(TiledUrbanSurface, k, d); default = _option_default(TiledUrbanSurface, k, d),
+                               units = units, doc = doc)
+            end
         end
     end
+
+# the tiles' class options: TOML key, doc, units (their defaults are the urban
+# site's: tile_class_defaults)
+const TILE_CLASS_OPTIONS = (
+    :ts0 => ("ts0", "initial skin temperature of the tiles", "K"),
+    :ts_water_offset => ("ts_water_offset", "water tiles start at ts0 + ts_water_offset", "K"),
+    :t_soil0 => ("t_soil0", "initial soil temperature (and the soil base's)", "K"),
+    :z0m => ("z0m", "momentum roughness length per surface class (the built tiles take at least the " *
+                    "Macdonald roughness of their column's buildings)", "m"),
+    :z0h_ratio => ("z0h_ratio", "the scalar roughness z0h = z0h_ratio × the class's z0m", "1"),
+    :soil_classes => ("soil_classes", "the classes whose tiles are soil columns (the others slabs)", ""),
+    :soil_theta0 => ("soil_theta0", "initial volumetric soil water per soil class", "m3 m-3"),
+    :texture => ("texture", "the soil texture (Carsel & Parrish 1988 hydraulics)", ""),
+    :sand => ("sand", "sand percentage of the soil (CLM thermal constants)", "%"),
+    :clay => ("clay", "clay percentage of the soil (CLM thermal constants)", "%"),
+    :nlayers => ("nlayers", "soil layers (the CLM exponential grid)", ""))
+
+"""
+    tile_class_defaults() -> NamedTuple
+
+The defaults of the tiles' class options: those of the urban site (its
+`[urban] ts0`, `ts_water_offset`, `t_soil0`, the `:surface_exchange`
+provider's `z0m` table and `z0h_ratio`, the `:ground` slot's soil), so a
+tiled surface and an urban site with default options build the same
+surface for a class.
+"""
+function tile_class_defaults()
+    g = default_options(GroundSoil); se = default_options(SurfaceExchangeMOST)
+    return (ts0 = 285.0, ts_water_offset = 5.0, t_soil0 = 288.0, z0m = se.z0m, z0h_ratio = se.z0h_ratio,
+            soil_classes = g.classes, soil_theta0 = g.θ0, texture = g.texture, sand = g.sand, clay = g.clay,
+            nlayers = g.nlayers)
+end
+
+"""
+    TileClasses
+
+The class-to-surface factory of a tiled surface ([`TiledUrbanSurface`](@ref),
+NEST-p3 #483): the per-class optical and thermal parameters (the urban
+site's, [`default_surface_params`](@ref)), the momentum roughness table
+`z0m`, the ratio `z0h_ratio`, the soil (`soil`, a [`GroundSoil`](@ref)
+of the soil classes, or `nothing`), the initial soil temperature `T_soil0`
+and the initial skin temperatures `Ts0` (water `+ ΔT_water`). A soil
+class's tile is a soil column ([`soil_surface`](@ref)), any other a slab
+([`fallback_slab`](@ref)): the constructions of the urban site's surfaces.
+"""
+struct TileClasses
+    params::SurfaceParams
+    z0m::Dict{UInt8,Float64}
+    z0h_ratio::Float64
+    soil::Union{Nothing,GroundSoil}
+    T_soil0::Float64
+    Ts0::Float64
+    ΔT_water::Float64
+end
+
+"The [`TileClasses`](@ref) of the resolved `[surface] model = \"tiles\"` options `opts` (TOML forms or Julia values)."
+function TileClasses(opts)
+    d = tile_class_defaults()
+    val(k) = (v = Components.option(opts, k, getproperty(d, k));
+              v isa AbstractDict && !(v isa Dict{UInt8}) ? _typed_option(getproperty(d, k), v, String(k)) : v)
+    soil = ground_soil((classes = val(:soil_classes), θ0 = val(:soil_theta0), texture = val(:texture),
+                        sand = val(:sand), clay = val(:clay), nlayers = val(:nlayers)))
+    return TileClasses(default_surface_params(), Dict{UInt8,Float64}(val(:z0m)), Float64(val(:z0h_ratio)),
+                       isempty(soil.classes) ? nothing : soil, Float64(val(:t_soil0)), Float64(val(:ts0)),
+                       Float64(val(:ts_water_offset)))
+end
+
+function _typed_option(d, v, key)
+    ok, x, why = option_value(d, v, key)
+    ok || throw(ArgumentError("[surface] $why"))
+    return x
+end
+
+function class_roughness(tc::TileClasses, site::SurfaceSite)
+    z0m = site.z0m !== nothing ? site.z0m : get(tc.z0m, site.class, 0.05)
+    return z0m, site.z0h !== nothing ? site.z0h : tc.z0h_ratio * z0m
+end
+function class_surface(tc::TileClasses, site::SurfaceSite)
+    z0m, z0h = class_roughness(tc, site)
+    tc.soil !== nothing && site.class in tc.soil.classes &&
+        return soil_surface(tc.soil, tc.params, tc.T_soil0, z0m, z0h, site)
+    return fallback_slab(tc.params, z0m, z0h, site)
+end
+tile_skin(tc::TileClasses, c::Integer) = tc.Ts0 + (c == SURFACE_WATER ? tc.ΔT_water : 0.0)
+
+# The tiled surface's maps, written once into its domain's output file (a
+# file with variables; the parent's surface map of plot_parent_surface.jl):
+# the area fraction of each surface class, the plan area density of the
+# morphometry window and the Macdonald roughness and displacement height of
+# the unresolved buildings (#249).
+function Components.static_outputs(c::TiledUrbanSurface)
+    ps = c.surface
+    names = ("street", "roof", "park", "water", "wall")
+    out = OutputVariable[OutputVariable("tile_fraction_$(names[k])", "1", "area fraction of the $(names[k]) tiles", :xy,
+                                        d -> ps.fractions[:, :, k]) for k in 1:min(5, size(ps.fractions, 3))]
+    append!(out, OutputVariable[
+        OutputVariable("tile_lambda_p", "1", "plan area density of the buildings (the morphometry window)", :xy, d -> ps.λp),
+        OutputVariable("tile_z0", "m", "roughness length of the unresolved buildings (Macdonald et al. 1998)", :xy, d -> ps.z0),
+        OutputVariable("tile_d", "m", "displacement height of the unresolved buildings (Macdonald et al. 1998)", :xy, d -> ps.d)])
+    return out
+end
 
 const _SFC_KEYS = (:Rn, :H, :LE, :G, :E, :delivered_H, :delivered_E)
 
 """
     build(TiledUrbanSurface, opts, domain)
 
-The tiled surface of `domain`: its land use `opts.landuse` (a
-[`ParentLanduse`](@ref); else the domain's static driver's tile form,
-`domain.drivers.static_tiles`, a `StaticTiles`), its tiles from the
-class-to-surface factory `opts.classes` (a built urban site:
-[`class_surface`](@ref)) with the factory's child under its footprint,
-or the [`ParentSurface`](@ref) `opts.surface` as built; `period`,
-`u_min`, `sw_down`, `lw_down` and `reference` ([`air_reference`](@ref)).
+The tiled surface of `domain`: its land use is the tile form of the
+domain's static driver (`domain.drivers.static_tiles`, a `StaticTiles`)
+and its tiles those of the [`TileClasses`](@ref) of `opts`; or the
+[`ParentSurface`](@ref) `opts.surface` as built. `period`, `u_min`,
+`sw_down`, `lw_down`; the reference profiles of [`air_reference`](@ref).
 """
 function Components.build(::Type{<:TiledUrbanSurface}, opts, domain)
     m = Components.grid(domain)
     ps = Components.option(opts, :surface, nothing)
     if ps === nothing
-        pl = Components.option(opts, :landuse, nothing)
-        if pl === nothing
-            t = get(domain.drivers, :static_tiles, nothing)
-            t === nothing && throw(ArgumentError("TiledUrbanSurface: the domain has no static driver with tiles"))
-            pl = landuse_of_tiles(t)
-        end
-        ps = build_parent_surface(opts.classes, pl; z_centres = level_centres(m))
+        t = get(domain.drivers, :static_tiles, nothing)
+        t === nothing && throw(ArgumentError("TiledUrbanSurface: the domain $(domain.id) has no static driver with tiles " *
+                                             "(its static_driver in the tile form, AeolusPrep.jl: aeolusprep static)"))
+        ps = build_parent_surface(TileClasses(opts), landuse_of_tiles(t); z_centres = level_centres(m))
     end
     (size(ps.columns) == (m.Nx, m.Ny)) ||
         throw(DimensionMismatch("TiledUrbanSurface: $(size(ps.columns)) columns on a $(m.Nx) × $(m.Ny) grid"))
@@ -379,13 +485,31 @@ Components.section(::Type{<:PrescribedSurfaceFlux}) = "surface"
 Components.slot(::Type{<:PrescribedSurfaceFlux}) = :surface
 Components.schema(::Type{<:PrescribedSurfaceFlux}) =
     Config.slot_section("surface"; key = "model") do sec
-        Config.provider!(sec, "prescribed"; doc = "Prescribed kinematic heat and vapour fluxes into the first level " *
-                                                  "(the functions of time q_surface, e_surface of the build options).")
+        Config.provider!(sec, "prescribed"; doc = "Prescribed kinematic heat and vapour fluxes into the first level.") do s
+            Config.option!(s, "q_surface", Config.OpenTable(t -> _form_problems(_forcing_value, t, "q_surface"));
+                           default = Dict{String,Any}("kind" => "constant", "value" => 0.0), units = "K m s^-1",
+                           doc = "kinematic heat flux, a function of the model time t (s): {kind = \"constant\", value} or " *
+                                 "{kind = \"series\", t = […], value = […]} (linear in t, constant beyond the ends)")
+            Config.option!(s, "e_surface", Config.OpenTable(t -> _form_problems(_forcing_value, t, "e_surface"));
+                           default = Dict{String,Any}("kind" => "constant", "value" => 0.0), units = "kg kg^-1 m s^-1",
+                           doc = "kinematic vapour flux (a moist core), a function of the model time as q_surface")
+        end
     end
 
+# a function of time from its TOML table ({kind = "constant" | "series"}), or as given
+_forcing_value(x, path) = surface_forcing_value(x, path)
+function _surface_function(x, key)
+    x isa AbstractDict || return x
+    ok, f, why = _forcing_value(x, key)
+    ok || throw(ArgumentError("[surface] $why"))
+    return f
+end
+
 Components.build(::Type{<:PrescribedSurfaceFlux}, opts, domain) =
-    PrescribedSurfaceFlux(opts.q_surface, opts.e_surface, air_reference(opts, domain),
-                          Dict{Symbol,Float64}(k => 0.0 for k in _SFC_KEYS))
+    PrescribedSurfaceFlux(_surface_function(opts.q_surface, "q_surface"), _surface_function(opts.e_surface, "e_surface"),
+                          air_reference(opts, domain), Dict{Symbol,Float64}(k => 0.0 for k in _SFC_KEYS))
+Components.enabled(::Type{<:PrescribedSurfaceFlux}, opts) = opts.model === :prescribed
+Components.enabled(::Type{<:TiledUrbanSurface}, opts) = opts.model === :tiles
 
 Components.stages(::PrescribedSurfaceFlux) = (Stage(:surface_flux),)
 
@@ -458,15 +582,41 @@ Components.component_name(::Type{<:MeanColumnRadiation}) = :mean_column_radiatio
 Components.section(::Type{<:MeanColumnRadiation}) = "radiation"
 Components.slot(::Type{<:MeanColumnRadiation}) = :radiation
 Components.schema(::Type{<:MeanColumnRadiation}) =
-    Config.slot_section("radiation"; key = "scheme") do sec
+    Config.slot_section("radiation"; key = "scheme", doc = "The radiation of the domain's air and ground.") do sec
+        Config.provider!(sec, "none"; default = [:model], doc = "No radiation.")
         Config.provider!(sec, "mean_column"; doc = "Two-stream radiation of the plane-mean column (ColumnRadiation).") do s
             Config.option!(s, "period", Float64; default = 600.0, range = (0, Inf), open_lower = true, units = "s",
                            doc = "period of the column radiation")
             Config.option!(s, "humid", Symbol; default = :midlatitude_summer,
                            allowed = [:midlatitude_summer, :subarctic_winter],
                            doc = "the humidity of the standard atmosphere above the domain")
+            # the sun: the place and the local clock of the domain (the urban site's [urban] defaults)
+            Config.option!(s, "latitude", Float64; default = 52.5220, range = (-90, 90), units = "degree",
+                           doc = "latitude of the solar position")
+            Config.option!(s, "longitude", Float64; default = 13.4100, range = (-180, 180), units = "degree",
+                           doc = "longitude of the solar position")
+            Config.option!(s, "elevation", Float64; default = 34.0, units = "m", doc = "height above sea level")
+            Config.option!(s, "date", Date; default = Date(2019, 6, 29), doc = "the local date at t = 0")
+            Config.option!(s, "utc_offset", Float64; default = 2.0, range = (-14, 14), units = "h",
+                           doc = "local clock = UTC + utc_offset")
+            Config.option!(s, "start_hour", Float64; default = 6.0, range = (0, 24), units = "h",
+                           doc = "local hour at the model time 0")
         end
     end
+
+"""
+    radiation_sun(opts) -> SiteSun
+
+The sun of the `[radiation] scheme = \"mean_column\"` options: the solar
+position ([`solar_position_at`](@ref)) of their date, place and local
+clock as a function of the model time.
+"""
+radiation_sun(opts) = SiteSun((date = (Dates.year(opts.date), Dates.month(opts.date), Dates.day(opts.date)),
+                               lat0 = Float64(opts.latitude), lon0 = Float64(opts.longitude),
+                               elevation = Float64(opts.elevation), utc_offset = Float64(opts.utc_offset),
+                               start_h = Float64(opts.start_hour)))
+
+Components.enabled(::Type{<:MeanColumnRadiation}, opts) = opts.scheme === :mean_column
 
 """
     build(MeanColumnRadiation, opts, domain)
@@ -480,7 +630,9 @@ function Components.build(::Type{<:MeanColumnRadiation}, opts, domain)
     ref = air_reference(opts, domain)
     ps = Components.option(opts, :p_surface, nothing)
     ps === nothing && (ps = hasproperty(ref, :p_surface) ? ref.p_surface : ref.p̄[1])
-    return MeanColumnRadiation(column_radiation_solver(m.Nz, ps), opts.sun,
+    sun = Components.option(opts, :sun, nothing)
+    sun === nothing && (sun = radiation_sun(opts))
+    return MeanColumnRadiation(column_radiation_solver(m.Nz, ps), sun,
                                Components.option(opts, :humid, :midlatitude_summer),
                                Float64(Components.option(opts, :period, 600.0)), collect(Float64, ref.π̄),
                                Ref(0.0), Ref(0.0), Ref(350.0))
@@ -525,3 +677,44 @@ end
 
 Aeolus.IO.checkpoint_state(c::MeanColumnRadiation) = Aeolus.IO.structural_state(c)
 Aeolus.IO.restore_checkpoint_state!(c::MeanColumnRadiation, s::Aeolus.IO.StructuralState) = Aeolus.IO.restore_structural_state!(c, s)
+
+"""
+    ConstantForcing(value)
+
+A prescribed surface forcing (`[surface] model = "prescribed"`) that does not change in time:
+`f(t) = value`. The TOML form `{kind = "constant", value = …}` of
+`q_surface` / `e_surface` (CFG-c, #358; NEST-p3 #483).
+"""
+struct ConstantForcing
+    value::Float64
+end
+(f::ConstantForcing)(t) = f.value
+
+"""
+    SeriesForcing(t, value)
+
+A prescribed surface forcing given at the times `t` (s, strictly
+increasing): linear in time between them, constant beyond the ends. The
+TOML form `{kind = "series", t = […], value = […]}` (CFG-c, #358).
+"""
+struct SeriesForcing
+    t::Vector{Float64}
+    value::Vector{Float64}
+end
+(f::SeriesForcing)(t) = _interp1(f.t, f.value, t)
+Base.:(==)(a::SeriesForcing, b::SeriesForcing) = a.t == b.t && a.value == b.value
+Base.isequal(a::SeriesForcing, b::SeriesForcing) = isequal(a.t, b.t) && isequal(a.value, b.value)
+Base.hash(a::SeriesForcing, h::UInt) = hash(a.value, hash(a.t, hash(:SeriesForcing, h)))
+
+"Linear interpolation of `(xs, ys)` at `x`, constant beyond the ends."
+function _interp1(xs, ys, x)
+    x <= xs[1] && return ys[1]
+    x >= xs[end] && return ys[end]
+    i = searchsortedlast(xs, x)
+    w = (x - xs[i]) / (xs[i+1] - xs[i])
+    return (1 - w) * ys[i] + w * ys[i+1]
+end
+
+"Level-centre heights (m) of the interior levels of a mesh."
+level_centres(m) = hasproperty(m, :zc) ? Float64[m.zc[m.Hz+k] for k in 1:m.Nz] :
+                   Float64[m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]

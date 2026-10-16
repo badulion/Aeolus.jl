@@ -29,7 +29,7 @@ makedocs(
         # references that hold the urban site (one table per urban component,
         # ONE-e #454); Documenter's 200 KiB limit otherwise fails the build
         size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/model.md",
-                                 "reference/options/urban_parent.md", "api/urban.md"],
+                                 "api/urban.md"],
     ),
     pages = [
         "Home"           => "index.md",

@@ -45,7 +45,8 @@ function _nest_domain_checks(cfg)
         push!(e, ConfigError("domain.origin", "a nested domain needs its origin (x, y) in its parent"))
     dom.refinement === nothing &&
         push!(e, ConfigError("domain.refinement", "a nested domain needs its refinement (rx, ry, rz)"))
-    dom.dynamic_driver === nothing ||
+    # (an urban site reads its initial profile from its sounding driver)
+    dom.dynamic_driver === nothing || Urban.urban_enabled(cfg) ||
         push!(e, ConfigError("domain.dynamic_driver", "a nested domain is driven by its parent: its faces are nest faces; leave dynamic_driver none"))
     _any_coupling(cfg) &&
         push!(e, ConfigError("domain.parent", "the couplings ([forcing], [surface], [microphysics], [tracer], [particles], " *
@@ -86,20 +87,41 @@ function _nest_checks(cfg)
             push!(e, ConfigError("checks", "the closure checks measure budgets, which a nested model with [nesting] budget_exchange = \"off\" does not (:$c)"))
         end
     end
+    # an urban site (NEST-p3 #483) is a child of a domain of the model's core,
+    # with no children of its own; its parent may have a stretched grid
+    urban = [Urban.urban_enabled(domain_view(cfg, i)) for i in 1:n]
     for (i, d) in enumerate(ds)
-        d.core.model in (:boussinesq, :anelastic) ||
-            push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq or the anelastic core"))
-        i > 1 && d.core.model === :anelastic && cfg.timestep.scheme === :rk3 &&
-            push!(e, ConfigError(key(i, "core.model"), "an anelastic nested domain has open (nest) faces, which the anelastic SSP-RK3 step does not take: step the nest with [timestep] scheme = \"euler\""))
-        d.grid.stretching === :uniform ||
-            push!(e, ConfigError(key(i, "grid.stretching"), "a nested model takes uniform grids"))
-        d.boundaries.z === :periodic &&
-            push!(e, ConfigError(key(i, "boundaries.z"), "a nested model has z walls (a child stands on its parent's ground)"))
+        if urban[i]
+            i == 1 && push!(e, ConfigError(key(1, "urban.enabled"), "an urban site in a nest is a child of a domain of the model's core, not the root"))
+            j = parent_of[i]
+            j > 0 && urban[j] && push!(e, ConfigError(key(i, "domain.parent"), "an urban site nests in a domain of the model's core, not in the urban site \"$(ids[j])\""))
+            (d.nesting.enabled && d.nesting.parent_driver === :aeolus) ||
+                push!(e, ConfigError(key(i, "nesting.enabled"), "an urban site in a nest takes its faces from its parent: [nesting] enabled = true, parent_driver = \"aeolus\""))
+            if j > 0 && d.domain.origin !== nothing
+                po = ds[j].grid.origin
+                all(a -> isapprox(po[a], -d.domain.origin[a]; atol = 1e-9 * max(1.0, abs(po[a]))), 1:2) ||
+                    push!(e, ConfigError(key(j, "grid.origin"), "the urban site \"$(ids[i])\" stands at its own corner (0, 0) at origin " *
+                                                               "$(d.domain.origin) in \"$(ids[j])\": its parent's [grid] origin is $(Tuple(-x for x in d.domain.origin)), not $(Tuple(po))"))
+            end
+        end
+        if !urban[i]
+            d.core.model in (:boussinesq, :anelastic) ||
+                push!(e, ConfigError(key(i, "core.model"), "a nested model runs the boussinesq or the anelastic core"))
+            i > 1 && d.core.model === :anelastic && d.timestep.scheme === :rk3 &&
+                push!(e, ConfigError(key(i, "core.model"), "an anelastic nested domain has open (nest) faces, which the anelastic SSP-RK3 step does not take: step the nest with [timestep] scheme = \"euler\""))
+            kids = [k for k in 1:n if parent_of[k] == i]
+            d.grid.stretching === :uniform || (!isempty(kids) && all(k -> urban[k], kids)) ||
+                push!(e, ConfigError(key(i, "grid.stretching"), "a nested model takes uniform grids (a stretched grid only in the parent of urban sites)"))
+            d.boundaries.z === :periodic &&
+                push!(e, ConfigError(key(i, "boundaries.z"), "a nested model has z walls (a child stands on its parent's ground)"))
+        end
         j = parent_of[i]
         (j == 0 || d.domain.origin === nothing || d.domain.refinement === nothing) && continue
         p = ds[j]; g = d.grid; pg = p.grid
         o = d.domain.origin; r = d.domain.refinement
         Δp = pg.extent ./ pg.size
+        # (a stretched parent: the spacing of its lowest levels, where the site stands)
+        pg.stretching === :uniform || (Δp = (Δp[1], Δp[2], pg.dz_surface))
         want = ntuple(a -> g.extent[a] / Δp[a] * r[a], 3)
         if any(a -> abs(want[a] - round(want[a])) > 1e-9 * max(1.0, want[a]), 1:3)
             push!(e, ConfigError(key(i, "grid.extent"), "$(g.extent) is not a whole number of child cells " *
@@ -115,6 +137,7 @@ function _nest_checks(cfg)
         end
         g.extent[3] <= pg.extent[3] * (1 + 1e-12) ||
             push!(e, ConfigError(key(i, "grid.extent"), "the domain is $(g.extent[3]) m high, its parent $(pg.extent[3]) m"))
+        urban[i] && continue           # the site's faces and field set are its :nesting component's
         # two anelastic domains share one reference profile (their transfers use its mass measure)
         (d.core.model === :anelastic && p.core.model === :anelastic &&
          (d.dynamics.theta0 != p.dynamics.theta0 || d.dynamics.g != p.dynamics.g)) &&
@@ -244,15 +267,31 @@ function _build_nested(cfg)
     ds = config_domains(cfg)
     n = length(ds)
     ids = [d.domain.id for d in ds]
+    urban = _urban_nest(cfg)
     doms = Any[]
     links = Components.NestLink[]
+    h = nothing
     for i in 1:n
         v = domain_view(cfg, i)
         if i == 1
-            push!(doms, _build_domain(v))
+            # the root of an urban site's nest steps adaptively ([time] cfl,
+            # dt_max): the site's own [time] dt is its step
+            push!(doms, urban ? _build_domain(v; cfl = _root_cfl(v)) : _build_domain(v))
+            # an urban site joins the nest while it is built (NEST-p3 #483):
+            # the hierarchy exists first, and every domain is linked in order
+            urban && (h = Components.nest_hierarchy(doms[1]))
             continue
         end
         j = findfirst(==(v.domain.parent), ids)
+        if Urban.urban_enabled(v)
+            nx = Urban.UrbanNest(doms[j], h, Symbol(v.domain.id), Symbol(ids[j]), Tuple(Float64.(v.domain.origin)),
+                                 Tuple(Int.(v.domain.refinement)), v.domain.feedback)
+            child = only(Urban.build_model(v; nest = nx).domains)
+            Components.set_pipeline_domain!(h.advance[end], child)
+            push!(doms, child)
+            push!(links, Components.NestLink(i, j, h.links[end].nest; feedback = v.domain.feedback, prebuilt = true))
+            continue
+        end
         nest = _nest_grid(v, Components.grid(doms[j]))
         bcs = _nest_child_bcs(v, domain_view(cfg, j), nest)
         push!(doms, _build_domain(v; mesh = nest.child_mesh, bcs = bcs))
@@ -260,15 +299,45 @@ function _build_nested(cfg)
         inflow = it.enabled ? (generator = it.generator, u_min = it.u_min, seed = it.seed,
                                statistics_interval = it.statistics_interval, length_interval = it.length_interval) :
                  nothing
-        push!(links, Components.NestLink(i, j, nest; feedback = v.domain.feedback, inflow = inflow))
+        l = Components.NestLink(i, j, nest; feedback = v.domain.feedback, inflow = inflow, prebuilt = urban)
+        if urban
+            try
+                Components.link_domain!(h, Tuple(doms), l)
+            catch err
+                err isa ArgumentError || rethrow()
+                throw(ConfigError("domain", err.msg))
+            end
+        end
+        push!(links, l)
     end
-    return try
-        Components.nested_model(Tuple(doms), links; budget_exchange = ds[1].nesting.budget_exchange)
+    model = try
+        Components.nested_model(Tuple(doms), links; budget_exchange = ds[1].nesting.budget_exchange, hierarchy = h)
     catch err
         err isa ArgumentError || rethrow()
         throw(ConfigError("domain", err.msg))
     end
+    # every [output] variable in the catalogue of some domain (each writes those it has)
+    if urban
+        have = Set(v.name for d in doms for v in Components.domain_catalogue(d))
+        bad = [x for x in cfg.output.variables if !(x in have)]
+        isempty(bad) || throw(ConfigError("output.variables", "$(join(bad, ", ")): in the catalogue of no domain of the nest"))
+    end
+    # the root's first step grows from the site's step, as the site's own does
+    urban && (model.nest.dt_prev[1] = Float64(cfg.time.dt))
+    return model
 end
+
+"""
+    _urban_nest(cfg) -> Bool
+
+Whether the nested config `cfg` has an urban site among its domains (a
+child; NEST-p3 #483): its root then steps adaptively with `[time] cfl`
+and `dt_max` while `[time] dt` and `nsteps` are the site's.
+"""
+_urban_nest(cfg) = _nested(cfg) && any(i -> Urban.urban_enabled(domain_view(cfg, i)), 2:length(config_domains(cfg)))
+
+"The CFL constraints of the root of an urban site's nest: `[time] cfl` and `dt_max`."
+_root_cfl(cfg) = CFLConstraints(; C_advective = cfg.time.cfl, dt_max = cfg.time.dt_max)
 
 # The published checks of a nested model: each check name once, its value
 # the worst over the domains that publish it, with each domain's value

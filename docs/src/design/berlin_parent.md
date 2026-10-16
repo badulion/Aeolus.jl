@@ -9,13 +9,15 @@ from, how it is validated, and what it costs. The nest itself — one-way
 boundary data, two-way feedback, the parent as default of the Berlin run
 — is N-berlin-nest (#265).
 
-Code: `src/components/urban/parent/config.jl` (`ParentConfig`),
-`src/components/urban/parent/components.jl` (its physics as components of
-its domain, NEST-p1 #481), `src/components/urban/parent/case.jl`
-(`parent_domain`, `build_parent`, `step_parent!`, `run_parent!`), the
-surface `src/components/urban/parent/surface.jl` (#249),
-the run `examples/urban/berlin_parent.toml` (the `urban_parent`
-driver, `src/components/urban/site/parent_driver.jl`, #438; figures from its output:
+Since NEST-p3 (#483) the parent is a `[[domain]]` of the model's config,
+a domain of the model's core, configured in full in its block (the
+nested Berlin configs) or alone (`berlin_parent.toml`,
+`berlin_parent_coarse.toml`). Code: `src/components/urban/parent/components.jl`
+(its physics as components, NEST-p1 #481: the tiled surface, the column
+radiation), the model's `[large_scale_forcing]`, `[sgs] model = "tke"`,
+`[coriolis]`, `[sponge]` and `[grid] stretching = "surface_refined"`,
+the surface `src/components/urban/parent/surface.jl` (#249), the run
+`examples/urban/berlin_parent.toml` (figures from its output:
 `examples/urban/berlin_parent_figures.jl <run folder>`), the checks
 `test/urban_checks.jl` (the smoke run, checks 1–3 and the parent surface;
 `test/berlin_parent.jl`, `test/berlin_parent_smoke.jl` and
@@ -33,27 +35,35 @@ analysis of a run of `berlin_parent_coarse.toml`.
 | uniform alternative | (2, 2, 4) | 192 × 192 × 120 | 31.25 m | 25 m uniform |
 | coarse (smoke test, 24 h check) | (16, 16, 8) | 24 × 24 × 38 | 250 m | 50 m to 500 m, then stretched |
 
+(the refinement of the site, 15.625 m × 6.25 m; since NEST-p3 the
+parent's `[grid]` gives its cells and spacing, `dz_surface`, `z_uniform`,
+`stretching_parameter`, `dz_max`, and the site's block its refinement.)
+
 The parent cell is an integer block of child cells (child: Δx =
 15.625 m, Δz = 6.25 m), so the parent's faces fall on child faces. The
 vertical layout is `surface_refined_faces` of #151 with the maintainer's
 decision of 2026-10-05: uniform 25 m up to 500 m, so that the child,
 deepened to ~400 m, lies entirely in the uniform part. The lateral
 boundaries are periodic (an idealised parent), with the child's footprint
-centred. `ParentConfig(child)` takes the date, clock, location, θ₀, f,
-the sounding and the initial state from the child's options (`site_options`).
+centred. The parent's block takes the date, clock and location of the
+site in its `[radiation]` options, θ₀ and f in `[dynamics]` and
+`[coriolis]`, the sounding as its own dynamic driver, and the site's
+idealised profile in `[initial]` when there is no sounding (NEST-p3:
+before, `ParentConfig(child)` derived them from the site's options).
 
-**Placement (#265).** `ParentConfig.center` (default: the child's centre,
-`child.offset`) places the parent box; the parent mesh is built at
-`parent_origin(pc)` in the child mesh's coordinates — (−2500, −2500, 0)
-m for the default, so the child covers parent cells 81–112 in x and y —
-and the land use is cropped to the box (`crop_landuse`; the 1 km parent
-of the smoke nest is a 32 × 32 crop of the 6 km table, coarsened to
-62.5 m). `step_parent!(p, dt)` takes a given step (a nest window) in
-pieces of at most the parent's own limit; `step_parent!(p)` is
-`step_parent!(p, parent_dt(p))`. The geostrophic wind has one definition,
-`parent_geostrophic(pc)`, which the nested child's `:geostrophic`
-coupling uses too; without a sounding it is the child's `(U_g, V_g)`
-options. The nest itself is the [Nesting](berlin_nesting.md#Nesting-(#265))
+**Placement (#265).** The parent's `[grid] origin` is its corner in the
+site's coordinates — (−2500, −2500) m for the default, the site's block
+at `origin = [2500, 2500]`, so the site covers parent cells 81–112 in x
+and y — and its land-use tiles are the land-use table cropped to the box
+and coarsened to its cells (`Urban.landuse_static_tiles`, written by
+AeolusPrep.jl into the parent's static driver, the site's own classes
+under its footprint; the 1 km parent of the smoke nest is a 32 × 32 crop
+of the 6 km table, coarsened to 62.5 m). The parent steps adaptively as
+the root of the nest (`[time] cfl`, `dt_max`). The geostrophic wind has
+one definition, the parent's `[large_scale_forcing]` (`u_g = "sounding"`:
+`Components.sounding_geostrophic`), which the nested site's
+`:geostrophic` coupling takes too; without a sounding it is the site's
+`(U_g, V_g)`. The nest itself is the [Nesting](berlin_nesting.md#Nesting-(#265;-NEST-p3,-#483))
 section of the Berlin case page.
 
 ## Physics, all from src or the child
@@ -70,22 +80,26 @@ section of the Berlin case page.
 | subsidence | `Subsidence`, form `:local` (#248) | w_s = −D z; default D = 0 (maintainer decision of 2026-10-06), D = 3 × 10⁻⁶ s⁻¹ is an option that currently diverges during the day (#312); see *Subsidence* |
 | θ damping | `ReferenceDamping(:θ, …)` (#254) | toward the time-interpolated sounding over the top 25 % (2250–3000 m), α_max = 0.01 s⁻¹; the core's sponge damps u, v, w over the same layer |
 | θ top | `FluxBC(Γ)` (#254) | Γ = ∂θ/∂z of the initial profile at the top face (`θ_top_gradient`) |
-| surface | the tiled mosaic of #249 | `build_parent_surface` with the child's class-to-surface factory; see *Surface coupling* |
+| surface | the tiled mosaic of #249 | `build_parent_surface` with the tiles' class-to-surface factory (`TileClasses`, the urban site's defaults); see *Surface coupling* |
 | radiation | the child's column radiation | `column_radiation!` on the parent's plane-mean column (`stitched_column` with the stretched layer thicknesses), every 600 s; the sun of the child's clock (`solar_position_at`) |
-| budgets | two `StageBudget`s (#253; `Aeolus.BudgetSystem`, ONE-c #452) | heat of the air ``Σ ρ̄c_pΠ̄θΔV/A`` and water of the air ``Σ ρ̄q_vΔV/A`` (the same meter with Π̄ = c_p = 1) |
+| budgets | the domain's energy and water budgets (`[checks]` or `[output]` budget variables) | heat of the air ``Σ ρ̄c_pΠ̄θΔV/A`` and water of the air ``Σ ρ̄q_vΔV/A`` |
 
 Since NEST-p1 (#481) the parent is a `Components.Domain` whose components
-are these pieces ([`parent_domain`](@ref Aeolus.Urban.parent_domain)):
+are these pieces, and since NEST-p3 (#483) its `[[domain]]` block enables them:
 the surface is the `:surface` slot's `TiledUrbanSurface` (on the tile form of
 the parent's static driver) or `PrescribedSurfaceFlux`, the radiation the
 `:radiation` slot's `MeanColumnRadiation`, the geostrophic wind, nudging,
 subsidence and θ damping the `LargeScale` component (its
 `BoundaryLayerTracker` holds the running z_i of the nudging weight), the
 SGS `[sgs] model = "tke"` (the exact wall distance of the stretched grid,
-the bottom only; the tiles' u* as its surface value). `step_parent!`
-runs their stage entries in the pipeline's order inside the ledgers; the
-domain alone through the pipeline is the same run, bit for bit. The core
-keeps its built-in Coriolis term, Rayleigh sponge and θ top.
+the bottom only; the tiles' u* as its surface value), the `[coriolis]`
+and `[sponge]` components and the fixed-gradient θ top of `[boundaries]
+theta_top = "initial_gradient"`. Against the ParentCase run that the
+pipeline replaced the parent differs at round-off (a 24 × 24 × 38 tiled
+parent, six matched adaptive steps: |Δθ| ≤ 3e-9 K, |Δu| ≤ 2.3e-7 m/s):
+its forcing takes the step's mean window instead of the core's substage
+clock, and the Coriolis force and the sponge are components, not the
+core's own terms.
 
 Nothing in the parent is a copy. Four pieces of the child were factored so
 that both domains call one function: the column radiation
@@ -254,7 +268,8 @@ D (#315) are open.
 
 The fallback grid (96 × 96 × 60, Δx = 62.5 m, Δz = 50 m), D = 0, every
 other forcing on, 06:00 LT 29 June to 06:00 LT 30 June 2019:
-`julia --project -m Aeolus run examples/urban/berlin_parent.toml --set nesting.parent.refinement=[4,4,8] --set 'nesting.parent.vertical="uniform"'`
+the urban_parent run of `berlin_parent.toml` at refinement (4, 4, 8), uniform
+(today a parent `[[domain]]` on 96 × 96 × 60 cells of 62.5 m × 50 m with its own tile driver)
 (until #438 `examples/urban/berlin_parent_diurnal.jl fallback`).
 It completed in 7598 s wall (19 299 steps, dt 0.03–10 s, no retry).
 The 24 h run on the default grid, and with it the final validation of

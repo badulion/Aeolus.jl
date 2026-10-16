@@ -31,9 +31,7 @@ Groups of fields (`site_options(cfg).<field>`):
   parent's uniform 25 m layers;
 * **geometry** — `static`, the static driver the ground is read from
   (CFG-f #361; AeolusPrep.jl writes it from OpenStreetMap or GeoJSON,
-  ONE-h #457), `parent_static`, the nest parent's (its land-use tiles;
-  `nothing`: from `landuse` in memory), `landuse`, the parent's land-use
-  table (`aeolusprep fetch-landuse` writes it), the anchor `lat0`/`lon0`
+  ONE-h #457), the anchor `lat0`/`lon0`
   of the projection, `offset` (m, the window centre relative to the
   anchor), `elevation` (m above sea level, for the solar position),
   `wall_subdivisions` of the radiosity scene. A driver whose grid or

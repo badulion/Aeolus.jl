@@ -33,9 +33,10 @@
 #                stages, its core step, its run hooks), its output
 #                catalogue, its checkpoint, and its sections of the
 #                model's configuration schema.
-#   parent/      the nest parent: its tiled land-use surface, its config,
-#                its physics as components of its domain (NEST-p1, #481),
-#                the parent case (run by the :nesting component).
+#   parent/      the nest parent's physics as components of a model
+#                domain (its tiled land-use surface, its column radiation;
+#                NEST-p1 #481): the parent is a `[[domain]]` of the
+#                model's config, the site its nested child (NEST-p3 #483).
 #
 # The physics itself lives in the other modules of `src/`. A coupling only
 # wires an implementation into the 3-D run; it never carries its own copy.
@@ -73,7 +74,7 @@ using ..Aeolus.Output: Output, OutputVariable, check_catalogue
 # the diagnostics registry (LOG-g, #338): the couplings extend these two
 import ..Aeolus.RunLog: diagnostics, profile_diagnostics
 using Printf
-using Dates: Dates, DateTime, Millisecond
+using Dates: Dates, Date, DateTime, Millisecond
 using Statistics: mean
 import Random
 
@@ -133,20 +134,17 @@ const URBAN_DEFAULTS = Type[
 all(s -> count(C -> slot(C) === s, URBAN_DEFAULTS) == 1, URBAN_SLOTS) ||
     error("URBAN_DEFAULTS: one component per urban slot")
 
-# The parent domain of the nest (#246): its tiled surface (#249), the
-# parent case (#259)
+# The nest parent's physics as components of a model domain (#246, #249,
+# #259; NEST-p1 #481, NEST-p3 #483): its tiled surface, its column radiation
 include(joinpath(@__DIR__, "urban", "parent", "surface.jl"))
-include(joinpath(@__DIR__, "urban", "parent", "config.jl"))
-include(joinpath(@__DIR__, "urban", "parent", "components.jl"))   # its physics as components (NEST-p1, #481)
-include(joinpath(@__DIR__, "urban", "parent", "case.jl"))
+include(joinpath(@__DIR__, "urban", "parent", "components.jl"))
 include(joinpath(@__DIR__, "urban", "site", "restart.jl"))      # checkpoint / restart of the site (#269)
 
 # The site's sections of the model's schema and its run under `aeolus run`
 # (CFG-c #358, EX-a #438, ONE-e #454): built from URBAN_COMPONENTS, so it comes last
 include(joinpath(@__DIR__, "urban", "site", "config_schema.jl"))
-include(joinpath(@__DIR__, "urban", "site", "parent_driver.jl"))   # the parent alone (`urban_parent`)
 
-export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, parent_results, case_state, build_case, describe,
+export site_options, SITE_FIELDS, build_model, run_results, case_state, build_case, describe, UrbanNest,
        UrbanComponent, Cadence, URBAN_COMPONENTS, URBAN_SLOTS, URBAN_SLOT_SECTIONS, URBAN_DEFAULTS, selected_components, component_options,
        ensure_tracer!, tracer, SurfaceBus, SurfaceParams, find_coupling,
        case_diagnostics, case_profiles,
@@ -160,9 +158,7 @@ export site_options, SITE_FIELDS, UrbanParentDriver, build_model, run_results, p
        initial_inversion_height, case_weekday,
        θ_top_gradient, θ_top_bc, TopHeatFlux,
        case_boundary_conditions, case_boundary_data, case_scalar_bcs, OpenBoundaryHeat,
-       ParentConfig, ParentCase, build_parent, step_parent!, run_parent!, parent_record!,
-       parent_domain, parent_static_driver, parent_downwelling, TiledUrbanSurface, PrescribedSurfaceFlux,
-       MeanColumnRadiation, SiteSun,
-       parent_zi, parent_heat_flux, mean_heat_flux, parent_mesh, parent_faces, parent_size, coarsen_landuse
+       TiledUrbanSurface, PrescribedSurfaceFlux, MeanColumnRadiation, SiteSun, ConstantForcing, SeriesForcing,
+       parent_zi, mean_heat_flux, coarsen_landuse, landuse_static_tiles
 
 end # module Urban
