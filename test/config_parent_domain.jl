@@ -166,9 +166,16 @@ end
     a = PU.landuse_static_tiles(PU.read_parent_landuse(joinpath(PD_EX, "data", "berlin_landuse_6km.csv")), m;
                                 origin_lat = file.origin_lat, origin_lon = file.origin_lon,
                                 origin_x = file.origin_x, origin_y = file.origin_y)
-    for f in (:x, :y, :dx, :x0, :y0, :refinement, :class_count, :lambda_f, :h_mean, :h_max)
+    for f in (:x, :y, :dx, :x0, :y0, :refinement, :lambda_f, :h_mean, :h_max)
         @test isequal(getfield(a, f), getfield(file, f))
     end
+    # the class counts are the table's except under the smoke site's footprint
+    # (250 m × 250 m: 4 × 4 parent columns), where the file holds the site's own
+    # classes (AeolusPrep.jl, NEST-p3 #483; checked cell by cell in input_static.jl)
+    diff = [I for I in CartesianIndices(size(a.class_count)[1:2]) if a.class_count[I, :] != file.class_count[I, :]]
+    @test 0 < length(diff) <= 16
+    @test maximum(I[1] for I in diff) - minimum(I[1] for I in diff) < 4 &&
+          maximum(I[2] for I in diff) - minimum(I[2] for I in diff) < 4
     # every column's class counts are its refinement² child cells
     @test all(==(a.refinement^2), sum(a.class_count; dims = 3))
     # a box off the table's cell faces is refused

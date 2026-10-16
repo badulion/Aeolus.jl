@@ -365,7 +365,10 @@ end
 # the boundary-layer components of the SBL cases (ONE-g, #456) on both cores
 # ---------------------------------------------------------------------------
 
-const BC_LSF = (u_g = 8.0, v_g = -2.0, advective_tendencies = false, subsidence = false, nudging = false)
+# the [large_scale_forcing] options: the geostrophic wind, every other option at its schema default
+const BC_LSF = (u_g = 8.0, v_g = -2.0, z_g = NaN, advective_tendencies = false, subsidence = false, nudging = false,
+                sounding_nudging_tau = Inf, nudging_factor = 1.2, nudging_depth = 200.0, divergence = 0.0,
+                damping_rate = 0.0, damping_frac = 0.25, damping_target = :initial)
 bc_sl_opts(T_s) = (model = :most, z0m = 0.1, z0h = nothing, rho_cp = 1206.0,
                    temperature = Dict{String,Any}("kind" => "cooling_rate", "initial" => T_s, "rate_per_hour" => 1.0),
                    stability = Dict{String,Any}("family" => "businger_dyer_log_linear", "beta_m" => 4.8, "beta_h" => 7.8))
