@@ -12,7 +12,8 @@
 # test/config_berlin.jl): the package directory in a path is written
 # "<pkg>"; a function-valued field is written as its values at
 # t = 0, 3600, 43200 s. Kept for the record; it no longer runs after the
-# migration (SCENARIOS is gone).
+# migration (SCENARIOS is gone). Its smoke_digests are replaced by the
+# [smoke_fingerprints] of capture_smoke_fingerprints.jl (#495).
 
 using Aeolus, TOML
 using Aeolus.IO: toml_value

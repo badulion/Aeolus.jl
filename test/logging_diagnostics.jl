@@ -8,7 +8,7 @@
 #   * the CSV values equal independently computed ones: each diagnostic is
 #     recomputed here from the raw arrays (own loops, own divergence, own
 #     friction velocity), and the CSV cells read back are the Float64s
-#     the writer evaluated, bit for bit;
+# the writer evaluated;
 #   * the costly diagnostics follow their cadence, the cheap ones every row;
 #   * the progress line carries %, steps/s, ETA, dt, limiter and the last
 #     warning.

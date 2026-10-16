@@ -11,13 +11,14 @@
 #   * polygons round-trip exactly (three_buildings, the Berlin drivers' cities);
 #   * errors: grid mismatch (both grids named), a missing variable, a
 #     wrong schema version, a stale source;
-#   * bit-identical to the OSM-direct path: the Berlin smoke geometry from
-#     its static driver (masks, classes, heightmap, view factors) and the
-#     summer rasterisation equal the digests captured before the switch
-#     (test/data/input_static/digests.toml), and so do the Mitte sample at
+#   * the OSM-direct path: the Berlin smoke geometry from its static driver
+#     (masks and classes exactly, test/data/input_static/digests.toml; the
+#     heightmap and view factors within ROUNDOFF_RTOL of their fingerprints,
+#     fingerprints.toml, #495) and the summer rasterisation equal what the
+#     OSM-direct path built before the switch, and so do the Mitte sample at
 #     32 × 32 × 16 (its polygons rasterised there; nested and periodic) and
 #     the nest parent's land use; the 12-step smoke state is checked
-#     against the same capture in test/config_berlin.jl (berlin_smoke.toml
+#     against its own fixture in test/config_berlin.jl (berlin_smoke.toml
 #     now runs from its static driver), as is the round trip, whose
 #     [inputs] now list the static drivers (asserted here);
 #   * a committed driver's rasters are its own polygons rasterised.
@@ -35,9 +36,14 @@ import NCDatasets
 const BCI = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 
 const IS_DATA = joinpath(@__DIR__, "data", "input_static")
-const IS_DIGESTS = TOML.parsefile(joinpath(IS_DATA, "digests.toml"))
+const IS_DIGESTS = TOML.parsefile(joinpath(IS_DATA, "digests.toml"))       # integer and class data: exact
+# computed floats (view factors, sky-view factors, areas, the parents'
+# frontal-area index and heights): fingerprints within ROUNDOFF_RTOL (#495)
+const IS_FP_PATH = joinpath(IS_DATA, "fingerprints.toml")
+const IS_FP = capturing_fingerprints() ? Dict{String,Any}() : TOML.parsefile(IS_FP_PATH)
 
 "A copy of the driver `src` at `dst` without the variables `skip`, with global attributes `attrs` changed."
 function copy_driver(src, dst; skip = String[], attrs = Dict{String,Any}())
@@ -148,7 +154,7 @@ end
         back = read_static_driver(p; mesh = m, ANCHOR...).city
         @test isequal(back, city)
         @test length(back.buildings) == length(city.buildings) > 0
-        # vertices bit for bit, rings (NaN separators) and attributes
+        # vertices, rings (NaN separators) and attributes
         @test all(isequal(a.polygon, b.polygon) for (a, b) in zip(back.buildings, city.buildings))
         @test sum(b -> count(v -> isnan(v[1]), b.polygon), back.buildings) ==
               sum(b -> count(v -> isnan(v[1]), b.polygon), city.buildings)
@@ -218,21 +224,23 @@ end
 # the Berlin case
 # ---------------------------------------------------------------------------
 
-function geom_digests_equal(label, g)
+function geom_matches(label, g)
     d = IS_DIGESTS[label]
-    got = Dict("mask" => digest(g.sm.mask), "sfc" => digest(g.sfc), "heightmap" => digest(g.heightmap),
-               "F" => digest(g.vfac.F), "F_sky" => digest(g.vfac.F_sky), "area" => digest(g.vfac.area),
-               "svf" => digest(g.svf))
+    got = Dict("mask" => digest(g.sm.mask), "sfc" => digest(g.sfc))
     bad = [k for (k, v) in got if v != d[k]]
-    isempty(bad) || @info "geometry digests differing from the OSM-direct path" label bad
+    for (k, v) in ("heightmap" => g.heightmap, "F" => g.vfac.F, "F_sky" => g.vfac.F_sky, "area" => g.vfac.area,
+                   "svf" => g.svf)
+        fixture_agree!(IS_FP, label, k, v) || push!(bad, k)
+    end
+    isempty(bad) || @info "geometry differing from the OSM-direct path" label bad
     return isempty(bad) && length(g.city.buildings) == d["buildings"] && length(g.city.patches) == d["patches"]
 end
 
-@testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's, bit for bit" begin
+@testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's" begin
     # smoke: from the committed static driver
     cs = site_config(berlin_toml("smoke"))
     @test endswith(cs.static, "urban/input/berlin_smoke_static.nc")
-    @test geom_digests_equal("smoke", BCI.build_geometry(cs, meshof(cs)))
+    @test geom_matches("smoke", BCI.build_geometry(cs, meshof(cs)))
     # the Mitte sample at 32 × 32 × 16, nested (frame) and periodic (no frame, wrapped
     # walls): its committed driver's polygons rasterised on that grid give the
     # digests the OSM file did in memory (before ONE-h, #457)
@@ -249,7 +257,7 @@ end
         ox, oy = BCI.anchor_xy(c, m)
         c = merge(c, (; static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0,
                                                      origin_lon = c.lon0, origin_x = ox, origin_y = oy)))
-        @test geom_digests_equal(label, BCI.build_geometry(c, m))
+        @test geom_matches(label, BCI.build_geometry(c, m))
         rm(c.static)
     end
     # summer, 64 × 64 × 64: masks, classes and heightmap at setup
@@ -260,13 +268,13 @@ end
     sm, sfc = solid_and_classes(st, mesh; frame = (c.boundary_frame, c.boundary_frame), bcs = BCI.case_scalar_bcs(c))
     d = IS_DIGESTS["summer"]
     @test digest(sm.mask) == d["mask"] && digest(sfc) == d["sfc"]
-    @test digest(Aeolus.Radiosity.heightmap_from_solid_mask(sm)) == d["heightmap"]
+    @test fixture_agree!(IS_FP, "summer", "heightmap", Aeolus.Radiosity.heightmap_from_solid_mask(sm))
     @test length(st.city.buildings) == d["buildings"] && length(st.city.patches) == d["patches"]
     # the file's rasters are its own polygons rasterised (park LAI 2.5, the summer source's)
     ox, oy = BCI.anchor_xy(c, mesh)
     mem = static_inputs(st.city, mesh; origin_lat = c.lat0, origin_lon = c.lon0, origin_x = ox, origin_y = oy,
                         class_lai = Dict(SURFACE_PARK => 2.5))
-    @test all(f -> isequal(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
+    @test all(f -> values_agree(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
     # the nest parents' land use: the land-use table cropped and coarsened to
     # their [[domain]]'s grid (NEST-p3 #483), and their static driver
     for s in (:smoke, :summer)
@@ -278,8 +286,9 @@ end
                                        origin_x = t.origin_x, origin_y = t.origin_y)
         d = IS_DIGESTS["parent_$s"]
         pl = BCI.landuse_of_tiles(mem)
-        @test digest(pl.counts) == d["counts"] && digest(pl.λf) == d["lambda_f"] &&
-              digest(pl.hmean) == d["h_mean"] && digest(pl.hmax) == d["h_max"]
+        @test digest(pl.counts) == d["counts"]
+        @test fixture_agree!(IS_FP, "parent_$s", "lambda_f", pl.λf) && fixture_agree!(IS_FP, "parent_$s", "h_mean", pl.hmean) &&
+              fixture_agree!(IS_FP, "parent_$s", "h_max", pl.hmax)
         @test (pl.nx, pl.ny, pl.dx, pl.x0, pl.y0, pl.r) == (d["nx"], d["ny"], d["dx"], d["x0"], d["y0"], d["r"])
         # the file (AeolusPrep.jl): the table's land use, and under the site's
         # footprint the site's own classes (#249: the parent sees the site there)
@@ -287,7 +296,7 @@ end
         sm = meshof(sc)
         sfc = BCI.build_geometry(sc, sm).sfc
         fp = BCI.landuse_of_tiles(t)
-        @test fp.λf == pl.λf && fp.hmean == pl.hmean && fp.hmax == pl.hmax
+        @test agree(fp.λf, pl.λf) && agree(fp.hmean, pl.hmean) && agree(fp.hmax, pl.hmax)
         r = pl.r
         Is = round(Int, (sm.x0 - pm.x0) / pl.dx) .+ (1:size(sfc, 1) ÷ r)
         Js = round(Int, (sm.y0 - pm.y0) / pl.dx) .+ (1:size(sfc, 2) ÷ r)
@@ -394,3 +403,7 @@ end
     @test isempty(check_driver(p, STATIC_SCHEMA))
     rm(p)
 end
+
+write_fixture(IS_FP_PATH, IS_FP; header = ["Fingerprints (test/support/agreement.jl) of the computed floats of test/input_static.jl's",
+                                         "geometry checks, captured with AEOLUS_CAPTURE_FINGERPRINTS=1 (#495). The",
+                                         "integer and class data stay exact in digests.toml."])

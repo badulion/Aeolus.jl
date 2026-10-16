@@ -152,10 +152,44 @@ in 1 of 3 runs, and in parallel in 1 of 2 full-tier runs. Until the
 assertion is settled, a red full tier with only this error is this
 flakiness.
 
+## Comparing results: tolerances, not bits
+
+Results need not be bit-identical across thread counts, machines, restarts
+or refactors (maintainer decision 2026-10-16, epic #493). The tests compare
+simulated results with `test/support/agreement.jl` (#495), which
+`runtests.jl` includes for every file:
+
+- `agree(a, b)`: two computed fields (or numbers) are the same computation
+  up to round-off, `max |a − b| ≤ ROUNDOFF_RTOL · max |b|`, NaN in the same
+  places. `ROUNDOFF_RTOL = 1e-10` was measured: the nested Berlin smoke at
+  1 and at 12 BLAS threads differs by at most 7.1e-14 of a field's size,
+  and FFTW's MEASURE plans against ESTIMATE move the 40 simulation-config
+  variants by at most 4.9e-16.
+- `values_agree(a, b)`: the same, recursively through dictionaries,
+  tuples, named tuples and snapshot structs; integers, symbols and strings
+  exactly.
+- `fingerprint(a)` / `fingerprints_differing(got, ref)`: a regression
+  fixture in place of a digest of the bits: length, non-finite count,
+  mean, mean |·|, RMS, min, max and 16 sampled values, compared within
+  `ROUNDOFF_RTOL` of the field's size. The fixtures are
+  `test/data/components/simulation_fingerprints.toml` (40 configs),
+  `test/data/config_berlin/fixture.toml` `[smoke_fingerprints]` and
+  `test/data/input_{static,dynamic}/fingerprints.toml`. Re-capture only for
+  a change that moves results beyond round-off, with the reason in the
+  commit: the capture scripts next to them, or
+  `AEOLUS_CAPTURE_FINGERPRINTS=1` for the tests that record their own.
+
+Exact comparison stays where data is copied, not computed: a checkpoint read
+back, a halo filled by copies, a state restored from a snapshot, a parsed
+configuration, a driver file regenerated from the same input, and integer
+and class data (masks, counts, step numbers).
+
 ## Thread invariance (KernelAbstractions port)
 
-`test/thread_invariance.jl` checks that the code gives identical bits at
-N threads and at 1 thread (KA-a, #294; [the kernel port](design/ka_port.md)).
+`test/thread_invariance.jl` checks that the code gives the same results at
+N threads and at 1 thread, within `ROUNDOFF_RTOL` (KA-a, #294;
+[the kernel port](design/ka_port.md)): a race between threads moves a
+result by far more than round-off.
 In the normal run it compares `CPUBackend(serial = true)` with the
 threaded backend in process, which is meaningful under `--threads 4`.
 Its subprocess level is opt-in. Every port PR runs it and quotes the
@@ -167,9 +201,10 @@ AEOLUS_THREAD_TESTS=1 julia --project=. test/run.jl --only thread_invariance.jl
 
 It starts `julia -t 1/4/24` (`AEOLUS_THREAD_COUNTS`) and runs the
 sections in `AEOLUS_THREAD_SECTIONS` (default
-`primitives,dns,reductions,smoke,flagship`). Every hash must match the 1-thread
-run. At KA-a it produced 2261 hashes, all identical, in about 2 min per
-process.
+`primitives,dns,reductions,smoke,flagship`). Every result must agree with
+the 1-thread run (fields as fingerprints within `ROUNDOFF_RTOL`, integer data
+exactly). At KA-a it produced 2261 hashes, all identical, in about 2 min
+per process.
 
 ## Measured times
 

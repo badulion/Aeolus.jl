@@ -323,7 +323,7 @@ end
         resume!(ck2, sim2)
     end
     @test d !== nothing && ck2.last_step == 4 && sim2.t == sim.t
-    @test interior_view(sim2.θ) == interior_view(sim.θ)
+    @test agree(interior_view(sim2.θ), interior_view(sim.θ))
     finish_run!(rf2)
     @test occursin("checkpoints: resumed", read(run_log_path(rf2), String))
 end

@@ -176,7 +176,7 @@ end
 end
 
 @testset "slot sections: the converted configs mean what the old ones did" begin
-    # bit for bit on the Boussinesq core (the simulation digests and the
+    # on the Boussinesq core (the simulation digests and the
     # Berlin fixture are the full check): a [sgs] c_s default per closure
     # replaces "none" → the closure's own default, so the closures are the same
     for (m, cs) in ((:smagorinsky, 0.17), (:vreman, 0.17), (:sigma, 1.35), (:amd, 0.3))

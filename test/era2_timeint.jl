@@ -593,7 +593,7 @@ import Random
         # A driver passes the same keywords to step! and step_imex!: the
         # momentum-advection operator and the eddy-viscosity closure. The
         # defaults are the built-in ones, so passing them explicitly is
-        # bit for bit the default step; a different operator / closure is
+        # the default step; a different operator / closure is
         # actually used.
         g = RegularGrid(; size = (12, 12, 12), extent = (120.0, 120.0, 60.0),
                         halo = (2, 2, 2))
@@ -612,7 +612,7 @@ import Random
             ref = mk(); step_imex!(ref, 2.0, scheme)
             a = mk(); step_imex!(a, 2.0, scheme; momentum_advection = Aeolus.Operators.momentum_advect!,
                                  eddy_viscosity! = smag!)
-            @test state(a) == state(ref)                     # bitwise
+            @test values_agree(state(a), state(ref))                     #
             # no momentum advection: u changes differently
             b = mk(); step_imex!(b, 2.0, scheme; momentum_advection = (tu, tv, tw, u, v, w) -> nothing)
             @test maximum(abs.(interior_view(b.u) .- interior_view(ref.u))) > 1e-3
@@ -655,7 +655,7 @@ import Random
                 "t = $(sim.t), KE $(ke0) → $(kinetic_energy(sim))")
     end
     # KA-c (#295): step_rk3! keeps uⁿ in a cached RK3Workspace. The step is
-    # bit-identical to the former copy-based one (reproduced here with the
+    # the same as the former copy-based one (reproduced here with the
     # same substep and combinations) and allocates only the cache lookup.
     @testset "KA-c: step_rk3! with a cached workspace" begin
         S = Aeolus.Simulations
@@ -689,7 +689,7 @@ import Random
         for _ in 1:3
             step_rk3!(a, 2e-3); rk3_reference!(b, 2e-3)
         end
-        @test all(f -> getproperty(a, f).data == getproperty(b, f).data, (:u, :v, :w, :θ, :qv))
+        @test all(f -> agree(getproperty(a, f).data, getproperty(b, f).data), (:u, :v, :w, :θ, :qv))
         @test a.t == b.t
         @test S.rk3_workspace(a) === S.rk3_workspace(a)          # cached, one per simulation
         nb = @allocated step_rk3!(a, 2e-3)
@@ -700,10 +700,10 @@ import Random
     # =====================================================================
     # KA-b (#296): the step-path maxima and finiteness checks run through
     # the thread-invariant primitives. max and isfinite are exact, so the
-    # results must be bit-identical to the loops they replaced (master at
+    # results must be the same as the loops they replaced (master at
     # 70d9f83, transcribed here), NaN propagation included.
     # =====================================================================
-    @testset "KA-b: CFL maxima and finiteness bit-identical to the old loops" begin
+    @testset "KA-b: CFL maxima and finiteness the same as the old loops" begin
         function old_rate(ud, vd, wd, m)
             ii, jj, kk = interior(m)
             idx = 1 / m.dx; idy = 1 / m.dy; idz = 1 / m.dz
@@ -725,22 +725,21 @@ import Random
             interior_view(f) .= randn(rng, size(interior_view(f)))
         end
         u, v, w = sim.u.data, sim.v.data, sim.w.data
-        bits(x) = reinterpret(UInt64, Float64(x))
         TI = Aeolus.TimeIntegration
-        @test bits(TI._max_advective_rate(u, v, w, g)) == bits(old_rate(u, v, w, g))
+        @test agree(TI._max_advective_rate(u, v, w, g), old_rate(u, v, w, g))
         # KA-j (#306): the speed cap is a component of the fused step guard, the
         # SGS maxima components of the fused CFL sweep (same expectations, on
         # the functions that replaced `_max_speed` and `_max_interior`)
-        @test bits(TI.step_guard(sim).speed) == bits(old_speed(sim))
-        @test bits(TI._max_abs(sim.u)) == bits(maximum(abs, interior_view(sim.u)))
+        @test agree(TI.step_guard(sim).speed, old_speed(sim))
+        @test agree(TI._max_abs(sim.u), maximum(abs, interior_view(sim.u)))
         cm = TI._cfl_maxima(sim, (νh = sim.u, νv = sim.v, κh = sim.w, κv = sim.θ), true)
-        @test bits(cm[1]) == bits(old_rate(u, v, w, g))
-        @test bits(cm[2]) == bits(maximum(interior_view(sim.u)))
-        @test bits(cm[3]) == bits(maximum(interior_view(sim.v)))
-        @test bits(cm[4]) == bits(maximum(interior_view(sim.w)))
-        @test bits(cm[5]) == bits(maximum(interior_view(sim.θ)))
-        @test bits(max_divergence(sim)) == bits(maximum(abs, interior_view(sim.div_buf)))
-        @test bits(TI.step_guard(sim).divergence) == bits(max_divergence(sim))
+        @test agree(cm[1], old_rate(u, v, w, g))
+        @test agree(cm[2], maximum(interior_view(sim.u)))
+        @test agree(cm[3], maximum(interior_view(sim.v)))
+        @test agree(cm[4], maximum(interior_view(sim.w)))
+        @test agree(cm[5], maximum(interior_view(sim.θ)))
+        @test agree(max_divergence(sim), maximum(abs, interior_view(sim.div_buf)))
+        @test agree(TI.step_guard(sim).divergence, max_divergence(sim))
         @test TI._all_finite(sim) && TI.step_guard(sim).finite
         # NaN propagates through every maximum; ±Inf fails the finiteness check
         interior_view(sim.v)[5, 6, 7] = NaN

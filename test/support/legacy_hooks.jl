@@ -5,7 +5,7 @@
 # drag of src/PlantCanopy.jl (full-grid loops), the direct forcing of
 # src/IBM.jl (a loop over the solid cells), the moist-buoyancy loops of
 # examples/urban/couplings/moist_buoyancy.jl and the per-level loops of
-# src/LargeScaleForcing.jl and its reference_damping.jl. The reference of test/ka_hooks.jl (bit for bit) and of the
+# src/LargeScaleForcing.jl and its reference_damping.jl. The reference of test/ka_hooks.jl and of the
 # KA-k timings (old loops vs launches). Nothing here is used by the package.
 # ---------------------------------------------------------------------------
 module LegacyHooks

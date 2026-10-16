@@ -86,7 +86,7 @@ cases = (
     end
 end
 
-@testset "step! with a custom momentum advection: the unfused path, the same bits" begin
+@testset "step! with a custom momentum advection: the unfused path, the same results" begin
     mk() = _kf_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, moisture = true, bcs = walls))
     a, r, f = mk(), mk(), mk()
     for _ in 1:3
@@ -98,7 +98,7 @@ end
     @test _kf_same(a, f)        # the fused and the unfused path agree too
 end
 
-@testset "stretched grid (the column solver's source buffer): the same bits" begin
+@testset "stretched grid (the column solver's source buffer): the same results" begin
     sg = StretchedGrid(; size = (12, 12, 16), extent = (240.0, 240.0, 600.0), stretching = (:tanh, 1.5))
     bcs = FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)
     @test Aeolus.PressureSolvers.source_buffer(BoussinesqSimulation(sg; bcs = bcs).solver) isa Array
@@ -116,7 +116,7 @@ end
     end
 end
 
-@testset "open x faces: the open-face check and the stage combination, the same bits" begin
+@testset "open x faces: the open-face check and the stage combination, the same results" begin
     mc = RegularGrid(size = (24, 1, 12), extent = (24.0, 1.0, 12.0), origin = (0.0, 0.0, 0.0),
                      halo = (3, 3, 3))
     data = ProfileBoundaryData(u = 1.0, v = 0.0, w = 0.0, θ = 300.0)

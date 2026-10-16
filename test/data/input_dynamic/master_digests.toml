@@ -1,17 +1,8 @@
+# The scalars of the summer initial state, and the smoke state's field names; the arrays are fingerprints.toml (#495).
 # summer_qv_zc and summer_qv_fine re-captured after master's KA-m (#301) fused
 # saturation vapour pressure (a named last-bits change of e_s, so of the sounding's
 # qv: max relative change 5.8e-16 in ls_profile_qv); every other entry as captured.
-summer_ref_rho = "7b4caa357e552e05"
-summer_ug = "88b332506aee67a9"
-summer_qv_fine = "cfe924028a14d551"
-summer_ref_T = "6000254d8599eca6"
-summer_theta_fine = "b0a1877c06d525bf"
-summer_vg = "9b57f7c34ba82912"
-summer_ref_pi = "3470f7d5efeebdb4"
-summer_ref_p = "a43e5c5ea1ed0572"
 summer_zi = 0.0
-summer_theta_zc = "e5beaccbd806323d"
-summer_qv_zc = "aa44cf23ab7e2df5"
 summer_p_surface = 101841.77889034548
 summer_zi_max = 1356.189155919033
 

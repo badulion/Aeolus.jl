@@ -8,12 +8,12 @@
 #   3. critical Ri of the log-linear and BDBH similarity functions;
 #   4. the pointwise N² and Ri_g fields on analytic flows (exact for linear
 #      profiles; second order for a tanh shear layer);
-#   5. the fog column delegates to ShortTail bit for bit;
-#   6. the mean-profile N² of TimeIntegration and Anelastic bit for bit;
+#   5. the fog column delegates to ShortTail (within ROUNDOFF_RTOL, #495);
+#   6. the mean-profile N² of TimeIntegration and Anelastic (the same);
 #   7. cloudy-air N² (#239): condensate loading, the saturated N² (Durran &
 #      Klemp 1982 in a saturated environment, a lifted parcel at a cloud
 #      top) — ≈ 0 on a moist adiabat, within 4 % of the fog column's parcel
-#      N² — and the dry / qv forms bit for bit.
+#      N² — and the dry / qv forms within ROUNDOFF_RTOL.
 
 using Aeolus.TurbulenceStability
 using Aeolus.TurbulenceStability: AbstractRiStability
@@ -177,7 +177,7 @@ function _ri_field(Nz, Lz, ufun, θfun; qv = nothing, θ₀ = 300.0, g = 9.81, N
     end
     gradient_richardson!(Ri, N2, u, v, w)
     S2 = strain_rate_squared!(Field(CellCenter(), m), u, v, w)
-    @test interior_view(Ri) == gradient_richardson.(interior_view(N2), interior_view(S2))
+    @test agree(interior_view(Ri), gradient_richardson.(interior_view(N2), interior_view(S2)))
     return m, N2, Ri, S2
 end
 
@@ -219,7 +219,7 @@ end
     @info "P58-a Ri_g fields" linear_rel_err = err tanh_rel_errs = errs tanh_orders = orders
 end
 
-# The pre-#170 implementations, verbatim, as references for "bit for bit".
+# The pre-#170 implementations, verbatim, as references (within ROUNDOFF_RTOL).
 _fstab_old(Ri) = Ri >= 0 ? 1 / (1 + 5Ri)^2 : sqrt(1 - 16Ri)
 
 function _fog_K_old(col; c = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS)
@@ -276,22 +276,22 @@ function _brunt_vaisala_profile_old(θ̄::Vector{T}, dz::T, g::T) where {T}
     return N²
 end
 
-@testset "5. the fog column delegates to ShortTail bit for bit" begin
+@testset "5. the fog column delegates to ShortTail" begin
     @test !isdefined(Aeolus.RadiationFog, :_fstab)
     Ris = vcat(.-(10.0 .^ range(-8, 2; length = 300)), 0.0, 10.0 .^ range(-8, 4; length = 300))
-    @test all(stability_factor_m(ShortTail(), Ri) === _fstab_old(Ri) for Ri in Ris)
-    @test all(stability_factor_h(ShortTail(), Ri) === _fstab_old(Ri) for Ri in Ris)
+    @test all(agree(stability_factor_m(ShortTail(), Ri), _fstab_old(Ri)) for Ri in Ris)
+    @test all(agree(stability_factor_h(ShortTail(), Ri), _fstab_old(Ri)) for Ri in Ris)
     col = parisfog_2011_column()
     run!(col, 3600)                                      # 1 h of the ParisFog case
     K = eddy_diffusivity(col)
-    @test K == _fog_K_old(col)
+    @test agree(K, _fog_K_old(col))
     ex = surface_exchange(col)
     lm = log(col.z[1] / col.set.z0m)
-    @test ex.C_D == Aeolus.RadiationFog._KARMAN^2 / lm^2 * _fstab_old(ex.Ri_b)
+    @test agree(ex.C_D, Aeolus.RadiationFog._KARMAN^2 / lm^2 * _fstab_old(ex.Ri_b))
     @info "P58-a ParisFog 1 h: K profile (m² s⁻¹), first interfaces" K = K[1:6] Ri_b = ex.Ri_b
 end
 
-@testset "6. mean-profile N² of TimeIntegration and Anelastic, bit for bit" begin
+@testset "6. mean-profile N² of TimeIntegration and Anelastic" begin
     rng = Xoshiro(170)
     g = RegularGrid(; size = (6, 5, 24), extent = (60.0, 50.0, 240.0), halo = (2, 2, 2))
     sim = BoussinesqSimulation(g; θ₀ = 300.0)
@@ -299,12 +299,11 @@ end
     interior_view(sim.θ) .+= 0.05 .* randn(rng, 6, 5, 24)
     N_new = Aeolus.TimeIntegration._brunt_vaisala(sim)
     @test N_new > 0
-    @test N_new === _brunt_vaisala_old(sim)
-    @test cfl_diagnostics(sim, CFLConstraints()).N === _brunt_vaisala_old(sim)
+    @test agree(N_new, _brunt_vaisala_old(sim))
+    @test agree(cfl_diagnostics(sim, CFLConstraints()).N, _brunt_vaisala_old(sim))
     for θ̄ in (300.0 .* exp.(1e-4 .* (0:39) .* 25 ./ 9.81),     # constant N² = 1e-4
               290.0 .+ 0.01 .* (0:39) .* 25 .+ 0.5 .* rand(rng, 40))
-        @test Aeolus.Anelastic._brunt_vaisala(θ̄, 25.0, 9.81) ==
-              _brunt_vaisala_profile_old(θ̄, 25.0, 9.81)
+        @test agree(Aeolus.Anelastic._brunt_vaisala(θ̄, 25.0, 9.81), _brunt_vaisala_profile_old(θ̄, 25.0, 9.81))
     end
     @test Aeolus.Anelastic._brunt_vaisala([300.0], 25.0, 9.81) == [0.0]
     # the exactness that motivated the log form survives
@@ -312,7 +311,7 @@ end
     @test maximum(abs, N2 .- 1e-4) < 1e-15
 end
 
-# The pre-#239 pointwise N² kernel, verbatim, as the reference for "bit for bit".
+# The pre-#239 pointwise N² kernel, verbatim, as the reference.
 function _n2_field_old!(N2, θ, qv, θ₀, g)
     m = θ.mesh
     qd = qv === nothing ? nothing : qv.data
@@ -333,8 +332,8 @@ isdefined(@__MODULE__, :moist_adiabat_column!) ||
     MT = Aeolus.MoistThermodynamics; c = MT.DEFAULT_CONSTANTS
     θ₀, g = 290.0, 9.81
 
-    # (a) dry and qv-only forms unchanged bit for bit; an all-zero condensate
-    #     field gives the qv form bit for bit
+    # (a) dry and qv-only forms unchanged; an all-zero condensate field gives
+    #     the qv form (within ROUNDOFF_RTOL)
     rng = Xoshiro(239)
     m = RegularGrid(; size = (5, 4, 12), extent = (50.0, 40.0, 120.0), halo = (1, 1, 1))
     θ = Field(CellCenter(), m); qv = Field(CellCenter(), m)
@@ -342,14 +341,14 @@ isdefined(@__MODULE__, :moist_adiabat_column!) ||
     qv.data .= 0.008 .+ 1e-3 .* rand(rng, size(qv.data))
     N2 = Field(CellCenter(), m); N2o = Field(CellCenter(), m)
     buoyancy_frequency_squared!(N2, θ; θ₀ = θ₀, g = g)
-    @test N2.data == _n2_field_old!(N2o, θ, nothing, θ₀, g).data
+    @test agree(N2.data, _n2_field_old!(N2o, θ, nothing, θ₀, g).data)
     buoyancy_frequency_squared!(N2, θ, qv; θ₀ = θ₀, g = g)
-    @test N2.data == _n2_field_old!(N2o, θ, qv, θ₀, g).data
+    @test agree(N2.data, _n2_field_old!(N2o, θ, qv, θ₀, g).data)
     N2c = Field(CellCenter(), m)
     buoyancy_frequency_squared!(N2c, θ, qv, Field(CellCenter(), m); θ₀ = θ₀, g = g, p = 1e5)
-    @test N2c.data == N2.data
+    @test agree(N2c.data, N2.data)
     buoyancy_frequency_squared!(N2c, θ, qv, nothing; θ₀ = θ₀, g = g)
-    @test N2c.data == N2.data
+    @test agree(N2c.data, N2.data)
     @test_throws DimensionMismatch buoyancy_frequency_squared!(N2c, θ, qv, Field(CellCenter(), m);
                                                                θ₀ = θ₀, g = g, p = zeros(3))
 

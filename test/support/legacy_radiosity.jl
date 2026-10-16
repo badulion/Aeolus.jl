@@ -1,5 +1,5 @@
 # Transcripts of the radiosity loops before KA-n (#305), from master at
-# c617bc1, kept as the bit-for-bit references of test/ka_radiation.jl:
+# c617bc1, kept as the references of test/ka_radiation.jl:
 #
 #   * `legacy_aggregate_to_grid`: the facet → column scatter (with the
 #     per-column dominant class from a Dict), replaced by the column gather;

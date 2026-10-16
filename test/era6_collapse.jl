@@ -171,7 +171,7 @@ _plane_u1(s) = (g = s.mesh; sum(view(s.u.data, g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.N
     @test all(==(290.0), view(s.θ.data, g.Hx+1:g.Hx+g.Nx, g.Hy+1:g.Hy+g.Ny, g.Hz+1:g.Hz+g.Nz))
     # the initial wind is the *neutral* law, the same state as the neutral case
     hn = half_channel_case(; N = N, closure = nothing, noise = 0.5)
-    @test hc.sim.u.data == hn.sim.u.data && hc.sim.w.data == hn.sim.w.data
+    @test agree(hc.sim.u.data, hn.sim.u.data) && agree(hc.sim.w.data, hn.sim.w.data)
     # the wall law is SurfaceExchange's flux-prescribed MOST (one source of truth)
     h = g.dz / 2; z0 = 1e-4
     for U in (5.0, 10.0, 20.0)

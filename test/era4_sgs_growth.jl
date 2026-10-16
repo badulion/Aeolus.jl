@@ -3,7 +3,7 @@
 # The sub-grid supersaturation distribution of issue #12 fed into
 # aerosol activation (Phase 42) and condensational droplet growth
 # (Phase 41). Headline checks: σ_S → 0 recovers the Phase 41/42 results
-# bit for bit; the sign of the activation change is the sign of the
+#; the sign of the activation change is the sign of the
 # curvature of the CCN spectrum (Jensen); the spread of r² matches the
 # analytic Ornstein-Uhlenbeck result; relative dispersion rises
 # monotonically with σ_S while total water is conserved to round-off.
@@ -22,9 +22,9 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
     @testset "CCN spectrum: one copy, shared with arg_activation" begin
         for w in (0.1, 0.5, 2.0)
             r = arg_activation(modes, w, T_K, p)
-            # bit-for-bit: arg_activation evaluates this very function
-            @test [ccn_fraction(m, r.S_max; T_K = T_K) for m in modes] == r.fraction
-            @test ccn_spectrum(modes, r.S_max; T_K = T_K) == r.N_act_total
+            # arg_activation evaluates this very function
+            @test values_agree([ccn_fraction(m, r.S_max; T_K = T_K) for m in modes], r.fraction)
+            @test values_agree(ccn_spectrum(modes, r.S_max; T_K = T_K), r.N_act_total)
         end
         # N_CCN(S) is a CDF in S: zero at S ≤ 0, monotone, → N_tot
         Ss = 10 .^ range(-5, -1; length = 200)
@@ -53,7 +53,7 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
         sd2 = deepcopy(sd1)
         Δ1 = condensation_growth!(sd1, 2e-3, 283.0, 9e4, 5.0)
         Δ2 = condensation_growth!(sd2, fill(2e-3, 64), 283.0, 9e4, 5.0)
-        @test Δ1 == Δ2 && sd1.radius == sd2.radius      # bit for bit
+        @test values_agree(Δ1, Δ2) && values_agree(sd1.radius, sd2.radius)      #
         # a droplet in a moister sub-volume grows faster
         sd3 = init_monodisperse_superdroplets(2, 1e8, 6e-6, V)
         condensation_growth!(sd3, [1e-3, 3e-3], 283.0, 9e4, 10.0)
@@ -195,7 +195,7 @@ using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
                   dW = (cell_total_water(sd, cell) - W0) / W0)
     end
 
-    @testset "SGS growth: σ_S = 0 is Phase 41 condensation_step! bit for bit" begin
+    @testset "SGS growth: σ_S = 0 is Phase 41 condensation_step!" begin
         a = growth_case(0.0)
         # the same population through the Phase 41 routine
         V = 1.0

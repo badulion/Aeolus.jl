@@ -3,7 +3,7 @@
 #
 # Physics asserted: Spalding's law and its inversion (round trip, the
 # viscous and logarithmic limits), the delegation of the rough laws to
-# SurfaceExchange (κ, ψ_m, the surface-layer solver bit for bit), the
+# SurfaceExchange (κ, ψ_m, the surface-layer solver), the
 # viscous limit against the resolved cut-cell stress; the operator's
 # momentum budget (the momentum removed is the wall stress at the
 # end-of-step velocity times area and Δt) and its unconditional
@@ -84,13 +84,13 @@ end
     for L in (Inf, -Inf)
         @test abs(friction_velocity(MOSTWallLaw(sf, z0, L), U, h) - ref) / ref < 1e-12
     end
-    # stable / unstable: the solver's u_* bit for bit, at ζ = ±0.5.
+    # stable / unstable: the solver's u_*, at ζ = ±0.5.
     # θ_a − θ_s is bisected until the solver's root is ζ = ±0.5 to 1e-6, and
     # the law is built from that solve's L. The law sees ζ' = h/L, which
     # need not be the solver's ζ in the last bit (h/(h/ζ) ≠ ζ for about half
     # of all ζ; L ↦ h/L skips representable values), so among the solves
     # within 1e-10 K of the bisected one the first with h/L == ζ is taken:
-    # bit for bit is then the claim that the law computes exactly what the
+    # is then the claim that the law computes exactly what the
     # solver computes at the same ζ. For any L it is round-off (1e-14).
     function solve_at(ζt)
         lo, hi = ζt > 0 ? (0.0, 30.0) : (-30.0, 0.0)
@@ -222,10 +222,10 @@ end
             @test ex < 1e-12 && ey < 1e-12
             @test F.Fx * Δt ≈ ΔMx rtol = 1e-12
             @test F.Fy * Δt ≈ ΔMy rtol = 1e-12
-            # w and every level without a wall are untouched, bit for bit
-            @test Aeolus.Fields.interior_view(sim.w) == Aeolus.Fields.interior_view(ref.w)
+            # w and every level without a wall are untouched
+            @test agree(Aeolus.Fields.interior_view(sim.w), Aeolus.Fields.interior_view(ref.w))
             inner = setdiff(1:g.Nz, levels)
-            @test u1[:, :, inner] == u0[:, :, inner] && v1[:, :, inner] == v0[:, :, inner]
+            @test values_agree(u1[:, :, inner], u0[:, :, inner]) && values_agree(v1[:, :, inner], v0[:, :, inner])
             @test all(abs.(u1[:, :, collect(levels)]) .< abs.(u0[:, :, collect(levels)]))
         end
     end

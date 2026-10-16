@@ -179,7 +179,7 @@ function _initialise!(sim, law, u_star, ν, walls, noise, seed)
 end
 
 # The wall-model inputs of the case's keywords (P57-b): `nothing` for the
-# classical first-cell, unfiltered input (the pre-P57-b path, bit for bit).
+# classical first-cell, unfiltered input (the pre-P57-b path).
 function _case_inputs(walls, h_wm, h_wm_cells, filter, T_f, u_star, height)
     filter in (:none, :temporal, :spatial, :both) ||
         throw(ArgumentError("filter must be :none, :temporal, :spatial or :both, got :$filter"))
@@ -396,7 +396,7 @@ of the domain are quieter than its centre; the fetch diagnostics
     `:spatial` (the 3 × 3 wall-parallel box of Bou-Zeid et al. 2005) or
     `:both`.
 
-The defaults reproduce the first-cell, unfiltered input bit for bit.
+The defaults reproduce the first-cell, unfiltered input.
 
 **Partially resolved roughness** (P57-e, #190): `roughness` — a
 [`DynamicRoughness`](@ref) on the `(N, N)` surface grid (periodic, the
@@ -978,7 +978,7 @@ run resumes from the newest checkpoint of its folder (the simulation, the
 case — closure memory, wall model, inputs, roughness, counters — and the
 averages above), writes periodic checkpoints, and a final one at `t_end`.
 `checkpoint_components` (a `NamedTuple`) adds the state of the caller's
-`callback`. A restarted run returns the same `stats`, bit for bit, as an
+`callback`. A restarted run returns the same `stats` as an
 uninterrupted one. Use one checkpoint `prefix` per call when a driver calls
 `run_channel!` more than once.
 """

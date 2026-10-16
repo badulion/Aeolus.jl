@@ -2,17 +2,19 @@
 # src/Components.jl, src/components/*.jl.
 #
 #   * acceptance: every `simulation`-config variant of
-#     test/support/simulation_digests.jl (the four shipped configs with
+#     test/support/simulation_fingerprints.jl (the four shipped configs with
 #     every SGS closure, Coriolis, the sponge, the surface θ flux, both
-#     cores, euler / rk3 / adaptive) reproduces, through Model, the state
-#     digests captured on master before the pipeline (bit for bit);
+#     cores, euler / rk3 / adaptive, and the EX-d configs with their
+#     couplings) reproduces its recorded fingerprints within ROUNDOFF_RTOL
+# (#495; the digests of master before the pipeline are in git
+#     history);
 #   * the pipeline: stage order (euler and the three substages of RK3),
 #     cadence, the order within a stage, validation, the hook-free fast path;
-#   * the core's components against the built-in terms, bit for bit, on both
+#   * the core's components against the built-in terms, on both
 #     cores, and their physics: inertial oscillation (Coriolis), the θ
 #     budget of the prescribed fluxes, the decay rate of the sponge;
 #   * component contracts: build from a section, a step on both cores, the
-#     checkpoint round trip (a restart is bitwise the uninterrupted run).
+# checkpoint round trip (a restart is the uninterrupted run).
 
 using Test
 using TOML
@@ -26,83 +28,27 @@ using Aeolus.Operators: sponge_profile, damping_rate, damping_coordinates
 using Aeolus.Anelastic: AnelasticSimulation, isentropic_reference
 using Aeolus.IO: checkpoint!, restart!, checkpoint_state, restore_checkpoint_state!
 
-include(joinpath(@__DIR__, "support", "simulation_digests.jl"))
+include(joinpath(@__DIR__, "support", "simulation_fingerprints.jl"))
 
-const CP_DIGESTS = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_digests.toml"))
-# Runs whose closure was the core's built-in Smagorinsky (C_s) before ONE-a
-# and is the :sgs component's StaticSmagorinsky now: their diagnostics.csv
-# gains the three `sgs.*` columns every other closure already had; the other
-# columns are the master bytes.
-const CP_NEW_SGS_COLUMNS = Set(l for (l, (n, o)) in SD_VARIANTS
-                               if n != "taylor_green_vortex" && !any(x -> startswith(x, "sgs.model"), o) &&
-                                  !any(x -> startswith(x, "sgs.stability"), o))
+const CP_FINGERPRINTS = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_fingerprints.toml"))
 
-@testset "pipeline acceptance: every simulation-config variant reproduces master's digests ($(length(SD_VARIANTS)) runs, 16³)" begin
-    ref = CP_DIGESTS["digests"]
-    @test CP_DIGESTS["commit"] == "ead7b986323b519c75681d38399c989ffde964b4"
-    @test Set(keys(ref)) == Set(first.(SD_VARIANTS))
-    inputs = sd_made_inputs()
-    for (label, (name, ovr)) in SD_VARIANTS
-        sd_anelastic(label) && continue      # new physics in ONE-j (#460): see the next testset
-        cfg = load_run_config(sd_config(name);
-                              overrides = vcat(SD_SMALL, ovr, get(inputs, name, String[])))
-        r = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir())
-        @test r.obj.model isa Model
-        s = state_fields(r.obj)
-        for (k, v) in pairs(s)
-            @test (label, k, sd_digest(v)) == (label, k, ref[label][string(k)])
-        end
-        @test (label, sd_digest([CPC.clock(r.obj.model)])) == (label, ref[label]["t"])
-        rows = sd_diagnostics(r.folder)
-        if label in CP_NEW_SGS_COLUMNS
-            hdr = split(rows[1], ',')
-            keep = findall(h -> !startswith(h, "sgs."), hdr)
-            @test length(hdr) - length(keep) == 3
-            rows = [join(split(l, ',')[keep], ',') for l in rows]
-        end
-        @test (label, sd_digest(codeunits(join(rows, "\n")))) == (label, ref[label]["diagnostics_csv"])
+@testset "pipeline acceptance: every simulation-config variant reproduces its fingerprints ($(length(SD_ALL)) runs)" begin
+    ref = CP_FINGERPRINTS["variants"]
+    @test Set(keys(ref)) == Set(first.(SD_ALL))
+    for v in SD_ALL
+        label = first(v)
+        got = variant_fingerprints(v)
+        bad = fingerprints_differing(got["fields"], ref[label]["fields"])
+        isempty(bad) || @info "fields differing from the recorded fingerprints" label bad
+        @test (label, bad) == (label, String[])
+        @test (label, agree(got["t"], ref[label]["t"])) == (label, true)
+        badd = diagnostics_differing(got["diagnostics"], ref[label]["diagnostics"])
+        isempty(badd) || @info "diagnostics columns differing from the recorded fingerprints" label badd
+        @test (label, badd) == (label, String[])
     end
 end
 
-@testset "the anelastic variants: ONE-j's digests, not master's (the weighted fluxes are new physics)" begin
-    # ONE-j (#460) put the anelastic core's SGS fluxes in the ρ̄-weighted
-    # flux form: the three anelastic variants of SD_VARIANTS with an SGS
-    # closure left master's digests (asserted), the one without
-    # (dcbl_anelastic_none) kept them bit for bit; all reproduce those
-    # captured on the ONE-j branch, as do the new anelastic RK3 / adaptive
-    # variants
-    an = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_digests_anelastic.toml"))
-    labels = vcat([l for (l, _) in SD_VARIANTS if sd_anelastic(l)], first.(SD_ANELASTIC_VARIANTS))
-    @test length(labels) == 7 && Set(keys(an["digests"])) == Set(labels)
-    got = simulation_digests(; variants = vcat([v for v in SD_VARIANTS if sd_anelastic(first(v))],
-                                               SD_ANELASTIC_VARIANTS))
-    for l in labels
-        @test (l, got[l]) == (l, an["digests"][l])
-        haskey(CP_DIGESTS["digests"], l) || continue
-        master = CP_DIGESTS["digests"][l]
-        if l == "dcbl_anelastic_none"
-            @test all(k -> got[l][k] == master[k], ("u", "v", "w", "p", "θ", "t", "diagnostics_csv"))
-        else
-            @test (l, got[l]["θ"] != master["θ"]) == (l, true)
-        end
-    end
-end
-
-@testset "pipeline acceptance: the EX-d simulation configs and their couplings reproduce master's digests ($(length(SD_EXD_VARIANTS)) runs)" begin
-    exd = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_digests_exd.toml"))
-    @test exd["commit"] == "a22b57babafc96bc15e4a2ca56ebb225c9bdd5f5"
-    ref = exd["digests"]
-    @test Set(keys(ref)) == Set(first.(SD_EXD_VARIANTS))
-    got = exd_digests()
-    for (label, d) in sort!(collect(got); by = first)
-        for (k, v) in ref[label]
-            k == "diagnostics_csv" && continue
-            @test (label, k, d[k]) == (label, k, v)
-        end
-        # the plain Smagorinsky runs gain the three sgs.* columns; the rest is master's bytes
-        key = d["plain_smagorinsky"] == "true" ? "diagnostics_csv_without_sgs" : "diagnostics_csv"
-        @test (label, d[key]) == (label, ref[label]["diagnostics_csv"])
-    end
+@testset "the EX-d couplings: one component of the domain" begin
     # the couplings are one component of the domain, attached where they acted before
     cfg = load_run_config(sd_config("flow_past_cube");
                           overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\""))
@@ -180,7 +126,7 @@ function cp_state!(sim; seed = 3)
     return sim
 end
 
-cp_bits(sim) = [reinterpret(UInt64, vec(copy(f.data))) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]
+cp_bits(sim) = [copy(f.data) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]   # compared within ROUNDOFF_RTOL (#495)
 
 const CP_COR = (; f = 1.0e-3)                                  # [coriolis]
 const CP_SPO = (alpha_max = 0.02, z_start = 250.0)             # [sponge]
@@ -336,7 +282,7 @@ end
     @test sim.workspaces.sweep !== nothing
 end
 
-@testset "components = the core's built-in terms, bit for bit ($c, $sch)" for (c, sch) in
+@testset "components = the core's built-in terms ($c, $sch)" for (c, sch) in
         ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler), (:anelastic, :rk3))
     # the built-in path: the core's own Coriolis, θ fluxes, sponge and Smagorinsky
     ref = cp_state!(cp_core(c; ν = 0.5, f_coriolis = CP_COR.f, C_s = 0.17,
@@ -351,10 +297,10 @@ end
         sch === :rk3 ? step_rk3!(ref, 2.0) : step!(ref, 2.0)
         step!(Model(d), 2.0)
     end
-    @test cp_bits(sim) == cp_bits(ref)
+    @test values_agree(cp_bits(sim), cp_bits(ref))
     @test sim.t === ref.t
     @test maximum(abs, interior_view(sim.w)) > 0           # it moved
-    # a body-force component is step!'s body_force! keyword, bit for bit
+    # a body-force component is step!'s body_force! keyword
     ref = cp_state!(cp_core(c; ν = 0.5))
     sim = cp_state!(cp_core(c; ν = 0.5))
     d = cp_domain(sim; scheme = sch, extra = (CPPush(1e-3),))
@@ -363,7 +309,7 @@ end
         sch === :rk3 ? step_rk3!(ref, 2.0; kw...) : step!(ref, 2.0; kw...)
         step!(d, 2.0)
     end
-    @test cp_bits(sim) == cp_bits(ref)
+    @test values_agree(cp_bits(sim), cp_bits(ref))
 end
 
 @testset "Coriolis: the inertial oscillation ($c)" for c in (:boussinesq, :anelastic)
@@ -500,7 +446,7 @@ end
     d2 = mk()
     restart!(d2.state, path; components = CPC.checkpoint_components(d2))
     for _ in 1:3; step!(d2, 2.0); end
-    @test cp_bits(d2.state) == cp_bits(d.state)
+    @test values_agree(cp_bits(d2.state), cp_bits(d.state))
     # a restart into another closure is refused
     d3 = Domain(Domain(cp_core(c; ν = 0.5, (c === :boussinesq ? (; θ₀ = 300.0) : (;))...); validate = false);
                 components = (CentredAdvection(), SGS(StaticSmagorinsky(0.17)), Coriolis(1e-3), Sponge(0.02, 250.0, (u = 0, v = 0, w = 0))))

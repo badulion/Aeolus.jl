@@ -172,13 +172,13 @@ const OLD_ITERS = Dict("cg(periodic,neumann)" => 147, "cg(neumann,neumann)" => 2
             @test abs(it - OLD_ITERS[lab]) <= 1
             x = copy(interior_view(p))
             @test abs(sum(x)) < 1e-10 * sum(abs, x)          # the zero-mean solution
-            # the serial backend: the same bits and iteration count
+            # the serial backend: the same results and iteration count
             q = Field(CellCenter(), m)
             with_backend(CPUBackend(serial = true)) do
                 solve!(q, src, s)
             end
             @test iterations(s) == it
-            @test interior_view(q) == x
+            @test agree(interior_view(q), x)
             # no allocation per solve (one thread; threaded launches allocate KA's tasks)
             if Threads.nthreads() == 1
                 solve!(p, src, s)
@@ -201,7 +201,7 @@ const OLD_ITERS = Dict("cg(periodic,neumann)" => 147, "cg(neumann,neumann)" => 2
             @test st.converged
             @test abs(st.iterations - OLD_ITERS[lab]) <= 1
             f2, st2 = with_backend(() -> imex_solve(g, c), CPUBackend(serial = true))
-            @test st2.iterations == st.iterations && f2.data == f.data
+            @test agree(st2.iterations, st.iterations) && agree(f2.data, f.data)
         end
     end
 

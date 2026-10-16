@@ -1,7 +1,7 @@
 # KA-f (#297): the nesting transfer operators as they were before the port
 # (src/nesting/operators.jl of master at 70d9f83, docstrings stripped), in
 # a module of their own on top of the package's types: the reference of
-# test/ka_halos.jl's bit-for-bit checks of the prolongation (with the
+# test/ka_halos.jl's checks of the prolongation (with the
 # limiters), the restrictions, the flux mismatch and the flux correction.
 module LegacyNesting
 using Aeolus
@@ -96,7 +96,7 @@ end
 # coordinate μ = ∫W dz of the sound-proof systems. Coordinates are shifted
 # to the first stencil node and scaled by the mean stencil spacing before
 # the Lagrange products are formed, so a child face that *is* a parent face
-# (bitwise, see `_child_zfaces`) gives a basis of exactly 0 and 1.
+# (, see `_child_zfaces`) gives a basis of exactly 0 and 1.
 
 function _lagrange_basis_nodes(t::AbstractVector{Float64}, x::Float64)
     n = length(t)
@@ -301,7 +301,7 @@ _dst_boxes(cd::_ShellArray, cm, loc, region) = _shell_slabs(cd)
 #     to second order, hence an option.
 #
 # θ_P < 1 only where a child violates the bound; everywhere else the values
-# are left bit for bit.
+# are left.
 
 const _LIMITERS = (:none, :positive, :monotone)
 

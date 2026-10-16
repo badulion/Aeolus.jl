@@ -191,7 +191,7 @@ end
     # `sum`, pairwise order) to rounding; ε = −ν⟨u_i ∇²u_i⟩ equals
     # ν⟨|D⁺u_i|²⟩ (summation by parts on the periodic grid: the discrete
     # Laplacian is −D⁻·D⁺) to rounding; the CFL max is the serial maximum
-    # bit for bit (max is exact); and all three are bit-identical with
+    # (max is exact); and all three are the same with
     # the serial backend and the threaded one (threshold 0).
     @testset "history reductions: the quantities they replace, thread-invariant (#400)" begin
         s = d.sim; n = length(interior_view(s.u))

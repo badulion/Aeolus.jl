@@ -8,7 +8,7 @@
 #
 # What is asserted: exact identities (Parseval, a single Fourier mode, the
 # analytic transfer functions of the filters, the discrete divergence of
-# the initial field) and the bit-for-bit refactor of the dynamic model.
+# the initial field) and the refactor of the dynamic model.
 
 using Test
 using Aeolus
@@ -19,7 +19,7 @@ using Printf
 
 # Frozen copy of `_dynamic_smagorinsky!` as it was on master (cc4a150),
 # before its test filter became `box_filter!`'s stencil sum. The refactor
-# must reproduce it bit for bit.
+# must reproduce it.
 function _legacy_dynamic_smagorinsky!(nd, ud, vd, wd, ws::Aeolus.Operators.DynamicSmagorinskyWorkspace{T}, g,
                                plane::Bool, α2, cs2max) where {T}
     Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
@@ -120,7 +120,7 @@ end
 
 @testset "Era VI — LES analysis toolbox (P54-c, #168)" begin
 
-    @testset "dynamic Smagorinsky: bit for bit after extracting the box filter" begin
+    @testset "dynamic Smagorinsky: after extracting the box filter" begin
         # The test filter of the dynamic model is now `box_filter!`'s
         # stencil sum (one source of truth). Same field, same workspace
         # layout: L_ij M_ij, M_ij M_ij, C_s² and ν_t must agree with `==`.

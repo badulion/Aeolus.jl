@@ -4,7 +4,7 @@
 # `_euler_projection!`, `_project_velocity!` and `_step_rk3!`, each a
 # sequence of single-purpose passes (zero the tendencies, advection,
 # Laplacian + axpy, ∂φ + axpy, the RK3 combinations over the storage).
-# The reference of test/ka_fusion.jl (bit for bit). Nothing here is used
+# The reference of test/ka_fusion.jl . Nothing here is used
 # by the package.
 # ---------------------------------------------------------------------------
 module LegacyFusion

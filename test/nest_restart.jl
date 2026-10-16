@@ -2,14 +2,15 @@
 # src/nesting/restart.jl (nest_state / restore_nest_state!) over the
 # structural walk of src/io/structural_state.jl.
 #
-# The assertion is **bitwise**: a parent + child pair driven the way the
+# The assertion is agreement within ROUNDOFF_RTOL (test/support/agreement.jl,
+# no bit-identity since #495): a parent + child pair driven the way the
 # model's nest engine drives an urban site (the parent window opened, the
 # child stepped by itself with subcycle_dt, the window closed: the engine's
 # internals of Aeolus.Nesting, NEST-p3 #483), checkpointed at a window
 # boundary (where the run loop checkpoints), written to disk and restored
 # into a freshly built run,
 # continues across the following window boundaries identical to the
-# uninterrupted run, bit for bit, in every field of both domains (with
+# uninterrupted run in every field of both domains (with
 # halos), the closures' memory, the parent time levels, the child's open
 # boundary buffers, the inflow generator's planes and the clocks. Adaptive
 # steps in both domains (refinement 3: about 3 child steps per parent
@@ -33,6 +34,7 @@ using Aeolus.Nesting
 using Aeolus.Fields: interior_view
 using Aeolus.TimeIntegration: CFLConstraints, adaptive_dt
 using Aeolus.BoundaryConditions: open_boundary_snapshot
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 
 const NR_θ = 300.0
 const NR_CFL = CFLConstraints(C_advective = 0.5)
@@ -113,7 +115,7 @@ end
 # a parent time level: a full array, or the halo slabs of a :shell state
 _nr_data(a) = a isa Array ? copy(a) : map(copy, Aeolus.Nesting._slabs(a))
 
-# Everything a later step reads, for the bitwise comparison.
+# Everything a later step reads, for the comparison.
 function _nr_digest(d::_NRDriver)
     run = d.run
     p, c = run.parent, run.child
@@ -133,11 +135,10 @@ function _nr_digest(d::_NRDriver)
     return out
 end
 
-_nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb && isequal(va, vb))]
+_nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb && values_agree(va, vb))]
 
-@testset "N-berlin-restart: nested run restart, bitwise (#269), $(Threads.nthreads()) thread(s)" begin
-    # the FFT plans of a fresh build must be the checkpointed run's: the
-    # estimate planner (a resumed run imports the run folder's wisdom instead)
+@testset "N-berlin-restart: nested run restart (#269), $(Threads.nthreads()) thread(s)" begin
+    # the estimate planner: plans in no time for the four builds
     fftw0 = fftw_policy().planner
     set_fftw_policy!(; planner = :estimate)
     dir = mktempdir()
@@ -180,7 +181,7 @@ _nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb &&
             @test isempty(_nr_differing(dA, dB))               # checkpointing is read-only
             diff = _nr_differing(dA, dC)
             isempty(diff) || @info "differing after the restart" diff
-            @test isempty(diff)                                # bitwise
+            @test isempty(diff)
             @test all(isfinite, interior_view(C.run.child.u)) && maximum(abs, interior_view(C.run.child.u)) < 20
             # the generator injected something, and the parent stepped
             @test any(f -> any(!iszero, inflow_perturbation(C.it, f.side)[1]), C.it.faces)

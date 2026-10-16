@@ -2,7 +2,7 @@
 # reduced to exact checksums. `test/nest_golden_gen.jl` recorded them on the
 # code before the nest hierarchy refactor (commit "NEST-g: golden snapshot
 # of NestedRun"); `era2_nest_hierarchy.jl` asserts that NestedRun, now a
-# two-domain NestHierarchy, still reproduces them bit for bit.
+# two-domain NestHierarchy, still reproduces them.
 #
 # Included by both scripts; defines `nest_golden_cases()`, a vector of
 # `name => () -> checksums::Vector{Float64}`.

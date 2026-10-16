@@ -316,7 +316,7 @@ const MT = Aeolus.MoistThermodynamics
             @test r.Δq ≈ 2.28605e-6 rtol = 1e-4
             @test abs(qx - r.Δq - saturation_specific_humidity(r.T, px)) < 1e-14
         end
-        # subsaturated, cloud-free air is returned bit-for-bit untouched
+        # subsaturated, cloud-free air is returned untouched
         r = isobaric_saturation_adjustment(290.0, 9e4, 5e-3, 0.0; q_r = 1e-3)
         @test r.Δq == 0 && r.T == 290.0
     end

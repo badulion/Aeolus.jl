@@ -125,7 +125,7 @@ const GP_MT = Aeolus.MoistThermodynamics
             # no roads: no heat
             θ1 = copy(interior_view(sim.θ))
             add_traffic_heat!(sim, CartesianIndex{2}[], Nx * Ny, dt; Q_urban = Q, ρcp = ρcp)
-            @test interior_view(sim.θ) == θ1
+            @test agree(interior_view(sim.θ), θ1)
         end
     end
 

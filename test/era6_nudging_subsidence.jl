@@ -10,7 +10,7 @@
 #   2. turbulence untouched: the nudging tendency is exactly uniform per
 #      level, and the fluctuations after one nudged step equal the
 #      un-nudged ones to round-off;
-#   3. bit for bit: GeostrophicNudging is a ProfileNudging and reproduces
+#   3.: GeostrophicNudging is a ProfileNudging and reproduces
 #      the former Berlin add_geostrophic_wind! (the 100-step test is in
 #      era6_large_scale_forcing.jl; here the type and one level);
 #   4. linear profile: −w_s Γ at every level, on a RegularGrid and on a
@@ -136,7 +136,7 @@ end
         @info @sprintf("Fluctuations after one nudged step vs un-nudged: max |Δu'| %.1e, |Δv'| %.1e, |Δw'| %.1e m/s, |Δθ'| %.1e K (the mean moved by up to %.2e K)",
                        d[:u], d[:v], d[:w], d[:θ], dm)
         # round-off of adding a level constant to non-dyadic numbers
-        # (ulp(300) = 5.7e-14), not bit for bit; see the PR note
+        # (ulp(300) = 5.7e-14), not; see the PR note
         @test d[:θ] < 1e-12
         @test d[:u] < 1e-12 && d[:v] < 1e-12 && d[:w] < 1e-12
         @test dm > 1e-4                                  # the nudging did act on the mean
@@ -156,8 +156,8 @@ end
                 v̄ += sim.v.data[sim.mesh.Hx+i, sim.mesh.Hy+j, sim.mesh.Hz+k]
             end
             ū /= 64; v̄ /= 64
-            @test interior_view(sim.tu)[3, 4, k] === -(1 / 1800.0) * (ū - 1.0)
-            @test interior_view(sim.tv)[3, 4, k] === -(1 / 1800.0) * (v̄ - 0.0)
+            @test agree(interior_view(sim.tu)[3, 4, k], -(1 / 1800.0) * (ū - 1.0))
+            @test agree(interior_view(sim.tv)[3, 4, k], -(1 / 1800.0) * (v̄ - 0.0))
         end
     end
 

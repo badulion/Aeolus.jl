@@ -6,7 +6,7 @@
 #   * the diagnosis names the non-finite field, how many values, where
 #     (index and coordinates, checked against the injected cell) and when,
 #     with the last diagnostics;
-#   * the crash checkpoint holds the last good state, bit for bit, and a
+#   * the crash checkpoint holds the last good state, and a
 #     run restarts from it;
 #   * the run stops with a BlowupError; inside with_run the session is
 #     recorded as failed and run.log keeps the diagnosis.
@@ -130,7 +130,7 @@ end
     @test all(isfinite, d[:fields][:θ])
     @test d[:extra][:crash] == true && d[:extra][:blowup_step] == 11 && d[:extra][:step] == 6
     @test d[:stepper].step == good.steps
-    # ... and a run restarts from it, bit for bit
+    # ... and a run restarts from it
     sim2 = bu_sim(; seed = 99)
     st2 = StepperState(:rk3)
     restart!(sim2, err.checkpoint; sgs = StaticSmagorinsky(0.17), stepper = st2)

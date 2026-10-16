@@ -56,7 +56,7 @@ end
         @test m.species === bio
 
         # Stokes settling is regime 1 of the droplet terminal velocity:
-        # one drag law, bit-identical for water.
+        # one drag law, the same for water.
         for r in (1e-7, 5e-7, 2e-6, 9e-6)
             @test stokes_settling_velocity(r, DEFAULT_MICRO.ρ_water) ==
                   terminal_velocity(r)

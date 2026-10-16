@@ -719,7 +719,7 @@ end
         pr[] = p
         @test all(x -> AS._ipow(x, Val(p)) === x^pr[], xs)
     end
-    # q = 6 (TENO): x³·x³ is not Base's compensated x^6 bit for bit. Three
+    # q = 6 (TENO): x³·x³ is not Base's compensated x^6. Three
     # correctly rounded multiplies bound its relative error by
     # (1+u)^4 − 1 ≈ 4u = 2 eps, i.e. ≤ 4 ulp of the result (measured:
     # 3.02 ulp on 20 000 log-normal arguments; Base's is ≤ 1 ulp). A first
@@ -743,16 +743,16 @@ end
     @info "TENO5 (q = 6) against the Base-power weights: $(ndiff) of $(length(vals)) values differ, max rel $(rel)"
     @test rel <= 1e-12
     # WENO-Z (p = 2, the default; p = 1): the scalar entry points and the
-    # descriptor path are one function, and agree bit for bit
+    # descriptor path are one function, and agree
     for p in (1, 2), v in vals[1:2000]
-        @test weno_z5_left(v...; p = p) === AS.reconstruct_left(AS.WENOZ(5, p), Tuple(v))
-        @test weno_z5_right(v...; p = p) === AS.reconstruct_right(AS.WENOZ(5, p), Tuple(v))
+        @test values_agree(weno_z5_left(v...; p = p), AS.reconstruct_left(AS.WENOZ(5, p), Tuple(v)))
+        @test values_agree(weno_z5_right(v...; p = p), AS.reconstruct_right(AS.WENOZ(5, p), Tuple(v)))
     end
     w7 = randn(rng, 7)
-    @test weno_z7_left(w7...) === AS.reconstruct_left(AS.WENOZ(7, 2), Tuple(w7))
+    @test values_agree(weno_z7_left(w7...), AS.reconstruct_left(AS.WENOZ(7, 2), Tuple(w7)))
     w8 = randn(rng, 8)
-    @test teno8_left(w8...) === AS.reconstruct_left(AS.TENO(8), Tuple(w8))
-    @test teno5_left(w8[1:5]...; q = 4) === AS.reconstruct_left(AS.TENO(5; q = 4), Tuple(w8[1:5]))
+    @test values_agree(teno8_left(w8...), AS.reconstruct_left(AS.TENO(8), Tuple(w8)))
+    @test values_agree(teno5_left(w8[1:5]...; q = 4), AS.reconstruct_left(AS.TENO(5; q = 4), Tuple(w8[1:5])))
 end
 
 @testset "KA-c: prebuilt reconstruction descriptor, allocation-free halos and limiter" begin
@@ -772,7 +772,7 @@ end
         t1 = Aeolus.Field(CellCenter(), g); t2 = Aeolus.Field(CellCenter(), g)
         advect_positive!(t1, u, v, w, ϕ, dt; scheme = name, workspace = ws)
         advect_positive!(t2, u, v, w, ϕ, dt; scheme = r, workspace = ws)
-        @test t1.data == t2.data                         # the same operator
+        @test agree(t1.data, t2.data)                         # the same operator
         advect_positive!(t2, u, v, w, ϕ, dt; scheme = r, workspace = ws)
         @test (@allocated advect_positive!(t2, u, v, w, ϕ, dt; scheme = r, workspace = ws)) == 0
     end

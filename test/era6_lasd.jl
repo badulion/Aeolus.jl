@@ -7,7 +7,7 @@
 #      5³ sum; Q^d_ij N_ij = 0 in laminar shear; the power law recovers a
 #      prescribed C²(Δ) and β = 2^φ exactly;
 #   1. scale invariance in isotropic turbulence (32³, t = 3);
-#   2. exact reduction: β forced to 1 is LASI bit for bit;
+#   2. exact reduction: β forced to 1 is LASI;
 #   3. log-law recovery in the half channel (P54-d case, P57-b 2Δ input
 #      filter), no wall damping — the headline test;
 #   5. robustness: ν_t ≥ 0, β ≥ 0.125, no NaN over 500 steps of isotropic
@@ -141,7 +141,7 @@ _geomean(β) = exp2(mean(log2, β))
         c = LagrangianDynamicSmagorinsky(g; scale_dependent = true, cadence = N)
         ref = LagrangianDynamicSmagorinsky(g; scale_dependent = true)
         advance_sgs!(c, sim, dt); advance_sgs!(ref, sim, dt)        # initialisation
-        @test sgs_state(c)[1:8] == sgs_state(ref)[1:8]
+        @test values_agree(sgs_state(c)[1:8], sgs_state(ref)[1:8])
         per = (true, true, false)
         z = zeros(size(c.I_LM))
         for n in 1:N-1                                           # transport only
@@ -219,7 +219,7 @@ _geomean(β) = exp2(mean(log2, β))
         @test_broken abs(csd / csi - 1) < 0.10
     end
 
-    @testset "2. exact reduction: β ≡ 1 is LASI bit for bit" begin
+    @testset "2. exact reduction: β ≡ 1 is LASI" begin
         sa = BoussinesqSimulation(mesh; ν = 1e-4)
         kolmogorov_field!(sa, Xoshiro(4))
         sb = deepcopy(sa)
@@ -228,10 +228,10 @@ _geomean(β) = exp2(mean(log2, β))
         for n in 1:30
             step_rk3!(sa, 0.01; sgs = a); step_rk3!(sb, 0.01; sgs = b)
         end
-        @test sa.u.data == sb.u.data && sa.w.data == sb.w.data
-        @test sa.νt.data == sb.νt.data
-        @test a.workspace.cs2 == b.workspace.cs2
-        @test a.I_LM == b.I_LM && a.I_MM == b.I_MM
+        @test agree(sa.u.data, sb.u.data) && agree(sa.w.data, sb.w.data)
+        @test agree(sa.νt.data, sb.νt.data)
+        @test values_agree(a.workspace.cs2, b.workspace.cs2)
+        @test values_agree(a.I_LM, b.I_LM) && values_agree(a.I_MM, b.I_MM)
         @test all(==(1), b.beta)
         @test maximum(b.I_QN) > 0                  # the second memory did run
         # contract: the second memory is part of the state a rejected step

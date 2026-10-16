@@ -578,7 +578,7 @@ end
 # writes the same scratch state, and calling it from a child hook is a
 # documented use: the sponge must then re-blend its target rather than
 # relax toward the hook's stage-time blend. A run whose hook calls
-# boundary_time must stay bit-identical to one whose hook does not.
+# boundary_time must stay the same as one whose hook does not.
 @testset "boundary_time from a child hook leaves the sponge target intact (#329)" begin
     rng = Xoshiro(3291)
     pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))

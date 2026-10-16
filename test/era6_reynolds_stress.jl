@@ -252,7 +252,7 @@ end
         interior_view(cc.τ[k]) .= τ0[k]
     end
     advance_sgs!(ca, simf, 600.0); advance_sgs!(cb, sim, 600.0)
-    @test all(k -> interior_view(ca.τ[k]) == interior_view(cb.τ[k]), 1:6)
+    @test all(k -> agree(interior_view(ca.τ[k]), interior_view(cb.τ[k])), 1:6)
 end
 
 @testset "5. stratification: equilibrium anisotropy against the algebraic root" begin
@@ -500,7 +500,7 @@ end
     @test half_trace(τs) > half_trace(τ0)
     @info @sprintf("  growing mode (dt·|G| = 4): one backward-Euler step e = %.2e (unrealizable), sub-stepped %.2e, exact %.2e",
                    half_trace(naive), half_trace(τs), half_trace(ex))
-    # a rejected adaptive step: the state rolls back bit for bit
+    # a rejected adaptive step: the state rolls back
     sim = rsm_flow_box(0.3; N = 8, L = 80.0)
     c = ReynoldsStressClosure(sim.mesh)
     initialize_reynolds_stress!(c, sim; e_min = 1e-3)

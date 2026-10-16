@@ -2,7 +2,7 @@
 #
 #   * the velocity-gradient helper every Era VI closure reads, and the
 #     strain stencil built from it;
-#   * the built-in closures as wrappers: bit for bit the pre-contract runs;
+#   * the built-in closures as wrappers: the pre-contract runs;
 #   * the commit cadence: advance_sgs! once per accepted step on every core,
 #     rolled back with the state when step_adaptive! rejects a step;
 #   * θ-aware closures see the current state;
@@ -20,7 +20,7 @@ using Printf
 const OPS = Aeolus.Operators
 
 # The pre-contract strain stencil (Operators._strain_at at cc4a150), kept
-# here verbatim as the bit-for-bit reference.
+# here verbatim as the reference.
 function _strain_ref(u, v, w, i, j, k, idx, idy, idz)
     S11 = (u[i+1,j,k] - u[i,j,k]) * idx
     S22 = (v[i,j+1,k] - v[i,j,k]) * idy
@@ -126,7 +126,7 @@ state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)), copy(interior_vi
 
 @testset "Era VI — SGS closure contract (P54-a, #167)" begin
 
-    @testset "velocity-gradient helper: exact on linear fields; strain bit for bit" begin
+    @testset "velocity-gradient helper: exact on linear fields; strain" begin
         dx, dy, dz = 15.625, 15.625, 6.25
         g = RegularGrid(; size = (8, 8, 8), extent = (8dx, 8dy, 8dz), halo = (2, 2, 2))
         A = [ 0.013 -0.021  0.034;
@@ -154,7 +154,7 @@ state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)), copy(interior_vi
         @test err < 1e-12
         @printf("  [gradient] linear field on (15.625, 15.625, 6.25) m: max|g − A| = %.1e s⁻¹\n", err)
 
-        # _strain_at, now built on the helper, is the pre-contract stencil bit for bit
+        # _strain_at, now built on the helper, is the pre-contract stencil
         rng = Xoshiro(167)
         for f in (u, v, w)
             f.data .= randn(rng, size(f.data))
@@ -176,17 +176,17 @@ state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)), copy(interior_vi
                 ("step_rk3!", (s, h; kw...) -> step_rk3!(s, h; kw...)),
                 ("step_imex!", (s, h; kw...) -> step_imex!(s, h, ARK2(); kw...)))
 
-    @testset "bit for bit: the wrappers reproduce the built-in and legacy runs ($name)" for (name, adv!) in steppers
+    @testset "the wrappers reproduce the built-in and legacy runs ($name)" for (name, adv!) in steppers
         run(sim, n; kw...) = (for _ in 1:n; adv!(sim, dt; kw...); end; sim)
         ref = run(decaying(C_s = 0.17), 50)                                 # built-in closure
         @test maximum(interior_view(ref.νt)) > 0
         st  = run(decaying(), 50; sgs = StaticSmagorinsky(0.17))            # C_s = 0 + closure
         leg = run(decaying(), 50; eddy_viscosity! = (νt, u, v, w) -> compute_smagorinsky_νt!(νt, u, v, w, 0.17))
         fun = run(decaying(), 50; sgs = (νt, u, v, w) -> compute_smagorinsky_νt!(νt, u, v, w, 0.17))
-        @test state(st) == state(ref)
-        @test state(leg) == state(ref)        # legacy 4-argument closure: identical u, v, w, θ
-        @test state(fun) == state(ref)
-        @test interior_view(st.κt) == interior_view(st.νt) ./ st.Pr_t
+        @test values_agree(state(st), state(ref))
+        @test values_agree(state(leg), state(ref))        # legacy 4-argument closure: identical u, v, w, θ
+        @test values_agree(state(fun), state(ref))
+        @test values_agree(interior_view(st.κt), interior_view(st.νt) ./ st.Pr_t)
         # the dynamic closure against today's eddy_viscosity! form
         ws1 = DynamicSmagorinskyWorkspace(ref.mesh); ws2 = DynamicSmagorinskyWorkspace(ref.mesh)
         dyn = run(decaying(), 50; sgs = DynamicSmagorinsky(ws1))
@@ -241,8 +241,8 @@ state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)), copy(interior_vi
         _, used2, nretry2 = step_adaptive!(s2, k; dt = h / 2, sgs = c2, body_force! = push_x!,
                                            max_velocity = cap)
         @test nretry2 == 0 && used2 == h / 2
-        @test memory(c1) == memory(c2) == (1, [h / 2])      # bitwise the direct short step
-        @test state(s1) == state(s2)
+        @test values_agree(memory(c1), memory(c2)) && values_agree(memory(c2), (1, [h / 2]))      # the direct short step
+        @test values_agree(state(s1), state(s2))
         @test c1.coef_calls == 2                               # the rejected try did evaluate
 
         # the Berlin pattern: cover h in pieces; every commit carries its piece
@@ -381,12 +381,12 @@ state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)), copy(interior_vi
         end
         cb = DynamicSmagorinsky(g); ca = DynamicSmagorinsky(g)
         compute_sgs!(cb, bq); compute_sgs!(ca, an)
-        @test interior_view(an.νt) == interior_view(bq.νt)        # same νt, bitwise
-        @test interior_view(an.κt) == interior_view(bq.κt)
+        @test values_agree(interior_view(an.νt), interior_view(bq.νt))        # same νt
+        @test values_agree(interior_view(an.κt), interior_view(bq.κt))
         @test maximum(interior_view(an.νt)) > 0
         # ... and the step runs it (νt is formed at the start of the step)
         a1 = set_uvw!(AnelasticSimulation(g; bcs = bcs)); step!(a1, 0.5; sgs = DynamicSmagorinsky(g))
-        @test interior_view(a1.νt) == interior_view(an.νt)
+        @test values_agree(interior_view(a1.νt), interior_view(an.νt))
         # built-in C_s = 0.17 ≡ StaticSmagorinsky(0.17); no closure ≡ a zero closure
         b1 = set_uvw!(AnelasticSimulation(g; bcs = bcs, C_s = 0.17))
         b2 = set_uvw!(AnelasticSimulation(g; bcs = bcs))

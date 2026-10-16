@@ -346,11 +346,11 @@ const CK_PROF = ck_file("dcbl_prof.csv", "z,theta_profile,u_profile\n100,300.0,5
     @test ch["energy_closure"]["storage"] ≈ ρ0 * DEFAULT_CONSTANTS.cp_dry * 0.24 rtol = 1e-9
     @test ch["reference_theta_mean"]["steps_in_window"] == 5 && ch["reference_theta_mean"]["window"] == [10.0, 30.0]
     @test 300.59 < ch["reference_theta_mean"]["model"] < 300.62
-    # the state is bit for bit that of the run without [checks] (the budgets the closures turn on measure only)
+    # the state is that of the run without [checks] (the budgets the closures turn on measure only)
     r0 = run_config(ck_cfg(); root = mktempdir(), allow_uncommitted = true, console = false)
     r1 = run_config(ck_cfg(sets...); root = mktempdir(), allow_uncommitted = true, console = false)
     f0 = Config.state_fields(r0.obj); f1 = Config.state_fields(r1.obj)
-    @test all(k -> bitwise_equal(f0[k], f1[k]), keys(f0))
+    @test all(k -> agree(f0[k], f1[k]), keys(f0))
     # without [checks] nothing is written
     @test !isfile(joinpath(r0.folder.path, "output", "results.toml"))
     # a failed required check: exit code 3, results.toml says which, the session is failed.
@@ -401,7 +401,7 @@ end
     sets = ["grid.size=[8,8,8]", "checks.finite={required=true}", "checks.energy_closure={required=true}",
             "checks.reference_file=\"$CK_REF\"", "checks.reference={theta_mean={required=true, window=[10.0, 60.0]}}"]
     r = resume_check(CK_DCBL; nsteps = 12, stop = 7, every_steps = 5, overrides = sets, outputs = ["results.toml"])
-    @test r.fields_equal && r.outputs_equal
+    @test r.fields_agree && r.outputs_agree
     @test r.statuses == ["interrupted", "completed"]
     @test ck_results(r.runs[2].folder.path)["checks"]["reference_theta_mean"]["steps_in_window"] == 11
 end

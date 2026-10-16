@@ -5,23 +5,22 @@
 # Acceptance tests of the issue covered here:
 #   * field for field: the site's options of "berlin_<s>.toml" equal the
 #     fixture captured from the Julia-built scenarios before SCENARIOS was
-#     deleted (test/data/config_berlin/fixture.toml), floats bitwise, and its
+# deleted (test/data/config_berlin/fixture.toml), floats, and its
 #     parent [[domain]] is the nest parent (ParentConfig) the fixture
 #     recorded, option for option (NEST-p3, #483);
 #   * one source of truth: the site's options map one to one onto the
 #     schema's options, and their defaults are the schema's;
 #   * berlin_smoke.toml run 12 steps through run_config gives the fixture's
-#     state digests (child, tracers, surface, nest parent; re-captured for
-#     NEST-p3, the parent a domain of the model, see the fixture's note);
-#   * round trip, bit-identical under ESTIMATE FFTW, nest on;
+#     state fingerprints within ROUNDOFF_RTOL (child, tracers, surface, nest
+#     parent; test/support/agreement.jl, #495);
+#   * round trip within ROUNDOFF_RTOL, nest on;
 #   * errors: an unknown provider, a parent grid of 2 integers, a parent
 #     corner that does not centre the site, an incompatible pair, an unknown
 #     per-coupling option;
 #   * the CLI: `aeolus run berlin_smoke.toml` leaves a completed run folder,
 #     and the run's ledgers close;
 #   * the case reports through the diagnostics registry (LOG-g, #338):
-#     every diagnostic evaluated at every step leaves the state bit for bit
-#     unchanged; the CSV's ledger, timing, time-stepper and dt columns equal
+#     every diagnostic evaluated at every step leaves the state unchanged; the CSV's ledger, timing, time-stepper and dt columns equal
 #     the case's own numbers; the log events are structured and carry the
 #     same values.
 
@@ -37,6 +36,7 @@ using Logging
 const BCC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
 include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
 
 const BERLIN_FIXTURE = TOML.parsefile(joinpath(@__DIR__, "data", "config_berlin", "fixture.toml"))
@@ -395,16 +395,16 @@ end
     @test length(e.problems) == 5
 end
 
-@testset "Config berlin: berlin_smoke.toml runs bit-identical to the Julia-built case, round trip, ledgers" begin
+@testset "Config berlin: berlin_smoke.toml reproduces its fingerprints, round trip, ledgers" begin
     t0 = time()
     # every diagnostic evaluated at every step (#338): the state below must
-    # still be the fixture's, bit for bit (the diagnostics only read it)
+    # still be the fixture's (the diagnostics only read it)
     r = roundtrip_check(berlin_toml("smoke"); nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
                         overrides = ["logging.diagnostics_cadence=1e-3"])
     wall = time() - t0
-    @test r.fields_equal
+    @test r.fields_agree
     isempty(r.fields_differing) || @info "fields differing in the round trip" r.fields_differing
-    @test r.diagnostics_equal && r.config_equal
+    @test r.diagnostics_agree && r.config_equal
     m = r.runs[1].obj.model
     case = urban_site(m)
     # the nest does not save its windows (the site retries its own pieces)
@@ -412,14 +412,9 @@ end
     st = berlin_state(case; parent = m.domains[1])
     # the nest is on: the parent domain's fields are compared too
     @test all(k -> k in first.(st), (:parent_θ, :parent_qv, :qv))
-    # the fixture's digests (ESTIMATE): re-recorded for the named changes of
-    # KA-m (#301, the fused-exponential saturation vapour pressure) and
-    # NEST-p3 (#483, the parent a [[domain]] of the model: see the fixture's note)
-    want = BERLIN_FIXTURE["smoke_digests"]
-    got = Dict(string(k) => digest(v) for (k, v) in st)
-    @test sort(collect(keys(got))) == sort(collect(keys(want)))
-    bad = sort!([k for k in keys(want) if get(got, k, "") != want[k]])
-    isempty(bad) || @info "state digests differing from the Julia-built smoke case" bad
+    # the fixture's fingerprints (capture_smoke_fingerprints.jl, #495)
+    bad = fingerprints_differing(st, BERLIN_FIXTURE["smoke_fingerprints"])
+    isempty(bad) || @info "state fingerprints differing from the fixture" bad
     @test isempty(bad)
     # the support copy of the state set (the fixture's capture) is the driver's
     @test collect(keys(BCC.case_state(case))) == first.(st)[1:end-6]

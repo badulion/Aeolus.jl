@@ -268,7 +268,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
         for x in (NaN, 1e30)
             _garbage_solid_faces!(sb, cellmask, x)
             fa = compute_sgs!(a, sa); fb = compute_sgs!(b, sb)
-            @test fa.νh.data == fb.νh.data && a.workspace.cs2 == b.workspace.cs2
+            @test agree(fa.νh.data, fb.νh.data) && agree(a.workspace.cs2, b.workspace.cs2)
             advance_sgs!(a, sa, dt); advance_sgs!(b, sb, dt)
             @test a.I_LM == b.I_LM && a.I_MM == b.I_MM && a.Up == b.Up && a.Wp == b.Wp
             @test a.workspace.LM == b.workspace.LM && a.workspace.MM == b.workspace.MM
@@ -285,7 +285,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
             s2 = deepcopy(sim); _garbage_solid_faces!(s2, cellmask, NaN)
             compute_dynamic_smagorinsky_νt!(na, sim.u, sim.v, sim.w; workspace = wa, averaging = av, mask = dmask)
             compute_dynamic_smagorinsky_νt!(nb, s2.u, s2.v, s2.w; workspace = wb, averaging = av, mask = dmask)
-            @test na.data == nb.data && wa.cs2 == wb.cs2
+            @test agree(na.data, nb.data) && agree(wa.cs2, wb.cs2)
             @test all(==(0), interior_view(na)[solid]) && all(==(0), wa.cs2[solid])
             @test all(c -> 0 <= c <= 0.25, wa.cs2)
         end
@@ -319,7 +319,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
         ref = deepcopy(c)
         step_rk3!(s, 1e-3; sgs = c)
         advance_sgs!(ref, s, 1e-3)                              # one commit, on the new state
-        @test sgs_state(c) == sgs_state(ref)
+        @test values_agree(sgs_state(c), sgs_state(ref))
 
         # A rejected adaptive step leaves the memory of a direct short step
         # (the forced-retry set-up of era6_sgs_closure.jl).
@@ -329,7 +329,7 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
         s1 = fresh(umax = 5e-4); c1 = LagrangianDynamicSmagorinsky(s1.mesh)
         s2 = fresh(umax = 5e-4); c2 = LagrangianDynamicSmagorinsky(s2.mesh)
         step!(s1, 1e-3; sgs = c1); step!(s2, 1e-3; sgs = c2)   # memories initialised
-        @test sgs_state(c1) == sgs_state(c2)
+        @test values_agree(sgs_state(c1), sgs_state(c2))
         m_before = sgs_state(c1)
         # a weak flow (u_rms = 5e-4): after a step dt, max|u| ≈ a·dt ± 3e-3,
         # so dt = h (0.02) fails the cap 0.75·a·h and h/2 (0.01) passes it
@@ -341,9 +341,9 @@ _lag_state(s) = (copy(s.u.data), copy(s.v.data), copy(s.w.data), copy(s.θ.data)
         _, used2, nretry2 = step_adaptive!(s2, k; dt = h / 2, sgs = c2, body_force! = push_x!,
                                            max_velocity = cap)
         @test nretry == 1 && used == h / 2 && nretry2 == 0 && used2 == h / 2
-        @test sgs_state(c1) == sgs_state(c2)
-        @test _lag_state(s1) == _lag_state(s2)
+        @test values_agree(sgs_state(c1), sgs_state(c2))
+        @test values_agree(_lag_state(s1), _lag_state(s2))
         @test sgs_state(c1)[1] != m_before[1]                  # the memory did advance
-        @printf("  [contract] forced retry: %d retry, memory == direct dt/2 run (bitwise)\n", nretry)
+        @printf("  [contract] forced retry: %d retry, memory == direct dt/2 run \n", nretry)
     end
 end

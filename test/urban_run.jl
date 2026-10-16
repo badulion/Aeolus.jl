@@ -26,7 +26,7 @@ using Aeolus.IO: read_run_toml
 
 const UC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
-include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))     # digest, berlin_state
+include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))     # berlin_state
 
 const SMALL_CITY = joinpath(@__DIR__, "data", "urban", "small_city.toml")
 
@@ -112,10 +112,11 @@ end
     @test all(a -> all(isfinite, a), values(st))
     # no static driver at all is an error, not a flat city
     @test_throws ErrorException UC.build_case(site_config(SMALL_CITY; static = nothing))
-    # run_results reads the state only: the digests do not move
-    d0 = Dict(k => digest(v) for (k, v) in pairs(UC.case_state(case)))
+    # run_results reads the state only: nothing it touches is written (an
+    # unmodified array is its copy, exactly: no arithmetic between them)
+    s0 = Dict(k => copy(v) for (k, v) in pairs(UC.case_state(case)))
     r = UC.run_results(case)
-    @test Dict(k => digest(v) for (k, v) in pairs(UC.case_state(case))) == d0
+    @test all(k -> isequal(UC.case_state(case)[k], s0[k]), keys(s0))
     @test r["budgets"]["closed"] === true
 end
 

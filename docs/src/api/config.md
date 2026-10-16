@@ -549,16 +549,15 @@ read `output/output.nc`. The channel cases of the former `sbl` run type
 (stratified, relaminarisation, collapse) are gone (maintainer decision of
 2026-10-09: no pressure-gradient forcing component).
 
-## The bit-identical round trip
+## The round trip
 
 `test/config_roundtrip_harness.jl` is the check every config migration
 uses: `roundtrip_check(path; nsteps, overrides)` runs a config through
 `run_config`, re-runs the run from its own `run.toml` (a new run), and
-compares every array of `state_fields` bitwise
-(`reinterpret(UInt64, a) == reinterpret(UInt64, b)`), `diagnostics.csv`
-outside its wall-clock column, and the two `[config]` tables. Both runs
-use `[fftw] planner = "estimate"` (the bitwise policy of #245) and the
-same thread count.
+compares every array of `state_fields` and every numeric column of
+`diagnostics.csv` (outside its machine columns) within `ROUNDOFF_RTOL`
+(`test/support/agreement.jl`, #495), and the two `[config]` tables
+exactly (they are parsed and written, not computed).
 
 ## The canonical form and `run.toml`
 

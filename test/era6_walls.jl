@@ -12,7 +12,7 @@
 #   * Stokes' first problem: U erfc(z / 2√(νt)), with GasOptics.erfc_series;
 #   * Stokes' second problem: decay length √(2ν/ω) (Schlichting 1979, §V.7);
 #   * the plane-integrated momentum budget of a 3-D random flow;
-#   * regression: `:wall` keeps its original code path bit for bit, and
+#   * regression: `:wall` keeps its original code path, and
 #     IMEX with :noslip matches the explicit steady state.
 
 using Test, Printf, Random
@@ -91,14 +91,14 @@ end
             @test lin.data[3, 3, H + 1 - h] ≈ Ub + 3.0 * (0.5 - h) * m.dz atol = 1e-14
         end
 
-        # w and cell-centred fields: exactly the ImpermeableWall halo (bitwise)
+        # w and cell-centred fields: exactly the ImpermeableWall halo
         free = FieldBoundaryConditions(:periodic, :periodic, :wall)
         for L in (FaceZ(), CellCenter())
             a = Field(L, m); b = Field(L, m)
             interior_view(a) .= randn(rng, size(interior_view(a)))
             b.data .= a.data
             fill_halos!(a, bcs); fill_halos!(b, free)
-            @test a.data == b.data
+            @test agree(a.data, b.data)
         end
     end
 
@@ -110,7 +110,7 @@ end
                                          Int, Int, L})
             @test endswith(string(meth.file), "BoundaryConditions.jl")
         end
-        # and the per-side helpers used for mixed pairs reproduce it bit for bit
+        # and the per-side helpers used for mixed pairs reproduce it
         m = wall_mesh(5)
         rng = MersenneTwister(2)
         for L in (FaceX(), FaceY(), FaceZ(), CellCenter())
@@ -119,7 +119,7 @@ end
             _fill_z!(a.data, ImpermeableWall(), ImpermeableWall(), m.Hz, m.Nz, L)
             _fill_wall_bottom!(b, ImpermeableWall(), m.Hz, L)
             _fill_wall_top!(b, ImpermeableWall(), m.Hz, m.Nz, L)
-            @test a.data == b
+            @test agree(a.data, b)
         end
         @test isempty(Test.detect_ambiguities(Aeolus.BoundaryConditions; recursive = false))
         free = FieldBoundaryConditions(:periodic, :periodic, :wall)

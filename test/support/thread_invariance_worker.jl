@@ -6,12 +6,15 @@
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
 # nested, fft, fv, pcg, multigrid, steps, radiation, hooks, columns,
 # advection, sgs) and writes
-# one line per checked quantity, `key<TAB>hash`, to OUT. The hashes are of
-# the raw bits (Float64 → UInt64), so two processes agree iff the results
-# are bit-identical. MODE is `default` (CPUBackend(): threaded when N > 1)
-# or `serial` (CPUBackend(serial = true)).
+# `key => summary` for every checked quantity to OUT (Serialization): a
+# float array as its fingerprint, a float as itself, integer data (masks,
+# iteration counts, step counts) as its hash (test/support/agreement.jl's
+# `summary_of`). The driver compares the processes within ROUNDOFF_RTOL
+# (`summaries_agree`; no bit-identity since #495): a race between threads
+# moves a result by far more than round-off. MODE is `default`
+# (CPUBackend(): threaded when N > 1) or `serial` (CPUBackend(serial = true)).
 #
-# What is hashed:
+# What is recorded:
 #   primitives  set!, interior_map! and every reduction on seeded random
 #               fields at 64×64×32 (NaN and Inf cases included);
 #   dns         a 64³ Boussinesq DNS (ν > 0, buoyancy, no SGS) from a seeded
@@ -33,7 +36,7 @@
 #               pressure-solver iteration counts per step;
 #   flagship    one dt (2 s: two adaptive steps, the second in the parent's
 #               parent's window) of the Berlin summer config (the 64×64×64
-#               Alexanderplatz run), hashed the same way;
+#               Alexanderplatz run), recorded the same way;
 #   nested      nested runs (KA-f, #297): one-way, two-way with a sponge,
 #               two-way with Orlanski outflow faces (16³ parent, 16³
 #               child at r = 2, 3 steps) and an anelastic two-way pair
@@ -92,35 +95,33 @@
 #               launches on several tasks; totals, levels, correction).
 #   radiation   (KA-n, #305) the radiosity view factors of a 16×14 city
 #               (n ≈ 600 facets), its shortwave / longwave solves through
-#               the LU cache (BLAS pinned to one thread here: LAPACK's bits
-#               depend on the BLAS thread count, docs/src/design/ka_port.md)
+#               the LU cache (BLAS at its own thread count: LAPACK rounds
+#               differently per BLAS thread count, within ROUNDOFF_RTOL)
 #               and aggregate_to_grid; gas + cloud optics and the
 #               multi-column two-stream solves of 6 columns; the cloud
 #               optical-depth field and shadow rays; a Monte-Carlo solve
 #               (12×10×10, 16 batches); 4 collision steps of 2000
 #               superdroplets in 16 cells and the sub-grid fluctuations.
 
-ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # deterministic plans (#245)
+ENV["AEOLUS_FFTW_PLANNER"] = "estimate"    # plans in no time
 using Aeolus
 using Aeolus.Fields: set!, interior_view, Field
 using Aeolus.Grids: interior
 using Random: Xoshiro, randn, rand
 using Printf
+using Serialization
 import LinearAlgebra
+include(joinpath(@__DIR__, "agreement.jl"))
 
 const OUT = ARGS[1]
 const SECTIONS = split(ARGS[2], ',')
 const MODE = length(ARGS) >= 3 ? ARGS[3] : "default"
 const BACKEND = MODE == "serial" ? CPUBackend(serial = true) : CPUBackend()
 
-const RESULTS = Pair{String,String}[]
+const RESULTS = Pair{String,Any}[]
 
-bitsof(x::AbstractArray{<:AbstractFloat}) = reinterpret(UInt64, vec(Float64.(collect(x))))
-bitsof(x::AbstractArray) = vec(collect(x))
-bitsof(x::AbstractFloat) = reinterpret(UInt64, Float64(x))
-bitsof(x) = x
-record!(key, x) = push!(RESULTS, key => string(hash(bitsof(x)); base = 16))
-record_repr!(key, x) = push!(RESULTS, key => string(hash(repr(x)); base = 16))
+record!(key, x) = push!(RESULTS, key => summary_of(x))
+record_repr!(key, x) = record!(key, x)
 
 "Every Field of `obj` (one level of its fields), by field name."
 fields_of(obj) = [(n, getfield(obj, n)) for n in fieldnames(typeof(obj))
@@ -286,7 +287,7 @@ const BC = Aeolus.Urban
 include(joinpath(@__DIR__, "berlin_configs.jl"))
 include(joinpath(@__DIR__, "smoke_matrix.jl"))
 
-function run_hashed!(label, cfg; seed = true, nsteps = nothing)
+function run_recorded!(label, cfg; seed = true, nsteps = nothing)
     m = build_config_model(cfg)
     case = urban_site(m)
     seed && seed_fog!(case, Xoshiro(127))
@@ -344,14 +345,14 @@ end
 
 function section_smoke()
     for (label, cfg) in smoke_matrix(; serial = MODE == "serial")
-        run_hashed!("smoke[$label]", cfg)
+        run_recorded!("smoke[$label]", cfg)
     end
 end
 
 function section_flagship()
     f = berlin_toml("summer")
     cfg = load_run_config(f; overrides = [site_key(f, "urban.serial") * "=" * string(MODE == "serial")])
-    run_hashed!("flagship", cfg; seed = false, nsteps = 1)
+    run_recorded!("flagship", cfg; seed = false, nsteps = 1)
 end
 
 # --------------------------------------------------------------------------
@@ -541,7 +542,7 @@ function section_columns()
     record!("columns/dry_deposition", vcat(vec(c), r))
     # aq_chem emissions: at one thread the site's own serial loop (only the
     # emitted terms added), threaded the column_sum launch (a 3-tuple per
-    # column, zeros included); equal hashes across the counts mean the two
+    # column, zeros included); agreement across the counts means the two
     # paths give the same fields and totals
     ac = BC.build_case(site_config(berlin_toml("smoke")))
     aq = BC.find_coupling(ac, :aq_chem)
@@ -549,15 +550,7 @@ function section_columns()
     with_backend(() -> BC._aq_emit!(aq, ac, 2.0), b)
     record!("columns/aq_emit", vcat(vec(BC._aq_sp(aq, :NO)), vec(BC._aq_sp(aq, :NO2)), vec(BC._aq_sp(aq, :VOC)),
                                     [aq.emitted[s] for s in (:NO, :NO2, :VOC)]))
-    # facet scenes: implicit (iterative, direct) and lagged. BLAS on one
-    # thread in every process: the scene's longwave response is an LU solve
-    # whose bits depend on the BLAS thread count, and init_threads! leaves
-    # BLAS threaded at -t 1 (it pins BLAS only when Julia runs threaded), so
-    # the -t 1 reference would differ from -t 4 for a reason that is not a
-    # Julia-thread one (measured: response hash 3b3d… with 12 BLAS threads,
-    # 517a… with 1, at -t 1 and -t 4 alike)
-    nblas = LinearAlgebra.BLAS.get_num_threads()
-    LinearAlgebra.BLAS.set_num_threads(1)
+    # facet scenes: implicit (iterative, direct) and lagged
     hm = zeros(10, 8); hm[3:4, :] .= 12; hm[7, 2:6] .= 20
     sc = Aeolus.Radiosity.build_scene(hm, 4.0, 4.0; wall_subdivisions = 2)
     vf = Aeolus.Radiosity.view_factors(sc)
@@ -572,7 +565,6 @@ function section_columns()
         record!("columns/facets[$lab]", vcat(facet_temperatures(u), [x.H for x in fl],
                                               reduce(vcat, [x.column.T for x in u.facets])))
     end
-    LinearAlgebra.BLAS.set_num_threads(nblas)
     # dynamic roughness (masked)
     WM = Aeolus.WallModels
     Nx, Ny, rr = 64, 16, 4
@@ -868,14 +860,11 @@ function section_radiation()
     record!("radiation/radiosity/nfacets", nfacets(scene))
     record!("radiation/radiosity/F", vf.F)
     record!("radiation/radiosity/F_sky", vf.F_sky)
-    nb = Aeolus.Backends.BLAS.get_num_threads()
-    Aeolus.Backends.BLAS.set_num_threads(1)
     csw, clw = RadiosityFactorCache(), RadiosityFactorCache()
     sun = solar_unit_vector((0.3, -0.4, 0.8))
     sw = solve_shortwave(scene, vf, sun; dni = 800.0, dhi = 90.0, cache = csw)
     lw = solve_longwave(scene, vf; L_sky = 320.0, cache = clw)
     lw2 = solve_longwave(scene, vf; L_sky = 330.0, cache = clw)
-    Aeolus.Backends.BLAS.set_num_threads(nb)
     record!("radiation/radiosity/sw.B", sw.radiosity)
     record!("radiation/radiosity/lw.B", lw.radiosity)
     record!("radiation/radiosity/lw2.B (cached LU)", lw2.radiosity)
@@ -1020,11 +1009,7 @@ include(joinpath(@__DIR__, "step_cases.jl"))
 section_steps() = (run_cases(); nothing)
 
 # --------------------------------------------------------------------------
-# BLAS on one thread at every count. `init_threads!` pins it only when Julia
-# runs threaded, so at -t 1 OpenBLAS keeps its own default; LAPACK's bits
-# depend on the BLAS thread count, and the Berlin radiosity solves through
-# it (bus sw/lw, the surface ledger of the smoke and flagship sections).
-init_threads!(BACKEND; blas_threads = 1)
+init_threads!(BACKEND)
 t0 = time()
 for s in SECTIONS
     ts = time()
@@ -1047,10 +1032,6 @@ for s in SECTIONS
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)
 end
-open(OUT, "w") do io
-    for (k, v) in RESULTS
-        println(io, k, '\t', v)
-    end
-end
-@printf("thread-invariance worker: -t %d %s: %d hashes in %.1f s\n",
+serialize(OUT, RESULTS)
+@printf("thread-invariance worker: -t %d %s: %d results in %.1f s\n",
         Threads.nthreads(), MODE, length(RESULTS), time() - t0)

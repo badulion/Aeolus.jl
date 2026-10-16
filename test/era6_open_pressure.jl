@@ -15,7 +15,7 @@
 #   4. CG bug regression
 #   5. variable coefficient (isothermal ρ̄) with Neumann sides
 #   6. compatibility: an incompatible source leaves the uniform residual −s̄
-#   7. default selection from the six faces; channel default bit for bit
+#   7. default selection from the six faces; channel default
 #   8. cost per solve (periodic cosine, all-Neumann DCT, multigrid)
 
 using Test
@@ -266,7 +266,7 @@ end
     # Bit for bit: the channel default is the construction of 3a23110 —
     # DCT-II along z, rfft along (x, y), the same eigenvalues, 1/(2Nz).
     # Plans use the one FFTW policy (#245), as the solver does: the same
-    # planner gives the same plans, so the comparison stays bitwise.
+    # planner gives the same plans, so the comparison stays .
     T = Float64; Nx, Ny, Nz = g.Nx, g.Ny, g.Nz
     rb = zeros(T, Nx, Ny, Nz); rb2 = similar(rb); hb = zeros(Complex{T}, Nx ÷ 2 + 1, Ny, Nz)
     pdf = FFTW.plan_r2r(rb, FFTW.REDFT10, 3; flags = fftw_planner_flags())

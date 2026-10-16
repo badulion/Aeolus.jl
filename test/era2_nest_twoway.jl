@@ -17,7 +17,7 @@ using Aeolus.Fields: interior_view
 #      parent (step!, Smagorinsky, molecular diffusion), with the negative
 #      control without refluxing; SSP-RK3 cores; an anelastic pair (∫ρ̄θ);
 #   2. relaxation: (1 − Δt/τ)ⁿ decay, e-folding = τ, τ = Δt replaces;
-#   3. masks: buffer, canopy restriction and inflow band are bit-identical
+#   3. masks: buffer, canopy restriction and inflow band are the same
 #      to feedback off, the rest is changed;
 #   4. idempotence of the feedback;
 #   5. one-way against two-way with a child-only heat source Q;
@@ -482,8 +482,8 @@ end
 # 3. Masks. From the same state, one parent step one-way and one two-way:
 #    the covered parent cells in the buffer (2 cells), below z_anterp (the
 #    lowest 2 covered layers) and in the inflow band (4 cells at the west
-#    face) are bit-identical to feedback off, the others are changed.
-@testset "masks: buffer, canopy restriction, inflow band bit-identical to feedback off" begin
+# face) are the same as feedback off, the others are changed.
+@testset "masks: buffer, canopy restriction, inflow band the same as feedback off" begin
     fb = TwoWayFeedback(; buffer = 2, z_anterp = 600.0, exclude_width = 4,
                         exclude_sides = (:west,), reproject = false)
     p1, c1, nest, run1, _ = _tw_box(; moist = true, feedback = :one_way, ν = 0.0)
@@ -565,7 +565,7 @@ end
 #    a heat source Q = 50 MW in a block of child cells (a source the parent
 #    does not see; ΔT of the plume ≈ Q/(ρ c_p U A) ≈ 0.07 K). SSP-RK3 in both
 #    domains (forward Euler with centred θ advection lets 2Δ noise at the
-#    child's outflow face grow to ~0.5 K by 750 s, one-way as well). One-way: the parent is bit-identical to a standalone
+# child's outflow face grow to ~0.5 K by 750 s, one-way as well). One-way: the parent is the same as a standalone
 #    run. Two-way: the heat reaches the parent through the feedback and the
 #    refluxed interface fluxes, and the parent's θ excess outside the nest
 #    is exactly Q·t/(ρc_p) minus what is still in the child.
@@ -598,7 +598,7 @@ end
     end
     ps, _, _, _ = heat_run(:standalone)
     p1, c1, nest, t = heat_run(:one_way)
-    @test p1.θ.data == ps.θ.data && p1.u.data == ps.u.data && p1.w.data == ps.w.data
+    @test agree(p1.θ.data, ps.θ.data) && agree(p1.u.data, ps.u.data) && agree(p1.w.data, ps.w.data)
     p2, c2, nest, t = heat_run(:two_way)
     pm = nest.parent_mesh; cm = nest.child_mesh
     cx, cy, cz = nest_covered_range(nest)
@@ -635,7 +635,7 @@ end
     restrict_to_parent!(ref, c.θ, nest; solid)
     restrict_state_to_parent!(p, c, nest; solid)
     cx, cy, cz = nest_covered_range(nest)
-    @test interior_view(p.θ)[cx, cy, cz] == interior_view(ref)[cx, cy, cz]
+    @test agree(interior_view(p.θ)[cx, cy, cz], interior_view(ref)[cx, cy, cz])
 end
 
 end # testset

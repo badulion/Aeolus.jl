@@ -3,7 +3,7 @@
 #
 #   1. Radiosity: the cached LU gives the bits of a refactorisation and
 #      refactorises only when F or ρ change; the threaded view-factor
-#      assembly and the column-gather `aggregate_to_grid` are bit-identical
+# assembly and the column-gather `aggregate_to_grid` are the same
 #      to the serial loops before the port (test/support/legacy_radiosity.jl)
 #      on every backend; `set_temperatures!` from a column map.
 #   2. Gas / cloud optics and the two-stream solves: the multi-column forms
@@ -28,8 +28,8 @@ include(joinpath(@__DIR__, "support", "legacy_radiosity.jl"))
 const KR_BACKENDS = ("serial" => CPUBackend(serial = true),
                      "threaded, threshold 0" => CPUBackend(threshold = 0),
                      "default" => CPUBackend())
-kr_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
-kr_same(a, b) = size(a) == size(b) && kr_bits(a) == kr_bits(b)
+kr_bits(A) = collect(Float64, A)      # a copy, compared within ROUNDOFF_RTOL (#495)
+kr_same(a, b) = size(a) == size(b) && agree(a, b)
 
 # A small city: blocks of different heights, a courtyard, open edges.
 function kr_scene(; nsub = 2)
@@ -51,7 +51,7 @@ end
 
 @testset "KA-n: radiation and stochastic modules (#305)" begin
 
-    @testset "Radiosity: view factors bit-identical to the serial pair loop" begin
+    @testset "Radiosity: view factors the same as the serial pair loop" begin
         s = kr_scene()
         F0, Fsky0 = legacy_view_factors(s)
         for (name, b) in KR_BACKENDS
@@ -201,7 +201,7 @@ end
                     @test kr_same(oc3.ssa[:, :, c], ref[c][2].ssa)
                     @test kr_same(oc3.g[:, :, c], ref[c][2].g)
                 end
-                # the single-column form on this backend: the same bits too
+                # the single-column form on this backend: the same results too
                 o1 = allocate_optics(Float64, (24,), spec)
                 compute_optics!(o1, go, cols[3]; backend = b)
                 @test kr_same(o1.τ, ref[3][1].τ)

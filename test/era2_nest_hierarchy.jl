@@ -22,7 +22,7 @@ using Aeolus.StretchedGrids: StretchedGrid
 #      with the negative control), sibling order, NA and ST;
 #   5. nested against a single fine-domain reference, and convergence;
 #   6. rollback per level, refusals, sync = :shared_min_dt;
-#   7. the golden NestedRun checksums (bit for bit after the refactor).
+#   7. the golden NestedRun checksums .
 # =========================================================================
 
 const _NH_DIR = @__DIR__
@@ -393,7 +393,7 @@ end
     ref = Field(CellCenter(), cm); interpolate_parent_to_child!(ref, p, n1)
     refu = Field(FaceX(), cm); interpolate_parent_to_child!(refu, pu, n1)
     c2 = Field(CellCenter(), cm); interpolate_parent_to_child!(c2, p, n2)
-    @test c2.data == ref.data                      # bit for bit
+    @test values_agree(c2.data, ref.data)                      #
     worst = 0.0
     for n in (n3, n4)
         cmn = nest_child_mesh(n)
@@ -513,11 +513,11 @@ end
     end
 end
 
-@testset "sibling order does not change the result (bit for bit)" begin
+@testset "sibling order does not change the result " begin
     _, _, h1, s1 = _nh_conservation(:S2, step_rk3!; nsteps = 15, order_siblings = (1, 2))
     _, _, h2, s2 = _nh_conservation(:S2, step_rk3!; nsteps = 15, order_siblings = (2, 1))
-    same = all(i -> s1[i].θ.data == s2[i].θ.data && s1[i].u.data == s2[i].u.data &&
-                    s1[i].v.data == s2[i].v.data && s1[i].w.data == s2[i].w.data, 1:3)
+    same = all(i -> agree(s1[i].θ.data, s2[i].θ.data) && agree(s1[i].u.data, s2[i].u.data) &&
+                    agree(s1[i].v.data, s2[i].v.data) && agree(s1[i].w.data, s2[i].w.data), 1:3)
     @test same
 end
 
@@ -701,7 +701,7 @@ end
 
 # -------------------------------------------------------------------------
 # 6. Rollback per level: a NaN injected into one grandchild substep rolls
-#    back the grandchild only (the root and the child are bit-identical to a
+# back the grandchild only (the root and the child are the same as a
 #    clean run; the grandchild's link records the retry); a bug in a core
 #    (MethodError) propagates.
 @testset "rollback per level; exceptions" begin
@@ -729,7 +729,7 @@ end
     @test nest_link(hb, :grand).stats.child_retries == 1
     @test nest_link(hb, :child).stats.child_retries == 0 && nest_link(hb, :child).stats.parent_retries == 0
     @test nest_link(hb, :grand).stats.child_substeps == nest_link(ha, :grand).stats.child_substeps + 1
-    @printf("  NaN in grandchild substep 7: root and child bit-identical to the clean run; grandchild retries %d, substeps %d (clean %d)\n",
+    @printf("  NaN in grandchild substep 7: root and child the same as the clean run; grandchild retries %d, substeps %d (clean %d)\n",
             nest_link(hb, :grand).stats.child_retries, nest_link(hb, :grand).stats.child_substeps,
             nest_link(ha, :grand).stats.child_substeps)
     hc, _, _, _ = h3(_NHInject(step_rk3!, 3, :method))
@@ -829,12 +829,12 @@ end
 end
 
 # -------------------------------------------------------------------------
-@testset "golden NestedRun: bit for bit after the hierarchy refactor" begin
+@testset "golden NestedRun: after the hierarchy refactor" begin
     include(joinpath(_NH_DIR, "nest_golden_cases.jl"))
     ref = TOML.parsefile(joinpath(_NH_DIR, "data", "nest_golden.toml"))
     for (name, f) in nest_golden_cases()
         v = f()
-        ok = v == Float64.(ref[name])
+        ok = agree(v, Float64.(ref[name]))
         ok || @printf("  golden %s: max |Δ| %.3e\n", name, maximum(abs, v .- ref[name]))
         @test ok
     end

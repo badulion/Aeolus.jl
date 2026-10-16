@@ -1,36 +1,24 @@
+# The integer and class data of test/input_static.jl (exact); the computed floats are fingerprints.toml (#495).
 commit = "4318272ce00c168fbc940d75c89d32d9a2f886c1"
 threads = 4
 
 [mitte_periodic]
-F = "5dbf1ad6dd1bfba1"
-F_sky = "ad8eaf9b385b06e2"
-area = "bce184c09aac554e"
 buildings = 136
-heightmap = "05484f2916cd67a4"
 mask = "e729fea0a2cef0b8"
 nfacets = 1745
 patches = 4
 sfc = "142483fe549f1853"
-svf = "b2fa6b64bd378b5e"
 
 [mitte_sample]
-F = "4dcc9ba291ba1ab6"
-F_sky = "a259c18915dbfc23"
-area = "c6e7ff74c59555d6"
 buildings = 136
-heightmap = "49adf9ab0b9b99a5"
 mask = "dfc6a3a91cccad51"
 nfacets = 1591
 patches = 4
 sfc = "4e2cb28847ad0b03"
-svf = "7f6a79dbf1e1b302"
 
 [parent_smoke]
 counts = "1db23a8e4f06c77f"
 dx = 62.5
-h_max = "76098462c588cede"
-h_mean = "955548f457b7cff1"
-lambda_f = "44d165ce9ee8f8e4"
 nx = 16
 ny = 16
 r = 4
@@ -40,9 +28,6 @@ y0 = -812.5
 [parent_summer]
 counts = "d3b5d0e665f2dda1"
 dx = 31.25
-h_max = "1b3a9f054f4def73"
-h_mean = "88c4d6627f18a7ca"
-lambda_f = "d846eba7dc93bd26"
 nx = 192
 ny = 192
 r = 2
@@ -50,16 +35,11 @@ x0 = -3000.0
 y0 = -3000.0
 
 [smoke]
-F = "9992f2d540dd28f9"
-F_sky = "c31ee6683d4c8c64"
-area = "dfaa9fb7adef59e5"
 buildings = 322
-heightmap = "cda84ff4126fd8b5"
 mask = "9b2df891ca2cabc1"
 nfacets = 298
 patches = 132
 sfc = "3b36f2cae28a9eeb"
-svf = "fd7e613af9aa7c4b"
 
 [smoke_case]
 mask = "9b2df891ca2cabc1"
@@ -91,7 +71,6 @@ w = "a1d3de5ffb9017b3"
 
 [summer]
 buildings = 322
-heightmap = "534129e301bbbb42"
 mask = "1db6872cad3ee81d"
 patches = 132
 sfc = "1bc72e769112cd9a"

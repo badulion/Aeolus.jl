@@ -4,7 +4,7 @@
 # Validation strategy, in order of increasing strength:
 #
 #   1. *Reduction*   — with `stretching=:uniform` every new kernel must
-#      reproduce the `RegularGrid` kernel bit-for-bit. Catches sign errors,
+#      reproduce the `RegularGrid` kernel. Catches sign errors,
 #      swapped metrics and off-by-one halo indexing in one shot.
 #   2. *Dispatch*    — prove the public `Operators.∂z` façade actually
 #      lands in the StretchedGrids methods (the whole retrofit rests on it).
@@ -69,7 +69,7 @@ end
         @test zfaces(u)[kf]           ≈ 0.0 atol = 0
         @test zfaces(u)[kf + SZ[3]]   ≈ EXT[3] atol = 1e-12
 
-        # znodes match RegularGrid for the uniform case. Not bit-identical:
+        # znodes match RegularGrid for the uniform case. Not the same:
         # `RegularGrid` builds its node vectors as `StepRangeLen`s, whose
         # TwicePrecision arithmetic is *more* accurate than the stored
         # `zc`/`zf` vectors' single multiply. The residual is one ulp of the

@@ -19,9 +19,10 @@ const BACKENDS = ("serial" => CPUBackend(serial = true),
                   "threaded, threshold 0" => CPUBackend(threshold = 0),
                   "default" => CPUBackend())
 
-bits(A) = reinterpret(UInt64, vec(collect(A)))
-same_bits(A, B) = size(A) == size(B) && bits(A) == bits(B)
-same_bits(a::Real, b::Real) = reinterpret(UInt64, Float64(a)) == reinterpret(UInt64, Float64(b))
+# the same computation, up to round-off (ROUNDOFF_RTOL of the field's size,
+# test/support/agreement.jl; no bit-identity since #495)
+same_bits(A, B) = size(A) == size(B) && agree(collect(A), collect(B))
+same_bits(a::Real, b::Real) = agree(Float64(a), Float64(b))
 
 # --- the loops set! ran before the port (master at a5b78cd) -----------------
 function old_set!(f, g::Function)
@@ -69,7 +70,7 @@ end
     mesh = RegularGrid(; size = (37, 29, 23), extent = (1.0, 2.0, 3.0), halo = (Hx, Hx, Hx))
     I3 = interior(mesh)
 
-    @testset "set! is bit-identical to the old loops, halos untouched ($name)" for (name, b) in BACKENDS
+    @testset "set! is the same as the old loops, halos untouched ($name)" for (name, b) in BACKENDS
         with_backend(b) do
             for loc in (CellCenter(), FaceX(), FaceY(), FaceZ())
                 g(x, y, z) = sin(3x) * exp(-y) + z^2 / 7
@@ -82,7 +83,7 @@ end
         end
     end
 
-    @testset "interior_map! (axpy) is bit-identical to the old loop ($name)" for (name, b) in BACKENDS
+    @testset "interior_map! (axpy) is the same as the old loop ($name)" for (name, b) in BACKENDS
         rng = Xoshiro(294)
         with_backend(b) do
             x = Field(mesh); y = Field(mesh)
@@ -94,7 +95,7 @@ end
             # numbers are passed through, fields indexed
             z = Field(mesh)
             interior_map!(muladd, z, 2.0, x, 1.0)
-            @test interior_view(z) == 2.0 .* interior_view(x) .+ 1.0
+            @test agree(interior_view(z), 2.0 .* interior_view(x) .+ 1.0)
             @test z.data[1, 1, 1] == 0.0
         end
     end
@@ -124,7 +125,7 @@ end
         @test v[17:4321] == 2 .* (17:4321) && count(!iszero, v) == 4321 - 16
     end
 
-    @testset "launch_weighted!: column bodies, each index once, same bits ($name)" for (name, b) in BACKENDS
+    @testset "launch_weighted!: column bodies, each index once, same results ($name)" for (name, b) in BACKENDS
         # KA-h (#298): a body that loops over a column itself; the weight
         # only changes how the work is split, never the result
         Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
@@ -170,7 +171,7 @@ end
         for (name, b) in BACKENDS
             p = zeros(length(kr))
             plane_partials!(p, b, identity, I3, A)
-            @test same_bits(p, parts)                       # the documented order, bit for bit
+            @test same_bits(p, parts)                       # the documented order
             @test same_bits(interior_sum(b, A, I3), refsum)
             @test same_bits(interior_dot(b, A, B, I3), interior_dot(BACKENDS[1][2], A, B, I3))
             @test same_bits(interior_max(b, A, I3), maximum(view(A, I3...)))
@@ -215,7 +216,7 @@ end
         @test same_bits(view(C, I3...), view(A, I3...) .+ 0.25 .* view(A, I3...))
         q3 = zeros(length(kr)); plane_partials!(q3, b, a -> 0.25 * a, I3, A)
         @test same_bits(dC, q3)
-        # interior-sized views with axes ranges: the same bits as the halo arrays
+        # interior-sized views with axes ranges: the same results as the halo arrays
         V = view(A, I3...)
         @test same_bits(plane_reduce!(p, b, (i, j, k, V) -> (@inbounds V[i, j, k]), axes(V), V), parts)
         # range_max: exact, so equal to Base's maximum; NaN-propagating

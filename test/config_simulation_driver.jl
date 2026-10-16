@@ -1,17 +1,17 @@
-# The model's run from a config and the bit-identical round trip (CFG-b,
+# The model's run from a config and the the same round trip (CFG-b,
 # #357; the schema-2 sections, ONE-b #451):
 # src/config/simulation_driver.jl, src/config/drivers.jl,
 # test/config_roundtrip_harness.jl.
 #
 # Acceptance tests of the issue covered here:
-#   * round trip, bit-identical under ESTIMATE FFTW: each of the three
+#   * round trip, the same under ESTIMATE FFTW: each of the three
 #     shipped bare configs, 20 steps at 16³, re-run from its run.toml;
 #   * the same run as the hand-built simulation: the TGV of
-#     taylor_green_vortex.toml equals, bit for bit after 50 steps at 32³,
+# taylor_green_vortex.toml equals after 50 steps at 32³,
 #     the simulation examples/taylor_green_vortex.jl built in code before
 #     it became a config (its code is captured below), and its kinetic
 #     energy decays at the analytic viscous rate 2νk²;
-#   * resume bitwise: 20 steps with a checkpoint at step 10, interrupted at
+#   * resume : 20 steps with a checkpoint at step 10, interrupted at
 #     step 15, resumed from step 10, equal to the uninterrupted run.
 # Plus the physics each section wires in: the surface heat flux closes the
 # θ budget, the profiles and the perturbation, the anelastic core keeps
@@ -47,12 +47,12 @@ function sim_error(f)
     error("expected a ConfigError")
 end
 
-@testset "the model: round trip from run.toml is bit-identical (16³, 20 steps)" begin
+@testset "the model: round trip from run.toml is the same (16³, 20 steps)" begin
     for name in ("taylor_green_vortex", "dry_convective_bl", "buoyant_convection")
         r = roundtrip_check(cfgs(name); nsteps = 20, overrides = ["grid.size=[16,16,16]"])
-        @test r.fields_equal
+        @test r.fields_agree
         @test isempty(r.fields_differing)
-        @test r.diagnostics_equal
+        @test r.diagnostics_agree
         @test r.config_equal
         r1, r2 = r.runs
         @test r1.folder.run_id != r2.folder.run_id                   # a new run, a new folder
@@ -65,7 +65,7 @@ end
     end
 end
 
-@testset "the model: the TGV config is the hand-built TGV, bit for bit (32³, 50 steps)" begin
+@testset "the model: the TGV config is the hand-built TGV (32³, 50 steps)" begin
     # The simulation examples/taylor_green_vortex.jl built in code before it
     # became a config, captured verbatim (its dt rule: min of the convective
     # and viscous limits, shortened to T_final / ceil(T_final / dt)).
@@ -97,7 +97,7 @@ end
     res = sim_run(cfg)
     s = state_fields(res.obj)
     for (k, f) in pairs((u = sim.u, v = sim.v, w = sim.w, p = sim.p, θ = sim.θ))
-        @test bitwise_equal(s[k], f.data)
+        @test agree(s[k], f.data)
     end
     @test simulation(res.obj).t === sim.t
 end
@@ -120,7 +120,7 @@ end
     @test maximum(abs, [max_divergence(sim)]) < 1e-10
 end
 
-@testset "the model: resume from the step-10 checkpoint is bitwise the 20-step run" begin
+@testset "the model: resume from the step-10 checkpoint is the 20-step run" begin
     for (name, extra) in (("dry_convective_bl", ["grid.size=[16,16,16]"]),
                           # adaptive dt: the restored stepper state limits the first dt's growth
                           ("taylor_green_vortex", ["grid.size=[16,16,16]", "time.dt=\"adaptive\"",
@@ -141,7 +141,7 @@ end
         @test res.folder.session == 2
         @test res.obj.stepper.step == 20
         a = state_fields(full.obj); b = state_fields(res.obj)
-        @test all(k -> bitwise_equal(a[k], b[k]), keys(a))
+        @test all(k -> agree(a[k], b[k]), keys(a))
         @test simulation(res.obj).t === simulation(full.obj).t
         rec2 = read_run_toml(folder)
         @test [s["status"] for s in rec2["session"]] == ["interrupted", "completed"]
@@ -179,7 +179,7 @@ end
     @test abs(sum(δ) / length(δ)) < 0.005
     @test all(θ[:, :, k] == fill(profile_value(cfg.initial.theta, zc[k]), 16, 16) for k in above)
     # the noise comes from [run] seed: the same seed, the same field; another, another
-    @test interior_view(simulation(Config.build(SIMD, cfg)).θ) == θ
+    @test agree(interior_view(simulation(Config.build(SIMD, cfg)).θ), θ)
     cfg2 = load_run_config(cfgs("dry_convective_bl"); overrides = ["grid.size=[16,16,16]", "run.seed=2"])
     @test interior_view(simulation(Config.build(SIMD, cfg2)).θ) != θ
     # a table profile of u, and θ = theta0 when no θ profile is given

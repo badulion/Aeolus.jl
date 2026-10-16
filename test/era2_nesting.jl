@@ -170,11 +170,11 @@ end
 end
 
 # -------------------------------------------------------------------------
-# A tracer initialised equal to θ must be bit-identical to θ through every
+# A tracer initialised equal to θ must be the same as θ through every
 # operator: the field set is iterated with one code path per member, so any
 # difference would mean a member is treated differently (a missed halo
 # fill, a skipped sponge, a forgotten restriction).
-@testset "tracer equivalence: a tracer equal to θ stays bit-identical" begin
+@testset "tracer equivalence: a tracer equal to θ stays the same" begin
     Random.seed!(250_1)
     pm = RegularGrid(Float64; size=(12, 12, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.5), (0.25, 0.75), (0.25, 0.75)), (3, 2, 2);
@@ -386,7 +386,7 @@ end
 # A child face that lies on a parent face. In the face-normal direction
 # the prolongation is nodal Lagrange, and at a node the Lagrange basis is
 # exactly 0 or 1 — so with no tangential refinement the coincident child
-# face is the parent face bit for bit; with tangential refinement its
+# face is the parent face; with tangential refinement its
 # r×r face-area mean is the parent value to round-off.
 @testset "odd-ratio coincident faces (r = 3, 5) reproduce the parent face" begin
     Random.seed!(250_4)
@@ -396,7 +396,7 @@ end
         ext = ((0.3, 0.6), (0.2, 0.5), (0.4, 0.7))
         Hp = (pm.Hx, pm.Hy, pm.Hz); Hc = (3, 3, 3)
         pf = Field(loc, pm); pf.data .= 300 .+ randn(size(pf.data))
-        # (a) refinement only along the face normal: bit for bit
+        # (a) refinement only along the face normal:
         nest = nested_grid(pm, ext, ntuple(d -> d == ax ? r : 1, 3); halo=Hc)
         cf = Field(loc, nest_child_mesh(nest))
         interpolate_parent_to_child!(cf, pf, nest; order=p)
@@ -423,7 +423,7 @@ end
             @test d < 1e-15
         end
     end
-    @printf("  coincident faces: normal-only refinement max rel diff = %.1e (bitwise); isotropic r×r face mean max rel diff = %.2e\n", worst_bit, worst_mean)
+    @printf("  coincident faces: normal-only refinement max rel diff = %.1e ; isotropic r×r face mean max rel diff = %.2e\n", worst_bit, worst_mean)
 end
 
 # -------------------------------------------------------------------------
@@ -549,13 +549,13 @@ end
         @test res[:positive][2] < 1e-14 && res[:monotone][2] < 1e-14       # conservative
         # the low-level operator does not limit by default (a field may be signed)
         cd = Field(CellCenter(), cm); interpolate_parent_to_child!(cd, pf, nest; order)
-        @test cd.data == res[:none][3].data
+        @test agree(cd.data, res[:none][3].data)
         # halo-only prolongation is limited the same way
         ch = Field(CellCenter(), cm)
         interpolate_to_nest_boundary!(ch, pf, nest; order, limiter = :positive)
         @test minimum(ch.data) >= 0.0
     end
-    # away from zero the positivity limiter is inactive: bit for bit
+    # away from zero the positivity limiter is inactive:
     sm = Field(CellCenter(), pm)
     for k in axes(sm.data, 3), j in axes(sm.data, 2), i in axes(sm.data, 1)
         sm.data[i, j, k] = 300 + sin(2π * (i - pm.Hx - 0.5) / pm.Nx)
@@ -563,7 +563,7 @@ end
     a = Field(CellCenter(), cm); b = Field(CellCenter(), cm)
     interpolate_parent_to_child!(a, sm, nest; order = 5, limiter = :none)
     interpolate_parent_to_child!(b, sm, nest; order = 5, limiter = :positive)
-    @test a.data == b.data
+    @test agree(a.data, b.data)
     # the field set of a run: qv and the tracers limited, θ not
     psim = BoussinesqSimulation(pm; moisture = true)
     psim.qv.data .= pf.data .* 0.01; psim.θ.data .= 300 .+ pf.data

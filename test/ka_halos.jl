@@ -2,7 +2,7 @@
 # as launches of the per-axis halo kernels (boundary_conditions/
 # halo_kernels.jl).
 #
-#   1. bit for bit against the pre-port fill (a transcript of the plane
+#   1. within ROUNDOFF_RTOL of the pre-port fill (a transcript of the plane
 #      copies of master at 70d9f83, below) for every BC type and
 #      combination, every location, on random fields with random halos
 #      (edges and corners included), at a regular size, at uneven halos
@@ -18,16 +18,17 @@
 #      :positive / :monotone limiters, halo / interface / whole child,
 #      halo-only shells), the restrictions (volume, mass measure,
 #      solid-aware), the flux mismatch, the face flux correction and the
-#      refluxing — bit for bit against the pre-port operators
+#      refluxing — within ROUNDOFF_RTOL of the pre-port operators
 #      (test/support/legacy_nesting.jl) on every backend;
 #   6. a short one-way and two-way (with a sponge) nested run: serial =
 #      threaded, in process (across processes: the worker's `nested`
 #      section of test/thread_invariance.jl);
 #   7. SC-b (#402): the fill of a set of fields (two launches: x and y by
-#      k-planes, then z by j-rows) is bit for bit the pre-port fill of each
+#      k-planes, then z by j-rows) is the pre-port fill (within ROUNDOFF_RTOL) of each
 #      field, for every BC type and every chunking of the planes and rows.
 
 using Test
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 using Random: Xoshiro, randn
 using Aeolus
 using Aeolus.Grids: FaceX, FaceY, FaceZ, CellCenter, Location
@@ -39,7 +40,7 @@ using Aeolus.BoundaryConditions: Periodic, NoFlux, ImpermeableWall, NoSlipWall, 
 const KH_BACKENDS = ("serial" => CPUBackend(serial = true),
                      "threaded, threshold 0" => CPUBackend(threshold = 0),
                      "default" => CPUBackend())
-kh_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
+kh_bits(A) = collect(Float64, A)      # a copy, compared within ROUNDOFF_RTOL (#495)
 
 # The pre-port fill (master at 70d9f83), transcribed: test/support/legacy_halos.jl.
 isdefined(@__MODULE__, :LegacyHalos) || include(joinpath(@__DIR__, "support", "legacy_halos.jl"))
@@ -97,7 +98,7 @@ function kh_compare(f, bcs, init)
         with_backend(b) do
             fill_halos!(f, bcs)
         end
-        ok &= kh_bits(f.data) == kh_bits(ref.data)
+        ok &= agree(f.data, ref.data)
     end
     return ok
 end
@@ -107,7 +108,7 @@ end
               ("9×7×6, H = (2, 4, 3)", RegularGrid(size = (9, 7, 6), extent = (0.9, 0.7, 0.6), halo = (2, 4, 3))),
               ("5×1×2, H = 3 (N < H)", RegularGrid(size = (5, 1, 2), extent = (0.5, 0.1, 0.2), halo = (3, 3, 3))))
 
-    @testset "bit for bit with the pre-port fill: $mlab" for (mlab, m) in meshes
+    @testset "the pre-port fill: $mlab" for (mlab, m) in meshes
         rng = Xoshiro(297)
         n = 0
         for (lab, bcs) in kh_closed_cases(m), loc in KH_LOCS
@@ -133,7 +134,7 @@ end
                 n += 1
             end
         end
-        @info "KA-f halos, $mlab: $n fills bit-identical to the pre-port loops on $(length(KH_BACKENDS)) backends"
+        @info "KA-f halos, $mlab: $n fills agreeing with the pre-port loops on $(length(KH_BACKENDS)) backends"
     end
 
     @testset "gradient top on a stretched grid" begin
@@ -186,7 +187,7 @@ end
                 n = size(ref, ax) - 2
                 kind === :periodic ? LegacyHalos.periodic!(ref, ax, 1, n) : LegacyHalos.mirror!(ref, ax, 1, n)
             end
-            @test kh_bits(φ) == kh_bits(ref)
+            @test agree(φ, ref)
         end
     end
 
@@ -207,7 +208,7 @@ end
         @test (@allocated Aeolus.Multigrid._fill_halo!(φ, :periodic, :neumann, :periodic)) == 0
     end
 
-    @testset "nesting transfer operators: bit for bit with the pre-port loops" begin
+    @testset "nesting transfer operators: the pre-port loops" begin
         pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
         nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.625), (0.0, 0.5)), 2; halo = (3, 3, 3))
         cm = nest_child_mesh(nest)
@@ -221,7 +222,7 @@ end
             for (_, b) in KH_BACKENDS
                 dst.data .= init
                 with_backend(() -> new!(dst), b)
-                ok &= kh_bits(dst.data) == kh_bits(ref.data)
+                ok &= agree(dst.data, ref.data)
             end
             return ok
         end
@@ -255,7 +256,7 @@ end
             loc isa CellCenter && continue
             mm = compute_nest_flux_mismatch(pf, cf, nest)
             mo = L.compute_nest_flux_mismatch(pf, cf, nest)
-            @test all(kh_bits(getfield(mm, s)) == kh_bits(getfield(mo, s)) for s in fieldnames(typeof(mm)))
+            @test all(values_agree(getfield(mm, s), getfield(mo, s)) for s in fieldnames(typeof(mm)))
             @test same(p -> apply_flux_correction!(p, mm, nest), p -> L.apply_flux_correction!(p, mm, nest),
                        pf, copy(pf.data))
             θp = Field(CellCenter(), pm); θ0 = randn(rng, size(θp.data))
@@ -283,12 +284,12 @@ end
             loc isa CellCenter && continue
             mm = compute_nest_flux_mismatch(pf, cf, nest; measure = meas)
             mo = L.compute_nest_flux_mismatch(pf, cf, nest; measure = meas)
-            @test all(kh_bits(getfield(mm, s)) == kh_bits(getfield(mo, s)) for s in fieldnames(typeof(mm)))
+            @test all(values_agree(getfield(mm, s), getfield(mo, s)) for s in fieldnames(typeof(mm)))
             @test same(p -> apply_flux_correction!(p, mm, nest; measure = meas),
                        p -> L.apply_flux_correction!(p, mm, nest; measure = meas), pf, copy(pf.data))
             n += 2
         end
-        @info "KA-f nesting: $n operator calls bit-identical to the pre-port loops on $(length(KH_BACKENDS)) backends"
+        @info "KA-f nesting: $n operator calls agreeing with the pre-port loops on $(length(KH_BACKENDS)) backends"
     end
 
     @testset "nested runs: serial = threaded" begin
@@ -318,11 +319,11 @@ end
                     [kh_bits(getproperty(s, f).data) for s in (run.child, run.parent) for f in (:u, :v, :w, :θ, :p)]
                 end
             end
-            @test res[1] == res[2]
+            @test all(agree(a, b) for (a, b) in zip(res[1], res[2]))
         end
     end
 
-    @testset "SC-b: set fills, by planes then rows, bit for bit (#402)" begin
+    @testset "SC-b: set fills, by planes then rows (#402)" begin
         BCm = Aeolus.BoundaryConditions
         for (mlab, m) in meshes
             rng = Xoshiro(402)
@@ -342,7 +343,7 @@ end
                     LegacyHalos.legacy_fill!(r, b; key = f.data)
                     kh_bits(r.data)
                 end
-                same() = all(kh_bits(f.data) == r for (f, r) in zip(fs, ref))
+                same() = all(agree(f.data, r) for (f, r) in zip(fs, ref))
                 # every chunking, including more chunks than planes or rows
                 for nc in (1, 2, 5, 3 + size(fs[1].data, 3))
                     foreach((f, x) -> f.data .= x, fs, init)
@@ -358,7 +359,7 @@ end
                 end
                 n += 1
             end
-            @info "SC-b set fills, $mlab: $n BC cases × 4 locations bit-identical to the pre-port loops"
+            @info "SC-b set fills, $mlab: $n BC cases × 4 locations agreeing with the pre-port loops"
         end
         # a vector of tracers with one set of boundary conditions (each field its own key)
         for (mlab, m) in meshes
@@ -378,12 +379,12 @@ end
                 for nc in (1, 4, 3 + size(qs[1].data, 3))
                     foreach((q, x) -> q.data .= x, qs, init)
                     BCm._fill_set_threaded!(CPUBackend(), qs, bcs, nothing, nc)
-                    @test all(kh_bits(q.data) == r for (q, r) in zip(qs, ref))
+                    @test all(agree(q.data, r) for (q, r) in zip(qs, ref))
                 end
                 for (_, b) in KH_BACKENDS
                     foreach((q, x) -> q.data .= x, qs, init)
                     with_backend(() -> fill_halos!(qs, bcs), b)
-                    @test all(kh_bits(q.data) == r for (q, r) in zip(qs, ref))
+                    @test all(agree(q.data, r) for (q, r) in zip(qs, ref))
                 end
             end
         end

@@ -16,21 +16,22 @@
 #     (Base.summarysize of the feed);
 #   * errors: a face missing for an open side, a time_bc that does not
 #     cover the run (both intervals printed), a grid mismatch; a case
-#     starting at another time reads the sounding driver bitwise as the CSV;
+#     starting at another time reads the sounding driver as the CSV;
 #   * the committed case-table drivers of the SBL configs hold the case
 #     tables' forcing (GABLS3: the geostrophic wind and the advective
 #     tendencies of gabls3_case.csv; GABLS2: the subsidence and the case's
 #     surface-temperature formula), and the model reading them runs, its
-#     driver hashed under [inputs], in a bitwise round trip;
+#     driver hashed under [inputs], in a round trip;
 #   * the initial state from the sounding driver (θ(z), qv(z), p_surface,
-#     the reference state, the parent's geostrophic wind and z_i) is
-#     bitwise the CSV path on master (digests captured on master,
-#     test/data/input_dynamic/master_digests.toml), and the smoke case
+#     the reference state, the parent's geostrophic wind and z_i) is the
+#     CSV path's on master within ROUNDOFF_RTOL (its fingerprints,
+#     test/data/input_dynamic/fingerprints.toml, #495; the scalars in
+#     master_digests.toml), and the smoke case
 #     from a sounding driver matches the CSV path over 12 steps, in a
 #     round trip with the driver hashed under [inputs];
 #   * offline nest = online: the smoke child alone, 12 steps from the
 #     driver its online parent wrote (`[output] child_boundaries`), is
-#     bitwise the online one-way child, in a round trip with the driver
+#     the online one-way child within ROUNDOFF_RTOL, in a round trip with the driver
 #     hashed under [inputs];
 #   * the committed summer sounding driver is valid and holds the master
 #     ground pressure (AeolusPrep.jl reproduces it, its test/recipes.jl).
@@ -59,6 +60,8 @@ isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data
 
 const ID_DATA = joinpath(@__DIR__, "data", "input_dynamic")
 const ID_MASTER = TOML.parsefile(joinpath(ID_DATA, "master_digests.toml"))
+const ID_FP_PATH = joinpath(ID_DATA, "fingerprints.toml")
+const ID_FP = capturing_fingerprints() ? Dict{String,Any}() : TOML.parsefile(ID_FP_PATH)
 const ID_SMOKE = joinpath(berlin_configs_dir(), "berlin_smoke.toml")
 # the smoke site alone (no parent domain): the offline and the open cases
 const ID_SMOKE_SITE = joinpath(berlin_configs_dir(), "berlin_smoke_site.toml")
@@ -197,13 +200,13 @@ end
     @test occursin("aeolus_driver = \"static\", expected \"dynamic\"", errmsg(() -> read_dynamic_driver(st)))
     # a case starting at another time than the sounding driver (08 instead
     # of 06 CEST): the same series with the axis moved and the ground
-    # pressure at its own start, bitwise the CSV read in memory
+    # pressure at its own start, the CSV read in memory (within ROUNDOFF_RTOL)
     a = BCD.case_sounding(site_config(berlin_toml("summer"); start_h = 8.0))
     b = BCD.case_sounding(site_config(berlin_toml("summer"); start_h = 8.0, dynamic = nothing))
     @test a.inputs.init_time == "2019-06-29T04:00:00Z" && b.inputs.init_time == "2019-06-29T06:00:00Z"
-    @test a.t0 == b.t0 == 6 * 3600.0 && isequal(a.p_surface, b.p_surface) && a.times == b.times
+    @test a.t0 == b.t0 == 6 * 3600.0 && agree(a.p_surface, b.p_surface) && a.times == b.times
     @test all(k -> (x = getproperty(a.profiles, k); y = getproperty(b.profiles, k);
-                    x.z == y.z && x.t == y.t && isequal(x.values, y.values)), (:θ, :qv, :u, :v, :p))
+                    agree(x.z, y.z) && agree(x.t, y.t) && agree(x.values, y.values)), (:θ, :qv, :u, :v, :p))
     @test a.p_surface != BCD.case_sounding(site_config(berlin_toml("summer"))).p_surface
     # the parent-made driver offered as the initial state of a case without the offline nest
     msg = errmsg(() -> BCD.case_sounding(site_config(berlin_toml("summer"); dynamic = p)))
@@ -275,18 +278,18 @@ end
     @test forcing_value(S.w_s, 500.0, 143999.0) == 0.0 && forcing_value(S.w_s, 500.0, 150000.0) ≈ -0.0025
     @test d2.surface.temperature ≈ [(gabls2_surface_temperature_C((t + 57600) / 3600) + 273.15) * (1e5 / 97200)^0.286
                                     for t in d2.surface.t] rtol = 1e-14
-    # the model reading the GABLS3 driver: a bitwise round trip, the driver hashed under [inputs]
+    # the model reading the GABLS3 driver: a round trip, the driver hashed under [inputs]
     r = roundtrip_check(joinpath(SBL_CONFIGS, "gabls3.toml"); nsteps = 20,
                         overrides = ["grid.size=[16,16,48]", "grid.extent=[400.0,400.0,400.0]", "sponge.z_start=300.0",
                                      "checks.reference={}", "checks.reference_file=\"none\""])
-    @test r.fields_equal && r.config_equal
+    @test r.fields_agree && r.config_equal
     inp = read_run_toml(r.runs[1].folder.path)["inputs"]
     @test inp["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv("gabls3_dynamic.nc"))
 end
 
 @testset "InputDrivers dynamic: the Berlin initial state from the sounding driver = the CSV path on master" begin
     M = ID_MASTER
-    function initial_digests(cfg)
+    function initial_state(cfg)
         mesh = RegularGrid(; size = cfg.size, extent = cfg.extent, halo = cfg.halo)
         zc = [mesh.z0 + (k - 0.5) * mesh.dz for k in 1:mesh.Nz]
         zf = collect(range(0.0, 4000.0; length = 4001))
@@ -295,26 +298,26 @@ end
         # (the site's sounding wind, what the nest parent of #259 took: NEST-p3, #483)
         Ug, Vg = BCD.site_geostrophic_wind(cfg, BCD.component_options(BCD.GeostrophicCoupling, cfg))
         tz = [(z, t) for z in zf[1:40:end], t in (0.0, 17.3, 3600.0, 40000.5)]
-        return Dict{String,Any}("summer_theta_zc" => digest([θ0(0.0, 0.0, z) for z in zc]),
-            "summer_qv_zc" => digest([q0(0.0, 0.0, z) for z in zc]),
-            "summer_theta_fine" => digest([θ0(0.0, 0.0, z) for z in zf]),
-            "summer_qv_fine" => digest([q0(0.0, 0.0, z) for z in zf]),
-            "summer_p_surface" => BCD.case_surface_pressure(cfg),
-            "summer_ref_p" => digest(ref.p̄), "summer_ref_rho" => digest(ref.ρ̄),
-            "summer_ref_T" => digest(ref.T̄), "summer_ref_pi" => digest(ref.π̄),
-            "summer_zi" => BCD.initial_inversion_height(cfg), "summer_zi_max" => BCD.sounding_zi_max(cfg),
-            "summer_ug" => digest([Ug(z, t) for (z, t) in tz]), "summer_vg" => digest([Vg(z, t) for (z, t) in tz]))
+        return Dict{String,Any}("summer_theta_zc" => [θ0(0.0, 0.0, z) for z in zc],
+            "summer_qv_zc" => [q0(0.0, 0.0, z) for z in zc],
+            "summer_theta_fine" => [θ0(0.0, 0.0, z) for z in zf],
+            "summer_qv_fine" => [q0(0.0, 0.0, z) for z in zf],
+            "summer_ref_p" => ref.p̄, "summer_ref_rho" => ref.ρ̄, "summer_ref_T" => ref.T̄, "summer_ref_pi" => ref.π̄,
+            "summer_ug" => [Ug(z, t) for (z, t) in tz], "summer_vg" => [Vg(z, t) for (z, t) in tz]),
+            Dict{String,Any}("summer_p_surface" => BCD.case_surface_pressure(cfg),
+                             "summer_zi" => BCD.initial_inversion_height(cfg), "summer_zi_max" => BCD.sounding_zi_max(cfg))
     end
     file = site_config(berlin_toml("summer"))
     @test file.dynamic == joinpath(berlin_configs_dir(), "input", "berlin_20190629_dynamic.nc")
     @test BCD.case_sounding(file).inputs.attributes["dynamic_source"] == "sounding"
     for (label, cfg) in (("sounding driver", file), ("CSV in memory", site_config(berlin_toml("summer"); dynamic = nothing)))
-        got = initial_digests(cfg)
-        bad = sort!([k for (k, v) in got if !isequal(M[k], v)])
+        arrays, scalars = initial_state(cfg)
+        bad = sort!([k for (k, v) in arrays if !fixture_agree!(ID_FP, "summer_initial", k, v)])
+        append!(bad, sort!([k for (k, v) in scalars if !agree(v, M[k])]))
         isempty(bad) || @info "initial state from the $label differs from master" bad
         @test isempty(bad)
     end
-    @info @sprintf("summer initial state from the sounding driver: p_surface %.6f Pa, z_i %.0f m, max sounding z_i %.1f m (bitwise master)",
+    @info @sprintf("summer initial state from the sounding driver: p_surface %.6f Pa, z_i %.0f m, max sounding z_i %.1f m (master's)",
                    M["summer_p_surface"], M["summer_zi"], M["summer_zi_max"])
 end
 
@@ -323,7 +326,7 @@ end
     @test filesize(cc.dynamic) <= 2 * 1024^2
     @test isempty(check_driver(cc.dynamic, DYNAMIC_SCHEMA))
     NCDataset(cc.dynamic) do ds
-        @test ds["init_p_surface"].var[] == ID_MASTER["summer_p_surface"]
+        @test agree(ds["init_p_surface"].var[], ID_MASTER["summer_p_surface"])
         # made by AeolusPrep (ONE-h, #457) from the CSV in Aeolus, hashed
         @test ds.attrib["preprocessor"] == "aeolusprep dynamic --from-sounding"
         @test ds.attrib["source"] == "../data/lindenberg_10393_20190629.csv"
@@ -355,7 +358,7 @@ end
     write_sounding_driver(load_run_config(ID_SMOKE; overrides = ["domain.site.urban.sounding=\"$ID_CSV\""]), out)
     r = roundtrip_check(ID_SMOKE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
                         overrides = ["domain.site.dynamic_driver=\"$out\""])
-    @test r.fields_equal && r.diagnostics_equal && r.config_equal
+    @test r.fields_agree && r.diagnostics_agree && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
     @test rec["inputs"]["domain.site.dynamic_driver"]["fnv1a64"] == content_hash(out)
     case = urban_site(r.runs[1].obj)
@@ -375,10 +378,10 @@ end
     got = Dict(berlin_state(case; parent = r.runs[1].obj.model.domains[1]))
     @test sort(collect(keys(got))) == sort(collect(keys(want)))
     @test issubset(Symbol.(keys(ID_MASTER["smoke_sounding_state"])), keys(got))
-    bad = sort!([k for k in keys(want) if !isequal(got[k], want[k])])
+    bad = sort!([k for k in keys(want) if !agree(got[k], want[k])])
     isempty(bad) || @info "smoke from the sounding driver: fields differing from the CSV path" bad
-    @test isempty(bad) && case.clock.n == ref.clock.n && case.sim.t == ref.sim.t
-    @info @sprintf("smoke from the sounding driver: %d steps to t = %.1f s, bitwise the CSV path in %d fields",
+    @test isempty(bad) && case.clock.n == ref.clock.n && agree(case.sim.t, ref.sim.t)
+    @info @sprintf("smoke from the sounding driver: %d steps to t = %.1f s, the CSV path's in %d fields",
                    case.clock.n, case.sim.t, length(want))
 end
 
@@ -408,7 +411,7 @@ end
         plain = urban_site(pm)
         run_model!(pm)
         st_plain = Dict(berlin_state(plain))
-        @test keys(st_plain) == keys(st_on) && all(k -> isequal(st_plain[k], st_on[k]), keys(st_on))
+        @test keys(st_plain) == keys(st_on) && all(k -> agree(st_plain[k], st_on[k]), keys(st_on))
         d = read_dynamic_driver(drv; mesh = online.mesh)
         f = d.boundary
         # a record per parent step from t = 0; the last window lands on the run's end
@@ -422,7 +425,7 @@ end
         r = roundtrip_check(ID_SMOKE_SITE; nsteps = 12, nsteps_overrides = n -> ["time.nsteps=$n"],
                             overrides = ["dynamic_driver=\"$drv\"", "nesting.enabled=true",
                                          "nesting.parent_driver=\"offline\"", "inflow_turbulence.enabled=false"])
-        @test r.fields_equal && r.diagnostics_equal && r.config_equal
+        @test r.fields_agree && r.diagnostics_agree && r.config_equal
         rec = read_run_toml(r.runs[1].folder.path)
         @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv)
         off = urban_site(r.runs[1].obj)
@@ -431,11 +434,11 @@ end
         st_off = Dict(berlin_state(off))
         ks = collect(keys(st_off))
         @test Set(ks) == Set(keys(st_on))
-        bad = [k for k in ks if !isequal(st_off[k], st_on[k])]
+        bad = [k for k in ks if !agree(st_off[k], st_on[k])]
         isempty(bad) || @info "offline child differs from the online child" bad
         @test isempty(bad)
-        @test off.sim.t == online.sim.t && off.clock.n == online.clock.n
-        @info @sprintf("offline smoke child: %d steps, bitwise the online one-way child in %d fields; %d records read",
+        @test agree(off.sim.t, online.sim.t) && off.clock.n == online.clock.n
+        @info @sprintf("offline smoke child: %d steps, the online one-way child in %d fields; %d records read",
                        off.clock.n, length(ks), oc.feed.reads)
     finally
         Aeolus.Operators.set_fftw_policy!(; planner = p0.planner, threads = p0.threads)
@@ -457,7 +460,7 @@ end
     @test all(st -> st.data isa ProfileBoundaryData, open_boundary_states(a.sim))
     @test all(st -> st.data isa FileBoundaryData, open_boundary_states(b.sim))
     sa, sb = Dict(berlin_state(a)), Dict(berlin_state(b))
-    bad = [k for k in keys(sa) if !isequal(sa[k], sb[k])]
+    bad = [k for k in keys(sa) if !agree(sa[k], sb[k])]
     isempty(bad) || @info "open case from the driver's planes differs from the profile data" bad
     @test isempty(bad) && b.clock.n == a.clock.n
 end
@@ -494,7 +497,7 @@ end
     @test load_run_config(E5_CFG).domain.dynamic_driver == E5_DRIVER          # the domain's (ONE-b)
     # the round trip, the driver hashed under [inputs]
     r = roundtrip_check(E5_CFG; nsteps = 20)
-    @test r.fields_equal && r.diagnostics_equal && r.config_equal
+    @test r.fields_agree && r.diagnostics_agree && r.config_equal
     rec = read_run_toml(r.runs[1].folder.path)
     @test rec["inputs"]["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(E5_DRIVER)
     run1 = r.runs[1].obj
@@ -513,7 +516,7 @@ end
     τ = 40.0 / 3600.0
     want = [(1 - τ) * A[i, j, k] + τ * B[i, j, k] for i in pu.irange, j in pu.jrange, k in pu.krange]
     @test maximum(abs.(pu.data .- want)) < 1e-12
-    @info @sprintf("open ERA5 box over Lindenberg: 20 steps to t = %.0f s, bitwise in the round trip; θ at the west face %.2f-%.2f K, u in the box %.2f-%.2f m/s",
+    @info @sprintf("open ERA5 box over Lindenberg: 20 steps to t = %.0f s, agreeing in the round trip; θ at the west face %.2f-%.2f K, u in the box %.2f-%.2f m/s",
                    sim1.t, extrema(pu.data)..., extrema(Aeolus.Fields.interior_view(sim1.u))...)
 end
 
@@ -535,3 +538,7 @@ end
     end
     @test e3 !== nothing && occursin("preprocess", sprint(showerror, e3))
 end
+
+write_fixture(ID_FP_PATH, ID_FP; header = ["Fingerprints (test/support/agreement.jl) of the summer initial state from the",
+                                         "sounding driver (test/input_dynamic.jl), captured with",
+                                         "AEOLUS_CAPTURE_FINGERPRINTS=1 (#495); the scalars stay in master_digests.toml."])

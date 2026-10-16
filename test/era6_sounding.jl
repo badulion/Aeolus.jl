@@ -9,7 +9,7 @@
 #      profile is stable above the diagnosed z_i and well mixed below;
 #   3. every `boundary_layer_height` method on analytic profiles (mixed
 #      layer + inversion, linear stable profile); the LES half of this
-#      test (bit-for-bit z_i of the CBL harness, :parcel within 10 %) is
+# test (z_i of the CBL harness, :parcel within 10 %) is
 #      in era6_tke.jl testset 6, which already runs that LES;
 #   4. the observed z_i and surface-inversion depths, quoted, against the
 #      Lindenberg mixing-height climatology of Beyrich & Leps (2012);

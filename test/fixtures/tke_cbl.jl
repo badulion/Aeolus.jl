@@ -4,7 +4,7 @@
 # test/tke_cbl_driver.jl); the CBL itself is the model's configuration
 # examples/cbl_tke/cbl_tke.toml since ONE-l (#475), and
 # test/config_validation_cases.jl asserts that it reproduces this harness
-# bit for bit. Include it once (it defines `module TKECBL`).
+#. Include it once (it defines `module TKECBL`).
 
 module TKECBL
 

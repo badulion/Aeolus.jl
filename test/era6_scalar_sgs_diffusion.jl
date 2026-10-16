@@ -71,7 +71,7 @@ end
             @test rel <= 1e-10
             @test amp(sim.qv) < 0.75                       # it decayed
             # qv and θ obey the same equation here: identical decay
-            @test interior_view(sim.qv) == interior_view(sim.θ)
+            @test agree(interior_view(sim.qv), interior_view(sim.θ))
             @printf("  [qv] %-10s %3d steps of %.2f s, hλ = %.4f: amplitude %.4f, rel. error vs R(hλ)^n %.1e\n",
                     name, nst, h, h * λ, amp(sim.qv), rel)
         end
@@ -192,10 +192,10 @@ end
         leak = sum(interior_view(t)[fluid])
         @test leak > 1e-3
 
-        # all-false mask == unmasked kernel, bit for bit
+        # all-false mask == unmasked kernel
         t2 = Field(CellCenter(), g)
         add_eddy_diffusion_scalar!(t2, ϕ, κ; mask = falses(size(ϕ.data)))
-        @test t2.data == t.data
+        @test agree(t2.data, t.data)
 
         # masked: no flux through solid faces; check one face directly
         fill!(t.data, 0)
@@ -252,7 +252,7 @@ end
 
     @testset "5. θ and momentum unchanged" begin
         # Decaying turbulence with the built-in Smagorinsky; θ₀ = 0, so qv has
-        # no route back into the flow: u, v, w, θ are bit for bit the dry run.
+        # no route back into the flow: u, v, w, θ are the dry run.
         g = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))
         rng = Xoshiro(5)
         U, V, W, Θ = (randn(rng, 16, 16, 16) for _ in 1:4)
@@ -267,9 +267,9 @@ end
             for _ in 1:20
                 adv!(dry, 0.01); adv!(wet, 0.01)
             end
-            @test dry.u.data == wet.u.data && dry.v.data == wet.v.data &&
-                  dry.w.data == wet.w.data && dry.θ.data == wet.θ.data
-            @test dry.νt.data == wet.νt.data && dry.κt.data == wet.κt.data
+            @test agree(dry.u.data, wet.u.data) && agree(dry.v.data, wet.v.data) &&
+                  agree(dry.w.data, wet.w.data) && agree(dry.θ.data, wet.θ.data)
+            @test agree(dry.νt.data, wet.νt.data) && agree(dry.κt.data, wet.κt.data)
             @test sum(interior_view(wet.qv)) ≈ sum(Q) rtol = 1e-12
         end
     end

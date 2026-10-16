@@ -3,7 +3,7 @@
 # src/FiniteVolume.jl, the StretchedGrid / TerrainFollowingGrid stencils of
 # src/StretchedGrids.jl and the StretchedGrid copies of
 # src/stretched/boussinesq.jl, transcribed verbatim. The reference of
-# test/ka_fv.jl (bit for bit) and of the KA-d timings (old loops vs
+# test/ka_fv.jl and of the KA-d timings (old loops vs
 # launches). Nothing here is used by the package.
 # ---------------------------------------------------------------------------
 module LegacyFV
@@ -618,7 +618,7 @@ end
 # `add_eddy_diffusion_scalar!(tϕ, ϕ, κt)` (Kh = Kv = κt, s = 1, exact),
 # `add_eddy_diffusion_scalar!(tϕ, ϕ, νt, Pr_t)` (Kh = Kv = νt, s = 1/Pr_t)
 # and the diagonal `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)` (P55-c,
-# #181). With Kh === Kv the arithmetic is the pre-P55-c kernel's, bit for bit.
+# #181). With Kh === Kv the arithmetic is the pre-P55-c kernel's.
 
 _add_eddy_diffusion_scalar!(tϕ::Field{CellCenter}, ϕ::Field{CellCenter},
                             K::Field{CellCenter}, s::Real, g::RegularGrid) =
@@ -759,7 +759,7 @@ end
 #     weighted; Σ W_k tϕ_k telescopes to zero.
 #
 # Kept separate from the kernel above so the unmasked, unweighted path stays
-# bit for bit what it was.
+# what it was.
 #
 # `Kh` on the x and y faces, `Kv` on the z faces (the diagonal operator of
 # P55-c with a mask; a stability-corrected closure's κh ≠ κv, P55-e). With
@@ -1646,7 +1646,7 @@ flow crossing the tilted surface contributes to the vertical flux
 divergence, which is exactly the term the naive Cartesian formula misses.
 Because the discrete form telescopes, the pressure projection remains
 mass-conserving cell by cell. For `h ≡ 0`, `Ω ≡ w` and the kernel is
-bit-identical to the [`StretchedGrid`](@ref) one.
+the same as the [`StretchedGrid`](@ref) one.
 """
 function _divergence!(out::Field{CellCenter},
                       u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},

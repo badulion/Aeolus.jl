@@ -75,7 +75,7 @@ include("open_boundary_vortex_harness.jl")
     re = st.radiation[findfirst(p -> p.side === :east && p.name === :u, st.planes)]
     @test all(isnan, rw.c)                       # west: inflow everywhere
     @test all(c -> c > 0, re.c)                  # east: outflow everywhere
-    @test all(==(2.0), pw.data)                  # the inflow face is the data, bit for bit
+    @test all(==(2.0), pw.data)                  # the inflow face is the data
     @test all(==(300.0), ps.data)
 end
 
