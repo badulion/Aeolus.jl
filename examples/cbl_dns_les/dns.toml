@@ -75,8 +75,9 @@ dt_max = 5.0
 duration = 7200.0
 
 [output]
-# (buoyancy_production_profile and dissipation need a uniform grid: the buoyancy
-# flux is (g/θ₀) × the heat flux, which analysis.jl computes from heat_flux_profile)
+# (dissipation needs a uniform grid; the buoyancy flux is (g/θ₀) × the total
+# heat flux, which analysis.jl computes from heat_flux_profile, the surface
+# flux included)
 variables = ["theta_profile", "heat_flux_profile", "w_variance_profile", "resolved_tke_profile",
              "w", "theta", "kinetic_energy"]
 averaging = "instant"
