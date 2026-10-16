@@ -235,7 +235,13 @@ P = -⟨u'w'⟩\partial_z U - ⟨v'w'⟩\partial_z V
 (Ellison 1957). Its irreversible part is the mixing efficiency (Ivey &
 Imberger 1991). `flux_richardson` uses the resolved plus the SGS fluxes
 (``τ_{i3} = -2ν_t S_{i3}``, ``⟨w'θ'⟩_{\rm sgs} = -(ν_t/Pr_t)\partial_zθ``)
-and matches the hand values of an analytic field to ``10^{-10}``. In the
+and matches the hand values of an analytic field to ``10^{-10}``. On a
+vertically stretched grid (`StretchedGrid`) its vertical differences, and
+those of the vorticity behind `turbulent_fraction` and the `vorticity_y`
+output, span the local spacings (the per-level metrics of the Smagorinsky
+kernel, ``∂U/∂z`` over the centre heights): on a surface-refined grid
+(Δz = 10–60 m) ``P`` and ``B`` of the analytic field match to
+``7\times10^{-14}`` (#505). In the
 billow example, the cumulative ``-∫B\,dt/∫P\,dt`` of the layer is about
 0.15 through the linear stage, 0.345 at saturation and 0.394 at
 ``t = 160\,δ/U``:
