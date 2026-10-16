@@ -115,14 +115,15 @@ too; only the coefficients in solid cells change, the fluid cells are bit
 for bit those of `closure` (`smoke_check` of [`SGSAMD`](@ref)).
 
 Why AMD needs it: its buoyancy term `(g/θ₀)(δ_k∂_k w)(δ_k∂_k θ)` is divided
-by `∂_l u_m ∂_l u_m`, so `ν_t` grows like `1/|∇u|` where the velocity
-gradient vanishes while θ still varies, which is the state inside a
+by `∂_l u_m ∂_l u_m`, so as published `ν_t` grows like `1/|∇u|` where the
+velocity gradient vanishes while θ still varies, which is the state inside a
 building (IBM forces u ≈ 0, θ keeps diffusing). On `:smoke` after 24 s
 that gave `ν_t` up to 19 m²/s in solid cells against a fluid maximum of
 1.7 m²/s, which only shortened the adaptive step (24 s in 20 steps
-instead of 12). This is a property of the published model (Abkar & Moin
-2017), not of a cell being solid: a quiescent, unstably stratified fluid
-region gets the same large `ν_t`, and the mask does not touch fluid cells.
+instead of 12). The same held in quiescent stratified fluid; since #504
+the buoyancy term is weighted by `min(1, 1/Ri_∇)`, which bounds it there
+([`compute_amd_coefficients!`](@ref Aeolus.Operators.compute_amd_coefficients!)), but solid cells should carry no
+eddy coefficient at all, so the mask stays; it does not touch fluid cells.
 """
 struct SolidMaskedSGS{C<:AbstractSGSClosure, M} <: AbstractSGSClosure
     closure::C

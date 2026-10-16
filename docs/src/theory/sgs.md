@@ -1037,6 +1037,41 @@ No separate Richardson-number correction is applied: the buoyancy term is
 AMD's stratification response, and a stability wrapper (P55-e, #187) is
 not stacked on it by default.
 
+**Quiescent stratified air** (#504). The shear term of ``ν_t`` is of
+degree 1 in the velocity gradient and vanishes with it; the buoyancy term
+is of degree 1 over degree 2, so as published ``ν_t ∝ 1/|∇u|`` where the
+air is at rest and θ is stratified. A convective boundary layer started
+from rest (``Γ = 3`` K/km, ``Δx = 40`` m, ``Δz = 25`` m,
+``|u| ≈ 0.01`` m/s after the first step) got ``ν_t = 5.7·10^6`` m²/s and an
+adaptive step of ``2.4·10^{-4}`` s. The code therefore multiplies the
+buoyancy term by ``\min(1, 1/Ri_∇)``, with
+
+```math
+Ri_∇ = \frac{|g/θ_0|\,|∇θ|}{∂_l u_m\,∂_l u_m},
+```
+
+a gradient Richardson number (``|g/θ_0||∇θ| = |N^2|`` for a vertical θ
+gradient). Because ``∂_l u_m ∂_l u_m ≥ (∂_z u)^2 + (∂_z v)^2``, ``Ri_∇`` is
+at most the gradient Richardson number, and the Miles–Howard threshold of
+shear instability is ``Ri_g = 1/4``. So the published model is evaluated
+unchanged, bit for bit, wherever ``Ri_∇ ≤ 1``, which covers resolved shear
+turbulence. Where ``Ri_∇ > 1`` the buoyancy contribution is
+``C(g/θ_0)(δ_k∂_k w)(δ_k∂_k θ)/(|g/θ_0||∇θ|) ≤ Cδ_{max}^2|∇w|``, which
+vanishes with the velocity, and in every regime it is at most
+``Cδ_{max}^2 N_∇`` with ``N_∇^2 = |g/θ_0||∇θ|``. Neither Rozema et al.
+(2015) nor Abkar & Moin (2017) regularise the ratio; Oceananigans' AMD
+only guards ``∂_l u_m ∂_l u_m = 0`` and leaves its buoyancy term off by
+default as unvalidated.
+
+Measured (`test/era6_amd_vreman.jl`): on ``θ = θ_s + Γz`` with velocity
+noise of amplitude ``ε = 10^{-2}, 10^{-4}, 10^{-6}`` m/s on the 40 × 40 ×
+25 m grid, max ``ν_t`` is 0.611, 6.1·10⁻³, 6.1·10⁻⁵ m²/s (the published
+ratio: 241, 2.4·10⁴, 2.4·10⁶). On the decaying-turbulence field with
+``Γ`` set to a bulk Richardson number of 0.1, 0.53 % of the cells have
+``Ri_∇ > 1`` and ``⟨2ν_tS_{ij}S_{ij}⟩`` changes by −2.4·10⁻⁵ (relative).
+The CBL of #504 now runs at the 5 s maximum step for 100 steps
+(``ν_t`` max 0.019 m²/s at step 1).
+
 What the buoyancy term does is set by the sign of ``∂w/∂z``, not by the
 stratification alone: on ``θ = θ_s + Γz`` it is ``(g/θ_0)Δz^2(∂w/∂z)Γ``,
 which lowers ``ν_t`` where the resolved flow is compressed vertically and
