@@ -1054,7 +1054,7 @@ a gradient Richardson number (``|g/θ_0||∇θ| = |N^2|`` for a vertical θ
 gradient). Because ``∂_l u_m ∂_l u_m ≥ (∂_z u)^2 + (∂_z v)^2``, ``Ri_∇`` is
 at most the gradient Richardson number, and the Miles–Howard threshold of
 shear instability is ``Ri_g = 1/4``. So the published model is evaluated
-unchanged, bit for bit, wherever ``Ri_∇ ≤ 1``, which covers resolved shear
+unchanged (the weight is exactly 1) wherever ``Ri_∇ ≤ 1``, which covers resolved shear
 turbulence. Where ``Ri_∇ > 1`` the buoyancy contribution is
 ``C(g/θ_0)(δ_k∂_k w)(δ_k∂_k θ)/(|g/θ_0||∇θ|) ≤ Cδ_{max}^2|∇w|``, which
 vanishes with the velocity, and in every regime it is at most

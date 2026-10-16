@@ -49,7 +49,7 @@ term of `ν_num/ν_den` that does not vanish with the velocity gradient
 wherever `Ri_∇ ≤ 1`: `∂_l u_m ∂_l u_m ≥ (∂_z u)² + (∂_z v)²`, so `Ri_∇`
 is at most the gradient Richardson number, and resolved shear turbulence
 lives at `Ri_g` below about 1/4 (Miles–Howard). There the published model
-is evaluated unchanged, bit for bit. See [`compute_amd_coefficients!`](@ref).
+is evaluated unchanged (the weight is exactly 1). See [`compute_amd_coefficients!`](@ref).
 """
 @inline function _amd_point(g, gθ, d2, βg)
     S12 = 0.5 * (g[1][2] + g[2][1])

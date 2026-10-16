@@ -266,8 +266,9 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         # resolved turbulence alone. The same field with θ = θ₀ + Γz at a
         # bulk Richardson number N²/⟨∂_l u_m ∂_l u_m⟩ = 0.1 (stratified
         # turbulence; Miles–Howard 1/4 is the shear-instability threshold):
-        # against the published ratio, cells with Ri_∇ ≤ 1 are bit-identical
-        # and the AMD dissipation ⟨2ν_t S S⟩ changes by < 1 %.
+        # against the published ratio, cells with Ri_∇ ≤ 1 agree to round-off
+        # (the weight is 1 there) and the AMD dissipation ⟨2ν_t S S⟩ changes
+        # by < 1 % (measured: −2.4e-5).
         idx, idy, idz = 1 / mesh.dx, 1 / mesh.dy, 1 / mesh.dz
         d2 = (mesh.dx^2, mesh.dy^2, mesh.dz^2)
         Hs = (mesh.Hx, mesh.Hy, mesh.Hz)
@@ -292,7 +293,7 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
             weighted[i, j, k] = βs * sqrt(sum(abs2, gθ)) > D
         end
         w_in = weighted[:, :, ks]
-        @test all(νwi[:, :, ks][.!w_in] .== νpub[:, :, ks][.!w_in])
+        @test agree(νwi[:, :, ks][.!w_in], νpub[:, :, ks][.!w_in]; rtol = 1e-13)
         mS2 = magS[:, :, ks] .^ 2
         εw, εp = mean(νwi[:, :, ks] .* mS2), mean(νpub[:, :, ks] .* mS2)
         @printf("  [turbulence + Γ, bulk Ri 0.1] Ri_∇ > 1 in %.2f %% of cells; ⟨2ν_t S S⟩ weighted / published − 1 = %.2e; max |Δν_t| %.2e of max ν_t\n",
