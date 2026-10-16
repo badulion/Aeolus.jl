@@ -1,8 +1,11 @@
 # The thread-invariance harness (KA-a, #294; docs/src/design/ka_port.md).
 #
-# "Bit-for-bit" in the KernelAbstractions port means: the code gives
-# identical bits at N threads and at 1 thread (maintainer decision,
-# 2026-10-06). This file checks it at two levels.
+# The code gives the same results at N threads and at 1 thread, up to
+# round-off: within ROUNDOFF_RTOL of each field's size
+# (test/support/agreement.jl). Bit-identity is not required (maintainer
+# decision 2026-10-16, epic #493, which replaced the rule of
+# 2026-10-06); what this file catches is a race between threads, which
+# moves a result by far more than round-off. It checks at two levels.
 #
 #  1. In process (always runs, fast): the primitives and a short Boussinesq
 #     run with `CPUBackend(serial = true)` against the threaded default.
@@ -11,12 +14,13 @@
 #
 #  2. Subprocesses (opt-in, AEOLUS_THREAD_TESTS=1; maintainer decision):
 #     test/support/thread_invariance_worker.jl runs at `julia -t 1`, `-t 4`
-#     and `-t 24` (AEOLUS_THREAD_COUNTS="1,4,24") and hashes every
-#     prognostic field, the ledgers, the solver iteration counts and the dt
+#     and `-t 24` (AEOLUS_THREAD_COUNTS="1,4,24") and
+#     records every prognostic field, the ledgers, the solver iteration counts and the dt
 #     sequence of: the primitives, a 64³ DNS step, the Berlin smoke matrix
 #     (12 steps per run), one flagship step and short nested runs (KA-f).
-#     Every hash must agree with
-#     the 1-thread one; the differing keys are listed otherwise.
+#     Every result must agree with the 1-thread one (fields within
+#     ROUNDOFF_RTOL, integer data exactly); the differing keys are listed
+#     otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
 #     "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,advection,sgs";
 #     reductions: the KA-b #296 reduction call sites; nested: short nested
@@ -41,10 +45,10 @@ using Random: Xoshiro, randn
 using Aeolus
 using Aeolus.Fields: set!, interior_view
 using Aeolus.Grids: interior
+using Serialization
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 
 const TI_WORKER = joinpath(@__DIR__, "support", "thread_invariance_worker.jl")
-
-ti_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
 
 function ti_short_run(b)
     with_backend(b) do
@@ -58,12 +62,12 @@ function ti_short_run(b)
         for _ in 1:3
             step!(sim, 1e-3)
         end
-        return [ti_bits(f.data) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]
+        return [copy(f.data) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]
     end
 end
 
-"`key => hash` from a worker output file."
-ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty(l))
+"`key => summary` from a worker output file."
+ti_read(path) = Dict{String,Any}(deserialize(path))
 
 @testset "Thread invariance (KA-a, #294)" begin
     @testset "in process: serial = true vs threaded ($(Threads.nthreads()) threads)" begin
@@ -89,9 +93,9 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
                               vcat(p, vec(C)))),
                           ("range_max (NaN)", b -> range_max(b, (i, j, k, A) -> (@inbounds abs(A[i, j, k])), I3, A)))
             r1, r2 = f(ser), f(thr)
-            @test isequal(r1, r2) && (r1 isa Bool || ti_bits(r1) == ti_bits(r2))
+            @test (what, r1 isa Bool ? r1 == r2 : values_agree(r1, r2)) == (what, true)
         end
-        @test ti_short_run(ser) == ti_short_run(CPUBackend())
+        @test all(agree(a, b) for (a, b) in zip(ti_short_run(ser), ti_short_run(CPUBackend())))
     end
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
@@ -99,30 +103,30 @@ ti_read(path) = Dict(Pair(split(l, '\t')...) for l in eachline(path) if !isempty
         sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,advection,sgs")
         project = dirname(Base.active_project())
         dir = mktempdir()
-        hashes = Dict{Int,Dict{String,String}}()
+        results = Dict{Int,Dict{String,Any}}()
         @testset "subprocesses at -t $(join(counts, '/')): $sections" begin
             for n in counts
-                out = joinpath(dir, "t$n.tsv")
+                out = joinpath(dir, "t$n.jls")
                 cmd = addenv(`$(Base.julia_cmd()) -t $n --project=$project $TI_WORKER $out $sections default`,
                              "AEOLUS_FFTW_PLANNER" => "estimate")
                 t0 = time()
                 ok = success(pipeline(cmd; stdout = stdout, stderr = stderr))
                 @test ok
-                ok && (hashes[n] = ti_read(out))
-                @info "thread-invariance worker -t $n: $(ok ? length(hashes[n]) : 0) hashes, $(round(time() - t0; digits = 1)) s"
+                ok && (results[n] = ti_read(out))
+                @info "thread-invariance worker -t $n: $(ok ? length(results[n]) : 0) results, $(round(time() - t0; digits = 1)) s"
             end
-            ref = get(hashes, first(counts), nothing)
+            ref = get(results, first(counts), nothing)
             @test ref !== nothing && !isempty(ref)
             if ref !== nothing
                 for n in counts[2:end]
-                    haskey(hashes, n) || continue
-                    h = hashes[n]
+                    haskey(results, n) || continue
+                    h = results[n]
                     @test Set(keys(h)) == Set(keys(ref))
-                    diff = sort!([k for k in keys(ref) if get(h, k, "") != ref[k]])
+                    diff = sort!([k for k in keys(ref) if !(haskey(h, k) && summaries_agree(h[k], ref[k]))])
                     isempty(diff) || @error "-t $n differs from -t $(first(counts)) in $(length(diff)) of " *
-                        "$(length(ref)) hashes:\n  " * join(first(diff, 40), "\n  ")
+                        "$(length(ref)) results:\n  " * join(first(diff, 40), "\n  ")
                     @test isempty(diff)
-                    isempty(diff) && @info "-t $n == -t $(first(counts)): all $(length(ref)) hashes identical"
+                    isempty(diff) && @info "-t $n agrees with -t $(first(counts)): all $(length(ref)) results"
                 end
             end
         end
