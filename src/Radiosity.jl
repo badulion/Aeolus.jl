@@ -1787,8 +1787,12 @@ end
 function _radiosity_factorize(F::AbstractMatrix{T}, ρ::AbstractVector{T}) where {T}
     n = length(ρ)
     M = Matrix{T}(undef, n, n)
-    @inbounds for j in 1:n, i in 1:n
-        M[i, j] = (i == j ? one(T) : zero(T)) - ρ[i] * F[i, j]
+    # by columns on the Julia threads (5639 facets: 0.097 s serial, 0.033 s on
+    # 12 threads, #496)
+    Threads.@threads for j in 1:n
+        @inbounds for i in 1:n
+            M[i, j] = (i == j ? one(T) : zero(T)) - ρ[i] * F[i, j]
+        end
     end
     if istril(M)
         return istriu(M) ? Diagonal(M) : LowerTriangular(M)
