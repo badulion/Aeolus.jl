@@ -243,6 +243,25 @@ end
     @test m isa StretchedGrid
     @test m.dzc[m.Hz+1] < m.dzc[m.Hz+8] < m.dzc[m.Hz+16]
     @test max_divergence(simulation(res.obj)) < 1e-10
+    # the transition outputs on it (#505: they read mesh.dz and failed at the
+    # first write): written, and the last record is the diagnostic of the
+    # final state, through the domain's closure
+    tv = ["shear_production_profile", "buoyancy_production_profile", "turbulent_fraction_profile", "vorticity_y"]
+    res = sim_run(sim_cfg("dry_convective_bl", 4, ["grid.size=[16,16,16]", "grid.stretching=\"tanh\"",
+                                                   "grid.stretching_parameter=1.5", "output.cadence=5.0",
+                                                   "output.variables=[$(join(repr.(tv), ", "))]"]))
+    d = only(res.obj.model.domains)
+    fr = Aeolus.Components._flux_richardson(d)
+    NCDataset(joinpath(res.folder.path, "output", "output.nc")) do nc
+        P = Float64.(nc["shear_production_profile"].var[:, end])
+        B = Float64.(nc["buoyancy_production_profile"].var[:, end])
+        @test length(P) == length(B) == 16 && all(isfinite, P) && all(isfinite, B)
+        @test agree(P, fr.P; rtol = 1e-6) && agree(B, fr.B; rtol = 1e-6)      # Float32 output
+        @test size(nc["vorticity_y"].var[:, :, :, end]) == (16, 16, 16)
+        @test all(x -> 0 <= x <= 1, nc["turbulent_fraction_profile"].var[:, end])
+        # heated from below: the buoyancy flux of the lowest level is upward
+        @test B[1] > 0
+    end
     # closures: every one is the :sgs component's closure object (ONE-a: the
     # plain Smagorinsky too, no longer the core's built-in C_s); none, no component
     b(over) = Config.build(SIMD, load_run_config(cfgs("dry_convective_bl"); overrides = over))
