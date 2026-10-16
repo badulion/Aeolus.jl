@@ -467,10 +467,13 @@ LU factorisations of its two radiosity operators between calls
 reflectance ``1 - \varepsilon`` never changes, so the longwave LU is
 computed once per run. The shortwave albedos follow μ₀, so the shortwave
 operator is refactorised on every daytime call. Measured on the flagship
-scene (5639 facets, BLAS on one thread), one `:radiation` stage takes
+scene (5639 facets, BLAS on one thread), one `:radiation` stage took
 1.80 s by day (3.78 s before) and 17 ms at night (1.89 s before).
 `view_factors` at build time takes 0.83 s on one thread and 0.19 s on 12.
-The results are bit-identical to refactorising on every call. See
+Since #496 the factorisation and its solves run on
+`Backends.dense_blas_threads()` (12 on the development machine) and the
+matrix is assembled on the Julia threads: `solve_radiosity_direct` on 5639
+facets at 12 Julia threads takes 0.358 s, 1.773 s before. See
 [the kernel port](ka_port.md), section KA-n.
 
 Remeasured on master (`915bd49`: the reference-state surface pressure
