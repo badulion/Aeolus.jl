@@ -6,16 +6,12 @@ Main.AeolusTestSelection.serial_entry(@__FILE__) && exit()
 
 using Test
 using Random
-# #245: the suite plans every FFT with FFTW.ESTIMATE (deterministic, so bitwise
-# comparisons hold across processes, and planning is fast). Set before
-# `using Aeolus`; subprocesses the tests start inherit it.
+# #245: the suite plans every FFT with FFTW.ESTIMATE: planning takes no time
+# (MEASURE times candidate plans for every new size). Set before `using
+# Aeolus`; subprocesses the tests start inherit it. Results are compared
+# within tolerances, not (#495, test/support/agreement.jl).
 ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
-# #489: and every BLAS call on one thread. With one Julia thread the model
-# leaves BLAS at its default (the machine's core count), and the radiosity
-# solve's LU rounds differently per BLAS thread count, so a digest would be
-# machine-dependent; test/run.jl's workers already run OPENBLAS_NUM_THREADS=1.
-using LinearAlgebra: BLAS
-BLAS.set_num_threads(1)
+include(joinpath(@__DIR__, "support", "agreement.jl"))   # agree, fingerprints (#495): every file has them
 using Statistics: mean
 using Aeolus
 using Aeolus.Grids: xnodes, ynodes, znodes, interior
@@ -27,6 +23,7 @@ using Aeolus.Fields: set!, interior_view
 
 @testset "Aeolus.jl" begin
 
+    include("agreement.jl")      # comparing results within tolerances, not (#495)
     include("ncio.jl")           # NetCDF-4 output policy, legacy NetCDF-3 reading (#310)
     include("viz_png.jl")        # examples/viz PNG/APNG encoder: DEFLATE + filters round-trip
 
@@ -680,8 +677,8 @@ using Aeolus.Fields: set!, interior_view
     include("ka_pcg.jl")     # KA-g (#300): the one pcg! driver of the four CG solvers
     include("ka_multigrid.jl")   # KA-i (#303): multigrid kernels on launch!, canonical means
     include("ka_step.jl")    # KA-j (#306): step cores on kernels, fused CFL / step guard, per-sim workspaces
-    include("ka_fusion.jl")  # SC-d (#404): fused step-core kernels = the pre-fusion passes bit for bit; RK3 order
-    include("ka_blocking.jl")  # SC-e (#405): blocked tendency + predictor sweep of the hook-free core = the separate passes bit for bit
+    include("ka_fusion.jl")  # SC-d (#404): fused step-core kernels = the pre-fusion passes; RK3 order
+    include("ka_blocking.jl")  # SC-e (#405): blocked tendency + predictor sweep of the hook-free core = the separate passes
     include("ka_columns.jl") # KA-m (#301): column physics per column (foreach_column!), caches, ported loops
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
     include("pressure_fft_threads.jl")  # KA-h (#298): spectral solvers as kernels, FFTW thread-invariant
@@ -841,7 +838,7 @@ using Aeolus.Fields: set!, interior_view
         write_snapshot(path, sim1)
         d = read_snapshot(path)
         @test d[:t] == 42.0
-        @test d[:u] == interior_view(sim1.u) && d[:θ] == interior_view(sim1.θ)
+        @test agree(d[:u], interior_view(sim1.u)) && agree(d[:θ], interior_view(sim1.θ))
         # Maintainer decision on #245: an unversioned snapshot is refused by
         # restart! (it has no closure memory, halos or stepper state). The
         # pre-#245 expectation here (restart! from write_snapshot) is retired.
@@ -851,11 +848,11 @@ using Aeolus.Fields: set!, interior_view
         checkpoint!(sim1, path)
         restart!(sim2, path)
         @test sim2.t == 42.0
-        @test sim2.u.data == sim1.u.data && sim2.θ.data == sim1.θ.data
+        @test agree(sim2.u.data, sim1.u.data) && agree(sim2.θ.data, sim1.θ.data)
         rm(path)
     end
 
-    include("io_checkpoint.jl")   # #245: full-state checkpoints, bitwise restart, FFTW policy
+    include("io_checkpoint.jl")   # #245: full-state checkpoints restart, FFTW policy
     include("logging_core.jl")    # #333: structured events, run log, test logger
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
@@ -864,7 +861,7 @@ using Aeolus.Fields: set!, interior_view
     include("logging_step_diagnostics.jl")  # #336: per-step diagnostics in the step cores, attached monitor
     include("config_schema.jl")       # CFG-a (#356): schema, strict errors, canonical fixed point, float bits
     include("config_load.jl")         # CFG-a (#356): one file + overrides, extends/schema 1 refused, run.toml [config], inputs, common sections
-    include("config_simulation_driver.jl")  # CFG-b (#357): the model from a config, bitwise round trip, resume, TGV
+    include("config_simulation_driver.jl")  # CFG-b (#357): the model from a config round trip, resume, TGV
     include("components_pipeline.jl")  # ONE-a (#450): component interface, stage pipeline, master digests through Model
     include("budgets_output.jl")       # ONE-c (#452): the one budget system and the one output writer
     include("checks.jl")               # ONE-d (#453): in-model checks: [checks], results.toml, exit code 3
@@ -876,17 +873,17 @@ using Aeolus.Fields: set!, interior_view
     include("components_parent.jl")      # NEST-p1 (#481): the urban nest parent's physics as components, both cores
     include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
     include("glue_physics.jl")         # ONE-e (#454): the physics moved out of the urban glue into its modules
-    include("config_cases.jl")        # EX-d (#441), ONE-l (#475): the example cases = the old scripts, bit for bit
+    include("config_cases.jl")        # EX-d (#441), ONE-l (#475): the example cases = the old scripts
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
-    include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver, bitwise vs Julia-built, round trip
+    include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
     include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
-    include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays bit for bit; resume
+    include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays; resume
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"
@@ -963,7 +960,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
     include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
     include("era2_nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
-    include("nest_restart.jl")       # #269        checkpoint / restart of a nested run, bitwise (nest_state)
+    include("nest_restart.jl")       # #269 checkpoint / restart of a nested run (nest_state)
     include("era2_nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
     include("era2_nest_twoway_longrun.jl") # Phase 30 two-way long runs: CBL, neutral, vortex (#263)
     include("era2_nest_hierarchy.jl") # #328 nest hierarchies, siblings, non-aligned and stretched children
