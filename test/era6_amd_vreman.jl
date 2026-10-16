@@ -48,7 +48,9 @@ function amd_exact(A, γ, δ; C = 0.3, βg = 0.0, Pr_t = 1/3)
     S = (A + A') / 2
     P = sum(δ[k]^2 * A[i, k] * A[j, k] * S[i, j] for i in 1:3, j in 1:3, k in 1:3)
     B = βg * sum(δ[k]^2 * A[3, k] * γ[k] for k in 1:3)
-    ν = C * max(0, -P + B) / sum(abs2, A)
+    D = sum(abs2, A)
+    Ri = abs(βg) * sqrt(sum(abs2, γ)) / D               # the #504 weight min(1, 1/Ri_∇)
+    ν = C * max(0, -P + B * min(1, 1 / Ri)) / D
     Q = sum(δ[k]^2 * A[i, k] * γ[k] * γ[i] for i in 1:3, k in 1:3)
     κ = sum(abs2, γ) > 0 ? C * max(0, -Q) / sum(abs2, γ) : ν / Pr_t
     return ν, κ
@@ -163,6 +165,60 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         @test all(x -> isapprox(x, 0.3 * δ[3]^2 * 2a; rtol = 1e-12), κs[2:end])
     end
 
+    @testset "quiescent stratified air: ν_t bounded and → 0 with ∇u (#504)" begin
+        # θ = θ_s + Γz with Γ = 3 K/km and a velocity of noise amplitude ε on
+        # the CBL LES grid of #504 (Δx = 40 m, Δz = 25 m). As published, the
+        # buoyancy term (g/θ₀)(δ_k∂_k w)(δ_k∂_k θ)/(∂_l u_m ∂_l u_m) grows like
+        # 1/ε (5.7e6 m²/s in the #504 run). With the weight min(1, 1/Ri_∇)
+        # every cell obeys
+        #   ν_t ≤ C δ_max² (|∇u| + min(|∇u|, N_∇)),   N_∇² = (g/θ₀)|∇θ|,
+        # the shear part because |P| ≤ δ_max²|∇u|³, the buoyancy part by
+        # Cauchy–Schwarz on the δ-weighted product; so ν_t → 0 linearly in ε.
+        δq = (40.0, 40.0, 25.0)
+        mq = RegularGrid(; size = (16, 16, 16), extent = 16 .* δq, halo = (2, 2, 2))
+        sq = BoussinesqSimulation(mq; θ₀ = 300.0)
+        Γ, βg, C = 0.003, 9.81 / 300, 0.3
+        idx, idy, idz = 1 ./ δq
+        H = (mq.Hx, mq.Hy, mq.Hz)
+        νmax = Float64[]; fields = Array{Float64, 3}[]; npub = Float64[]
+        εs = (1e-2, 1e-4, 1e-6)
+        for ε in εs
+            rng = Xoshiro(504)
+            for f in (sq.u, sq.v, sq.w)
+                interior_view(f) .= ε .* randn(rng, 16, 16, 16)
+            end
+            interior_view(sq.θ) .= [300 + Γ * (k - 0.5) * δq[3] for i in 1:16, j in 1:16, k in 1:16]
+            foreach(f -> fill_halos!(f, sq.bcs), (sq.u, sq.v, sq.w)); fill_halos!(sq.θ, sq.θ_bcs)
+            ν = Field(CellCenter(), mq); κ = Field(CellCenter(), mq)
+            compute_amd_coefficients!(ν, κ, sq.u, sq.v, sq.w, sq.θ; buoyancy = βg)
+            νi = interior_view(ν)
+            ok = true; pub = 0.0
+            for k in 1:16, j in 1:16, i in 1:16
+                G = OPS._velocity_gradient_at(sq.u.data, sq.v.data, sq.w.data,
+                                              i + H[1], j + H[2], k + H[3], idx, idy, idz)
+                gθ = OPS._scalar_gradient_at(sq.θ.data, i + H[1], j + H[2], k + H[3], idx, idy, idz)
+                D = OPS._gsq(G); gu = sqrt(D); N = sqrt(βg * sqrt(sum(abs2, gθ)))
+                ok &= νi[i, j, k] <= C * maximum(δq)^2 * (gu + min(gu, N)) * (1 + 1e-12)
+                # the published (unweighted) ratio, for the record
+                negP = OPS._amd_point(G, gθ, δq .^ 2, 0.0)[1]
+                pub = max(pub, C * max(0, negP + βg * OPS._sdot(G[3], gθ, δq .^ 2)) / D)
+            end
+            @test ok
+            push!(νmax, maximum(νi)); push!(fields, copy(νi)); push!(npub, pub)
+        end
+        @printf("  [quiescent] Γ = 3 K/km, noise ε = %s m/s: max ν_t %s m²/s (published ratio: %s)\n",
+                join((@sprintf("%.0e", e) for e in εs), ", "),
+                join((@sprintf("%.3e", x) for x in νmax), ", "),
+                join((@sprintf("%.3e", x) for x in npub), ", "))
+        # Ri_∇ ≫ 1 in every cell here, so ν_t is homogeneous of degree 1 in ε
+        @test fields[2] ≈ 1e-2 .* fields[1] rtol = 1e-9
+        @test fields[3] ≈ 1e-4 .* fields[1] rtol = 1e-9
+        # at ε = 1 cm/s (the #504 state) below the molecular ν = 1.333 m²/s of
+        # that case, so ν_t no longer sets its diffusive step
+        @test 0 < νmax[1] < 1.0
+        @test npub[3] > 1e3 * npub[1]                                  # the published 1/ε growth
+    end
+
     @testset "Galilean invariance" begin
         rng = Xoshiro(176)
         m = RegularGrid(; size = (12, 12, 12), extent = (12δ[1], 12δ[2], 12δ[3]), halo = (2, 2, 2))
@@ -205,6 +261,44 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
                 rA, rV, mean(νa), mean(νv), mean(νs), 100 * count(==(0), νa) / length(νa))
         @test 0.6 <= rA <= 1.4
         @test 0.6 <= rV <= 1.4
+
+        # #504: the weight min(1, 1/Ri_∇) of the buoyancy term leaves AMD in
+        # resolved turbulence alone. The same field with θ = θ₀ + Γz at a
+        # bulk Richardson number N²/⟨∂_l u_m ∂_l u_m⟩ = 0.1 (stratified
+        # turbulence; Miles–Howard 1/4 is the shear-instability threshold):
+        # against the published ratio, cells with Ri_∇ ≤ 1 are bit-identical
+        # and the AMD dissipation ⟨2ν_t S S⟩ changes by < 1 %.
+        idx, idy, idz = 1 / mesh.dx, 1 / mesh.dy, 1 / mesh.dz
+        d2 = (mesh.dx^2, mesh.dy^2, mesh.dz^2)
+        Hs = (mesh.Hx, mesh.Hy, mesh.Hz)
+        Dm = mean(OPS._gsq(OPS._velocity_gradient_at(s.u.data, s.v.data, s.w.data, i + Hs[1], j + Hs[2],
+                                                     k + Hs[3], idx, idy, idz))
+                  for i in 1:32, j in 1:32, k in 1:32)
+        βs = 9.81 / 300; N2 = 0.1 * Dm; Γs = N2 / βs
+        interior_view(s.θ) .= [300 + Γs * (k - 0.5) * mesh.dz for i in 1:32, j in 1:32, k in 1:32]
+        fill_halos!(s.θ, s.θ_bcs)
+        νw = Field(CellCenter(), mesh); κw = Field(CellCenter(), mesh)
+        compute_amd_coefficients!(νw, κw, s.u, s.v, s.w, s.θ; buoyancy = βs)
+        νwi = interior_view(νw)
+        ks = 2:31                                # the periodic halos wrap the profile at 1 and 32
+        νpub = similar(νwi); weighted = falses(size(νwi))
+        for k in 1:32, j in 1:32, i in 1:32
+            G = OPS._velocity_gradient_at(s.u.data, s.v.data, s.w.data, i + Hs[1], j + Hs[2], k + Hs[3],
+                                          idx, idy, idz)
+            gθ = OPS._scalar_gradient_at(s.θ.data, i + Hs[1], j + Hs[2], k + Hs[3], idx, idy, idz)
+            D = OPS._gsq(G)
+            negP = OPS._amd_point(G, gθ, d2, 0.0)[1]
+            νpub[i, j, k] = D > 0 ? 0.3 * max(0, negP + βs * OPS._sdot(G[3], gθ, d2)) / D : 0.0
+            weighted[i, j, k] = βs * sqrt(sum(abs2, gθ)) > D
+        end
+        w_in = weighted[:, :, ks]
+        @test all(νwi[:, :, ks][.!w_in] .== νpub[:, :, ks][.!w_in])
+        mS2 = magS[:, :, ks] .^ 2
+        εw, εp = mean(νwi[:, :, ks] .* mS2), mean(νpub[:, :, ks] .* mS2)
+        @printf("  [turbulence + Γ, bulk Ri 0.1] Ri_∇ > 1 in %.2f %% of cells; ⟨2ν_t S S⟩ weighted / published − 1 = %.2e; max |Δν_t| %.2e of max ν_t\n",
+                100 * count(w_in) / length(w_in), εw / εp - 1,
+                maximum(abs, νwi[:, :, ks] .- νpub[:, :, ks]) / maximum(νpub[:, :, ks]))
+        @test abs(εw / εp - 1) < 0.01
     end
 
     @testset "on the closure contract: every core, own κ_t, conservation" begin
