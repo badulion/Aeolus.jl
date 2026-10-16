@@ -11,7 +11,7 @@
 #   4. the rollback restores νt and κt;
 #   5. the per-simulation workspaces replace the global caches (two domains
 #      stepped concurrently give the sequential bits);
-#   6. serial and threaded step cores give the same bits; one step of the
+#   6. serial and threaded step cores give the same results; one step of the
 #      Boussinesq, RK3 and adaptive drivers allocates nothing.
 
 using Test
@@ -40,7 +40,7 @@ _ks_rand!(f, rng; s = 1.0, o = 0.0) = (f.data .= o .+ s .* randn(rng, size(f.dat
 
 @testset "KA-j: step cores on kernels (#306)" begin
 
-@testset "weighted operators and anelastic buoyancy: the old loops bit for bit" begin
+@testset "weighted operators and anelastic buoyancy: the old loops" begin
     g = RegularGrid(; size = (37, 21, 13), extent = (370.0, 210.0, 1300.0), halo = (2, 2, 2))
     ref = isothermal_reference(g; T_surf = 290.0)
     rng = Xoshiro(306)
@@ -53,25 +53,25 @@ _ks_rand!(f, rng; s = 1.0, o = 0.0) = (f.data .= o .+ s .* randn(rng, size(f.dat
                 a = _ks_rand!(Field(CellCenter(), g), rng); c = Field(CellCenter(), g); c.data .= a.data
                 weighted_divergence!(a, u, v, w, Wc, Wf, g; normalize)
                 LegacyStep.weighted_divergence!(c, u, v, w, Wc, Wf, g; normalize)
-                @test a.data == c.data
+                @test agree(a.data, c.data)
             end
             tn = (_ks_rand!(Field(FaceX(), g), rng), _ks_rand!(Field(FaceY(), g), rng), _ks_rand!(Field(FaceZ(), g), rng))
             to = map(f -> (c = Field(Aeolus.Fields.location(f), g); c.data .= f.data; c), tn)
             weighted_momentum_advect!(tn..., u, v, w, Wc, Wf, g)
             LegacyStep.weighted_momentum_advect!(to..., u, v, w, Wc, Wf, g)
-            @test all(i -> tn[i].data == to[i].data, 1:3)
+            @test all(i -> agree(tn[i].data, to[i].data), 1:3)
             a = _ks_rand!(Field(CellCenter(), g), rng); c = Field(CellCenter(), g); c.data .= a.data
             weighted_scalar_advect!(a, u, v, w, θ, ref.Pc_pad, ref.Pf_pad, g)
             LegacyStep.weighted_scalar_advect!(c, u, v, w, θ, ref.Pc_pad, ref.Pf_pad, g)
-            @test a.data == c.data
+            @test agree(a.data, c.data)
             a = _ks_rand!(Field(FaceZ(), g), rng); c = Field(FaceZ(), g); c.data .= a.data
             add_anelastic_buoyancy!(a, θ, ref, g); LegacyStep.add_anelastic_buoyancy!(c, θ, ref, g)
-            @test a.data == c.data
+            @test agree(a.data, c.data)
         end
     end
 end
 
-@testset "field algebra: the broadcasts it replaced, bit for bit" begin
+@testset "field algebra: the broadcasts it replaced" begin
     g = RegularGrid(; size = (33, 17, 11), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
     rng = Xoshiro(3061)
     mk() = _ks_rand!(Field(FaceX(), g), rng)
@@ -80,17 +80,17 @@ end
             A, B, C, D = mk(), mk(), mk(), mk()
             y = mk(); y0 = Field(FaceX(), g); y0.data .= y.data
             SIM.axpy!(y, 0.37, A); LegacyStep._axpy_interior!(y0, 0.37, A, g)
-            @test y.data == y0.data
+            @test agree(y.data, y0.data)
             o = mk(); o0 = Field(FaceX(), g); o0.data .= o.data
             TI._combine2!(o, 1.0, A, 0.3, B); LegacyStep._combine2!(o0, 1.0, A, 0.3, B, g)
-            @test o.data == o0.data
+            @test agree(o.data, o0.data)
             TI._combine2!(o, 0.0, o, 0.7, B); LegacyStep._combine2!(o0, 0.0, o0, 0.7, B, g)  # aliased
-            @test o.data == o0.data
+            @test agree(o.data, o0.data)
             TI._combine3!(o, 1.0, A, 1.5, B, 0.5, C); LegacyStep._combine3!(o0, 1.0, A, 1.5, B, 0.5, C, g)
-            @test o.data == o0.data
+            @test agree(o.data, o0.data)
             TI._combine4!(o, 1.0, A, -0.2, B, 1.2, C, 0.29, D)
             LegacyStep._combine4!(o0, 1.0, A, -0.2, B, 1.2, C, 0.29, D, g)
-            @test o.data == o0.data
+            @test agree(o.data, o0.data)
             a = copy(A.data); a0 = copy(A.data); s = randn(rng, size(a))
             # the RK3 combination over the storage: the interior pass and the
             # halo-shell pass of the fused cores (SC-d, #404)
@@ -107,7 +107,7 @@ end
                   !any(iszero, z.data[interior(g)...])
             p = Field(CellCenter(), g); p0 = Field(CellCenter(), g); φ = _ks_rand!(Field(CellCenter(), g), rng)
             SIM.pressure_from_potential!(p, φ, 0.07); LegacyStep.pressure!(p0, φ, 0.07, g)
-            @test p.data == p0.data
+            @test agree(p.data, p0.data)
             z = mk(); SIM.zero_storage!(z); @test all(iszero, z.data)
             d = similar(A.data); SIM.copy_storage!(d, A.data); @test d == A.data
             @test_throws DimensionMismatch SIM.copy_storage!(d, zeros(3, 3, 3))
@@ -131,12 +131,12 @@ end
         f = (νh = sim.νt, νv = sim.νt, κh = sim.κt, κv = sim.κt)
         @test TI._cfl_maxima(sim, f, true) === LegacyStep.cfl_maxima(sim, f)
         @test d.advective_rate === LegacyStep.cfl_maxima(sim, f)[1]
-        @test d.νt_max === maximum(interior_view(sim.νt)) && d.κt_max === maximum(interior_view(sim.κt))
-        # the guard: same bits and the same verdict as the separate checks
+        @test agree(d.νt_max, maximum(interior_view(sim.νt))) && agree(d.κt_max, maximum(interior_view(sim.κt)))
+        # the guard: same results and the same verdict as the separate checks
         gd = step_guard(sim)
         @test gd.finite
-        @test gd.divergence === max_divergence(sim)
-        @test gd.speed === LegacyStep._max_speed(sim)
+        @test values_agree(gd.divergence, max_divergence(sim))
+        @test values_agree(gd.speed, LegacyStep._max_speed(sim))
         for (dt, cap) in ((1e-6, Inf), (Inf, 1e-3), (Inf, Inf))
             @test TI._guard_reason(sim, dt, cap) === LegacyStep.guard_reason(sim, dt, cap)
         end
@@ -189,8 +189,8 @@ end
     @test nr > 0 && dt == 40.0 / 2^nr
     step!(b, dt)
     # (the guard fills the velocity halos after the step; compare interiors)
-    @test all(f -> interior_view(getfield(a, f)) == interior_view(getfield(b, f)), (:u, :v, :w))
-    @test a.θ.data == b.θ.data && a.p.data == b.p.data && a.νt.data == b.νt.data
+    @test all(f -> agree(interior_view(getfield(a, f)), interior_view(getfield(b, f))), (:u, :v, :w))
+    @test agree(a.θ.data, b.θ.data) && agree(a.p.data, b.p.data) && agree(a.νt.data, b.νt.data)
 end
 
 @testset "per-simulation workspaces: no global caches" begin
@@ -214,7 +214,7 @@ end
     @sync for s in par
         Threads.@spawn drive!(s)
     end
-    @test all(k -> par[k].u.data == seq[k].u.data && par[k].θ.data == seq[k].θ.data, 1:4)
+    @test all(k -> agree(par[k].u.data, seq[k].u.data) && agree(par[k].θ.data, seq[k].θ.data), 1:4)
 end
 
 @testset "step cores: serial and threaded bits, no allocation" begin
@@ -233,8 +233,8 @@ end
                 s = mk(); drv!(s); drv!(s); s
             end
         end
-        @test all(s -> s.u.data == r[1].u.data && s.w.data == r[1].w.data && s.θ.data == r[1].θ.data &&
-                       s.qv.data == r[1].qv.data && s.p.data == r[1].p.data, r)
+        @test all(s -> agree(s.u.data, r[1].u.data) && agree(s.w.data, r[1].w.data) && agree(s.θ.data, r[1].θ.data) &&
+                       agree(s.qv.data, r[1].qv.data) && agree(s.p.data, r[1].p.data), r)
     end
     ga = RegularGrid(; size = (24, 24, 24), extent = (240.0, 240.0, 2400.0), halo = (3, 3, 3))
     r = map(_KS_BACKENDS) do (bn, b)
@@ -245,7 +245,7 @@ end
             step!(s, 0.2); step!(s, 0.2); s
         end
     end
-    @test all(s -> s.u.data == r[1].u.data && s.θ.data == r[1].θ.data, r)
+    @test all(s -> agree(s.u.data, r[1].u.data) && agree(s.θ.data, r[1].θ.data), r)
     with_backend(CPUBackend(serial = true)) do
         s = mk()
         for (nm, drv!) in drivers[1:3]

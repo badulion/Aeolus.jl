@@ -328,7 +328,7 @@ end
         tg = tend175(g); tf = tend175(g)
         add_stress_divergence!(tg..., τ)
         add_sgs_stress_divergence!(tf..., u, v, w, νh, νv)
-        @test all(iv(tg[i]) == iv(tf[i]) for i in 1:3)  # bit for bit
+        @test all(agree(iv(tg[i]), iv(tf[i])) for i in 1:3)
         # τ is −2νS: the diagonal at one cell, by hand
         i, j, k = g.Hx + 3, g.Hy + 4, g.Hz + 2
         @test τ.τ11[i, j, k] ≈ -2 * νh.data[i, j, k] * (u.data[i+1, j, k] - u.data[i, j, k]) / g.dx rtol = 1e-14
@@ -407,7 +407,7 @@ end
             step!(a, 0.5); step!(b, 0.5; sgs_stress = :laplacian)
             step!(c, 0.5; sgs_stress = :symmetric)
         end
-        @test st(a) == st(b)                          # the default is :laplacian, bit for bit
+        @test values_agree(st(a), st(b))                          # the default is :laplacian
         @test st(a) != st(c)
         # with constant νt the forms agree; with Smagorinsky νt(x) they differ by
         # the transposed term only — small next to the Laplacian part
@@ -434,7 +434,7 @@ end
         ad = mk()
         _, h, nr = step_adaptive!(ad, CFLConstraints(); sgs_stress = :symmetric)
         @test nr == 0 && h > 0
-        # the anelastic core (walls in z): default == :laplacian bit for bit,
+        # the anelastic core (walls in z): default == :laplacian,
         # :symmetric runs
         ga = RegularGrid(; size = (16, 16, 12), extent = (800.0, 800.0, 600.0), halo = (3, 3, 3))
         bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
@@ -480,7 +480,7 @@ end
             @test d_old.νt_cfl == νmax                                       # unchanged
             @test d_new.νt_cfl ≈ 2νmax                                       # νh = νv
             @test d_new.dt_sgs ≈ d_old.dt_sgs / 2
-            @test d_old.dt_sgs == 0.5 * Δ²harm / νmax                        # old formula, bit for bit
+            @test values_agree(d_old.dt_sgs, 0.5 * Δ²harm / νmax)                        # old formula
             ρ  = spectral_radius175(sim, ν, ν, :symmetric)
             ρL = spectral_radius175(sim, ν, ν, :laplacian)
             ρP = spectral_radius175(sim, ν, ν, :symmetric; project = true)

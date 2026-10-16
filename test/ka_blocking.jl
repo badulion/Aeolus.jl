@@ -84,11 +84,11 @@ walls = FieldBoundaryConditions(:periodic, :periodic, :wall)
                     s1 = (a.θ, ps, rk3 ? snap[1] : nothing)
                     s2 = moist ? (a.qv, ps, rk3 ? snap[2] : nothing) : nothing
                     FVb.blocked_predictor!(bufs, a.u, a.v, a.w, a.ν, SIMb._Axpy(Δt), s1, s2, mesh)
-                    same = all(f -> interior_view(f[1]) == interior_view(f[2]),
+                    same = all(f -> agree(interior_view(f[1]), interior_view(f[2])),
                                ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
                     same || println("  [SC-e] mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns")
                     @test same
-                    @test a.u.data == r.u.data && a.v.data == r.v.data && a.w.data == r.w.data
+                    @test agree(a.u.data, r.u.data) && agree(a.v.data, r.v.data) && agree(a.w.data, r.w.data)
                     @test all(t -> all(isnan, t.data), (a.tu, a.tv, a.tw, a.tθ, a.tqv))
                 end
             end

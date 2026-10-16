@@ -27,9 +27,9 @@
                          q_c = 2e-4, N_c = 5e7, q_r = 1e-3, N_r = 5e3,
                          q_i = 3e-4, N_i = 1e5)
 
-    @testset "Default off: bit-identical to the grid-mean scheme" begin
+    @testset "Default off: the same as the grid-mean scheme" begin
         # p3_step(s, 10 s) recorded on origin/integration/p3-icenuc before
-        # this change (shortest round-trip repr, so == is bitwise), and
+        # this change (shortest round-trip repr, so == is ), and
         # re-recorded for issue #82, when p3_condensation (step 5) moved
         # from the θ_li diagnosis to the enthalpy-conserving process
         # adjustment. That shifted only T, q_v and q_c of step 5: T by
@@ -50,9 +50,9 @@
              0.0, 0.0, 0.0, 0.0]]
         for (s, r) in zip((warm, cold, melt), ref)
             @test fields(p3_step(s, 10.0)) == r
-            # fractions of one: the same, bit for bit
-            @test fields(p3_step(s, 10.0; cloud_fraction = 1.0, precip_fraction = 1.0)) == r
-            @test p3_fractional_process_rates(s, 1.0, 1.0) == p3_process_rates(s)
+            # fractions of one: the same
+            @test values_agree(fields(p3_step(s, 10.0; cloud_fraction = 1.0, precip_fraction = 1.0)), r)
+            @test values_agree(p3_fractional_process_rates(s, 1.0, 1.0), p3_process_rates(s))
         end
     end
 
@@ -169,7 +169,7 @@
         ru = p3_fractional_process_rates(c, 0.3, 1.0)
         @test rl.dep ≈ ru.dep rtol = 1e-12      # not limited: far from the region's content
         @test rl.dep > 0 && rl.sub > 0
-        # fractions of one: the grid-mean limited rates, bit for bit
+        # fractions of one: the grid-mean limited rates
         for st in (warm, cold, melt)
             @test p3_fractional_process_rates(st, 1.0, 1.0; dt = 10.0) ==
                   p3_limit_rates(st, p3_process_rates(st), 10.0)

@@ -3,7 +3,7 @@
 # flux-form operators and the anelastic buoyancy of src/Anelastic.jl, the
 # field algebra of the step drivers (broadcasts over interior views), and
 # the separate post-step checks and CFL maxima of src/TimeIntegration.jl.
-# The reference of test/ka_step.jl (bit for bit) and of the KA-j timings.
+# The reference of test/ka_step.jl and of the KA-j timings.
 # Nothing here is used by the package.
 # ---------------------------------------------------------------------------
 module LegacyStep

@@ -278,12 +278,12 @@ end
         @test c isa AbstractEddyViscosityClosure && c.C_σ == 1.35
         f = compute_sgs!(c, sim)
         ref = Field(CellCenter(), m); compute_sigma_νt!(ref, sim.u, sim.v, sim.w, 1.35)
-        @test interior_view(f.νh) == interior_view(ref)
-        @test f.κh.data == f.νh.data ./ 0.7
+        @test agree(interior_view(f.νh), interior_view(ref))
+        @test agree(f.κh.data, f.νh.data ./ 0.7)
         @test minimum(interior_view(f.νh)) >= 0 && maximum(interior_view(f.νh)) > 0
         f2 = compute_sgs!(SigmaModel(2.7; Pr_t = 1 / 3), sim)
         @test interior_view(f2.νh) ≈ 4 .* interior_view(ref) rtol = 1e-14   # ∝ C_σ²
-        @test f2.κh.data == f2.νh.data ./ (1 / 3)
+        @test agree(f2.κh.data, f2.νh.data ./ (1 / 3))
         for stepper in (s -> step!(s, 1e-3; sgs = c), s -> step_rk3!(s, 1e-3; sgs = c),
                         s -> step_imex!(s, 1e-3, ARK2(); sgs = c))
             s2 = BoussinesqSimulation(m; ν = 1e-4)

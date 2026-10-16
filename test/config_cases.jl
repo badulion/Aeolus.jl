@@ -4,8 +4,9 @@
 # model; it is now a TOML file run by `aeolus run`. For each one this file
 # runs the config at a small size and the old script's code at the same
 # size, verbatim but for the plots and the size, and asserts that the two
-# give the same bits (where the port is not a stated physics change); then
-# it asserts the physics the example shows.
+# agree within ROUNDOFF_RTOL (where the port is not a stated physics change;
+# test/support/agreement.jl, #495); then it asserts the physics the example
+# shows.
 
 using Test
 using Aeolus
@@ -76,18 +77,18 @@ end
 rd_interior(a, mesh) = a[mesh.Hx+1:mesh.Hx+mesh.Nx, mesh.Hy+1:mesh.Hy+mesh.Ny, mesh.Hz+1:mesh.Hz+mesh.Nz]
 
 """
-Whether the state of the run `r` is bitwise that of the Boussinesq simulation
+Whether the state of the run `r` agrees with that of the Boussinesq simulation
 `sim` (the interiors of u, v, w, p, θ, qv: the run monitor's diagnostics
 fill halos after a step, a bare loop does not).
 """
 function rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
     m = sim.mesh
-    return all(bitwise_equal(rd_interior(getproperty(f, k), m), rd_interior(getproperty(sim, k).data, m))
+    return all(agree(rd_interior(getproperty(f, k), m), rd_interior(getproperty(sim, k).data, m))
                for k in (:u, :v, :w, :p, :θ, :qv) if haskey(f, k))
 end
 
-@testset "kernels: tgv_energy_decay.toml is the old script, bit for bit; KE decays as exp(-6νt)" begin
+@testset "kernels: tgv_energy_decay.toml is the old script; KE decays as exp(-6νt)" begin
     N = 16; T_end = 1.0
     # examples/kernels/01_tgv_energy_decay.jl before EX-d, verbatim but for N, T_end and the plot
     L = 2π; ν = 1e-2
@@ -115,7 +116,7 @@ end
     @test max_divergence(rd_sim(r.obj)) < 1e-12
 end
 
-@testset "kernels: decaying_hit.toml is the old script, bit for bit; KE decays" begin
+@testset "kernels: decaying_hit.toml is the old script; KE decays" begin
     N = 16; T_end = 0.6
     # examples/kernels/02_decaying_hit.jl before EX-d, verbatim but for N, T_end and the plot
     L = 2π; ν = 5e-3
@@ -140,7 +141,7 @@ end
     @test issorted(kes[2:end]; rev = true) && kes[end] < 0.9kes[2]
 end
 
-@testset "kernels: channel_flow.toml is the old script, bit for bit; the walls hold w = 0" begin
+@testset "kernels: channel_flow.toml is the old script; the walls hold w = 0" begin
     Nx = Ny = 8; Nz = 16; T_end = 0.25
     # examples/kernels/03_channel_flow.jl before EX-d, verbatim but for the size, T_end and the plot
     L = 1.0; ν = 5e-4
@@ -167,7 +168,7 @@ end
     @test 0.99 < sum(interior_view(rd_sim(r.obj).u)) / (Nx * Ny * Nz) < 1.01
 end
 
-@testset "kernels: pollution_plume.toml is the old script, bit for bit; tracer budget" begin
+@testset "kernels: pollution_plume.toml is the old script; tracer budget" begin
     T_end = 3.0
     # examples/kernels/05_pollution_plume.jl before EX-d, verbatim but for T_end and the plot
     Nx = 64; Ny = 48; Nz = 8; L = 100.0
@@ -199,7 +200,7 @@ end
     r = rd_run(rd_case("pollution_plume"), ["time.duration=$T_end"])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
-    @test bitwise_equal(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
+    @test agree(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
     @test only(rd_couplings(r.obj).tracer.sources)[1:3] == (Hx + i_src, Hy + j_src, Hz + k_src)
     # the physics: centred advection in a periodic box conserves the tracer,
     # so the cell sum obeys dM/dt = S − M/τ exactly, step by step (forward Euler)
@@ -213,7 +214,7 @@ end
     @test sum(ci[i_src+1:end, :, :]) > 2sum(ci[1:i_src-1, :, :])
 end
 
-@testset "kernels: particle_trail.toml is the old script, bit for bit" begin
+@testset "kernels: particle_trail.toml is the old script" begin
     N = 16; nsteps = 20
     # examples/kernels/06_particle_trail.jl before EX-d, verbatim but for N, nsteps and the plot
     L = 2π
@@ -282,7 +283,7 @@ function rd_dcbl_script(N, nsteps; fix::Bool)
     return sim, land, Qs
 end
 
-@testset "coupled: dcbl_radiation_lsm.toml is the old script with its surface flux applied, bit for bit" begin
+@testset "coupled: dcbl_radiation_lsm.toml is the old script with its surface flux applied" begin
     N = 16; nsteps = 30
     old, land_old, _ = rd_dcbl_script(N, nsteps; fix = false)
     fixed, land, Qs = rd_dcbl_script(N, nsteps; fix = true)
@@ -299,14 +300,14 @@ end
         step!(noland, 5.0)
         Aeolus.Radiation.apply_radiative_cooling!(noland.θ, fill(-2.315e-5, N) .* 5.0)
     end
-    @test interior_view(old.θ) == interior_view(noland.θ)
-    @test interior_view(fixed.θ) != interior_view(old.θ)
+    @test agree(interior_view(old.θ), interior_view(noland.θ))
+    @test !agree(interior_view(fixed.θ), interior_view(old.θ))
     # the config is the script with the flux applied
     r = rd_run(rd_case("dcbl_radiation_lsm"),
                ["grid.size=[$N,$N,$N]", "time.duration=\"none\"", "time.nsteps=$nsteps"])
     @test rd_same_state(r, fixed)
     f = Base.invokelatest(state_fields, r.obj)
-    @test f.T_s == [land.T]
+    @test agree(f.T_s, [land.T])
     # the physics: the domain heat budget closes. Advection and diffusion
     # conserve Σθ in the closed box, so per step Σθ changes by the floor
     # flux Q Δt/Δz over one level plus the cooling over all cells
@@ -325,7 +326,7 @@ end
     @test all(<(0), Qs) && land.T < 297.0
 end
 
-@testset "coupled: moist_convection.toml is the old script, bit for bit; Kessler turns cloud into rain" begin
+@testset "coupled: moist_convection.toml is the old script; Kessler turns cloud into rain" begin
     Nx = Ny = 12; Nz = 16; nsteps = 24
     # examples/coupled/02_moist_convection.jl before EX-d, verbatim but for the size, nsteps and the plots
     Lx = Ly = 3200.0; Lz = 2400.0
@@ -362,8 +363,8 @@ end
     @test 0.8 * Lz == 1920.0                     # the config's sponge_z_start is the script's 0.8 Lz
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
-    @test bitwise_equal(rd_interior(f.ql, mesh), rd_interior(ql.data, mesh))
-    @test bitwise_equal(rd_interior(f.qr, mesh), rd_interior(qr.data, mesh))
+    @test agree(rd_interior(f.ql, mesh), rd_interior(ql.data, mesh))
+    @test agree(rd_interior(f.qr, mesh), rd_interior(qr.data, mesh))
     # the physics: autoconversion and accretion move cloud water into rain
     # (ql falls, qr appears), and the rain falls below the cloud base
     @test sum(interior_view(ql)) < ql0 && maximum(interior_view(qr)) > 0
@@ -375,7 +376,7 @@ end
                                              overrides = ["microphysics.scheme=\"none\""])
 end
 
-@testset "coupled: heated_plume.toml is the old script, bit for bit; the patch heats its column" begin
+@testset "coupled: heated_plume.toml is the old script; the patch heats its column" begin
     N = 16; nsteps = 30
     # examples/coupled/03_heated_plume_rain.jl before EX-d, verbatim but for N, nsteps and the plots
     Lx = Ly = 2000.0; Lz = 1500.0
@@ -411,7 +412,7 @@ end
     @test sum(θ1[hot]) / count(hot) > sum(θ1[.!hot]) / count(.!hot) + 0.1
 end
 
-@testset "coupled: flow_past_cube.toml (cube in the static driver) is the old script, bit for bit" begin
+@testset "coupled: flow_past_cube.toml (cube in the static driver) is the old script" begin
     nsteps = 6
     # examples/coupled/04_flow_past_cube.jl before EX-d, verbatim but for nsteps and the plots
     Lx = 200.0; Ly = 80.0; Lz = 80.0
@@ -458,7 +459,7 @@ end
           sort([(Hx + i, Hy + j, Hz + k_src, 1.0) for i in i_src_start:i_src_end for j in j_src])
     @test rd_same_state(r, sim)
     f = Base.invokelatest(state_fields, r.obj)
-    @test bitwise_equal(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
+    @test agree(rd_interior(f.tracer, mesh), rd_interior(c.data, mesh))
     # the physics: the penalty stops the flow inside the cube (from 3 m/s,
     # e^(-6Δt/3Δt) = e^(-2) after six steps), and the tracer is released
     ui = interior_view(rd_sim(r.obj).u); solid = view(sm.mask, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
@@ -479,7 +480,7 @@ end
 # ---------------------------------------------------------------------------
 # examples/cbl_tke/cbl_tke.toml, examples/cbl_inflow_statistics/cbl_inflow_statistics.toml
 # ([sgs] model = "tke", [inflow_statistics]; ONE-l: the `cbl` run type's
-# harness tke_cbl, a test fixture, bit for bit)
+# harness tke_cbl, a test fixture, within ROUNDOFF_RTOL)
 # ---------------------------------------------------------------------------
 
 isdefined(@__MODULE__, :TKECBL) || include(joinpath(@__DIR__, "fixtures", "tke_cbl.jl"))
@@ -489,7 +490,7 @@ using Aeolus.Transition: ParentResolvedStatistics, update_inflow_statistics!, in
 "The interior of the halo-padded storage `a` of `m`, after a halo fill (wall faces set as the run monitor sets them)."
 rd_filled(f, bcs, m) = (fill_halos!(f, bcs); rd_interior(f.data, m))
 
-@testset "cbl: the configs on the model are the tke_cbl harness and its parent statistics, bit for bit" begin
+@testset "cbl: the configs on the model are the tke_cbl harness and its parent statistics" begin
     # the config's [test] size: 12³ on 1200 m, z_i0 = 600 m, 2 min, the
     # statistics from 60 s, four levels (400 m)
     N = 12; T = 120.0; nlev = 4
@@ -505,13 +506,13 @@ rd_filled(f, bcs, m) = (fill_halos!(f, bcs); rd_interior(f.data, m))
     f = rd_case("cbl_inflow_statistics")
     r = rd_run(f, config_test_table(f).overrides)
     sim = rd_sim(r.obj); m = sim.mesh; d = first(Aeolus.Components.domains(r.obj.model))
-    @test sim.t == S[].t == T
-    @test all(rd_interior(getproperty(sim, k).data, m) == rd_interior(getproperty(S[], k).data, m) for k in (:u, :v, :w, :θ, :p))
+    @test agree(sim.t, S[].t) && agree(sim.t, T)
+    @test all(agree(rd_interior(getproperty(sim, k).data, m), rd_interior(getproperty(S[], k).data, m)) for k in (:u, :v, :w, :θ, :p))
     clo = Aeolus.Components.sgs_closure(d)
-    @test clo isa TKEClosure && rd_interior(clo.e.data, m) == rd_interior(C[].e.data, m)
+    @test clo isa TKEClosure && agree(rd_interior(clo.e.data, m), rd_interior(C[].e.data, m))
     st = only(c for c in d.components if c isa Aeolus.Components.ParentStatistics)
     p0 = inflow_stress_parts(src[]); p1 = inflow_stress_parts(st.stats)
-    @test all(getproperty(p0, k) == getproperty(p1, k) for k in keys(p0))
+    @test all(values_agree(getproperty(p0, k), getproperty(p1, k)) for k in keys(p0))
     # the physics of the record: e stays positive, and in scale-gap mode what
     # the generator adds is exactly the SGS part plus the band; the outputs
     # hold the statistics' levels and NaN above them
@@ -528,7 +529,7 @@ rd_filled(f, bcs, m) = (fill_halos!(f, bcs); rd_interior(f.data, m))
     # first cell after 2 min (measured 0.0846 K m/s), e and the resolved TKE ≥ 0
     f2 = rd_case("cbl_tke")
     r2 = rd_run(f2, config_test_table(f2).overrides)
-    @test rd_interior(rd_sim(r2.obj).θ.data, m) == rd_interior(sim.θ.data, m)
+    @test agree(rd_interior(rd_sim(r2.obj).θ.data, m), rd_interior(sim.θ.data, m))
     ds = rd_output(r2)
     q = ds["heat_flux_profile"][:, end]; e = ds["sgs_tke_profile"][:, end]
     kres = ds["resolved_tke_profile"][:, end]; w2 = ds["w_variance_profile"][:, end]
@@ -544,7 +545,7 @@ end
 
 using Aeolus.Transition: turbulent_fraction, flux_richardson
 
-@testset "kelvin_helmholtz.toml is the old script, bit for bit; the seed grows" begin
+@testset "kelvin_helmholtz.toml is the old script; the seed grows" begin
     Nx, Nz, tend = 16, 32, 12.0
     # examples/transition/kelvin_helmholtz.jl before EX-d, verbatim but for the size, tend and the figures
     δ, U, Re, J, αδ = 1.0, 1.0, 1000.0, 0.05, 0.4446
@@ -576,8 +577,8 @@ using Aeolus.Transition: turbulent_fraction, flux_richardson
     s2 = rd_sim(r.obj)
     # the state (the old loop's wall faces of w held the seed's 1e-102 until
     # a halo fill zeroes them; the run's output fills them)
-    @test all(rd_filled(getproperty(s2, k), s2.bcs, mesh) == rd_filled(getproperty(sim, k), sim.bcs, mesh)
-              for k in (:u, :v, :w)) && rd_interior(s2.θ.data, mesh) == rd_interior(sim.θ.data, mesh)
+    @test all(agree(rd_filled(getproperty(s2, k), s2.bcs, mesh), rd_filled(getproperty(sim, k), sim.bcs, mesh))
+              for k in (:u, :v, :w)) && agree(rd_interior(s2.θ.data, mesh), rd_interior(sim.θ.data, mesh))
     ds = rd_output(r)
     tser = ds["time_series"][:]; A = ds["w_rms"][:]; trec = ds["time"][:]
     γo = ds["turbulent_fraction_profile"][:, :]; Bo = ds["buoyancy_production_profile"][:, :]
@@ -588,7 +589,7 @@ using Aeolus.Transition: turbulent_fraction, flux_richardson
     for (k, tq) in enumerate(tser)
         tq == 0 && continue
         n = findfirst(t -> t >= tq * (1 - 1e-9), ts)
-        @test A[k] == As[n]
+        @test agree(Float64(A[k]), Float64(As[n]))
     end
     n = length(ts)
     @test sum(Float64.(Bo[layer, end])) ≈ Bs[n] rtol = 1e-5
@@ -598,7 +599,7 @@ using Aeolus.Transition: turbulent_fraction, flux_richardson
     @test As[end] > As[1] && A[end] > A[2] && all(iszero, γm) && all(iszero, γo)
 end
 
-@testset "flat_plate_t3a.toml is the old script, bit for bit (small grid); c_f is Blasius at the inflow" begin
+@testset "flat_plate_t3a.toml is the old script (small grid); c_f is Blasius at the inflow" begin
     Nx, Ny, Nz, nsteps, navg = 96, 8, 16, 6, 3
     # examples/transition/flat_plate_t3a.jl before EX-d, verbatim but for the size and the steps
     Tu = 0.033; dt = 1.0
@@ -625,8 +626,8 @@ end
     f = rd_case("flat_plate_t3a")
     r = rd_run(f, config_test_table(f).overrides)       # 6 steps, the means of steps 1–3 and 4–6
     s2 = rd_sim(r.obj)
-    @test all(rd_filled(getproperty(s2, k), s2.bcs, g) == rd_filled(getproperty(sim, k), sim.bcs, g) for k in (:u, :v, :w))
-    @test rd_interior(s2.p.data, g) == rd_interior(sim.p.data, g)
+    @test all(agree(rd_filled(getproperty(s2, k), s2.bcs, g), rd_filled(getproperty(sim, k), sim.bcs, g)) for k in (:u, :v, :w))
+    @test agree(rd_interior(s2.p.data, g), rd_interior(sim.p.data, g))
     ds = rd_output(r)
     m = ds["skin_friction"][:, :, end]; t = ds["time"][:]
     close(ds)

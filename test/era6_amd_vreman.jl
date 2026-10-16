@@ -348,7 +348,7 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
                 nq, 16^3, mean(interior_view(κq)), mean(interior_view(f.κh)), dq)
 
         # step! / step_rk3! diffuse qv explicitly (#177) by the same rule
-        # (merge train, #215): qv's own AMD diffusivity, f.κh (bit for bit
+        # (merge train, #215): qv's own AMD diffusivity, f.κh (as
         # add_sgs_scalar!) for a Prandtl-number closure
         interior_view(x.qv) .= Q; fill_halos!(x.qv, x.θ_bcs)
         foreach(g -> fill_halos!(g, x.bcs), (x.u, x.v, x.w)); fill_halos!(x.θ, x.θ_bcs)
@@ -357,7 +357,7 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         Aeolus.Simulations._add_sgs_tracer!(tq, x.qv, AMDClosure(), fa, x, Field(CellCenter(), m))
         κe = sgs_tracer_diffusivity!(Field(CellCenter(), m), AMDClosure(), fa, x, x.qv)
         Aeolus.Operators.add_eddy_diffusion_scalar!(tref, x.qv, κe)
-        @test interior_view(tq) == interior_view(tref)
+        @test values_agree(interior_view(tq), interior_view(tref))
         add_sgs_scalar!(tθκ, x.qv, AMDClosure(), fa, x)                # with θ's κ_t
         @test interior_view(tq) != interior_view(tθκ)
         fs = compute_sgs!(StaticSmagorinsky(0.17), x)

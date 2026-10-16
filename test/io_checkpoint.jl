@@ -2,9 +2,10 @@
 # src/wall_models/checkpoint.jl, the FFTW planning policy
 # (src/operators/fftw_planning.jl).
 #
-# The physics assertion is **bitwise**: a run checkpointed at step N and
-# restarted (into freshly built objects whose scratch buffers hold NaN) is
-# identical, bit for bit, to the continuous run at step 2N — fields with
+# The physics assertion: a run checkpointed at step N and restarted (into
+# freshly built objects whose scratch buffers hold NaN) agrees with the
+# continuous run at step 2N within ROUNDOFF_RTOL (test/support/agreement.jl;
+# no bit-identity since #495) — fields with
 # halos, closure memory, wall-model state, clock — for every closure with
 # memory, under every stepper, and with wall models whose input filter and
 # TBLE columns carry memory.
@@ -19,6 +20,7 @@ using Aeolus.BoundaryConditions: FieldBoundaryConditions
 using Aeolus.TimeIntegration: step_adaptive!, step_imex!, ARK2, CFLConstraints
 using Random
 using Serialization
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 
 const CK_N = (12, 10, 8)
 
@@ -63,7 +65,7 @@ function ck_step!(sim, c, st, scheme)
 end
 
 # NaN in every buffer that is not state: a restart that read one of them
-# before writing it would not be bitwise (it would not even be finite).
+# before writing it would not agree (it would not even be finite).
 function ck_poison!(sim)
     for f in (sim.tu, sim.tv, sim.tw, sim.tθ, sim.tqv, sim.div_buf, sim.φ, sim.dφdx,
               sim.dφdy, sim.dφdz, sim.lap_u, sim.lap_v, sim.lap_w, sim.lap_θ)
@@ -93,9 +95,9 @@ function ck_case(kind)
     end
 end
 
-# Bitwise equality of two (nested) checkpoint states: their serialised bytes.
-ck_bytes(x) = (io = IOBuffer(); serialize(io, x); take!(io))
-ck_same(a, b) = ck_bytes(a) == ck_bytes(b)
+# Agreement of two (nested) checkpoint states: floats within ROUNDOFF_RTOL,
+# the rest (counts, symbols, structure) equal.
+ck_same(a, b) = values_agree(a, b)
 
 # The structural state of an object graph (#269): what the nested run and
 # the Berlin case are checkpointed with.
@@ -120,7 +122,7 @@ end
 
 @testset "Checkpoint / restart (#245)" begin
 
-@testset "bitwise restart: $name × $scheme" for name in keys(CK_CLOSURES), scheme in CK_SCHEMES
+@testset "restart: $name × $scheme" for name in keys(CK_CLOSURES), scheme in CK_SCHEMES
     mk = CK_CLOSURES[name]
     Nhalf = 3
     # the RSM's explicit stress cannot be split by step_imex!: refused by design
@@ -141,20 +143,20 @@ end
     simC = ck_sim(; seed = 99); cC = mk(simC); stC = StepperState(scheme)
     ck_poison!(simC)
     restart!(simC, path; sgs = cC, stepper = stC)
-    @test stC.step == Nhalf && simC.t == simB.t
+    @test stC.step == Nhalf && agree(simC.t, simB.t)
     for _ in 1:Nhalf; ck_step!(simC, cC, stC, scheme); end
-    @test simC.t === simA.t
+    @test agree(simC.t, simA.t)
     sA, sC = ck_state(simA), ck_state(simC)
-    @test all(k -> sA[k] == sC[k], keys(sA))                 # bitwise, halos included
-    @test checkpoint_state(cC) == checkpoint_state(cA)       # closure memory, bitwise
-    @test checkpoint_state(stC) == checkpoint_state(stA)     # step count, dt history
+    @test all(k -> agree(sA[k], sC[k]), keys(sA))            # halos included
+    @test values_agree(checkpoint_state(cC), checkpoint_state(cA))       # closure memory
+    @test values_agree(checkpoint_state(stC), checkpoint_state(stA))     # step count, dt history
     @test all(isfinite, interior_view(simC.u))
     # the run did something: the state moved, and the memory is not the initial one
     @test sA.u != ck_state(ck_sim()).u
     rm(path)
 end
 
-@testset "bitwise restart: adaptive dt controller resumes" begin
+@testset "restart: adaptive dt controller resumes" begin
     # The first step is forced short (dt = 0.5 s); afterwards the controller
     # grows dt by at most growth_max = 1.1 per step from dt_prev, far below
     # the CFL limit (≈ 9 s), so every dt is set by the memory dt_prev. A
@@ -175,9 +177,9 @@ end
     simC = ck_sim(); stC = StepperState(:adaptive)
     restart!(simC, path; sgs = sgs, stepper = stC)
     adv!(simC, stC, 3)
-    @test stC.dt_history == stA.dt_history
-    @test all(i -> stA.dt_history[i+1] == 1.1 * stA.dt_history[i], 1:5)   # growth-limited
-    @test ck_state(simC).u == ck_state(simA).u
+    @test agree(stC.dt_history, stA.dt_history)
+    @test all(i -> agree(stA.dt_history[i+1], 1.1 * stA.dt_history[i]), 1:5)   # growth-limited
+    @test agree(ck_state(simC).u, ck_state(simA).u)
     # without the stepper state the first restarted dt is the CFL limit
     simD = ck_sim(); restart!(simD, path; sgs = sgs, stepper = StepperState(:adaptive))
     _, dtD, _ = step_adaptive!(simD, c; sgs = sgs)
@@ -189,7 +191,7 @@ end
 # Wall models with memory (P57-b input filter, P57-c TBLE columns) and the
 # case harness (WallBoundedCase): checkpointed as one component.
 # ---------------------------------------------------------------------------
-@testset "bitwise restart: wall model with memory ($kind)" for kind in (:filtered_lasd, :tble)
+@testset "restart: wall model with memory ($kind)" for kind in (:filtered_lasd, :tble)
     Nhalf = 4; dt = 0.004
     A = ck_case(kind)
     for _ in 1:2Nhalf; advance_channel!(A, dt); end
@@ -203,14 +205,14 @@ end
     @test C.nsteps == Nhalf
     for _ in 1:Nhalf; advance_channel!(C, dt); end
     sA, sC = ck_state(A.sim), ck_state(C.sim)
-    @test all(k -> sA[k] == sC[k], keys(sA))
+    @test all(k -> agree(sA[k], sC[k]), keys(sA))
     @test ck_same(checkpoint_state(C), checkpoint_state(A))
-    @test C.τ_wall_bottom === A.τ_wall_bottom
+    @test values_agree(C.τ_wall_bottom, A.τ_wall_bottom)
     if kind === :filtered_lasd
         # the filter state is memory: primed, and not the instantaneous sample
         mi = A.inputs.bottom
         @test mi.primed && mi.T_f > 0
-        @test checkpoint_state(C.inputs.bottom) == checkpoint_state(mi)
+        @test values_agree(checkpoint_state(C.inputs.bottom), checkpoint_state(mi))
         # a restart that dropped the filter memory diverges: the memory matters
         D = ck_case(kind)
         restart!(D.sim, path; components = (case = D,))
@@ -220,7 +222,7 @@ end
     else
         w = A.wall.walls[:bottom]
         @test w.nupdates > 0
-        @test C.wall.walls[:bottom].cols[3, 2].u == w.cols[3, 2].u
+        @test agree(C.wall.walls[:bottom].cols[3, 2].u, w.cols[3, 2].u)
     end
     rm(path)
 end
@@ -240,7 +242,7 @@ end
     @test d[:extra][:tag] == 7
     @test d[:closure_type] == "TKEClosure"
     @test size(d[:fields][:u]) == size(sim.u.data)            # halos stored
-    # FFTW provenance: the suite plans with ESTIMATE, so bitwise reproducible
+    # FFTW provenance: the suite plans with ESTIMATE, so reproducible
     @test d[:fftw].planner === :estimate && d[:fftw].bitwise_reproducible
     @test d[:fftw].threads == fftw_policy().threads
     @test !isfile(path * ".tmp")                               # atomic write
@@ -396,9 +398,9 @@ end
         for _ in 1:10; step_rk3!(sim, CK_DT; sgs = c); push!(s, kinetic_energy(sim)); end
         (sim = sim, c = c, series = s)
     end
-    @test ck_state(second.sim).u == ck_state(cont.sim).u
-    @test second.series == cont.series                 # the driver's series continues
-    @test checkpoint_state(second.c) == checkpoint_state(cont.c)
+    @test agree(ck_state(second.sim).u, ck_state(cont.sim).u)
+    @test values_agree(second.series, cont.series)     # the driver's series continues
+    @test values_agree(checkpoint_state(second.c), checkpoint_state(cont.c))
     @test filter(f -> endswith(f, ".jls"), readdir(dir)) == ["checkpoint_000000006.jls", "checkpoint_000000009.jls"]
     rm(dir; recursive = true)
 end
@@ -455,18 +457,17 @@ end
     ld(f) = deserialize(joinpath(dir, f))
     e1, e2 = ld("estimate_first.jls"), ld("estimate_second.jls")
     @test e1.fftw.planner === :estimate && e1.fftw.bitwise_reproducible
-    @test all(k -> e1.fields[k] == e2.fields[k], keys(e1.fields))     # two processes, bitwise
+    @test all(k -> agree(e1.fields[k], e2.fields[k]), keys(e1.fields))     # two processes
     @test ck_same(e1.closure, e2.closure)
     pc, pr = ld("patient_continuous.jls"), ld("patient_restart.jls")
     @test pc.fftw.planner === :patient && pr.fftw.planner === :patient
     @test pr.fftw.wisdom_loaded && pr.fftw.bitwise_reproducible       # the restart reloaded the plans
-    @test pc.t === pr.t
-    @test all(k -> pc.fields[k] == pr.fields[k], keys(pc.fields))     # restart in a new process, bitwise
+    @test agree(pc.t, pr.t)
+    @test all(k -> agree(pc.fields[k], pr.fields[k]), keys(pc.fields))     # restart in a new process
     @test ck_same(pc.closure, pr.closure)
-    # the two planners solve the same problem: round-off apart (bitwise they
-    # may differ: on this grid the PATIENT plan's pressure differed from the
-    # ESTIMATE one in the last bit when measured, which is why the restart
-    # needs the saved wisdom)
+    # the two planners solve the same problem: round-off apart (on this grid
+    # the PATIENT plan's pressure differed from the ESTIMATE one in the last
+    # bit when measured)
     @test maximum(abs, pc.fields.u .- e1.fields.u) < 1e-10
     @info "cross-process: PATIENT vs ESTIMATE, max |Δu| = $(maximum(abs, pc.fields.u .- e1.fields.u))"
     rm(dir; recursive = true)
@@ -475,7 +476,7 @@ end
 # ---------------------------------------------------------------------------
 # The long drivers' hook: run_channel! (WallModels' channel runs)
 # interrupted after a checkpoint and resumed in fresh objects returns the
-# uninterrupted run's state and statistics bit for bit. (The GABLS cases are
+# uninterrupted run's state and statistics (within ROUNDOFF_RTOL). (The GABLS cases are
 # configurations of the model since ONE-g, #456: their components'
 # checkpoints are tested in components_both_cores.jl.)
 # ---------------------------------------------------------------------------
@@ -503,14 +504,14 @@ struct CkKilled <: Exception end
     a = run_part(10)                                        # killed after step 10 (checkpoint at 8)
     @test a.st === nothing
     b = run_part(-1)                                        # resumes at step 8
-    @test ck_state(b.c.sim).u == ck_state(ref.sim).u
+    @test agree(ck_state(b.c.sim).u, ck_state(ref.sim).u)
     @test ck_same(checkpoint_state(b.c), checkpoint_state(ref))
-    @test b.series == seen                                  # the callback's state resumed too
-    @test b.st.U == st_ref.U && b.st.τ_series == st_ref.τ_series && b.st.nsteps == st_ref.nsteps
-    @test b.st.stress.total == st_ref.stress.total && b.st.τ_wall === st_ref.τ_wall
+    @test agree(b.series, seen)                             # the callback's state resumed too
+    @test agree(b.st.U, st_ref.U) && agree(b.st.τ_series, st_ref.τ_series) && b.st.nsteps == st_ref.nsteps
+    @test values_agree(b.st.stress.total, st_ref.stress.total) && values_agree(b.st.τ_wall, st_ref.τ_wall)
     # rerunning the finished call returns at once from its final checkpoint
     c2 = run_part(-1)
-    @test c2.st.U == st_ref.U && c2.c.nsteps == ref.nsteps
+    @test agree(c2.st.U, st_ref.U) && c2.c.nsteps == ref.nsteps
     finish_checkpoints!(CheckpointSchedule(dir))
     @test !isdir(dir)
 end

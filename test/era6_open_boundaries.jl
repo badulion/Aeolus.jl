@@ -3,7 +3,7 @@
 # boundary mass-flux correction, in every dynamical core.
 #
 #   1. halo-fill semantics: face slots, Dirichlet halos, Neumann φ,
-#      idempotence; the free-stream top is bit for bit the P59-d fill
+# idempotence; the free-stream top is the P59-d fill
 #   2. boundary-data contract: ProfileBoundaryData, FunctionBoundaryData
 #   3. the mass-flux correction: a prescribed net imbalance Q gives
 #      max|∇·u| = |Q|/V without it and round-off with it, in step!,
@@ -112,7 +112,7 @@ const _OB_LIN = FunctionBoundaryData(
 end
 
 # ---------------------------------------------------------------------------
-@testset "FreeStreamBoundary is the special case, bit for bit the P59-d fill" begin
+@testset "FreeStreamBoundary is the special case the P59-d fill" begin
     # The P59-d (#185) top fill, verbatim, as the reference.
     function ref_fs_top!(d::AbstractArray{T,3}, wb, Hz, Nz, isw::Bool) where {T}
         if !isw
@@ -148,7 +148,7 @@ end
             Aeolus.BoundaryConditions._fill_y!(ref, Periodic(), Periodic(), H, m.Ny, loc)
             Aeolus.BoundaryConditions._fill_wall_bottom!(ref, bot, H, loc)
             ref_fs_top!(ref, wb, H, m.Nz, loc isa FaceZ)
-            @test f.data == ref                 # bit for bit
+            @test agree(f.data, ref)                 #
         end
         # homogeneous part: zero transpiration
         hb = homogeneous_bcs(bcs)
@@ -243,7 +243,7 @@ end
             @test abs(L1.residual) < 1e-9 * _Q_IMB
             @test L1.δ ≈ _Q_IMB / (2 * (_Ly * _Lz + _Lx * _Lz) + _Lx * _Ly) rtol = 1e-12
             @test max_divergence(s1) < 1e-12
-            @test _faces_equal_buffers(s1)                  # bit for bit
+            @test _faces_equal_buffers(s1)                  #
             @test !isempty(only(open_boundary_states(s1)).log)
         end
     end

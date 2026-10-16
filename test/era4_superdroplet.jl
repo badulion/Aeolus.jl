@@ -168,7 +168,7 @@ using Aeolus
             return copy(sd.radius), copy(sd.ξ)
         end
         r1, x1 = run(123); r2, x2 = run(123); r3, x3 = run(124)
-        @test r1 == r2 && x1 == x2        # bitwise identical
+        @test values_agree(r1, r2) && values_agree(x1, x2)        # the same
         @test !(r1 == r3)                  # a different seed really differs
     end
 

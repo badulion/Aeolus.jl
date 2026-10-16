@@ -3,7 +3,7 @@
 #
 #   * a bare config is a minimal dry LES: the defaults resolve to it, the
 #     advection and the Smagorinsky SGS are its only components, and it runs:
-#     a fluid at rest stays at rest bit for bit at the adaptive limit dt_max;
+# a fluid at rest stays at rest at the adaptive limit dt_max;
 #     perturbed, θ is conserved between its no-flux walls, the SGS acts and
 #     ∇·u stays at round-off;
 #   * the component sections are generated from the component schemas;
@@ -49,7 +49,7 @@ cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktemp
     @test cfg.domain.static_driver === nothing && cfg.domain.dynamic_driver === nothing
     # the default output set (ONE-c): u, v, w, theta and the time series of the domain means
     @test cfg.output.variables == ["u", "v", "w", "theta", "u_mean", "v_mean", "w_mean", "theta_mean"]
-    # a fluid at rest stays at rest, bit for bit, at the adaptive limit dt_max
+    # a fluid at rest stays at rest, at the adaptive limit dt_max
     rest = load_run_config(IOBuffer(""); overrides = ["grid.size=[16,16,16]", "time.duration=60.0",
                                                      "fftw.planner=\"estimate\""])
     r = cm_run(rest)

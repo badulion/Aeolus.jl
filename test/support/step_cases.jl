@@ -3,7 +3,7 @@
 # a forced retry), IMEX ARK2 and Rosenbrock2, anelastic and
 # pseudo-incompressible, a stretched grid, open boundaries. Section `steps`
 # of the thread-invariance worker; uses only APIs that predate KA-j, so the
-# same cases hash the pre-port code (the bit-for-bit check of the KA-j PR).
+# same cases hash the pre-port code (the check of the KA-j PR).
 # `record!(key, x)` must be defined by the includer.
 using Aeolus
 using Aeolus.Fields: set!, interior_view, Field

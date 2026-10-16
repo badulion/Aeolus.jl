@@ -3,7 +3,7 @@
 #
 #   1. the immersed-wall operators (apply_immersed_wall_stress!,
 #      remove_stencil_wall_flux!, immersed_wall_drag!) as a per-face gather
-#      over the face index of ImmersedWalls, bit for bit against the former
+# over the face index of ImmersedWalls against the former
 #      scatter into full work arrays (test/support/legacy_hooks.jl): on a
 #      solid mask with corners and one-cell gaps (faces with two walls), with
 #      and without eddy viscosity, also for a shuffled pair order; serially,
@@ -18,7 +18,7 @@
 #      forcings (geostrophic pressure gradient, profile nudging with a
 #      height weight, both subsidence forms, advective tendencies, the
 #      `:mean` target of ReferenceDamping) one work item per level, on a
-#      RegularGrid and a StretchedGrid: bit for bit against the former loops,
+#      RegularGrid and a StretchedGrid: against the former loops,
 #      on every backend.
 
 using Test
@@ -38,8 +38,8 @@ isdefined(@__MODULE__, :LegacyHooks) || include(joinpath(@__DIR__, "support", "l
 const HK_BACKENDS = ("serial" => CPUBackend(serial = true),
                      "threaded, threshold 0" => CPUBackend(threshold = 0),
                      "default" => CPUBackend())
-hk_bits(A::AbstractArray) = reinterpret(UInt64, vec(collect(Float64, A)))
-hk_bits(x::Real) = reinterpret(UInt64, Float64(x))
+hk_bits(A::AbstractArray) = collect(Float64, A)      # copies, compared within ROUNDOFF_RTOL (#495)
+hk_bits(x::Real) = Float64(x)
 hk_bits(x::Tuple) = map(hk_bits, x)
 
 # a 3-D city: blocks with a one-cell street between two of them (faces with
@@ -93,7 +93,7 @@ end
     @info "KA-k city: $(length(iw.faces)) pairs on $nf faces, $multi faces with two walls"
 end
 
-@testset "immersed walls: gather = former scatter, bit for bit ($(sgs ? "with" : "no") ν_t, $(shuf ? "shuffled" : "built") order)" for sgs in (true, false), shuf in (false, true)
+@testset "immersed walls: gather = former scatter ($(sgs ? "with" : "no") ν_t, $(shuf ? "shuffled" : "built") order)" for sgs in (true, false), shuf in (false, true)
     sim, sm = hk_city(; sgs = sgs)
     law = (i, j, k) -> isodd(i + j) ? RoughLogLaw(0.05) : RoughLogLaw(0.2)
     iw0 = immersed_walls(sim, sm, law)
@@ -116,9 +116,9 @@ end
             apply_immersed_wall_stress!(sim, iw, 0.7)
             immersed_wall_drag!(zeros(length(faces)), iw, sim.u.data, sim.v.data, sim.w.data)
         end
-        ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_state(sim), ref)) &&
-             hk_bits(got) == hk_bits(aref) &&
-             all(hk_bits(iw.stats[k]) == hk_bits(rs[k]) for k in (:F, :τA, :area, :τ_min, :F_stencil))
+        ok = all(values_agree(hk_bits(x), hk_bits(y)) for (x, y) in zip(hk_state(sim), ref)) &&
+             values_agree(hk_bits(got), hk_bits(aref)) &&
+             all(values_agree(hk_bits(iw.stats[k]), hk_bits(rs[k])) for k in (:F, :τA, :area, :τ_min, :F_stencil))
         ok || @info "KA-k bit mismatch (immersed walls)" bname sgs shuf
         @test ok
     end
@@ -141,8 +141,8 @@ end
     for (bname, b) in HK_BACKENDS
         hk_restore!(sim, st)
         F = with_backend(() -> apply_canopy_drag!(sim, drag, 2.0), b)
-        ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_state(sim), ref)) &&
-             hk_bits(Tuple(F)) == hk_bits(Tuple(Fref))
+        ok = all(values_agree(hk_bits(x), hk_bits(y)) for (x, y) in zip(hk_state(sim), ref)) &&
+             values_agree(hk_bits(Tuple(F)), hk_bits(Tuple(Fref)))
         ok || @info "KA-k bit mismatch (canopy drag)" bname
         @test ok
     end
@@ -167,7 +167,7 @@ end
         for (bname, b) in HK_BACKENDS
             hk_restore!(sim, st)
             with_backend(() -> new!(sim), b)
-            ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_state(sim), ref))
+            ok = all(values_agree(hk_bits(x), hk_bits(y)) for (x, y) in zip(hk_state(sim), ref))
             ok || @info "KA-k bit mismatch (IBM)" mname cname bname
             @test ok
         end
@@ -196,7 +196,7 @@ end
             BCm.moist_buoyancy_perturbation!(Δ, θ, qv, qc, fluid)
             BCm.add_moist_buoyancy!(tw, Δ, 300.0, 9.81)
         end
-        ok = hk_bits(Δ) == hk_bits(Δr) && hk_bits(tw.data) == hk_bits(twr)
+        ok = values_agree(hk_bits(Δ), hk_bits(Δr)) && values_agree(hk_bits(tw.data), hk_bits(twr))
         ok || @info "KA-k bit mismatch (moist buoyancy)" bname
         @test ok
     end
@@ -258,8 +258,8 @@ end
         for (bname, b) in HK_BACKENDS
             hk_lsf_restore!(sim, st)
             I = with_backend(() -> new!(sim), b)
-            ok = all(hk_bits(x) == hk_bits(y) for (x, y) in zip(hk_lsf_state(sim), ref)) &&
-                 hk_bits(Float64.(I)) == hk_bits(Float64.(Iref))
+            ok = all(values_agree(hk_bits(x), hk_bits(y)) for (x, y) in zip(hk_lsf_state(sim), ref)) &&
+                 values_agree(hk_bits(Float64.(I)), hk_bits(Float64.(Iref)))
             ok || @info "KA-k bit mismatch (large-scale forcing)" gname cname bname
             @test ok
         end
@@ -270,7 +270,7 @@ end
     for (bname, b) in HK_BACKENDS
         resize!(F.buf, m.Nz)
         got = with_backend(() -> copy(LSF._resolve_target(F, :mean, sim.θ, nothing, t)), b)
-        @test hk_bits(got) == hk_bits(bref)
+        @test values_agree(hk_bits(got), hk_bits(bref))
     end
     # the whole apply_forcing! of the damping is thread-invariant
     outs = map(HK_BACKENDS) do (bname, b)

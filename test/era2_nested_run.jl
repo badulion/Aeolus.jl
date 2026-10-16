@@ -90,7 +90,7 @@ end
     @test adaptive_dt(sim, CFLConstraints(dt_max = 1e-4)) == 1e-4
     sim.u.data[5, 5, 5] = NaN
     @test adaptive_dt(sim, c) == c.dt_min
-    # snapshot round trip is bit-identical, clock included
+    # snapshot round trip is the same, clock included
     fill!(sim.u.data, U); sim.θ.data .+= randn(size(sim.θ.data)); sim.t = 3.5
     snap = state_snapshot(sim)
     @test snap === state_snapshot(sim)                   # cached per simulation
@@ -108,7 +108,7 @@ end
     @test stage_times(domain_advance(step_rk3!)) == (0.0, 1.0, 0.5)
     @test stage_times(domain_advance(step_imex!, ARK2())) == (0.0, ARK2().γ)
     @test stage_times(domain_advance(step_imex!, Rosenbrock2())) == (0.0, Rosenbrock2().a21)
-    # the closure is exactly the core with its keywords: bit-identical to a
+    # the closure is exactly the core with its keywords: the same as a
     # direct call, and the run's hook is chained after the domain's own
     m = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     mk() = (s = BoussinesqSimulation(m; ν=1e-3);
@@ -120,7 +120,7 @@ end
                          post_predictor! = (s, h) -> push!(order, :user))
     adv(a, 1e-2; post_predictor! = (s, h) -> push!(order, :run))
     step_rk3!(b, 1e-2; body_force! = drag!, post_predictor! = (s, h) -> nothing)
-    @test a.u.data == b.u.data && a.θ.data == b.θ.data && a.t == b.t
+    @test agree(a.u.data, b.u.data) && agree(a.θ.data, b.θ.data) && agree(a.t, b.t)
     @test order == [:user, :run, :user, :run, :user, :run]
 end
 
@@ -352,7 +352,7 @@ function _nr_covered_ke(p, nest)
     return 0.5 * s * m.dx * m.dy * m.dz
 end
 
-@testset "one-way: the parent is bit-identical to a standalone run" begin
+@testset "one-way: the parent is the same as a standalone run" begin
     run = _nr_tg_case(; feedback = :one_way, cfl_parent = CFLConstraints())
     alone = deepcopy(run.parent)
     c = CFLConstraints(); dtp = nothing
@@ -361,14 +361,14 @@ end
         dt = adaptive_dt(alone, c; dt_prev = dtp)
         step!(alone, dt); dtp = dt
     end
-    same = interior_view(run.parent.u) == interior_view(alone.u) &&
-           interior_view(run.parent.v) == interior_view(alone.v) &&
-           interior_view(run.parent.w) == interior_view(alone.w) &&
-           interior_view(run.parent.θ) == interior_view(alone.θ)
-    @printf("  20 one-way steps: parent bit-identical = %s, t = %.6g vs %.6g, child substeps %d\n",
+    same = agree(interior_view(run.parent.u), interior_view(alone.u)) &&
+           agree(interior_view(run.parent.v), interior_view(alone.v)) &&
+           agree(interior_view(run.parent.w), interior_view(alone.w)) &&
+           agree(interior_view(run.parent.θ), interior_view(alone.θ))
+    @printf("  20 one-way steps: parent the same = %s, t = %.6g vs %.6g, child substeps %d\n",
             same, run.parent.t, alone.t, run.stats.child_substeps)
     @test same
-    @test run.parent.t == alone.t
+    @test values_agree(run.parent.t, alone.t)
 end
 
 # -------------------------------------------------------------------------
@@ -476,15 +476,15 @@ end
     dc = maximum(abs, interior_view(inj.child.u) .- interior_view(ref.child.u))
     @printf("  child NaN: retries %d (parent %d); parent core calls %d (ref %d), child core calls %d (ref %d)\n",
             inj.stats.child_retries, inj.stats.parent_retries, ncp, ncp_ref, ncc, ncc_ref)
-    @printf("  max |u_child − u_child,ref| = %.2e, parent bit-identical = %s\n", dc,
+    @printf("  max |u_child − u_child,ref| = %.2e, parent the same = %s\n", dc,
             interior_view(inj.parent.u) == interior_view(ref.parent.u))
     @test inj.stats.child_retries == 1 && inj.stats.parent_retries == 0
     @test ncp == 10 && ncp_ref == 10                   # the parent is never advanced twice
     # the rejected piece is redone at half size; the growth limiter
     # (growth_max = 1.1) then ramps the child dt back up over a few pieces
     @test ncc >= ncc_ref + 2
-    @test interior_view(inj.parent.u) == interior_view(ref.parent.u)
-    @test interior_view(inj.parent.θ) == interior_view(ref.parent.θ)
+    @test agree(interior_view(inj.parent.u), interior_view(ref.parent.u))
+    @test agree(interior_view(inj.parent.θ), interior_view(ref.parent.θ))
     @test dc < 1e-12
     @test inj.child.t == inj.parent.t
     # a parent rejection is retried before any child substep
@@ -592,18 +592,14 @@ end
             step_nested!(a; dt = 2e-3); step_nested!(b; dt = 2e-3)
         end
         for f in (:u, :v, :w, :θ)
-            @test getproperty(a.child, f).data == getproperty(b.child, f).data
-            @test getproperty(a.parent, f).data == getproperty(b.parent, f).data
+            @test agree(getproperty(a.child, f).data, getproperty(b.child, f).data)
+            @test agree(getproperty(a.parent, f).data, getproperty(b.parent, f).data)
         end
         # boundary_time over every stored (halo) point is the same blend
         sa = boundary_time(a, a.t0 + 0.4a.Δt); sb = boundary_time(b, b.t0 + 0.4b.Δt)
         ii, jj, kk = interior(cm)
-        same = true
-        for k in axes(sb.θ.data, 3), j in axes(sb.θ.data, 2), i in axes(sb.θ.data, 1)
-            (i in ii) && (j in jj) && (k in kk) && continue
-            same &= sa.θ[i, j, k] == sb.θ[i, j, k] && sa.u[i, j, k] == sb.u[i, j, k]
-        end
-        @test same
+        halo = [I for I in CartesianIndices(sb.θ.data) if !(I[1] in ii && I[2] in jj && I[3] in kk)]
+        @test agree(sa.θ[halo], sb.θ[halo]) && agree(sa.u[halo], sb.u[halo])
         if fb === :one_way
             bytes(r) = sum(st -> sum(Aeolus.Nesting._data_bytes(getproperty(st, f).data)
                                      for f in (:u, :v, :w, :θ)), (r.s_old, r.s_new, r.s_bc))

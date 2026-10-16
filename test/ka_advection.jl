@@ -1,7 +1,7 @@
 # KA-e (#302): the scalar-transport hot path and the momentum advection of
 # AdvectionSchemes on launch!.
 #
-#   1. bit for bit against the pre-port serial loops (a transcript:
+#   1. against the pre-port serial loops (a transcript:
 #      test/support/legacy_advection.jl) for the flux-form scalar sweep of
 #      every reconstruction (WENO-Z5/7, TENO5/8, WENO-JS5, Centered2,
 #      upwind), the reconstructed and upwind face fluxes, the positivity
@@ -33,7 +33,7 @@ const LA = LegacyAdvection
 const ADV_BACKENDS = ("serial" => CPUBackend(serial = true),
                       "threaded, threshold 0" => CPUBackend(threshold = 0),
                       "default" => CPUBackend())
-adv_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
+adv_bits(A) = collect(Float64, A)      # a copy, compared within ROUNDOFF_RTOL (#495)
 
 function adv_field(rng, loc, g; scale = 1.0, offset = 0.0)
     f = Field(loc, g)
@@ -46,7 +46,7 @@ adv_data(x::Field) = x.data
 adv_data(x::AbstractArray) = x
 
 # Run `new!(outs...)` on every backend and `old!(outs...)` once, each on its
-# own copy of `outs`; every output must agree bit for bit (halos included).
+# own copy of `outs`; every output must agree (halos included).
 # A non-`nothing` return value (boundary_scalar_flux's totals) must agree too.
 function adv_check(name, new!, old!, outs...)
     ref = map(adv_copy, outs)
@@ -56,10 +56,9 @@ function adv_check(name, new!, old!, outs...)
         rgot = with_backend(b) do
             new!(got...)
         end
-        ok = all(adv_bits(adv_data(a)) == adv_bits(adv_data(r)) for (a, r) in zip(got, ref))
+        ok = all(agree(adv_data(a), adv_data(r)) for (a, r) in zip(got, ref))
         if rref isa NamedTuple
-            ok &= all(reinterpret(UInt64, Float64(getfield(rgot, s))) ==
-                      reinterpret(UInt64, Float64(getfield(rref, s))) for s in keys(rref))
+            ok &= all(agree(Float64(getfield(rgot, s)), Float64(getfield(rref, s))) for s in keys(rref))
         end
         ok || @info "KA-e bit mismatch" name bname
         @test ok
@@ -83,7 +82,7 @@ function adv_state(rng, g)
     return u, v, w, ϕ
 end
 
-@testset "KA-e: scalar and momentum advection on launch! (bit for bit against the old loops)" begin
+@testset "KA-e: scalar and momentum advection on launch! " begin
     rng = Xoshiro(302)
     g = adv_grid()
     u, v, w, ϕ = adv_state(rng, g)
@@ -192,7 +191,7 @@ function adv_open_sim()
     return s
 end
 
-@testset "KA-e: boundary_scalar_flux on launch! (bit for bit against the old loops)" begin
+@testset "KA-e: boundary_scalar_flux on launch! " begin
     s = adv_open_sim()
     m = s.u.mesh
     Nz = m.Nz

@@ -6,7 +6,7 @@
 # variance-conserving scalar advection and boundary_scalar_flux. The
 # point functions (reconstructions, `_face_x/_y/_z`, `_bsf_face_flux`, …)
 # are unchanged by the port and are taken from the package. The reference
-# of test/ka_advection.jl (bit for bit) and of the KA-e timings (old
+# of test/ka_advection.jl and of the KA-e timings (old
 # loops vs launches). Nothing here is used by the package.
 # ---------------------------------------------------------------------------
 module LegacyAdvection

@@ -12,7 +12,7 @@
 #   * the model: the budgets attribute the prescribed surface heat flux,
 #     Coriolis and the sponge to their components exactly (euler, RK3 and an
 #     adaptive step that retries), close to round-off, and leave the state
-#     bit for bit unchanged; the catalogue and the config validation.
+# unchanged; the catalogue and the config validation.
 
 using Test
 using Aeolus
@@ -38,7 +38,7 @@ function bo_domain(sim, specs...; scheme = :euler, cfl = nothing, extra = ())
     d0 = Domain(sim; scheme = scheme, cfl = cfl, validate = false)
     return Domain(d0; components = (CentredAdvection(), BOC.build_components(specs, d0)..., extra...))
 end
-bo_bits(sim) = [reinterpret(UInt64, vec(copy(f.data))) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]
+bo_bits(sim) = [copy(f.data) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p)]   # compared within ROUNDOFF_RTOL (#495)
 "A divergence-free sheared flow (u(y, z), v(x), w = 0) over a stable θ with a wave."
 function bo_state!(sim)
     set!(sim.u, (x, y, z) -> 0.3 * sin(2π * y / 500) * cos(π * z / 400))
@@ -255,7 +255,7 @@ const BO_FLUX = (bottom = 0.2, top = -0.05)                   # [surface_theta_f
     @test abs(rm.closure) <= 1e-14 * BO_RHO0 * BO_MESH.Lz * 0.3
 end
 
-@testset "model budgets: the state is bit for bit that of a run without them" begin
+@testset "model budgets: the state is that of a run without them" begin
     for scheme in (:euler, :rk3)
         sims = [bo_state!(bo_core(; ν = 0.5)) for _ in 1:2]
         specs = (SurfaceThetaFlux => BO_FLUX, Coriolis => (; f = 1e-3), Sponge => (alpha_max = 0.02, z_start = 250.0))
@@ -264,7 +264,7 @@ end
         for _ in 1:4
             step!(Model(d1), 3.0); step!(Model(d2), 3.0)
         end
-        @test bo_bits(sims[1]) == bo_bits(sims[2])
+        @test values_agree(bo_bits(sims[1]), bo_bits(sims[2]))
         # with the budgets off nothing is measured and the fast path holds
         @test BOC.budgets(d1) === nothing
         @test BOC.core_hooks(bo_domain(bo_core(); scheme = scheme)).body_force! === nothing

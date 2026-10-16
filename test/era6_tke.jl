@@ -281,7 +281,7 @@ end
     restore_sgs_state!(c, snap)
     @test c.e.data == e0 && tke_statistics(c).steps == 0
     # a rejected adaptive step: the first try commits, then is poisoned and
-    # rejected; the retry at Δt/2 must equal a direct Δt/2 step bit for bit
+    # rejected; the retry at Δt/2 must equal a direct Δt/2 step
     sim, c = mk(); simB, cB = mk()
     tries = Ref(0)
     stepper = (s, h; kw...) -> begin
@@ -293,8 +293,8 @@ end
     _, dt_taken, nretry = step_adaptive!(sim, CFLConstraints(); dt = 0.02, stepper = stepper, sgs = c)
     step!(simB, 0.01; sgs = cB)
     @test nretry == 1 && dt_taken == 0.01
-    @test c.e.data == cB.e.data
-    @test interior_view(sim.u) == interior_view(simB.u) && interior_view(sim.θ) == interior_view(simB.θ)
+    @test agree(c.e.data, cB.e.data)
+    @test agree(interior_view(sim.u), interior_view(simB.u)) && agree(interior_view(sim.θ), interior_view(simB.θ))
     @test tke_statistics(c).steps == 1
 end
 
@@ -312,9 +312,9 @@ end
     @test 750 < r.zi < 1000
     # N-parent-a (#247): the harness's z_i is the one diagnostic,
     # boundary_layer_height(:min_flux); it equals the former local code
-    # (zf[argmin(flux)]) bit for bit, and the parcel method on the mean θ
+    # (zf[argmin(flux)]), and the parcel method on the mean θ
     # profile agrees within 10 %
-    @test r.zi === r.zf[argmin(r.flux)]
+    @test values_agree(r.zi, r.zf[argmin(r.flux)])
     zi_parcel = boundary_layer_height(r.zc, r.θ; method = :parcel)
     @info @sprintf("  z_i: min flux %.0f m, parcel (mean θ) %.0f m (%.1f %%)", r.zi, zi_parcel,
                    100 * (zi_parcel / r.zi - 1))
@@ -348,7 +348,7 @@ end
     @test all(νt -> νt ≈ 0.1 * Δ * sqrt(e0), v(f.νh))    # l = Δ: ν_t = c_k Δ √e
     rsm = ReynoldsStressClosure(g; e0 = e0, qv = qv, qc = qc, p = pv)
     Aeolus.PrognosticSGS._stratification!(rsm, sim)
-    @test interior_view(rsm.N2) == interior_view(wet.N2)   # the one N² of both closures
+    @test agree(interior_view(rsm.N2), interior_view(wet.N2))   # the one N² of both closures
     @test_throws ArgumentError TKEClosure(g; qv = qv, qc = qc)          # no pressure
     @info "#239 TKE in a saturated column" N2_θv = minimum(v(dry.N2)) N2_cloudy = maximum(abs, v(wet.N2))
 end

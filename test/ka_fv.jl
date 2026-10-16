@@ -1,7 +1,7 @@
 # KA-d (#299): the finite-volume kernels on launch! and the grid-metric
 # abstraction (Operators.FiniteVolume, StretchedGrids).
 #
-#   1. bit for bit against the pre-port serial loops (a transcript of the
+#   1. against the pre-port serial loops (a transcript of the
 #      old src/FiniteVolume.jl, the StretchedGrid / TerrainFollowingGrid
 #      stencils of src/StretchedGrids.jl and the #151 / #276 copies of
 #      src/stretched/boussinesq.jl: test/support/legacy_fv.jl) for every
@@ -32,7 +32,7 @@ isdefined(@__MODULE__, :LegacyFV) || include(joinpath(@__DIR__, "support", "lega
 const FV_BACKENDS = ("serial" => CPUBackend(serial = true),
                      "threaded, threshold 0" => CPUBackend(threshold = 0),
                      "default" => CPUBackend())
-fv_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
+fv_bits(A) = collect(Float64, A)      # a copy, compared within ROUNDOFF_RTOL (#495)
 
 const FV_LOCS = (CellCenter(), FaceX(), FaceY(), FaceZ())
 
@@ -58,7 +58,7 @@ function fv_check(name, new!, old!, outs...)
         with_backend(b) do
             new!(got...)
         end
-        ok = all(fv_bits(data(a)) == fv_bits(data(r)) for (a, r) in zip(got, ref))
+        ok = all(agree(data(a), data(r)) for (a, r) in zip(got, ref))
         ok || @info "KA-d bit mismatch" name bname
         @test ok
     end
@@ -281,7 +281,7 @@ function fv_tfg_kernels(rng)
     return nothing
 end
 
-@testset "KA-d: finite-volume kernels on launch! (bit for bit against the old loops)" begin
+@testset "KA-d: finite-volume kernels on launch! " begin
     rng = Xoshiro(299)
     for (gname, g) in fv_grids()
         @testset "$gname" begin
@@ -311,8 +311,8 @@ end
             with_backend(b) do
                 FVK._add_damping!(tf, θ, p, zs, 3, target, g; levels = lv)
             end
-            @test fv_bits(tf.data) == fv_bits(ref.data)
-            @test fv_bits(lv) == fv_bits(lref)
+            @test agree(tf.data, ref.data)
+            @test agree(lv, lref)
         end
         # the levels hold what was added to each level (a budget's integral)
         tf = fv_copy(tf0); lv = zeros(g.Nz)

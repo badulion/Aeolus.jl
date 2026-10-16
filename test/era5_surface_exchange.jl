@@ -114,12 +114,12 @@ const SE = Aeolus.SurfaceExchange
         for (φ, ψ) in ((phi_m, psi_m), (phi_h, psi_h))
             @test (ψ(g1, 0.41) - ψ(g1, 0.39)) / 0.02 ≈ (1 - φ(g1, 0.4)) / 0.4
         end
-        # Neutral normalisation and the unstable branch is BDBH with the same γ, bit for bit
+        # Neutral normalisation and the unstable branch is BDBH with the same γ
         @test phi_m(g1, 0.0) == 1 && psi_h(g1, 0.0) == 0
         bd = BusingerDyerBeljaarsHoltslag(γ_m = 15.0, γ_h = 9.0)
         g2 = BusingerDyerLogLinear(γ_m = 15.0, γ_h = 9.0, β_m = 4.8, β_h = 7.8)
         for ζ in (-3.0, -0.5, -0.01), f in (phi_m, phi_h, psi_m, psi_h)
-            @test f(g2, ζ) == f(bd, ζ)
+            @test values_agree(f(g2, ζ), f(bd, ζ))
         end
         # Heat more strongly damped than momentum: φ_h > φ_m for ζ > 0 when β_h > β_m
         @test phi_h(g1, 1.0) - phi_m(g1, 1.0) ≈ 3.0

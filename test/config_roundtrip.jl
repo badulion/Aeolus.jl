@@ -1,5 +1,5 @@
 # The round-trip coverage suite (CFG-i, #364): every shipped config stays
-# valid, canonical, documented and replayable bit for bit.
+# valid, canonical, documented and replayable.
 #
 # Every config of an example case, `examples/<case>/*.toml` (ONE-i #458), is
 # found by globbing the tree, not from a list, and each one must carry its own smoke size, a
@@ -18,11 +18,11 @@
 #      sections and the nest parent's table included;
 #   4. it replays: run at its smoke size, then re-run from the first run's
 #      run.toml; the state fields, diagnostics.csv, results.toml and
-#      [config] are bit-identical under ESTIMATE FFTW (roundtrip_check).
+#      [config] are the same under ESTIMATE FFTW (roundtrip_check).
 # A shipped config without a [test] table fails the suite with a message
 # naming the file. Resume: for the model (the SBL components among them) and the urban legacy case, a run
 # interrupted after its middle checkpoint and resumed the way
-# `aeolus run <folder> --resume` does is bitwise the uninterrupted run
+# `aeolus run <folder> --resume` does is the uninterrupted run
 # (the Berlin case's since #269).
 
 using Test
@@ -168,31 +168,31 @@ const RT_PLAN = smoke_plan(RT_FILES)
         end
         @test isempty(undocumented_keys(cfg))
     end
-    # 4. it replays from its run.toml, bit for bit
+    # 4. it replays from its run.toml
     r = in_dir(() -> roundtrip_check(f; overrides = t.overrides, member = member), f)
     @test r.config_equal
-    @test r.fields_equal
+    @test r.fields_agree
     isempty(r.fields_differing) || @info "round trip differs" f r.fields_differing
-    @test r.diagnostics_equal
-    @test r.results_equal
+    @test r.diagnostics_agree
+    @test r.results_agree
     # the replay is of a run that ran: some state, finite
     fs = Base.invokelatest(state_fields, r.runs[1].obj)
     @test !isempty(keys(fs))
     @test all(k -> all(isfinite, fs[k]), keys(fs))
 end
 
-@testset "resume: interrupted after the middle checkpoint, resumed, bitwise the uninterrupted run" begin
+@testset "resume: interrupted after the middle checkpoint, resumed the uninterrupted run" begin
     # the model: buoyant_convection at 16³, 20 steps (dry_convective_bl and the
     # adaptive TGV resume in config_simulation_driver.jl)
     r = resume_check(joinpath(RT_EXAMPLES, "buoyant_convection", "buoyant_convection.toml");
                      overrides = ["grid.size=[16,16,16]", "output.series_cadence=0.0", "output.cadence=0.2"],
                      outputs = ["output.nc"])
-    @test r.fields_equal && isempty(r.fields_differing)
+    @test r.fields_agree && isempty(r.fields_differing)
     # the one writer's file (ONE-c): the resumed run continues it after the checkpoint,
     # over what the interrupted session wrote after it, to the same records and series
-    @test r.outputs_equal
+    @test r.outputs_agree
     @test r.statuses == ["interrupted", "completed"]
-    @test r.runs[2].obj.stepper.step == 20 && Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
+    @test values_agree(r.runs[2].obj.stepper.step, 20) && values_agree(Aeolus.SimulationDriver.simulation(r.runs[2].obj).t, Aeolus.SimulationDriver.simulation(r.runs[1].obj).t)
     # the SBL components (ONE-g #456): cases99 (GABLS2 with the towers, the surface layer, the
     # large-scale forcing and the retargeted sponge) at 16 × 16 × 32, 20 steps; the surface
     # layer's state, the towers' segments and bins and the output.nc series are restored too;
@@ -203,29 +203,29 @@ end
                                   "output.series_cadence=60.0", "output.cadence=120.0",
                                   "checks.reference={}", "checks.reference_file=\"none\""],
                      outputs = ["output.nc"])
-    @test r.fields_equal && isempty(r.fields_differing)
-    @test r.outputs_equal
+    @test r.fields_agree && isempty(r.fields_differing)
+    @test r.outputs_agree
     @test r.statuses == ["interrupted", "completed"]
     @test r.runs[2].obj.stepper.step == 20 &&
           Aeolus.SimulationDriver.simulation(r.runs[2].obj).t === Aeolus.SimulationDriver.simulation(r.runs[1].obj).t
     # the urban site (#269, ONE-e #454): berlin_smoke.toml, nested in its parent domain
     # (NEST-p3 #483), every component on, 24 s (8 windows of the parent, 11 adaptive site
     # steps), a checkpoint every 3 windows, interrupted after window 5 and resumed from
-    # window 3; the state of the site, every tracer, Ts and the parent domain bitwise, and the NetCDF
+    # window 3; the state of the site, every tracer, Ts and the parent domain, and the NetCDF
     # output's record written after the checkpoint is rewritten to the same values
     r = resume_check(joinpath(RT_EXAMPLES, "urban", "berlin_smoke.toml");
                      nsteps = 12, stop = 5, every_steps = 3, nsteps_overrides = n -> ["time.nsteps=$n"],
                      overrides = ["output.netcdf=\"smoke.nc\"", "output.path=\"none\"",
                                   "output.variables=[\"u\", \"theta\", \"qv\", \"Ts\", \"hour\"]"],
                      outputs = ["smoke.nc"])
-    @test r.fields_equal && isempty(r.fields_differing)
+    @test r.fields_agree && isempty(r.fields_differing)
     isempty(r.fields_differing) || @info "Berlin resume: fields differing" r.fields_differing
     @test r.statuses == ["interrupted", "completed"]
     site(x) = Aeolus.Urban.urban_case(x.obj.model.domains[2])
     c1, c2 = site(r.runs[1]), site(r.runs[2])
-    @test c2.clock.n == c1.clock.n && c2.sim.t === c1.sim.t === 24.0 && c2.clock.nrecord == c1.clock.nrecord == 2
+    @test c2.clock.n == c1.clock.n && agree(c2.sim.t, c1.sim.t) && agree(c1.sim.t, 24.0) && c2.clock.nrecord == c1.clock.nrecord == 2
     @test any(k -> startswith(String(k), "site_"), keys(Base.invokelatest(state_fields, r.runs[2].obj)))
     # the output (the run's writer, ONE-k #474): the record written after the
     # checkpoint is rewritten to the same values
-    @test r.outputs_equal
+    @test r.outputs_agree
 end

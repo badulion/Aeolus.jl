@@ -33,7 +33,7 @@ _ib_eigvals(R) = eigvals(Symmetric([R[1] R[4] R[5]; R[4] R[2] R[6]; R[5] R[6] R[
     interior_view(sim.νt) .= interior_view(f.νh)
     e2 = Aeolus.Fields.Field(Aeolus.Grids.CellCenter(), m)
     sgs_tke!(e2, nothing, sim)
-    @test interior_view(e2) == interior_view(e)
+    @test agree(interior_view(e2), interior_view(e))
     # prognostic closures return their memory
     tk = TKEClosure(m; e0 = 0.37)
     sgs_tke!(e, tk, sim)

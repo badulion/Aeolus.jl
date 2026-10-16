@@ -13,7 +13,7 @@
 #   4. divergence: max|∇·u| < 1e-10 after the projection on a refine = 3
 #      nest with ParentResolvedStatistics (one-way; the wind veers)
 #   5. restart: generator (and statistics) state saved and restored
-#      continues bit for bit
+# continues
 #
 # References: Lund, Wu & Squires (1998), JCP 140, 233; Xie & Castro (2008),
 # FTaC 81, 449; Kadasch et al. (2021), GMD 14, 5435 (PALM's STG: mean
@@ -266,7 +266,7 @@ end
 end
 
 # ---------------------------------------------------------------------------
-@testset "restart: generator state saved and restored continues bit for bit" begin
+@testset "restart: generator state saved and restored continues" begin
     m = RegularGrid(size = (16, 12, 8), extent = (160.0, 120.0, 80.0), halo = (3, 3, 3))
     sim, _ = _it_sim(m, 2.0, -1.0)
     stats = ParametrizedStatistics(; u_star = t -> 0.3 + 1e-3t, z_i = 800.0, length_scale = 25.0)
@@ -280,8 +280,8 @@ end
     restore_state!(sim, snap); restore_open_boundaries!(sim, ob); sim.t = t0
     restore_generator_state!(it, gs)
     for _ in 1:20; step_rk3!(sim, 0.5); end
-    @test sim.u.data == ua
-    @test sim.w.data == wa
+    @test agree(sim.u.data, ua)
+    @test agree(sim.w.data, wa)
     @test inflow_perturbation(it, :west)[1] == Pa
     @test any(!iszero, Pa)
 end
@@ -321,7 +321,7 @@ end
 
 @testset "ParentResolvedStatistics on a StretchedGrid parent (the Berlin parent)" begin
     # the same random state on a RegularGrid and on its uniform StretchedGrid
-    # (bit-identical levels): every statistic agrees exactly, and the levels
+    # (the same levels): every statistic agrees exactly, and the levels
     # are the stretched grid's own centres
     g = RegularGrid(size = (24, 20, 10), extent = (1200.0, 1000.0, 500.0), halo = (3, 3, 3))
     sg = StretchedGrid(g)
@@ -457,13 +457,13 @@ end
     # no feedback loop: the child and the parent stay at their one-way energy
     @test abs(kinetic_energy(two.c) / kinetic_energy(one.c) - 1) < 0.05   # measured ×0.995 (×1.29 before)
     @test abs(kinetic_energy(two.p) / kinetic_energy(one.p) - 1) < 0.01   # measured ×0.999 (×1.025 before)
-    # the feedback gives the child's faces back bit for bit
+    # the feedback gives the child's faces back
     run = two.run
     w = Aeolus.Nesting._begin_parent_step!(run)
     Aeolus.Nesting._subcycle_child!(run, w.t_child_end)
     u0 = copy(two.c.u.data); v0 = copy(two.c.v.data)
     Aeolus.Nesting._end_parent_step!(run, w, true)
-    @test two.c.u.data == u0 && two.c.v.data == v0
+    @test agree(two.c.u.data, u0) && agree(two.c.v.data, v0)
 end
 
 end

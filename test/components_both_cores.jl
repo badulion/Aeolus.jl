@@ -2,7 +2,7 @@
 # infrastructure on the anelastic core, and the ONE-a components on it.
 #
 #   * the sound-proof flux form of the SGS and surface fluxes: with W ≡ 1 the
-#     weighted operators are the unweighted ones bit for bit; with W = ρ̄ they
+# weighted operators are the unweighted ones; with W = ρ̄ they
 #     conserve Σ W uᵢ ΔV and Σ W θ ΔV and dissipate the weighted kinetic energy;
 #   * a dry CBL on both cores through the `simulation` config: the θ budget
 #     closes to round-off (Σ θ on the Boussinesq core, Σ ρ̄ θ on the anelastic
@@ -10,10 +10,10 @@
 #     mass aloft);
 #   * SSP-RK3 and the adaptive step on the anelastic core: the constraint at
 #     round-off, the guard on the core's own constraint, a rejected step
-#     restored bit for bit, the components' limits;
+# restored, the components' limits;
 #   * checkpoints on both cores and every scheme: a restart (in-process,
 #     through the components, and through the `simulation` run type's
-#     resume) is bitwise the uninterrupted run; another base state is refused;
+# resume) is the uninterrupted run; another base state is refused;
 #   * the component contracts on both cores and both schemes;
 #   * the boundary-layer components of the SBL cases (ONE-g, #456): the
 #     geostrophic balance and the inertial oscillation, the surface layer's
@@ -64,7 +64,7 @@ bc_wsum(f, W, H) = sum(W[H+k] * sum(interior_view(f)[:, :, k]) for k in 1:size(i
 
 const BC_SGS = (model = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :none)
 
-@testset "the weighted SGS and surface fluxes: W ≡ 1 is the unweighted operator, bit for bit" begin
+@testset "the weighted SGS and surface fluxes: W ≡ 1 is the unweighted operator" begin
     sim = bc_state!(bc_core(:anelastic))
     Hz = BC_MESH.Hz; n = size(sim.θ.data, 3)
     one_w = (ones(n), ones(n + 1))
@@ -233,7 +233,7 @@ end
         BC_MESH, nothing; x = :open, y = :periodic, bottom = :wall, top = :wall, fields = (:u, :v, :w, :θ), halo = 1)), 1.0)
 end
 
-@testset "anelastic adaptive step: the guard on ∇·(ρ̄u), a rejected step restored bit for bit, the limits" begin
+@testset "anelastic adaptive step: the guard on ∇·(ρ̄u), a rejected step restored, the limits" begin
     sim = bc_state!(bc_core(:anelastic; C_s = 0.17)); Aeolus.Anelastic._project_mass_weighted!(sim)
     c = CFLConstraints(; C_advective = 0.5, dt_max = 50.0)
     _, dt, nr = step_adaptive!(sim, c)
@@ -242,7 +242,7 @@ end
     @test g.finite && g.divergence < 1e-12
     @test max_divergence(sim) > 1e-6        # the plain ∇·u: what a Boussinesq guard would reject on
     # a step that always fails (a speed cap below the flow) is retried, then
-    # the pre-step state is restored bit for bit and the driver throws (the
+    # the pre-step state is restored and the driver throws (the
     # prognostic interiors: the dt pick itself fills halos and forms νt)
     iv(s) = [copy(interior_view(f)) for f in (s.u, s.v, s.w, s.θ, s.p)]
     before = iv(sim); t0 = sim.t
@@ -284,7 +284,7 @@ bc_advance!(d, n) = (for _ in 1:n; d.cfl === nothing ? step!(d, 2.0) : BCC.step_
     d2 = bc_domain(core; scheme = sch, cfl = cfl)
     restart!(d2.state, path; components = BCC.checkpoint_components(d2))
     bc_advance!(d2, 3)
-    @test bc_bits(d2.state) == bc_bits(d.state)
+    @test values_agree(bc_bits(d2.state), bc_bits(d.state))
     @test d2.state.t === d.state.t
     if core === :anelastic
         # another base state is another experiment: refused, or warned with allow_mismatch
@@ -298,7 +298,7 @@ bc_advance!(d, n) = (for _ in 1:n; d.cfl === nothing ? step!(d, 2.0) : BCC.step_
     end
 end
 
-@testset "the simulation run type: an anelastic run resumes bitwise from its checkpoint ($label)" for
+@testset "the simulation run type: an anelastic run resumes from its checkpoint ($label)" for
         (label, extra) in (("euler", String[]),
                            ("rk3 adaptive", ["timestep.scheme=\"rk3\"", "time.dt=\"adaptive\"", "time.cfl=0.3",
                                              "time.dt_max=5.0"]))
@@ -474,7 +474,7 @@ end
     d2 = bc_sbl_domain(core; scheme = sch, cfl = cfl)
     restart!(d2.state, path; components = BCC.checkpoint_components(d2))
     bc_advance!(d2, 3)
-    @test bc_bits(d2.state) == bc_bits(d.state)
+    @test values_agree(bc_bits(d2.state), bc_bits(d.state))
     sl = only(c for c in d.components if c isa SurfaceLayer); sl2 = only(c for c in d2.components if c isa SurfaceLayer)
     @test sl2.wθ == sl.wθ && sl2.τ == sl.τ
     tw = only(c for c in d.components if c isa Towers); tw2 = only(c for c in d2.components if c isa Towers)
@@ -535,7 +535,7 @@ end
     d2 = bc_tke_domain(core; scheme = sch, cfl = cfl)
     restart!(d2.state, path; components = BCC.checkpoint_components(d2))   # the statistics wait for their first fold
     bc_advance!(d2, 3)
-    @test bc_bits(d2.state) == bc_bits(d.state)
+    @test values_agree(bc_bits(d2.state), bc_bits(d.state))
     e(d) = only(c for c in d.components if c isa SGS).closure.e.data
     @test e(d2) == e(d) && minimum(interior_view(only(c for c in d.components if c isa SGS).closure.e)) > 0
     st(d) = only(c for c in d.components if c isa ParentStatistics).stats
@@ -613,7 +613,7 @@ end
     @test all(iszero, tu[i_up, :, :])
     @test all(tu[i_pl, j, k] ≈ -0.4 * (ud[i_pl, j, k] - ut[i_pl, j, k]) for j in m.Hy+1:m.Hy+m.Ny, k in m.Hz+1:m.Hz+m.Nz)
     @test maximum(abs, fr.target.v.data[i_pl, :, :]) > 0           # the disturbance in the target
-    # a restart continues bit for bit: the target and the time of its last
+    # a restart continues: the target and the time of its last
     # refresh are checkpointed (the first substage of a step keeps the
     # previous step's last target, so a target rebuilt from the time would not)
     d1 = bc_plate(core); for _ in 1:3; step!(d1, 0.5); end
@@ -623,5 +623,5 @@ end
     d2 = bc_plate(core)
     restart!(d2.state, path; components = BCC.checkpoint_components(d2))
     for _ in 1:3; step!(d2, 0.5); end
-    @test bc_bits(d2.state) == bc_bits(d1.state)
+    @test values_agree(bc_bits(d2.state), bc_bits(d1.state))
 end

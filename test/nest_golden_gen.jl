@@ -2,7 +2,7 @@
 #
 #   julia --project=. test/nest_golden_gen.jl
 #
-# Run on the code before a change that must keep NestedRun bit-identical
+# Run on the code before a change that must keep NestedRun the same
 # (it was run on the commit before the nest hierarchy refactor); the test
 # (era2_nest_hierarchy.jl, "golden NestedRun") compares against the file.
 

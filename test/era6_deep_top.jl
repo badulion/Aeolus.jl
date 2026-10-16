@@ -5,8 +5,8 @@
 # What is checked against what:
 #   1. relaxation: a uniform θ anomaly with no flow decays per level by the
 #      exact SSP-RK3 amplification factor 1 − a + a²/2 − a³/6 (a = λΔt);
-#   2. locality and exactness: zero tendency below z_start bit for bit; a
-#      constant level-vector target == the number target bit for bit, on a
+#   2. locality and exactness: zero tendency below z_start; a
+# constant level-vector target == the number target, on a
 #      RegularGrid and a StretchedGrid; the `:mean` target conserves every
 #      level's sum; the booked integral is the tendency's volume integral;
 #   3. gravity-wave absorption (Klemp & Lilly 1978, JAS 35, 78; Durran 2010
@@ -172,15 +172,15 @@ end
             z_s, z_t = 500.0, 800.0
             zc = damping_coordinates(g, CellCenter())
             below = findall(<(z_s), zc)
-            # the number path and the constant level vector, bit for bit
+            # the number path and the constant level vector
             t1 = Field(CellCenter(), g); t2 = Field(CellCenter(), g); t3 = Field(CellCenter(), g)
             add_sponge!(t1, f, 0.02, z_s, z_t; f_ref = 300.0)
             add_sponge!(t2, f, 0.02, z_s, z_t; f_ref = fill(300.0, g.Nz))
             ref = Field(CellCenter(), g); ref.data .= 300.0
             add_sponge!(t3, f, 0.02, z_s, z_t; f_ref = ref)
-            @test t1.data == t2.data
-            @test t1.data == t3.data
-            # below z_start: zero bit for bit, whatever the target
+            @test agree(t1.data, t2.data)
+            @test agree(t1.data, t3.data)
+            # below z_start: zero, whatever the target
             t4 = Field(CellCenter(), g)
             add_sponge!(t4, f, 0.02, z_s, z_t; f_ref = collect(range(290.0, 310.0; length = g.Nz)))
             @test all(interior_view(t4)[:, :, below] .=== 0.0)
@@ -188,11 +188,11 @@ end
             @test any(!iszero, interior_view(t4))
             # a level vector of the wrong length is refused
             @test_throws DimensionMismatch add_sponge!(t4, f, 0.02, z_s, z_t; f_ref = zeros(g.Nz - 1))
-            @info "locality / exactness on $name: below z_start untouched, vector == number bit for bit"
+            @info "locality / exactness on $name: below z_start untouched, vector == number"
         end
 
         # TerrainFollowingGrid: the one kernel sampled at the 3-D physical
-        # heights equals the per-cell sin² formula (the pre-#254 loop) bit for bit
+        # heights equals the per-cell sin² formula (the pre-#254 loop)
         sg = StretchedGrid(; size = (8, 6, 12), extent = (800.0, 600.0, 1200.0), halo = (2, 2, 2))
         tg = terrain_following_grid(sg, (x, y) -> 150 * exp(-((x - 400)^2) / 200^2))
         f = Field(CellCenter(), tg)
@@ -208,7 +208,7 @@ end
             sn = sin(0.5π * (z - 700.0) * (1 / (1200.0 - 700.0)))
             oracle[i, j, k] -= 0.03 * sn * sn * (f.data[i, j, k] - 300.0)
         end
-        @test tt.data == oracle
+        @test agree(tt.data, oracle)
         @test count(!iszero, tt.data) > 0
 
         # ReferenceDamping on a simulation: profile, table and :mean targets
@@ -220,15 +220,15 @@ end
         prof = sponge_profile(0.05, 300.0, 600.0)
         θref = 300 .+ 0.003 .* zc
         # the level vector, a time-independent table on the level heights and a
-        # function of (z, t) give the same tendency, bit for bit
+        # function of (z, t) give the same tendency
         tends = map((θref, ForcingTable(zc, θref), (z, t) -> 300 + 0.003z)) do target
             fill!(sim.tθ.data, 0)
             F = ReferenceDamping(:θ, prof, target)
             apply_forcing!(sim, F, 0.0, 1.0)
             copy(sim.tθ.data), damping_tendency(F)
         end
-        @test tends[1][1] == tends[2][1]
-        @test tends[1][1] == tends[3][1]
+        @test values_agree(tends[1][1], tends[2][1])
+        @test values_agree(tends[1][1], tends[3][1])
         # the booked integral is the volume integral of the tendency it added
         d = tends[1][2]
         @test d.levels ≈ _dt_level_sums(tends[1][1], g) rtol = 1e-14

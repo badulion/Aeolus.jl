@@ -157,7 +157,7 @@ using Aeolus.RadiationFog
     @testset "Fog: delegates to the contract's process adjustment (#82)" begin
         # One source of truth: fog_equilibrium IS the contract's
         # isobaric_saturation_adjustment with no rain or ice — the same
-        # numbers bit for bit, not merely close ones.
+        # numbers, not merely close ones.
         n_same = 0; n = 0
         for T in 230.0:10.0:320.0, p in (5.0e4, 8.0e4, 1.0e5),
             S in (0.5, 0.99, 1.01, 1.2), ql in (0.0, 1e-6, 2e-3)

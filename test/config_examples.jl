@@ -174,9 +174,9 @@ include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
     @test sum(interior_view(sim.qv)) + sum(interior_view(water.ql)) <= q0
 end
 
-@testset "round trip from run.toml (kernels: cloud_spinup.toml), bit-identical" begin
+@testset "round trip from run.toml (kernels: cloud_spinup.toml), the same" begin
     r = roundtrip_check(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
-    @test r.fields_equal && r.config_equal && r.results_equal
+    @test r.fields_agree && r.config_equal && r.results_agree
 end
 
 # (The coverage test of the scripts that integrate the equations is

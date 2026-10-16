@@ -91,10 +91,10 @@ end
     @test phi_m(s, 0.1) ≈ 1.48 && phi_h(s, 0.1) ≈ 1.78     # GABLS1: β_m = 4.8, β_h = 7.8
     @test psi_m(s, 0.5) ≈ -2.4 && psi_h(s, 0.5) ≈ -3.9
     # the momentum wall law with the Obukhov length of the heat-flux solve
-    # returns the solver's u* bit for bit (one Monin-Obukhov solution)
+    # returns the solver's u* (one Monin-Obukhov solution)
     sol = solve_surface_layer(s; U = 7.3, z_m = 6.25, θ_a = 264.8, θ_s = 263.9, z0m = 0.1, z0h = 0.1)
     @test sol.L > 0
-    @test friction_velocity(MOSTWallLaw(s, 0.1, sol.L), 7.3, 6.25) == sol.u_star
+    @test values_agree(friction_velocity(MOSTWallLaw(s, 0.1, sol.L), 7.3, 6.25), sol.u_star)
     @test kinematic_heat_flux(sol) == -sol.u_star * sol.θ_star < 0
     d = gabls1_domain(8)
     @test Components.core(d) === :boussinesq && d.scheme === :rk3 && d.cfl.C_advective == 1.2

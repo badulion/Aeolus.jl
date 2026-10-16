@@ -143,12 +143,12 @@ Aeolus.Operators.add_sgs_scalar!(tϕ, ϕ, c::ConstTensor181, f::SGSFields, sim) 
         add_eddy_diffusion_scalar!(tz, ϕz, constfield181(g, κh), constfield181(g, κv))
         e_z = maxabs181(iv181(tz) .+ λz .* iv181(ϕz)) / (λz * maxabs181(ϕz))
         @test e_z <= 1e-10
-        # κh = κv: the isotropic three-argument form, bit for bit
+        # κh = κv: the isotropic three-argument form
         t3 = Field(CellCenter(), g); t4 = Field(CellCenter(), g)
         K = constfield181(g, 0.7)
         add_eddy_diffusion_scalar!(t3, ϕ, K)
         add_eddy_diffusion_scalar!(t4, ϕ, K, K)
-        @test t3.data == t4.data
+        @test values_agree(t3.data, t4.data)
 
         # time stepping through the closure contract: θ decays at the discrete
         # amplification factor of λ

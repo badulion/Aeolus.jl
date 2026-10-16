@@ -10,7 +10,7 @@
 # as arguments. The point functions they call (`_strain_at`,
 # `_germano_terms`, `_amd_point`, `sigma_operator`, `tke_length_scale`, …)
 # are unchanged by the port and are taken from the package. The reference
-# of test/ka_sgs.jl (bit for bit, and the named one-time changes) and of the
+# of test/ka_sgs.jl and of the
 # KA-l timings (old loops vs launches). Nothing here is used by the package.
 # ---------------------------------------------------------------------------
 module LegacySGS

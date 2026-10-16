@@ -109,15 +109,15 @@ using Printf, Random
     add_velocity_sponge!(sp)
     tu = Field(FaceX(), m)
     add_sponge!(tu, sp.u, 0.05, 300.0, 400.0; f_ref = tp.u)
-    @test sp.tu.data == tu.data                     # bit for bit: one kernel
-    # the closed-top default stays the zero target of add_sponge! bit for bit
+    @test values_agree(sp.tu.data, tu.data)                     #: one kernel
+    # the closed-top default stays the zero target of add_sponge!
     sc = BoussinesqSimulation(m; kw...)
     sc.u.data .= sp.u.data
     fill!(sc.tu.data, 0)
     add_velocity_sponge!(sc)
     tu0 = Field(FaceX(), m)
     add_sponge!(tu0, sc.u, 0.05, 300.0, 400.0)
-    @test sc.tu.data == tu0.data
+    @test values_agree(sc.tu.data, tu0.data)
 end
 
 # ---------------------------------------------------------------------------

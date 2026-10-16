@@ -49,7 +49,7 @@ _dns_spectrum(k) = k^4 * exp(-2 * (k / DNS_KP)^2)
 # The per-step history runs on the deterministic reductions of KA-b (#296,
 # #400): every sum below is a canonical plane sum (`plane_reduce!`,
 # `interior_dot`) combined by `ordered_sum`, and the CFL speed a
-# `range_max`, so the history is threaded and bit-identical at every thread
+# `range_max`, so the history is threaded and the same at every thread
 # count. Before #400 they were `sum` over broadcast temporaries and
 # `maximum(abs, …)`, serial; the sums now add in the canonical order, which
 # moves S and ε in their last bits (the max is exact: dt keeps its bits).

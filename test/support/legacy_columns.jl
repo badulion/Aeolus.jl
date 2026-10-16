@@ -1,5 +1,5 @@
 # Transcripts of the column-physics loops before KA-m (#301), kept as the
-# bit-for-bit reference of test/ka_columns.jl. Each is the pre-port loop
+# reference of test/ka_columns.jl. Each is the pre-port loop
 # body as it was on the base of the port (KA-b #367 merged with master at
 # c617bc1), with its serial loop order and its running accumulators.
 

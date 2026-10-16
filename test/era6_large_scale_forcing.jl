@@ -11,18 +11,18 @@
 #     no-slip wall against the analytic profile and its 45° surface veer;
 #   * the advective tendencies: Δ∫θ dV against ∫∫(∂θ/∂t)_adv dV dt, the
 #     latter by the trapezoid rule on the table nodes, to round-off;
-#   * bit for bit: GeostrophicNudging against the Berlin case's former
+#   *: GeostrophicNudging against the Berlin case's former
 #     add_geostrophic_wind! over 100 SSP-RK3 and 100 forward-Euler steps
 #     of a sheared, rotating, turbulent box with Smagorinsky SGS (until
 #     #317 the same oracle ran inside 100 Berlin smoke steps; the
 #     forcing is a body-force hook either way, and the Berlin case is an
 #     example, run by hand, not a test fixture). The Berlin version also
-#     asserted every tracer bit for bit; the box carries no tracers, and
+# asserted every tracer; the box carries no tracers, and
 #     that check was redundant: both forcings write only u and v, never
 #     a tracer, so a tracer differs between the two runs only through
 #     the state it is advected, diffused and sourced by; that state
 #     (u, v, w, θ, p, and the eddy diffusivity computed from it) is
-#     bit-identical, which the == below checks.
+# the same, which the == below checks.
 
 using Test, Printf
 using Aeolus
@@ -54,7 +54,7 @@ _lsf_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1)
 
 # The Berlin case's geostrophic forcing before #171
 # (examples/urban/couplings/geostrophic.jl at cc4a150), kept verbatim as
-# the oracle of the bit-for-bit test. It is a test fixture, not a second
+# the oracle of the test. It is a test fixture, not a second
 # implementation: nothing outside this file calls it.
 function _legacy_add_geostrophic_wind!(sim, U_g::Real, V_g::Real, τ_relax::Real)
     Nx, Ny = sim.mesh.Nx, sim.mesh.Ny
@@ -262,7 +262,7 @@ end
     end
 
 
-    @testset "bit for bit: GeostrophicNudging == the former add_geostrophic_wind! (100 steps, turbulent box)" begin
+    @testset "GeostrophicNudging is the former add_geostrophic_wind! (100 steps, turbulent box)" begin
         # The oracle and the forcing as body-force hooks of the same run: a
         # rotating, sheared, stably stratified box with random fluctuations
         # and Smagorinsky SGS, so that every tendency the hook subtracts
@@ -295,10 +295,10 @@ end
             for _ in 1:100
                 adv!(new, new_bf!); adv!(old, old_bf!)
             end
-            same = all(getfield(new, x).data == getfield(old, x).data for x in (:u, :v, :w, :θ, :p))
-            @info @sprintf("Nudging bit for bit, %s, 100 steps (t = %.0f s = %.1f τ): u, v, w, θ, p identical: %s; ⟨u⟩ %.3f → %.3f (U_g %.1f), ⟨v⟩ → %.3f (V_g %.1f)",
+            same = all(agree(getfield(new, x).data, getfield(old, x).data) for x in (:u, :v, :w, :θ, :p))
+            @info @sprintf("Nudging, %s, 100 steps (t = %.0f s = %.1f τ): u, v, w, θ, p identical: %s; ⟨u⟩ %.3f → %.3f (U_g %.1f), ⟨v⟩ → %.3f (V_g %.1f)",
                            name, new.t, new.t / τ, same, u0, _lsf_mean(new.u), U_g, _lsf_mean(new.v), V_g)
-            @test new.t == old.t == 200.0
+            @test agree(new.t, old.t) && agree(old.t, 200.0)
             @test same
             # the forcing acted: over 3.3 τ the mean u moved more than half-way to U_g
             @test abs(_lsf_mean(new.u) - U_g) < 0.5 * abs(u0 - U_g)

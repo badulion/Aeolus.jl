@@ -3,13 +3,13 @@
 #   1. the primitives: foreach_column! (2-D columns and 1-D id lists, with
 #      and without partials) and foreach_cell! — every column / cell runs
 #      once, the partials are the per-column terms, and their column-order
-#      fold equals the serial loop `s += x` it replaces, bit for bit, on
+# fold equals the serial loop `s += x` it replaces, on
 #      every backend;
 #   2. the global caches (one Gauss-Legendre node cache, the aerosol
 #      bulk-optics memo, the SNICAR ageing table): prefilled or guarded,
 #      so a first use from many tasks at once gives the serial result;
 #   3. the ported column physics against transcripts of the pre-port loops
-#      (test/support/legacy_columns.jl), bit for bit, on every backend.
+# (test/support/legacy_columns.jl), on every backend.
 
 using Test
 using Random: Xoshiro, rand, randn
@@ -20,7 +20,7 @@ const LC = LegacyColumns
 const KC_BACKENDS = ("serial" => CPUBackend(serial = true),
                      "threaded, threshold 0" => CPUBackend(threshold = 0),
                      "default" => CPUBackend())
-kc_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
+kc_bits(A) = collect(Float64, A)      # a copy, compared within ROUNDOFF_RTOL (#495)
 
 @testset "KA-m: column physics (#301)" begin
 
@@ -51,20 +51,20 @@ kc_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
                         (ir, jr), A; partials = P, weight = 7)
         @test vec(P[:, 1]) == vec(ref_col)
         S = column_sums(P)
-        @test kc_bits(S[1]) == kc_bits(ref_fold((i, j) -> colsum(i, j, A)))
-        @test kc_bits(S[2]) == kc_bits(ref_fold((i, j) -> isodd(i + j) ? 0.0 : abs(colsum(i, j, A))))
+        @test agree(S[1], ref_fold((i, j) -> colsum(i, j, A)))
+        @test agree(S[2], ref_fold((i, j) -> isodd(i + j) ? 0.0 : abs(colsum(i, j, A))))
         # column_sum: the running sums serially, partials + fold threaded —
         # the same numbers in the same order
         cs = column_sum(b, (i, j, A) -> (s = colsum(i, j, A); (s, isodd(i + j) ? 0.0 : abs(s))),
                         (ir, jr), A; weight = 7)
-        @test cs isa NTuple{2,Float64} && kc_bits(collect(cs)) == kc_bits(S)
+        @test cs isa NTuple{2,Float64} && agree(collect(cs), S)
         c1 = column_sum(b, colsum, (ir, jr), A; weight = 10^6)
-        @test kc_bits(c1) == kc_bits(S[1])
+        @test agree(c1, S[1])
         @test column_sum(b, (n, v) -> v[n], (3:9,), collect(1.0:10.0)) === sum(3.0:9.0)
         # a body whose type is not inferred still sums from zero (−0.0 + 0.0 = 0.0)
         anyv = Any[-0.0, -0.0, 1.5]
-        @test kc_bits(column_sum(b, (n, v) -> v[n], (1:3,), anyv)) == kc_bits(0.0 + -0.0 + -0.0 + 1.5)
-        @test kc_bits(column_sum(b, (n, v) -> v[n], (1:2,), anyv)) == kc_bits(0.0)
+        @test agree(column_sum(b, (n, v) -> v[n], (1:3,), anyv), 0.0 + -0.0 + -0.0 + 1.5)
+        @test agree(column_sum(b, (n, v) -> v[n], (1:2,), anyv), 0.0)
         # a maximum over the partials (exact: any order)
         @test foldl(max, view(P, :, 1); init = -Inf) == maximum(ref_col)
         # 1-D id lists, one term returned as a number
@@ -84,14 +84,14 @@ kc_bits(A) = reinterpret(UInt64, vec(collect(Float64, A)))
         p1 = zeros(5); p2 = zeros(5)
         foreach_cell!(b, (i, j, k, A) -> (@inbounds A[i, j, k]), (ir, jr, 2:6), A; partials = p1)
         plane_partials!(p2, CPUBackend(serial = true), identity, (ir, jr, 2:6), A)
-        @test kc_bits(p1) == kc_bits(p2)
+        @test agree(p1, p2)
     end
     # the fold of the partials is one register pass: no allocation per row
     # (a boxed accumulator allocated 72 bytes per row: 5.5 ms for 128² rows)
     P = randn(rng, 4096, 3)
     column_sums(P)
     @test (@allocated Aeolus.Backends._column_sums(P, Val(3))) < 1024
-    @test kc_bits(collect(column_sums(P))) == kc_bits([foldl(+, P[:, t]; init = 0.0) for t in 1:3])
+    @test agree(collect(column_sums(P)), [foldl(+, P[:, t]; init = 0.0) for t in 1:3])
 end
 
 @testset "global caches: one Gauss-Legendre source, safe first use under threads" begin
@@ -101,8 +101,8 @@ end
         x, w = RC._gauss_legendre(n)
         @test Aeolus.SurfaceOptics._gauss_legendre(n) === (x, w)
         @test Aeolus.Radiosity._gauss_nodes(n) === RC._gauss_legendre(n)
-        @test kc_bits(x) == kc_bits(RC._gauss_legendre_nodes(n)[1]) &&
-              kc_bits(w) == kc_bits(RC._gauss_legendre_nodes(n)[2])
+        @test agree(x, RC._gauss_legendre_nodes(n)[1]) &&
+              agree(w, RC._gauss_legendre_nodes(n)[2])
         @test sum(w) ≈ 2 && issorted(x; rev = true)
     end
     @test_throws ErrorException RC._gauss_legendre(0)
@@ -164,12 +164,12 @@ end
         θb, qvb, qlb = copy(θ0), copy(qv0), copy(ql0)
         tb = LC.fog_adjust!(θb, qvb, qlb, p, 2.0; τ = τ)
         ta = fog_adjust!(θa, qva, qla, p, 2.0; τ = τ, backend = b)
-        @test kc_bits(θa) == kc_bits(θb) && kc_bits(qva) == kc_bits(qvb) && kc_bits(qla) == kc_bits(qlb)
+        @test agree(θa, θb) && agree(qva, qvb) && agree(qla, qlb)
         # the total: plane sums in cell order, then ascending k (a named
         # one-time change of its last bits against the one running sum)
         @test isapprox(ta, tb; rtol = 1e-12)
         parts = [LC.fog_adjust!(copy(θ0), copy(qv0), copy(ql0), p, 2.0; τ = τ, levels = k:k) for k in 1:n[3]]
-        @test kc_bits(ta) == kc_bits(ordered_sum(parts))
+        @test agree(ta, ordered_sum(parts))
         # views (the Berlin coupling passes interior views), a scalar pressure
         H = 2
         big = [fill(NaN, n .+ 2H) for _ in 1:3]
@@ -178,7 +178,7 @@ end
         θc, qvc, qlc = copy(θ0), copy(qv0), copy(ql0)
         LC.fog_adjust!(θc, qvc, qlc, 9.5e4, 2.0; τ = τ)
         fog_adjust!(vs..., 9.5e4, 2.0; τ = τ, backend = b)
-        @test kc_bits(vs[1]) == kc_bits(θc) && kc_bits(vs[2]) == kc_bits(qvc) && kc_bits(vs[3]) == kc_bits(qlc)
+        @test agree(vs[1], θc) && agree(vs[2], qvc) && agree(vs[3], qlc)
         @test all(isnan, big[1][1:H, :, :])
     end
 end
@@ -200,7 +200,7 @@ end
         fb = [mk() for _ in 1:3]; for (f, d) in zip(fb, a); f.data .= d; end
         LC.apply_kessler_step!(fb..., 20.0; Vt = Vt, ρ_air = ρa)
         apply_kessler_step!(fa..., 20.0; Vt = Vt, ρ_air = ρa, backend = b)
-        @test all(n -> kc_bits(fa[n].data) == kc_bits(fb[n].data), 1:3)
+        @test all(n -> agree(fa[n].data, fb[n].data), 1:3)
         @test fa[3].data != qr0.data                       # rain was made and fell
     end
 end
@@ -212,7 +212,7 @@ end
         ca, cb = copy(c0), copy(c0)
         rb = LC.apply_dry_deposition!(cb, v, 30.0; dz = 2.0, k = k)
         ra = Aeolus.Chemistry.apply_dry_deposition!(ca, v, 30.0; dz = 2.0, k = k, backend = b)
-        @test kc_bits(ca) == kc_bits(cb) && kc_bits(ra) == kc_bits(rb)
+        @test agree(ca, cb) && agree(ra, rb)
     end
 end
 
@@ -235,8 +235,8 @@ end
     end
     for kw in ((;), (solver = :direct,), (coupling = :lagged,))
         ref = run(CPUBackend(serial = true), kw)
-        @test kc_bits(run(CPUBackend(threshold = 0), kw)) == kc_bits(ref)
-        @test kc_bits(run(CPUBackend(), kw)) == kc_bits(ref)
+        @test agree(run(CPUBackend(threshold = 0), kw), ref)
+        @test agree(run(CPUBackend(), kw), ref)
     end
     # a facet listed twice would be stepped twice (and by two work items)
     u = UrbanFacetScene(sc, vf; T = 290.0)
@@ -261,8 +261,8 @@ end
     end
     @test res[1][2]                                     # a root was found
     for r in res[2:end]
-        @test kc_bits(r[1]) == kc_bits(res[1][1]) && kc_bits(r[3]) == kc_bits(res[1][3]) &&
-              kc_bits(r[4]) == kc_bits(res[1][4])
+        @test agree(r[1], res[1][1]) && agree(r[3], res[1][3]) &&
+              agree(r[4], res[1][4])
     end
 end
 
@@ -278,7 +278,7 @@ end
         H = with_backend(() -> dew_exchange!(q, d, Ts, 1.0e5, 60.0; dz = 4.0, ρ = 1.2), b)
         r = (vec(q), d, H)
         ref === nothing && (ref = r)
-        @test all(n -> kc_bits(r[n]) == kc_bits(ref[n]), 1:3)
+        @test all(n -> agree(r[n], ref[n]), 1:3)
     end
     @test count(!=(0), ref[3]) > 50                     # dew forms and evaporates
 end

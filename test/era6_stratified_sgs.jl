@@ -1,7 +1,7 @@
 # Era VI, Phase 55 (P55-e, #187) — stratification-dependent anisotropic
 # eddy viscosity and diffusivity: the StabilityCorrected wrapper.
 #
-#   1. neutral bit for bit: with N² = 0 (and ℓh = ℓv = 1) the wrapper is
+#   1. neutral: with N² = 0 (and ℓh = ℓv = 1) the wrapper is
 #      the base closure — coefficients, tendencies and every core's step;
 #   2. analytic field u = Sz, θ = θ₀ + Γz: interior νh, νv, κh, κv equal
 #      the analytic values for Ri ∈ {-0.5, 0, 0.1, 0.2, 0.25, 0.5, 5} with
@@ -162,7 +162,7 @@ end
     @test_throws ArgumentError StabilityCorrected(IsentropicDiffusion(StaticSmagorinsky(0.17), g), g)
 end
 
-@testset "1. neutral: StabilityCorrected(base) == base, bit for bit" begin
+@testset "1. neutral: StabilityCorrected(base) == base" begin
     rng = Xoshiro(187)
     gc = RegularGrid(; size = (12, 10, 12), extent = (240.0, 200.0, 240.0), halo = (3, 3, 3))   # cubic cells
     gn = RegularGrid(; size = (12, 10, 8), extent = (300.0, 250.0, 80.0), halo = (3, 3, 3))    # dx/dz = 2.5
@@ -467,10 +467,10 @@ end
     foreach(f -> fill_halos!(f, bcs), (q, κh, κv))
     mask = falses(size(q.data)); mask[6:7, 5:6, 4:8] .= true       # a building (interior cells)
     t(f) = (x = Field(CellCenter(), g); f(x); interior_view(x))
-    # κv === κh: the one-coefficient masked operator, bit for bit
+    # κv === κh: the one-coefficient masked operator
     @test t(x -> add_eddy_diffusion_scalar!(x, q, κh, κh; mask)) ==
           t(x -> add_eddy_diffusion_scalar!(x, q, κh; mask))
-    # no keywords: the unmasked diagonal operator, bit for bit
+    # no keywords: the unmasked diagonal operator
     @test t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv; mask = nothing)) ==
           t(x -> add_eddy_diffusion_scalar!(x, q, κh, κv))
     # without a solid cell the masked kernel is the unmasked one (to round-off)

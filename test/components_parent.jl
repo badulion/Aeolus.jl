@@ -4,7 +4,7 @@
 #   * TiledUrbanSurface: the heat and vapour the air receives over a step are the
 #     tiles' area-mean fluxes × the step, exactly (the canopy levels' depth
 #     weights sum to one); u* = √(Σ fᵢ τᵢ / ρ̄₁); the drag is the implicit
-#     deceleration u/(1 + Δt a/U); a checkpoint restores the tiles bit for bit;
+# deceleration u/(1 + Δt a/U); a checkpoint restores the tiles;
 #   * PrescribedSurfaceFlux: Q Δt/Δz₁ into the first level of every column;
 #   * MeanColumnRadiation: the sun of the site's clock (sw ≈ 0 at night, a
 #     clear-sky noon sun by day), the heating applied as Ṫ Δt / Π̄, the

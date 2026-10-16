@@ -7,7 +7,7 @@
 #   * every shipped profile equals the one computed here from the raw
 #     arrays with own loops (means, the w variance on the faces, the
 #     resolved heat flux, eddy viscosity, SGS energy), on the right levels;
-#   * diagnostics.nc holds every row of the CSV (bit for bit) on `time`
+#   * diagnostics.nc holds every row of the CSV on `time`
 #     and the costly scalars and profiles on `time_costly`, at the cadence;
 #   * each scalar is evaluated once per row for both files;
 #   * the global attributes are the run folder's provenance; a restart
@@ -292,7 +292,7 @@ end
         costly_rows = [r for r in rows if r[col("ke_mean")] != ""]
         @test [parse(Int, r[1]) for r in costly_rows] == ds["step_costly"][:] == [1, 4, 7, 10]
         for name in ("ke_mean", "max_div", "theta_max", "sgs.nu_h_max", "c.costly_calls")
-            @test ds[name][:] == [parse(Float64, r[col(name)]) for r in costly_rows]   # bit for bit
+            @test ds[name][:] == [parse(Float64, r[col(name)]) for r in costly_rows]   #
         end
         @test ds["c.costly_calls"][:] == 1.0:4.0
         for (j, n) in enumerate((1, 4, 7, 10))

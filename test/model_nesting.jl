@@ -6,14 +6,16 @@
 #     validated (parents, sizes, placement, faces, no budgets);
 #   * each domain runs its own stage pipeline inside the nest: a child's
 #     stages run once per substep, its in-core stages once per stage;
-#   * one-way: the parent is bit for bit the parent run alone;
+#   * one-way: the parent is the parent run alone (within ROUNDOFF_RTOL,
+#     test/support/agreement.jl; no bit-identity since #495);
 #   * two-way: the parent changes, and the composite θ of the nest is
 #     conserved to round-off (Berger–Colella refluxing); with three levels
 #     and a one-way sibling too;
 #   * a nested run writes one output file per domain, evaluates its checks
-#     on every domain, and resumes bit for bit from its checkpoint.
+#     on every domain, and resumes from its checkpoint.
 
 using Test
+include(joinpath(@__DIR__, "support", "agreement.jl"))
 using TOML
 using NCDatasets: NCDataset
 using Aeolus
@@ -214,12 +216,12 @@ end
 end
 
 # the engine (NEST-p2, #482): with fixed steps every domain's prognostic
-# state is that of Nesting.step_nested!(::NestHierarchy), bit for bit
-mn_state_equal(a, b) = all(i -> all(f -> interior_view(getproperty(a.domains[i].state, f)) ==
-                                         interior_view(getproperty(b.domains[i].state, f)), (:u, :v, :w, :θ, :p)),
+# state is that of Nesting.step_nested!(::NestHierarchy), within ROUNDOFF_RTOL
+mn_state_equal(a, b) = all(i -> all(f -> agree(interior_view(getproperty(a.domains[i].state, f)),
+                                               interior_view(getproperty(b.domains[i].state, f))), (:u, :v, :w, :θ, :p)),
                            eachindex(a.domains))
 
-@testset "the nest engine with fixed steps is Nesting.step_nested!, bit for bit ($scheme, $fb)" for scheme in (:euler, :rk3), fb in (:one_way, :two_way)
+@testset "the nest engine with fixed steps is Nesting.step_nested! ($scheme, $fb)" for scheme in (:euler, :rk3), fb in (:one_way, :two_way)
     a, = mn_pair(; scheme = scheme, feedback = fb)
     b, = mn_pair(; scheme = scheme, feedback = fb)
     for _ in 1:3
@@ -231,7 +233,7 @@ mn_state_equal(a, b) = all(i -> all(f -> interior_view(getproperty(a.domains[i].
     @test nest_link(a, "c").stats.child_substeps == 6 && nest_link(a, "c").stats.n_last == 2
 end
 
-@testset "the nest engine with three levels and a sibling is Nesting.step_nested!, bit for bit" begin
+@testset "the nest engine with three levels and a sibling is Nesting.step_nested!" begin
     text = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
            mn_child(; id = "a", origin = "[300.0, 300.0]", size = "[12, 12, 8]", extent = "[600.0, 600.0, 400.0]") *
            mn_child(; id = "g", parent = "a", origin = "[200.0, 200.0]", size = "[8, 8, 8]",
@@ -247,14 +249,14 @@ end
     @test mn_state_equal(a, b)
 end
 
-@testset "one-way: the parent is the parent run alone, bit for bit" begin
+@testset "one-way: the parent is the parent run alone" begin
     nested = mn_run(mn_cfg(mn_two(; feedback = "one_way")))
     alone = mn_run(mn_cfg(MN_HEAD))
     # the prognostic state: the interiors (the halos are filled from them at
     # every stage, and the nest's prolongation fills the parent's after a step)
     a = simulation(alone.obj); b = simulation(nested.obj)
     for f in (:u, :v, :w, :p, :θ, :νt, :κt)
-        @test interior_view(getproperty(a, f)) == interior_view(getproperty(b, f))
+        @test agree(interior_view(getproperty(a, f)), interior_view(getproperty(b, f)))
     end
     @test haskey(state_fields(nested.obj), :inner_θ) && b.t == a.t == 24.0
     ci = nested.obj.model.domains[2].state
@@ -324,7 +326,7 @@ end
     @test occursin("overlaps its sibling", only(e.problems).message)
 end
 
-@testset "a nested run: one output file per domain, checks on every domain, a bit-identical resume" begin
+@testset "a nested run: one output file per domain, checks on every domain, a resume" begin
     cfg = mn_cfg(mn_two() * "[checks]\nfinite = {required = true}\n";
                  overrides = ["checkpoint.every_steps=3"])
     full = mn_run(cfg)
@@ -349,7 +351,7 @@ end
     resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
     a = state_fields(full.obj); b = state_fields(resumed.obj)
     @test haskey(a, :inner_u) && keys(a) == keys(b)
-    @test all(k -> a[k] == b[k], keys(a))
+    @test all(k -> agree(a[k], b[k]), keys(a))
 end
 
 @testset "a one-way child that goes non-finite is a blow-up of the run" begin
@@ -488,17 +490,17 @@ MNC.run_stage!(::MNLimit, d, ::Val{:clock}, dt) =
     @info "adaptive nest, no growth limit: child substeps per window" ns
 end
 
-@testset "window retry: a failing root redoes the window with half the step, bit for bit" begin
+@testset "window retry: a failing root redoes the window with half the step" begin
     a = mn_adaptive(); b = mn_adaptive()
     MN_ARM["p"] = 1
     _, Δt, retries = step_adaptive!(a)
     @test retries == 1 && a.nest.retries == 1
     _, Δt1, _ = step_adaptive!(b)                        # the twin, unarmed
-    @test Δt == Δt1 / 2
+    @test agree(Δt, Δt1 / 2)
     # the twin at the halved step from the same start: same state, budgets, components
     c = mn_adaptive()
     _, Δtc, rc = step_adaptive!(c; t_end = Δt)
-    @test Δtc == Δt && rc == 0
+    @test agree(Δtc, Δt) && rc == 0
     @test mn_state_equal(a, c)
     @test nest_link(a, "c").stats.child_substeps == nest_link(c, "c").stats.child_substeps
     @test nest_link(a, "c").stats.parent_retries == 1
@@ -512,13 +514,13 @@ end
     _, Δt, retries = step_adaptive!(a)
     La = nest_link(a, "c")
     @test retries == 1 && La.stats.child_retries == 1
-    @test Δt == Δtb                                       # the root step is kept
+    @test agree(Δt, Δtb)                                  # the root step is kept
     @test La.stats.n_last == 2nb                          # the child doubled its substeps
     @test La.stats.child_substeps == 2nb                  # the failed attempt left no count behind
     @test all(isfinite, interior_view(a.domains[2].state.θ))
-    # one-way: the parent never sees the child: bit for bit the unarmed twin
-    fb === :one_way && @test all(f -> interior_view(getproperty(a.domains[1].state, f)) ==
-                                      interior_view(getproperty(b.domains[1].state, f)), (:u, :v, :w, :θ, :p))
+    # one-way: the parent never sees the child: the unarmed twin's
+    fb === :one_way && @test all(f -> agree(interior_view(getproperty(a.domains[1].state, f)),
+                                            interior_view(getproperty(b.domains[1].state, f))), (:u, :v, :w, :θ, :p))
     # a child that keeps failing: an error after max_retries, the window start restored
     MN_ARM["c"] = 100
     t0 = a.domains[1].state.t
@@ -547,7 +549,7 @@ end
     @test max_divergence(m.domains[1].state) < 1e-9 && max_divergence(m.domains[2].state) < 1e-9
 end
 
-@testset "an adaptive nested config: runs, lands on its duration, resumes bit for bit" begin
+@testset "an adaptive nested config: runs, lands on its duration, resumes" begin
     cfg = mn_cfg(mn_two(); overrides = ["time.dt=\"adaptive\"", "time.nsteps=6", "time.cfl=0.5",
                                         "checkpoint.every_steps=3"])
     full = mn_run(cfg)
@@ -561,7 +563,7 @@ end
     folder = only(readdir(root; join = true))
     resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
     a = state_fields(full.obj); b = state_fields(resumed.obj)
-    @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+    @test keys(a) == keys(b) && all(k -> agree(a[k], b[k]), keys(a))
 end
 
 # ---------------------------------------------------------------------------
@@ -658,7 +660,7 @@ const MN_TREE = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
              extent = "[100.0, 100.0, 100.0]", feedback = "one_way") *
     mn_child(; id = "b", origin = "[1100.0, 1100.0]", size = "[8, 8, 4]", extent = "[400.0, 400.0, 200.0]")
 
-@testset "concurrent nest (siblings in parallel, a one-way parent ahead of its children) is the sequential one, bit for bit (adaptive $ad)" for ad in (false, true)
+@testset "concurrent nest (siblings in parallel, a one-way parent ahead of its children) is the sequential one (adaptive $ad)" for ad in (false, true)
     over = ad ? ["time.dt=\"adaptive\"", "time.cfl=0.5"] : String[]
     seq = Config.build(SimulationDriverType(), mn_cfg(MN_TREE; overrides = over)).model
     con = Config.build(SimulationDriverType(), mn_cfg(MN_TREE; overrides = over)).model
@@ -672,7 +674,7 @@ const MN_TREE = MN_HEAD * "[[domain]]\nid = \"outer\"\n" *
     @test mn_state_equal(seq, con)
     @test all(d -> d.state.t == seq.domains[1].state.t, con.domains)
     @test nest_link(con, "g").stats.child_substeps == nest_link(seq, "g").stats.child_substeps > 0
-    @info "concurrent nest (adaptive $ad) on $(Threads.nthreads()) threads: identical to sequential"
+    @info "concurrent nest (adaptive $ad) on $(Threads.nthreads()) threads: agrees with sequential"
 end
 
 # ---------------------------------------------------------------------------
@@ -713,7 +715,7 @@ mn_inflow(; feedback = "two_way") = mn_cfg(MN_HEAD * "[[domain]]\nid = \"outer\"
     end
 end
 
-@testset "inflow turbulence: config rules, and a bit-identical resume with the generator" begin
+@testset "inflow turbulence: config rules, and a resume with the generator" begin
     keyed(e) = Dict(p.key => p.message for p in e.problems)
     e = mn_error(() -> mn_cfg(MN_HEAD * "[inflow_turbulence]\nenabled = true\n[[domain]]\nid = \"outer\"\n" * mn_child() *
                                   "[domain.inflow_turbulence]\nenabled = true\n"))
@@ -731,7 +733,7 @@ end
     folder = only(readdir(root; join = true))
     resumed = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
     a = state_fields(full.obj); b = state_fields(resumed.obj)
-    @test keys(a) == keys(b) && all(k -> a[k] == b[k], keys(a))
+    @test keys(a) == keys(b) && all(k -> agree(a[k], b[k]), keys(a))
 end
 
 # ---------------------------------------------------------------------------

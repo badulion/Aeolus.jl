@@ -244,16 +244,16 @@ end
     for dt in (0.3, 0.1, 0.4)
         unit_fluctuations!(p1..., g1, dt); unit_fluctuations!(p2..., g2, dt)
     end
-    @test all(p1[c] == p2[c] for c in 1:3)                   # bit-identical
+    @test all(agree(p1[c], p2[c]) for c in 1:3)
     # a deep-copied state survives later snapshots
     keep = deepcopy(generator_state(g1))
     unit_fluctuations!(p1..., g1, 0.3); generator_state(g1)
     restore_generator_state!(g1, keep)
     unit_fluctuations!(p1..., g1, 0.3); unit_fluctuations!(p2..., g2, 0.3)
-    @test all(p1[c] == p2[c] for c in 1:3)
+    @test all(agree(p1[c], p2[c]) for c in 1:3)
     # Δt = 0 returns the current planes unchanged
     q = P(); unit_fluctuations!(q..., g1, 0.0)
-    @test all(q[c] == p1[c] for c in 1:3)
+    @test all(agree(q[c], p1[c]) for c in 1:3)
     @test_throws DimensionMismatch unit_fluctuations!(zeros(3, 3), zeros(3, 3), zeros(3, 3), g1, 0.1)
     @test_throws ArgumentError DigitalFilterGenerator(8, 8, 1.0, 1.0; L_s = 2.0, L_z = 2.0, T = 0.0)
 

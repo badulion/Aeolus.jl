@@ -17,7 +17,7 @@ using Printf
 # ---------------------------------------------------------------------------
 
 # The Phase-7 sponge kernel as it stood before the shared profile, kept here
-# verbatim as the bit-for-bit oracle for the refactored add_sponge!.
+# verbatim as the oracle for the refactored add_sponge!.
 function _phase7_sponge_reference!(tf, f, α_max, z_start, z_top, f_ref, zs)
     m = Aeolus.Fields.mesh(f)
     ii, jj, kk = Aeolus.Grids.interior(m)
@@ -55,7 +55,7 @@ end
     @test damping_rate(p, 11.5) ≈ 1.0 atol = 1e-14    # mid-rise: S(1/2) = 1/2
     @test damping_rate(p, 29.0) ≈ 1.0 atol = 1e-14    # mid-fall
 
-    # add_sponge! is bit for bit the Phase-7 kernel on every location and on
+    # add_sponge! is the Phase-7 kernel on every location and on
     # Float64 and Float32 grids (the rate now comes from sponge_profile).
     for T in (Float64, Float32)
         g = RegularGrid(T; size = (6, 5, 24), extent = (1, 1, 2))

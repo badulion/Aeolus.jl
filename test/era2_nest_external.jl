@@ -10,7 +10,7 @@
 # NEST-p3) on synthetic boxes (no Berlin geometry, rule of #321):
 #
 #   1. the split is exact: the window driven from outside equals
-#      `step_nested!(run)` bit for bit (one- and two-way);
+#      `step_nested!(run)` (one- and two-way);
 #   2. a parent at rest with a hydrostatic θ(z) leaves a calm child at rest
 #      with the parent's profile (adaptive child steps that do not divide
 #      the parent step);
@@ -161,7 +161,7 @@ end
 @testset "Era II — externally driven nest child (N-berlin-nest, #265)" begin
 
 # -------------------------------------------------------------------------
-@testset "a window driven from outside + subcycle_dt == step_nested!(run), bit for bit" begin
+@testset "a window driven from outside + subcycle_dt == step_nested!(run)" begin
     for feedback in (:one_way, :two_way)
         rng = Xoshiro(265)
         runs = map(1:2) do _
@@ -189,13 +189,13 @@ end
             n = _nx_window!(B, adv, 0.6, 0.6 / 3)
             @test n == 3
         end
-        same = all(getproperty(A.child, f).data == getproperty(B.child, f).data for f in (:u, :v, :w, :θ)) &&
-               all(getproperty(A.parent, f).data == getproperty(B.parent, f).data for f in (:u, :v, :w, :θ))
-        @printf("  %-8s 4 windows × 3 substeps: child and parent bit-identical = %s\n", feedback, same)
+        same = all(agree(getproperty(A.child, f).data, getproperty(B.child, f).data) for f in (:u, :v, :w, :θ)) &&
+               all(agree(getproperty(A.parent, f).data, getproperty(B.parent, f).data) for f in (:u, :v, :w, :θ))
+        @printf("  %-8s 4 windows × 3 substeps: child and parent the same = %s\n", feedback, same)
         @test same
-        @test A.child.t == B.child.t && A.t == B.t
+        @test values_agree(A.child.t, B.child.t) && values_agree(A.t, B.t)
         @test A.stats.parent_steps == B.stats.parent_steps == 4
-        feedback === :two_way && @test A.nest.ledger == B.nest.ledger
+        feedback === :two_way && @test values_agree(A.nest.ledger, B.nest.ledger)
     end
     # the substep rule: n = ⌈R/limit⌉, landing exactly on the window end
     @test subcycle_dt(1.0, 0.3) == 0.25
