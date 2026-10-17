@@ -17,10 +17,14 @@
 #     e/w*² against z/z_i), their maxima and the height of the σ_w² maximum;
 #   * the horizontal spectrum of w at z = 0.5 z_i (radially binned E_w(k)).
 #
-# Against the DNS, at the records both runs have, each LES gets the RMS
-# difference of σ_w²/w*² and of the heat flux / Q over 0.1 ≤ z/z_i ≤ 1.2
-# (both interpolated to the same z/z_i), and its relative z_i and A
-# differences. It prints the tables and writes, into
+# Against the DNS, each LES is scored over the averaging window (the second
+# hour, t ≥ 3600 s: past the spin-up; single records are noisy, A varies by
+# a factor 2 between records): the RMS difference of the window-averaged
+# σ_w²/w*² and heat flux / Q over 0.1 ≤ z/z_i ≤ 1.2 (each record
+# interpolated to the same z/z_i before averaging), and the relative
+# differences of the window means of z_i and A. Records of different runs
+# are matched by time to the nearest one (the output lands on the first
+# step past each 10-min mark). It prints the tables and writes, into
 # examples/cbl_dns_les/output/:
 #
 #   cbl_series.csv     run, t, z_i, w*, θ*, A, max σ_w²/w*², z(max)/z_i
@@ -45,6 +49,8 @@ import Aeolus.Operators.FFTW as FFTW
 
 const OUT = joinpath(@__DIR__, "output")
 const SCORE_RANGE = (0.1, 1.2)          # z/z_i range of the profile scores
+const WINDOW = 3600.0                    # the averaging window: t ≥ WINDOW (the second hour)
+const ZETA = collect(range(SCORE_RANGE...; length = 50))   # the common z/z_i heights
 
 "A run folder: its name, its parameters (from run.toml) and its output (profiles, the 3-D w)."
 function read_run(folder)
@@ -114,10 +120,17 @@ function w_spectrum(run, r, zlev)
     return (k = dk .* (1:nb), E = E)
 end
 
-"RMS of a(z/z_i) − b(z/z_i) over SCORE_RANGE, both interpolated to 50 heights."
-function profile_rms(za, fa, zb, fb)
-    ζ = range(SCORE_RANGE...; length = 50)
-    return sqrt(sum(abs2, [interp(za, fa, s) - interp(zb, fb, s) for s in ζ]) / length(ζ))
+"RMS difference of two profiles on the common heights ZETA."
+profile_rms(a, b) = sqrt(sum(abs2, a .- b) / length(a))
+
+"The window means of a run: σ_w²/w*² and the heat flux / Q on ZETA, z_i and A, over its records with t ≥ WINDOW."
+function window_means(norm, name)
+    recs = [v for ((n, t), v) in norm if n == name && t >= WINDOW - 30]
+    isempty(recs) && return nothing
+    avg(f) = sum(f, recs) / length(recs)
+    return (n = length(recs), w2 = avg(r -> [interp(r.ζ, r.w2, s) for s in ZETA]),
+            F = avg(r -> [interp(r.ζ, r.F, s) for s in ZETA]), zi = avg(r -> r.zi), A = avg(r -> r.A),
+            sdA = sqrt(avg(r -> r.A^2) - avg(r -> r.A)^2))
 end
 
 function analyse(folders)
@@ -149,21 +162,18 @@ function analyse(folders)
         end
         norm[(run.name, run.t[r])] = (ζ = ζ, w2 = w2n, F = s.F ./ run.par.Q, zi = s.zi, A = s.A)
     end
-    scores = ["run,t,rms_w2_norm,rms_heat_flux_over_Q,rel_z_i,rel_A"]
+    scores = ["run,records,rms_w2_norm,rms_heat_flux_over_Q,rel_z_i,rel_A,A,sd_A"]
     if iref !== nothing
-        ref = runs[iref]
-        println("\nagainst the DNS (", SCORE_RANGE[1], " ≤ z/z_i ≤ ", SCORE_RANGE[2], ")")
-        @printf("%-28s %8s %12s %14s %9s %9s\n", "run", "t (s)", "RMS σw²/w*²", "RMS flux/Q", "Δz_i/z_i", "ΔA/A")
+        ref = runs[iref]; mr = window_means(norm, ref.name)
+        println("\nagainst the DNS, window means over t ≥ ", WINDOW / 60, " min (", SCORE_RANGE[1], " ≤ z/z_i ≤ ", SCORE_RANGE[2], ")")
+        @printf("%-28s %7s %12s %12s %9s %9s %14s\n", "run", "records", "RMS σw²/w*²", "RMS flux/Q", "Δz_i/z_i", "ΔA/A", "A ± sd")
         for run in runs
-            run === ref && continue
-            for t in run.t
-                haskey(norm, (ref.name, t)) || continue
-                a, b = norm[(run.name, t)], norm[(ref.name, t)]
-                rw = profile_rms(a.ζ, a.w2, b.ζ, b.w2); rf = profile_rms(a.ζ, a.F, b.ζ, b.F)
-                dz = (a.zi - b.zi) / b.zi; dA = (a.A - b.A) / b.A
-                @printf("%-28s %8.0f %12.4f %14.4f %9.3f %9.3f\n", run.name, t, rw, rf, dz, dA)
-                push!(scores, @sprintf("%s,%.1f,%.6f,%.6f,%.5f,%.5f", run.name, t, rw, rf, dz, dA))
-            end
+            m = window_means(norm, run.name)
+            m === nothing && continue
+            rw = profile_rms(m.w2, mr.w2); rf = profile_rms(m.F, mr.F)
+            dz = (m.zi - mr.zi) / mr.zi; dA = (m.A - mr.A) / mr.A
+            @printf("%-28s %7d %12.4f %12.4f %9.3f %9.3f %8.3f ± %.3f\n", run.name, m.n, rw, rf, dz, dA, m.A, m.sdA)
+            push!(scores, @sprintf("%s,%d,%.6f,%.6f,%.5f,%.5f,%.5f,%.5f", run.name, m.n, rw, rf, dz, dA, m.A, m.sdA))
         end
     end
     for (name, lines) in (("cbl_series.csv", series), ("cbl_profiles.csv", profs),
