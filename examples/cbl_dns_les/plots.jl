@@ -9,8 +9,9 @@
 #
 # writes into examples/cbl_dns_les/output/:
 #
-#   cbl_profiles.svg   at the last record every run has: the total heat flux
-#                      / Q, σ_w²/w*² and θ against z/z_i, every run a curve
+#   cbl_profiles.svg   the total heat flux / Q, σ_w²/w*² and the resolved
+#                      TKE / w*² against z/z_i, averaged over the second
+#                      hour (t ≥ 60 min, analysis.jl's window), every run a curve
 #   cbl_growth.svg     z_i(t) and the entrainment ratio A(t)
 #   cbl_spectra.svg    E_w(k) at 0.5 z_i at that record (log-log)
 #   cbl_w_xz.apng      w in the x–z plane through the domain's middle, one
@@ -48,22 +49,35 @@ function ticks(lo, hi; n = 5)
     return collect(ceil(lo / step) * step:step:hi)
 end
 
-function profiles_figure(prof, t)
+"Linear interpolation of (xs, ys) at x (clamped)."
+function _interp(xs, ys, x)
+    x <= xs[1] && return ys[1]; x >= xs[end] && return ys[end]
+    k = searchsortedlast(xs, x)
+    return ys[k] + (ys[k+1] - ys[k]) * (x - xs[k]) / (xs[k+1] - xs[k])
+end
+
+function profiles_figure(prof; window = 3600.0)
     names = runs_of(prof)
-    fig = svg_figure(1200, 460, @sprintf("CBL: DNS and LES at t = %.0f min (mixed-layer scaling)", t / 60))
-    sel(n) = filter(r -> r["run"] == n && r["t"] == t && r["z_over_zi"] <= 1.5, prof)
+    ζ = collect(range(0.0, 1.5; length = 76))
+    "the run's window mean of column `key` on ζ"
+    function wmean(n, key)
+        ts = unique(r["t"] for r in prof if r["run"] == n && r["t"] >= window - 30)
+        acc = zeros(length(ζ))
+        for t in ts
+            rs = filter(r -> r["run"] == n && r["t"] == t, prof)
+            acc .+= [_interp([r["z_over_zi"] for r in rs], [r[key] for r in rs], z) for z in ζ]
+        end
+        return acc ./ length(ts)
+    end
+    fig = svg_figure(1200, 460, @sprintf("CBL: DNS and LES, mean over t ≥ %.0f min (mixed-layer scaling)", window / 60))
     leg = [(n, i, "") for (i, n) in enumerate(names)]
     for (p, (key, xlab, xlim)) in enumerate((("heat_flux_over_Q", "total heat flux / Q", (-0.4, 1.1)),
                                              ("w2_norm", "σ_w² / w*²", (0.0, 0.6)),
-                                             ("theta", "θ (K)", nothing)))
-        curves = [([r[key] for r in sel(n)], [r["z_over_zi"] for r in sel(n)], i) for (i, n) in enumerate(names)]
-        xt = xlim === nothing ? nothing : ticks(xlim...)
-        if xlim === nothing                         # θ: whole kelvins
-            v = vcat(first.(curves)...); xlim = (floor(minimum(v)), ceil(maximum(v))); xt = xlim[1]:1:xlim[2]
-        end
-        svg_panel(fig, 70 + (p - 1) * 380, 50, 320, 340; xlim = xlim, ylim = (0.0, 1.5), xticks = xt,
+                                             ("tke_norm", "TKE / w*² (resolved + SGS)", (0.0, 0.8))))
+        curves = [(wmean(n, key), ζ, i) for (i, n) in enumerate(names)]
+        svg_panel(fig, 70 + (p - 1) * 380, 50, 320, 340; xlim = xlim, ylim = (0.0, 1.5), xticks = ticks(xlim...),
                   yticks = 0:0.25:1.5, xlabel = xlab, ylabel = p == 1 ? "z / z_i" : "", curves = curves,
-                  legend = p == 2 ? leg : [], legend_x = 160)
+                  legend = p == 2 ? leg : [], legend_x = 150)
     end
     svg_write(fig, joinpath(OUT, "cbl_profiles.svg"))
 end
@@ -150,7 +164,7 @@ function make_plots(folders)
     series = read_csv("cbl_series.csv"); prof = read_csv("cbl_profiles.csv"); spec = read_csv("cbl_spectra.csv")
     # the last record every run has
     t = minimum(maximum(r["t"] for r in series if r["run"] == n) for n in runs_of(series))
-    profiles_figure(prof, t)
+    profiles_figure(prof)
     growth_figure(series)
     spectra_figure(spec, t)
     animation(folders, series)
