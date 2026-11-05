@@ -14,11 +14,8 @@ using Aeolus.Fields: set!, interior_view
 # it, so the log doubles as the validation report.
 # =========================================================================
 
-"L2 norm over a field's interior."
-_l2(a) = sqrt(sum(abs2, a))
-
-"Relative L2 difference between the interiors of two like-located fields."
-_reldiff(a, b) = _l2(interior_view(a) .- interior_view(b)) / _l2(interior_view(b))
+# _l2, _reldiff: shared with the warm-bubble validation (validation/era2_anelastic.jl)
+isdefined(@__MODULE__, :_reldiff) || include(joinpath(@__DIR__, "support", "anelastic_norms.jl"))
 
 "Drop the mean of an array (the null space of every singular Poisson operator)."
 _demean(a) = a .- sum(a) / length(a)
@@ -481,103 +478,64 @@ end
 end
 
 # =====================================================================
-# 8. Warm-bubble benchmark in all three systems.
+# 8. Anelastic ≡ pseudo-incompressible on a neutral base state. (The
+#    warm-bubble benchmark of all three cores, 130 steps, is in
+#    validation/era2_anelastic.jl.)
 # =====================================================================
-@testset "Warm bubble in Boussinesq / anelastic / pseudo-incompressible" begin
+@testset "Anelastic ≡ pseudo-incompressible on θ̄ = const (warm bubble, 5 steps)" begin
     L, Lz = 3000.0, 3000.0
     g   = RegularGrid(; size=(16,16,32), extent=(L,L,Lz), halo=(2,2,2))
     bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
     ref = isentropic_reference(g; θ_const=300.0)      # neutral stratification
-    # +2 K Gaussian bubble centred at z = 800 m, radius 400–500 m
     bubble(x,y,z) = 2.0 * exp(-(((x-L/2)/500)^2 + ((y-L/2)/500)^2 + ((z-800.0)/400)^2))
     initθ(s) = set!(s.θ, (x,y,z) -> 300.0 + bubble(x,y,z))
-
-    bq = BoussinesqSimulation(g; θ₀=300.0, bcs=bcs);                           initθ(bq)
     an = AnelasticSimulation(g; ref=ref, bcs=bcs, tol=1e-13, maxit=2000);      initθ(an)
     pi_ = PseudoIncompressibleSimulation(g; ref=ref, bcs=bcs, tol=1e-13, maxit=2000); initθ(pi_)
-
-    top0 = bubble_top_height(bq)
-    @printf("  [warm bubble] deep domain Lz = %.0f m, H = %.0f m, Lz/H = %.3f, ρ̄ ∈ [%.4f, %.4f]; initial bubble top = %.1f m\n",
-            Lz, reference_scale_height(ref), Lz/reference_scale_height(ref),
-            minimum(ref.ρ̄), maximum(ref.ρ̄), top0)
-
-    dt, nsteps = 2.0, 130
-    for _ in 1:nsteps
-        step!(bq, dt)
-        step_anelastic!(an, dt)
-        step_pseudo_incompressible!(pi_, dt)
+    for _ in 1:5
+        step_anelastic!(an, 2.0)
+        step_pseudo_incompressible!(pi_, 2.0)
     end
-
-    d = system_comparison_diagnostics((boussinesq = bq, anelastic = an, pseudo = pi_))
-    for name in keys(d)
-        r = d[name]
-        @printf("  [warm bubble] %-11s t = %5.1f s  bubble_top = %7.1f m  max_w = %7.4f m/s  θ'var = %.5f K²  KE(unw) = %.4e  constraint = %.2e  |∇·u| = %.3e\n",
-                String(name), r.t, r.bubble_top, r.max_w, r.θ_variance,
-                r.kinetic_energy_unweighted, r.constraint_residual, r.plain_divergence)
-    end
-    @printf("  [warm bubble] relative to Boussinesq:  anelastic  ΔKE = %+.4f  Δmax_w = %+.5f  Δθ'var = %+.4f\n",
-            d.anelastic.rel_ke, d.anelastic.rel_max_w, d.anelastic.rel_θ_variance)
-    @printf("  [warm bubble] relative to Boussinesq:  pseudo-inc ΔKE = %+.4f  Δmax_w = %+.5f  Δθ'var = %+.4f\n",
-            d.pseudo.rel_ke, d.pseudo.rel_max_w, d.pseudo.rel_θ_variance)
-
-    # --- (a) all three are physically sensible -------------------------
-    for (name, sim) in (("boussinesq", bq), ("anelastic", an), ("pseudo", pi_))
-        @test all(isfinite, interior_view(sim.w))
-        @test all(isfinite, interior_view(sim.θ))
-        @test bubble_top_height(sim) > top0            # the bubble rose
-        @test max_w(sim) > 1.0                         # and is still rising
-        @test maximum(interior_view(sim.θ)) > 300.0    # warm core survives
-        @test θ_variance(sim) > 0
-    end
-    # w > 0 at the bubble top: the leading edge is ascending
-    zc = collect(znodes(g, CellCenter()))
-    for sim in (bq, an, pi_)
-        ktop = argmin(abs.(zc .- bubble_top_height(sim)))
-        @test maximum(@view interior_view(sim.w)[:, :, ktop]) > 0.5
-    end
-
-    # --- (b) each core satisfies its own constraint --------------------
-    @test max_divergence(bq)                       < 1e-10
-    @test max_anelastic_divergence(an)             < 1e-10
-    @test max_pseudo_incompressible_divergence(pi_) < 1e-10
-    # and the sound-proof cores are NOT divergence-free
-    @test max_divergence(an)  > 1e-6
-    @test max_divergence(pi_) > 1e-6
-
-    # --- (c) the sound-proof cores differ from Boussinesq, in the
-    #         expected direction: with ∇·(ρ̄u) = 0 the *mass* flux is what
-    #         is conserved, so the same buoyancy forcing produces a larger
-    #         velocity where ρ̄ is smaller — i.e. the anelastic run carries
-    #         more vertical velocity overall, and proportionally more of it
-    #         aloft.
-    #
-    #         Note the discriminator is a norm, not a pointwise extremum:
-    #         on a 16×16×32 grid `max_w` is a single cell value that flips
-    #         sign of difference from step to step, whereas ‖w‖₂ and the
-    #         kinetic energy separate the two systems monotonically.
-    rel_w = _reldiff(an.w, bq.w)
-    wi_b = interior_view(bq.w); wi_a = interior_view(an.w)
-    upper = (g.Nz ÷ 2 + 1):g.Nz
-    ratio_all   = _l2(wi_a) / _l2(wi_b)
-    ratio_upper = _l2(@view wi_a[:, :, upper]) / _l2(@view wi_b[:, :, upper])
-    ke_ratio    = unweighted_kinetic_energy(an) / unweighted_kinetic_energy(bq)
-    @printf("  [warm bubble] anelastic vs Boussinesq: rel‖Δw‖ = %.4f;  ‖w‖₂ ratio = %.5f;  ‖w‖₂ ratio in the upper half = %.5f;  KE ratio = %.5f\n",
-            rel_w, ratio_all, ratio_upper, ke_ratio)
-    @test 0.01 < rel_w < 0.5          # genuinely different, not blown up
-    @test ratio_all   > 1.0           # stronger ascent for the same forcing
-    @test ratio_upper > ratio_all     # and the excess is concentrated aloft
-    @test ke_ratio    > 1.0
-    @test d.anelastic.rel_ke > 0      # same statement via the comparison tool
-    @test d.pseudo.rel_ke    > 0
+    @test max_w(an) > 0.01      # the bubble has started to rise: a non-trivial state
 
     # --- (d) on a NEUTRAL base state θ̄ = const the pseudo-density ρ̄θ̄ is
     #         ρ̄ times a constant, so the two projections are the *same*
     #         linear system: the two cores must agree to round-off.
     dw = maximum(abs, interior_view(an.w) .- interior_view(pi_.w))
     dθ = maximum(abs, interior_view(an.θ) .- interior_view(pi_.θ))
-    @printf("  [warm bubble] anelastic vs pseudo-incompressible on θ̄ = const: max|Δw| = %.3e m/s, max|Δθ| = %.3e K\n", dw, dθ)
+    @printf("  [θ̄ = const, 5 steps] anelastic vs pseudo-incompressible on θ̄ = const: max|Δw| = %.3e m/s, max|Δθ| = %.3e K\n", dw, dθ)
     @test dw < 1e-8
     @test dθ < 1e-8
+end
+
+@testset "bubble_top_height: highest level of a known anomaly" begin
+    g   = RegularGrid(; size=(8,8,16), extent=(800.0,800.0,1600.0), halo=(2,2,2))
+    sim = BoussinesqSimulation(g; θ₀=300.0)
+    zc  = collect(znodes(g, CellCenter()))
+    # perturbation-free: the bottom of the domain
+    set!(sim.θ, (x,y,z) -> 300.0)
+    @test bubble_top_height(sim) == zc[1]
+    # one warm column: +1 K at levels 3-7, +0.4 K at levels 8-10. The
+    # level-wise anomaly maxima are 1 − 1/64 and 0.4·(1 − 1/64) K, so the
+    # half-amplitude top is level 7 and a 0.3 threshold reaches level 10.
+    θi = interior_view(sim.θ)
+    θi[4, 5, 3:7]  .+= 1.0
+    θi[4, 5, 8:10] .+= 0.4
+    @test bubble_top_height(sim) == zc[7]
+    @test bubble_top_height(sim; frac = 0.3) == zc[10]
+    # a uniform warm layer is no anomaly against its own level mean
+    θi[:, :, 12] .+= 5.0
+    @test bubble_top_height(sim) == zc[7]
+end
+
+@testset "unweighted_kinetic_energy of a uniform flow is ½|u|²V" begin
+    g = RegularGrid(; size=(8,6,10), extent=(800.0,600.0,500.0), halo=(2,2,2))
+    ref = isentropic_reference(g; θ_const=300.0)
+    V = 800.0 * 600.0 * 500.0
+    U, Vv, W = 1.5, -0.5, 0.25
+    for sim in (BoussinesqSimulation(g; θ₀=300.0), AnelasticSimulation(g; ref=ref))
+        interior_view(sim.u) .= U; interior_view(sim.v) .= Vv; interior_view(sim.w) .= W
+        @test unweighted_kinetic_energy(sim) ≈ 0.5 * (U^2 + Vv^2 + W^2) * V rtol = 1e-12
+    end
 end
 
 # =====================================================================

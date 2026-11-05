@@ -1,9 +1,10 @@
 # Era IV, Phase 41 — superdroplet Lagrangian microphysics.
 #
-# Headline validation: the stochastic all-or-nothing coalescence algorithm
-# against GOLOVIN'S ANALYTIC SOLUTION for the additive kernel. That is a
-# hard external check — a closed form the solver knows nothing about — and
-# it is the only test here that can catch a subtly wrong multiplicity rule.
+# The headline validation, the stochastic all-or-nothing coalescence
+# algorithm against GOLOVIN'S ANALYTIC SOLUTION for the additive kernel,
+# and its convergence with the superdroplet count, is
+# validation/era4_superdroplet.jl. Here: the closed form itself and the
+# unit properties (Köhler, kernels, exact mass conservation, condensation).
 
 using Test, Printf, Random, Statistics
 using Aeolus
@@ -85,78 +86,24 @@ using Aeolus
         @info "600 s of coalescence" mass_drift=abs(total_water_mass(sd)-m0)/m0 number_ratio=total_number(sd)/n0
     end
 
-    @testset "Golovin analytic solution — the headline validation" begin
-        # Shima et al. (2009) benchmark: n0 = 2^23 m^-3, mean mass
-        # x̄ = 3.3e-12 kg (r̄ = 30.531 μm), b = 1.5 m³ kg⁻¹ s⁻¹, V = 1e6 m³.
-        n0 = 2.0^23; r̄ = 30.531e-6; V = 1e6; b = 1.5
-        rng = MersenneTwister(2009)
-        sd = init_exponential_superdroplets(rng, 2^15, n0, r̄, V)
-        K = GolovinKernel(b_mass = b)
-        m0 = total_water_mass(sd)
-
-        edges = exp.(range(log(1e-6), log(5e-3); length = 41))
-        centres = sqrt.(edges[1:end-1] .* edges[2:end])
-
-        function mass_density(sd)
-            g = zeros(length(centres))
-            for k in eachindex(sd.ξ)
-                j = searchsortedlast(edges, sd.radius[k])
-                (1 <= j <= length(centres)) || continue
-                g[j] += sd.ξ[k] * (4π/3) * 1000.0 * sd.radius[k]^3 /
-                        (V * log(edges[j+1] / edges[j]))
-            end
-            return g
+    @testset "Golovin closed form: initial exponential, mass conserved" begin
+        # (The Monte-Carlo coalescence against this solution is the
+        # validation run validation/era4_superdroplet.jl.)
+        n0 = 2.0^23; r̄ = 30.531e-6; b = 1.5
+        x̄ = (4π/3) * 1000.0 * r̄^3
+        # t = 0: the exponential n(x) = n₀/x̄ e^(−x/x̄), as g(ln r) = 3x² n(x)
+        for r in (5e-6, 20e-6, 30.531e-6, 80e-6)
+            x = (4π/3) * 1000.0 * r^3
+            @test golovin_mass_density(r, 0.0, n0, r̄, b) ≈ 3x^2 * n0 / x̄ * exp(-x / x̄) rtol = 1e-12
         end
-
-        errs = Float64[]
-        t = 0.0
-        for t_target in (1200.0, 2400.0, 3600.0)
-            while t < t_target
-                coalescence_step!(rng, sd, K, 1.0, V); t += 1.0
-            end
-            ana = [golovin_mass_density(r, t, n0, r̄, b) for r in centres]
-            num = mass_density(sd)
-            sel = findall(a -> a > 1e-8 * maximum(ana), eachindex(ana))
-            err = sum(abs(num[i] - ana[i]) for i in sel) / sum(ana[i] for i in sel)
-            push!(errs, err)
-            @test total_water_mass(sd) ≈ m0 rtol = 1e-12
-            @info @sprintf("Golovin t=%4.0fs: L1 error = %.4f", t, err)
+        # ∫ g d(ln r) = n₀ x̄ at every time: coalescence conserves mass.
+        # Trapezoid rule on 20001 points over 0.1 μm - 10 cm, where g decays
+        # to zero at both ends (measured |error| ≤ 2e-12).
+        lr = range(log(1e-7), log(1e-1); length = 20001); h = step(lr)
+        for t in (0.0, 1200.0, 3600.0)
+            g = [golovin_mass_density(exp(l), t, n0, r̄, b) for l in lr]
+            @test h * (sum(g) - 0.5 * (g[1] + g[end])) ≈ n0 * x̄ rtol = 1e-9
         end
-        # Published superdroplet results reproduce Golovin to a few percent
-        # at early times, degrading as the distribution spreads into the tail
-        # where finite N_sd leaves statistical scatter.
-        @test errs[1] < 0.10
-        @test errs[2] < 0.15
-        @test errs[3] < 0.25
-        @info "Golovin L1 errors" t1200=errs[1] t2400=errs[2] t3600=errs[3]
-    end
-
-    @testset "Golovin convergence with superdroplet count" begin
-        # The error should fall as N_sd rises — the defining property of a
-        # Monte-Carlo method, and the thing a wrong multiplicity rule breaks
-        # (it would converge to the wrong answer instead).
-        n0 = 2.0^23; r̄ = 30.531e-6; V = 1e6; b = 1.5
-        edges = exp.(range(log(1e-6), log(5e-3); length = 41))
-        centres = sqrt.(edges[1:end-1] .* edges[2:end])
-        ana = [golovin_mass_density(r, 2400.0, n0, r̄, b) for r in centres]
-        sel = findall(a -> a > 1e-8 * maximum(ana), eachindex(ana))
-        errs = Float64[]
-        for N_sd in (2^11, 2^13, 2^15)
-            rng = MersenneTwister(11)
-            sd = init_exponential_superdroplets(rng, N_sd, n0, r̄, V)
-            K = GolovinKernel(b_mass = b)
-            for _ in 1:2400; coalescence_step!(rng, sd, K, 1.0, V); end
-            g = zeros(length(centres))
-            for k in eachindex(sd.ξ)
-                j = searchsortedlast(edges, sd.radius[k])
-                (1 <= j <= length(centres)) || continue
-                g[j] += sd.ξ[k]*(4π/3)*1000.0*sd.radius[k]^3 /
-                        (V*log(edges[j+1]/edges[j]))
-            end
-            push!(errs, sum(abs(g[i]-ana[i]) for i in sel)/sum(ana[i] for i in sel))
-        end
-        @test errs[end] < errs[1]
-        @info "Golovin convergence vs N_sd (2^11, 2^13, 2^15)" errors=errs
     end
 
     @testset "Reproducibility" begin

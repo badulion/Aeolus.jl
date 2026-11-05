@@ -25,8 +25,20 @@ include(joinpath(@__DIR__, "..", "test", "support", "environment.jl"))
 end
 
 @testset "Era II" begin
+    include("era2_anelastic.jl")              # Phase 27  warm bubble in Boussinesq / anelastic / pseudo-incompressible
+    include("era2_anelastic_cbl.jl")          # #259/#320 Boussinesq vs anelastic: 5 h CBL to ~2 km
+    include("era2_sgs_numerics.jl")           # #132  dynamic Smagorinsky C_s ≈ Lilly in developed turbulence
+    include("era2_nest_boundary.jl")          # Phase 30  one-way nest in a CBL: overlap means within the spread (#261)
     include("era2_nest_twoway_longrun.jl")    # Phase 30 two-way long runs: CBL, neutral, vortex (#263)
     include("era2_nest_hierarchy_longrun.jl") # #328 two two-way nest levels, 50 turnovers
+end
+
+@testset "Era IV" begin
+    include("era4_activation.jl")       # Phase 42  ARG vs explicit parcel
+    include("era4_superdroplet.jl")     # Phase 41  Golovin analytic solution, convergence with N_sd
+    include("era4_icenucleation.jl")    # Phase 43  ISDAC Arctic stratus column, 2-8 h at five INP scalings
+    include("era4_broadening.jl")       # Phase 45  bulk vs superdroplet broadening, σ_r² ∝ t^½
+    include("era4_radiation_fog.jl")    # Phase 44  ParisFog 2011: dt convergence, 6 h budgets, 14 h case
 end
 
 @testset "Era V" begin

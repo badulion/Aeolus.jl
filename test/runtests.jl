@@ -935,7 +935,6 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
     include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
-    include("era2_anelastic_cbl.jl") # #259/#320    Boussinesq vs anelastic: 5 h CBL to ~2 km
     include("era2_multigrid.jl")   # Phase  29     geometric multigrid
     include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
     include("era2_nesting.jl")     # Phase  30     parent-child nesting operators (#250)
@@ -973,7 +972,7 @@ end
         include("era4_icenucleation.jl")   # Phase 43  ice nucleation
         include("era4_turbmicro.jl")       # Phase 45  sub-grid supersaturation PDF
         include("era4_sgs_growth.jl")      # Phase 45  SGS activation and growth
-        include("era4_broadening.jl")      # Phase 45  spectral broadening validation
+        include("era4_broadening.jl")      # Phase 45  spectral broadening: moment closure, OU limit
         include("era4_visibility.jl")      # Phase 44  visibility diagnostic
         include("era4_fog.jl")             # Phase 44  fog / dew coupling (#11)
         include("era4_radiation_fog.jl")   # Phase 44  radiation fog feedback (#9)

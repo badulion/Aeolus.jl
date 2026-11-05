@@ -18,15 +18,8 @@ using Printf
 # `kolmogorov_field!`, shared with the other SGS tests (#317).
 isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
 
-function _dynamic_cs(sim; kw...)
-    ws = DynamicSmagorinskyWorkspace(sim.mesh)
-    νt = Aeolus.Fields.Field(CellCenter(), sim.mesh)
-    for f in (sim.u, sim.v, sim.w)
-        fill_halos!(f, sim.bcs)
-    end
-    compute_dynamic_smagorinsky_νt!(νt, sim.u, sim.v, sim.w; workspace = ws, kw...)
-    return mean(sqrt.(ws.cs2)), ws, νt
-end
+# `_dynamic_cs`, shared with the validation run (validation/era2_sgs_numerics.jl)
+isdefined(@__MODULE__, :_dynamic_cs) || include(joinpath(@__DIR__, "support", "dynamic_smagorinsky.jl"))
 
 @testset "Era II — SGS and momentum-advection swap-ins (#132)" begin
 
@@ -67,27 +60,12 @@ end
         @test maximum(abs, ws2.cs2 .- cs0) < 1e-9 * maximum(cs0)
     end
 
-    @testset "dynamic Smagorinsky: C_s ≈ Lilly's value in developed turbulence, ≈ 0 for random phases" begin
-        # The coefficient measures the energy transfer to subfilter
-        # scales. A random-phase field with a k^(-5/3) spectrum has the
-        # right spectrum but no transfer, so C_s ≈ 0; after the same field
-        # has evolved for ~1 eddy turnover under the resolved dynamics
-        # (static Smagorinsky LES) the dynamic C_s approaches the
-        # inertial-range value 0.17 of Lilly (1967).
+    @testset "dynamic Smagorinsky: plane averaging gives one coefficient per level" begin
+        # (C_s in developed turbulence, after ~1 eddy turnover of LES, is
+        # the validation run validation/era2_sgs_numerics.jl.)
         sim = BoussinesqSimulation(mesh; C_s = 0.17, ν = 1e-4)
         kolmogorov_field!(sim, Xoshiro(1))
-        cs_random, = _dynamic_cs(sim)
-        for _ in 1:100                                                    # t = 1, ~1 turnover
-            step!(sim, 0.01)
-        end
-        cs3, ws3, = _dynamic_cs(sim; filter_ratio = 3)
-        cs2, = _dynamic_cs(sim; filter_ratio = 2)
-        @info @sprintf("  dynamic C_s: random phases %.4f; evolved (t = 1): α = 3 → %.4f, α = 2 → %.4f",
-                       cs_random, cs3, cs2)
-        @test 0.10 < cs3 < 0.20
-        @test cs_random < 0.25 * cs3
-        @test cs2 > cs3               # a narrower assumed test filter needs a larger C_s
-        # plane averaging: one coefficient per level
+        _, ws3, = _dynamic_cs(sim; filter_ratio = 3)
         @test all(k -> allequal(view(ws3.cs2, :, :, k)), 1:mesh.Nz)
     end
 

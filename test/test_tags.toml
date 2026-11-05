@@ -36,14 +36,6 @@ seconds = 90
 weight = "heavy"
 seconds = 83
 
-["era4_icenucleation.jl"]
-weight = "heavy"
-seconds = 72
-
-["era2_anelastic_cbl.jl"]
-weight = "heavy"
-seconds = 71
-
 ["era6_wall_models_channel.jl"]
 weight = "heavy"
 seconds = 65

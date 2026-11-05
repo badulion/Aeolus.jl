@@ -94,3 +94,8 @@ reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget w
 
 # --- fast, timing-sensitive --------------------------------------------------
 
+
+["era2_anelastic_cbl.jl"]
+weight = "heavy"
+seconds = 71
+reason = "5 h CBL to ~2 km, Boussinesq vs anelastic (z_i, θ_ML); the anelastic core stays tested in era2_anelastic.jl, components_both_cores.jl"

@@ -7,6 +7,10 @@
 # anelastic CBL is deeper and warmer, because the heat goes into air whose
 # density falls with height (ρ̄ is ~20 % lower at 2 km), which the
 # Boussinesq core (one ρ₀) does not see.
+#
+# A validation run (5 h of simulated CBL in each core). The two cores stay
+# tested in test/era2_anelastic.jl, the TKE closure in its own test files
+# (e.g. test/era6_tke_stretched.jl).
 
 using Test
 using Printf
