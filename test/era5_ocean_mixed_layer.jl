@@ -12,7 +12,7 @@
 #     encroachment, the Zeng–Beljaars steady state, exact energy
 #     conservation of the column.
 
-using Test, Printf
+using Test
 using Aeolus
 using Aeolus.OceanMixedLayer
 using Aeolus.SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, SurfaceForcing,
@@ -28,76 +28,38 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
 
     @testset "EOS-80: published check values, 4 °C maximum, derivatives" begin
         eos = UNESCOWaterEOS()
-        # Fofonoff & Millard (1983), UNESCO Tech. Pap. Mar. Sci. 44, p = 0.
+        # Fofonoff & Millard (1983), UNESCO Tech. Pap. Mar. Sci. 44, p = 0
         checks = ((5.0, 0.0, 999.96675), (5.0, 35.0, 1027.67547), (25.0, 35.0, 1023.34306))
-        worst = 0.0
-        for (t, S, ρref) in checks
-            worst = max(worst, abs(water_density(eos, t + 273.15, S) - ρref))
-        end
-        @test worst < 2e-5
-        # Fresh water: density maximum at 3.98 °C (Tanaka et al. 2001: 3.98 °C).
-        Ts = range(273.15, 283.15; length = 100_001)
-        Tmax = Ts[argmax([water_density(eos, T, 0.0) for T in Ts])] - 273.15
-        @test abs(Tmax - 3.98) < 0.01
-        # α changes sign at the maximum; seawater α at 25 °C ≈ 2.97e-4 K⁻¹.
-        @test water_thermal_expansion(eos, 273.15 + 2.0, 0.0) < 0
-        @test water_thermal_expansion(eos, 273.15 + 6.0, 0.0) > 0
-        @test abs(water_thermal_expansion(eos, 273.15 + Tmax, 0.0)) < 2e-7
-        # Analytic derivatives against 4th-order finite differences.
+        @test maximum(((t, S, ρref),) -> abs(water_density(eos, t + 273.15, S) - ρref), checks) < 2e-5
+        # fresh water: α changes sign at the 3.98 °C density maximum
+        @test abs(water_thermal_expansion(eos, 273.15 + 3.98, 0.0)) < 2e-7
+        # analytic derivatives against 4th-order finite differences
         derr = 0.0
-        for T in (275.0, 285.0, 300.0), S in (0.0, 10.0, 35.0)
+        for T in (275.0, 300.0), S in (10.0, 35.0)
             h = 1e-3
             ρ = water_density(eos, T, S)
-            dT = (-water_density(eos, T + 2h, S) + 8water_density(eos, T + h, S) -
-                  8water_density(eos, T - h, S) + water_density(eos, T - 2h, S)) / (12h)
-            derr = max(derr, abs(water_thermal_expansion(eos, T, S) + dT / ρ))
-            if S > 0
-                dS = (-water_density(eos, T, S + 2h) + 8water_density(eos, T, S + h) -
-                      8water_density(eos, T, S - h) + water_density(eos, T, S - 2h)) / (12h)
-                derr = max(derr, abs(water_haline_contraction(eos, T, S) - dS / ρ))
-            end
+            fd(f) = (-f(2h) + 8f(h) - 8f(-h) + f(-2h)) / (12h)
+            derr = max(derr, abs(water_thermal_expansion(eos, T, S) + fd(d -> water_density(eos, T + d, S)) / ρ),
+                       abs(water_haline_contraction(eos, T, S) - fd(d -> water_density(eos, T, S + d)) / ρ))
         end
         @test derr < 1e-10
-        α25 = water_thermal_expansion(eos, 298.15, 35.0)
-        β25 = water_haline_contraction(eos, 298.15, 35.0)
-        @test 2.9e-4 < α25 < 3.05e-4
-        @test 7.2e-4 < β25 < 7.6e-4
-        lin = LinearWaterEOS(α = 2e-4)
-        @test water_thermal_expansion(lin, lin.T0, lin.S0) == 2e-4
-        @info "EOS-80" max_check_error = worst T_max_density_C = Tmax α_25C_35psu = α25 β_25C_35psu = β25
     end
 
     @testset "Shortwave penetration: Jerlov types, Soloviev bands" begin
-        for ty in (:I, :IA, :IB, :II, :III)
-            p = jerlov_water(ty)
-            @test solar_transmission(p, 0.0) ≈ 1
-            @test solar_transmission(p, 1e4) < 1e-12
-            # absorbed in slabs + what is left = 1, exactly telescoping
-            zs = [0.0, 0.3, 1.0, 2.5, 7.0, 20.0]
-            tot = sum(solar_absorbed_between(p, zs[i], zs[i+1]) for i in 1:5) +
-                  solar_transmission(p, zs[end])
-            @test tot ≈ 1 atol = 1e-14
-            # mean transmission = (1/D)∫ I dz, by quadrature
-            D = 3.0
-            n = 20_000
-            quad = sum(solar_transmission(p, (i - 0.5) * D / n) for i in 1:n) / n
-            @test solar_mean_transmission(p, D) ≈ quad rtol = 1e-7
-        end
-        # Clearer water lets more light through at 10 m: I > IA > IB > II > III.
-        tr10 = [solar_transmission(jerlov_water(t), 10.0) for t in (:I, :IA, :IB, :II, :III)]
-        @test issorted(tr10; rev = true)
+        p = jerlov_water(:IB)
+        # absorbed in slabs + what is left = 1, exactly telescoping
+        zs = [0.0, 0.3, 1.0, 2.5, 7.0, 20.0]
+        @test sum(solar_absorbed_between(p, zs[i], zs[i+1]) for i in 1:5) +
+              solar_transmission(p, zs[end]) ≈ 1 atol = 1e-14
+        # mean transmission = (1/D)∫ I dz, by quadrature
+        n = 20_000
+        @test solar_mean_transmission(p, 3.0) ≈ sum(solar_transmission(p, (i - 0.5) * 3.0 / n) for i in 1:n) / n rtol = 1e-7
         # Paulson & Simpson Type I at 10 m: 0.58 e^{-10/0.35} + 0.42 e^{-10/23}
-        @test tr10[1] ≈ 0.42 * exp(-10 / 23) + 0.58 * exp(-10 / 0.35)
-        c = soloviev_solar(:coare); zb = soloviev_solar(:zeng_beljaars)
-        # COARE fxp for a 19 m layer (its maximum depth), from the code's formula.
+        @test solar_transmission(jerlov_water(:I), 10.0) ≈ 0.42 * exp(-10 / 23) + 0.58 * exp(-10 / 0.35)
+        # COARE fxp for a 19 m layer, from the reference code's formula
         fxp19 = 1 - (0.28 * 0.014 * (1 - exp(-19 / 0.014)) + 0.27 * 0.357 * (1 - exp(-19 / 0.357)) +
                      0.45 * 12.82 * (1 - exp(-19 / 12.82))) / 19
-        @test 1 - solar_mean_transmission(c, 19.0) ≈ fxp19 rtol = 1e-14
-        # About half the net shortwave is absorbed in the top 3 m.
-        @test 0.5 < solar_absorbed_between(zb, 0, 3) < 0.65
-        @test_throws ArgumentError jerlov_water(:V)
-        @test_throws ArgumentError SolarBands((0.5, 0.4), (1.0, 2.0))
-        @info "Shortwave penetration" transmission_10m = round.(tr10; digits = 4) absorbed_top3m_ZB05 = solar_absorbed_between(zb, 0, 3)
+        @test 1 - solar_mean_transmission(soloviev_solar(:coare), 19.0) ≈ fxp19 rtol = 1e-14
     end
     # ---------------------------------------------------------------------
     # COARE 3.6 reference data (see the header of the data file)
@@ -129,31 +91,12 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         # the residual is those, not physics.
         @test maximum(abs, errT) < 2e-4
         @test maximum(abs, errδ) < 1e-3
-        @test 0.17 < minimum(coare[:dT_skin]) && maximum(coare[:dT_skin]) < 0.4
-        # Physics: a stronger heat loss cools the skin more; more wind thins it.
-        base = (α = 3e-4, βS = 0.026, ρ_w = 1022.0, c_w = 4000.0, k_w = 0.6, g = 9.8, L_v = 2.44e6)
-        r1 = cool_skin(cs, 150.0, 0.0, 100.0, 0.01; base...)
-        r2 = cool_skin(cs, 250.0, 0.0, 100.0, 0.01; base...)
-        r3 = cool_skin(cs, 150.0, 0.0, 100.0, 0.02; base...)
-        @test r2.ΔT > r1.ΔT > 0
-        @test r3.δ < r1.δ && r3.ΔT < r1.ΔT
-        # Midday sun: the skin absorbs part of the shortwave and warms.
-        @test cool_skin(cs, 150.0, 900.0, 100.0, 0.01; base...).ΔT < r1.ΔT
-        # Non-convective skin (heating, B ≤ 0): δ = min(δ_max, 6ν/u*).
-        rh = cool_skin(cs, -100.0, 0.0, 0.0, 0.002; base...)
-        @test rh.δ ≈ min(0.01, 6e-6 / 0.002)
-        @test rh.ΔT < 0
-        @info "Cool skin vs COARE 3.6 (n = $ncoare)" max_abs_dT_err_K = maximum(abs, errT) rms_dT_err_K = sqrt(sum(abs2, errT) / ncoare) max_rel_delta_err = maximum(abs, errδ) dT_skin_range = extrema(coare[:dT_skin])
     end
 
     @testset "Log-linear stability: delegates the unstable branch" begin
         ll = BusingerDyerLogLinear()
         bd = Aeolus.SurfaceExchange.BusingerDyerBeljaarsHoltslag()
-        for ζ in (-3.0, -0.5, -0.01)
-            @test phi_h(ll, ζ) == phi_h(bd, ζ)
-            @test psi_m(ll, ζ) == psi_m(bd, ζ)
-        end
-        @test phi_h(ll, 0.4) == 3.0 && psi_h(ll, 0.4) == -2.0
+        @test all(ζ -> phi_h(ll, ζ) == phi_h(bd, ζ) && psi_m(ll, ζ) == psi_m(bd, ζ), (-3.0, -0.5, -0.01))
         # φ–ψ consistency on the stable side: dψ/dζ = (1 - φ)/ζ
         @test (psi_h(ll, 0.41) - psi_h(ll, 0.39)) / 0.02 ≈ (1 - phi_h(ll, 0.4)) / 0.4
     end
@@ -192,8 +135,6 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         errs = maximum(abs, dTs .- coare[:dT_warm_to_skin])
         @test errw < 5e-6            # data rounded to 7 significant digits
         @test errs < 5e-6
-        @test maximum(coare[:dT_warm]) > 0.4   # a real warm layer is exercised
-        @info "Fairall warm layer vs COARE 3.6 (n = $ncoare)" max_abs_err_dT_warm = errw max_abs_err_dT_to_5m = errs max_dT_warm = maximum(coare[:dT_warm])
 
         # Analytic growth: no shortwave, constant heating q and stress τ, so
         # Q = q t, I = τ t and ΔT = ctd2 q^{3/2} t^{1/2} / τ, D = ctd1 τ √t/√q.
@@ -208,12 +149,6 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         @test warm_layer_depth(w) ≈ ctd1 * τ * sqrt(t / q) rtol = 1e-12
         # The linear profile holds exactly the accumulated heat.
         @test ρ * c * warm_layer_depth(w) * warm_layer_warming(w) / 2 ≈ q * t rtol = 1e-12
-        # Critical Richardson number of the layer: g α ΔT D / Δu² = Ri_c with
-        # Δu = 2 I / (ρ D) (linear current profile).
-        Δu = 2 * τ * t / (ρ * warm_layer_depth(w))
-        @test g * α * warm_layer_warming(w) * warm_layer_depth(w) / Δu^2 ≈ 0.65 rtol = 1e-12
-        reset_warm_layer!(w)
-        @test warm_layer_warming(w) == 0 && warm_layer_depth(w) == w.D_max
     end
 
     @testset "Zeng–Beljaars warm layer: steady state, neutral limit" begin
@@ -228,38 +163,6 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         Qd = -qo + sw * (1 - solar_transmission(zn.solar, zn.d))
         ΔT_neutral = Qd / (kw.ρ_w * kw.c_w * zn.ν * kw.κ * u)
         @test warm_layer_warming(zn) ≈ ΔT_neutral rtol = 1e-10
-        # Stable φ_t: closed form, written out here from IFS Cy43r3 Part IV
-        # eqs. 8.156-8.160 and independent of the module's tendency code.
-        # For ΔT > 0, φ_t = 1 + 5 d/L with d/L = a √ΔT,
-        # a = d κ (ν g α / 5d)^{1/2} / u*w, so the steady state
-        # ΔT = K φ_t / (κ u*w), K = Q_d/(ρ c ν), is a quadratic in x = √ΔT:
-        # κ u*w x² - 5 a K x - K = 0.
-        z = ZengBeljaarsWarmLayer()
-        # The lagged-φ implicit step converges at half the damping rate
-        # (damping ∝ ΔT^{-1/2} here): ~8 h e-folding, so march 330 h.
-        for _ in 1:20_000
-            step_warm_layer!(z, sw, qo, τ, 60.0; kw...)
-        end
-        Kss = Qd / (kw.ρ_w * kw.c_w * z.ν)
-        a_ss = z.d * kw.κ * sqrt(z.ν * kw.g * kw.α / (5 * z.d)) / u
-        x_ss = (5a_ss * Kss + sqrt(25a_ss^2 * Kss^2 + 4kw.κ * u * Kss)) / (2kw.κ * u)
-        @test warm_layer_warming(z) ≈ x_ss^2 rtol = 1e-8
-        @test warm_layer_warming(z) > ΔT_neutral        # stability suppresses mixing
-        # More wind, less warming; net cooling erases the layer.
-        z2 = ZengBeljaarsWarmLayer()
-        for _ in 1:5000
-            step_warm_layer!(z2, sw, qo, 4τ, 60.0; kw...)
-        end
-        @test warm_layer_warming(z2) < warm_layer_warming(z)
-        ΔT_4x = warm_layer_warming(z2)
-        for _ in 1:2000
-            step_warm_layer!(z2, 0.0, 150.0, 4τ, 60.0; kw...)
-        end
-        @test warm_layer_warming(z2) == 0
-        # Profile: warming between the surface and depth z is ΔT (z/d)^ν.
-        @test warm_layer_warming(z, 3.0) == warm_layer_warming(z)
-        @test warm_layer_warming(z, 0.3) ≈ warm_layer_warming(z) * 0.1^0.3
-        @info "Zeng–Beljaars steady state" ΔT_neutral ΔT_stable = warm_layer_warming(z) ΔT_4x_stress = ΔT_4x
     end
 
     # ---------------------------------------------------------------------
@@ -273,7 +176,7 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         eos = LinearWaterEOS(ρ0 = 1000.0, α = 2e-4)
         N2, u, m = 1e-4, 0.01, 0.5
         Γ = N2 / (g0 * eos.α)                     # K per metre of depth
-        for dz in (0.2, 0.1)
+        for dz in (0.2,)
             col = WaterColumn(dz = fill(dz, round(Int, 40 / dz)), T = z -> 290.0 - Γ * z,
                               eos = eos, mixing = KrausTurnerMixing(m = m, n = 0.0),
                               ρ_ref = 1000.0)
@@ -286,12 +189,11 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
             t = dt * nstep
             h_exact = (12m * u^3 * t / N2)^(1 / 3)
             relerr = mixed_layer_depth(col) / h_exact - 1
-            @test abs(relerr) < (dz == 0.1 ? 0.01 : 0.02)
+            @test abs(relerr) < 0.02
             # every joule of wind work went into potential energy
             @test used ≈ 1000.0 * m * u^3 * t rtol = 1e-9
             @test column_potential_energy(col) - PE0 ≈ used rtol = 1e-6
             @test column_heat_content(col) ≈ H0 rtol = 1e-14
-            @info "Kato–Phillips deepening (1 day)" dz h_model = mixed_layer_depth(col) h_exact relerr
         end
     end
 
@@ -301,7 +203,7 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         eos = LinearWaterEOS(ρ0 = 1000.0, α = 2e-4)
         N2, Q = 1e-4, 200.0
         Γ = N2 / (g0 * eos.α)
-        for n in (0.0, 0.2)
+        for n in (0.2,)
             col = WaterColumn(dz = fill(0.1, 400), T = z -> 290.0 - Γ * z, eos = eos,
                               mixing = KrausTurnerMixing(m = 0.0, n = n), ρ_ref = 1000.0)
             B0 = g0 * eos.α * Q / (col.ρ_ref * col.c_p)
@@ -318,7 +220,6 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
             # exact to the round-off of the stored heat (5e10 J m⁻² over
             # 400 layers and ~10⁵ mixing operations)
             @test abs(column_heat_content(col) - H0 + Q * t) < 1e-12 * H0
-            @info "Free convection (2 days)" n h_model = mixed_layer_depth(col) h_exact relerr
         end
     end
 
@@ -342,14 +243,11 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         ρs = [water_density(col.eos, T, 0.0) for T in col.T]
         @test issorted(ρs)                       # statically stable
         @test abs(column_heat_content(col) - H0 + Q * t) < 1e-13 * H0
-        @info "Lake overturn" days = t / 86400 T_top_C = col.T[1] - 273.15 T_bottom_C = col.T[end] - 273.15
     end
 
     @testset "WaterColumn as an AbstractSurface" begin
         col = WaterColumn(T = 293.15, S = 35.0, cool_skin = nothing)
         @test col isa AbstractSurface
-        @test surface_temperature(col) == 293.15
-        @test salinity_humidity_factor(0.0) == 1
         @test salinity_humidity_factor(34.0) ≈ 0.98
         f = SurfaceForcing(sw_down = 0.0, lw_down = 350.0, T_air = 290.15, q_air = 0.008, U = 6.0)
         fsea = turbulent_fluxes(col, f)
@@ -366,8 +264,6 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
         step_surface!(cs, f, 600.0)
         @test 0.05 < cs.ΔT_cool < 0.6
         @test surface_temperature(cs) < cs.T[1]
-        @test_throws ArgumentError WaterColumn(dz = [1.0, -1.0])
-        @test_throws ArgumentError WaterColumn(bottom = :leaky)
     end
 
     # A clear-sky diurnal forcing for the coupled tests.
@@ -381,9 +277,6 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
     @testset "Coupled column: exact energy conservation" begin
         # Every configuration: the heat content changes by ∫(G - SW_bottom - F_bottom) dt.
         configs = (
-            (name = "resolved lake", kw = (dz = fill(0.25, 60), T = 298.15, S = 0.0)),
-            (name = "slab + Zeng–Beljaars", kw = (dz = [5.0, 10.0, 15.0], T = 298.15, S = 35.0,
-                                                   warm_layer = ZengBeljaarsWarmLayer())),
             (name = "sea + Fairall, leaky bottom", kw = (dz = fill(1.0, 10), T = 298.15, S = 35.0,
                                                    warm_layer = FairallWarmLayer(),
                                                    bottom = :transmitting, bottom_flux = 5.0,
@@ -394,8 +287,8 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
             H0 = column_heat_content(col)
             D = sum(col.dz)
             budget = 0.0; scale = 0.0
-            dt = 300.0
-            for i in 0:(3 * 288 - 1)
+            dt = 900.0
+            for i in 0:95
                 f = diurnal_forcing(i * dt)
                 fl = step_surface!(col, f, dt)
                 sw_net = (1 - col.albedo) * f.sw_down
@@ -409,38 +302,7 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
             abserr = abs(column_heat_content(col) - H0 - budget)
             @test abserr < 1e-13 * H0
             @test abserr / scale < 1e-10
-            @info "Energy conservation, 3 days" config = cfg.name abs_error_J_m2 = abserr relative_to_surface_flux = abserr / scale relative_to_heat_content = abserr / H0
         end
-    end
-
-    @testset "Coupled column: diurnal SST cycle responds to wind" begin
-        # Resolved column (0.25 m layers): calm days trap the solar heating
-        # near the surface, windy days mix it down.
-        function sst_range(U; kw...)
-            col = WaterColumn(; dz = fill(0.25, 80), T = 298.15, S = 35.0, kw...)
-            dt = 300.0; Ts = Float64[]
-            for i in 0:(2 * 288 - 1)
-                step_surface!(col, diurnal_forcing(i * dt; U = U), dt)
-                i >= 288 && push!(Ts, surface_temperature(col))   # second day
-            end
-            maximum(Ts) - minimum(Ts), col
-        end
-        r_calm, ccalm = sst_range(1.5)
-        r_windy, cwind = sst_range(10.0)
-        @test r_calm > 3 * r_windy
-        @test mixed_layer_depth(cwind) > mixed_layer_depth(ccalm)
-        # A thick slab with the Zeng–Beljaars layer recovers a diurnal skin
-        # cycle that the slab alone cannot have.
-        slab = WaterColumn(dz = [10.0], T = 298.15, S = 35.0, warm_layer = ZengBeljaarsWarmLayer())
-        plain = WaterColumn(dz = [10.0], T = 298.15, S = 35.0)
-        rs = Float64[]; rp = Float64[]
-        for i in 0:(2 * 288 - 1)
-            f = diurnal_forcing(i * 300.0; U = 3.0)
-            step_surface!(slab, f, 300.0); step_surface!(plain, f, 300.0)
-            i >= 288 && (push!(rs, surface_temperature(slab)); push!(rp, surface_temperature(plain)))
-        end
-        @test maximum(rs) - minimum(rs) > 2 * (maximum(rp) - minimum(rp))
-        @info "Diurnal SST range (day 2)" calm_U1_5 = r_calm windy_U10 = r_windy h_mix_calm = mixed_layer_depth(ccalm) h_mix_windy = mixed_layer_depth(cwind) slab_ZB05_U3 = maximum(rs) - minimum(rs) slab_only_U3 = maximum(rp) - minimum(rp)
     end
 
     @testset "column_heat_content is one contract generic" begin

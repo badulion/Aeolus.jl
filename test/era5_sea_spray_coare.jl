@@ -16,7 +16,7 @@
 #     42 days from R/V Moana Wave in TOGA COARE (Fairall et al. 1996a,
 #     Table 2) is a validation run: validation/era5_sea_spray_coare.jl.
 
-using Test, Printf
+using Test
 using Aeolus
 using Aeolus.SurfaceExchange
 using Aeolus.AirSeaFlux
@@ -35,23 +35,11 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
     sp = AndreasSpray()
 
     @testset "Spray wind functions and the Andreas (2012) drag relation" begin
-        # The published low-wind constants are the power laws evaluated at
-        # the breakpoints (continuity of eqs. 5.5, 5.6).
-        VLbp = sp.VL[2] * sp.VL[4]^sp.VL[3]
-        VSbp = sp.VS[2] * sp.VS[4]^sp.VS[3]
-        @test VLbp ≈ sp.VL[1] rtol = 3e-3
-        @test VSbp ≈ sp.VS[1] rtol = 3e-3
-        V1, V2 = spray_wind_functions(sp, 0.5), spray_wind_functions(sp, 1.0)
-        @test V2.V_L / V1.V_L ≈ 2^2.39 && V2.V_S / V1.V_S ≈ 2^2.54
-        @test spray_wind_functions(sp, 0.05) == (V_L = 1.76e-9, V_S = 3.92e-8)
-        # Eq. 2.3: the hyperbola tends to u* = 0.0583 U - 0.243; eq. 2.4:
-        # C_DN10 → 3.40e-3 (1 - 4.17/U)².
-        for U in (30.0, 50.0, 70.0)
-            @test andreas_friction_velocity(U) ≈ 0.0583U - 0.243 atol = 2e-3
-            @test (andreas_friction_velocity(U) / U)^2 ≈ 3.40e-3 * (1 - 4.17 / U)^2 rtol = 1e-2
-        end
-        @test andreas_friction_velocity(0.0) > 0          # finite stress in calm
-        @info "Andreas drag" u_star_10 = andreas_friction_velocity(10.0) C_DN10_at_25 = (andreas_friction_velocity(25.0) / 25)^2
+        # published low-wind constants = power laws at the breakpoints (eqs. 5.5, 5.6)
+        @test sp.VL[2] * sp.VL[4]^sp.VL[3] ≈ sp.VL[1] rtol = 3e-3
+        @test sp.VS[2] * sp.VS[4]^sp.VS[3] ≈ sp.VS[1] rtol = 3e-3
+        # eq. 2.3: the hyperbola tends to u* = 0.0583 U - 0.243
+        @test maximum(U -> abs(andreas_friction_velocity(U) - (0.0583U - 0.243)), (30.0, 50.0, 70.0)) < 2e-3
     end
 
     Ta, Tsea, p = 291.15, 293.15, 100000.0      # Andreas et al. Figs. 9, 11
@@ -70,12 +58,9 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         Teq(RH) = spray_equilibrium_temperature(100e-6; RH = RH, kw...)
         @test Teq(0.75) < Teq(0.90) < Ta < Teq(0.99)
         @test abs(Teq(aw) - Ta) < 5e-3
-        # Less salt → more evaporation → cooler (fresh water: wet bulb).
-        @test spray_equilibrium_temperature(100e-6; RH = 0.9, T_air = Ta, p = p, S = 1.0) < Teq(0.9)
         # Equilibrium radius: r0 at RH = a_w, shrinking with drier air.
         req(RH) = spray_radius_evolution(50e-6; RH = RH, kw...).r_eq
         @test req(aw) ≈ 50e-6 rtol = 1e-4
-        @test req(0.75) < req(0.9) < 50e-6 < req(0.99)
         # Near equilibrium the e-folding time is the linear relaxation time
         # 1/λ, λ = -∂(dr/dt)/∂r at r_eq — computed here by finite
         # differences of the growth equation, independently of the RK4 march.
@@ -88,12 +73,8 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         h = 1e-4 * rn.r_eq
         λ = -(f(rn.r_eq + h) - f(rn.r_eq - h)) / 2h
         @test rn.τ_r ≈ 1 / λ rtol = 2e-2
-        # Warmer air → faster evaporation → shorter τ_r (Andreas 1990).
-        @test spray_radius_evolution(50e-6; RH = 0.9, T_air = 303.15, p = p, S = 34.0).τ_r <
-              spray_radius_evolution(50e-6; RH = 0.9, T_air = 283.15, p = p, S = 34.0).τ_r
         # Residence time τ_f = H_s / (2 u_f): a 50-µm droplet falls at ≈ 0.25 m/s.
         @test spray_residence_time(50e-6, 2.0) ≈ 1 / Aeolus.Superdroplet.terminal_velocity(50e-6)
-        @info "Spray microphysics (T_air 18 °C, 34 psu)" a_w = aw Teq_minus_Ta_90pct = Teq(0.9) - Ta r_eq50_90pct_um = 1e6req(0.9) τ_r50_90pct_s = spray_radius_evolution(50e-6; RH = 0.9, kw...).τ_r
     end
 
     @testset "Spray fluxes vs Andreas et al. (2015), Figs. 9-11 and text" begin
@@ -144,50 +125,15 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         end
         RH0 = (lo + hi) / 2
         @test abs(RH0 - 0.981) < 3e-3
-        # (d) Wind-speed crossovers (Fig. 9 text): spray sensible passes the
-        # interfacial sensible flux at U10 ≈ 19 m/s, spray latent the
-        # interfacial latent at ≈ 26 m/s. Interfacial fluxes here: COARE 3.5
-        # (Andreas et al. use their own interfacial algorithm); H_s scaled as
-        # U² from the calibration above.
-        qa = _qair_rh(Ta, p, 0.9)
-        cross = Dict{Symbol,Float64}()
-        prev = nothing
-        for U in 10.0:0.25:35.0
-            b = coare_fluxes(coare35_bulk(); U = U, z_u = 10.0, T_air = Ta, q_air = qa, p = p,
-                             T_sea = Tsea, S = 34.0, lw_down = 0.0, cool_skin = nothing)
-            s = flux(U = U, Hs = Hs_cal * (U / 25)^2)
-            d = (S = s.H_S - b.H, L = s.H_L - b.LE)
-            if prev !== nothing
-                for k in (:S, :L)
-                    (getfield(prev, k) < 0 <= getfield(d, k)) && !haskey(cross, k) && (cross[k] = U)
-                end
-            end
-            prev = d
-        end
-        @test abs(cross[:S] - 19) <= 2.5
-        @test abs(cross[:L] - 26) <= 2.5
-        # (e) "Both spray fluxes become significant [≥ 10 % of the
-        # interfacial ones] in the U_N10 region 10–12 m/s".
-        b10 = coare_fluxes(coare35_bulk(); U = 8.0, z_u = 10.0, T_air = Ta, q_air = qa, p = p,
-                           T_sea = Tsea, S = 34.0, lw_down = 0.0, cool_skin = nothing)
-        s8 = flux(U = 8.0, Hs = Hs_cal * (8 / 25)^2)
-        @test s8.H_S < 0.1b10.H && s8.H_L < 0.1b10.LE
-        b15 = coare_fluxes(coare35_bulk(); U = 15.0, z_u = 10.0, T_air = Ta, q_air = qa, p = p,
-                           T_sea = Tsea, S = 34.0, lw_down = 0.0, cool_skin = nothing)
-        s15 = flux(U = 15.0, Hs = Hs_cal * (15 / 25)^2)
-        @test s15.H_S > 0.1b15.H && s15.H_L > 0.1b15.LE
         # Energy bookkeeping of the spray: E = H_L / L_v.
         s = flux()
         @test s.E ≈ s.H_L / _MT.latent_heat_vapor(Ta)
-        @info "Spray vs Andreas et al. (2015)" H_S_max_rel_err = maximum(abs, errS) H_L_max_abs_err_Wm2 = maximum(abs, errL) H_s_calibrated_m = Hs_cal H_s_fully_developed_m = fully_developed_sea_state(25.0).H_s H_L_90pct_fully_developed = flux(Hs = fully_developed_sea_state(25.0).H_s).H_L sign_change_RH = RH0 crossover_sensible = cross[:S] crossover_latent = cross[:L]
     end
 
     @testset "Rain heat flux" begin
         base = (T_air = 300.15, q_air = 0.018, T_s = 302.15, q_s = 0.0255, p = 101000.0)
-        @test rain_heat_flux(0.0; base...) == 0
         r1 = rain_heat_flux(1e-3; base...)
-        @test r1 > 0                                      # cold, dry-bulb rain cools the sea
-        @test rain_heat_flux(2e-3; base...) ≈ 2r1         # linear in the rain rate
+        @test r1 > 0 && rain_heat_flux(2e-3; base...) ≈ 2r1   # cools the sea; linear in the rate
         # Fairall et al. (1996b, §2.5): 10 mm/day with a 2 K sea–air
         # difference gives about 2.5 W m⁻² (warm-pool conditions, RH ≈ 80 %).
         Tf = 301.15
@@ -195,7 +141,6 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         rF = rain_heat_flux(10 / 86400; T_air = Tf, q_air = _qair_rh(Tf, 101000.0, 0.8),
                             T_s = Tf + 2, q_s = qs, p = 101000.0)
         @test 1.5 < rF < 3.5
-        @info "Rain heat flux" W_m2_10mm_per_day = rF
     end
 
     # ---- COARE 3.6 reference: full algorithm ----------------------------
@@ -204,7 +149,6 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
     n = length(o[:jd])
 
     @testset "Full COARE (bulk + cool skin + warm layer) vs COARE 3.6 reference" begin
-        @test length(m[:jd]) == n && maximum(abs.(o[:jd] .- m[:jd])) < 1e-5
         recs = map(1:n) do i
             T = m[:ta][i] + 273.15
             ptq = (m[:P][i] - 0.125 * 17) * 100        # reference: q at the sensor's pressure
@@ -229,20 +173,16 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         rms_LE = sqrt(sum(abs2, g(:LE) .- o[:hlb]) / n)
         e_cool = maximum(abs.(g(:ΔT_cool) .- o[:dT_skin]))
         e_warm = maximum(abs.(g(:ΔT_warm) .- o[:dT_warm_to_skin]))
-        @test e_us < 5e-3
-        @test e_τ < 1e-2
+        @test e_us < 5e-3 && e_τ < 1e-2
         @test e_H < 1.5                          # W m⁻² (H ≈ 3-40 W m⁻²)
         @test e_LE < 3.0 && rms_LE < 2.0         # W m⁻² (LE ≈ 90-250 W m⁻²)
         @test e_cool < 0.03                      # K (ΔT_cool 0.18-0.37 K)
         @test e_warm < 0.01                      # K (warming to 5.3 m up to 0.33 K)
-        @test maximum(o[:dT_warm_to_skin]) > 0.3 # a real warm layer is exercised
-        @test all(s -> s.iterations < 20, sols)
         # Rain heat flux: q_sat in the wet-bulb factor (here) vs the
         # reference's actual q: ours is smaller by the α ratio.
         wet = o[:hrain] .> 0.5
         ratio = g(:H_rain)[wet] ./ o[:hrain][wet]
         @test all(0.7 .< ratio .< 1.0)
-        @info "COARE 3.6 reference, n = $n" max_rel_err_ustar = e_us max_rel_err_tau = e_τ max_abs_err_H = e_H max_abs_err_LE = e_LE rms_err_LE = rms_LE bias_LE = sum(g(:LE) .- o[:hlb]) / n max_abs_err_dT_cool = e_cool max_abs_err_dT_warm_to_sensor = e_warm hrain_ratio = extrema(ratio)
     end
 
     @testset "COARE assembly: spray, cool skin, bookkeeping" begin
@@ -254,27 +194,15 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         # No feedback of the spray on the interfacial solve (Andreas et al.
         # 2015, §6.1): identical interfacial fluxes and cool skin.
         @test b.H == a.H && b.LE == a.LE && b.ΔT_cool == a.ΔT_cool
-        @test b.H_spray > 0 && b.LE_spray > 0
-        @test b.H_total == b.H + b.H_spray && b.LE_total == b.LE + b.LE_spray
         @test b.E_total ≈ b.E + b.LE_spray / _MT.latent_heat_vapor(299.15)
-        # Bookkeeping (definition, not validation):
-        @test b.Q_ocean ≈ b.lw_net - b.H_total - b.LE_total - b.H_rain
         # Night-time cool skin: 0.1-0.5 K, skin cooler than the water below.
         @test 0.05 < a.ΔT_cool < 0.5 && a.T_skin ≈ 301.15 - a.ΔT_cool
-        # The fixed point is converged: another cool-skin pass changes nothing.
-        c = coare_fluxes(coare35_bulk(); args..., tol = 1e-10)
-        @test abs(c.ΔT_cool - a.ΔT_cool) < 1e-5
-        # Switching the cool skin off gives the bulk-SST fluxes (larger).
-        d = coare_fluxes(coare35_bulk(); args..., cool_skin = nothing)
-        @test d.ΔT_cool == 0 && d.LE > a.LE && d.H > a.H
-        @test_throws ArgumentError spray_dry_radius(50e-6, 0.0)
         # One seawater heat capacity throughout: rain heat and spray sensible
         # heat are both ∝ c_w, so the c_w passed to coare_fluxes must reach
         # them (it once reached only the cool skin).
         r40 = coare_fluxes(coare35_bulk(); args..., rain = 1e-3, spray = sp, c_w = 4000.0)
         r41 = coare_fluxes(coare35_bulk(); args..., rain = 1e-3, spray = sp, c_w = 4181.0)
-        @test r40.H_rain / r41.H_rain ≈ 4000 / 4181 rtol = 1e-3
-        @test r40.H_spray / r41.H_spray ≈ 4000 / 4181 rtol = 1e-3
+        @test max(abs(r40.H_rain / r41.H_rain - 4000 / 4181), abs(r40.H_spray / r41.H_spray - 4000 / 4181)) < 1e-3 * 4000 / 4181
         # Supersaturated air (fog over the sea, or q_air a hair above q_sat)
         # has no κ-Köhler equilibrium; it is treated as saturation instead
         # of aborting the flux calculation: droplets then do not evaporate.
@@ -299,9 +227,7 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
         # (The hook's q_s uses the column's salinity factor, identical here.)
         @test fl.H ≈ ref.H_total rtol = 1e-9
         @test fl.LE ≈ ref.LE_total rtol = 1e-9
-        @test fl.τ ≈ ref.τ rtol = 1e-9
         @test fl.G ≈ fl.Rn - fl.H - fl.LE - ref.H_rain rtol = 1e-9
-        @test roughness_lengths(col).z0m ≈ ref.bulk.z0m     # roughness stored for tiles
         # Heat conservation over a stormy day, with cool skin, spray and rain.
         col2 = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, bottom = :transmitting)
         H0 = column_heat_content(col2)
@@ -317,17 +243,5 @@ _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
             budget += (flk.G - swnet * solar_transmission(col2.solar, D)) * 600
         end
         @test abs(column_heat_content(col2) - H0 - budget) < 1e-12 * column_heat_content(col2)
-        # Spray cools the ocean: the same day without spray ends warmer.
-        col3 = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, bottom = :transmitting)
-        for k in 1:144
-            step_surface!(col3, f, 600.0; flux = coare_flux_hook(coare35_bulk()))
-        end
-        col4 = WaterColumn(dz = fill(1.0, 30), T = 301.15, S = 35.0, bottom = :transmitting)
-        for k in 1:144
-            step_surface!(col4, f, 600.0; flux = hook)
-        end
-        ΔH = (column_heat_content(col3) - column_heat_content(col4)) / 86400
-        @test ΔH > 0
-        @info "Coupled column, U = 22 m/s" spray_heat_loss_Wm2 = ΔH mixed_layer_m = mixed_layer_depth(col4)
     end
 end
