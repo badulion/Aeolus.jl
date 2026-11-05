@@ -71,7 +71,7 @@ end
     include("era6_sigma_sgs.jl")         # P59-b: σ-model KE decay vs Smagorinsky 0.17 (#184)
     include("era6_relaminarisation.jl")  # P59-e: decaying turbulence in stable stratification vs neutral (#195)
     include("era6_deep_top.jl")          # N-parent-b: gravity-wave absorption by the θ damping layer (Klemp & Lilly 1978) (#254)
-    include("era6_lasd.jl")              # P54-e: scale-dependent Lagrangian dynamic model, log law (#186)
+    include("era6_lasd.jl")              # P54-e: LASD scale invariance, half-channel log law, robustness (#186)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_gabls2.jl")            # N-parent-c: GABLS2 (reduced) with large-scale subsidence (#248)
     include("era6_transition_kh.jl")     # Phase 59  Kelvin–Helmholtz / Miles–Howard growth rates (#180)

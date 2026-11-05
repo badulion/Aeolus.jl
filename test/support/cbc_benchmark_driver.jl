@@ -1,9 +1,11 @@
 # Comte-Bellot & Corrsin (1971) decaying grid turbulence: the shared LES
 # benchmark harness of Era VI (P54-c, #168).
 #
-# Included by test/era6_cbc_decay.jl. (The examples/validation/cbc_decay
-# example and its run type went with ONE-g #456: an evolve-and-rescale
-# spin-up averaged over seeds is not one model run.)
+# Included by test/era6_cbc_decay.jl (the reference table and the initial
+# state, `cbc_initial_state`) and validation/era6_cbc_decay.jl (the
+# benchmark runs). (The examples/validation/cbc_decay example and its run
+# type went with ONE-g #456: an evolve-and-rescale spin-up averaged over
+# seeds is not one model run.)
 # A closure is benchmarked with one call, `cbc_benchmark(closure; N)`, so
 # later closures (LASD, AMD/Vreman, σ, TKE) add one line each to the test.
 #
@@ -179,12 +181,8 @@ function cbc_benchmark(closure; N::Integer = 32, cfl::Real = 0.5, seeds = 1:3,
     k = runs[1].k
     E_les = [sum(r.E[s] for r in runs) ./ length(runs) for s in 1:3]
     nc = N ÷ 2
-    Δk = k[2] - k[1]
-    shells = 2:nc+1                                   # n = 1 … N/2
-    E_ref = [Eref[s].(k) for s in 1:3]
-    K(E) = sum(E[shells]) * Δk
-    K_ratio = (K(E_les[2]) / K(E_les[1]), K(E_les[3]) / K(E_les[1]))
-    K_ratio_ref = (K(E_ref[2]) / K(E_ref[1]), K(E_ref[3]) / K(E_ref[1]))
+    E_ref, K_ratio_ref = _cbc_filtered_reference(k, N, Eref)
+    K_ratio = (_cbc_K(E_les[2], k, N) / _cbc_K(E_les[1], k, N), _cbc_K(E_les[3], k, N) / _cbc_K(E_les[1], k, N))
     nlog = floor(Int, 2nc / 3)
     rms(s) = sqrt(sum(abs2, log10.(E_les[s][2:nlog+1] ./ E_ref[s][2:nlog+1])) / nlog)
     return (; K_ratio, K_ratio_ref, K_err = K_ratio ./ K_ratio_ref .- 1,
@@ -193,7 +191,20 @@ function cbc_benchmark(closure; N::Integer = 32, cfl::Real = 0.5, seeds = 1:3,
               k, E_les, E_ref, nsteps = runs[1].nsteps, wall, N, nseeds = length(runs))
 end
 
-function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
+# the resolved TKE Σ_n E(nΔk) Δk over the shells n = 1 … N/2
+_cbc_K(E, k, N) = sum(E[2:N÷2+1]) * (k[2] - k[1])
+
+# CBC on the LES shells `k` (3 stations) and its TKE ratios K(98)/K(42),
+# K(171)/K(42) filtered to the grid cut-off
+function _cbc_filtered_reference(k, N, Eref)
+    E_ref = [Eref[s].(k) for s in 1:3]
+    return E_ref, (_cbc_K(E_ref[2], k, N) / _cbc_K(E_ref[1], k, N), _cbc_K(E_ref[3], k, N) / _cbc_K(E_ref[1], k, N))
+end
+
+# the initial field of one realisation: the station-1 spectrum, then
+# `spinup` evolve-and-rescale cycles; returns the simulation (t = 0) and
+# the step! keywords of the closure
+function _cbc_initial(closure, N, cfl, seed, spinup, t_spin, Eref)
     mesh = RegularGrid(; size = (N, N, N), extent = (CBC_LBOX, CBC_LBOX, CBC_LBOX), halo = (3, 3, 3))
     ckw, skw = _cbc_closure(closure, mesh)
     sim = BoussinesqSimulation(mesh; ν = CBC_NU, ckw...)
@@ -209,6 +220,11 @@ function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
         end
     end
     sim.t = 0.0
+    return sim, skw
+end
+
+function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
+    sim, skw = _cbc_initial(closure, N, cfl, seed, spinup, t_spin, Eref)
     t_station = [(s - CBC_STATIONS[1]) * CBC_M / CBC_U0 for s in CBC_STATIONS]
     k, E0 = isotropic_energy_spectrum(sim.u, sim.v, sim.w)
     E = [E0]; nsteps = 0
@@ -217,6 +233,26 @@ function _cbc_run(closure, N, cfl, seed, spinup, t_spin, Eref)
         push!(E, isotropic_energy_spectrum(sim.u, sim.v, sim.w)[2])
     end
     return (; k, E, nsteps)
+end
+
+"""
+    cbc_initial_state(closure; N = 32, seed = 1, spinup = 2, t_spin, cfl = 0.5) -> NamedTuple
+
+The initial state of one realisation of [`cbc_benchmark`](@ref), built the
+same way (station-1 spectrum, `spinup` evolve-and-rescale cycles of
+`t_spin`) but not run to the stations: the simulation `sim`, the shells
+`k`, the LES spectrum `E_les = [E(42)]`, CBC on the shells `E_ref`
+(3 stations) and `K_ratio_ref`, CBC's K(98)/K(42), K(171)/K(42) filtered
+to the grid cut-off. A short `t_spin` makes it a cheap test of the set-up.
+"""
+function cbc_initial_state(closure; N::Integer = 32, cfl::Real = 0.5, seed::Integer = 1,
+                           spinup::Integer = 2,
+                           t_spin::Real = (CBC_STATIONS[2] - CBC_STATIONS[1]) * CBC_M / CBC_U0)
+    Eref = [cbc_spectrum(s; table = cbc_table()) for s in 1:3]
+    sim, _ = _cbc_initial(closure, N, cfl, seed, spinup, t_spin, Eref)
+    k, E0 = isotropic_energy_spectrum(sim.u, sim.v, sim.w)
+    E_ref, K_ratio_ref = _cbc_filtered_reference(k, N, Eref)
+    return (; sim, k, E_les = [E0], E_ref, K_ratio_ref, N)
 end
 
 function cbc_summary(name, r)

@@ -1,10 +1,11 @@
 # Era VI, Phase 54 (P54-c, #168): decaying grid turbulence of
 # Comte-Bellot & Corrsin (1971), the LES benchmark of Era VI.
 #
-# Set-up and harness: test/cbc_benchmark_driver.jl (`cbc_benchmark`).
-# Reference: CBC table 3 (test/data/cbc1971_table3.txt). CBC is a wind-
-# tunnel experiment, not DNS; the LES is compared with the measured
-# spectra filtered to the grid cut-off.
+# Set-up and harness: test/support/cbc_benchmark_driver.jl (`cbc_benchmark`,
+# shared with test/era6_cbc_decay.jl, which tests the reference table and
+# the initial state). Reference: CBC table 3 (test/data/cbc1971_table3.txt).
+# CBC is a wind-tunnel experiment, not DNS; the LES is compared with the
+# measured spectra filtered to the grid cut-off.
 #
 # Measured at 32³, three random seeds (the numbers in docs/src/theory/sgs.md):
 #
@@ -102,26 +103,9 @@
 using Test
 using Aeolus
 using Printf
-
-include(joinpath(@__DIR__, "support", "cbc_benchmark_driver.jl"))
+isdefined(@__MODULE__, :cbc_benchmark) || include(joinpath(@__DIR__, "..", "test", "support", "cbc_benchmark_driver.jl"))
 
 @testset "Era VI — Comte-Bellot–Corrsin decay (P54-c, #168)" begin
-
-    @testset "reference data: table 3 against table 4" begin
-        k, E, urms = cbc_table()
-        @test size(E) == (20, 3) && count(isnan, E) == 4
-        @test k[1] ≈ 15.0 && k[end] ≈ 2000.0                       # 0.15 … 20 cm⁻¹
-        for s in 1:3
-            f = cbc_spectrum(s)
-            ok = .!isnan.(E[:, s])
-            @test f.(k[ok]) ≈ E[ok, s] rtol = 1e-12                 # passes through the table
-            # isotropy: ∫E dk = (3/2) u'² with u' from table 4 (an
-            # independent measurement); within 5 % (measured 4.2, 1.3, 0.3 %)
-            kk = exp.(range(log(1.0), log(3000.0), length = 20001))
-            I = sum((f.(kk[1:end-1]) .+ f.(kk[2:end])) ./ 2 .* diff(kk))
-            @test abs(I / (1.5 * urms[s]^2) - 1) < 0.05
-        end
-    end
 
     res = Dict{Symbol,Any}()
     t_total = @elapsed for c in (:dynamic, :lagrangian, :smagorinsky, :none, :amd, :vreman)
@@ -136,16 +120,6 @@ include(joinpath(@__DIR__, "support", "cbc_benchmark_driver.jl"))
     # of the closures above
     res[:sigma] = cbc_benchmark(:sigma; N = 32)
     @info "  " * cbc_summary("sigma", res[:sigma])
-
-    @testset "set-up: station-1 spectrum exact in every resolved shell" begin
-        r = res[:dynamic]
-        @test r.E_les[1][2:17] ≈ r.E_ref[1][2:17] rtol = 1e-10
-        @test r.k[2] ≈ 2π / (11 * 0.0508)
-        # filtering to 32³ keeps more of the decay than the full K = 3/2 u'²
-        _, _, urms = cbc_table()
-        @test r.K_ratio_ref[1] > (urms[2] / urms[1])^2
-        @test r.K_ratio_ref[2] > (urms[3] / urms[1])^2
-    end
 
     @testset "$c: TKE decay and spectra against CBC" for c in (:dynamic, :lagrangian, :smagorinsky, :vreman)
         r = res[c]
