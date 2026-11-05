@@ -8,21 +8,17 @@
 # against direct quadrature of the ODE; Stokes' first problem with its
 # second-order convergence; the laminar pressure-gradient balance
 # (τ = τ_w + y ∂p/∂x, Poiseuille) to round-off; exact column momentum
-# conservation per step; the stress the operator removes; the channel at
+# conservation per step; the stress the operator removes; the faster
+# response of the TBLE to a sudden pressure-
+# gradient increase (He & Seddighi 2013, qualitative). The channel at
 # Re_τ = 1000 against Lee & Moser (2015), with the dynamic κ_wm of Wang &
-# Moin (2002); the faster response of the TBLE to a sudden pressure-
-# gradient increase (He & Seddighi 2013, qualitative).
+# Moin (2002), is a validation run, in validation/era6_wall_models_tble.jl.
 
 using Test
 using Printf
 using Random
 using Aeolus
-# the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
-isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
-using .ChannelCases
 using Aeolus.WallModels
-
-include(joinpath(@__DIR__, "data", "lee_moser_2015.jl"))
 
 # independent adaptive Simpson quadrature (for the equilibrium-ODE check)
 function _simpson(f, a, b; tol = 1e-13, depth = 60)
@@ -210,31 +206,6 @@ end
     @test tble_columns(wm, :top).cols[1, 1].τx ≈ cols[1, 1].τx rtol = 1e-12
     @test_throws ArgumentError apply_wall_stress!(sim, wm, 0.1; formulation = :schumann)
     @test_throws ArgumentError TBLEWallModel(; terms = :bogus)
-end
-
-@testset "5. Channel Re_τ = 1000 (24×12×16, h_wm = 3Δz, time filter, :pressure_gradient)" begin
-    Ub_LM = lm2015_ub_plus(1000)
-    dz = 2 / 16
-    c = channel_case(; Re_τ = 1000, N = (24, 12, 16), closure = StaticSmagorinsky(0.1),
-                     wall_law = SpaldingLaw(), seed = 1, h_wm = 3dz, filter = :temporal,
-                     wall_model = :nonequilibrium,
-                     tble = (terms = :pressure_gradient, dynamic_kappa = :total, κ_feedback = false,
-                             T_κ = 0.5))
-    ks = Float64[]
-    st = run_channel!(c, 8.0; average_from = 5.0,
-                      callback = cc -> cc.sim.t >= 5 && push!(ks, (tble_kappa(cc.wall, :bottom; dynamic = true) +
-                                                                  tble_kappa(cc.wall, :top; dynamic = true)) / 2))
-    Ub = sum(st.U) / length(st.U)
-    κd = sum(ks) / length(ks)
-    @info @sprintf("  channel Re_τ=1000 TBLE-PG: U_b⁺ %.3f (%+.2f %% vs Lee & Moser %.2f), ⟨τ_w⟩ %.3f, Φ_m(Δz) %.3f, dynamic κ_wm %.3f (%.1f s)",
-                   Ub, 100(Ub / Ub_LM - 1), Ub_LM, st.τ_wall, st.phi_m[1], κd, st.wall_time)
-    @test abs(Ub / Ub_LM - 1) < 0.05
-    @test abs(st.τ_wall - 1) < 0.07
-    # the dynamic κ_wm (Wang & Moin 2002: ≈ 0.2): the effective LES eddy
-    # viscosity at h = 0.375δ, close to 0.41(1 − h/δ) = 0.256, the
-    # outer-layer stress decrease the mixing-length ν_t,wm lacks
-    @test 0.15 < κd < 0.32
-    @test tble_kappa(c.wall) == 0.41                  # not fed back
 end
 
 @testset "6. Non-equilibrium response to a sudden tripling of ∂p/∂x (He & Seddighi 2013)" begin

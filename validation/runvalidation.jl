@@ -58,6 +58,19 @@ end
 end
 
 @testset "Era VI" begin
+    include("era6_lagrangian_sgs.jl")    # P54-b: Lagrangian dynamic Smagorinsky in isotropic turbulence: C_s vs plane, positivity (#173)
+    include("era6_neutral_abl.jl")       # P54-d: half channel (u*², τ(z)), two-wall channel at Re_τ = 1000 (#174)
+    include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected on linear and breaking internal waves (#187)
+    include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman dissipation vs Smagorinsky 0.17 in developed turbulence (#176)
+    include("era6_apriori_sgs.jl")       # Phase 56  96³ filtered-DNS fixture: a-priori Smagorinsky, Bardina, dynamic C_s (#178)
+    include("era6_tke.jl")               # P56-b: TKE positivity over 500 steps, reduced CBL (#182)
+    include("era6_wall_models_channel.jl") # P57-b: channel Re_τ = 1000 and rough half channel, matching height + filters (#183)
+    include("era6_wall_models_tble.jl")  # P57-c: TBLE channel at Re_τ = 1000 vs Lee & Moser (#189)
+    include("era6_wall_models_immersed.jl") # P57-d: rotated channel, IBM walls vs z-walls, Lee & Moser U_b⁺ (#179)
+    include("era6_wall_models_dynamic.jl") # P57-e: dynamic roughness, grid invariance 32² vs 16² (#190)
+    include("era6_sigma_sgs.jl")         # P59-b: σ-model KE decay vs Smagorinsky 0.17 (#184)
+    include("era6_relaminarisation.jl")  # P59-e: decaying turbulence in stable stratification vs neutral (#195)
+    include("era6_deep_top.jl")          # N-parent-b: gravity-wave absorption by the θ damping layer (Klemp & Lilly 1978) (#254)
     include("era6_lasd.jl")              # P54-e: scale-dependent Lagrangian dynamic model, log law (#186)
     include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_gabls2.jl")            # N-parent-c: GABLS2 (reduced) with large-scale subsidence (#248)

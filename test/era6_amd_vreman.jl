@@ -8,9 +8,11 @@
 #   * AMD's buoyancy term: ν_t falls linearly with N² and vanishes at the
 #     analytic N² where buoyancy cancels the production;
 #   * Galilean invariance;
-#   * dissipation in developed turbulence relative to Smagorinsky 0.17;
+#   * the #504 buoyancy weight on a turbulent field;
+#   * (dissipation in developed turbulence relative to Smagorinsky 0.17 is
+#     a validation run, validation/era6_amd_vreman.jl)
 #   * the closures on the contract: every core, own κ_t, conservation.
-# The Comte-Bellot–Corrsin rows are in test/era6_cbc_decay.jl.
+# The Comte-Bellot–Corrsin rows are in validation/era6_cbc_decay.jl.
 
 using Test
 using Aeolus
@@ -62,14 +64,9 @@ function vreman_exact(A, δ; C_s = 0.17)
     return 2.5 * C_s^2 * sqrt(Bβ / sum(abs2, α))
 end
 
-function closures!(sim; βg = 0.0)
-    νa = Field(CellCenter(), sim.mesh); κa = Field(CellCenter(), sim.mesh)
-    νv = Field(CellCenter(), sim.mesh); νs = Field(CellCenter(), sim.mesh)
-    compute_amd_coefficients!(νa, κa, sim.u, sim.v, sim.w, sim.θ; buoyancy = βg)
-    compute_vreman_νt!(νv, sim.u, sim.v, sim.w)
-    compute_smagorinsky_νt!(νs, sim.u, sim.v, sim.w, 0.17)
-    return interior_view(νa), interior_view(κa), interior_view(νv), interior_view(νs)
-end
+# closures!: the AMD, Vreman and Smagorinsky 0.17 coefficients of a state (shared
+# with validation/era6_amd_vreman.jl)
+isdefined(@__MODULE__, :closures!) || include(joinpath(@__DIR__, "support", "amd_vreman_closures.jl"))
 
 relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
 
@@ -239,36 +236,28 @@ relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
         @test all(<=(1e-14), dν)
     end
 
-    @testset "developed turbulence: dissipation relative to Smagorinsky 0.17" begin
-        # the decaying-turbulence set-up of test/era2_sgs_numerics.jl: a
-        # k^(-5/3) random field evolved for t = 1 (≈ one turnover) with
-        # static Smagorinsky 0.17
+    @testset "AMD buoyancy weight min(1, 1/Ri_∇) in a turbulent field (#504)" begin
+        # The weighted vs published AMD formula on an unstepped k^(-5/3)
+        # random field (the stepped field of the dissipation ratio is a
+        # validation run, validation/era6_amd_vreman.jl); the assertions are
+        # pointwise or ratio identities of the formula, not statistics of
+        # the flow, so any turbulent field exercises them.
         mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))
         s = BoussinesqSimulation(mesh; C_s = 0.17, ν = 1e-4)
         kolmogorov_field!(s, Xoshiro(1))            # k_c = 8 = N/4, u_rms = 1
-        for _ in 1:100
-            step!(s, 0.01)
-        end
         foreach(f -> fill_halos!(f, s.bcs), (s.u, s.v, s.w, s.θ))
-        νa, _, νv, νs = closures!(s)
         S2 = Field(CellCenter(), mesh)
         compute_smagorinsky_νt!(S2, s.u, s.v, s.w, 1.0)                 # Δ²|S|
         Δ2 = (mesh.dx * mesh.dy * mesh.dz)^(2/3)
         magS = interior_view(S2) ./ Δ2
-        ε(ν) = mean(ν .* magS .^ 2)                                        # ⟨2 ν_t S_ij S_ij⟩
-        rA, rV = ε(νa) / ε(νs), ε(νv) / ε(νs)
-        @printf("  [turbulence 32³, t = 1] ⟨2ν_t S S⟩ / Smagorinsky(0.17): AMD %.3f, Vreman %.3f; mean ν_t AMD %.2e Vreman %.2e Smag %.2e; AMD zero in %.1f %% of cells\n",
-                rA, rV, mean(νa), mean(νv), mean(νs), 100 * count(==(0), νa) / length(νa))
-        @test 0.6 <= rA <= 1.4
-        @test 0.6 <= rV <= 1.4
-
         # #504: the weight min(1, 1/Ri_∇) of the buoyancy term leaves AMD in
         # resolved turbulence alone. The same field with θ = θ₀ + Γz at a
         # bulk Richardson number N²/⟨∂_l u_m ∂_l u_m⟩ = 0.1 (stratified
         # turbulence; Miles–Howard 1/4 is the shear-instability threshold):
         # against the published ratio, cells with Ri_∇ ≤ 1 agree to round-off
         # (the weight is 1 there) and the AMD dissipation ⟨2ν_t S S⟩ changes
-        # by < 1 % (measured: −2.4e-5).
+        # by < 1 % (measured: −1.6e-6 on this unstepped field, Ri_∇ > 1 in
+        # 0.05 % of cells; −2.4e-5 on the field stepped to t = 1).
         idx, idy, idz = 1 / mesh.dx, 1 / mesh.dy, 1 / mesh.dz
         d2 = (mesh.dx^2, mesh.dy^2, mesh.dz^2)
         Hs = (mesh.Hx, mesh.Hy, mesh.Hz)

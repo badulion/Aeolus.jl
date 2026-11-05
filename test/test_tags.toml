@@ -16,11 +16,7 @@
 # Times: test/run.jl, 8 jobs x 1 thread, 1-min load 5-13 on the 24-core
 # machine (2026-10-06).
 
-["era6_apriori_sgs.jl"]
-weight = "heavy"
-exclusive = true
-seconds = 87
-# asserts the filtered-DNS fixture wall time (d.wall < 300 s), so it runs alone
+# --- timing-sensitive ---------------------------------------------------------
 
 ["thread_invariance.jl"]
 exclusive = true
@@ -32,23 +28,7 @@ reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the
 weight = "heavy"
 seconds = 90
 
-["era6_relaminarisation.jl"]
-weight = "heavy"
-seconds = 83
-
-["era6_wall_models_channel.jl"]
-weight = "heavy"
-seconds = 65
-
-["era6_neutral_abl.jl"]
-weight = "heavy"
-seconds = 56
-
 ["era6_tke.jl"]
-weight = "heavy"
-seconds = 53
-
-["era6_sigma_sgs.jl"]
 weight = "heavy"
 seconds = 53
 

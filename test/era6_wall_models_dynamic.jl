@@ -11,12 +11,11 @@
 #      differences), and the solver reproduces the α of that closed-form
 #      balance to 1e-8; the test-filter variance is the exact variance of
 #      the fine surface over the composite kernel;
-#   2. grid invariance (reduced) — on a neutral rough half channel over a
-#      random k⁻² surface, the plane-mean u_* the model predicts at 32²
-#      and 16² (a priori, on the 32² LES wind) agrees within 5 % with the
-#      dynamic α and disagrees by more with α fixed at its 32² value; the
+#   2. on a neutral rough half channel over a random k⁻² surface, the
 #      half channel's plane-mean momentum budget, with the form drag of
-#      the resolved relief, closes to round-off.
+#      the resolved relief, closes to round-off over 5 steps. Grid
+#      invariance (reduced; the u_* predicted at 32² and 16² over 6 H/u*)
+#      is a validation run, in validation/era6_wall_models_dynamic.jl.
 
 using Test
 using Printf
@@ -31,25 +30,9 @@ using Aeolus.WallModels
 
 const _WM = Aeolus.WallModels
 
-# A periodic random surface on an Nf² map of side L whose radial spectrum
-# is E(k) ∝ k^-2 for 1 ≤ k ≤ kmax (in units of 2π/L), rms σh, zero mean.
-function _k2_surface(Nf, L, σh; seed = 1, kmax = Nf ÷ 2)
-    rng = Xoshiro(seed)
-    Hk = zeros(ComplexF64, Nf, Nf)
-    for b in 1:Nf, a in 1:Nf
-        kx = a - 1 <= Nf ÷ 2 ? a - 1 : a - 1 - Nf
-        ky = b - 1 <= Nf ÷ 2 ? b - 1 : b - 1 - Nf
-        k = hypot(kx, ky)
-        (1 <= k <= kmax) || continue
-        Hk[a, b] = k^-1.5 * cis(2π * rand(rng))      # |ĥ|² ∝ k⁻³ per mode → E(k) ∝ k⁻²
-    end
-    h = real(ifft(Hk))
-    h .-= mean(h)
-    return h .* (σh / std(h))
-end
-
-_blockmean(A, r) = [mean(@view A[(i-1)*r+1:i*r, (j-1)*r+1:j*r])
-                    for i in 1:size(A, 1)÷r, j in 1:size(A, 2)÷r]
+# _k2_surface, _blockmean, _rough_half_channel: the random k⁻² surface and
+# the rough half channel over it (shared with validation/era6_wall_models_dynamic.jl)
+isdefined(@__MODULE__, :_rough_half_channel) || include(joinpath(@__DIR__, "support", "rough_half_channel.jl"))
 
 @testset "Era VI — dynamic roughness of partially resolved relief (#190)" begin
 
@@ -222,30 +205,17 @@ end
                                              fill(U0, Nx, Ny), zeros(Nx, Ny), 0.05)
 end
 
-@testset "Grid invariance (reduced): rough half channel, 32² vs 16²" begin
-    # A random k⁻² surface (256² map, 1 ≤ k ≤ 128, σ_h = 0.04 H), resolved
-    # through the surface-gradient drag (C_d = 4), the rest sub-filter.
-    # Half channel 2πH × 2πH × H, 32 × 32 × 8, StaticSmagorinsky(0.1), with
-    # the dynamic roughness, run to 6 H/u*; at t = 4, 5, 6 the first-cell
-    # wind is taken as is (32²) and block-averaged 2 × 2 (16²), and the
-    # plane-mean u_* = √(wall + form drag) of the model is evaluated at both
-    # resolutions with the dynamic α of each, and with α fixed at its 32²
-    # value.
-    Nf, L, H = 256, 2π, 1.0
-    hf = _k2_surface(Nf, L, 0.04)
-    C_d, z0f, Nz = 4.0, 1e-5, 8
-    st32 = subfilter_height(hf, Nf ÷ 32; dx = L / 32, dy = L / 32)
-    st16 = subfilter_height(hf, Nf ÷ 16; dx = L / 16, dy = L / 16)
+@testset "Rough half channel with form drag: σ² statistics, plane-mean budget to round-off" begin
+    # The grid-invariance case (validation/era6_wall_models_dynamic.jl) over
+    # its first 1 H/u* and 5 steps: the sub-filter statistics, and the
+    # momentum budget with the form drag of the resolved relief.
+    (; H, Nz, st32, st16, dr, case) = _rough_half_channel()
     @test st32.filter === :spectral
     @test mean(st16.σ2) > mean(st32.σ2)            # more of the relief is sub-filter at 16²
-    dr = DynamicRoughness(st32; z0_floor = z0f, C_d = C_d)
-    case = half_channel_case(; N = (32, 32, Nz), roughness = dr, z0_over_H = 0.01)
-    z = case.sim.mesh.dz / 2
     # the momentum budget with the form drag closes to round-off
     sim = case.sim; A = sim.mesh.Lx * sim.mesh.Ly
     um() = sum(Aeolus.Fields.interior_view(sim.u)) / (sim.mesh.Nx * sim.mesh.Ny * Nz)
     budget_err = 0.0
-    t0 = time()
     run_channel!(case, 1.0)
     for _ in 1:5
         u0 = um(); dt = channel_dt(case)
@@ -258,29 +228,6 @@ end
                    budget_err, case.τ_wall_bottom, case.τ_form)
     @test budget_err < 1e-10
     @test case.τ_form > 0 && dr.converged
-    run_channel!(case, 4.0)
-    dr32 = DynamicRoughness(st32; z0_floor = z0f, C_d = C_d)
-    dr16 = DynamicRoughness(st16; z0_floor = z0f, C_d = C_d)
-    us = Dict(k => Float64[] for k in (:d32, :d16, :f16)); αs = Dict(k => Float64[] for k in (:a32, :a16))
-    for t in (4.0, 5.0, 6.0)
-        run_channel!(case, t)
-        uc, vc = ChannelCases._first_cell_velocity(case.sim)
-        u16, v16 = _blockmean(uc, 2), _blockmean(vc, 2)
-        a32, c32 = dynamic_alpha(dr32, uc, vc, z)
-        a16, c16 = dynamic_alpha(dr16, u16, v16, z)
-        @test c32 && c16
-        push!(αs[:a32], a32); push!(αs[:a16], a16)
-        push!(us[:d32], sqrt(roughness_surface_drag(dr32, uc, vc, z; α = a32).total))
-        push!(us[:d16], sqrt(roughness_surface_drag(dr16, u16, v16, z; α = a16).total))
-        push!(us[:f16], sqrt(roughness_surface_drag(dr16, u16, v16, z; α = a32).total))
-    end
-    u32, ud, uf = mean(us[:d32]), mean(us[:d16]), mean(us[:f16])
-    ed, ef = ud / u32 - 1, uf / u32 - 1
-    @info @sprintf("  grid invariance: α(32²) = %.3f, α(16²) = %.3f; u*(32²) = %.4f, u*(16²) dynamic = %.4f (%+.1f %%), fixed α = %.4f (%+.1f %%); %.1f s",
-                   mean(αs[:a32]), mean(αs[:a16]), u32, ud, 100ed, uf, 100ef, time() - t0)
-    @test abs(ed) < 0.05
-    @test abs(ef) > abs(ed)
-    @test mean(αs[:a16]) < mean(αs[:a32])          # α is scale dependent: the point of the dynamic model
 end
 
 end

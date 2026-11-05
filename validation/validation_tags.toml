@@ -109,3 +109,9 @@ reason = "20 annual ASHRAE 140-2020 BESTEST runs vs the reference programs; Buil
 weight = "heavy"
 seconds = 82
 reason = "five FLUXNET/PLUMBER2 site-years vs measured fluxes; LandSurface stays tested in era5_land_surface.jl (incl. a Ball-Berry day)"
+
+["era6_apriori_sgs.jl"]
+weight = "heavy"
+exclusive = true
+seconds = 87
+reason = "96³ filtered-DNS fixture (asserts its wall time, so it runs alone) and the a-priori comparisons; the a-priori harness stays tested in era6_apriori_sgs.jl on a 32³ field"
