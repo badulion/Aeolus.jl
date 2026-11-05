@@ -38,11 +38,11 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **A test suite run by CI on every pull request** (120,748 assertions
-  before the validation runs became a suite of their own; recounted at
-  closeout), and **a separate validation suite** of simulated cases
-  (GABLS, channels, campaigns, benchmarks), run weekly.
-  104,000 lines of source, 72,000 lines of tests.
+- **A test suite run by CI on every pull request** (4,099 executed
+  assertions, about 11 min serially), and **a separate validation suite**
+  of simulated cases (GABLS, channels, campaigns, benchmarks), run weekly.
+  128,000 lines of source, 31,000 lines of tests, 8,000 lines of
+  validation cases.
 - **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
   NCDatasets). PNG, Mie scattering, error and Bessel functions are
   written in the package.
