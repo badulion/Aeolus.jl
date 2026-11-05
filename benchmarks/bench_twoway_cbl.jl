@@ -5,7 +5,7 @@
 # Parent 3.2 × 3.2 × 1.6 km at Δ = 50 m (64 × 64 × 32, periodic sides),
 # child 1.2 × 1.2 km × 800 m on the ground at r = 3 (Δ = 16.7 m,
 # 72 × 72 × 48), surface heat flux 0.1 K m/s, no mean wind, Smagorinsky
-# SGS, adaptive steps (C = 0.5). The case is test/twoway_cbl_case.jl, the
+# SGS, adaptive steps (C = 0.5). The case is validation/support/twoway_cbl_case.jl, the
 # one the suite runs at Δ = 100 m for 2 h.
 #
 # Reports, for one-way and two-way feedback:

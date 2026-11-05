@@ -377,7 +377,7 @@ SSP-RK3 with the forcing in every stage, decays per level by exactly
 10 s the anomaly matches ``A R^{100}`` to 1.8 × 10⁻¹² K at every level,
 and the levels below `z_start` keep their tendency at zero bit for bit.
 
-**Gravity-wave absorption** (`test/era6_deep_top.jl`, test 3). A 2-D
+**Gravity-wave absorption** (`validation/era6_deep_top.jl`, test 3). A 2-D
 packet with ``N = 0.01`` s⁻¹, ``λ_x = λ_z = 1`` km (``ω = N/\sqrt2``,
 ``c_{gz} = 0.56`` m s⁻¹, initialised from a C-grid stream function so its
 discrete divergence is zero) propagates upward into a sin² layer of
@@ -507,7 +507,7 @@ domain would need to be deeper than the nocturnal boundary layer.
   (now `test/support/patchy_surface.jl`): it now delegates its
   ``+fU_g`` to `GeostrophicPressureGradient`. After 60 steps of the
   ``U_g = 5`` m/s, ``f = 10^{-4}`` setup, the state is unchanged bit for
-  bit, and `test/era5_heterogeneous_surface.jl` prints identical numbers.
+  bit, and `validation/era5_heterogeneous_surface.jl` prints identical numbers.
 
 ## References
 

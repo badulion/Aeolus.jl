@@ -23,8 +23,8 @@
 #
 # Check 8 (GABLS2 reduced: subsidence from 40 h, the heat ledger with it
 # booked, the residual-layer inversion, night 2 against the
-# gabls2_reference.csv envelopes) is test/era6_gabls2.jl, full tier
-# (split off in #320 so that checks 1-7 run in the fast tier).
+# gabls2_reference.csv envelopes) is the validation run
+# validation/era6_gabls2.jl (split off in #320; checks 1-7 are tests).
 
 using Test, Printf
 using Aeolus

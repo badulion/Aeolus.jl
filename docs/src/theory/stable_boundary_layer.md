@@ -76,7 +76,7 @@ of the run type were inside the heat-flux band and at the upper end of the
 ``u_*`` band, below). The GABLS3 jet speed checked here
 is the mean of the instantaneous maxima of the plane-mean wind over the
 window, a little below the maximum of the window-mean profile that the
-analysis script and the reduced CI test report.
+analysis script and the reduced validation run report.
 
 ## GABLS1
 
@@ -101,7 +101,7 @@ it is reported without a reference.
 ### Results
 
 The numbers below were measured on the `sbl` run type (P55-f). The
-reduced CI case on the model (`test/era6_gabls1.jl`: 32³, 1.0–1.25 h)
+reduced validation case on the model (`validation/era6_gabls1.jl`: 32³, 1.0–1.25 h)
 reproduces them within the scatter of a realisation (another θ noise
 draw and the model's adaptive step, which takes 2834 steps where the
 run type took 3501):
@@ -115,7 +115,7 @@ run type took 3501):
 | ``κ_v/κ_h`` below ``h`` | 0.63 | 0.61 |
 | SGS share of the heat flux (uncorrected) | 0.108 (0.153) | 0.109 (0.148) |
 
-Reduced CI test (`test/era6_gabls1.jl`, 32³ at 12.5 m, 0–1.25 h,
+Reduced validation run (`validation/era6_gabls1.jl`, 32³ at 12.5 m, 0–1.25 h,
 statistics over 1.0–1.25 h):
 
 | | `:brown94` | `:none` |
@@ -233,13 +233,13 @@ boundary layer is meant to evolve under the prescribed advection.
   omits the 15 UTC surface temperature (233.04 K) and shifts the later
   hours by one. The official case file (read with NCDatasets) is used.
 
-### GABLS3: reduced CI test
+### GABLS3: reduced validation run
 
-`test/era6_gabls3.jl` runs one 16 × 16 × 48 simulation (Δx = 25 m,
+`validation/era6_gabls3.jl` runs one 16 × 16 × 48 simulation (Δx = 25 m,
 Δz = 8.3 m on 400 × 400 × 400 m, sponge from 300 m) from 00 to 04 UTC.
 The issue asked for 00-02 UTC. The run goes on to 04 UTC because the
 only accessible LES envelope is for 03-04 UTC. Checks 1-3 use the
-01-02 UTC window as specified. The test file takes 63 s at machine load 3.7 (the run itself 37 s), within the issue's 90 s. At load 11 it takes 141 s.
+01-02 UTC window as specified. The file takes 63 s at machine load 3.7 (the run itself 37 s), within the issue's 90 s. At load 11 it takes 141 s.
 
 | check | measured | asserted |
 | :-- | :-- | :-- |

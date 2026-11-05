@@ -18,7 +18,7 @@
 #     the :surface component's u*;
 #   * (the parent as a [[domain]] of the model's config, NEST-p3 #483:
 #     test/config_parent_domain.jl; the tiled Berlin parent is in
-#     urban_checks.jl, full tier).
+#     urban_checks.jl, test and validation).
 
 using Test
 using Aeolus

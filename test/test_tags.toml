@@ -24,6 +24,11 @@ reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the
 
 # --- heavy (started first) ----------------------------------------------------
 
+["urban_checks.jl"]
+weight = "heavy"
+seconds = 204
+reason = "the 49-run Berlin smoke matrix (12 steps each, ledgers closed); measured alone 2026-10-07, when it was part of the full-tier urban_checks.jl"
+
 ["era2_nest_hierarchy.jl"]
 weight = "heavy"
 seconds = 90

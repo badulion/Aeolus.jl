@@ -422,7 +422,7 @@ used.
 
 ### Results
 
-`test/era5_canopy_profiles.jl` (and the former column example `examples/validation/canopy_profiles.jl`, (removed by ONE-g, #456)):
+`validation/era5_canopy_profiles.jl` (and the former column example `examples/validation/canopy_profiles.jl`, (removed by ONE-g, #456)):
 
 | Quantity | Observed | Model |
 | :-- | --: | --: |

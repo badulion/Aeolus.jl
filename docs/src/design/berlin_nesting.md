@@ -359,7 +359,7 @@ generator's normal perturbation (`synthetic_normal_velocity`, #418).
 Before #418 it copied the perturbation into the parent's interface faces.
 The next window's boundary data returned it to the child, and the
 generator added the next one on top. On the 2 h sheared-CBL nest of
-`test/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
+`validation/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
 with a 3 m s⁻¹ wind, r = 3), that made the child's kinetic energy ×12
 and the parent's ×2.5, with an overlap θ drift of +0.25 K against one-way
 with the generator. Two-way with the generator now meets the #268

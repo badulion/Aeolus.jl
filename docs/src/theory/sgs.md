@@ -445,7 +445,7 @@ the base closure's order of operations,
 `IsentropicDiffusion(StabilityCorrected(base, mesh), mesh)` gives the
 rotated tensor the corrected ``\kappa_v`` across the isentropes.
 
-Measured (`test/era6_stratified_sgs.jl`):
+Measured (`test/era6_stratified_sgs.jl`; the internal waves in `validation/era6_stratified_sgs.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -541,7 +541,7 @@ right spectrum but no energy transfer to small scales, and the dynamic
 procedure — which measures that transfer — correctly gives
 ``C_s ≈ 0``; it switches off in laminar shear too (``L_{ij}M_{ij} = 0``
 for a linear velocity profile), where the constant-coefficient model
-still dissipates. These are the tests in `test/era2_sgs_numerics.jl`.
+still dissipates. These are the tests in `test/era2_sgs_numerics.jl` (laminar shear) and `validation/era2_sgs_numerics.jl` (the turbulent fields).
 
 **Using it.** `step!(sim, dt; sgs = DynamicSmagorinsky(ws))` replaces
 the built-in closure (the eddy-viscosity terms are added where the
@@ -626,7 +626,7 @@ are filled from the boundary conditions. The plane / local
 Nothing stored inside an obstacle reaches a fluid coefficient: test 6
 below sets every solid face to NaN and to 1e30 and gets the same bits.
 
-Measured (`test/era6_lagrangian_sgs.jl`):
+Measured (`test/era6_lagrangian_sgs.jl`; isotropic turbulence and the 200 steps in `validation/era6_lagrangian_sgs.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -734,7 +734,7 @@ near-wall coefficient comes from the scale dependence, and the wall
 stress from the wall model (`WallModels`, #169, with the P57-b matching
 input, #183).
 
-Measured (`test/era6_lasd.jl`):
+Measured (`test/era6_lasd.jl`; isotropic, half-channel and 500-step runs in `validation/era6_lasd.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -1095,7 +1095,7 @@ one direction only. The minor form leaves round-off on a two-component
 shear ``u(z), v(z)``, and the square root turned that into
 ``ν_t ≈ 10^{-10}`` m²/s in the Berlin laminar check.
 
-**What was measured** (`test/era6_amd_vreman.jl`, `test/era6_cbc_decay.jl`):
+**What was measured** (`test/era6_amd_vreman.jl`; decaying turbulence in `validation/era6_amd_vreman.jl`, `validation/era6_cbc_decay.jl`):
 
 | property | AMD | Vreman | Smagorinsky 0.17 |
 | :-- | :-- | :-- | :-- |
@@ -1161,10 +1161,10 @@ then two cycles of evolve-and-[`rescale`](@ref Aeolus.Operators.rescale_to_spect
 so the cascade is established), run to the later stations with SSP-RK3.
 The LES is compared with CBC *filtered to the grid cut-off*: TKE is the
 shell sum over ``k ≤ k_c = (N/2)Δk``. CBC is an experiment, not DNS; the
-harness (`cbc_benchmark(closure; N)` in `test/cbc_benchmark_driver.jl`)
+harness (`cbc_benchmark(closure; N)` in `test/support/cbc_benchmark_driver.jl`)
 accepts any spectrum function, so a tabulated DNS spectrum can replace it.
 
-Measured (three random seeds; `test/era6_cbc_decay.jl` at 32³,
+Measured (three random seeds; `validation/era6_cbc_decay.jl` at 32³,
 the former `examples/validation/cbc_decay.jl` at 64³, (removed by ONE-g, #456)):
 
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
@@ -1260,7 +1260,7 @@ The test therefore asserts ±10 % at station 171 (32³) and ±20 % at
 station 98, and keeps ±10 % at station 98 as a broken test. A closure
 or numerics change that moves the 64³ numbers was checked with
 the former `examples/validation/cbc_decay.jl` (its harness is
-`test/cbc_benchmark_driver.jl`). Starting from the random-phase field
+`test/support/cbc_benchmark_driver.jl`). Starting from the random-phase field
 without the rescale cycles gives +33.5 % / +10.5 % at 32³, because the
 field transfers no energy during the first turnover.
 
@@ -1341,8 +1341,8 @@ operator is clipped at zero there. The gradient is
 `_velocity_gradient_at`, the one stencil of the contract, so there is no
 second stencil.
 
-**What was measured** (`test/era6_sigma_sgs.jl`; KH in
-`test/era6_transition_kh.jl`; CBC in `test/era6_cbc_decay.jl`):
+**What was measured** (`test/era6_sigma_sgs.jl`; decaying turbulence in
+`validation/era6_sigma_sgs.jl`; KH in `validation/era6_transition_kh.jl`; CBC in `validation/era6_cbc_decay.jl`):
 
 | property | σ-model | Smagorinsky |
 | :-- | :-- | :-- |

@@ -19,7 +19,7 @@
 # (TEB forced by the campaign tower), not numbers chosen after measuring. What
 # fails that yardstick is recorded with @test_broken and explained, not
 # loosened. Geometry, materials and forcing are labelled with their sources in
-# test/urban_validation_driver.jl; what was not validated is listed in
+# validation/support/urban_validation_driver.jl; what was not validated is listed in
 # docs/src/theory/urban_validation.md.
 
 using Test, Printf

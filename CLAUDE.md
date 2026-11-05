@@ -15,10 +15,10 @@ git worktree add .worktrees/issue-42 -b issue/42-p3-microphysics master
 cd .worktrees/issue-42
 
 # 2. Work. Commit after every self-contained subproblem (see below).
-# 3. Run the FAST tier before proposing anything (parallel; 12.6 min at 4 jobs, #320),
-#    plus the full-tier files of any physics you touched.
+# 3. Run the tests before proposing anything (parallel), plus the
+#    validation runs of any physics you touched.
 julia --project=. test/run.jl
-julia --project=. test/run.jl --only era6_gabls1.jl,era6_gabls3.jl
+julia --project=. validation/run.jl --only era6_gabls1.jl,era6_gabls3.jl
 
 # 4. Push the branch and open a PR. Then stop.
 git push -u origin issue/42-p3-microphysics
@@ -52,29 +52,36 @@ P3: wire into Aeolus.jl, add to runtests, fix export collision
 PRs are merged with a **merge commit**, so these survive on `master`.
 That is the point of asking for them — do not squash them yourself.
 
-## Tests: fast tier for PRs, full tier at merge
+## Tests and validation runs are separate suites
 
-The suite has two tiers (`AEOLUS_TEST_TIER=fast|full`, default `fast`).
-The full tier adds the validation mini-simulations that
-`test/test_tags.toml` marks `tier = "full"`, each with its reason.
+**Tests** (`test/`) check code: analytic values, identities, conservation
+over a few steps, interfaces, short code-path runs. **Validation runs**
+(`validation/`) are simulated cases that confirm the physics works and
+stays stable: GABLS, channels, decaying turbulence, campaigns, benchmarks
+(maintainer decision, 2026-11-05; the fast/full tiers are gone).
 
-- **A PR needs the fast tier green**: `julia --project=. test/run.jl`
+- **A PR needs the tests green**: `julia --project=. test/run.jl`
   (parallel) or `julia --project=. test/runtests.jl` (serial).
-- **When you touch physics that a full-only file validates, run that
-  file too** (`test/run.jl --only <file>`) and quote its result.
-- **The merge train runs the full tier before merging**:
-  `AEOLUS_TEST_TIER=full julia --project=. test/run.jl`.
-- `test/runtests.jl`'s include list stays the single list of test
-  files; a new file needs only its include line. Tag it in
-  `test/test_tags.toml` only if it is a full-only validation run
-  (with a one-line reason) or timing-sensitive (`exclusive`).
+- **Validation is not a gate.** When you touch physics a validation case
+  covers, run it (`validation/run.jl --only <file>`) and quote its result
+  in the PR body; report a failure honestly, it does not block by itself.
+  CI runs the whole validation suite weekly.
+- Never put a validation run in `test/`. A new case goes in
+  `validation/<file>.jl` (its unit checks in the module's test file), with
+  its include line in `validation/runvalidation.jl`.
+- Each entry file's include list (`test/runtests.jl`,
+  `validation/runvalidation.jl`) is the single list of its files; a new
+  file needs only its include line. Tag it (`test/test_tags.toml`,
+  `validation/validation_tags.toml`) only if it is heavy or
+  timing-sensitive (`exclusive`).
 
-Details: [`docs/src/testing.md`](docs/src/testing.md).
+Details: [`docs/src/testing.md`](docs/src/testing.md),
+[`docs/src/validation.md`](docs/src/validation.md).
 
 ## Before opening a PR
 
-- [ ] Fast tier green: `julia --project=. test/run.jl`, plus the
-      full-tier files of the physics you touched (`--only`)
+- [ ] Tests green: `julia --project=. test/run.jl`, plus the validation
+      runs of the physics you touched (`validation/run.jl --only`), quoted
 - [ ] New code has tests that assert **physics**, not just that it runs
 - [ ] Validation numbers measured and quoted in the PR body
 - [ ] No new export collisions (see below)
@@ -104,8 +111,10 @@ are gone, #320).
   data) and optional scripts that only read run output (maintainer rule,
   2026-10-09, #438). `test/examples_enforcement.jl` fails on any `.jl`
   under `examples/` that builds or steps a model, with no exemptions.
-- After changing the urban site (`Aeolus.Urban`), run its end-to-end checks:
-  `julia --project=. test/run.jl --only urban_run.jl,urban_checks.jl`
+- After changing the urban site (`Aeolus.Urban`), run its tests and its
+  end-to-end validation runs:
+  `julia --project=. test/run.jl --only urban_run.jl,urban_checks.jl` and
+  `julia --project=. validation/run.jl --only urban_checks.jl`
   (every coupling on, ledgers closed; the nest parent's smoke run and
   validations). A run's own checks are in its `output/results.toml`.
 
@@ -208,8 +217,10 @@ weeks because nobody viewed the image at size.
 
 ```
 src/            70 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl and other module tests, 120,748 fast-tier
-                assertions; run.jl = parallel runner, test_tags.toml = tiers
+test/           runtests.jl + era*_*.jl and other module tests (the PR gate);
+                run.jl = parallel runner, test_tags.toml = weights
+validation/     runvalidation.jl + simulated validation cases (not a gate);
+                run.jl = the same runner
 examples/       one directory per case: <case>.toml + input/*.nc + data/ + output
                 analysis scripts; examples/urban/ (Berlin) is the flagship
 docs/src/       theory, design, API reference

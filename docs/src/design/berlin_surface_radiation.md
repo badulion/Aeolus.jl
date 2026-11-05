@@ -288,7 +288,7 @@ decoupled (bulk Ri ≈ 1.8, LE = 0.7 W m⁻² at 13:00). With
 `blending = MasonBlendingHeight(L)` etc., a column is a `BlendedMosaic`
 forced once at z_k − d̄.
 
-**Measured** (`test/urban_checks.jl`, by hand in `examples/urban/berlin_checks.jl parent` before #438, before #320
+**Measured** (`test/urban_checks.jl` and `validation/urban_checks.jl`, by hand in `examples/urban/berlin_checks.jl parent` before #438, before #320
 `test/berlin_parent_surface.jl`; synthetic clear-sky
 forcing `parent_offline_forcing`: Bird SW and Brutsaert LW for 20 June,
 T = 295 ± 6 K, q = 8 g kg⁻¹, U = 3 m s⁻¹, 24 h at dt = 300 s; as
@@ -320,7 +320,7 @@ few per cent. LE also depends on when each soil reaches its dry limit:
 the child's street and park soils dry about an hour earlier, so LE at
 13:00 differs by 21 %.
 
-At 13:00 in the offline run (`parent/parent_surface_diurnal.jl`, a demonstration removed in #438; the same columns are covered by the footprint checks of `test/urban_checks.jl`):
+At 13:00 in the offline run (`parent/parent_surface_diurnal.jl`, a demonstration removed in #438; the same columns are covered by the footprint checks of `validation/urban_checks.jl`):
 
 | column | built-tile z0, d | Rn | H | LE | G |
 | :-- | :-- | --: | --: | --: | --: |

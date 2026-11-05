@@ -2,7 +2,7 @@
 # two hours — what the Berlin nest runs, on an idealised nest (the Berlin
 # case has no test suite of its own; maintainer decision 2026-10-06).
 #
-# The case: the two-way CBL of N-nest-e (test/twoway_cbl_case.jl, after
+# The case: the two-way CBL of N-nest-e (validation/support/twoway_cbl_case.jl, after
 # Hellsten et al. 2021, GMD 14, 3185, §4.1: 3.2 × 3.2 × 1.6 km periodic
 # parent at 100 m, surface heat flux 0.1 K m/s, 600 m mixed layer under
 # 5 K/km) with a mean wind of (3, 1) m/s, so the child's west and south

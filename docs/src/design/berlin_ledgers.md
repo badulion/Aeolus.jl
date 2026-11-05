@@ -562,8 +562,8 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 The smoke runs were `test/berlin_smoke.jl` until #320 removed the Berlin
 test suite; they were then the `smoke` part of the by-hand
 `examples/urban/berlin_checks.jl`, and since #438 are
-**`test/urban_checks.jl`** (full tier; `julia --project=. test/run.jl --only
-urban_checks.jl`), while every run writes its ledger closure to
+**`test/urban_checks.jl`** (a heavy test; `julia --project=. test/run.jl --only
+urban_checks.jl`; the flagship and parent runs are `validation/urban_checks.jl`), while every run writes its ledger closure to
 `output/results.toml`. They
 run the case in `examples/urban/berlin_smoke.toml`
 (each run of the matrix is that file plus `--set` overrides, CFG-c #358): a

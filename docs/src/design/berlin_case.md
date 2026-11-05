@@ -4,8 +4,8 @@ The Berlin (Alexanderplatz) run is the flagship example of Aeolus. Until
 2026-10-06 every physics module in `src/` had to be exercised by it (the
 rule of #123); the maintainer dropped that rule, and the example has no
 test suite of its own (#320): the physics it couples is tested in the
-module tests, and its end-to-end runs are `test/urban_checks.jl` (full
-tier). Since #126 it is not a script but a small framework, built so that
+module tests, and its end-to-end runs are `test/urban_checks.jl` (smoke runs)
+and `validation/urban_checks.jl` (flagship and parent runs). Since #126 it is not a script but a small framework, built so that
 many couplings can be added independently and at the same time; since
 EX-a (#438) that framework is part of the package; since ONE-e (#454)
 it is the urban site of the model (a model config with `[urban] enabled`
@@ -748,7 +748,7 @@ asserted for every coupling.
 
 **5. Run and quote.** `julia --project=. test/run.jl --only urban_checks.jl`
 locally (the smoke matrix alone is about 3.5 min); the physics itself is tested in its module's
-tests, which the fast tier runs.
+tests, which every PR runs.
 In the PR body quote one Berlin diagnostic — a ledger term is often the
 natural one — the configuration it was measured in, and the cost from
 the `:timing` events.

@@ -248,13 +248,13 @@ size). Two-way nesting is **not validated against** Hellsten et al.'s
 circulation; it reproduces their mechanism, not their sign. This is one
 reason the Berlin nest of the urban site stays one-way until its
 validation (#331), although two-way is the self-nesting default (ONE-f,
-#455). `test/era2_nest_twoway_longrun.jl`
+#455). `validation/era2_nest_twoway_longrun.jl`
 asserts that the suite run's circulation is thermally direct and that the
 standalone CBL is cooler at the child's spacing.
 
 ## Measured behaviour
 
-From `test/era2_nest_twoway.jl` and `test/era2_nest_twoway_longrun.jl`.
+From `test/era2_nest_twoway.jl` and `validation/era2_nest_twoway_longrun.jl`.
 
 | property | result | bound |
 | :-- | :-- | :-- |
@@ -270,7 +270,7 @@ From `test/era2_nest_twoway.jl` and `test/era2_nest_twoway_longrun.jl`.
 | child-only 50 MW heat source: one-way parent vs standalone | bit-identical | |
 | the same, two-way: parent θ excess vs ``Qt/ρc_p`` − child content | 6.4e-11 | < 1e-10 |
 
-### Long runs (`test/era2_nest_twoway_longrun.jl`, ≈ 240 s on an idle core)
+### Long runs (`validation/era2_nest_twoway_longrun.jl`, ≈ 240 s on an idle core)
 
 | case | measured |
 | :-- | :-- |

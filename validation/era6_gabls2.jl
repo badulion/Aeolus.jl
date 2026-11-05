@@ -5,8 +5,8 @@
 # heat budget with the subsidence measured as the large_scale_forcing
 # term, the residual-layer inversion lowered by about the passive descent,
 # and night 2 against the gabls2_reference.csv envelopes. Checks 1-7 of
-# ProfileNudging and Subsidence run in the fast tier
-# (era6_nudging_subsidence.jl); this mini-simulation stays full-only.
+# ProfileNudging and Subsidence are tested in
+# test/era6_nudging_subsidence.jl; this simulation is a validation run.
 
 using Test, Printf
 using Aeolus

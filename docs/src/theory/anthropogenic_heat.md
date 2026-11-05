@@ -108,7 +108,8 @@ zones the set settles in a few passes; the loop is bounded.
 
 ## 3. Validation
 
-All numbers are measured by `test/era5_anthropogenic_heat.jl`.
+All numbers are measured by `test/era5_anthropogenic_heat.jl` (Toulouse:
+`validation/era5_anthropogenic_heat.jl`).
 
 | check | reference | measured |
 |:--|:--|:--|
@@ -125,7 +126,7 @@ All numbers are measured by `test/era5_anthropogenic_heat.jl`.
 describe the dense residential centre of Toulouse: 20 m buildings,
 building density 0.68, wall-to-plan ratio 1.05, 30 % glazing, brick with
 3 cm insulation, 0.5 ACH, internal gains 5.8 W m⁻² of floor, set points
-19–24 °C, 2/3 electric heating. The test builds a 3 × 3 array of
+19–24 °C, 2/3 electric heating. The validation run builds a 3 × 3 array of
 50 m blocks with 10 m streets (density 0.694, wall ratio 1.11). Every
 block is a zone behind its facets. The run uses the PVGIS typical-year
 weather for the site (ERA5 temperature, SARAH2 irradiance), with 14 days
@@ -173,7 +174,7 @@ hourly direct release was 104 W m⁻².
 regular array. Floor height (3 m), window U (3.1 W m⁻² K⁻¹) and SHGC
 (0.7), the insulation material, the internal-mass floors (10 cm
 concrete) and the boiler efficiency (0.9) are assumptions, labelled in
-`test/toulouse_bem_driver.jl`. Sailor (2011) itself is paywalled and
+`validation/support/toulouse_bem_driver.jl`. Sailor (2011) itself is paywalled and
 its tables were not accessible here. The ranges above are quoted from
 open reviews that cite it.
 

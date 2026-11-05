@@ -272,7 +272,7 @@ the inertial-range 0.17: the window's flow is a 1 m s⁻¹ geostrophic wind
 over 250 m with a capping inversion at 60 m, far from developed
 isotropic turbulence, and the dynamic coefficient is lower in stratified
 and transitional flow (it reaches 0.13–0.15 in the decaying-turbulence
-test of `test/era2_sgs_numerics.jl`).
+run of `validation/era2_sgs_numerics.jl`).
 
 **Cost** on the flagship grid (64 × 64 × 32), per call, minimum of 15
 repetitions on a loaded 24-core machine (each operator runs once per

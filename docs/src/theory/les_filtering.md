@@ -224,7 +224,7 @@ rather than "past the peak", the 48³ criterion.
 There is no inertial range at this ``Re_λ``, which is the price of a
 fixture that runs in CI.
 
-**Measured a-priori numbers** (Gaussian filter, `test/era6_apriori_sgs.jl`):
+**Measured a-priori numbers** (Gaussian filter, `validation/era6_apriori_sgs.jl`):
 
 | | Δ = 4h (7.8η) | Δ = 8h (15.7η) |
 | :-- | --: | --: |
