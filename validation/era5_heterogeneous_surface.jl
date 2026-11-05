@@ -8,10 +8,9 @@
 # ONE-g, #456: the patchy-surface example, its full-resolution runs and the
 # λ/z_i sweep, waits for a heterogeneous-surface component of the model).
 #
-# What is checked against what:
-#   * discrete conservation of the coupling (column heat content against
-#     the applied surface flux) and the identity of the resolved, tiled
-#     and parameter-aggregated code paths over a uniform surface;
+# What is checked against what (the coupling's discrete conservation and the
+# identity of the resolved, tiled and parameter-aggregated code paths over a
+# uniform surface are tests: test/era5_heterogeneous_surface.jl):
 #   * the resolved heterogeneous LES against (a) tiles forced by the
 #     LES's own mean state (a-priori) and (b) an LES whose every column
 #     is the tiled mosaic (a-posteriori), and against parameter
@@ -33,38 +32,12 @@ using Aeolus
 
 include(joinpath(@__DIR__, "..", "test", "support", "patchy_surface.jl"))
 
-# Coarse version of the example's setup: 100 m cells, 3.2 × 1.6 × 1.6 km.
-const HS_GRID = (Nx = 32, Ny = 16, Nz = 16, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0)
+# HS_GRID (the coarse 100 m grid, 3.2 × 1.6 × 1.6 km) is in patchy_surface.jl.
 const HS_RUN = (t_end = 4500.0, dt = 5.0, t_avg = 2250.0, every = 3)
 
 _hs_rel(a, b) = (a - b) / b
 
 @testset "Era V — heterogeneous-surface validation (#43)" begin
-
-    @testset "Coupling: conservation and code-path identity" begin
-        # Over a uniform surface (both strip types at 305 K) the three modes
-        # — column surfaces, a two-tile mosaic per column, one aggregated
-        # surface per column — describe the same surface and must give the
-        # same flow.
-        runs = Dict(mode => patchy_les(; HS_GRID..., λ = 800.0, T_hot = 305.0, T_cool = 305.0,
-                                       mode = mode) for mode in (:resolved, :tiled, :parameter))
-        h0 = Dict(k => patchy_heat_content(v) for (k, v) in runs)
-        for _ in 1:40, pl in values(runs)
-            patchy_step!(pl, 5.0)
-        end
-        θr = runs[:resolved].sim.θ.data
-        worst = maximum(maximum(abs.(runs[m].sim.θ.data .- θr)) for m in (:tiled, :parameter))
-        @info "Uniform surface: max |Δθ| between resolved, tiled and parameter runs after 200 s" worst
-        @test worst < 1e-10
-        # Column heat content changes by exactly the applied surface flux
-        # (walls, no-flux θ, conservative advection and SGS diffusion).
-        for (k, pl) in runs
-            err = (patchy_heat_content(pl) - h0[k] - pl.applied_heat) / pl.applied_heat
-            @test abs(err) < 1e-8
-        end
-        # The applied flux is warming: θ_s = 305 K above a 300 K mixed layer.
-        @test runs[:resolved].applied_heat > 0
-    end
 
     # The five runs of the comparison (≈ 25 s each).
     cases = [(:hom,    (λ = 800.0,  T_hot = 305.0, T_cool = 305.0)),

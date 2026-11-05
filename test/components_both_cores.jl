@@ -6,8 +6,8 @@
 #     conserve Σ W uᵢ ΔV and Σ W θ ΔV and dissipate the weighted kinetic energy;
 #   * a dry CBL on both cores through the `simulation` config: the θ budget
 #     closes to round-off (Σ θ on the Boussinesq core, Σ ρ̄ θ on the anelastic
-#     one), and the anelastic mixed layer warms more (its heat goes into less
-#     mass aloft);
+#     one) (that the anelastic mixed layer warms more over 30 min is a
+#     validation run: validation/components_both_cores.jl);
 #   * SSP-RK3 and the adaptive step on the anelastic core: the constraint at
 #     round-off, the guard on the core's own constraint, a rejected step
 # restored, the components' limits;
@@ -56,9 +56,10 @@ function bc_state!(sim; seed = 7, a = 0.5)
     return sim
 end
 bc_bits(sim) = [copy(f.data) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p, sim.νt, sim.κt)]
-"The constraint weights of `sim` (ones on the Boussinesq core)."
-bc_weights(sim) = sim isa BoussinesqSimulation ? (ones(size(sim.θ.data, 3)), ones(size(sim.θ.data, 3) + 1)) :
-                                                 constraint_weights(sim)
+# bc_weights(sim), the constraint weights (ones on the Boussinesq core), and the
+# DCBL through the `simulation` config (BC_CFG, bc_cbl_cfg, bc_run, bc_budget),
+# shared with validation/components_both_cores.jl
+isdefined(@__MODULE__, :bc_budget) || include(joinpath(@__DIR__, "support", "dcbl_both_cores.jl"))
 "Σ_k W[k] Σ_ij f[i,j,k] over the interior levels of a centre-located field."
 bc_wsum(f, W, H) = sum(W[H+k] * sum(interior_view(f)[:, :, k]) for k in 1:size(interior_view(f), 3))
 
@@ -144,25 +145,8 @@ end
 # a dry CBL on both cores
 # ---------------------------------------------------------------------------
 
-const BC_CFG = joinpath(pkgdir(Aeolus), "examples", "dry_convective_bl", "dry_convective_bl.toml")
-bc_cbl_cfg(core, n; extra = String[]) =
-    load_run_config(BC_CFG; overrides = vcat(["grid.size=[16,16,16]", "time.duration=\"none\"",
-                                              "time.nsteps=$n", "fftw.planner=\"estimate\""],
-                                             core === :anelastic ? ["core.model=\"anelastic\""] : String[], extra))
-bc_run(cfg; kw...) = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir(), kw...)
-
-"The θ budget of a `simulation` run of the DCBL config: (Σ W δθ ΔV, W_bot F t A)."
-function bc_budget(core, n; extra = String[])
-    cfg = bc_cbl_cfg(core, n; extra = extra)
-    s0 = Aeolus.SimulationDriver.simulation(Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg))
-    θ0 = copy(interior_view(s0.θ))
-    r = bc_run(cfg)
-    s = Aeolus.SimulationDriver.simulation(r.obj); m = s.mesh; H = m.Hz
-    Wc, Wf = bc_weights(s)
-    dθ = interior_view(s.θ) .- θ0
-    got = sum(Wc[H+k] * sum(dθ[:, :, k]) for k in 1:m.Nz) * m.dx * m.dy * m.dz
-    return (got = got, expected = Wf[H+1] * 0.24 * s.t * m.Lx * m.Ly, sim = s, θ0 = θ0)
-end
+# BC_CFG, bc_cbl_cfg, bc_run, bc_budget: test/support/dcbl_both_cores.jl (above);
+# the 30 min mixed-layer comparison is validation/components_both_cores.jl
 
 @testset "dry CBL on both cores: the θ budget closes to round-off (euler, rk3, adaptive)" begin
     for core in (:boussinesq, :anelastic),
@@ -177,29 +161,6 @@ end
         @test abs(err) < 1e-9
         core === :anelastic && @test max_anelastic_divergence(b.sim) < 1e-10
     end
-end
-
-@testset "dry CBL on both cores: the anelastic mixed layer warms more (30 min, 16³)" begin
-    # The same kinematic flux F: the Boussinesq core heats a column of ρ₀
-    # (Σ δθ Δz = F t), the anelastic one a column of ρ̄(z) that thins upward
-    # (Σ ρ̄ δθ Δz = ρ̄_bot F t). Mixed over a layer of depth h, the anelastic
-    # warming is larger by ρ̄_bot h / ∫₀ʰ ρ̄ dz ≈ 1 + h/(2 H_ρ) (H_ρ ≈ 12 km for
-    # the 300 K isentropic base state): about 4 % at h ≈ 1 km.
-    B = bc_budget(:boussinesq, 360); A = bc_budget(:anelastic, 360)
-    @test abs(B.got / B.expected - 1) < 1e-11 && abs(A.got / A.expected - 1) < 1e-11   # δθ ≈ 0.5 K here
-    m = A.sim.mesh; zc = [(k - 0.5) * m.dz for k in 1:m.Nz]
-    ml = findall(z -> 200 <= z <= 800, zc)                         # the mixed layer, away from the surface and the top
-    mean_dθ(b) = sum(sum(interior_view(b.sim.θ)[:, :, k] .- b.θ0[:, :, k]) for k in ml) / (length(ml) * m.Nx * m.Ny)
-    dB = mean_dθ(B); dA = mean_dθ(A)
-    ρ̄ = A.sim.ref.ρ̄; h = 1000.0
-    pred = ρ̄[1] * h / (sum(ρ̄[k] for k in 1:m.Nz if zc[k] < h) * m.dz) - 1
-    @info @sprintf("DCBL 30 min: mixed-layer warming Boussinesq %.4f K, anelastic %.4f K, ratio − 1 = %.4f (column-mass estimate %.4f at h = 1 km)",
-                   dB, dA, dA / dB - 1, pred)
-    @test 0.3 < dB < 0.7                                           # F t / h ≈ 0.43 K
-    @test 0.5pred < dA / dB - 1 < 1.5pred
-    # the profiles agree to the core difference: within 0.05 K below 1.6 km
-    pA = vec(sum(interior_view(A.sim.θ); dims = (1, 2))) ./ 256; pB = vec(sum(interior_view(B.sim.θ); dims = (1, 2))) ./ 256
-    @test maximum(abs, pA .- pB) < 0.05
 end
 
 # ---------------------------------------------------------------------------

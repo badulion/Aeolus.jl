@@ -21,7 +21,8 @@
 include(joinpath(@__DIR__, "..", "test", "support", "environment.jl"))
 
 @testset "Validation" begin
-    include("urban_checks.jl")       # EX-a (#438): end-to-end urban runs on the Berlin configs (smoke matrix, flagship, parent validations)
+    include("urban_checks.jl")       # EX-a (#438): end-to-end Berlin runs: flagship, parent encroachment / Wangara / 24 h mosaic
+    include("components_both_cores.jl")  # ONE-j (#460): 30 min dry CBL on both cores, the anelastic mixed layer warms more
 end
 
 @testset "Era II" begin

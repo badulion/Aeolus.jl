@@ -475,4 +475,28 @@ wall_matrix(layers, ω) = foldl((M, l) -> layer_matrix(l, ω) * M, layers;
         # interior flux peaks hours later (thermal mass time lag).
         @test argmax(wall.Qi) > argmax(wall.Ts)
     end
+
+    # The TEB canyon closures of the BUBBLE / CAPITOUL canyons (#30): hand-evaluated
+    # values (moved from validation/era5_urban_validation.jl)
+    @testset "TEB canyon closures" begin
+        # Hand-evaluated Masson (2000) / Lemonsu et al. (2004) eq. B1:
+        # H = W = 20, z0 = 2, z_ref = 10: 2/π e^{-1/4} ln(3.3333) / ln(8.3333)
+        ref = 2 / π * exp(-0.25) * log(20 / 3 / 2) / log((10 + 20 / 3) / 2)
+        @test canyon_wind_speed(1.0, 10.0, 20.0, 20.0; z0_town = 2.0) ≈ ref rtol = 1e-14
+        @test ref ≈ 0.28154 atol = 1e-5
+        @test canyon_wind_speed(3.0, 10.0, 20.0, 20.0) ≈ 3 * canyon_wind_speed(1.0, 10.0, 20.0, 20.0)
+        # forcing at the canyon top (z_ref → 0): only the orientation average and the
+        # exponential decay remain
+        @test canyon_wind_speed(1.0, 1e-9, 20.0, 10.0) ≈ 2 / π * exp(-0.5) rtol = 1e-8
+        # deeper canyons are more sheltered; a higher forcing level carries less wind down
+        @test canyon_wind_speed(2.0, 20.0, 30.0, 10.0) < canyon_wind_speed(2.0, 20.0, 20.0, 10.0)
+        @test canyon_wind_speed(2.0, 40.0, 20.0, 10.0) < canyon_wind_speed(2.0, 20.0, 20.0, 10.0)
+        @test_throws ArgumentError canyon_wind_speed(2.0, 20.0, 10.0, 20.0)   # H/W < 1
+        @test_throws ArgumentError canyon_wind_speed(2.0, 0.0, 20.0, 10.0)
+        @test_throws ArgumentError canyon_wind_speed(2.0, 20.0, 20.0, 10.0; z0_town = 7.0)
+        # Rowley et al. (1930): 11.8 + 4.2 U
+        @test rowley_convection_coefficient(0.0) == 11.8
+        @test rowley_convection_coefficient(2.5) ≈ 22.3
+        @test_throws ArgumentError rowley_convection_coefficient(-1.0)
+    end
 end

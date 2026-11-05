@@ -864,6 +864,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
+    include("urban_checks.jl")       # EX-a (#438): Berlin smoke matrix (49 runs, ledgers), parent smoke run, parent class fractions, parent_zi
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
@@ -996,6 +997,7 @@ end
     include("era5_leaf_energy.jl")       # Phase 48  leaf energy balance, leaf temperature (#24)
     include("era5_canopy_profiles.jl")   # Phase 48  within-canopy wind/temperature validation (#25)
     include("era5_urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
+    include("era5_heterogeneous_surface.jl")  # Phase 53  patchy-surface coupling: code-path identity, heat conservation (#43)
     include("era5_glazing.jl")           # Phase 49  glazing transmission, window facets (#27)
     include("era5_urban_radiosity.jl")   # Phase 49  facet temperatures coupled to radiosity (#28)
     include("era5_building_energy.jl")   # Phase 50  indoor air temperature + thermal mass (#31)
