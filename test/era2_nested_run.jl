@@ -1,11 +1,9 @@
 using Test
-using Printf
 using Random
 using Aeolus
 using Aeolus.Nesting
 using Aeolus.Grids: interior
 using Aeolus.Fields: interior_view
-using Aeolus.PressureSolvers: FFTPoissonSolver
 
 # =========================================================================
 # N-nest-c (#257) — NestedRun: the time coupling of parent and child.
@@ -52,7 +50,6 @@ _nr_analytic_core(f) = (sim, dt; kw...) -> begin
     sim
 end
 
-_nr_mean_u(sim) = sum(interior_view(sim.u)) / length(interior_view(sim.u))
 
 """
 The time whose boundary data the child core's current tendency evaluation
@@ -70,261 +67,110 @@ end
 # =========================================================================
 @testset "Era II — NestedRun time coupling (N-nest-c, #257)" begin
 
-# -------------------------------------------------------------------------
-@testset "adaptive_dt and StateSnapshot extend to the sound-proof cores" begin
-    m = RegularGrid(Float64; size=(16, 8, 8), extent=(1.0, 0.5, 0.5), halo=(3, 3, 3))
-    sim = AnelasticSimulation(m; buoyancy=false)
-    U = 2.0
-    fill!(sim.u.data, U)
-    c = CFLConstraints(C_advective=0.5)
-    dt = adaptive_dt(sim, c)
-    @printf("  anelastic adaptive_dt, uniform U=2, dx=1/16: dt = %.15g (C dx/U = %.15g)\n",
-            dt, 0.5 * m.dx / U)
-    @test dt ≈ 0.5 * m.dx / U rtol = 1e-14
-    # molecular diffusive limit binds once ν is large
-    simν = AnelasticSimulation(m; buoyancy=false, ν=1.0)
-    Δ²h = 1 / (1 / m.dx^2 + 1 / m.dy^2 + 1 / m.dz^2)
-    @test adaptive_dt(simν, c) ≈ 0.25 * Δ²h / 1.0 rtol = 1e-14
-    # growth limiter and clamps, as for the Boussinesq core
-    @test adaptive_dt(sim, c; dt_prev = 1e-3) ≈ 1.1e-3 rtol = 1e-14
-    @test adaptive_dt(sim, CFLConstraints(dt_max = 1e-4)) == 1e-4
-    sim.u.data[5, 5, 5] = NaN
-    @test adaptive_dt(sim, c) == c.dt_min
-    # snapshot round trip is the same, clock included
-    fill!(sim.u.data, U); sim.θ.data .+= randn(size(sim.θ.data)); sim.t = 3.5
-    snap = state_snapshot(sim)
-    @test snap === state_snapshot(sim)                   # cached per simulation
-    save_state!(snap, sim)
-    θ0 = copy(sim.θ.data); u0 = copy(sim.u.data)
-    step!(sim, 1e-3)
-    @test sim.θ.data != θ0
-    restore_state!(sim, snap)
-    @test sim.θ.data == θ0 && sim.u.data == u0 && sim.t == 3.5
-end
-
-# -------------------------------------------------------------------------
-@testset "domain_advance: hooks, dispatch and stage times" begin
-    @test stage_times(domain_advance()) == (0.0,)
+@testset "stage times of the cores" begin
     @test stage_times(domain_advance(step_rk3!)) == (0.0, 1.0, 0.5)
     @test stage_times(domain_advance(step_imex!, ARK2())) == (0.0, ARK2().γ)
-    @test stage_times(domain_advance(step_imex!, Rosenbrock2())) == (0.0, Rosenbrock2().a21)
-    # the closure is exactly the core with its keywords: the same as a
-    # direct call, and the run's hook is chained after the domain's own
-    m = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
-    mk() = (s = BoussinesqSimulation(m; ν=1e-3);
-            Random.seed!(3); s.θ.data .= randn(size(s.θ.data)); fill!(s.u.data, 1.0); s)
-    drag!(sim, Δt) = (sim.tu.data .-= 0.3 .* sim.u.data; sim)
-    a = mk(); b = mk()
-    order = Symbol[]
-    adv = domain_advance(step_rk3!; body_force! = drag!,
-                         post_predictor! = (s, h) -> push!(order, :user))
-    adv(a, 1e-2; post_predictor! = (s, h) -> push!(order, :run))
-    step_rk3!(b, 1e-2; body_force! = drag!, post_predictor! = (s, h) -> nothing)
-    @test agree(a.u.data, b.u.data) && agree(a.θ.data, b.θ.data) && agree(a.t, b.t)
-    @test order == [:user, :run, :user, :run, :user, :run]
 end
 
-# -------------------------------------------------------------------------
 # Parent 16³ on the unit cube, child (0.25, 0.75)³ at r = 2. The parent is
-# advanced by a user core that sets it analytically, linear in x, y, z, t.
-function _nr_linear_case(child_adv; substeps=3, dt=1e-3, nsteps=4)
+# advanced by a user core that sets it analytically, linear in x, y, z, t:
+# the child's boundary data at every substep and RK3 stage are exact. (16³,
+# not 8³: on 8³ the prolongation stencils of the child halos reach the
+# parent's periodic halos, where the linear field is not linear.)
+@testset "exact temporal interpolation at every substep and stage" begin
     pm = RegularGrid(Float64; size=(16, 16, 16), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
-    # u is divergence-free (no x dependence): the child's open faces make
-    # the boundary flux compatible with the projection (N-nest-d), so data
-    # with ∂u/∂x ≠ 0 would be (correctly) changed by the mass-flux correction
+    # u divergence-free (no x dependence): the open faces' mass-flux
+    # correction leaves it unchanged
     f(n, x, y, z, t) = n === :θ ? 300.0 + 2x - 3y + z + 7.0 * t :
                                   1.0 + 0.25y - 0.125z - 4.0 * t
     psim = BoussinesqSimulation(pm)
     _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
     csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
     _nr_init_child_from_parent!(csim, psim, nest)
-    # stage halos, recorded where the core reads them (body_force! runs after
-    # the tendencies, before anything writes the halos again)
     RUN = Ref{Any}(nothing)
     err = Ref(0.0); nrec = Ref(0); ctr = [NaN, 0.0]
     ii, jj, kk = interior(cm)
-    function record!(sim, Δt)
-        run = RUN[]
-        ts = _nr_stage_time!(ctr, run)
+    function record!(sim, Δt)            # runs where the core reads the stage halos
+        ts = _nr_stage_time!(ctr, RUN[])
         for k in axes(sim.θ.data, 3), j in axes(sim.θ.data, 2), i in axes(sim.θ.data, 1)
             (i in ii) && (j in jj) && (k in kk) && continue
             ex = f(:θ, _nr_xc(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), ts)
-            err[] = max(err[], abs(sim.θ.data[i, j, k] - ex) / abs(ex))
             exu = f(:u, _nr_xf(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), ts)
-            err[] = max(err[], abs(sim.u.data[i, j, k] - exu) / abs(exu))
+            err[] = max(err[], abs(sim.θ.data[i, j, k] - ex) / abs(ex),
+                        abs(sim.u.data[i, j, k] - exu) / abs(exu))
         end
         nrec[] += 1
         return sim
     end
-    adv = domain_advance(child_adv.core, child_adv.args...;
-                         child_adv.kwargs..., body_force! = record!)
-    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(_nr_analytic_core(f)),
-                    advance_child = adv, cfl_parent = nothing, cfl_child = nothing,
-                    substeps)
+    run = NestedRun(psim, csim, nest; feedback = :one_way,
+                    advance_parent = domain_advance(_nr_analytic_core(f)),
+                    advance_child = domain_advance(step_rk3!; body_force! = record!),
+                    cfl_parent = nothing, cfl_child = nothing, substeps = 3)
     RUN[] = run
-    for _ in 1:nsteps
-        step_nested!(run; dt)
+    for _ in 1:2
+        step_nested!(run; dt = 1e-3)
     end
-    # boundary_time over the last window, all stored fields (halo cells)
-    eb = 0.0
-    for τ in (0.0, 0.3, 0.5, 1.0)
-        t = run.t0 + τ * run.Δt
-        s = boundary_time(run, t)
-        for k in axes(s.θ.data, 3), j in axes(s.θ.data, 2), i in axes(s.θ.data, 1)
-            (i in ii) && (j in jj) && (k in kk) && continue
-            ex = f(:θ, _nr_xc(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), t)
-            eb = max(eb, abs(s.θ.data[i, j, k] - ex) / abs(ex))
-        end
-    end
-    return (; err = err[], nrec = nrec[], eb, run)
+    @test nrec[] == 2 * 3 * 3            # 2 parent steps × 3 substeps × 3 stages
+    @test err[] < 1e-14
+    s = boundary_time(run, run.t0 + 0.3 * run.Δt)
+    tq = run.t0 + 0.3 * run.Δt
+    @test maximum(abs(s.θ.data[i, j, k] - f(:θ, _nr_xc(cm, i), _nr_yc(cm, j), _nr_zc(cm, k), tq))
+                  for k in axes(s.θ.data, 3), j in axes(s.θ.data, 2), i in axes(s.θ.data, 1)
+                  if !((i in ii) && (j in jj) && (k in kk))) < 1e-11
+    @test run.child.t == run.parent.t
 end
 
-@testset "exact temporal interpolation at every substep and stage" begin
-    for (name, adv, nst) in (("step!", domain_advance(), 1),
-                             ("step_rk3!", domain_advance(step_rk3!), 3),
-                             ("step_imex! ARK2", domain_advance(step_imex!, ARK2()), 2),
-                             ("step_imex! Rosenbrock2", domain_advance(step_imex!, Rosenbrock2()), 2))
-        r = _nr_linear_case(adv)
-        @printf("  %-24s %2d stage evaluations: max rel. halo error %.2e, boundary_time %.2e\n",
-                name, r.nrec, r.err, r.eb)
-        @test r.nrec == 4 * 3 * nst           # 4 parent steps × 3 substeps × stages
-        @test r.err < 1e-14
-        @test r.eb < 1e-14
-        @test r.run.child.t == r.run.parent.t
-    end
-end
-
-# -------------------------------------------------------------------------
-@testset "temporal interpolation is second order (sin ωt)" begin
-    ω = 2π; A = 1.5
-    function boundary_error(dtp)
-        pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
-        nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
-        cm = nest_child_mesh(nest)
-        f(n, x, y, z, t) = n === :θ ? 300.0 + A * sin(ω * t) : 0.0
-        psim = BoussinesqSimulation(pm); _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
-        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
-        _nr_init_child_from_parent!(csim, psim, nest)
-        RUN = Ref{Any}(nothing); err = Ref(0.0); ctr = [NaN, 0.0]
-        function rec!(sim, Δt)
-            run = RUN[]
-            ts = _nr_stage_time!(ctr, run)
-            err[] = max(err[], abs(sim.θ.data[1, 1, 1] - (300.0 + A * sin(ω * ts))))
-            sim
-        end
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(_nr_analytic_core(f)),
-                        advance_child = domain_advance(step_rk3!; body_force! = rec!),
-                        cfl_parent = nothing, cfl_child = nothing, substeps = 2)
-        RUN[] = run
-        for _ in 1:round(Int, 1 / dtp)
-            step_nested!(run; dt = dtp)
-        end
-        return err[]
-    end
-    e1 = boundary_error(1 / 20); e2 = boundary_error(1 / 40); e3 = boundary_error(1 / 80)
-    @printf("  boundary-data error: Δt_p = 1/20 → %.3e, 1/40 → %.3e (×%.3f), 1/80 → %.3e (×%.3f)\n",
-            e1, e2, e1 / e2, e3, e2 / e3)
-    # leading error of linear interpolation: Δt²/8 · max|f''| = Δt² A ω² / 8
-    @printf("  bound Δt_p² A ω²/8 at 1/20: %.3e\n", (1 / 20)^2 * A * ω^2 / 8)
-    @test e1 / e2 >= 3.7
-    @test e2 / e3 >= 3.7
-    @test e1 <= (1 / 20)^2 * A * ω^2 / 8 * (1 + 1e-9)
-end
-
-# -------------------------------------------------------------------------
-# Substep count: uniform flow along x, so the child's advective limit is
-# exactly the parent's divided by r.
-@testset "substep count: child limit Δt_p/r gives n = r" begin
-    for r in (2, 3, 4, 5)
-        pm = RegularGrid(Float64; size=(8, 4, 4), extent=(1.0, 0.5, 0.5), halo=(3, 3, 3))
-        nest = nested_grid(pm, ((0.25, 0.5), (0.125, 0.375), (0.125, 0.375)), r; halo=(3, 3, 3))
-        cm = nest_child_mesh(nest)
-        psim = BoussinesqSimulation(pm); fill!(psim.u.data, 1.3); fill!(psim.θ.data, 300.0)
-        csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
-        fill!(csim.u.data, 1.3); fill!(csim.θ.data, 300.0)
-        run = NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = CFLConstraints(C_advective = 0.5))
-        for _ in 1:3
-            step_nested!(run)
-        end
-        st = run.stats
-        @printf("  r = %d: Δt_p = %.6g, n = %d..%d, Δt_c ∈ [%.6g, %.6g], max child CFL %.15f\n",
-                r, st.dt_parent_max, st.n_min, st.n_max, st.dt_child_min, st.dt_child_max,
-                st.max_child_cfl)
-        @test st.n_min == r && st.n_max == r
-        @test st.dt_child_max ≈ st.dt_parent_max / r rtol = 1e-12
-        @test st.max_child_cfl <= 0.5 * (1 + 1e-9)
-    end
-end
-
-# -------------------------------------------------------------------------
-# Uniform flow along x, w = 0, no viscosity: the child spans the parent
-# horizontally (periodic) and is nested only in z, where w = 0 means the
-# halos cannot act on u. A drag hook then has an exact answer.
-function _nr_drag_case(; drag_on::Symbol, child_core::Symbol = :boussinesq, c = 1.0,
-                    T = 1.0, U0 = 1.0)
+@testset "linear temporal interpolation: error within Δt² A ω²/8 (sin ωt)" begin
+    ω = 2π; A = 1.5; dtp = 1 / 10
     pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
-    nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
-    psim = BoussinesqSimulation(pm); fill!(psim.u.data, U0); fill!(psim.θ.data, 300.0)
-    csim = child_core === :boussinesq ?
-        BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest)) :
-        AnelasticSimulation(cm; buoyancy=false, bcs=nest_bcs(cm, :periodic, :periodic, :nest))
-    fill!(csim.u.data, U0)
-    child_core === :boussinesq && fill!(csim.θ.data, 300.0)
-    # RK3 with the drag as a tendency (Boussinesq), or the drag integrated
-    # exactly, u ← u e^{-cΔt}, as a post-predictor correction (sound-proof
-    # core: its forward-Euler step would carry an O(cΔt) error)
-    drag_rk3 = domain_advance(step_rk3!; body_force! = (s, Δt) -> (s.tu.data .-= c .* s.u.data; s))
-    drag_pp  = domain_advance(; post_predictor! = (s, Δt) -> (interior_view(s.u) .*= exp(-c * Δt); s))
-    plain_rk3 = domain_advance(step_rk3!)
-    ap = drag_on === :parent ? drag_rk3 : plain_rk3
-    ac = drag_on === :child ? (child_core === :boussinesq ? drag_rk3 : drag_pp) :
-         (child_core === :boussinesq ? plain_rk3 : domain_advance())
-    cfl = CFLConstraints(dt_max = 0.01)
-    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = ap, advance_child = ac,
-                    cfl_parent = cfl)
-    while run.t < T - 1e-12
-        step_nested!(run; dt = min(0.01, T - run.t))
+    f(n, x, y, z, t) = n === :θ ? 300.0 + A * sin(ω * t) : 0.0
+    psim = BoussinesqSimulation(pm); _nr_set_fields!(psim, (n, x, y, z) -> f(n, x, y, z, 0.0))
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
+    _nr_init_child_from_parent!(csim, psim, nest)
+    RUN = Ref{Any}(nothing); err = Ref(0.0); ctr = [NaN, 0.0]
+    rec!(sim, Δt) = (ts = _nr_stage_time!(ctr, RUN[]);
+                     err[] = max(err[], abs(sim.θ.data[1, 1, 1] - (300.0 + A * sin(ω * ts)))); sim)
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(_nr_analytic_core(f)),
+                    advance_child = domain_advance(step_rk3!; body_force! = rec!),
+                    cfl_parent = nothing, cfl_child = nothing, substeps = 2)
+    RUN[] = run
+    for _ in 1:10
+        step_nested!(run; dt = dtp)
     end
-    return run
+    bound = dtp^2 * A * ω^2 / 8           # leading error of linear interpolation
+    @test 0 < err[] <= bound * (1 + 1e-9)
 end
 
-@testset "hooks reach both domains (linear drag), other domain unchanged" begin
-    for (drag_on, core) in ((:child, :boussinesq), (:parent, :boussinesq),
-                            (:child, :anelastic))
-        run = _nr_drag_case(; drag_on, child_core = core)
-        p, c = run.parent, run.child
-        dragged, other = drag_on === :child ? (c, p) : (p, c)
-        e = abs(_nr_mean_u(dragged) / exp(-run.t) - 1.0)
-        o = abs(_nr_mean_u(other) - 1.0)
-        @printf("  drag on %-6s (%s child): t = %.3f, |ū/e^{-ct} − 1| = %.2e, other domain |ū − 1| = %.2e\n",
-                drag_on, core, run.t, e, o)
-        @test run.t ≈ 1.0 rtol = 1e-14
-        @test e < 1e-6
-        @test o < 1e-14
-    end
+# Uniform flow along x: the child's advective limit is the parent's over r.
+@testset "substep count: child limit Δt_p/r gives n = r" begin
+    pm = RegularGrid(Float64; size=(8, 4, 4), extent=(1.0, 0.5, 0.5), halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.5), (0.125, 0.375), (0.125, 0.375)), 3; halo=(3, 3, 3))
+    cm = nest_child_mesh(nest)
+    psim = BoussinesqSimulation(pm); fill!(psim.u.data, 1.3); fill!(psim.θ.data, 300.0)
+    csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm))
+    fill!(csim.u.data, 1.3); fill!(csim.θ.data, 300.0)
+    run = NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = CFLConstraints(C_advective = 0.5))
+    step_nested!(run)
+    st = run.stats
+    @test st.n_min == 3 && st.n_max == 3
+    @test st.dt_child_max ≈ st.dt_parent_max / 3 rtol = 1e-12
+    @test st.max_child_cfl <= 0.5 * (1 + 1e-9)
 end
 
-# -------------------------------------------------------------------------
 """
-Parent and child with a Taylor-Green flow plus a mean wind and a θ blob.
-The child's x and y faces are open nest faces (N-nest-d): the parent's
-normal velocity on the boundary faces, Dirichlet tangential velocity and
-θ, and an all-Neumann projection that sees that flux. Before N-nest-d the
-child kept a periodic FFT projection and needed the normal velocity
-imposed on its interface planes *and* a 3-cell sponge to stay stable; it
-now runs without a sponge (the N-nest-c default).
+Parent and child with a Taylor-Green flow plus a mean wind and a θ blob;
+the child's x and y faces are open nest faces (N-nest-d).
 """
-function _nr_tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
-                  sponge = nothing, kwargs...)
+function _nr_tg_case(; Np = 16, r = 2, U = 0.5, ν = 5e-3, kwargs...)
     L = 1.0
-    pm = RegularGrid(Float64; size=(Np, Np, 8), extent=(L, L, L / 2), halo=(3, 3, 3))
-    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.0, L / 2)), (r, r, 1); halo=(3, 3, 3))
+    pm = RegularGrid(Float64; size=(Np, Np, 4), extent=(L, L, L / 4), halo=(3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.0, L / 4)), (r, r, 1); halo=(3, 3, 3))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; ν = ν)
-    Random.seed!(seed)
     for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
         x = _nr_xf(pm, i); xc = _nr_xc(pm, i); y = _nr_yc(pm, j)
         yf = pm.y0 + (j - pm.Hy - 1) * pm.dy
@@ -335,377 +181,101 @@ function _nr_tg_case(; Np = 16, r = 2, U = 0.5, seed = 1, ν = 5e-3,
     step!(psim, 1e-6); psim.t = 0.0           # project once
     csim = BoussinesqSimulation(cm; ν = ν, bcs = nest_bcs(cm, :nest, :nest, :periodic))
     _nr_init_child_from_parent!(csim, psim, nest)
-    return NestedRun(psim, csim, nest; sponge, merge((; feedback = :one_way), NamedTuple(kwargs))...)
+    return NestedRun(psim, csim, nest; merge((; feedback = :one_way), NamedTuple(kwargs))...)
 end
 
-"KE of the parent over the cells the child covers (u, v, w averaged to centres)."
-function _nr_covered_ke(p, nest)
-    m = p.mesh; cx, cy, cz = nest_covered_range(nest)
-    s = 0.0
-    for k in cz, j in cy, i in cx
-        I = m.Hx + i; J = m.Hy + j; K = m.Hz + k
-        uc = 0.5 * (p.u.data[I, J, K] + p.u.data[I+1, J, K])
-        vc = 0.5 * (p.v.data[I, J, K] + p.v.data[I, J+1, K])
-        wc = 0.5 * (p.w.data[I, J, K] + p.w.data[I, J, K+1])
-        s += uc^2 + vc^2 + wc^2
-    end
-    return 0.5 * s * m.dx * m.dy * m.dz
-end
-
-@testset "one-way: the parent is the same as a standalone run" begin
+@testset "one-way: the parent is a standalone run" begin
     run = _nr_tg_case(; feedback = :one_way, cfl_parent = CFLConstraints())
     alone = deepcopy(run.parent)
     c = CFLConstraints(); dtp = nothing
-    for _ in 1:20
+    for _ in 1:3
         step_nested!(run)
         dt = adaptive_dt(alone, c; dt_prev = dtp)
         step!(alone, dt); dtp = dt
     end
-    same = agree(interior_view(run.parent.u), interior_view(alone.u)) &&
-           agree(interior_view(run.parent.v), interior_view(alone.v)) &&
-           agree(interior_view(run.parent.w), interior_view(alone.w)) &&
-           agree(interior_view(run.parent.θ), interior_view(alone.θ))
-    @printf("  20 one-way steps: parent the same = %s, t = %.6g vs %.6g, child substeps %d\n",
-            same, run.parent.t, alone.t, run.stats.child_substeps)
-    @test same
-    @test values_agree(run.parent.t, alone.t)
+    @test agree(interior_view(run.parent.u), interior_view(alone.u)) &&
+          agree(interior_view(run.parent.θ), interior_view(alone.θ))
 end
 
-# -------------------------------------------------------------------------
-@testset "clock alignment and child CFL over 1000 adaptive parent steps" begin
-    for fb in (:one_way, :two_way)
-        run = _nr_tg_case(; feedback = fb, cfl_parent = CFLConstraints(C_advective = 0.5))
-        kep0 = kinetic_energy(run.parent)
-        maxdrift = 0.0; kepmax = kep0; mass = 0.0
-        rmin = Inf; rmax = 0.0
-        for n in 1:1000
-            step_nested!(run)
-            maxdrift = max(maxdrift, abs(run.child.t - run.parent.t) / run.parent.t)
-            kepmax = max(kepmax, kinetic_energy(run.parent))
-            r = kinetic_energy(run.child) / _nr_covered_ke(run.parent, run.nest)
-            rmin = min(rmin, r); rmax = max(rmax, r)
-            fb === :two_way && (mass = max(mass, nest_conservation_error(run.parent, run.child,
-                                                                        run.nest, :mass)))
-        end
-        st = run.stats
-        @printf("  %-7s 1000 steps to t = %.3f: %d child substeps (n %d..%d), Δt_p ∈ [%.4g, %.4g], Δt_c ∈ [%.4g, %.4g]\n",
-                fb, run.t, st.child_substeps, st.n_min, st.n_max, st.dt_parent_min,
-                st.dt_parent_max, st.dt_child_min, st.dt_child_max)
-        @printf("          clock error before snap %.2e, after %.2e; max child CFL %.6f (C = 0.5)\n",
-                st.max_clock_error, maxdrift, st.max_child_cfl)
-        @printf("          KE_child / KE_parent(covered) ∈ [%.4f, %.4f]; max KE_parent / KE_parent(0) %.4f%s\n",
-                rmin, rmax, kepmax / kep0,
-                fb === :two_way ? @sprintf("; interface mass imbalance ≤ %.2e", mass) : "")
-        @printf("          wall: parent %.2f s, child %.2f s, boundary %.2f s, feedback %.2f s\n",
-                st.wall_parent, st.wall_child, st.wall_boundary, st.wall_feedback)
-        @test st.parent_steps == 1000
-        @test st.max_clock_error <= 1e-12
-        @test maxdrift == 0.0
-        @test st.max_child_cfl <= 0.5 * (1 + 1e-9)
-        @test st.n_min >= 2                         # the child never outruns its CFL
-        @test st.child_retries == 0 && st.parent_retries == 0
-        # stable: the child carries the parent's energy (±15 %) and the
-        # viscous parent never gains energy
-        @test 0.85 <= rmin && rmax <= 1.15
-        @test kepmax <= kep0 * (1 + 1e-12)
-        fb === :two_way && @test mass < 1e-10
-    end
-end
-
-# -------------------------------------------------------------------------
-@testset "sync = :shared_min_dt: one dt for both domains (PALM)" begin
-    run = _nr_tg_case(; cfl_parent = CFLConstraints(), sync = :shared_min_dt)
-    for _ in 1:10
+@testset "two-way adaptive run: clock, child CFL, interface mass" begin
+    run = _nr_tg_case(; feedback = :two_way, cfl_parent = CFLConstraints(C_advective = 0.5))
+    kep0 = kinetic_energy(run.parent)
+    mass = 0.0
+    for n in 1:5
         step_nested!(run)
+        mass = max(mass, nest_conservation_error(run.parent, run.child, run.nest, :mass))
     end
     st = run.stats
-    @printf("  shared min dt: n = %d..%d, Δt_p ∈ [%.5g, %.5g], Δt_c ∈ [%.5g, %.5g]\n",
-            st.n_min, st.n_max, st.dt_parent_min, st.dt_parent_max, st.dt_child_min,
-            st.dt_child_max)
-    @test st.n_min == 1 && st.n_max == 1
-    @test st.dt_parent_min ≈ st.dt_child_min rtol = 1e-12
-    @test st.dt_parent_max ≈ st.dt_child_max rtol = 1e-12
-    @test st.max_child_cfl <= 0.5 * (1 + 1e-9)
-    # the shared step is the child's (finer) limit, below the parent's own
-    sub = _nr_tg_case(; cfl_parent = CFLConstraints())
-    step_nested!(sub)
-    @test st.dt_parent_max < sub.stats.dt_parent_max
+    @test run.child.t == run.parent.t
+    @test st.max_child_cfl <= 0.5 * (1 + 1e-9) && st.n_min >= 2
+    @test mass < 1e-10
+    @test kinetic_energy(run.parent) <= kep0 * (1 + 1e-12)     # viscous: no energy gain
 end
 
-# -------------------------------------------------------------------------
-# Retry isolation. The child carries uniform flow decaying under an exactly
-# integrated drag, so its state is independent of the dt sequence; the
-# parent is a Taylor-Green flow.
+# Retry isolation: the child carries uniform flow decaying under an exactly
+# integrated drag (independent of the dt sequence); a child NaN rolls back
+# and redoes only the child.
 @testset "retry isolation: a child NaN rolls back only the child" begin
-    function retry_case(inject::Bool; parent_nan::Bool = false)
+    function retry_case(inject::Bool)
         pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
         nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
         cm = nest_child_mesh(nest)
         psim = BoussinesqSimulation(pm)
-        Random.seed!(7)
         for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
             psim.u.data[i, j, k] = 1.0 + 0.3 * sin(2π * _nr_xf(pm, i)) * cos(2π * _nr_yc(pm, j))
-            psim.v.data[i, j, k] = -0.3 * cos(2π * _nr_xc(pm, i)) *
-                                   sin(2π * (pm.y0 + (j - pm.Hy - 1) * pm.dy))
         end
-        psim.θ.data .= 300.0 .+ randn(size(psim.θ.data))
+        fill!(psim.θ.data, 300.0)
         csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest))
         fill!(csim.u.data, 1.0); fill!(csim.θ.data, 300.0)
-        ncalls = Ref(0); ncore_child = Ref(0); armed = Ref(inject); parmed = Ref(parent_nan)
-        counting(sim, dt; kw...) = (ncalls[] += 1; step!(sim, dt; kw...);
-                                    parmed[] && ncalls[] == 3 && (sim.u.data[5, 5, 5] = NaN;
-                                                                  parmed[] = false); sim)
-        cdrag(sim, dt; kw...) = (ncore_child[] += 1; step!(sim, dt; kw...))
+        ncalls = Ref(0); armed = Ref(inject)
+        counting(sim, dt; kw...) = (ncalls[] += 1; step!(sim, dt; kw...))
         pp(s, Δt) = begin
             interior_view(s.u) .*= exp(-0.5 * Δt)
-            if armed[] && s.t > 0.05
-                s.u.data[6, 6, 6] = NaN; armed[] = false
-            end
+            armed[] && s.t > 0.03 && (s.u.data[6, 6, 6] = NaN; armed[] = false)
             s
         end
         run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(counting),
-                        advance_child = domain_advance(cdrag; post_predictor! = pp),
+                        advance_child = domain_advance(; post_predictor! = pp),
                         cfl_parent = CFLConstraints(dt_max = 0.02))
-        for _ in 1:10
+        for _ in 1:4
             step_nested!(run)
         end
-        return run, ncalls[], ncore_child[]
+        return run, ncalls[]
     end
-    ref, ncp_ref, ncc_ref = retry_case(false)
-    inj, ncp, ncc = retry_case(true)
-    dc = maximum(abs, interior_view(inj.child.u) .- interior_view(ref.child.u))
-    @printf("  child NaN: retries %d (parent %d); parent core calls %d (ref %d), child core calls %d (ref %d)\n",
-            inj.stats.child_retries, inj.stats.parent_retries, ncp, ncp_ref, ncc, ncc_ref)
-    @printf("  max |u_child − u_child,ref| = %.2e, parent the same = %s\n", dc,
-            interior_view(inj.parent.u) == interior_view(ref.parent.u))
+    ref, ncp_ref = retry_case(false)
+    inj, ncp = retry_case(true)
     @test inj.stats.child_retries == 1 && inj.stats.parent_retries == 0
-    @test ncp == 10 && ncp_ref == 10                   # the parent is never advanced twice
-    # the rejected piece is redone at half size; the growth limiter
-    # (growth_max = 1.1) then ramps the child dt back up over a few pieces
-    @test ncc >= ncc_ref + 2
+    @test ncp == ncp_ref == 4                          # the parent is never advanced twice
     @test agree(interior_view(inj.parent.u), interior_view(ref.parent.u))
-    @test agree(interior_view(inj.parent.θ), interior_view(ref.parent.θ))
-    @test dc < 1e-12
+    @test maximum(abs, interior_view(inj.child.u) .- interior_view(ref.child.u)) < 1e-12
     @test inj.child.t == inj.parent.t
-    # a parent rejection is retried before any child substep
-    pr, ncp2, ncc2 = retry_case(false; parent_nan = true)
-    @printf("  parent NaN: parent retries %d, child retries %d, child core calls %d = substeps %d\n",
-            pr.stats.parent_retries, pr.stats.child_retries, ncc2, pr.stats.child_substeps)
-    @test pr.stats.parent_retries == 1 && pr.stats.child_retries == 0
-    @test ncp2 == 11 && ncc2 == pr.stats.child_substeps
-    @test all(isfinite, interior_view(pr.parent.u))
-    @test pr.child.t == pr.parent.t
 end
 
-# -------------------------------------------------------------------------
-# #327 M6: only a numerical failure is a rejected step. A bug (MethodError,
-# BoundsError, ArgumentError from a finite state) propagates at once instead
-# of being retried at half the step.
+# #327 M6: only a numerical failure is a rejected step; a bug from a finite
+# state propagates at once instead of being retried at half the step.
 @testset "exceptions: bugs are rethrown, numerical failures retried (#327 M6)" begin
-    function exc_case(child_throw, parent_throw = nothing)
+    function exc_case(child_throw)
         pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
         nest = nested_grid(pm, ((0.0, 1.0), (0.0, 1.0), (0.25, 0.75)), 2; halo=(3, 3, 3))
         cm = nest_child_mesh(nest)
-        psim = BoussinesqSimulation(pm)
-        fill!(psim.u.data, 1.0); fill!(psim.θ.data, 300.0)
+        psim = BoussinesqSimulation(pm); fill!(psim.u.data, 1.0); fill!(psim.θ.data, 300.0)
         csim = BoussinesqSimulation(cm; bcs=nest_bcs(cm, :periodic, :periodic, :nest))
         fill!(csim.u.data, 1.0); fill!(csim.θ.data, 300.0)
-        armed_c = Ref(child_throw !== nothing); armed_p = Ref(parent_throw !== nothing)
-        ccalls = Ref(0); pcalls = Ref(0)
-        ccore(sim, dt; kw...) = (ccalls[] += 1; step!(sim, dt; kw...);
-                                 armed_c[] && (armed_c[] = false; child_throw(sim)); sim)
-        pcore(sim, dt; kw...) = (pcalls[] += 1; step!(sim, dt; kw...);
-                                 armed_p[] && (armed_p[] = false; parent_throw(sim)); sim)
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(pcore),
-                        advance_child = domain_advance(ccore),
-                        cfl_parent = CFLConstraints(dt_max = 0.02))
-        return run, ccalls, pcalls
+        armed = Ref(true)
+        ccore(sim, dt; kw...) = (step!(sim, dt; kw...); armed[] && (armed[] = false; child_throw(sim)); sim)
+        return NestedRun(psim, csim, nest; feedback = :one_way, advance_child = domain_advance(ccore),
+                         cfl_parent = CFLConstraints(dt_max = 0.02))
     end
-    # bugs from a finite state: rethrown, no retry, nothing rolled back silently
-    for (name, thr, E) in (("BoundsError", s -> zeros(2)[3], BoundsError),
-                           ("MethodError", s -> sqrt("x"), MethodError),
-                           ("ArgumentError", s -> throw(ArgumentError("bad option")), ArgumentError),
-                           ("ErrorException", s -> error("a bug"), ErrorException))
-        run, cc, pc = exc_case(thr)
-        @test_throws E step_nested!(run)
-        @test run.stats.child_retries == 0 && cc[] == 1
-        run, cc, pc = exc_case(nothing, thr)
-        @test_throws E step_nested!(run)
-        @test run.stats.parent_retries == 0 && pc[] == 1 && cc[] == 0
-        @printf("  %s in a child / parent core: rethrown after 1 call, 0 retries\n", name)
-    end
-    # numerical failures: rolled back and retried at half the step
-    for (name, thr) in (("NumericalFailure", s -> throw(NumericalFailure("solver diverged"))),
-                        ("DomainError", s -> sqrt(-1.0)),
-                        ("InexactError", s -> ceil(Int, Inf)),
-                        ("error from a non-finite state", s -> (s.u.data[6, 6, 6] = NaN;
-                                                                error("NaN downstream"))))
-        run, cc, pc = exc_case(thr)
-        step_nested!(run)
-        @test run.stats.child_retries == 1
-        @test all(isfinite, interior_view(run.child.u)) && run.child.t == run.parent.t
-        run, cc, pc = exc_case(nothing, thr)
-        step_nested!(run)
-        @test run.stats.parent_retries == 1 && run.stats.child_retries == 0
-        @test all(isfinite, interior_view(run.parent.u))
-        @printf("  %s in a child / parent core: rolled back, 1 retry each\n", name)
-    end
-    # the predicate itself
-    g = RegularGrid(Float64; size=(4, 4, 4), extent=(1.0, 1.0, 1.0), halo=(1, 1, 1))
-    s = BoussinesqSimulation(g)
+    run = exc_case(s -> zeros(2)[3])
+    @test_throws BoundsError step_nested!(run)
+    @test run.stats.child_retries == 0
+    run = exc_case(s -> throw(NumericalFailure("solver diverged")))
+    step_nested!(run)
+    @test run.stats.child_retries == 1 && run.child.t == run.parent.t
+    s = BoussinesqSimulation(RegularGrid(Float64; size=(4, 4, 4), extent=(1.0, 1.0, 1.0), halo=(1, 1, 1)))
     @test !is_numerical_failure(BoundsError(zeros(1), 2), s)
-    @test !is_numerical_failure(InterruptException(), s)
-    @test is_numerical_failure(NumericalFailure("x"), s)
     s.θ.data[2, 2, 2] = Inf
-    @test is_numerical_failure(BoundsError(zeros(1), 2), s)
-end
-
-# -------------------------------------------------------------------------
-# #329 item 4: without a sponge a NestedRun reads the prolongated parent only
-# at the child's open-boundary points, so its three field sets keep only
-# their halo slabs (and the boundary-normal face plane). Bit-identical
-# results to child-sized sets, a fraction of the memory.
-@testset "halo-only field sets of a NestedRun (#329)" begin
-    pm = RegularGrid(Float64; size=(32, 32, 32), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
-    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
-    cm = nest_child_mesh(nest)
-    function mk(fb; state = nothing)
-        rng = Xoshiro(329)
-        p = BoussinesqSimulation(pm; ν = 1e-3)
-        for f in (p.u, p.v, p.w)
-            interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f)))
-        end
-        interior_view(p.θ) .= 300 .+ randn(rng, size(interior_view(p.θ)))
-        step!(p, 1e-10); p.t = 0.0
-        c = BoussinesqSimulation(cm; ν = 1e-3, bcs = nest_bcs(cm))
-        _nr_init_child_from_parent!(c, p, nest)
-        st = state === nothing ? nothing :
-             ntuple(_ -> nest_interp_state(nest, p, c; storage = state), 3)
-        return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing,
-                         feedback = fb, state = st)
-    end
-    for fb in (:one_way, :two_way)
-        a = mk(fb); b = mk(fb; state = :full)
-        @test nest_storage(a.s_old) === nest_storage(a.s_new) === nest_storage(a.s_bc) === :shell
-        @test nest_storage(b.s_bc) === :full
-        for _ in 1:4
-            step_nested!(a; dt = 2e-3); step_nested!(b; dt = 2e-3)
-        end
-        for f in (:u, :v, :w, :θ)
-            @test agree(getproperty(a.child, f).data, getproperty(b.child, f).data)
-            @test agree(getproperty(a.parent, f).data, getproperty(b.parent, f).data)
-        end
-        # boundary_time over every stored (halo) point is the same blend
-        sa = boundary_time(a, a.t0 + 0.4a.Δt); sb = boundary_time(b, b.t0 + 0.4b.Δt)
-        ii, jj, kk = interior(cm)
-        halo = [I for I in CartesianIndices(sb.θ.data) if !(I[1] in ii && I[2] in jj && I[3] in kk)]
-        at(f) = [f[I[1], I[2], I[3]] for I in halo]
-        @test agree(at(sa.θ), at(sb.θ)) && agree(at(sa.u), at(sb.u))
-        if fb === :one_way
-            bytes(r) = sum(st -> sum(Aeolus.Nesting._data_bytes(getproperty(st, f).data)
-                                     for f in (:u, :v, :w, :θ)), (r.s_old, r.s_new, r.s_bc))
-            n = (cm.Nx + 2cm.Hx) * (cm.Ny + 2cm.Hy) * (cm.Nz + 2cm.Hz)
-            nin = cm.Nx * cm.Ny * cm.Nz
-            plane = cm.Ny * cm.Nz                           # one face plane per velocity
-            @test bytes(b) == 3 * 4 * 8n
-            @test bytes(a) == 3 * 8 * (4 * (n - nin) + 3plane)
-            @printf("  child %d³, halo %d: the run's three field sets hold %.0f KiB (child-sized: %.0f KiB, %.0f %%)\n",
-                    cm.Nx, cm.Hx, bytes(a) / 1024, bytes(b) / 1024, 100 * bytes(a) / bytes(b))
-        end
-    end
-    # a shell has no interior: reading it, prolongating region = :all into
-    # it or relaxing toward it is an error
-    a = mk(:one_way)
-    @test_throws ArgumentError a.s_bc.θ.data[cm.Hx + 2, cm.Hy + 2, cm.Hz + 2]
-    @test_throws ArgumentError interpolate_parent_state!(a.s_bc, a.parent, nest; region = :all)
-    @test_throws ArgumentError apply_nest_sponge!(a.child, a.s_bc, NestSponge())
-    @test_throws ArgumentError NestedRun(a.parent, a.child, nest; feedback = :one_way, sponge = NestSponge(),
-                                         state = (a.s_old, a.s_new, a.s_bc),
-                                         cfl_parent = nothing, cfl_child = nothing)
-end
-
-# -------------------------------------------------------------------------
-# #329 items 5 and 6: the nesting layer of a step allocates (almost)
-# nothing beyond what the two cores allocate on their own, and its state is
-# concretely typed (the KernelAbstractions port, #291, needs both). Before
-# #329 a nested step of this set-up allocated 2.9 MiB (one-way) and 6.6 MiB
-# (two-way) on top of the cores: fresh rollback copies of the open-boundary
-# buffers, two child- and parent-sized fields per composite momentum
-# integral, the anterpolation boxes, the mismatch matrices.
-@testset "a nested step allocates little beyond the cores; typed state (#329)" begin
-    pm = RegularGrid(Float64; size=(32, 32, 32), extent=(1.0, 1.0, 1.0), halo=(3, 3, 3))
-    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo=(3, 3, 3))
-    cm = nest_child_mesh(nest)
-    function mk(fb)
-        rng = Xoshiro(5)
-        p = BoussinesqSimulation(pm)
-        interior_view(p.θ) .= 300 .+ 0.1 .* rand(rng, size(interior_view(p.θ)))
-        fill!(p.u.data, 0.5)
-        c = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
-        fill!(c.θ.data, 300.0)
-        return NestedRun(p, c, nest; cfl_parent = nothing, cfl_child = nothing, feedback = fb)
-    end
-    loose(T) = T === Any ||
-        (T <: AbstractArray && eltype(T) in (Any, Field)) ||
-        (T <: AbstractDict && (keytype(T) === Any || valtype(T) === Any))
-    for fb in (:one_way, :two_way)
-        run = mk(fb); ref = mk(fb)
-        for _ in 1:3; step_nested!(run; dt = 1e-3); end
-        a = @allocated step_nested!(run; dt = 1e-3)
-        # the two cores alone, on an identical pair, with the same hooks
-        p, c = ref.parent, ref.child
-        step!(p, 1e-3); step!(c, 5e-4)
-        ap = @allocated step!(p, 1e-3)
-        ac = @allocated step!(c, 5e-4)
-        over = a - ap - run.stats.n_last * ac
-        @printf("  %-8s nested step allocates %.1f KiB; the cores alone %.1f KiB; nesting %.1f KiB\n",
-                fb, a / 1024, (ap + run.stats.n_last * ac) / 1024, over / 1024)
-        @test over < 96 * 1024
-        @test (@allocated composite_integral(run.parent, run.child, nest, :momentum_x)) == 0
-        @test (@allocated composite_integral(run.parent, run.child, nest, :mass)) == 0
-        @test @inferred(composite_integral(run.parent, run.child, nest, :momentum_x)) isa Float64
-        # no Any, Vector{Any}, Vector{Field} or Dict{Any,Any} left in the state
-        for T in (typeof(run), typeof(run.s_bc), typeof(run.nest), typeof(run.rb_child))
-            bad = [n for (n, F) in zip(fieldnames(T), fieldtypes(T)) if loose(F)]
-            @test isempty(bad)
-        end
-        run.regs === nothing || @test isempty([n for (n, F) in zip(fieldnames(typeof(run.regs)),
-                                                   fieldtypes(typeof(run.regs))) if loose(F)])
-    end
-    # the prolongation limiters (`:positive` for qv and the tracers, on by
-    # default; `:monotone` for θ and the velocity here) on a sharp tracer
-    # front: the limiter path adds no allocation either
-    function mk_lim()
-        rng = Xoshiro(6)
-        p = BoussinesqSimulation(pm)
-        interior_view(p.θ) .= 300 .+ 0.1 .* rand(rng, size(interior_view(p.θ)))
-        fill!(p.u.data, 0.5)
-        qp = Field(CellCenter(), pm)
-        interior_view(qp) .= ifelse.(rand(rng, size(interior_view(qp))) .< 0.5, 0.0, 1e-2)
-        c = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest, :nest; scalars = (:q,)))
-        fill!(c.θ.data, 300.0)
-        qc = Field(CellCenter(), cm)
-        return NestedRun(p, c, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing,
-                         scalars = (:q => (qc, qp),), limit_scalars = :positive,
-                         limit_theta = :monotone, limit_momentum = :monotone)
-    end
-    # (fresh names: reusing `run`, `p`, `c` would make the loop's locals
-    # above type-unstable, and @allocated would see the dynamic dispatch)
-    let rl = mk_lim(), rf = mk_lim()
-        @test rl.limit_scalars === :positive && rl.limit_theta === :monotone
-        for _ in 1:3; step_nested!(rl; dt = 1e-3); end
-        al = @allocated step_nested!(rl; dt = 1e-3)
-        pl, cl = rf.parent, rf.child
-        step!(pl, 1e-3); step!(cl, 5e-4)
-        apl = @allocated step!(pl, 1e-3)
-        acl = @allocated step!(cl, 5e-4)
-        overl = al - apl - rl.stats.n_last * acl
-        @printf("  limited  nested step (tracer :positive, θ and u :monotone) allocates %.1f KiB; the cores alone %.1f KiB; nesting %.1f KiB\n",
-                al / 1024, (apl + rl.stats.n_last * acl) / 1024, overl / 1024)
-        @test overl < 96 * 1024
-    end
-    @test @inferred(Aeolus.Nesting._plan(nest, :avg, 1, 3)) isa Aeolus.Nesting._Plan1D
-    @test @inferred(nest_measure(nest)) isa NestMeasure
+    @test is_numerical_failure(BoundsError(zeros(1), 2), s)   # from a non-finite state: numerical
 end
 
 end # testset

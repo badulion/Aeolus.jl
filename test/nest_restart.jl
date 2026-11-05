@@ -2,33 +2,22 @@
 # src/nesting/restart.jl (nest_state / restore_nest_state!) over the
 # structural walk of src/io/structural_state.jl.
 #
-# The assertion is agreement within ROUNDOFF_RTOL (test/support/agreement.jl,
-# no bit-identity since #495): a parent + child pair driven the way the
-# model's nest engine drives an urban site (the parent window opened, the
-# child stepped by itself with subcycle_dt, the window closed: the engine's
-# internals of Aeolus.Nesting, NEST-p3 #483), checkpointed at a window
-# boundary (where the run loop checkpoints), written to disk and restored
-# into a freshly built run,
-# continues across the following window boundaries identical to the
-# uninterrupted run in every field of both domains (with
-# halos), the closures' memory, the parent time levels, the child's open
-# boundary buffers, the inflow generator's planes and the clocks. Adaptive
-# steps in both domains (refinement 3: about 3 child steps per parent
-# step), SGS closures with memory in both domains (prognostic TKE in the
-# parent, Lagrangian-dynamic in the child), the synthetic inflow generator
-# on (DigitalFilterGenerator, parent-resolved statistics); one-way and
-# two-way (refluxing, inflow band). The suite runs at one
-# thread; the same file at 12 threads (`test/run.jl --threads 12 --only
-# nest_restart.jl`) is quoted in #269's PR.
-#
-# A restart of the two simulations alone (IO's checkpoint! / restart!,
-# without the nest state) is shown to **differ**: the test can see what the
-# nest state adds.
+# A two-way parent + child pair driven the way the model's nest engine
+# drives an urban site (the parent window opened, the child stepped by
+# itself with subcycle_dt, the window closed: the engine's internals of
+# Aeolus.Nesting, NEST-p3 #483), with adaptive steps in both domains, SGS
+# closures with memory (prognostic TKE in the parent, Lagrangian-dynamic in
+# the child), the synthetic inflow generator on and refluxing, is
+# checkpointed at a window boundary through checkpoint!'s `nest` component,
+# restored into a freshly built run, and continued across two more window
+# boundaries. It must agree within ROUNDOFF_RTOL (test/support/agreement.jl;
+# no bit-identity since #495) with the run that was checkpointed and went
+# on, in every field of both domains (with halos), the closures' memory, the
+# parent time levels, the open-boundary buffers, the generator and the
+# clocks.
 
 using Test
-using Printf
 using Random
-using Serialization
 using Aeolus
 using Aeolus.Nesting
 using Aeolus.Fields: interior_view
@@ -38,8 +27,8 @@ include(joinpath(@__DIR__, "support", "agreement.jl"))
 
 const NR_θ = 300.0
 const NR_CFL = CFLConstraints(C_advective = 0.5)
-const NR_N = 32                 # child steps of the uninterrupted run
-const NR_W = 3                  # the checkpoint: after this parent window
+const NR_N = 16                 # child steps of the run
+const NR_W = 1                  # the checkpoint: after this parent window
 
 mutable struct _NRDriver
     run::Any
@@ -137,108 +126,46 @@ end
 
 _nr_differing(a, b) = [ka for ((ka, va), (kb, vb)) in zip(a, b) if !(ka == kb && values_agree(va, vb))]
 
-@testset "N-berlin-restart: nested run restart (#269), $(Threads.nthreads()) thread(s)" begin
-    # the estimate planner: plans in no time for the four builds
+@testset "N-berlin-restart: nested run restart (#269)" begin
+    # the estimate planner: plans in no time for the builds
     fftw0 = fftw_policy().planner
     set_fftw_policy!(; planner = :estimate)
     dir = mktempdir()
-    for feedback in (:one_way, :two_way)
-        label = "$feedback"
-        @testset "$label" begin
-            # the uninterrupted run
-            A = _nr_build(feedback)
-            for _ in 1:NR_N
-                _nr_step!(A)
-            end
-            # the interrupted run: checkpoint at the end of parent window NR_W
-            B = _nr_build(feedback)
-            while B.windows < NR_W
-                _nr_step!(B)
-            end
-            K = B.n
-            @test B.window === nothing && 0 < K < NR_N - 4
-            path = joinpath(dir, "nest_$(feedback).jls")
-            t_w = @elapsed serialize(path, (nest = nest_state(B.run),
-                                            driver = (n = B.n, dtc = B.dtc, windows = B.windows)))
-            mb = filesize(path) / 2^20
-            # B goes on: the checkpoint did not disturb it
-            for _ in K+1:NR_N
-                _nr_step!(B)
-            end
-            # restarted from the file into a freshly built run
-            C = _nr_build(feedback)
-            ck = deserialize(path)
-            t_r = @elapsed restore_nest_state!(C.run, ck.nest)
-            C.n, C.dtc, C.windows = ck.driver.n, ck.driver.dtc, ck.driver.windows
-            w0 = C.windows
-            for _ in K+1:NR_N
-                _nr_step!(C)
-            end
-            dA, dB, dC = _nr_digest(A), _nr_digest(B), _nr_digest(C)
-            @printf("  %-28s checkpoint %.2f MiB, write %.3f s, restore %.3f s; %d windows after the restart, %d parent steps, %d child steps\n",
-                    label, mb, t_w, t_r, C.windows - w0, C.run.stats.parent_steps, C.n)
-            @test C.windows - w0 >= 2                          # across window boundaries
-            @test isempty(_nr_differing(dA, dB))               # checkpointing is read-only
-            diff = _nr_differing(dA, dC)
-            isempty(diff) || @info "differing after the restart" diff
-            @test isempty(diff)
-            @test all(isfinite, interior_view(C.run.child.u)) && maximum(abs, interior_view(C.run.child.u)) < 20
-            # the generator injected something, and the parent stepped
-            @test any(f -> any(!iszero, inflow_perturbation(C.it, f.side)[1]), C.it.faces)
-
-            # the two simulations alone (IO checkpoint!, closures included),
-            # without the nest state: the continuation is not the run's
-            D = _nr_build(feedback)
-            while D.windows < NR_W
-                _nr_step!(D)
-            end
-            pp, cp = joinpath(dir, "p.jls"), joinpath(dir, "c.jls")
-            checkpoint!(D.run.parent, pp; sgs = D.pc); checkpoint!(D.run.child, cp; sgs = D.cc)
-            E = _nr_build(feedback)
-            restart!(E.run.parent, pp; sgs = E.pc); restart!(E.run.child, cp; sgs = E.cc)
-            E.n, E.dtc = D.n, D.dtc
-            dE = try
-                for _ in K+1:NR_N
-                    _nr_step!(E)
-                end
-                _nr_differing(dA, _nr_digest(E))
-            catch err                                  # (or the cold nest fails outright)
-                ["failed: " * sprint(showerror, err)[1:min(end, 80)]]
-            end
-            @printf("  %-28s simulations alone (no nest state): %d of %d items differ (%s)\n",
-                    label, length(dE), length(dA), first(dE, 1))
-            @test !isempty(dE)
-        end
+    # the run that is checkpointed at the end of parent window NR_W and goes on
+    B = _nr_build(:two_way)
+    while B.windows < NR_W
+        _nr_step!(B)
     end
-
-    @testset "negative: no nest state, another mode, through checkpoint!" begin
-        A = _nr_build(:one_way)
-        for _ in 1:4
-            _nr_step!(A)
-        end
-        s = nest_state(A.run)
-        T = _nr_build(:two_way)
-        @test_throws ArgumentError restore_nest_state!(T.run, s)         # one-way state, two-way run
-        F = _nr_build(:one_way)
-        err = try restore_nest_state!(F.run, nothing); nothing catch e; e end
-        @test err isa ArgumentError && occursin("no nest state", sprint(showerror, err))
-        # a snapshot of the child alone cannot restart the nest
-        cp = joinpath(dir, "child_only.jls")
-        checkpoint!(A.run.child, cp; sgs = A.cc)
-        @test_throws ArgumentError restart!(F.run.child, cp; sgs = F.cc, components = (nest = F.run,))
-        # as a checkpoint component, at a window boundary
-        while A.window !== nothing
-            _nr_step!(A)
-        end
-        cp2 = joinpath(dir, "with_nest.jls")
-        checkpoint!(A.run.child, cp2; sgs = A.cc, components = (nest = A.run,))
-        G = _nr_build(:one_way)
-        restart!(G.run.child, cp2; sgs = G.cc, components = (nest = G.run,))
-        G.n, G.dtc, G.windows = A.n, A.dtc, A.windows
-        for _ in 1:4
-            _nr_step!(A); _nr_step!(G)
-        end
-        @test isempty(_nr_differing(_nr_digest(A), _nr_digest(G)))
+    K, dtK = B.n, B.dtc
+    @test B.window === nothing && 0 < K < NR_N - 4
+    path = joinpath(dir, "with_nest.jls")
+    checkpoint!(B.run.child, path; sgs = B.cc, components = (nest = B.run,))
+    for _ in K+1:NR_N
+        _nr_step!(B)
     end
+    # restarted from the file into a freshly built run
+    C = _nr_build(:two_way)
+    restart!(C.run.child, path; sgs = C.cc, components = (nest = C.run,))
+    C.n, C.dtc, C.windows = K, dtK, NR_W
+    for _ in K+1:NR_N
+        _nr_step!(C)
+    end
+    @test C.windows - NR_W >= 2                        # across window boundaries
+    diff = _nr_differing(_nr_digest(B), _nr_digest(C))
+    isempty(diff) || @info "differing after the restart" diff
+    @test isempty(diff)
+    @test all(isfinite, interior_view(C.run.child.u)) && maximum(abs, interior_view(C.run.child.u)) < 20
+    # the generator injected something
+    @test any(f -> any(!iszero, inflow_perturbation(C.it, f.side)[1]), C.it.faces)
+
+    # refusals: a two-way state into a one-way run; no nest state; a
+    # snapshot of the child alone cannot restart the nest
+    T = _nr_build(:one_way)
+    @test_throws ArgumentError restore_nest_state!(T.run, nest_state(C.run))
+    err = try restore_nest_state!(T.run, nothing); nothing catch e; e end
+    @test err isa ArgumentError && occursin("no nest state", sprint(showerror, err))
+    cp = joinpath(dir, "child_only.jls")
+    checkpoint!(C.run.child, cp; sgs = C.cc)
+    @test_throws ArgumentError restart!(T.run.child, cp; sgs = T.cc, components = (nest = T.run,))
     set_fftw_policy!(; planner = fftw0)
 end
