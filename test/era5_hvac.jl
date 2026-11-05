@@ -21,20 +21,7 @@ hvac_air_box(; T = 299.15, q = nothing, ach = 0.5, UA = 150.0) =
     BuildingZone(; volume = 300.0, floor_area = 100.0, window_area = 1.0, window_U = UA,
                  infiltration_ach = ach, T_air = T, q_air = q)
 
-# A massive 8 m × 6 m × 2.7 m box (brick walls, roof, insulated slab, a brick
-# partition), as in the #31 tests.
-function hvac_mass_box(; T = 297.15)
-    wl = [WallLayer(:brick, 0.24), WallLayer(:gypsum_plaster, 0.015)]
-    walls = EnvelopeElement(wl, 2 * (8 + 6) * 2.7 - 12; absorptance = 0.6, T = T, name = :walls)
-    roof = EnvelopeElement(example_roof_layers(), 48.0; h_inside = 10.0, absorptance = 0.7, T = T,
-                           name = :roof)
-    floor = EnvelopeElement([WallLayer(:xps_insulation, 0.1), WallLayer(:concrete, 0.15)], 48.0;
-                            exterior = :adiabatic, h_inside = 1 / 0.17, T = T, name = :floor)
-    im = [InternalMass([WallLayer(:brick, 0.12)], 20.0; sides = 2, T = T)]
-    return BuildingZone(; volume = 8 * 6 * 2.7, floor_area = 48.0, envelope = [walls, roof, floor],
-                        internal_mass = im, window_area = 12.0, window_U = 2.8,
-                        infiltration_ach = 0.5, T_air = T)
-end
+isdefined(@__MODULE__, :hvac_mass_box) || include(joinpath(@__DIR__, "support", "building_box.jl"))
 
 @testset "Era V — BuildingEnergy: HVAC demand and exhaust heat (#32)" begin
 
@@ -368,29 +355,7 @@ end
         @test amp_v > amp_f
     end
 
-    @testset "Resolved zone vs ISO 13790 5R1C ideal cooling need" begin
-        # Same construction, same hourly forcing, both with ideal loads; the
-        # 5R1C need follows ISO 13790 §C.4.2. Agreement bounds are envelopes
-        # set after measuring (as in #31), not physics expectations.
-        z = hvac_mass_box(T = 299.15)
-        iso = iso13790_zone(z)
-        h = IdealLoadsHVAC(T_heat = 293.15, T_cool = 299.15, curves = nothing)
-        Tout(t) = 302.15 + 6 * sin(2π * (t / 86400 - 0.375))
-        Qi(t) = 300.0 + (8 <= mod(t / 3600, 24) < 18 ? 500.0 : 0.0)
-        Qs(t) = max(0.0, 1500 * sin(2π * (t / 86400 - 0.25)))
-        E_res = zeros(5); E_iso = zeros(5); P_res = zeros(5); P_iso = zeros(5)
-        for k in 0:(5 * 24 - 1)
-            t = (k + 0.5) * 3600; d = k ÷ 24 + 1
-            _, hb = step_zone!(z, ZoneForcing(T_out = Tout(t), Q_internal = Qi(t), Q_solar = Qs(t)), 3600.0, h)
-            Φ, _, _, _ = iso13790_ideal_load!(iso, Tout(t), 3600.0; θ_heat = 293.15, θ_cool = 299.15,
-                                             Φ_int = Qi(t), Φ_sol = Qs(t))
-            E_res[d] += hb.Q_cooling_sensible * 3600; E_iso[d] += max(-Φ, 0.0) * 3600
-            P_res[d] = max(P_res[d], hb.Q_cooling_sensible); P_iso[d] = max(P_iso[d], -Φ)
-        end
-        r = E_res[5] / E_iso[5]
-        @printf("  day-5 cooling need: resolved %.2f kWh, ISO 13790 5R1C %.2f kWh (ratio %.3f); peak %.0f / %.0f W\n",
-                E_res[5] / 3.6e6, E_iso[5] / 3.6e6, r, P_res[5], P_iso[5])
-        @test 0.8 < r < 1.25
+    @testset "ISO 13790 §C.4.2 ideal load holds the 5R1C air node on the setpoint" begin
         # the ISO C.4.2 need holds the 5R1C air node exactly on the setpoint
         iso2 = iso13790_zone(hvac_mass_box(T = 299.15))
         Φ, θa, _, _ = iso13790_ideal_load!(iso2, 310.0, 3600.0; θ_heat = 293.15, θ_cool = 299.15,

@@ -42,6 +42,17 @@ end
 end
 
 @testset "Era V" begin
+    include("era5_land_surface_fluxnet.jl")   # Phase 47  land column vs FLUXNET/PLUMBER2 towers (#21)
+    include("era5_canopy_profiles.jl")        # Phase 48  canopy wind/temperature vs wind tunnel, CHATS, Hyytiälä (#25)
+    include("era5_building_energy.jl")        # Phase 50  resolved zone vs ISO 13790 5R1C, 150-day periodic regime (#31)
+    include("era5_hvac.jl")                   # Phase 50  resolved zone vs ISO 13790 5R1C ideal cooling need (#32)
+    include("era5_bestest.jl")                # Phase 50  ASHRAE 140-2020 BESTEST annual loads (#33)
+    include("era5_anthropogenic_heat.jl")     # Phase 49  Toulouse winter building energy vs CAPITOUL inventory (#29)
+    include("era5_snowpack.jl")               # Phase 51  bulk density vs Sturm et al. (2010) alpine climatology (#34)
+    include("era5_snow_metamorphism.jl")      # Phase 51  30-day albedo decay vs reference-scheme curves (#35)
+    include("era5_ice_thermodynamics.jl")     # Phase 51  MU71 vs BL99 reference code and Tables 1-2 (#37)
+    include("era5_ocean_mixed_layer.jl")      # Phase 52  warm layers vs ship near-surface thermometers (#38)
+    include("era5_sea_spray_coare.jl")        # Phase 52  diurnal warm layer vs TOGA COARE observations (#40)
     include("era5_urban_validation.jl")       # Phase 49  BUBBLE / CAPITOUL validation of the urban canopy (#30)
     include("era5_heterogeneous_surface.jl")  # Phase 53  resolved patchy-surface LES vs tiles (#43)
 end

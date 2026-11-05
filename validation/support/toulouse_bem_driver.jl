@@ -15,7 +15,7 @@
 # so only the central block, surrounded by the others, is used for per-area
 # numbers; every block is a zone, so its neighbours are heated too.
 #
-# Weather: PVGIS TMY for the Toulouse centre (test/data/pvgis_tmy_toulouse_hourly.csv;
+# Weather: PVGIS TMY for the Toulouse centre (validation/data/pvgis_tmy_toulouse_hourly.csv;
 # ERA5 + SARAH2), a typical year, not the 2004-05 campaign.
 #
 # Assumptions made here that Bueno et al. do not state (each is labelled in
@@ -35,7 +35,7 @@ using Aeolus.MoistThermodynamics
 const TLS_SITE = (latitude = 43.604, longitude = 1.444, elevation = 155.0, irr_offset_h = 0.1746)
 
 "Hourly columns of the PVGIS Toulouse TMY file (°C, %, W m⁻², m s⁻¹, Pa)."
-function tls_weather(path = joinpath(@__DIR__, "data", "pvgis_tmy_toulouse_hourly.csv"))
+function tls_weather(path = joinpath(@__DIR__, "..", "data", "pvgis_tmy_toulouse_hourly.csv"))
     rows = [split(l, ',') for l in eachline(path) if !startswith(l, '#') && !startswith(l, "month")]
     col(i, T = Float64) = [parse(T, r[i]) for r in rows]
     return (month = col(1, Int), day = col(2, Int), hour = col(3, Int), T2m = col(4), RH = col(5),

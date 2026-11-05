@@ -99,3 +99,13 @@ reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget w
 weight = "heavy"
 seconds = 71
 reason = "5 h CBL to ~2 km, Boussinesq vs anelastic (z_i, θ_ML); the anelastic core stays tested in era2_anelastic.jl, components_both_cores.jl"
+
+["era5_bestest.jl"]
+weight = "heavy"
+seconds = 109
+reason = "20 annual ASHRAE 140-2020 BESTEST runs vs the reference programs; BuildingEnergy stays tested in era5_building_energy.jl, era5_hvac.jl"
+
+["era5_land_surface_fluxnet.jl"]
+weight = "heavy"
+seconds = 82
+reason = "five FLUXNET/PLUMBER2 site-years vs measured fluxes; LandSurface stays tested in era5_land_surface.jl (incl. a Ball-Berry day)"

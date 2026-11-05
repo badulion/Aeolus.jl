@@ -1,9 +1,11 @@
 # Phase 50 — BuildingEnergy validation: annual heating and cooling demand
-# against ANSI/ASHRAE Standard 140-2020 (BESTEST) (#33).
+# against ANSI/ASHRAE Standard 140-2020 (BESTEST) (#33). The zone model is
+# unit-tested in test/era5_building_energy.jl, test/era5_hvac.jl and
+# test/era5_occupancy.jl.
 #
 # Reference: the example results of six whole-building programs (BSIMAC,
 # CSE, DeST, EnergyPlus, ESP-r, TRNSYS) in Informative Annex B8 of Standard
-# 140-2020, test/data/ashrae140_2020_annexB8_results.csv. These are
+# 140-2020, validation/data/ashrae140_2020_annexB8_results.csv. These are
 # program-to-program comparisons, not measurements: no instrumented-building
 # data is used here (see the PR / theory page).
 #
@@ -12,10 +14,10 @@
 # 240 (internal gains), 250 (exterior solar absorptance), 395 (solid
 # conduction), 400 (high-conductance wall elements, "20,27" thermostat), 410,
 # 420 (internal gains), 430 and 800 (high mass). Denver TMY3 weather,
-# test/data/ashrae140_725650TYCST_hourly.csv.
+# validation/data/ashrae140_725650TYCST_hourly.csv.
 
 using Test, Printf
-include("ashrae140_driver.jl")
+include(joinpath(@__DIR__, "support", "ashrae140_driver.jl"))
 
 function a140_reference(path = joinpath(@__DIR__, "data", "ashrae140_2020_annexB8_results.csv"))
     ref = Dict{Tuple{String, String}, NamedTuple{(:min, :max, :mean, :energyplus), NTuple{4, Float64}}}()

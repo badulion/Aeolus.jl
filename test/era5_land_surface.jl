@@ -231,13 +231,13 @@ end
 # ---------------------------------------------------------------------------
 
 function _ls_column(; ψ = -3.37, pft = :bdt_temperate, LAI = 4.0, SAI = 0.5,
-                    z_top = 20.0, T = 292.0, hydrology = true)
+                    z_top = 20.0, T = 292.0, hydrology = true, model = :medlyn)
     g = clm5_soil_grid(13)
     w = SoilWaterColumn(g, clapp_hornberger_texture(:loam); ψ = ψ,
                         ice_impedance = PowerLawIceImpedance())
     soil = SoilThermalColumn(w, clm_soil_thermal_properties(40.0, 20.0); T_soil = T,
                              hydrology = hydrology)
-    return VegetatedLandColumn(soil, pft_vegetation(pft); LAI = LAI, SAI = SAI, z_top = z_top)
+    return VegetatedLandColumn(soil, pft_vegetation(pft; model = model); LAI = LAI, SAI = SAI, z_top = z_top)
 end
 
 # Clear-sky day: sun up 6-18 h, peak 850 W m⁻², air 287-299 K, dry air.
@@ -301,6 +301,28 @@ end
     @test abs(water_res) < 1e-12
     @info "vegetated column, 4 days: worst |Rn−H−LE−G|, leaf residual (W m⁻²), SW residual, water residual (m)" worst_col worst_leaf worst_sw water_res
     @info "vegetated column, 4 days: transpiration, ground evaporation (kg m⁻²), converged steps" s.budget.transpiration s.budget.ground_evaporation nconv / nsteps
+end
+
+@testset "Vegetated column: Ball-Berry stomata, one day" begin
+    # The CLM4.5 Ball-Berry closure (model = :ball_berry) on the same
+    # column: one clear day closes the surface energy balance every step
+    # (the tolerance of the FLUXNET validation, validation/
+    # era5_land_surface_fluxnet.jl) and the canopy iteration converges.
+    s = _ls_column(model = :ball_berry)
+    @test s.veg.stomata isa BallBerryStomata
+    worst = 0.0
+    nconv = nsteps = 0
+    ΣLE = 0.0
+    _ls_run!(s, 1; record = (t, f, fl, d) -> begin
+        worst = max(worst, abs(fl.Rn - fl.H - fl.LE - fl.G))
+        nconv += d.converged; nsteps += 1
+        ΣLE += fl.LE
+    end)
+    @test worst < 1e-9
+    @test nconv == nsteps
+    @test s.budget.transpiration > 0          # the stomata opened in daylight
+    @test abs(s.budget.leaf_residual) < 1e-4
+    @info "Ball-Berry column, 1 day: worst |Rn−H−LE−G| (W m⁻²), converged steps, transpiration (kg m⁻²)" worst nconv / nsteps s.budget.transpiration
 end
 
 @testset "Vegetated column: limits and interface" begin

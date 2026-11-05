@@ -5,7 +5,9 @@
 #   * EOS-80 check values (Fofonoff & Millard 1983),
 #   * the NOAA-PSL COARE 3.6 reference implementation, run on its own
 #     test data set (ship observations), for the cool skin and the
-#     Fairall warm layer (test/data/coare36_warm_cool_subset.txt),
+#     Fairall warm layer (test/data/coare36_warm_cool_subset.txt)
+#     (the comparison of both warm layers with the ship's near-surface
+#     thermometers is a validation run: validation/era5_ocean_mixed_layer.jl),
 #   * analytic limits: Kato–Phillips wind deepening, convective
 #     encroachment, the Zeng–Beljaars steady state, exact energy
 #     conservation of the column.
@@ -19,6 +21,8 @@ using Aeolus.SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS, Surfa
 using Aeolus.MoistThermodynamics: ThermodynamicConstants
 
 const OML = Aeolus.OceanMixedLayer
+
+isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "support", "coare36_subset.jl"))
 
 @testset "Era V — OceanMixedLayer (#38)" begin
 
@@ -98,17 +102,8 @@ const OML = Aeolus.OceanMixedLayer
     # ---------------------------------------------------------------------
     # COARE 3.6 reference data (see the header of the data file)
     # ---------------------------------------------------------------------
-    function read_coare_subset(path)
-        lines = filter(l -> !startswith(l, "#") && !isempty(strip(l)), readlines(path))
-        hdr = Symbol.(split(lines[1]))
-        rows = [parse.(Float64, split(l)) for l in lines[2:end]]
-        return Dict(h => [r[i] for r in rows] for (i, h) in enumerate(hdr))
-    end
-    coare = read_coare_subset(joinpath(@__DIR__, "data", "coare36_warm_cool_subset.txt"))
+    coare = coare36_warm_cool_subset()
     ncoare = length(coare[:jd])
-    # COARE's latitude-dependent gravity (coare36vn_zrf_et.grv).
-    coare_grav(lat) = (x = sind(lat);
-                       9.7803267715 * (1 + 0.0052790414x^2 + 2.32718e-5x^4 + 1.262e-7x^6 + 7e-10x^8))
 
     @testset "Cool skin: reproduces COARE 3.6 on its ship test data" begin
         cs = CoolSkin()
@@ -265,55 +260,6 @@ const OML = Aeolus.OceanMixedLayer
         @test warm_layer_warming(z, 3.0) == warm_layer_warming(z)
         @test warm_layer_warming(z, 0.3) ≈ warm_layer_warming(z) * 0.1^0.3
         @info "Zeng–Beljaars steady state" ΔT_neutral ΔT_stable = warm_layer_warming(z) ΔT_4x_stress = ΔT_4x
-    end
-
-    @testset "Warm layers against the ship's near-surface thermometers" begin
-        # Observed T(0.05 m) - T(5.3 m) from the sea snake and the TSG, and
-        # the same difference from each scheme, driven by the COARE fluxes.
-        # Reported, not tuned: the observed signal is small (≤ 0.14 K)
-        # because the trade winds kept mixing the layer.
-        ld = floor.(Int, coare[:jd] .+ ((coare[:lon] .+ 7.5) ./ 15) ./ 24)
-        obs = coare[:tsnk] .- coare[:tsg]
-        night = coare[:sw_net] .== 0
-        offset = sort(obs[night])[cld(count(night), 2)]    # sensor offset: night median
-        function drive(wl)
-            out = zeros(ncoare); jtime = 0.0; started = false
-            for i in 1:ncoare
-                jd, lon = coare[:jd][i], coare[:lon][i]
-                chk = (lon + 7.5) / 15 + (jd - trunc(jd)) * 24
-                chk > 24 && (chk -= 24)
-                newtime = (chk - 24 * trunc(chk / 24)) * 3600
-                if i > 1 && (newtime <= 21600 || started)
-                    started = true
-                    if newtime < jtime
-                        wl isa FairallWarmLayer && reset_warm_layer!(wl)
-                    else
-                        tsg = coare[:tsg][i]
-                        lw_up = 0.97 * (5.67e-8 * (tsg - coare[:dT_skin][i-1] + 273.16)^4 - coare[:lw_dn][i])
-                        q_out = lw_up + coare[:hsb][i-1] + coare[:hlb][i-1] + coare[:hrain][i-1]
-                        step_warm_layer!(wl, coare[:sw_net][i], q_out, coare[:tau][i-1], newtime - jtime;
-                                         α = 2.1e-5 * (tsg + 3.2)^0.79, ρ_w = 1022.0, c_w = 4000.0,
-                                         g = coare_grav(coare[:lat][i]))
-                    end
-                end
-                out[i] = warm_layer_warming(wl, coare[:ztsg][i]) - warm_layer_warming(wl, 0.05)
-                jtime = newtime
-            end
-            out
-        end
-        F = drive(FairallWarmLayer()); Z = drive(ZengBeljaarsWarmLayer())
-        days = 19:25
-        mo = [maximum(obs[ld .== k]) - offset for k in days]
-        mF = [maximum(F[ld .== k]) for k in days]
-        mZ = [maximum(Z[ld .== k]) for k in days]
-        τday = [sum(coare[:tau][ld .== k]) / count(ld .== k) for k in days]
-        # The calmest day (25) has the largest observed warming, and both
-        # schemes put their largest warming on it too.
-        @test argmin(τday) == argmax(mo) == argmax(mF) == argmax(mZ)
-        day = .!night
-        rmsF = sqrt(sum(abs2, F[day] .- (obs[day] .- offset)) / count(day))
-        rmsZ = sqrt(sum(abs2, Z[day] .- (obs[day] .- offset)) / count(day))
-        @info "Warm layer vs ship observations, T(0.05 m) - T(5.3 m), days 19-25" sensor_offset_K = offset daily_max_obs = round.(mo; digits = 3) daily_max_Fairall = round.(mF; digits = 3) daily_max_ZengBeljaars = round.(mZ; digits = 3) daytime_rms_Fairall = rmsF daytime_rms_ZB = rmsZ
     end
 
     # ---------------------------------------------------------------------

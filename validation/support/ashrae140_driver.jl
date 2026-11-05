@@ -1,7 +1,7 @@
 # ASHRAE Standard 140-2020 §5.2 (BESTEST) driver for BuildingEnergy.
 #
 # This file is test infrastructure, not model code: it reads the Standard 140
-# Denver TMY3 weather (test/data/ashrae140_725650TYCST_hourly.csv), puts the
+# Denver TMY3 weather (validation/data/ashrae140_725650TYCST_hourly.csv), puts the
 # sun on the six faces of the 8 × 6 × 2.7 m test cell, builds the in-depth
 # test cases of §5.2.3 that have no transparent windows (220-250, 395-430,
 # 800) from the normative material tables, and runs them for a year with an
@@ -34,7 +34,7 @@ using Aeolus.SolarGeometry
 const A140_SITE = (latitude = 39.833, longitude = -104.6509, utc_offset = -7, ground_albedo = 0.2)
 
 "Hourly weather columns of the Standard 140 TMY3 file (°C, Pa, W m⁻², Wh m⁻²)."
-function a140_weather(path = joinpath(@__DIR__, "data", "ashrae140_725650TYCST_hourly.csv"))
+function a140_weather(path = joinpath(@__DIR__, "..", "data", "ashrae140_725650TYCST_hourly.csv"))
     rows = [split(l, ',') for l in eachline(path) if !startswith(l, '#') && !startswith(l, "month")]
     col(i, T = Float64) = [parse(T, r[i]) for r in rows]
     return (month = col(1, Int), day = col(2, Int), hour = col(3, Int), T_db = col(4),

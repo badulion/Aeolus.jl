@@ -1,7 +1,7 @@
-# Regenerate the PLUMBER2 subsets in this directory (not run by the test
-# suite; needs network access). Usage, from the repository root:
+# Regenerate the PLUMBER2 subsets in this directory (not run by the
+# validation suite; needs network access). Usage, from the repository root:
 #
-#     julia --project=. test/data/fluxnet/fetch_plumber2.jl
+#     julia --project=. validation/data/fluxnet/fetch_plumber2.jl
 #
 # Source: Ukkola, A. & Abramowitz, G. (2020). PLUMBER2: forcing and
 # evaluation datasets for a model intercomparison project for land surface
