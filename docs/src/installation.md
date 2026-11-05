@@ -32,14 +32,15 @@ Test extras: `Random`, `Statistics`.
 ## Running tests
 
 ```bash
-$ julia --project=. test/run.jl                          # fast tier, in parallel
-$ AEOLUS_TEST_TIER=full julia --project=. test/run.jl    # full tier, in parallel
-$ julia --project=. test/runtests.jl                     # serial (also Pkg.test())
+$ julia --project=. test/run.jl                          # the tests, in parallel
+$ julia --project=. test/runtests.jl                     # the tests, serially (also Pkg.test())
+$ julia --project=. validation/run.jl                    # the validation runs, in parallel
 ```
 
-The fast tier (the default) skips the validation mini-simulations; the
-full tier runs everything. See [Running the tests](testing.md) for the
-tiers, the runner's options and measured times.
+The tests check code; the validation runs are simulated cases (GABLS,
+channels, campaigns, benchmarks) that confirm the physics. See
+[Running the tests](testing.md) and [Validation runs](validation.md) for
+the runner's options and measured times.
 
 ## Running examples
 

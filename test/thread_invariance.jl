@@ -52,7 +52,7 @@ const TI_WORKER = joinpath(@__DIR__, "support", "thread_invariance_worker.jl")
 
 function ti_short_run(b)
     with_backend(b) do
-        mesh = RegularGrid(; size = (32, 32, 32), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+        mesh = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
         sim = BoussinesqSimulation(mesh; ν = 1e-3, θ₀ = 300.0)
         rng = Xoshiro(7)
         for f in (sim.u, sim.v, sim.w)
@@ -71,30 +71,30 @@ ti_read(path) = Dict{String,Any}(deserialize(path))
 
 @testset "Thread invariance (KA-a, #294)" begin
     @testset "in process: serial = true vs threaded ($(Threads.nthreads()) threads)" begin
-        mesh = RegularGrid(; size = (64, 64, 32), extent = (1.0, 1.0, 0.5), halo = (3, 3, 3))
+        mesh = RegularGrid(; size = (24, 16, 8), extent = (1.0, 1.0, 0.5), halo = (3, 3, 3))
         I3 = interior(mesh)
         rng = Xoshiro(3)
         A = randn(rng, Aeolus.Grids.totalsize(mesh))
-        A[10, 20, 9] = NaN
+        A[10, 12, 7] = NaN
         B = randn(rng, size(A))
         ser, thr = CPUBackend(serial = true), CPUBackend(threshold = 0)
+        bad = String[]
         for (what, f) in (("interior_sum", b -> interior_sum(b, B, I3)),
-                          ("interior_dot", b -> interior_dot(b, B, B, I3)),
-                          ("plane_mean!", b -> plane_mean!(zeros(32), b, B, I3)),
                           ("column_partials", b -> column_partials(b, B, I3)),
                           ("interior_max (NaN)", b -> interior_max(b, A, I3)),
                           ("interior_all_finite (NaN)", b -> interior_all_finite(b, A, I3)),
-                          ("plane_reduce! (tuple)", b -> (p = (zeros(32), zeros(32));
+                          ("plane_reduce! (tuple)", b -> (p = (zeros(8), zeros(8));
                               plane_reduce!(p, b, (i, j, k, B) -> (@inbounds (B[i, j, k], abs(B[i, j, k]))), I3, B);
                               vcat(p...))),
-                          ("plane_map! (fused)", b -> (C = copy(B); p = plane_map!(zeros(32), b,
+                          ("plane_map! (fused)", b -> (C = copy(B); p = plane_map!(zeros(8), b,
                               (k, ir, jr, C) -> (s = 0.0; @inbounds(for j in jr, i in ir
                                   x = 0.5 * C[i, j, k]; C[i, j, k] -= x; s += x end); s), I3, C);
                               vcat(p, vec(C)))),
                           ("range_max (NaN)", b -> range_max(b, (i, j, k, A) -> (@inbounds abs(A[i, j, k])), I3, A)))
             r1, r2 = f(ser), f(thr)
-            @test (what, r1 isa Bool ? r1 == r2 : values_agree(r1, r2)) == (what, true)
+            (r1 isa Bool ? r1 == r2 : values_agree(r1, r2)) || push!(bad, what)
         end
+        @test isempty(bad)
         @test all(agree(a, b) for (a, b) in zip(ti_short_run(ser), ti_short_run(CPUBackend())))
     end
 

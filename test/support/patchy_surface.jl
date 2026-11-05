@@ -20,14 +20,19 @@
 #   :parameter  — every column holds `parameter_aggregate(mosaic)`: one
 #                 surface with the area-mean skin temperature.
 #
-# This file only defines functions (prefix `patchy_`); it is included by
-# `test/era5_heterogeneous_surface.jl`. (A test harness that runs its own
+# This file only defines functions (prefix `patchy_`) and the coarse grid
+# `HS_GRID`; it is included by `test/era5_heterogeneous_surface.jl` (the
+# coupling's conservation and code-path identity) and
+# `validation/era5_heterogeneous_surface.jl` (the heterogeneous runs). (A test harness that runs its own
 # LES, moved from examples/validation/ by ONE-g, #456: the example becomes
 # a configuration once the model has a heterogeneous-surface component.)
 # =========================================================================
 
 using Aeolus
 using Aeolus.Fields: set!
+
+# Coarse version of the example's setup: 100 m cells, 3.2 × 1.6 × 1.6 km.
+const HS_GRID = (Nx = 32, Ny = 16, Nz = 16, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0)
 using Aeolus.SurfaceTiles
 using Aeolus.MoistThermodynamics: PhasePartition, air_density, heat_capacity_moist,
                                   dry_adiabatic_lapse_rate

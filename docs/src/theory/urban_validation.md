@@ -13,8 +13,8 @@ compared with published observations:
   walls and a roof.
 - **BUBBLE** (Basel, June 2002): the surface energy balance.
 
-The test is `test/era5_urban_validation.jl`. The case is built in
-`test/urban_validation_driver.jl`, which labels every input with its
+The test is `validation/era5_urban_validation.jl`. The case is built in
+`validation/support/urban_validation_driver.jl`, which labels every input with its
 source, or as an assumption.
 
 ## The offline canyon case
@@ -132,7 +132,7 @@ spin-up, then the 32-day periods of Moscicki & Voogt (2007):
 
 **Observations.** The observations are from Moscicki & Voogt (2007),
 Table 4.1, typed from the table text into
-`test/data/capitoul_surface_temperature_statistics.csv`. That table gives
+`validation/data/capitoul_surface_temperature_statistics.csv`. That table gives
 the observed and TEB-modelled mean and standard deviation over all three
 periods (about 4500 half-hourly samples), with TEB forced by the tower
 itself. The observed series are:
@@ -229,7 +229,7 @@ per unit plan area:
 - ``S↑ = S↓ - Σ A\,S_{abs}/A_{plan}`` and
   ``L↑ = L↓ - Σ A\,L_{net}/A_{plan}``.
 
-**Observations**, in `test/data/bubble_sperrstrasse_energy_balance.csv`:
+**Observations**, in `validation/data/bubble_sperrstrasse_energy_balance.csv`:
 
 - **Hamdi & Masson (2008), Table 4.** Means over the clear days 17, 18,
   19, 22, 23, 29 and 30 June 2002, with TEB's skill at the same site. The

@@ -5,7 +5,7 @@
 # Parent 3.2 × 3.2 × 1.6 km at Δ = 50 m (64 × 64 × 32, periodic sides),
 # child 1.2 × 1.2 km × 800 m on the ground at r = 3 (Δ = 16.7 m,
 # 72 × 72 × 48), surface heat flux 0.1 K m/s, no mean wind, Smagorinsky
-# SGS, adaptive steps (C = 0.5). The case is test/twoway_cbl_case.jl, the
+# SGS, adaptive steps (C = 0.5). The case is validation/support/twoway_cbl_case.jl, the
 # one the suite runs at Δ = 100 m for 2 h.
 #
 # Reports, for one-way and two-way feedback:
@@ -22,7 +22,7 @@
 #
 # Run: julia --project=. benchmarks/bench_twoway_cbl.jl [hours=4] [Δ=50]
 
-include(joinpath(@__DIR__, "..", "test", "twoway_cbl_case.jl"))
+include(joinpath(@__DIR__, "..", "validation", "support", "twoway_cbl_case.jl"))
 
 const HOURS = length(ARGS) >= 1 ? parse(Float64, ARGS[1]) : 4.0
 const DELTA = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 50.0

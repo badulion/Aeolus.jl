@@ -70,9 +70,7 @@ end
     @test rc == 0
     folder = only(readdir(root; join = true))
     @test occursin(folder, out) && occursin("completed", out)
-    for f in ("run.log", "run.toml", "diagnostics.csv")
-        @test isfile(joinpath(folder, f))
-    end
+    @test all(f -> isfile(joinpath(folder, f)), ("run.log", "run.toml", "diagnostics.csv"))
     @test countlines(joinpath(folder, "diagnostics.csv")) == 5          # header + 4 steps
     rec = read_run_toml(folder)
     @test rec["config"]["time"]["nsteps"] == 4
@@ -108,6 +106,7 @@ end
     @test read_run_toml(folder)["session"][1]["status"] == "failed"
     # usage and config errors write nothing
     root2 = mktempdir()
+    bad = Any[]
     for args in (["bogus"], ["run"], ["run", TGV, "--frobnicate", "--root", root2],
                  ["run", TGV, "--resume", "--root", root2],                  # not a run folder
                  ["run", folder, "--resume", "--set", "time.nsteps=8"],      # --set with --resume
@@ -118,9 +117,9 @@ end
                  ["options", "nocase", "grid"], ["options", "urban_parent", "grid"],   # gone (NEST-p3 #483)
                  ["preprocess", "static", TGV])                               # AeolusPrep.jl's since ONE-h (#457)
         rc, _, err = cli(args...)
-        @test rc == 2
-        @test !isempty(err)
+        (rc == 2 && !isempty(err)) || push!(bad, args)
     end
+    @test isempty(bad)
     @test isempty(readdir(root2))
     @test length(read_run_toml(folder)["session"]) == 1
     rc, out, _ = cli("help")
@@ -139,9 +138,7 @@ end
     @test rc == 0
     sch = Config.driver_schema()
     @test sch.name == "model"
-    for s in sch.sections, o in s.options          # every option of every section is listed
-        @test occursin("\n  $(o.key) : ", out)
-    end
+    @test all(occursin("\n  $(o.key) : ", out) for s in sch.sections for o in s.options)   # every option listed
     # [output] extended by the model; its default set (ONE-c): u, v, w, theta and the domain means
     @test occursin("variables : [string, …] = [\"u\", \"v\", \"w\", \"theta\", \"u_mean\"", out)
     # (the last legacy case, urban_parent, went with NEST-p3 #483: the nest parent is a domain)
@@ -166,11 +163,13 @@ end
     # the legacy cases are exactly the schemas registered by the package
     @test legacy_cases() == sort!(filter(n -> !(n in (Config.MODEL, "common")), registered_drivers()))
     @test !isdefined(Config, :DRIVER_FILES)
+    kept = String[]
     for gone in ("column", "dns_decay",                 # their files left examples/ (ONE-i #458)
                  "advection", "cbl", "inflow_fetch", "obstacle_channel", "shear_layer", "flat_plate", "sgs_decay")   # ONE-l #475
         e = try load_run_config(cli_file("[run]\nlegacy = \"$gone\"\n")); nothing; catch err; err; end
-        @test e isa ConfigError && occursin("unknown legacy case", sprint(showerror, e))
+        e isa ConfigError && occursin("unknown legacy case", sprint(showerror, e)) || push!(kept, gone)
     end
+    @test isempty(kept)
     # "common" has a schema but nothing runs it
     @test_throws ConfigError run_driver("common")
 end

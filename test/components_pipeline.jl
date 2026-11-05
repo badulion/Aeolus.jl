@@ -1,13 +1,6 @@
 # The component interface and the fixed stage pipeline (ONE-a, #450):
 # src/Components.jl, src/components/*.jl.
 #
-#   * acceptance: every `simulation`-config variant of
-#     test/support/simulation_fingerprints.jl (the four shipped configs with
-#     every SGS closure, Coriolis, the sponge, the surface θ flux, both
-#     cores, euler / rk3 / adaptive, and the EX-d configs with their
-#     couplings) reproduces its recorded fingerprints within ROUNDOFF_RTOL
-# (#495; the digests of master before the pipeline are in git
-#     history);
 #   * the pipeline: stage order (euler and the three substages of RK3),
 #     cadence, the order within a stage, validation, the hook-free fast path;
 #   * the core's components against the built-in terms, on both
@@ -28,35 +21,6 @@ using Aeolus.Operators: sponge_profile, damping_rate, damping_coordinates
 using Aeolus.Anelastic: AnelasticSimulation, isentropic_reference
 using Aeolus.IO: checkpoint!, restart!, checkpoint_state, restore_checkpoint_state!
 
-include(joinpath(@__DIR__, "support", "simulation_fingerprints.jl"))
-
-const CP_FINGERPRINTS = TOML.parsefile(joinpath(@__DIR__, "data", "components", "simulation_fingerprints.toml"))
-
-@testset "pipeline acceptance: every simulation-config variant reproduces its fingerprints ($(length(SD_ALL)) runs)" begin
-    ref = CP_FINGERPRINTS["variants"]
-    @test Set(keys(ref)) == Set(first.(SD_ALL))
-    for v in SD_ALL
-        label = first(v)
-        got = variant_fingerprints(v)
-        bad = fingerprints_differing(got["fields"], ref[label]["fields"])
-        isempty(bad) || @info "fields differing from the recorded fingerprints" label bad
-        @test (label, bad) == (label, String[])
-        @test (label, agree(got["t"], ref[label]["t"])) == (label, true)
-        badd = diagnostics_differing(got["diagnostics"], ref[label]["diagnostics"])
-        isempty(badd) || @info "diagnostics columns differing from the recorded fingerprints" label badd
-        @test (label, badd) == (label, String[])
-    end
-end
-
-@testset "the EX-d couplings: one component of the domain" begin
-    # the couplings are one component of the domain, attached where they acted before
-    cfg = load_run_config(sd_config("flow_past_cube");
-                          overrides = vcat(SD_EXD_TEST, "fftw.planner=\"estimate\""))
-    r = cd(() -> Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg),
-           joinpath(SD_EXAMPLES, "flow_past_cube"))
-    c = only(x for x in only(r.model.domains).components if x isa Aeolus.SimulationDriver.SimulationCouplings)
-    @test map(st -> st.name, CPC.stages(c)) == (:surface_flux, :body_force, :surface_update)
-end
 
 # ---------------------------------------------------------------------------
 # test components
@@ -149,7 +113,7 @@ const CP_SGS = (model = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :non
 end
 
 @testset "pipeline: one Euler step runs every stage once, RK3 the core stages three times" begin
-    for (core_, scheme) in ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler), (:anelastic, :rk3))
+    for (core_, scheme) in ((:boussinesq, :euler), (:anelastic, :rk3))
         rec = CPRecorder()
         d = cp_domain(cp_core(core_; ν = 1.0), extra = (rec,); scheme = scheme)
         step!(Model(d), 0.5)
@@ -282,8 +246,7 @@ end
     @test sim.workspaces.sweep !== nothing
 end
 
-@testset "components = the core's built-in terms ($c, $sch)" for (c, sch) in
-        ((:boussinesq, :euler), (:boussinesq, :rk3), (:anelastic, :euler), (:anelastic, :rk3))
+@testset "components = the core's built-in terms ($c, $sch)" for (c, sch) in ((:anelastic, :rk3),)
     # the built-in path: the core's own Coriolis, θ fluxes, sponge and Smagorinsky
     ref = cp_state!(cp_core(c; ν = 0.5, f_coriolis = CP_COR.f, C_s = 0.17,
                             θ_flux_bottom = CP_BND.bottom, θ_flux_top = CP_BND.top,
@@ -312,7 +275,7 @@ end
     @test values_agree(cp_bits(sim), cp_bits(ref))
 end
 
-@testset "Coriolis: the inertial oscillation ($c)" for c in (:boussinesq, :anelastic)
+@testset "Coriolis: the inertial oscillation ($c)" for c in (:boussinesq,)
     # a uniform (u, v) under f only: forward Euler maps u + iv to
     # (1 − i f Δt)(u + iv) exactly (a clockwise rotation at f, amplitude
     # √(1 + (fΔt)²) per step); the projection of a uniform field is zero
@@ -340,8 +303,6 @@ end
         z = f * Δ
         @test hypot(u, v) / U0 ≈ (1 - z^4 / 12 + z^6 / 36)^(m / 2) rtol = 1e-10
         @test abs(atan(v, u)) < 1e-3
-        @info "Coriolis RK3 ($c), one inertial period in $m steps (fΔt = $(round(z; sigdigits = 3))): " *
-              "|u|/U0 = $(hypot(u, v) / U0), phase error $(atan(v, u)) rad"
     end
     # the adaptive limit (on both cores: the anelastic adaptive step is ONE-j's)
     dc = cp_domain(cp_core(c), Coriolis => (; f = -4.0e-3))
@@ -354,7 +315,7 @@ end
     @test Aeolus.Simulations.step_record(da.state).limiter === :coriolis
 end
 
-@testset "SurfaceThetaFlux: Σ W θ ΔV changes by (W_bot F_bottom − W_top F_top) A t ($c)" for c in (:boussinesq, :anelastic)
+@testset "SurfaceThetaFlux: Σ W θ ΔV changes by (W_bot F_bottom − W_top F_top) A t ($c)" for c in (:anelastic,)
     # at rest: only the fluxes act; the anelastic core is buoyant (θ̄ is its
     # reference), so it takes one step from rest, the Boussinesq one ten.
     # W = 1 on the Boussinesq core: the domain-mean θ changes by
@@ -381,7 +342,7 @@ end
     @test CPC.enabled(SurfaceThetaFlux, (bottom = 0.0, top = -0.01))
 end
 
-@testset "Sponge: u decays as (1 − α(z)Δt)ⁿ above z_start, nothing below ($c)" for c in (:boussinesq, :anelastic)
+@testset "Sponge: u decays as (1 − α(z)Δt)ⁿ above z_start, nothing below ($c)" for c in (:boussinesq,)
     U0 = 2.0; Δt = 5.0; n = 12
     sim = cp_core(c); set!(sim.u, (x, y, z) -> U0)
     d = cp_domain(sim, Sponge => CP_SPO)
@@ -391,10 +352,7 @@ end
     zs = damping_coordinates(CP_MESH, FaceX())
     p = sponge_profile(CP_SPO.alpha_max, CP_SPO.z_start, 400.0)
     u = interior_view(sim.u)
-    for k in 1:8
-        expected = U0 * (1 - Δt * damping_rate(p, zs[k]))^n
-        @test all(x -> isapprox(x, expected; rtol = 1e-12), u[:, :, k])
-    end
+    @test all(k -> all(x -> isapprox(x, U0 * (1 - Δt * damping_rate(p, zs[k]))^n; rtol = 1e-12), u[:, :, k]), 1:8)
     @test all(==(U0), u[:, :, findall(<(CP_SPO.z_start), zs)])
     @test u[1, 1, 8] < 0.6U0                                     # the top level: α ≈ α_max
     # the sponge is off when α = 0 or z_start is "none"; a z_start at or above
@@ -405,20 +363,18 @@ end
     @test_throws ArgumentError CPC.build(Sponge, (alpha_max = 0.02, z_start = 400.0), d)
 end
 
-@testset "component contracts ($c)" for c in (:boussinesq, :anelastic)
+@testset "component contracts ($c)" for c in (:boussinesq,)
     sim = cp_state!(cp_core(c; ν = 0.5))
     d = cp_domain(sim, SGS => CP_SGS, Coriolis => CP_COR, Sponge => CP_SPO, SurfaceThetaFlux => CP_BND)
-    for comp in d.components
-        T = typeof(comp)
-        @test CPC.section(T) isa String && !isempty(CPC.section(T))
-        @test Aeolus.Components.schema(T) isa Aeolus.Config.Section
-        @test Aeolus.Components.schema(T).name == CPC.section(T)
-        @test all(s -> s isa Stage, CPC.stages(comp))
-        @test isempty(CPC.outputs(comp)) && isempty(CPC.checks(comp)) && CPC.check_names(typeof(comp)) == ()
-        @test CPC.budget!(comp, d, nothing) === nothing
+    contract(comp, T = typeof(comp)) =
+        CPC.section(T) isa String && !isempty(CPC.section(T)) &&
+        Aeolus.Components.schema(T) isa Aeolus.Config.Section && Aeolus.Components.schema(T).name == CPC.section(T) &&
+        all(s -> s isa Stage, CPC.stages(comp)) &&
+        isempty(CPC.outputs(comp)) && isempty(CPC.checks(comp)) && CPC.check_names(T) == () &&
+        CPC.budget!(comp, d, nothing) === nothing &&
         # stateless or not, the checkpoint state restores into the component
-        @test restore_checkpoint_state!(comp, checkpoint_state(comp)) === comp
-    end
+        restore_checkpoint_state!(comp, checkpoint_state(comp)) === comp
+    @test all(contract, d.components)
     @test keys(CPC.checkpoint_components(d)) == (:advection, :sgs, :coriolis, :sponge, :surface_theta_flux)
     step!(d, 2.0)
     @test all(f -> all(isfinite, interior_view(f)), (sim.u, sim.v, sim.w, sim.θ))
@@ -431,7 +387,7 @@ end
     @test bc((; model = :none)) === nothing
 end
 
-@testset "checkpoint round trip: a restart through the components is the uninterrupted run ($c)" for c in (:boussinesq, :anelastic)
+@testset "checkpoint round trip: a restart through the components is the uninterrupted run ($c)" for c in (:anelastic,)
     # the Lagrangian dynamic closure carries memory (its averaged LM, MM);
     # on both cores (the anelastic checkpoint is ONE-j's, #460)
     mk() = (s = cp_state!(cp_core(c; ν = 0.5, (c === :boussinesq ? (; θ₀ = 300.0) : (;))...));

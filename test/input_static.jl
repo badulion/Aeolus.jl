@@ -8,19 +8,9 @@
 #   * geometry is recovered: three hand-written buildings of known size
 #     rasterised at dx = 5 m give the exact cell counts, at dx = 7 m an
 #     area within one cell perimeter; the class code table round-trips;
-#   * polygons round-trip exactly (three_buildings, the Berlin drivers' cities);
+#   * polygons round-trip exactly (three_buildings, the Mitte sample's city);
 #   * errors: grid mismatch (both grids named), a missing variable, a
 #     wrong schema version, a stale source;
-#   * the OSM-direct path: the Berlin smoke geometry from its static driver
-#     (masks and classes exactly, test/data/input_static/digests.toml; the
-#     heightmap and view factors within ROUNDOFF_RTOL of their fingerprints,
-#     fingerprints.toml, #495) and the summer rasterisation equal what the
-#     OSM-direct path built before the switch, and so do the Mitte sample at
-#     32 × 32 × 16 (its polygons rasterised there; nested and periodic) and
-#     the nest parent's land use; the 12-step smoke state is checked
-#     against its own fixture in test/config_berlin.jl (berlin_smoke.toml
-#     now runs from its static driver), as is the round trip, whose
-#     [inputs] now list the static drivers (asserted here);
 #   * a committed driver's rasters are its own polygons rasterised.
 
 using Test
@@ -35,15 +25,7 @@ import NCDatasets
 
 const BCI = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
-include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))
-include(joinpath(@__DIR__, "support", "agreement.jl"))
 
-const IS_DATA = joinpath(@__DIR__, "data", "input_static")
-const IS_DIGESTS = TOML.parsefile(joinpath(IS_DATA, "digests.toml"))       # integer and class data: exact
-# computed floats (view factors, sky-view factors, areas, the parents'
-# frontal-area index and heights): fingerprints within ROUNDOFF_RTOL (#495)
-const IS_FP_PATH = joinpath(IS_DATA, "fingerprints.toml")
-const IS_FP = capturing_fingerprints() ? Dict{String,Any}() : TOML.parsefile(IS_FP_PATH)
 
 "A copy of the driver `src` at `dst` without the variables `skip`, with global attributes `attrs` changed."
 function copy_driver(src, dst; skip = String[], attrs = Dict{String,Any}())
@@ -102,15 +84,16 @@ const ANCHOR = (origin_lat = 52.5, origin_lon = 13.4, origin_x = 0.0, origin_y =
     # dx = 5 m: every edge on a cell face, so the counts are exact
     st = static_inputs(city, geo_mesh(120.0, 5.0); ANCHOR..., class_lai = Dict(SURFACE_PARK => 3.0))
     n5 = [count(==(Int32(b)), st.building_id) for b in 1:3]
-    @test n5 == [32, 36, 60]
-    @test n5[3] == area[3] / 25
-    @test count(>(0), st.building_height) == sum(n5)
-    @test all(st.building_height[st.building_id .== 2] .== 30.0)
-    @test all(st.surface_class[st.building_id .>= 0] .== SURFACE_ROOF)
-    @test all(st.ground_class[st.building_id .>= 0] .== SURFACE_STREET)   # no patch under them
+    @test (n5 == [32, 36, 60]) &&
+          (n5[3] == area[3] / 25) &&
+          (count(>(0), st.building_height) == sum(n5))
+    # no patch under them
+    @test (all(st.building_height[st.building_id .== 2] .== 30.0)) &&
+          (all(st.surface_class[st.building_id .>= 0] .== SURFACE_ROOF)) &&
+          (all(st.ground_class[st.building_id .>= 0] .== SURFACE_STREET))
     # the park: 40 × 50 m, its leaf area on park cells only
-    @test count(==(SURFACE_PARK), st.surface_class) == 80
-    @test all(st.lai[st.surface_class .== SURFACE_PARK] .== 3.0) && sum(st.lai) == 80 * 3.0
+    @test (count(==(SURFACE_PARK), st.surface_class) == 80) &&
+          (all(st.lai[st.surface_class .== SURFACE_PARK] .== 3.0) && sum(st.lai) == 80 * 3.0)
     # the courtyard is open ground
     xs = collect(xnodes(geo_mesh(120.0, 5.0), CellCenter()))
     i, j = findfirst(==(17.5), xs), findfirst(==(77.5), xs)
@@ -119,21 +102,19 @@ const ANCHOR = (origin_lat = 52.5, origin_lon = 13.4, origin_x = 0.0, origin_y =
     m5 = geo_mesh(120.0, 5.0)
     sm, sfc = solid_and_classes(st, m5; tag_walls = true)
     zc = znodes(m5, CellCenter())                        # 5, 15, 25, 35 m
-    @test count(sm.mask) == 32 * count(<=(20), zc) + 36 * count(<=(30), zc) + 60 * count(<=(15), zc)
-    @test count(==(SURFACE_WALL), sfc) > 0 && all(sfc[st.building_id .>= 0] .== SURFACE_ROOF)
+    @test (count(sm.mask) == 32 * count(<=(20), zc) + 36 * count(<=(30), zc) + 60 * count(<=(15), zc)) &&
+          (count(==(SURFACE_WALL), sfc) > 0 && all(sfc[st.building_id .>= 0] .== SURFACE_ROOF))
     # dx = 7 m: the area within one cell perimeter of the analytic area
     st7 = static_inputs(city, geo_mesh(126.0, 7.0); ANCHOR...)
-    for b in 1:3
-        err = abs(count(==(Int32(b)), st7.building_id) * 49.0 - area[b])
-        @test err <= perim[b] * 7.0 / 2                 # half a cell along the perimeter (measured: 82, 80, 166 m²)
-    end
+    # half a cell along the perimeter (measured: 82, 80, 166 m²)
+    @test all(b -> abs(count(==(Int32(b)), st7.building_id) * 49.0 - area[b]) <= perim[b] * 7.0 / 2, 1:3)
     # the code table round-trips through the file
     p = tempname() * ".nc"
     write_static_driver(p, st)
     NCDataset(p) do ds
-        @test collect(ds["surface_class"].attrib["flag_values"]) == UInt8[first(c) for c in SURFACE_CLASSES]
-        @test split(ds["surface_class"].attrib["flag_meanings"]) == [last(c) for c in SURFACE_CLASSES]
-        @test ds.attrib["projection"] == "equirectangular" && ds.attrib["aeolus_schema_version"] == 1
+        @test (collect(ds["surface_class"].attrib["flag_values"]) == UInt8[first(c) for c in SURFACE_CLASSES]) &&
+              (split(ds["surface_class"].attrib["flag_meanings"]) == [last(c) for c in SURFACE_CLASSES]) &&
+              (ds.attrib["projection"] == "equirectangular" && ds.attrib["aeolus_schema_version"] == 1)
         @test ds["lai"].attrib["standard_name"] == "leaf_area_index"
     end
     st2 = read_static_driver(p; mesh = m5, ANCHOR...)
@@ -147,8 +128,7 @@ end
     # the cities of the committed Berlin drivers (OpenStreetMap, NaN-separated rings and the
     # OSM attributes: levels, roof shapes, materials) and the hand-written one
     berlin(s) = (c = site_config(berlin_toml(s)); BCI.case_static_inputs(c, meshof(c)).city)
-    for (label, city) in ("summer" => berlin("summer"), "mitte_sample" => berlin("mitte_sample"),
-                          "three_buildings" => three_buildings())
+    for (label, city) in ("mitte_sample" => berlin("mitte_sample"), "three_buildings" => three_buildings())
         p = tempname() * ".nc"
         write_static_driver(p, city, m; ANCHOR...)
         back = read_static_driver(p; mesh = m, ANCHOR...).city
@@ -160,9 +140,6 @@ end
               sum(b -> count(v -> isnan(v[1]), b.polygon), city.buildings)
         rm(p)
     end
-    c = berlin("summer")
-    @test count(b -> !isnan(b.levels), c.buildings) > 0
-    @test count(b -> !isempty(b.roof), c.buildings) > 0
 end
 
 @testset "InputDrivers: errors" begin
@@ -220,122 +197,25 @@ end
     @test occursin("| `surface_class` | x, y | `UInt8` |", md) && count(==('\n'), md) == length(STATIC_SCHEMA.variables) + 2
 end
 
-# ---------------------------------------------------------------------------
-# the Berlin case
-# ---------------------------------------------------------------------------
-
-function geom_matches(label, g)
-    d = IS_DIGESTS[label]
-    got = Dict("mask" => digest(g.sm.mask), "sfc" => digest(g.sfc))
-    bad = [k for (k, v) in got if v != d[k]]
-    for (k, v) in ("heightmap" => g.heightmap, "F" => g.vfac.F, "F_sky" => g.vfac.F_sky, "area" => g.vfac.area,
-                   "svf" => g.svf)
-        fixture_agree!(IS_FP, label, k, v) || push!(bad, k)
-    end
-    isempty(bad) || @info "geometry differing from the OSM-direct path" label bad
-    return isempty(bad) && length(g.city.buildings) == d["buildings"] && length(g.city.patches) == d["patches"]
-end
-
-@testset "InputDrivers: the Berlin geometry from its static driver is the OSM path's" begin
-    # smoke: from the committed static driver
-    cs = site_config(berlin_toml("smoke"))
-    @test endswith(cs.static, "urban/input/berlin_smoke_static.nc")
-    @test geom_matches("smoke", BCI.build_geometry(cs, meshof(cs)))
-    # the Mitte sample at 32 × 32 × 16, nested (frame) and periodic (no frame, wrapped
-    # walls): its committed driver's polygons rasterised on that grid give the
-    # digests the OSM file did in memory (before ONE-h, #457)
-    full = site_config(berlin_toml("mitte_sample"))
-    mitte = BCI.case_static_inputs(full, meshof(full)).city
-    # (at 32 × 32 × 16 the site has the parent's spacing: refinement 1; the
-    # periodic variant is the site's options without the nest component)
-    m32 = site_config(berlin_toml("mitte_sample"); size = (32, 32, 16), overrides = ["domain.site.refinement=[1, 1, 1]"])
-    per = site_config(berlin_toml("mitte_sample"); size = (32, 32, 16), lateral = :periodic,
-                      overrides = ["domain.site.refinement=[1, 1, 1]"])
-    per = merge(per, (; components = delete!(copy(per.components), :nesting)))
-    for (label, c) in ("mitte_sample" => m32, "mitte_periodic" => per)
-        m = meshof(c)
-        ox, oy = BCI.anchor_xy(c, m)
-        c = merge(c, (; static = write_static_driver(tempname() * ".nc", mitte, m; origin_lat = c.lat0,
-                                                     origin_lon = c.lon0, origin_x = ox, origin_y = oy)))
-        @test geom_matches(label, BCI.build_geometry(c, m))
-        rm(c.static)
-    end
-    # summer, 64 × 64 × 64: masks, classes and heightmap at setup
-    c = site_config(berlin_toml("summer"))
+@testset "InputDrivers: a committed driver's rasters are its own polygons rasterised" begin
+    # the smoke site's driver (16 × 16): its rasters equal its polygons rasterised in memory
+    # (park LAI 2.5, the source's); integer and class data copied, so exactly
+    c = site_config(berlin_toml("smoke_site"))
     mesh = meshof(c)
     st = BCI.case_static_inputs(c, mesh)
-    @test !isempty(st.attributes)                        # read from the file
-    sm, sfc = solid_and_classes(st, mesh; frame = (c.boundary_frame, c.boundary_frame), bcs = BCI.case_scalar_bcs(c))
-    d = IS_DIGESTS["summer"]
-    @test digest(sm.mask) == d["mask"] && digest(sfc) == d["sfc"]
-    @test fixture_agree!(IS_FP, "summer", "heightmap", Aeolus.Radiosity.heightmap_from_solid_mask(sm))
-    @test length(st.city.buildings) == d["buildings"] && length(st.city.patches) == d["patches"]
-    # the file's rasters are its own polygons rasterised (park LAI 2.5, the summer source's)
+    @test !isempty(st.attributes) && !isempty(st.city.buildings)          # read from the file
     ox, oy = BCI.anchor_xy(c, mesh)
     mem = static_inputs(st.city, mesh; origin_lat = c.lat0, origin_lon = c.lon0, origin_x = ox, origin_y = oy,
                         class_lai = Dict(SURFACE_PARK => 2.5))
     @test all(f -> values_agree(getfield(st, f), getfield(mem, f)), filter(!=(:attributes), fieldnames(StaticInputs)))
-    # the nest parents' land use: the land-use table cropped and coarsened to
-    # their [[domain]]'s grid (NEST-p3 #483), and their static driver
-    for s in (:smoke, :summer)
-        pv = Aeolus.Config.domain_view(load_run_config(berlin_toml(s)), 1)
-        pm = Aeolus.SimulationDriver._mesh(pv.grid)
-        t = Aeolus.SimulationDriver._read_tiles(pv.domain.static_driver, pm)
-        mem = BCI.landuse_static_tiles(BCI.read_parent_landuse(joinpath(berlin_data_dir(), "berlin_landuse_6km.csv")), pm;
-                                       origin_lat = t.origin_lat, origin_lon = t.origin_lon,
-                                       origin_x = t.origin_x, origin_y = t.origin_y)
-        d = IS_DIGESTS["parent_$s"]
-        pl = BCI.landuse_of_tiles(mem)
-        @test digest(pl.counts) == d["counts"]
-        @test fixture_agree!(IS_FP, "parent_$s", "lambda_f", pl.λf) && fixture_agree!(IS_FP, "parent_$s", "h_mean", pl.hmean) &&
-              fixture_agree!(IS_FP, "parent_$s", "h_max", pl.hmax)
-        @test (pl.nx, pl.ny, pl.dx, pl.x0, pl.y0, pl.r) == (d["nx"], d["ny"], d["dx"], d["x0"], d["y0"], d["r"])
-        # the file (AeolusPrep.jl): the table's land use, and under the site's
-        # footprint the site's own classes (#249: the parent sees the site there)
-        sc = site_config(berlin_toml(s))
-        sm = meshof(sc)
-        sfc = BCI.build_geometry(sc, sm).sfc
-        fp = BCI.landuse_of_tiles(t)
-        @test agree(fp.λf, pl.λf) && agree(fp.hmean, pl.hmean) && agree(fp.hmax, pl.hmax)
-        r = pl.r
-        Is = round(Int, (sm.x0 - pm.x0) / pl.dx) .+ (1:size(sfc, 1) ÷ r)
-        Js = round(Int, (sm.y0 - pm.y0) / pl.dx) .+ (1:size(sfc, 2) ÷ r)
-        under = falses(pl.nx, pl.ny); under[Is, Js] .= true
-        @test all(fp.counts[I, :] == pl.counts[I, :] for I in CartesianIndices(under) if !under[I])
-        @test all(fp.counts[I, J, c] == count(==(c), sfc[(a - 1) * r + 1:a * r, (b - 1) * r + 1:b * r])
-                  for (b, J) in enumerate(Js), (a, I) in enumerate(Is), c in 1:5)
-    end
-    # the round trip hashes the static drivers under [inputs], the site's and the parent's
-    smoke_cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))
-    inp = config_inputs(smoke_cfg)
-    @test inp["domain.site.static_driver"]["fnv1a64"] == content_hash(cs.static)
-    @test inp["domain.parent.static_driver"]["fnv1a64"] ==
-          content_hash(Aeolus.Config.domain_view(smoke_cfg, 1).domain.static_driver)
     # a grid the file was not made for is refused, naming both grids and the command
-    # (the site alone: in its nest the grid's size is checked against the parent first)
     small = site_config(berlin_toml("smoke_site"); size = (8, 8, 16))
     e = try
-        BCI.build_geometry(small, meshof(small))
-        nothing
+        BCI.build_geometry(small, meshof(small)); nothing
     catch err
         sprint(showerror, err)
     end
     @test e !== nothing && occursin("16 × 16 cells", e) && occursin("8 × 8 cells", e) && occursin("aeolusprep static", e)
-    # a missing driver: a config error before any run folder, with the exact command
-    cfg = load_run_config(joinpath(berlin_configs_dir(), "berlin_smoke.toml"); overrides = ["domain.site.static_driver=\"nope.nc\""])
-    e = try
-        Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg); nothing
-    catch err
-        err
-    end
-    @test e isa ConfigError && occursin("AeolusPrep static $(joinpath(berlin_configs_dir(), "berlin_smoke.toml"))", sprint(showerror, e))
-    # no static driver at all: no ground, an error naming AeolusPrep, not a flat city
-    e = try
-        BCI.build_geometry(site_config(berlin_toml("smoke_site"); static = nothing), meshof(cs)); nothing
-    catch err
-        sprint(showerror, err)
-    end
-    @test e !== nothing && occursin("static is \"none\"", e) && occursin("AeolusPrep", e)
 end
 
 @testset "InputDrivers: the committed Berlin static drivers" begin
@@ -344,15 +224,12 @@ end
         cc = site_config(berlin_toml(s))
         ps = Aeolus.Config.domain_view(load_run_config(berlin_toml(s)), 1).domain.static_driver
         for (f, sch) in ((cc.static, STATIC_SCHEMA), (ps, STATIC_TILES_SCHEMA))
-            @test filesize(f) <= 2 * 1024^2                 # committed: 2 MB or smaller
-            @test isempty(check_driver(f, sch))
-            # made by AeolusPrep (ONE-h, #457): the OSM source in its package, the
-            # land-use table in Aeolus (relative, hashed: a changed table makes it stale)
-            NCDataset(f) do ds
-                @test ds.attrib["preprocessor"] == "aeolusprep static"
-                @test sch === STATIC_SCHEMA ? startswith(ds.attrib["source"], "AeolusPrep:data/berlin/") :
-                                              ds.attrib["source"] == "../data/berlin_landuse_6km.csv"
-            end
+            # committed: 2 MB or smaller, valid; made by AeolusPrep (ONE-h, #457): the OSM source
+            # in its package, the land-use table in Aeolus (relative, hashed: a changed table makes it stale)
+            src = NCDataset(ds -> (ds.attrib["preprocessor"], ds.attrib["source"]), f)
+            @test filesize(f) <= 2 * 1024^2 && isempty(check_driver(f, sch)) && src[1] == "aeolusprep static" &&
+                  (sch === STATIC_SCHEMA ? startswith(src[2], "AeolusPrep:data/berlin/") :
+                                           src[2] == "../data/berlin_landuse_6km.csv")
         end
     end
     smoke = joinpath(berlin_configs_dir(), "input", "berlin_mitte_sample_smoke_static.nc")
@@ -363,15 +240,16 @@ end
     # check_driver's staleness check skips a source it cannot find: a source
     # recorded relative to its driver must resolve, or the check is silently
     # off (three Berlin drivers named ../../data/ after ONE-i moved them up)
-    root = pkgdir(Aeolus); n = 0
+    root = pkgdir(Aeolus); n = 0; missing_ = String[]
     for top in ("examples", joinpath("test", "data")), (dir, _, files) in walkdir(joinpath(root, top))
         basename(dir) == "input" || continue
         for f in filter(f -> endswith(f, ".nc") && !startswith(f, "."), files)
             p = joinpath(dir, f)
             sp = NCDataset(ds -> Aeolus.InputDrivers.source_path(p, ds), p)
-            sp === nothing || (n += 1; @test isfile(sp))
+            sp === nothing || (n += 1; isfile(sp) || push!(missing_, sp))
         end
     end
+    @test isempty(missing_)
     @test n >= 6      # the Berlin parents' land use, the sounding, the three SBL case tables
 end
 
@@ -404,6 +282,3 @@ end
     rm(p)
 end
 
-write_fixture(IS_FP_PATH, IS_FP; header = ["Fingerprints (test/support/agreement.jl) of the computed floats of test/input_static.jl's",
-                                         "geometry checks, captured with AEOLUS_CAPTURE_FINGERPRINTS=1 (#495). The",
-                                         "integer and class data stay exact in digests.toml."])

@@ -36,17 +36,17 @@ cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktemp
 
 @testset "a bare config is a minimal dry LES" begin
     cfg = load_run_config(IOBuffer(""))
-    @test Config.config_case(cfg) == "model" && cfg.run.name == "aeolus"
-    @test cfg.grid.size == (32, 32, 32) && cfg.grid.extent == (3200.0, 3200.0, 1600.0)
-    @test cfg.core.model === :boussinesq && cfg.dynamics.theta0 == 300.0 && !cfg.dynamics.moisture
-    @test (cfg.boundaries.x, cfg.boundaries.y, cfg.boundaries.z) == (:periodic, :periodic, :free_slip)
-    @test cfg.sgs.model === :smagorinsky
+    @test (Config.config_case(cfg) == "model" && cfg.run.name == "aeolus") &&
+          (cfg.grid.size == (32, 32, 32) && cfg.grid.extent == (3200.0, 3200.0, 1600.0)) &&
+          (cfg.core.model === :boussinesq && cfg.dynamics.theta0 == 300.0 && !cfg.dynamics.moisture)
+    @test ((cfg.boundaries.x, cfg.boundaries.y, cfg.boundaries.z) == (:periodic, :periodic, :free_slip)) &&
+          (cfg.sgs.model === :smagorinsky)
     @test cfg.timestep.scheme === :rk3 && cfg.time.dt === :adaptive && cfg.time.cfl == 0.5 &&
           cfg.time.dt_max == 10.0 && cfg.time.duration == 3600.0 && cfg.time.nsteps === nothing
     # the components: the advection and the SGS, nothing else until a section enables it
-    @test enabled_components(cfg) == Any[CentredAdvection, SGS]
-    @test only(config_domains(cfg)).domain.id == "main"
-    @test cfg.domain.static_driver === nothing && cfg.domain.dynamic_driver === nothing
+    @test (enabled_components(cfg) == Any[CentredAdvection, SGS]) &&
+          (only(config_domains(cfg)).domain.id == "main") &&
+          (cfg.domain.static_driver === nothing && cfg.domain.dynamic_driver === nothing)
     # the default output set (ONE-c): u, v, w, theta and the time series of the domain means
     @test cfg.output.variables == ["u", "v", "w", "theta", "u_mean", "v_mean", "w_mean", "theta_mean"]
     # a fluid at rest stays at rest, at the adaptive limit dt_max
@@ -57,8 +57,8 @@ cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktemp
     @test sim.t == 60.0 && r.obj.stepper.step == 6                       # 6 steps of dt_max = 10 s
     @test all(iszero, interior_view(sim.u)) && all(iszero, interior_view(sim.v)) &&
           all(iszero, interior_view(sim.w))
-    @test all(==(300.0), interior_view(sim.θ))
-    @test only(r.obj.model.domains).scheme === :rk3
+    @test (all(==(300.0), interior_view(sim.θ))) &&
+          (only(r.obj.model.domains).scheme === :rk3)
     # perturbed: θ is conserved between the no-flux walls, the SGS acts, ∇·u at round-off
     pert = load_run_config(IOBuffer("""
         [initial]
@@ -69,30 +69,27 @@ cm_run(cfg) = run_config(cfg; root = mktempdir(), console = false, repo = mktemp
     θ0 = sum(interior_view(simulation(b).θ))
     r = cm_run(pert)
     sim = simulation(r.obj)
-    @test r.obj.stepper.step == 10 && sim.t == 100.0                     # slow motion: dt_max binds
-    @test isapprox(sum(interior_view(sim.θ)), θ0; rtol = 1e-12)
-    @test maximum(interior_view(sim.νt)) > 0
-    @test max_divergence(sim) < 1e-10
-    @test isfinite(kinetic_energy(sim)) && kinetic_energy(sim) > 0
-    @info "bare config, perturbed: 10 adaptive RK3 steps to t = $(round(sim.t; sigdigits = 4)) s, " *
-          "Σθ relative change $(sum(interior_view(sim.θ)) / θ0 - 1), max νt $(maximum(interior_view(sim.νt))) m²/s"
+    # slow motion: dt_max binds
+    @test (r.obj.stepper.step == 10 && sim.t == 100.0) &&
+          (isapprox(sum(interior_view(sim.θ)), θ0; rtol = 1e-12)) &&
+          (maximum(interior_view(sim.νt)) > 0)
+    @test (max_divergence(sim) < 1e-10) &&
+          (isfinite(kinetic_energy(sim)) && kinetic_energy(sim) > 0)
 end
 
 @testset "the component sections are generated from the component schemas" begin
     sch = driver_schema()
-    for C in COMPONENTS
+    opts(x) = [(o.key, o.default) for o in x.options]
+    function generated(C)
         s = only(x for x in sch.sections if x.name == CMC.section(C))
         own = CMC.schema(C)
-        if own.selector === nothing
-            @test isequal([(o.key, o.default) for o in s.options], [(o.key, o.default) for o in own.options])
-        else        # a slot section (ONE-m, #476): the component's providers are those of the merged section
-            for p in own.selector.providers
-                q = only(x for x in s.selector.providers if x.name == p.name && x.kinds == p.kinds)
-                @test isequal([(o.key, o.default) for o in q.options], [(o.key, o.default) for o in p.options])
-            end
-        end
-        @test is_domain_section(sch, s.name)
+        same = own.selector === nothing ? isequal(opts(s), opts(own)) :
+            # a slot section (ONE-m, #476): the component's providers are those of the merged section
+            all(p -> isequal(opts(only(x for x in s.selector.providers if x.name == p.name && x.kinds == p.kinds)), opts(p)),
+                own.selector.providers)
+        return same && is_domain_section(sch, s.name)
     end
+    @test all(generated, COMPONENTS)
     @test [CMC.section(C) for C in COMPONENTS] == ["advection", "sgs", "coriolis", "sponge", "surface_theta_flux",
                                                    "large_scale_forcing", "surface", "towers",   # ONE-g #456, ONE-m #476
                                                    "inflow_statistics", "kinematic_flow", "fringe",    # ONE-l #475
@@ -135,45 +132,44 @@ const CM_TWO = """
     p = cm_file(CM_TWO)
     cfg = load_run_config(p)
     ds = config_domains(cfg)
-    @test [d.domain.id for d in ds] == ["outer", "inner"]
-    @test [d.sgs.model for d in ds] == [:vreman, :amd]                      # each block its own
-    @test [d.grid.size for d in ds] == [(8, 8, 8), (8, 8, 8)]
-    @test [d.grid.extent for d in ds] == [(3200.0, 3200.0, 1600.0), (400.0, 400.0, 200.0)]
-    @test config_origin(cfg, "domain[2].sgs.model") == p && config_origin(cfg, "domain[1].grid.extent") == "default"
+    # each block its own
+    @test ([d.domain.id for d in ds] == ["outer", "inner"]) &&
+          ([d.sgs.model for d in ds] == [:vreman, :amd]) &&
+          ([d.grid.size for d in ds] == [(8, 8, 8), (8, 8, 8)])
+    @test ([d.grid.extent for d in ds] == [(3200.0, 3200.0, 1600.0), (400.0, 400.0, 200.0)]) &&
+          (config_origin(cfg, "domain[2].sgs.model") == p && config_origin(cfg, "domain[1].grid.extent") == "default")
     # per-domain sections are reached through the domains
     @test_throws ArgumentError cfg.grid
     @test domain_view(cfg, 2).sgs.model === :amd && domain_view(cfg, 2).time == cfg.time
     # --set addresses one domain, by its id or its number (NEST-p3)
     c2 = load_run_config(p; overrides = ["domain.inner.sgs.model=\"sigma\"", "domain.1.grid.halo=[3, 3, 3]"])
-    @test [d.sgs.model for d in config_domains(c2)] == [:vreman, :sigma]
-    @test [d.grid.halo for d in config_domains(c2)] == [(3, 3, 3), (2, 2, 2)]
-    @test config_origin(c2, "domain[2].sgs.model") == "--set"
+    @test ([d.sgs.model for d in config_domains(c2)] == [:vreman, :sigma]) &&
+          ([d.grid.halo for d in config_domains(c2)] == [(3, 3, 3), (2, 2, 2)]) &&
+          (config_origin(c2, "domain[2].sgs.model") == "--set")
     # a run-level override of a per-domain section is refused, as a run-level section is
     e = cm_error(() -> load_run_config(p; overrides = ["sgs.model=\"sigma\""]))
     @test only(e.problems).key == "sgs" && occursin("[domain.sgs]", only(e.problems).message)
     e = cm_error(() -> load_run_config(p; overrides = ["domain.middle.sgs.model=\"sigma\""]))
-    @test occursin("no [[domain]] block \"middle\"", only(e.problems).message)
-    @test [d.sgs.model for d in config_domains(with(cfg, "sgs.model" => :none))] == [:none, :none]
+    @test (occursin("no [[domain]] block \"middle\"", only(e.problems).message)) &&
+          ([d.sgs.model for d in config_domains(with(cfg, "sgs.model" => :none))] == [:none, :none])
     # the resolved config lists every component's options, per domain, and reloads to itself
     t = config_text(cfg)
-    @test count("\n[[domain]]\n", t) == 2
-    for s in DOMAIN_SECTIONS
-        s == "domain" && continue
-        @test count("\n[domain.$s]\n", t) == 2
-    end
+    @test (count("\n[[domain]]\n", t) == 2) &&
+          (all(s -> s == "domain" || count("\n[domain.$s]\n", t) == 2, DOMAIN_SECTIONS))
     @test occursin("\n[[domain]]\nfeedback = \"two_way\"\nid = \"inner\"\norigin = [1200.0, 1200.0]\nparent = \"outer\"\n" *
                    "refinement = [8, 8, 8]\nstatic_driver = \"none\"\n", replace(t, "dynamic_driver = \"none\"\n" => ""))
     @test !occursin("\n[sgs]\n", t) && !occursin("\n[grid]\n", t)            # only per domain
     c3 = load_run_config(IOBuffer(t))
-    @test c3 == cfg && config_text(c3) == t
-    @test [d.sgs.model for d in config_domains(c3)] == [:vreman, :amd]
+    @test (c3 == cfg && config_text(c3) == t) &&
+          ([d.sgs.model for d in config_domains(c3)] == [:vreman, :amd])
     # a run record keeps it: replayed from run.toml, the same config
     rf = start_run(cfg; root = mktempdir(), repo = mktempdir(), console = false); finish_run!(rf)
     @test load_run_config(rf.path) == cfg
     # several domains are a nest (ONE-f, #455; test/model_nesting.jl has the rest)
     m = Config.build(SimulationDriverType(), cfg).model
-    @test [d.id for d in m.domains] == ["outer", "inner"] && m.nest isa CMC.ModelNest
-    @test only(m.nest.links).feedback === :two_way                           # the self-nesting default
+    # the self-nesting default
+    @test ([d.id for d in m.domains] == ["outer", "inner"] && m.nest isa CMC.ModelNest) &&
+          (only(m.nest.links).feedback === :two_way)
 end
 
 @testset "[[domain]]: one block is the top-level form" begin

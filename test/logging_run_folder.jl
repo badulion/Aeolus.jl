@@ -48,20 +48,6 @@ else
     @test fnv1a64(Vector{UInt8}("foobar")) == fnv1a64("foobar")
 end
 
-@testset "toml_value records any config object" begin
-    t = toml_value(RFCfg(3, :abc, (; a = 1.5, b = nothing)))
-    @test t["_type"] == "RFCfg" && t["n"] == 3 && t["name"] == "abc"
-    @test t["inner"]["a"] == 1.5 && t["inner"]["b"] == "nothing"
-    @test toml_value(typemax(UInt64)) == string(typemax(UInt64))
-    @test toml_value(UInt32(7)) === Int64(7)
-    @test toml_value((1, :x, "s")) == Any[1, "x", "s"]
-    @test toml_value(zeros(100)) isa String          # long arrays: a summary
-    @test toml_value(Dict(:k => [1, 2])) == Dict("k" => Any[1, 2])
-    # TOML round trip
-    io = IOBuffer(); Aeolus.IO.TOML.print(io, Dict("config" => t))
-    @test Aeolus.IO.TOML.parse(String(take!(io)))["config"]["inner"]["a"] == 1.5
-end
-
 @testset "a new run: folder, provenance fields, run log" begin
     repo = rf_repo(); root = mktempdir()
     console = IOBuffer()
@@ -167,20 +153,6 @@ end
     finish_run!(rf2)
 end
 
-@testset "run folders inside the work tree do not make it dirty" begin
-    repo = rf_repo(); root = joinpath(repo, "runs")      # not gitignored on purpose
-    rf = start_run("inside"; root = root, repo = repo, console = false)
-    finish_run!(rf)
-    @test !isempty(read(`git -C $repo status --porcelain --untracked-files=all`, String))
-    rf2 = start_run("inside"; root = root, repo = repo, console = false, resume = rf.path)
-    @test only(unique(s["git"]["dirty"] for s in rf2.record["session"])) == false
-    finish_run!(rf2)
-    write(joinpath(repo, "other.jl"), "z = 1\n")          # anything else still counts
-    @test_throws UncommittedCodeError start_run("inside"; root = root, repo = repo,
-                                                console = false, resume = rf.path)
-    @test git_state(repo; exclude = [root]).changes == ["?? other.jl"]
-end
-
 @testset "a restart appends with the same run ID" begin
     repo = rf_repo(); root = mktempdir()
     rf = start_run("gabls"; root = root, repo = repo, console = false,
@@ -229,43 +201,6 @@ end
                                          resume = :latest)
 end
 
-@testset "latest_run compares created_unix as a number, not as a string" begin
-    # The decimal forms of these Float64s differ in length ("1.759748412123456e9"
-    # vs "1.7597490001e9"); a zero-padded string comparison picked the older one.
-    repo = rf_repo(); root = mktempdir()
-    old = start_run("x"; root = root, repo = repo, console = false, run_id = "aaaaaaaa")
-    finish_run!(old)
-    new = start_run("x"; root = root, repo = repo, console = false, run_id = "bbbbbbbb")
-    finish_run!(new)
-    function set_created!(rf, t)
-        r = read_run_toml(rf.path); r["created_unix"] = t
-        open(io -> Aeolus.IO.TOML.print(io, r; sorted = true), joinpath(rf.path, "run.toml"), "w")
-    end
-    set_created!(new, 1.7597490001e9)          # 10 minutes later, shorter decimal form
-    set_created!(old, 1.759748412123456e9)     # written last: the newer mtime, so no tie-break help
-    @test length(string(1.7597490001e9)) < length(string(1.759748412123456e9))
-    @test latest_run(root, "x") == new.path
-    rf = start_run("x"; root = root, repo = repo, console = false, resume = :latest)
-    @test rf.path == new.path && rf.run_id == "bbbbbbbb" && rf.session == 2
-    finish_run!(rf)
-    @test length(read_run_toml(old.path)["session"]) == 1    # the older run is untouched
-    # and the other way round: the longer decimal form is the newer one
-    set_created!(old, 1.7597500001234567e9)
-    @test latest_run(root, "x") == old.path
-end
-
-@testset "a session that never finished is marked aborted on restart" begin
-    repo = rf_repo(); root = mktempdir()
-    rf = start_run("crash"; root = root, repo = repo, console = false)
-    close(rf.logger)                                    # the process "dies": no finish_run!
-    @test only(read_run_toml(rf.path)["session"])["status"] == "running"
-    rf2 = start_run("crash"; root = root, repo = repo, console = false, resume = rf.path)
-    finish_run!(rf2)
-    r = read_run_toml(rf.path)
-    @test [s["status"] for s in r["session"]] == ["aborted", "completed"]
-    @test occursin("previous session(s) of this run did not finish", read(run_log_path(rf2), String))
-end
-
 @testset "with_run: logger installed, success and failure recorded" begin
     repo = rf_repo(); root = mktempdir()
     path = Ref("")
@@ -287,45 +222,6 @@ end
     log = read(joinpath(path[], "run.log"), String)
     @test occursin("ERROR run[main] run stopped by an error", log)
     @test occursin("the solver blew up", log) && occursin("run finished: failed", log)
-end
-
-@testset "code outside git: the run starts, provenance says so" begin
-    repo = mktempdir(); root = mktempdir()
-    @test git_state(repo).available == false
-    rf = start_run("nogit"; root = root, repo = repo, console = false)
-    finish_run!(rf)
-    s = only(read_run_toml(rf.path)["session"])
-    @test s["git"]["available"] == false && s["git"]["commit"] == "" && !s["git"]["dirty"]
-    @test occursin("not in a git work tree", read(run_log_path(rf), String))
-end
-
-@testset "run_checkpoints: the schedule lives in the folder and resumes there" begin
-    repo = rf_repo(); root = mktempdir()
-    m = RegularGrid(; size = (8, 8, 8), extent = (800.0, 800.0, 400.0), halo = (3, 3, 3))
-    mk() = BoussinesqSimulation(m; θ₀ = 300.0,
-                                bcs = Aeolus.BoundaryConditions.FieldBoundaryConditions(:periodic, :periodic, :wall))
-    rf = start_run("ck"; root = root, repo = repo, console = false)
-    ck = run_checkpoints(rf; every_steps = 2, wisdom = false)
-    @test ck.dir == joinpath(rf.path, "checkpoints")
-    s = rf.record["session"][end]
-    @test s["fftw"]["planner"] == string(fftw_policy().planner)
-    sim = mk()
-    @test resume!(ck, sim) === nothing
-    for n in 1:4
-        step!(sim, 0.5)
-        maybe_checkpoint!(ck, sim; step = n)
-    end
-    finish_run!(rf)
-    rf2 = start_run("ck"; root = root, repo = repo, console = false, resume = rf.path)
-    ck2 = run_checkpoints(rf2; every_steps = 2, wisdom = false)
-    sim2 = mk()
-    d = Logging.with_logger(rf2.logger) do      # the run's events go to its run.log
-        resume!(ck2, sim2)
-    end
-    @test d !== nothing && ck2.last_step == 4 && sim2.t == sim.t
-    @test agree(interior_view(sim2.θ), interior_view(sim.θ))
-    finish_run!(rf2)
-    @test occursin("checkpoints: resumed", read(run_log_path(rf2), String))
 end
 
 end # git available

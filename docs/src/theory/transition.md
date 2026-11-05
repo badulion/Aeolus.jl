@@ -91,7 +91,7 @@ silently fall back to free slip:
 
 All runs below are on `(4, 4, Nz)` grids with the full 3-D
 fractional-step driver (`step!`, ``Δt = 0.3\,Δz^2/ν``), in
-`test/era6_walls.jl`.
+`test/era6_walls.jl` (removed).
 
 | Flow | Reference | Measured |
 | :--- | :--- | :--- |
@@ -150,7 +150,7 @@ parameter ``J``. For this profile the neutral curve is
 parallel flow with ``Ri_g ≥ 1/4`` everywhere is linearly stable (Miles
 1961; Howard 1961).
 
-`test/era6_transition_kh.jl` checks these results with the Boussinesq
+`validation/era6_transition_kh.jl` checks these results with the Boussinesq
 core in 2-D (``N_y = 1``), with free-slip walls at ``z = ±L_z/2``
 (``≥ 8.9δ``) and ``Re = Uδ/ν = 1000``. The seed is
 ``w' = 10^{-4} U \sin(αx)\,e^{-z^2/δ^2}``. The base state is held against
@@ -527,7 +527,7 @@ top, the prescribed bottom θ flux of the core, molecular ``Pr = 0.71``.
 
 ### Laminar stratified Poiseuille flow (exact)
 
-`test/era6_relaminarisation.jl`, test 1. At ``Re_τ = 10`` the steady
+`validation/era6_relaminarisation.jl`, test 1. At ``Re_τ = 10`` the steady
 closed-channel Poiseuille flow with the stable conduction profile
 (``Ri_τ = 50``) gives ``ν_t ≡ 0`` (exactly, ``ν_h``, ``ν_v`` and
 ``κ_v``) with σ, σ + correction (isotropic and anisotropic length
@@ -926,7 +926,7 @@ per `length_scale` above ``z_i``. The lengths follow PALM (Kadasch et al.
 is a numerical choice, not a similarity law. The blend has no
 stable-stratification correction.
 
-Measured (`test/era6_inflow_statistics.jl`):
+Measured (`test/era6_inflow_statistics.jl` (removed)):
 
 | test | measured | asserted |
 | :-- | :-- | :-- |
@@ -1172,7 +1172,7 @@ The pressure-gradient bias is the least-squares slope of the time- and
 plane-mean pressure over ``1δ ≤ x ≤ 4δ``, divided by ``G``: the extra
 drive the developing flow needs.
 
-**Measured.** CI case (`test/era6_inflow_fetch.jl`, 5δ child with open
+**Measured.** Validation case (`validation/era6_inflow_fetch.jl`, 5δ child with open
 lateral faces, averaged ``5δ/u_*``, about 2 min for the precursor and
 the three children), ratios to the precursor over the span centre, one
 realisation (precursor seed 1):
@@ -1220,8 +1220,8 @@ CI case asserts.
 
 The former example (the `inflow_fetch` run type, dropped with the channel
 cases in ONE-l #475: it ran on the periodic, pressure-driven half channel;
-its harness is the test fixture `test/fixtures/inflow_fetch.jl` of
-`test/era6_inflow_fetch.jl`; 15δ child, spanwise periodic, averaged
+its harness is the fixture `validation/fixtures/inflow_fetch.jl` of
+`validation/era6_inflow_fetch.jl`; 15δ child, spanwise periodic, averaged
 ``10δ/u_*``, about 11 min) gave these ratios to the child-grid reference
 and development lengths (δ) to 10 % / 20 %:
 
@@ -1307,12 +1307,12 @@ therefore ≈ 10δ (10–14δ), not the 3δ placeholder**, and that number is
 adopted here. It agrees with the turnover estimate: at
 ``U_b/u_τ ≈ 18–20``, one turnover near ``0.1–0.5δ`` is 5–10δ.
 
-**CI: the physical fetch** (`test/era6_inflow_fetch.jl`, testset
+**Validation: the physical fetch** (`validation/era6_inflow_fetch.jl`, testset
 "DF-same against the child-grid reference"). The reference periodic
 channel on the child grid (48 × 24 × 16, ``30δ/u_*``) is the statistics
 source, the inflow profile and the target. The child is 10δ long at
 ``Δx = 0.104δ``, averaged ``5δ/u_*``, with open lateral faces as in the
-CI case (statistics over the span centre). The testset takes about
+validation case (statistics over the span centre). The testset takes about
 120–165 s (reference 68–93 s, child 50–70 s). Measured over five
 realisations (reference seeds 2–5, plus a repeat of seed 2):
 
@@ -1399,7 +1399,7 @@ on the 192 × 192 Berlin parent (20 levels) 65 ms, hence the 60 s
 cadence.
 
 **Effect, idealised.** On the 2 h sheared-CBL nest
-(`test/era6_inflow_nest_longrun.jl`: the two-way CBL of Hellsten et al.
+(`validation/era6_inflow_nest_longrun.jl`: the two-way CBL of Hellsten et al.
 2021 with a (3, 1) m s⁻¹ wind, parent 100 m, child r = 3) the resolved
 TKE within 200 m of the upwind face, 50–150 m up, is 3.165 m² s⁻² with
 the generator against 2.278 without (+39 %); KE flux 0.79 W m⁻²
@@ -1464,7 +1464,7 @@ sources, the composite θ is conserved to ``3.5×10^{-14}`` per parent
 step with the generator on. The generator has no θ perturbation of its
 own.
 
-Measured after #418, 2 h, sheared CBL (`test/era6_inflow_nest_longrun.jl`,
+Measured after #418, 2 h, sheared CBL (`validation/era6_inflow_nest_longrun.jl`,
 the test runner's `:estimate` FFTW plans; two realisations, seeds 1 and
 2 of the initial θ noise):
 

@@ -359,7 +359,7 @@ generator's normal perturbation (`synthetic_normal_velocity`, #418).
 Before #418 it copied the perturbation into the parent's interface faces.
 The next window's boundary data returned it to the child, and the
 generator added the next one on top. On the 2 h sheared-CBL nest of
-`test/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
+`validation/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
 with a 3 m s⁻¹ wind, r = 3), that made the child's kinetic energy ×12
 and the parent's ×2.5, with an overlap θ drift of +0.25 K against one-way
 with the generator. Two-way with the generator now meets the #268
@@ -402,7 +402,7 @@ Module-level proof: `test/nest_restart.jl` (bitwise, one-way and
 two-way, a checkpoint at a window's end); the resume of the nested
 `berlin_smoke.toml` (a checkpoint every 3 windows, interrupted after 5,
 the site, its tracers and the parent domain bitwise) is in
-`test/config_roundtrip.jl`. The 24 h flagship
+`test/config_roundtrip.jl` (removed). The 24 h flagship
 restart (22:00 resumed to 23:00) waits for the long Berlin runs, paused
 when this was written. Design and limits: [Checkpoint /
 restart](checkpoint_restart.md#The-Berlin-case).

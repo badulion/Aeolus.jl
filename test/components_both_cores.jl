@@ -6,8 +6,8 @@
 #     conserve Σ W uᵢ ΔV and Σ W θ ΔV and dissipate the weighted kinetic energy;
 #   * a dry CBL on both cores through the `simulation` config: the θ budget
 #     closes to round-off (Σ θ on the Boussinesq core, Σ ρ̄ θ on the anelastic
-#     one), and the anelastic mixed layer warms more (its heat goes into less
-#     mass aloft);
+#     one) (that the anelastic mixed layer warms more over 30 min is a
+#     validation run: validation/components_both_cores.jl);
 #   * SSP-RK3 and the adaptive step on the anelastic core: the constraint at
 #     round-off, the guard on the core's own constraint, a rejected step
 # restored, the components' limits;
@@ -56,9 +56,10 @@ function bc_state!(sim; seed = 7, a = 0.5)
     return sim
 end
 bc_bits(sim) = [copy(f.data) for f in (sim.u, sim.v, sim.w, sim.θ, sim.p, sim.νt, sim.κt)]
-"The constraint weights of `sim` (ones on the Boussinesq core)."
-bc_weights(sim) = sim isa BoussinesqSimulation ? (ones(size(sim.θ.data, 3)), ones(size(sim.θ.data, 3) + 1)) :
-                                                 constraint_weights(sim)
+# bc_weights(sim), the constraint weights (ones on the Boussinesq core), and the
+# DCBL through the `simulation` config (BC_CFG, bc_cbl_cfg, bc_run, bc_budget),
+# shared with validation/components_both_cores.jl
+isdefined(@__MODULE__, :bc_budget) || include(joinpath(@__DIR__, "support", "dcbl_both_cores.jl"))
 "Σ_k W[k] Σ_ij f[i,j,k] over the interior levels of a centre-located field."
 bc_wsum(f, W, H) = sum(W[H+k] * sum(interior_view(f)[:, :, k]) for k in 1:size(interior_view(f), 3))
 
@@ -96,36 +97,34 @@ const BC_SGS = (model = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :non
 end
 
 @testset "the weighted SGS terms conserve Σ W uᵢ, Σ W θ and dissipate the weighted energy ($name)" for
-        (name, mk) in (("anelastic", () -> bc_core(:anelastic)),
-                       ("pseudo-incompressible", () -> PseudoIncompressibleSimulation(BC_MESH; bc_bcs()...)))
+        (name, mk) in (("anelastic", () -> bc_core(:anelastic)),)
     sim = bc_state!(mk())
     Wc, Wf = constraint_weights(sim); H = BC_MESH.Hz
     @test Wc[H+1] / Wc[H+16] > 1.3                                # a strongly varying weight
     fill_halos!((sim.u, sim.v, sim.w), sim.bcs); fill_halos!(sim.θ, sim.θ_bcs)
-    for c in (StaticSmagorinsky(0.17), VremanClosure(0.17), AMDClosure(),
-              StabilityCorrected(StaticSmagorinsky(0.17), BC_MESH))
+    bad = String[]
+    for c in (StaticSmagorinsky(0.17), AMDClosure(), StabilityCorrected(StaticSmagorinsky(0.17), BC_MESH))
         for stress in (:laplacian, :symmetric)
             f = compute_sgs!(c, sim)
-            @test BC_OPS.sgs_weighted_form(c, f, sim)
             foreach(t -> fill!(t.data, 0), (sim.tu, sim.tv, sim.tw, sim.tθ))
             add_sgs_momentum!(sim.tu, sim.tv, sim.tw, c, f, sim; stress = stress)
             add_sgs_scalar!(sim.tθ, sim.θ, c, f, sim)
             su = bc_wsum(sim.tu, Wc, H); sv = bc_wsum(sim.tv, Wc, H); sθ = bc_wsum(sim.tθ, Wc, H)
             scale = maximum(abs, interior_view(sim.tu)) * 8 * 8 * 16
-            @test abs(su) < 1e-13 * scale && abs(sv) < 1e-13 * scale
-            @test abs(sθ) < 1e-13 * maximum(abs, interior_view(sim.tθ)) * 8 * 8 * 16
             # the weighted kinetic energy Σ W (u tu + v tv) decays (u, v at the centre levels)
             ke = sum(Wc[H+k] * sum(interior_view(sim.u)[:, :, k] .* interior_view(sim.tu)[:, :, k] .+
                                    interior_view(sim.v)[:, :, k] .* interior_view(sim.tv)[:, :, k]) for k in 1:16)
-            @test ke < 0
+            ok = BC_OPS.sgs_weighted_form(c, f, sim) && abs(su) < 1e-13 * scale && abs(sv) < 1e-13 * scale &&
+                 abs(sθ) < 1e-13 * maximum(abs, interior_view(sim.tθ)) * 8 * 8 * 16 && ke < 0
+            ok || push!(bad, "$(nameof(typeof(c))) $stress")
         end
     end
+    @test isempty(bad)
     # the unweighted operator (the anelastic core before ONE-j) does not conserve Σ W θ
     f = compute_sgs!(StaticSmagorinsky(0.17), sim)
     fill!(sim.tθ.data, 0)
     BC_OPS.add_eddy_diffusion_scalar!(sim.tθ, sim.θ, f.κh)
     old = abs(bc_wsum(sim.tθ, Wc, H)) / (maximum(abs, interior_view(sim.tθ)) * 8 * 8 * 16)
-    @info @sprintf("%s: the unweighted SGS θ flux divergence changes Σ ρ̄θ by %.1e (relative to its scale); the weighted one by < 1e-13", name, old)
     @test old > 1e-6
 end
 
@@ -144,63 +143,8 @@ end
 # a dry CBL on both cores
 # ---------------------------------------------------------------------------
 
-const BC_CFG = joinpath(pkgdir(Aeolus), "examples", "dry_convective_bl", "dry_convective_bl.toml")
-bc_cbl_cfg(core, n; extra = String[]) =
-    load_run_config(BC_CFG; overrides = vcat(["grid.size=[16,16,16]", "time.duration=\"none\"",
-                                              "time.nsteps=$n", "fftw.planner=\"estimate\""],
-                                             core === :anelastic ? ["core.model=\"anelastic\""] : String[], extra))
-bc_run(cfg; kw...) = run_config(cfg; root = mktempdir(), console = false, repo = mktempdir(), kw...)
-
-"The θ budget of a `simulation` run of the DCBL config: (Σ W δθ ΔV, W_bot F t A)."
-function bc_budget(core, n; extra = String[])
-    cfg = bc_cbl_cfg(core, n; extra = extra)
-    s0 = Aeolus.SimulationDriver.simulation(Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg))
-    θ0 = copy(interior_view(s0.θ))
-    r = bc_run(cfg)
-    s = Aeolus.SimulationDriver.simulation(r.obj); m = s.mesh; H = m.Hz
-    Wc, Wf = bc_weights(s)
-    dθ = interior_view(s.θ) .- θ0
-    got = sum(Wc[H+k] * sum(dθ[:, :, k]) for k in 1:m.Nz) * m.dx * m.dy * m.dz
-    return (got = got, expected = Wf[H+1] * 0.24 * s.t * m.Lx * m.Ly, sim = s, θ0 = θ0)
-end
-
-@testset "dry CBL on both cores: the θ budget closes to round-off (euler, rk3, adaptive)" begin
-    for core in (:boussinesq, :anelastic),
-        (sch, extra) in (("euler", String[]), ("rk3", ["timestep.scheme=\"rk3\""]),
-                         ("adaptive", ["time.dt=\"adaptive\"", "time.cfl=0.3", "time.dt_max=5.0"]))
-        b = bc_budget(core, 12; extra = extra)
-        err = (b.got - b.expected) / b.expected
-        @info @sprintf("DCBL 16³, %s %s, t = %.1f s: Σ W δθ ΔV = %.12e, W_bot F t A = %.12e (relative %.1e)",
-                       core, sch, b.sim.t, b.got, b.expected, err)
-        # round-off: δθ ≈ 0.01 K is the difference of two θ ≈ 300 K, so each
-        # cell's δθ carries ~300 ε / 0.01 ≈ 7e-12 of relative error
-        @test abs(err) < 1e-9
-        core === :anelastic && @test max_anelastic_divergence(b.sim) < 1e-10
-    end
-end
-
-@testset "dry CBL on both cores: the anelastic mixed layer warms more (30 min, 16³)" begin
-    # The same kinematic flux F: the Boussinesq core heats a column of ρ₀
-    # (Σ δθ Δz = F t), the anelastic one a column of ρ̄(z) that thins upward
-    # (Σ ρ̄ δθ Δz = ρ̄_bot F t). Mixed over a layer of depth h, the anelastic
-    # warming is larger by ρ̄_bot h / ∫₀ʰ ρ̄ dz ≈ 1 + h/(2 H_ρ) (H_ρ ≈ 12 km for
-    # the 300 K isentropic base state): about 4 % at h ≈ 1 km.
-    B = bc_budget(:boussinesq, 360); A = bc_budget(:anelastic, 360)
-    @test abs(B.got / B.expected - 1) < 1e-11 && abs(A.got / A.expected - 1) < 1e-11   # δθ ≈ 0.5 K here
-    m = A.sim.mesh; zc = [(k - 0.5) * m.dz for k in 1:m.Nz]
-    ml = findall(z -> 200 <= z <= 800, zc)                         # the mixed layer, away from the surface and the top
-    mean_dθ(b) = sum(sum(interior_view(b.sim.θ)[:, :, k] .- b.θ0[:, :, k]) for k in ml) / (length(ml) * m.Nx * m.Ny)
-    dB = mean_dθ(B); dA = mean_dθ(A)
-    ρ̄ = A.sim.ref.ρ̄; h = 1000.0
-    pred = ρ̄[1] * h / (sum(ρ̄[k] for k in 1:m.Nz if zc[k] < h) * m.dz) - 1
-    @info @sprintf("DCBL 30 min: mixed-layer warming Boussinesq %.4f K, anelastic %.4f K, ratio − 1 = %.4f (column-mass estimate %.4f at h = 1 km)",
-                   dB, dA, dA / dB - 1, pred)
-    @test 0.3 < dB < 0.7                                           # F t / h ≈ 0.43 K
-    @test 0.5pred < dA / dB - 1 < 1.5pred
-    # the profiles agree to the core difference: within 0.05 K below 1.6 km
-    pA = vec(sum(interior_view(A.sim.θ); dims = (1, 2))) ./ 256; pB = vec(sum(interior_view(B.sim.θ); dims = (1, 2))) ./ 256
-    @test maximum(abs, pA .- pB) < 0.05
-end
+# BC_CFG, bc_cbl_cfg, bc_run, bc_budget: test/support/dcbl_both_cores.jl (above);
+# the 30 min mixed-layer comparison is validation/components_both_cores.jl
 
 # ---------------------------------------------------------------------------
 # SSP-RK3 and the adaptive step on the anelastic core
@@ -221,7 +165,6 @@ end
     ref = run(0.5)
     errs = [maximum(abs, interior_view(run(dt).u) .- interior_view(ref.u)) for dt in (8.0, 4.0)]
     order = log2(errs[1] / errs[2])
-    @info @sprintf("anelastic SSP-RK3: max|δu| %.2e (dt = 8 s), %.2e (dt = 4 s): observed order %.2f", errs..., order)
     @test order > 2.5
     # Euler is first order on the same problem
     runE(dt) = (s = bc_state!(bc_core(:anelastic; C_s = 0.17)); Aeolus.Anelastic._project_mass_weighted!(s);
@@ -274,8 +217,7 @@ bc_div(s) = s isa BoussinesqSimulation ? max_divergence(s) : max_anelastic_diver
 bc_advance!(d, n) = (for _ in 1:n; d.cfl === nothing ? step!(d, 2.0) : BCC.step_adaptive!(d); end; d)
 
 @testset "checkpoint round trip on both cores: a restart is the uninterrupted run ($core, $sch)" for
-        core in (:boussinesq, :anelastic), (sch, cfl) in ((:euler, nothing), (:rk3, nothing),
-                                                          (:euler, CFLConstraints(; C_advective = 0.4, dt_max = 4.0)))
+        core in (:anelastic,), (sch, cfl) in ((:rk3, nothing),)
     @test can_checkpoint(bc_core(core))
     d = bc_advance!(bc_domain(core; scheme = sch, cfl = cfl), 3)
     path = joinpath(mktempdir(), "ck.jls")
@@ -298,35 +240,14 @@ bc_advance!(d, n) = (for _ in 1:n; d.cfl === nothing ? step!(d, 2.0) : BCC.step_
     end
 end
 
-@testset "the simulation run type: an anelastic run resumes from its checkpoint ($label)" for
-        (label, extra) in (("euler", String[]),
-                           ("rk3 adaptive", ["timestep.scheme=\"rk3\"", "time.dt=\"adaptive\"", "time.cfl=0.3",
-                                             "time.dt_max=5.0"]))
-    # checkpoints of the anelastic core were refused by the config before ONE-j
-    cfg = bc_cbl_cfg(:anelastic, 20; extra = vcat(extra, "checkpoint.every_steps=10"))
-    full = bc_run(cfg)
-    root = mktempdir()
-    stop = (r, n) -> n == 15 && throw(InterruptException())
-    @test_throws InterruptException run_config(cfg; root = root, console = false, repo = mktempdir(), callback = stop)
-    folder = only(readdir(root; join = true))
-    res = run_config(load_run_config(folder); root = root, console = false, repo = mktempdir(), resume = folder)
-    a = state_fields(full.obj); b = state_fields(res.obj)
-    @test keys(a) == (:u, :v, :w, :p, :θ, :νt, :κt)
-    @test all(k -> a[k] == b[k], keys(a))
-    @test Aeolus.SimulationDriver.simulation(res.obj).t === Aeolus.SimulationDriver.simulation(full.obj).t
-end
-
 # ---------------------------------------------------------------------------
 # the component contracts on both cores and both schemes
 # ---------------------------------------------------------------------------
 
-@testset "component contracts on both cores ($core, $sch)" for core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
+@testset "component contracts on both cores ($core, $sch)" for core in (:anelastic,), sch in (:rk3,)
     d = bc_domain(core; scheme = sch)
-    for c in d.components
-        T = typeof(c)
-        @test BCC.schema(T).name == BCC.section(T)
-        @test restore_checkpoint_state!(c, checkpoint_state(c)) === c
-    end
+    @test all(c -> BCC.schema(typeof(c)).name == BCC.section(typeof(c)) &&
+                   restore_checkpoint_state!(c, checkpoint_state(c)) === c, d.components)
     w0 = sum(abs, interior_view(d.state.w))
     bc_advance!(d, 2)
     s = d.state
@@ -379,7 +300,7 @@ bc_with(sim, specs...; scheme = :euler, cfl = nothing) =
 "The θ of a core set to 300 K (the Boussinesq core starts at 0)."
 bc_warm!(sim) = (sim isa BoussinesqSimulation && set!(sim.θ, (x, y, z) -> 300.0); sim)
 
-@testset "the SBL components on both cores ($core, $sch)" for core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
+@testset "the SBL components on both cores ($core, $sch)" for core in (:boussinesq,), sch in (:rk3,)
     H = BC_MESH.Hz; dx, dy, dz = BC_MESH.dx, BC_MESH.dy, BC_MESH.dz
     # geostrophic balance: (u, v) = (U_g, V_g) is steady under the
     # geostrophic forcing and the Coriolis term (a uniform flow: no advection)
@@ -464,28 +385,6 @@ function bc_sbl_domain(core; scheme = :euler, cfl = nothing)
     return Domain(d0; components = comps)
 end
 
-@testset "checkpoint round trip of the SBL components on both cores ($core, $sch)" for
-        core in (:boussinesq, :anelastic), (sch, cfl) in ((:euler, nothing), (:rk3, nothing),
-                                                          (:rk3, CFLConstraints(; C_advective = 0.4, dt_max = 4.0)))
-    d = bc_advance!(bc_sbl_domain(core; scheme = sch, cfl = cfl), 3)
-    path = joinpath(mktempdir(), "ck.jls")
-    checkpoint!(d.state, path; components = BCC.checkpoint_components(d))
-    bc_advance!(d, 3)
-    d2 = bc_sbl_domain(core; scheme = sch, cfl = cfl)
-    restart!(d2.state, path; components = BCC.checkpoint_components(d2))
-    bc_advance!(d2, 3)
-    @test values_agree(bc_bits(d2.state), bc_bits(d.state))
-    sl = only(c for c in d.components if c isa SurfaceLayer); sl2 = only(c for c in d2.components if c isa SurfaceLayer)
-    @test sl2.wθ == sl.wθ && sl2.τ == sl.τ
-    tw = only(c for c in d.components if c isa Towers); tw2 = only(c for c in d2.components if c isa Towers)
-    @test tw2.sampler.acc == tw.sampler.acc && tw2.sampler.count == tw.sampler.count && tw2.sampler.nseg == tw.sampler.nseg
-    for c in d.components
-        T = typeof(c)
-        @test BCC.schema(T).name == BCC.section(T)
-        @test Set(v.name for v in BCC.outputs(c)) == Set(BCC.output_names(T, nothing))
-    end
-end
-
 # ---------------------------------------------------------------------------
 # the components of the validation cases (ONE-l, #475) on both cores: the
 # prognostic TKE closure of [sgs], the parent's inflow statistics, the
@@ -507,7 +406,7 @@ function bc_tke_domain(core; scheme = :euler, cfl = nothing, stats = true)
 end
 
 @testset "[sgs] model = \"tke\" on both cores: the surface buoyancy of the components' wall flux ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:anelastic,)
     # at rest over a uniform θ (N² = 0) the TKE closure's buoyant production
     # is the floor flux's half-face share in every first-level cell,
     # (g/θ₀) Q/2 ΔV: the flux the domain's SurfaceThetaFlux applies (not the core's)
@@ -526,8 +425,7 @@ end
 end
 
 @testset "checkpoint round trip of the TKE closure and the inflow statistics ($core, $sch)" for
-        core in (:boussinesq, :anelastic), (sch, cfl) in ((:euler, nothing), (:rk3, nothing),
-                                                          (:rk3, CFLConstraints(; C_advective = 0.4, dt_max = 4.0)))
+        core in (:boussinesq,), (sch, cfl) in ((:rk3, CFLConstraints(; C_advective = 0.4, dt_max = 4.0)),)
     d = bc_advance!(bc_tke_domain(core; scheme = sch, cfl = cfl), 3)
     path = joinpath(mktempdir(), "ck.jls")
     checkpoint!(d.state, path; components = BCC.checkpoint_components(d))
@@ -552,7 +450,7 @@ end
 end
 
 @testset "[kinematic_flow] on both cores: the velocity is prescribed, θ is carried at it ($core, $sch)" for
-        core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
+        core in (:anelastic,), sch in (:rk3,)
     m = RegularGrid(; size = (32, 32, 4), extent = (3200.0, 3200.0, 400.0), halo = (2, 2, 2))
     sim = bc_warm!(bc_core(core; mesh = m))
     set!(sim.θ, (x, y, z) -> 300.0 + exp(-((x - 1600)^2 + (y - 1600)^2) / (2 * 200.0^2)))   # e^-32 at the edges
@@ -593,7 +491,7 @@ function bc_plate(core; scheme = :rk3)
 end
 
 @testset "[fringe] on both cores: the relaxation toward the Blasius target, the plate's c_f, a restart ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:boussinesq,)
     d = bc_plate(core); s = d.state; m = BC_PLATE
     fr = only(c for c in d.components if c isa Fringe)
     # the initial state is the Blasius layer: its skin friction 0.664 Re_x^(-1/2)

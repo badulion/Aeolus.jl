@@ -300,7 +300,7 @@ A replay from `run.toml` is bit-identical to the original under the
 `ESTIMATE` FFTW planner and the same thread count (#245). `--resume`
 refuses `--set`, because a resumed run must be the run it continues. For
 the model (the SBL configurations among its runs) and the `urban` legacy case a run interrupted and
-resumed is bitwise equal to the uninterrupted run (`test/config_roundtrip.jl`).
+resumed is bitwise equal to the uninterrupted run (`test/config_roundtrip.jl` (removed)).
 
 ## The `[inputs]` hash check
 
@@ -387,7 +387,7 @@ member = "lasd_32x32x32"     # sweeps only: the member replayed (default: the fi
 ```
 
 The loader ignores `[test]` (it checks only its shape): it is not part of
-the resolved config, of `run.toml` or of the config hash. `test/config_roundtrip.jl` finds every
+the resolved config, of `run.toml` or of the config hash. `test/config_roundtrip.jl` (removed) finds every
 `examples/<case>/*.toml` and checks that it validates, that
 resolving it is a fixed point, that every key it uses is in the option
 reference, and that its smoke run replays bit for bit from its `run.toml`.

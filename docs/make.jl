@@ -36,6 +36,7 @@ makedocs(
         "Installation"   => "installation.md",
         "Quick start"    => "quickstart.md",
         "Running the tests" => "testing.md",
+        "Validation runs" => "validation.md",
         "Theory" => [
             "Overview"                    => "theory/overview.md",
             "Boussinesq equations"        => "theory/boussinesq.md",

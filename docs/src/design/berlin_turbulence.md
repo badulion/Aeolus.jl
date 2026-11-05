@@ -85,7 +85,7 @@ output record.
 ### Inflow fetch (#266) and the inflow generator (#268)
 
 N-inflow-d measures the development length behind a synthetic inflow on
-the periodic half channel (the harness `test/fixtures/inflow_fetch.jl`, theory:
+the periodic half channel (the harness `validation/fixtures/inflow_fetch.jl`, theory:
 [Development length behind the inflow](../theory/transition.md#Development-length-behind-the-inflow-(N-inflow-d))).
 Its diagnostics (`FetchStatistics`, `development_length`) are not coupled;
 the generator itself is, on the nested child's lateral faces: the addon

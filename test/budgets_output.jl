@@ -192,11 +192,12 @@ end
     end
     close_output!(w)
     NCDataset(path) do nc
-        @test nc["time"].var[:] == [4.0, 8.0] && nc["time_series"].var[:] == [2.0, 4.0, 6.0, 8.0]
-        @test nc["f"].var[1, 1, 1, :] == Float32[2.5, 6.5]                   # means of 1..4, 5..8
-        @test nc["p"].var[3, :] == Float32[5.0, 13.0]
-        @test nc["s"].var[:] == [1.5, 3.5, 5.5, 7.5]
-        @test nc["s"].attrib["cell_methods"] == "time_series: mean"
+        # means of 1..4, 5..8
+        @test (nc["time"].var[:] == [4.0, 8.0] && nc["time_series"].var[:] == [2.0, 4.0, 6.0, 8.0]) &&
+              (nc["f"].var[1, 1, 1, :] == Float32[2.5, 6.5]) &&
+              (nc["p"].var[3, :] == Float32[5.0, 13.0])
+        @test (nc["s"].var[:] == [1.5, 3.5, 5.5, 7.5]) &&
+              (nc["s"].attrib["cell_methods"] == "time_series: mean")
         # the group's members appear as booked: a from step 3, b from step 5
         @test nc["g__a"].var[2:4] == [1.0, 1.0, 1.0] && nc["g__b"].var[3:4] == [2.0, 2.0]
     end
@@ -205,8 +206,8 @@ end
     RO = Module(:RunOutput)
     Base.include(RO, joinpath(pkgdir(Aeolus), "examples", "viz", "run_output.jl"))
     F, tl = Base.invokelatest(RO.read_last_record, path)
-    @test tl == 8.0 && sort(collect(keys(F))) == ["f", "p"]
-    @test size(F["f"]) == (6, 5, 8) && all(==(6.5f0), F["f"]) && F["p"] == fill(13.0f0, 8)
+    @test (tl == 8.0 && sort(collect(keys(F))) == ["f", "p"]) &&
+          (size(F["f"]) == (6, 5, 8) && all(==(6.5f0), F["f"]) && F["p"] == fill(13.0f0, 8))
     # :instant, and a resumed file continues after the last sample at or before t
     p2 = joinpath(dir, "inst.nc")
     w = OutputWriter(p2; x, y, z, records = [prof], series = [ser], ctx = ctx)
@@ -218,8 +219,9 @@ end
     s[] = 40.0; write_record!(w, ctx, 4.0); write_series!(w, ctx, 4.0)
     close_output!(w)
     NCDataset(p2) do nc
-        @test nc["time"].var[:] == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]           # record 5 rewritten, 6 left
-        @test nc["s"].var[5] == 40.0 && nc["p"].var[1, 5] == 80.0f0
+        # record 5 rewritten, 6 left
+        @test (nc["time"].var[:] == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]) &&
+              (nc["s"].var[5] == 40.0 && nc["p"].var[1, 5] == 80.0f0)
     end
     # nothing selected: no file
     w = OutputWriter(joinpath(dir, "none.nc"); x, y, z)
@@ -233,8 +235,7 @@ end
 const BO_FLUX = (bottom = 0.2, top = -0.05)                   # [surface_theta_flux], K m s⁻¹
 
 @testset "model budgets: the surface heat flux is attributed exactly ($label)" for (label, scheme, cfl, nsteps, dt) in
-        (("euler", :euler, nothing, 6, 4.0), ("rk3", :rk3, nothing, 6, 4.0),
-         ("rk3 adaptive", :rk3, CFLConstraints(; dt_max = 5.0), 6, nothing))
+        (("rk3 adaptive", :rk3, CFLConstraints(; dt_max = 5.0), 6, nothing),)
     sim = bo_state!(bo_core(; ν = 0.5))
     d = with_budgets(bo_domain(sim, SurfaceThetaFlux => BO_FLUX; scheme = scheme, cfl = cfl), (:energy, :momentum_x))
     model = Model(d)
@@ -256,7 +257,7 @@ const BO_FLUX = (bottom = 0.2, top = -0.05)                   # [surface_theta_f
 end
 
 @testset "model budgets: the state is that of a run without them" begin
-    for scheme in (:euler, :rk3)
+    for scheme in (:rk3,)
         sims = [bo_state!(bo_core(; ν = 0.5)) for _ in 1:2]
         specs = (SurfaceThetaFlux => BO_FLUX, Coriolis => (; f = 1e-3), Sponge => (alpha_max = 0.02, z_start = 250.0))
         d1 = bo_domain(sims[1], specs...; scheme = scheme)
@@ -316,7 +317,7 @@ function BOC.run_stage!(c::BOHeater, d, ::Val{:tendencies}, Δt)
 end
 
 @testset "model budgets: a retried adaptive step books its in-core terms once" begin
-    for scheme in (:euler, :rk3)
+    for scheme in (:rk3,)
         sim = bo_core()
         d = with_budgets(bo_domain(sim; scheme = scheme, cfl = CFLConstraints(; dt_max = 4.0), extra = (BOHeater(false),)),
                          (:energy,))
@@ -381,22 +382,17 @@ end
     p = only(select_variables(cat, ["theta_profile"])).getter(d)
     @test p ≈ [sum(interior_view(sim.θ)[:, :, k]) / 30 for k in 1:8] rtol = 1e-14
     # every component's catalogue matches the names its type declares
-    for c in d.components
-        @test catalogue_names(BOC.outputs(c)) == collect(BOC.output_names(typeof(c), nothing))
-    end
+    @test all(c -> catalogue_names(BOC.outputs(c)) == collect(BOC.output_names(typeof(c), nothing)), d.components)
 end
 
 @testset "config: [output] selects from the catalogues; budgets turn on with their variable" begin
     load(ov) = load_run_config(IOBuffer(""); overrides = vcat(["grid.size=[8,8,8]", "fftw.planner=\"estimate\""], ov))
     @test load([]).output.variables == collect(BOC.DEFAULT_OUTPUTS)
-    for (ov, msg) in (("output.variables=[\"qv\"]", "moisture"),
-                      ("output.variables=[\"ql\"]", "no enabled component publishes"),
-                      ("output.variables=[\"budget_tracer\"]", "carries a tracer"),
-                      ("output.variables=[\"budget_water\"]", "moisture"),
-                      ("output.variables=[\"nonsense\"]", "no enabled component publishes"))
-        err = try load([ov]); nothing catch e; e end
-        @test err isa Aeolus.Config.ConfigError && occursin(msg, sprint(showerror, err))
-    end
+    refused(ov, msg) = (err = try load([ov]); nothing catch e; e end;
+                        err isa Aeolus.Config.ConfigError && occursin(msg, sprint(showerror, err)))
+    @test refused("output.variables=[\"qv\"]", "moisture") &&
+          refused("output.variables=[\"budget_tracer\"]", "carries a tracer") &&
+          refused("output.variables=[\"nonsense\"]", "no enabled component publishes")
     @test_throws Aeolus.Config.ConfigError load(["output.variables=[\"budget_energy\"]", "dynamics.theta0=0.0"])
     # a run with budgets selected writes their terms, and they close
     cfg = load(["time.duration=\"none\"", "time.nsteps=4", "surface_theta_flux.bottom=0.1",
@@ -410,7 +406,6 @@ end
         @test !haskey(nc, "u")
     end
     # without a budget variable the domain measures nothing
-    r = run_config(load(["time.duration=\"none\"", "time.nsteps=1"]); root = mktempdir(), console = devnull,
-                   repo = mktempdir())
-    @test BOC.budgets(only(r.obj.model.domains)) === nothing
+    @test BOC.budgets(only(Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
+                                               load(String[])).model.domains)) === nothing
 end

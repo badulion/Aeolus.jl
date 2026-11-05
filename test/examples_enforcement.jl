@@ -201,15 +201,11 @@ end
 
 @testset "examples: the model's API as read from the package" begin
     # the stepping and building entry points are in the forbidden set
-    for n in (:step!, :step_rk3!, :step_adaptive!, :fill_halos!, :set!, :apply_kessler_step!, :RegularGrid,
-              :Field, :BoussinesqSimulation, :run_config, :register_driver!)
-        @test n in EF_FORBIDDEN
-    end
+    @test all(in(EF_FORBIDDEN), (:step!, :step_rk3!, :step_adaptive!, :fill_halos!, :set!, :apply_kessler_step!,
+                                 :RegularGrid, :Field, :BoussinesqSimulation, :run_config, :register_driver!))
     isdefined(Aeolus, :Components) && @test :Domain in EF_FORBIDDEN && :Model in EF_FORBIDDEN
     # what an analysis script needs is not: reading files and the config
-    for n in (:NCDataset, :load_run_config, :read_run_toml, :read_dynamic_driver, :println, :joinpath)
-        @test !(n in EF_FORBIDDEN)
-    end
+    @test !any(in(EF_FORBIDDEN), (:NCDataset, :load_run_config, :read_run_toml, :read_dynamic_driver, :println, :joinpath))
 end
 
 @testset "examples: the scan finds what builds or steps a model (synthetic files)" begin
@@ -229,10 +225,9 @@ end
         set!.(fields, 0.0)
         """
     o = ef_offences(bad, p)
-    for what in ("imports step!", "calls RegularGrid", "calls BoussinesqSimulation", "calls step_rk3!",
-                 "calls run_config", "calls main", "outside examples/", "not a literal", "calls set!")
-        @test count(x -> occursin(what, x), o) == 1
-    end
+    @test all(what -> count(x -> occursin(what, x), o) == 1,
+              ("imports step!", "calls RegularGrid", "calls BoussinesqSimulation", "calls step_rk3!",
+               "calls run_config", "calls main", "outside examples/", "not a literal", "calls set!"))
     @test length(o) == 9
     @test occursin("x.jl:6:", only(filter(x -> occursin("step_rk3!", x), o)))     # with its line
     good = """
@@ -265,11 +260,10 @@ end
     mk("old/configs/old.toml"); mk("loose.toml"); mk("good/static.nc"); mk("good/ref.csv"); mk("good/notes.txt")
     mk("scripts/x.jl"); mk("scripts/a.csv")
     o = ef_layout_offences(root)
-    for what in ("configs/: a configs/", "old/configs/old.toml", "loose.toml", "good/static.nc",
-                 "good/ref.csv", "good/notes.txt", "scripts/a.csv", "scripts: a directory without",
-                 "old: a directory without")
-        @test count(x -> startswith(x, what), o) == 1
-    end
+    @test all(what -> count(x -> startswith(x, what), o) == 1,
+              ("configs/: a configs/", "old/configs/old.toml", "loose.toml", "good/static.nc",
+               "good/ref.csv", "good/notes.txt", "scripts/a.csv", "scripts: a directory without",
+               "old: a directory without"))
     @test length(o) == 9
     # the shipped tree
     o = ef_layout_offences()

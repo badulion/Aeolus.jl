@@ -141,7 +141,7 @@ compared:
   source.
 
 Plane-of-array irradiance comes from the Perez et al. (1990) model with
-ground reflectance 0.2, in the test driver `test/ashrae140_driver.jl`.
+ground reflectance 0.2, in the test driver `validation/support/ashrae140_driver.jl`.
 The zone is stepped six times per hour. Going to 12 steps per hour
 changes every annual heating load and every peak by less than 0.04 %,
 and the annual cooling loads by at most 0.12 % (Case 400, whose annual

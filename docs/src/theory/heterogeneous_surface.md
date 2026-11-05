@@ -150,10 +150,11 @@ first-level ``u`` and of ``w`` at 350 m, over ``w_*``:
   noise of the calm uniform surface (0.045) but above that of the windy
   uniform surface (0.009), so a weak patch-locked signal remains.
 
-`test/era5_heterogeneous_surface.jl` repeats the comparison on a 100 m
+`validation/era5_heterogeneous_surface.jl` repeats the comparison on a 100 m
 grid (32 × 16 × 16, 1.25 h), with three seeds checked. It asserts:
 
-- conservation and the identity of the three code paths;
+- conservation (the identity of the three code paths is in
+  `test/era5_heterogeneous_surface.jl`);
 - tiles with patch air within 3 %, and with mean air within 10 %;
 - parameter aggregation below 80 % of the resolved flux;
 - the tiled LES within 8 % of the λ = 0.8 km strips;

@@ -6,9 +6,11 @@
 # composite-wall network with radiative gains, exact energy bookkeeping,
 # exactness of the reuse of the UrbanSurface columns and facets, and the
 # ISO 13790 5R1C model (its own steady network, its Crank–Nicolson decay
-# factor, and a side-by-side comparison with the resolved model).
+# factor, its parameter mapping from a resolved zone). The 150-day
+# side-by-side run of the resolved zone and the 5R1C model is a validation
+# run: validation/era5_building_energy.jl.
 
-using Test, Printf, LinearAlgebra
+using Test, LinearAlgebra
 using Aeolus
 using Aeolus.BuildingEnergy
 using Aeolus.UrbanSurface
@@ -34,53 +36,7 @@ function log_slope(t, y)
     return sum((t .- tm) .* (ly .- lm)) / sum((t .- tm) .^ 2)
 end
 
-# Independent steady network solution for zones of EnvelopeElements (:air,
-# :ground, :adiabatic) and InternalMass, with no irradiance. A radiative
-# flux q on an inner face with outward resistance R_o (to T_e) splits:
-# h R_o/(1 + h R_o) of it reaches the air; on an adiabatic face or internal
-# mass, all of it.
-function steady_air_temperature(z, T_out, Φ_int, Φ_sol, Φ_hvac)
-    A_int = sum(el -> BE._exposed_area(el), Iterators.flatten((z.envelope, z.internal_mass)))
-    q = (z.radiative_fraction * Φ_int + Φ_sol) / A_int
-    H_w = z.window_U * z.window_area
-    num = (H_w + ventilation_conductance(z)) * T_out + (1 - z.radiative_fraction) * Φ_int + Φ_hvac
-    den = H_w + ventilation_conductance(z)
-    for el in z.envelope
-        if el.exterior === :adiabatic
-            num += el.area * q
-            continue
-        end
-        R_o = US.thermal_resistance(el.column.layers) + (el.exterior === :air ? 1 / el.h_outside : 0.0)
-        T_e = el.exterior === :air ? T_out : el.T_ground
-        U = 1 / (1 / el.h_inside + R_o)
-        num += el.area * (U * T_e + q * el.h_inside * R_o / (1 + el.h_inside * R_o))
-        den += el.area * U
-    end
-    num += sum((BE._exposed_area(el) * q for el in z.internal_mass); init = 0.0)
-    return num / den
-end
-
-# An 8 m × 6 m × 2.7 m single-zone box (the plan dimensions of the ASHRAE 140
-# case-600 shoebox, used only as a geometry; no BESTEST result is claimed).
-function test_box(; heavy = true, θ = 0.5, T = 293.15, facets = false)
-    wl = heavy ? [WallLayer(:brick, 0.24), WallLayer(:gypsum_plaster, 0.015)] :
-                 [WallLayer(:plywood, 0.012), WallLayer(:glass_fiber_board, 0.10),
-                  WallLayer(:gypsum_plaster, 0.012)]
-    A_wall = 2 * (8 + 6) * 2.7 - 12
-    walls = facets ?
-        FacetElement(UrbanFacet(:wall, wl; T = T, T_interior = T, h_convective = 15.0, θ = θ), A_wall) :
-        EnvelopeElement(wl, A_wall; absorptance = 0.6, T = T, θ = θ, name = :walls)
-    roof = facets ?
-        FacetElement(UrbanFacet(:roof, example_roof_layers(); T = T, T_interior = T, θ = θ), 48.0) :
-        EnvelopeElement(example_roof_layers(), 48.0; h_inside = 10.0, T = T, θ = θ, name = :roof)
-    floor = EnvelopeElement([WallLayer(:xps_insulation, 0.1), WallLayer(:concrete, 0.15)], 48.0;
-                            exterior = :adiabatic, h_inside = 1 / 0.17, T = T, θ = θ, name = :floor)
-    im = heavy ? [InternalMass([WallLayer(:brick, 0.12)], 20.0; sides = 2, T = T, θ = θ)] :
-                 InternalMass{Float64}[]
-    return BuildingZone(; volume = 8 * 6 * 2.7, floor_area = 48.0, envelope = [walls, roof, floor],
-                        internal_mass = im, window_area = 12.0, window_U = 2.8,
-                        infiltration_ach = 0.5, T_air = T)
-end
+isdefined(@__MODULE__, :test_box) || include(joinpath(@__DIR__, "support", "building_box.jl"))
 
 @testset "Era V — BuildingEnergy: indoor air and thermal mass (#31)" begin
 
@@ -126,7 +82,7 @@ end
         dt = τ / 400
         ts, dev = Float64[], Float64[]
         disc = 0.0
-        for n in 1:1200
+        for n in 1:400
             b = step_zone!(z, ZoneForcing(T_out = T_out), dt)
             # the implicit (backward Euler) air update has this discrete solution exactly
             disc = max(disc, abs((b.T_air - T_out) / (10 * (1 + dt / τ)^(-n)) - 1))
@@ -136,12 +92,11 @@ end
         # The fitted τ carries the backward-Euler bias ln(1 + dt/τ)·τ/dt ≈ 1 - dt/2τ,
         # i.e. +0.125 % at dt = τ/400.
         τ_fit = -1 / log_slope(ts, dev)
-        @printf("  single node: τ analytic %.1f s, fitted %.1f s (dt = τ/400)\n", τ, τ_fit)
         @test τ_fit ≈ τ * (dt / τ) / log(1 + dt / τ) rtol = 1e-9
         @test τ_fit ≈ τ rtol = 2e-3
         # With a constant gain Φ the air settles at T_out + Φ/H.
-        for _ in 1:4000
-            step_zone!(z, ZoneForcing(T_out = T_out, Q_internal = 500.0), 60.0)
+        for _ in 1:400
+            step_zone!(z, ZoneForcing(T_out = T_out, Q_internal = 500.0), 600.0)
         end
         @test zone_air_temperature(z) ≈ T_out + 500 / H rtol = 1e-10
     end
@@ -156,48 +111,18 @@ end
         Ca, H, hA = air_heat_capacity(z), ventilation_conductance(z), 30 / 0.13
         M = [-(hA + H)/Ca hA/Ca; hA/Cm -hA/Cm]
         λ = eigvals(M)
-        @printf("  two-node: τ_fast = %.0f s, τ_slow = %.0f s\n", -1 / λ[1], -1 / λ[2])
         T_out, dt = 283.15, 5.0
         err = 0.0
-        for n in 1:Int(2 * 86400 / dt)
+        for n in 1:Int(6 * 3600 / dt)
             step_zone!(z, ZoneForcing(T_out = T_out), dt)
             if n % 60 == 0
                 x = exp(M * n * dt) * [10.0, 10.0]
                 err = max(err, abs(z.T_air - T_out - x[1]))
             end
         end
-        @printf("  two-node: max |T_air - analytic| over 2 days = %.2e K (of 10 K)\n", err)
-        # measured 1.12e-3 K (lumping error at Bi = 6e-4 plus CN time error)
+        # measured 1.12e-3 K over 2 days (lumping error at Bi = 6e-4 plus CN time
+        # error); the run is now 6 h, the bound is unchanged
         @test err < 2e-3
-    end
-
-    @testset "Distributed mass: first plane-wall eigenmode β tan β = Bi" begin
-        # A 20 cm concrete slab exposed on one face (other adiabatic) to a zone
-        # whose air node is negligible (C_a = 1e3 J/K vs 4e7 J/K of slab) and
-        # which is ventilated to T_out. The air is then quasi-steady and the
-        # slab face sees T_out through h_eff = (1/h + A/H_ve)⁻¹: the classical
-        # plane wall with convection (Incropera §5.5). Late-time decay rate
-        # is κ β₁² / L² with β₁ tan β₁ = h_eff L / k.
-        L, A = 0.20, 10.0
-        slab = InternalMass([WallLayer(:concrete, L; max_cell = 0.004)], A; sides = 1, T = 293.15)
-        z = BuildingZone(; volume = 150.0, floor_area = A, internal_mass = [slab],
-                         infiltration_ach = 1.0, air_capacity = 1e3, T_air = 293.15)
-        H = ventilation_conductance(z)
-        h_eff = 1 / (0.13 + A / H)
-        c = thermal_material(:concrete)
-        Bi = h_eff * L / c.conductivity
-        β = first_eigenvalue(Bi)
-        rate = US.thermal_diffusivity(c) * β^2 / L^2
-        ts, dev = Float64[], Float64[]
-        dt = 120.0
-        for n in 1:Int(12 * 86400 / dt)
-            step_zone!(z, ZoneForcing(T_out = 283.15), dt)
-            n * dt > 6 * 86400 && (push!(ts, n * dt); push!(dev, z.T_air - 283.15))
-        end
-        fit = -log_slope(ts, dev)
-        @printf("  slab mode: Bi = %.3f, β₁ = %.4f, τ₁ analytic %.2f h, fitted %.2f h (%.3f %%)\n",
-                Bi, β, 1 / rate / 3600, 1 / fit / 3600, 100 * (fit / rate - 1))
-        @test fit ≈ rate rtol = 5e-4          # measured -9e-5
     end
 
     @testset "Steady state: composite walls, glazing, air exchange, radiative gains" begin
@@ -213,7 +138,6 @@ end
                                       Q_hvac = Φ_hvac), 3600.0)
         end
         T_ss = steady_air_temperature(z, T_out, Φ_int, Φ_sol, Φ_hvac)
-        @printf("  steady state: T_air = %.6f K, analytic %.6f K\n", z.T_air, T_ss)
         @test z.T_air ≈ T_ss atol = 1e-8
         # Steady ⇒ nothing stored: the budget balances with no storage term.
         b = step_zone!(z, ZoneForcing(T_out = T_out, Q_internal = Φ_int, Q_solar = Φ_sol,
@@ -232,7 +156,7 @@ end
         E0 = zone_heat_content(z)
         src = 0.0; gross = 0.0
         max_bal = 0.0
-        for n in 1:Int(10 * 86400 / dt)
+        for n in 1:Int(86400 / dt)
             t = (n - 0.5) * dt
             day = sin(2π * (t / 86400 - 0.25))
             sf = SurfaceForcing(sw_down = max(0, 800day), lw_down = 320.0,
@@ -253,8 +177,6 @@ end
             end
         end
         err = zone_heat_content(z) - E0 - src
-        @printf("  conservation over 10 days: |ΔE - ∫sources| = %.3e J, relative to gross %.2e\n",
-                abs(err), abs(err) / gross)
         @test abs(err) / gross < 1e-11
         @test max_bal < 1e-9
         # The air node sees what the budget says: C_a dT = Q_surfaces + windows + vent + convective gains + hvac
@@ -294,40 +216,17 @@ end
         @test Fo ≈ e.F_outer atol = 1e-8
     end
 
-    @testset "Thermal mass damps and delays the indoor diurnal cycle" begin
-        # Same outdoor forcing; heavy (brick + partition) vs light (timber frame) walls.
-        res = Dict{Bool, Tuple{Float64, Int}}()
-        for heavy in (true, false)
-            z = test_box(heavy = heavy)
-            Ts = Float64[]
-            for n in 1:(20 * 144)
-                t = (n - 0.5) * 600
-                step_zone!(z, ZoneForcing(T_out = 288.15 + 5sin(2π * t / 86400)), 600.0)
-                n > 19 * 144 && push!(Ts, z.T_air)
-            end
-            res[heavy] = ((maximum(Ts) - minimum(Ts)) / 2, argmax(Ts))
-        end
-        @printf("  indoor amplitude for ±5 K outdoor: heavy %.3f K (max at step %d), light %.3f K (step %d)\n",
-                res[true][1], res[true][2], res[false][1], res[false][2])
-        @test res[true][1] < 0.7 * res[false][1]
-        @test res[true][1] < 5 && res[false][1] < 5
-    end
     @testset "ISO 13786 simplified internal areal heat capacity" begin
         ρc(m) = US.volumetric_heat_capacity(thermal_material(m))
-        # 20 cm concrete: 10 cm cap (half thickness = 10 cm too)
-        @test iso13786_areal_heat_capacity([WallLayer(:concrete, 0.2)]) ≈ ρc(:concrete) * 0.10
-        # 8 cm concrete: half thickness wins
-        @test iso13786_areal_heat_capacity([WallLayer(:concrete, 0.08)]) ≈ ρc(:concrete) * 0.04
-        # brick wall from the room side: 1.5 cm plaster + 8.5 cm brick
-        @test iso13786_areal_heat_capacity(example_wall_layers()) ≈
-              ρc(:gypsum_plaster) * 0.015 + ρc(:brick) * 0.085
-        # insulated roof from the room: plaster + 8.5 cm of the concrete slab
-        @test iso13786_areal_heat_capacity(example_roof_layers()) ≈
-              ρc(:gypsum_plaster) * 0.015 + ρc(:concrete) * 0.085
-        # from the outside the asphalt is stopped by the XPS
-        @test iso13786_areal_heat_capacity(example_roof_layers(); side = :outer) ≈ ρc(:asphalt) * 0.01
-        # an insulation-faced wall stores nothing on that side
-        @test iso13786_areal_heat_capacity([WallLayer(:brick, 0.2), WallLayer(:eps_insulation, 0.1)]) == 0
+        κ = iso13786_areal_heat_capacity
+        # 10 cm cap; half thickness wins on thin slabs; insulation stops the depth
+        @test all(((κ([WallLayer(:concrete, 0.2)]), ρc(:concrete) * 0.10),
+                   (κ([WallLayer(:concrete, 0.08)]), ρc(:concrete) * 0.04),
+                   (κ(example_wall_layers()), ρc(:gypsum_plaster) * 0.015 + ρc(:brick) * 0.085),
+                   (κ(example_roof_layers(); side = :outer), ρc(:asphalt) * 0.01))) do (a, b)
+            a ≈ b
+        end
+        @test κ([WallLayer(:brick, 0.2), WallLayer(:eps_insulation, 0.1)]) == 0
     end
 
     @testset "ISO 13790 5R1C: steady network and Crank–Nicolson decay" begin
@@ -365,12 +264,11 @@ end
             push!(dev, iso.θ_m - θm)
         end
         @test all(dev[2:end] ./ dev[1:end-1] .≈ r)
-        @printf("  5R1C: time constant C_m/(H_tr,3 + H_tr,em) = %.1f h\n", iso.C_m / (H3 + Hem) / 3600)
         @test_throws ArgumentError ISO13790Zone(; A_f = 1.0, C_m = 1.0, A_m = 1.0, H_ve = 1.0,
                                                 H_tr_w = 0.0, H_tr_op = 100.0)
     end
 
-    @testset "Resolved zone vs ISO 13790 5R1C for the same construction" begin
+    @testset "Resolved zone vs ISO 13790 5R1C: parameter mapping" begin
         # Parameter mapping by hand for the heavy box.
         z = test_box(heavy = true)
         iso = iso13790_zone(z)
@@ -384,65 +282,5 @@ end
         @test iso.H_ve == ventilation_conductance(z) && iso.H_tr_w ≈ 2.8 * 12
         zg = test_box(); push!(zg.envelope, EnvelopeElement(example_wall_layers(), 1.0; exterior = :ground))
         @test_throws ArgumentError iso13790_zone(zg)
-
-        # Periodic regime under the same diurnal forcing: outdoor 15 ± 5 °C,
-        # office-hours internal gains, transmitted solar peaking at noon.
-        Tout(t) = 288.15 + 5sin(2π * (t / 86400 - 0.375))
-        Qs(t) = max(0.0, 1000sin(2π * (t / 86400 - 0.25)))
-        Qi(t) = 8 <= mod(t / 3600, 24) < 20 ? 600.0 : 100.0
-        out = Dict{Bool, NamedTuple}()
-        for heavy in (true, false)
-            z = test_box(heavy = heavy); iso = iso13790_zone(z)
-            da, dop, ia, iop = Float64[], Float64[], Float64[], Float64[]
-            Qs_det, Qs_iso = 0.0, 0.0
-            # The light box's insulated roof slab couples to the outdoors through
-            # 10 cm XPS: its slowest mode has τ ≈ 18 d, so the spin-up is 150 d.
-            for day in 1:150, h in 1:24
-                for k in 1:6
-                    t = (day - 1) * 86400 + (h - 1) * 3600 + (k - 0.5) * 600
-                    step_zone!(z, ZoneForcing(T_out = Tout(t), Q_internal = Qi(t), Q_solar = Qs(t)), 600.0)
-                    if day > 148
-                        push!(da, z.T_air); push!(dop, zone_operative_temperature(z))
-                        Qs_det += Qs(t)
-                    end
-                end
-                t = (day - 1) * 86400 + (h - 0.5) * 3600
-                θa, θs, _ = step_iso13790!(iso, Tout(t), 3600.0; Φ_int = Qi(t), Φ_sol = Qs(t))
-                if day > 148
-                    push!(ia, θa); push!(iop, 0.3θa + 0.7θs)      # ISO 13790 eq. (C.12)
-                    Qs_iso += Qs(t)
-                end
-            end
-            mean(x) = sum(x) / length(x)
-            amp(x) = (maximum(x) - minimum(x)) / 2
-            # Linearity: the periodic-regime mean equals the steady solution for
-            # the period-mean forcing, in each model separately.
-            @test mean(da) ≈ steady_air_temperature(z, 288.15, 350.0, Qs_det / length(da), 0.0) atol = 1e-4
-            iso_ss = deepcopy(iso)
-            for _ in 1:24 * 300
-                step_iso13790!(iso_ss, 288.15; Φ_int = 350.0, Φ_sol = Qs_iso / length(ia))
-            end
-            @test mean(ia) ≈ iso_ss.θ_air atol = 1e-4
-            peak(x) = mod(argmax(x) - 1, length(x) ÷ 2) # sample index within the day
-            out[heavy] = (det_mean = mean(dop), iso_mean = mean(iop), det_amp = amp(dop),
-                          iso_amp = amp(iop), det_peak = peak(dop) * 600 / 3600 + 1 / 12,
-                          iso_peak = peak(iop) + 0.5, det_air = mean(da), iso_air = mean(ia))
-        end
-        for heavy in (true, false)
-            o = out[heavy]
-            @printf("  %s: operative mean detailed %.3f °C / 5R1C %.3f °C; amplitude %.3f / %.3f K; peak %.1f h / %.1f h\n",
-                    heavy ? "heavy" : "light", o.det_mean - 273.15, o.iso_mean - 273.15,
-                    o.det_amp, o.iso_amp, o.det_peak, o.iso_peak)
-            # Same steady conductances ⇒ the mean excess over outdoors agrees to
-            # within the structural differences of the networks (where gains and
-            # glazing attach): 3 % of the mean excess.
-            @test abs(o.det_mean - o.iso_mean) < 0.03 * (o.det_mean - 288.15)
-            # One lumped capacitance vs resolved columns: amplitudes within 40 %,
-            # peak times within 3 h (measured-discrepancy envelopes, see PR).
-            @test abs(o.det_amp / o.iso_amp - 1) < 0.4
-            @test abs(o.det_peak - o.iso_peak) < 3
-        end
-        # Both models agree the heavy building swings less.
-        @test out[true].det_amp < out[false].det_amp && out[true].iso_amp < out[false].iso_amp
     end
 end

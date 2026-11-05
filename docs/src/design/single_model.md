@@ -296,7 +296,7 @@ How PALM does it, for comparison (Hellsten et al. 2021): every domain is the sam
 
 - **Physics modules** keep their module tests: analytic limits, conservation, benchmarks.
 - **Components** get contract tests: build, a single step, `budget!` closure on a tiny domain, output catalogue consistency and checkpoint round-trip.
-- **End-to-end configs:** a small set of tiny configs in `test/` (dry LES, moist convection, a synthetic city with every urban component, a two-domain nest) run in the fast tier with `[checks]` required.
+- **End-to-end configs:** a small set of tiny configs in `test/` (dry LES, moist convection, a synthetic city with every urban component, a two-domain nest) run in the tests with `[checks]` required.
 - **Examples:** an enforcement test fails if any `.jl` in `examples/` builds or steps a model. Analysis scripts may only read output files.
 
 ### Repository layout after the refactor

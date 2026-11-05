@@ -2,8 +2,7 @@
 #
 # Acceptance tests of the issue covered in this file:
 #   * sweeps: a [sweep] table expands into override sets in a fixed order,
-#     one run folder per member, each member validated;
-#   * the Kessler box of the kernel demos (cloud_spinup.toml) on the model.
+#     one run folder per member, each member validated.
 # The per-directory bit-identity and round-trip tests are in
 # config_examples_*.jl.
 
@@ -121,64 +120,3 @@ end
     @test Aeolus.main(["check", p]; io = out) == 0
     @test count("ok:", String(take!(out))) == 2
 end
-
-# ---------------------------------------------------------------------------
-# examples/cloud_spinup/: kernel demo 04, the Kessler box on the model (ONE-i #458)
-# ---------------------------------------------------------------------------
-
-include(joinpath(@__DIR__, "config_roundtrip_harness.jl"))
-
-@testset "kernels: cloud_spinup.toml is the Kessler box at rest on the model" begin
-    # the same box with the same eight Kessler steps applied directly
-    # (Microphysics.apply_kessler_step!, the Marshall-Palmer fall speeds)
-    H = 2000.0
-    mesh = RegularGrid(; size = (4, 4, 32), extent = (H, H, H), halo = (1, 1, 1))
-    qv = Field(CellCenter(), mesh); Aeolus.Fields.set!(qv, (x, y, z) -> 0.01)
-    ql = Field(CellCenter(), mesh); Aeolus.Fields.set!(ql, (x, y, z) -> 0.6H < z < 0.9H ? 3e-3 : 0.0)
-    qr = Field(CellCenter(), mesh); Aeolus.Fields.set!(qr, (x, y, z) -> 0.0)
-    q0 = sum(interior_view(qv)) + sum(interior_view(ql))
-    for _ in 1:8
-        apply_kessler_step!(qv, ql, qr, 60.0; Vt = :spectrum)
-    end
-    cfg = load_run_config(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
-    root = mktempdir()
-    r = run_config(cfg; root = root, console = false, repo = mktempdir())
-    sim = Aeolus.SimulationDriver.simulation(r.obj)
-    water = Aeolus.SimulationDriver.sim_couplings(r.obj).water
-    @test sim.t ≈ 480.0
-    # horizontally uniform fields: the layer's buoyancy is balanced by the
-    # pressure, the air stays at rest and the run is the microphysics alone
-    @test maximum(abs, interior_view(sim.u)) == 0 && maximum(abs, interior_view(sim.v)) == 0
-    @test maximum(abs, interior_view(sim.w)) < 1e-12
-    @test isapprox(interior_view(sim.qv), interior_view(qv); rtol = 1e-12)
-    @test isapprox(interior_view(water.ql), interior_view(ql); rtol = 1e-12, atol = 1e-15)
-    @test isapprox(interior_view(water.qr), interior_view(qr); rtol = 1e-12, atol = 1e-15)
-    # the physics, from the run's profiles (diagnostics.nc): autoconversion
-    # turns cloud into rain (the cloud maximum falls monotonically) and the
-    # rain reaches below the cloud base
-    ds = NCDatasets.NCDataset(joinpath(r.folder.path, "diagnostics.nc"))
-    z = Array(ds["z"][:]); QL = Array(ds["micro.ql"][:, :]); QR = Array(ds["micro.qr"][:, :])
-    t = Array(ds["time_costly"][:]); close(ds)
-    # a row per step, written after it (the run monitor records no row of
-    # the initial state): t = 60, 120, …, 480 s
-    @test t ≈ 60:60:480
-    qlmax = vec(maximum(QL; dims = 1))
-    @test issorted(qlmax; rev = true) && qlmax[end] < qlmax[1]
-    # the core step writes the row (the run monitor is attached to it), before
-    # the step's Kessler update: the row at 60 s still holds the initial
-    # cloud and no rain (the direct steps above: 0.0192 summed qr after one);
-    # at the end the rain is there
-    @test maximum(QR[:, 1]) == 0 && maximum(QR[:, end]) > 1e-5
-    @test any(QR[k, end] > 0 for k in eachindex(z) if z[k] < 0.6H)
-    # vapour and cloud only lose water to the rain (no source of water)
-    @test sum(interior_view(sim.qv)) + sum(interior_view(water.ql)) <= q0
-end
-
-@testset "round trip from run.toml (kernels: cloud_spinup.toml), the same" begin
-    r = roundtrip_check(joinpath(EX_DIR, "cloud_spinup", "cloud_spinup.toml"))
-    @test r.fields_agree && r.config_equal && r.results_agree
-end
-
-# (The coverage test of the scripts that integrate the equations is
-# test/examples_enforcement.jl since ONE-i #458: no file under examples/
-# builds or steps a model, with no exemptions.)

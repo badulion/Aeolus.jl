@@ -60,7 +60,7 @@ export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
 # Each accessor evaluates the *same floating-point expression* the
 # pre-port kernel of that grid evaluated (on a uniform grid `0.5*(a + b)`,
 # on a stretched grid the precomputed weight vectors), so every kernel is
-# bit for bit the old one on both grids (test/ka_fv.jl).
+# bit for bit the old one on both grids (test/ka_fv.jl (removed)).
 
 """
     UniformZ
@@ -1729,7 +1729,7 @@ end
 # These bodies do the same arithmetic, in the same order, in one pass per
 # group, so each field is streamed once (docs/src/design/ka_port.md,
 # "SC-d"). Every value is bit for bit the one of the separate passes
-# (test/ka_fusion.jl).
+# (test/ka_fusion.jl (removed)).
 
 # t + ν∇²f, the molecular viscosity / diffusion (`axpy!(t, ν, ∇²f)`); none
 # when the core has no viscosity

@@ -522,11 +522,9 @@ sections the site shares with the model (`[core]`, `[timestep]`, `[sgs]`,
 `build_case` consumes (ONE-k, #474: there is no `CaseConfig` struct of
 its own). `test/config_berlin.jl` checks that the site's fields and the
 model's options map one to one,
-that the four files give, field for field and bitwise, the sites the
-old Julia presets built and their parent `[[domain]]` the nest parent
-they ran (`test/data/config_berlin/fixture.toml`), and that
-`berlin_smoke.toml` run 12 steps gives the fixture's state digests and
-passes the round trip with the nest on.
+and that the shipped Berlin files load, round-trip and report their
+errors. Running them end to end is a validation case
+(`validation/urban_checks.jl`).
 `[checkpoint]` needs the Boussinesq core.
 
 Its options, the component sections included: [Options: the model](../reference/options/model.md).

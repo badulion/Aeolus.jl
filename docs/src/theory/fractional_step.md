@@ -263,7 +263,7 @@ the normal velocity convectively. The mass-flux correction of the
 previous section balances the radiated normal velocities exactly as it
 balances data.
 
-Measured (`test/era6_outflow_conditions.jl`):
+Measured (`validation/era6_outflow_conditions.jl`; the vortex and the 2000 steps in `validation/era6_outflow_conditions.jl`):
 
 | test | result |
 | :-- | :-- |

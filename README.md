@@ -38,8 +38,10 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **120,748 assertions in the fast tier (149 jobs)**, run by CI on every
-  pull request; the full tier adds the validation mini-simulations.
+- **A test suite run by CI on every pull request** (120,748 assertions
+  before the validation runs became a suite of their own; recounted at
+  closeout), and **a separate validation suite** of simulated cases
+  (GABLS, channels, campaigns, benchmarks), run weekly.
   104,000 lines of source, 72,000 lines of tests.
 - **Few dependencies** (FFTW, KernelAbstractions, StaticArrays,
   NCDatasets). PNG, Mie scattering, error and Bessel functions are
@@ -409,9 +411,9 @@ Online: [stable](https://badulion.github.io/Aeolus.jl/stable/) (latest
 release) · [dev](https://badulion.github.io/Aeolus.jl/dev/) (`master`).
 The `Documentation` workflow builds the docs on every pull request and
 deploys them to `gh-pages`: `dev` on every push to `master`, `stable` on
-a version tag. The `CI` workflow runs the fast test tier on every pull
-request and push to `master`, and the full tier on push to `master` and
-weekly.
+a version tag. The `CI` workflow runs the tests on every pull request and
+push to `master`, and the validation runs (`validation/run.jl`) weekly and
+on demand.
 
 ```bash
 julia --project=docs docs/make.jl     # build locally (never deploys)

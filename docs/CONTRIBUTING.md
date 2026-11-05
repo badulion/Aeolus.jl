@@ -146,8 +146,8 @@ git commit -m "P3: wire into Aeolus.jl, add to runtests, resolve export collisio
 Then the gate, and only then the PR:
 
 ```bash
-julia --project=. test/run.jl                           # fast tier: must be green
-julia --project=. test/run.jl --only era4_icenucleation.jl  # full-tier files of the physics you touched
+julia --project=. test/run.jl                           # the tests: must be green
+julia --project=. validation/run.jl --only era4_icenucleation.jl  # validation runs of the physics you touched
 git push -u origin issue/42-p3-microphysics
 gh pr create --base master --title "Phase 40 — P3 microphysics (#42)" --body "..."
 ```
@@ -221,35 +221,37 @@ in the whole PR.
 
 ## Testing standards
 
-The gate is that the agent runs the suite and reports the result
-honestly in the PR; GitHub Actions re-runs it (see
-[Continuous integration](#continuous-integration)). **Fast tier for PRs,
-full tier at merge:**
+The gate is that the agent runs the tests and reports the result
+honestly in the PR; GitHub Actions re-runs them (see
+[Continuous integration](#continuous-integration)). **Tests are the PR
+gate; validation runs are a separate suite and not a gate:**
 
 ```bash
-julia --project=. test/run.jl                          # fast tier, parallel: the PR gate
-julia --project=. test/run.jl --only <file>.jl         # a full-tier file you affected
-AEOLUS_TEST_TIER=full julia --project=. test/run.jl    # full tier: the merge train
-julia --project=. test/runtests.jl                     # serial, same tier selection
+julia --project=. test/run.jl                          # the tests, parallel: the PR gate
+julia --project=. test/runtests.jl                     # the tests, serially (Pkg.test())
+julia --project=. validation/run.jl --only <file>.jl   # a validation case you affected
+julia --project=. validation/run.jl                    # every validation case
 ```
 
-- The **fast tier** (default) is every test file except the validation
-  mini-simulations tagged `tier = "full"` in `test/test_tags.toml`. It
-  keeps every module covered by conservation, analytic and unit checks,
-  and runs in about 5 minutes on the 24-core machine. A PR needs it
-  green.
-- The **full tier** adds the validation runs (GABLS, channels, flat
-  plate, CBC decay, urban and heterogeneous-surface campaigns). The merge
-  train runs it before merging. If your change touches physics that a
-  full-only file validates, run that file yourself and quote it: the
-  merge train is not the place to find out.
-- `test/runtests.jl`'s include list stays the single list of test files.
-  A new file needs its include line and nothing else; tag it only if it
-  is a full-only validation run (with a one-line reason saying which fast
-  file keeps the module covered) or timing-sensitive (`exclusive`).
+- **Tests** (`test/`) check code: analytic and closed-form values,
+  identities, conservation over a few steps, interfaces, short code-path
+  runs. They keep every `src` module tested. A PR needs them green.
+- **Validation runs** (`validation/`) are simulated cases that confirm the
+  physics works and stays stable (GABLS, channels, flat plate, CBC decay,
+  urban, land and ocean campaigns, long nest runs). If your change touches
+  physics a validation case covers, run it and quote the result; a
+  failure is reported (code or expectation wrong?), it does not block the
+  merge by itself. CI runs them weekly.
+- Never put a validation run in `test/`; put its unit checks there and the
+  run in `validation/` (see [Validation runs](src/validation.md)).
+- Each entry file's include list (`test/runtests.jl`,
+  `validation/runvalidation.jl`) is the single list of its files. A new
+  file needs its include line and nothing else; tag it only if it is heavy
+  or timing-sensitive (`exclusive`).
 
 The runner, its options and the tag table are described in
-[`docs/src/testing.md`](src/testing.md).
+[`docs/src/testing.md`](src/testing.md) and
+[`docs/src/validation.md`](src/validation.md).
 
 **Test physics, not execution.** A test asserting a function returns
 without error is nearly worthless. Assert conservation laws, analytic
@@ -308,8 +310,8 @@ Four workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 | :-- | :-- | :-- |
-| `CI.yml` | every PR, push to `master` | fast tier: `julia --project=. test/run.jl` |
-| `CI.yml` | push to `master`, Mondays 03:17 UTC, manual | full tier: `AEOLUS_TEST_TIER=full` |
+| `CI.yml` | every PR, push to `master` | the tests: `julia --project=. test/run.jl` |
+| `CI.yml` | Mondays 03:17 UTC, manual | the validation runs: `julia --project=. validation/run.jl` (not a gate) |
 | `Documenter.yml` | push to `master`, tags, PRs | builds `docs/make.jl`; deploys from `master` and tags only |
 | `CompatHelper.yml` | daily | opens PRs that bump `[compat]` entries |
 | `TagBot.yml` | registry release | tags and releases a registered version |
@@ -318,7 +320,7 @@ The test jobs run Julia 1.13 on `ubuntu-latest` (4 cores, 16 GB) with
 `JOBS=4`, one thread per job and `AEOLUS_FFTW_PLANNER=estimate`. Each job
 uploads its run folder (`.testruns/ci-*`: per-file logs, `summary.txt`)
 as an artifact, so a failure can be read without rerunning it. Timeouts:
-90 min for the fast tier, 240 min for the full tier, 60 min for the docs.
+150 min for the tests, 360 min for the validation runs, 60 min for the docs.
 
 CI is a second check, not a replacement for running the suite yourself:
 the wall-clock assertions (`era6_apriori_sgs.jl`, `era6_cbc_decay.jl`) were
@@ -489,8 +491,8 @@ The end-to-end runs of the example (every coupling on, ledgers closed;
 the nest parent's smoke run and its idealised validations) became
 `examples/urban/berlin_checks.jl`, run by hand; since the urban case
 moved into `src/` (EX-a, #438; an urban site of the model since ONE-e,
-#454) they are `test/urban_checks.jl` (full
-tier), and every urban run writes its ledger closure to
+#454) they are `validation/urban_checks.jl` (the runs) and
+`test/urban_checks.jl` (their code-path checks), and every urban run writes its ledger closure to
 `output/results.toml`.
 
 ### One model; examples are configuration
@@ -516,7 +518,7 @@ its sections enable.
   and its variants, its drivers in `input/` (written by AeolusPrep.jl),
   its reference data in `data/`, and optional scripts that read a
   finished run folder and plot or tabulate it. Each TOML file carries a
-  `[test]` table with its smoke size; `test/config_roundtrip.jl` finds it
+  `[test]` table with its smoke size; `test/config_roundtrip.jl` (removed) finds it
   by globbing, validates it and replays it.
 - **The rule is a test.** `test/examples_enforcement.jl` parses every
   `.jl` under `examples/` and fails on a call that builds or steps a
@@ -624,10 +626,11 @@ git worktree prune
 open a PR for the part that is finished. A large PR that touches six
 subsystems cannot be reviewed meaningfully.
 
-**A full-tier file fails at merge but the fast tier was green.** The
-log path is printed in the runner's summary. Rerun that file alone
-(`test/run.jl --only <file>`) to rule out load: files tagged
+**A validation run fails but the tests are green.** The log path is
+printed in the runner's summary. Rerun that file alone
+(`validation/run.jl --only <file>`) to rule out load: files tagged
 `exclusive` assert wall-clock budgets and must not share the machine.
+Then say in the PR whether the code or the case's expectation is wrong.
 
 **The suite fails on `master`.** Stop and report it. Do not build on a
 red baseline — you will not be able to tell your failures from the

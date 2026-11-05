@@ -44,7 +44,7 @@
 #              N-nest-e #263), and the interface flux correction leaves
 #              the generator's normal perturbation out of the parent's
 #              interface faces (synthetic_normal_velocity, #418). On the
-#              idealised 2 h sheared-CBL nest (test/era6_inflow_nest_longrun.jl)
+#              idealised 2 h sheared-CBL nest (validation/era6_inflow_nest_longrun.jl)
 #              two-way with the generator is within 10 % of one-way in KE
 #              and 0.01 K in overlap θ (child KE ×12 before #418). In
 #              Berlin the two-way nest is unvalidated (nesting.jl); the

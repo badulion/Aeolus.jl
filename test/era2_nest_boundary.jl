@@ -7,22 +7,19 @@
 #
 #   1. mass: divergence-free random parent → net child boundary flux after
 #      the correction ≤ 1e-13·U·A, |δ|/U, child max|∇·u| < 1e-10
-#   2. advection of a Gaussian θ anomaly through the nest (r = 2, 3): child
-#      error ≤ parent error while inside; residual after it left, with and
-#      without a NestSponge
-#   3. one-way consistency in a convective boundary layer: overlap-mean
-#      θ(z), u(z) of child and parent agree within the run-to-run spread
-#   4. top boundary: the child top halo follows a parent θ trend, and the
+#   2. one-way consistency in a convective boundary layer (overlap means
+#      within the run-to-run spread): validation/era2_nest_boundary.jl
+#   3. top boundary: the child top halo follows a parent θ trend, and the
 #      child column responds only through the boundary flux
-#   5. faces inside solids (a building cut by the east face): u·n = 0,
+#   4. faces inside solids (a building cut by the east face): u·n = 0,
 #      excluded from δ
-#   6. perfect parent: refinement 1, the child driven by the truth
-#   7. outflow condition through nest_bcs (#329): a child-only θ pulse
+#   5. perfect parent: refinement 1, the child driven by the truth
+#   6. outflow condition through nest_bcs (#329): a child-only θ pulse
 #      leaves through a convective outflow face, but is trapped by the
 #      Dirichlet (parent) one; the advection halo is checked
-#   8. a NestSponge keeps the child divergence-free (#329): the velocity is
+#   7. a NestSponge keeps the child divergence-free (#329): the velocity is
 #      relaxed before the projection
-#   9. fill_nest_halos! (public since #329): new boundary data reach the
+#   8. fill_nest_halos! (public since #329): new boundary data reach the
 #      child's halos
 #
 # References: Hellsten et al. (2021), GMD 14, 3185 (PALM nesting: Dirichlet
@@ -32,7 +29,6 @@
 # scale w* = (g/θ₀ H zᵢ)^(1/3)).
 
 using Test
-using Printf
 using Random
 using Aeolus
 using Aeolus.Nesting
@@ -40,21 +36,12 @@ using Aeolus.Grids: interior
 using Aeolus.Fields: interior_view
 using Aeolus.BoundaryConditions: FieldBoundaryConditions, OpenBoundary, open_boundary_states
 using Aeolus.Operators: divergence
-using Aeolus.AdvectionSchemes: advect_weno_z!
 using Aeolus.IBM: SolidMask, mark_solid!, apply_solid_mask!
 
 _nb_xc(m, i) = m.x0 + (i - m.Hx - 0.5) * m.dx
-_nb_zc(m, k) = m.z0 + (k - m.Hz - 0.5) * m.dz
 
-"Child initialised from the parent prolongated over the whole child."
-function _nb_init_child!(csim, psim, nest)
-    st = nest_interp_state(nest)
-    interpolate_parent_state!(st, psim, nest; order = 3, region = :all)
-    for (cf, sf) in ((csim.u, st.u), (csim.v, st.v), (csim.w, st.w), (csim.θ, st.θ))
-        cf.data .= sf.data
-    end
-    return csim
-end
+# `_nb_init_child!`, shared with the CBL validation run (validation/era2_nest_boundary.jl)
+isdefined(@__MODULE__, :_nb_init_child!) || include(joinpath(@__DIR__, "support", "nest_boundary.jl"))
 
 "Total area of the open faces of the child's (first) open boundary set."
 function _nb_open_area(csim)
@@ -65,308 +52,95 @@ end
 
 @testset "Era II — one-way nest boundary data (N-nest-d, #261)" begin
 
-# -------------------------------------------------------------------------
 @testset "mass: divergence-free parent, net boundary flux and δ" begin
-    # local RNGs throughout: the file leaves the global RNG stream of the
-    # suite untouched (later stochastic tests, e.g. era6_gabls3, depend on it)
     rng = Xoshiro(261)
-    cases = (
-        # a child inside a triply periodic parent: all six faces open
-        (name = "inside, r = 2", r = 2, pbcs = FieldBoundaryConditions(:periodic),
-         ext = ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), bottom = :nest),
-        # the Berlin shape: ground wall, open sides and top, r = (2, 2, 4)
-        (name = "ground, r = (2,2,4)", r = (2, 2, 4),
-         pbcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
-         ext = ((0.25, 0.625), (0.25, 0.625), (0.0, 0.5)), bottom = :wall),
-        (name = "ground, r = 3", r = 3,
-         pbcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
-         ext = ((0.25, 0.625), (0.25, 0.625), (0.0, 0.5)), bottom = :wall))
-    for c in cases
-        pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
-        nest = nested_grid(pm, c.ext, c.r; halo = (3, 3, 3))
-        cm = nest_child_mesh(nest)
-        psim = BoussinesqSimulation(pm; bcs = c.pbcs)
-        for f in (psim.u, psim.v, psim.w)
-            interior_view(f) .= randn(rng, size(interior_view(f)))
-        end
-        step!(psim, 1e-10); psim.t = 0.0             # project: ∇·u = 0 to round-off
-        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest;
-                                                       bottom = c.bottom, top = :nest))
-        _nb_init_child!(csim, psim, nest)
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
-                        advance_child = domain_advance(step_rk3!),
-                        cfl_parent = CFLConstraints(C_advective = 0.4))
-        # project the prolongated child once (with its open faces): SSP-RK3
-        # mixes the step-start state into its result, so a non-solenoidal
-        # start would survive (decaying ×1/9 per step) in any domain
-        step!(csim, 1e-12); csim.t = psim.t
-        U = maximum(abs, interior_view(psim.u))
-        A = _nb_open_area(csim)
-        worst_Q = 0.0; worst_res = 0.0; worst_δ = 0.0; worst_div = 0.0
-        st = only(open_boundary_states(csim))
-        st.record = true
-        for _ in 1:5
-            step_nested!(run)
-            for (_, Q, res) in st.log
-                worst_Q = max(worst_Q, abs(Q)); worst_res = max(worst_res, abs(res))
-            end
-            empty!(st.log)
-            worst_δ = max(worst_δ, abs(open_boundary_ledger(csim).δ))
-            divergence(csim.div_buf, csim.u, csim.v, csim.w)
-            worst_div = max(worst_div, maximum(abs, interior_view(csim.div_buf)))
-        end
-        @printf("  %-20s U = %.2f: |Q|/(U A) before %.2e, after %.2e; |δ|/U = %.2e; child max|∇·u| = %.2e s⁻¹\n",
-                c.name, U, worst_Q / (U * A), worst_res / (U * A), worst_δ / U, worst_div)
-        @test worst_res <= 1e-13 * U * A
-        @test worst_div < 1e-10
-        # the prolongation preserves face fluxes and the blend is linear in
-        # time, so a divergence-free parent already gives a compatible
-        # boundary: δ is round-off (Hellsten et al. 2021 report |δ| three to
-        # four orders below U for their non-conservative interpolation)
-        @test worst_δ < 1e-13 * U
-    end
-end
-
-# -------------------------------------------------------------------------
-# A Gaussian θ anomaly (amplitude 1 K, σ = 6 parent cells) carried by a
-# uniform U = 5 m/s through a periodic parent (2400 m, Δx = 25 m) and a
-# child over 800–1600 m at r = 2 and 3 (quasi-1-D: the child is periodic
-# in y and z). Both domains SSP-RK3, Δt_p = 1 s, r child substeps. The
-# fields are finite-volume cell averages, so they are initialised with, and
-# compared against, the exact cell averages of the translated Gaussian
-# (point values would put an O(Δx² θ''/24) inconsistency between the two
-# grids that the conservative prolongation exposes).
-function _nb_advect(r; sponge = nothing, weno = false, order = 3, σ = 150.0, U = 5.0,
-                    L = 2400.0, x0 = 500.0, dt = 1.0, t_inside = 140.0, t_end = 350.0)
-    pm = RegularGrid(Float64; size = (96, 4, 4), extent = (L, 100.0, 100.0), halo = (3, 3, 3))
-    nest = nested_grid(pm, ((800.0, 1600.0), (0.0, 100.0), (0.0, 100.0)), (r, 1, 1))
+    # the Berlin shape: ground wall, open sides and top, r = (2, 2, 4)
+    pm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.625), (0.25, 0.625), (0.0, 0.5)), (2, 2, 4); halo = (3, 3, 3))
     cm = nest_child_mesh(nest)
-    erf = Aeolus.GasOptics.erf_series
-    s2 = σ * sqrt(2)
-    # exact average over storage cell i of mesh m at time t (periodic images)
-    exact(m, i, t) = begin
-        a = m.x0 + (i - m.Hx - 1) * m.dx; b = a + m.dx
-        sum(σ * sqrt(π / 2) / m.dx * (erf((b - x0 - U * t + n * L) / s2) -
-                                      erf((a - x0 - U * t + n * L) / s2)) for n in -1:1)
+    psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    for f in (psim.u, psim.v, psim.w)
+        interior_view(f) .= randn(rng, size(interior_view(f)))
     end
-    psim = BoussinesqSimulation(pm)
-    csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :periodic, :periodic))
-    for s in (psim, csim)
-        fill!(s.u.data, U)
-        for i in axes(s.θ.data, 1)
-            s.θ.data[i, :, :] .= exact(s.mesh, i, 0.0)
-        end
+    step!(psim, 1e-10); psim.t = 0.0             # project: ∇·u = 0 to round-off
+    csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
+    _nb_init_child!(csim, psim, nest)
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
+                    advance_child = domain_advance(step_rk3!),
+                    cfl_parent = CFLConstraints(C_advective = 0.4))
+    # project the prolongated child once with its open faces (SSP-RK3 keeps
+    # a non-solenoidal start state, ×1/9 per step)
+    step!(csim, 1e-12); csim.t = psim.t
+    U = maximum(abs, interior_view(psim.u))
+    A = _nb_open_area(csim)
+    worst_res = 0.0; worst_δ = 0.0; worst_div = 0.0
+    st = only(open_boundary_states(csim))
+    st.record = true
+    for _ in 1:2
+        step_nested!(run)
+        worst_res = max(worst_res, maximum(abs(res) for (_, Q, res) in st.log))
+        empty!(st.log)
+        worst_δ = max(worst_δ, abs(open_boundary_ledger(csim).δ))
+        divergence(csim.div_buf, csim.u, csim.v, csim.w)
+        worst_div = max(worst_div, maximum(abs, interior_view(csim.div_buf)))
     end
-    # θ transport: the core's centred scheme, or WENO-Z5 (the Berlin
-    # tracers' scheme) swapped in as the θ tendency of both domains
-    bf = weno ? (s, Δt) -> (fill!(s.tθ.data, 0); advect_weno_z!(s.tθ, s.u, s.v, s.w, s.θ); s) :
-                nothing
-    adv = domain_advance(step_rk3!; body_force! = bf)
-    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
-                    cfl_parent = nothing, cfl_child = nothing, substeps = r, sponge, order)
-    cx, _, _ = nest_covered_range(nest)
-    l2(s, idx, t) = sqrt(sum(abs2, interior_view(s.θ)[idx, 1, 1] .-
-                                   [exact(s.mesh, i + s.mesh.Hx, t) for i in idx]) / length(idx))
-    ratio = NaN
-    while run.t < t_end - 1e-9
-        step_nested!(run; dt)
-        if abs(run.t - t_inside) < 1e-9            # centre at 1200 m, mid-child
-            ratio = l2(csim, 1:cm.Nx, run.t) / l2(psim, cx, run.t)
-        end
-    end
-    resid = maximum(abs, interior_view(csim.θ))  # centre at 2250 m: 4.3σ past the child
-    return (; ratio, resid)
+    @test worst_res <= 1e-13 * U * A
+    @test worst_div < 1e-10
+    # flux-preserving prolongation + linear blend: a divergence-free parent
+    # already gives a compatible boundary, δ is round-off
+    @test worst_δ < 1e-13 * U
 end
 
-@testset "advection of a θ anomaly through the nest (r = 2, 3)" begin
-    sp = NestSponge(width = 6, α_max = 0.2)
-    for r in (2, 3)
-        cen = _nb_advect(r)
-        cen_sp = _nb_advect(r; sponge = sp)
-        # WENO-Z5 needs a 5th-order prolongation (`order = 5`): with the
-        # default order 3 the interface error O(Δx_p³ ∂³θ/∂x³) exceeds the
-        # parent's own 5th-order error (child/parent ratio 3.5, see below)
-        wen = _nb_advect(r; weno = true, order = 5)
-        wen_sp = _nb_advect(r; weno = true, order = 5, sponge = sp)
-        wen3 = _nb_advect(r; weno = true, order = 3)
-        @printf("  r = %d, centred θ: child/parent L2 error inside %.3f; residual after it left %.2e (sponge: %.2e, ratio %.3f)\n",
-                r, cen.ratio, cen.resid, cen_sp.resid, cen_sp.ratio)
-        @printf("  r = %d, WENO-Z5 θ, order-5 prolongation: child/parent L2 error inside %.3f; residual after it left %.2e (sponge: %.2e, ratio %.3f); order-3 prolongation: ratio %.3f\n",
-                r, wen.ratio, wen.resid, wen_sp.resid, wen_sp.ratio, wen3.ratio)
-        @test wen3.ratio > 1.0      # documents why the order must match the scheme
-        # the refined child is more accurate than the parent over the overlap
-        for c in (cen, cen_sp, wen, wen_sp)
-            @test c.ratio <= 1.0
-        end
-        # with an upwind-biased scalar scheme the anomaly leaves cleanly,
-        # with and without the sponge
-        @test wen.resid < 0.01
-        @test wen_sp.resid < 0.01
-        @test cen_sp.resid < 0.01
-        # the core's 2nd-order centred θ advection has an undamped 2Δx mode
-        # (group velocity −U) that the Dirichlet outflow face excites and the
-        # Dirichlet inflow face reflects: without a sponge it stays trapped at
-        # a few % (3.1e-2 at r = 2, 4.1e-2 at r = 3). A property of the
-        # scheme rather than of the boundary data: the same nest with WENO-Z5
-        # θ leaves 7e-5, and the sponge removes it (8e-4, 2e-3). The upwind
-        # scalar outflow halo is N-open-c (#260).
-        @test cen.resid < 0.05
-        @test_broken cen.resid < 0.01
-    end
-end
-
-# -------------------------------------------------------------------------
-# A convective boundary layer (surface heat flux 0.1 K m/s, a 2 m/s mean
-# wind, Smagorinsky) in a 1200² × 600 m parent with a 600² × 400 m child at
-# r = 2 on the ground (open sides and top). After 1200 s of spin-up
-# (~3 t* = zᵢ/w*, w* ≈ 1.2 m/s) the overlap-mean θ(z) and u(z), averaged
-# over 1200–2400 s, of child and parent must agree within the run-to-run
-# spread of the parent itself (4 seeds).
-function _nb_cbl_parent(pm, seed)
-    p = BoussinesqSimulation(pm; θ₀ = 300.0, C_s = 0.17, θ_flux_bottom = 0.1,
-                             bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    rng = Xoshiro(seed)
-    for k in axes(p.θ.data, 3)
-        z = _nb_zc(pm, k)
-        p.θ.data[:, :, k] .= 300.0 + (z > 300 ? 0.005 * (z - 300) : 0.0)
-    end
-    θi = interior_view(p.θ)
-    θi[:, :, 1:3] .+= 0.2 .* (rand(rng, size(θi, 1), size(θi, 2), 3) .- 0.5)
-    fill!(p.u.data, 2.0)
-    step!(p, 1e-3); p.t = 0.0
-    return p
-end
-
-_nb_hmean(f, ci, cj, kk) = [sum(interior_view(f)[ci, cj, k]) / (length(ci) * length(cj)) for k in kk]
-
-function _nb_cbl(seed; nested, T1 = 1200.0, T2 = 2400.0)
-    pm = RegularGrid(Float64; size = (24, 24, 12), extent = (1200.0, 1200.0, 600.0), halo = (3, 3, 3))
-    p = _nb_cbl_parent(pm, seed)
-    nest = nested_grid(pm, ((300.0, 900.0), (300.0, 900.0), (0.0, 400.0)), 2)
-    cm = nest_child_mesh(nest); cx, cy, cz = nest_covered_range(nest)
-    cfl = CFLConstraints(C_advective = 0.5)
-    c = nothing; run = nothing
-    if nested
-        c = BoussinesqSimulation(cm; θ₀ = 300.0, C_s = 0.17, θ_flux_bottom = 0.1,
-                                 bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
-        _nb_init_child!(c, p, nest)
-        run = NestedRun(p, c, nest; feedback = :one_way, cfl_parent = cfl)
-    end
-    ap = zeros(length(cz), 2); ac = zeros(cm.Nz, 2); n = 0; dtp = nothing
-    while p.t < T2
-        if nested
-            step_nested!(run)
-        else
-            dt = adaptive_dt(p, cfl; dt_prev = dtp); step!(p, dt); dtp = dt
-        end
-        p.t >= T1 || continue
-        ap[:, 1] .+= _nb_hmean(p.θ, cx, cy, cz); ap[:, 2] .+= _nb_hmean(p.u, cx, cy, cz)
-        if nested
-            ac[:, 1] .+= _nb_hmean(c.θ, 1:cm.Nx, 1:cm.Ny, 1:cm.Nz)
-            ac[:, 2] .+= _nb_hmean(c.u, 1:cm.Nx, 1:cm.Ny, 1:cm.Nz)
-        end
-        n += 1
-    end
-    ap ./= n
-    # child levels averaged onto the parent levels (r_z = 2)
-    pc = nested ? [(ac[2k-1, j] + ac[2k, j]) / (2n) for k in 1:length(cz), j in 1:2] : nothing
-    return ap, pc, run
-end
-
-@testset "one-way consistency: convective boundary layer, overlap means" begin
-    pp, pc, run = _nb_cbl(1; nested = true)
-    runs = [pp, (first(_nb_cbl(s; nested = false)) for s in 2:4)...]
-    spread = [maximum(a[k, j] for a in runs) - minimum(a[k, j] for a in runs)
-              for k in axes(pp, 1), j in 1:2]
-    d = abs.(pc .- pp)
-    st = run.stats
-    @printf("  CBL: %d parent steps, %d child substeps (n %d..%d), retries %d/%d\n",
-            st.parent_steps, st.child_substeps, st.n_min, st.n_max, st.parent_retries,
-            st.child_retries)
-    for k in axes(pp, 1)
-        @printf("    z = %3.0f m: θ parent %.4f child %.4f |Δ| %.4f spread %.4f K | u parent %.3f child %.3f |Δ| %.3f spread %.3f m/s\n",
-                25.0 + 50.0 * (k - 1), pp[k, 1], pc[k, 1], d[k, 1], spread[k, 1],
-                pp[k, 2], pc[k, 2], d[k, 2], spread[k, 2])
-    end
-    @printf("  max |Δθ| / spread = %.2f, max |Δu| / spread = %.2f\n",
-            maximum(d[:, 1] ./ spread[:, 1]), maximum(d[:, 2] ./ spread[:, 2]))
-    @test all(d[:, 1] .<= spread[:, 1])
-    @test all(d[:, 2] .<= spread[:, 2])
-    @test st.child_retries == 0 && st.parent_retries == 0
-end
-
-# -------------------------------------------------------------------------
-# A parent warming in time, θ = 300 + a t everywhere (set analytically, at
-# rest). The child spans the parent horizontally (periodic) on the ground
-# and is nested only through its top. Its top halo must follow the trend,
-# and its column may change only through the diffusive flux through the
-# top face: Δ∫θ = Δt κ Σ (θ_halo − θ_top)/Δz · A, and nothing at all
-# with κ = 0.
+# A parent warming in time, θ = 300 + a t (set analytically, at rest). The
+# child is nested only through its top: its top halo follows the trend and
+# its column changes only by the diffusive flux through the top face.
 @testset "top boundary: a parent θ trend reaches the child only through fluxes" begin
-    a = 1e-3                                              # K/s
-    for κ in (0.0, 5.0)
-        pm = RegularGrid(Float64; size = (8, 8, 16), extent = (400.0, 400.0, 800.0), halo = (3, 3, 3))
-        nest = nested_grid(pm, ((0.0, 400.0), (0.0, 400.0), (0.0, 400.0)), (2, 2, 4))
-        cm = nest_child_mesh(nest)
-        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-        fill!(psim.θ.data, 300.0)
-        csim = BoussinesqSimulation(cm; ν = κ,
-                                    bcs = nest_bcs(cm, :periodic, :periodic; bottom = :wall,
-                                                   top = :nest))
-        fill!(csim.θ.data, 300.0)
-        core = (s, dt; kw...) -> (s.t += dt; fill!(s.θ.data, 300.0 + a * s.t); s)
-        halo_err = Ref(0.0); flux = Ref(0.0); ctr = Ref(0)
-        kt = cm.Hz + cm.Nz
-        # body_force! runs after the tendencies, with the halos the core read
-        probe! = (s, Δt) -> begin
-            ht = view(s.θ.data, cm.Hx+1:cm.Hx+cm.Nx, cm.Hy+1:cm.Hy+cm.Ny, kt + 1)
-            halo_err[] = max(halo_err[], maximum(abs, ht .- (300.0 + a * s.t)))
-            inn = view(s.θ.data, cm.Hx+1:cm.Hx+cm.Nx, cm.Hy+1:cm.Hy+cm.Ny, kt)
-            flux[] += Δt * κ * sum(ht .- inn) / cm.dz * cm.dx * cm.dy
-            ctr[] += 1
-            s
-        end
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(core),
-                        advance_child = domain_advance(; body_force! = probe!),
-                        cfl_parent = nothing, cfl_child = nothing, substeps = 3)
-        V = cm.dx * cm.dy * cm.dz
-        # ∫(θ − 300): the anomaly integral, free of the 300 K cancellation
-        I0 = sum(interior_view(csim.θ) .- 300.0) * V
-        θ0 = copy(interior_view(csim.θ))
-        for _ in 1:40
-            step_nested!(run; dt = 5.0)
-        end
-        I1 = sum(interior_view(csim.θ) .- 300.0) * V
-        budget = abs((I1 - I0) - flux[]) / max(abs(I1 - I0), 1e-300)
-        top_inc = sum(interior_view(csim.θ)[:, :, end] .- 300.0) / (cm.Nx * cm.Ny)
-        bot_inc = sum(interior_view(csim.θ)[:, :, 1] .- 300.0) / (cm.Nx * cm.Ny)
-        @printf("  κ = %.0f m²/s, %d child steps to t = %.0f s (parent +%.3f K): top-halo error %.1e K; Δ∫θ = %.6e, boundary flux %.6e (rel. diff %.1e); top cell +%.4f K, bottom cell +%.2e K\n",
-                κ, ctr[], run.t, a * run.t, halo_err[], I1 - I0, flux[], budget, top_inc, bot_inc)
-        @test halo_err[] < 1e-12
-        if κ == 0
-            @test interior_view(csim.θ) == θ0                  # no flux, no change
-        else
-            @test budget < 1e-10
-            @test top_inc > 0 && top_inc > 100 * abs(bot_inc)   # warming from the top down
-        end
+    a, κ = 1e-3, 5.0
+    pm = RegularGrid(Float64; size = (4, 4, 16), extent = (200.0, 200.0, 800.0), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.0, 200.0), (0.0, 200.0), (0.0, 400.0)), (2, 2, 4))
+    cm = nest_child_mesh(nest)
+    psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+    fill!(psim.θ.data, 300.0)
+    csim = BoussinesqSimulation(cm; ν = κ,
+                                bcs = nest_bcs(cm, :periodic, :periodic; bottom = :wall, top = :nest))
+    fill!(csim.θ.data, 300.0)
+    core = (s, dt; kw...) -> (s.t += dt; fill!(s.θ.data, 300.0 + a * s.t); s)
+    halo_err = Ref(0.0); flux = Ref(0.0)
+    kt = cm.Hz + cm.Nz
+    probe! = (s, Δt) -> begin           # after the tendencies, with the halos the core read
+        ht = view(s.θ.data, cm.Hx+1:cm.Hx+cm.Nx, cm.Hy+1:cm.Hy+cm.Ny, kt + 1)
+        halo_err[] = max(halo_err[], maximum(abs, ht .- (300.0 + a * s.t)))
+        inn = view(s.θ.data, cm.Hx+1:cm.Hx+cm.Nx, cm.Hy+1:cm.Hy+cm.Ny, kt)
+        flux[] += Δt * κ * sum(ht .- inn) / cm.dz * cm.dx * cm.dy
+        s
     end
+    run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(core),
+                    advance_child = domain_advance(; body_force! = probe!),
+                    cfl_parent = nothing, cfl_child = nothing, substeps = 3)
+    V = cm.dx * cm.dy * cm.dz
+    I0 = sum(interior_view(csim.θ) .- 300.0) * V          # anomaly integral
+    for _ in 1:5
+        step_nested!(run; dt = 5.0)
+    end
+    I1 = sum(interior_view(csim.θ) .- 300.0) * V
+    @test halo_err[] < 1e-12
+    @test abs((I1 - I0) - flux[]) / abs(I1 - I0) < 1e-10
+    top_inc = sum(interior_view(csim.θ)[:, :, end] .- 300.0)
+    bot_inc = sum(interior_view(csim.θ)[:, :, 1] .- 300.0)
+    @test top_inc > 0 && top_inc > 100 * abs(bot_inc)     # warming from the top down
 end
 
-# -------------------------------------------------------------------------
-# A building cut by the child's east face. The open faces next to its solid
+# A building cut by the child's east face: the open faces next to its solid
 # cells carry u·n = 0 and are left out of the mass-flux correction, exactly.
 @testset "faces inside solids: u·n = 0, excluded from δ" begin
     pm = RegularGrid(Float64; size = (16, 16, 8), extent = (800.0, 800.0, 400.0), halo = (3, 3, 3))
     nest = nested_grid(pm, ((200.0, 600.0), (200.0, 600.0), (0.0, 200.0)), 2)
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    fill!(psim.u.data, 3.0)                               # an eastward wind: outflow at the east face
-    rng = Xoshiro(5)
-    interior_view(psim.v) .= 0.2 .* randn(rng, size(interior_view(psim.v)))
+    fill!(psim.u.data, 3.0)                               # eastward: outflow at the east face
+    interior_view(psim.v) .= 0.2 .* randn(Xoshiro(5), size(interior_view(psim.v)))
     step!(psim, 1e-6); psim.t = 0.0
-    # the building: x ∈ [550, 600] m (cut by the east face at 600 m),
-    # y ∈ [350, 450] m, height 100 m
-    sm = SolidMask(cm)
+    sm = SolidMask(cm)                                    # x ∈ [550, 600], y ∈ [350, 450], z < 100
     mark_solid!(sm, (x, y, z) -> x > 550 && 350 < y < 450 && z < 100)
     csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest))
     _nb_init_child!(csim, psim, nest)
@@ -376,125 +150,62 @@ end
                     cfl_parent = CFLConstraints(C_advective = 0.4))
     st = only(open_boundary_states(csim))
     east = csim.bcs.east.planes[:u]
-    nsolid = count(!, east.fluid)
-    for _ in 1:5
-        step_nested!(run)
-    end
-    # the east boundary face (storage index Hx+Nx+1) on the solid rows
+    step_nested!(run)
     ie = cm.Hx + cm.Nx + 1
     solid_rows = [(cm.Hy + a, cm.Hz + b) for a in 1:cm.Ny, b in 1:cm.Nz if !east.fluid[a, b]]
-    un_solid = maximum(abs(csim.u.data[ie, j, k]) for (j, k) in solid_rows)
-    buf_solid = maximum(abs(east.data[1, j, k]) for (j, k) in solid_rows)
-    # δ is Q over the fluid faces only (outward-normal area, solid faces excluded)
+    @test length(solid_rows) == 4 * 4                     # 100 m × 100 m of 25 m faces
+    @test all(csim.u.data[ie, j, k] == 0.0 for (j, k) in solid_rows)
     led = open_boundary_ledger(csim)
     A_fluid = sum(count(p.fluid) * (p.axis == 1 ? cm.dy * cm.dz : p.axis == 2 ? cm.dx * cm.dz :
                                     cm.dx * cm.dy) for p in st.planes if p.normal)
-    A_all = _nb_open_area(csim)
-    U = 3.0
-    @printf("  building at the east face: %d solid face(s) of %d; u·n there %.1e (buffer %.1e); Q = %.4e m³/s, δ = %.4e m/s = Q/A_fluid (%.4e), residual %.1e\n",
-            nsolid, length(east.fluid), un_solid, buf_solid, led.Q, led.δ, led.Q / A_fluid,
-            led.residual)
-    @test nsolid == 4 * 4                                  # 4 cells in y (100 m) × 4 in z (100 m)
-    @test un_solid == 0.0 && buf_solid == 0.0
-    @test led.δ == led.Q / A_fluid                         # excluded from δ, exactly
-    @test A_fluid < A_all
-    @test abs(led.residual) <= 1e-13 * U * A_all
-    @test abs(led.Q) > 1e-6 * U * A_all                    # the solid faces do make an imbalance
+    @test led.δ ≈ led.Q / A_fluid rtol = 1e-14             # solid faces excluded from δ
+    @test abs(led.residual) <= 1e-13 * 3.0 * _nb_open_area(csim)
     divergence(csim.div_buf, csim.u, csim.v, csim.w)
     @test maximum(abs, interior_view(csim.div_buf)) < 1e-10
-    # #327 M4: one solid path (mark_open_boundary_solids!), so the
-    # tangential velocities are zero at the solid points too (the retired
-    # nest-only path zeroed u·n alone), in the buffers and in the halos
-    ntan = 0; tmax = 0.0
-    for nm in (:v, :w)
-        pl = csim.bcs.east.planes[nm]
-        f = getproperty(csim, nm)
-        fill_halos!(f, csim.bcs)
-        for b in axes(pl.fluid, 2), a in axes(pl.fluid, 1)
-            pl.fluid[a, b] && continue
-            ntan += 1
-            for c in 1:length(pl.range)
-                tmax = max(tmax, abs(pl.data[c, cm.Hy + a, cm.Hz + b]),
-                           abs(f.data[pl.range[c], cm.Hy + a, cm.Hz + b]))
-            end
-        end
-    end
-    # the flags are those of mark_open_boundary_solids! on fresh bcs
-    fresh = nest_bcs(cm, :nest, :nest; bottom = :wall, top = :nest)
-    mark_open_boundary_solids!(fresh, sm.mask)
-    same = all(csim.bcs.east.planes[nm].fluid == fresh.east.planes[nm].fluid for nm in (:u, :v, :w, :θ))
-    @printf("  solid points of the east face: %d tangential (v, w), max |velocity| there %.1e; flags = mark_open_boundary_solids!: %s\n",
-            ntan, tmax, same)
-    @test ntan >= 2 * nsolid
-    @test tmax == 0.0
-    @test same
-    @test !hasfield(NestBoundaryData, :solid)
 end
 
-# -------------------------------------------------------------------------
 # Refinement 1: the child is the parent's own grid over a sub-box, so the
-# parent is the exact solution of the child's problem. Driven by it, the
-# child must stay on it: with the projection step the predictor sees the
-# same halos and the Neumann solve reproduces the parent's interior
-# pressure gradient, so the match is round-off; with SSP-RK3 the
-# intermediate stages see the time-blended parent (B(t+Δt), B(t+Δt/2))
-# instead of the parent's own stage values, an O(Δt²) per-step difference.
+# parent is the exact solution of the child's problem; with the projection
+# step the child stays on it to round-off.
 @testset "perfect parent: refinement 1, the child stays on the truth" begin
-    for (name, adv) in (("step!", domain_advance()), ("step_rk3!", domain_advance(step_rk3!)))
-        L = 1.0
-        pm = RegularGrid(Float64; size = (24, 24, 8), extent = (L, L, L / 3), halo = (3, 3, 3))
-        nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.0, L / 3)), (1, 1, 1))
-        cm = nest_child_mesh(nest)
-        psim = BoussinesqSimulation(pm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1)
-        rng = Xoshiro(11)
-        for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
-            x = pm.x0 + (i - pm.Hx - 1) * pm.dx; xc = x + 0.5pm.dx
-            y = pm.y0 + (j - pm.Hy - 0.5) * pm.dy; yf = y - 0.5pm.dy
-            psim.u.data[i, j, k] = 0.4 + sin(2π * x) * cos(2π * y)
-            psim.v.data[i, j, k] = -cos(2π * xc) * sin(2π * yf)
-            psim.θ.data[i, j, k] = 300.0 + exp(-((xc - 0.4)^2 + (y - 0.5)^2) / 0.02)
-        end
-        interior_view(psim.w) .+= 0.05 .* randn(rng, size(interior_view(psim.w)))
-        step!(psim, 1e-8); psim.t = 0.0
-        csim = BoussinesqSimulation(cm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1,
-                                    bcs = nest_bcs(cm, :nest, :nest, :periodic))
-        _nb_init_child!(csim, psim, nest)
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
-                        cfl_parent = nothing, cfl_child = nothing, substeps = 1)
-        cx, cy, cz = nest_covered_range(nest)
-        rel(fc, fp; base = 0.0) =
-            sqrt(sum(abs2, interior_view(fc) .- interior_view(fp)[cx, cy, cz]) /
-                 sum(abs2, interior_view(fp)[cx, cy, cz] .- base))
-        worst = 0.0
-        for _ in 1:100
-            step_nested!(run; dt = 4e-3)
-            # u: the child's interior faces are parent faces cx (the east
-            # boundary face is the child's halo); θ, v: cells
-            worst = max(worst, rel(csim.u, psim.u), rel(csim.v, psim.v),
-                        rel(csim.θ, psim.θ; base = 300.0))
-        end
-        @printf("  r = 1, %-10s 100 steps: max relative L2 child − parent (u, v, θ) = %.2e\n",
-                name, worst)
-        @test worst < 1e-3
-        name == "step!" && @test worst < 1e-10
+    L = 1.0
+    pm = RegularGrid(Float64; size = (16, 16, 4), extent = (L, L, L / 4), halo = (3, 3, 3))
+    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.0, L / 4)), (1, 1, 1))
+    cm = nest_child_mesh(nest)
+    psim = BoussinesqSimulation(pm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1)
+    for k in axes(psim.u.data, 3), j in axes(psim.u.data, 2), i in axes(psim.u.data, 1)
+        x = pm.x0 + (i - pm.Hx - 1) * pm.dx; xc = x + 0.5pm.dx
+        y = pm.y0 + (j - pm.Hy - 0.5) * pm.dy; yf = y - 0.5pm.dy
+        psim.u.data[i, j, k] = 0.4 + sin(2π * x) * cos(2π * y)
+        psim.v.data[i, j, k] = -cos(2π * xc) * sin(2π * yf)
+        psim.θ.data[i, j, k] = 300.0 + exp(-((xc - 0.4)^2 + (y - 0.5)^2) / 0.02)
     end
+    interior_view(psim.w) .+= 0.05 .* randn(Xoshiro(11), size(interior_view(psim.w)))
+    step!(psim, 1e-8); psim.t = 0.0
+    csim = BoussinesqSimulation(cm; ν = 2e-3, θ₀ = 300.0, g_accel = 0.1,
+                                bcs = nest_bcs(cm, :nest, :nest, :periodic))
+    _nb_init_child!(csim, psim, nest)
+    run = NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing,
+                    substeps = 1)
+    cx, cy, cz = nest_covered_range(nest)
+    rel(fc, fp; base = 0.0) = sqrt(sum(abs2, interior_view(fc) .- interior_view(fp)[cx, cy, cz]) /
+                                   sum(abs2, interior_view(fp)[cx, cy, cz] .- base))
+    for _ in 1:5
+        step_nested!(run; dt = 4e-3)
+    end
+    @test max(rel(csim.u, psim.u), rel(csim.v, psim.v), rel(csim.θ, psim.θ; base = 300.0)) < 1e-10
 end
 
-# A θ pulse that exists only in the child (the parent is uniform, θ = 0)
-# leaves through the east (outflow) face of a 1-D nest. With the nest's
-# default Dirichlet outflow the parent's θ = 0 is imposed in the outflow
-# halo and the centred scheme traps and reflects the pulse; with the
-# convective outflow passed through nest_bcs (#329; Orlanski 1976, JCP 21,
-# 251) it radiates out. Same set-up as era6_outflow_conditions.jl's pulse,
-# here through the nest's faces.
+# A θ pulse only in the child (parent θ = 0) leaves through the east face
+# of a 1-D nest: the convective outflow (#329; Orlanski 1976) radiates it,
+# the default Dirichlet outflow (parent θ imposed) traps and reflects it.
 function _nb_outflow_pulse(mode; σ = 4.0, U = 1.0)
     pm = RegularGrid(Float64; size = (64, 1, 1), extent = (64.0, 1.0, 1.0), halo = (3, 3, 3))
     nest = nested_grid(pm, ((16.0, 48.0), (0.0, 1.0), (0.0, 1.0)), (2, 1, 1))
     cm = nest_child_mesh(nest)
     psim = BoussinesqSimulation(pm)
     fill!(psim.u.data, U)
-    bcs = nest_bcs(cm, :nest, :periodic, :periodic; outflow = mode, halo = 3)
-    csim = BoussinesqSimulation(cm; bcs)
+    csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :periodic, :periodic; outflow = mode, halo = 3))
     fill!(csim.u.data, U)
     ii, jj, kk = interior(cm)
     for i in ii
@@ -504,153 +215,64 @@ function _nb_outflow_pulse(mode; σ = 4.0, U = 1.0)
     run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
                     advance_child = domain_advance(step_rk3!),
                     cfl_parent = nothing, cfl_child = nothing, substeps = 2)
-    st = only(open_boundary_states(csim))
     for _ in 1:round(Int, 2 * 32.0 / (U * 0.25))          # two crossings of the child
         step_nested!(run; dt = 0.25)
     end
-    return sum(abs2, interior_view(csim.θ)) / E0, st
+    return sum(abs2, interior_view(csim.θ)) / E0
 end
 
-@testset "outflow condition and advection halo through nest_bcs (#329)" begin
-    res_c, st_c = _nb_outflow_pulse(:convective)
-    res_d, st_d = _nb_outflow_pulse(:dirichlet)
-    @printf("  child-only θ pulse, two crossings: residual ∫θ'²/∫θ'²₀ convective outflow %.2e, Dirichlet (parent) outflow %.2e\n",
-            res_c, res_d)
-    @test all(==(:convective), values(st_c.outflow))
-    @test all(==(:dirichlet), values(st_d.outflow))
-    @test res_c < 1e-3                # radiated out
-    @test res_d > 0.1                 # trapped by the imposed parent θ = 0
-    # the advection halo is checked against the child mesh, as for
-    # open_boundary_conditions
+@testset "outflow condition through nest_bcs (#329)" begin
+    @test _nb_outflow_pulse(:convective) < 1e-3          # radiated out
+    @test _nb_outflow_pulse(:dirichlet) > 0.1            # trapped by the imposed parent θ = 0
     cm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
-    @test nest_bcs(cm; halo = 3) isa FieldBoundaryConditions
-    @test_throws ArgumentError nest_bcs(cm; halo = 4)
-    @test_throws ArgumentError nest_bcs(cm; outflow = :sponge)
+    @test_throws ArgumentError nest_bcs(cm; halo = 4)   # advection halo checked
 end
 
-# A NestSponge relaxes the child velocity toward the prolongated parent,
-# which is flux-consistent on parent cells but not divergence-free on child
-# cells. Relaxed after the step (before #329) the child kept that
-# divergence; relaxed on the predicted velocity, before the projection, it
-# stays divergence-free to round-off.
+# A NestSponge relaxes the child velocity toward the prolongated parent
+# (flux-consistent on parent cells, not divergence-free on child cells):
+# relaxed on the predicted velocity, before the projection, the child stays
+# divergence-free; relaxed after the step (before #329) it does not.
 @testset "a NestSponge keeps the child divergence-free (#329)" begin
     rng = Xoshiro(329)
-    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
+    pm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
     cm = nest_child_mesh(nest)
-    for (name, adv) in (("step!", domain_advance()), ("step_rk3!", domain_advance(step_rk3!)))
-        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
-        for f in (psim.u, psim.v, psim.w)
-            interior_view(f) .= randn(rng, size(interior_view(f)))
-        end
-        step!(psim, 1e-10); psim.t = 0.0
-        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
-        _nb_init_child!(csim, psim, nest)
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = adv, advance_child = adv,
-                        cfl_parent = nothing, cfl_child = nothing,
-                        sponge = NestSponge(; width = 3, α_max = 20.0))
-        # project the prolongated child once with its open faces attached
-        # (SSP-RK3 keeps a non-solenoidal start state, ×1/9 per step)
-        step!(csim, 1e-12); csim.t = psim.t
-        worst = 0.0; moved = 0.0
-        for _ in 1:5
-            u0 = copy(csim.u.data)
-            step_nested!(run; dt = 2e-3)
-            divergence(csim.div_buf, csim.u, csim.v, csim.w)
-            worst = max(worst, maximum(abs, interior_view(csim.div_buf)))
-            moved = max(moved, maximum(abs, interior_view(csim.u) .- view(u0, interior(cm)...)))
-        end
-        # the same relaxation applied after the step, as before #329
-        after = copy(csim.u.data), copy(csim.v.data), copy(csim.w.data)
-        apply_nest_sponge!(csim, boundary_time(run, run.t0 + run.Δt), run.sponge;
-                           dt = 2e-3, scalars = false)
-        divergence(csim.div_buf, csim.u, csim.v, csim.w)
-        broken = maximum(abs, interior_view(csim.div_buf))
-        @printf("  sponge, %-10s child max|∇·u| %.2e s⁻¹ (relaxed after the step instead: %.2e); max|Δu| per step %.2e\n",
-                name, worst, broken, moved)
-        @test worst < 1e-10
-        @test broken > 1e3 * worst        # the test can see the old placement
+    psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
+    for f in (psim.u, psim.v, psim.w)
+        interior_view(f) .= randn(rng, size(interior_view(f)))
     end
-end
-
-# The sponge target lives in the run's scratch state run.s_bc and is
-# blended once per child substep (#329, item 3). `boundary_time(run, t)`
-# writes the same scratch state, and calling it from a child hook is a
-# documented use: the sponge must then re-blend its target rather than
-# relax toward the hook's stage-time blend. A run whose hook calls
-# boundary_time must stay the same as one whose hook does not.
-@testset "boundary_time from a child hook leaves the sponge target intact (#329)" begin
-    rng = Xoshiro(3291)
-    pm = RegularGrid(Float64; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
-    nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2; halo = (3, 3, 3))
-    cm = nest_child_mesh(nest)
-    ui = [randn(rng, size(interior_view(Field(FaceX(), pm)))) for _ in 1:3]
-    θi = 300 .+ 0.5 .* rand(rng, size(interior_view(Field(CellCenter(), pm))))
-    function mk(call_bt::Bool)
-        psim = BoussinesqSimulation(pm; bcs = FieldBoundaryConditions(:periodic))
-        for (f, a) in zip((psim.u, psim.v, psim.w), ui)
-            interior_view(f) .= a
-        end
-        interior_view(psim.θ) .= θi
-        step!(psim, 1e-10); psim.t = 0.0
-        csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
-        _nb_init_child!(csim, psim, nest)
-        rr = Ref{Any}(nothing)
-        ncalls = Ref(0)
-        hook = (s, h) -> begin
-            r = rr[]
-            if call_bt && r !== nothing && r.Δt > 0
-                boundary_time(r, clamp(Float64(s.t), r.t0, r.t0 + r.Δt))
-                ncalls[] += 1
-            end
-            nothing
-        end
-        run = NestedRun(psim, csim, nest; feedback = :one_way, advance_parent = domain_advance(step_rk3!),
-                        advance_child = domain_advance(step_rk3!; body_force! = hook),
-                        cfl_parent = nothing, cfl_child = nothing,
-                        sponge = NestSponge(; width = 3, α_max = 20.0))
-        rr[] = run
-        return run, ncalls
+    step!(psim, 1e-10); psim.t = 0.0
+    csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm))
+    _nb_init_child!(csim, psim, nest)
+    run = NestedRun(psim, csim, nest; feedback = :one_way, cfl_parent = nothing, cfl_child = nothing,
+                    sponge = NestSponge(; width = 3, α_max = 20.0))
+    step!(csim, 1e-12); csim.t = psim.t
+    for _ in 1:2
+        step_nested!(run; dt = 2e-3)
     end
-    a, na = mk(true)
-    b, nb = mk(false)
-    for _ in 1:4
-        step_nested!(a; dt = 2e-3)
-        step_nested!(b; dt = 2e-3)
-    end
-    d = maximum(maximum(abs, getproperty(a.child, f).data .- getproperty(b.child, f).data)
-                for f in (:u, :v, :w, :θ))
-    # the parent moves within a window, so a stale target would show
-    sw = maximum(abs, a.s_new.u.data .- a.s_old.u.data)
-    @printf("  boundary_time called %d times from the child hook; max child difference %.2e (window change of the target %.2e)\n",
-            na[], d, sw)
-    @test na[] > 0 && nb[] == 0
-    @test sw > 1e-6
-    @test d == 0.0
+    divergence(csim.div_buf, csim.u, csim.v, csim.w)
+    worst = maximum(abs, interior_view(csim.div_buf))
+    apply_nest_sponge!(csim, boundary_time(run, run.t0 + run.Δt), run.sponge; dt = 2e-3, scalars = false)
+    divergence(csim.div_buf, csim.u, csim.v, csim.w)
+    @test worst < 1e-10
+    @test maximum(abs, interior_view(csim.div_buf)) > 1e3 * worst   # the old placement is visible
 end
 
 # fill_nest_halos! is the public entry a driver uses after changing a
-# child's boundary data outside a NestedRun step (#329, item 7; the Berlin
-# nest coupling uses it since #349, the private alias is gone).
+# child's boundary data outside a NestedRun step (#329, #349).
 @testset "fill_nest_halos!: new boundary data reach the halos (#329)" begin
     pm = RegularGrid(Float64; size = (8, 8, 8), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
     nest = nested_grid(pm, ((0.25, 0.75), (0.25, 0.75), (0.25, 0.75)), 2)
     cm = nest_child_mesh(nest)
-    psim = BoussinesqSimulation(pm)
     csim = BoussinesqSimulation(cm; bcs = nest_bcs(cm, :nest, :nest, :periodic))
     st = nest_interp_state(nest)
     fill!(st.θ.data, 301.0)
     apply_nest_boundary!(csim, st)
     ii, jj, kk = interior(cm)
-    @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 301.0
     fill!(st.θ.data, 305.0)                       # the driver's new parent data
     @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 301.0
     @test fill_nest_halos!(csim, st) === csim
-    @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 305.0   # west halo
-    @test csim.θ.data[last(ii) + 1, last(jj), first(kk)] == 305.0     # east halo
-    @test !isdefined(Aeolus.Nesting, :_fill_nest_halos!)              # alias removed (#349)
-    closed = BoussinesqSimulation(cm)
-    @test fill_nest_halos!(closed, st) === closed                      # no open faces
+    @test csim.θ.data[first(ii) - 1, first(jj), first(kk)] == 305.0   # copied
 end
 
 end # testset

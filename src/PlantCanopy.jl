@@ -62,7 +62,7 @@ sink it exerts on the resolved flow:
      diffusivity ([`harman_finnigan_scalar_diffusivity`](@ref)), which turns
      the leaf heat sources of item 5 into an air-temperature profile. These
      are what the #25 validation against wind-tunnel, orchard and forest
-     profiles uses (`test/era5_canopy_profiles.jl`).
+     profiles uses (`validation/era5_canopy_profiles.jl`).
 
 # References
 

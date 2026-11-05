@@ -415,7 +415,7 @@ anything cheaper than the periodic-x, y solve. The former
 **Tests** (the former `test/berlin_open_boundaries.jl`, removed in #320;
 the +1 K anomaly's analytic face flux, upwind and centred, with the
 diffusive part, and the wall tagging across an open face are asserted in
-`test/era6_open_near_boundary.jl`): the default stays periodic;
+`test/era6_open_near_boundary.jl` (removed)): the default stays periodic;
 the open faces, data, sponge target, solver axes, frame and solid points;
 one dynamics step through the case's own hook books 0.0 J m⁻² for an
 inflow equal to the interior and ``ρ̄c_pΠ̄(UΔT/2 + νΔT/Δx)AΔt`` = 604.525
@@ -425,7 +425,7 @@ jump is ``νΔT/Δx`` with the case's ``ν`` = 2 m² s⁻¹). The smoke matrix r
 `geostrophic: lateral = :open, Dirichlet outflow` and `…, convective
 outflow` with every coupling on: air-heat closure ≤ 1.1e-13 W m⁻², water
 residual ≤ 4.3e-16 kg m⁻², column transport < 1e-6 W m⁻² (smoke check).
-The src tests are in `test/era6_open_near_boundary.jl` (theory:
+The src tests are in `test/era6_open_near_boundary.jl` (removed) (theory:
 [Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d))).
 
 ### Baseline (measured, #127)
@@ -562,8 +562,8 @@ W m⁻² after #128; on master it is −4.87 W m⁻² (see the table under the
 The smoke runs were `test/berlin_smoke.jl` until #320 removed the Berlin
 test suite; they were then the `smoke` part of the by-hand
 `examples/urban/berlin_checks.jl`, and since #438 are
-**`test/urban_checks.jl`** (full tier; `julia --project=. test/run.jl --only
-urban_checks.jl`), while every run writes its ledger closure to
+**`test/urban_checks.jl`** (a heavy test; `julia --project=. test/run.jl --only
+urban_checks.jl`; the flagship and parent runs are `validation/urban_checks.jl`), while every run writes its ledger closure to
 `output/results.toml`. They
 run the case in `examples/urban/berlin_smoke.toml`
 (each run of the matrix is that file plus `--set` overrides, CFG-c #358): a

@@ -144,7 +144,7 @@ now computed from the output by the cases' scripts. `inflow_fetch` and
 `obstacle_channel` ran on pressure-driven channels and `sgs_decay` is the
 filtered-DNS study; all three are dropped (the design drops the channel
 cases and the a-priori study), their harnesses kept as test fixtures
-(`test/fixtures/inflow_fetch.jl`, `sgs_validation.jl`), and so is the
+(`validation/fixtures/inflow_fetch.jl`, `sgs_validation.jl`), and so is the
 channel harness of `WallModels` (`test/fixtures/channel_cases.jl`).
 
 Every domain has an `:advection` provider; `[sgs] model = "none"`
@@ -218,7 +218,8 @@ the same on both cores.
 
 `test/components_both_cores.jl` runs the contracts of every component on
 both cores and both schemes, the checkpoint round trip on both cores with
-Euler, RK3 and the adaptive step, and a dry CBL on both cores. Its numbers
+Euler, RK3 and the adaptive step, and a dry CBL on both cores (the 30 min run is
+`validation/components_both_cores.jl`). Its numbers
 (16³, the DCBL config): the θ budget closes to below `1e-11` on both cores
 with every scheme; after 30 min the anelastic mixed layer has warmed more
 than the Boussinesq one by the column-mass ratio `ρ̄_bot h / ∫₀ʰ ρ̄ dz`

@@ -1494,7 +1494,7 @@ end
 
 The Philox4x32-10 block function: ten rounds of the Salmon et al. (2011)
 round function, with the Weyl key schedule. Checked against the Random123
-known-answer vectors in `test/ka_radiation.jl`.
+known-answer vectors in `test/backends.jl`.
 """
 @inline function philox4x32(ctr::NTuple{4,UInt32}, key::NTuple{2,UInt32})
     c0, c1, c2, c3 = ctr

@@ -1,8 +1,9 @@
-# One job of the parallel test runner (#316): run a single file of
-# test/runtests.jl's include list (or the inline tests, job "runtests.jl")
-# in this process and write its counts to a TOML result file.
+# One job of the parallel runner (#316): run a single file of a suite's
+# include list (test/runtests.jl or validation/runvalidation.jl), or that
+# entry file's inline tests (job "runtests.jl" / "runvalidation.jl"), in
+# this process and write its counts to a TOML result file.
 #
-#   julia --project=. test/runner/worker.jl <job> <result.toml>
+#   julia --project=. test/runner/worker.jl <suite> <job> <result.toml>
 #
 # The job is evaluated by AeolusTestSelection.run_selected inside an outer
 # DefaultTestSet, so the top-level @testset blocks it meets (e.g. "Era VI")
@@ -13,10 +14,11 @@ using Test
 using TOML
 
 Base.include(Main, joinpath(@__DIR__, "selection.jl"))
-using .AeolusTestSelection: CORE, run_selected
+using .AeolusTestSelection: core, run_selected, suite
 
-const JOB = ARGS[1]
-const OUT = ARGS[2]
+const SUITE = suite(ARGS[1])
+const JOB = ARGS[2]
+const OUT = ARGS[3]
 
 "(pass, fail, error, broken) of a finished testset, children included."
 function counts(ts)
@@ -28,7 +30,7 @@ function counts(ts)
             c.errors + c.cumulative_errors, c.broken + c.cumulative_broken)
 end
 
-keep, core = JOB == CORE ? ((f -> false), true) : ((f -> f == JOB), false)
+keep, inline = JOB == core(SUITE) ? ((f -> false), true) : ((f -> f == JOB), false)
 
 outer = Test.DefaultTestSet("job $JOB")
 loaderror = ""
@@ -48,7 +50,7 @@ function with_testset(f, ts)
 end
 
 try
-    with_testset(() -> run_selected(keep, core), outer)
+    with_testset(() -> run_selected(keep, inline, SUITE.entry), outer)
 catch err
     # an error outside every @testset: the serial run would stop here
     global loaderror = sprint(showerror, err, catch_backtrace())
