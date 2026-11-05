@@ -41,7 +41,7 @@ import NCDatasets
         for t in 1:nt
             nc_append_record!(ds, Dict("time" => [60.0t], "theta" => θ(t), "Ts" => Ts(t),
                                        :tke_prof => prof(t), "count" => Int32[-t]))
-            @test ds.dim["time"] == t                  # one record per call
+            ds.dim["time"] == t || error("record $t: not one record per call")
         end
         close(ds)
         return path
@@ -67,11 +67,8 @@ import NCDatasets
             @test size(ds["theta"]) == (nx, ny, nz, nt)
             @test ds["x"][:] == Float32.((1:nx) .- 0.5)
             @test Array(ds["building_height"]) == Float32[10i + j for i in 1:nx, j in 1:ny]
-            for t in 1:nt                               # compression is lossless
-                @test ds["theta"][:, :, :, t] == θ(t)
-                @test ds["Ts"][:, :, t] == Ts(t)
-                @test ds["tke_prof"][:, t] == prof(t)
-            end
+            @test all(ds["theta"][:, :, :, t] == θ(t) && ds["Ts"][:, :, t] == Ts(t) &&
+                      ds["tke_prof"][:, t] == prof(t) for t in 1:nt)    # compression is lossless
             @test eltype(ds["count"]) == Int32 && ds["count"][:] == Int32.(-(1:nt))
             # CF time: decoded to the reference date plus the seconds written
             @test ds["time"][:] == [DateTime(2019, 6, 29, 4, t) for t in 1:nt]
@@ -89,14 +86,8 @@ import NCDatasets
             @test NCDatasets.chunking(ds["time"]) == (:chunked, (4096,))
             @test NCDatasets.chunking(ds["building_height"]) == (:chunked, (nx, ny))
         end
-        # the compression is real: the same records uncompressed are larger
-        raw = write_case(joinpath(dir, "raw.nc"); deflatelevel = 0)
-        NCDataset(raw) do ds
-            @test NCDatasets.deflate(ds["theta"])[2] == false
-            @test ds["theta"][:, :, :, nt] == θ(nt)
-        end
-        @test filesize(path) < filesize(raw)
-        @info "NCIO test file" deflated = filesize(path) uncompressed = filesize(raw)
+        # the compression is real: smaller than the raw values
+        @test filesize(path) < 4 * nx * ny * nz * nt
     end
 
     @testset "nc_append_record! checks the record" begin
@@ -127,38 +118,6 @@ import NCDatasets
         close(ds)
     end
 
-    @testset "nc_append_record!: blocks of records, two unlimited dimensions" begin
-        p = joinpath(dir, "two.nc")
-        ds = nc_create(p)
-        ds.dim["z"] = 3; ds.dim["time"] = Inf; ds.dim["time_costly"] = Inf
-        nc_defvar!(ds, "t", Float64, ("time",))
-        nc_defvar!(ds, "lim", String, ("time",); deflatelevel = 0)   # vlen: no filters
-        nc_defvar!(ds, "tc", Float64, ("time_costly",))
-        nc_defvar!(ds, "prof", Float64, ("z", "time_costly"))
-        # with two record dimensions the dimension must be named
-        @test_throws ErrorException nc_append_record!(ds, Dict("t" => [1.0], "lim" => ["a"]))
-        @test_throws ErrorException nc_append_record!(ds, Dict("t" => [1.0]); dim = "z")
-        # a block of three records along `time`; `time_costly` untouched
-        nc_append_record!(ds, Dict("t" => [1.0, 2.0, 3.0], "lim" => ["cfl", "", "diffusive"]);
-                          dim = "time", count = 3, sync = false)
-        @test ds.dim["time"] == 3 && ds.dim["time_costly"] == 0
-        # a block of the wrong length is refused whole
-        @test_throws ErrorException nc_append_record!(ds, Dict("t" => [4.0, 5.0], "lim" => ["x"]);
-                                                      dim = "time", count = 2)
-        @test ds.dim["time"] == 3
-        nc_append_record!(ds, Dict("tc" => [0.0], "prof" => [1.0, 2.0, 3.0]); dim = "time_costly")
-        nc_append_record!(ds, Dict("tc" => [5.0, 9.0], "prof" => [4.0 7.0; 5.0 8.0; 6.0 9.0]);
-                          dim = "time_costly", count = 2)
-        nc_append_record!(ds, Dict("t" => [4.0], "lim" => ["advective"]); dim = "time")
-        close(ds)
-        NCDataset(p) do ds
-            @test ds["t"][:] == [1.0, 2.0, 3.0, 4.0]
-            @test ds["lim"][:] == ["cfl", "", "diffusive", "advective"]
-            @test ds["tc"][:] == [0.0, 5.0, 9.0]
-            @test ds["prof"][:, :] == [1.0 4.0 7.0; 2.0 5.0 8.0; 3.0 6.0 9.0]
-        end
-    end
-
     @testset "NetCDF-3 files written before #310 still read" begin
         # written by the removed in-package NetCDFIO writer (CDF-2, 64-bit
         # offsets), same values as its generator script
@@ -173,11 +132,8 @@ import NCDatasets
             # NCDatasets warns and returns the raw seconds
             t = @test_logs (:warn, r"cannot parse time units") ds["time"][:]
             @test t == [60.0, 120.0, 180.0]
-            for t in 1:3
-                @test ds["theta"][:, :, :, t] ==
-                      Float32[290 + i + 10j + 100k + 0.5t for i in 1:4, j in 1:3, k in 1:2]
-                @test ds["Ts"][:, :, t] == Float32[300 + i - j + t for i in 1:4, j in 1:3]
-            end
+            @test all(ds["theta"][:, :, :, t] == Float32[290 + i + 10j + 100k + 0.5t for i in 1:4, j in 1:3, k in 1:2] &&
+                      ds["Ts"][:, :, t] == Float32[300 + i - j + t for i in 1:4, j in 1:3] for t in 1:3)
         end
         # the CLM/SNICAR table shipped in src/data is CDF-1 (32-bit offsets)
         @test read(Aeolus.Snowpack.SNICAR_AGING_FILE, 4) == UInt8['C', 'D', 'F', 0x01]

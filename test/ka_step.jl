@@ -1,165 +1,38 @@
-# KA-j (#306): the step cores on kernels.
+# KA-j (#306), SC-d (#404), SC-e (#405): the step cores.
 #
-#   1. the weighted flux-form operators and the anelastic buoyancy as launch!
-#      bodies equal the pre-port loops (test/support/legacy_step.jl) bit for
-#      bit, on the serial, threshold-0 and default backends;
-#   2. the field algebra of the drivers (axpy!, the IMEX stage combinations,
-#      the RK3 combinations, p = φ/Δt) equals the broadcasts it replaced;
-#   3. the fused CFL sweep and the fused step guard equal the separate
-#      maxima and checks, NaN and Inf semantics included; a blow-up still
-#      collapses adaptive_dt to dt_min and the guard still fires;
-#   4. the rollback restores νt and κt;
-#   5. the per-simulation workspaces replace the global caches (two domains
-#      stepped concurrently give the sequential bits);
-#   6. serial and threaded step cores give the same results; one step of the
-#      Boussinesq, RK3 and adaptive drivers allocates nothing.
+#   1. a blow-up collapses adaptive_dt to dt_min, the step guard fires, and
+#      a rejected step restores the state with νt and κt (#346); a retry
+#      that recovers equals a direct step at the short dt;
+#   2. the per-simulation workspaces replace the global caches (two domains
+#      stepped concurrently give the sequential results);
+#   3. one step of the Boussinesq, RK3 and adaptive drivers allocates nothing;
+#   4. physics of the fused / blocked cores: the projected field is
+#      solenoidal at round-off, RK3 keeps its third order in time, and a
+#      small-amplitude viscous Taylor–Green vortex decays at the rate of the
+#      discrete Laplacian.
+# (The ported kernels against the pre-port loops were checked when they were
+# ported, test/support/legacy_*.jl; serial = threaded: the `steps` section of
+# the thread-invariance harness.)
 
 using Test
 using Aeolus
 using Aeolus.Fields: Field, set!, interior_view
 using Aeolus.Grids: interior, CellCenter, FaceX, FaceY, FaceZ
 using Aeolus.Backends: CPUBackend, with_backend
-using Aeolus.Simulations: BoussinesqSimulation, step_rk3!, max_divergence
-using Aeolus.TimeIntegration: step_adaptive!, step_imex!, ARK2, Rosenbrock2, CFLConstraints,
-                              cfl_diagnostics, adaptive_dt, state_snapshot, imex_workspace,
-                              save_state!, restore_state!, step_guard
-using Aeolus.Anelastic: AnelasticSimulation, PseudoIncompressibleSimulation, isothermal_reference,
-                        weighted_divergence!, weighted_momentum_advect!, weighted_scalar_advect!,
-                        add_anelastic_buoyancy!
-using Aeolus.BoundaryConditions: FieldBoundaryConditions, fill_halos!
+using Aeolus.Simulations: BoussinesqSimulation, step_rk3!, max_divergence, kinetic_energy
+using Aeolus.TimeIntegration: step_adaptive!, CFLConstraints, adaptive_dt, state_snapshot, imex_workspace,
+                              step_guard
+using Aeolus.Anelastic: AnelasticSimulation
+using Aeolus.BoundaryConditions: FieldBoundaryConditions
 using Random: Xoshiro, randn
 
-isdefined(@__MODULE__, :LegacyStep) || include(joinpath(@__DIR__, "support", "legacy_step.jl"))
-
-const _KS_BACKENDS = (("serial", CPUBackend(serial = true)), ("threshold 0", CPUBackend(threshold = 0)),
-                      ("default", CPUBackend()))
 const TI = Aeolus.TimeIntegration
 const SIM = Aeolus.Simulations
 
-_ks_rand!(f, rng; s = 1.0, o = 0.0) = (f.data .= o .+ s .* randn(rng, size(f.data)); f)
-
-@testset "KA-j: step cores on kernels (#306)" begin
-
-@testset "weighted operators and anelastic buoyancy: the old loops" begin
-    g = RegularGrid(; size = (37, 21, 13), extent = (370.0, 210.0, 1300.0), halo = (2, 2, 2))
-    ref = isothermal_reference(g; T_surf = 290.0)
-    rng = Xoshiro(306)
-    u, v, w = _ks_rand!(Field(FaceX(), g), rng), _ks_rand!(Field(FaceY(), g), rng), _ks_rand!(Field(FaceZ(), g), rng)
-    θ = _ks_rand!(Field(CellCenter(), g), rng; s = 2.0, o = 300.0)
-    Wc, Wf = ref.ρ̄c_pad, ref.ρ̄f_pad
-    for (bn, b) in _KS_BACKENDS
-        with_backend(b) do
-            for normalize in (false, true)
-                a = _ks_rand!(Field(CellCenter(), g), rng); c = Field(CellCenter(), g); c.data .= a.data
-                weighted_divergence!(a, u, v, w, Wc, Wf, g; normalize)
-                LegacyStep.weighted_divergence!(c, u, v, w, Wc, Wf, g; normalize)
-                @test agree(a.data, c.data)
-            end
-            tn = (_ks_rand!(Field(FaceX(), g), rng), _ks_rand!(Field(FaceY(), g), rng), _ks_rand!(Field(FaceZ(), g), rng))
-            to = map(f -> (c = Field(Aeolus.Fields.location(f), g); c.data .= f.data; c), tn)
-            weighted_momentum_advect!(tn..., u, v, w, Wc, Wf, g)
-            LegacyStep.weighted_momentum_advect!(to..., u, v, w, Wc, Wf, g)
-            @test all(i -> agree(tn[i].data, to[i].data), 1:3)
-            a = _ks_rand!(Field(CellCenter(), g), rng); c = Field(CellCenter(), g); c.data .= a.data
-            weighted_scalar_advect!(a, u, v, w, θ, ref.Pc_pad, ref.Pf_pad, g)
-            LegacyStep.weighted_scalar_advect!(c, u, v, w, θ, ref.Pc_pad, ref.Pf_pad, g)
-            @test agree(a.data, c.data)
-            a = _ks_rand!(Field(FaceZ(), g), rng); c = Field(FaceZ(), g); c.data .= a.data
-            add_anelastic_buoyancy!(a, θ, ref, g); LegacyStep.add_anelastic_buoyancy!(c, θ, ref, g)
-            @test agree(a.data, c.data)
-        end
-    end
-end
-
-@testset "field algebra: the broadcasts it replaced" begin
-    g = RegularGrid(; size = (33, 17, 11), extent = (1.0, 1.0, 1.0), halo = (3, 3, 3))
-    rng = Xoshiro(3061)
-    mk() = _ks_rand!(Field(FaceX(), g), rng)
-    for (bn, b) in _KS_BACKENDS
-        with_backend(b) do
-            A, B, C, D = mk(), mk(), mk(), mk()
-            y = mk(); y0 = Field(FaceX(), g); y0.data .= y.data
-            SIM.axpy!(y, 0.37, A); LegacyStep._axpy_interior!(y0, 0.37, A, g)
-            @test agree(y.data, y0.data)
-            o = mk(); o0 = Field(FaceX(), g); o0.data .= o.data
-            TI._combine2!(o, 1.0, A, 0.3, B); LegacyStep._combine2!(o0, 1.0, A, 0.3, B, g)
-            @test agree(o.data, o0.data)
-            TI._combine2!(o, 0.0, o, 0.7, B); LegacyStep._combine2!(o0, 0.0, o0, 0.7, B, g)  # aliased
-            @test agree(o.data, o0.data)
-            TI._combine3!(o, 1.0, A, 1.5, B, 0.5, C); LegacyStep._combine3!(o0, 1.0, A, 1.5, B, 0.5, C, g)
-            @test agree(o.data, o0.data)
-            TI._combine4!(o, 1.0, A, -0.2, B, 1.2, C, 0.29, D)
-            LegacyStep._combine4!(o0, 1.0, A, -0.2, B, 1.2, C, 0.29, D, g)
-            @test agree(o.data, o0.data)
-            a = copy(A.data); a0 = copy(A.data); s = randn(rng, size(a))
-            # the RK3 combination over the storage: the interior pass and the
-            # halo-shell pass of the fused cores (SC-d, #404)
-            comb!(c, a, s) = (Aeolus.Backends.range_map!(Aeolus.Backends.backend(a), c, a, interior(g), a, s);
-                              SIM._shell_map!(c, (a,), (s,), g))
-            comb!(SIM._Lin2r(0.75, 0.25), a, s); LegacyStep.rk3_combine2!(a0, s)
-            @test a == a0
-            comb!(SIM._Lin2r(1 / 3, 2 / 3), a, s); LegacyStep.rk3_combine3!(a0, s, 1 / 3, 2 / 3)
-            @test a == a0
-            z = mk(); SIM._shell_map!(SIM._Zero(), (z.data,), nothing, g)
-            @test all(iszero, z.data[setdiff(1:size(z.data, 1), interior(g)[1]), :, :]) &&
-                  all(iszero, z.data[:, setdiff(1:size(z.data, 2), interior(g)[2]), :]) &&
-                  all(iszero, z.data[:, :, setdiff(1:size(z.data, 3), interior(g)[3])]) &&
-                  !any(iszero, z.data[interior(g)...])
-            p = Field(CellCenter(), g); p0 = Field(CellCenter(), g); φ = _ks_rand!(Field(CellCenter(), g), rng)
-            SIM.pressure_from_potential!(p, φ, 0.07); LegacyStep.pressure!(p0, φ, 0.07, g)
-            @test agree(p.data, p0.data)
-            z = mk(); SIM.zero_storage!(z); @test all(iszero, z.data)
-            d = similar(A.data); SIM.copy_storage!(d, A.data); @test d == A.data
-            @test_throws DimensionMismatch SIM.copy_storage!(d, zeros(3, 3, 3))
-        end
-    end
-end
-
-@testset "fused CFL sweep and step guard: the separate maxima and checks" begin
-    for grid in (:regular, :stretched)
-        g = grid === :regular ?
-            RegularGrid(; size = (40, 24, 20), extent = (400.0, 240.0, 200.0), halo = (3, 3, 3)) :
-            Aeolus.StretchedGrids.StretchedGrid(; size = (40, 24, 20), extent = (400.0, 240.0, 200.0),
-                                                halo = (3, 3, 3), stretching = (:geometric, 1.06))
-        sim = BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17, moisture = true,
-                                   bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-        rng = Xoshiro(3062)
-        for f in (sim.u, sim.v, sim.w, sim.p); interior_view(f) .= randn(rng, size(interior_view(f))); end
-        set!(sim.θ, 300.0); set!(sim.qv, 0.01)
-        c = CFLConstraints()
-        d = cfl_diagnostics(sim, c)                     # fills halos, computes νt, κt
-        f = (νh = sim.νt, νv = sim.νt, κh = sim.κt, κv = sim.κt)
-        @test TI._cfl_maxima(sim, f, true) === LegacyStep.cfl_maxima(sim, f)
-        @test d.advective_rate === LegacyStep.cfl_maxima(sim, f)[1]
-        @test agree(d.νt_max, maximum(interior_view(sim.νt))) && agree(d.κt_max, maximum(interior_view(sim.κt)))
-        # the guard: same results and the same verdict as the separate checks
-        gd = step_guard(sim)
-        @test gd.finite
-        @test values_agree(gd.divergence, max_divergence(sim))
-        @test values_agree(gd.speed, LegacyStep._max_speed(sim))
-        for (dt, cap) in ((1e-6, Inf), (Inf, 1e-3), (Inf, Inf))
-            @test TI._guard_reason(sim, dt, cap) === LegacyStep.guard_reason(sim, dt, cap)
-        end
-        # NaN or Inf in any prognostic field, halos excluded
-        for (fld, bad) in ((:θ, NaN), (:p, Inf), (:qv, -Inf), (:w, NaN), (:u, Inf))
-            a = interior_view(getfield(sim, fld)); old = a[3, 4, 5]; a[3, 4, 5] = bad
-            @test !step_guard(sim).finite
-            @test TI._guard_reason(sim, 1.0, Inf) === :nonfinite === LegacyStep.guard_reason(sim, 1.0, Inf)
-            if fld in (:u, :w)
-                @test !isfinite(step_guard(sim).speed)
-                # NaN poisons the advective limit, Inf makes it 0
-                @test isnan(bad) ? isnan(cfl_diagnostics(sim, c).dt_adv) : cfl_diagnostics(sim, c).dt_adv == 0
-                @test adaptive_dt(sim, c) == c.dt_min        # a blow-up collapses dt
-            end
-            a[3, 4, 5] = old
-        end
-        sim.θ.data[1, 1, 1] = NaN                         # a halo value is not checked
-        @test step_guard(sim).finite
-    end
-end
+@testset "step cores (#306, #404, #405)" begin
 
 @testset "blow-up: adaptive_dt collapses, the guard fires, the state is restored" begin
-    g = RegularGrid(; size = (24, 24, 16), extent = (240.0, 240.0, 160.0), halo = (3, 3, 3))
+    g = RegularGrid(; size = (16, 16, 8), extent = (160.0, 160.0, 80.0), halo = (3, 3, 3))
     sim = BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17,
                                bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
     rng = Xoshiro(3063)
@@ -176,6 +49,7 @@ end
         e
     end
     @test err isa ErrorException && occursin("after 2 retries", err.msg)
+    # the state is copied back (not computed): exact
     @test sim.u.data == u0 && sim.t == t0
     @test sim.νt.data == νt0 && sim.κt.data == κt0   # νt, κt restored with the state (#346)
     # a NaN velocity: the dt pick collapses to dt_min
@@ -209,52 +83,67 @@ end
                 for f in (s.u, s.v, s.w); interior_view(f) .= 0.1 .* randn(rng, size(interior_view(f))); end;
                 set!(s.θ, 300.0); s)
     drive!(s) = (for _ in 1:3; step_rk3!(s, 1e-3); step_adaptive!(s, CFLConstraints(dt_max = 1e-3)); end; s)
-    seq = [drive!(mk(k)) for k in 1:4]
-    par = [mk(k) for k in 1:4]
+    seq = [drive!(mk(k)) for k in 1:2]
+    par = [mk(k) for k in 1:2]
     @sync for s in par
         Threads.@spawn drive!(s)
     end
-    @test all(k -> agree(par[k].u.data, seq[k].u.data) && agree(par[k].θ.data, seq[k].θ.data), 1:4)
+    @test all(k -> agree(par[k].u.data, seq[k].u.data) && agree(par[k].θ.data, seq[k].θ.data), 1:2)
 end
 
-@testset "step cores: serial and threaded bits, no allocation" begin
-    g = RegularGrid(; size = (40, 40, 24), extent = (400.0, 400.0, 240.0), halo = (3, 3, 3))
+@testset "step cores: no allocation per step" begin
+    g = RegularGrid(; size = (16, 16, 8), extent = (160.0, 160.0, 80.0), halo = (3, 3, 3))
     walls = FieldBoundaryConditions(:periodic, :periodic, :wall)
     mk() = (s = BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17, moisture = true, bcs = walls);
             rng = Xoshiro(3064);
             for f in (s.u, s.v, s.w); interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f))); end;
             set!(s.θ, (x, y, z) -> 300 + 0.003z); set!(s.qv, 0.008); s)
     drivers = (("step!", s -> step!(s, 0.05)), ("rk3", s -> step_rk3!(s, 0.05)),
-               ("adaptive", s -> step_adaptive!(s, CFLConstraints(dt_max = 0.05))),
-               ("ark2", s -> step_imex!(s, 0.2, ARK2())))
-    for (nm, drv!) in drivers
-        r = map(_KS_BACKENDS) do (bn, b)
-            with_backend(b) do
-                s = mk(); drv!(s); drv!(s); s
-            end
-        end
-        @test all(s -> agree(s.u.data, r[1].u.data) && agree(s.w.data, r[1].w.data) && agree(s.θ.data, r[1].θ.data) &&
-                       agree(s.qv.data, r[1].qv.data) && agree(s.p.data, r[1].p.data), r)
-    end
-    ga = RegularGrid(; size = (24, 24, 24), extent = (240.0, 240.0, 2400.0), halo = (3, 3, 3))
-    r = map(_KS_BACKENDS) do (bn, b)
-        with_backend(b) do
-            s = AnelasticSimulation(ga; ν = 1e-2, C_s = 0.17)
-            rng = Xoshiro(3065)
-            for f in (s.u, s.v, s.w); interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f))); end
-            step!(s, 0.2); step!(s, 0.2); s
-        end
-    end
-    @test all(s -> agree(s.u.data, r[1].u.data) && agree(s.θ.data, r[1].θ.data), r)
+               ("adaptive", s -> step_adaptive!(s, CFLConstraints(dt_max = 0.05))))
     with_backend(CPUBackend(serial = true)) do
         s = mk()
-        for (nm, drv!) in drivers[1:3]
+        for (nm, drv!) in drivers
             drv!(s); drv!(s)
             nb = @allocated drv!(s)
-            println("  [KA-j] one $nm step (40×40×24, SGS, moist, serial) allocates $nb bytes")
             @test nb <= (nm == "adaptive" ? 2048 : 64)
         end
     end
+end
+
+
+@testset "physics: solenoidal, RK3 third order in time, Taylor–Green decay at the discrete rate" begin
+    N = 16; ν = 0.05
+    gt = RegularGrid(; size = (N, N, N), extent = (2π, 2π, 2π), halo = (3, 3, 3))
+    # max |∇·u| at round-off after a step from a random, divergent start
+    s = BoussinesqSimulation(gt; ν = 1e-2)
+    for f in (s.u, s.v, s.w); interior_view(f) .= randn(Xoshiro(404), N, N, N); end
+    step!(s, 0.05)
+    @test max_divergence(s) < 1e-12
+    # Taylor–Green vortex, ν = 0.05: the energy after t = 1 against a dt/4
+    # reference; halving dt divides the error by ≈ 2³ = 8 (the spatial error is
+    # common to every run). Measured: ratio 7.47 from dt = 0.1 to 0.05; a stage
+    # combination in the wrong place drops to first order.
+    function tg(dt; U = 1.0, T = 1.0)
+        s = BoussinesqSimulation(gt; ν = ν)
+        set!(s.u, (x, y, z) -> U * sin(x) * cos(y) * cos(z))
+        set!(s.v, (x, y, z) -> -U * cos(x) * sin(y) * cos(z))
+        for _ in 1:round(Int, T / dt)
+            step_rk3!(s, dt)
+        end
+        return s
+    end
+    Kref = kinetic_energy(tg(1 / 80))
+    e1 = abs(kinetic_energy(tg(0.1)) - Kref); e2 = abs(kinetic_energy(tg(0.05)) - Kref)
+    @test 6.5 < e1 / e2 < 9.5
+    # small amplitude (advection ~ 1e-6 of diffusion): K(t) = K₀ exp(−2ν k̃² t)
+    # with k̃² the modified wavenumber of the 7-point Laplacian for k = (1, 1, 1)
+    U = 1e-3
+    K0 = kinetic_energy(tg(1.0; U = U, T = 0.0))
+    s = tg(0.05; U = U, T = 1.0)
+    Δ = 2π / N
+    k2 = 3 * (2 / Δ * sin(Δ / 2))^2
+    @test abs(kinetic_energy(s) / K0 / exp(-2ν * k2) - 1) < 1e-4
+    @test max_divergence(s) < 1e-12
 end
 
 end

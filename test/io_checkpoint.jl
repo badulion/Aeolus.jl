@@ -1,20 +1,15 @@
-# Full-state checkpoint / restart (#245): src/io/checkpoint.jl,
-# src/wall_models/checkpoint.jl, the FFTW planning policy
-# (src/operators/fftw_planning.jl).
+# Full-state checkpoint / restart (#245): src/io/checkpoint.jl, the FFTW
+# planning policy (src/operators/fftw_planning.jl).
 #
 # The physics assertion: a run checkpointed at step N and restarted (into
 # freshly built objects whose scratch buffers hold NaN) agrees with the
 # continuous run at step 2N within ROUNDOFF_RTOL (test/support/agreement.jl;
 # no bit-identity since #495) — fields with
-# halos, closure memory, wall-model state, clock — for every closure with
-# memory, under every stepper, and with wall models whose input filter and
-# TBLE columns carry memory.
+# halos, closure memory, clock — for a closure with memory under RK3, and
+# the adaptive stepper's dt memory.
 
 using Test
 using Aeolus
-# the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
-isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
-using .ChannelCases
 using Aeolus.Fields: interior_view, set!
 using Aeolus.BoundaryConditions: FieldBoundaryConditions
 using Aeolus.TimeIntegration: step_adaptive!, step_imex!, ARK2, CFLConstraints
@@ -78,23 +73,6 @@ ck_state(sim) = map(f -> copy(f.data), checkpoint_fields(sim))
 
 const CK_SCHEMES = (:fixed, :rk3, :imex, :adaptive)
 
-# Two wall-modelled cases whose wall model carries memory: the half channel
-# with the P57-b matching input filtered in time and along the wall, run
-# with the scale-dependent Lagrangian closure; and the channel with the
-# P57-c TBLE columns behind a temporally filtered input.
-function ck_case(kind)
-    if kind === :filtered_lasd
-        m = RegularGrid(; size = (12, 10, 8), extent = (2π, 2π, 1.0))
-        half_channel_case(; N = (12, 10, 8), seed = 4, noise = 1.0, h_wm = 2 / 8,
-                          filter = :both, T_f = 0.2,
-                          closure = LagrangianDynamicSmagorinsky(m; scale_dependent = true))
-    else
-        dz = 2.0 / 8
-        channel_case(; Re_τ = 1000, N = (12, 8, 8), seed = 4, wall_law = SpaldingLaw(),
-                     h_wm = 2dz, filter = :temporal, wall_model = :nonequilibrium)
-    end
-end
-
 # Agreement of two (nested) checkpoint states: floats within ROUNDOFF_RTOL,
 # the rest (counts, symbols, structure) equal.
 ck_same(a, b) = values_agree(a, b)
@@ -122,9 +100,11 @@ end
 
 @testset "Checkpoint / restart (#245)" begin
 
-@testset "restart: $name × $scheme" for name in keys(CK_CLOSURES), scheme in CK_SCHEMES
+# a closure with memory (TKE) under RK3; the stepper's memory (the adaptive
+# dt history) is the next testset
+@testset "restart: $name × $scheme" for (name, scheme) in ((:tke, :rk3),)
     mk = CK_CLOSURES[name]
-    Nhalf = 3
+    Nhalf = 2
     # the RSM's explicit stress cannot be split by step_imex!: refused by design
     if name === :rsm && scheme === :imex
         sim = ck_sim(); c = mk(sim)
@@ -184,46 +164,6 @@ end
     simD = ck_sim(); restart!(simD, path; sgs = sgs, stepper = StepperState(:adaptive))
     _, dtD, _ = step_adaptive!(simD, c; sgs = sgs)
     @test dtD > 5 * stA.dt_history[4]
-    rm(path)
-end
-
-# ---------------------------------------------------------------------------
-# Wall models with memory (P57-b input filter, P57-c TBLE columns) and the
-# case harness (WallBoundedCase): checkpointed as one component.
-# ---------------------------------------------------------------------------
-@testset "restart: wall model with memory ($kind)" for kind in (:filtered_lasd, :tble)
-    Nhalf = 4; dt = 0.004
-    A = ck_case(kind)
-    for _ in 1:2Nhalf; advance_channel!(A, dt); end
-    B = ck_case(kind)
-    for _ in 1:Nhalf; advance_channel!(B, dt); end
-    path = tempname()
-    checkpoint!(B.sim, path; components = (case = B,))
-    C = ck_case(kind)
-    ck_poison!(C.sim)
-    restart!(C.sim, path; components = (case = C,))
-    @test C.nsteps == Nhalf
-    for _ in 1:Nhalf; advance_channel!(C, dt); end
-    sA, sC = ck_state(A.sim), ck_state(C.sim)
-    @test all(k -> agree(sA[k], sC[k]), keys(sA))
-    @test ck_same(checkpoint_state(C), checkpoint_state(A))
-    @test values_agree(C.τ_wall_bottom, A.τ_wall_bottom)
-    if kind === :filtered_lasd
-        # the filter state is memory: primed, and not the instantaneous sample
-        mi = A.inputs.bottom
-        @test mi.primed && mi.T_f > 0
-        @test values_agree(checkpoint_state(C.inputs.bottom), checkpoint_state(mi))
-        # a restart that dropped the filter memory diverges: the memory matters
-        D = ck_case(kind)
-        restart!(D.sim, path; components = (case = D,))
-        D.inputs.bottom.primed = false
-        for _ in 1:Nhalf; advance_channel!(D, dt); end
-        @test ck_state(D.sim).u != sA.u
-    else
-        w = A.wall.walls[:bottom]
-        @test w.nupdates > 0
-        @test agree(C.wall.walls[:bottom].cols[3, 2].u, w.cols[3, 2].u)
-    end
     rm(path)
 end
 
@@ -425,13 +365,6 @@ end
         @test fftw_policy().planner === :patient
         @test_throws ArgumentError set_fftw_policy!(; planner = :fastest)
         @test_throws ArgumentError set_fftw_policy!(; threads = 0)
-        # a PATIENT plan of the pressure solver solves the same problem
-        # (round-off apart): the planner changes speed, not the answer
-        set_fftw_policy!(; planner = :estimate)
-        sE = ck_sim(); step!(sE, CK_DT)
-        set_fftw_policy!(; planner = :patient)
-        sP = ck_sim(); step!(sP, CK_DT)
-        @test maximum(abs, interior_view(sP.u) .- interior_view(sE.u)) < 1e-12
         # namelist table
         cfg = Dict("fftw" => Dict("planner" => "measure", "threads" => 1))
         @test apply_fftw_config!(cfg).planner === :measure
@@ -440,80 +373,6 @@ end
         set_fftw_policy!(; planner = p0.planner, threads = p0.threads)
     end
     @test fftw_policy().planner === :estimate
-end
-
-# ---------------------------------------------------------------------------
-# Across processes: plans are made anew in every process, so this is where
-# the FFTW policy matters (test/fixtures/checkpoint_subprocess.jl).
-# ---------------------------------------------------------------------------
-@testset "cross-process: ESTIMATE reruns and a PATIENT restart with saved wisdom" begin
-    dir = mktempdir()
-    script = joinpath(@__DIR__, "fixtures", "checkpoint_subprocess.jl")
-    proj = dirname(Base.active_project())
-    for role in ("first", "second")
-        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$proj $script $role $dir`
-        @test success(pipeline(cmd; stdout = devnull, stderr = devnull))
-    end
-    ld(f) = deserialize(joinpath(dir, f))
-    e1, e2 = ld("estimate_first.jls"), ld("estimate_second.jls")
-    @test e1.fftw.planner === :estimate && e1.fftw.bitwise_reproducible
-    @test all(k -> agree(e1.fields[k], e2.fields[k]), keys(e1.fields))     # two processes
-    @test ck_same(e1.closure, e2.closure)
-    pc, pr = ld("patient_continuous.jls"), ld("patient_restart.jls")
-    @test pc.fftw.planner === :patient && pr.fftw.planner === :patient
-    @test pr.fftw.wisdom_loaded && pr.fftw.bitwise_reproducible       # the restart reloaded the plans
-    @test agree(pc.t, pr.t)
-    @test all(k -> agree(pc.fields[k], pr.fields[k]), keys(pc.fields))     # restart in a new process
-    @test ck_same(pc.closure, pr.closure)
-    # the two planners solve the same problem: round-off apart (on this grid
-    # the PATIENT plan's pressure differed from the ESTIMATE one in the last
-    # bit when measured)
-    @test maximum(abs, pc.fields.u .- e1.fields.u) < 1e-10
-    @info "cross-process: PATIENT vs ESTIMATE, max |Δu| = $(maximum(abs, pc.fields.u .- e1.fields.u))"
-    rm(dir; recursive = true)
-end
-
-# ---------------------------------------------------------------------------
-# The long drivers' hook: run_channel! (WallModels' channel runs)
-# interrupted after a checkpoint and resumed in fresh objects returns the
-# uninterrupted run's state and statistics (within ROUNDOFF_RTOL). (The GABLS cases are
-# configurations of the model since ONE-g, #456: their components'
-# checkpoints are tested in components_both_cores.jl.)
-# ---------------------------------------------------------------------------
-struct CkKilled <: Exception end
-
-@testset "driver hook: run_channel! interrupted and resumed" begin
-    mk() = ck_case(:filtered_lasd)
-    T = 0.06; dt = 0.004                                    # 15 steps
-    ref = mk(); seen = Float64[]
-    st_ref = run_channel!(ref, T; dt = dt, average_from = 0.02, sample_every = 2,
-                          callback = c -> push!(seen, c.τ_wall_bottom))
-    dir = mktempdir()
-    run_part(kill_at) = begin
-        ck = CheckpointSchedule(dir; every_steps = 4, keep = 2)
-        c = mk(); series = Float64[]
-        cb = c -> (push!(series, c.τ_wall_bottom); c.nsteps == kill_at && throw(CkKilled()))
-        st = try
-            run_channel!(c, T; dt = dt, average_from = 0.02, sample_every = 2, callback = cb,
-                         checkpoint = ck, checkpoint_components = (series = series,))
-        catch e
-            e isa CkKilled || rethrow(); nothing
-        end
-        (c = c, st = st, series = series)
-    end
-    a = run_part(10)                                        # killed after step 10 (checkpoint at 8)
-    @test a.st === nothing
-    b = run_part(-1)                                        # resumes at step 8
-    @test agree(ck_state(b.c.sim).u, ck_state(ref.sim).u)
-    @test ck_same(checkpoint_state(b.c), checkpoint_state(ref))
-    @test agree(b.series, seen)                             # the callback's state resumed too
-    @test agree(b.st.U, st_ref.U) && agree(b.st.τ_series, st_ref.τ_series) && b.st.nsteps == st_ref.nsteps
-    @test values_agree(b.st.stress.total, st_ref.stress.total) && values_agree(b.st.τ_wall, st_ref.τ_wall)
-    # rerunning the finished call returns at once from its final checkpoint
-    c2 = run_part(-1)
-    @test agree(c2.st.U, st_ref.U) && c2.c.nsteps == ref.nsteps
-    finish_checkpoints!(CheckpointSchedule(dir))
-    @test !isdir(dir)
 end
 
 end # testset

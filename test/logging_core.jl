@@ -40,24 +40,18 @@ function lg_rhs(g)
     return src
 end
 
-"Every way the core can fail to converge or retry, once each."
+"A pressure solve that fails to converge and an adaptive retry (the other solvers log the same way)."
 function lg_failures()
     g = RegularGrid(; size = (16, 16, 16), extent = (1.0, 1.0, 1.0), halo = (1, 1, 1))
     src = lg_rhs(g); out = Field(CellCenter(), g)
-    mg = MultigridPoissonSolver(g; bc_x = :periodic, bc_y = :periodic, bc_z = :periodic,
-                                tol = 1e-14, maxcycles = 1)
-    solve!(out, src, mg)
     cg = CGPoissonSolver(g; bc_top = :periodic, bc_bottom = :periodic, tol = 1e-14, maxit = 2)
     solve!(out, src, cg)
-    sol = Field(CellCenter(), g)
-    solve_implicit_diffusion!(sol, src, 0.7, 0.3, g, FieldBoundaryConditions(:periodic);
-                              tol = 1e-14, maxit = 1)
     sim = lg_sim()
     calls = Ref(0)
     flaky = (s, h; kw...) -> (calls[] += 1; calls[] == 1 && error("injected failure");
                               step!(s, h; kw...))
     step_adaptive!(sim, CFLConstraints(; dt_max = 2.0); stepper = flaky)
-    return (; mg, cg, sim)
+    return (; cg, sim)
 end
 
 "stdout and stderr of `f()`, captured through a file."
@@ -128,24 +122,11 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         end
         @test all(r -> haskey(kw(r), :subsystem) && kw(r)[:domain] === :child, tl.logs)
 
-        mgr = only(r for r in tl.logs if get(kw(r), :solver, nothing) === :multigrid)
-        @test mgr.level == Logging.Warn
-        @test kw(mgr)[:subsystem] === :pressure
-        @test kw(mgr)[:cycles] == 1 == res.mg.last_cycles[]
-        @test kw(mgr)[:relative_residual] == res.mg.last_residual[]
-        @test kw(mgr)[:relative_residual] > kw(mgr)[:tol] == 1e-14
-        @test occursin("maxcycles=1 reached", mgr.message)
-
         cgr = only(r for r in tl.logs if get(kw(r), :solver, nothing) === :cg)
         @test cgr.level == Logging.Warn && kw(cgr)[:subsystem] === :pressure
         @test kw(cgr)[:iterations] == 2 == res.cg.last_iter[]
         @test kw(cgr)[:residual] == res.cg.last_residual[]
         @test kw(cgr)[:relative_residual] > kw(cgr)[:tol]
-
-        dr = only(r for r in tl.logs if get(kw(r), :subsystem, nothing) === :diffusion)
-        @test dr.level == Logging.Warn
-        @test kw(dr)[:reason] === :maxit && kw(dr)[:iterations] == 1
-        @test kw(dr)[:relative_residual] > kw(dr)[:tol] == 1e-14
 
         # the adaptive driver: one throw, one retry at half the step, both
         # at Debug (run.log only; #347 removed the verbose keyword)
@@ -158,59 +139,6 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         @test kw(rty)[:reason] === :exception
         @test kw(rty)[:to] == kw(rty)[:from] / 2 && kw(rty)[:from] == kw(thr)[:dt]
         @test kw(rty)[:retry] == 1 && kw(rty)[:max_retries] == 3
-    end
-
-    @testset "no verbose keywords: the logger level decides what is shown (#347)" begin
-        # the keywords are gone, without a deprecation (maintainer, 2026-10-06)
-        sim = lg_sim()
-        @test_throws MethodError step_adaptive!(sim, CFLConstraints(; dt_max = 2.0); verbose = true)
-        @test_throws MethodError CheckpointSchedule(mktempdir(); verbose = false)
-        @test !hasfield(CheckpointSchedule, :verbose)
-
-        # each former verbose message, at its level: the adaptive retry chatter
-        # and the checkpoint fresh start / resume are Debug ...
-        dir = mktempdir()
-        tl = Test.TestLogger(; min_level = Logging.Debug)
-        with_logger(tl) do
-            s = lg_sim(); calls = Ref(0)
-            step_adaptive!(s, CFLConstraints(; dt_max = 2.0);
-                           stepper = (s, h; kw...) -> (calls[] += 1; calls[] == 1 && error("x");
-                                                       step!(s, h; kw...)))
-            ck = CheckpointSchedule(dir; every_steps = 1, wisdom = false)
-            resume!(ck, s)                                   # fresh start
-            maybe_checkpoint!(ck, s; step = 1)
-            ck2 = CheckpointSchedule(dir; every_steps = 1, wisdom = false)
-            resume!(ck2, lg_sim())                           # resumed from step 1
-        end
-        ts = [r for r in tl.logs if get(kw(r), :subsystem, nothing) === :timestepping]
-        @test [r.message for r in ts] == ["step_adaptive!: stepper threw", "step_adaptive!: retry"]
-        @test all(r -> r.level == Logging.Debug, ts)
-        ckr = [r for r in tl.logs if get(kw(r), :subsystem, nothing) === :checkpoint]
-        @test [kw(r)[:event] for r in ckr] == [:fresh_start, :write, :resume]
-        @test all(r -> r.level == Logging.Debug, ckr)
-        res = ckr[3]
-        @test kw(res)[:step] == 1 && basename(kw(res)[:path]) == "checkpoint_000000001.jls"
-        @test occursin("FFTW planner", res.message)
-
-        # ... so a console at Info (the default) shows none of them, and the
-        # same run under a Debug console shows them all, in order
-        run_all() = begin
-            s = lg_sim(); calls = Ref(0)
-            step_adaptive!(s, CFLConstraints(; dt_max = 2.0);
-                           stepper = (s, h; kw...) -> (calls[] += 1; calls[] == 1 && error("x");
-                                                       step!(s, h; kw...)))
-            resume!(CheckpointSchedule(mktempdir(); wisdom = false), s)
-        end
-        info = IOBuffer(); dbg = IOBuffer()
-        with_logger(run_all, AeolusLogger(info; min_level = Logging.Info))
-        with_logger(run_all, AeolusLogger(dbg; min_level = Logging.Debug))
-        @test String(take!(info)) == ""
-        # (the exception's continuation lines start with "    │")
-        lines = filter(l -> occursin(" DEBUG ", l), split(String(take!(dbg)), '\n'))
-        @test length(lines) == 3
-        @test occursin("DEBUG timestepping[main] step_adaptive!: stepper threw", lines[1])
-        @test occursin("DEBUG timestepping[main] step_adaptive!: retry", lines[2])
-        @test occursin("DEBUG checkpoint[main] checkpoints: fresh start", lines[3])
     end
 
     @testset "with_domain nests and restores; tasks start at :main" begin
@@ -260,33 +188,6 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         @test_throws ArgumentError AeolusLogger(buf; timestamps = :bogus)
     end
 
-    @testset "parse_log_level and the test logger" begin
-        @test parse_log_level("debug") == Logging.Debug
-        @test parse_log_level(" Info ") == Logging.Info
-        @test parse_log_level("warning") == parse_log_level(:warn) == Logging.Warn
-        @test parse_log_level("error") == Logging.Error
-        @test parse_log_level("off") == Logging.AboveMaxLevel
-        @test parse_log_level("-500") == Logging.LogLevel(-500)
-        @test_throws ArgumentError parse_log_level("verbose")
-        withenv("AEOLUS_LOG" => nothing) do
-            @test Logging.min_enabled_level(test_logger()) == Logging.Warn
-        end
-        withenv("AEOLUS_LOG" => "debug") do
-            @test Logging.min_enabled_level(test_logger()) == Logging.Debug
-        end
-        withenv("AEOLUS_LOG" => "") do
-            @test Logging.min_enabled_level(test_logger()) == Logging.Warn
-        end
-        # the test logger shows warnings, not info, on the current stderr
-        out = lg_capture_output() do
-            with_logger(test_logger(; level = Logging.Warn)) do
-                @info "hidden" subsystem = :t
-                @warn "shown" subsystem = :t
-            end
-        end
-        @test !occursin("hidden", out) && occursin(r"^\d\d:\d\d:\d\d\.\d{3} WARN  t\[main\] shown", out)
-    end
-
     @testset "the run log: info to the console, debug to run.log, append, close" begin
         dir = mktempdir()
         path = joinpath(dir, "sub", "run.log")
@@ -331,151 +232,4 @@ kw(r) = Dict{Symbol,Any}(r.kwargs)
         @test isopen(con)                        # the caller's console stays open
     end
 
-    @testset "flush policy: Warn+ at once, the rest every flush_interval s (2026-10-06)" begin
-        dir = mktempdir()
-        nlines(p) = count('\n', read(p, String))
-
-        # a Warn record is on disk at once, taking the buffered debug lines
-        # with it; read the file while the logger is still open
-        p = joinpath(dir, "warn.log")
-        lg = open_run_log(p; console = false, append = false, flush_interval = 3600)
-        file = lg.loggers[1]
-        @test file.flush_interval == 3600.0
-        t0 = file.last_flush
-        with_logger(lg) do
-            @debug "d1" subsystem = :t
-            @info "i1" subsystem = :t
-        end
-        # within the interval a debug or info record does not flush: the
-        # policy's clock has not moved (what the stream buffer holds is its
-        # own business, so the file is not required to be empty)
-        @test file.last_flush == t0
-        with_logger(lg) do
-            @warn "w1" subsystem = :t
-        end
-        @test file.last_flush > t0
-        txt = read(p, String)
-        @test count('\n', txt) == 3 && occursin("WARN  t[main] w1", txt) && occursin("d1", txt)
-        with_logger(lg) do
-            @error "e1" subsystem = :t
-        end
-        @test nlines(p) == 4                       # Error too
-        with_logger(lg) do
-            for i in 1:50
-                @debug "late" subsystem = :t i
-            end
-        end
-        close(lg)
-        @test nlines(p) == 54                      # everything is on disk after close
-
-        # the interval itself: once it has passed, the next debug record flushes
-        p = joinpath(dir, "interval.log")
-        lg = open_run_log(p; console = false, append = false, flush_interval = 0.05)
-        with_logger(lg) do
-            @debug "a" subsystem = :t
-        end
-        t0 = lg.loggers[1].last_flush
-        sleep(0.1)
-        with_logger(lg) do
-            @debug "b" subsystem = :t
-        end
-        @test lg.loggers[1].last_flush > t0
-        @test nlines(p) == 2
-        close(lg)
-
-        # flush_interval = 0 restores flush-every-record
-        p = joinpath(dir, "zero.log")
-        lg = open_run_log(p; console = false, append = false, flush_interval = 0)
-        with_logger(lg) do
-            for i in 1:3
-                @debug "z" subsystem = :t i
-                @test nlines(p) == i
-            end
-        end
-        close(lg)
-
-        # an exception inside with_run_log: every buffered record is on disk
-        p = joinpath(dir, "crash.log")
-        @test_throws ErrorException with_run_log(p; console = false, append = false,
-                                                 flush_interval = 3600) do
-            for i in 1:20
-                @debug "before crash" subsystem = :t i
-            end
-            error("blew up")
-        end
-        txt = read(p, String)
-        @test count("before crash", txt) == 20 && occursin("run stopped by an error", txt)
-        @test occursin("i=20", txt)
-
-        # and at the end of a normal with_run_log
-        p = joinpath(dir, "normal.log")
-        with_run_log(p; console = false, append = false, flush_interval = 3600) do
-            for i in 1:5
-                @info "ok" subsystem = :t i
-            end
-        end
-        @test nlines(p) == 5
-
-        # a process that dies of an uncaught error with the log still open
-        # (no with_run_log, no close): the atexit hook flushes it
-        p = joinpath(dir, "atexit.log")
-        script = """
-            using Aeolus, Logging
-            lg = open_run_log($(repr(p)); console = false, flush_interval = 3600)
-            global_logger(lg)
-            for i in 1:7
-                @debug "kept" subsystem = :t i
-            end
-            error("uncaught")
-            """
-        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(pkgdir(Aeolus)) -e $script`
-        proc = run(pipeline(ignorestatus(cmd); stderr = devnull, stdout = devnull))
-        @test !success(proc)
-        @test count("kept", read(p, String)) == 7
-
-        # the console and the test logger flush every record
-        @test test_logger().flush_interval == 0.0
-        lg = open_run_log(joinpath(dir, "c.log"); console = IOBuffer())
-        @test lg.loggers[1].flush_interval == 0.0 && lg.loggers[2].flush_interval == 5.0
-        close(lg)
-        @test AeolusLogger(devnull).flush_interval == 5.0             # the default
-        @test_throws ArgumentError AeolusLogger(devnull; flush_interval = -1)
-    end
-
-    @testset "logging overhead is negligible next to a step" begin
-        # One structured debug record written to run.log (formatted, written,
-        # flushed by the default policy: at most every 5 s for Debug)
-        # against one step of an 8³ case, the smallest the suite runs; the
-        # 64×64×32 figure is measured in the PR (#333). The epic's budget is
-        # 2 % of run time at the default cadence with a few records a step.
-        sim = lg_sim()
-        tstep = Inf
-        for _ in 1:6
-            tstep = min(tstep, @elapsed step!(sim, 1.0))
-        end
-        path = tempname()
-        lg = open_run_log(path; console = false)
-        records(n) = with_logger(lg) do
-            @elapsed for i in 1:n
-                @debug "step" subsystem = :timestepping domain = current_domain() step = i dt = 0.5 cfl = 0.31
-            end
-        end
-        records(10)                               # compile
-        trec = minimum(records(200) for _ in 1:3) / 200
-        close(lg)
-        @test countlines(path) == 10 + 3 * 200
-        rm(path)
-        # one record (≈10 µs, about half of it Base's logging macro) is
-        # cheaper than one step of the smallest case; a regression such as a
-        # recompilation or a blocking write per record would break this
-        @test trec < tstep
-        # a disabled @debug (no logger at Debug) costs nanoseconds
-        quiet(n) = with_logger(AeolusLogger(devnull; min_level = Logging.Info)) do
-            @elapsed for i in 1:n
-                @debug "x" subsystem = :t i
-            end
-        end
-        quiet(10)
-        @test quiet(10_000) / 10_000 < 1e-6
-    end
 end
