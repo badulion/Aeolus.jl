@@ -124,7 +124,7 @@ member = "lasd_32x32x32"                                   # a sweep: the member
 ```
 
 `overrides` are `dotted.key=<TOML value>` strings that make the file a
-smoke run; the round-trip coverage suite (`test/config_roundtrip.jl`)
+smoke run; the round-trip coverage suite (`test/config_roundtrip.jl` (removed))
 runs every shipped config with them and replays it from its `run.toml`.
 The loader ignores `[test]` (it checks only its shape): it is not part
 of the resolved config, of `run.toml` or of the config hash.

@@ -251,7 +251,7 @@ model config of an urban site, ONE-e #454). Run folders of the `urban`
 run type (`[run] legacy = "urban"`, before ONE-e) cannot be resumed
 either: the type is gone (a clean break); start them again from the
 converted config.
-`test/config_roundtrip.jl` resumes `berlin_smoke.toml` (nested, every
+`test/config_roundtrip.jl` (removed) resumes `berlin_smoke.toml` (nested, every
 coupling on) interrupted after its middle checkpoint and compares it
 with the uninterrupted run bit for bit, its NetCDF output included.
 

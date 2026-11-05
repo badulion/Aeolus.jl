@@ -8,7 +8,7 @@ velocity held fixed by the `[kinematic_flow]` component (ONE-l, #475).
 Location: `examples/scalar_advection_2d/scalar_advection_2d.toml` (a
 configuration of the model; formerly the script
 `examples/scalar_advection_2d.jl`, then the `advection` run type).
-`test/config_cases.jl` runs it at 32² for a quarter revolution.
+`test/config_cases.jl` (removed) runs it at 32² for a quarter revolution.
 
 Run with:
 
@@ -54,7 +54,7 @@ peak after 1 rev: (0.746, 0.496)   expected: (0.750, 0.500)
 ## What to look for
 
   * **Conservation** — the mean of θ is constant to round-off (the flux
-    form on a periodic box; `test/config_cases.jl` asserts 1e-13).
+    form on a periodic box; `test/config_cases.jl` (removed) asserts 1e-13).
   * **Peak location** — back at its start after one revolution, within a
     cell (0.746, 0.496 against 0.75, 0.5).
   * **Peak amplitude** — 0.998 → 0.996: the centred scheme has no

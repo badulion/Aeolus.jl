@@ -168,13 +168,9 @@ simulated results with `test/support/agreement.jl` (#495), which
 - `fingerprint(a)` / `fingerprints_differing(got, ref)`: a regression
   fixture in place of a digest of the bits: length, non-finite count,
   mean, mean |·|, RMS, min, max and 16 sampled values, compared within
-  `ROUNDOFF_RTOL` of the field's size. The fixtures are
-  `test/data/components/simulation_fingerprints.toml` (40 configs),
-  `test/data/config_berlin/fixture.toml` `[smoke_fingerprints]` and
-  `test/data/input_{static,dynamic}/fingerprints.toml`. Re-capture only for
-  a change that moves results beyond round-off, with the reason in the
-  commit: the capture scripts next to them, or
-  `AEOLUS_CAPTURE_FINGERPRINTS=1` for the tests that record their own.
+  `ROUNDOFF_RTOL` of the field's size. No committed test fixture uses it
+  any more (the simulation and Berlin fingerprint fixtures went with the
+  test reduction of the validation split); `test/agreement.jl` tests it.
 
 Exact comparison stays where data is copied, not computed: a checkpoint read
 back, a halo filled by copies, a state restored from a snapshot, a parsed
@@ -204,6 +200,42 @@ exactly). At KA-a it produced 2261 hashes, all identical, in about 2 min
 per process.
 
 ## Measured times
+
+### The reduced suite (2026-11-05)
+
+After the validation runs moved to `validation/`, the test suite was cut
+to the checks that matter (maintainer request: fewer than 10 000
+executed assertions). Kept: analytic values, published reference values,
+identities, conservation and budgets over a few steps, interfaces and
+refusals, one short code-path run per configuration. Cut: parameter
+sweeps, resolution studies, long runs, repeated configurations,
+bit-identity and allocation checks, and the ported-kernel comparisons of
+the KA work (`test/ka_*.jl`). Per-element `@test` loops became one
+aggregate assertion each; a failure then names the group, not the
+element.
+
+Serial `julia --project=. test/runtests.jl`, 24-core machine, 1-minute
+load 6.4 at the start, 110 files, all pass:
+
+| Block | Executed assertions | Time |
+| :-- | --: | --: |
+| Aeolus.jl | 1929 | 6 min 53 s |
+| Chemistry: urban NOx–O3–VOC mechanism (#135) | 31 | 0.6 s |
+| Era II | 376 | 2 min 09 s |
+| Era III | 316 | 17 s |
+| Era IV | 506 | 17 s |
+| Era V | 782 | 57 s |
+| Era VI | 159 | 14 s |
+| **Total** | **4099** | **652 s wall** (with `using Aeolus`) |
+
+Before the reduction the same suite executed 123 087 assertions in 158
+jobs (17.5 min wall with `test/run.jl` at 16 jobs). Most of what is left
+is compilation: the first model built from a configuration costs 65–90 s,
+the first urban-site run 137 s, while a second run of either takes
+seconds. That is why the `Aeolus.jl` block (configuration, components,
+nesting and the urban site) dominates.
+
+### Before the reduction
 
 The figures below were measured under the fast/full tiers, before the
 validation runs became a suite of their own; "full tier" is the test files

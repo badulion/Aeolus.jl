@@ -499,7 +499,7 @@ forcing component). Their physics stays in `WallModels`
 (`test/fixtures/channel_cases.jl`: `channel_case` with θ walls,
 `stratified_channel_walls`) and
 `SurfaceExchange` (the maximum sustainable heat flux), tested at module
-level (`test/era6_walls.jl`, `era6_collapse.jl`); the measured channel
+level (`test/era6_walls.jl` (removed), `era6_collapse.jl`); the measured channel
 results are in the history of this page before #456.
 
 ## Berlin

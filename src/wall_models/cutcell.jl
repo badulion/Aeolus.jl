@@ -33,7 +33,7 @@ direction (along ``-u_t``).
 is a trilinear interpolation, which at one cell from the wall
 underestimates a logarithmic profile (on a 30° channel at
 ``Re_τ = 1000``, ``Δ = δ/15``: ``⟨τ_w⟩/(δ\\,dp/dx)`` = 0.931 at
-`probe_factor = 1`, 0.990 at 2; `test/era6_wall_models_immersed.jl`).
+`probe_factor = 1`, 0.990 at 2; `validation/era6_wall_models_immersed.jl`).
 
 This is the immersed-boundary wall model of Tessicini et al. (2002):
 the law is applied at a probe point off the true surface along its

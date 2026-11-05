@@ -149,7 +149,7 @@ Nudging is not a pressure gradient. It has no Coriolis partner, so it
 damps the inertial oscillation on the time scale ``τ`` and pulls the
 nocturnal jet back toward ``U_g``.
 
-*Tests* (`test/era6_nudging_subsidence.jl`):
+*Tests* (`test/era6_large_scale_forcing.jl`, which now holds the nudging and subsidence checks; the measurements below are from the former `test/era6_nudging_subsidence.jl`):
 
 | Check | Measured | Required |
 | :-- | :-- | :-- |
@@ -423,7 +423,7 @@ for a moving wall. `qv` and the SGS TKE share θ's boundary conditions
 but not θ's prescribed gradient (they are filled with
 `homogeneous_bcs(θ_bcs)`).
 
-Measured (`test/era6_deep_top.jl`, test 4):
+Measured (`validation/era6_deep_top.jl`, test 4):
 
 * ``Δ∫θ\,dz = κΓΔt`` per step to 4.4 × 10⁻¹¹ (relative) with `step!`, and
   to 1.4 × 10⁻¹² with ARK2 at 6.8 times the forward-Euler diffusion limit;

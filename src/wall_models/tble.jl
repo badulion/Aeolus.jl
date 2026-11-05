@@ -53,7 +53,7 @@ end
     NoEddyViscosity()
 
 ``ν_{t,wm} ≡ 0``: the laminar boundary-layer equations (the Stokes and
-Poiseuille limits of `test/era6_wall_models_tble.jl`).
+Poiseuille limits of `validation/era6_wall_models_tble.jl`).
 """
 struct NoEddyViscosity <: AbstractTBLEEddyViscosity end
 

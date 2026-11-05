@@ -146,7 +146,7 @@ _ncells(L::MGLevel) = L.nx * L.ny * L.nz
 # The operator reaches the bodies as a small struct: `_ConstOp` (the
 # constant-coefficient fast path) or `_VarOp` (`∇·(c∇φ)` with the face
 # coefficient arrays). The arithmetic of every pointwise body is that of
-# the serial loop it replaced, operation for operation (test/ka_multigrid.jl
+# the serial loop it replaced, operation for operation (test/ka_multigrid.jl (removed)
 # compares them bit for bit).
 
 struct _ConstOp{T}

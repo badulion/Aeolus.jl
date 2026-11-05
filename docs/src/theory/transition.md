@@ -91,7 +91,7 @@ silently fall back to free slip:
 
 All runs below are on `(4, 4, Nz)` grids with the full 3-D
 fractional-step driver (`step!`, ``Δt = 0.3\,Δz^2/ν``), in
-`test/era6_walls.jl`.
+`test/era6_walls.jl` (removed).
 
 | Flow | Reference | Measured |
 | :--- | :--- | :--- |
@@ -527,7 +527,7 @@ top, the prescribed bottom θ flux of the core, molecular ``Pr = 0.71``.
 
 ### Laminar stratified Poiseuille flow (exact)
 
-`test/era6_relaminarisation.jl`, test 1. At ``Re_τ = 10`` the steady
+`validation/era6_relaminarisation.jl`, test 1. At ``Re_τ = 10`` the steady
 closed-channel Poiseuille flow with the stable conduction profile
 (``Ri_τ = 50``) gives ``ν_t ≡ 0`` (exactly, ``ν_h``, ``ν_v`` and
 ``κ_v``) with σ, σ + correction (isotropic and anisotropic length
@@ -926,7 +926,7 @@ per `length_scale` above ``z_i``. The lengths follow PALM (Kadasch et al.
 is a numerical choice, not a similarity law. The blend has no
 stable-stratification correction.
 
-Measured (`test/era6_inflow_statistics.jl`):
+Measured (`test/era6_inflow_statistics.jl` (removed)):
 
 | test | measured | asserted |
 | :-- | :-- | :-- |

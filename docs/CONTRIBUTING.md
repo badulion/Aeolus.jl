@@ -518,7 +518,7 @@ its sections enable.
   and its variants, its drivers in `input/` (written by AeolusPrep.jl),
   its reference data in `data/`, and optional scripts that read a
   finished run folder and plot or tabulate it. Each TOML file carries a
-  `[test]` table with its smoke size; `test/config_roundtrip.jl` finds it
+  `[test]` table with its smoke size; `test/config_roundtrip.jl` (removed) finds it
   by globbing, validates it and replays it.
 - **The rule is a test.** `test/examples_enforcement.jl` parses every
   `.jl` under `examples/` and fails on a call that builds or steps a

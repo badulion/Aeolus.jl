@@ -13,8 +13,9 @@
 # runtests.jl itself. Validation runs are not here: they are a separate
 # suite, validation/ (validation/validation_tags.toml).
 #
-# Times: test/run.jl, 8 jobs x 1 thread, 1-min load 5-13 on the 24-core
-# machine (2026-10-06).
+# Times: serial, one process per group of files, after the test reduction
+# (2026-11-05); they include the compilation that the first file of a group
+# pays, so they order the batch rather than predict it.
 
 # --- timing-sensitive ---------------------------------------------------------
 
@@ -24,23 +25,18 @@ reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the
 
 # --- heavy (started first) ----------------------------------------------------
 
-["urban_checks.jl"]
+["config_simulation_driver.jl"]
 weight = "heavy"
-seconds = 204
-reason = "the 49-run Berlin smoke matrix (12 steps each, ledgers closed); measured alone 2026-10-07, when it was part of the full-tier urban_checks.jl"
+seconds = 65
 
-["era2_nest_hierarchy.jl"]
+["nest_restart.jl"]
 weight = "heavy"
-seconds = 90
+seconds = 60
 
-["era6_tke.jl"]
+["urban_run.jl"]
 weight = "heavy"
 seconds = 53
 
-["era5_anthropogenic_heat.jl"]
+["model_nesting.jl"]
 weight = "heavy"
-seconds = 47
-
-["era6_stratified_sgs.jl"]
-weight = "heavy"
-seconds = 45
+seconds = 49

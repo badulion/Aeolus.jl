@@ -185,8 +185,9 @@ split into the pieces the hierarchy reuses (`_prepare_window!`, the
 parent advance, `_open_window!`), and without a subtree the code path is
 the former one. Golden checksums of 20 steps of six configurations
 (one- and two-way, `step!` and `step_rk3!`, fixed and adaptive, moist,
-sponge, solid), recorded before the change (`test/nest_golden_gen.jl`),
-are reproduced bit for bit.
+sponge, solid), recorded before the change, were reproduced bit for bit
+when the hierarchy landed (the generator and its checksums were removed
+later: tests compare within tolerances, not bits).
 
 ## Measured (`test/era2_nest_hierarchy.jl`)
 

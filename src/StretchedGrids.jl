@@ -536,7 +536,7 @@ set_physical!(f::Field, fun) = _set_physical!(f, fun, mesh(f))
 # Phase-24 stencils here and the #151 / #276 Boussinesq kernels of
 # src/stretched/boussinesq.jl were copies of the RegularGrid kernels with
 # the vertical metric swapped in; the folded kernels give the same bits
-# (test/ka_fv.jl).
+# (test/ka_fv.jl (removed)).
 
 # Three-point unequal-spacing centred derivative weights.
 #   h₋ = zc[k]   - zc[k-1] = dzf[k]

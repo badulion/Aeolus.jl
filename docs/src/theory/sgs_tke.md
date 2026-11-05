@@ -136,7 +136,7 @@ take out of the resolved flow. Booking all of the wall stress's work as
 production is the constant-stress log layer: its shear production
 integrated from ``z_0`` to the first face, ``∫ τ_w\,∂U/∂n\,dn = τ_w U``,
 is the work of the wall stress at the face velocity. The test
-(`test/era6_tke_facades.jl`) checks the budget to 0 relative error, the
+(`test/era6_tke_facades.jl` (removed)) checks the budget to 0 relative error, the
 removed share to 4.6e-15, the wall work against the energy
 `apply_immersed_wall_stress!` removes to 4.7e-8 (``δt = 10^{-6}``), and,
 for uniform flow along a wall, ``Σ P_s V/A = u_*^3 \ln(h/z_0)/κ`` to
@@ -198,7 +198,7 @@ MOST surface exchange (`bus.u_star`).
 
 The Berlin nesting parent runs this closure on a `StretchedGrid` (25 m
 levels to 500 m, then growing by 1.08 per level to 100 m). Four things
-change, each tested in `test/era6_tke_stretched.jl`:
+change, each tested in `test/era6_tke_stretched.jl` (removed):
 
 * **Filter width.** ``Δ_k = (Δx\,Δy\,Δz_k)^{1/3}`` per level, ``Δz_k`` the
   cell thickness — the width the core's Smagorinsky uses there (Deardorff
@@ -248,7 +248,7 @@ mask is not supported on a stretched grid.
 
 **Convective boundary layer** (`examples/cbl_tke/cbl_tke.toml`, the model with `[sgs] model = "tke"`,
 ONE-l #475; the 24³ validation case of `validation/era6_tke.jl` is the harness `tke_cbl` of `test/fixtures/tke_cbl.jl`, which the
-configuration reproduces bit for bit, `test/config_cases.jl`): free convection
+configuration reproduces bit for bit, `test/config_cases.jl` (removed)): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above
 ``z_{i0}``, periodic laterally, sponge in the top quarter, SSP-RK3 at the
 CFL step.
@@ -439,7 +439,7 @@ without qualification. Three runs were stable without it: the decaying
 box (200 RK3 steps), the Berlin smoke runs (12 adaptive steps, with and
 without the wall cap), and the 30 min flagship runs.
 
-### Validation (`test/era6_reynolds_stress.jl`, measured)
+### Validation (`test/era6_reynolds_stress.jl` (removed), measured)
 
 1. **Trace.** For 200 random states, ½ tr of the right-hand side equals
    ``−τ:∇\bar u + βh_3 − ε`` to 1.2e-16, and ``\operatorname{tr}Φ +

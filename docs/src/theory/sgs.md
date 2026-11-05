@@ -209,7 +209,7 @@ pressure solve stopped at a tolerance, wall boundaries, and the anelastic
 field. `:laplacian` keeps `νt_cfl = νt_max`, so its limits are unchanged bit
 for bit.
 
-Measured (`test/era6_sgs_stress_form.jl`; spacing (15.625, 15.625, 6.25) m):
+Measured (`test/era6_sgs_stress_form.jl` (removed); spacing (15.625, 15.625, 6.25) m):
 
 | test | result |
 | :-- | :-- |
@@ -353,7 +353,7 @@ linearisation as ν_t. The explicit cross terms are bounded by
 ``\kappa_h S_{max}/(1+S_{max}^2)``. They therefore do not tighten the
 explicit advective limit the IMEX step runs at.
 
-**Validation** (`test/era6_tensor_diffusion.jl`, Berlin spacing
+**Validation** (`test/era6_tensor_diffusion.jl` (removed), Berlin spacing
 15.625 × 15.625 × 6.25 m):
 
 | check | result |
@@ -445,7 +445,7 @@ the base closure's order of operations,
 `IsentropicDiffusion(StabilityCorrected(base, mesh), mesh)` gives the
 rotated tensor the corrected ``\kappa_v`` across the isentropes.
 
-Measured (`test/era6_stratified_sgs.jl`; the internal waves in `validation/era6_stratified_sgs.jl`):
+Measured (the internal waves in `validation/era6_stratified_sgs.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -626,7 +626,7 @@ are filled from the boundary conditions. The plane / local
 Nothing stored inside an obstacle reaches a fluid coefficient: test 6
 below sets every solid face to NaN and to 1e30 and gets the same bits.
 
-Measured (`test/era6_lagrangian_sgs.jl`; isotropic turbulence and the 200 steps in `validation/era6_lagrangian_sgs.jl`):
+Measured (isotropic turbulence and the 200 steps in `validation/era6_lagrangian_sgs.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -734,7 +734,7 @@ near-wall coefficient comes from the scale dependence, and the wall
 stress from the wall model (`WallModels`, #169, with the P57-b matching
 input, #183).
 
-Measured (`test/era6_lasd.jl`; isotropic, half-channel and 500-step runs in `validation/era6_lasd.jl`):
+Measured (isotropic, half-channel and 500-step runs in `validation/era6_lasd.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -952,7 +952,7 @@ form ``(1/W)\,∂_j(W κ_t ∂_jϕ)`` with the constraint weight (``ρ̄`` or
 ``ρ̄θ̄``) at cell centres and ``z`` faces; it conserves ``Σ W ϕ\,dV``.
 Without either keyword the kernel is the unmasked one, bit for bit.
 
-| property (`test/era6_scalar_sgs_diffusion.jl`) | result |
+| property (`test/era6_scalar_sgs_diffusion.jl` (removed)) | result |
 | :-- | :-- |
 | `qv = sin(2πz/L_z)`, constant `κ₀`, `moisture = true`: amplitude vs the discrete amplification factor, `step!` / `step_rk3!` (100 steps) / ARK2 (20 steps) | 1.8e-15 / 2.6e-15 / 4.4e-16 relative (before #177: `step!` and `step_rk3!` left `qv` at amplitude 1, error 2.3) |
 | random positive `κ_t`, no-flux walls, 100 `step!`s: ``Σ qv``; ``Σ qv^2`` | conserved to 3.5e-15 relative; non-increasing at every step |
@@ -1341,7 +1341,7 @@ operator is clipped at zero there. The gradient is
 `_velocity_gradient_at`, the one stencil of the contract, so there is no
 second stencil.
 
-**What was measured** (`test/era6_sigma_sgs.jl`; decaying turbulence in
+**What was measured** (`validation/era6_sigma_sgs.jl`; decaying turbulence in
 `validation/era6_sigma_sgs.jl`; KH in `validation/era6_transition_kh.jl`; CBC in `validation/era6_cbc_decay.jl`):
 
 | property | σ-model | Smagorinsky |
@@ -1378,7 +1378,7 @@ laminar sheared layer (γ = 0), and σ gives 5.3e-4 against 2.0e-2 m²/s
 (2.7 %). On the laminar version of the current flow (level means of u, v;
 ``w = 0``) σ's ``ν_t`` is zero to the bit where Smagorinsky is on (the
 smoke check AMD and Vreman share), and for an exactly parallel turning
-profile (`test/era6_sigma_sgs.jl`; on the Berlin mesh until #320). The smoke step
+profile (`validation/era6_sigma_sgs.jl`; on the Berlin mesh until #320). The smoke step
 costs 17.8 ms against 16.5 ms with Smagorinsky.
 
 Those free-stream numbers were measured with a sponge that relaxed the

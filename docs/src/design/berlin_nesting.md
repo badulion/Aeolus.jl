@@ -402,7 +402,7 @@ Module-level proof: `test/nest_restart.jl` (bitwise, one-way and
 two-way, a checkpoint at a window's end); the resume of the nested
 `berlin_smoke.toml` (a checkpoint every 3 windows, interrupted after 5,
 the site, its tracers and the parent domain bitwise) is in
-`test/config_roundtrip.jl`. The 24 h flagship
+`test/config_roundtrip.jl` (removed). The 24 h flagship
 restart (22:00 resumed to 23:00) waits for the long Berlin runs, paused
 when this was written. Design and limits: [Checkpoint /
 restart](checkpoint_restart.md#The-Berlin-case).

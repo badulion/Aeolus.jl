@@ -142,7 +142,7 @@ the face centre is half a cell from it. Two hooks act on every step:
 The correction of a step is therefore the modelled stress minus the
 stencil stress, and the momentum the step removes at the walls is
 exactly ``Σ τ_w ΔA Δt`` (measured to 1e-14 for u, v and the w faces of
-an L-shaped corner, `test/era6_wall_models_immersed.jl`). With the IMEX
+an L-shaped corner, `validation/era6_wall_models_immersed.jl`). With the IMEX
 stepper the diffusion is implicit; the explicit removal is then
 first-order in time.
 
@@ -445,7 +445,7 @@ can turn the stress away from the flow). `update_wall_model!` advances
 the columns once per accepted step with the end-of-step velocity and
 pressure. The first use primes them with the equilibrium solution.
 
-### Measured (`test/era6_wall_models_tble.jl`; the channel in `validation/era6_wall_models_tble.jl`)
+### Measured (`validation/era6_wall_models_tble.jl`; the channel in `validation/era6_wall_models_tble.jl`)
 
 | test | result |
 | :-- | :-- |
@@ -544,7 +544,7 @@ default on a periodic surface) or `Operators.box_filter!` (3 × 3, ratio
 applies the form drag as a first-cell body force (budget term `τ_form`)
 and updates α once per step.
 
-**Measured** (`test/era6_wall_models_dynamic.jl`; grid invariance in `validation/era6_wall_models_dynamic.jl`, about 25-30 s):
+**Measured** (`validation/era6_wall_models_dynamic.jl`; grid invariance in `validation/era6_wall_models_dynamic.jl`, about 25-30 s):
 
   * **Analytic invariance.** On a two-mode sinusoid with a uniform
     log-law wind, the block means, transfer functions and central
