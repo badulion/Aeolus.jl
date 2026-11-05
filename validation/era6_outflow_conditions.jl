@@ -30,7 +30,7 @@ using Aeolus.Anelastic: AnelasticSimulation, PseudoIncompressibleSimulation
 using Aeolus.Operators: advect_centered!
 using Printf
 
-include("open_boundary_vortex_harness.jl")
+include(joinpath(@__DIR__, "support", "open_boundary_vortex_harness.jl"))
 
 # ---------------------------------------------------------------------------
 @testset "N-open-c API: per-face outflow modes, halo check, inflow stays Dirichlet" begin

@@ -1,6 +1,6 @@
-# Tests (#354). Fast tier on every PR and push to master; full tier on push
-# to master and weekly. The tiers are defined in test/test_tags.toml and run
-# by the parallel runner test/run.jl (see docs/src/testing.md).
+# Tests (#354) on every PR and push to master: test/run.jl, the PR gate.
+# Validation runs (validation/run.jl) weekly and on demand; they are not a
+# gate (docs/src/testing.md, docs/src/validation.md).
 name: CI
 
 on:
@@ -8,7 +8,7 @@ on:
   push:
     branches: [master]
   schedule:
-    - cron: '17 3 * * 1'   # Mondays 03:17 UTC: full tier
+    - cron: '17 3 * * 1'   # Mondays 03:17 UTC: validation suite
   workflow_dispatch:
 
 concurrency:
@@ -31,8 +31,8 @@ env:
   JULIA_NUM_THREADS: '1'
 
 jobs:
-  fast:
-    name: Fast tier - Julia ${{ matrix.version }}
+  test:
+    name: Tests - Julia ${{ matrix.version }}
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -48,25 +48,20 @@ jobs:
           arch: x64
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Run fast tier
-        env:
-          AEOLUS_TEST_TIER: fast
-        run: julia --color=yes --project=. test/run.jl --outdir .testruns/ci-fast
+      - name: Run the tests
+        run: julia --color=yes --project=. test/run.jl --outdir .testruns/ci-test
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: testlogs-fast-${{ matrix.version }}
-          path: .testruns/ci-fast
+          name: testlogs-${{ matrix.version }}
+          path: .testruns/ci-test
           retention-days: 14
           if-no-files-found: ignore
 
-  full:
-    name: Full tier - Julia ${{ matrix.version }}
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+  validation:
+    name: Validation - Julia ${{ matrix.version }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -81,15 +76,13 @@ jobs:
           arch: x64
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Run full tier
-        env:
-          AEOLUS_TEST_TIER: full
-        run: julia --color=yes --project=. test/run.jl --outdir .testruns/ci-full
+      - name: Run the validation suite
+        run: julia --color=yes --project=. validation/run.jl --outdir .testruns/ci-validation
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: testlogs-full-${{ matrix.version }}
-          path: .testruns/ci-full
+          name: validationlogs-${{ matrix.version }}
+          path: .testruns/ci-validation
           retention-days: 30
           if-no-files-found: ignore

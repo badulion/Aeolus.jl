@@ -41,7 +41,7 @@ Table 3 of Comte-Bellot & Corrsin (1971) in SI units: `k` [rad m⁻¹],
 `NaN` where the table has no value), and the streamwise r.m.s. velocity
 of their table 4 [m s⁻¹].
 """
-function cbc_table(path = joinpath(@__DIR__, "data", "cbc1971_table3.txt"))
+function cbc_table(path = joinpath(@__DIR__, "..", "data", "cbc1971_table3.txt"))
     rows = [parse.(Float64, split(l)) for l in eachline(path) if !startswith(l, "#") && !isempty(strip(l))]
     A = reduce(vcat, permutedims.(rows))
     k = A[:, 1] .* 100                     # cm⁻¹ → m⁻¹

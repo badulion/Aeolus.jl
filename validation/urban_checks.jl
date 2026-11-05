@@ -44,10 +44,10 @@ using Random: Xoshiro
 using Aeolus.SurfaceTiles: last_tile_fluxes, parameter_aggregate, mosaic_fractions
 
 const BC = Aeolus.Urban
-include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
+include(joinpath(@__DIR__, "..", "test", "support", "berlin_configs.jl"))
 # smoke_matrix(registry) and seed_fog!(case, rng), shared with the
 # thread-invariance harness (KA-a, #294)
-include(joinpath(@__DIR__, "support", "smoke_matrix.jl"))
+include(joinpath(@__DIR__, "..", "test", "support", "smoke_matrix.jl"))
 
 """
     berlin_default(; kw...) -> NamedTuple

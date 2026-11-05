@@ -26,11 +26,11 @@ using Aeolus.Fields: interior_view
 #      the parent supplies (a standalone parent run).
 # =========================================================================
 
-isdefined(@__MODULE__, :VortexHarness) || include("open_boundary_vortex_harness.jl")
+isdefined(@__MODULE__, :VortexHarness) || include(joinpath(@__DIR__, "support", "open_boundary_vortex_harness.jl"))
 
 # ---- 1. convective boundary layer: the case is shared with the 4 h
 #         benchmark, benchmarks/bench_twoway_cbl.jl ---------------------------
-include("twoway_cbl_case.jl")
+include(joinpath(@__DIR__, "support", "twoway_cbl_case.jl"))
 
 # ---- 2. forced neutral flow ----------------------------------------------
 

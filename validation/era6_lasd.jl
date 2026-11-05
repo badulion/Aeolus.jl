@@ -19,7 +19,7 @@
 using Test
 using Aeolus
 # the wall-bounded benchmark harness (half channel, channel) is a test fixture (ONE-l, #475)
-isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "fixtures", "channel_cases.jl"))
+isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "..", "test", "fixtures", "channel_cases.jl"))
 using .ChannelCases
 using Aeolus.Fields: interior_view, set!, Field
 using Aeolus.WallModels
@@ -30,7 +30,7 @@ using Printf
 const LOPS = Aeolus.Operators
 
 # the k^(-5/3) initial field of the SGS tests (era2_sgs_numerics.jl, #317)
-isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "support", "kolmogorov.jl"))
+isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "..", "test", "support", "kolmogorov.jl"))
 
 # geometric mean of β, 2^⟨log₂ β⟩ = 2^⟨φ⟩: the mean power-law exponent
 _geomean(β) = exp2(mean(log2, β))

@@ -31,7 +31,7 @@
 using Test, Printf
 using Aeolus
 
-include(joinpath(@__DIR__, "support", "patchy_surface.jl"))
+include(joinpath(@__DIR__, "..", "test", "support", "patchy_surface.jl"))
 
 # Coarse version of the example's setup: 100 m cells, 3.2 × 1.6 × 1.6 km.
 const HS_GRID = (Nx = 32, Ny = 16, Nz = 16, Lx = 3200.0, Ly = 1600.0, Lz = 1600.0)

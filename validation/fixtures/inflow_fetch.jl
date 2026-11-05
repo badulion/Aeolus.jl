@@ -7,7 +7,7 @@
 # docs/src/design/single_model.md). Include it once (it defines
 # `module InflowFetch`; it needs the channel fixture).
 
-isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "channel_cases.jl"))
+isdefined(@__MODULE__, :ChannelCases) || include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "channel_cases.jl"))
 
 module InflowFetch
 

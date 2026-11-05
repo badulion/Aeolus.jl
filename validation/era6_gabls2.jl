@@ -17,7 +17,7 @@ using Aeolus.BudgetSystem: stage_budget
 using Aeolus.Fields: interior_view
 using Statistics: mean
 
-isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
+isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "..", "test", "support", "sbl_data.jl"))
 
 _g2comp(d, T) = only(c for c in d.components if c isa T)
 

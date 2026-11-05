@@ -103,7 +103,7 @@ using Test
 using Aeolus
 using Printf
 
-include("cbc_benchmark_driver.jl")
+include(joinpath(@__DIR__, "support", "cbc_benchmark_driver.jl"))
 
 @testset "Era VI — Comte-Bellot–Corrsin decay (P54-c, #168)" begin
 

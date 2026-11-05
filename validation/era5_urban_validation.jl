@@ -28,7 +28,7 @@ using Aeolus.UrbanSurface
 using Aeolus.Radiosity
 using Statistics: mean, std
 
-include(joinpath(@__DIR__, "urban_validation_driver.jl"))
+include(joinpath(@__DIR__, "support", "urban_validation_driver.jl"))
 
 # Hour (UTC) of the maximum of a diurnal composite of `x` over the samples `sel`.
 function composite(x, hours, sel)

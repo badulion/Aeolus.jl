@@ -22,7 +22,7 @@
 #
 # Run: julia --project=. benchmarks/bench_twoway_cbl.jl [hours=4] [Δ=50]
 
-include(joinpath(@__DIR__, "..", "test", "twoway_cbl_case.jl"))
+include(joinpath(@__DIR__, "..", "validation", "support", "twoway_cbl_case.jl"))
 
 const HOURS = length(ARGS) >= 1 ? parse(Float64, ARGS[1]) : 4.0
 const DELTA = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 50.0

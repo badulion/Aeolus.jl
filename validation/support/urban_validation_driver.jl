@@ -32,7 +32,7 @@ using Statistics: mean, std
 
 "Hourly columns of a NASA POWER extract in test/data (see its header for units)."
 function power_forcing(file)
-    path = joinpath(@__DIR__, "data", file)
+    path = joinpath(@__DIR__, "..", "data", file)
     rows = [split(l, ',') for l in eachline(path) if !startswith(l, '#') && !startswith(l, "year")]
     col(i, T = Float64) = [parse(T, r[i]) for r in rows]
     return (year = col(1, Int), month = col(2, Int), day = col(3, Int), hour = col(4, Int),
@@ -132,7 +132,7 @@ bubble_materials() = UrbanMaterials([0.08, 0.14, 0.2, 0.05, 0.14], [0.94, 0.90, 
 
 "CAPITOUL statistics of Moscicki & Voogt (2007), Table 4.1: `stat[:O].walls` etc."
 function capitoul_statistics()
-    path = joinpath(@__DIR__, "data", "capitoul_surface_temperature_statistics.csv")
+    path = joinpath(@__DIR__, "..", "data", "capitoul_surface_temperature_statistics.csv")
     rows = [split(l, ',') for l in eachline(path) if !startswith(l, '#') && !startswith(l, "statistic")]
     return Dict(Symbol(r[1]) => (roads = parse(Float64, r[2]), walls = parse(Float64, r[3]),
                                  roof = parse(Float64, r[4])) for r in rows)
@@ -140,7 +140,7 @@ end
 
 "BUBBLE table: `bubble[(source, period, quantity)] = (obs, SBL, REF, rmseSBL, rmseREF)` (NaN if absent)."
 function bubble_observations()
-    path = joinpath(@__DIR__, "data", "bubble_sperrstrasse_energy_balance.csv")
+    path = joinpath(@__DIR__, "..", "data", "bubble_sperrstrasse_energy_balance.csv")
     rows = [split(l, ',') for l in eachline(path) if !startswith(l, '#') && !startswith(l, "source")]
     num(x) = isempty(x) ? NaN : parse(Float64, x)
     return Dict((r[1], r[2], r[3]) => (obs = num(r[4]), SBL = num(r[5]), REF = num(r[6]),

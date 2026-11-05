@@ -1,25 +1,10 @@
-# Test selection (#316): AEOLUS_TEST_TIER=fast|full (default fast) picks
-# files by the tags in test_tags.toml; test/run.jl runs them in parallel.
-# The include list below stays the single list. See docs/src/testing.md.
-isdefined(Main, :AeolusTestSelection) || Base.include(Main, joinpath(@__DIR__, "runner", "selection.jl"))
-Main.AeolusTestSelection.serial_entry(@__FILE__) && exit()
+# The tests of Aeolus.jl: unit, analytic, conservation and interface checks
+# and short code-path runs. The include list below is the single list of
+# test files; test/run.jl runs them in parallel, `Pkg.test()` serially.
+# Validation runs (simulated cases that confirm the physics) are a separate
+# suite, validation/runvalidation.jl. See docs/src/testing.md.
 
-using Test
-using Random
-# #245: the suite plans every FFT with FFTW.ESTIMATE: planning takes no time
-# (MEASURE times candidate plans for every new size). Set before `using
-# Aeolus`; subprocesses the tests start inherit it. Results are compared
-# within tolerances, not (#495, test/support/agreement.jl).
-ENV["AEOLUS_FFTW_PLANNER"] = "estimate"
-include(joinpath(@__DIR__, "support", "agreement.jl"))   # agree, fingerprints (#495): every file has them
-using Statistics: mean
-using Aeolus
-using Aeolus.Grids: xnodes, ynodes, znodes, interior
-# #333: the suite shows warnings and errors only (AEOLUS_LOG=debug or info
-# opts in); tests that assert on events capture them with their own logger.
-using Logging: global_logger
-global_logger(test_logger())
-using Aeolus.Fields: set!, interior_view
+include(joinpath(@__DIR__, "support", "environment.jl"))
 
 @testset "Aeolus.jl" begin
 
@@ -879,7 +864,6 @@ using Aeolus.Fields: set!, interior_view
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
-    include("urban_checks.jl")        # EX-a (#438): end-to-end urban checks (smoke matrix, flagship, parent validations); full tier
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
@@ -962,9 +946,7 @@ include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet depos
     include("era2_nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
     include("nest_restart.jl")       # #269 checkpoint / restart of a nested run (nest_state)
     include("era2_nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
-    include("era2_nest_twoway_longrun.jl") # Phase 30 two-way long runs: CBL, neutral, vortex (#263)
     include("era2_nest_hierarchy.jl") # #328 nest hierarchies, siblings, non-aligned and stretched children
-    include("era2_nest_hierarchy_longrun.jl") # #328 two two-way nest levels, 50 turnovers (full tier)
 end
 
 # =========================================================================
@@ -1023,7 +1005,6 @@ end
     include("era5_occupancy.jl")         # Phase 50  occupancy schedules and internal gains (#33)
     include("era5_bestest.jl")           # Phase 50  ASHRAE 140-2020 BESTEST annual loads (#33)
     include("era5_anthropogenic_heat.jl") # Phase 49  anthropogenic heat from the building energy model (#29)
-    include("era5_urban_validation.jl")  # Phase 49  BUBBLE / CAPITOUL validation of the urban canopy (#30)
     include("era5_snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
     include("era5_snow_metamorphism.jl") # Phase 51: grain metamorphism and albedo ageing (#35)
     include("era5_snow_liquid.jl")        # Phase 51: snow percolation and refreezing (#36)
@@ -1033,7 +1014,6 @@ end
     include("era5_sea_spray_coare.jl")   # Phase 52  sea spray, full COARE, validation (#40)
     include("era5_surface_tiles.jl")     # Phase 53 sub-grid tile mosaic, flux aggregation (#41)
     include("era5_blending_height.jl")   # Phase 53 blending height, effective roughness, IBL (#42)
-    include("era5_heterogeneous_surface.jl") # Phase 53 resolved patchy-surface LES vs tiles (#43)
 end
 
 # =========================================================================
@@ -1051,41 +1031,30 @@ end
     include("era6_wall_models_immersed.jl") # Phase 57: wall model on IBM and cut-cell walls (#179)
     include("era6_les_toolbox.jl")       # Phase 54  filters, spectrum, initialiser (#168)
     include("era6_lagrangian_sgs.jl")    # P54-b: Lagrangian dynamic Smagorinsky, mask-aware (#173)
-    include("era6_lasd.jl")              # P54-e: scale-dependent Lagrangian dynamic model, log law (#186)
-    include("era6_cbc_decay.jl")         # Phase 54  Comte-Bellot–Corrsin decay benchmark (#168)
     include("era6_walls.jl")             # P59-a NoSlipWall, laminar wall-flow verification (#172)
     include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
     include("era6_nudging_subsidence.jl") # N-parent-c: plane-mean nudging of u, v, θ, qv; large-scale subsidence (#248)
-    include("era6_gabls2.jl")            # N-parent-c: GABLS2 (reduced) with large-scale subsidence (#248, split off in #320)
     include("era6_scalar_sgs_diffusion.jl") # P56-a: SGS diffusion of qv and tracers with κ_t, solid mask (#177)
     include("era6_neutral_abl.jl")       # P54-d: half-channel ABL / channel harness + Φ_m, stress, E11 (#174)
     include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
     include("era6_apriori_sgs.jl")       # Phase 56  a-priori SGS stress, filtered-DNS fixture (#178)
-    include("era6_transition_kh.jl")       # Phase 59 Transition diagnostics, KH / Miles-Howard (#180)
     include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
     include("era6_tke_stretched.jl")     # N-parent-e: the TKE closure on a StretchedGrid, dual on stretched levels (#259)
     include("era6_tke_facades.jl")       # #232: TKE shear production at wall-modelled facades
     include("era6_reynolds_stress.jl")   # P56-d: differential SGS Reynolds-stress closure (#188)
-    include("era6_sgs_validation.jl")    # P56-e: TKE and RSM against filtered DNS (#192)
     include("era6_wall_models_channel.jl") # P57-b: matching height, time / wall-parallel input filters, LLM (#183)
     include("era6_wall_models_tble.jl")  # P57-c: non-equilibrium (TBLE) wall model, dynamic κ (#189)
     include("era6_sigma_sgs.jl")         # P59-b σ-model closure: invariants, z³ wall scaling, Couette, HIT (#184)
-    include("era6_flat_plate.jl")        # P59-d flat-plate BL: fringe, Blasius, FST, transition (#185)
     include("era6_synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
     include("era6_inflow_statistics.jl")  # N-inflow-b: Reynolds stresses, lengths, times for the inflow (#258)
     include("era6_inflow_turbulence.jl")  # N-inflow-c: inflow faces, zero added mass flux (#264)
     include("era6_stratified_sgs.jl")    # P55-e: StabilityCorrected, Ri_g-dependent anisotropic ν/κ (#187)
     include("era6_wall_models_dynamic.jl") # P57-e: dynamic z0 of partially resolved roughness (#190)
-    include("era6_gabls1.jl")            # P55-f, ONE-g: GABLS1 on the model, reduced (#191, #456)
     include("era6_collapse.jl")            # P58-e: maximum sustainable heat flux, the flux-cooled half channel (#193)
-    include("era6_gabls3.jl")            # P58-d: GABLS3 on the SBL driver: budgets, MOST, LLJ (#194)
     include("era6_relaminarisation.jl")  # P59-e: laminar stratified flow, decaying stratified turbulence, criteria (#195)
     include("era6_deep_top.jl")          # N-parent-b: θ damping toward a profile, fixed-gradient θ top (#254)
     include("era6_open_pressure.jl")     # N-open-a: per-axis Neumann Poisson solves, BC-aware default solver (#251)
     include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
-    include("era6_outflow_conditions.jl") # N-open-c: convective / Orlanski outflow, boundary_scalar_flux, outgoing vortex (#260)
-    include("era6_inflow_fetch.jl")      # N-inflow-d: development length behind a synthetic inflow vs a periodic precursor (#266)
-    include("era6_inflow_nest_longrun.jl")  # N-inflow-e: inflow generator on a nest child, 2 h one-/two-way (#268)
     include("era6_sounding.jl")          # N-parent-a: Lindenberg sounding → (z, t) profiles, boundary_layer_height (#247)
     include("era6_open_near_boundary.jl") # N-open-d: sponge toward the data, neighbor_index, solid open faces, boundary heat terms (#262)
 end

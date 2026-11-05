@@ -1,0 +1,96 @@
+# Validation tags: weight, exclusivity, measured time and what each case
+# checks, for the files that validation/runvalidation.jl includes (same
+# format and runner as test/test_tags.toml; see docs/src/validation.md).
+#
+#   weight    = "light" (default) | "heavy" (started first)
+#   exclusive = true: run alone after the parallel batch (wall-clock asserts)
+#   seconds   = measured wall time, orders the parallel batch
+#   reason    = one line: what the case validates and which test file keeps
+#               its module tested
+#
+# Times: AEOLUS_TEST_TIER=full test/run.jl, 8 jobs x 1 thread, 1-min load
+# 5-13 on the 24-core machine (2026-10-06), when these were the full tier.
+
+["era2_nest_twoway_longrun.jl"]
+weight = "heavy"
+seconds = 349
+reason = "two-way long runs (2 h CBL, neutral, 2000-step vortex); two-way nesting stays fast in era2_nest_twoway.jl"
+
+["era2_nest_hierarchy_longrun.jl"]
+weight = "heavy"
+seconds = 200
+reason = "50-turnover forced neutral flow with two two-way nest levels and its two-level reference; nest hierarchies stay fast in era2_nest_hierarchy.jl"
+
+["era6_inflow_fetch.jl"]
+weight = "heavy"
+seconds = 299
+reason = "development-length runs behind synthetic inflow vs a periodic precursor; Transition stays fast in era6_synthetic_inflow.jl, era6_inflow_statistics.jl, era6_inflow_turbulence.jl (development_length/FetchStatistics have no other fast test)"
+
+["era6_inflow_nest_longrun.jl"]
+weight = "heavy"
+seconds = 205
+reason = "2 h sheared-CBL nest runs, one-way and two-way, with and without the inflow generator (two realisations with it); the generator on a nest stays fast in era6_inflow_turbulence.jl"
+
+["era6_outflow_conditions.jl"]
+weight = "heavy"
+seconds = 225
+reason = "convective/Orlanski outflow and outgoing-vortex runs; open-boundary outflow stays fast in era6_open_near_boundary.jl, era6_open_boundaries.jl"
+
+["urban_checks.jl"]
+weight = "heavy"
+seconds = 700
+reason = "end-to-end runs of the urban site on the Berlin configs (49-run smoke matrix, 20-step 64^3 flagship, parent encroachment/Wangara/24 h tiled-surface runs; formerly the by-hand examples/urban/berlin_checks.jl); the urban site stays fast in urban_run.jl, config_berlin.jl"
+
+["era6_gabls2.jl"]
+weight = "heavy"
+seconds = 92
+reason = "GABLS2 (reduced) 54 h run on the model (gabls2.toml) with large-scale subsidence; ProfileNudging and Subsidence stay fast in era6_nudging_subsidence.jl (checks 1-7, split off in #320)"
+
+["era6_gabls1.jl"]
+weight = "heavy"
+seconds = 152
+reason = "GABLS1 32^3 LES on the model (gabls1.toml; full-only); the SBL components stay fast in components_both_cores.jl, stability functions and forcing in era6_stability_functions.jl, era6_large_scale_forcing.jl"
+
+["era6_flat_plate.jl"]
+weight = "heavy"
+seconds = 146
+reason = "laminar and bypass-transition flat-plate runs (its Blasius / fringe unit checks go with them); Transition stays fast in era6_relaminarisation.jl (laminar_mask!, turbulent_fraction)"
+
+["era6_lasd.jl"]
+weight = "heavy"
+seconds = 131
+reason = "scale-dependent Lagrangian model log-law channel runs; the Lagrangian dynamic model stays fast in era6_lagrangian_sgs.jl"
+
+["era6_transition_kh.jl"]
+weight = "heavy"
+seconds = 126
+reason = "Kelvin-Helmholtz / Miles-Howard growth-rate runs (128x1x256); Transition stays fast in era6_relaminarisation.jl"
+
+["era6_gabls3.jl"]
+weight = "heavy"
+seconds = 113
+reason = "GABLS3 4 h LES on the model (gabls3.toml); LargeScaleForcing and wall models stay fast in era6_large_scale_forcing.jl, era6_wall_models.jl"
+
+["era5_heterogeneous_surface.jl"]
+weight = "heavy"
+seconds = 106
+reason = "resolved patchy-surface CBL LES vs tiles; SurfaceTiles stays fast in era5_surface_tiles.jl, era5_blending_height.jl"
+
+["era6_sgs_validation.jl"]
+weight = "heavy"
+seconds = 72
+reason = "48^3 DNS and 12 LES against filtered DNS; TKE and RSM closures stay fast in era6_tke.jl, era6_reynolds_stress.jl"
+
+["era5_urban_validation.jl"]
+weight = "heavy"
+seconds = 71
+reason = "BUBBLE / CAPITOUL multi-season canyon runs; UrbanSurface and BuildingEnergy stay fast in era5_urban_surface.jl, era5_building_energy.jl"
+
+["era6_cbc_decay.jl"]
+weight = "heavy"
+exclusive = true
+seconds = 55
+reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget wall-clock asserts; closures stay fast in era6_amd_vreman.jl, era6_sigma_sgs.jl"
+
+# --- fast, timing-sensitive --------------------------------------------------
+

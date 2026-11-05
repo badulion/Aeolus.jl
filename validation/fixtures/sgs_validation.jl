@@ -77,7 +77,7 @@ vmean(x) = sum(x) / length(x)
 vmean(f, x) = sum(f, x) / length(x)
 
 # The DNS of P56-c: the fixture the tests and benchmarks share (one source of truth).
-include(joinpath(@__DIR__, "dns_decay.jl"))
+include(joinpath(@__DIR__, "..", "..", "test", "fixtures", "dns_decay.jl"))
 _dns_decay(; kw...) = dns_decay(; kw...)
 _coarse_grain(f, r) = coarse_grain(f, r)
 

@@ -16,7 +16,7 @@ using Aeolus.Fields: interior_view
 using Aeolus.Checks: read_reference
 using Statistics: mean
 
-isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "support", "sbl_data.jl"))
+isdefined(Main, :gabls3_data) || include(joinpath(@__DIR__, "..", "test", "support", "sbl_data.jl"))
 
 # One run, 00-04 UTC. The issue asks for 00-02 UTC; the only accessible LES
 # envelope (Basu, Holtslag & Bosveld 2012, Fig. 1) is for 03-04 UTC, so the
