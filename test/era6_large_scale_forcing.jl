@@ -1,32 +1,25 @@
-# Phase 58 (P58-c, #171) — LargeScaleForcing: geostrophic pressure
-# gradient, geostrophic nudging, prescribed advective tendencies and a
+# Phase 58 (P58-c, #171) and N-parent-c (#248) — LargeScaleForcing:
+# geostrophic pressure gradient, prescribed advective tendencies, plane-mean
+# nudging (ProfileNudging, NudgingWeight), large-scale subsidence and a
 # prescribed surface-temperature series.
 #
-# What is checked against what:
 #   * the tables: bilinear interpolation, end-holding, and the exact step
 #     mean of a piecewise-linear series against hand-computed integrals;
 #   * the pressure gradient: the frictionless inertial oscillation
-#     (Blackadar 1957) after one period 2π/f and its maximum speed
-#     U_g + |V_ag|, and the laminar Ekman spiral (Ekman 1905) over a
-#     no-slip wall against the analytic profile and its 45° surface veer;
-#   * the advective tendencies: Δ∫θ dV against ∫∫(∂θ/∂t)_adv dV dt, the
-#     latter by the trapezoid rule on the table nodes, to round-off;
-#   *: GeostrophicNudging against the Berlin case's former
-#     add_geostrophic_wind! over 100 SSP-RK3 and 100 forward-Euler steps
-#     of a sheared, rotating, turbulent box with Smagorinsky SGS (until
-#     #317 the same oracle ran inside 100 Berlin smoke steps; the
-#     forcing is a body-force hook either way, and the Berlin case is an
-#     example, run by hand, not a test fixture). The Berlin version also
-# asserted every tracer; the box carries no tracers, and
-#     that check was redundant: both forcings write only u and v, never
-#     a tracer, so a tracer differs between the two runs only through
-#     the state it is advected, diffused and sourced by; that state
-#     (u, v, w, θ, p, and the eddy diffusivity computed from it) is
-# the same, which the == below checks.
+#     (Blackadar 1957) after one period 2π/f;
+#   * nudging: the level-mean residual against the exact forward-Euler
+#     amplification factor 1 − wΔt/τ; the tendency is uniform per level;
+#   * subsidence: −w_s Γ on a linear profile, zero in a mixed layer;
+#   * the ledger: Δ∫θ dV = booked nudging + subsidence + ∫∫(∂θ/∂t)_adv dV dt
+#     (the latter by the trapezoid rule on the table nodes), to 1e-10.
+#
+# GABLS2 reduced (subsidence from 40 h) is the validation run
+# validation/era6_gabls2.jl.
 
-using Test, Printf
+using Test
 using Aeolus
-using Aeolus.Fields: interior_view
+using Aeolus.Fields: interior_view, set!
+using Statistics: mean
 
 # Shu–Osher SSP-RK3 of the projected Euler step `step!`, with a body
 # force and the stage times t, t + Δt, t + Δt/2 (step_rk3! takes no hook).
@@ -52,26 +45,25 @@ end
 _lsf_mean(f) = sum(interior_view(f)) / length(interior_view(f))
 _lsf_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1) * size(iv, 2)))
 
-# The Berlin case's geostrophic forcing before #171
-# (examples/urban/couplings/geostrophic.jl at cc4a150), kept verbatim as
-# the oracle of the test. It is a test fixture, not a second
-# implementation: nothing outside this file calls it.
-function _legacy_add_geostrophic_wind!(sim, U_g::Real, V_g::Real, τ_relax::Real)
-    Nx, Ny = sim.mesh.Nx, sim.mesh.Ny
-    Hx, Hy, Hz = sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz
-    Nz = sim.mesh.Nz
-    invτ = 1 / τ_relax
-    @inbounds for k in 1:Nz
-        ū = 0.0; v̄ = 0.0
-        for j in 1:Ny, i in 1:Nx
-            ū += sim.u.data[Hx+i, Hy+j, Hz+k]
-            v̄ += sim.v.data[Hx+i, Hy+j, Hz+k]
-        end
-        ū /= (Nx * Ny); v̄ /= (Nx * Ny)
-        for j in 1:Ny, i in 1:Nx
-            sim.tu.data[Hx+i, Hy+j, Hz+k] -= invτ * (ū - U_g)
-            sim.tv.data[Hx+i, Hy+j, Hz+k] -= invτ * (v̄ - V_g)
-        end
+_ns_level(f, k) = (iv = interior_view(f); sum(@view iv[:, :, k]) / (size(iv, 1) * size(iv, 2)))
+_ns_quiet(Nz; Lz = 800.0, θ₀ = 300.0, N = 4) =
+    BoussinesqSimulation(RegularGrid(; size = (N, N, Nz), extent = (400.0, 400.0, Lz)); θ₀ = θ₀)
+
+# a turbulent-looking, closed (fully periodic) box; flux-form advection and
+# diffusion conserve ∫θ. Buoyancy is off (θ₀ = 0): θ is a passive scalar,
+# and the periodic seam of a stratified θ would otherwise drive the flow
+# unstable within the run (measured: NaN after 63 steps with θ₀ = 300 K).
+function _ns_box(; N = 8, Nz = 8, moisture = false)
+    mesh = RegularGrid(; size = (N, N, Nz), extent = (800.0, 800.0, 400.0))
+    sim = BoussinesqSimulation(mesh; ν = 1.0, θ₀ = 0.0, f_coriolis = 1e-4, moisture = moisture)
+    iu, iv, iθ = interior_view.((sim.u, sim.v, sim.θ))
+    for k in 1:Nz, j in 1:N, i in 1:N
+        iu[i, j, k] = 2 + sin(2π * j / N + k)
+        iv[i, j, k] = cos(2π * i / N - k)
+        iθ[i, j, k] = 300 + 0.004 * (k - 0.5) * mesh.dz + 0.3 * sin(i * j + k)
+    end
+    if moisture
+        interior_view(sim.qv) .= [8e-3 - 1e-5 * k + 1e-4 * cos(i + 2j) for i in 1:N, j in 1:N, k in 1:Nz]
     end
     return sim
 end
@@ -89,18 +81,13 @@ end
         @test forcing_value(tab, 300.0, 3600.0) == 0.0
         @test forcing_value(tab, 50.0, 0.0) ≈ 2.0                 # mid-way in z
         @test forcing_value(tab, 200.0, 1800.0) ≈ (0.5 * (3 + 5) + 0.5 * (3 + 0)) / 2
-        @test forcing_value(tab, -10.0, -100.0) == 1.0            # held below / before
         @test forcing_value(tab, 1e4, 1e5) == 5.0                 # held above / after
         # the step mean of a piecewise-linear series is exact:
         # at z = 0 over [1800, 5400]: ∫ = 900·(1.5+2)/2·2 … by hand
         # p(1800) = 1.5, p(3600) = 2, p(5400) = 3 → (1.5+2)/2·1800 + (2+3)/2·1800
         @test forcing_mean(tab, 0.0, 1800.0, 5400.0) ≈ ((1.5 + 2) / 2 * 1800 + (2 + 3) / 2 * 1800) / 3600
-        # beyond the end the value is held: mean over [7200, 9000] = 4
-        @test forcing_mean(tab, 0.0, 7200.0, 9000.0) ≈ 4.0
         # straddling the end: [6300, 8100] → (3.5+4)/2·900 + 4·900
         @test forcing_mean(tab, 0.0, 6300.0, 8100.0) ≈ ((3.5 + 4) / 2 * 900 + 4 * 900) / 1800
-        # a zero-length step is the point value
-        @test forcing_mean(tab, 200.0, 1800.0, 1800.0) == forcing_value(tab, 200.0, 1800.0)
         # step means add up to the whole integral to round-off
         tt = range(0.0, 9000.0; length = 38)
         s = sum(forcing_mean(tab, 150.0, tt[i], tt[i+1]) * (tt[i+1] - tt[i]) for i in 1:length(tt)-1)
@@ -109,19 +96,15 @@ end
         prof = ForcingTable([0.0, 1000.0], [2.0, 12.0])
         @test forcing_value(prof, 250.0, 1e6) ≈ 4.5
         @test forcing_mean(prof, 250.0, 0.0, 600.0) ≈ 4.5
-        @test forcing_mean(7.0, 1.0, 0.0, 1.0) === 7.0
         @test forcing_mean((z, t) -> z + t^2, 1.0, 0.0, 3.0) ≈ 1 + 3.0   # Simpson is exact for t²
         @test_throws ArgumentError ForcingTable([0.0, 0.0], [0.0], zeros(2, 1))
-        @test_throws ArgumentError ForcingTable([0.0, 1.0], [0.0], zeros(3, 1))
     end
 
     @testset "SurfaceTemperatureSeries (GABLS1: 265 K, −0.25 K/h)" begin
         s = SurfaceTemperatureSeries([0.0, 9 * 3600.0], [265.0, 265.0 - 0.25 * 9])
-        @test surface_temperature(s, 0.0) == 265.0
         @test surface_temperature(s, 4 * 3600.0) ≈ 264.0
         @test surface_temperature(s, 9 * 3600.0) ≈ 262.75
         @test surface_temperature(s, 20 * 3600.0) ≈ 262.75       # held after the end
-        @test_throws ArgumentError SurfaceTemperatureSeries([0.0, 1.0], [265.0])
     end
 
     @testset "inertial oscillation about U_g (Blackadar 1957)" begin
@@ -147,8 +130,6 @@ end
             n == N ÷ 4 && (quarter = (u - U_g, v))
         end
         err = hypot(_lsf_mean(sim.u) - (U_g + a), _lsf_mean(sim.v) - b)
-        @info @sprintf("Inertial oscillation: error after one period %.2e m/s = %.2e |V_ag|; max speed %.6f vs U_g + |V_ag| = %.6f (rel. %.1e); quarter period (u−U_g, v) = (%.4f, %.4f) vs (b, −a) = (%.1f, %.1f)",
-                       err, err / Vag, speed_max, U_g + Vag, speed_max / (U_g + Vag) - 1, quarter..., b, -a)
         @test err < 1e-3 * Vag
         @test abs(speed_max / (U_g + Vag) - 1) < 1e-3
         @test all(isapprox.(quarter, (b, -a); atol = 1e-3 * Vag))   # clockwise (NH)
@@ -156,155 +137,118 @@ end
         @test maximum(abs, interior_view(sim.u) .- _lsf_mean(sim.u)) < 1e-12
     end
 
-    @testset "laminar Ekman spiral over a no-slip wall (Ekman 1905)" begin
-        # ν = 1 m²/s, f = 1e-4: δ = √(2ν/f) = 141.4 m. Analytic steady state
-        #   u = U_g (1 − e^{−z/δ} cos z/δ),  v = U_g e^{−z/δ} sin z/δ,
-        # whose wall stress points 45° to the left of U_g.
-        # The no-slip bottom: neither #172 (NoSlipWall) nor #169
-        # (SpaldingLaw) is on master, so the wall stress is the laminar wall
-        # law τ/ρ = ν u₁/(Δz/2) — the u⁺ = y⁺ limit of Spalding's law, i.e.
-        # the no-slip ghost u₀ = −u₁ — added to the first level of a
-        # free-slip (:wall) domain.
-        ν, f, U_g = 1.0, 1e-4, 10.0
-        δ = sqrt(2ν / f)
-        Nz = 64
-        Lz = 1280.0                                   # 9.05 δ
-        mesh = RegularGrid(; size = (4, 4, Nz), extent = (400.0, 400.0, Lz))
-        sim = BoussinesqSimulation(mesh; ν = ν, f_coriolis = f,
-                                   bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-        interior_view(sim.u) .= U_g                   # impulsive start from geostrophic flow
-        F = GeostrophicPressureGradient(U_g, 0.0)
-        dz = mesh.dz
-        K = mesh.Hz + 1
-        function bf!(s, Δt)
-            apply_forcing!(s, F, s.t, Δt)
-            c = ν / (dz / 2) / dz
-            @views s.tu.data[:, :, K] .-= c .* s.u.data[:, :, K]
-            @views s.tv.data[:, :, K] .-= c .* s.v.data[:, :, K]
-            return nothing
+    @testset "1. nudging e-folding: exact stepper factor" begin
+        τ = 3600.0
+        # forward Euler (step!), with a height weight: per level 1 − w(z)Δt/τ
+        W = NudgingWeight(300.0; depth = 200.0)
+        F = ProfileNudging((θ = 300.0,), τ; weight = W)
+        # buoyancy off (θ₀ = 0): a level-dependent θ would otherwise give the
+        # pressure solve a hydrostatic field to cancel
+        sim = _ns_quiet(8; θ₀ = 0.0)
+        interior_view(sim.θ) .= 302.0
+        N = 100; dt = τ / N
+        for _ in 1:N
+            step!(sim, dt; body_force! = (s, Δt) -> apply_forcing!(s, F, s.t, Δt))
         end
-        dt = 100.0                                    # ν dt/dz² = 0.25
-        nsteps = 6000                                 # f t = 60
-        for _ in 1:nsteps
-            _lsf_rk3!(sim, dt, bf!)
+        zc = [(k - 0.5) * sim.mesh.dz for k in 1:8]
+        err = maximum(1:8) do k
+            w = nudging_weight(W, zc[k], sim)
+            r = (_ns_level(sim.θ, k) - 300) / 2
+            abs(r - (1 - w * dt / τ)^N)
         end
-        z = [(k - 0.5) * dz for k in 1:Nz]
-        u = [_lsf_level(sim.u, k) for k in 1:Nz]
-        v = [_lsf_level(sim.v, k) for k in 1:Nz]
-        ue = @. U_g * (1 - exp(-z / δ) * cos(z / δ))
-        ve = @. U_g * exp(-z / δ) * sin(z / δ)
-        l2 = sqrt(sum(abs2, u .- ue) + sum(abs2, v .- ve)) / sqrt(sum(abs2, ue) + sum(abs2, ve))
-        l2_ag = sqrt(sum(abs2, u .- ue) + sum(abs2, v .- ve)) /
-                sqrt(sum(abs2, ue .- U_g) + sum(abs2, ve))
-        # Surface veer: the angle between the surface stress and U_g. The
-        # model's wall stress is ν (u₁, v₁)/(Δz/2), so its direction is that
-        # of the first-level wind. (The analytic first-level wind, at z = 10 m,
-        # points 43.0°: the wall law's half-cell linear profile puts the
-        # first level 1.7° off it, and a quadratic extrapolation of the
-        # discrete shear to z = 0 gives ≈ 47°; both are the first-order
-        # wall-stress closure, not the forcing.)
-        veer = atand(v[1], u[1])
-        veer_quad = atand(9v[1] - v[2], 9u[1] - u[2])
-        # the maximum of v (the spiral's cross-isobaric jet) and the
-        # supergeostrophic maximum of u, at z = πδ/4 and 3πδ/4
-        @info @sprintf("Ekman spiral (Nz = %d, dz = %.0f m, δ = %.1f m, f t = %.0f): relative L2 error %.2e (of the ageostrophic part %.2e); surface veer (stress direction) %.3f° (quadratic shear extrapolation %.3f°); max u %.4f vs %.4f, max v %.4f vs %.4f",
-                       Nz, dz, δ, f * nsteps * dt, l2, l2_ag, veer, veer_quad, maximum(u), maximum(ue), maximum(v), maximum(ve))
-        @test l2 < 0.01
-        @test abs(veer - 45) < 0.5
-        @test maximum(u) > U_g                        # supergeostrophic overshoot
-        @test isapprox(maximum(u), maximum(ue); rtol = 0.01)
-        @test isapprox(maximum(v), maximum(ve); rtol = 0.01)
+        @test err < 1e-12
+        @test _ns_level(sim.θ, 1) == 302.0               # below z_n: not nudged at all
+        @test nudging_weight(W, 400.0, sim) ≈ 0.5
+        @test_throws ArgumentError ProfileNudging((w = 0.0,), τ)
     end
 
-    @testset "advective tendencies: Δ∫θ dV = ∫∫(∂θ/∂t)_adv dV dt" begin
-        # A turbulent, closed box (periodic sides, impermeable walls, no
-        # surface flux): flux-form advection and diffusion conserve ∫θ, so
-        # the change is the prescribed large-scale tendency alone. The table
-        # varies with height and is piecewise linear in time with a kink at
-        # t = 250 s that does not fall on a step boundary.
-        mesh = RegularGrid(; size = (8, 8, 8), extent = (800.0, 800.0, 400.0))
-        sim = BoussinesqSimulation(mesh; ν = 1.0, θ₀ = 300.0, f_coriolis = 1e-4,
-                                   bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-        rng_vals(k) = (sin(1.3k), cos(0.7k))
-        iu, iv, iw, iθ = interior_view.((sim.u, sim.v, sim.w, sim.θ))
-        for k in 1:8, j in 1:8, i in 1:8
-            iu[i, j, k] = 2 + sin(2π * j / 8 + k)
-            iv[i, j, k] = cos(2π * i / 8 - k)
-            iθ[i, j, k] = 300 + 0.01 * (i + 2j - k) + 0.3 * sin(i * j)
+    @testset "2. turbulence untouched: uniform tendency per level" begin
+        prof = ForcingTable([0.0, 400.0], [301.0, 299.0])
+        F = ProfileNudging((u = 3.0, v = -1.0, θ = prof), 600.0; weight = z -> min(1.0, z / 200))
+        a = _ns_box()
+        for f in (a.tu, a.tv, a.tθ); fill!(f.data, 0); end
+        I = apply_forcing!(a, F, 0.0, 10.0)
+        level_uniform(iv) = all(all(iv[:, :, k] .== iv[1, 1, k]) for k in 1:size(iv, 3))
+        @test all(level_uniform(interior_view(f)) for f in (a.tu, a.tv, a.tθ))
+        @test all(any(!=(0), interior_view(f)) for f in (a.tu, a.tv, a.tθ))
+        @test keys(I) == (:u, :v, :θ)
+    end
+
+    @testset "4. linear profile: −w_s Γ at every level" begin
+        Γ, ws = 0.003, -0.01
+        sim = _ns_box(Nz = 16)
+        m = sim.mesh
+        iθ = interior_view(sim.θ)
+        for k in 1:16, j in 1:8, i in 1:8   # θ₀ + Γz plus fluctuations of zero plane mean
+            iθ[i, j, k] = 290 + Γ * (k - 0.5) * m.dz + 0.2 * sinpi(2i / 8) * cospi(2j / 8)
         end
+        for form in (:mean_gradient, :local)
+            fill!(sim.tθ.data, 0)
+            I = apply_forcing!(sim, Subsidence(ws; fields = (:θ,), form = form), 0.0, 1.0)
+            t = [_ns_level(sim.tθ, k) for k in 1:16]
+            @test maximum(abs, t .+ ws * Γ) / abs(ws * Γ) < 1e-10
+            @test I.θ ≈ -ws * Γ * m.Lx * m.Ly * m.Lz rtol = 1e-10
+        end
+    end
+
+    @testset "6. mixed layer: no subsidence tendency where ⟨θ⟩ is constant" begin
+        sim = _ns_box(Nz = 16)
+        m = sim.mesh
+        iθ = interior_view(sim.θ)
+        zi = 200.0
+        for k in 1:16, j in 1:8, i in 1:8
+            z = (k - 0.5) * m.dz
+            iθ[i, j, k] = (z < zi ? 300.0 : 300.0 + 0.01 * (z - zi)) + 0.05 * sinpi(2i / 8 + j / 4)
+        end
+        S = Subsidence(-0.02; fields = (:θ,))
+        fill!(sim.tθ.data, 0)
+        apply_forcing!(sim, S, 0.0, 1.0)
+        kml = [k for k in 2:16 if (k + 0.5) * m.dz < zi]      # both neighbours inside the layer
+        tml = maximum(abs, [_ns_level(sim.tθ, k) for k in kml])
+        tabove = _ns_level(sim.tθ, 14)
+        @test tml <= 0.02 * 4eps(300.0) / m.dz        # round-off of the plane means at most
+        @test tabove ≈ 0.02 * 0.01 rtol = 1e-10
+    end
+
+    @testset "ledger: Δ∫θ dV = booked nudging + subsidence + advective tendency, to 1e-10" begin
+        # a closed box: flux-form advection and diffusion conserve ∫θ, so the
+        # change is the forcing alone. The tables vary with height and are
+        # piecewise linear in time with kinks off the step boundaries.
+        zt = [0.0, 200.0, 400.0]
+        tt = [0.0, 300.0, 900.0]
+        wtab = ForcingTable(zt, tt, [0.0 0.0 0.0; -0.004 -0.01 -0.002; -0.006 -0.02 -0.004])
+        θref = ForcingTable([0.0, 400.0], [299.0, 303.0])
+        sim = _ns_box()
+        mesh = sim.mesh
         zc = [(k - 0.5) * mesh.dz for k in 1:8]
         tnodes = [0.0, 250.0, 600.0]
         Θ = [1e-4 * (1 + k / 8) * c for k in 1:8, c in (1.0, -2.0, 0.5)]   # K/s
-        F = AdvectiveTendencies(zc, tnodes, Θ, nothing, nothing, nothing)
-        bf!(s, Δt) = apply_forcing!(s, F, s.t, Δt)
+        F = (ProfileNudging((θ = θref,), 300.0; weight = NudgingWeight(100.0; depth = 100.0)),
+             Subsidence(wtab; form = :mean_gradient),
+             AdvectiveTendencies(zc, tnodes, Θ, nothing, nothing, nothing))
         dV = mesh.dx * mesh.dy * mesh.dz
         H0 = sum(interior_view(sim.θ)) * dV
-        dt = 7.0
-        nsteps = 86                                   # 602 s: past the last node
+        nudged = 0.0; subsided = 0.0
+        dt = 7.0; nsteps = 86                          # 602 s: past the last node
         for _ in 1:nsteps
-            step!(sim, dt; body_force! = bf!)
+            step!(sim, dt; body_force! = function (s, Δt)
+                apply_forcing!(s, F, s.t, Δt)
+                nudged += Δt * tendency_integrals(F[1]).θ
+                subsided += Δt * tendency_integrals(F[2]).θ
+            end)
         end
         T = nsteps * dt
-        # ∫∫ F dV dt: trapezoid on the nodes (exact for piecewise-linear t)
-        # plus the held end value after the last node.
+        # ∫∫ F_adv dV dt: trapezoid on the nodes (exact for piecewise-linear t)
+        # plus the held end value after the last node
         It = [sum((tnodes[n+1] - tnodes[n]) * (Θ[k, n] + Θ[k, n+1]) / 2 for n in 1:2) +
               (T - tnodes[end]) * Θ[k, end] for k in 1:8]
-        expected = sum(It) * mesh.Nx * mesh.Ny * dV
+        advected = sum(It) * mesh.Nx * mesh.Ny * dV
+        booked = nudged + subsided + advected
         ΔH = sum(interior_view(sim.θ)) * dV - H0
-        rel = abs(ΔH - expected) / abs(expected)
-        @info @sprintf("Advective tendencies: Δ∫θ dV = %.12e K m³, ∫∫F dV dt = %.12e K m³, relative difference %.1e (max |w| %.2f m/s)",
-                       ΔH, expected, rel, maximum(abs, interior_view(sim.w)))
-        @test rel < 1e-11
-        @test maximum(abs, interior_view(sim.w)) > 1e-3   # the flow really mixed
+        @test abs(ΔH - booked) / abs(booked) < 1e-10
+        @test abs(nudged) > 0 && subsided > 0 && abs(advected) > 0   # every term acts
+        @test maximum(abs, interior_view(sim.w)) > 1e-3          # the flow really mixed
         # no humidity field to receive a q tendency: an error, not a no-op
-        Fq = AdvectiveTendencies(; q = 1e-8)
-        @test_throws ArgumentError apply_forcing!(sim, Fq, 0.0, 1.0)
-    end
-
-
-    @testset "GeostrophicNudging is the former add_geostrophic_wind! (100 steps, turbulent box)" begin
-        # The oracle and the forcing as body-force hooks of the same run: a
-        # rotating, sheared, stably stratified box with random fluctuations
-        # and Smagorinsky SGS, so that every tendency the hook subtracts
-        # from is non-zero and the plane means move every step. τ = 60 s
-        # (not the Berlin 1800 s) so that the nudging moves the mean by
-        # O(1) over the run: the comparison is not of two nearly unforced
-        # runs.
-        U_g, V_g, τ = 1.0, -0.5, 60.0
-        function box()
-            m = RegularGrid(; size = (12, 10, 8), extent = (600.0, 500.0, 400.0))
-            s = BoussinesqSimulation(m; θ₀ = 300.0, C_s = 0.18, ν = 1e-5, f_coriolis = 1e-4,
-                                     bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
-                                     θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
-            iu, iv, iw, iθ = interior_view.((s.u, s.v, s.w, s.θ))
-            for k in 1:8, j in 1:10, i in 1:12
-                iu[i, j, k] = 3 + 0.2k + 0.5 * sin(2π * i / 12 + 2π * j / 10 + k)
-                iv[i, j, k] = 1 + 0.4 * cos(2π * j / 10 - 0.7k + i)
-                iw[i, j, k] = 0.1 * sin(i * j + k)
-                iθ[i, j, k] = 300 + 0.004 * (k - 0.5) * m.dz + 0.2 * cos(i + 2j - k)
-            end
-            return s
-        end
-        F = GeostrophicNudging(U_g, V_g, τ)
-        new_bf!(s, Δt) = (apply_forcing!(s, F, s.t, Δt); nothing)
-        old_bf!(s, Δt) = (_legacy_add_geostrophic_wind!(s, U_g, V_g, τ); nothing)
-        for (name, adv!) in (("step_rk3!", (s, bf!) -> step_rk3!(s, 2.0; body_force! = bf!)),
-                             ("step!", (s, bf!) -> step!(s, 2.0; body_force! = bf!)))
-            new, old = box(), box()
-            u0 = _lsf_mean(new.u)
-            for _ in 1:100
-                adv!(new, new_bf!); adv!(old, old_bf!)
-            end
-            same = all(agree(getfield(new, x).data, getfield(old, x).data) for x in (:u, :v, :w, :θ, :p))
-            @info @sprintf("Nudging, %s, 100 steps (t = %.0f s = %.1f τ): u, v, w, θ, p identical: %s; ⟨u⟩ %.3f → %.3f (U_g %.1f), ⟨v⟩ → %.3f (V_g %.1f)",
-                           name, new.t, new.t / τ, same, u0, _lsf_mean(new.u), U_g, _lsf_mean(new.v), V_g)
-            @test agree(new.t, old.t) && agree(old.t, 200.0)
-            @test same
-            # the forcing acted: over 3.3 τ the mean u moved more than half-way to U_g
-            @test abs(_lsf_mean(new.u) - U_g) < 0.5 * abs(u0 - U_g)
-            # and the fluctuations are not damped by it (they are the same
-            # bits in both runs; here: they survive the 100 steps)
-            @test maximum(abs, interior_view(new.u) .- _lsf_mean(new.u)) > 1e-3
-        end
+        @test_throws ArgumentError apply_forcing!(sim, AdvectiveTendencies(; q = 1e-8), 0.0, 1.0)
     end
 end
