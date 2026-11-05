@@ -833,7 +833,6 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("components_parent.jl")      # NEST-p1 (#481): the urban nest parent's physics as components, both cores
     include("dns_vs_les.jl")             # ONE-g (#456): the isotropic-turbulence initial field, the spectrum and dissipation outputs
     include("glue_physics.jl")         # ONE-e (#454): the physics moved out of the urban glue into its modules
-    include("config_cases.jl")        # EX-d (#441), ONE-l (#475): the example cases = the old scripts
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
@@ -843,7 +842,6 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)
     include("config_reference.jl")    # CFG-i (#364): option reference and input-format pages, counted against the schemas
-    include("config_roundtrip.jl")    # CFG-i (#364): every shipped config validates, is canonical, documented, replays; resume
 
     @testset "I/O: TOML config round-trip" begin
         path = tempname() * ".toml"

@@ -68,9 +68,7 @@ end
         rows, order = md_rows(md)
         refs = reference_sections(sch)
         @test order == first.(refs)                                   # every table, in order
-        for (name, s) in refs
-            @test rows[name] == [o.key for o in s.options]
-        end
+        @test all(((name, s),) -> rows[name] == [o.key for o in s.options], refs)
         # the count the issue asks for: rows of the schema's sections = its options
         # (a slot section: its selector and shared options, then one block per provider)
         @test sum(length(rows[s.name]) for s in sch.sections) ==
@@ -79,9 +77,7 @@ end
                   for p in s.selector.providers) ==
               sum(length(p.options) for s in sch.sections if s.selector !== nothing for p in s.selector.providers)
         # every row is a well-formed six-cell row (a `|` in a cell is escaped)
-        for t in filter(x -> x isa Markdown.Table, Markdown.parse(md).content)
-            @test all(r -> length(r) == 6, t.rows)
-        end
+        @test all(t -> all(r -> length(r) == 6, t.rows), filter(x -> x isa Markdown.Table, Markdown.parse(md).content))
         # the checks: one bullet per described line
         lines = C._check_lines(sch)
         isempty(lines) || @test count(l -> startswith(l, "- "), split(split(md, "## Cross-field checks")[end], '\n')) ==
@@ -150,36 +146,26 @@ end
 end
 
 @testset "undocumented_keys: the Berlin configs, parent and site domains, document every key" begin
-    for f in readdir(joinpath(@__DIR__, "..", "examples", "urban"); join = true)
-        endswith(f, ".toml") || continue
-        cfg = load_run_config(f)
-        @test isempty(undocumented_keys(cfg))
-    end
+    fs = filter(endswith(".toml"), readdir(joinpath(@__DIR__, "..", "examples", "urban"); join = true))
+    @test !isempty(fs) && all(f -> isempty(undocumented_keys(load_run_config(f))), fs)
 end
 
 @testset "input-format reference: one row per variable of each driver schema" begin
-    for (schema, file) in ((STATIC_SCHEMA, "berlin_smoke_static.nc"),
-                           (STATIC_TILES_SCHEMA, "berlin_smoke_parent_static.nc"),
-                           (DYNAMIC_SCHEMA, "berlin_20190629_dynamic.nc"))
+    for (schema, file) in ((STATIC_SCHEMA, "berlin_smoke_static.nc"), (DYNAMIC_SCHEMA, "berlin_20190629_dynamic.nc"))
         path = joinpath(REF_INPUT, file)
         md = format_reference(schema; example = path)
         vars = split(split(md, "### Variables")[2], "### Global attributes")[1]
         names = [String(m[1]) for m in eachmatch(r"^\| `([^`]+)` \|"m, vars)]
         @test names == [v.name for v in schema.variables]          # the count, and the order
         attrs = split(split(md, "### Global attributes")[2], "### Example")[1]
-        for a in vcat(collect(DRIVER_ATTRIBUTES), [strip(x) for (k, _) in schema.attributes for x in split(k, ',')])
-            @test occursin("`$a`", attrs)
-        end
+        @test all(a -> occursin("`$a`", attrs),
+                  vcat(collect(DRIVER_ATTRIBUTES), [strip(x) for (k, _) in schema.attributes for x in split(k, ',')]))
         @test occursin("aeolus_schema_version = $(DRIVER_SCHEMA_VERSION)", md)
         @test occursin("aeolus_driver = \"$(schema.kind)\"", md) && occursin("aeolus_form = \"$(schema.form)\"", md)
         # the example is the file's own header: every dimension and variable of the file
         NCDatasets.NCDataset(path) do ds
-            for d in keys(ds.dim)
-                @test occursin("\n\t$d = $(ds.dim[d]) ;", md)
-            end
-            for v in keys(ds)
-                @test occursin(Regex("\\n\\t\\w+ $(v)( ;|\\()"), md)
-            end
+            @test all(d -> occursin("\n\t$d = $(ds.dim[d]) ;", md), keys(ds.dim))
+            @test all(v -> occursin(Regex("\\n\\t\\w+ $(v)( ;|\\()"), md), keys(ds))
         end
         @test isempty(check_driver(path, schema))                  # the example is a valid driver
     end

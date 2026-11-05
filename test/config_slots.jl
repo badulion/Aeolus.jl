@@ -142,10 +142,9 @@ end
                     ("momentum_advection.scheme=\"weno_z\"", SU.MomentumWENOZ), ("sgs.model=\"smagorinsky\"", SU.SGSSmagorinsky))
         cfg = load_run_config(smoke; overrides = [ov])
         so = SU.site_options(cfg)
-        @test C in SU.selected_components(so)
         others = [D for D in SU.URBAN_COMPONENTS if SU.slot(D) === SU.slot(C) && D !== C]
-        @test !any(D -> D in SU.selected_components(so), others)
-        @test so.components[SU.component_name(C)] == SU.default_options(C)     # its options: the defaults
+        @test C in SU.selected_components(so) && !any(D -> D in SU.selected_components(so), others) &&
+              so.components[SU.component_name(C)] == SU.default_options(C)     # its options: the defaults
     end
     # one provider per urban slot, always: the default selection of a bare site
     cfg = load_run_config(IOBuffer("[urban]\nenabled = true\n[time]\ndt = 1.0\nduration = \"none\"\nnsteps = 1\n" *
@@ -157,33 +156,14 @@ end
           Any[Components.CentredAdvection]
 end
 
-@testset "slot sections: the option reference lists each provider's options" begin
-    md = option_reference("model"; format = :markdown)
-    @test occursin("## `[pressure]`", md) && occursin("### `[pressure]` solver = `\"multigrid\"`", md)
-    @test occursin("### `[sgs]` model = `\"tke\"` (a domain of the model's core)", md) &&
-          occursin("### `[sgs]` model = `\"tke\"` (an urban site ([urban] enabled = true))", md)
-    txt = option_reference("model"; section = "surface")
-    @test occursin("[surface] model = \"most\"", txt) && occursin("z0m", txt) && occursin("[surface] model = \"slab\"", txt)
-    sch = driver_schema("model")
-    s = only(x for x in sch.sections if x.name == "timestep")
-    @test Set(p.name for p in C.providers(s, :model)) == Set(["rk3", "euler"]) &&
-          Set(p.name for p in C.providers(s, :urban)) == Set(["fixed", "adaptive", "imex"])
-    # a schema whose slot has no default on a kind it serves is refused
-    bad = slot_section("t476"; key = "model") do s
-        provider!(s, "a")
-    end
-    @test_throws ArgumentError ConfigSchema("t476"; sections = [bad])
-end
-
 @testset "slot sections: the converted configs mean what the old ones did" begin
     # on the Boussinesq core (the simulation digests and the
     # Berlin fixture are the full check): a [sgs] c_s default per closure
     # replaces "none" → the closure's own default, so the closures are the same
     for (m, cs) in ((:smagorinsky, 0.17), (:vreman, 0.17), (:sigma, 1.35), (:amd, 0.3))
         cfg = load_run_config(IOBuffer("[sgs]\nmodel = \"$m\"\n"))
-        @test cfg.sgs.c_s == cs
         c = Components.build_closure(cfg.sgs, Aeolus.RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
-        @test getfield(c, 1) == cs                  # C_s, C_σ, C: the closure's coefficient
+        @test cfg.sgs.c_s == cs && getfield(c, 1) == cs     # C_s, C_σ, C: the closure's coefficient
     end
     # the Monin–Obukhov surface layer is [surface] model = "most"
     g = load_run_config(joinpath(SL_EXAMPLES, "sbl", "gabls1.toml"))

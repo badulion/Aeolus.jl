@@ -1,234 +1,23 @@
-# The urban site's code-path checks on the Berlin configurations (EX-a,
-# #438), formerly part of the by-hand examples/urban/berlin_checks.jl
-# (#320), before that test/berlin_smoke.jl, test/berlin_parent_smoke.jl
-# and check 1 of test/berlin_parent.jl:
+# The urban site's checks of the nest parent's helpers on synthetic setups
+# (formerly part of the by-hand examples/urban/berlin_checks.jl, #320):
 #
-#   smoke   every coupling of the run type in a short window of the real OSM
-#           scene (examples/urban/berlin_smoke.toml: 16³, 250 m ×
-#           250 m × 100 m, 12 steps of 2 s), in every configuration the
-#           registry knows about (test/support/smoke_matrix.jl, shared with
-#           the thread-invariance harness): a finite state, every coupling's
-#           own `smoke_check`s, and the surface-energy, water and air-heat
-#           ledgers closed (49 runs, 6494 coupling checks, 204 s measured on
-#           2026-10-07);
-#   parent  the nest parent (a domain of the model's core, NEST-p3 #483:
-#           berlin_parent.toml at its coarse [test] size) with every forcing
-#           on for 12 steps, its energy and water budgets closed (#259),
-#           every forcing a named term; the parent's class fractions over the
-#           child's footprint (#249: exact identities, no run);
 #   zi      the parent's boundary-layer height (`parent_zi`) and its heat-flux
 #           profile (`mean_heat_flux`) on a synthetic unstepped state with a
-#           known flux minimum, and the synthetic offline forcing of the
-#           parent surface (`parent_offline_forcing`).
+#           known flux minimum;
+#   forcing the synthetic offline forcing of the parent surface
+#           (`parent_offline_forcing`): the clear-sky day in closed form.
 #
-# The end-to-end validation runs (the flagship past step 16, encroachment,
-# Wangara Day 33, the 24 h parent mosaic against the child) are in
-# validation/urban_checks.jl.
+# The Berlin smoke matrix, the parent smoke run and the end-to-end validation
+# runs (the flagship past step 16, encroachment, Wangara Day 33, the 24 h
+# parent mosaic against the child) are in validation/urban_checks.jl; the
+# synthetic city's run is test/urban_run.jl.
 
 using Test
 using Aeolus
-using Aeolus.Fields: interior_view, set!
-using Printf
-using Logging
-using Random: Xoshiro
+using Aeolus.Config: load_run_config
 
 const BC = Aeolus.Urban
 isdefined(@__MODULE__, :berlin_default) || include(joinpath(@__DIR__, "support", "berlin_checks.jl"))
-# smoke_matrix(registry) and seed_fog!(case, rng), shared with the
-# thread-invariance harness (KA-a, #294)
-include(joinpath(@__DIR__, "support", "smoke_matrix.jl"))
-
-allfinite(x) = all(isfinite, x)
-
-"smoke: every run of the registry's smoke matrix, its checks and ledgers."
-function berlin_smoke_checks()
-    @testset "Berlin smoke matrix" begin
-        t_start = time()
-        runs = smoke_matrix()
-        @info "Berlin smoke matrix: $(length(runs)) runs — " * join(first.(runs), "; ")
-        exercised = Set{Symbol}()
-        nchecks = 0
-        for (irun, (label, rc)) in enumerate(runs)
-            @testset "$label" begin
-                t0 = time()
-                # the site nested in its parent domain (NEST-p3 #483), or alone
-                m = build_config_model(rc)
-                case = urban_site(m)
-                cfg = case.cfg
-                seed_fog!(case, Xoshiro(127))
-                length(m.domains) > 1 ? run_model!(m) : run_site!(case)
-                union!(exercised, BC.component_name.(case.couplings))
-                sim, bus = case.sim, case.bus
-                # nsteps·dt of simulated time (in nsteps steps, unless the
-                # time stepper chooses its own step, #133)
-                @test !case.clock.blowup && isapprox(sim.t, cfg.nsteps * cfg.dt; rtol = 1e-12)
-                BC.variable_dt(typeof(BC.timestepper(case))) || @test case.clock.n == cfg.nsteps
-                @test all(allfinite ∘ interior_view, (sim.u, sim.v, sim.w, sim.θ))
-                @test all(t -> allfinite(interior_view(t.field)), case.tracers.list)
-                @test all(allfinite, (bus.Ts, bus.sw, bus.lw, bus.dew))
-                # every coupling's own physics checks
-                failed = String[]
-                for c in case.couplings, (what, ok) in BC.smoke_check(c, case)
-                    nchecks += 1
-                    ok || push!(failed, "$(BC.component_name(c)): $what")
-                end
-                @test failed == String[]
-                # the surface energy ledger closes per class
-                rows = BC.surface_budget(case.budgets)
-                @test !isempty(rows)
-                for r in rows
-                    @test abs(r.closure) < 1e-6          # W/m²; measured ≲ 3e-10
-                end
-                dom = rows[end]
-                # the water ledger closes
-                w = BC.water_budget(case.budgets)
-                @test abs(w.residual) < 1e-12            # kg/m²; measured ≲ 3e-16
-                # the air-heat ledger closes (#253), nothing changed θ unattributed
-                hb = BC.heat_budget(case.budgets)
-                @test hb.elapsed > 0
-                @test abs(hb.closure / hb.elapsed) <= 1e-10     # W/m²
-                @test !haskey(hb.terms, (:core, :unattributed))
-                @test !haskey(hb.terms, (:output, :between_steps))
-                # every diagnostic and profile of the run evaluates (#338): a
-                # source that throws gives NaN and a warning
-                tl = Test.TestLogger(min_level = Logging.Warn)
-                with_logger(tl) do
-                    foreach(evaluate_diagnostic, BC.case_diagnostics(case))
-                    foreach(evaluate_profile, BC.case_profiles(case))
-                end
-                @test isempty(tl.logs)
-                @info @sprintf("  %-26s %5.1f s  domain Rn %7.2f H %6.2f LE %5.2f G %7.2f dS %7.2f W/m², closure %.1e; water residual %.1e kg/m²; air heat closure %.1e W/m²",
-                               label, time() - t0, dom.Rn, dom.H, dom.LE, dom.G, dom.dS,
-                               dom.closure, w.residual, hb.closure / hb.elapsed)
-                if irun == 1
-                    print(BC.budget_report(case.budgets))
-                    # midday sun: the surfaces gain radiative energy and warm
-                    @test dom.Rn > 0 && dom.dS > 0
-                    # the flux-form transport conserves water (#132)
-                    @test abs(get(w.sources, :transport, 0.0)) < 1e-12
-                    # and the heat of the air: the dynamics' transport term is
-                    # round-off (measured -1.1e-8 J m⁻² over the 24 s), and
-                    # the open faces' θ relaxation is booked once, as the
-                    # dynamics' (:relaxation), not also measured as the
-                    # site's :tendencies entry (which had left +119.6 J m⁻²
-                    # in the transport term to compensate)
-                    @test abs(get(hb.terms, (:dynamics, :transport), 0.0)) < 1e-6
-                    @test !haskey(hb.terms, (:tendencies, :urban))
-                end
-            end
-        end
-        @testset "every registered coupling ran in some configuration" begin
-            @test isempty(setdiff(Set(BC.component_name.(BC.URBAN_COMPONENTS)), exercised))
-        end
-        @info @sprintf("Berlin smoke matrix: %d runs, %d coupling checks, %.1f s", length(runs), nchecks,
-                       time() - t_start)
-    end
-end
-
-"parent: the parent smoke run (12 steps, every forcing)."
-function berlin_parent_checks()
-    @testset "Berlin parent smoke: every forcing, 12 steps, budgets close (#259)" begin
-        # berlin_parent.toml at its coarse [test] size, at 10 LT (sun up,
-        # convective); subsidence is off by default (divergence = 0, #312): on
-        # here at D = 3e-6 s⁻¹
-        toml = berlin_toml("parent")
-        tt = Aeolus.Config.config_test_table(toml)
-        cfg = cd(() -> load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\"",
-                                                     "large_scale_forcing.divergence=3e-6", "radiation.start_hour=10.0",
-                                                     "checks.energy_closure={required = false}",
-                                                     "checks.water_closure={required = false}"])), dirname(toml))
-        m = build_config_model(cfg)
-        d = only(m.domains)
-        @test map(Aeolus.Components.component_name, d.components) ==
-              (:advection, :tiled_surface, :sgs, :mean_column_radiation, :coriolis, :large_scale_forcing, :sponge)
-        ls = only(c for c in d.components if c isa Aeolus.Components.LargeScale)
-        # the sounding's geostrophic wind, its nudging above the tracked z_i,
-        # the subsidence and the θ damping
-        @test ls.geostrophic !== nothing && ls.zi !== nothing && length(ls.extra) == 3
-        @test Aeolus.Components.sgs_closure(d) isa TKEClosure
-        dt = 2.0
-        for _ in 1:12
-            _, dt, _ = Aeolus.Components.step_adaptive!(d; dt_prev = dt)
-        end
-        s = d.state
-        @test all(isfinite, interior_view(s.θ)) && all(isfinite, interior_view(s.qv))
-        @test minimum(interior_view(Aeolus.Components.sgs_closure(d).e)) >= 0
-        hb = domain_budget(d, :energy); wb = domain_budget(d, :water)
-        scale = maximum(abs, values(hb.terms)); wscale = maximum(abs, values(wb.terms))
-        @info "parent smoke: the energy budget's terms" hb.terms
-        @test abs(hb.closure) <= 1e-10 * scale
-        @test abs(wb.closure) <= 1e-10 * wscale
-        # every forcing is a named term of the heat of the air
-        for c in (:tiled_surface, :mean_column_radiation, :large_scale_forcing)
-            @test any(k -> k[2] === c, keys(hb.terms))
-        end
-        sfc = Aeolus.Components.slot_component(d, :surface)
-        rad = Aeolus.Components.slot_component(d, :radiation)
-        @test rad.sw_down[] > 100 && 250 < rad.lw_down[] < 450
-        @test isfinite(sfc.sfc_mean[:delivered_H]) && sfc.sfc_mean[:delivered_E] > 0
-        @info @sprintf("parent smoke: 12 steps to t = %.1f s; closure %.1e (energy) %.1e (water)",
-                       s.t, hb.closure / scale, wb.closure / wscale)
-    end
-end
-
-"parent surface: the class fractions of the parent over the child's footprint (#249)."
-function berlin_parent_surface_checks()
-  @testset "Berlin parent surface (#249)" begin
-    PCFG = berlin_default()
-    PCASE = BC.build_case(PCFG)
-    PL = BC.read_parent_landuse(BERLIN_LANDUSE)
-    PFP = BC.child_footprint(PL, PCFG)
-
-    @testset "Parent class fractions" begin
-        @test (PL.nx, PL.ny, PL.dx, PL.r) == (192, 192, 31.25, 2)    # 6 km at Δx = 31.25 m, r = 2
-        @test PFP == (81:112, 81:112)                                  # the 1 km child, centred
-        sfc = PCASE.geom.sfc
-        f = BC.parent_fractions(PL; child_sfc = sfc, footprint = PFP)
-        @test size(f, 3) == max(5, Int(maximum(sfc)))
-        @test maximum(abs.(sum(f; dims = 3) .- 1)) <= 1e-12
-        @test all(>=(0), f)
-        # under the footprint: exactly the class counts of the r × r child block
-        r = PL.r
-        @test all(begin
-                      blk = sfc[(a - 1) * r + 1:a * r, (b - 1) * r + 1:b * r]
-                      all(f[I, J, c] == count(==(c), blk) / r^2 for c in axes(f, 3))
-                  end for (b, J) in enumerate(PFP[2]), (a, I) in enumerate(PFP[1]))
-        # outside it: the table's counts
-        out = [I for I in CartesianIndices((PL.nx, PL.ny)) if !(I[1] in PFP[1] && I[2] in PFP[2])]
-        @test all(f[I, c] == PL.counts[I, c] / r^2 for I in out, c in 1:5)
-        # the parent's area-mean over the footprint is the child's area-mean
-        for c in axes(f, 3)
-            @test sum(f[PFP..., c]) / length(f[PFP..., c]) ≈ count(==(c), sfc) / length(sfc) atol = 1e-14
-        end
-        # the 6 km table itself: every cell a full block, roofs = λp
-        @test all(sum(PL.counts; dims = 3) .== r^2)
-        # morphometry: the 8 × 8-cell (250 m) window keeps the box-mean λp
-        λp, λf, h = BC.parent_morphometry(PL, f)
-        @test all(0 .<= λp .<= 1) && all(λf .>= 0) && all(h .>= 0)
-        @test abs(sum(λp) / length(λp) - sum(f[:, :, BC.SURFACE_ROOF]) / (PL.nx * PL.ny)) < 0.01
-        @test maximum(h) <= maximum(PL.hmax)
-    end
-
-    @testset "parent_offline_forcing: the synthetic clear-sky day" begin
-        # one evaluation at 13 h (sun up) and at 0 h (Berlin in June: below
-        # the horizon); the air temperature T_mean + T_amp sin(2π(t − 9)/24)
-        # and Brutsaert's (1975) clear-sky longwave in closed form
-        f13 = BC.parent_offline_forcing(PCFG, 13.0)
-        f0 = BC.parent_offline_forcing(PCFG, 0.0)
-        for f in (f13, f0)
-            @test all(isfinite, (f.sw_down, f.lw_down, f.T_air, f.q_air, f.U, f.p))
-            @test f.U == 3.0 && f.q_air == 0.008
-            @test 9.0e4 < f.p < 1.05e5
-            e = f.q_air * f.p / (0.622 + 0.378 * f.q_air) / 100
-            @test f.lw_down ≈ 1.24 * (e / f.T_air)^(1 / 7) * 5.670374419e-8 * f.T_air^4 rtol = 1e-6
-        end
-        @test f13.sw_down > 300 && f0.sw_down == 0
-        @test f13.T_air ≈ 295 + 6 * sin(2π * 4 / 24) rtol = 1e-14
-        @test f0.T_air ≈ 295 + 6 * sin(-2π * 9 / 24) rtol = 1e-14
-        @test 250 < f0.lw_down < f13.lw_down < 450
-    end
-  end
-end
 
 """
 A one-domain model of the core (8 × 8 × 16, Δz = 100 m, the TKE closure),
@@ -304,9 +93,25 @@ function parent_zi_checks()
     end
 end
 
-@testset "urban run type: code-path checks on the Berlin configs" begin
-    berlin_smoke_checks()
-    berlin_parent_checks()
-    berlin_parent_surface_checks()
+@testset "urban run type: the parent's helpers on synthetic setups" begin
     parent_zi_checks()
+    PCFG = berlin_default()
+    @testset "parent_offline_forcing: the synthetic clear-sky day" begin
+        # one evaluation at 13 h (sun up) and at 0 h (Berlin in June: below
+        # the horizon); the air temperature T_mean + T_amp sin(2π(t − 9)/24)
+        # and Brutsaert's (1975) clear-sky longwave in closed form
+        f13 = BC.parent_offline_forcing(PCFG, 13.0)
+        f0 = BC.parent_offline_forcing(PCFG, 0.0)
+        for f in (f13, f0)
+            @test all(isfinite, (f.sw_down, f.lw_down, f.T_air, f.q_air, f.U, f.p))
+            @test f.U == 3.0 && f.q_air == 0.008
+            @test 9.0e4 < f.p < 1.05e5
+            e = f.q_air * f.p / (0.622 + 0.378 * f.q_air) / 100
+            @test f.lw_down ≈ 1.24 * (e / f.T_air)^(1 / 7) * 5.670374419e-8 * f.T_air^4 rtol = 1e-6
+        end
+        @test f13.sw_down > 300 && f0.sw_down == 0
+        @test f13.T_air ≈ 295 + 6 * sin(2π * 4 / 24) rtol = 1e-14
+        @test f0.T_air ≈ 295 + 6 * sin(-2π * 9 / 24) rtol = 1e-14
+        @test 250 < f0.lw_down < f13.lw_down < 450
+    end
 end

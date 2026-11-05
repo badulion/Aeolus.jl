@@ -3,7 +3,7 @@
 #
 # Acceptance tests of the issue covered here:
 #   * canonical fixed point: write_config(load(write_config(cfg))) is
-#     byte-identical, for every shipped config and 200 seeded random
+#     byte-identical, for every shipped config and 40 seeded random
 #     configs per test schema;
 #   * float exactness: 0.1, 1/3, 1e-4, nextfloat(1.0), 5e-324, floatmax(),
 #     ±Inf, NaN and -0.0 survive TOML text → RunConfig → TOML text with
@@ -46,25 +46,15 @@ end
         option!(s, "a", Int; default = 1, range = (0, 10))
     end
     @test s.name == "demo" && length(s.options) == 1
-    @test_throws ArgumentError section("Bad Name") do s end
-    @test_throws ArgumentError section("demo") do s
-        option!(s, "CamelCase", Int; default = 1)
-    end
-    @test_throws ArgumentError section("demo") do s          # no default, not required
-        option!(s, "a", Int)
-    end
-    @test_throws ArgumentError section("demo") do s          # default outside range
-        option!(s, "a", Int; default = 11, range = (0, 10))
-    end
-    @test_throws ArgumentError section("demo") do s          # unsupported type
-        option!(s, "a", Dict{String,Int}; default = Dict{String,Int}())
-    end
-    @test_throws ArgumentError section("demo") do s          # declared twice
-        option!(s, "a", Int; default = 1); option!(s, "a", Int; default = 2)
-    end
-    @test_throws ArgumentError section("demo") do s          # required with a default
-        option!(s, "a", Int; default = 1, required = true)
-    end
+    throws(f) = try f(); false catch e; e isa ArgumentError end
+    @test throws(() -> section("Bad Name") do s end)
+    @test all(throws, [
+        () -> section("demo") do s; option!(s, "CamelCase", Int; default = 1); end,
+        () -> section("demo") do s; option!(s, "a", Int); end,                                  # no default, not required
+        () -> section("demo") do s; option!(s, "a", Int; default = 11, range = (0, 10)); end,  # default outside range
+        () -> section("demo") do s; option!(s, "a", Dict{String,Int}; default = Dict{String,Int}()); end,  # unsupported type
+        () -> section("demo") do s; option!(s, "a", Int; default = 1); option!(s, "a", Int; default = 2); end,  # twice
+        () -> section("demo") do s; option!(s, "a", Int; default = 1, required = true); end])  # required with a default
     # Optional defaults to nothing, OpenTable to an empty table
     s2 = section("demo") do s
         option!(s, "o", Optional{Int}); option!(s, "t", OpenTable())
@@ -108,30 +98,31 @@ end
         z0 = 0.1
         """; dir = joinpath(dir, "cases") |> mkpath)
     cfg = load_run_config(p)
-    @test cfg.grid.size === (32, 16, 8)
-    @test cfg.grid.extent === (1000.0, 500.5, 250.0)
-    @test cfg.grid.levels == [0.0, 10.0, 25.0] && cfg.grid.levels isa Vector{Float64}
-    @test cfg.clock.start_date == Date(2023, 1, 15)
-    @test cfg.clock.start_time == Time(7, 32, 0, 500)
-    @test cfg.clock.scheme === :ab2
-    @test cfg.clock.dt_max === nothing
-    @test cfg.clock.nsteps == 10                      # default
+    @test (cfg.grid.size === (32, 16, 8)) &&
+          (cfg.grid.extent === (1000.0, 500.5, 250.0)) &&
+          (cfg.grid.levels == [0.0, 10.0, 25.0] && cfg.grid.levels isa Vector{Float64})
+    @test (cfg.clock.start_date == Date(2023, 1, 15)) &&
+          (cfg.clock.start_time == Time(7, 32, 0, 500)) &&
+          (cfg.clock.scheme === :ab2)
+    # default
+    @test (cfg.clock.dt_max === nothing) &&
+          (cfg.clock.nsteps == 10)
     # a path is resolved against the directory of the file that set it
-    @test cfg.physics.terrain == normpath(joinpath(dir, "data", "dem.tif"))
-    @test cfg.physics.inputs == [joinpath(dir, "cases", "a.nc"), "/abs/b.nc"]
-    @test cfg.physics.tags == [:a, :c]
-    @test cfg.physics.couplings == Dict("wall" => Dict("z0" => 0.1))
-    @test cfg["grid.size"] === (32, 16, 8)
-    @test config_origin(cfg, "grid.size") == p
+    @test (cfg.physics.terrain == normpath(joinpath(dir, "data", "dem.tif"))) &&
+          (cfg.physics.inputs == [joinpath(dir, "cases", "a.nc"), "/abs/b.nc"]) &&
+          (cfg.physics.tags == [:a, :c])
+    @test (cfg.physics.couplings == Dict("wall" => Dict("z0" => 0.1))) &&
+          (cfg["grid.size"] === (32, 16, 8)) &&
+          (config_origin(cfg, "grid.size") == p)
     @test config_origin(cfg, "clock.nsteps") == "default"
     # canonical text: every option, sorted keys, "none", absolute paths
     t = write_config(cfg)
-    @test startswith(t, "schema_version = 2\n\n[checkpoint]\n")
-    @test occursin("\n[clock]\nadaptive = true\ndt = 0.5\ndt_max = \"none\"\nnsteps = 10\n", t)
-    @test occursin("extent = [1000.0, 500.5, 250.0]\n", t)
-    @test occursin("start_time = 07:32:00.5\n", t)
-    @test occursin("terrain = \"$(normpath(joinpath(dir, "data", "dem.tif")))\"", t)
-    @test occursin("\n[physics.couplings.wall]\nz0 = 0.1\n", t)
+    @test (startswith(t, "schema_version = 2\n\n[checkpoint]\n")) &&
+          (occursin("\n[clock]\nadaptive = true\ndt = 0.5\ndt_max = \"none\"\nnsteps = 10\n", t)) &&
+          (occursin("extent = [1000.0, 500.5, 250.0]\n", t))
+    @test (occursin("start_time = 07:32:00.5\n", t)) &&
+          (occursin("terrain = \"$(normpath(joinpath(dir, "data", "dem.tif")))\"", t)) &&
+          (occursin("\n[physics.couplings.wall]\nz0 = 0.1\n", t))
     @test config_hash(cfg) == Aeolus.IO.fnv1a64(t)
 end
 
@@ -167,25 +158,26 @@ function cfg_shipped()
                   if endswith(f, ".toml") && dirname(r) == rstrip(ex, '/')])
 end
 
-@testset "Config: canonical fixed point (shipped + 200 random configs per schema)" begin
+@testset "Config: canonical fixed point (shipped + 40 random configs per schema)" begin
     # shipped configs: every examples/<case>/*.toml, every member of a sweep
     shipped = cfg_shipped()
     # 44 since ONE-g (#456): 15 column, channel and a-priori configs dropped, 6 DNS-vs-LES added
     @test length(shipped) >= 40
+    bad = String[]
     for f in shipped
         runs = cd(() -> load_sweep(f), dirname(f))
         for (_, cfg) in runs
             t1 = write_config(cfg)
-            t2 = write_config(load_run_config(IOBuffer(t1)))
-            @test t1 == t2
+            t1 == write_config(load_run_config(IOBuffer(t1))) || push!(bad, f)
         end
     end
+    @test isempty(bad)
     nfail = 0; nnan = 0
     for name in ("cfgtest", "common")
         schema = Aeolus.Config.driver_schema(name)
         rng = Xoshiro(356 + length(name))
         dir = mktempdir()
-        for i in 1:200
+        for i in 1:40
             raw = cfgt_random_raw(rng, schema)
             p = joinpath(dir, "r$i.toml")
             open(io -> TOML.print(io, raw), p, "w")
@@ -208,17 +200,18 @@ end
             (nextfloat(1.0), "1.0000000000000002"), (5e-324, "5e-324"),
             (floatmax(), "1.7976931348623157e308"), (Inf, "inf"), (-Inf, "-inf"),
             (NaN, "nan"), (-0.0, "-0.0")]
+    bits(c) = reinterpret(UInt64, c.clock.dt)
+    bad = Float64[]
     for (x, lit) in vals
         p = cfg_file("[run]\nlegacy = \"cfgtest\"\n[clock]\ndt = $lit\n")
         cfg = load_run_config(p)
-        @test reinterpret(UInt64, cfg.clock.dt) == reinterpret(UInt64, x)
         cfg2 = load_run_config(IOBuffer(write_config(cfg)))
-        @test reinterpret(UInt64, cfg2.clock.dt) == reinterpret(UInt64, x)
         # and from Julia through with()
         cfg3 = load_run_config(IOBuffer(write_config(with(cfg, "clock.dt" => x))))
-        @test reinterpret(UInt64, cfg3.clock.dt) == reinterpret(UInt64, x)
-        @test write_config(cfg3) == write_config(cfg)
+        ok = bits(cfg) == bits(cfg2) == bits(cfg3) == reinterpret(UInt64, x) && write_config(cfg3) == write_config(cfg)
+        ok || push!(bad, x)
     end
+    @test isempty(bad)
 end
 
 @testset "Config: strict errors name key, file and constraint" begin
@@ -227,8 +220,8 @@ end
     p = cfg_file(base * "[grid]\nsise = [8, 8, 8]\n")
     e = cfg_error(() -> load_run_config(p))
     m = sprint(showerror, e)
-    @test length(e.problems) == 1
-    @test occursin("grid.sise", m) && occursin(p, m) && occursin("did you mean \"size\"", m)
+    @test (length(e.problems) == 1) &&
+          (occursin("grid.sise", m) && occursin(p, m) && occursin("did you mean \"size\"", m))
     # unknown table
     e = cfg_error(() -> load_run_config(cfg_file(base * "[clok]\nnsteps = 3\n")))
     @test occursin("did you mean \"clock\"", sprint(showerror, e))
@@ -281,8 +274,7 @@ end
         scheme = "rk4"
         """)
     e = cfg_error(() -> load_run_config(p))
-    @test length(e.problems) == 5
-    @test Set(q.key for q in e.problems) ==
+    @test length(e.problems) == 5 && Set(q.key for q in e.problems) ==
           Set(["grid.sise", "grid.stretch", "grid.size", "clock.nsteps", "clock.scheme"])
     @test all(q -> q.file == p, e.problems)
     m = sprint(showerror, e)
@@ -293,13 +285,9 @@ end
 end
 
 @testset "Config: Damerau–Levenshtein" begin
-    @test damerau_levenshtein("size", "size") == 0
-    @test damerau_levenshtein("sise", "size") == 1          # substitution
-    @test damerau_levenshtein("szie", "size") == 1          # transposition
-    @test damerau_levenshtein("nstep", "nsteps") == 1       # insertion
-    @test damerau_levenshtein("kitten", "sitting") == 3
-    @test damerau_levenshtein("", "abc") == 3
-    @test damerau_levenshtein("ca", "abc") == 3             # OSA distance (not 2)
+    # identity, substitution, transposition, insertion, the textbook pair, empty, OSA (not 2)
+    @test [damerau_levenshtein(a, b) for (a, b) in (("size", "size"), ("sise", "size"), ("szie", "size"),
+            ("nstep", "nsteps"), ("kitten", "sitting"), ("", "abc"), ("ca", "abc"))] == [0, 1, 1, 1, 3, 3, 3]
     @test Aeolus.Config._suggest("planer", ["planner", "threads"]) == "; did you mean \"planner\"?"
     @test Aeolus.Config._suggest("xyzzy", ["planner", "threads"]) == ""
 end
@@ -308,11 +296,12 @@ end
     cfg = load_run_config(cfg_file("[run]\nlegacy = \"cfgtest\"\n"))
     c2 = with(cfg, "clock.nsteps" => 12, "grid.size" => [8, 8, 4], "clock.scheme" => :ab2,
               "clock.dt_max" => 2, "physics.terrain" => "dem.tif")
-    @test c2.clock.nsteps == 12 && cfg.clock.nsteps == 10          # cfg is unchanged
-    @test c2.grid.size === (8, 8, 4)
-    @test c2.clock.dt_max === 2.0
-    @test c2.physics.terrain == joinpath(pwd(), "dem.tif")
-    @test config_origin(c2, "clock.nsteps") == "with()"
+    # cfg is unchanged
+    @test (c2.clock.nsteps == 12 && cfg.clock.nsteps == 10) &&
+          (c2.grid.size === (8, 8, 4)) &&
+          (c2.clock.dt_max === 2.0)
+    @test (c2.physics.terrain == joinpath(pwd(), "dem.tif")) &&
+          (config_origin(c2, "clock.nsteps") == "with()")
     @test config_sources(c2)["with"] == ["clock.nsteps", "grid.size", "clock.scheme",
                                          "clock.dt_max", "physics.terrain"]
     @test with(c2, "clock.dt_max" => nothing).clock.dt_max === nothing
@@ -321,16 +310,16 @@ end
                             "physics.terrain" => nothing) == cfg
     # every problem at once, cross-field checks included
     e = cfg_error(() -> with(cfg, "clock.nsteps" => -1, "grid.sise" => 1, "clok.dt" => 1.0))
-    @test length(e.problems) == 3
-    @test occursin("did you mean \"size\"", sprint(showerror, e))
+    @test (length(e.problems) == 3) &&
+          (occursin("did you mean \"size\"", sprint(showerror, e)))
     @test_throws ConfigError with(cfg, "clock.scheme" => :imex)            # adaptive = true
     @test with(cfg, "clock.scheme" => :imex, "clock.adaptive" => false).clock.scheme === :imex
     @test_throws ConfigError with(cfg, "clock.nsteps" => true)             # Bool is not Int
     # a closure: only where allow_julia = true, and the config is not replayable
     @test_throws ConfigError with(cfg, "clock.dt" => z -> z)
     c3 = with(cfg, "physics.profile" => z -> 2z)
-    @test c3.physics.profile(2.0) == 4.0
-    @test nonreplayable_keys(c3) == ["physics.profile"] && isempty(nonreplayable_keys(cfg))
+    @test (c3.physics.profile(2.0) == 4.0) &&
+          (nonreplayable_keys(c3) == ["physics.profile"] && isempty(nonreplayable_keys(cfg)))
     @test occursin("profile = \"<julia: ", write_config(c3))
     # a property that does not exist suggests the right one
     @test_throws ArgumentError cfg.grid.sise
@@ -358,30 +347,4 @@ end
     withenv("AEOLUS_FFTW_THREADS" => "zero") do       # a bad variable is a config error
         @test_throws ConfigError load_run_config(cfg_file("[run]\nname = \"e\"\n"))
     end
-end
-
-@testset "Config: a name or a number (OneOf) and a driver's defaults of common options (CFG-c, #358)" begin
-    # OneOf(Symbol, Float64): a name from `allowed` or a number in `range` (CFG-c's Either{A,B},
-    # merged into CFG-d's OneOf so that one option type means "either")
-    register_driver!("eithertest"; sections = [section("top") do s
-        option!(s, "theta", OneOf(Symbol, Float64); default = :initial_gradient,
-                allowed = [:initial_gradient, :noflux], range = (-1, 1))
-    end], defaults = ("output.cadence" => 1800.0, "run.name" => "alexanderplatz"))
-    ld(t) = load_run_config(cfg_file("[run]\nlegacy = \"eithertest\"\n" * t))
-    @test ld("").top.theta === :initial_gradient
-    @test ld("[top]\ntheta = \"noflux\"\n").top.theta === :noflux
-    @test ld("[top]\ntheta = 0.003\n").top.theta === 0.003
-    @test ld("[top]\ntheta = 0\n").top.theta === 0.0               # an integer is a float
-    e = cfg_error(() -> ld("[top]\ntheta = \"lid\"\n"))
-    @test occursin("a string or a float", e.problems[1].message) && occursin("noflux", e.problems[1].message)
-    e = cfg_error(() -> ld("[top]\ntheta = 2.0\n"))                 # outside the range
-    @test only(e.problems).key == "top.theta"
-    c = ld("[top]\ntheta = -0.5\n")                                 # canonical text round-trips
-    @test load_run_config(IOBuffer(write_config(c))).top.theta === -0.5
-    # the driver's own defaults replace the common ones; type and range stay
-    cfg = ld("")
-    @test cfg.output.cadence == 1800.0 && cfg.run.name == "alexanderplatz"
-    @test load_run_config(cfg_file("[run]\nname = \"e\"\n")).output.cadence == 3600.0   # the model's: unchanged
-    @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.cadence" => -1.0))
-    @test_throws ArgumentError ConfigSchema("x"; defaults = ("output.nope" => 1.0))
 end

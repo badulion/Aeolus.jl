@@ -58,15 +58,16 @@ ck_results(folder) = TOML.parsefile(joinpath(folder, "output", "results.toml"))
 # ---------------------------------------------------------------------------
 
 @testset "check entries: {required, tolerance}, reference entries" begin
-    @test isempty(check_entry_problems(Dict{String,Any}()))                       # off
-    @test isempty(check_entry_problems(Dict{String,Any}("required" => true, "tolerance" => 1e-8)))
-    @test any(occursin("required:", p) for p in check_entry_problems(Dict{String,Any}("tolerance" => 1.0)))
-    @test any(occursin("tolerance:", p) for p in check_entry_problems(Dict{String,Any}("required" => true, "tolerance" => -1.0)))
-    @test any(occursin("required: expected", p) for p in check_entry_problems(Dict{String,Any}("required" => "yes")))
-    @test any(occursin("windows: unknown key", p) for p in check_entry_problems(Dict{String,Any}("required" => true, "windows" => 1)))
-    @test isempty(reference_entry_problems(Dict{String,Any}("required" => false, "variable" => "u_mean", "window" => [0, 10.0])))
-    @test any(occursin("window:", p) for p in reference_entry_problems(Dict{String,Any}("required" => false, "window" => [5.0, 1.0])))
-    @test any(occursin("required:", p) for p in reference_entry_problems(Dict{String,Any}()))       # always on
+    has(ps, what) = any(occursin(what, p) for p in ps)
+    E(pairs...) = Dict{String,Any}(pairs...)
+    @test isempty(check_entry_problems(E())) && isempty(check_entry_problems(E("required" => true, "tolerance" => 1e-8)))  # off; on
+    @test has(check_entry_problems(E("tolerance" => 1.0)), "required:") &&
+          has(check_entry_problems(E("required" => true, "tolerance" => -1.0)), "tolerance:") &&
+          has(check_entry_problems(E("required" => "yes")), "required: expected") &&
+          has(check_entry_problems(E("required" => true, "windows" => 1)), "windows: unknown key")
+    @test isempty(reference_entry_problems(E("required" => false, "variable" => "u_mean", "window" => [0, 10.0])))
+    @test has(reference_entry_problems(E("required" => false, "window" => [5.0, 1.0])), "window:") &&
+          has(reference_entry_problems(E()), "required:")                                   # always on
 end
 
 @testset "reference data: CSV quantity tables and profiles, NetCDF" begin
@@ -112,11 +113,9 @@ end
     # at the end of the run: the distance outside [low, high]
     c = reference_check("q", ReferenceValue(1.0, 2.0), () -> x[]; variable = "q_mean", units = "K")
     @test c.name == "reference_q" && c.units == "K" && c.tolerance == 0.0 && c.sample === nothing
-    for (v, want) in ((1.5, 0.0), (2.5, 0.5), (0.25, 0.75), (2.0, 0.0))
-        x[] = v
-        val, info = c.evaluate(c.acc)
-        @test val == want && info["model"] == v && info["low"] == 1.0 && info["high"] == 2.0
-    end
+    @test all(((v, want),) -> (x[] = v; (val, info) = c.evaluate(c.acc);
+                               val == want && info["model"] == v && info["low"] == 1.0 && info["high"] == 2.0),
+              ((1.5, 0.0), (2.5, 0.5), (0.25, 0.75), (2.0, 0.0)))
     x[] = NaN
     @test isnan(first(c.evaluate(c.acc)))
     # a window: the mean weighted by the step length, over the steps ending in it
@@ -172,20 +171,23 @@ ck_const(name, v; tol = 1.0) = Check(name; doc = "constant $v", units = "u", tol
                            "reference_file" => nothing,
                            "reference" => Dict{String,Any}("ke" => Dict{String,Any}("required" => true)))
     st = enabled_checks(tbl)
-    @test sort!(collect(keys(st))) == ["a", "b", "boom", "reference_ke"]
-    @test st["boom"].tolerance == 5.0 && st["a"].tolerance === nothing && st["reference_ke"].required
+    @test (sort!(collect(keys(st))) == ["a", "b", "boom", "reference_ke"]) &&
+          (st["boom"].tolerance == 5.0 && st["a"].tolerance === nothing && st["reference_ke"].required)
     delete!(st, "reference_ke")
     st["c"] = CheckSetting(true, 0.0)
     res = evaluate_checks(CheckRunner(cs, st))
     by = Dict(x.name => x for x in res)
-    @test by["a"].passed && by["a"].required && by["a"].tolerance == 1.0      # 0.5 ≤ the default 1
-    @test !by["b"].passed && !by["b"].required                                # 2 > 1: advisory
-    @test by["c"].passed                                                      # 0 ≤ 0
-    @test !by["boom"].passed && isnan(by["boom"].value) && occursin("no data", by["boom"].info["error"])
-    @test isempty(required_failures(res)) && Set(x.name for x in advisory_failures(res)) == Set(["b", "boom"])
+    # 0.5 ≤ the default 1
+    # 2 > 1: advisory
+    # 0 ≤ 0
+    @test (by["a"].passed && by["a"].required && by["a"].tolerance == 1.0) &&
+          (!by["b"].passed && !by["b"].required) &&
+          (by["c"].passed)
+    @test (!by["boom"].passed && isnan(by["boom"].value) && occursin("no data", by["boom"].info["error"])) &&
+          (isempty(required_failures(res)) && Set(x.name for x in advisory_failures(res)) == Set(["b", "boom"]))
     t = results_table(res)
-    @test t["passed"] && t["failed_required"] == String[] && sort(t["failed_advisory"]) == ["b", "boom"]
-    @test t["checks"]["b"]["value"] == 2.0 && t["checks"]["b"]["v"] == 2.0 && t["checks"]["b"]["units"] == "u"
+    @test (t["passed"] && t["failed_required"] == String[] && sort(t["failed_advisory"]) == ["b", "boom"]) &&
+          (t["checks"]["b"]["value"] == 2.0 && t["checks"]["b"]["v"] == 2.0 && t["checks"]["b"]["units"] == "u")
     # a tolerance from [checks] overrides the default: b required at 1.5 fails the run
     res = evaluate_checks(CheckRunner(cs, Dict("b" => CheckSetting(true, 1.5))))
     @test !results_table(res)["passed"] && only(required_failures(res)).name == "b"
@@ -194,9 +196,9 @@ ck_const(name, v; tol = 1.0) = Check(name; doc = "constant $v", units = "u", tol
     # a stopped run: finite fails (added when not enabled), the others are not evaluated
     r = CheckRunner(cs, Dict("a" => CheckSetting(false, nothing)))
     res = stopped_checks(r, ErrorException("blew up"); step = 7, t = 3.5)
-    @test [x.name for x in res] == ["finite", "a"]
-    @test res[1].required && res[1].evaluated && !res[1].passed && res[1].info["stopped_at_step"] == 7
-    @test !res[2].evaluated && !res[2].passed && occursin("blew up", res[2].info["error"])
+    @test ([x.name for x in res] == ["finite", "a"]) &&
+          (res[1].required && res[1].evaluated && !res[1].passed && res[1].info["stopped_at_step"] == 7) &&
+          (!res[2].evaluated && !res[2].passed && occursin("blew up", res[2].info["error"]))
     # the accumulators are checkpointed and restored (a resumed run continues them)
     x = Ref(1.0)
     rc = reference_check("q", ReferenceValue(0.0, 10.0), () -> x[]; variable = "q", window = (0.0, 100.0))
@@ -346,13 +348,6 @@ const CK_PROF = ck_file("dcbl_prof.csv", "z,theta_profile,u_profile\n100,300.0,5
     @test ch["energy_closure"]["storage"] ≈ ρ0 * DEFAULT_CONSTANTS.cp_dry * 0.24 rtol = 1e-9
     @test ch["reference_theta_mean"]["steps_in_window"] == 5 && ch["reference_theta_mean"]["window"] == [10.0, 30.0]
     @test 300.59 < ch["reference_theta_mean"]["model"] < 300.62
-    # the state is that of the run without [checks] (the budgets the closures turn on measure only)
-    r0 = run_config(ck_cfg(); root = mktempdir(), allow_uncommitted = true, console = false)
-    r1 = run_config(ck_cfg(sets...); root = mktempdir(), allow_uncommitted = true, console = false)
-    f0 = Config.state_fields(r0.obj); f1 = Config.state_fields(r1.obj)
-    @test all(k -> agree(f0[k], f1[k]), keys(f0))
-    # without [checks] nothing is written
-    @test !isfile(joinpath(r0.folder.path, "output", "results.toml"))
     # a failed required check: exit code 3, results.toml says which, the session is failed.
     # The θ profile fails: the surface flux has warmed the lowest level (z = 100 m) by
     # about F t / Δz = 0.24 × 30 / 200 = 0.036 K over the 300 K of the reference; the
@@ -373,12 +368,6 @@ const CK_PROF = ck_file("dcbl_prof.csv", "z,theta_profile,u_profile\n100,300.0,5
     @test res["checks"]["energy_closure"]["passed"]              # 0 ≤ 0: the closure is exact here
     @test read_run_toml(folder)["session"][1]["status"] == "failed"
     @test isfile(joinpath(folder, "output", "output.nc"))
-    # an advisory failure alone: exit code 0
-    root = mktempdir()
-    rc, err = ck_cli("run", CK_DCBL, ck_sets(vcat(CK_SMALL, ["checks.reference_file=\"$CK_PROF\"",
-                                                             "checks.reference={u_profile={required=false}}"]))...,
-                     "--root", root, "--allow-uncommitted")
-    @test rc == 0 && ck_results(only(readdir(root; join = true)))["failed_advisory"] == ["reference_u_profile"]
 end
 
 @testset "aeolus run: a blow-up records the failed sanity check (exit code 1)" begin

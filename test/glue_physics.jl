@@ -62,20 +62,18 @@ const GP_MT = Aeolus.MoistThermodynamics
         c = GP_MT.DEFAULT_CONSTANTS
         a = c.molmass_dry / c.molmass_water - 1          # 1/ε − 1
         @test abs(a - 0.608) < 1e-3
-        maxdev = 0.0
-        for k in 1:Nz
+        maxdev = 0.0; maxnet = 0.0
+        for k in 1:Nz-1
             f = view(fluid, :, :, k)
             n = count(f)
-            if n == 0
-                @test all(iszero, view(Δ, :, :, k))
-                continue
-            end
             # the closed form of θ_ρ − θ: θ ((1/ε − 1) q_v − q_c), minus its fluid mean
             ref = [θ[i, j, k] * (a * qv[i, j, k] - qc[1][i, j, k] - qc[2][i, j, k]) for i in 1:Nx, j in 1:Ny]
             m = sum(ref[f]) / n
-            @test abs(sum(Δ[:, :, k][f])) <= 1e-12 * n          # no net force on the level
+            maxnet = max(maxnet, abs(sum(Δ[:, :, k][f])) / n)
             maxdev = max(maxdev, maximum(abs.(Δ[:, :, k][f] .- (ref[f] .- m))))
         end
+        @test all(iszero, view(Δ, :, :, Nz))                     # the level with no fluid
+        @test maxnet <= 1e-12                                    # no net force on a level
         @test maxdev < 1e-10                                     # K; Δ is O(0.3 K)
         @test all(Δ[.!fluid] .== 0)                              # no buoyancy in solids
         # a horizontally uniform moisture field is a pure pressure gradient: no perturbation
@@ -137,15 +135,11 @@ const GP_MT = Aeolus.MoistThermodynamics
         LAI[6, 5] = 5.0                                                 # leaves off the vegetation mask
         d = vegetation_canopy_drag(mesh, veg, LAI; cd = 0.25, k_height = 3)
         @test d.C_d == 0.25
-        for i in 1:Nx, j in 1:Ny
-            col = d.lad[i, j, :]
-            if veg[i, j] && LAI[i, j] > 0
-                @test sum(col) * mesh.dz ≈ LAI[i, j] rtol = 1e-12      # the crown holds its LAI
-                @test all(>(0), col[1:3]) && all(iszero, col[4:end])   # over k_height layers
-            else
-                @test all(iszero, col)
-            end
-        end
+        crown_ok(i, j, col = d.lad[i, j, :]) = veg[i, j] && LAI[i, j] > 0 ?
+            # the crown holds its LAI, over k_height layers
+            isapprox(sum(col) * mesh.dz, LAI[i, j]; rtol = 1e-12) && all(>(0), col[1:3]) && all(iszero, col[4:end]) :
+            all(iszero, col)
+        @test all(I -> crown_ok(Tuple(I)...), CartesianIndices((Nx, Ny)))
         # the default crown: Nz ÷ 4 layers
         d2 = vegetation_canopy_drag(mesh, veg, LAI)
         @test all(>(0), d2.lad[2, 2, 1:2]) && all(iszero, d2.lad[2, 2, 3:end]) && d2.C_d == 0.2
@@ -260,17 +254,15 @@ const GP_MT = Aeolus.MoistThermodynamics
         H = fill(NaN, Nx, Ny)
         dt, dz = 60.0, 5.0
         dew_exchange_columns!(H, qv, dew, Ts, mask, k_air, p, ρ, dz, dt)
-        for i in 1:Nx, j in 1:Ny
+        function dew_ok(i, j)
             k = k_air[i, j]
-            if !mask[i, j] || Ts[i, j] == 300.0
-                @test H[i, j] == 0 && dew[i, j] == 0 && qv[i, j, :] == q0[i, j, :]
-                continue
-            end
-            @test dew[i, j] > 0 && H[i, j] > 0                     # dew forms, its latent heat warms the surface
-            @test (q0[i, j, k] - qv[i, j, k]) * ρ[k] * dz ≈ dew[i, j] rtol = 1e-9   # water conserved
-            @test H[i, j] ≈ latent_heat_vapor(Ts[i, j]) * dew[i, j] / dt rtol = 1e-12
-            @test all(kk -> kk == k || qv[i, j, kk] == q0[i, j, kk], 1:Nz)          # only the air cell
+            (!mask[i, j] || Ts[i, j] == 300.0) && return H[i, j] == 0 && dew[i, j] == 0 && qv[i, j, :] == q0[i, j, :]
+            return dew[i, j] > 0 && H[i, j] > 0 &&                    # dew forms, its latent heat warms the surface
+                   isapprox((q0[i, j, k] - qv[i, j, k]) * ρ[k] * dz, dew[i, j]; rtol = 1e-9) &&   # water conserved
+                   isapprox(H[i, j], latent_heat_vapor(Ts[i, j]) * dew[i, j] / dt; rtol = 1e-12) &&
+                   all(kk -> kk == k || qv[i, j, kk] == q0[i, j, kk], 1:Nz)          # only the air cell
         end
+        @test all(I -> dew_ok(Tuple(I)...), CartesianIndices((Nx, Ny)))
         # the surface warms past the dew point: the dew re-evaporates, the reservoir stays ≥ 0
         Ts .= 295.0
         dew_exchange_columns!(H, qv, dew, Ts, mask, k_air, p, ρ, dz, 3600.0)
@@ -395,15 +387,17 @@ const GP_MT = Aeolus.MoistThermodynamics
         @test θ[2, 3, :] == θ0[2, 3, :] && qv[2, 3, :] == q0[2, 3, :]     # no surface: nothing
         @test nsolid == 1
         heat = water = 0.0; Hτ = Eτ = 0.0
+        onlyfirst = true
         for j in 1:Ny, i in 1:Nx
             surfaces[i, j] === nothing && continue
             k = k_air[i, j]
             # only the first air cell changes
-            @test all(θ[i, j, kk] == θ0[i, j, kk] for kk in 1:Nz if kk != k)
+            onlyfirst &= all(θ[i, j, kk] == θ0[i, j, kk] for kk in 1:Nz if kk != k)
             heat += ρ̄[k] * cp[i, j] * Π̄[k] * (θ[i, j, k] - θ0[i, j, k]) * dz
             water += ρ̄[k] * (qv[i, j, k] - q0[i, j, k]) * dz
             Hτ += Hs[i, j] * τ; Eτ += Es[i, j] * τ
         end
+        @test onlyfirst
         # the air gets exactly H τ and E τ per unit area (the θ_per_heat conversion)
         @test heat ≈ Hτ rtol = 1e-10
         @test water ≈ Eτ rtol = 1e-10

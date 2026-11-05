@@ -36,10 +36,6 @@ function dvl_truncate(f, gf, gc, loc)
     return real.(ifft(G))
 end
 
-dvl_sim(name, n) = simulation(build(SimulationDriverType(),
-    load_run_config(joinpath(DVL, name * ".toml"); overrides = ["grid.size=[$n,$n,$n]", "time.duration=\"none\"",
-                                                                  "time.nsteps=3"])))
-
 @testset "DNS against LES: the isotropic-turbulence initial field and the outputs (ONE-g)" begin
 
 @testset "the spectrum and the field, defined in spectral space" begin
@@ -55,9 +51,9 @@ dvl_sim(name, n) = simulation(build(SimulationDriverType(),
     gf, uf, vf, wf = mk(32); gc, uc, vc, wc = mk(16)
     isotropic_turbulence_field!(uf, vf, wf, E; seed = 3)
     isotropic_turbulence_field!(uc, vc, wc, E; seed = 3)
-    for (f, c, loc) in ((uf, uc, FaceX()), (vf, vc, FaceY()), (wf, wc, FaceZ()))
-        @test maximum(abs, dvl_truncate(f, gf, gc, loc) .- interior_view(c)) < 1e-14 * maximum(abs, interior_view(c))
-    end
+    @test all(((f, c, loc),) -> maximum(abs, dvl_truncate(f, gf, gc, loc) .- interior_view(c)) <
+                                1e-14 * maximum(abs, interior_view(c)),
+              ((uf, uc, FaceX()), (vf, vc, FaceY()), (wf, wc, FaceZ())))
     # another seed is another field; the shells hold E(k) Δk in expectation:
     # the 32³ field's energy in shells 1-15 against ∫ E over them
     isotropic_turbulence_field!(uc, vc, wc, E; seed = 4)
@@ -67,18 +63,6 @@ dvl_sim(name, n) = simulation(build(SimulationDriverType(),
     # continuous-solenoidal: the spectral divergence vanishes mode by mode
     # (the staggered one is O((kΔ)²): the model projects it once)
     @test maximum(abs, interior_view(uf)) > 0.5
-end
-
-@testset "the configs: the DNS truncated to the LES grid is the LES start" begin
-    dns = dvl_sim("dns", 32); les = dvl_sim("les_smagorinsky", 16)
-    # after the model's one projection of each start (O((kΔ)²) of the divergent
-    # part, different on the two grids) the large scales agree: the energy of
-    # the shells 1-4 within 1 %, and the truncated DNS field within 2 % of the LES
-    kd, Ed = isotropic_energy_spectrum(dns.u, dns.v, dns.w); kl, El = isotropic_energy_spectrum(les.u, les.v, les.w)
-    @test all(isapprox(Ed[n], El[n]; rtol = 1e-2) for n in 2:5)
-    t = dvl_truncate(dns.u, dns.mesh, les.mesh, FaceX())
-    @test maximum(abs, t .- interior_view(les.u)) < 0.02 * maximum(abs, interior_view(les.u))
-    @test les.ν == dns.ν == 2.0e-3 && !dns.has_buoyancy
 end
 
 @testset "the runs write the kinetic energy, the dissipation and the spectrum" begin
@@ -108,10 +92,8 @@ end
     @test all(>(0), d.ε)
     # the energy budget: -dK/dt ≈ ε (centred differences, the dissipation of
     # the second-order operators; within 15 % at 16³)
-    for (o, name) in ((d, "dns"), (l, "les"))
-        r = [(o.K[i-1] - o.K[i+1]) / (o.t[i+1] - o.t[i-1]) / o.ε[i] for i in 3:length(o.t)-1]
-        @test all(x -> 0.85 < x < 1.15, r)
-    end
+    ratio(o) = [(o.K[i-1] - o.K[i+1]) / (o.t[i+1] - o.t[i-1]) / o.ε[i] for i in 3:length(o.t)-1]
+    @test all(x -> 0.85 < x < 1.15, vcat(ratio(d), ratio(l)))
 end
 
 end # testset

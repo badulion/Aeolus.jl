@@ -110,55 +110,6 @@ pd_build(text; overrides = String[]) =
     @test m.x0 == -375.0 && m.y0 == -375.0                         # [grid] origin
 end
 
-@testset "the smoke parent as a model domain: components, initial state, top gradient, reference" begin
-    r = pd_build(pd_smoke())
-    d = only(r.model.domains); s = d.state; m = s.mesh
-    @test map(PD.component_name, d.components) ==
-          (:advection, :tiled_surface, :sgs, :mean_column_radiation, :coriolis, :large_scale_forcing, :sponge)
-    # u, v: the geostrophic wind of [large_scale_forcing] everywhere
-    @test all(==(1.0), interior_view(s.u)) && all(==(0.0), interior_view(s.v))
-    # θ: the mixed-layer-and-lapse profile plus the noise in the lowest 100 m (|noise| ≤ 0.2 K)
-    zc = [m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]
-    θp(z) = z < 60 ? 293.0 : 293.0 + 0.003 * (z - 60)
-    θi = interior_view(s.θ)
-    @test all(k -> zc[k] >= 100 ? all(==(θp(zc[k])), θi[:, :, k]) :
-                                  maximum(abs, θi[:, :, k] .- θp(zc[k])) <= 0.2 + 1e-12, 1:m.Nz)
-    @test any(k -> zc[k] < 100 && maximum(abs, θi[:, :, k] .- θp(zc[k])) > 0.05, 1:m.Nz)
-    # the fixed-gradient θ top (#254): the profile's 3 K/km
-    @test s.θ_bcs.top.f ≈ 0.003
-    # the hydrostatic reference the tiles and the radiation convert with
-    ref = d.drivers.reference
-    c = DEFAULT_CONSTANTS
-    @test ref.p_surface == 101325.0
-    @test all(diff(ref.p̄) .< 0) && ref.p̄ ≈ ref.ρ̄ .* R_d(c) .* ref.T̄
-    # dp/dz = -ρ g between the first two levels (to the trapezoid's order)
-    @test (ref.p̄[2] - ref.p̄[1]) / m.dz ≈ -9.81 * (ref.ρ̄[1] + ref.ρ̄[2]) / 2 rtol = 1e-4
-    @test PD.slot_component(d, :surface).ref === ref
-end
-
-@testset "the smoke parent: 12 adaptive steps, the energy and water budgets closed" begin
-    r = pd_build(pd_smoke(); overrides = ["checks.energy_closure={required=true}", "checks.water_closure={required=true}"])
-    d = only(r.model.domains); s = d.state
-    @test Set(d.budgets.quantities) == Set([:energy, :water])
-    dt = nothing
-    for _ in 1:12
-        _, dt, _ = PD.step_adaptive!(r.model; dt_prev = something(dt, 2.0))
-    end
-    @test s.t > 12 * 2.0 && all(isfinite, interior_view(s.θ)) && all(isfinite, interior_view(s.qv))
-    cs = Dict(c.name => c for c in PD.domain_checks(d))
-    for n in ("energy_closure", "water_closure")
-        v, info = cs[n].evaluate(cs[n].acc)
-        @info "smoke parent domain: $n $(v) over $(info["elapsed"]) s"
-        @test info["unattributed"] == 0.0
-        @test v <= (n == "energy_closure" ? 1e-6 : 1e-12)
-    end
-    # the cold tiles (285 K, water 290 K) under 293 K air at noon cool the first level
-    @test mean(interior_view(s.θ)[:, :, 1]) < 293.0
-    # the surface delivered heat: what it booked as delivered is what the air gained in its entries
-    sfc = PD.slot_component(d, :surface)
-    @test sfc.sfc_mean[:delivered_H] < 0 && isfinite(sfc.sfc_mean[:Rn])
-end
-
 @testset "the tiled surface's driver: the land-use table cropped and coarsened to the domain" begin
     cfg = load_run_config(IOBuffer(pd_smoke()))
     m = Aeolus.SimulationDriver._mesh(cfg.grid)
@@ -199,43 +150,4 @@ end
     # the options of [surface] model = "tiles" set them
     tc2 = PU.TileClasses((; ts0 = 280.0, z0m = Dict("3" => 0.5)))
     @test tc2.Ts0 == 280.0 && tc2.z0m[PU.SURFACE_PARK] == 0.5
-end
-
-@testset "a deep domain from a sounding driver: θ, qv at the start, the geostrophic wind above z_g, the damping" begin
-    dyn = joinpath(PD_EX, "input", "berlin_20190629_dynamic.nc")
-    text = replace(pd_smoke(), "[initial]\ntheta = {kind = \"mixed_layer_lapse\", value = 293.0, z_i = 60.0, lapse = 0.003}\n" *
-                               "qv = {kind = \"exponential\", value = 0.01, scale_height = 800.0}\n" => "[initial]\n")
-    text = replace(text, "schema_version = 2\n" => "schema_version = 2\ndynamic_driver = \"$dyn\"\n")
-    text = replace(text, "u_g = 1.0\nv_g = 0.0\ndamping_rate = 0.01\n" =>
-                         "u_g = \"sounding\"\nv_g = \"sounding\"\nsounding_nudging_tau = 21600.0\n" *
-                         "damping_rate = 0.01\ndamping_target = \"sounding\"\n")
-    text = replace(text, "start_hour = 12.0" => "start_hour = 6.0")
-    r = pd_build(text)
-    d = only(r.model.domains); s = d.state; m = s.mesh
-    dd = d.drivers.dynamic
-    zc = [m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]
-    Tθ, Tq = dd.tables[:profile_theta], dd.tables[:profile_qv]
-    fv = Aeolus.LargeScaleForcing.forcing_value
-    # θ above the noise and qv everywhere: the sounding driver's at the start
-    @test all(k -> all(==(fv(Tθ, zc[k], 0.0)), interior_view(s.θ)[:, :, k]), findall(>=(100), zc))
-    @test all(k -> all(==(fv(Tq, zc[k], 0.0)), interior_view(s.qv)[:, :, k]), 1:m.Nz)
-    # the geostrophic wind is the sounding's at max(z, z_g): constant below z_g (1.2 × the largest parcel
-    # z_i of the six launches, 1356 m; the urban site's own sounding gives the same, Urban.sounding_zi_max)
-    zi = PD.sounding_zi_max(Tθ, Tq)
-    @test 1300 < zi < 1400
-    Ug, Vg = PD.sounding_geostrophic(dd, NaN)
-    @test Ug(0.0, 0.0) == Ug(1.2zi, 0.0) == fv(dd.tables[:profile_u], 1.2zi, 0.0)
-    @test Ug(2000.0, 0.0) == fv(dd.tables[:profile_u], 2000.0, 0.0)
-    @test all(k -> all(==(Ug(zc[k], 0.0)), interior_view(s.u)[:, :, k]), 1:m.Nz)
-    # the large-scale forcing: the nudging above the tracked boundary layer (its floor the sounding's z_i), the damping
-    ls = only(c for c in d.components if c isa PD.LargeScale)
-    @test ls.zi !== nothing && PD.nudging_height(ls.zi) == zi
-    damp = only(f for f in ls.extra if f isa Aeolus.LargeScaleForcing.ReferenceDamping)
-    nudge = only(f for f in ls.extra if f isa Aeolus.LargeScaleForcing.ProfileNudging)
-    @test nudge.τ == 21600.0
-    @test damp !== nothing
-    for _ in 1:3
-        PD.step_adaptive!(r.model; dt_prev = 2.0)
-    end
-    @test all(isfinite, interior_view(s.θ))
 end

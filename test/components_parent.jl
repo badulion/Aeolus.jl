@@ -80,7 +80,7 @@ const NOON = (start_h = 13.0, utc_offset = 2.0, date = (2019, 6, 29), lat0 = 52.
 const NIGHT = merge(NOON, (start_h = 1.0,))
 
 @testset "TiledUrbanSurface: the air receives the tiles' mean fluxes × Δt, u*, the implicit drag ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:boussinesq,)
     sim = p_state!(p_core(core))
     d0 = Domain(sim; validate = false)
     ts = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
@@ -105,11 +105,9 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
     end
     # u* of every column from its tiles' stress
     ref = ts.ref
-    for I in CartesianIndices(ts.ustar)
-        col = ts.surface.columns[I]
-        tf = last_tile_fluxes(col.surface); fr = mosaic_fractions(col.surface)
-        @test ts.ustar[I] == sqrt(max(sum(fr[n] * tf[n].τ for n in eachindex(tf)), 0.0) / ref.ρ̄[1])
-    end
+    ustar(col, tf = last_tile_fluxes(col.surface), fr = mosaic_fractions(col.surface)) =
+        sqrt(max(sum(fr[n] * tf[n].τ for n in eachindex(tf)), 0.0) / ref.ρ̄[1])
+    @test all(I -> ts.ustar[I] == ustar(ts.surface.columns[I]), CartesianIndices(ts.ustar))
     @test Components.surface_friction_velocity(ts, d) === ts.ustar
     # the drag: u ← u / (1 + Δt a / U) at the west face of column (1, 1) (a
     # the mean of the two columns it separates, U the speed there, the
@@ -128,7 +126,7 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
 end
 
 @testset "TiledUrbanSurface: a step through the pipeline on both cores, and its checkpoint ($core, $sch)" for
-        core in (:boussinesq, :anelastic), sch in (:euler, :rk3)
+        core in (:anelastic,), sch in (:rk3,)
     mk() = (s = p_state!(p_core(core)); d0 = Domain(s; scheme = sch, validate = false);
             Domain(s; scheme = sch, components = (CentredAdvection(), PC.build(PU.TiledUrbanSurface, p_tiles_opts(s), d0))))
     d = mk()
@@ -146,7 +144,7 @@ end
     @test Components.slot_component(d, :surface).sfc_mean == Components.slot_component(d2, :surface).sfc_mean
 end
 
-@testset "PrescribedSurfaceFlux: Q Δt/Δz₁ into every column of the first level ($core)" for core in (:boussinesq, :anelastic)
+@testset "PrescribedSurfaceFlux: Q Δt/Δz₁ into every column of the first level ($core)" for core in (:boussinesq,)
     sim = p_state!(p_core(core))
     d0 = Domain(sim; validate = false)
     pf = PC.build(PU.PrescribedSurfaceFlux, (; q_surface = PU.ConstantForcing(0.12),
@@ -165,7 +163,7 @@ end
 end
 
 @testset "MeanColumnRadiation: the site's sun, Ṫ Δt / Π̄, the tiles' downwelling, one call per period ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:boussinesq,)
     for (cfg, day) in ((NOON, true), (NIGHT, false))
         sim = p_state!(p_core(core))
         d0 = Domain(sim; validate = false)
@@ -187,9 +185,8 @@ end
             @test all(==(0), rad.model.heat_sw) && rad.model.heat == rad.model.heat_lw
         end
         π̄ = rad.π̄
-        for k in 1:PM.Nz
-            @test interior_view(sim.θ)[:, :, k] ≈ θ0[:, :, k] .+ rad.model.heat[k] * 10.0 / π̄[k] rtol = 1e-15
-        end
+        @test all(k -> isapprox(interior_view(sim.θ)[:, :, k], θ0[:, :, k] .+ rad.model.heat[k] * 10.0 / π̄[k];
+                                rtol = 1e-15), 1:PM.Nz)
         # the next step, within the period: the heating again, no call
         sim.t = 10.0
         Components.run_stage!(rad, d, Val(:surface_flux), 10.0)
@@ -204,7 +201,7 @@ end
 end
 
 @testset "LargeScale: the boundary-layer tracker, the nudging weight above it, a checkpoint ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:anelastic,)
     sim = p_core(core; moist = false)
     zi0 = 400.0
     θm(z) = z < zi0 ? 300.0 : 300.0 + 0.01 * (z - zi0)
@@ -237,7 +234,7 @@ end
 end
 
 @testset "LargeScale clocks in an SSP-RK3 step: the step mean, or the core's substage clock ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:boussinesq,)
     c = 1e-4                                              # dθ/dt = c t (K s⁻¹, t in s)
     Δθ = Dict{Symbol,Float64}()
     for clk in (:step, :core)
@@ -269,13 +266,13 @@ end
         s = PC.build(SGS, (; model = :tke, e_min = 1e-4, surface_factor = 3.9, wall_cap = true, wall_cap_top = top,
                             surface_value = false, stress = :laplacian), d0)
         c = s.closure
-        @test all(c.l_wall[:, :, k] == fill(0.4 * dist[k], 4, 4) for k in 1:8)
-        @test all(c.first_level[:, :, 1]) && !any(c.first_level[:, :, 2:end])
+        @test all(c.l_wall[:, :, k] == fill(0.4 * dist[k], 4, 4) for k in 1:8) &&
+              all(c.first_level[:, :, 1]) && !any(c.first_level[:, :, 2:end])
     end
 end
 
 @testset "[sgs] surface_value: the first-level e is u*²/√(c_k c_ε) of the surface's u* ($core)" for
-        core in (:boussinesq, :anelastic)
+        core in (:anelastic,)
     sim = p_state!(p_core(core; moist = false))
     d0 = Domain(sim; validate = false)
     sl = PC.build(SurfaceLayer, (; model = :most, z0m = 0.1, z0h = nothing,

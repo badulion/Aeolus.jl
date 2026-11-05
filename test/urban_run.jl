@@ -9,9 +9,8 @@
 #     checks (the ledgers closed, a finite state, the sun's net gain), and
 #     the ground is the GeoJSON's its static driver holds (heights,
 #     classes, the shed below the minimum height dropped);
-#   * the nest parent alone (berlin_parent.toml at its [test] size): a
-#     domain of the model's core with its tiled surface; its profiles,
-#     budgets and surface maps in its output file.
+#   * step!(model, dt) rejects a dt above the adaptive stable step (#392),
+#     on the synthetic city (the nest parent's domain: test/config_parent_domain.jl).
 # The input preprocessors (osm-sample, the IGRA2 parser, the parent's
 # land-use table) are AeolusPrep.jl's since ONE-h (#457), with their tests.
 #   * the examples policy: no script under examples/urban builds or runs the
@@ -26,7 +25,6 @@ using Aeolus.IO: read_run_toml
 
 const UC = Aeolus.Urban
 include(joinpath(@__DIR__, "support", "berlin_configs.jl"))
-include(joinpath(@__DIR__, "support", "berlin_fixture.jl"))     # berlin_state
 
 const SMALL_CITY = joinpath(@__DIR__, "data", "urban", "small_city.toml")
 
@@ -37,9 +35,11 @@ quiet_main(args) = redirect_stdout(devnull) do
     end
 end
 
-@testset "urban run type: the synthetic city through aeolus run" begin
+@testset "urban run type: the synthetic city through aeolus run, its checks through [checks] (ONE-d)" begin
     root = mktempdir()
-    rc = quiet_main(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\""])
+    chk = ["--set", "checks.urban_budgets={required = true}", "--set", "checks.surface_exchange_checks={required = true}",
+           "--set", "checks.energy_closure={required = true, tolerance = 1e-9}", "--set", "checks.finite={required = true}"]
+    rc = quiet_main(vcat(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\""], chk))
     @test rc == 0
     run = only(readdir(root; join = true))
     rec = read_run_toml(run)
@@ -61,15 +61,7 @@ end
     # the idealised profile: 293 K at the ground below the 60 m inversion
     @test 292.9 < res["theta_mean_below_100m_start"] < 293.5
     @test isfile(joinpath(run, "diagnostics.csv")) || isfile(joinpath(run, "output", "diagnostics.csv"))
-end
-
-@testset "urban site: its checks through [checks] (ONE-d) in results.toml" begin
-    root = mktempdir()
-    chk = ["--set", "checks.urban_budgets={required = true}", "--set", "checks.surface_exchange_checks={required = true}",
-           "--set", "checks.energy_closure={required = true, tolerance = 1e-9}", "--set", "checks.finite={required = true}"]
-    rc = quiet_main(vcat(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\""], chk))
-    @test rc == 0
-    res = TOML.parsefile(joinpath(only(readdir(root; join = true)), "output", "results.toml"))
+    # the site's checks through [checks]
     @test res["passed"] === true && isempty(res["failed_required"])
     c = res["checks"]
     @test Set(keys(c)) == Set(["urban_budgets", "surface_exchange_checks", "energy_closure", "finite"])
@@ -107,6 +99,27 @@ end
     @test g.sfc[floor(Int, 175.0 / m.dx) + 1, floor(Int, 150.0 / m.dy) + 1] == UC.SURFACE_WATER
     @test length(g.city.buildings) == 2
     @test endswith(cc.static, joinpath("input", "small_city_static.nc"))
+    # step!(model, dt) rejects a dt above the adaptive stable step (#392)
+    for _ in 1:2
+        step!(case.model)
+    end
+    @test !case.clock.blowup
+    ts = UC.timestepper(case)
+    @test UC.variable_dt(typeof(ts))
+    lim = UC.stable_dt(ts, case)
+    lims = copy(ts.stats.limiters)
+    @test UC.stable_dt(ts, case) == lim && ts.stats.limiters == lims        # pure: nothing counted
+    @test ts.constraints.dt_min <= lim <= ts.constraints.dt_max
+    dt_ok = UC.step_dt(case)
+    @test 0 < dt_ok <= lim                                                  # the stepper's own pick
+    n0, t0, u0 = case.clock.n, case.sim.t, copy(interior_view(case.sim.u))
+    err = try
+        step!(case.model, 1.5lim); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("stable step", err.msg)
+    @test case.clock.n == n0 && case.sim.t == t0 && interior_view(case.sim.u) == u0   # rejected before any stage
     run_site!(case)
     st = UC.case_state(case)
     @test all(a -> all(isfinite, a), values(st))
@@ -118,43 +131,6 @@ end
     r = UC.run_results(case)
     @test all(k -> isequal(UC.case_state(case)[k], s0[k]), keys(s0))
     @test r["budgets"]["closed"] === true
-end
-
-@testset "the nest parent alone: berlin_parent.toml, a domain of the model's core" begin
-    toml = berlin_toml("parent")
-    tt = Aeolus.Config.config_test_table(toml)
-    # (the [test] overrides' paths are relative to the file)
-    cfg = cd(() -> load_run_config(toml; overrides = vcat(tt.overrides, ["fftw.planner=\"estimate\""])), dirname(toml))
-    @test !hasproperty(cfg.run, :legacy) && !UC.urban_enabled(cfg)
-    r = run_config(cfg; root = mktempdir(), console = devnull, allow_uncommitted = true)
-    d = only(r.obj.model.domains)
-    m = d.state.mesh
-    @test (m.Nx, m.Ny, m.Nz) == (24, 24, 38) && d.state.t ≈ 180.0
-    @test map(Aeolus.Components.component_name, d.components) ==
-          (:advection, :tiled_surface, :sgs, :mean_column_radiation, :coriolis, :large_scale_forcing, :sponge)
-    @test all(isfinite, interior_view(d.state.θ)) && all(isfinite, interior_view(d.state.u))
-    out = joinpath(r.folder.path, "output")
-    ds = NCDataset(joinpath(out, "parent.nc"))
-    # a record at the start and every 60 s to 180 s: the θ profile on the 38 levels
-    θp = Array(ds["theta_profile"])
-    @test size(θp) == (38, 4) && all(isfinite, θp)
-    hf = Array(ds["heat_flux_profile"])
-    @test size(hf, 2) == 4
-    # the tiled surface's maps: the class fractions of every column sum to one,
-    # the unresolved buildings' roughness is positive
-    f = sum(Array(ds[v]) for v in ("tile_fraction_street", "tile_fraction_roof", "tile_fraction_park",
-                                    "tile_fraction_water", "tile_fraction_wall"))
-    z0 = Array(ds["tile_z0"])
-    close(ds)
-    @test maximum(abs.(f .- 1)) < 1e-6        # (written as Float32)
-    @test all(z0 .> 0)
-    # the energy and water budgets close, every term attributed
-    b = d.budgets
-    for q in (:energy, :water)
-        sb = Aeolus.BudgetSystem.stage_budget(b.budgets.measured[q])
-        @test abs(sb.closure) <= 1e-10 * maximum(abs, values(sb.terms))
-    end
-    @test Base.invokelatest(state_fields, r.obj).θ isa Array{Float64,3}
 end
 
 # ---------------------------------------------------------------------------
@@ -175,15 +151,10 @@ end
         occursin(forbidden, l) && push!(offenders, "$(relpath(f, ex)):$i: $(strip(l))")
     end
     @test isempty(offenders)
-    isempty(offenders) || @info "examples/urban scripts that build or run the model" offenders
-    # every config validates; every script is analysis of output
-    for f in readdir(ex; join = true)
-        endswith(f, ".toml") || continue
-        cfg = load_run_config(f)
-        # an urban site (alone, or nested in its parent domain), or the parent alone (its tiles)
-        @test !hasproperty(cfg.run, :legacy) &&
+    # every config validates: an urban site (alone, or nested in its parent domain), or the parent alone (its tiles)
+    ok(cfg) = !hasproperty(cfg.run, :legacy) &&
               (UC.urban_enabled(cfg) || Aeolus.Config.config_domains(cfg)[1].surface.model === :tiles)
-    end
+    @test all(f -> ok(load_run_config(f)), filter(endswith(".toml"), readdir(ex; join = true)))
     @test sort(basename.(jl)) == ["alexanderplatz_animation.jl", "alexanderplatz_surface_diagnostics.jl",
                                   "berlin_parent_figures.jl", "berlin_parent_lindenberg_check.jl", "parent_output.jl",
                                   "plot_parent_surface.jl"]

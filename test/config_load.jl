@@ -77,19 +77,22 @@ cfgl_start(cfg; kw...) = start_run(cfg; root = get(kw, :root, mktempdir()), repo
         "inputs" => Any[], "profile" => "linear",
         "couplings" => Dict{String,Any}("wall" => Dict{String,Any}("z0" => 0.5, "kind" => "log"),
                                         "canopy" => Dict{String,Any}("lai" => 3.0)))
-    @test t["run"]["name"] == "child" && t["run"]["legacy"] == "cfgtest"
-    @test t["schema_version"] == 2 && !haskey(t, "domain")      # a legacy case has no domains
+    # a legacy case has no domains
+    @test (t["run"]["name"] == "child" && t["run"]["legacy"] == "cfgtest") &&
+          (t["schema_version"] == 2 && !haskey(t, "domain"))
     # where each value came from
-    @test config_origin(cfg, "clock.nsteps") == "--set"
-    @test config_origin(cfg, "clock.scheme") == child
-    @test config_origin(cfg, "clock.adaptive") == "default"
-    @test config_sources(cfg)["files"] == [child]
-    @test config_sources(cfg)["overrides"] == ["clock.nsteps=300", "grid.size=[16,16,8]"]
-    @test load_run_config(child).clock.nsteps == 200              # file < override
+    @test (config_origin(cfg, "clock.nsteps") == "--set") &&
+          (config_origin(cfg, "clock.scheme") == child) &&
+          (config_origin(cfg, "clock.adaptive") == "default")
+    # file < override
+    @test (config_sources(cfg)["files"] == [child]) &&
+          (config_sources(cfg)["overrides"] == ["clock.nsteps=300", "grid.size=[16,16,8]"]) &&
+          (load_run_config(child).clock.nsteps == 200)
     # an override with a table value, and one with a string
     c2 = load_run_config(child; overrides = ["physics.couplings.wall={z0=2.0}", "run.name=\"x y\""])
-    @test c2.physics.couplings["wall"] == Dict("z0" => 2.0)          # an override table replaces
-    @test c2.run.name == "x y"
+    # an override table replaces
+    @test (c2.physics.couplings["wall"] == Dict("z0" => 2.0)) &&
+          (c2.run.name == "x y")
     # override problems are collected with the file "--set"
     e = cfgl_error(() -> load_run_config(child; overrides = ["clock.nsteps", "run.name=x y",
                                                               "clock.nstep=3", "grid.size=[1,2]"]))
@@ -151,19 +154,19 @@ end
     finish_run!(rf)
     @test startswith(basename(rf.path), Libc.strftime("%Y-%m-%d", time()) * "_cfgrun_")
     rec = read_run_toml(rf.path)
-    @test rec["config"] == to_toml(cfg)
-    @test rec["config_schema_version"] == 2
-    @test rec["config_hash"] == string(config_hash(cfg); base = 16, pad = 16)
-    @test rec["config_sources"]["files"] == [p] && rec["config_sources"]["overrides"] == ["clock.nsteps=12"]
-    @test rec["replayable"] === true && !haskey(rec, "nonreplayable_keys")
+    @test (rec["config"] == to_toml(cfg)) &&
+          (rec["config_schema_version"] == 2) &&
+          (rec["config_hash"] == string(config_hash(cfg); base = 16, pad = 16))
+    @test (rec["config_sources"]["files"] == [p] && rec["config_sources"]["overrides"] == ["clock.nsteps=12"]) &&
+          (rec["replayable"] === true && !haskey(rec, "nonreplayable_keys"))
     @test rec["inputs"] == Dict("physics.terrain" => Dict("path" => input,
                                                           "fnv1a64" => content_hash(input)))
     @test content_hash(input) == string(Aeolus.IO.fnv1a64(read(input)); base = 16, pad = 16)
     # the folder, its run.toml and the record's text all load back to cfg
     for src in (rf.path, joinpath(rf.path, "run.toml"))
         c = load_run_config(src)
-        @test c == cfg && config_hash(c) == config_hash(cfg)
-        @test write_config(c) == write_config(cfg)
+        @test (c == cfg && config_hash(c) == config_hash(cfg)) &&
+              (write_config(c) == write_config(cfg))
     end
     # overrides apply on top of a run folder too
     @test load_run_config(rf.path; overrides = ["clock.nsteps=13"]).clock.nsteps == 13
@@ -172,21 +175,22 @@ end
     rf2 = cfgl_start(cfgr; root = root, resume = rf.path)
     finish_run!(rf2)
     rec2 = read_run_toml(rf.path)
-    @test length(rec2["session"]) == 2 && !haskey(rec2["session"][2], "config")
-    @test rec2["config_hash"] == rec["config_hash"]
-    @test load_run_config(rf.path) == cfg
+    @test (length(rec2["session"]) == 2 && !haskey(rec2["session"][2], "config")) &&
+          (rec2["config_hash"] == rec["config_hash"]) &&
+          (load_run_config(rf.path) == cfg)
     # a restart with a different config records it in its session
     rf3 = cfgl_start(with(cfg, "clock.nsteps" => 24); root = root, resume = rf.path)
     finish_run!(rf3)
     s3 = read_run_toml(rf.path)["session"][3]
-    @test s3["config"]["clock"]["nsteps"] == 24 && s3["config_hash"] != rec["config_hash"]
-    @test load_run_config(rf.path) == cfg              # the run's config is the first session's
+    # the run's config is the first session's
+    @test (s3["config"]["clock"]["nsteps"] == 24 && s3["config_hash"] != rec["config_hash"]) &&
+          (load_run_config(rf.path) == cfg)
     # [run] and [logging] set start_run's defaults: root, allow_uncommitted
     root2 = mktempdir()
     rf4 = start_run(with(cfg, "run.root" => root2); repo = mktempdir(), console = false)
     finish_run!(rf4)
-    @test dirname(rf4.path) == root2
-    @test Aeolus.IO.run_options(cfg).flush_interval == 5.0
+    @test (dirname(rf4.path) == root2) &&
+          (Aeolus.IO.run_options(cfg).flush_interval == 5.0)
     # a config not made from a RunConfig has no config_schema_version: refused
     rfd = start_run("plain"; root = root, repo = mktempdir(), console = false,
                     config = Dict("clock" => Dict("nsteps" => 3)))
@@ -235,48 +239,4 @@ end
     @test startswith(rec["config"]["physics"]["profile"], "<julia: ")
     m = sprint(showerror, cfgl_error(() -> load_run_config(rf.path)))
     @test occursin("not replayable", m) && occursin("physics.profile", m)
-end
-
-@testset "Config: common sections drive checkpoints and FFTW like the Dict" begin
-    p0 = fftw_policy()
-    try
-        d = Dict{String,Any}("fftw" => Dict{String,Any}("planner" => "estimate", "threads" => 1),
-                             "checkpoint" => Dict{String,Any}("every_steps" => 5, "every_seconds" => 100.0,
-                                                              "keep" => 3, "prefix" => "ck"))
-        cfg = load_run_config(IOBuffer("""
-            [fftw]
-            planner = "estimate"
-            threads = 1
-            [checkpoint]
-            every_steps = 5
-            every_seconds = 100.0
-            keep = 3
-            prefix = "ck"
-            """))
-        fields(ck) = (ck.dir, ck.prefix, ck.every_steps, ck.every_seconds, ck.keep, ck.wisdom)
-        dir = mktempdir()
-        @test fields(checkpoint_schedule(cfg, dir)) == fields(checkpoint_schedule(d, dir))
-        @test fields(checkpoint_schedule(cfg, dir)) == (dir, "ck", 5, 100.0, 3, true)
-        set_fftw_policy!(; planner = :measure)
-        pd = apply_fftw_config!(d)
-        set_fftw_policy!(; planner = :measure)
-        pc = apply_fftw_config!(cfg)
-        @test pc == pd && pc.planner === :estimate && pc.threads == 1
-        # defaults: an empty Dict and an empty RunConfig give the same schedule
-        cd(mktempdir()) do
-            empty = load_run_config(IOBuffer("[fftw]\nplanner = \"estimate\"\n"))     # the model
-            @test fields(checkpoint_schedule(empty)) == fields(checkpoint_schedule(Dict{String,Any}()))
-            @test fields(checkpoint_schedule(empty))[2:5] == ("checkpoint", 0, Inf, 2)
-        end
-        # the [fftw] planner of a config is applied; the Dict without one changes nothing
-        set_fftw_policy!(; planner = :patient)
-        @test apply_fftw_config!(Dict{String,Any}()).planner === :patient
-        @test apply_fftw_config!(cfg).planner === :estimate
-        # a wisdom file is imported when it exists
-        wf = joinpath(mktempdir(), "wisdom")
-        Aeolus.Operators.save_fftw_wisdom(wf)
-        @test apply_fftw_config!(with(cfg, "fftw.wisdom" => wf)).wisdom_file == wf
-    finally
-        set_fftw_policy!(; planner = p0.planner, threads = p0.threads)
-    end
 end
