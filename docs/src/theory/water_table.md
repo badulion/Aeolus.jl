@@ -148,7 +148,7 @@ for any step length. Under steady recharge ``R`` the table settles at
 
 ## 5. Validation
 
-All numbers are measured by `test/era5_water_table.jl`.
+All numbers are measured by `test/water_table.jl`.
 
 | check | reference | result |
 | :-- | :-- | :-- |

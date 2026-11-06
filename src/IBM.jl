@@ -249,7 +249,7 @@ The distance is exact for a plane surface aligned with the grid
 (`d = Δz/2 + (k−1)Δz` above a floor) and next to every surface; elsewhere
 the raster propagation can miss the true nearest point only in rare
 configurations (Danielsson 1980). Around a cube on a 2:2:1 grid it equals
-the Euclidean distance to the box to round-off (`test/era6_tke.jl`); a
+the Euclidean distance to the box to round-off (`test/tke.jl`); a
 plain chamfer transform with the 26 step lengths overestimated it there by
 up to 24 %.
 

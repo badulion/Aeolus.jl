@@ -255,7 +255,7 @@ free-stream disturbance advected through the fringe, superposed on the
 recomputed. `damping` as in [`disturbance_velocity!`](@ref) (e.g.
 `z -> smooth_step(z / (2δ_{99}))`, as in `examples/flat_plate_t3a/flat_plate_t3a.toml`,
 keeps the forcing out of the inflow boundary layer; the bypass run in
-`validation/era6_flat_plate.jl` uses `1.5δ_{99}`). The target is refreshed when `t` differs by at least
+`validation/flat_plate.jl` uses `1.5δ_{99}`). The target is refreshed when `t` differs by at least
 `interval` from the time of the last refresh (`0`, the default: every
 call). Note that `step_rk3!` calls `body_force!` with `sim.t` = ``t``,
 ``t + Δt``, ``t + 2Δt`` on its three sub-stages (it advances the clock

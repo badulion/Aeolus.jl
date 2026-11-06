@@ -157,7 +157,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   `:smoke` window after 100 steps, MG-CG differs from the FFT by at most
   6.1e-10 m s⁻¹ in u, v, w and 2.1e-9 K in θ, with max|∇·u| = 1.9e-13
   s⁻¹ (measured by the former `test/berlin_numerics.jl`; the same
-  agreement on a synthetic 16³ box is `test/era2_multigrid.jl`). They are here for the stretched-grid
+  agreement on a synthetic 16³ box is `test/multigrid.jl`). They are here for the stretched-grid
   and cut-cell solver work (#151, #152), not for speed.
 * **SGS.** `:tke` (default since #182) is described in
   [Prognostic SGS TKE (#182)](berlin_turbulence.md#Prognostic-SGS-TKE-(#182)) below.
@@ -272,7 +272,7 @@ the inertial-range 0.17: the window's flow is a 1 m s⁻¹ geostrophic wind
 over 250 m with a capping inversion at 60 m, far from developed
 isotropic turbulence, and the dynamic coefficient is lower in stratified
 and transitional flow (it reaches 0.13–0.15 in the decaying-turbulence
-run of `validation/era2_sgs_numerics.jl`).
+run of `validation/sgs_numerics.jl`).
 
 **Cost** on the flagship grid (64 × 64 × 32), per call, minimum of 15
 repetitions on a loaded 24-core machine (each operator runs once per
@@ -311,7 +311,7 @@ The numerics are unchanged: p = 2 is evaluated as `x*x`, which is
 Base's `x^2` bit for bit; TENO's q = 6 as `x³·x³`, which differs from
 Base's compensated `x^6` by at most 4 ulp (3.02 measured) and changed no
 value of the Berlin smoke matrix nor of 10⁵ random TENO5 stencils
-(`test/era2_advection.jl`).
+(`test/advection.jl`).
 
 For scale, a whole default step cost about 40–60 ms under the same load
 at #132 (`timing_report`, radiation excluded), of which `step!` was

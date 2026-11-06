@@ -157,7 +157,7 @@ lets it take its own steps inside:
 3. the window closes: the clock check and snap, the two-way feedback, the
    statistics.
 
-`test/era2_nest_external.jl` drives a window this way (the engine's
+`test/nest_external.jl` drives a window this way (the engine's
 internals of `Aeolus.Nesting`) and checks that it is `step_nested!(run)`
 bit for bit (one- and two-way, four windows of three substeps). The same
 file runs the physics of a child that picks its own steps on synthetic
@@ -250,7 +250,7 @@ The historical `step_nested!(parent, child, nest, dt; …)` is a thin wrapper.
 It is a two-way `NestedRun` with a fixed ``Δt``, a fixed `substeps`
 (default ``\max r``) and no step validation.
 
-## Measured behaviour (test/era2_nested_run.jl)
+## Measured behaviour (test/nested_run.jl)
 
 | property | result | bound |
 | :-- | :-- | :-- |

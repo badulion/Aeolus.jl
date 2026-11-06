@@ -1,8 +1,8 @@
 # Comte-Bellot & Corrsin (1971) decaying grid turbulence: the shared LES
 # benchmark harness of Era VI (P54-c, #168).
 #
-# Included by test/era6_cbc_decay.jl (the reference table and the initial
-# state, `cbc_initial_state`) and validation/era6_cbc_decay.jl (the
+# Included by test/cbc_decay.jl (the reference table and the initial
+# state, `cbc_initial_state`) and validation/cbc_decay.jl (the
 # benchmark runs). (The examples/validation/cbc_decay example and its run
 # type went with ONE-g #456: an evolve-and-rescale spin-up averaged over
 # seeds is not one model run.)

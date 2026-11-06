@@ -21,9 +21,9 @@
 #                 surface with the area-mean skin temperature.
 #
 # This file only defines functions (prefix `patchy_`) and the coarse grid
-# `HS_GRID`; it is included by `test/era5_heterogeneous_surface.jl` (the
+# `HS_GRID`; it is included by `test/heterogeneous_surface.jl` (the
 # coupling's conservation and code-path identity) and
-# `validation/era5_heterogeneous_surface.jl` (the heterogeneous runs). (A test harness that runs its own
+# `validation/heterogeneous_surface.jl` (the heterogeneous runs). (A test harness that runs its own
 # LES, moved from examples/validation/ by ONE-g, #456: the example becomes
 # a configuration once the model has a heterogeneous-surface component.)
 # =========================================================================

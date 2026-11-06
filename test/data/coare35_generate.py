@@ -1,4 +1,4 @@
-"""Generate COARE 3.5 reference-model output for test/era5_air_sea_flux.jl.
+"""Generate COARE 3.5 reference-model output for test/air_sea_flux.jl.
 
 Runs the NOAA-PSL COARE 3.5 Python reference (github.com/NOAA-PSL/
 COARE-algorithm, commit bd1cac80d2dae454e699f9ef46204dfd88086a71,

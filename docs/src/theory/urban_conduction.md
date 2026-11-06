@@ -161,7 +161,7 @@ apart.
 
 ## 6. Validation
 
-All numbers are from `test/era5_urban_surface.jl`.
+All numbers are from `test/urban_surface.jl`.
 
 | check | reference | measured |
 |:------|:----------|:---------|

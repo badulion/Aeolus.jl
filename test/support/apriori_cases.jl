@@ -2,8 +2,8 @@
 # state of `sim` (P56-c, #178): the exact subfilter stress τe, the filtered
 # velocity and strain, the dissipation-matched C_s and the a-priori metrics
 # of the Smagorinsky, Bardina and Clark gradient models. Shared by
-# test/era6_apriori_sgs.jl (a cheap DNS state) and
-# validation/era6_apriori_sgs.jl (the 96³ fixture).
+# test/apriori_sgs.jl (a cheap DNS state) and
+# validation/apriori_sgs.jl (the 96³ fixture).
 
 using Aeolus
 using Aeolus.Fields: interior_view

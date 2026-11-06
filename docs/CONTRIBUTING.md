@@ -147,7 +147,7 @@ Then the gate, and only then the PR:
 
 ```bash
 julia --project=. test/run.jl                           # the tests: must be green
-julia --project=. validation/run.jl --only era4_icenucleation.jl  # validation runs of the physics you touched
+julia --project=. validation/run.jl --only icenucleation.jl  # validation runs of the physics you touched
 git push -u origin issue/42-p3-microphysics
 gh pr create --base master --title "Phase 40 — P3 microphysics (#42)" --body "..."
 ```
@@ -323,7 +323,7 @@ as an artifact, so a failure can be read without rerunning it. Timeouts:
 150 min for the tests, 360 min for the validation runs, 60 min for the docs.
 
 CI is a second check, not a replacement for running the suite yourself:
-the wall-clock assertions (`era6_apriori_sgs.jl`, `era6_cbc_decay.jl`) were
+the wall-clock assertions (`apriori_sgs.jl`, `cbc_decay.jl`) were
 calibrated on the 24-core machine, and a slow runner failing one of them
 is reported, not papered over by loosening the limit.
 

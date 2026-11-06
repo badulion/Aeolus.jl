@@ -36,7 +36,7 @@ module Superdroplet
 # multiplicity bookkeeping absorbs them exactly. Getting that bookkeeping
 # right is the whole ballgame — it is what makes water mass conserve to
 # round-off while the droplet number decays at the analytically correct
-# rate. The Golovin validation in `validation/era4_superdroplet.jl` is a hard external
+# rate. The Golovin validation in `validation/superdroplet.jl` is a hard external
 # check on precisely this.
 #
 # WHAT IS *NOT* HERE, STATED PLAINLY

@@ -18,7 +18,7 @@ cd .worktrees/issue-42
 # 3. Run the tests before proposing anything (parallel), plus the
 #    validation runs of any physics you touched.
 julia --project=. test/run.jl
-julia --project=. validation/run.jl --only era6_gabls1.jl,era6_gabls3.jl
+julia --project=. validation/run.jl --only gabls1.jl,gabls3.jl
 
 # 4. Push the branch and open a PR. Then stop.
 git push -u origin issue/42-p3-microphysics

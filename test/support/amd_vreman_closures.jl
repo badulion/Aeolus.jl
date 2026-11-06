@@ -1,6 +1,6 @@
 # The SGS coefficients of AMD (ν_t, κ_t), Vreman and Smagorinsky 0.17 of the
-# current state of `sim` (interiors), for test/era6_amd_vreman.jl and
-# validation/era6_amd_vreman.jl.
+# current state of `sim` (interiors), for test/amd_vreman.jl and
+# validation/amd_vreman.jl.
 using Aeolus.Fields: interior_view, Field
 
 function closures!(sim; βg = 0.0)

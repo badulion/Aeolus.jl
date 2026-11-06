@@ -138,7 +138,7 @@ gradient). This changes nothing where `Ri_∇ ≤ 1`: `Ri_∇` is at most the
 gradient Richardson number `N²/((∂_z u)² + (∂_z v)²)`, and the
 Miles–Howard threshold of shear instability is `Ri_g = 1/4`, so resolved
 shear turbulence keeps the published model (measured in
-test/era6_amd_vreman.jl: on a decaying-turbulence field at bulk Richardson
+test/amd_vreman.jl: on a decaying-turbulence field at bulk Richardson
 number 0.1, 0.53 % of the cells have `Ri_∇ > 1` and the AMD dissipation
 `⟨2ν_t S_ij S_ij⟩` changes by −2.4e-5, relative). Where
 `Ri_∇ > 1` the buoyancy contribution becomes

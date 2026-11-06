@@ -166,7 +166,7 @@ guessed.
 
 ## 6. What is and is not validated
 
-All numbers below were measured by `test/era5_stomata.jl`. Unless
+All numbers below were measured by `test/stomata.jl`. Unless
 stated otherwise the conditions are 25 °C, 400 W m⁻² PAR (85 % absorbed),
 ``U = 1`` m s⁻¹ and ``D = 1.5`` kPa.
 

@@ -132,7 +132,7 @@ cool skin that evolve it belong to `OceanMixedLayer`.
 
 ## 5. Validation
 
-Measured with `test/era5_air_sea_flux.jl`:
+Measured with `test/air_sea_flux.jl`:
 
 | check | model | reference |
 |:-- |:-- |:-- |

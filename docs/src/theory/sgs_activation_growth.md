@@ -161,7 +161,7 @@ taken to mean "no root". In the stochastic benchmark droplets briefly
 see ``S < 0``, and ``\mathrm{Var}(r^2)`` came out 61 times the analytic
 value. The code was wrong, not the expectation. It now brackets the
 root from the residual's minimum, and a regression test is in
-`era4_superdroplet.jl`.
+`superdroplet.jl`.
 
 ## References
 

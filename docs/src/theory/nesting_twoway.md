@@ -143,7 +143,7 @@ what it applies with [`book_nest_flux!`](@ref)`(sim, name, ϕ, dt; scheme,
 diffusivity)`, called with the state it is about to update (a no-op for a
 simulation outside a two-way run). The domain's core then wraps the
 dynamics and the transport and declares the weights of its dynamics
-([`nest_stage_weights`](@ref)). Measured (`test/era2_nest_twoway.jl`, 100
+([`nest_stage_weights`](@ref)). Measured (`test/nest_twoway.jl`, 100
 steps, forward-Euler WENO-Z5 slot after `step!`): composite ``∫``tracer
 drift 1.2e-14 per step booked by the transport, 2.9e-7 booked at the core
 stage (the pre-#327 way: right scheme, wrong velocity), 2.5e-6 not booked;
@@ -248,13 +248,13 @@ size). Two-way nesting is **not validated against** Hellsten et al.'s
 circulation; it reproduces their mechanism, not their sign. This is one
 reason the Berlin nest of the urban site stays one-way until its
 validation (#331), although two-way is the self-nesting default (ONE-f,
-#455). `validation/era2_nest_twoway_longrun.jl`
+#455). `validation/nest_twoway_longrun.jl`
 asserts that the suite run's circulation is thermally direct and that the
 standalone CBL is cooler at the child's spacing.
 
 ## Measured behaviour
 
-From `test/era2_nest_twoway.jl` and `validation/era2_nest_twoway_longrun.jl`.
+From `test/nest_twoway.jl` and `validation/nest_twoway_longrun.jl`.
 
 | property | result | bound |
 | :-- | :-- | :-- |
@@ -270,7 +270,7 @@ From `test/era2_nest_twoway.jl` and `validation/era2_nest_twoway_longrun.jl`.
 | child-only 50 MW heat source: one-way parent vs standalone | bit-identical | |
 | the same, two-way: parent θ excess vs ``Qt/ρc_p`` − child content | 6.4e-11 | < 1e-10 |
 
-### Long runs (`validation/era2_nest_twoway_longrun.jl`, ≈ 240 s on an idle core)
+### Long runs (`validation/nest_twoway_longrun.jl`, ≈ 240 s on an idle core)
 
 | case | measured |
 | :-- | :-- |

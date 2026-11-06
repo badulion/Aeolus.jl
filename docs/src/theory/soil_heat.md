@@ -181,7 +181,7 @@ linearisation is done once per step, as in CLM.
 
 ## 5. Validation
 
-All numbers are from `test/era5_soil_thermal.jl`.
+All numbers are from `test/soil_thermal.jl`.
 
 **Neumann's freezing front** (Carslaw & Jaeger 1959, §11.2). Soil with
 ``W = 0.3`` at +2 °C, surface held at −10 °C, sharp freezing; the phase

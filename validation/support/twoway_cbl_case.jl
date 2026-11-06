@@ -1,5 +1,5 @@
 # The two-way convective-boundary-layer case of N-nest-e (#263), shared by
-# the suite (validation/era2_nest_twoway_longrun.jl: 100 m parent, 2 h) and the
+# the suite (validation/nest_twoway_longrun.jl: 100 m parent, 2 h) and the
 # benchmark (benchmarks/bench_twoway_cbl.jl: 50 m parent, 4 h).
 #
 # A scaled version of the two-way CBL of Hellsten et al. (2021), GMD 14,

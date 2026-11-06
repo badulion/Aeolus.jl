@@ -432,7 +432,7 @@ Left as they are, with the reason:
 
 **One-time bit changes against master (70d9f83).** Every ported sum
 changes its last bits once; maxima, minima and finiteness checks do not
-(`test/era2_timeint.jl` compares them with transcripts of the old loops,
+(`test/timeint.jl` compares them with transcripts of the old loops,
 NaN and ±Inf included), and neither does any pointwise update (the
 chemistry cells, the moist-buoyancy cells: identical). Measured on a
 seeded 32³ LES after three steps (before → after):
@@ -721,7 +721,7 @@ below at 32×32×16 and 64×64×32; the issue allowed ±1). The solutions
 change in the last bits: `sum(|x|)` and `max(|x|)` changed by at most
 2.2e-15 and 1.8e-15 relative (deep density-weighted case). In 2 of the
 28 cases both are bit-identical. No regression reference of the suite
-moved. One assertion was replaced: `era2_multigrid.jl` asserted that
+moved. One assertion was replaced: `multigrid.jl` asserted that
 MG-CG's dot equals `sum(x .* y)`. It now asserts that the driver's dot
 is `interior_dot` (canonical).
 
@@ -1089,7 +1089,7 @@ on the serial, threshold-0 and default backends (600 checks; the folded
 stretched kernels against the copies they replace); the damping with
 `levels` on every backend; the metric accessors against the old per-level
 expressions; zero allocation on the serial path. The harness has an `fv`
-section (below). `test/era2_stretched.jl` asked *which module* defined
+section (below). `test/stretched.jl` asked *which module* defined
 the StretchedGrid stencils; with one kernel per operator that
 expectation was obsolete, and it now checks that a StretchedGrid hands
 the kernels its per-level metrics (its behavioural check is unchanged).
@@ -1436,7 +1436,7 @@ as long.
 
 * *Monte-Carlo photons.* Every realisation changes, but the statistics
   do not: the standard-error calibration over 60 seeds gives sd/err 0.97
-  on the new streams against 0.99 on the old. Four `era3_montecarlo`
+  on the new streams against 0.99 on the old. Four `montecarlo`
   assertions held only for the old realisation. Their tolerances are
   unchanged. The conservative closure and the delta-Eddington comparison
   now use 96k photons instead of 24k: at 24k they failed for 1 or 2 of

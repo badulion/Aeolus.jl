@@ -1742,7 +1742,7 @@ index-space proper-nesting check.
   the checkpoint's record (`nc_append_record!(...; at)`).
 
 **Measured**:
-- Idealised nest (`era6_inflow_nest_longrun.jl`, Hellsten-type CBL,
+- Idealised nest (`inflow_nest_longrun.jl`, Hellsten-type CBL,
   parent 100 m, r = 3, 2 h): one-way, resolved TKE within 200 m of the
   upwind face at 50–150 m is 3.165 m²/s² with the generator against
   2.278 without (+39 %). KE flux 0.786 W/m²; largest added mass flux
@@ -1786,7 +1786,7 @@ bit-identical. Measured, two-way against one-way with the generator,
 2 h sheared CBL, r = 3: child KE ×0.937 / ×1.091, parent ×1.015 /
 ×1.020, overlap θ −0.0031 / −0.0085 K (seeds 1 / 2), within #268's
 1.5× / 0.2 K criteria. The former `@test_broken` in
-`era6_inflow_nest_longrun.jl` are real tests for both realisations
+`inflow_nest_longrun.jl` are real tests for both realisations
 (18/18 pass). Decaying refine-3 nest, 2 h: child ×0.985, parent
 ×0.999, θ +0.0009 K (×2.26, ×1.21, +0.31 K before). Composite θ ledger
 drift ≤ 3.5e-14 per parent step; interface imbalance before the
@@ -1945,9 +1945,9 @@ small to split (the 64³ flagship). Also open:
   for the eight-lane order, both measured against BigFloat).
 - A `backends.jl` test field was identically ±0 instead of spanning
   four decades (KA-b).
-- `era2_stretched` asked which module defines the StretchedGrid method;
+- `stretched` asked which module defines the StretchedGrid method;
   with one kernel per operator that question is obsolete (KA-d).
-- `era2_multigrid` asserted that MG-CG's dot product equals
+- `multigrid` asserted that MG-CG's dot product equals
   `sum(x .* y)`, untrue after the planned reduction-order change; it now
   checks `interior_dot`. Iteration counts are unchanged in all 28
   measured CG cases and 22 multigrid cases (KA-g, KA-i).
@@ -2204,7 +2204,7 @@ PR #395; `docs/src/testing.md`). What was built:
   Every `src` physics check moved into a module test with a synthetic
   setup; the example's end-to-end runs are a by-hand script,
   `examples/urban/berlin_checks.jl` (897 assertions).
-- **Pruning (#317)**: `era6_large_scale_forcing.jl` 78.3 → 12.6 s (a
+- **Pruning (#317)**: `large_scale_forcing.jl` 78.3 → 12.6 s (a
   turbulent box instead of 100 Berlin smoke steps); one shared
   k^(−5/3) fixture for five SGS files.
 

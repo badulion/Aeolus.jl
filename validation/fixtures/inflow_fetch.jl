@@ -1,6 +1,6 @@
 # The development length behind a synthetic inflow (N-inflow-d, #266) on
 # the periodic, neutral, wall-modelled half channel of P54-d: the harness
-# of test/era6_inflow_fetch.jl. It was the `inflow_fetch` run type of
+# of test/inflow_fetch.jl. It was the `inflow_fetch` run type of
 # Aeolus.RunDrivers (EX-d #441; formerly test/inflow_fetch_harness.jl and
 # examples/nesting/inflow_fetch.jl); since ONE-l (#475) a test fixture: the
 # channel cases are not configurations of the model (dropped,

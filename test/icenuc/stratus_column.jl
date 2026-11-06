@@ -4,7 +4,7 @@
 # Asserted here: the ISDAC initial profile; over a short column run the
 # water and INP budgets close and every ice particle came from a consumed
 # INP; glaciation_time on a synthetic LWP series. The 2-8 h persistence
-# runs are the validation run validation/era4_icenucleation.jl.
+# runs are the validation run validation/icenucleation.jl.
 
 @testset "Arctic stratus column (issue #7)" begin
     @test isdac_initial_profile(600.0) == (265.0, 1.5e-3)

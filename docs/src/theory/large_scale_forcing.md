@@ -138,7 +138,7 @@ which a ledger books.
 case's behaviour before #171. As a body-force hook of 100 SSP-RK3 or
 forward-Euler steps of a rotating, sheared, turbulent box it reproduces
 the former `add_geostrophic_wind!` bit for bit (`==` on ``u, v, w, θ,
-p``; `test/era6_large_scale_forcing.jl`, which until #317 ran the same
+p``; `test/large_scale_forcing.jl`, which until #317 ran the same
 oracle inside 100 Berlin smoke steps and also compared every tracer;
 the tracer check is redundant, because the forcing writes only ``u`` and
 ``v`` and the state a tracer is transported by is compared bit for bit);
@@ -149,7 +149,7 @@ Nudging is not a pressure gradient. It has no Coriolis partner, so it
 damps the inertial oscillation on the time scale ``τ`` and pulls the
 nocturnal jet back toward ``U_g``.
 
-*Tests* (`test/era6_large_scale_forcing.jl`, which now holds the nudging and subsidence checks; the measurements below are from the former `test/era6_nudging_subsidence.jl`):
+*Tests* (`test/large_scale_forcing.jl`, which now holds the nudging and subsidence checks; the measurements below are from the former `test/nudging_subsidence.jl`):
 
 | Check | Measured | Required |
 | :-- | :-- | :-- |
@@ -377,7 +377,7 @@ SSP-RK3 with the forcing in every stage, decays per level by exactly
 10 s the anomaly matches ``A R^{100}`` to 1.8 × 10⁻¹² K at every level,
 and the levels below `z_start` keep their tendency at zero bit for bit.
 
-**Gravity-wave absorption** (`validation/era6_deep_top.jl`, test 3). A 2-D
+**Gravity-wave absorption** (`validation/deep_top.jl`, test 3). A 2-D
 packet with ``N = 0.01`` s⁻¹, ``λ_x = λ_z = 1`` km (``ω = N/\sqrt2``,
 ``c_{gz} = 0.56`` m s⁻¹, initialised from a C-grid stream function so its
 discrete divergence is zero) propagates upward into a sin² layer of
@@ -423,7 +423,7 @@ for a moving wall. `qv` and the SGS TKE share θ's boundary conditions
 but not θ's prescribed gradient (they are filled with
 `homogeneous_bcs(θ_bcs)`).
 
-Measured (`validation/era6_deep_top.jl`, test 4):
+Measured (`validation/deep_top.jl`, test 4):
 
 * ``Δ∫θ\,dz = κΓΔt`` per step to 4.4 × 10⁻¹¹ (relative) with `step!`, and
   to 1.4 × 10⁻¹² with ARK2 at 6.8 times the forward-Euler diffusion limit;
@@ -507,7 +507,7 @@ domain would need to be deeper than the nocturnal boundary layer.
   (now `test/support/patchy_surface.jl`): it now delegates its
   ``+fU_g`` to `GeostrophicPressureGradient`. After 60 steps of the
   ``U_g = 5`` m/s, ``f = 10^{-4}`` setup, the state is unchanged bit for
-  bit, and `validation/era5_heterogeneous_surface.jl` prints identical numbers.
+  bit, and `validation/heterogeneous_surface.jl` prints identical numbers.
 
 ## References
 

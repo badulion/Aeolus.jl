@@ -291,7 +291,7 @@ the air.
 
 ### What the tests measure
 
-`test/era5_leaf_energy.jl`:
+`test/leaf_energy.jl`:
 
 | Check | Reference | Measured |
 | :-- | :-- | --: |
@@ -422,7 +422,7 @@ used.
 
 ### Results
 
-`validation/era5_canopy_profiles.jl` (and the former column example `examples/validation/canopy_profiles.jl`, (removed by ONE-g, #456)):
+`validation/canopy_profiles.jl` (and the former column example `examples/validation/canopy_profiles.jl`, (removed by ONE-g, #456)):
 
 | Quantity | Observed | Model |
 | :-- | --: | --: |

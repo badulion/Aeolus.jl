@@ -193,7 +193,7 @@ street canyons.
 **Tests** (the former `test/berlin_air_heat.jl` and `test/berlin_smoke.jl`,
 removed in #320 with the rest of the Berlin suite; the heat content of
 the discretely hydrostatic reference against this analytic value is now
-asserted in `test/era2_anelastic.jl`, the ledger closure by the smoke runs
+asserted in `test/anelastic.jl`, the ledger closure by the smoke runs
 of `test/urban_checks.jl`). The meter
 against the analytic heat of a uniform-θ hydrostatic layer
 (``c_p^2 θ p_0/(R g)\,[Π^{c_p/R+1}/(c_p/R+1)]``: 3.1e-8 at Nz = 16,
@@ -415,7 +415,7 @@ anything cheaper than the periodic-x, y solve. The former
 **Tests** (the former `test/berlin_open_boundaries.jl`, removed in #320;
 the +1 K anomaly's analytic face flux, upwind and centred, with the
 diffusive part, and the wall tagging across an open face are asserted in
-`test/era6_open_near_boundary.jl` (removed)): the default stays periodic;
+`test/open_near_boundary.jl` (removed)): the default stays periodic;
 the open faces, data, sponge target, solver axes, frame and solid points;
 one dynamics step through the case's own hook books 0.0 J m⁻² for an
 inflow equal to the interior and ``ρ̄c_pΠ̄(UΔT/2 + νΔT/Δx)AΔt`` = 604.525
@@ -425,7 +425,7 @@ jump is ``νΔT/Δx`` with the case's ``ν`` = 2 m² s⁻¹). The smoke matrix r
 `geostrophic: lateral = :open, Dirichlet outflow` and `…, convective
 outflow` with every coupling on: air-heat closure ≤ 1.1e-13 W m⁻², water
 residual ≤ 4.3e-16 kg m⁻², column transport < 1e-6 W m⁻² (smoke check).
-The src tests are in `test/era6_open_near_boundary.jl` (removed) (theory:
+The src tests are in `test/open_near_boundary.jl` (removed) (theory:
 [Near the open faces](../theory/fractional_step.md#Near-the-open-faces-(N-open-d))).
 
 ### Baseline (measured, #127)

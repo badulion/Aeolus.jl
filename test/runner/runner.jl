@@ -5,8 +5,8 @@
 #   julia --project=. test/run.jl                 # the tests (the PR gate)
 #   julia --project=. validation/run.jl           # the validation runs (not a gate)
 #   JOBS=8 julia --project=. test/run.jl --threads 2
-#   julia --project=. test/run.jl --only era6_tke.jl,io_checkpoint.jl
-#   julia --project=. validation/run.jl --only era6_gabls1.jl
+#   julia --project=. test/run.jl --only tke.jl,io_checkpoint.jl
+#   julia --project=. validation/run.jl --only gabls1.jl
 #   julia --project=. test/run.jl --list          # show the plan, run nothing
 #
 # Every file of the suite's include list (test/runtests.jl or

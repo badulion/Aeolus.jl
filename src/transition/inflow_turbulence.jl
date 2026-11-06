@@ -150,7 +150,7 @@ update of a [`NestedRun`](@ref)) finds exactly the faces the projection
 saw. Planes held constant over a step, a ramp re-evaluated at every
 stage, or perturbations switched on at the installation time each left
 a divergence of ``O(10^{-3})`` s⁻¹ that the combination only damps by
-1/3 per substep (measured, `test/era6_inflow_turbulence.jl`).
+1/3 per substep (measured, `test/inflow_turbulence.jl`).
 
 **Zero added mass flux.** On every face and level the area-weighted mean
 of the normal perturbation over the receiving fluid faces is removed, so

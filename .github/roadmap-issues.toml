@@ -2174,7 +2174,7 @@ title = "Assert superdroplet convergence rather than a loose threshold"
 milestone = "Technical debt"
 labels = ["era-iv", "microphysics", "tech-debt", "validation"]
 body = """
-test/era4_superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.
+test/superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.
 
 Measured properties worth asserting instead:
 

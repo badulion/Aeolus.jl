@@ -142,7 +142,7 @@ NEAR = {
 TECH_DEBT = [
  ("superdroplet-bias", "Assert superdroplet convergence rather than a loose threshold",
   "IV",
-  "test/era4_superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.\n\nMeasured properties worth asserting instead:\n\n- The finite-N_sd BIAS converges: ~2.5% at N_sd=2^12, falling ~2.26x per 4x N_sd (about N^-0.6). It does NOT average away over seeds - holding N fixed and going from 10 to 160 seeds leaves it at ~0.03.\n- The collision RATE is correct: ensemble-mean number decay matches Golovin's analytic n0*exp(-b*L*t) to <=1.3%, improving 3.4x per 4x N_sd.\n\nReplace the threshold with these two.",
+  "test/superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.\n\nMeasured properties worth asserting instead:\n\n- The finite-N_sd BIAS converges: ~2.5% at N_sd=2^12, falling ~2.26x per 4x N_sd (about N^-0.6). It does NOT average away over seeds - holding N fixed and going from 10 to 160 seeds leaves it at ~0.03.\n- The collision RATE is correct: ensemble-mean number decay matches Golovin's analytic n0*exp(-b*L*t) to <=1.3%, improving 3.4x per 4x N_sd.\n\nReplace the threshold with these two.",
   ["microphysics", "tech-debt", "validation"]),
  ("coverage-41-42", "Raise test coverage of Phases 41 and 42",
   "IV",

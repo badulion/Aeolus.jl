@@ -102,7 +102,7 @@ form. At 800 hPa, 285 K and ``S`` = 1.05 the diagnosis over-heats by
 2.76 % of ``L_v \Delta q`` and condenses 1.75 % less. Most of that
 gap is the partition-dependent exponent: frozen at total water, the
 diagnosis agrees with the enthalpy form to 0.2–0.3 % at every pressure
-(`test/era4_thermodynamics.jl`). Condensation during a step is a process
+(`test/thermodynamics.jl`). Condensation during a step is a process
 and uses the enthalpy form, which is exact; reading the state off a
 prognostic ``\theta_{li}`` is a diagnosis and must invert whatever
 ``\theta_{li}`` the model carries, approximation included. Before

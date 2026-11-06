@@ -136,7 +136,7 @@ the open-loop estimate. A temperature-dependent COP adds
 
 ## 5. Validation (measured)
 
-All numbers are from `test/era5_hvac.jl` (the resolved zone vs 5R1C: `validation/era5_hvac.jl`).
+All numbers are from `test/hvac.jl` (the resolved zone vs 5R1C: `validation/hvac.jl`).
 
 | Check | Reference | Measured |
 |:--|:--|:--|

@@ -150,7 +150,7 @@ concrete each, stepped at 30 min:
 
 ## 4. Validation
 
-All numbers are from `test/era5_urban_radiosity.jl`.
+All numbers are from `test/urban_radiosity.jl`.
 
 | check | reference | measured |
 |:------|:----------|:---------|

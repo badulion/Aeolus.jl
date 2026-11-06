@@ -1,8 +1,8 @@
 # The rough half channel of the dynamic wall model (P57-e, #190): a random
 # k⁻² surface and the half channel over it, partly resolved through the
-# surface-gradient drag. Shared by test/era6_wall_models_dynamic.jl (the
+# surface-gradient drag. Shared by test/wall_models_dynamic.jl (the
 # σ² statistics and the momentum budget over a few steps) and
-# validation/era6_wall_models_dynamic.jl (grid invariance over 6 H/u*).
+# validation/wall_models_dynamic.jl (grid invariance over 6 H/u*).
 # The caller has `using .ChannelCases` (half_channel_case).
 
 using Random: Xoshiro

@@ -62,7 +62,7 @@ sink it exerts on the resolved flow:
      diffusivity ([`harman_finnigan_scalar_diffusivity`](@ref)), which turns
      the leaf heat sources of item 5 into an air-temperature profile. These
      are what the #25 validation against wind-tunnel, orchard and forest
-     profiles uses (`validation/era5_canopy_profiles.jl`).
+     profiles uses (`validation/canopy_profiles.jl`).
 
 # References
 
@@ -1491,7 +1491,7 @@ the larger of the two is used (`free_convection = false` keeps only the
 forced value). These are the textbook flat-plate correlations
 ``\\overline{Nu} = 0.664\\,Re^{1/2}Pr^{1/3}`` and ``\\overline{Nu} = 0.54\\,Ra^{1/4}``
 (Incropera et al. 2007, chs. 7 and 9) evaluated for air at 20 °C;
-`test/era5_leaf_energy.jl` re-derives them to 1–3 %. The heat conductance of the leaf is that of both sides,
+`test/leaf_energy.jl` re-derives them to 1–3 %. The heat conductance of the leaf is that of both sides,
 ``2g_{Ha}``; the vapour conductance is ``n\\,g_{va}`` with `n =
 stomatal_sides` = 1 for hypostomatous leaves (most broadleaf trees) and
 2 for amphistomatous ones. The coefficients are C&N's values at 20 °C and

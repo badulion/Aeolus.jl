@@ -1,5 +1,5 @@
-# Field norms shared by the anelastic tests (test/era2_anelastic.jl) and the
-# warm-bubble validation (validation/era2_anelastic.jl).
+# Field norms shared by the anelastic tests (test/anelastic.jl) and the
+# warm-bubble validation (validation/anelastic.jl).
 
 using Aeolus.Fields: interior_view
 

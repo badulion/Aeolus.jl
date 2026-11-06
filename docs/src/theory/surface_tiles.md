@@ -71,7 +71,7 @@ holding spectral optics itself.
 
 ## 3. Where the aggregation error comes from
 
-All numbers below are measured by `test/era5_surface_tiles.jl` with the
+All numbers below are measured by `test/surface_tiles.jl` with the
 forcing ``T_a = 295`` K, ``U = 3`` m s⁻¹ at 10 m, two tiles of equal
 area. They are model-internal comparisons, not observations.
 

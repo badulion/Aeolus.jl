@@ -136,7 +136,7 @@ take out of the resolved flow. Booking all of the wall stress's work as
 production is the constant-stress log layer: its shear production
 integrated from ``z_0`` to the first face, ``∫ τ_w\,∂U/∂n\,dn = τ_w U``,
 is the work of the wall stress at the face velocity. The test
-(`test/era6_tke_facades.jl` (removed)) checks the budget to 0 relative error, the
+(`test/tke_facades.jl` (removed)) checks the budget to 0 relative error, the
 removed share to 4.6e-15, the wall work against the energy
 `apply_immersed_wall_stress!` removes to 4.7e-8 (``δt = 10^{-6}``), and,
 for uniform flow along a wall, ``Σ P_s V/A = u_*^3 \ln(h/z_0)/κ`` to
@@ -198,7 +198,7 @@ MOST surface exchange (`bus.u_star`).
 
 The Berlin nesting parent runs this closure on a `StretchedGrid` (25 m
 levels to 500 m, then growing by 1.08 per level to 100 m). Four things
-change, each tested in `test/era6_tke_stretched.jl` (removed):
+change, each tested in `test/tke_stretched.jl` (removed):
 
 * **Filter width.** ``Δ_k = (Δx\,Δy\,Δz_k)^{1/3}`` per level, ``Δz_k`` the
   cell thickness — the width the core's Smagorinsky uses there (Deardorff
@@ -231,7 +231,7 @@ A `:uniform` `StretchedGrid` reproduces the `RegularGrid` closure (``e`` to
 8.5e-17 relative after 20 convective steps without transport). A solid
 mask is not supported on a stretched grid.
 
-## Validation (`test/era6_tke.jl` and the 500-step run of `validation/era6_tke.jl`, measured)
+## Validation (`test/tke.jl` and the 500-step run of `validation/tke.jl`, measured)
 
 | test | result |
 | :-- | :-- |
@@ -247,7 +247,7 @@ mask is not supported on a stretched grid.
 | rejected adaptive step (first try committed, then rejected) | ``e``, ``u``, ``θ`` bitwise a direct ``Δt/2`` step |
 
 **Convective boundary layer** (`examples/cbl_tke/cbl_tke.toml`, the model with `[sgs] model = "tke"`,
-ONE-l #475; the 24³ validation case of `validation/era6_tke.jl` is the harness `tke_cbl` of `test/fixtures/tke_cbl.jl`, which the
+ONE-l #475; the 24³ validation case of `validation/tke.jl` is the harness `tke_cbl` of `test/fixtures/tke_cbl.jl`, which the
 configuration reproduces bit for bit, `test/config_cases.jl` (removed)): free convection
 over a heated free-slip floor, ``Q_s = 0.1`` K m s⁻¹, ``Γ = 3`` K km⁻¹ above
 ``z_{i0}``, periodic laterally, sponge in the top quarter, SSP-RK3 at the
@@ -272,7 +272,7 @@ the CBL is run with Moeng's closure and `wall_distance = nothing` is the
 closure's default; the cap is there for walls Moeng's floor factor cannot
 reach — the Berlin facades — and the Berlin case uses it.
 
-**Decaying grid turbulence** (Comte-Bellot & Corrsin, `validation/era6_cbc_decay.jl`,
+**Decaying grid turbulence** (Comte-Bellot & Corrsin, `validation/cbc_decay.jl`,
 32³, three seeds, with the corrected face-spectrum set-up of #205):
 ``K_{98}/K_{42}`` −9.4 %, ``K_{171}/K_{42}`` −26.9 %, RMS ``\log_{10}E``
 0.065 / 0.120, ``E(k_c)``/CBC 0.81 / 0.38: too dissipative (before the
@@ -439,7 +439,7 @@ without qualification. Three runs were stable without it: the decaying
 box (200 RK3 steps), the Berlin smoke runs (12 adaptive steps, with and
 without the wall cap), and the 30 min flagship runs.
 
-### Validation (`test/era6_reynolds_stress.jl` (removed), measured)
+### Validation (`test/reynolds_stress.jl` (removed), measured)
 
 1. **Trace.** For 200 random states, ½ tr of the right-hand side equals
    ``−τ:∇\bar u + βh_3 − ε`` to 1.2e-16, and ``\operatorname{tr}Φ +
@@ -496,7 +496,7 @@ time* with filtered DNS, with Smagorinsky (``C_s = 0.17``) and dynamic
 Smagorinsky as baselines (the Lagrangian scale-dependent model, #186, is
 not in this branch's stack). Fixture: `validation/fixtures/sgs_validation.jl`
 (module `SGSValidation`; it was the `sgs_decay` run type from EX-d #441
-to ONE-l #475); validation run: `validation/era6_sgs_validation.jl`. The 96³ example
+to ONE-l #475); validation run: `validation/sgs_validation.jl`. The 96³ example
 and the wall-bounded surface-mounted cube (below) were run types of
 `Aeolus.RunDrivers`; they are not configurations of the model and were
 dropped with it (ONE-l, #475): the filtered-DNS study is the a-priori

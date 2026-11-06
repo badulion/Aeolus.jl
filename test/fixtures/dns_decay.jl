@@ -1,7 +1,7 @@
 # Filtered-DNS fixture of Era VI (P56-c, #178): decaying isotropic
 # turbulence computed by Aeolus itself, from a fixed seed.
 #
-# Included by test/era6_apriori_sgs.jl, the thread-invariance worker, the
+# Included by test/apriori_sgs.jl, the thread-invariance worker, the
 # benchmarks and the SGS validation fixture validation/fixtures/sgs_validation.jl,
 # which starts from this DNS (it was the `sgs_decay` run type until ONE-l, #475).
 #

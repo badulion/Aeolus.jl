@@ -266,7 +266,7 @@ end
     @test d2.surface.temperature ≈ [(gabls2_surface_temperature_C((t + 57600) / 3600) + 273.15) * (1e5 / 97200)^0.286
                                     for t in d2.surface.t] rtol = 1e-14
     # the model reading the GABLS3 driver: a round trip, the driver hashed under [inputs]
-    # the model's config hashes the GABLS3 driver under [inputs] (the run itself: validation/era6_gabls3.jl)
+    # the model's config hashes the GABLS3 driver under [inputs] (the run itself: validation/gabls3.jl)
     inp = config_inputs(load_run_config(joinpath(SBL_CONFIGS, "gabls3.toml")))
     @test inp["domain.main.dynamic_driver"]["fnv1a64"] == content_hash(drv("gabls3_dynamic.nc"))
 end

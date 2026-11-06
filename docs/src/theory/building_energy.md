@@ -119,8 +119,8 @@ substitute for data.
 
 ## 4. Validation
 
-All numbers below are measured by `test/era5_building_energy.jl` (the resolved
-zone vs 5R1C: `validation/era5_building_energy.jl`).
+All numbers below are measured by `test/building_energy.jl` (the resolved
+zone vs 5R1C: `validation/building_energy.jl`).
 
 | Check | Reference | Result |
 |:------|:----------|:-------|

@@ -41,7 +41,7 @@ module AdvectionSchemes
 # NOTE ON A JULIA PITFALL: `3f0` is a *Float32 literal* (3.0f0), not
 # `3 * f0`.  Every coefficient below is written with an explicit `*`.
 # (`src/FiniteVolume.jl`'s `_weno5_left` smoothness indicators are hit by
-# exactly this parsing trap — see the Phase 26 notes in test/era2_advection.jl.)
+# exactly this parsing trap — see the Phase 26 notes in test/advection.jl.)
 
 using ..Grids
 using ..Grids: AbstractMesh, RegularGrid, interior, CellCenter, FaceX, FaceY, FaceZ, Location
@@ -161,7 +161,7 @@ end
 # TENO's q = 6, which is *not* bitwise Base's compensated `x^6` (it
 # differs, by up to 3 ulp, in 61 % of arguments; the weights only enter
 # TENO through a cut-off, and no TENO5 value changed on 10⁵ random
-# stencils; see the KA-c notes in test/era2_advection.jl).
+# stencils; see the KA-c notes in test/advection.jl).
 #
 # One method, branching on the static `P` (the branches fold away for a
 # concrete `P`), not one method per exponent: a descriptor whose exponent

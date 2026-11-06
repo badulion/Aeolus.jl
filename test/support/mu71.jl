@@ -1,5 +1,5 @@
-# Shared by test/era5_ice_thermodynamics.jl and
-# validation/era5_ice_thermodynamics.jl: the MU71 forcing, the BL99 reference
+# Shared by test/ice_thermodynamics.jl and
+# validation/ice_thermodynamics.jl: the MU71 forcing, the BL99 reference
 # driver protocol and the BL99 parameter sets.
 
 using Aeolus.IceThermodynamics

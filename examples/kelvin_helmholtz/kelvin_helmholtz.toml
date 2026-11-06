@@ -7,7 +7,7 @@
 # below it, seeded at the most unstable wavenumber of the inviscid tanh
 # layer, αδ = 0.4446 (L_x = 2πδ/α), with w′ = 1e-4 U sin(αx) exp(−((z − z_c)/δ)²).
 # δ = U = 1, θ₀ = 300 K; Δθ = J U² θ₀/(g δ) = 1.529 K. Unlike the linear validation run
-# (validation/era6_transition_kh.jl) the base state is free to diffuse and the
+# (validation/transition_kh.jl) the base state is free to diffuse and the
 # billow runs into its nonlinear stage. SSP-RK3 at dt = 0.6 Δx/U, no SGS model.
 #
 #   julia --project -m Aeolus run examples/kelvin_helmholtz/kelvin_helmholtz.toml

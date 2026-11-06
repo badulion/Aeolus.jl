@@ -146,7 +146,7 @@ array. The results are bit-identical. The prolongation itself loops over
 the six halo slabs (one kernel, `_interp_box!`), not over the whole child
 array.
 
-## Validation (`test/era2_nest_boundary.jl`; the convective boundary layer in `validation/era2_nest_boundary.jl`)
+## Validation (`test/nest_boundary.jl`; the convective boundary layer in `validation/nest_boundary.jl`)
 
 | test | result |
 | :-- | :-- |

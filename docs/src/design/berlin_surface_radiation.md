@@ -200,7 +200,7 @@ potential, delivered less; the difference was only recorded as
 first noon run a third of the street LE (≈ 70 of 184 W m⁻²) was never
 lost by the soil. It now returns the delivered E and LE and keeps the
 unspent latent heat in the top soil layer (test in
-`era5_soil_thermal.jl`). LandSurface's vegetated column has the same
+`soil_thermal.jl`). LandSurface's vegetated column has the same
 pattern (`latent_mismatch` there); #140 should check it.
 
 **Cost.** The surface step (4094 surfaces: 3179 soil columns with

@@ -108,8 +108,8 @@ zones the set settles in a few passes; the loop is bounded.
 
 ## 3. Validation
 
-All numbers are measured by `test/era5_anthropogenic_heat.jl` (Toulouse:
-`validation/era5_anthropogenic_heat.jl`).
+All numbers are measured by `test/anthropogenic_heat.jl` (Toulouse:
+`validation/anthropogenic_heat.jl`).
 
 | check | reference | measured |
 |:--|:--|:--|

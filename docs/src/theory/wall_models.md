@@ -142,7 +142,7 @@ the face centre is half a cell from it. Two hooks act on every step:
 The correction of a step is therefore the modelled stress minus the
 stencil stress, and the momentum the step removes at the walls is
 exactly ``Σ τ_w ΔA Δt`` (measured to 1e-14 for u, v and the w faces of
-an L-shaped corner, `validation/era6_wall_models_immersed.jl`). With the IMEX
+an L-shaped corner, `validation/wall_models_immersed.jl`). With the IMEX
 stepper the diffusion is implicit; the explicit removal is then
 first-order in time.
 
@@ -227,7 +227,7 @@ viscosity of `add_eddy_viscosity_u!`), so its divergence equals the
 plane-mean tendency to round-off (1e-12). **E11** is Parseval-normalised
 (``Σ E_{11} Δk_1 = ⟨u'^2⟩`` to 1e-12).
 
-Measured in `validation/era6_neutral_abl.jl` (seed 1; about 60 s in all):
+Measured in `validation/neutral_abl.jl` (seed 1; about 60 s in all):
 
 | case | quantity | measured | expected |
 | :-- | :-- | :-- | :-- |
@@ -341,7 +341,7 @@ so the magnitude is the law's at the input wind, as documented. The
 #169 test encoded the old formula; both were wrong. Nothing used `wind`
 before this phase.
 
-**Channel, Re_τ = 1000** (`validation/era6_wall_models_channel.jl`: 24 × 12 ×
+**Channel, Re_τ = 1000** (`validation/wall_models_channel.jl`: 24 × 12 ×
 16, `StaticSmagorinsky(0.1)`, `SpaldingLaw`, averaged over 5-8 δ/u_τ,
 seed 1; Lee & Moser U_b⁺ = 19.99):
 
@@ -445,7 +445,7 @@ can turn the stress away from the flow). `update_wall_model!` advances
 the columns once per accepted step with the end-of-step velocity and
 pressure. The first use primes them with the equilibrium solution.
 
-### Measured (`validation/era6_wall_models_tble.jl`; the channel in `validation/era6_wall_models_tble.jl`)
+### Measured (`validation/wall_models_tble.jl`; the channel in `validation/wall_models_tble.jl`)
 
 | test | result |
 | :-- | :-- |
@@ -544,7 +544,7 @@ default on a periodic surface) or `Operators.box_filter!` (3 × 3, ratio
 applies the form drag as a first-cell body force (budget term `τ_form`)
 and updates α once per step.
 
-**Measured** (`validation/era6_wall_models_dynamic.jl`; grid invariance in `validation/era6_wall_models_dynamic.jl`, about 25-30 s):
+**Measured** (`validation/wall_models_dynamic.jl`; grid invariance in `validation/wall_models_dynamic.jl`, about 25-30 s):
 
   * **Analytic invariance.** On a two-mode sinusoid with a uniform
     log-law wind, the block means, transfer functions and central
