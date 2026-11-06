@@ -2410,6 +2410,52 @@ point, field and time. Every plane takes the slab path, reads exactly what
 spanning more than one slab keeps the view. Shifting the slab offset by
 one point makes the test fail (43 errors).
 
+**A checkpoint of an open box continues the run (#528, 2026-11-06).**
+Resuming the Berlin 100 m run (ERA5 open faces) did not continue it. One
+step after `--resume`, u differed by up to 0.012 m/s at the east open face;
+after 60 steps, by 0.14 m/s in u and 0.10 K in θ. Two uninterrupted runs
+agree to 3e-9.
+
+The open boundaries belong to the simulation's boundary conditions, not to
+a component, and the checkpoint stored only the fields and the components.
+A restart rebuilt each `OpenBoundaryState` with `initialized = false`. Its
+first step refilled every plane buffer from the boundary data, so the
+values carried over were lost:
+- the radiated values at outflow points;
+- the Runge–Kutta stage combination of the buffers;
+- the mass-flux correction.
+
+The Orlanski history was lost as well.
+
+The checkpoint now stores `open_boundary_checkpoint(sim)`: every buffer,
+`initialized`, the correction's ledger and the radiation planes' history.
+`restore_checkpoint!` copies these back. A checkpoint from before this
+change restores as before, with a warning.
+
+A bug the experiment caught in the first version of the fix: an
+`initialized` state skips the first update, which is where θ is bound
+(by identity) to its planes. The unbound θ got the mirror halo for one
+step, so the restored run still diverged (2e-4 m/s in u, 1.6e-2 K in θ
+after one step, with Dirichlet faces). Restoring now binds the fields.
+Finding this took a walk over the whole object graph: the restored and
+the continuous simulation were identical except for scratch, and
+stepping a fresh build once before restoring made it exact.
+
+Measured on a 16 × 12 × 8 open box (RK3, dt 0.5 s, time-varying data,
+checkpoint after 20 steps, compared with the uninterrupted run over the
+next 10 steps):
+
+| outflow | restored with the open-boundary state | old restart, after 10 steps |
+| :-- | --: | --: |
+| `dirichlet` | 0 | 9.9e-5 m/s, 1.6e-3 K |
+| `convective` | 0 | 0.42 m/s, 1.5 K |
+| `orlanski` | 0 | 0.41 m/s, 1.5 K |
+
+Test (`open_boundaries.jl`), Orlanski outflow:
+- a restored fresh build continues to 1e-12;
+- an old payload warns and diverges by more than 1e-2;
+- a differently built open box is refused.
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*

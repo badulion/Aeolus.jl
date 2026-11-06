@@ -19,6 +19,7 @@ cores, since ONE-j #460, the same without `qv`, plus their base state):
 | state | where it lives | how it is checkpointed |
 | :---- | :------------- | :--------------------- |
 | `u, v, w, p, θ, qv` **with halos**, the clock | the simulation | `checkpoint_fields(sim)`, full storage arrays |
+| the open boundaries: every plane's buffer (at outflow points the radiated values, which the boundary data cannot reproduce), `initialized`, the last correction's ledger, the Orlanski history `hist`, `t_hist`, `has_hist` | the `OpenBoundaryState`s of `sim.bcs`, `sim.θ_bcs` | `open_boundary_checkpoint(sim)`, restored by `restore_open_boundary_checkpoint!`, which also binds θ, qv to their planes (#528) |
 | the base state `θ̄`, `ρ̄` (sound-proof cores) | `sim.ref` | `checkpoint_reference(sim)`: recorded and compared on restart like the run parameters, not restored (a restart onto another base state is refused) |
 | last eddy coefficients `νt, κt` | the simulation | stored too: a driver's dt choice (`channel_dt`, the model's adaptive step) reads them before the closure recomputes them |
 | SGS closure memory: TKE ``e``, Lagrangian / LASD ``I_{LM}, I_{MM}, I_{QN}, I_{NN}`` and the pathline velocities, the six Reynolds stresses, booked statistics, commit cadence | the closure | the closure contract's `sgs_state` / `restore_sgs_state!` (#167), whose snapshots are now required to be self-contained |
