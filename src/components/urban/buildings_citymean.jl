@@ -48,7 +48,10 @@ function init!(c::CityMeanBuildings, case)
     c.bem = city_buildings(g.heightmap, [I for I in CartesianIndices(g.sfc) if g.sfc[I] == SURFACE_WALL],
                            mesh.dx, mesh.dy, mesh.dz,
                            sum(scene.facets[i].area for i in g.wall_ids);
-                           start_weekday = case_weekday(case.cfg))
+                           start_weekday = case_weekday(case.cfg),
+                           # the envelope starts in its steady state against the
+                           # initial canyon air (#519), not uniform at the zone air
+                           T_outdoor = mean(view(interior_view(case.sim.θ), :, :, 1)[g.open_cols]) * ref_exner(case, 1))
     bem = c.bem
     @debug("city-mean building", subsystem = :urban, domain = current_domain(), event = :init,
            coupling = :buildings_citymean, floor_area = bem.zone.floor_area,
