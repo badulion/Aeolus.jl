@@ -116,7 +116,8 @@ unsaturated); water fluxes are in m s⁻¹ of liquid water, positive
 """
 module SoilColumn
 
-using ..SurfaceExchange: SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
+using ..SurfaceExchange: SurfaceExchange, has_packed_state, packed_state_length, pack_state!, unpack_state!,
+                         SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
                          SurfaceForcing, SurfaceFluxes, AbstractSurface, grav,
                          cp_water, cp_ice, LH_f0, turbulent_fluxes, surface_latent_heat
 import ..SurfaceExchange: moisture_availability, surface_temperature, roughness_lengths,
@@ -2622,6 +2623,92 @@ function set_water_table!(col::SoilWaterColumn, zwt::Real)
         aq.W = _aq_storage(aq, col, zwt)
     end
     return col
+end
+
+# =============================================================================
+# 11. The packed state (#526)
+# =============================================================================
+#
+# What a checkpoint must hold to continue a column exactly: the layer
+# profiles (ψ, θ_liq, θ_ice, T_soil; the thermal column's enthalpy H), the
+# skin temperature, the adaptive sub-steps and the budgets. Not packed: the
+# grid, the hydraulic and thermal properties, the boundary constants (set
+# by the configuration) and the solver workspaces `ws` (scratch, written
+# before they are read in every step).
+
+# the evolving part of a bottom boundary: the aquifer's storage and its
+# last fluxes; the other boundaries are constants
+_bottom_state_length(::UnconfinedAquifer) = 3
+_bottom_state_length(b) = 0
+_bottom_packable(b) = b isa UnconfinedAquifer || !ismutable(b)
+function _pack_bottom!(buf, i, b::UnconfinedAquifer)
+    buf[i] = b.W; buf[i+1] = b.recharge; buf[i+2] = b.baseflow
+    return i + 3
+end
+_pack_bottom!(buf, i, b) = i
+function _unpack_bottom!(b::UnconfinedAquifer, buf, i)
+    b.W = buf[i]; b.recharge = buf[i+1]; b.baseflow = buf[i+2]
+    return i + 3
+end
+_unpack_bottom!(b, buf, i) = i
+
+@inline function _pack_vec!(buf, i, v)
+    n = length(v)
+    @inbounds for l in 1:n
+        buf[i+l-1] = v[l]
+    end
+    return i + n
+end
+@inline function _unpack_vec!(v, buf, i)
+    n = length(v)
+    @inbounds for l in 1:n
+        v[l] = buf[i+l-1]
+    end
+    return i + n
+end
+
+SurfaceExchange.has_packed_state(c::SoilWaterColumn) = _bottom_packable(c.top) && _bottom_packable(c.bottom)
+SurfaceExchange.packed_state_length(c::SoilWaterColumn) = 4 * length(c.ψ) + 1 + 6 + _bottom_state_length(c.bottom)
+function SurfaceExchange.pack_state!(buf, i, c::SoilWaterColumn)
+    i = _pack_vec!(buf, i, c.ψ); i = _pack_vec!(buf, i, c.θ_liq)
+    i = _pack_vec!(buf, i, c.θ_ice); i = _pack_vec!(buf, i, c.T_soil)
+    b = c.budget
+    buf[i] = c.dt_sub
+    buf[i+1] = b.infiltration; buf[i+2] = b.runoff; buf[i+3] = b.evaporation
+    buf[i+4] = b.drainage; buf[i+5] = b.extraction; buf[i+6] = b.time
+    return _pack_bottom!(buf, i + 7, c.bottom)
+end
+function SurfaceExchange.unpack_state!(c::SoilWaterColumn, buf, i)
+    i = _unpack_vec!(c.ψ, buf, i); i = _unpack_vec!(c.θ_liq, buf, i)
+    i = _unpack_vec!(c.θ_ice, buf, i); i = _unpack_vec!(c.T_soil, buf, i)
+    b = c.budget
+    c.dt_sub = buf[i]
+    b.infiltration = buf[i+1]; b.runoff = buf[i+2]; b.evaporation = buf[i+3]
+    b.drainage = buf[i+4]; b.extraction = buf[i+5]; b.time = buf[i+6]
+    return _unpack_bottom!(c.bottom, buf, i + 7)
+end
+
+SurfaceExchange.has_packed_state(c::SoilThermalColumn) =
+    has_packed_state(c.water) && _bottom_packable(c.bottom)
+SurfaceExchange.packed_state_length(c::SoilThermalColumn) =
+    packed_state_length(c.water) + length(c.H) + 2 + 5
+function SurfaceExchange.pack_state!(buf, i, c::SoilThermalColumn)
+    i = pack_state!(buf, i, c.water)
+    i = _pack_vec!(buf, i, c.H)
+    b = c.budget
+    buf[i] = c.T_skin; buf[i+1] = c.dt_sub
+    buf[i+2] = b.surface; buf[i+3] = b.bottom; buf[i+4] = b.water
+    buf[i+5] = b.latent_mismatch; buf[i+6] = b.time
+    return i + 7
+end
+function SurfaceExchange.unpack_state!(c::SoilThermalColumn, buf, i)
+    i = unpack_state!(c.water, buf, i)
+    i = _unpack_vec!(c.H, buf, i)
+    b = c.budget
+    c.T_skin = buf[i]; c.dt_sub = buf[i+1]
+    b.surface = buf[i+2]; b.bottom = buf[i+3]; b.water = buf[i+4]
+    b.latent_mismatch = buf[i+5]; b.time = buf[i+6]
+    return i + 7
 end
 
 end # module

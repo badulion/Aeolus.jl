@@ -18,7 +18,7 @@ module Radiation
 using ..Grids: RegularGrid, interior
 using ..Fields: Field
 using ..RadiationCore: STEFAN_BOLTZMANN
-using ..SurfaceExchange: AbstractSurface, SurfaceForcing, SurfaceFluxes,
+using ..SurfaceExchange: SurfaceExchange, AbstractSurface, SurfaceForcing, SurfaceFluxes,
                          turbulent_fluxes
 # `surface_temperature` is the SurfaceExchange generic (one function for
 # every surface model); SlabLand adds a method and this module re-exports it.
@@ -123,6 +123,12 @@ mutable struct SlabLand{T<:AbstractFloat} <: AbstractSurface
     z0h::T         # heat / moisture roughness length [m]
     β::T           # moisture availability ∈ [0, 1]
 end
+
+# the packed state (#526): the skin temperature
+SurfaceExchange.has_packed_state(::SlabLand) = true
+SurfaceExchange.packed_state_length(::SlabLand) = 1
+SurfaceExchange.pack_state!(buf, i, s::SlabLand) = (buf[i] = s.T; i + 1)
+SurfaceExchange.unpack_state!(s::SlabLand, buf, i) = (s.T = buf[i]; i + 1)
 
 function SlabLand(; T::Real = 290.0, C_s::Real = 2e5, albedo::Real = 0.2,
                   emissivity::Real = 1.0, z0m::Real = 0.1, z0h::Real = z0m / 10,

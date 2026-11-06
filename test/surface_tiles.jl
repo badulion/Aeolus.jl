@@ -315,3 +315,35 @@ _maxrel(a, b) = maximum(abs(x - y) / max(abs(x), abs(y), 1e-300)
         @test macdonald_roughness(1.0, 0.5, 25.0).d == 25.0
     end
 end
+
+using Aeolus.SurfaceExchange: has_packed_state, packed_state_length, pack_state!, unpack_state!
+using Aeolus.Radiation: SlabLand
+using Aeolus.SoilColumn
+
+@testset "Packed state of a mosaic: fractions, last fluxes, every tile (#526)" begin
+    h = carsel_parrish_texture(:sand)
+    p = clm_soil_thermal_properties(20, 5)
+    mk() = SurfaceMosaic(Aeolus.SurfaceExchange.AbstractSurface[SlabLand(T = 300.0, C_s = 3e5, β = 0.1),
+                             SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(8), h; θ = 0.2), p; T_soil = 290.0)],
+                         [0.4, 0.6])
+    f = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 293.0, q_air = 0.007, U = 2.5)
+    a, b = mk(), mk()
+    @test has_packed_state(a)
+    @test isempty(a.fluxes)
+    n = packed_state_length(a)
+    @test n == 1 + 7 * 2 + 1 + packed_state_length(a.tiles[2])
+    buf0 = zeros(n)
+    pack_state!(buf0, 1, a)
+    @test buf0[3] == 0.0                          # no fluxes before the first step
+    for _ in 1:20; step_surface!(a, f, 60.0); end
+    buf = zeros(n)
+    @test pack_state!(buf, 1, a) == n + 1
+    @test unpack_state!(b, buf, 1) == n + 1
+    @test length(b.fluxes) == 2 && b.fluxes[1].H == a.fluxes[1].H   # copied, not computed
+    @test b.tiles[1].T == a.tiles[1].T && b.tiles[2].water.T_soil == a.tiles[2].water.T_soil
+    for _ in 1:10
+        step_surface!(a, f, 60.0); step_surface!(b, f, 60.0)
+    end
+    @test b.tiles[1].T ≈ a.tiles[1].T rtol = 1e-12
+    @test b.tiles[2].H ≈ a.tiles[2].H rtol = 1e-12
+end
