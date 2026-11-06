@@ -1014,7 +1014,8 @@ end
 # (NEST-p3): its initial θ profile (`theta_profile`), the hydrostatic
 # reference state of a Boussinesq domain whose components convert fluxes
 # with one (`reference`), and the tile form of its static driver
-# (`static_tiles`, for [surface] model = "tiles").
+# (`static_tiles`, for [surface] model = "tiles", with the driver's
+# initial soil, `soil`, #521).
 function _domain_inputs(cfg, mesh, sim, dyn)
     θf = initial_theta_profile(cfg, dyn)
     out = (; theta_profile = θf)
@@ -1031,6 +1032,9 @@ function _domain_inputs(cfg, mesh, sim, dyn)
             throw(ConfigError("surface.model", "\"tiles\" reads the tile form of the domain's static_driver, which is \"none\" " *
                                                "(AeolusPrep.jl: aeolusprep static)"))
         out = merge(out, (; static_tiles = _read_tiles(path, mesh)))
+        # the initial soil of the tiles (#521): the dynamic driver's, if it holds one
+        dyn === nothing || dyn.soil === nothing ||
+            (out = merge(out, (; soil = (data = dyn.soil, path = cfg.domain.dynamic_driver))))
     end
     return out
 end

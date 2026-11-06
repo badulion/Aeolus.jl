@@ -2465,6 +2465,37 @@ for one date (θ RMSE 0.787 K, qv RMSE 0.718 g/kg). The reader now lives
 in AeolusPrep.jl (#457). **Phase 67b, open** (#57): MERRA-2, multi-day
 runs and the validation across several dates.
 
+**Initial soil profiles, shipped** (#521; AeolusPrep#6 / its PR #7 writes them).
+
+- **The driver.** It reads PALM's `init_soil_t` / `init_soil_m` over `zsoil`, as a profile or a volume (`alt_dims`, a new field of `DriverVariable`).
+- **Where they go.** The urban site's ground (`[ground] soil_init`: auto, uniform, driver, annual_wave) and the nest parent's soil tiles start from them. The base is held at the deepest level.
+- **The fallback without data.** It is the analytic annual wave (`SoilColumn.annual_soil_temperature`, `soil_damping_depth`).
+
+Measured:
+
+- **The wave start removes the slow mode.** On a 15 m loam column under the annual surface wave, 30 d of hourly steps from day 120: started on the wave it stays within 0.0045 K of the analytic solution over the top 3 m; started uniform at the mean it is 1.51 K off (d = 2.84 m).
+- **FLUXNET land column, uniform start vs annual wave** (a script, not a validation case: the climatology is assumed, MAT 8.3 °C / 7.8 °C, A = 9 K, maximum on day 200). Bias of G against the observed `Qg`:
+
+  | site | days 1–5 | days 6–35 |
+  | :-- | :-- | :-- |
+  | DE-Hai | −21.6 → −2.8 W m⁻² | −6.1 → +2.7 W m⁻² |
+  | DE-Gri | −13.6 → +5.4 W m⁻² | −3.5 → +5.9 W m⁻² |
+
+  RMSE: days 1–5 31.0 → 25.6 (DE-Hai) and 24.9 → 27.3 (DE-Gri); days 6–35 26.5 → 27.5 and 23.7 → 26.7 W m⁻². The 1 m soil temperatures of the two starts still differ by 6.0 K and 5.3 K after 35 d. The start is not a detail at the daily scale, and an assumed climatology is no substitute for ERA5's profile.
+
+Test expectations that were wrong:
+
+- Two CLM nodes below ERA5's deepest level (1.945 m): there is one, because the 9th node is at 1.73 m.
+- The water clipped after the interpolation: the code clips the driver's levels before, which is what it should do.
+
+A soil volume read without a mesh is no longer an error. The sounding reader opens the same file without one; the soil's consumer reads it with the mesh and checks x and y.
+
+**Deviations:**
+
+- `"auto"` without soil warns only when a driver exists; an idealised case logs info.
+- A nested child does not yet take the parent's mean profile (PALM's rule).
+- Per-column texture from data (SoilGrids) is the extension noted on #521.
+
 ### Phase 68 — Mesoscale model nesting
 Offline and online nesting into WRF, ICON and IFS output, with the
 interface handling different vertical coordinates, different

@@ -236,6 +236,38 @@ end
     @test_throws Exception read_dynamic_driver(p3)
 end
 
+@testset "InputDrivers dynamic: the initial soil (zsoil, init_soil_t, init_soil_m; #521)" begin
+    # PALM's PIDS variables as AeolusPrep.jl's ERA5 soil writes them: copied
+    # data, so they read back exactly, NaN (the fill value) included
+    dir = mktempdir()
+    z = [0.035, 0.175, 0.64, 1.945]                       # ERA5's layer centres
+    p = joinpath(dir, "soil_profile.nc")
+    t, m = [291.2, 289.5, 287.0, 284.8], [0.21, NaN, 0.30, 0.31]
+    write_dynamic_driver(p, DynamicInputs(; init_time = "2019-06-29T04:00:00Z", soil = (z = z, t = t, m = m)))
+    @test isempty(check_driver(p, DYNAMIC_SCHEMA))
+    d = read_dynamic_driver(p)
+    @test d.soil.z == z && d.soil.t == t && isequal(d.soil.m, m)
+    @test d.profiles === nothing && d.surface === nothing
+    # a volume over (x, y, zsoil) on the run's grid; a temperature-only file
+    M = SYN_MESH
+    T3 = [280.0 + i + 0.1j - k for i in 1:M.Nx, j in 1:M.Ny, k in 1:length(z)]
+    T3[2, 3, :] .= NaN                                    # a column without data (not land)
+    pv = joinpath(dir, "soil_volume.nc")
+    write_dynamic_driver(pv, DynamicInputs(; soil = (z = z, t = T3, m = nothing)); mesh = M)
+    @test isempty(check_driver(pv, DYNAMIC_SCHEMA))
+    dv = read_dynamic_driver(pv; mesh = M, planes = false)
+    @test isequal(dv.soil.t, T3) && dv.soil.m === nothing
+    # read with the mesh, a volume must be on the run's grid (without it, unchecked)
+    @test isequal(read_dynamic_driver(pv; planes = false).soil.t, T3)
+    m2 = RegularGrid(; size = (8, 6, 5), extent = (160.0, 60.0, 50.0), halo = (2, 2, 2))
+    @test occursin("not on the run's horizontal grid", errmsg(() -> read_dynamic_driver(pv; mesh = m2, planes = false)))
+    # zsoil must increase; °C is outside the schema's range
+    @test_throws ArgumentError DynamicInputs(; soil = (z = [0.5, 0.1], t = [280.0, 281.0], m = nothing))
+    pc = joinpath(dir, "celsius.nc")
+    write_dynamic_driver(pc, DynamicInputs(; soil = (z = z, t = t .- 273.15, m = nothing)))
+    @test any(s -> occursin("init_soil_t", s), check_driver(pc, DYNAMIC_SCHEMA))
+end
+
 @testset "InputDrivers dynamic: the committed SBL case-table drivers" begin
     drv(n) = joinpath(SBL_CONFIGS, "input", n)
     keys_of = Dict("gabls2_dynamic.nc" => [:w_subs], "gabls3_dynamic.nc" => [:theta_adv, :u_adv, :u_g, :v_adv, :v_g],

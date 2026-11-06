@@ -142,6 +142,60 @@ end
     @test atan(Gc, Gs) ≈ π / 4 atol = 0.005
 end
 
+@testset "Initial soil from data: a profile on the nodes (#521)" begin
+    zd = [0.035, 0.175, 0.64, 1.945]                       # ERA5's layer centres
+    g = clm_exponential_soil_grid(10)
+    # a linear profile is reproduced at every node between the levels (round-off)
+    lin(z) = 290.0 - 2.5z
+    T = soil_profile_on_nodes(zd, lin.(zd), g.z)
+    inside = zd[1] .<= g.z .<= zd[end]
+    @test maximum(abs.(T[inside] .- lin.(g.z[inside]))) < 1e-12
+    # above the first level the shallowest value, below the last the deepest (held)
+    @test all(T[g.z .< zd[1]] .== lin(zd[1])) && all(T[g.z .> zd[end]] .== lin(zd[end]))
+    @test count(g.z .> zd[end]) == 1                       # the CLM column's 2.87 m node (the 9th is at 1.73 m)
+    # a fill value (NaN) is skipped: interpolation across it
+    T2 = soil_profile_on_nodes(zd, [lin(zd[1]), NaN, lin(zd[3]), lin(zd[4])], g.z)
+    @test maximum(abs.(T2[inside] .- lin.(g.z[inside]))) < 1e-12
+    @test soil_profile_on_nodes(zd, fill(NaN, 4), g.z) === nothing
+    @test_throws ArgumentError soil_profile_on_nodes(zd[[2, 1, 3, 4]], lin.(zd), g.z)
+end
+
+@testset "Initial soil without data: the annual wave removes the slow mode (#521)" begin
+    # A 15 m column (the base 6.6 damping depths down) under the annual
+    # surface wave, 30 days of hourly steps. Started on the wave it stays on
+    # the analytic solution (Carslaw & Jaeger §2.6) within the discretisation
+    # error; started uniform at the mean (what [urban] t_soil0 does) it is
+    # off by the slow mode, which decays with τ of months.
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    g = uniform_soil_grid(15.0, 150)
+    θ = 0.3
+    k = soil_thermal_conductivity(p, soil_porosity(h), θ, 0.0)
+    C = soil_heat_capacity(p, soil_porosity(h), θ, 0.0)
+    d = soil_damping_depth(k, C)
+    @test 1.5 < d < 3.5                                     # "2–3 m in moist loam"
+    @test d ≈ sqrt(2 * (k / C) / (2π / SOIL_YEAR)) rtol = 1e-14
+    wave(z, t) = annual_soil_temperature(z, t; T_mean = 283.0, amplitude = 9.0, damping_depth = d,
+                                         t_max = 200 * 86400.0)
+    t0, dt, n = 120 * 86400.0, 3600.0, 30 * 24              # 30 days from day 120 (spring)
+    function run(Tinit)
+        col = SoilThermalColumn(SoilWaterColumn(g, h; θ = θ), p; T_soil = Tinit, hydrology = false,
+                                bottom = Aeolus.SoilColumn.BottomTemperature(283.0))
+        t = t0
+        for _ in 1:n
+            step_soil_heat!(col, dt, SkinTemperatureTop(wave(0.0, t + dt / 2)))
+            t += dt
+        end
+        return col.water.T_soil .- wave.(g.z, t)
+    end
+    top3 = g.z .<= 3.0
+    e_wave = maximum(abs.(run(wave.(g.z, t0))[top3]))
+    e_unif = maximum(abs.(run(283.0)[top3]))
+    @info "annual wave: max |T − T_analytic| over the top 3 m after 30 d" e_wave e_unif
+    @test e_wave < 0.05                                     # dz = 0.1 m, dt = 1 h
+    @test e_unif > 1.0                                      # the slow mode is still there
+end
+
 @testset "Energy conservation with freeze–thaw, zero curtain" begin
     g = clm5_soil_grid(12)
     hyd = [i <= 4 ? carsel_parrish_texture(:silt_loam) : carsel_parrish_texture(:clay) for i in 1:12]

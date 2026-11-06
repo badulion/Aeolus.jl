@@ -261,7 +261,12 @@ function Components.build(::Type{<:TiledUrbanSurface}, opts, domain)
         t = get(domain.drivers, :static_tiles, nothing)
         t === nothing && throw(ArgumentError("TiledUrbanSurface: the domain $(domain.id) has no static driver with tiles " *
                                              "(its static_driver in the tile form, AeolusPrep.jl: aeolusprep static)"))
-        ps = build_parent_surface(TileClasses(opts), landuse_of_tiles(t); z_centres = level_centres(m))
+        tc = TileClasses(opts)
+        sd = get(domain.drivers, :soil, nothing)
+        # the tiles' soil from the dynamic driver (#521): its profile, or a
+        # volume's mean profile (a tile has no column of its own)
+        sd === nothing || tc.soil === nothing || (tc.soil.init[] = _driver_soil_init(tc.soil, sd.data, sd.path, m))
+        ps = build_parent_surface(tc, landuse_of_tiles(t); z_centres = level_centres(m))
     end
     (size(ps.columns) == (m.Nx, m.Ny)) ||
         throw(DimensionMismatch("TiledUrbanSurface: $(size(ps.columns)) columns on a $(m.Nx) × $(m.Ny) grid"))

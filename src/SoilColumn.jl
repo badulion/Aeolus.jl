@@ -125,7 +125,8 @@ import ..SurfaceExchange: moisture_availability, surface_temperature, roughness_
 using ..SurfaceOptics: material_emissivity
 using ..TimeIntegration: NumericalFailure   # a diverged solver (#327 M6)
 
-export SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
+export soil_profile_on_nodes, SOIL_YEAR, soil_damping_depth, annual_soil_temperature,
+       SoilGrid, clm5_soil_grid, clm_exponential_soil_grid, uniform_soil_grid,
        AbstractHydraulicModel, ClappHornberger, VanGenuchtenMualem, GardnerExponential,
        CLAPP_HORNBERGER_1978, CARSEL_PARRISH_1988,
        clapp_hornberger_texture, carsel_parrish_texture, cosby_clapp_hornberger,
@@ -2625,8 +2626,72 @@ function set_water_table!(col::SoilWaterColumn, zwt::Real)
     return col
 end
 
+# =========================================================================
+# 11. Initial state from data (#521)
+# =========================================================================
+
+"""
+    soil_profile_on_nodes(z_data, v, z) -> Vector or nothing
+
+The profile `v` given at the depths `z_data` (m, positive down, strictly
+increasing) on the node depths `z`: linear in depth between the levels
+with data (`NaN` levels are skipped: a fill value), the shallowest value
+above the first level and the deepest below the last (PALM's and INIFOR's
+rule: the deepest level is held, and is the base temperature). `nothing`
+when no level has data.
+"""
+function soil_profile_on_nodes(z_data::AbstractVector, v::AbstractVector, z::AbstractVector)
+    length(z_data) == length(v) ||
+        throw(ArgumentError("soil_profile_on_nodes: $(length(v)) values for $(length(z_data)) depths"))
+    keep = findall(!isnan, v)
+    isempty(keep) && return nothing
+    zs, vs = Float64.(z_data[keep]), Float64.(v[keep])
+    all(>(0), diff(zs)) || throw(ArgumentError("soil_profile_on_nodes: the depths must increase strictly"))
+    return map(z) do zz
+        zz <= zs[1] && return vs[1]
+        zz >= zs[end] && return vs[end]
+        n = searchsortedlast(zs, zz)
+        w = (zz - zs[n]) / (zs[n+1] - zs[n])
+        (1 - w) * vs[n] + w * vs[n+1]
+    end
+end
+
+"The length of the annual cycle of [`annual_soil_temperature`](@ref) (s): 365.25 d."
+const SOIL_YEAR = 365.25 * 86400.0
+
+"""
+    soil_damping_depth(k, C; period = SOIL_YEAR) -> d (m)
+
+The damping depth ``d = \\sqrt{2κ/ω} = \\sqrt{k P/(π C)}`` of a periodic
+surface temperature wave of `period` ``P`` (s) in a soil of conductivity
+`k` (W m⁻¹ K⁻¹) and volumetric heat capacity `C` (J m⁻³ K⁻¹): the depth
+over which its amplitude falls by ``e`` (Carslaw & Jaeger 1959, §2.6).
+About 2–3 m for the annual wave in moist loam.
+"""
+soil_damping_depth(k::Real, C::Real; period::Real = SOIL_YEAR) = sqrt(k * period / (π * C))
+
+"""
+    annual_soil_temperature(z, t; T_mean, amplitude, damping_depth, t_max, period = SOIL_YEAR) -> T (K)
+
+The periodic solution of the heat equation in a homogeneous half-space
+under a surface temperature ``T̄ + A\\cos(ω(t - t_{max}))``:
+
+```math
+T(z, t) = T̄ + A\\, e^{-z/d} \\cos\\bigl(ω (t - t_{max}) - z/d\\bigr),\\qquad ω = 2π/P,
+```
+
+`z` the depth (m, positive down), `t` and `t_max` (the time of the
+surface maximum) in s on the same axis, `d` the [`soil_damping_depth`](@ref)
+(Carslaw & Jaeger 1959, §2.6). The initial soil without data (#521): it
+starts the slow modes (τ ≈ 30 d for the CLM column's 3.4 m) on the
+annual wave instead of at a uniform temperature they then relax from.
+"""
+annual_soil_temperature(z::Real, t::Real; T_mean::Real, amplitude::Real, damping_depth::Real, t_max::Real,
+                        period::Real = SOIL_YEAR) =
+    T_mean + amplitude * exp(-z / damping_depth) * cos(2π * (t - t_max) / period - z / damping_depth)
+
 # =============================================================================
-# 11. The packed state (#526)
+# 12. The packed state (#526)
 # =============================================================================
 #
 # What a checkpoint must hold to continue a column exactly: the layer

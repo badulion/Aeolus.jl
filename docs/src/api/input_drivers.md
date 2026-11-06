@@ -187,6 +187,13 @@ profiles: a sounding's tables, or a nest parent's mean over the child
 (the sponge and θ-relaxation targets). The surface series are
 `sfc_temperature` and `sfc_pressure` over `time_sfc`.
 
+**Initial soil** (#521). `init_soil_t` (K) and `init_soil_m` (m³ m⁻³) are PALM's PIDS variables, on the coordinate `zsoil`. That coordinate is the levels' centres in m below the surface: positive down and strictly increasing.
+
+- **Shape.** Each variable is a profile over `zsoil`, or a volume over (`x`, `y`, `zsoil`) on the run's horizontal grid. The schema's `alt_dims` lets a variable take either shape.
+- **Fill values.** `NaN` (the `_FillValue`) marks a level or a column without data.
+- **The writer.** AeolusPrep.jl's ERA5 soil writes them from ERA5's four layers (`stl1–4`, `swvl1–4`; centres 0.035, 0.175, 0.64 and 1.945 m), appended to the sounding driver. Columns that are not land are NaN.
+- **What reads them.** The urban site's ground starts from them (`[ground] soil_init`, [`GroundSoil`](@ref Aeolus.Urban.GroundSoil)), and so do the nest parent's soil tiles.
+
 **Boundary planes.** For each open face and each field with data,
 `bc_<face>_<var>` over (`…_i`, `…_j`, `…_k`, `time_bc`) holds the
 child's **buffer slab**: the storage points of the
