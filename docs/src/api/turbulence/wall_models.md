@@ -30,7 +30,7 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   a `WallBoundedCase` advanced by `advance_channel!` / `run_channel!`
   (time-averaged U, Φ_m, stress budget, ⟨τ_w⟩), with the step size of
   `channel_dt`. Closure, wall law, formulation and stepper are keyword
-  arguments; the diagnostics are Operators' (see [Era VI](../era6.md)).
+  arguments; the diagnostics are Operators' (see [Era VI](../turbulence.md)).
 - **Wall-model input** (P57-b, #183): `MatchingInput` (matching height
   `h_wm` / `h_wm_cells`, exponential time filter `T_f`, 3 × 3
   wall-parallel filter), `matching_input!` (the `wind` / `height` of

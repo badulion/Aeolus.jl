@@ -55,7 +55,7 @@ Aeolus.Operators.add_eddy_diffusion_scalar!
 
 ## Stratification (Era VI, P58-a)
 
-Pointwise fields of the [`TurbulenceStability`](era6/turbulence_stability.md)
+Pointwise fields of the [`TurbulenceStability`](turbulence/turbulence_stability.md)
 contract.
 
 ```@docs

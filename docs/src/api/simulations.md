@@ -56,7 +56,7 @@ changing the algorithm (both default to the built-in one):
   closure — reproduces the built-in run bit for bit. The pre-contract
   keyword name `eddy_viscosity! = f(νt, u, v, w)` is still accepted.
   `step_rk3!`, `step_imex!`, `step_adaptive!` and the sound-proof cores
-  take the same keyword; see [Era VI](era6.md).
+  take the same keyword; see [Era VI](turbulence.md).
 
 The pressure solver is chosen at construction (`solver = …`, any
 `AbstractPressureSolver`, e.g. `MultigridPoissonSolver` or

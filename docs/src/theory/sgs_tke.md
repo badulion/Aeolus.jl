@@ -5,7 +5,7 @@ carries the subgrid-scale turbulent kinetic energy ``e`` as a prognostic
 variable; the eddy viscosity follows from it, not from the resolved strain
 alone. Aeolus implements it with the coefficients of Moeng (1984) as
 [`TKEClosure`](@ref Aeolus.PrognosticSGS.TKEClosure) in the module
-`Aeolus.PrognosticSGS` ([API](../api/era6/prognostic_sgs.md)), an
+`Aeolus.PrognosticSGS` ([API](../api/turbulence/prognostic_sgs.md)), an
 `AbstractSGSClosure` of the [closure contract](sgs.md#Closure-contract).
 
 ## The model

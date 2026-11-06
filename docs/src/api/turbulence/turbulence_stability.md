@@ -40,4 +40,4 @@ Modules = [Aeolus.TurbulenceStability]
 
 `MOSTConsistent`, `most_gradient_richardson` and
 `most_stability_parameter` belong to `Aeolus.SurfaceExchange` and are
-documented with it, on [Shared contract — SurfaceExchange](../era5/surface_exchange.md).
+documented with it, on [Shared contract — SurfaceExchange](../surface/surface_exchange.md).

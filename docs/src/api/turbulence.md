@@ -16,13 +16,13 @@ tested at are in
 - Stress-form momentum divergence (P55-b, #175; below) — `Aeolus.Operators`
 - Tensorial scalar eddy diffusivity (P55-c, #181; below) — `Aeolus.Operators`
 - Stability-corrected anisotropic eddy viscosity (P55-e, #187; below) — `Aeolus.Operators`
-- [Stability contract — TurbulenceStability](era6/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
-- [Transition diagnostics — Transition](era6/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition); synthetic inflow, N-inflow-a, #252, [theory](../theory/transition.md#Synthetic-inflow-turbulence))
-- [Wall models — WallModels](era6/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; #189: the non-equilibrium (TBLE) wall model with dynamic κ; #190: dynamic roughness of partially resolved relief; [theory](../theory/wall_models.md))
-- [Large-scale forcing — LargeScaleForcing](era6/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; N-parent-b, #254: `ReferenceDamping`, θ damping toward a profile; [theory](../theory/large_scale_forcing.md))
+- [Stability contract — TurbulenceStability](turbulence/turbulence_stability.md) — `Aeolus.TurbulenceStability` (Phase 58, #170; [theory](../theory/turbulence_stability.md))
+- [Transition diagnostics — Transition](turbulence/transition.md) — `Aeolus.Transition` (Phase 59, #180; flat-plate boundary layer, P59-d, #185; [theory](../theory/transition.md#Laminar–turbulent-transition), [flat plate](../theory/transition.md#Flat-plate-transition); synthetic inflow, N-inflow-a, #252, [theory](../theory/transition.md#Synthetic-inflow-turbulence))
+- [Wall models — WallModels](turbulence/wall_models.md) — `Aeolus.WallModels` (Phase 57, #169: equilibrium wall laws and the implicit wall-stress operator; #179: wall model on immersed and cut-cell walls; #183: matching height and input filtering against log-layer mismatch; #189: the non-equilibrium (TBLE) wall model with dynamic κ; #190: dynamic roughness of partially resolved relief; [theory](../theory/wall_models.md))
+- [Large-scale forcing — LargeScaleForcing](turbulence/large_scale_forcing.md) — `Aeolus.LargeScaleForcing` (Phase 58, #171: geostrophic pressure gradient, nudging, advective tendencies, surface-temperature series; N-parent-b, #254: `ReferenceDamping`, θ damping toward a profile; [theory](../theory/large_scale_forcing.md))
 - Walls — `NoSlipWall` and the resolved wall stress (P59-a, #172; below; [theory](../theory/transition.md))
 - AMD and Vreman closures (P55-d, #176; below) — `Aeolus.Operators`
-- [Prognostic SGS TKE — PrognosticSGS](era6/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
+- [Prognostic SGS TKE — PrognosticSGS](turbulence/prognostic_sgs.md) — `Aeolus.PrognosticSGS`, the Deardorff/Moeng `TKEClosure` (Phase 56, P56-b, #182) and the differential `ReynoldsStressClosure` (P56-d, #188; [theory](../theory/sgs_tke.md))
 - σ-model SGS closure (P59-b, #184; below) — `Aeolus.Operators`
 - The stable-boundary-layer cases (GABLS1-4, CASES-99) are configurations of the model since ONE-g (#456): `examples/sbl/`, run with the components `LargeScale`, `SurfaceLayer`, the retargeted `Sponge` and `Towers` ([Components](../components.md); [theory](../theory/stable_boundary_layer.md)). The `sbl` run type (`Aeolus.StableBoundaryLayer`) and its channel cases are gone.
 
@@ -255,7 +255,7 @@ shared by every Era VI benchmark. The cases that produce the flows —
 `half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
 2000) and `channel_case` (the two-wall channel) — are the test fixture
 `test/fixtures/channel_cases.jl` (module `ChannelCases`; part of
-[WallModels](era6/wall_models.md) until ONE-l, #475: the channel cases
+[WallModels](turbulence/wall_models.md) until ONE-l, #475: the channel cases
 are not configurations of the model); theory and measured numbers in
 [Wall models → Wall-bounded benchmark cases](../theory/wall_models.md#Wall-bounded-benchmark-cases).
 

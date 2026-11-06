@@ -3,7 +3,7 @@
 A nested child grid refines a box of a parent grid by integer ratios
 ``(r_x, r_y, r_z)`` (each ``\ge 1``, odd, even or mixed, e.g. the Berlin
 ``(2, 2, 4)``). Every operator between the two grids lives in
-`Aeolus.Nesting` ([API](../api/era2/nesting.md)); this page derives the
+`Aeolus.Nesting` ([API](../api/numerics/nesting.md)); this page derives the
 three on which everything else rests — prolongation, restriction and
 refluxing — and quotes the numbers they are tested at
 (`test/nesting.jl`).
