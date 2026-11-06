@@ -20,6 +20,7 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,   # N-o
        prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
        open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
+       open_boundary_checkpoint, restore_open_boundary_checkpoint!,   # #528
        assert_open_face_correction, open_intermediate_velocity!
 export WindowedBoundaryData, snapshot_values, window_fraction, blend_window!   # #329
 export synthetic_normal_velocity                                             # #418

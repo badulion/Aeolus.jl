@@ -14,7 +14,8 @@
 using Test
 using Aeolus
 using Aeolus.Fields: interior_view, set!
-using Aeolus.Simulations: BoussinesqSimulation
+using Aeolus.Simulations: BoussinesqSimulation, step_rk3!
+using Aeolus.IO: checkpoint_payload, restore_checkpoint!   # #528
 
 # ---------------------------------------------------------------------------
 # 3. A prescribed net imbalance: u = 1 + 0.2 x/Lx on the faces gives an
@@ -53,4 +54,49 @@ _imb_data() = FunctionBoundaryData(u = (x, y, z, t) -> 1.0 + 0.2 * x / _Lx,
     s3 = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, ProfileBoundaryData(u = 5.0, v = 2.0, w = 0.0, θ = 300.0)))
     Aeolus.BoundaryConditions.update_open_boundaries!(s3, 0.0, 1.0)
     @test abs(open_boundary_ledger(s3).Q) < 1e-9 * 5.0 * _Ly * _Lz && abs(open_boundary_ledger(s3).δ) < 1e-12
+end
+
+# ---------------------------------------------------------------------------
+# #528: a checkpoint of an open box continues the run. The open boundaries'
+# buffers (radiated values at the outflow points), the Orlanski history and
+# the binding of θ to its planes are state; without them a restart refilled
+# the buffers from the data and the outflow face jumped.
+_ob_data() = FunctionBoundaryData(u = (x, y, z, t) -> 2.0 + 0.3 * x / _Lx + 0.5 * sin(2π * t / 60),
+                                  v = (x, y, z, t) -> 0.5 + 0.2 * cos(2π * t / 45), w = 0.0,
+                                  θ = (x, y, z, t) -> 300.0 + 0.01 * z + 0.2 * sin(2π * t / 30))
+function _ob_sim()
+    m = RegularGrid(size = (16, 12, 8), extent = (_Lx, _Ly, _Lz))
+    s = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, _ob_data(); outflow = :orlanski), θ₀ = 300.0)
+    set!(s.u, 2.0); set!(s.v, 0.5); set!(s.θ, 300.0)
+    interior_view(s.θ) .+= 0.1 .* sin.((1:16) .* 0.7) .* cos.((1:12)' .* 0.5)   # a fixed perturbation
+    return s
+end
+_ob_dif(a, b) = max(maximum(abs, interior_view(a.u) .- interior_view(b.u)),
+                    maximum(abs, interior_view(a.θ) .- interior_view(b.θ)))
+
+@testset "open box: a checkpoint continues the run (#528)" begin
+    dt = 0.5
+    a = _ob_sim()
+    for _ in 1:6; step_rk3!(a, dt); end
+    pay = checkpoint_payload(a)
+    @test pay[:open_boundaries] isa Vector && pay[:open_boundaries][1].initialized
+    @test any(r -> r !== nothing && r.has_hist, pay[:open_boundaries][1].radiation)   # the Orlanski history is in it
+    old = copy(pay); delete!(old, :open_boundaries)                                  # a checkpoint from before #528
+    for _ in 1:4; step_rk3!(a, dt); end
+    # restored into a fresh build: the same steps on the same state, so the
+    # same values to round-off (one thread; 1e-12 m/s, K is far below the
+    # 1e-1 jump of the old restart)
+    b = _ob_sim(); restore_checkpoint!(b, pay)
+    for _ in 1:4; step_rk3!(b, dt); end
+    @test _ob_dif(a, b) <= 1e-12
+    # the old payload: the open faces restart from the data, warned, and the
+    # run does not continue (measured 0.26 m/s, 0.99 K after one step)
+    c = _ob_sim()
+    @test_logs (:warn, r"holds no open-boundary state") match_mode = :any restore_checkpoint!(c, old)
+    for _ in 1:4; step_rk3!(c, dt); end
+    @test _ob_dif(a, c) > 1e-2
+    # an open box built differently (no radiating faces) is refused
+    m = RegularGrid(size = (16, 12, 8), extent = (_Lx, _Ly, _Lz))
+    d = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, _ob_data()), θ₀ = 300.0)
+    @test_throws ArgumentError restore_checkpoint!(d, pay)
 end

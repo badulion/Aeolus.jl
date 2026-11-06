@@ -22,6 +22,8 @@ using ..RunLog: current_domain   # structured events (LOG-a, #333)
 using ..Grids: interior, RegularGrid
 using ..Fields: Field, interior_view, location
 using ..Simulations: BoussinesqSimulation
+using ..BoundaryConditions: open_boundary_checkpoint, restore_open_boundary_checkpoint!,
+                          has_open_boundaries   # #528
 
 export write_snapshot, read_snapshot, checkpoint!, restart!, load_config
 # #245: full-state checkpoints (io/checkpoint.jl)
