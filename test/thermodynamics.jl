@@ -1,4 +1,4 @@
-# Era IV, Phase 39 — exact moist thermodynamics.
+# Phase 39 — exact moist thermodynamics.
 #
 # The load-bearing test here is CLAUSIUS-CLAPEYRON CONSISTENCY: that the
 # saturation vapour pressure and the latent heat used everywhere else in
@@ -10,7 +10,7 @@ using Test
 using Aeolus.MoistThermodynamics
 const MT = Aeolus.MoistThermodynamics
 
-@testset "Era IV — Moist thermodynamics (Phase 39)" begin
+@testset "Moist thermodynamics (Phase 39)" begin
     c = DEFAULT_CONSTANTS
     Rv = 8.314462618 / 0.018015268
 

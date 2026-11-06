@@ -80,7 +80,7 @@ function _nhl_fit(x, y)
     return s, sqrt(sum(r .^ 2) / (n - 2) / sxx)
 end
 
-@testset "Era II — nest hierarchy long run (#328)" begin
+@testset "nest hierarchy long run (#328)" begin
 
 @testset "forced neutral flow, two two-way nest levels: 50 eddy turnovers" begin
     T = 300.0

@@ -28,7 +28,7 @@
 # solves ∇·(W∇φ) = ∇·(W u*) with a density-weighted solver built from the
 # core's base state and weighting (direct by default, #309), and momentum is advected in the
 # W-weighted centred flux form (`_step_mass_weighted!` takes no
-# momentum-advection keyword). The SGS closure is the Era VI contract's
+# momentum-advection keyword). The SGS closure is the SGS closure contract's
 # (`sgs`, #167), which the sound-proof step takes like the Boussinesq one.
 # Hence:
 #

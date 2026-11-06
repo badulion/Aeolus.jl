@@ -38,7 +38,7 @@ end
 
 isdefined(@__MODULE__, :test_box) || include(joinpath(@__DIR__, "support", "building_box.jl"))
 
-@testset "Era V — BuildingEnergy: indoor air and thermal mass (#31)" begin
+@testset "BuildingEnergy: indoor air and thermal mass (#31)" begin
 
     @testset "Air node and conductances from first principles" begin
         z = BuildingZone(; volume = 100.0, floor_area = 40.0, infiltration_ach = 0.5,

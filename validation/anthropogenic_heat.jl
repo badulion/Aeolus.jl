@@ -11,7 +11,7 @@ using Aeolus
 
 include(joinpath(@__DIR__, "support", "toulouse_bem_driver.jl"))
 
-@testset "Era V — anthropogenic heat from the building energy model (#29)" begin
+@testset "anthropogenic heat from the building energy model (#29)" begin
 
     # =====================================================================
     # Magnitude: the dense centre of Toulouse in winter (CAPITOUL)

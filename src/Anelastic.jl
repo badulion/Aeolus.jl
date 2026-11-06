@@ -1,7 +1,7 @@
 """
     Anelastic
 
-Era II / Phase 27 — **anelastic** and **pseudo-incompressible** dynamics as
+Phase 27 — **anelastic** and **pseudo-incompressible** dynamics as
 selectable alternatives to the Boussinesq core in
 [`Simulations`](@ref Aeolus.Simulations).
 
@@ -1435,7 +1435,7 @@ mutable struct MassWeightedSimulation{S<:MassWeighting,
     lap_w::Field{FaceZ,        T, Array{T,3}, M}
     lap_θ::Field{CellCenter,   T, Array{T,3}, M}
     νt::Field{CellCenter,      T, Array{T,3}, M}
-    κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
+    κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (#167)
     # the drivers' scratch (the retry snapshot), per simulation (KA-j, #306)
     workspaces::StepWorkspaces
 end

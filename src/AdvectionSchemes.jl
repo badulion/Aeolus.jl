@@ -1,7 +1,7 @@
 module AdvectionSchemes
 
 # =========================================================================
-# Era II — Phase 26 (WENO-Z / TENO advection) and Phase 28 (energy- and
+# Phase 26 (WENO-Z / TENO advection) and Phase 28 (energy- and
 # enstrophy-conserving discrete operators) for the finite-volume backend.
 # =========================================================================
 #
@@ -1436,7 +1436,7 @@ Pass `momentum_advection! = momentum_advect_skew!` (or
 `momentum_advect_weno_z!`) to budget an alternative operator: the
 `advection` entry then measures that operator's energy conservation.
 
-`sgs`: an SGS closure of the Era VI contract (`Operators.AbstractSGSClosure`,
+`sgs`: a closure of the SGS closure contract (`Operators.AbstractSGSClosure`,
 or a function `f(νt, u, v, w)`) to budget instead of the built-in
 Smagorinsky: its coefficients are computed with `compute_sgs!` (pure: no
 closure memory changes; `sim.νt`, `sim.κt` are overwritten) and its

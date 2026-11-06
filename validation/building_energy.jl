@@ -12,7 +12,7 @@ using Aeolus.UrbanSurface
 
 isdefined(@__MODULE__, :test_box) || include(joinpath(@__DIR__, "..", "test", "support", "building_box.jl"))
 
-@testset "Era V — BuildingEnergy: resolved zone vs ISO 13790 5R1C (#31)" begin
+@testset "BuildingEnergy: resolved zone vs ISO 13790 5R1C (#31)" begin
     @testset "Resolved zone vs ISO 13790 5R1C for the same construction" begin
         # Periodic regime under the same diurnal forcing: outdoor 15 ± 5 °C,
         # office-hours internal gains, transmitted solar peaking at noon.

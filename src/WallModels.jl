@@ -1,7 +1,7 @@
 """
     WallModels
 
-Era VI, Phase 57: the modelled wall stress of wall-modelled LES. **Owner
+Phase 57: the modelled wall stress of wall-modelled LES. **Owner
 of every modelled wall stress in the code base**: the stable-boundary-layer
 cases, the TKE surface value and the Berlin ground drag all call this module rather than writing their own.
 
@@ -16,7 +16,7 @@ roughness) only add files and include lines:
      in one formula), [`RoughLogLaw`](@ref) (fully rough, neutral) and
      [`MOSTWallLaw`](@ref) (rough, Monin–Obukhov stability correction).
      κ of the rough laws and the stability functions are *delegated* to
-     the Era V contract `SurfaceExchange`; nothing is restated.
+     the surface shared core `SurfaceExchange`; nothing is restated.
   2. **The operator** (`operator.jl`) — [`apply_wall_stress!`](@ref),
      which applies the stress of a law to the first velocity level next
      to the z-walls of a `RegularGrid`, implicitly (stable for any Δt),
@@ -57,7 +57,7 @@ roughness) only add files and include lines:
      filter (Anderson & Meneveau 2011), as a parameter provider for
      `RoughLogLaw` / `MOSTWallLaw` ([`with_roughness`](@ref)).
   8. The wall-bounded benchmark harness of P54-d (#174), the half channel
-     and the two-wall channel every Era VI closure is validated on, is a
+     and the two-wall channel every SGS closure is validated on, is a
      test fixture since ONE-l (#475), `test/fixtures/channel_cases.jl`:
      the channel cases are not configurations of the model.
 

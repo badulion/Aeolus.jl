@@ -1,4 +1,4 @@
-# Era V, Phase 51 — lake and sea-ice thermodynamics validation (issue #37):
+# Phase 51 — lake and sea-ice thermodynamics validation (issue #37):
 # the Maykut & Untersteiner (1971) benchmark. 20-year runs against the BL99
 # reference code (same configuration, numbers measured in Octave) and
 # 100-year equilibria against the published Bitz & Lipscomb (1999) Tables
@@ -12,7 +12,7 @@ using Aeolus.IceThermodynamics
 
 isdefined(@__MODULE__, :_run_mu71) || include(joinpath(@__DIR__, "..", "test", "support", "mu71.jl"))
 
-@testset "Era V — sea-ice thermodynamics: MU71 benchmark (#37)" begin
+@testset "sea-ice thermodynamics: MU71 benchmark (#37)" begin
 
     @testset "MU71 benchmark vs. the BL99 reference code (same configuration)" begin
         # Reference numbers measured by running the BL99 reference code

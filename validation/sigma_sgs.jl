@@ -1,4 +1,4 @@
-# Era VI, Phase 59 (P59-b, #184): validation of the σ-model SGS closure of
+# Phase 59 (P59-b, #184): validation of the σ-model SGS closure of
 # Nicoud, Baya Toda, Cabrit, Bose & Lee (2011, Phys. Fluids 23, 085106) in
 # decaying isotropic turbulence (32³, t ∈ [1, 3], two seeds): its kinetic
 # energy decay exponent against Smagorinsky C_s = 0.17 (±15 %), and the

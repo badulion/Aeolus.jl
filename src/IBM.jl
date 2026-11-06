@@ -213,7 +213,7 @@ function implicit_ibm_correction!(sim, sm::SolidMask; τ::Real = 0.0, dt::Real =
 end
 
 # =========================================================================
-# Wall distance (Era VI, P56-b #182) — the one source of truth for the
+# Wall distance (P56-b #182) — the one source of truth for the
 # distance from a cell centre to the nearest solid surface.
 # =========================================================================
 
@@ -254,7 +254,7 @@ plain chamfer transform with the 26 step lengths overestimated it there by
 up to 24 %.
 
 The TKE closure (`PrognosticSGS.TKEClosure`) caps its mixing length at
-`κ · wall_distance`; every Era VI closure that needs a wall distance takes
+`κ · wall_distance`; every SGS closure that needs a wall distance takes
 it from here.
 
 References: Danielsson, P.-E. (1980), *Euclidean distance mapping*, Comput.

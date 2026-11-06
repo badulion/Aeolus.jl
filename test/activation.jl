@@ -1,4 +1,4 @@
-# Era IV, Phase 42 — aerosol-cloud interaction.
+# Phase 42 — aerosol-cloud interaction.
 #
 # Köhler theory, the Abdul-Razzak & Ghan (ARG) parameterisation and the
 # explicit adiabatic parcel it approximates. The headline validation, ARG
@@ -8,7 +8,7 @@
 using Test
 using Aeolus
 
-@testset "Era IV — Aerosol-cloud interaction (Phase 42)" begin
+@testset "Aerosol-cloud interaction (Phase 42)" begin
 
     @testset "Köhler theory agrees with the Phase 39 contract" begin
         # One implementation of Köhler (MoistThermodynamics); the closed

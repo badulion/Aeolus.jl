@@ -6,7 +6,7 @@
 # skin temperature, the classical idealised heterogeneous convective
 # boundary layer (Avissar & Schmidt 1998; Patton, Sullivan & Moeng 2005).
 #
-# Every surface column is an Era V `AbstractSurface` and its fluxes come
+# Every surface column is a `SurfaceExchange.AbstractSurface` and its fluxes come
 # from the contract's `turbulent_fluxes` (Monin–Obukhov through
 # `SurfaceExchange.solve_surface_layer`), so the LES and the tile mosaic
 # of `SurfaceTiles` compute fluxes with *the same code*; they differ only

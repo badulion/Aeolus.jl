@@ -1,4 +1,4 @@
-# Era VI, Phase 57 (P57-b, #183): validation of the log-layer mismatch fix
+# Phase 57 (P57-b, #183): validation of the log-layer mismatch fix
 # — the matching height off the first cell (Kawai & Larsson 2012), the
 # exponential time filter (Yang, Park & Moin 2017) and the 3 × 3
 # wall-parallel filter (Bou-Zeid, Meneveau & Parlange 2005) — in simulated
@@ -18,7 +18,7 @@ using Aeolus.WallModels
 
 isdefined(@__MODULE__, :lm2015_ub_plus) || include(joinpath(@__DIR__, "..", "test", "data", "lee_moser_2015.jl"))
 
-@testset "Era VI — log-layer mismatch: channel and half-channel runs (#183)" begin
+@testset "log-layer mismatch: channel and half-channel runs (#183)" begin
 
 # A channel run: U_b⁺ (mean over both halves), Φ_m of the averaged profile
 # on the faces in 0.1δ < z < 0.3δ, the first-face Φ_m, ⟨τ_w⟩.

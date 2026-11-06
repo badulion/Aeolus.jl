@@ -1,4 +1,4 @@
-# Era IV, Phase 45 — turbulence-microphysics interaction, issue #14.
+# Phase 45 — turbulence-microphysics interaction, issue #14.
 #
 # Spectral broadening by sub-grid supersaturation fluctuations: the bulk
 # moment closure and its building blocks. Its validation against the
@@ -9,7 +9,7 @@
 using Test, Random, Statistics
 using Aeolus
 
-@testset "Era IV — spectral broadening (Phase 45, #14)" begin
+@testset "spectral broadening (Phase 45, #14)" begin
 
     @testset "gamma moment ratio Γ(k+p)/(Γ(k)kᵖ)" begin
         # closed forms: Γ(3/2) = √π/2, Γ(k+2) = (k+1)kΓ(k), recurrence in p

@@ -14,7 +14,7 @@ function band_containing(spec, λ)
     error("no band contains λ = $λ μm")
 end
 
-@testset "Era III — Spectral albedo and BRDF (Phase 36)" begin
+@testset "Spectral albedo and BRDF (Phase 36)" begin
 
     sw = shortwave_bands()
     lw = longwave_bands()

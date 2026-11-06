@@ -3,7 +3,7 @@ using Aeolus
 using Aeolus.RadiationCore
 using Aeolus.GasOptics
 
-@testset "Era III — Correlated-k gas optics (Phase 32)" begin
+@testset "Correlated-k gas optics (Phase 32)" begin
 
     # Own erf/erfc (no SpecialFunctions): tabulated 16-digit values.
     @testset "Error function" begin

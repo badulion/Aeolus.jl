@@ -1,4 +1,4 @@
-# Era V, Phase 48 (#25) — validation: the 1-D canopy column of
+# Phase 48 (#25) — validation: the 1-D canopy column of
 # PlantCanopy (implicit drag, Harman & Finnigan mixing length, coupled leaf
 # energy balance and scalar column) against published within-canopy
 # profiles from a wind tunnel (Brunet et al. 1994), an orchard (CHATS,
@@ -83,7 +83,7 @@ function _cp_temperature(p, h; C_d, ztop, N, u_star, T_ref, rh, μ, S_dir, S_dif
     return (; Ta, z = col.z, leaf, col, ρcp, iters, K)
 end
 
-@testset "Era V — PlantCanopy: within-canopy profiles vs observations (#25)" begin
+@testset "PlantCanopy: within-canopy profiles vs observations (#25)" begin
 
 @testset "wind tunnel: Brunet et al. (1994) waving wheat" begin
     wt = canopy_profile_observations().wind_tunnel

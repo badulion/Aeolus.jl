@@ -6,7 +6,7 @@ using Aeolus.RadiationCore
 using Aeolus.TwoStream
 using Aeolus.MonteCarloRT
 
-@testset "Era III — 3-D Monte-Carlo RT (Phase 34)" begin
+@testset "3-D Monte-Carlo RT (Phase 34)" begin
 
     unit_sw_grid(T = Float64; S = 1000.0) =
         SpectralGrid(:shortwave, T[4000.0], T[25000.0], [1], T[1.0], T[S])

@@ -26,7 +26,7 @@ function uniform_pack(N, H, ρ, Tfun; kwargs...)
     return p
 end
 
-@testset "Era V — Snowpack (#34)" begin
+@testset "Snowpack (#34)" begin
 
     @testset "Conductivity and fresh-snow density: published forms" begin
         c = DEFAULT_SURFACE_CONSTANTS

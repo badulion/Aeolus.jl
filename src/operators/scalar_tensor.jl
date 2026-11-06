@@ -1,9 +1,9 @@
 # =========================================================================
-# Era VI, Phase 55 (P55-c, #181) — the tensorial scalar eddy diffusivity.
+# Phase 55 (P55-c, #181) — the tensorial scalar eddy diffusivity.
 # =========================================================================
 #
 # Included into `module Operators`, after the FV kernels. The single
-# scalar-flux operator of Era VI: `add_tensor_diffusion_scalar!(tϕ, ϕ, K)`
+# scalar-flux operator of the SGS closures: `add_tensor_diffusion_scalar!(tϕ, ϕ, K)`
 # for any symmetric diffusivity tensor K at cell centres, in the triad
 # (functional) discretisation of Griffies et al. (1998). The diagonal
 # special case is `add_eddy_diffusion_scalar!(tϕ, ϕ, κh, κv)`; the rotated

@@ -1,5 +1,5 @@
 # The differential SGS Reynolds-stress closure (Aeolus.PrognosticSGS,
-# Era VI P56-d, #188) in the `:sgs` slot, provider `:reynolds_stress` — an
+# P56-d, #188) in the `:sgs` slot, provider `:reynolds_stress` — an
 # option: a genuine alternative to the default `:tke` (components/urban/sgs_tke.jl),
 # with the same module, so no coverage list changes.
 #

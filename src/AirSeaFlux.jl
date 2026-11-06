@@ -1,12 +1,12 @@
 """
     AirSeaFlux
 
-Air–sea exchange over open water (Era V, Phase 52): the sea-surface
+Air–sea exchange over open water (Phase 52): the sea-surface
 roughness that responds to wind and waves, the scalar roughness that
 follows from it, the COARE convective stability functions and
 gustiness, and a COARE-style bulk algorithm that ties them together.
 
-It *extends* the Era V contract `SurfaceExchange` rather than restating
+It *extends* the surface shared core `SurfaceExchange` rather than restating
 it: the Monin–Obukhov solve is `SurfaceExchange.solve_surface_layer`,
 the stability functions are a new `AbstractStabilityFunctions` subtype
 ([`COAREStability`](@ref)), the sea surface is an `AbstractSurface`
@@ -876,7 +876,7 @@ function air_sea_fluxes(b::BulkAirSea = coare35_bulk();
 end
 
 # =========================================================================
-# 7. The sea surface as an Era V AbstractSurface
+# 7. The sea surface as an AbstractSurface
 # =========================================================================
 
 """

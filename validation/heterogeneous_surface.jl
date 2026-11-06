@@ -37,7 +37,7 @@ const HS_RUN = (t_end = 4500.0, dt = 5.0, t_avg = 2250.0, every = 3)
 
 _hs_rel(a, b) = (a - b) / b
 
-@testset "Era V — heterogeneous-surface validation (#43)" begin
+@testset "heterogeneous-surface validation (#43)" begin
 
     # The five runs of the comparison (≈ 25 s each).
     cases = [(:hom,    (λ = 800.0,  T_hot = 305.0, T_cool = 305.0)),

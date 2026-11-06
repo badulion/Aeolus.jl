@@ -1,4 +1,4 @@
-# Era VI, P55-d (#176): validation of the AMD and Vreman SGS closures in
+# P55-d (#176): validation of the AMD and Vreman SGS closures in
 # developed turbulence — a k^(-5/3) field (32³) evolved for t = 1 with
 # static Smagorinsky 0.17, where both closures dissipate ⟨2ν_t S S⟩ within
 # ±40 % of Smagorinsky 0.17. The closures stay tested in
@@ -17,7 +17,7 @@ isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "..", "
 # with test/amd_vreman.jl)
 isdefined(@__MODULE__, :closures!) || include(joinpath(@__DIR__, "..", "test", "support", "amd_vreman_closures.jl"))
 
-@testset "Era VI — AMD and Vreman SGS closures in turbulence (P55-d, #176)" begin
+@testset "AMD and Vreman SGS closures in turbulence (P55-d, #176)" begin
 
     @testset "developed turbulence: dissipation relative to Smagorinsky 0.17" begin
         # the decaying-turbulence set-up of test/sgs_numerics.jl: a

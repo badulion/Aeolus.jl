@@ -71,7 +71,7 @@ end
 _nx_open_area(csim) = (o = nest_open_sides(csim); m = csim.mesh;
     (o[1] + o[2]) * m.Ly * m.Lz + (o[3] + o[4]) * m.Lx * m.Lz + (o[5] + o[6]) * m.Lx * m.Ly)
 
-@testset "Era II — externally driven nest child (N-berlin-nest, #265)" begin
+@testset "externally driven nest child (N-berlin-nest, #265)" begin
 
 # -------------------------------------------------------------------------
 @testset "a window driven from outside + subcycle_dt == step_nested!(run)" begin

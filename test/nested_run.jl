@@ -65,7 +65,7 @@ function _nr_stage_time!(ctr, run)
 end
 
 # =========================================================================
-@testset "Era II — NestedRun time coupling (N-nest-c, #257)" begin
+@testset "NestedRun time coupling (N-nest-c, #257)" begin
 
 @testset "stage times of the cores" begin
     @test stage_times(domain_advance(step_rk3!)) == (0.0, 1.0, 0.5)

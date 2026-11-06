@@ -1,4 +1,4 @@
-# Era V, Phase 48 (#25) — within-canopy wind and temperature profiles:
+# Phase 48 (#25) — within-canopy wind and temperature profiles:
 # the tools the validation needs, against analytic results: measured
 # (tabulated) LAD profiles, the steady K-theory scalar column, the
 # displacement height and the Harman–Finnigan scalar diffusivity. The
@@ -11,7 +11,7 @@ using Random
 
 include(joinpath(@__DIR__, "data", "canopy_profiles.jl"))
 
-@testset "Era V — PlantCanopy: within-canopy profiles (#25)" begin
+@testset "PlantCanopy: within-canopy profiles (#25)" begin
 
 @testset "TabulatedLAD: measured profiles" begin
     # a triangle 0 → 2 → 0 on [1, 5] m: LAI = 4 exactly; layer integrals

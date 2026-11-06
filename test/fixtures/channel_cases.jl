@@ -1,4 +1,4 @@
-# The wall-bounded benchmark harness of Era VI (P54-d, #174): the
+# The wall-bounded benchmark harness of the turbulence closures (P54-d, #174): the
 # pressure-driven half-channel ABL and the two-wall channel, with their
 # checkpoint state (#245). It was `src/wall_models/channel_cases.jl` of
 # `Aeolus.WallModels`; since ONE-l (#475) it is a test fixture: the channel
@@ -408,7 +408,7 @@ gets, per column, the dynamic roughness ``\\sqrt{z_{0,f}^2+α^2σ_Δ^2}``,
 with α solved once per step from the first-cell (or matching-height)
 velocity (Anderson & Meneveau 2011). `τ_form` holds the form drag.
 
-Keyword hooks reserved for later Era VI issues — documented, **not
+Keyword hooks reserved for later turbulence-closure issues — documented, **not
 implemented** (any value other than the default raises an
 `ArgumentError`):
 

@@ -1,4 +1,4 @@
-# Era II numerics swap-ins used by the Berlin case (#132): the dynamic
+# Numerics swap-ins used by the Berlin case (#132): the dynamic
 # Smagorinsky closure (Germano et al. 1991 / Lilly 1992) and the
 # `momentum_advection` / `eddy_viscosity!` keywords of step!.
 
@@ -13,7 +13,7 @@ isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "suppor
 # `_dynamic_cs`, shared with the validation run (validation/sgs_numerics.jl)
 isdefined(@__MODULE__, :_dynamic_cs) || include(joinpath(@__DIR__, "support", "dynamic_smagorinsky.jl"))
 
-@testset "Era II — SGS and momentum-advection swap-ins (#132)" begin
+@testset "SGS and momentum-advection swap-ins (#132)" begin
 
     @testset "dynamic Smagorinsky: zero in laminar shear, |S| of the static model, Galilean" begin
         # u = S z: test-filtered and grid stresses agree (L_ij M_ij = 0), so the

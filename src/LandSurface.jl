@@ -1,7 +1,7 @@
 """
     LandSurface
 
-The vegetated land column of Era V (Phase 47, #21): a two-big-leaf
+The vegetated land column (Phase 47, #21): a two-big-leaf
 (sunlit/shaded) canopy over a [`SoilThermalColumn`](@ref), coupled to the
 atmosphere through the Monin–Obukhov solver of `SurfaceExchange` and
 implementing its `AbstractSurface` interface, so the tile framework can

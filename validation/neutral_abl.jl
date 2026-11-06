@@ -1,4 +1,4 @@
-# Era VI, Phase 54 (P54-d, #174): validation runs of the wall-bounded
+# Phase 54 (P54-d, #174): validation runs of the wall-bounded
 # benchmark harness. The pressure-driven half channel (24³, Smagorinsky
 # 0.1) reaches the momentum budget of Porté-Agel et al. (2000): wall stress
 # = u*², total stress = u*²(1 - z/H); with Smagorinsky 0.17 and no damping
@@ -16,7 +16,7 @@ using .ChannelCases
 using Aeolus.SurfaceExchange: von_karman
 using Aeolus.WallModels
 
-@testset "Era VI — neutral ABL / channel benchmarks (#174)" begin
+@testset "neutral ABL / channel benchmarks (#174)" begin
 
 # ---------------------------------------------------------------------------
 # The Phase 54 benchmarks (Porté-Agel et al. 2000; Moin & Kim 1982)

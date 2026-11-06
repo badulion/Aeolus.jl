@@ -1,4 +1,4 @@
-# Era VI, Phase 58 (#170) — the TurbulenceStability contract:
+# Phase 58 (#170) — the TurbulenceStability contract:
 # gradient-Richardson stability functions, N² and Ri_g.
 #
 #   1. limits of every implementer: f(0) = 1, f ≥ 0, non-increasing in
@@ -28,7 +28,7 @@ psi_h(s::LogLinearMOST, ζ::Real) = ζ < 0 ? psi_h(_BDBH, ζ) : -s.α * ζ
 # 4th-order centred first derivative
 _d4(f, z, h) = (8 * (f(z + h) - f(z - h)) - (f(z + 2h) - f(z - 2h))) / (12h)
 
-@testset "Era VI — TurbulenceStability (P58-a, #170)" begin
+@testset "TurbulenceStability (P58-a, #170)" begin
 
 @testset "1. limits of every implementer" begin
     impls = [LillyCutoff(), BrownEtAl1994(), ShortTail(), LongTail(),

@@ -1,7 +1,7 @@
 """
     AerosolCloud
 
-Aerosol-cloud interaction — Era IV, Phase 42.
+Aerosol-cloud interaction — Phase 42.
 
 The two aerosol indirect effects, computed rather than prescribed.
 
@@ -132,7 +132,7 @@ export # --- physical constants of the module ---------------------------
        autoconversion_rate, autoconversion_suppression,
        albrecht_lifetime_factor
 
-# Era IV contract (Phase 39) for thermodynamics and Köhler theory; Phase 37
+# The MoistThermodynamics shared core (Phase 39) for thermodynamics and Köhler theory; Phase 37
 # for the aerosol size-distribution types, so this module does not carry a
 # second copy of either.
 using ..MoistThermodynamics

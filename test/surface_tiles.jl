@@ -69,7 +69,7 @@ _fluxtuple(fl) = (fl.Rn, fl.H, fl.LE, fl.G, fl.τ, fl.E)
 _maxrel(a, b) = maximum(abs(x - y) / max(abs(x), abs(y), 1e-300)
                         for (x, y) in zip(_fluxtuple(a), _fluxtuple(b)) if max(abs(x), abs(y)) > 1e-12)
 
-@testset "Era V — sub-grid surface tiles (#41)" begin
+@testset "sub-grid surface tiles (#41)" begin
 
     forcing = SurfaceForcing(sw_down = 600.0, lw_down = 330.0, T_air = 295.0,
                              q_air = 0.008, U = 3.0)

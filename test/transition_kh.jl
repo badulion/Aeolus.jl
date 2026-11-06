@@ -1,4 +1,4 @@
-# Era VI, Phase 59 (P59-c, #180) — Transition diagnostics: turbulent
+# Phase 59 (P59-c, #180) — Transition diagnostics: turbulent
 # fraction γ(z), intermittency, Ri_f / Re_b / V_TKE, growth-rate fit.
 #
 #   3. γ: laminar parallel shear 0 exactly, a half-turbulent synthetic

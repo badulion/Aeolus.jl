@@ -62,7 +62,7 @@ const κ_bh = Aeolus.SurfaceExchange.DEFAULT_SURFACE_CONSTANTS.κ
 _θ(f::SurfaceForcing, z = f.z_ref) =
     f.T_air + dry_adiabatic_lapse_rate(PhasePartition(f.q_air)) * z
 
-@testset "Era V — blending height (#42)" begin
+@testset "blending height (#42)" begin
 
     @testset "Effective roughness: defining identity, bounds, limits" begin
         # Identical tiles: z0_eff = z0.

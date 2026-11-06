@@ -1,4 +1,4 @@
-# Era V, Phase 52 — OceanMixedLayer (issue #38).
+# Phase 52 — OceanMixedLayer (issue #38).
 #
 # Water column with a Kraus–Turner mixed layer, shortwave penetration,
 # cool skin and diurnal warm layer. Validation targets:
@@ -24,7 +24,7 @@ const OML = Aeolus.OceanMixedLayer
 
 isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "support", "coare36_subset.jl"))
 
-@testset "Era V — OceanMixedLayer (#38)" begin
+@testset "OceanMixedLayer (#38)" begin
 
     @testset "EOS-80: published check values, 4 °C maximum, derivatives" begin
         eos = UNESCOWaterEOS()

@@ -1,4 +1,4 @@
-# Era IV, Phase 45 — turbulence-microphysics interaction.
+# Phase 45 — turbulence-microphysics interaction.
 #
 # Issue #12: the sub-grid distribution of the saturation deficit, the
 # partial cloud fraction and condensate it implies, and the SGS variance
@@ -23,7 +23,7 @@ function _simpson(f, a, b, n)
     return s * h / 3
 end
 
-@testset "Era IV — Turbulent microphysics (Phase 45)" begin
+@testset "Turbulent microphysics (Phase 45)" begin
 
     @testset "Saturation-deficit PDFs: moments, closed forms vs quadrature" begin
         s̄, σ = 2.0e-4, 5.0e-4

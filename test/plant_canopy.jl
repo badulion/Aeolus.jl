@@ -1,4 +1,4 @@
-# Era V, Phase 48 — PlantCanopy (issue #22): leaf-area-density profiles
+# Phase 48 — PlantCanopy (issue #22): leaf-area-density profiles
 # and implicit canopy drag.
 
 using Test
@@ -6,7 +6,7 @@ using Aeolus
 using Aeolus.PlantCanopy
 using Aeolus.Fields: set!
 
-@testset "Era V — PlantCanopy: LAD and implicit drag (#22)" begin
+@testset "PlantCanopy: LAD and implicit drag (#22)" begin
 
     @testset "LAD profiles: LAI, published shape, layer conservation" begin
         h = 20.0

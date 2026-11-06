@@ -1,4 +1,4 @@
-# Era VI, Phase 57 (#169): WallModels — equilibrium wall laws and the
+# Phase 57 (#169): WallModels — equilibrium wall laws and the
 # implicit wall-stress operator.
 #
 # Physics asserted: Spalding's law and its inversion (round trip, the
@@ -52,7 +52,7 @@ function expected_impulse(sim0, sim1, law, Δt, k; ν = 1.5e-5)
     return Ix, Iy
 end
 
-@testset "Era VI — WallModels (#169)" begin
+@testset "WallModels (#169)" begin
 
 @testset "Spalding: round trip, viscous limit, monotone in U" begin
     law = SpaldingLaw()

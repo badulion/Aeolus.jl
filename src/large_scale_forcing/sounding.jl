@@ -125,10 +125,10 @@ end
 # days since 1970-01-01 of a Gregorian date (Hinnant's days_from_civil)
 function _days_from_civil(y::Integer, m::Integer, d::Integer)
     y -= m <= 2
-    era = fld(y, 400); yoe = y - era * 400
+    cyc = fld(y, 400); yoe = y - cyc * 400   # 400-year Gregorian cycle
     doy = fld(153 * (m + (m > 2 ? -3 : 9)) + 2, 5) + d - 1
     doe = yoe * 365 + fld(yoe, 4) - fld(yoe, 100) + doy
-    return era * 146097 + doe - 719468
+    return cyc * 146097 + doe - 719468
 end
 
 """

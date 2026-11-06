@@ -1,4 +1,4 @@
-# Era VI, Phase 54 (P54-e, #186): validation of the scale-dependent
+# Phase 54 (P54-e, #186): validation of the scale-dependent
 # Lagrangian dynamic model (LASD) of Bou-Zeid, Meneveau & Parlange (2005,
 # Phys. Fluids 17, 025105) — `LagrangianDynamicSmagorinsky(mesh;
 # scale_dependent = true)`, one type with the scale-invariant model of #173
@@ -35,7 +35,7 @@ isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "..", "
 # geometric mean of β, 2^⟨log₂ β⟩ = 2^⟨φ⟩: the mean power-law exponent
 _geomean(β) = exp2(mean(log2, β))
 
-@testset "Era VI — scale-dependent Lagrangian dynamic model (P54-e, #186)" begin
+@testset "scale-dependent Lagrangian dynamic model (P54-e, #186)" begin
 
     mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))
 

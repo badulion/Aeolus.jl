@@ -73,7 +73,7 @@ _rows(pf, Hp, cov, ax) = ntuple(d -> Hp[d] .+ (first(cov[d]):last(cov[d]) + (d =
 const _H30 = 3000 / log(1 / 0.7)
 const _T30 = 9.80665 * _H30 / 287.04
 
-@testset "Era II — Nesting: stretched parent, mass weighting, solid-aware (#256)" begin
+@testset "Nesting: stretched parent, mass weighting, solid-aware (#256)" begin
 
 # =========================================================================
 # 1. Stretched parent

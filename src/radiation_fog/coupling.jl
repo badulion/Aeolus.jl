@@ -2,7 +2,7 @@
 #
 # Included into `RadiationFog`. Nothing here computes an optical property
 # or solves a transfer equation: the droplet field (LWC, N_d, r_eff) is
-# written into a RadiationCore `AtmosphericColumn` and handed to the Era III
+# written into a RadiationCore `AtmosphericColumn` and handed to the radiation
 # stack — `GasOptics` for the gases, `TwoStream.MieCloudOptics` for the
 # droplets, `RadiationCore.combine_optics!` to merge them and
 # `TwoStream.solve_lw!` / `solve_sw!` for the fluxes. The only physics this
@@ -43,7 +43,7 @@ const _VMR_PER_Q = 28.9647 / 18.01528
 """
     FogRadiation
 
-Era III radiation configured for a 1-D fog column: longwave and
+The radiation stack configured for a 1-D fog column: longwave and
 shortwave RRTMG-band grids, correlated-k gas optics, the Phase 33
 `MieCloudOptics` for the droplets and a two-stream solver for each, plus
 a fixed upper atmosphere above the model top so that the downwelling

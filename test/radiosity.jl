@@ -5,7 +5,7 @@ using Aeolus.Radiosity
 using Aeolus.RadiationCore: STEFAN_BOLTZMANN
 
 # =========================================================================
-# Era III — Phase 35: full urban radiosity
+# Phase 35: full urban radiosity
 # =========================================================================
 #
 # The validation strategy, in order of hardness:
@@ -65,7 +65,7 @@ function _perpendicular_pair(l, w, h)
     return f1, f2
 end
 
-@testset "Era III — Urban radiosity (Phase 35)" begin
+@testset "Urban radiosity (Phase 35)" begin
 
     @testset "Facet decomposition" begin
         # one 10 m building in a 5×5 field of 2 m cells

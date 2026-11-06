@@ -1,4 +1,4 @@
-# Era V, Phase 52 — OceanMixedLayer validation (issue #38): the Fairall
+# Phase 52 — OceanMixedLayer validation (issue #38): the Fairall
 # and Zeng–Beljaars diurnal warm layers, driven by the COARE 3.6 ship
 # fluxes over days 19-25, against the ship's near-surface thermometers
 # (sea snake T(0.05 m) minus TSG T(5.3 m)). Reported, not tuned. The
@@ -12,7 +12,7 @@ using Aeolus.OceanMixedLayer
 isdefined(@__MODULE__, :read_coare_subset) ||
     include(joinpath(@__DIR__, "..", "test", "support", "coare36_subset.jl"))
 
-@testset "Era V — OceanMixedLayer: warm layers vs ship observations (#38)" begin
+@testset "OceanMixedLayer: warm layers vs ship observations (#38)" begin
     coare = coare36_warm_cool_subset()
     ncoare = length(coare[:jd])
 

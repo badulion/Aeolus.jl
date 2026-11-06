@@ -69,7 +69,7 @@ function _halo_err(f)
                    if !((i in ii) && (j in jj) && (k in kk)))
 end
 
-@testset "Era II — Nesting operators (#250)" begin
+@testset "Nesting operators (#250)" begin
 
 @testset "restriction (r = 3): covered cells → child volume mean, rest untouched" begin
     pm = RegularGrid(Float64; size=(8, 8, 8), extent=(1.0, 1.0, 1.0), halo=(2, 2, 2))
@@ -245,4 +245,4 @@ end
     @test max(res[:positive][2], res[:monotone][2]) < 1e-14            # conservative
 end
 
-end # Era II — Nesting operators
+end # Nesting operators

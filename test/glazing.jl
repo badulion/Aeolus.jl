@@ -41,7 +41,7 @@ poly4(a, x) = sum(a[i+1] * x^i for i in 0:4)
 window_tau_clr(Φ) = poly4(TAU_CLR, cos(Φ))
 window_rho_clr(Φ) = poly4(RHO_CLR, cos(Φ)) - window_tau_clr(Φ)
 
-@testset "Era V — UrbanSurface glazing: window transmission (#27)" begin
+@testset "UrbanSurface glazing: window transmission (#27)" begin
 
     @testset "Fresnel (SurfaceOptics) and single-pane optics" begin
         n = 1.526

@@ -86,7 +86,7 @@ function build_geometry(cfg, mesh)
     w_f = lateral_open(cfg) ? cfg.boundary_frame : 0
     sm, sfc = solid_and_classes(st, mesh; tag_walls = true, frame = (w_f, w_f), bcs = case_scalar_bcs(cfg))
 
-    # Era III: a radiosity scene replaces the ray-cast sky-view factor.
+    # Radiosity: a radiosity scene replaces the ray-cast sky-view factor.
     # Geometry is static, so facets and view factors are built once. The
     # ground facet of every open column takes the material of its surface
     # class (park, water, street), see `scene_class_map`.

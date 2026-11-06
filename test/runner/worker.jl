@@ -6,7 +6,7 @@
 #   julia --project=. test/runner/worker.jl <suite> <job> <result.toml>
 #
 # The job is evaluated by AeolusTestSelection.run_selected inside an outer
-# DefaultTestSet, so the top-level @testset blocks it meets (e.g. "Era VI")
+# DefaultTestSet, so the top-level @testset blocks it meets (e.g. "Turbulence closure")
 # become its children: their counts are read per block, and a failure does
 # not stop the process before the counts are written.
 

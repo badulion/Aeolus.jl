@@ -31,7 +31,7 @@ function occ_mass_box(; T = 294.15, ach = 0.5)
                         infiltration_ach = ach, T_air = T)
 end
 
-@testset "Era V — BuildingEnergy: occupancy schedules and internal gains (#33)" begin
+@testset "BuildingEnergy: occupancy schedules and internal gains (#33)" begin
 
     @testset "Day profiles and weekly schedules" begin
         p = DayProfile(6 => 0.0, 7 => 0.1, 12 => 0.9, 24 => 0.2)

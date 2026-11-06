@@ -34,7 +34,7 @@ const A140_CASES = (220, 230, 240, 250, 395, 400, 410, 420, 430, 800)
 const A140_QUANTITIES = (("annual_heating_MWh", :heating), ("annual_cooling_MWh", :cooling),
                          ("peak_heating_kW", :peak_heating), ("peak_cooling_kW", :peak_cooling))
 
-@testset "Era V — BuildingEnergy: ASHRAE 140-2020 BESTEST annual loads (#33)" begin
+@testset "BuildingEnergy: ASHRAE 140-2020 BESTEST annual loads (#33)" begin
     w = a140_weather()
     ref = a140_reference()
 

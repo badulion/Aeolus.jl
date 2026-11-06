@@ -836,6 +836,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
+    include("naming_conventions.jl")  # work is grouped by content; ERA is the reanalysis (2026-11-06)
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
     include("urban_checks.jl")       # EX-a (#438): Berlin smoke matrix (49 runs, ledgers), parent smoke run, parent class fractions, parent_zi
@@ -967,7 +968,7 @@ end
 # `SurfaceExchange` (the shared core), soil, vegetation, snow, sea ice, ocean and lakes, tiles (Phases 46-48, 51-53).
 
 @testset "Land and surface" begin
-    include("surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
+    include("surface_exchange.jl")  # surface shared core: MOST, constants, surface interface (#92)
     include("soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
     include("soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
     include("water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)

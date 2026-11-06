@@ -1,4 +1,4 @@
-# Era VI, Phase 57 (P57-e, #190): validation of the dynamic wall model for
+# Phase 57 (P57-e, #190): validation of the dynamic wall model for
 # partially resolved roughness (Anderson & Meneveau 2011, JFM 679) — grid
 # invariance (reduced): on a neutral rough half channel over a random k⁻²
 # surface, run to 6 H/u*, the plane-mean u_* the model predicts at 32² and
@@ -20,7 +20,7 @@ using Aeolus.WallModels
 # the rough half channel over it (shared with test/wall_models_dynamic.jl)
 isdefined(@__MODULE__, :_rough_half_channel) || include(joinpath(@__DIR__, "..", "test", "support", "rough_half_channel.jl"))
 
-@testset "Era VI — dynamic roughness: grid invariance (#190)" begin
+@testset "dynamic roughness: grid invariance (#190)" begin
 
 @testset "Grid invariance (reduced): rough half channel, 32² vs 16²" begin
     # A random k⁻² surface (256² map, 1 ≤ k ≤ 128, σ_h = 0.04 H), resolved

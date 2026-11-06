@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 56 (P56-d, #188) — the differential SGS Reynolds-stress
+# Phase 56 (P56-d, #188) — the differential SGS Reynolds-stress
 # closure. Included into `module PrognosticSGS`, after the TKE closure,
 # whose length scale, dissipation rate and eddy coefficients it calls.
 # =========================================================================

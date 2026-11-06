@@ -32,7 +32,7 @@ function bats_alb(d, T)
     return (vis = 0.95 * (1 - 0.2F), nir = 0.65 * (1 - 0.5F))
 end
 
-@testset "Era V — Snow metamorphism: 30-day albedo decay (#35)" begin
+@testset "Snow metamorphism: 30-day albedo decay (#35)" begin
     @testset "30-day albedo decay of a clear-sky pack vs reference-model curves" begin
         # A 50 cm, 150 kg m⁻³ pack under a clear-sky diurnal cycle at −10 °C
         # (SW peak 500 W m⁻², LW 230 W m⁻², RH 80 %, U = 3 m s⁻¹), 30-min steps,

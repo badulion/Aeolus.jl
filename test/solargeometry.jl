@@ -4,7 +4,7 @@ using Aeolus.Grids: CellCenter
 using Aeolus.RadiationCore
 using Aeolus.SolarGeometry
 
-@testset "Era III — Solar geometry & cloud shadows (Phase 38)" begin
+@testset "Solar geometry & cloud shadows (Phase 38)" begin
 
     # NREL SPA reference case (Reda & Andreas 2004, Table A5.1):
     #   2003-10-17 19:30:30 UTC, lon -105.1786°, lat 39.742476°, 1830.14 m,

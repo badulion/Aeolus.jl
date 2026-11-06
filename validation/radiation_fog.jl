@@ -1,4 +1,4 @@
-# Era IV, Phase 44 (#9) — radiation fog with the droplet-radiative
+# Phase 44 (#9) — radiation fog with the droplet-radiative
 # feedback: the validation runs of the ParisFog 2011 column. The default
 # time step converged against a halved step over 3 h; the column's energy
 # and water budgets closed over 6 h of fog formation; and the 14 h ParisFog
@@ -20,7 +20,7 @@ using Aeolus
 using Aeolus.MoistThermodynamics
 using Aeolus.RadiationFog
 
-@testset "Era IV — Radiation fog, droplet-radiative feedback (Phase 44 #9)" begin
+@testset "Radiation fog, droplet-radiative feedback (Phase 44 #9)" begin
 
     @testset "Column time-step convergence (no K-closure fibrillation)" begin
         # Review finding: the first default, dt = 10 s, was not converged —

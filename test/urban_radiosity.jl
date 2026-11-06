@@ -1,4 +1,4 @@
-# Phase 49 — facet temperatures coupled to the Era III radiosity solver (#28).
+# Phase 49 — facet temperatures coupled to the radiosity solver (#28).
 #
 # Every radiosity facet carries its own UrbanFacet conduction column and
 # skin temperature, and the longwave exchange between facets is implicit.

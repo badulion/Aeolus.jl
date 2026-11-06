@@ -1,4 +1,4 @@
-# The prognostic SGS TKE closure (Aeolus.PrognosticSGS, Era VI P56-b, #182)
+# The prognostic SGS TKE closure (Aeolus.PrognosticSGS, P56-b, #182)
 # in the `:sgs` slot, provider `:tke` (the default).
 #
 # Deardorff (1980) with the Moeng (1984) coefficients: ν_t = c_k l √e,

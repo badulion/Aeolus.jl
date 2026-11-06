@@ -1,7 +1,7 @@
-# Era V contract — SurfaceExchange (issue #92).
+# Surface shared core — SurfaceExchange (issue #92).
 #
 # Material constants, Monin–Obukhov similarity and the surface interface
-# that every Era V surface model builds on.
+# that every surface model builds on.
 
 using Test
 using Aeolus
@@ -12,9 +12,9 @@ using Aeolus.MoistThermodynamics: DEFAULT_CONSTANTS, PhasePartition, air_density
 
 const SE = Aeolus.SurfaceExchange
 
-@testset "Era V — SurfaceExchange contract (#92)" begin
+@testset "SurfaceExchange contract (#92)" begin
 
-    @testset "Material constants delegate to the era contracts" begin
+    @testset "Material constants delegate to the shared cores" begin
         c = DEFAULT_SURFACE_CONSTANTS
         # one source of truth: the very same numbers
         @test LH_f0(c) === DEFAULT_CONSTANTS.LH_s0 - DEFAULT_CONSTANTS.LH_v0

@@ -1,6 +1,6 @@
 module Chemistry
 
-# Era I chemistry.
+# Chemistry.
 #
 #   1. `apply_linear_chemistry!` — a single tracer with first-order decay
 #      and a source (Phase 20).

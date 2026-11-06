@@ -1,5 +1,5 @@
 # The SGS closures against filtered DNS of rotating and stratified decay
-# (Era VI, P56-e, #192): the fixture of test/sgs_validation.jl. It was
+# (P56-e, #192): the fixture of test/sgs_validation.jl. It was
 # the `sgs_decay` run type of Aeolus.RunDrivers (EX-d #441, formerly
 # test/fixtures/sgs_validation.jl and examples/sgs/rotating_stratified_decay.jl),
 # back among the tests since ONE-l (#475): the filtered-DNS study is not a
@@ -13,7 +13,7 @@
     SGSValidation
 
 The SGS closures against filtered DNS of decaying turbulence under
-rotation and stratification — Era VI, P56-e (#192), which
+rotation and stratification — P56-e (#192), which
 `test/sgs_validation.jl` runs at 48³.
 
 The method ("a priori in time"). One DNS of decaying isotropic

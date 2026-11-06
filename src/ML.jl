@@ -33,7 +33,7 @@ and `add_eddy_diffusion_scalar!` kernels — the ML kernel is a *drop-in
 replacement* for `compute_smagorinsky_νt!`.
 
 An `MLSGS` is an [`AbstractEddyViscosityClosure`](@ref
-Aeolus.Operators.AbstractEddyViscosityClosure) of the Era VI SGS contract, so
+Aeolus.Operators.AbstractEddyViscosityClosure) of the SGS closure contract, so
 it is passed to any core directly, `step!(sim, dt; sgs = mlsgs)`, with
 `κt = νt / sim.Pr_t`. It is stateless.
 """

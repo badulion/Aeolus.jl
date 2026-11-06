@@ -9,7 +9,7 @@ using Aeolus
 using Aeolus.Snowpack
 using Aeolus.SurfaceExchange: DEFAULT_SURFACE_CONSTANTS
 
-@testset "Era V — Snowpack: density vs Sturm et al. (2010) (#34)" begin
+@testset "Snowpack: density vs Sturm et al. (2010) (#34)" begin
     @testset "Density evolution vs Sturm et al. (2010) alpine climatology" begin
         # Sturm et al. (2010), J. Hydrometeorol. 11, 1380, Eq. 6 and Table 4:
         # ρ(h, DOY) = (ρmax - ρ0)[1 - exp(-k1 h - k2 DOY)] + ρ0, h in cm,

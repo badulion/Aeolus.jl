@@ -197,7 +197,7 @@ end
 """
 Air, ISO 15099:2003 Table B.1. The conductivity fit gives 0.02406
 W m⁻¹ K⁻¹ at 273.15 K, the still-air value `SurfaceConstants.k_air`
-(0.024) of the Era V contract.
+(0.024) of the surface shared core.
 """
 const GLAZING_AIR = FillGas(:air, (2.873e-3, 7.760e-5), (3.723e-6, 4.940e-8),
                             (1002.7370, 1.2324e-2), 28.97)
@@ -273,7 +273,7 @@ faces at `T1`, `T2` (K) with emissivities `ε1`, `ε2`:
     ``h_r = σ (T_1^2+T_2^2)(T_1+T_2) / (1/ε_1 + 1/ε_2 - 1)``, so that
     ``h_r (T_1 - T_2)`` is the exact net exchange.
 
-σ, `g` and the gas constant come from the Era V contract `c`.
+σ, `g` and the gas constant come from the surface shared core's constants `c`.
 """
 function gap_conductance(gap::GlazingGap, T1::Real, T2::Real, ε1::Real, ε2::Real;
                          c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
@@ -574,7 +574,7 @@ end
                 c = DEFAULT_SURFACE_CONSTANTS, nquad = 48)
 
 A glazed facet: the pane network of a [`Glazing`](@ref) whose outer face
-is closed by the surface energy balance of the Era V contract and whose
+is closed by the surface energy balance of the surface shared core (`SurfaceExchange`) and whose
 inner face exchanges with the room through `interior` (a
 [`ColumnBoundary`](@ref); by default ISO 6946 ``R_{si} = 0.13``, the
 same hook as [`UrbanFacet`](@ref)).

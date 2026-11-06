@@ -1,5 +1,5 @@
 # =========================================================================
-# Era II — Phases 23 & 25: adaptive time stepping and semi-implicit IMEX.
+# Phases 23 & 25: adaptive time stepping and semi-implicit IMEX.
 # =========================================================================
 
 using Test
@@ -8,7 +8,7 @@ using Aeolus.TimeIntegration
 using Aeolus.Fields: set!, interior_view
 using Aeolus.Grids: interior, xnodes, znodes
 
-@testset "Era II — Adaptive dt & IMEX" begin
+@testset "Adaptive dt & IMEX" begin
 
     @testset "CFL diagnostics: advective, diffusive, buoyancy limits" begin
         g = RegularGrid(; size = (8, 8, 8), extent = (1.0, 2.0, 4.0), halo = (2, 2, 2))

@@ -1,7 +1,7 @@
 module TimeIntegration
 
 # =========================================================================
-# Era II, Phases 23 & 25 — adaptive time stepping and semi-implicit IMEX.
+# Phases 23 & 25 — adaptive time stepping and semi-implicit IMEX.
 # =========================================================================
 #
 # Phase 23 (adaptive dt):
@@ -270,7 +270,7 @@ double the operator's spectral radius, so `νt_cfl =`
 
 The SGS limit uses the larger of the momentum viscosity `νt_cfl` and the eddy
 diffusivity, each as stored: for a Prandtl-number closure `κt = νt/Prₜ`,
-for a closure with its own κ (Era VI) whatever it computed.
+for a closure with its own κ whatever it computed.
 
 `limits` are the explicit limits of a model's components (ONE-a, #450:
 [`limit_dt`](@ref Aeolus.Components.limit_dt), e.g. the Coriolis

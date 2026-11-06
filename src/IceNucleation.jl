@@ -1,6 +1,6 @@
 module IceNucleation
 
-# Era IV, Phase 43 — heterogeneous ice nucleation.
+# Phase 43 — heterogeneous ice nucleation.
 #
 # Ice in a mixed-phase cloud between 0 °C and about -38 °C does not form
 # on its own: supercooled water is metastable there, and the first ice

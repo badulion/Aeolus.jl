@@ -1,4 +1,4 @@
-# Era IV, Phase 44 (#11) — fog / dew condensation coupled to vapour.
+# Phase 44 (#11) — fog / dew condensation coupled to vapour.
 #
 # The scheme this replaces (examples/urban `apply_fog_dew!`) shipped
 # disabled because its warming "amplified". The tests below pin the three
@@ -10,7 +10,7 @@ using Test
 using Aeolus.MoistThermodynamics
 using Aeolus.RadiationFog
 
-@testset "Era IV — Radiation fog / dew coupling (Phase 44)" begin
+@testset "Radiation fog / dew coupling (Phase 44)" begin
     c = DEFAULT_CONSTANTS
     qsat(T, p) = saturation_specific_humidity(T, p)
 

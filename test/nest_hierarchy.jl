@@ -112,7 +112,7 @@ function (c::_NHInject)(sim, dt; kw...)
 end
 Aeolus.Nesting.nest_stage_weights(c::_NHInject, args...) = Aeolus.Nesting.nest_stage_weights(c.core)
 
-@testset "Era II — nest hierarchy, non-aligned and stretched children (#328)" begin
+@testset "nest hierarchy, non-aligned and stretched children (#328)" begin
 
 # -------------------------------------------------------------------------
 @testset "NestAxis: common faces, conservation box, overlaps" begin

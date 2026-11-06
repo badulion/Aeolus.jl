@@ -69,7 +69,7 @@ function _cbl_run(core; N = 24, Nz = 40, L = 3000.0, H = 3000.0, Q = 0.25, Γ = 
     return (zi = zi, θml = sum(ml) / length(ml))
 end
 
-@testset "Era II — Boussinesq against anelastic: 5 h CBL to ~2 km (#259, #320)" begin
+@testset "Boussinesq against anelastic: 5 h CBL to ~2 km (#259, #320)" begin
     b = _cbl_run(:boussinesq); a = _cbl_run(:anelastic)
     dzi = (a.zi - b.zi) / b.zi; dθ = a.θml - b.θml
     @info @sprintf("core sensitivity, 5 h CBL (Q = 0.25 K m/s, Γ = 3 K/km): z_i Boussinesq %.0f m, anelastic %.0f m (Δz_i/z_i = %+.3f); θ_ML %.2f vs %.2f K (Δθ_ML = %+.2f K)",

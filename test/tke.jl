@@ -1,4 +1,4 @@
-# Era VI, Phase 56 (P56-b, #182): the Deardorff (1980) 1.5-order prognostic
+# Phase 56 (P56-b, #182): the Deardorff (1980) 1.5-order prognostic
 # SGS TKE closure (src/PrognosticSGS.jl) with the Moeng (1984) coefficients,
 #
 # The 500-step positivity run and the reduced CBL are validation runs, in
@@ -10,7 +10,7 @@ using Aeolus.Fields: interior_view, set!
 using Aeolus.Operators: advance_sgs!, sgs_state, restore_sgs_state!
 using Random: Xoshiro, randn
 
-@testset "Era VI — prognostic SGS TKE (P56-b, #182)" begin
+@testset "prognostic SGS TKE (P56-b, #182)" begin
 
 @testset "1. free decay at l = Δ (c_ε = 0.70)" begin
     m = RegularGrid(; size = (4, 4, 4), extent = (40.0, 40.0, 40.0))

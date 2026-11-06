@@ -1,4 +1,4 @@
-# Era VI, Phase 54 (P54-b, #173): validation of the Lagrangian-averaged
+# Phase 54 (P54-b, #173): validation of the Lagrangian-averaged
 # dynamic Smagorinsky closure of Meneveau, Lund & Cabot (1996, JFM 319, 353)
 # in simulated isotropic turbulence (32³):
 #
@@ -33,7 +33,7 @@ function _lag_plane_cs(sim; mask = nothing)
     return mean(sqrt.(ws.cs2)), ws, νt
 end
 
-@testset "Era VI — Lagrangian dynamic Smagorinsky in isotropic turbulence (P54-b, #173)" begin
+@testset "Lagrangian dynamic Smagorinsky in isotropic turbulence (P54-b, #173)" begin
 
 
     mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))

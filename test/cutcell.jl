@@ -6,7 +6,7 @@ using Aeolus.Fields: Field, set!, interior_view
 using Aeolus.CutCell
 
 # =========================================================================
-# Era II, Phases 21-22 — cut-cell IBM with ghost-cell wall reconstruction
+# Phases 21-22 — cut-cell IBM with ghost-cell wall reconstruction
 # =========================================================================
 
 # cell-center z of a storage index (origin at 0)
@@ -33,7 +33,7 @@ function ghost_case(N::Int, power::Int, wall::Float64)
             geom = geom, stencils = st, grid = g)
 end
 
-@testset "Era II — Cut-cell IBM" begin
+@testset "Cut-cell IBM" begin
 
     g = RegularGrid(; size = (4, 4, 8), extent = (1.0, 1.0, 1.0), halo = (2, 2, 2))
     ii, jj, kk = interior(g)

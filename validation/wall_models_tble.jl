@@ -1,4 +1,4 @@
-# Era VI, Phase 57 (P57-c, #189): validation of the non-equilibrium (TBLE)
+# Phase 57 (P57-c, #189): validation of the non-equilibrium (TBLE)
 # wall model in a simulated flow — the wall-modelled channel at Re_τ = 1000
 # (24×12×16, h_wm = 3Δz, time filter, the pressure-gradient TBLE): its bulk
 # velocity against Lee & Moser (2015), ⟨τ_w⟩ = u_τ², and the dynamic κ_wm
@@ -18,7 +18,7 @@ using Aeolus.WallModels
 
 isdefined(@__MODULE__, :lm2015_ub_plus) || include(joinpath(@__DIR__, "..", "test", "data", "lee_moser_2015.jl"))
 
-@testset "Era VI — non-equilibrium (TBLE) wall model: channel at Re_τ = 1000 (#189)" begin
+@testset "non-equilibrium (TBLE) wall model: channel at Re_τ = 1000 (#189)" begin
 
 @testset "5. Channel Re_τ = 1000 (24×12×16, h_wm = 3Δz, time filter, :pressure_gradient)" begin
     Ub_LM = lm2015_ub_plus(1000)

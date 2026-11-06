@@ -1,4 +1,4 @@
-# Era IV, Phase 42 — aerosol-cloud interaction: the headline validation.
+# Phase 42 — aerosol-cloud interaction: the headline validation.
 # The Abdul-Razzak & Ghan parameterisation against an EXPLICIT adiabatic
 # parcel integration over w = 0.1-5 m/s and N_a = 100-1000 cm⁻³. ARG is the
 # operational workhorse; the parcel model is the truth it approximates.
@@ -8,7 +8,7 @@
 using Test, Printf
 using Aeolus
 
-@testset "Era IV — Aerosol-cloud interaction (Phase 42)" begin
+@testset "Aerosol-cloud interaction (Phase 42)" begin
 
     @testset "ARG vs explicit parcel — the headline validation" begin
         T, p = 283.0, 9.0e4

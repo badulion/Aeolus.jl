@@ -50,7 +50,7 @@ function _nb_open_area(csim)
            (o[5] + o[6]) * m.Lx * m.Ly
 end
 
-@testset "Era II — one-way nest boundary data (N-nest-d, #261)" begin
+@testset "one-way nest boundary data (N-nest-d, #261)" begin
 
 @testset "mass: divergence-free parent, net boundary flux and δ" begin
     rng = Xoshiro(261)

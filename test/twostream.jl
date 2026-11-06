@@ -4,7 +4,7 @@ using Aeolus.RadiationCore
 using Aeolus.TwoStream
 using Aeolus.GasOptics: us_standard_column, correlated_k_optics
 
-@testset "Era III — Two-stream RT (Phase 33)" begin
+@testset "Two-stream RT (Phase 33)" begin
 
     # single-band grids with a clean source, so references are analytic
     unit_sw_grid(T = Float64; S = 1000.0) =

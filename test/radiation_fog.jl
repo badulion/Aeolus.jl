@@ -1,4 +1,4 @@
-# Era IV, Phase 44 (#9) — radiation fog with the droplet-radiative feedback.
+# Phase 44 (#9) — radiation fog with the droplet-radiative feedback.
 #
 # The validation runs (time-step convergence over 3 h, budgets over 6 h,
 # the 14 h ParisFog 2011 case) are validation/radiation_fog.jl.
@@ -34,7 +34,7 @@ function _static_fog_column(; nz = 50, H = 1000.0, hfog = 150.0, ql_fog = 3e-4,
               kt = findlast(>(0), ql))
 end
 
-@testset "Era IV — Radiation fog, droplet-radiative feedback (Phase 44 #9)" begin
+@testset "Radiation fog, droplet-radiative feedback (Phase 44 #9)" begin
 
     @testset "Droplet optics inputs delegate to AerosolCloud" begin
         @test all(isapprox(fog_effective_radius(ql, ρ, N), 1e6 * droplet_effective_radius(ql * ρ, N);

@@ -1,6 +1,6 @@
-# Era V, Phase 48 — PlantCanopy (issue #23): radiation attenuation through
+# Phase 48 — PlantCanopy (issue #23): radiation attenuation through
 # the canopy. Beer–Lambert with the Ross–Goudriaan G-function, the Sellers
-# (1985) two-stream solved with the Era III TwoStream layer formulae and
+# (1985) two-stream solved with the TwoStream layer formulae and
 # adding solver, sunlit/shaded partition, and the longwave exchange.
 
 using Test
@@ -55,7 +55,7 @@ function _sellers_ode(; Λt, ω, β, β0, μ̄, K, S0, D0, αb, αd, n = 20_000)
     return up, dn
 end
 
-@testset "Era V — PlantCanopy: radiation attenuation (#23)" begin
+@testset "PlantCanopy: radiation attenuation (#23)" begin
 
     par = LeafOptics(0.10, 0.05)     # typical broadleaf PAR
     nir = LeafOptics(0.45, 0.25)     # typical broadleaf NIR

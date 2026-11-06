@@ -1,7 +1,7 @@
 """
     TurbulenceStability
 
-The Era VI stability contract: one family of gradient-Richardson
+The stability contract: one family of gradient-Richardson
 stability functions, the one definition of the squared buoyancy frequency
 from a θ difference, and the one definition of the gradient Richardson
 number. Every Ri-dependent closure, mixing length, transition diagnostic

@@ -1,4 +1,4 @@
-# Era V, Phase 46 (#15) — SoilColumn: CLM-style soil column with
+# Phase 46 (#15) — SoilColumn: CLM-style soil column with
 # Richards-equation water transport.
 #
 # The solver is checked against exact solutions of Richards' equation
@@ -13,7 +13,7 @@ using Aeolus.SurfaceExchange: DEFAULT_SURFACE_CONSTANTS, SurfaceForcing, Surface
 
 const SC = Aeolus.SoilColumn
 
-@testset "Era V — SoilColumn (#15)" begin
+@testset "SoilColumn (#15)" begin
 
 @testset "Layer structure and hydraulic functions" begin
     # CLM5.0 Technical Note, Table 2.2.3: layer 10 node, thickness, interface

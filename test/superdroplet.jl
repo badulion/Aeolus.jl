@@ -1,4 +1,4 @@
-# Era IV, Phase 41 — superdroplet Lagrangian microphysics.
+# Phase 41 — superdroplet Lagrangian microphysics.
 #
 # The headline validation, the stochastic all-or-nothing coalescence
 # algorithm against GOLOVIN'S ANALYTIC SOLUTION for the additive kernel,
@@ -9,7 +9,7 @@
 using Test, Random, Statistics
 using Aeolus
 
-@testset "Era IV — Superdroplet microphysics (Phase 41)" begin
+@testset "Superdroplet microphysics (Phase 41)" begin
 
     @testset "Köhler delegates to the Phase 39 contract" begin
         # parameterised by SOLUTE MASS here, by dry radius and κ in the

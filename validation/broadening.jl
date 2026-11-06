@@ -1,4 +1,4 @@
-# Era IV, Phase 45 — turbulence-microphysics interaction, issue #14: the
+# Phase 45 — turbulence-microphysics interaction, issue #14: the
 # validation case. Spectral broadening by sub-grid supersaturation
 # fluctuations, the bulk moment closure against the Phase 41 superdroplet
 # reference in an ascending parcel (300 s, n_sd = 8000, three σ_S), and
@@ -10,7 +10,7 @@
 using Test, Printf, Random, Statistics
 using Aeolus
 
-@testset "Era IV — spectral broadening validation (Phase 45, #14)" begin
+@testset "spectral broadening validation (Phase 45, #14)" begin
 
     # ---------------------------------------------------------------------
     # The validation case (issue #14): superdroplet reference vs bulk

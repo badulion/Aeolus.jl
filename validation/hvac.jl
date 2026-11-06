@@ -11,7 +11,7 @@ using Aeolus.UrbanSurface
 
 isdefined(@__MODULE__, :hvac_mass_box) || include(joinpath(@__DIR__, "..", "test", "support", "building_box.jl"))
 
-@testset "Era V — BuildingEnergy: HVAC, resolved zone vs ISO 13790 5R1C (#32)" begin
+@testset "BuildingEnergy: HVAC, resolved zone vs ISO 13790 5R1C (#32)" begin
     @testset "Resolved zone vs ISO 13790 5R1C ideal cooling need" begin
         # Same construction, same hourly forcing, both with ideal loads; the
         # 5R1C need follows ISO 13790 §C.4.2. Agreement bounds are envelopes

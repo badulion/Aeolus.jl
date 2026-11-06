@@ -1,6 +1,6 @@
-# Era VI, P54-a (#167): the SGS closure contract.
+# P54-a (#167): the SGS closure contract.
 #
-#   * the velocity-gradient helper every Era VI closure reads, and the
+#   * the velocity-gradient helper every SGS closure reads, and the
 #     strain stencil built from it;
 #   * StaticSmagorinsky as a closure reproduces the built-in C_s run;
 #   * the commit cadence: advance_sgs! once per accepted step;
@@ -98,7 +98,7 @@ end
 state(s) = (copy(interior_view(s.u)), copy(interior_view(s.v)), copy(interior_view(s.w)),
             copy(interior_view(s.θ)))
 
-@testset "Era VI — SGS closure contract (P54-a, #167)" begin
+@testset "SGS closure contract (P54-a, #167)" begin
 
     @testset "velocity-gradient helper: exact on linear fields; strain" begin
         dx, dy, dz = 15.625, 15.625, 6.25

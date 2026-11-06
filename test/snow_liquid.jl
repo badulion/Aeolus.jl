@@ -34,7 +34,7 @@ end
 cl98(θi) = θi <= 0.23 ? 0.0264 + 0.0099 * (1 - θi) / θi :
            θi <= 0.812 ? 0.08 - 0.1023 * (θi - 0.03) : 0.0
 
-@testset "Era V — Snow liquid water (#36)" begin
+@testset "Snow liquid water (#36)" begin
 
     @testset "Retention laws: published forms" begin
         L = ColeouLesaffre1998Retention()

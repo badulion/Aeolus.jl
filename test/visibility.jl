@@ -1,4 +1,4 @@
-# Era IV, Phase 44 — visibility diagnostic.
+# Phase 44 — visibility diagnostic.
 #
 # Koschmieder visibility V = −ln ε / β_ext with β_ext built from droplet
 # Mie extinction, κ-Köhler haze (AerosolOptics) and molecular Rayleigh
@@ -8,7 +8,7 @@
 using Test
 using Aeolus
 
-@testset "Era IV — Visibility diagnostic (Phase 44)" begin
+@testset "Visibility diagnostic (Phase 44)" begin
 
     @testset "Koschmieder's law" begin
         # the two textbook constants

@@ -1,5 +1,5 @@
 # =========================================================================
-# Era II / Phase 24 — stretched & terrain-following vertical coordinates
+# Phase 24 — stretched & terrain-following vertical coordinates
 # =========================================================================
 # Reduction to RegularGrid, exactness of the non-uniform stencils (and the
 # naive ones measurably not), 2nd-order convergence, a solenoidal field,
@@ -20,7 +20,7 @@ function maxerr(f::Field, fun)
     return maxdiff(f, ref)
 end
 
-@testset "Era II — Stretched & terrain-following grids" begin
+@testset "Stretched & terrain-following grids" begin
 
     SZ, EXT, HALO = (6, 5, 24), (600.0, 500.0, 1000.0), (2, 2, 2)
 

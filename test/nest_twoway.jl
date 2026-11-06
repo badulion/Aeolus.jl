@@ -161,7 +161,7 @@ function _tw_slot_run(model; book = true, nsteps = 100)
     return worst, abs(composite_integral(trp, trc, nest) - I0) / I0, run
 end
 
-@testset "Era II — two-way nest feedback (N-nest-e, #263)" begin
+@testset "two-way nest feedback (N-nest-e, #263)" begin
 
 # -------------------------------------------------------------------------
 # 1. Composite conservation. A closed periodic parent with no sources: the

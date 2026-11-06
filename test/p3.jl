@@ -1,4 +1,4 @@
-# Era IV, Phase 40 — Morrison–Milbrandt P3 microphysics.
+# Phase 40 — Morrison–Milbrandt P3 microphysics.
 #
 # One test file per part-file of src/p3/, included here so parallel
 # issues only add an include line.

@@ -1,5 +1,5 @@
-# Era VI, Phase 54 (P54-c, #168): decaying grid turbulence of
-# Comte-Bellot & Corrsin (1971), the LES benchmark of Era VI.
+# Phase 54 (P54-c, #168): decaying grid turbulence of
+# Comte-Bellot & Corrsin (1971), the LES benchmark of the SGS closures.
 #
 # Set-up and harness: test/support/cbc_benchmark_driver.jl (`cbc_benchmark`,
 # shared with test/cbc_decay.jl, which tests the reference table and
@@ -105,7 +105,7 @@ using Aeolus
 using Printf
 isdefined(@__MODULE__, :cbc_benchmark) || include(joinpath(@__DIR__, "..", "test", "support", "cbc_benchmark_driver.jl"))
 
-@testset "Era VI — Comte-Bellot–Corrsin decay (P54-c, #168)" begin
+@testset "Comte-Bellot–Corrsin decay (P54-c, #168)" begin
 
     res = Dict{Symbol,Any}()
     t_total = @elapsed for c in (:dynamic, :lagrangian, :smagorinsky, :none, :amd, :vreman)

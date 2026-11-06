@@ -1,4 +1,4 @@
-# Era IV, Phase 45 — turbulence-microphysics interaction, issue #13.
+# Phase 45 — turbulence-microphysics interaction, issue #13.
 #
 # The sub-grid supersaturation distribution of issue #12 fed into
 # aerosol activation (Phase 42) and condensational droplet growth
@@ -12,7 +12,7 @@ using Test, Random, Statistics
 using Aeolus
 using Aeolus.AerosolCloud: ccn_fraction, ccn_spectrum
 
-@testset "Era IV — SGS activation and growth (Phase 45, #13)" begin
+@testset "SGS activation and growth (Phase 45, #13)" begin
 
     modes = [arg_mode(300e6, 0.04e-6, 1.8, 0.6),
              arg_mode(50e6, 0.15e-6, 1.6, 0.6)]

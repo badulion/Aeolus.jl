@@ -1,4 +1,4 @@
-# Era VI, Phase 56 (P56-b, #182): validation of the Deardorff (1980)
+# Phase 56 (P56-b, #182): validation of the Deardorff (1980)
 # 1.5-order prognostic SGS TKE closure with the Moeng (1984) coefficients
 # in simulated flows:
 #
@@ -24,7 +24,7 @@ using Printf
 isdefined(@__MODULE__, :TKECBL) || include(joinpath(@__DIR__, "..", "test", "fixtures", "tke_cbl.jl"))
 using .TKECBL: tke_cbl, tke_cbl_summary
 
-@testset "Era VI — prognostic SGS TKE: decaying turbulence and the CBL (P56-b, #182)" begin
+@testset "prognostic SGS TKE: decaying turbulence and the CBL (P56-b, #182)" begin
 
 
 @testset "5. positivity over 500 steps, zero clips" begin

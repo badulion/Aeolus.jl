@@ -16,7 +16,7 @@ const _MT = Aeolus.MoistThermodynamics
 isdefined(@__MODULE__, :read_coare_subset) ||
     include(joinpath(@__DIR__, "..", "test", "support", "coare36_subset.jl"))
 
-@testset "Era V — diurnal warm layer vs TOGA COARE observations (#40)" begin
+@testset "diurnal warm layer vs TOGA COARE observations (#40)" begin
     @testset "Diurnal warm layer vs TOGA COARE observations (Fairall et al. 1996a, Table 2)" begin
         t = read_coare_subset(joinpath(@__DIR__, "data", "fairall1996a_table2.txt"))
         nd = length(t[:Q])

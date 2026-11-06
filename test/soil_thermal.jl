@@ -1,4 +1,4 @@
-# Era V, Phase 46 (#16) — SoilColumn: soil heat conduction, freeze–thaw
+# Phase 46 (#16) — SoilColumn: soil heat conduction, freeze–thaw
 # and the soil column as an AbstractSurface.
 #
 # Validation: exact energy conservation; the Neumann (Carslaw & Jaeger
@@ -20,7 +20,7 @@ const CST = DEFAULT_SURFACE_CONSTANTS
 _erf(x) = Aeolus.erf_series(x)
 _erfc(x) = Aeolus.erfc_series(x)
 
-@testset "Era V — SoilColumn heat and freeze–thaw (#16)" begin
+@testset "SoilColumn heat and freeze–thaw (#16)" begin
 
 @testset "Thermal properties (Johansen 1975)" begin
     # Johansen dry conductivity at porosity 0.4 (ρ_d = 1620 kg m⁻³), by hand

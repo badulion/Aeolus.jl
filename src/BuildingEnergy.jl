@@ -14,7 +14,7 @@ The zone is an RC network whose capacitances are *resolved*:
     either a bare [`EnvelopeElement`](@ref) (outside air with a sol-air
     source, the ground, or an adiabatic party wall) or a
     [`FacetElement`](@ref) wrapping a full `UrbanFacet` whose outer face
-    is closed by the Era V surface energy balance.
+    is closed by the surface energy balance of `SurfaceExchange`.
   * **Internal mass** — floors, partitions and furniture as
     [`InternalMass`](@ref) columns exposed to the room on one or both
     faces.

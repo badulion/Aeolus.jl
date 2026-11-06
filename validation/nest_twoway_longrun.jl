@@ -102,7 +102,7 @@ function _twl_vortex(h::VortexHarness; nsteps = 2000, record_every = 20)
     return dev, child, run
 end
 
-@testset "Era II — two-way nesting, long runs (N-nest-e, #263)" begin
+@testset "two-way nesting, long runs (N-nest-e, #263)" begin
 
 @testset "two-way CBL (Hellsten et al. 2021 §4.1, scaled): 2 h at 100 m, r = 3" begin
     tw, run2, wall2 = _twl_cbl(:two_way)

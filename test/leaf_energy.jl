@@ -1,4 +1,4 @@
-# Era V, Phase 48 — PlantCanopy (issue #24): leaf energy balance and leaf
+# Phase 48 — PlantCanopy (issue #24): leaf energy balance and leaf
 # temperature. Leaf boundary layer (Campbell & Norman 1998 / CLM5),
 # transpiration through Photosynthesis (#20), sensible heat, the
 # Penman–Monteith limit, prognostic leaf temperature, and the coupled
@@ -26,7 +26,7 @@ function _bisect(f, a, b; n = 200)
     return (a + b) / 2
 end
 
-@testset "Era V — PlantCanopy: leaf energy balance (#24)" begin
+@testset "PlantCanopy: leaf energy balance (#24)" begin
 
 @testset "leaf boundary layer" begin
     # Campbell & Norman (1998) ch. 7: forced convection, both sides for heat

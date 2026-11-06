@@ -1,4 +1,4 @@
-# Era VI, P55-d (#176): the anisotropic minimum-dissipation (AMD) and
+# P55-d (#176): the anisotropic minimum-dissipation (AMD) and
 # Vreman SGS closures (src/operators/sgs_amd_vreman.jl).
 #
 #   * exact closed forms on linear fields on the Berlin grid spacing
@@ -61,7 +61,7 @@ isdefined(@__MODULE__, :closures!) || include(joinpath(@__DIR__, "support", "amd
 
 relerr(x, y) = abs(x - y) / max(abs(y), floatmin())
 
-@testset "Era VI — AMD and Vreman SGS closures (P55-d, #176)" begin
+@testset "AMD and Vreman SGS closures (P55-d, #176)" begin
 
     δ = (15.625, 15.625, 6.25)
     grid = RegularGrid(; size = (6, 6, 6), extent = (6δ[1], 6δ[2], 6δ[3]), halo = (2, 2, 2))

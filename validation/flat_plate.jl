@@ -1,4 +1,4 @@
-# Era VI, Phase 59 (P59-d, #185) — spatially developing flat-plate boundary
+# Phase 59 (P59-d, #185) — spatially developing flat-plate boundary
 # layer: validation runs — the laminar plate against Blasius (c_f, H, the
 # fringe exit) and bypass transition sanity on a coarse 3-D plate.
 # The pieces stay tested in test/flat_plate.jl (the shared damping

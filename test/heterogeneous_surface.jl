@@ -13,7 +13,7 @@ using Aeolus
 
 isdefined(@__MODULE__, :patchy_les) || include(joinpath(@__DIR__, "support", "patchy_surface.jl"))
 
-@testset "Era V — heterogeneous-surface coupling (#43)" begin
+@testset "heterogeneous-surface coupling (#43)" begin
 
     @testset "Coupling: conservation and code-path identity" begin
         # Over a uniform surface (both strip types at 305 K) the three modes

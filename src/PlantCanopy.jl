@@ -1,7 +1,7 @@
 """
     PlantCanopy
 
-Resolved plant canopies for the LES (Era V, Phase 48).
+Resolved plant canopies for the LES (Phase 48).
 
 This module owns the vertical structure of vegetation and the momentum
 sink it exerts on the resolved flow:
@@ -36,7 +36,7 @@ sink it exerts on the resolved flow:
      leaf layers and ground ([`canopy_longwave`](@ref)). The optical-depth
      coordinate is the cumulative leaf area [`cumulative_leaf_area`](@ref),
      and the two-stream layer algebra and adding solver are those of the
-     Era III `TwoStream` module, supplied with the canopy γ coefficients.
+     `TwoStream` radiation module, supplied with the canopy γ coefficients.
 
   5. **Leaf energy balance** — leaf temperature from the balance of
      absorbed radiation, thermal emission, sensible heat and
@@ -882,7 +882,7 @@ end
 # Ross (1981) projection function G(μ); what happens to the intercepted
 # light is the leaf single-scattering albedo ω = α + τ_l. The multiple
 # scattering between leaves and soil is the two-stream problem of
-# Sellers (1985), which is solved here with the Era III two-stream layer
+# Sellers (1985), which is solved here with the two-stream layer
 # formulae and adding solver of `TwoStream` — not a second copy of them —
 # by supplying the canopy's γ coefficients through a `TwoStreamVariant`.
 
@@ -1222,7 +1222,7 @@ leaf-area densities `lad` [m² m⁻³] on the layers bounded by `z_faces`
     `SolarGeometry.SolarPosition` (its apparent ``μ_0`` is used); a sun at
     or below the horizon has no direct beam and no sunlit leaves
   * `sw_direct` — direct-beam irradiance **on a horizontal plane** at the
-    top face [W m⁻²] (i.e. DNI·μ, or the `flux_dn_dir` of an Era III
+    top face [W m⁻²] (i.e. DNI·μ, or the `flux_dn_dir` of a radiation
     atmospheric solve at the surface level)
   * `sw_diffuse` — diffuse downward irradiance at the top face [W m⁻²]
   * `albedo_direct`, `albedo_diffuse` — ground (soil) albedo for the two

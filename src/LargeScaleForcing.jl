@@ -1,6 +1,6 @@
 module LargeScaleForcing
 
-# Era VI, Phase 58 (#171) — prescribed large-scale (case) forcing.
+# Phase 58 (#171) — prescribed large-scale (case) forcing.
 #
 # The forcing a single-column or LES case is driven by when the larger
 # scales are not resolved: the geostrophic pressure gradient, nudging of

@@ -1,4 +1,4 @@
-# Era VI, Phase 55 (P55-e, #187): validation of the StabilityCorrected
+# Phase 55 (P55-e, #187): validation of the StabilityCorrected
 # wrapper (stratification-dependent anisotropic eddy viscosity and
 # diffusivity) on a simulated standing internal-wave mode:
 #
@@ -87,7 +87,7 @@ function _w_run(g, s, closure; periods = 5, nstep = 80)
     return (E = _w_energy(sim) / E0, T = Tm, νvmax = νvmax, t_on = t_on)
 end
 
-@testset "Era VI — StabilityCorrected on internal waves (P55-e, #187)" begin
+@testset "StabilityCorrected on internal waves (P55-e, #187)" begin
 
 # ---------------------------------------------------------------------------
 # 3. a linear internal wave is not damped by the vertical SGS

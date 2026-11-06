@@ -5,7 +5,7 @@ using Aeolus.Grids: CellCenter
 using Aeolus.Fields: set!, interior_view
 using Aeolus.Multigrid
 
-@testset "Era II — Multigrid pressure solver (Phase 29)" begin
+@testset "Multigrid pressure solver (Phase 29)" begin
 
     @testset "Manufactured solution; channel BCs agree with the cosine FFT" begin
         g = RegularGrid(; size=(16,16,16), extent=(1.0,1.0,1.0), halo=(1,1,1))

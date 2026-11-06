@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 59 (P59-b, #184) — the σ-model SGS closure.
+# Phase 59 (P59-b, #184) — the σ-model SGS closure.
 # =========================================================================
 #
 # Included into `module Operators`, after the closure contract
@@ -230,7 +230,7 @@ end
     SigmaModel(C_σ = 1.35; Pr_t = nothing)
 
 The σ-model of Nicoud, Baya Toda, Cabrit, Bose & Lee (2011) as an SGS
-closure of the Era VI contract (an [`AbstractEddyViscosityClosure`](@ref):
+closure of the SGS closure contract (an [`AbstractEddyViscosityClosure`](@ref):
 `ν_t` from [`compute_sigma_νt!`](@ref), `κ_t = ν_t/Prₜ`; `Pr_t = nothing`
 takes the simulation's). Stateless; pass it as `sgs = SigmaModel()` to any
 core.

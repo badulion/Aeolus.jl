@@ -31,7 +31,7 @@ function layered(dz, ρ, T; grain = fill(54.5, length(dz)), liq = zeros(length(d
     return p
 end
 
-@testset "Era V — Snow metamorphism and albedo ageing (#35)" begin
+@testset "Snow metamorphism and albedo ageing (#35)" begin
 
     tab = snicar_aging_table()
 

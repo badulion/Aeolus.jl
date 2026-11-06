@@ -2,7 +2,7 @@
 #
 # COARE stability functions and gustiness, Charnock / COARE / wave-age /
 # wave-steepness momentum roughness, scalar roughness, the COARE-style
-# bulk algorithm, and the SeaSurface implementer of the Era V contract.
+# bulk algorithm, and the SeaSurface implementer of the surface shared core.
 #
 # Reference values come from (i) the NOAA-PSL COARE reference
 # implementation (github.com/NOAA-PSL/COARE-algorithm, commit bd1cac8),
@@ -223,7 +223,7 @@ end
         @test worst[:C_D10N] < 0.01 && worst[:L] < 0.015
     end
 
-    @testset "SeaSurface implements the Era V surface interface" begin
+    @testset "SeaSurface implements the SurfaceExchange surface interface" begin
         c = DEFAULT_SURFACE_CONSTANTS
         s = SeaSurface(T_skin = 301.0)
         @test s isa AbstractSurface

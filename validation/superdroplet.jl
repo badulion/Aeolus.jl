@@ -1,4 +1,4 @@
-# Era IV, Phase 41 — superdroplet Lagrangian microphysics: the headline
+# Phase 41 — superdroplet Lagrangian microphysics: the headline
 # validation. The stochastic all-or-nothing coalescence algorithm against
 # GOLOVIN'S ANALYTIC SOLUTION for the additive kernel (Shima et al. 2009
 # benchmark, 3600 one-second steps of 2^15 superdroplets), and its
@@ -11,7 +11,7 @@
 using Test, Printf, Random, Statistics
 using Aeolus
 
-@testset "Era IV — Superdroplet microphysics (Phase 41)" begin
+@testset "Superdroplet microphysics (Phase 41)" begin
 
     @testset "Golovin analytic solution — the headline validation" begin
         # Shima et al. (2009) benchmark: n0 = 2^23 m^-3, mean mass

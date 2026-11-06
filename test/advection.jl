@@ -1,5 +1,5 @@
 # =========================================================================
-# Era II — Phases 26 & 28
+# Phases 26 & 28
 #   * WENO-Z / TENO advection for all prognostics
 #   * energy- and enstrophy-conserving discrete operators
 # =========================================================================
@@ -47,7 +47,7 @@ function rk3_scalar!(ϕ, u, v, w, advect!, dt, nsteps, g)
     return ϕ
 end
 
-@testset "Era II — High-order & conservative advection" begin
+@testset "High-order & conservative advection" begin
 
 @testset "Reconstruction: design order, TENO exactness, critical point" begin
     @test measure_order(weno_z5_left, 5, -2) > 4.8

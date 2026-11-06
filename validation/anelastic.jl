@@ -1,4 +1,4 @@
-# Era II / Phase 27 — the warm-bubble benchmark in the three dynamical cores
+# Phase 27 — the warm-bubble benchmark in the three dynamical cores
 # (Boussinesq, anelastic, pseudo-incompressible): a +2 K bubble in a 3 km
 # neutral domain integrated 130 steps (260 s). Validates that the bubble
 # rises in all three, that each core keeps its own constraint, and that the
@@ -16,7 +16,7 @@ using Aeolus.Fields: set!, interior_view
 
 isdefined(@__MODULE__, :_reldiff) || include(joinpath(@__DIR__, "..", "test", "support", "anelastic_norms.jl"))
 
-@testset "Era II — Anelastic & pseudo-incompressible" begin
+@testset "Anelastic & pseudo-incompressible" begin
 
 # =====================================================================
 # 8. Warm-bubble benchmark in all three systems.
@@ -109,4 +109,4 @@ isdefined(@__MODULE__, :_reldiff) || include(joinpath(@__DIR__, "..", "test", "s
     @test d.pseudo.rel_ke    > 0
 end
 
-end # @testset "Era II — Anelastic & pseudo-incompressible"
+end # @testset "Anelastic & pseudo-incompressible"

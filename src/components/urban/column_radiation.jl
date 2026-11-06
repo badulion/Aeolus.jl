@@ -1,5 +1,5 @@
 # Column radiation: the domain-mean LES column, stitched onto a standard
-# atmosphere above the domain, through the Era III radiation stack
+# atmosphere above the domain, through the radiation stack
 # (RadiationCore columns, GasOptics correlated-k gas optics, TwoStream
 # solver and Mie cloud optics) at the radiation cadence.
 #

@@ -35,7 +35,7 @@ end
 wall_matrix(layers, ω) = foldl((M, l) -> layer_matrix(l, ω) * M, layers;
                                init = ComplexF64[1 0; 0 1])
 
-@testset "Era V — UrbanSurface: multi-layer facet conduction (#26)" begin
+@testset "UrbanSurface: multi-layer facet conduction (#26)" begin
 
     @testset "Thermal material table: cited values, optical links" begin
         @test all(n -> (m = thermal_material(n); m.optical === nothing || m.optical in SurfaceOptics.material_names()),

@@ -22,7 +22,7 @@ isdefined(@__MODULE__, :_nb_init_child!) || include(joinpath(@__DIR__, "..", "te
 
 _nb_zc(m, k) = m.z0 + (k - m.Hz - 0.5) * m.dz
 
-@testset "Era II — one-way nest boundary data (N-nest-d, #261)" begin
+@testset "one-way nest boundary data (N-nest-d, #261)" begin
 
 # -------------------------------------------------------------------------
 # A convective boundary layer (surface heat flux 0.1 K m/s, a 2 m/s mean

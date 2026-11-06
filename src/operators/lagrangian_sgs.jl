@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 54 (P54-b, #173) — Lagrangian-averaged dynamic Smagorinsky,
+# Phase 54 (P54-b, #173) — Lagrangian-averaged dynamic Smagorinsky,
 # and its scale-dependent form (P54-e, #186; Bou-Zeid et al. 2005).
 # =========================================================================
 #

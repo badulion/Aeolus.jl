@@ -1,4 +1,4 @@
-# Filtered-DNS fixture of Era VI (P56-c, #178): decaying isotropic
+# Filtered-DNS fixture of the SGS closures (P56-c, #178): decaying isotropic
 # turbulence computed by Aeolus itself, from a fixed seed.
 #
 # Included by test/apriori_sgs.jl, the thread-invariance worker, the

@@ -92,7 +92,7 @@ end
 ah_T_out(t, mean) = mean + 7 * sin(2π * (t / 86400 - 0.375))
 ah_sun(t) = max(0.0, 700 * sin(2π * (t / 86400 - 0.25)))
 
-@testset "Era V — anthropogenic heat from the building energy model (#29)" begin
+@testset "anthropogenic heat from the building energy model (#29)" begin
 
     @testset "First law every step: release + storage = consumption + sun" begin
         # office gains with every split (lost lighting heat, latent equipment),

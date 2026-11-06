@@ -1,4 +1,4 @@
-# Era II — the dynamic Smagorinsky closure (Germano et al. 1991 / Lilly
+# The dynamic Smagorinsky closure (Germano et al. 1991 / Lilly
 # 1992) in developed turbulence: a k^(-5/3) random-phase field on 32³ is
 # evolved ~1 eddy turnover (100 steps) of static-Smagorinsky LES, after
 # which the dynamic C_s must approach Lilly's inertial-range value 0.17
@@ -14,7 +14,7 @@ using Printf
 isdefined(@__MODULE__, :kolmogorov_field!) || include(joinpath(@__DIR__, "..", "test", "support", "kolmogorov.jl"))
 isdefined(@__MODULE__, :_dynamic_cs) || include(joinpath(@__DIR__, "..", "test", "support", "dynamic_smagorinsky.jl"))
 
-@testset "Era II — SGS and momentum-advection swap-ins (#132)" begin
+@testset "SGS and momentum-advection swap-ins (#132)" begin
 
     mesh = RegularGrid(; size = (32, 32, 32), extent = (2π, 2π, 2π), halo = (3, 3, 3))
 

@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 55 (P55-d, #176) — anisotropic minimum-dissipation (AMD)
+# Phase 55 (P55-d, #176) — anisotropic minimum-dissipation (AMD)
 # and Vreman SGS closures.
 # =========================================================================
 #
@@ -162,7 +162,7 @@ unvalidated.
   separate Richardson-number correction is applied).
 
 The velocity gradient is [`_velocity_gradient_at`](@ref), the stencil of
-every Era VI closure; the θ gradient is the centred difference over two
+every SGS closure; the θ gradient is the centred difference over two
 cells. Halos of `u, v, w, θ` must be filled.
 
 References: Rozema, Bae, Moin & Verstappen (2015), *Phys. Fluids* 27,

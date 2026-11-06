@@ -1,4 +1,4 @@
-# Era VI, Phase 56 (P56-c, #178): validation of the a-priori SGS-stress
+# Phase 56 (P56-c, #178): validation of the a-priori SGS-stress
 # harness on the filtered-DNS fixture (test/fixtures/dns_decay.jl, 96³
 # decaying isotropic turbulence): the fixture checked as a DNS, then
 # the a-priori numbers against the literature. The harness stays tested in
@@ -118,7 +118,7 @@ isdefined(@__MODULE__, :dns_decay) || include(joinpath(@__DIR__, "..", "test", "
 # test and the validation run)
 isdefined(@__MODULE__, :apriori_case) || include(joinpath(@__DIR__, "..", "test", "support", "apriori_cases.jl"))
 
-@testset "Era VI — a-priori SGS stress on the 96³ DNS fixture (P56-c, #178)" begin
+@testset "a-priori SGS stress on the 96³ DNS fixture (P56-c, #178)" begin
 
     # ---------------------------------------------------------------- fixture
     d = dns_decay(; N = 96)

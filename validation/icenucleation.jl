@@ -1,4 +1,4 @@
-# Era IV, Phase 43, issue #7 — mixed-phase Arctic stratus persistence: the
+# Phase 43, issue #7 — mixed-phase Arctic stratus persistence: the
 # ISDAC-style 1-D column (see src/icenuc/stratus_column.jl for what is
 # simplified) integrated 2-8 h at five INP scalings (×0, 1, 10, 100, 300).
 #

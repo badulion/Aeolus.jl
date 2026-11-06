@@ -30,7 +30,7 @@ isdefined(@__MODULE__, :read_coare_subset) || include(joinpath(@__DIR__, "suppor
 _qair_rh(T, p, RH) = (th = _MT.DEFAULT_CONSTANTS; ε = _MT.molmass_ratio(th);
                       e = RH * _MT.saturation_vapor_pressure(T, th); ε * e / (p - (1 - ε) * e))
 
-@testset "Era V — sea spray and COARE validation (#40)" begin
+@testset "sea spray and COARE validation (#40)" begin
 
     sp = AndreasSpray()
 

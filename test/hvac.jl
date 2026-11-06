@@ -23,7 +23,7 @@ hvac_air_box(; T = 299.15, q = nothing, ach = 0.5, UA = 150.0) =
 
 isdefined(@__MODULE__, :hvac_mass_box) || include(joinpath(@__DIR__, "support", "building_box.jl"))
 
-@testset "Era V — BuildingEnergy: HVAC demand and exhaust heat (#32)" begin
+@testset "BuildingEnergy: HVAC demand and exhaust heat (#32)" begin
 
     @testset "Indoor humidity: implicit vapour balance" begin
         # relaxation to outdoor humidity: implicit Euler factor 1/(1 + n dt) per step

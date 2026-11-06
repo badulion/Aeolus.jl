@@ -1,4 +1,4 @@
-# Era V, Phase 51 — lake and sea-ice thermodynamics (issue #37).
+# Phase 51 — lake and sea-ice thermodynamics (issue #37).
 #
 # Bitz & Lipscomb (1999) energy-conserving multi-layer sea ice with brine
 # pockets, snow, surface/basal melt and growth, coupled to SurfaceExchange.
@@ -23,7 +23,7 @@ using Aeolus.GasOptics: erf_series
 
 const ITD = Aeolus.IceThermodynamics
 
-@testset "Era V — lake and sea-ice thermodynamics (#37)" begin
+@testset "lake and sea-ice thermodynamics (#37)" begin
 
     @testset "BL99 material functions" begin
         p = IceParameters()

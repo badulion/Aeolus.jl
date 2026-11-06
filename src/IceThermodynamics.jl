@@ -1,7 +1,7 @@
 """
     IceThermodynamics
 
-Lake- and sea-ice thermodynamics for Era V (Phase 51, issue #37): the
+Lake- and sea-ice thermodynamics (Phase 51, issue #37): the
 energy-conserving multi-layer model of Bitz & Lipscomb (1999, "BL99")
 with brine pockets, an optional snow layer, surface and basal melting,
 basal accretion, sublimation, snow-ice formation and an ocean (or lake)
@@ -27,7 +27,7 @@ enthalpies are then updated *from the interface fluxes*, so the column
 conserves energy to round-off by construction; growth and melt consume
 exactly ``-E`` per unit volume.
 
-# Ownership (Era V "one source of truth")
+# Ownership ("one source of truth")
 
   * ``ρ_i``, ``k_i`` (fresh-ice conductivity ``k_0``), ``c_0 = c_{p,ice}``
     and ``L = L_f`` come from `SurfaceExchange.SurfaceConstants` — never
@@ -40,7 +40,7 @@ exactly ``-E`` per unit volume.
     `GasOptics.erf_series`.
   * This module *owns* the sea-water freezing point
     [`seawater_freezing_point`](@ref) and the sea-ice material functions;
-    other Era V modules (e.g. the ocean mixed layer) should delegate.
+    other surface modules (e.g. the ocean mixed layer) should delegate.
 
 # References
 

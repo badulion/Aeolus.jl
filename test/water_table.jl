@@ -1,4 +1,4 @@
-# Era V, Phase 46 (#17) — SoilColumn: prognostic water table in an
+# Phase 46 (#17) — SoilColumn: prognostic water table in an
 # unconfined aquifer with SIMTOP baseflow (Niu et al. 2005, 2007; CLM4).
 #
 # Checked against closed-form results: the Gardner (1958) steady profile
@@ -25,7 +25,7 @@ function _rk4_aquifer(aq, col, W, R, t, n)
     return W
 end
 
-@testset "Era V — water table and unconfined aquifer (#17)" begin
+@testset "water table and unconfined aquifer (#17)" begin
 
 @testset "Gardner two-point flux" begin
     # Gardner (1958): steady flux through an exponential soil above a table

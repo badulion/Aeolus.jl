@@ -6,7 +6,7 @@ using Aeolus.Grids: interior
 using Aeolus.Fields: set!, interior_view
 using Aeolus.AdaptiveMesh: _xc, _yc, _xf, _yf, _coarse_bounds, _level_size, _amr_advect!
 
-@testset "Era II — Nesting & AMR" begin
+@testset "Nesting & AMR" begin
 
 @testset "NestedGrid geometry + validation" begin
     pm = RegularGrid(Float64; size=(16,16,8), extent=(1.0,1.0,1.0), halo=(2,2,2))

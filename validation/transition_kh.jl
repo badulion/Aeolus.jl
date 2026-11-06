@@ -1,4 +1,4 @@
-# Era VI, Phase 59 (P59-c, #180) — Transition: Kelvin–Helmholtz and
+# Phase 59 (P59-c, #180) — Transition: Kelvin–Helmholtz and
 # Miles–Howard validation of the growth-rate diagnostics.
 #
 #   1. unstratified KH (tanh shear layer, αδ = 0.4446, Re = 1000,

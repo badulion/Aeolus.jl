@@ -68,7 +68,7 @@ function _ns_box(; N = 8, Nz = 8, moisture = false)
     return sim
 end
 
-@testset "Era VI — LargeScaleForcing (#171)" begin
+@testset "LargeScaleForcing (#171)" begin
 
     @testset "ForcingTable: interpolation, end values, exact step mean" begin
         z = [0.0, 100.0, 300.0]

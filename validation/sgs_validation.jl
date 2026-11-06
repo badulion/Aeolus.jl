@@ -1,4 +1,4 @@
-# Era VI, Phase 56 (P56-e, #192): the TKE (P56-b) and Reynolds-stress
+# Phase 56 (P56-e, #192): the TKE (P56-b) and Reynolds-stress
 # (P56-d) SGS closures against filtered DNS, with Smagorinsky and dynamic
 # Smagorinsky as baselines. The method and the fixtures are in
 # the sgs_decay run type (formerly test/fixtures/sgs_validation.jl): one 48³ DNS of decaying isotropic

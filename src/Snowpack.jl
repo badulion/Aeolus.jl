@@ -5,9 +5,9 @@ A layered seasonal snowpack in the tradition of CLM, SNOWPACK and
 Crocus: a column of snow layers, each carrying its ice and liquid-water
 mass, thickness and temperature, that settles under its own weight,
 conducts heat, melts, sublimates and accumulates fresh snow. The pack
-is an Era V surface: [`LayeredSnowpack`](@ref) implements
+is a surface model: [`LayeredSnowpack`](@ref) implements
 `SurfaceExchange.AbstractSurface`, so its turbulent fluxes, net
-radiation and coupling to the atmosphere come from the era contract.
+radiation and coupling to the atmosphere come from the shared core.
 
 Material laws are dispatch hierarchies so a user (or a later phase)
 chooses among published parameterisations without touching the solver:

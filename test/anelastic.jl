@@ -6,7 +6,7 @@ using Aeolus.Grids: CellCenter, FaceZ, znodes, interior
 using Aeolus.Fields: set!, interior_view
 
 # =========================================================================
-# Era II / Phase 27 — anelastic and pseudo-incompressible dynamics.
+# Phase 27 — anelastic and pseudo-incompressible dynamics.
 # (The warm-bubble benchmark of all three cores is validation/anelastic.jl.)
 # =========================================================================
 
@@ -34,7 +34,7 @@ function _continuous_hydrostatic(θ, z, p_surf; R, cp, p₀, g, nsub = 1000)
     return out
 end
 
-@testset "Era II — Anelastic & pseudo-incompressible" begin
+@testset "Anelastic & pseudo-incompressible" begin
 
 @testset "Reference states: discrete hydrostatic balance, analytic profiles" begin
     g = RegularGrid(; size=(4,4,24), extent=(2000.0,2000.0,6000.0), halo=(2,2,2))
@@ -177,4 +177,4 @@ end
     @test max_pseudo_incompressible_divergence(an) > 1e-8
 end
 
-end # @testset "Era II — Anelastic & pseudo-incompressible"
+end # @testset "Anelastic & pseudo-incompressible"

@@ -1,4 +1,4 @@
-# Era VI, Phase 57-d (#179): validation of the wall model on immersed (IBM
+# Phase 57-d (#179): validation of the wall model on immersed (IBM
 # mask) walls — the rotated channel at Re_τ = 1000. A channel whose walls in
 # y are an IBM solid mask, run to t = 80 δ/u_τ, reaches the bulk velocity of
 # the same channel with z-walls (the P57-a operator), and the Lee & Moser
@@ -15,7 +15,7 @@ using Aeolus.Fields: interior_view
 
 const IV = interior_view
 
-@testset "Era VI — wall model on immersed walls: rotated channel (#179)" begin
+@testset "wall model on immersed walls: rotated channel (#179)" begin
 
 # -------------------------------------------------------------------------
 # 1. The rotated channel: walls in y from an IBM mask vs walls in z
