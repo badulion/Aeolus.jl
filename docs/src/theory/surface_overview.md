@@ -81,7 +81,7 @@ patchy-surface LES.
 
 Against observations or external reference models (the analytic and
 conservation checks of each phase are on its page and in the
-[long-range roadmap](../design/longterm_roadmap.md)):
+[roadmap](../design/roadmap.md)):
 
 | phase | check | result | reference |
 | :-- | :-- | :-- | :-- |

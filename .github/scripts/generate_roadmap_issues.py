@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate .github/roadmap-issues.toml from the long-range roadmap.
+"""Generate .github/roadmap-issues.toml from the roadmap (docs/src/design/roadmap.md).
 
 Tiered by horizon: the near term is decomposed into concrete issues by
 hand (below), the mid term gets one issue per phase parsed from the
@@ -11,7 +11,7 @@ Run:  python3 .github/scripts/generate_roadmap_issues.py
 import re, pathlib, datetime
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ROADMAP = ROOT / "docs/src/design/longterm_roadmap.md"
+ROADMAP = ROOT / "docs/src/design/roadmap.md"
 OUT = ROOT / ".github/roadmap-issues.toml"
 
 # Milestones, named by content. The key is the GitHub label for the
@@ -253,7 +253,7 @@ def main():
                         f"## Phase context\n\n{pbody}\n"
                         + (f"\n**Phase validation target:** {pval}\n" if pval else "")
                         + accept([]) +
-                        f"\n## References\n\n- Roadmap: `docs/src/design/longterm_roadmap.md`, Phase {p}\n"
+                        f"\n## References\n\n- Roadmap: `docs/src/design/roadmap.md`, Phase {p}\n"
                         f"- Workflow: [`docs/CONTRIBUTING.md`](../blob/master/docs/CONTRIBUTING.md)\n")
                 emit(f"Phase {p} — {stitle}", ms,
                      dedup([mlabel, f"phase-{p}"] + labels), body)
@@ -264,7 +264,7 @@ def main():
                       "concrete issues before starting — see the tiering rule in "
                       "`docs/CONTRIBUTING.md`.\n"
                     + accept([]) +
-                    f"\n## References\n\n- Roadmap: `docs/src/design/longterm_roadmap.md`, Phase {p}\n")
+                    f"\n## References\n\n- Roadmap: `docs/src/design/roadmap.md`, Phase {p}\n")
             emit(f"Phase {p} — {ptitle}", ms, [mlabel, f"phase-{p}"], body)
 
     for label, title, lo, hi, state, desc in MILESTONES:
@@ -277,7 +277,7 @@ def main():
                 "## Note\n\nThis milestone is far enough out that decomposing it now would be "
                 "guesswork. Break it into per-phase issues when the preceding milestone is "
                 "close to complete.\n\n"
-                "## References\n\n- Roadmap: `docs/src/design/longterm_roadmap.md`\n")
+                "## References\n\n- Roadmap: `docs/src/design/roadmap.md`\n")
         emit(f"{title} (epic)", title, [label, "epic"], body)
 
     for slug, title, area, body, labels in TECH_DEBT:

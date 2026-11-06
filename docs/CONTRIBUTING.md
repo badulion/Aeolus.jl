@@ -29,8 +29,9 @@ Development is organised into **milestones** — coherent blocks of
 capability named by their content (radiation, clouds and microphysics,
 turbulence closure, …), each ending at a validation target — subdivided into **phases** of two
 to six weeks. The full plan is
-[`docs/src/design/longterm_roadmap.md`](src/design/longterm_roadmap.md):
-eleven milestones, one hundred phases.
+[`docs/src/design/roadmap.md`](src/design/roadmap.md):
+one page with a Status checklist (✅ shipped, ☐ open), then one
+section per milestone in phase order: thirteen milestones, 112 phases.
 
 A phase is too large to be a unit of work. Phases are therefore broken
 into **issues**, each one a self-contained piece that can be implemented,
@@ -383,15 +384,15 @@ small dedicated closeout PR.
 
 Two reasons. A phase cannot honestly be marked ✅ SHIPPED while the PR
 delivering it is still open and might yet be rejected. And
-`longterm_roadmap.md` and `README.md` are shared files — if every
+`roadmap.md` and `README.md` are shared files — if every
 phase-completing branch edited them, concurrent agents would conflict on
 precisely the two files most likely to be touched simultaneously. Keeping
 them off feature branches removes that class of conflict entirely.
 
 **When a phase's last issue is merged**, update
-`docs/src/design/longterm_roadmap.md`:
+`docs/src/design/roadmap.md`:
 
-- Mark the phase **✅ SHIPPED**.
+- Tick the phase (✅) in the page's **Status** checklist.
 - Replace the planned description with **what was actually built**, and
   the numbers it was measured at. A shipped phase's entry is a record,
   not a forecast.
@@ -404,7 +405,6 @@ them off feature branches removes that class of conflict entirely.
   *expectations* that proved wrong rather than the code. Both happen. The
   distinction is the single most useful thing in the file, because it
   tells the next reader which of their own assumptions to distrust.
-- Tick the phase in the README roadmap checkboxes.
 
 A worked example of the tone, from the Phase 32 entry:
 
@@ -417,7 +417,8 @@ A worked example of the tone, from the Phase 32 entry:
 
 **When a milestone's last issue is merged**, additionally:
 
-- **Close the milestone.**
+- **Close the milestone**, and tick it in the Status checklist and in the
+  README's roadmap (the README lists milestones, not phases).
 - **Update the README** — milestone table, capability summary, validation table
   and test count. The README carried "39 unit tests" long after the suite
   passed seven thousand; that is how a README rots.

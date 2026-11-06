@@ -28,7 +28,7 @@ makedocs(
         # long single pages: the KA port log (223 KiB) and the generated option
         # references that hold the urban site (one table per urban component,
         # ONE-e #454); Documenter's 200 KiB limit otherwise fails the build
-        size_threshold_ignore = ["design/ka_port.md", "design/longterm_roadmap.md", "reference/options/model.md",
+        size_threshold_ignore = ["design/ka_port.md", "design/roadmap.md", "reference/options/model.md",
                                  "api/urban.md"],
     ),
     pages = [
@@ -118,7 +118,6 @@ makedocs(
             "Checkpoint / restart and FFT planning" => "design/checkpoint_restart.md",
             "Kernel port (KernelAbstractions)" => "design/ka_port.md",
             "Roadmap"                     => "design/roadmap.md",
-            "Long-range roadmap" => "design/longterm_roadmap.md",
         ],
         "Reference" => [
             "Options"              => OPTION_PAGES,

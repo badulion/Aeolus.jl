@@ -11,15 +11,23 @@ mixed-layer, and engineering CFD in a single framework.
 
 ## Scope and status
 
-Aeolus is under active development. The public API is not yet stable.
+Aeolus is under active development; the public API is not yet stable.
+Milestones, ✅ shipped · ☐ open (every phase, and what each shipped one
+measured, is in the [Roadmap](design/roadmap.md)):
 
-* **Phase 0 (foundations)** — done. Staggered Arakawa-C mesh, halo-fill,
-  FV operators, SSP-RK3 stepper, scalar-advection smoke test.
-* **Phase 1a (dry Boussinesq core)** — done. Face-centered velocity fields,
-  staggered momentum advection, FFT Poisson solver, fractional-step
-  projection, Smagorinsky-Lilly SGS, buoyancy, Coriolis.
-* **Phase 1b (DCBL validation)** — next.
-* Phases 2–5 in [`design/roadmap.md`](design/roadmap.md).
+* ✅ [LES core and physics scaffolds](design/roadmap.md#LES-core-and-physics-scaffolds) (Phases 1–20)
+* ✅ [Numerical foundations](design/roadmap.md#Numerical-foundations) (Phases 21–31)
+* ✅ [Radiation](design/roadmap.md#Radiation) (Phases 32–38)
+* ✅ [Clouds and microphysics](design/roadmap.md#Clouds-and-microphysics) (Phases 39–45)
+* ✅ [Land, urban and surface exchange](design/roadmap.md#Land,-urban-and-surface-exchange) (Phases 46–53)
+* ✅ [Turbulence closure](design/roadmap.md#Turbulence-closure) (Phases 54–59)
+* ☐ [Model infrastructure](design/roadmap.md#Model-infrastructure)
+* ☐ [Chemistry and aerosol](design/roadmap.md#Chemistry-and-aerosol) (Phases 60–66)
+* ☐ [Real-world data, forcing and validation](design/roadmap.md#Real-world-data,-forcing-and-validation) (Phases 67–73)
+* ☐ [Data assimilation and inverse problems](design/roadmap.md#Data-assimilation-and-inverse-problems) (Phases 74–79)
+* ☐ [Performance, scale and portability](design/roadmap.md#Performance,-scale-and-portability) (Phases 80–87)
+* ☐ [Machine learning, applications, ecosystem](design/roadmap.md#Machine-learning,-applications,-ecosystem) (Phases 88–100)
+* ☐ [Kilometre-scale regional and climate modelling](design/roadmap.md#Kilometre-scale-regional-and-climate-modelling) (Phases 101–112)
 
 ## Design philosophy
 
