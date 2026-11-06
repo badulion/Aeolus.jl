@@ -434,56 +434,24 @@ julia --project=docs docs/make.jl     # build locally (never deploys)
 
 ## Roadmap
 
-Development is organised into milestones named by content, each a coherent
-block of capability that ends with a validation target. Full plan:
+Development is organised into milestones named by content, each ending at
+a validation target. The full plan, with every phase checked or open and
+the record of what each shipped phase measured, is
 [`docs/src/design/roadmap.md`](docs/src/design/roadmap.md).
 
-- [x] **LES core and physics scaffolds** — and the first urban flagship *(Phases 1–20)*
-- [x] **Numerical foundations** — cut-cell IBM, IMEX, WENO-Z/TENO,
-      anelastic, multigrid, nesting, AMR *(21–31)* · 2,148 tests
-- [x] **Radiation** — gas optics, two-stream,
-      Monte-Carlo, radiosity, BRDF, aerosol, solar geometry *(32–38)* · 4,912 tests
-- [x] **Clouds and microphysics** *(39–45)* · 47,392 tests
-  - [x] Phase 39 — exact moist thermodynamics
-  - [x] Phase 40 — P3 bulk microphysics
-  - [x] Phase 41 — superdroplet Lagrangian microphysics
-  - [x] Phase 42 — aerosol-cloud interaction
-  - [x] Phase 43 — ice nucleation
-  - [x] Phase 44 — precipitation, fog and visibility
-  - [x] Phase 45 — turbulence-microphysics interaction
-- [x] **Land, urban and surface exchange** *(46–53)* · 19,326 tests (6 `@test_broken`)
-  - [x] Phase 46 — multi-layer soil and hydrology
-  - [x] Phase 47 — photosynthesis, stomatal conductance, FLUXNET
-  - [x] Phase 48 — resolved plant canopy
-  - [x] Phase 49 — production urban canopy model, BUBBLE / CAPITOUL
-  - [x] Phase 50 — building energy model
-  - [x] Phase 51 — snow, ice and frozen surfaces
-  - [x] Phase 52 — water surfaces and wave coupling
-  - [x] Phase 53 — surface heterogeneity and blending
-- [x] **Turbulence closure** *(54–59)* · 5,729 tests (17 `@test_broken`)
-  - [x] Phase 54 — Lagrangian and scale-dependent dynamic SGS models
-  - [x] Phase 55 — AMD, Vreman, anisotropic and tensorial eddy viscosity, GABLS1
-  - [x] Phase 56 — prognostic SGS TKE and Reynolds stresses, filtered-DNS validation
-  - [x] Phase 57 — wall models: equilibrium, log-layer mismatch, immersed walls, TBLE
-  - [x] Phase 58 — stable boundary layer: GABLS2–4, CASES-99, turbulence collapse
-  - [x] Phase 59 — transition, σ-model, flat-plate transition, relaminarisation
-- [ ] **Chemistry and aerosol** *(60–66)*
-- [ ] **Real-world data, forcing and validation** *(67–73)*
-- [ ] **Data assimilation and inverse problems** *(74–79)*
-- [ ] **Performance, scale and portability** — MPI, GPU *(80–87)*
-  - [ ] Phase 81 — GPU port; its CPU half, the KernelAbstractions port
-        for multithreading, landed early (#291): Berlin flagship 155 → 88
-        ms/step at 12 threads (1.77×), short of the 4× target
-- [ ] **Machine learning, applications, ecosystem** *(88–100)*
-- [ ] **Kilometre-scale regional and climate modelling** *(future direction, 101–112)*
-- [x] **Outside the milestone plan** — delivered for the Berlin nesting epic and
-      the technical-debt milestone
-  - [x] Nesting: hierarchies, sibling, non-aligned and stretched children (#327–#329, #349)
-  - [x] KernelAbstractions port for CPU multithreading (#291)
-  - [x] Direct anelastic pressure solver (#309)
-  - [x] Structured logging, run folders and diagnostics (#293)
-  - [x] TOML run configuration, static and dynamic input drivers, ERA5 (#311)
-  - [x] Test tiers, CI, docs deployment, Berlin suite folded into module tests (#316, #354, #320, #317)
+- [x] **[LES core and physics scaffolds](docs/src/design/roadmap.md#les-core-and-physics-scaffolds)** *(Phases 1–20)* — the dry and moist core, pressure solvers, the first urban example
+- [x] **[Numerical foundations](docs/src/design/roadmap.md#numerical-foundations)** *(Phases 21–31)* — cut-cell walls, adaptive dt and IMEX, WENO-Z/TENO, anelastic, multigrid, nesting, AMR
+- [x] **[Radiation](docs/src/design/roadmap.md#radiation)** *(Phases 32–38)* — correlated-k gas optics, two-stream, Monte Carlo, urban radiosity, BRDF, aerosol, solar geometry
+- [x] **[Clouds and microphysics](docs/src/design/roadmap.md#clouds-and-microphysics)** *(Phases 39–45)* — moist thermodynamics, P3, superdroplets, activation, ice nucleation, fog and visibility
+- [x] **[Land, urban and surface exchange](docs/src/design/roadmap.md#land-urban-and-surface-exchange)** *(Phases 46–53)* — soil, photosynthesis, plant canopy, urban canopy, building energy, snow and ice, water surfaces, tiles
+- [x] **[Turbulence closure](docs/src/design/roadmap.md#turbulence-closure)** *(Phases 54–59)* — dynamic and Lagrangian SGS, AMD/Vreman/σ, TKE and Reynolds stress, wall models, stable boundary layer, transition
+- [ ] **[Model infrastructure](docs/src/design/roadmap.md#model-infrastructure)** — TOML run configuration and input drivers, one model, tests and CI shipped; structured logging and provenance (#293) open
+- [ ] **[Chemistry and aerosol](docs/src/design/roadmap.md#chemistry-and-aerosol)** *(Phases 60–66)* — KPP mechanisms, photolysis, aqueous chemistry, aerosol microphysics, emissions, deposition
+- [ ] **[Real-world data, forcing and validation](docs/src/design/roadmap.md#real-world-data-forcing-and-validation)** *(Phases 67–73)* — reanalysis and mesoscale driving, OSM ingestion, benchmarks, provenance; the ERA5 driver (67a) has shipped
+- [ ] **[Data assimilation and inverse problems](docs/src/design/roadmap.md#data-assimilation-and-inverse-problems)** *(Phases 74–79)* — adjoint, 4D-Var, ensemble Kalman, inversion, UQ
+- [ ] **[Performance, scale and portability](docs/src/design/roadmap.md#performance-scale-and-portability)** *(Phases 80–87)* — MPI, GPU, mixed precision, high-order backends; the CPU KernelAbstractions port (81a) and multithreaded scaling (84a) have shipped
+- [ ] **[Machine learning, applications, ecosystem](docs/src/design/roadmap.md#machine-learning-applications-ecosystem)** *(Phases 88–100)* — neural closures and emulators, wind energy, urban climate services, air quality
+- [ ] **[Kilometre-scale regional and climate modelling](docs/src/design/roadmap.md#kilometre-scale-regional-and-climate-modelling)** *(Phases 101–112)* — future direction: compressible core, sphere grids, convection-permitting downscaling
 
 ---
 
