@@ -1,9 +1,9 @@
-# Long-range roadmap — Eras II through XII
+# Long-range roadmap
 
 This document plans the next **decade** of Aeolus development. It sits
 downstream of two things already delivered:
 
-  * **Era I — Foundations** (Phases 1–20): the LES core, staggered
+  * **LES core and physics scaffolds** (Phases 1–20): the LES core, staggered
     Arakawa-C grid, pluggable pressure solvers, SGS closure,
     fractional-step projection, IBM, I/O, and the scaffolding for MPI /
     GPU / SEM / nesting.
@@ -18,9 +18,9 @@ downstream of two things already delivered:
 > **No scaffolds. Every phase ships a production-quality, validated
 > capability.**
 
-Era I deliberately traded depth for breadth — it wired interfaces so
+The LES core deliberately traded depth for breadth — it wired interfaces so
 later work would have somewhere to plug in. That phase is over. From
-Era II onward, a phase is only "done" when:
+Phase 21 onward, a phase is only "done" when:
 
 1. The physics or numerics is implemented to the standard of the
    reference literature, not a toy approximation.
@@ -33,31 +33,31 @@ Era II onward, a phase is only "done" when:
    test, and a benchmark entry.
 
 Items that cannot meet that bar get **deferred**, not shipped as
-scaffolds. Where Era I left a scaffold, the corresponding Era II–IV
-phase's job is to *replace* it with the real thing.
+scaffolds. Where Phases 1–20 left a scaffold, the corresponding phase
+among Phases 21–45 has the job to *replace* it with the real thing.
 
 ## Scope
 
-Roughly **5× the work completed so far**, organised as 10 eras of 8–12
+Roughly **5× the work completed so far**, organised as 10 milestones of 8–12
 phases each — about **100 phases**, each 2–6 weeks. A small team could
 do this in 4–5 years; a solo contributor should plan on 8–10.
 
-The ordering is deliberately physics-first: Eras II–IV close every
-approximation in the current physics before the project chases scale,
+The ordering is deliberately physics-first: Phases 21–45 (numerics,
+radiation, clouds) close every approximation in the current physics before the project chases scale,
 ML, or applications. A high-fidelity single-node model is more useful
 than a fast wrong one.
 
-Era XII (Phases 101–112) is a **future direction** beyond that
+Phases 101–112 are a **future direction** beyond that
 decade: kilometre-scale regional and climate modelling. It is listed
 so the architecture does not close the door on it, not as a commitment
 within the 100-phase plan.
 
 ---
 
-# Era II — Numerical foundations for fidelity ✅ SHIPPED
+# Numerical foundations ✅ SHIPPED
 
 *Replace every numerical compromise that currently forces artificially
-high viscosity or small time steps. Without this era, none of the
+high viscosity or small time steps. Without this milestone, none of the
 physics work downstream can run at realistic parameters.*
 
 **Status: complete.** 2,094 validation tests, all green. Every phase
@@ -76,7 +76,7 @@ relative** on a sloping wall with an embedded sphere (this is what makes
 the projection exact on cut geometry); `L = D·G` to 2.2e-17 relative;
 half-cut cell volume fraction and area exact to 1e-14; tilted-plane
 normals to 1e-12; uniform-flow divergence past a cut wall < 1e-12.
-**Unlocks** `ν = 10⁻⁵` in urban geometry — the whole point of the era.
+**Unlocks** `ν = 10⁻⁵` in urban geometry — the whole point of the milestone.
 
 ### Phase 22 — Ghost-cell wall reconstruction ✅
 `src/CutCell.jl`. Image/foot-point stencils on the *true* surface with
@@ -220,7 +220,7 @@ correction doing real, measurable work; nest sponge reduces reflected
 amplitude **12.6×** (3.71e-2 → 2.94e-3).
 *Since then* the parent–child operators moved to `src/Nesting.jl`
 (#250) and gained multi-level hierarchies, sibling, non-aligned and
-stretched children (#328); see "Delivered outside the era plan" below.
+stretched children (#328); see "Delivered outside the milestone plan" below.
 
 ### Phase 31 — Adaptive mesh refinement ✅
 `src/AdaptiveMesh.jl`. Block-structured AMR: Löhner gradient, vorticity
@@ -236,7 +236,7 @@ efficiency**; mass conserved to **1.13e-16 across two regrid events**
 accuracy at 56% of the cell count** (L1 error 1.206e-2 on 2,296 cells
 vs 1.247e-2 on 4,096 uniform-fine cells, against 2.019e-2 coarse).
 
-### Era II — known limitations carried forward
+### Numerical foundations — known limitations carried forward
 
 Recorded honestly rather than papered over; each is a candidate
 follow-up phase:
@@ -264,12 +264,12 @@ follow-up phase:
     flux-form upwind; per-block momentum and pressure solves are future
     work.
 
-# Era III — High-fidelity radiation ✅ SHIPPED
+# Radiation ✅ SHIPPED
 
 **Status: all seven phases (32–38) and the shared contract are
-complete** (Phases 34–37 landed together in `ac38822`; the era test set
+complete** (Phases 34–37 landed together in `ac38822`; the radiation test set
 is 4,912 tests on master at `2895fed`). `src/RadiationCore.jl` fixes the interface every component in
-this era speaks — `SpectralGrid` (RRTMG-layout bands with correlated-k
+the radiation stack speaks — `SpectralGrid` (RRTMG-layout bands with correlated-k
 g-points and weights), `OpticalProperties` (τ/ssa/g with the correct
 optical-depth- and scattering-weighted `combine_optics!` rule),
 `RadiativeFluxes` (level-based, bottom-up, `net = dn - up` positive
@@ -293,7 +293,7 @@ model's own vertical grid, replacing the prescribed LW-down constant.
 "bind `RRTMGP.jl`". That is not possible on this host: RRTMGP.jl pulls
 in NetCDF/HDF5 for its k-distribution files, and those binary
 dependencies do not load here (the same `libmpifort.so` failure that
-forced the Serialization+TOML I/O layer in Era I). Rather than ship a
+forced the Serialization+TOML I/O layer in Phases 1–20). Rather than ship a
 module that cannot be loaded, Phase 32 builds the k-distribution
 **from first principles** instead of reading it from a file:
 
@@ -495,7 +495,7 @@ longwave. **Measured**: view factors against closed forms 9.2e-15
 effective canyon albedo of 0.152 / 0.127 / 0.106 / 0.095 at
 H/W = 0.5 / 1 / 2 / 4, and the canyon floor's longwave loss falls to
 0.63 / 0.42 / 0.25 / 0.14 of a flat plate. The façade-temperature
-comparison against BUBBLE / CAPITOUL was done in Era V (Phase 49, #30).
+comparison against BUBBLE / CAPITOUL was done in Phase 49 (#30).
 Glass is Lambertian here; the angle-dependent glazing is Phase 49 (#27).
 
 ### Phase 36 — Spectral surface albedo and BRDF ✅ SHIPPED
@@ -553,7 +553,7 @@ refraction 0.564° at the horizon and 1.0 arcmin at 45°; air mass exactly
 plane-parallel 1/μ₀ diverges); TOA irradiance 1316.7 W/m² at aphelion and
 1408.0 at perihelion; Berlin summer-solstice maximum elevation within
 0.5° of the analytic 90 − φ + ε and solar noon at the correct UTC hour.
-The Era-I sinusoidal declination it replaces is in error by up to
+The earlier sinusoidal declination it replaces is in error by up to
 **0.79°** near the equinoxes.
 **Accuracy is stated honestly**: this is Meeus-grade (~0.01°), not full
 NREL SPA (±0.0003°). The full SPA needs ≈ 350 published VSOP87
@@ -564,7 +564,7 @@ transfer 0.01° is not limiting — the solar disc itself subtends 0.53°.
 
 ---
 
-# Era IV — High-fidelity clouds and microphysics ✅ SHIPPED
+# Clouds and microphysics ✅ SHIPPED
 
 *Move from the Kessler/two-moment scaffold to schemes that reproduce
 observed cloud microstructure and precipitation.*
@@ -573,10 +573,10 @@ observed cloud microstructure and precipitation.*
 landed before the issue tracker (`622184e`, `63fc020`); Phases 40 and
 43–45 are issues #1–#14 (PRs #72–#89), plus the contract fix #82
 (PR #91) and the P3 size-limit deduplication (PR #87). Milestone 4 has
-15 closed issues and none open. The era test set is 47,392 tests on
+15 closed issues and none open. The microphysics test set is 47,392 tests on
 master at `2895fed`; about 29,850 of them are the 14,880-state enthalpy
 sweep of #91. Shared contract: `src/MoistThermodynamics.jl`, which
-every scheme of the era speaks and which also owns Köhler theory
+every cloud scheme speaks and which also owns Köhler theory
 (after three drifted copies were merged, see Phase 42) and, since #91,
 the one enthalpy-conserving process adjustment.
 
@@ -746,7 +746,7 @@ maximum-random overlap and four in-cell regions (`src/p3/precip_fraction.jl`);
 `src/Visibility.jl` (Koschmieder over Mie droplet, κ-Köhler haze and
 Rayleigh extinction); `src/RadiationFog.jl` (enthalpy-conserving fog
 adjustment, implicit dew into the surface budget, a 1-D `FogColumn`
-with droplet-radiative feedback through the Era III stack).
+with droplet-radiative feedback through the radiation stack).
 **Measured**: Kessler fall speed within 0.1 % of Klemp & Wilhelmson at
 1–3 g m⁻³; the old urban rain kernel created mass (×1.000678 in 20 s),
 the new one conserves exactly; fog visibility 171 / 108 / 83 m at LWC
@@ -806,14 +806,14 @@ broadening law).
 
 ---
 
-# Era V — High-fidelity land, urban and surface exchange ✅ SHIPPED
+# Land, urban and surface exchange ✅ SHIPPED
 
 *Make the surface as good as the atmosphere. Currently the biggest
 source of error in the urban runs.*
 
 **Status: all eight phases (46–53) and the shared contract are
 complete** — issues #15–#43 and #92, PRs #93–#122. Milestone 5 has 30
-closed issues and none open. The era test set is 19,326 tests (6 `@test_broken`) on
+closed issues and none open. The surface test set is 19,326 tests (6 `@test_broken`) on
 master at `2895fed`. Shared contract (`src/SurfaceExchange.jl`, #92 /
 PR #93): material constants that read latent heats, c_p and g from
 MoistThermodynamics rather than restating them; Monin–Obukhov
@@ -821,12 +821,12 @@ similarity as a dispatch hierarchy (Businger–Dyer / Paulson unstable,
 Beljaars–Holtslag stable) solved for ζ by a bracketed Illinois
 iteration; and the `AbstractSurface` interface (`surface_temperature`,
 `roughness_lengths`, `step_surface!`, the RadiationCore albedo and
-emissivity generics) that every Era V surface implements. Measured:
+emissivity generics) that every land and urban surface implements. Measured:
 neutral C_D 2.7e-16 from (κ/ln(z/z0))²; ψ against Paulson and Beljaars–
 Holtslag to 6 digits; returned L against the Obukhov length of its own
 fluxes 9.1e-15; a very stable case (ΔT = −10 K, U = 2 m/s) converges in
 8 iterations. Expectation that was wrong: Ri_B = ζ C_D/C_H (the identity
-is ζΦ_h/Φ_m²). Since the era closed, the Berlin case runs this contract
+is ζΦ_h/Φ_m²). Since the milestone closed, the Berlin case runs this contract
 in every column (MOST + `SoilThermalColumn`, #129 / PR #158) — which
 found a src bug recorded under Phase 46 — and the urban facet system
 got a matrix-free GMRES solve (#138 / PR #163, Phase 49).
@@ -928,7 +928,7 @@ displacement height 8.36 / 6.64 m against 7.8 / 5.8; Hyytiälä U/u*
 Körner 2007, assumed forcing). **Bugs the tests caught**: Gauss–Legendre
 integrated a Beta LAD only to 2e-5 (endpoint grading added); a TwoStream
 resonance where 1 − k²μ₀² = 0 put the canopy two-stream 3–14 % off the
-incident flux (an Era III fix); β₀ = 0/0 near χ_L = −0.4; a lagged-K
+incident flux (a radiation fix); β₀ = 0/0 near χ_L = −0.4; a lagged-K
 column two-cycling; a mixing length not capped at the wall (13 % of the
 stress on the floor). The retired explicit drag used LAI for LAD — but
 its recorded instability did not reproduce in the urban example.
@@ -942,7 +942,7 @@ profiles; turbulence statistics; the CHATS leafless L_s/h (`@test_broken`).
 Full urban-canopy model matching or exceeding PALM's USM: per-facet
 (roof / wall / ground) multi-layer wall conduction, window transmission,
 anthropogenic heat with a real building-energy model, and
-street-canyon-resolved radiation coupled to Era III's radiosity.
+street-canyon-resolved radiation coupled to the radiation stack's radiosity.
 **Validated by**: façade and surface temperatures against BUBBLE /
 CAPITOUL urban field-campaign data.
 
@@ -952,7 +952,7 @@ CAPITOUL urban field-campaign data.
 not restated); a θ-scheme conduction core; `UrbanFacet <: AbstractSurface`
 with the skin balance linearised into a Robin condition; Fresnel /
 Beer–Lambert glazing, multi-pane units with ISO 15099 gaps,
-`WindowFacet`; implicit facet–facet longwave through the Era III
+`WindowFacet`; implicit facet–facet longwave through the
 radiosity response J; building heat release from the Phase 50 model
 replacing the prescribed anthropogenic heat; TEB canyon wind and Rowley
 convection for the validation driver. **Measured**: ISO 6946 composite
@@ -1113,7 +1113,7 @@ qualitatively.
 
 ---
 
-# Era VI — High-fidelity turbulence closure ✅ SHIPPED
+# Turbulence closure ✅ SHIPPED
 
 *The SGS model is the heart of LES. Make it defensible.*
 
@@ -1122,16 +1122,16 @@ qualitatively.
 from the Technical-debt milestone (#232–#237 / PRs #240–#244, #271).
 Milestone 6 is still open: its six phase tracking issues #44–#49 have
 no open work left, but agents do not close issues, so closing them and
-the milestone is left to the maintainer. Era VI adds five src modules:
+the milestone is left to the maintainer. The turbulence-closure work adds five src modules:
 `TurbulenceStability`, `WallModels`, `LargeScaleForcing`, `PrognosticSGS`
-and `Transition`. The closures themselves live in `Operators`. The era
+and `Transition`. The closures themselves live in `Operators`. The turbulence
 test set is 5,729 tests (17 `@test_broken`) on master at `511deda`:
 4,704 in the fast tier and 1,025 in the full-only validation runs. The
-count includes the files of the nesting epic (#246) that are filed under Era VI. The groundwork from before the era (#132 /
+count includes the files of the nesting epic (#246) that are filed under Turbulence closure. The groundwork from before it (#132 /
 PR #160) moved the local Germano–Lilly scaffold into `Operators` after
 its M_ij sign was found wrong (C_s = 0 everywhere).
 
-**Berlin defaults after the era.** The `:sgs` slot runs the Deardorff
+**Berlin defaults after the milestone.** The `:sgs` slot runs the Deardorff
 TKE closure (`:tke`), with the stress-form divergence, the diagonal
 scalar diffusivity, and qv and every tracer diffused with κ_t. Every
 eddy-viscosity provider is wrapped in `StabilityCorrected` (`:brown94`).
@@ -1147,7 +1147,7 @@ defaults: LASD (the default of the `:dynamic` provider), AMD, Vreman,
 σ, the Reynolds-stress closure, the isentropic tensor, the TBLE wall
 model and the dynamic z0.
 
-**Open after the era** (Technical debt, not Era VI milestone):
+**Open after the milestone** (Technical debt, not the Turbulence closure milestone):
 #238, Berlin nights are implausible (37 °C at 03:00, heat island
 27.7 K, u* ≈ 0.001 m/s); #239, N² ignores condensate loading and
 saturated stability.
@@ -1590,7 +1590,7 @@ the σ-model in `Operators`; #172, #184, #180, #185, #195 / PRs #209,
 - h/L 0.45 was not re-run on 96³.
 - σ is off by default.
 
-### Era VI — known limitations carried forward
+### Turbulence closure — known limitations carried forward
 
 - **The Berlin flagship night is not physical** (#238): 37 °C at 03:00,
   a 27.7 K heat island, u* ≈ 0.001 m/s. Its constant ν = 2 m²/s is
@@ -1608,10 +1608,10 @@ the σ-model in `Operators`; #172, #184, #180, #185, #195 / PRs #209,
 
 ---
 
-# Delivered outside the era plan ✅ SHIPPED
+# Delivered outside the milestone plan ✅ SHIPPED
 
 *Infrastructure that the Berlin nesting epic and the Technical-debt
-milestone pulled forward. None of it is an era phase. Parts of it are
+milestone pulled forward. None of it is a roadmap phase. Parts of it are
 early halves of Phases 30, 67, 73 and 81, which point here.*
 
 **Status: all seven blocks below are merged** (master `4b3a16b`,
@@ -1627,7 +1627,7 @@ only the upstream FFTW crash #397 stays open.
 
 **✅ SHIPPED** (`src/Nesting.jl`, `src/nesting/`; follow-ups of the
 Berlin nesting epic #246, whose N-* PRs #272–#292, #323, #330 and #343
-are counted with Era VI; #327 / PR #339, #329 / PR #348, #349 / PR #371,
+are counted with Turbulence closure; #327 / PR #339, #329 / PR #348, #349 / PR #371,
 #328 / PR #394). What was built:
 - **Hardening M1–M6 (#327).** One mixed-core two-way guard,
   `_check_two_way_pair`. One per-face advective-plus-diffusive kernel,
@@ -2357,7 +2357,7 @@ across nests) and #461 (external LES validation) are separate.
 
 ---
 
-# Era VII — High-fidelity chemistry and aerosol
+# Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*
 
@@ -2380,7 +2380,7 @@ implementation; ozone-production comparison for a photochemical smog
 case.
 
 ### Phase 61 — Photolysis rates
-Online photolysis using the computed actinic flux from Era III's
+Online photolysis using the computed actinic flux from the
 radiation solver, including the effect of clouds and aerosol on
 photolysis rates.
 **Validated by**: J-value comparison against TUV reference model.
@@ -2424,7 +2424,7 @@ stations.
 
 ---
 
-# Era VIII — Real-world data, forcing and validation
+# Real-world data, forcing and validation
 
 *A model is only as good as what drives it and what it is checked
 against.*
@@ -2495,7 +2495,7 @@ compiler-flag provenance remain.
 
 ---
 
-# Era IX — Data assimilation and inverse problems
+# Data assimilation and inverse problems
 
 *Once forward fidelity is real, make the model answer inverse
 questions.*
@@ -2507,7 +2507,7 @@ dynamics, physics and I/O, with checkpointing for long windows.
 every prognostic and parameter.
 
 ### Phase 75 — 4D-Var
-Strong- and weak-constraint 4D-Var with the Era-VII observation
+Strong- and weak-constraint 4D-Var with the observation
 operators, background-error covariance modelling, and a quasi-Newton
 minimiser.
 **Validated by**: identical-twin experiments; assimilation of real
@@ -2542,11 +2542,11 @@ prediction.
 
 ---
 
-# Era X — Performance, scale and portability
+# Performance, scale and portability
 
 *Deliberately placed after physics: a fast model of the wrong physics
 is worthless, and premature optimisation would have frozen interfaces
-too early. By this era the physics is settled, so it is safe to
+too early. By this point the physics is settled, so it is safe to
 optimise hard.*
 
 ### Phase 80 — Production MPI
@@ -2565,7 +2565,7 @@ CPU/GPU code path.
 speed-up over single-CPU-core on realistic cases.
 
 **CPU half ✅ SHIPPED early** (epic #291; details under "Delivered
-outside the era plan" above). KernelAbstractions port landed early
+outside the milestone plan" above). KernelAbstractions port landed early
 (epic #291) for CPU multithreading; the GPU backend, GPU-resident FFT/MG
 and SoA surfaces remain. Measured (KA-o #308, Ryzen 9 7900): Berlin
 flagship 155 -> 88 ms/step at 12 threads (1.77x), 256³ DNS 1.15 h -> 48
@@ -2617,14 +2617,14 @@ A DG variant for problems needing shock capturing or extreme
 
 ---
 
-# Era XI — Machine learning, applications and ecosystem
+# Machine learning, applications, ecosystem
 
 *With a differentiable, validated, fast model in hand, the payoff
-era.*
+milestone.*
 
 ### Phase 88 — Neural SGS closures
 Train SGS models on filtered DNS and superdroplet reference data,
-with online (solver-in-the-loop) training via the Era-IX adjoint,
+with online (solver-in-the-loop) training via the Phase 74 adjoint,
 plus stability guarantees and physical-constraint enforcement.
 **Validated by**: a-posteriori skill on unseen flow regimes; stability
 over long integrations.
@@ -2714,24 +2714,24 @@ projects, and a governance model.
 
 ---
 
-# Era XII — Kilometre-scale regional and climate modelling
+# Kilometre-scale regional and climate modelling
 
 *A future direction, not part of the decade plan above (tracking
-issue #289). Through Era XI
+issue #289). Through Phase 100
 Aeolus is a large-eddy model: grid spacings of metres to tens of
 metres over a few kilometres, with the mesoscale entering from outside
-(Phase 68). Era XII would make Aeolus itself a convection-permitting
+(Phase 68). Phases 101–112 would make Aeolus itself a convection-permitting
 regional model at about 3 km, in the class of ICON-LAM, COSMO-CLM and
 REMO-NH, so that one code and one physics library cover the scales
 from a European domain down to a Berlin street canyon.*
 
 **Why it sits here.** Every piece of it depends on something earlier:
-- the cost needs Era X (MPI and GPU);
-- the driving data needs Era VIII (reanalysis readers, Phase 67) and
+- the cost needs MPI and GPU (Phases 80–87);
+- the driving data needs the reanalysis readers (Phase 67) and
   the nesting interface of Phase 68 (#58, and the Berlin nesting epic
   #246);
 - long-run conservation needs the full-state checkpointing of #245;
-- the grey-zone physics needs the Era VI closures to blend into.
+- the grey-zone physics needs the turbulence closures (Phases 54–59) to blend into.
 
 A 3 km domain the size of EURO-CORDEX is roughly 1500 × 1500 × 60
 ≈ 1.4 × 10⁸ cells. On the present single-threaded solver one time step
@@ -2744,7 +2744,7 @@ resolves the energetic boundary-layer eddies, so the LES closures stop
 being valid. The full troposphere and the orography enter the
 dynamics, and the domain is a piece of a sphere driven at its edges.
 The phases below address each of these. A phase is done by the same
-standard as every other era: implemented to the reference literature,
+standard as every other milestone: implemented to the reference literature,
 validated, stable at production resolution.
 
 ### Phase 101 — Compressible non-hydrostatic dynamical core
@@ -2823,8 +2823,8 @@ global models.
 - Optional spectral nudging of the large scales (von Storch et al.
   2000).
 - Driving from ERA5 and from CMIP-class global model output, built on
-  the boundary-data contract of the nesting epic (#246) and the Era
-  VIII readers.
+  the boundary-data contract of the nesting epic (#246) and the
+  real-world data readers (Phases 67–73).
 - Mass and energy consistency of the boundary fluxes.
 
 **Validated by**: a perfect-model "big brother" experiment (Denis et
@@ -2833,7 +2833,7 @@ al. 2002); driving drift and boundary noise quantified.
 ### Phase 105 — Grey-zone boundary-layer turbulence
 A scale-aware boundary-layer scheme, for example an eddy-diffusivity
 mass-flux (EDMF) TKE closure (Siebesma et al. 2007), blended by grid
-spacing with the Era VI LES closures (Honnert, Masson & Couvreux 2011;
+spacing with the LES turbulence closures (Honnert, Masson & Couvreux 2011;
 Boutle et al. 2014). The same model then runs continuously from LES to
 3 km, without switching physics by hand.
 
@@ -2845,7 +2845,7 @@ shallow-cumulus case (BOMEX) at mesoscale resolution.
 - Scale-aware shallow convection, and an optional deep-convection
   scheme for grids coarser than about 5 km.
 - Subgrid cloud cover from a statistical cloud scheme.
-- The Era IV microphysics (two-moment, P3) and Era VII aerosol–cloud
+- The cloud microphysics (two-moment, P3) and the aerosol–cloud
   coupling, at kilometre scale.
 
 **Validated by**: an idealised supercell; radiative–convective
@@ -2855,7 +2855,7 @@ intensity) against radar.
 ### Phase 107 — Land surface and hydrology for climate time scales
 Multi-year soil hydrology with groundwater, frozen soil and snow,
 river routing, lakes, vegetation phenology, and land-use tiles at
-kilometre scale (`SurfaceTiles`), built on the Era V land modules.
+kilometre scale (`SurfaceTiles`), built on the land-surface modules.
 
 **Validated by**: multi-year eddy-covariance sites (FLUXNET); river
 discharge at gauged catchments; snow-cover duration.
@@ -2912,14 +2912,14 @@ offline-driven Berlin case (#246); conservation across all levels.
 ### Phase 112 — Climate-change downscaling
 - Scenario runs driven by CMIP-class global models.
 - The pseudo-global-warming method (Schär et al. 1996).
-- Ensembles with the Era IX uncertainty machinery.
+- Ensembles with the uncertainty machinery of Phases 74–79.
 - Urban climate projections, for example Berlin heat-wave statistics,
   from the full chain down to street scale.
 
 **Validated by**: historical-period skill (Phase 110) and a documented
 uncertainty budget for the projected change.
 
-**Era XII milestone.** Aeolus is a convection-permitting regional
+**Milestone.** Aeolus is a convection-permitting regional
 climate model, evaluated against the published ensemble, that nests
 seamlessly down to its own urban LES.
 
@@ -2934,7 +2934,7 @@ These apply to *every* phase above, not to any one of them:
     assumptions, its validity range, and what it omits. Where a cheaper
     option exists it is selectable, never the silent default.
   * **Regression-tested.** The benchmark suite (Phases 71–72) runs in
-    CI from Era VIII onward; earlier eras add their validation cases to
+    CI from Phase 67 onward; earlier milestones add their validation cases to
     it as they land.
   * **Performance budget.** Each phase records its cost. A phase that
     makes the flagship run more than ~20 % slower needs either an
@@ -2946,25 +2946,25 @@ These apply to *every* phase above, not to any one of them:
 
 | After | Aeolus is… |
 | :---- | :--------- |
-| Era II (Phase 31) | numerically sound enough to run real-Reynolds urban LES without inflated viscosity |
-| Era III (Phase 38) | radiatively accurate — 3-D urban radiation, real gas optics |
-| Era IV (Phase 45) | cloud-physics-capable at research standard, superdroplet reference included |
-| Era V (Phase 53) | a credible urban and land-surface model, validated against field campaigns |
-| Era VI (Phase 59) | defensible in the turbulence-modelling literature, including the stable boundary layer |
-| Era VII (Phase 66) | a real chemistry-transport model, driven by real inventories |
-| Era VIII (Phase 73) | drivable from reanalysis, validated across the canonical benchmark suite, fully reproducible |
-| Era IX (Phase 79) | an inverse-problem and uncertainty-quantification platform |
-| Era X (Phase 87) | HPC-production: MPI + GPU at scale, high-order backends |
-| Era XI (Phase 100) | a community Earth-system-scale tool with an ML-native workflow and real applications |
-| Era XII (Phase 112), future direction | a convection-permitting regional climate model (~3 km) that nests seamlessly down to its own urban LES |
+| Numerical foundations (Phase 31) | numerically sound enough to run real-Reynolds urban LES without inflated viscosity |
+| Radiation (Phase 38) | radiatively accurate — 3-D urban radiation, real gas optics |
+| Clouds and microphysics (Phase 45) | cloud-physics-capable at research standard, superdroplet reference included |
+| Land, urban and surface exchange (Phase 53) | a credible urban and land-surface model, validated against field campaigns |
+| Turbulence closure (Phase 59) | defensible in the turbulence-modelling literature, including the stable boundary layer |
+| Chemistry and aerosol (Phase 66) | a real chemistry-transport model, driven by real inventories |
+| Real-world data, forcing and validation (Phase 73) | drivable from reanalysis, validated across the canonical benchmark suite, fully reproducible |
+| Data assimilation and inverse problems (Phase 79) | an inverse-problem and uncertainty-quantification platform |
+| Performance, scale and portability (Phase 87) | HPC-production: MPI + GPU at scale, high-order backends |
+| Machine learning, applications, ecosystem (Phase 100) | a community Earth-system-scale tool with an ML-native workflow and real applications |
+| Kilometre-scale regional and climate modelling (Phase 112), future direction | a convection-permitting regional climate model (~3 km) that nests seamlessly down to its own urban LES |
 
 ## Honest assessment
 
 This is a decade of work and it assumes sustained effort, domain
 expertise across meteorology, cloud physics, chemistry, turbulence and
 numerical analysis, and access to reference data and HPC resources. A
-solo contributor should expect to reach the end of Era IV in that
-window, not the end of Era XI.
+solo contributor should expect to reach the end of Clouds and microphysics (Phase 45) in that
+window, not the end of Phase 100.
 
 The ordering is the important part. Physics and numerical fidelity come
 first because everything downstream — assimilation, ML, applications —
@@ -2972,16 +2972,16 @@ inherits their errors. Performance comes late deliberately: there is no
 value in efficiently computing the wrong answer, and optimising before
 the physics settles freezes interfaces that still need to change.
 
-Era XII changes what kind of model Aeolus is: from a large-eddy model
+Kilometre-scale modelling changes what kind of model Aeolus is: from a large-eddy model
 with the mesoscale entering at its boundaries to a regional model that
 contains its own mesoscale. Projects of that kind (ICON, COSMO-CLM,
 REMO) are built and maintained by institutional teams over many
 years. It belongs on the roadmap because the payoff, one physics
 library from the regional domain down to the street canyon, is
-distinctive. It should be started only once Eras VIII and X are
-shipped, and broken into issues only when it comes into view.
+distinctive. It should be started only once real-world data (Phases 67–73) and
+performance (Phases 80–87) are shipped, and broken into issues only when it comes into view.
 
-Era XII is deliberately **not** a global climate model. But its grid
+The kilometre-scale model is deliberately **not** a global climate model. But its grid
 abstraction (Phase 103) is designed so a global one stays possible: the
 cubed sphere is global from the start, and the panel and metric
 abstraction leaves room for unstructured grids later. Global context in

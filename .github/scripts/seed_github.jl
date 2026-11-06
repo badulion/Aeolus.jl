@@ -28,14 +28,15 @@ const LABEL_COLOURS = Dict(
     "tech-debt"      => "d93f0b",
     "validation"     => "0e8a16",
     "infrastructure" => "1d76db",
-    "microphysics"   => "c5def5",
-    "radiation"      => "fef2c0",
     "land"           => "bfd4f2",
     "urban"          => "d4c5f9",
-    "turbulence"     => "f9d0c4",
 )
+# One label per roadmap milestone, named by content; all share one colour.
+const MILESTONE_LABELS = Set(["radiation", "microphysics", "surface",
+    "turbulence", "chemistry", "real-world-data", "data-assimilation",
+    "performance", "ml-ecosystem", "km-scale"])
 label_colour(l) = get(LABEL_COLOURS, l,
-                      startswith(l, "era-")   ? "0052cc" :
+                      l in MILESTONE_LABELS   ? "0052cc" :
                       startswith(l, "phase-") ? "ededed" : "cccccc")
 
 function sh(args::Vector{String})
