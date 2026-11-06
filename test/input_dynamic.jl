@@ -141,6 +141,59 @@ end
     @test plane_ulps(planes, 2.5) == 0
 end
 
+# A synthetic boundary snapshot whose values differ at every storage point,
+# field and time (all exactly representable), so a slab read at a wrong
+# offset or from the wrong face shows.
+struct PosSnapshot
+    t::Float64
+    dims::NTuple{3,Int}
+end
+pos_value(name, i, j, k, t) = i + 100.0j + 10000.0k + 0.25findfirst(==(name), (:u, :v, :w, :θ, :qv)) + 1e6 + 1e3t
+snapshot_values(s::PosSnapshot, name::Symbol) =
+    [pos_value(name, i, j, k, s.t) for i in 1:s.dims[1], j in 1:s.dims[2], k in 1:s.dims[3]]
+
+@testset "InputDrivers dynamic: the time blend reads each plane's slab directly (#529)" begin
+    path = joinpath(mktempdir(), "pos.nc")
+    planes = syn_planes(SYN_MESH)
+    rec = NestBoundaryRecorder(path, planes, SYN_MESH; init_time = "2019-06-29T10:00:00Z")
+    for (n, t) in enumerate((0.0, 60.0))
+        record_boundary!(rec, t, n == 1 ? NaN : 60.0, PosSnapshot(t, syn_dims(SYN_MESH)))
+    end
+    d = read_dynamic_driver(path; mesh = SYN_MESH)
+    t = 25.0
+    advance_feed!(d.boundary, t)
+    data = d.boundary.data
+    open_planes = [p for p in planes if p.mode !== :mirror]
+    @test length(open_planes) >= 8
+    # every plane's box lies in one slab: the blend reads that dense array,
+    # and at its offset it holds exactly the values getindex finds point by point
+    for p in open_planes
+        r = (p.irange, p.jrange, p.krange)
+        for snap in (data.a, data.b)
+            A = snapshot_values(snap, p.name)
+            src, o = Aeolus.BoundaryConditions.blend_source(A, r)
+            @test src isa Array{Float64,3}
+            @test all(src[i - o[1], j - o[2], k - o[3]] == A[i, j, k] for i in r[1], j in r[2], k in r[3])
+        end
+    end
+    # the blend: the same two products on the same copied values as the
+    # point-by-point read, so the planes agree exactly
+    τ = window_fraction(data, t)
+    boundary_values!(planes, data, t)
+    for p in open_planes
+        A = snapshot_values(data.a, p.name); B = snapshot_values(data.b, p.name)
+        want = [(1 - τ) * A[i, j, k] + τ * B[i, j, k] for i in p.irange, j in p.jrange, k in p.krange]
+        @test p.data == want
+        # and it is the time blend of the recorded field (0.5 ulp per product)
+        @test maximum(abs, p.data .- [(1 - τ) * pos_value(p.name, i, j, k, 0.0) + τ * pos_value(p.name, i, j, k, 60.0)
+                                      for i in p.irange, j in p.jrange, k in p.krange]) <= 2eps(2e6)
+    end
+    # a box no single slab holds (the whole array) keeps the point-by-point view
+    A = snapshot_values(data.a, :u)
+    src, o = Aeolus.BoundaryConditions.blend_source(A, map(n -> 1:n, size(A)))
+    @test src === A && o == (0, 0, 0)
+end
+
 @testset "InputDrivers dynamic: at most two records resident over 300" begin
     dir = mktempdir()
     n = 300

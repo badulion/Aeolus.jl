@@ -206,7 +206,9 @@ with a [`FileSnapshot`](@ref Aeolus.InputDrivers.FileSnapshot), one
 `time_bc` record whose `snapshot_values` is a slab-backed 3-D view
 ([`SlabArray`](@ref Aeolus.InputDrivers.SlabArray)): the time blend is
 the existing `blend_window!`, the one kernel of the nest, with no second
-interpolation. A [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed)
+interpolation. The blend reads each plane from the one slab that holds its
+whole box, found once per plane ([`blend_source`](@ref Aeolus.BoundaryConditions.blend_source), #529),
+not point by point through the view. A [`FileBoundaryFeed`](@ref Aeolus.InputDrivers.FileBoundaryFeed)
 holds two records and moves the window ([`feed_window!`](@ref Aeolus.InputDrivers.feed_window!),
 [`advance_feed!`](@ref Aeolus.InputDrivers.advance_feed!)), reading the one
 record it does not hold. Measured (`test/input_dynamic.jl`): over 1000

@@ -2380,6 +2380,36 @@ step's total did not change, so the remaining time is elsewhere (being
 profiled). Test: `config_model.jl` builds a non-urban run from a policy
 at 3 threads and expects `Threads.nthreads()`, and an explicit 2 kept.
 
+**The open faces' time blend reads the slabs directly (#529, 2026-11-06).**
+A dynamic driver's boundary record is a `SlabArray`, a storage-indexed view
+whose `getindex` searched the field's slabs and tested three ranges at
+every point. The blend of two records into each open plane read two such
+points per output point. Most planes are below the threading threshold
+(26 112 points against 16 384 per task; 18 of the 20 run serially), so
+this was a serial loop paying the search at every point. `blend_window!`
+now asks `blend_source(A, ranges)` for the dense array and offset behind
+the plane's box. A `SlabArray` returns the one slab holding the whole
+box, found once per plane, and a box no single slab holds keeps the
+point-by-point view.
+
+Measured on the Berlin 100 m domain (200 × 200 × 60, ERA5 open faces, 24
+threads), all 20 planes and 548 352 points:
+- one `boundary_values!` takes 2.69 ms before and 0.42 ms after
+  (2.55 and 0.36 ms in a second pair of runs);
+- per step, counted inside `step!`: 3.0 calls, 8.1 ms before and
+  1.8 ms after, out of a 0.26 s step. That is a 2.4 % gain.
+
+A deviation from the plan: the issue estimated the blend at 12 % of the
+step, from its share (95 of 785 samples) of the main thread's profile.
+The direct timing gives 3 %. The real run loop can't resolve 2.4 %: its
+s/step varied between 0.35 and 0.59 between sessions, for both versions.
+
+Test: `input_dynamic.jl` records a driver whose values differ at every
+point, field and time. Every plane takes the slab path, reads exactly what
+`getindex` reads (copied data) and blends to the same values; a box
+spanning more than one slab keeps the view. Shifting the slab offset by
+one point makes the test fail (43 errors).
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*
