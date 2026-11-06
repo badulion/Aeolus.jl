@@ -6,7 +6,7 @@
 
 using ..RunLog: ProgressLine, progress!, WarningTap, collect_diagnostics, record_diagnostics!,
                 Diagnostic, ProfileDiagnostic, collect_profiles, prefixed, process_diagnostics
-using ..Simulations: StepRecord, step_record, set_step_hook!, step_hook, reset_interval!
+using ..Simulations: Simulations, StepRecord, step_record, set_step_hook!, step_hook, reset_interval!
 
 "`path/crash`, the folder of a run's crash checkpoints (created)."
 crash_dir(rf::RunFolder) = mkpath(joinpath(rf.path, "crash"))
@@ -91,6 +91,19 @@ struct MonitorHook
 end
 (h::MonitorHook)(sim, rec::StepRecord) = _hook_report!(h.monitor, sim, rec)
 
+# The start of a step of an attached monitor's simulation (#514): before a
+# due check, take what a crash checkpoint of this step's start state needs
+# besides the fields (the step's rollback snapshot holds those; see
+# `check_blowup!(guard, sim, record)`).
+function Simulations.step_begun(h::MonitorHook, sim, rec::StepRecord)
+    m = h.monitor; g = m.guard
+    g.pending = nothing
+    step = m.step + 1
+    (sim === m.sim && step - g.last_check >= g.every_steps && can_checkpoint(sim)) || return nothing
+    g.pending = (step = step, payload = _payload(g, sim, step - 1; with_fields = false))
+    return nothing
+end
+
 function RunMonitor(sim; run::Union{Nothing,RunFolder} = nothing, components = (;),
                     diagnostics::Union{Nothing,AbstractVector{Diagnostic}} = nothing,
                     t_end::Union{Nothing,Real} = nothing,
@@ -162,7 +175,7 @@ end
 function _hook_report!(m::RunMonitor, sim, rec::StepRecord)
     step = m.step + 1
     _flushing_nc(m) do
-        check_blowup!(m.guard, sim; step)
+        check_blowup!(m.guard, sim, rec; step)
     end
     _report!(m, sim; step, dt = rec.dt, limiter = rec.limiter, retries = rec.retries_sum)
     return nothing

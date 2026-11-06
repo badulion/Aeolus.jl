@@ -156,4 +156,84 @@ end
     close(w)
 end
 
+
+@testset "the guard reuses the step's own checks (#514)" begin
+    IOm = Aeolus.IO
+    cfl = CFLConstraints(; dt_max = 5.0)
+    # the fused sweep: every array, the interior only, NaN and Inf
+    a = Tuple(randn(Xoshiro(k), 10, 9, 8) for k in 1:3); r = (2:9, 2:8, 2:7)
+    @test IOm.interior_allfinite(a, r)
+    for (k, x) in ((1, NaN), (3, Inf))
+        b = map(copy, a); b[k][4, 5, 6] = x
+        @test !IOm.interior_allfinite(b, r)
+    end
+    b = map(copy, a); b[2][1, 1, 1] = NaN                # a halo point: not inspected
+    @test IOm.interior_allfinite(b, r)
+
+    # the step record: step_adaptive! notes its rollback snapshot and its verdict
+    sim = bu_sim(); rec = Aeolus.Simulations.step_record(sim)
+    step_adaptive!(sim, cfl)
+    @test rec.entry_snap === sim.workspaces.snapshot && rec.exit_verified
+    step_adaptive!(sim, cfl; fast_processes = (s, h) -> (interior_view(s.θ)[2, 2, 2] = NaN))
+    @test !rec.exit_verified                             # a fast process left a NaN
+    @test Aeolus.Simulations.guard_covered(sim) == (:u, :v, :w, :p, :θ)
+
+    # attached: a due check keeps the start state of its step, no copy
+    sim = bu_sim(); dir = mktempdir()
+    m = RunMonitor(sim; csv = nothing, nc = nothing, crash = dir, t_end = nothing, attach = true)
+    g = m.guard
+    snaps = Any[]; starts = Dict{Int,Array{Float64,3}}()
+    with_logger(NullLogger()) do
+        for n in 1:45
+            starts[n] = copy(sim.θ.data)                 # the state the step n starts from
+            step_adaptive!(sim, cfl)
+            push!(snaps, sim.workspaces.snapshot)
+        end
+    end
+    @test g.good === nothing                             # never copied
+    @test [c.step for c in g.claims] == [40, 30]         # due at 41 and 31: the states after 40 and 30
+    I = Aeolus.Grids.interior(sim.mesh)                  # (the step fills the halos before it saves)
+    @test view(g.claims[1].payload[:fields][:θ], I...) == view(starts[41], I...)   # copied data: exact
+    @test g.claims[1].payload[:t] == g.claims[1].snap.t
+    @test length(unique(objectid, filter(!isnothing, snaps[25:end]))) == 3   # three buffers cycle, none allocated
+
+    # a field the step neither checks nor rewrites (qv of a dry core; νt and
+    # κt are recomputed every step here) is caught at the due check, and the
+    # crash checkpoint is the newest kept state that is finite
+    with_logger(NullLogger()) do
+        for _ in 46:49; step_adaptive!(sim, cfl); end
+        interior_view(sim.qv)[3, 3, 3] = NaN
+        g.claims[1].snap.p[5, 5, 5] = NaN                # the newest kept state is not finite
+        err = try
+            for _ in 1:20; step_adaptive!(sim, cfl); end
+            nothing
+        catch e
+            e
+        end
+        @test err isa BlowupError && err.step == 51 && [f.name for f in err.fields] == [:qv]
+        @test err.checkpoint_step == 30                  # the older kept state
+        s2 = bu_sim(); restart!(s2, err.checkpoint)
+        @test isempty(Aeolus.IO.nonfinite_fields(s2)) && s2.t == g.claims[2].snap.t
+    end
+    close(m)
+
+    # a fixed-step core: one pressure value between due checks catches a
+    # velocity blowup at the step it reaches the solve
+    sim = bu_sim()
+    m = RunMonitor(sim; csv = nothing, nc = nothing, crash = mktempdir(), t_end = nothing, attach = true)
+    err = with_logger(NullLogger()) do
+        try
+            for n in 1:30
+                Aeolus.Simulations.step!(sim, 0.5)
+                n == 13 && (interior_view(sim.w)[4, 4, 4] = NaN)
+            end
+            nothing
+        catch e
+            e
+        end
+    end
+    @test err isa BlowupError && err.step == 14 && :w in [f.name for f in err.fields]
+    close(m)
+end
+
 end
