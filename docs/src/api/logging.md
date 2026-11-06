@@ -371,10 +371,13 @@ session (its first row is costly).
 
 **Flushing.** The rows of `time` are buffered and written as one block at
 the first row 5 s wall after the last write (`flush_interval`, the
-`run.log` policy), after 1000 rows, at every costly row, when a blowup is
-thrown out of the monitor, and on `close`; each write ends with an HDF5
-`sync`, so after a crash the file holds every written row. A sync costs
-about 2 ms, which is why the rows are not written one by one.
+`run.log` policy), after 1000 rows, when a blowup is thrown out of the
+monitor, and on `close`; each write ends with an HDF5 `sync`, so after a
+crash the file holds every written row. A sync costs about 2 ms, which is
+why the rows are not written one by one. The costly rows (scalars and
+profiles, evaluated when due) are buffered with them and written in the
+same block (#514): written at once, a costly row cost 13.5 ms, of which
+the five profiles are 0.085 ms.
 
 ## Progress line
 
@@ -421,8 +424,10 @@ throws ([`guarded_step!`](@ref Aeolus.IO.guarded_step!), e.g.
 2. **dumps** the crash checkpoint `crash/crash_<step>.jls` of the last good
    state: the current state when it is still finite (a throwing
    `step_adaptive!` restores the start of its step), else the state of the
-   last passing check. It is an ordinary checkpoint: `restart!` continues
-   from it (tested bit for bit);
+   last passing check (under an attached monitor stepping with
+   `step_adaptive!`, the state at the start of the checked step, see
+   below). It is an ordinary checkpoint: `restart!` continues from it
+   (tested bit for bit);
 3. **stops** with a [`BlowupError`](@ref Aeolus.IO.BlowupError) carrying all
    of it. Inside `with_run`, the session is recorded as `failed`.
 
@@ -437,6 +442,28 @@ without this a NaN in it never reached the root and the run ended
 Only `BoussinesqSimulation` has a checkpoint format (#245) today; for the
 other cores the diagnosis is logged and says that no checkpoint was
 written.
+
+**What a check costs (#514).** A check is one fused, threaded sweep over
+every inspected field ([`interior_allfinite`](@ref
+Aeolus.IO.interior_allfinite)) and a copy of them. Between checks the
+guard reads one interior value of the pressure: the solve spreads a
+non-finite value anywhere over the whole field, so a fixed-step run is
+stopped at the step a velocity blowup reaches the solve, not at the next
+check. Under an **attached** monitor whose simulation steps with
+`step_adaptive!`, a check repeats nothing the step has done itself: the
+step's post-step guard has swept `u, v, w, p, θ` (and a moist core's
+`qv`; [`guard_covered`](@ref Aeolus.Simulations.guard_covered)), so the
+check sweeps only `νt`, `κt` (and a dry core's `qv`), and it keeps the
+step's rollback snapshot, the state at the start of the checked step,
+as the last good state instead of copying the state (the simulation gets
+the buffers of an older kept snapshot; two are kept and swept only if a
+blowup needs them). The rest of that crash payload (closure memory,
+components, stepper, RNG) is taken when the step starts
+([`step_begun`](@ref Aeolus.Simulations.step_begun)). The blowups caught
+are the same, at the same step (scenarios against master in PR #514):
+`νt`, `κt`, `qv` and every prognostic field, a non-finite fast process,
+a throwing step, not attached and attached; the crash checkpoint is one
+step older; fixed-step runs are stopped earlier.
 
 ## Run monitor
 
@@ -567,6 +594,23 @@ add up to **0.084 ms per step, 1.56 %** of a step, within the asserted
 load: the attached monitor +3.05 % and the driver-called one +5.63 %
 (paired medians) in one run, +4.03 % and +1.00 % in the run before (the
 bare-step repetitions spread over 5.26 to 5.61 ms).
+
+By 2026-11-06 the same parts were **2.27 %** of a 3.71 ms step: the step
+had become 30 % faster, the monitor had not, and the benchmark failed.
+After #514 (the attached check reuses the step's own guard and snapshot,
+the sweeps are fused and threaded, the costly rows are buffered): the
+default (attached) monitor's parts are **0.57 %** of a step on one
+thread and 0.46 to 0.55 % on 4 and 8; a due check costs 0.068 ms
+(0.035 to 0.044 ms threaded) against 0.44 ms for the full check and
+copy; the `monitor!` path, which still copies, 1.4 to 1.6 %. The
+benchmark now also times every step on its own (null and attached
+interleaved, trimmed means): **+1.1 to +1.5 %** on one thread (master
++2.8 to +3.1 %), about 2.5 times the parts, because a due sweep reads
+fields the step has pushed out of the cache and a per-step diagnostic
+read right after a step costs 1 to 5 µs instead of 0.1 µs. On 4 threads
+that measurement scattered from −1.2 to +4.6 % over five runs (master
++2.9 to +6.4 %); the parts do not scatter, so they stay the asserted
+figure.
 
 ## Cost of a record
 

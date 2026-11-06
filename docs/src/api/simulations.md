@@ -92,6 +92,8 @@ Aeolus.Simulations.step_record
 Aeolus.Simulations.set_step_hook!
 Aeolus.Simulations.step_hook
 Aeolus.Simulations.reset_interval!
+Aeolus.Simulations.step_begun
+Aeolus.Simulations.guard_covered
 ```
 
 ### Field algebra of the step cores (KA-j, #306)
