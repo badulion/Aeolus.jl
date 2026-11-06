@@ -18,8 +18,29 @@
 # and, timed in isolation (median of 200 calls), the parts: a cheap row, a
 # costly row (all core, step-record and process diagnostics), a blowup
 # check, a snapshot, and for diagnostics.nc a buffered row, the block write
-# + sync (every 5 s wall) and a costly row (the 5 profiles plus their write
-# and sync); and the step record's bracket with a no-op hook (#336).
+# + sync (every 5 s wall, with a buffered costly row since #514) and a
+# costly row (the 5 profiles, buffered since #514); the step record's
+# bracket with a no-op hook (#336); and the attached guard (#514): its
+# start-of-step hook and end-of-step check on a step that is not due and on
+# a due one after a verified `step_adaptive!` step (the sweep of `νt, κt,
+# qv` and the kept rollback snapshot, instead of a full check and a copy).
+#
+# The budget (epic #293, at most about 2 % of a step) is asserted on the
+# parts of the default configuration: the attached monitor of
+# `with_monitor` and `aeolus run`. The parts of a monitor called with
+# `monitor!` (the full check and copy every 10 steps) are printed too.
+# Run it at several thread counts (`julia -t 4 ...`): the step is threaded,
+# so are the guard's sweeps (#514).
+#
+# Measured (#514, 2026-11-06, this machine; master 89719c2b before it):
+#   default (attached) from the parts: 0.57-0.58 % of a step on 1 thread,
+#     0.46-0.55 % on 4, 0.47 % on 8 (master: 2.27 % on 1 thread, over budget);
+#   a due check 0.068 ms (0.035-0.044 ms on 4-8 threads) against the full
+#     check + copy of 0.44 ms;
+#   per step, trimmed means (what a run pays): +1.1 to +1.5 % on 1 thread
+#     (master +2.8 to +3.1 %); on 4 threads -1.2 to +4.6 % over 5 runs
+#     (master +2.9 to +6.4 %): at 4-8 threads this measurement scatters by
+#     2-3 points here, the parts do not.
 
 using Aeolus
 using Aeolus.Fields: set!
@@ -86,6 +107,31 @@ with_logger(NullLogger()) do
 end
 dt_mean = sim.t / (15 + NREP * 5 * n)       # 15 compile steps + the timed ones
 
+# what a run pays, per step (#514): every step timed on its own, the null
+# step and the attached default interleaved in blocks of 50; a trimmed mean
+# (the top 5 % dropped: GC and the OS) is the mean a run pays. The parts
+# below miss what a monitor costs the step around it (a due sweep reads
+# fields the step has pushed out of the cache): this is about 2.5x them.
+# A fresh simulation (the first one blows up after ~2930 steps).
+sim2 = build()
+mon2 = RunMonitor(sim2; csv = joinpath(dir, "p.csv"), nc = joinpath(dir, "p.nc"),
+                  crash = joinpath(dir, "crash2"), t_end = 1e9)
+function per_step!(v, s, k)
+    for _ in 1:k
+        t = time_ns(); step_adaptive!(s, CFL); push!(v, (time_ns() - t) / 1e9)
+    end
+end
+tn_steps = Float64[]; ta_steps = Float64[]
+with_logger(NullLogger()) do
+    per_step!(Float64[], sim2, 5)
+    for _ in 1:12
+        per_step!(tn_steps, sim2, 50)
+        attach_monitor!(mon2); per_step!(ta_steps, sim2, 50); detach_monitor!(mon2)
+    end
+end
+close(mon2)
+trim(v) = (w = sort(v); sum(w[1:floor(Int, 0.95 * length(w))]) / floor(Int, 0.95 * length(w)))
+
 # the parts in isolation
 w = mon_default.writer
 g = BlowupGuard(sim; every_steps = 1)
@@ -117,7 +163,30 @@ tnc_flush = med([(record_diagnostics!(nw, sim.t; step = 0, costly = false, value
 nw.flush_interval = 5.0
 tnc_costly = med([@elapsed(record_diagnostics!(nw, sim.t; step = 0, costly = true, values = w.last))
                   for _ in 1:100])
-close(mon_default); close(mon_every); close(mon_csv)
+# a block write with one buffered costly row in it (#514)
+tnc_flush_costly = med([(record_diagnostics!(nw, sim.t; step = 0, costly = true, values = w.last);
+                         @elapsed(flush(nw))) for _ in 1:50])
+
+# the attached guard (#514), in isolation: the start-of-step hook and the
+# end-of-step check, the record set as a verified step_adaptive! step leaves it
+const TI = Aeolus.TimeIntegration
+ga = mon_att.guard
+hk = Aeolus.IO.MonitorHook(mon_att)
+function guard_call!(ga, hk, sim, rec, due)
+    st = mon_att.step + 1
+    ga.last_check = due ? st - ga.every_steps : st - 1
+    snap = TI.state_snapshot(sim)                    # allocated after a claim (the first two only)
+    t = @elapsed begin
+        SIM.step_begun(hk, sim, rec)
+        rec.entry_snap = snap; rec.exit_verified = true
+        check_blowup!(ga, sim, rec; step = st)
+    end
+    return t
+end
+for _ in 1:4; guard_call!(ga, hk, sim, rec, true); end
+tguard_due = med([guard_call!(ga, hk, sim, rec, true) for _ in 1:200])
+tguard_idle = med([guard_call!(ga, hk, sim, rec, false) for _ in 1:200])
+close(mon_default); close(mon_every); close(mon_csv); close(mon_att)
 
 base = med(res[:null])
 @printf("64×64×32 step_adaptive!, %d thread(s), %d steps × %d repetitions (median of repetitions); mean dt %.2f s\n",
@@ -136,9 +205,17 @@ end
 @printf("  step record bracket + hook call: %.0f ns per step\n", 1e9 * trec)
 @printf("  diagnostics.nc: buffered row %.1f µs, block write + sync %.3f ms (every 5 s wall), costly row %.3f ms\n",
         1e6 * tnc_cheap, 1e3 * tnc_flush, 1e3 * tnc_costly)
-per = trec + tcheap + tnc_cheap + (tcheck + tsnap) / 10 + (tcostly + tnc_costly) * dt_mean / 60 +
-      tnc_flush * base / 5.0
-@printf("  default cadence from the parts: %.3f ms/step = %.2f %% of a null step\n",
+@printf("  per step, trimmed means: null %.3f ms, attached default %.3f ms (%+.2f %%)\n",
+        1e3 * trim(tn_steps), 1e3 * trim(ta_steps), 100 * (trim(ta_steps) / trim(tn_steps) - 1))
+@printf("  attached guard (#514): idle step %.2f µs, due check %.3f ms (full check + copy: %.3f ms)\n",
+        1e6 * tguard_idle, 1e3 * tguard_due, 1e3 * (tcheck + tsnap))
+@printf("  diagnostics.nc block write + sync with a costly row: %.3f ms\n", 1e3 * tnc_flush_costly)
+rows = trec + tcheap + tnc_cheap + (tcostly + tnc_costly) * dt_mean / 60 + tnc_flush_costly * base / 5.0
+per_manual = rows + (tcheck + tsnap) / 10
+per = rows + tguard_idle + (tguard_due - tguard_idle) / 10
+@printf("  monitor! cadence from the parts: %.3f ms/step = %.2f %% of a null step\n",
+        1e3 * per_manual, 100 * per_manual / base)
+@printf("  default (attached) cadence from the parts: %.3f ms/step = %.2f %% of a null step\n",
         1e3 * per, 100 * per / base)
 # the budget of epic #293: at most about 2 % of a step at the default cadence
 # (asserted on the parts, which are free of the step-time noise)
