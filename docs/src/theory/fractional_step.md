@@ -159,7 +159,7 @@ with ``W = 1`` for the Boussinesq core and the constraint weight
 (``ρ̄`` anelastic, ``ρ̄θ̄`` pseudo-incompressible) for the sound-proof
 cores, taken exactly as the projection's divergence takes it (``W_c(k)``
 on lateral faces, ``W_f`` on the top). `correction = :outflow_only`
-adjusts only the outflow faces. Measured (`test/era6_open_boundaries.jl`,
+adjusts only the outflow faces. Measured (`test/open_boundaries.jl`,
 16 × 12 × 8 box, ``Q = 4.8 × 10^4`` m³ s⁻¹ of net outflow): without the
 correction ``\max|∇·u| = Q/V = 2.5 × 10^{-4}`` s⁻¹ in every core, to
 1e-12; with it ``\max|∇·u| < 10^{-12}`` s⁻¹ in `step!`, `step_rk3!`,
@@ -263,7 +263,7 @@ the normal velocity convectively. The mass-flux correction of the
 previous section balances the radiated normal velocities exactly as it
 balances data.
 
-Measured (`validation/era6_outflow_conditions.jl`; the vortex and the 2000 steps in `validation/era6_outflow_conditions.jl`):
+Measured (`validation/outflow_conditions.jl`; the vortex and the 2000 steps in `validation/outflow_conditions.jl`):
 
 | test | result |
 | :-- | :-- |

@@ -3,10 +3,10 @@
 A nested child grid refines a box of a parent grid by integer ratios
 ``(r_x, r_y, r_z)`` (each ``\ge 1``, odd, even or mixed, e.g. the Berlin
 ``(2, 2, 4)``). Every operator between the two grids lives in
-`Aeolus.Nesting` ([API](../api/era2/nesting.md)); this page derives the
+`Aeolus.Nesting` ([API](../api/numerics/nesting.md)); this page derives the
 three on which everything else rests — prolongation, restriction and
 refluxing — and quotes the numbers they are tested at
-(`test/era2_nesting.jl`).
+(`test/nesting.jl`).
 
 ## Geometry
 
@@ -137,7 +137,7 @@ all of them (tested).
 
 ## Measured accuracy and conservation
 
-From `test/era2_nesting.jl` (smooth separable
+From `test/nesting.jl` (smooth separable
 ``f = \prod_d \sin(2\pi x_d + \varphi_d)``, parent ``8^3 \to 16^3 \to 32^3``,
 halo error of the child, rate from the finest pair):
 
@@ -242,7 +242,7 @@ fluid child keeps its value. The preserved quantity is the
 fluid-weighted integral ``\sum_\text{fluid} W\phi\,\Delta V``. N-nest-e
 (#263) builds its canopy-restricted anterpolation on this primitive.
 
-### Measured (`test/era2_nesting_conservative.jl`)
+### Measured (`test/nesting_conservative.jl`)
 
 | property | measured | bound tested |
 | :-- | :-- | :-- |

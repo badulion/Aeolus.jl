@@ -247,7 +247,7 @@ Float64 snapshots over the same windows.
 
 ### ERA5 drivers
 
-AeolusPrep's ERA5 preprocessor (CFG-h #363, shared with Era VIII #57)
+AeolusPrep's ERA5 preprocessor (CFG-h #363, shared with #57)
 reads ERA5 as the CDS delivers it, GRIB2 or NetCDF, on pressure or model
 levels, and writes the `init_*` profiles and `init_p_surface`, the
 boundary planes of the run's open faces (one `time_bc` record per ERA5

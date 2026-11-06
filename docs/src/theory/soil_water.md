@@ -153,7 +153,7 @@ interface through which the [water table](water_table.md) (#17),
 `UnconfinedAquifer`, is coupled.
 
 **Coupling.** `step_soil_water!(col, forcing, fluxes, dt)` takes the
-Era V `SurfaceForcing` (rain) and `SurfaceFluxes` (evaporation ``E``)
+`SurfaceExchange`'s `SurfaceForcing` (rain) and `SurfaceFluxes` (evaporation ``E``)
 and converts kg m⁻² s⁻¹ with the contract's ``\rho_w``;
 `moisture_availability(col)` is the Lee & Pielke (1992) ``\beta`` of the
 top layer relative to field capacity (−33 kPa).

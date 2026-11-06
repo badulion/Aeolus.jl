@@ -4,7 +4,7 @@ P55-f (#191) validates the stability-corrected closure of P55-e
 (`StabilityCorrected`, [Smagorinsky-Lilly SGS → Stability
 correction](sgs.md#Stability-correction)) on two stably stratified,
 horizontally homogeneous flows. It adds no physics to `src/`: both cases
-are assembled from the Era V and Era VI modules, and only the
+are assembled from the surface and turbulence-closure modules, and only the
 wall-resolved, θ-walled variant of the P54-d channel builder is new
 (`channel_case(bottom_bc = :noslip, θ_walls = …)`).
 
@@ -101,7 +101,7 @@ it is reported without a reference.
 ### Results
 
 The numbers below were measured on the `sbl` run type (P55-f). The
-reduced validation case on the model (`validation/era6_gabls1.jl`: 32³, 1.0–1.25 h)
+reduced validation case on the model (`validation/gabls1.jl`: 32³, 1.0–1.25 h)
 reproduces them within the scatter of a realisation (another θ noise
 draw and the model's adaptive step, which takes 2834 steps where the
 run type took 3501):
@@ -115,7 +115,7 @@ run type took 3501):
 | ``κ_v/κ_h`` below ``h`` | 0.63 | 0.61 |
 | SGS share of the heat flux (uncorrected) | 0.108 (0.153) | 0.109 (0.148) |
 
-Reduced validation run (`validation/era6_gabls1.jl`, 32³ at 12.5 m, 0–1.25 h,
+Reduced validation run (`validation/gabls1.jl`, 32³ at 12.5 m, 0–1.25 h,
 statistics over 1.0–1.25 h):
 
 | | `:brown94` | `:none` |
@@ -235,7 +235,7 @@ boundary layer is meant to evolve under the prescribed advection.
 
 ### GABLS3: reduced validation run
 
-`validation/era6_gabls3.jl` runs one 16 × 16 × 48 simulation (Δx = 25 m,
+`validation/gabls3.jl` runs one 16 × 16 × 48 simulation (Δx = 25 m,
 Δz = 8.3 m on 400 × 400 × 400 m, sponge from 300 m) from 00 to 04 UTC.
 The issue asked for 00-02 UTC. The run goes on to 04 UTC because the
 only accessible LES envelope is for 03-04 UTC. Checks 1-3 use the
@@ -499,7 +499,7 @@ forcing component). Their physics stays in `WallModels`
 (`test/fixtures/channel_cases.jl`: `channel_case` with θ walls,
 `stratified_channel_walls`) and
 `SurfaceExchange` (the maximum sustainable heat flux), tested at module
-level (`test/era6_walls.jl` (removed), `era6_collapse.jl`); the measured channel
+level (`test/walls.jl` (removed), `collapse.jl`); the measured channel
 results are in the history of this page before #456.
 
 ## Berlin

@@ -1,6 +1,6 @@
 # A saturated moist-adiabatic column for the cloudy-air N² tests (#239),
-# shared by test/era6_stability_functions.jl, test/era6_stratified_sgs.jl
-# and test/era6_tke.jl. The includer loads Aeolus.
+# shared by test/stability_functions.jl, test/stratified_sgs.jl
+# and test/tke.jl. The includer loads Aeolus.
 
 """
     moist_adiabat_column!(θ, qv, qc; q_w = 0.012, T0 = 285.0, p0 = 1.0e5) -> p

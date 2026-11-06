@@ -25,7 +25,7 @@ module CutCell
 # which is what makes the fractional-step projection discretely exact on a
 # cut geometry (and makes L = D G symmetric negative-definite, so the
 # existing CG pressure solver still converges). See `cutcell_cell_inner`
-# and `cutcell_face_inner` for the two inner products, and the Era II test
+# and `cutcell_face_inner` for the two inner products, and the cut-cell test
 # file for the numerical verification of the identity.
 #
 # Geometry is built by sub-cell sampling of a level set (`nsub^3` samples
@@ -779,7 +779,7 @@ cut-cell operators are adjoint:
 (exactly, to round-off) whenever the velocity vanishes on the
 domain-boundary faces or the geometry closes them. That identity is what
 makes the fractional-step projection discretely divergence-free on a cut
-geometry, and it is verified numerically in the Era II test set.
+geometry, and it is verified numerically in the cut-cell tests.
 """
 function cutcell_cell_inner(a::Field{CellCenter}, b::Field{CellCenter},
                             geom::CutCellGeometry{T}, mesh::RegularGrid = geom.mesh) where {T}

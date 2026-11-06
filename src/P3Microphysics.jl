@@ -1,7 +1,7 @@
 """
     P3Microphysics
 
-Predicted Particle Properties (P3) bulk microphysics — Era IV, Phase 40.
+Predicted Particle Properties (P3) bulk microphysics — Phase 40.
 
 P3 (Morrison & Milbrandt 2015) replaces the traditional split of ice into
 fixed categories (cloud ice, snow, graupel, hail) with a single ice
@@ -31,7 +31,7 @@ The module is split into part-files under `src/p3/`:
   * `secondary.jl`     — Hallett–Mossop rime splintering, nucleated-ice mass
 
 Thermodynamics (saturation vapour pressures, latent heats, saturation
-adjustment) is NOT re-derived here: it comes from the Era IV contract
+adjustment) is NOT re-derived here: it comes from the shared core
 `MoistThermodynamics`.
 
 REFERENCES

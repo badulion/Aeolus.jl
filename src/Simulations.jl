@@ -177,7 +177,7 @@ mutable struct BoussinesqSimulation{T,
     lap_w::Field{FaceZ,        T, Array{T,3}, M}
     lap_θ::Field{CellCenter,   T, Array{T,3}, M}
     νt::Field{CellCenter,      T, Array{T,3}, M}
-    κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (Era VI, #167)
+    κt::Field{CellCenter,      T, Array{T,3}, M}   # SGS scalar diffusivity (#167)
     # the drivers' scratch (RK3 stage state, retry snapshot, IMEX), per simulation (KA-j, #306)
     workspaces::StepWorkspaces
 end
@@ -404,8 +404,8 @@ fields `sim.tu, tv, tw, tθ, tqv` are then neither written nor read.
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):
-    `:laplacian` is `∂ⱼ(νₜ∂ⱼuᵢ)` (the default; the pre-Era-VI runs bit for
-    bit), `:symmetric` the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)` with the closure's
+    `:laplacian` is `∂ⱼ(νₜ∂ⱼuᵢ)` (the default; the runs before the SGS closure
+    contract bit for bit), `:symmetric` the stress form `∂ⱼ(2νᵢⱼSᵢⱼ)` with the closure's
     horizontal and vertical viscosities
     ([`add_sgs_stress_divergence!`](@ref Aeolus.Operators.add_sgs_stress_divergence!),
     P55-b). `step_rk3!`, `step_imex!`, `step_adaptive!` and the
@@ -796,7 +796,7 @@ committed ([`advance_sgs!`](@ref Aeolus.Operators.advance_sgs!)) once, with
 `qv` advanced by three Euler steps per call).
 
 `body_force!(sim, Δt)` and `post_predictor!(sim, Δt)` are `step!`'s hooks
-(added for the Era VI wall-bounded cases, P54-d #174): each SSP-RK3
+(added for the wall-bounded turbulence cases, P54-d #174): each SSP-RK3
 substage is one forward-Euler predictor + projection of length `dt`, and
 the hooks run inside every substage exactly where `step!` runs them (a
 tendency before the predictor; an implicit correction such as

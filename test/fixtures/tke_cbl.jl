@@ -1,5 +1,5 @@
 # The convective boundary layer harness of the prognostic SGS TKE closure
-# (P56-b, #182): `tke_cbl`, run by test/era6_tke.jl at 24³. It was the
+# (P56-b, #182): `tke_cbl`, run by test/tke.jl at 24³. It was the
 # `cbl` run type of Aeolus.RunDrivers (EX-d #441; formerly
 # test/tke_cbl_driver.jl); the CBL itself is the model's configuration
 # examples/cbl_tke/cbl_tke.toml since ONE-l (#475), and

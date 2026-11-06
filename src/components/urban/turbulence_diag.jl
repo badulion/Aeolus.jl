@@ -1,4 +1,4 @@
-# Turbulence diagnostics (Aeolus.TurbulenceStability, Era VI P58-a, #170).
+# Turbulence diagnostics (Aeolus.TurbulenceStability, P58-a, #170).
 #
 # At the output cadence: the pointwise squared buoyancy frequency N² (of θ_v,
 # Operators.buoyancy_frequency_squared!), the strain-rate magnitude |S|² and

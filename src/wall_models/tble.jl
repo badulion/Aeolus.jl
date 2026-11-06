@@ -53,7 +53,7 @@ end
     NoEddyViscosity()
 
 ``ν_{t,wm} ≡ 0``: the laminar boundary-layer equations (the Stokes and
-Poiseuille limits of `validation/era6_wall_models_tble.jl`).
+Poiseuille limits of `validation/wall_models_tble.jl`).
 """
 struct NoEddyViscosity <: AbstractTBLEEddyViscosity end
 
@@ -420,7 +420,7 @@ handing it to the columns. Plane walls only (`mask = nothing`).
 not determine κ: in a statistically steady flow both sides equal
 ``τ_w + h\\,∂p/∂x`` by the momentum balance whatever κ is (the first
 version did this and drifted to the lower clamp). Measured in the
-Re_τ = 1000 channel (`validation/era6_wall_models_tble.jl`): the effective
+Re_τ = 1000 channel (`validation/wall_models_tble.jl`): the effective
 LES viscosity at ``h = 0.375δ`` gives κ_wm ≈ 0.23, close to
 ``0.41(1 - h/δ) = 0.26`` (the outer-layer decrease of the stress that
 the mixing-length ``ν_{t,wm}`` lacks) and to Wang & Moin's ≈ 0.2. Fed

@@ -3,7 +3,7 @@ module SolarGeometry
 # Phase 38 — Solar position, atmospheric refraction, direct/diffuse
 # partitioning, and true 3-D cloud shadows.
 #
-# What this replaces: the Era-I urban runs used
+# What this replaces: the original urban runs used
 # `solar_declination(day) = 23.44 sin(2π(284+d)/365)` with a mean-solar-time
 # hour angle. That is a ~1° approximation with no equation of time, no
 # refraction, no nutation, and a fixed 365-day year — errors of order 15
@@ -298,7 +298,7 @@ end
     equation_of_time(st) -> minutes
 
 Difference between apparent and mean solar time. Ranges ±16 minutes over
-the year; this is the term the Era-I sinusoidal approximation omitted
+the year; this is the term the original sinusoidal approximation omitted
 entirely, and it is why the analemma exists.
 """
 equation_of_time(st::SolarTime) = solar_position(st).eot_minutes
@@ -306,7 +306,7 @@ equation_of_time(st::SolarTime) = solar_position(st).eot_minutes
 """
     solar_declination_accurate(st) -> degrees
 
-Apparent solar declination. Compare against the Era-I approximation
+Apparent solar declination. Compare against the original approximation
 `23.44 sin(2π(284+doy)/365)`, which is in error by up to ~0.5°.
 """
 solar_declination_accurate(st::SolarTime) = solar_position(st).declination

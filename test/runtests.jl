@@ -836,6 +836,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("config_cli.jl")          # CFG-b (#357): aeolus CLI, exit codes, example drivers, subprocess
     include("config_examples.jl")     # CFG-e (#360): [sweep] expansion; the Kessler box on the model (ONE-i #458)
     include("examples_enforcement.jl")  # ONE-i (#458): no .jl under examples/ builds or steps a model; the case layout
+    include("naming_conventions.jl")  # work is grouped by content; ERA is the reanalysis (2026-11-06)
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
     include("urban_checks.jl")       # EX-a (#438): Berlin smoke matrix (49 runs, ledgers), parent smoke run, parent class fractions, parent_zi
@@ -892,117 +893,142 @@ C_s = 0.17
 
 end
 
-include("era1_chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition (#135)
+include("chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition (#135)
+
 
 # =========================================================================
-# Era II — numerical foundations for fidelity (Phases 21-31)
+# Numerics
 # =========================================================================
-# Each file is a self-contained validated-capability suite. They are kept
-# in separate files because each is large and each corresponds to a
-# distinct roadmap phase; keeping the mapping one-file-per-phase-group
-# makes it obvious what a regression belongs to.
+# Grids, advection, time integration, pressure solvers and the anelastic core (Phases 21-29, 31).
 
-@testset "Era II" begin
-    include("era2_cutcell.jl")     # Phases 21-22  cut-cell IBM, ghost cells
-    include("era2_stretched.jl")   # Phase  24     stretched / terrain-following
-    include("era2_stretched_boussinesq.jl") # #151 Boussinesq core + Poisson on a StretchedGrid
-    include("era2_timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
-    include("era2_advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
-    include("era2_anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
-    include("era2_multigrid.jl")   # Phase  29     geometric multigrid
-    include("era2_sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
-    include("era2_nesting.jl")     # Phase  30     parent-child nesting operators (#250)
-    include("era2_nesting_conservative.jl") # #256 stretched parent, mass-weighted, solid-aware nesting
-    include("era2_amr.jl")         # Phases 30-31  nesting, AMR
-    include("era2_nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
-    include("era2_nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
-    include("era2_nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
+@testset "Numerics" begin
+    include("cutcell.jl")     # Phases 21-22  cut-cell IBM, ghost cells
+    include("stretched.jl")   # Phase  24     stretched / terrain-following
+    include("stretched_boussinesq.jl") # #151 Boussinesq core + Poisson on a StretchedGrid
+    include("timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
+    include("advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
+    include("anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
+    include("multigrid.jl")   # Phase  29     geometric multigrid
+end
+
+# =========================================================================
+# Nesting
+# =========================================================================
+# Grid nesting: operators, one- and two-way runs, hierarchies, restart (Phase 30).
+
+@testset "Nesting" begin
+    include("nesting.jl")     # Phase  30     parent-child nesting operators (#250)
+    include("nesting_conservative.jl") # #256 stretched parent, mass-weighted, solid-aware nesting
+    include("amr.jl")         # Phases 30-31  nesting, AMR
+    include("nested_run.jl")  # Phase  30     NestedRun time coupling (#257)
+    include("nest_boundary.jl") # Phase 30   one-way nest boundary data (#261)
+    include("nest_external.jl") # #265        externally driven child (the Berlin pattern), open scalars added later
     include("nest_restart.jl")       # #269 checkpoint / restart of a nested run (nest_state)
-    include("era2_nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
-    include("era2_nest_hierarchy.jl") # #328 nest hierarchies, siblings, non-aligned and stretched children
+    include("nest_twoway.jl")  # Phase 30   two-way feedback: anterpolation, refluxing (#263)
+    include("nest_hierarchy.jl") # #328 nest hierarchies, siblings, non-aligned and stretched children
 end
 
 # =========================================================================
-# Era III — high-fidelity radiation (Phases 32-38)
+# Radiation
 # =========================================================================
-# In progress. Phases 32-37 are stubbed pending implementation; the shared
-# radiation contract (`RadiationCore`) and Phase 38 are complete.
+# Gas and aerosol optics, two-stream and Monte Carlo transport, radiosity; `RadiationCore` is the shared core (Phases 32-38).
 
-@testset "Era III" begin
-    include("era3_gasoptics.jl")       # Phase 32  correlated-k gas optics
-    include("era3_twostream.jl")       # Phase 33  two-stream RT, cloud optics
-    include("era3_surfaceoptics.jl")   # Phase 36  spectral albedo, BRDF
-    include("era3_aerosol.jl")         # Phase 37  Mie aerosol optics
-    include("era3_montecarlo.jl")      # Phase 34  3-D Monte-Carlo RT
-    include("era3_radiosity.jl")       # Phase 35  urban radiosity
-    include("era3_solargeometry.jl")   # Phase 38  solar position, shadows
-    end
-
-    @testset "Era IV" begin
-        include("era4_thermodynamics.jl")  # Phase 39  exact moist thermodynamics
-        include("era4_activation.jl")      # Phase 42  aerosol-cloud interaction
-        include("era4_superdroplet.jl")    # Phase 41  superdroplet microphysics
-        include("era4_p3.jl")              # Phase 40  P3 microphysics
-        include("era4_icenucleation.jl")   # Phase 43  ice nucleation
-        include("era4_turbmicro.jl")       # Phase 45  sub-grid supersaturation PDF
-        include("era4_sgs_growth.jl")      # Phase 45  SGS activation and growth
-        include("era4_broadening.jl")      # Phase 45  spectral broadening: moment closure, OU limit
-        include("era4_visibility.jl")      # Phase 44  visibility diagnostic
-        include("era4_fog.jl")             # Phase 44  fog / dew coupling (#11)
-        include("era4_radiation_fog.jl")   # Phase 44  radiation fog feedback (#9)
+@testset "Radiation" begin
+    include("gasoptics.jl")       # Phase 32  correlated-k gas optics
+    include("twostream.jl")       # Phase 33  two-stream RT, cloud optics
+    include("surfaceoptics.jl")   # Phase 36  spectral albedo, BRDF
+    include("aerosol.jl")         # Phase 37  Mie aerosol optics
+    include("montecarlo.jl")      # Phase 34  3-D Monte-Carlo RT
+    include("radiosity.jl")       # Phase 35  urban radiosity
+    include("solargeometry.jl")   # Phase 38  solar position, shadows
 end
 
 # =========================================================================
-# Era V — high-fidelity land, urban and surface exchange (Phases 46-53)
+# Clouds and microphysics
 # =========================================================================
-# `SurfaceExchange` is the era contract; later phases append here.
+# Moist thermodynamics (the shared core), activation, superdroplets, P3, ice nucleation, fog and visibility (Phases 39-45).
 
-@testset "Era V" begin
-    include("era5_surface_exchange.jl")  # Era V contract: MOST, constants, surface interface (#92)
-    include("era5_soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
-    include("era5_soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
-    include("era5_water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
-    include("era5_photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
-    include("era5_stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
-    include("era5_land_surface.jl")      # Phase 47: vegetated land column, soil-water stress (#21)
-    include("era5_plant_canopy.jl")      # Phase 48  LAD profiles, implicit canopy drag (#22)
-    include("era5_canopy_radiation.jl")  # Phase 48  canopy SW two-stream, sunlit/shaded, LW (#23)
-    include("era5_leaf_energy.jl")       # Phase 48  leaf energy balance, leaf temperature (#24)
-    include("era5_canopy_profiles.jl")   # Phase 48  within-canopy wind/temperature validation (#25)
-    include("era5_urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
-    include("era5_heterogeneous_surface.jl")  # Phase 53  patchy-surface coupling: code-path identity, heat conservation (#43)
-    include("era5_glazing.jl")           # Phase 49  glazing transmission, window facets (#27)
-    include("era5_urban_radiosity.jl")   # Phase 49  facet temperatures coupled to radiosity (#28)
-    include("era5_building_energy.jl")   # Phase 50  indoor air temperature + thermal mass (#31)
-    include("era5_hvac.jl")              # Phase 50  HVAC demand and exhaust heat (#32)
-    include("era5_occupancy.jl")         # Phase 50  occupancy schedules and internal gains (#33)
-    include("era5_anthropogenic_heat.jl") # Phase 49  anthropogenic heat from the building energy model (#29)
-    include("era5_snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
-    include("era5_snow_metamorphism.jl") # Phase 51: grain metamorphism and albedo ageing (#35)
-    include("era5_snow_liquid.jl")        # Phase 51: snow percolation and refreezing (#36)
-    include("era5_ice_thermodynamics.jl")  # Phase 51  lake and sea ice, BL99 (#37)
-    include("era5_ocean_mixed_layer.jl") # Phase 52  water column, cool skin, warm layer (#38)
-    include("era5_air_sea_flux.jl")      # Phase 52  wave-dependent sea-surface roughness (#39)
-    include("era5_sea_spray_coare.jl")   # Phase 52  sea spray, full COARE, validation (#40)
-    include("era5_surface_tiles.jl")     # Phase 53 sub-grid tile mosaic, flux aggregation (#41)
-    include("era5_blending_height.jl")   # Phase 53 blending height, effective roughness, IBL (#42)
+@testset "Clouds and microphysics" begin
+    include("thermodynamics.jl")  # Phase 39  exact moist thermodynamics
+    include("activation.jl")      # Phase 42  aerosol-cloud interaction
+    include("superdroplet.jl")    # Phase 41  superdroplet microphysics
+    include("p3.jl")              # Phase 40  P3 microphysics
+    include("icenucleation.jl")   # Phase 43  ice nucleation
+    include("turbmicro.jl")       # Phase 45  sub-grid supersaturation PDF
+    include("sgs_growth.jl")      # Phase 45  SGS activation and growth
+    include("broadening.jl")      # Phase 45  spectral broadening: moment closure, OU limit
+    include("visibility.jl")      # Phase 44  visibility diagnostic
+    include("fog.jl")             # Phase 44  fog / dew coupling (#11)
+    include("radiation_fog.jl")   # Phase 44  radiation fog feedback (#9)
 end
 
 # =========================================================================
-# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# Land and surface
 # =========================================================================
-# The SGS closure contract (P54-a, #167) is the era contract; later issues
-# append one include line each here.
+# `SurfaceExchange` (the shared core), soil, vegetation, snow, sea ice, ocean and lakes, tiles (Phases 46-48, 51-53).
 
-@testset "Era VI" begin
-    include("era6_sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
-    include("era6_stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
-    include("era6_wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
-    include("era6_large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
-    include("era6_amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
-    include("era6_tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
-    include("era6_transition_kh.jl")      # P59-c: turbulent fraction γ, intermittency, Ri_f, growth_rate (#180)
-    include("era6_synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
-    include("era6_inflow_turbulence.jl")  # N-inflow-c: inflow faces, zero added mass flux (#264)
-    include("era6_open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
+@testset "Land and surface" begin
+    include("surface_exchange.jl")  # surface shared core: MOST, constants, surface interface (#92)
+    include("soil_column.jl")       # Phase 46: soil column, Richards equation (#15)
+    include("soil_thermal.jl")      # Phase 46: soil heat and freeze–thaw (#16)
+    include("water_table.jl")       # Phase 46: water table, unconfined aquifer (#17)
+    include("photosynthesis.jl")    # Phase 47  Farquhar C3 / Collatz C4 photosynthesis (#19)
+    include("stomata.jl")           # Phase 47  Ball-Berry / Medlyn stomatal conductance (#20)
+    include("land_surface.jl")      # Phase 47: vegetated land column, soil-water stress (#21)
+    include("plant_canopy.jl")      # Phase 48  LAD profiles, implicit canopy drag (#22)
+    include("canopy_radiation.jl")  # Phase 48  canopy SW two-stream, sunlit/shaded, LW (#23)
+    include("leaf_energy.jl")       # Phase 48  leaf energy balance, leaf temperature (#24)
+    include("canopy_profiles.jl")   # Phase 48  within-canopy wind/temperature validation (#25)
+    include("snowpack.jl")          # Phase 51: layered snowpack with compaction (#34)
+    include("snow_metamorphism.jl") # Phase 51: grain metamorphism and albedo ageing (#35)
+    include("snow_liquid.jl")        # Phase 51: snow percolation and refreezing (#36)
+    include("ice_thermodynamics.jl")  # Phase 51  lake and sea ice, BL99 (#37)
+    include("ocean_mixed_layer.jl") # Phase 52  water column, cool skin, warm layer (#38)
+    include("air_sea_flux.jl")      # Phase 52  wave-dependent sea-surface roughness (#39)
+    include("sea_spray_coare.jl")   # Phase 52  sea spray, full COARE, validation (#40)
+    include("surface_tiles.jl")     # Phase 53 sub-grid tile mosaic, flux aggregation (#41)
+    include("blending_height.jl")   # Phase 53 blending height, effective roughness, IBL (#42)
+    include("heterogeneous_surface.jl")  # Phase 53  patchy-surface coupling: code-path identity, heat conservation (#43)
+end
+
+# =========================================================================
+# Urban surface and buildings
+# =========================================================================
+# Urban facets, glazing, urban radiosity, building energy, HVAC, occupancy, anthropogenic heat (Phases 49-50).
+
+@testset "Urban surface and buildings" begin
+    include("urban_surface.jl")     # Phase 49  multi-layer urban facet conduction (#26)
+    include("glazing.jl")           # Phase 49  glazing transmission, window facets (#27)
+    include("urban_radiosity.jl")   # Phase 49  facet temperatures coupled to radiosity (#28)
+    include("building_energy.jl")   # Phase 50  indoor air temperature + thermal mass (#31)
+    include("hvac.jl")              # Phase 50  HVAC demand and exhaust heat (#32)
+    include("occupancy.jl")         # Phase 50  occupancy schedules and internal gains (#33)
+    include("anthropogenic_heat.jl") # Phase 49  anthropogenic heat from the building energy model (#29)
+end
+
+# =========================================================================
+# Turbulence
+# =========================================================================
+# SGS closures (the closure contract, P54-a #167), stability functions, TKE, wall models, transition (Phases 54-59).
+
+@testset "Turbulence" begin
+    include("sgs_closure.jl")       # P54-a: SGS closure contract, κ_t, commit cadence (#167)
+    include("sgs_numerics.jl") # #132         dynamic Smagorinsky, step! operator swap-ins
+    include("stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
+    include("amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
+    include("tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
+    include("transition_kh.jl")      # P59-c: turbulent fraction γ, intermittency, Ri_f, growth_rate (#180)
+end
+
+# =========================================================================
+# Forcing and boundaries
+# =========================================================================
+# Large-scale forcing, synthetic inflow and open boundaries.
+
+@testset "Forcing and boundaries" begin
+    include("large_scale_forcing.jl") # Phase 58: geostrophic forcing, nudging, advective tendencies (#171)
+    include("synthetic_inflow.jl")  # N-inflow-a: digital-filter inflow, Lund transform (#252)
+    include("inflow_turbulence.jl")  # N-inflow-c: inflow faces, zero added mass flux (#264)
+    include("open_boundaries.jl")   # N-open-b: open faces, boundary-data contract, mass-flux correction (#255)
 end

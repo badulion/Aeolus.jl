@@ -1,12 +1,12 @@
 # =========================================================================
-# Era VI, Phase 55 (P55-e, #187) — stratification-dependent anisotropic
+# Phase 55 (P55-e, #187) — stratification-dependent anisotropic
 # eddy viscosity and diffusivity: the StabilityCorrected wrapper.
 # =========================================================================
 #
 # Included into `module Operators`, after the SGS closure contract
 # (sgs_closures.jl), the scalar-tensor closures (scalar_tensor.jl) and the
 # pointwise N² / Ri_g stencils (stratification.jl). It is the one
-# stability-corrected closure of Era VI (P55 "stratification-dependent
+# stability-corrected closure (P55 "stratification-dependent
 # anisotropic" and the former P58 "buoyancy-aware Smagorinsky" merged):
 #
 #   νh = ν_base·ℓh            νv = ν_base·ℓv·f_m(Ri)

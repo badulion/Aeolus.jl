@@ -1,10 +1,10 @@
 """
     MoistThermodynamics
 
-Exact moist thermodynamics — Era IV, Phase 39.
+Exact moist thermodynamics — Phase 39.
 
-This module is the shared contract for Era IV the way `RadiationCore` is
-for Era III: every microphysics scheme, activation parameterisation and
+This module is the shared core for moist thermodynamics the way
+`RadiationCore` is for radiation: every microphysics scheme, activation parameterisation and
 cloud diagnostic in Phases 40-45 speaks it, so they agree on what
 temperature, saturation and buoyancy mean.
 
@@ -1312,11 +1312,11 @@ function effective_radius end
 # what decides whether a haze particle stays a haze particle or becomes a
 # cloud droplet.
 #
-# It lives HERE, in the Era IV thermodynamic contract, for the same reason
+# It lives HERE, in the moist-thermodynamics shared core, for the same reason
 # the plane-surface saturation does: several modules need it — the
 # superdroplet solver (Phase 41), the activation parameterisation (Phase
 # 42), and the hygroscopic-growth code in `AerosolOptics` (Phase 37) — and
-# if each carries its own copy they drift. Era III already taught that
+# if each carries its own copy they drift. The radiation work already taught that
 # lesson with the urban material tables.
 #
 # TWO PARAMETERISATIONS, ONE PHYSICS. The literature writes the solute

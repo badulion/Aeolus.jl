@@ -4,7 +4,7 @@
 # boundary layer just detailed enough for radiation fog to form, thicken
 # by its own fog-top cooling, and burn off after sunrise:
 #
-#   * radiation      — `fog_radiative_transfer!` (Era III stack) with the
+#   * radiation      — `fog_radiative_transfer!` (radiation stack) with the
 #                      droplet field in the optics (coupling.jl)
 #   * phase change   — `fog_condensation` (saturation adjustment at exact
 #                      moist enthalpy, this module)
@@ -165,7 +165,7 @@ mutable struct FogColumn{R<:FogRadiation}
     last_out::Float64
 end
 
-# von Kármán constant: the Era V SurfaceExchange value, not a local copy.
+# von Kármán constant: the SurfaceExchange shared-core value, not a local copy.
 const _KARMAN = DEFAULT_SURFACE_CONSTANTS.κ
 
 # =========================================================================

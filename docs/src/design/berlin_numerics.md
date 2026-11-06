@@ -16,7 +16,7 @@ provider).
 | slot | providers (default first) | how |
 | :-- | :-- | :-- |
 | `:pressure_solver` | `:cosine_fft` (`pressure_fft`), `:multigrid` (`pressure_multigrid`), `:mg_cg` (`pressure_mg_cg`), `:density_weighted_direct` (`pressure_density_direct`, sound-proof cores only, the direct FFT/DCT + tridiagonal solve, #309), `:density_weighted_cg` (`pressure_density_weighted`, sound-proof cores only, #133) | `sim_options`: the `solver` of `BoussinesqSimulation`, built with the per-axis Poisson kinds of the case's velocity `bcs` (`case_poisson_axes(cfg, mesh)`, #251: periodic x, y and Neumann z by default, all-Neumann for `lateral = :open` or a nested child; smoke-checked); for a sound-proof core `pressure_solver = :direct` or `:cg` (with the CG's `tol`, `maxit`), the core building the solver with axes derived from the same `bcs` |
-| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the Era VI contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
+| `:sgs` | `:tke` (`sgs_tke`, `PrognosticSGS.TKEClosure`, the Deardorff/Moeng prognostic SGS TKE, #182; Laplacian momentum form, see below), `:smagorinsky` (`sgs_smagorinsky`, `StaticSmagorinsky(cfg.C_s)`, the coefficients of the cores' built-in closure bit for bit; the default before #182), `:dynamic` (`sgs_dynamic`: `LagrangianDynamicSmagorinsky` by default, `DynamicSmagorinsky` for `averaging = :plane` / `:local`; with the buildings' mask), `:mlsgs` (`sgs_mlsgs`, `ML.MLSGS`), `:amd` (`sgs_amd`, `AMDClosure`, zero in the building cells), `:vreman` (`sgs_vreman`, `VremanClosure(cfg.C_s)`), `:sigma` (`sgs_sigma`, `SigmaModel`, #184), `:reynolds_stress` (`sgs_reynolds_stress`, `PrognosticSGS.ReynoldsStressClosure`, the differential Reynolds-stress closure, #188; not with `timestepper = :imex`); all but `:tke` and `:reynolds_stress` with option `stress = :symmetric` (`:laplacian`); `:smagorinsky`, `:dynamic` and `:mlsgs` are each wrapped in `StabilityCorrected` (P55-e, #187; `cfg.sgs_stability = :brown94`; `:none` gives the bare closure, for `:smagorinsky` the coefficients of the cores' built-in closure bit for bit) and also take `scalar_tensor = :diagonal` (`:isentropic`, with `diapycnal`, `slope_max`); `:tke` and `:amd` carry their own stability treatment (TKE length scale, AMD buoyancy term) and are not wrapped, nor are `:vreman`, `:sigma` and `:reynolds_stress` (its stresses carry the buoyancy production directly) | `step_options`: `sgs`, an `AbstractSGSClosure` (the SGS closure contract, #167), and `sgs_stress` (the stress form, #175); every core and stepper takes both |
 | `:momentum_advection` | `:centered` (`momentum_centered`), `:weno_z` (`momentum_weno_z`, option `order = 5`/7) | `step_options`: `momentum_advection` |
 | `:scalar_advection` | `:advection_schemes` (`scalar_advection`, options `scheme = :weno_z5`, `sgs_diffusion = true`) | the `:transport` stage: advection, then SGS diffusion with `κt` (#177; with a stability-corrected `:sgs` closure κh on the x, y faces and its κv on the z faces, as for θ) |
 
@@ -40,7 +40,7 @@ dynamics step (`step!`, or `step_imex!` under the IMEX steppers, which
 takes the same `momentum_advection` and `sgs`); two
 couplings may not set the same keyword.
 
-**SGS providers** are closure objects of the Era VI contract
+**SGS providers** are closure objects of the SGS closure contract
 ([Closure contract](../theory/sgs.md#Closure-contract)): a provider
 builds its `AbstractSGSClosure` once and `step_options` returns
 `sgs_step_options(closure, stress) = (sgs = closure, sgs_stress = stress)`.
@@ -157,7 +157,7 @@ on its 12-step state AMD's own κ would differ from θ's by 77–80 %
   `:smoke` window after 100 steps, MG-CG differs from the FFT by at most
   6.1e-10 m s⁻¹ in u, v, w and 2.1e-9 K in θ, with max|∇·u| = 1.9e-13
   s⁻¹ (measured by the former `test/berlin_numerics.jl`; the same
-  agreement on a synthetic 16³ box is `test/era2_multigrid.jl`). They are here for the stretched-grid
+  agreement on a synthetic 16³ box is `test/multigrid.jl`). They are here for the stretched-grid
   and cut-cell solver work (#151, #152), not for speed.
 * **SGS.** `:tke` (default since #182) is described in
   [Prognostic SGS TKE (#182)](berlin_turbulence.md#Prognostic-SGS-TKE-(#182)) below.
@@ -272,7 +272,7 @@ the inertial-range 0.17: the window's flow is a 1 m s⁻¹ geostrophic wind
 over 250 m with a capping inversion at 60 m, far from developed
 isotropic turbulence, and the dynamic coefficient is lower in stratified
 and transitional flow (it reaches 0.13–0.15 in the decaying-turbulence
-run of `validation/era2_sgs_numerics.jl`).
+run of `validation/sgs_numerics.jl`).
 
 **Cost** on the flagship grid (64 × 64 × 32), per call, minimum of 15
 repetitions on a loaded 24-core machine (each operator runs once per
@@ -311,7 +311,7 @@ The numerics are unchanged: p = 2 is evaluated as `x*x`, which is
 Base's `x^2` bit for bit; TENO's q = 6 as `x³·x³`, which differs from
 Base's compensated `x^6` by at most 4 ulp (3.02 measured) and changed no
 value of the Berlin smoke matrix nor of 10⁵ random TENO5 stencils
-(`test/era2_advection.jl`).
+(`test/advection.jl`).
 
 For scale, a whole default step cost about 40–60 ms under the same load
 at #132 (`timing_report`, radiation excluded), of which `step!` was

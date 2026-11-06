@@ -153,7 +153,7 @@ transmittance is the hemispheric integral
 
 with ``\bar μ = \int_0^1 μ/G\,dμ`` and the up-scatter fractions ``β``,
 ``β_0`` of the CLM5.0 Technical Note (§2.3.1). Dividing by ``\bar μ``
-puts this in exactly the Meador–Weaver form solved by the Era III
+puts this in exactly the Meador–Weaver form solved by the radiation stack's
 `TwoStream` module, with optical depth ``Λ``, beam cosine ``1/K`` and
 
 ```math
@@ -291,7 +291,7 @@ the air.
 
 ### What the tests measure
 
-`test/era5_leaf_energy.jl`:
+`test/leaf_energy.jl`:
 
 | Check | Reference | Measured |
 | :-- | :-- | --: |
@@ -422,7 +422,7 @@ used.
 
 ### Results
 
-`validation/era5_canopy_profiles.jl` (and the former column example `examples/validation/canopy_profiles.jl`, (removed by ONE-g, #456)):
+`validation/canopy_profiles.jl` (and the former column example `examples/validation/canopy_profiles.jl`, (removed by ONE-g, #456)):
 
 | Quantity | Observed | Model |
 | :-- | --: | --: |

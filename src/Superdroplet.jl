@@ -1,6 +1,6 @@
 module Superdroplet
 
-# Era IV, Phase 41 — Superdroplet (Lagrangian probabilistic) microphysics.
+# Phase 41 — Superdroplet (Lagrangian probabilistic) microphysics.
 #
 # THE IDEA, AND WHY IT IS THE REFERENCE
 #
@@ -36,7 +36,7 @@ module Superdroplet
 # multiplicity bookkeeping absorbs them exactly. Getting that bookkeeping
 # right is the whole ballgame — it is what makes water mass conserve to
 # round-off while the droplet number decays at the analytically correct
-# rate. The Golovin validation in `validation/era4_superdroplet.jl` is a hard external
+# rate. The Golovin validation in `validation/superdroplet.jl` is a hard external
 # check on precisely this.
 #
 # WHAT IS *NOT* HERE, STATED PLAINLY
@@ -82,7 +82,7 @@ using Random: AbstractRNG, MersenneTwister, shuffle!, rand
 using ..Backends: AbstractBackend, default_backend, launch!, launch_weighted!, counter_rng,
                   counter_xoshiro
 
-# MoistThermodynamics is the Era IV contract (Phase 39): saturation vapour
+# MoistThermodynamics is the shared core (Phase 39): saturation vapour
 # pressure, latent heats and the thermodynamic constants all come from
 # there rather than being redefined here, so this module and the bulk
 # schemes cannot disagree about what saturation means.
@@ -340,7 +340,7 @@ times the dry radius.
 function droplet_critical_radius(m_s::Real, T::Real, a::AerosolProperties,
                          m::MicrophysicalConstants = DEFAULT_MICRO,
                          c::ThermodynamicConstants = DEFAULT_CONSTANTS)
-    # Delegates to the Era IV contract. This module is parameterised by
+    # Delegates to the MoistThermodynamics shared core. This module is parameterised by
     # solute MASS (what a superdroplet carries) and the contract by dry
     # RADIUS and kappa (what is measured); `dry_radius` converts, and
     # `raoult_b = kappa r_d^3` is the same relation the contract uses. One

@@ -102,7 +102,7 @@ constant (`RadiationCore.STEFAN_BOLTZMANN`), `H` the upward sensible
 heat flux to the atmosphere (typically `ρ cₚ w'θ'|₀`), `LE` the latent
 heat flux, and `C_s` [J/m²/K] the effective heat capacity.
 
-`SlabLand` is the first implementer of the Era V
+`SlabLand` is the first implementer of the
 `SurfaceExchange.AbstractSurface` interface. Its moisture availability
 is the constant `β` (`moisture_availability(land) = β`): `β = 0`, the
 default, is a dry surface (`LE = 0`); `β = 1` an open-water surface with

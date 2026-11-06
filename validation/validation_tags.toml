@@ -18,99 +18,99 @@ weight = "heavy"
 seconds = 700
 reason = "end-to-end runs of the urban site on the Berlin configs (20-step 64^3 flagship, parent encroachment/Wangara/24 h tiled-surface runs); the smoke matrix, parent smoke run and class fractions are tests in urban_checks.jl, with urban_run.jl, config_berlin.jl"
 
-["era2_nest_twoway_longrun.jl"]
+["nest_twoway_longrun.jl"]
 weight = "heavy"
 seconds = 349
-reason = "two-way long runs (2 h CBL, neutral, 2000-step vortex); two-way nesting stays tested in era2_nest_twoway.jl"
+reason = "two-way long runs (2 h CBL, neutral, 2000-step vortex); two-way nesting stays tested in nest_twoway.jl"
 
-["era6_inflow_fetch.jl"]
+["inflow_fetch.jl"]
 weight = "heavy"
 seconds = 299
-reason = "development-length runs behind synthetic inflow vs a periodic precursor; development_length, FetchStatistics and the open-x half channel are tested in era6_inflow_fetch.jl"
+reason = "development-length runs behind synthetic inflow vs a periodic precursor; development_length, FetchStatistics and the open-x half channel are tested in inflow_fetch.jl"
 
-["era6_outflow_conditions.jl"]
+["outflow_conditions.jl"]
 weight = "heavy"
 seconds = 225
-reason = "outgoing Lamb-Oseen vortex reflection and the 2000-step stability run; the outflow API, uniform flow and budgets are tested in era6_outflow_conditions.jl"
+reason = "outgoing Lamb-Oseen vortex reflection and the 2000-step stability run; the outflow API, uniform flow and budgets are tested in outflow_conditions.jl"
 
-["era6_inflow_nest_longrun.jl"]
+["inflow_nest_longrun.jl"]
 weight = "heavy"
 seconds = 205
-reason = "2 h sheared-CBL nest runs, one-way and two-way, with and without the inflow generator (two realisations with it); the generator on a nest stays tested in era6_inflow_turbulence.jl"
+reason = "2 h sheared-CBL nest runs, one-way and two-way, with and without the inflow generator (two realisations with it); the generator on a nest stays tested in inflow_turbulence.jl"
 
-["era2_nest_hierarchy_longrun.jl"]
+["nest_hierarchy_longrun.jl"]
 weight = "heavy"
 seconds = 200
-reason = "50-turnover forced neutral flow with two two-way nest levels and its two-level reference; nest hierarchies stay tested in era2_nest_hierarchy.jl"
+reason = "50-turnover forced neutral flow with two two-way nest levels and its two-level reference; nest hierarchies stay tested in nest_hierarchy.jl"
 
-["era6_gabls1.jl"]
+["gabls1.jl"]
 weight = "heavy"
 seconds = 152
-reason = "GABLS1 32^3 LES on the model (gabls1.toml); its configuration is tested in era6_gabls1.jl, the SBL components in components_both_cores.jl, stability functions and forcing in era6_stability_functions.jl, era6_large_scale_forcing.jl"
+reason = "GABLS1 32^3 LES on the model (gabls1.toml); its configuration is tested in gabls1.jl, the SBL components in components_both_cores.jl, stability functions and forcing in stability_functions.jl, large_scale_forcing.jl"
 
-["era6_flat_plate.jl"]
+["flat_plate.jl"]
 weight = "heavy"
 seconds = 146
-reason = "laminar flat plate vs Blasius and the coarse 3-D bypass transition; the fringe, Blasius solution and diagnostics are tested in era6_flat_plate.jl"
+reason = "laminar flat plate vs Blasius and the coarse 3-D bypass transition; the fringe, Blasius solution and diagnostics are tested in flat_plate.jl"
 
-["era6_lasd.jl"]
+["lasd.jl"]
 weight = "heavy"
 seconds = 131
-reason = "LASD scale invariance in isotropic turbulence, half-channel log law, 500-step robustness; the LASD kernels are tested in era6_lasd.jl"
+reason = "LASD scale invariance in isotropic turbulence, half-channel log law, 500-step robustness; the LASD kernels are tested in lasd.jl"
 
-["era6_transition_kh.jl"]
+["transition_kh.jl"]
 weight = "heavy"
 seconds = 126
-reason = "Kelvin-Helmholtz / Miles-Howard growth rates (128x1x256); the Transition diagnostics are tested in era6_transition_kh.jl, era6_relaminarisation.jl"
+reason = "Kelvin-Helmholtz / Miles-Howard growth rates (128x1x256); the Transition diagnostics are tested in transition_kh.jl, relaminarisation.jl"
 
-["era6_gabls3.jl"]
+["gabls3.jl"]
 weight = "heavy"
 seconds = 113
-reason = "GABLS3 4 h LES on the model (gabls3.toml): budgets, MOST, the jet; the case data, forcing and surface diagnostics are tested in era6_gabls3.jl"
+reason = "GABLS3 4 h LES on the model (gabls3.toml): budgets, MOST, the jet; the case data, forcing and surface diagnostics are tested in gabls3.jl"
 
-["era5_bestest.jl"]
+["bestest.jl"]
 weight = "heavy"
 seconds = 109
-reason = "20 annual ASHRAE 140-2020 BESTEST runs vs the reference programs; BuildingEnergy stays tested in era5_building_energy.jl, era5_hvac.jl"
+reason = "20 annual ASHRAE 140-2020 BESTEST runs vs the reference programs; BuildingEnergy stays tested in building_energy.jl, hvac.jl"
 
-["era5_heterogeneous_surface.jl"]
+["heterogeneous_surface.jl"]
 weight = "heavy"
 seconds = 106
-reason = "resolved patchy-surface CBL LES vs tiles; the coupling identity and conservation are tests in era5_heterogeneous_surface.jl, SurfaceTiles in era5_surface_tiles.jl, era5_blending_height.jl"
+reason = "resolved patchy-surface CBL LES vs tiles; the coupling identity and conservation are tests in heterogeneous_surface.jl, SurfaceTiles in surface_tiles.jl, blending_height.jl"
 
-["era6_gabls2.jl"]
+["gabls2.jl"]
 weight = "heavy"
 seconds = 92
-reason = "GABLS2 (reduced) 54 h run on the model (gabls2.toml) with large-scale subsidence; ProfileNudging and Subsidence stay tested in era6_nudging_subsidence.jl (checks 1-7, split off in #320)"
+reason = "GABLS2 (reduced) 54 h run on the model (gabls2.toml) with large-scale subsidence; ProfileNudging and Subsidence stay tested in nudging_subsidence.jl (checks 1-7, split off in #320)"
 
-["era5_land_surface_fluxnet.jl"]
+["land_surface_fluxnet.jl"]
 weight = "heavy"
 seconds = 82
-reason = "five FLUXNET/PLUMBER2 site-years vs measured fluxes; LandSurface stays tested in era5_land_surface.jl (incl. a Ball-Berry day)"
+reason = "five FLUXNET/PLUMBER2 site-years vs measured fluxes; LandSurface stays tested in land_surface.jl (incl. a Ball-Berry day)"
 
-["era6_sgs_validation.jl"]
+["sgs_validation.jl"]
 weight = "heavy"
 seconds = 72
-reason = "48^3 DNS and 12 LES against filtered DNS; the hook API is tested in era6_sgs_validation.jl, the TKE and RSM closures in era6_tke.jl, era6_reynolds_stress.jl"
+reason = "48^3 DNS and 12 LES against filtered DNS; the hook API is tested in sgs_validation.jl, the TKE and RSM closures in tke.jl, reynolds_stress.jl"
 
-["era5_urban_validation.jl"]
+["urban_validation.jl"]
 weight = "heavy"
 seconds = 71
-reason = "BUBBLE / CAPITOUL multi-season canyon runs; UrbanSurface (incl. the TEB canyon closures) and BuildingEnergy are tested in era5_urban_surface.jl, era5_building_energy.jl"
+reason = "BUBBLE / CAPITOUL multi-season canyon runs; UrbanSurface (incl. the TEB canyon closures) and BuildingEnergy are tested in urban_surface.jl, building_energy.jl"
 
-["era2_anelastic_cbl.jl"]
+["anelastic_cbl.jl"]
 weight = "heavy"
 seconds = 71
-reason = "5 h CBL to ~2 km, Boussinesq vs anelastic (z_i, θ_ML); the anelastic core stays tested in era2_anelastic.jl, components_both_cores.jl"
+reason = "5 h CBL to ~2 km, Boussinesq vs anelastic (z_i, θ_ML); the anelastic core stays tested in anelastic.jl, components_both_cores.jl"
 
-["era6_apriori_sgs.jl"]
+["apriori_sgs.jl"]
 weight = "heavy"
 exclusive = true
 seconds = 87
-reason = "96³ filtered-DNS fixture (asserts its wall time, so it runs alone) and the a-priori comparisons; the a-priori harness stays tested in era6_apriori_sgs.jl on a 32³ field"
+reason = "96³ filtered-DNS fixture (asserts its wall time, so it runs alone) and the a-priori comparisons; the a-priori harness stays tested in apriori_sgs.jl on a 32³ field"
 
-["era6_cbc_decay.jl"]
+["cbc_decay.jl"]
 weight = "heavy"
 exclusive = true
 seconds = 55
-reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget wall-clock asserts (so it runs alone); the reference table and initial state are tested in era6_cbc_decay.jl, the closures in era6_amd_vreman.jl, era6_sigma_sgs.jl"
+reason = "Comte-Bellot-Corrsin 32^3 benchmark, 8 closures x 3 seeds, CI-budget wall-clock asserts (so it runs alone); the reference table and initial state are tested in cbc_decay.jl, the closures in amd_vreman.jl, sigma_sgs.jl"

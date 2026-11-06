@@ -1,6 +1,6 @@
 # Stability functions and the gradient Richardson number
 
-Era VI (Phase 58, #170) puts every Richardson-number-dependent piece of
+Phase 58 (#170) puts every Richardson-number-dependent piece of
 turbulence physics behind one contract, `TurbulenceStability`. Before
 it the repository had two stability families that did not share code:
 the Monin–Obukhov ``φ/ψ`` functions of `SurfaceExchange` and a private
@@ -270,7 +270,7 @@ the flux–stability relation is the momentum half of MOST. Every
 `solve_surface_layer` solution with effective wind ``U`` lies on the
 curve, so its buoyancy flux ``u_*θ_{v*}`` never exceeds ``Q_{max}``.
 
-**Measured (`test/era6_collapse.jl` (removed)).**
+**Measured (`test/collapse.jl` (removed)).**
 
 * *Log-linear ``α = 5``.* The numerical maximum agrees with the closed
   form to ``5 × 10^{-16}`` (requirement ``10^{-8}``) at four

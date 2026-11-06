@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 55 (P55-d, #176) — anisotropic minimum-dissipation (AMD)
+# Phase 55 (P55-d, #176) — anisotropic minimum-dissipation (AMD)
 # and Vreman SGS closures.
 # =========================================================================
 #
@@ -138,7 +138,7 @@ gradient). This changes nothing where `Ri_∇ ≤ 1`: `Ri_∇` is at most the
 gradient Richardson number `N²/((∂_z u)² + (∂_z v)²)`, and the
 Miles–Howard threshold of shear instability is `Ri_g = 1/4`, so resolved
 shear turbulence keeps the published model (measured in
-test/era6_amd_vreman.jl: on a decaying-turbulence field at bulk Richardson
+test/amd_vreman.jl: on a decaying-turbulence field at bulk Richardson
 number 0.1, 0.53 % of the cells have `Ri_∇ > 1` and the AMD dissipation
 `⟨2ν_t S_ij S_ij⟩` changes by −2.4e-5, relative). Where
 `Ri_∇ > 1` the buoyancy contribution becomes
@@ -162,7 +162,7 @@ unvalidated.
   separate Richardson-number correction is applied).
 
 The velocity gradient is [`_velocity_gradient_at`](@ref), the stencil of
-every Era VI closure; the θ gradient is the centred difference over two
+every SGS closure; the θ gradient is the centred difference over two
 cells. Halos of `u, v, w, θ` must be filled.
 
 References: Rozema, Bae, Moin & Verstappen (2015), *Phys. Fluids* 27,

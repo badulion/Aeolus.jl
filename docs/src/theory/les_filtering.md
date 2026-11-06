@@ -224,7 +224,7 @@ rather than "past the peak", the 48³ criterion.
 There is no inertial range at this ``Re_λ``, which is the price of a
 fixture that runs in CI.
 
-**Measured a-priori numbers** (Gaussian filter, `validation/era6_apriori_sgs.jl`):
+**Measured a-priori numbers** (Gaussian filter, `validation/apriori_sgs.jl`):
 
 | | Δ = 4h (7.8η) | Δ = 8h (15.7η) |
 | :-- | --: | --: |
@@ -303,7 +303,7 @@ from it, and on the LES grid +24 % and +47 % (4h, 8h).
 (an offline 256³ filtered-DNS record, its `dns` run type and its tables)
 was removed by the maintainer's decision of 2026-10-09 (ONE-g, #456): the
 LES is to be validated differently, possibly externally (#461). The
-a-priori unit tests of the SGS models stay (`validation/era6_apriori_sgs.jl`);
+a-priori unit tests of the SGS models stay (`validation/apriori_sgs.jl`);
 the comparison of the models in the running LES is a posteriori, below.
 
 References: Clark, R. A., Ferziger, J. H. & Reynolds, W. C. (1979),

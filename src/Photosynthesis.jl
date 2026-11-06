@@ -1,7 +1,7 @@
 """
     Photosynthesis
 
-Leaf-level biochemical photosynthesis for Era V (Phase 47): the
+Leaf-level biochemical photosynthesis (Phase 47): the
 Farquhar, von Caemmerer & Berry (1980) model for C3 leaves and the
 Collatz, Ribas-Carbo & Berry (1992) model for C4 leaves, in the form
 used by the Community Land Model (CLM4.5 / CLM5, Bonan et al. 2011).
@@ -88,7 +88,7 @@ module Photosynthesis
 
 using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              saturation_vapor_pressure, latent_heat_vapor
-# The bracketed Illinois root finder of the Era V contract (used by the
+# The bracketed Illinois root finder of the surface shared core (used by the
 # Monin-Obukhov solver) also solves the coupled A-gs-ci system here.
 using ..SurfaceExchange: _illinois
 

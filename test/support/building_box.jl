@@ -1,5 +1,5 @@
 # Shared by the BuildingEnergy tests and validation runs
-# (test/era5_building_energy.jl, test/era5_hvac.jl and their namesakes in
+# (test/building_energy.jl, test/hvac.jl and their namesakes in
 # validation/): the single-zone test boxes and an independent steady network
 # solution for them (the reference both suites compare with).
 

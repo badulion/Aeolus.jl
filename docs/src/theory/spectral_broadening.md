@@ -1,6 +1,6 @@
 # Spectral broadening: bulk closure and validation
 
-*Era IV, Phase 45 (issue #14) — module `TurbulentMicrophysics`.*
+*Phase 45 (issue #14) — module `TurbulentMicrophysics`.*
 
 The [previous page](sgs_activation_growth.md) lets every superdroplet grow
 in its own supersaturation ``\bar S + \sigma_S\xi_i(t)``, where ``\xi_i``

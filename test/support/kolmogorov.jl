@@ -1,6 +1,6 @@
 # The decaying-turbulence initial field shared by the SGS tests (#317):
-# test/era2_sgs_numerics.jl, test/era6_lagrangian_sgs.jl, test/era6_lasd.jl,
-# test/era6_amd_vreman.jl and test/era6_sigma_sgs.jl each carried a copy of
+# test/sgs_numerics.jl, test/lagrangian_sgs.jl, test/lasd.jl,
+# test/amd_vreman.jl and test/sigma_sgs.jl each carried a copy of
 # it (three named, two inline). The includer loads Aeolus.
 
 using Random: AbstractRNG

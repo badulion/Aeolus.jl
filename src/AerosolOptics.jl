@@ -1457,7 +1457,7 @@ A vertically resolved aerosol population on a radiation column.
   * `τ`, `ssa`, `g` — per-layer, per-band optical properties, already
     multiplied by `scale·dz` so `τ[k,b]` is the layer optical depth
 
-The profile is a `AbstractAerosolOptics`, so it plugs into the Era III
+The profile is a `AbstractAerosolOptics`, so it plugs into the radiation
 `compute_optics!` contract and merges with gas and cloud optics.
 
 Vertical shape: an exponentially decaying boundary-layer term plus an
@@ -1753,7 +1753,7 @@ end
 """
     compute_optics!(optics, aerosol::AerosolProfile, col, spec; add = true)
 
-Era III optics contract for aerosol. Writes the profile's layer optical
+Radiation optics contract for aerosol. Writes the profile's layer optical
 depth, single-scattering albedo and asymmetry parameter into `optics`
 for every g-point.
 

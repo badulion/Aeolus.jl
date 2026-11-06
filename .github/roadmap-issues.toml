@@ -7,57 +7,57 @@
 # Generated 2026-09-24.
 
 [[milestone]]
-title = "Era I — LES core and physics scaffolds"
+title = "LES core and physics scaffolds"
 state = "closed"
 description = "Phases 1-20. The dynamical core, pluggable pressure solvers, physics scaffolds and the first urban flagship."
 
 [[milestone]]
-title = "Era II — Numerical foundations for fidelity"
+title = "Numerical foundations"
 state = "closed"
 description = "Phases 21-31. Cut-cell IBM, ghost-cell walls, adaptive dt, IMEX, WENO-Z/TENO, anelastic dynamics, multigrid, nesting, AMR. 2,094 tests."
 
 [[milestone]]
-title = "Era III — High-fidelity radiation"
+title = "Radiation"
 state = "closed"
 description = "Phases 32-38. Correlated-k gas optics, two-stream, 3-D Monte-Carlo, urban radiosity, spectral BRDF, Mie aerosol, solar geometry. 4,881 tests."
 
 [[milestone]]
-title = "Era IV — High-fidelity clouds and microphysics"
+title = "Clouds and microphysics"
 state = "open"
 description = "Phases 39-45. Exact moist thermodynamics, bulk and Lagrangian microphysics, aerosol-cloud interaction, ice nucleation, fog. Phases 39, 41, 42 shipped."
 
 [[milestone]]
-title = "Era V — High-fidelity land, urban and surface exchange"
+title = "Land, urban and surface exchange"
 state = "open"
 description = "Phases 46-53. Richards-equation soil, Farquhar photosynthesis, resolved canopy, production urban canopy, building energy, snow, water surfaces, heterogeneity."
 
 [[milestone]]
-title = "Era VI — High-fidelity turbulence closure"
+title = "Turbulence closure"
 state = "open"
 description = "Phases 54-59. Scale-dependent dynamic SGS, anisotropic closures, prognostic SGS stress, high-Re wall models, stable boundary layer, transition."
 
 [[milestone]]
-title = "Era VII — High-fidelity chemistry and aerosol"
+title = "Chemistry and aerosol"
 state = "open"
 description = "Phases 60-66. KPP mechanism, online photolysis, aqueous and heterogeneous chemistry, modal/sectional aerosol, SOA, emissions, deposition."
 
 [[milestone]]
-title = "Era VIII — Real-world data, forcing and validation"
+title = "Real-world data, forcing and validation"
 state = "open"
 description = "Phases 67-73. ERA5 driver, mesoscale nesting, production geospatial ingestion, observation operators, benchmark library, provenance."
 
 [[milestone]]
-title = "Era IX — Data assimilation and inverse problems"
+title = "Data assimilation and inverse problems"
 state = "open"
 description = "Phases 74-79. Adjoint via AD, 4D-Var, ensemble Kalman filtering, hybrid assimilation, parameter and source inversion, UQ."
 
 [[milestone]]
-title = "Era X — Performance, scale and portability"
+title = "Performance, scale and portability"
 state = "open"
 description = "Phases 80-87. Production MPI, GPU port, multi-GPU, mixed precision, performance engineering, async I/O, spectral element, DG."
 
 [[milestone]]
-title = "Era XI — Machine learning, applications, ecosystem"
+title = "Machine learning, applications, ecosystem"
 state = "open"
 description = "Phases 88-100. Neural closures and emulators, differentiable physics, foundation models, wildfire, wind energy, urban services, air quality, ecosystem."
 
@@ -68,8 +68,8 @@ description = "Caveats of shipped code: known biases, uneven coverage, disabled 
 
 [[issue]]
 title = "Phase 40 — Gamma-function machinery and size-distribution moments"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-40", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-40"]
 body = """
 Part of **Phase 40 — P3 microphysics**.
 
@@ -91,7 +91,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -101,8 +101,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 40 — P3 mass-dimension relation and predicted rime density"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-40", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-40"]
 body = """
 Part of **Phase 40 — P3 microphysics**.
 
@@ -124,7 +124,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -134,8 +134,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 40 — Process rates: condensation, autoconversion, riming, melting"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-40", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-40"]
 body = """
 Part of **Phase 40 — P3 microphysics**.
 
@@ -157,7 +157,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -167,8 +167,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 40 — Sedimentation, size sorting and radar reflectivity"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-40", "microphysics", "validation"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-40", "validation"]
 body = """
 Part of **Phase 40 — P3 microphysics**.
 
@@ -190,7 +190,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -200,8 +200,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 43 — Prognostic ice-nucleating-particle species"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-43", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-43"]
 body = """
 Part of **Phase 43 — Ice nucleation**.
 
@@ -223,7 +223,7 @@ Heterogeneous ice nucleation with prognostic ice-nucleating-particle species (du
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -233,8 +233,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 43 — Immersion and deposition freezing"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-43", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-43"]
 body = """
 Part of **Phase 43 — Ice nucleation**.
 
@@ -256,7 +256,7 @@ Heterogeneous ice nucleation with prognostic ice-nucleating-particle species (du
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -266,8 +266,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 43 — Secondary ice production and Arctic stratus case"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-43", "microphysics", "validation"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-43", "validation"]
 body = """
 Part of **Phase 43 — Ice nucleation**.
 
@@ -289,7 +289,7 @@ Heterogeneous ice nucleation with prognostic ice-nucleating-particle species (du
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -299,8 +299,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 44 — Terminal-velocity spectrum and sub-grid precipitation fraction"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-44", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-44"]
 body = """
 Part of **Phase 44 — Precipitation, fog and visibility**.
 
@@ -322,7 +322,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -332,14 +332,14 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 44 — Radiation fog with droplet-radiative feedback"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-44", "microphysics", "radiation"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-44", "radiation"]
 body = """
 Part of **Phase 44 — Precipitation, fog and visibility**.
 
 ## Scope
 
-Fog formation and dissipation with the droplet-radiative feedback that actually controls it - fog cools itself by radiating, which thickens it. Requires coupling the droplet field to the Era III radiation.
+Fog formation and dissipation with the droplet-radiative feedback that actually controls it - fog cools itself by radiating, which thickens it. Requires coupling the droplet field to the radiation stack.
 
 ## Phase context
 
@@ -355,7 +355,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -365,8 +365,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 44 — Visibility diagnostic"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-44", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-44"]
 body = """
 Part of **Phase 44 — Precipitation, fog and visibility**.
 
@@ -388,7 +388,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -398,8 +398,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 44 — Re-enable fog/dew condensation coupling"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-44", "microphysics", "tech-debt"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-44", "tech-debt"]
 body = """
 Part of **Phase 44 — Precipitation, fog and visibility**.
 
@@ -421,7 +421,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -431,8 +431,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 45 — Sub-grid supersaturation distribution"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-45", "microphysics", "turbulence"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-45", "turbulence"]
 body = """
 Part of **Phase 45 — Turbulence-microphysics interaction**.
 
@@ -454,7 +454,7 @@ Sub-grid supersaturation fluctuations and their effect on droplet growth and act
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -464,8 +464,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 45 — Effect on activation and condensational growth"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-45", "microphysics"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-45"]
 body = """
 Part of **Phase 45 — Turbulence-microphysics interaction**.
 
@@ -487,7 +487,7 @@ Sub-grid supersaturation fluctuations and their effect on droplet growth and act
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -497,8 +497,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 45 — Spectral broadening validation against superdroplet and DNS"
-milestone = "Era IV — High-fidelity clouds and microphysics"
-labels = ["era-iv", "phase-45", "microphysics", "validation"]
+milestone = "Clouds and microphysics"
+labels = ["microphysics", "phase-45", "validation"]
 body = """
 Part of **Phase 45 — Turbulence-microphysics interaction**.
 
@@ -520,7 +520,7 @@ Sub-grid supersaturation fluctuations and their effect on droplet growth and act
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -530,8 +530,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 46 — Richards-equation water transport"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-46", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-46", "land"]
 body = """
 Part of **Phase 46 — Multi-layer soil and hydrology**.
 
@@ -553,7 +553,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -563,8 +563,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 46 — Multi-layer soil thermal column with freeze-thaw"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-46", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-46", "land"]
 body = """
 Part of **Phase 46 — Multi-layer soil and hydrology**.
 
@@ -586,7 +586,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -596,8 +596,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 46 — Water table and drainage"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-46", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-46", "land"]
 body = """
 Part of **Phase 46 — Multi-layer soil and hydrology**.
 
@@ -619,7 +619,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -629,8 +629,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 46 — Replace the three-layer example soil with the production column"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-46", "land", "urban", "tech-debt"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-46", "land", "urban", "tech-debt"]
 body = """
 Part of **Phase 46 — Multi-layer soil and hydrology**.
 
@@ -652,7 +652,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -662,8 +662,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 47 — Farquhar photosynthesis"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-47", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-47", "land"]
 body = """
 Part of **Phase 47 — Vegetation photosynthesis and stomatal conductance**.
 
@@ -685,7 +685,7 @@ Farquhar photosynthesis coupled to Ball-Berry / Medlyn stomatal conductance, so 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -695,8 +695,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 47 — Ball-Berry / Medlyn stomatal conductance"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-47", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-47", "land"]
 body = """
 Part of **Phase 47 — Vegetation photosynthesis and stomatal conductance**.
 
@@ -718,7 +718,7 @@ Farquhar photosynthesis coupled to Ball-Berry / Medlyn stomatal conductance, so 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -728,8 +728,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 47 — Soil-water stress coupling and FLUXNET validation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-47", "land", "validation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-47", "land", "validation"]
 body = """
 Part of **Phase 47 — Vegetation photosynthesis and stomatal conductance**.
 
@@ -751,7 +751,7 @@ Farquhar photosynthesis coupled to Ball-Berry / Medlyn stomatal conductance, so 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -761,8 +761,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 48 — Leaf-area density and implicit canopy drag"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-48", "land", "tech-debt"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-48", "land", "tech-debt"]
 body = """
 Part of **Phase 48 — Resolved plant canopy**.
 
@@ -784,7 +784,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -794,14 +794,14 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 48 — Radiation attenuation through the canopy"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-48", "land", "radiation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-48", "land", "radiation"]
 body = """
 Part of **Phase 48 — Resolved plant canopy**.
 
 ## Scope
 
-Beer-Lambert or two-stream attenuation through the leaf-area profile, coupled to Era III radiation.
+Beer-Lambert or two-stream attenuation through the leaf-area profile, coupled to the radiation stack.
 
 ## Phase context
 
@@ -817,7 +817,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -827,8 +827,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 48 — Leaf energy balance and leaf temperature"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-48", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-48", "land"]
 body = """
 Part of **Phase 48 — Resolved plant canopy**.
 
@@ -850,7 +850,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -860,8 +860,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 48 — Within-canopy profile validation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-48", "land", "validation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-48", "land", "validation"]
 body = """
 Part of **Phase 48 — Resolved plant canopy**.
 
@@ -883,7 +883,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -893,8 +893,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 49 — Per-facet multi-layer wall conduction"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-49", "urban"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-49", "urban"]
 body = """
 Part of **Phase 49 — Production urban canopy model**.
 
@@ -904,7 +904,7 @@ Multi-layer conduction through roof, wall and ground facets with real material l
 
 ## Phase context
 
-Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to Era III's radiosity.
+Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to the radiation stack's radiosity.
 
 **Phase validation target:** façade and surface temperatures against BUBBLE / CAPITOUL urban field-campaign data.
 
@@ -916,7 +916,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -926,8 +926,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 49 — Window and glazing transmission"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-49", "urban", "radiation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-49", "urban", "radiation"]
 body = """
 Part of **Phase 49 — Production urban canopy model**.
 
@@ -937,7 +937,7 @@ Shortwave transmission through glazing into the building interior, and its effec
 
 ## Phase context
 
-Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to Era III's radiosity.
+Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to the radiation stack's radiosity.
 
 **Phase validation target:** façade and surface temperatures against BUBBLE / CAPITOUL urban field-campaign data.
 
@@ -949,7 +949,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -958,9 +958,9 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 """
 
 [[issue]]
-title = "Phase 49 — Couple facet temperatures to the Era III radiosity solver"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-49", "urban", "radiation", "tech-debt"]
+title = "Phase 49 — Couple facet temperatures to the radiosity solver"
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-49", "urban", "radiation", "tech-debt"]
 body = """
 Part of **Phase 49 — Production urban canopy model**.
 
@@ -970,7 +970,7 @@ The radiosity solver already resolves every facet, but the surface energy balanc
 
 ## Phase context
 
-Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to Era III's radiosity.
+Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to the radiation stack's radiosity.
 
 **Phase validation target:** façade and surface temperatures against BUBBLE / CAPITOUL urban field-campaign data.
 
@@ -982,7 +982,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -992,8 +992,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 49 — Anthropogenic heat from a building energy model"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-49", "urban"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-49", "urban"]
 body = """
 Part of **Phase 49 — Production urban canopy model**.
 
@@ -1003,7 +1003,7 @@ Replace the prescribed diurnal anthropogenic heat profile with output from the P
 
 ## Phase context
 
-Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to Era III's radiosity.
+Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to the radiation stack's radiosity.
 
 **Phase validation target:** façade and surface temperatures against BUBBLE / CAPITOUL urban field-campaign data.
 
@@ -1015,7 +1015,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1025,8 +1025,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 49 — BUBBLE / CAPITOUL validation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-49", "urban", "validation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-49", "urban", "validation"]
 body = """
 Part of **Phase 49 — Production urban canopy model**.
 
@@ -1036,7 +1036,7 @@ Validate facade and surface temperatures against the BUBBLE and CAPITOUL urban f
 
 ## Phase context
 
-Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to Era III's radiosity.
+Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall / ground) multi-layer wall conduction, window transmission, anthropogenic heat with a real building-energy model, and street-canyon-resolved radiation coupled to the radiation stack's radiosity.
 
 **Phase validation target:** façade and surface temperatures against BUBBLE / CAPITOUL urban field-campaign data.
 
@@ -1048,7 +1048,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1058,8 +1058,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 50 — Indoor air temperature and thermal mass"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-50", "urban"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-50", "urban"]
 body = """
 Part of **Phase 50 — Building energy model coupling**.
 
@@ -1081,7 +1081,7 @@ Two-way coupled building interior: indoor air temperature, HVAC demand and its e
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1091,8 +1091,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 50 — HVAC demand and exhaust heat"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-50", "urban"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-50", "urban"]
 body = """
 Part of **Phase 50 — Building energy model coupling**.
 
@@ -1114,7 +1114,7 @@ Two-way coupled building interior: indoor air temperature, HVAC demand and its e
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1124,8 +1124,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 50 — Occupancy schedules and validation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-50", "urban", "validation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-50", "urban", "validation"]
 body = """
 Part of **Phase 50 — Building energy model coupling**.
 
@@ -1147,7 +1147,7 @@ Two-way coupled building interior: indoor air temperature, HVAC demand and its e
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1157,8 +1157,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 51 — Multi-layer snowpack with compaction"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-51", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-51", "land"]
 body = """
 Part of **Phase 51 — Snow, ice and frozen surfaces**.
 
@@ -1180,7 +1180,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1190,8 +1190,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 51 — Metamorphism and albedo ageing"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-51", "land", "radiation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-51", "land", "radiation"]
 body = """
 Part of **Phase 51 — Snow, ice and frozen surfaces**.
 
@@ -1213,7 +1213,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1223,8 +1223,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 51 — Liquid water percolation and refreezing"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-51", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-51", "land"]
 body = """
 Part of **Phase 51 — Snow, ice and frozen surfaces**.
 
@@ -1246,7 +1246,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1256,8 +1256,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 51 — Lake and sea-ice thermodynamics"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-51", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-51", "land"]
 body = """
 Part of **Phase 51 — Snow, ice and frozen surfaces**.
 
@@ -1279,7 +1279,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1289,8 +1289,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 52 — Mixed-layer model and diurnal warm layer"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-52", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-52", "land"]
 body = """
 Part of **Phase 52 — Water surfaces and wave coupling**.
 
@@ -1312,7 +1312,7 @@ Lake and coastal-sea surface with a mixed-layer model, wave-dependent roughness 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1322,8 +1322,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 52 — Wave-dependent surface roughness"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-52", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-52", "land"]
 body = """
 Part of **Phase 52 — Water surfaces and wave coupling**.
 
@@ -1345,7 +1345,7 @@ Lake and coastal-sea surface with a mixed-layer model, wave-dependent roughness 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1355,8 +1355,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 52 — Sea spray and COARE validation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-52", "land", "validation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-52", "land", "validation"]
 body = """
 Part of **Phase 52 — Water surfaces and wave coupling**.
 
@@ -1378,7 +1378,7 @@ Lake and coastal-sea surface with a mixed-layer model, wave-dependent roughness 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1388,8 +1388,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 53 — Sub-grid tile framework"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-53", "land", "urban"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-53", "land", "urban"]
 body = """
 Part of **Phase 53 — Surface heterogeneity and blending**.
 
@@ -1411,7 +1411,7 @@ Sub-grid tile approach with a blending-height formulation so a single grid cell 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1421,8 +1421,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 53 — Blending-height formulation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-53", "land"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-53", "land"]
 body = """
 Part of **Phase 53 — Surface heterogeneity and blending**.
 
@@ -1444,7 +1444,7 @@ Sub-grid tile approach with a blending-height formulation so a single grid cell 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1454,8 +1454,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 53 — Heterogeneous-surface validation"
-milestone = "Era V — High-fidelity land, urban and surface exchange"
-labels = ["era-v", "phase-53", "land", "validation"]
+milestone = "Land, urban and surface exchange"
+labels = ["surface", "phase-53", "land", "validation"]
 body = """
 Part of **Phase 53 — Surface heterogeneity and blending**.
 
@@ -1477,7 +1477,7 @@ Sub-grid tile approach with a blending-height formulation so a single grid cell 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1487,8 +1487,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 54 — Production dynamic and scale-dependent SGS models"
-milestone = "Era VI — High-fidelity turbulence closure"
-labels = ["era-vi", "phase-54"]
+milestone = "Turbulence closure"
+labels = ["turbulence", "phase-54"]
 body = """
 ## Phase 54 — Production dynamic and scale-dependent SGS models
 
@@ -1508,7 +1508,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1517,8 +1517,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 55 — Anisotropic and tensorial eddy viscosity"
-milestone = "Era VI — High-fidelity turbulence closure"
-labels = ["era-vi", "phase-55"]
+milestone = "Turbulence closure"
+labels = ["turbulence", "phase-55"]
 body = """
 ## Phase 55 — Anisotropic and tensorial eddy viscosity
 
@@ -1538,7 +1538,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1547,8 +1547,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 56 — Prognostic SGS energy and stress"
-milestone = "Era VI — High-fidelity turbulence closure"
-labels = ["era-vi", "phase-56"]
+milestone = "Turbulence closure"
+labels = ["turbulence", "phase-56"]
 body = """
 ## Phase 56 — Prognostic SGS energy and stress
 
@@ -1568,7 +1568,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1577,8 +1577,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 57 — Wall models for high Reynolds number"
-milestone = "Era VI — High-fidelity turbulence closure"
-labels = ["era-vi", "phase-57"]
+milestone = "Turbulence closure"
+labels = ["turbulence", "phase-57"]
 body = """
 ## Phase 57 — Wall models for high Reynolds number
 
@@ -1598,7 +1598,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1607,8 +1607,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 58 — Stable-boundary-layer and intermittent turbulence"
-milestone = "Era VI — High-fidelity turbulence closure"
-labels = ["era-vi", "phase-58"]
+milestone = "Turbulence closure"
+labels = ["turbulence", "phase-58"]
 body = """
 ## Phase 58 — Stable-boundary-layer and intermittent turbulence
 
@@ -1628,7 +1628,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1637,8 +1637,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 59 — Transition and laminar-turbulent coexistence"
-milestone = "Era VI — High-fidelity turbulence closure"
-labels = ["era-vi", "phase-59"]
+milestone = "Turbulence closure"
+labels = ["turbulence", "phase-59"]
 body = """
 ## Phase 59 — Transition and laminar-turbulent coexistence
 
@@ -1658,7 +1658,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1667,8 +1667,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 60 — KPP-generated gas-phase mechanism"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-60"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-60"]
 body = """
 ## Phase 60 — KPP-generated gas-phase mechanism
 
@@ -1688,7 +1688,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1697,12 +1697,12 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 61 — Photolysis rates"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-61"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-61"]
 body = """
 ## Phase 61 — Photolysis rates
 
-Online photolysis using the computed actinic flux from Era III's radiation solver, including the effect of clouds and aerosol on photolysis rates.
+Online photolysis using the computed actinic flux from the radiation solver, including the effect of clouds and aerosol on photolysis rates.
 
 **Validated by:** J-value comparison against TUV reference model.
 
@@ -1718,7 +1718,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1727,8 +1727,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 62 — Aqueous and heterogeneous chemistry"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-62"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-62"]
 body = """
 ## Phase 62 — Aqueous and heterogeneous chemistry
 
@@ -1748,7 +1748,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1757,8 +1757,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 63 — Modal and sectional aerosol microphysics"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-63"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-63"]
 body = """
 ## Phase 63 — Modal and sectional aerosol microphysics
 
@@ -1778,7 +1778,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1787,8 +1787,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 64 — Secondary organic aerosol"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-64"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-64"]
 body = """
 ## Phase 64 — Secondary organic aerosol
 
@@ -1808,7 +1808,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1817,8 +1817,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 65 — Real emission inventories"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-65"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-65"]
 body = """
 ## Phase 65 — Real emission inventories
 
@@ -1838,7 +1838,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1847,8 +1847,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 66 — Deposition and pollen"
-milestone = "Era VII — High-fidelity chemistry and aerosol"
-labels = ["era-vii", "phase-66"]
+milestone = "Chemistry and aerosol"
+labels = ["chemistry", "phase-66"]
 body = """
 ## Phase 66 — Deposition and pollen
 
@@ -1868,7 +1868,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1877,8 +1877,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 67 — ERA5 and reanalysis driver"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-67"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-67"]
 body = """
 ## Phase 67 — ERA5 and reanalysis driver
 
@@ -1898,7 +1898,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1907,8 +1907,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 68 — Mesoscale model nesting"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-68"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-68"]
 body = """
 ## Phase 68 — Mesoscale model nesting
 
@@ -1928,7 +1928,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1937,8 +1937,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 69 — Production OSM and geospatial ingestion"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-69"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-69"]
 body = """
 ## Phase 69 — Production OSM and geospatial ingestion
 
@@ -1958,7 +1958,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1967,8 +1967,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 70 — Observation operators and evaluation framework"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-70"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-70"]
 body = """
 ## Phase 70 — Observation operators and evaluation framework
 
@@ -1988,7 +1988,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -1997,8 +1997,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 71 — Canonical benchmark library, part 1 (dry)"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-71"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-71"]
 body = """
 ## Phase 71 — Canonical benchmark library, part 1 (dry)
 
@@ -2016,7 +2016,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -2025,8 +2025,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 72 — Canonical benchmark library, part 2 (moist and reactive)"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-72"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-72"]
 body = """
 ## Phase 72 — Canonical benchmark library, part 2 (moist and reactive)
 
@@ -2044,7 +2044,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -2053,8 +2053,8 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 
 [[issue]]
 title = "Phase 73 — Reproducibility and provenance"
-milestone = "Era VIII — Real-world data, forcing and validation"
-labels = ["era-viii", "phase-73"]
+milestone = "Real-world data, forcing and validation"
+labels = ["real-world-data", "phase-73"]
 body = """
 ## Phase 73 — Reproducibility and provenance
 
@@ -2072,7 +2072,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 
 ## References
 
@@ -2080,11 +2080,11 @@ Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and R
 """
 
 [[issue]]
-title = "Era IX — Data assimilation and inverse problems (epic)"
-milestone = "Era IX — Data assimilation and inverse problems"
-labels = ["era-ix", "epic"]
+title = "Data assimilation and inverse problems (epic)"
+milestone = "Data assimilation and inverse problems"
+labels = ["data-assimilation", "epic"]
 body = """
-Tracking epic for **Era IX — Data assimilation and inverse problems**.
+Tracking epic for **Data assimilation and inverse problems**.
 
 Adjoint via AD, 4D-Var, ensemble Kalman filtering, hybrid assimilation, parameter and source inversion, UQ.
 
@@ -2099,7 +2099,7 @@ Adjoint via AD, 4D-Var, ensemble Kalman filtering, hybrid assimilation, paramete
 
 ## Note
 
-This era is far enough out that decomposing it now would be guesswork. Break it into per-phase issues when the preceding era is close to complete.
+This milestone is far enough out that decomposing it now would be guesswork. Break it into per-phase issues when the preceding milestone is close to complete.
 
 ## References
 
@@ -2107,11 +2107,11 @@ This era is far enough out that decomposing it now would be guesswork. Break it 
 """
 
 [[issue]]
-title = "Era X — Performance, scale and portability (epic)"
-milestone = "Era X — Performance, scale and portability"
-labels = ["era-x", "epic"]
+title = "Performance, scale and portability (epic)"
+milestone = "Performance, scale and portability"
+labels = ["performance", "epic"]
 body = """
-Tracking epic for **Era X — Performance, scale and portability**.
+Tracking epic for **Performance, scale and portability**.
 
 Production MPI, GPU port, multi-GPU, mixed precision, performance engineering, async I/O, spectral element, DG.
 
@@ -2128,7 +2128,7 @@ Production MPI, GPU port, multi-GPU, mixed precision, performance engineering, a
 
 ## Note
 
-This era is far enough out that decomposing it now would be guesswork. Break it into per-phase issues when the preceding era is close to complete.
+This milestone is far enough out that decomposing it now would be guesswork. Break it into per-phase issues when the preceding milestone is close to complete.
 
 ## References
 
@@ -2136,11 +2136,11 @@ This era is far enough out that decomposing it now would be guesswork. Break it 
 """
 
 [[issue]]
-title = "Era XI — Machine learning, applications, ecosystem (epic)"
-milestone = "Era XI — Machine learning, applications, ecosystem"
-labels = ["era-xi", "epic"]
+title = "Machine learning, applications, ecosystem (epic)"
+milestone = "Machine learning, applications, ecosystem"
+labels = ["ml-ecosystem", "epic"]
 body = """
-Tracking epic for **Era XI — Machine learning, applications, ecosystem**.
+Tracking epic for **Machine learning, applications, ecosystem**.
 
 Neural closures and emulators, differentiable physics, foundation models, wildfire, wind energy, urban services, air quality, ecosystem.
 
@@ -2162,7 +2162,7 @@ Neural closures and emulators, differentiable physics, foundation models, wildfi
 
 ## Note
 
-This era is far enough out that decomposing it now would be guesswork. Break it into per-phase issues when the preceding era is close to complete.
+This milestone is far enough out that decomposing it now would be guesswork. Break it into per-phase issues when the preceding milestone is close to complete.
 
 ## References
 
@@ -2172,9 +2172,9 @@ This era is far enough out that decomposing it now would be guesswork. Break it 
 [[issue]]
 title = "Assert superdroplet convergence rather than a loose threshold"
 milestone = "Technical debt"
-labels = ["era-iv", "microphysics", "tech-debt", "validation"]
+labels = ["microphysics", "tech-debt", "validation"]
 body = """
-test/era4_superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.
+test/superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.
 
 Measured properties worth asserting instead:
 
@@ -2190,13 +2190,13 @@ Replace the threshold with these two.
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 """
 
 [[issue]]
 title = "Raise test coverage of Phases 41 and 42"
 milestone = "Technical debt"
-labels = ["era-iv", "microphysics", "tech-debt"]
+labels = ["microphysics", "tech-debt"]
 body = """
 Exported-surface coverage is 28/73 (38%) for `Superdroplet` and 12/56 (21%) for `AerosolCloud`. Whole subsystems are never called by the suite: `cell_from_state`, `advance_positions!`, `aerosol_from_vant_hoff`, `autoconversion_rate`, the Twomey/Albrecht susceptibility functions.
 
@@ -2209,13 +2209,13 @@ These modules were written by agents that were cut off mid-work; the tested path
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 """
 
 [[issue]]
 title = "Locate the two defects the Phase 41 author named but never fixed"
 milestone = "Technical debt"
-labels = ["era-iv", "microphysics", "tech-debt"]
+labels = ["microphysics", "tech-debt"]
 body = """
 The agent that wrote `Superdroplet.jl` reported it was fixing four defects when it was cut off: "recursive constructors, a bogus blend expression, the import form, and the substep criterion".
 
@@ -2230,13 +2230,13 @@ Audit the module against that description.
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 """
 
 [[issue]]
 title = "Optional RRTMGP backend behind AbstractGasOptics"
 milestone = "Technical debt"
-labels = ["era-iii", "radiation", "tech-debt"]
+labels = ["radiation", "tech-debt"]
 body = """
 Phase 32 gas optics is a band-model reconstruction (Malkmus -> Domoto), not a fit to line-by-line data, because RRTMGP.jl needs a NetCDF/HDF5 stack that does not build on every target. Broadband fluxes land within a few percent of observations.
 
@@ -2249,13 +2249,13 @@ Add an optional RRTMGP-backed implementation behind the same `AbstractGasOptics`
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 """
 
 [[issue]]
 title = "Add an export-collision check to the test suite"
 milestone = "Technical debt"
-labels = ["era-iv", "infrastructure", "tech-debt"]
+labels = ["infrastructure", "microphysics", "tech-debt"]
 body = """
 Name collisions across modules have been caught three times by hand, each time only when something broke: `material_albedo`/`material_emissivity` (Phases 35 vs 36), `band_wavelength` (four copies), `effective_radius` (Phases 37 vs 41). An ambiguous export makes the name silently undefined at the top level.
 
@@ -2268,5 +2268,5 @@ Add a test that scans every module's export list and fails on any name exported 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/era closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
 """

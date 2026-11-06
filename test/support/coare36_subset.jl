@@ -1,4 +1,4 @@
-# Shared by test/era5_ocean_mixed_layer.jl, test/era5_sea_spray_coare.jl
+# Shared by test/ocean_mixed_layer.jl, test/sea_spray_coare.jl
 # and their namesakes in validation/: the reader of the whitespace-separated
 # COARE data tables (test/data/coare36_*.txt, validation/data/
 # fairall1996a_table2.txt; see test/data/README_coare.md), the COARE 3.6

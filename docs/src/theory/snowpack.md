@@ -5,7 +5,7 @@ insulator, a slowly flowing viscous material and a reservoir of latent
 heat. `src/Snowpack.jl` represents it the way CLM, SNOWPACK and Crocus
 do: a column of layers, each with ice mass ``w_{ice}``, liquid mass
 ``w_{liq}`` (kg m⁻²), thickness ``Δz`` and temperature ``T``, numbered
-from the surface down. `LayeredSnowpack` implements the Era V
+from the surface down. `LayeredSnowpack` implements the surface shared core
 `AbstractSurface` interface, so its turbulent fluxes come from
 `SurfaceExchange` like every other surface.
 

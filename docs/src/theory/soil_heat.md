@@ -6,7 +6,7 @@ capacity depend on how much liquid water and ice they hold; water freezes
 and thaws with its latent heat; and a massless skin on top closes the
 surface energy balance with the atmosphere. The result, `SoilThermalColumn`
 in `src/SoilColumn.jl`, is an `AbstractSurface` of the
-[Era V contract](surface_exchange.md).
+[surface shared core](surface_exchange.md).
 
 Why it matters: without a ground heat flux the skin is decoupled from
 the heat stored below it. The single-slab `step_soil!` of the urban
@@ -181,7 +181,7 @@ linearisation is done once per step, as in CLM.
 
 ## 5. Validation
 
-All numbers are from `test/era5_soil_thermal.jl`.
+All numbers are from `test/soil_thermal.jl`.
 
 **Neumann's freezing front** (Carslaw & Jaeger 1959, §11.2). Soil with
 ``W = 0.3`` at +2 °C, surface held at −10 °C, sharp freezing; the phase

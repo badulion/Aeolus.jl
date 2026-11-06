@@ -141,10 +141,10 @@ Aeolus.jl/
    dynamics step); the copies then ran on views, and since KA-f (#297)
    every fill is a launch of the per-axis halo kernels, which also made
    the open-boundary fills allocation-free (`test/ka_halos.jl` (removed)).
-   `test/era2_advection.jl`
+   `test/advection.jl`
    asserts that `fill_halos!` and `advect_positive!` (with a workspace
    and a prebuilt reconstruction) allocate 0 bytes, and
-   `test/era2_multigrid.jl` the same of the CG and multigrid solves.
+   `test/multigrid.jl` the same of the CG and multigrid solves.
 4. **Public API is thin.** `Operators` re-exports one name per
    physically meaningful operation; the underscore-prefixed backend
    kernels are internal.

@@ -1,7 +1,7 @@
 # Radiation fog
 
-This page covers the radiative half of radiation fog in Aeolus (Era IV,
-Phase 44, issue #9): how fog droplets enter the Era III radiation, why
+This page covers the radiative half of radiation fog in Aeolus
+(Phase 44, issue #9): how fog droplets enter the radiation stack, why
 that coupling is what thickens a fog, and the 1-D column used to test
 it against the ParisFog case of 14–15 November 2011. The thermodynamic
 half (condensation, dew, energy conservation) is in
@@ -23,7 +23,7 @@ then carries the cold, wet air down and the fog deepens. Without the
 droplets in the radiation none of this happens: the fog stays a thin
 layer that cools only from the ground.
 
-## 2. Coupling to the Era III radiation
+## 2. Coupling to the radiation stack
 
 Nothing in `RadiationFog` computes an optical property. For each layer
 the column writes
@@ -81,7 +81,7 @@ stretched by 8 % per layer to at most 25 m, up to 1000 m. Each step of
    ``K = l^2 |\partial U/\partial z| f(Ri) + K_\min``, with the
    Blackadar length (``\lambda`` = 30 m) and
    ``f = (1+5Ri)^{-2}`` for ``Ri > 0``, ``\sqrt{1-16Ri}`` for ``Ri < 0``
-   (the `ShortTail` family of the Era VI stability contract,
+   (the `ShortTail` family of the stability contract,
    [`TurbulenceStability`](turbulence_stability.md), since #170).
    ``Ri`` uses a *moist* ``N^2``, measured by displacing a parcel
    across each interface with conserved ``s = h + gz`` and total water,

@@ -1,10 +1,10 @@
 # =========================================================================
-# Era VI, Phase 54 (P54-d, #174) — wall-bounded flow diagnostics.
+# Phase 54 (P54-d, #174) — wall-bounded flow diagnostics.
 # =========================================================================
 #
 # Included into `module Operators`. Three plane-averaged diagnostics of a
 # horizontally periodic, wall-bounded LES on the staggered C-grid, shared by
-# every Era VI benchmark (the half-channel ABL and the two-wall channel of
+# every wall-bounded turbulence benchmark (the half-channel ABL and the two-wall channel of
 # `WallModels`, and the issues that reuse them):
 #
 #   phi_m_profile          (κz/u*) ∂⟨U⟩/∂z at the interior w-faces
@@ -64,7 +64,7 @@ neutral surface layer Φ_m = 1; Porté-Agel, Meneveau & Parlange (2000,
 Fig. 7) and Mason & Thomson (1992) show the Smagorinsky model's overshoot
 to Φ_m ≈ 1.5-2 near the wall.
 
-`κ` (the von Kármán constant) has no default here: the Era V contract
+`κ` (the von Kármán constant) has no default here: the surface shared core
 `SurfaceExchange.von_karman()` owns it, and the case builders of
 `WallModels` pass it.
 

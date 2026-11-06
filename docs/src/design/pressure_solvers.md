@@ -195,7 +195,7 @@ random source; CG at the cores' tolerances):
 A 64³ anelastic step (warm bubble, fixed 1 s) costs 6.1 ms with the
 direct solve against 173 ms with the CG (tol 1e-10). The direct solution
 satisfies the discrete equation to a relative residual of ~5e-16 and
-agrees with a tol-1e-14 CG to ~2e-13 (`test/era2_anelastic.jl`); the
+agrees with a tol-1e-14 CG to ~2e-13 (`test/anelastic.jl`); the
 weighted constraint after a step is at round-off (~2e-16 s⁻¹ against
 ~8e-15 s⁻¹ for the CG at tol 1e-12). A solve allocates nothing.
 

@@ -434,16 +434,16 @@ julia --project=docs docs/make.jl     # build locally (never deploys)
 
 ## Roadmap
 
-Development is organised into *eras*, each a coherent block of capability that
-ends with a validation target. Full plan:
+Development is organised into milestones named by content, each a coherent
+block of capability that ends with a validation target. Full plan:
 [`docs/src/design/longterm_roadmap.md`](docs/src/design/longterm_roadmap.md).
 
-- [x] **Era I** — LES core, physics scaffolds, urban flagship *(Phases 1–20)*
-- [x] **Era II** — numerical foundations: cut-cell IBM, IMEX, WENO-Z/TENO,
+- [x] **LES core and physics scaffolds** — and the first urban flagship *(Phases 1–20)*
+- [x] **Numerical foundations** — cut-cell IBM, IMEX, WENO-Z/TENO,
       anelastic, multigrid, nesting, AMR *(21–31)* · 2,148 tests
-- [x] **Era III** — high-fidelity radiation: gas optics, two-stream,
+- [x] **Radiation** — gas optics, two-stream,
       Monte-Carlo, radiosity, BRDF, aerosol, solar geometry *(32–38)* · 4,912 tests
-- [x] **Era IV** — clouds and microphysics *(39–45)* · 47,392 tests
+- [x] **Clouds and microphysics** *(39–45)* · 47,392 tests
   - [x] Phase 39 — exact moist thermodynamics
   - [x] Phase 40 — P3 bulk microphysics
   - [x] Phase 41 — superdroplet Lagrangian microphysics
@@ -451,7 +451,7 @@ ends with a validation target. Full plan:
   - [x] Phase 43 — ice nucleation
   - [x] Phase 44 — precipitation, fog and visibility
   - [x] Phase 45 — turbulence-microphysics interaction
-- [x] **Era V** — land surface and urban canopy *(46–53)* · 19,326 tests (6 `@test_broken`)
+- [x] **Land, urban and surface exchange** *(46–53)* · 19,326 tests (6 `@test_broken`)
   - [x] Phase 46 — multi-layer soil and hydrology
   - [x] Phase 47 — photosynthesis, stomatal conductance, FLUXNET
   - [x] Phase 48 — resolved plant canopy
@@ -460,23 +460,23 @@ ends with a validation target. Full plan:
   - [x] Phase 51 — snow, ice and frozen surfaces
   - [x] Phase 52 — water surfaces and wave coupling
   - [x] Phase 53 — surface heterogeneity and blending
-- [x] **Era VI** — turbulence closure *(54–59)* · 5,729 tests (17 `@test_broken`)
+- [x] **Turbulence closure** *(54–59)* · 5,729 tests (17 `@test_broken`)
   - [x] Phase 54 — Lagrangian and scale-dependent dynamic SGS models
   - [x] Phase 55 — AMD, Vreman, anisotropic and tensorial eddy viscosity, GABLS1
   - [x] Phase 56 — prognostic SGS TKE and Reynolds stresses, filtered-DNS validation
   - [x] Phase 57 — wall models: equilibrium, log-layer mismatch, immersed walls, TBLE
   - [x] Phase 58 — stable boundary layer: GABLS2–4, CASES-99, turbulence collapse
   - [x] Phase 59 — transition, σ-model, flat-plate transition, relaminarisation
-- [ ] **Era VII** — chemistry and aerosol *(60–66)*
-- [ ] **Era VIII** — real-world data, forcing and validation *(67–73)*
-- [ ] **Era IX** — data assimilation and inverse problems *(74–79)*
-- [ ] **Era X** — performance and scale: MPI, GPU *(80–87)*
+- [ ] **Chemistry and aerosol** *(60–66)*
+- [ ] **Real-world data, forcing and validation** *(67–73)*
+- [ ] **Data assimilation and inverse problems** *(74–79)*
+- [ ] **Performance, scale and portability** — MPI, GPU *(80–87)*
   - [ ] Phase 81 — GPU port; its CPU half, the KernelAbstractions port
         for multithreading, landed early (#291): Berlin flagship 155 → 88
         ms/step at 12 threads (1.77×), short of the 4× target
-- [ ] **Era XI** — machine learning, applications, ecosystem *(88–100)*
-- [ ] **Era XII** *(future direction)* — kilometre-scale regional and climate modelling *(101–112)*
-- [x] **Outside the era plan** — delivered for the Berlin nesting epic and
+- [ ] **Machine learning, applications, ecosystem** *(88–100)*
+- [ ] **Kilometre-scale regional and climate modelling** *(future direction, 101–112)*
+- [x] **Outside the milestone plan** — delivered for the Berlin nesting epic and
       the technical-debt milestone
   - [x] Nesting: hierarchies, sibling, non-aligned and stretched children (#327–#329, #349)
   - [x] KernelAbstractions port for CPU multithreading (#291)
@@ -492,7 +492,7 @@ ends with a validation target. Full plan:
 Caveats of what currently ships, as distinct from what is not yet built.
 
 - **Single-node CPU only.** Domain decomposition and GPU backends exist as
-  interfaces, not implementations (Era X). Threading scales less than
+  interfaces, not implementations (Phases 80–87). Threading scales less than
   hoped: the stencils are memory-bound, so the 64³ Berlin flagship
   gains 1.77× at 12 threads and the 256³ DNS 1.43×, while compute-bound
   kernels such as WENO-Z5 reach 8.6× (measured on a 12-core desktop).
@@ -501,7 +501,7 @@ Caveats of what currently ships, as distinct from what is not yet built.
   is built from a Malkmus narrow-band model via Domoto inversion. Broadband
   fluxes land within a few percent of observations; a line-by-line backend can
   be added behind the same interface.
-- **One surface temperature per grid column in the flagship.** Era V's
+- **One surface temperature per grid column in the flagship.** The
   `UrbanSurface` gives every facet its own conduction column and skin
   temperature, coupled implicitly through the radiosity longwave, but the
   Berlin run still collapses a façade to one surface per grid column until
@@ -510,7 +510,7 @@ Caveats of what currently ships, as distinct from what is not yet built.
   2.5 % at *N*<sub>sd</sub> = 2¹², shrinking as ≈ *N*<sup>-0.6</sup>. It does
   not average away over random seeds. The collision *rate* is correct: mean
   number decay matches Golovin's analytic solution to ≤ 1.3 %.
-- **Most Era IV–V physics is validated as point and column models, not yet
+- **Most cloud, land and urban physics is validated as point and column models, not yet
   in the 3-D flagship.** The Berlin run couples the surface exchange, soil,
   column radiation, fog and dew, moist buoyancy and chemistry; P3, ice
   nucleation, the land column, per-facet walls, building zones, snow, water
@@ -534,7 +534,8 @@ several commits, one pull request. See
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for the workflow and
 [`CLAUDE.md`](CLAUDE.md) for the short operational contract.
 
-Work is tracked as GitHub issues grouped into milestones, one per era.
+Work is tracked as GitHub issues grouped into milestones named by content
+(clouds and microphysics, turbulence closure, …).
 The issue set is generated from the roadmap — see
 [`.github/roadmap-issues.toml`](.github/roadmap-issues.toml).
 

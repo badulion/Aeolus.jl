@@ -1,8 +1,8 @@
 # Comte-Bellot & Corrsin (1971) decaying grid turbulence: the shared LES
-# benchmark harness of Era VI (P54-c, #168).
+# benchmark harness of the SGS closures (P54-c, #168).
 #
-# Included by test/era6_cbc_decay.jl (the reference table and the initial
-# state, `cbc_initial_state`) and validation/era6_cbc_decay.jl (the
+# Included by test/cbc_decay.jl (the reference table and the initial
+# state, `cbc_initial_state`) and validation/cbc_decay.jl (the
 # benchmark runs). (The examples/validation/cbc_decay example and its run
 # type went with ONE-g #456: an evolve-and-rescale spin-up averaged over
 # seeds is not one model run.)
@@ -76,10 +76,10 @@ end
 
 # One SSP-RK3 step (Shu–Osher), each stage a projected `step!` with the
 # closure; the same combination as `step_rk3!`, which on this master does
-# not forward the `eddy_viscosity!` keyword. (After the Era VI closure
+# not forward the `eddy_viscosity!` keyword. (After the SGS closure
 # contract, #167, `step_rk3!(sim, dt; sgs)` replaces this.)
 # A closure object (stateful closures included) goes through `step_rk3!`,
-# which commits its memory once per step (the Era VI contract, #167).
+# which commits its memory once per step (the SGS closure contract, #167).
 _cbc_rk3!(sim, dt, kw::NamedTuple{(:sgs,)}) = step_rk3!(sim, dt; sgs = kw.sgs)
 function _cbc_rk3!(sim, dt, kw)
     u0 = copy(sim.u.data); v0 = copy(sim.v.data); w0 = copy(sim.w.data)
@@ -147,7 +147,7 @@ Run the Comte-Bellot–Corrsin decay at N³ with `closure`:
 * `:lasd` — the same closure with `scale_dependent = true` (Bou-Zeid,
   Meneveau & Parlange 2005; P54-e, #186);
 * `:sigma` — the σ-model, `SigmaModel(1.35)` (Nicoud et al. 2011; #184);
-* an `AbstractSGSClosure` — any closure of the Era VI contract (copied per
+* an `AbstractSGSClosure` — any closure of the SGS closure contract (copied per
   realisation), stepped the same way;
 * a function `f(νt, u, v, w)` — any closure accepted by `step!`'s
   `eddy_viscosity!`.

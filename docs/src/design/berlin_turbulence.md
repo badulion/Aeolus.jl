@@ -3,7 +3,7 @@
 ## Turbulence diagnostics (#170)
 
 `turbulence_diag` (`components/urban/turbulence_diag.jl`, addon, on by default)
-is the Berlin coupling of the Era VI stability contract
+is the Berlin coupling of the stability contract
 `TurbulenceStability` (see [the theory page](../theory/turbulence_stability.md)).
 At the output cadence it evaluates, on copies of `u, v, w, θ, q_v` whose
 halos it fills with the core's boundary conditions (the model state is

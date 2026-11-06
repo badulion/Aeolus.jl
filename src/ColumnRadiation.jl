@@ -1,9 +1,9 @@
 """
     Aeolus.ColumnRadiation
 
-The radiation of a model's mean column (Era III): the model's mean
+The radiation of a model's mean column: the model's mean
 profiles of θ, q_v and q_l on its own layers, made hydrostatic and
-stitched under a standard atmosphere to 30 km, through the Era III
+stitched under a standard atmosphere to 30 km, through the
 radiation stack — correlated-k gas optics (`GasOptics`), Mie cloud optics
 and the two-stream solvers (`TwoStream`) — at the sun of
 `SolarGeometry`. It gives the downwelling longwave and the direct and

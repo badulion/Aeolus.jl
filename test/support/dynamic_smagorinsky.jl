@@ -1,5 +1,5 @@
 # The dynamic Smagorinsky coefficient of a simulation's current velocity,
-# shared by test/era2_sgs_numerics.jl and validation/era2_sgs_numerics.jl.
+# shared by test/sgs_numerics.jl and validation/sgs_numerics.jl.
 
 using Aeolus
 using Statistics: mean

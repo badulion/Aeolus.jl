@@ -1,7 +1,7 @@
 """
     SoilColumn
 
-Era V (Phase 46) multi-layer soil column — CLM-style vertical
+Multi-layer soil column (Phase 46) — CLM-style vertical
 discretisation with Richards-equation water transport, heat conduction
 and freeze–thaw.
 
@@ -1025,7 +1025,7 @@ end
 
 Total water in the column as a depth of liquid water,
 ``Σ_i Δz_i (θ_{liq,i} + θ_{ice,i} ρ_{ice}/ρ_w)`` (densities from the
-Era V contract).
+surface shared core).
 """
 function soil_water_storage(col::SoilWaterColumn; c::SurfaceConstants = col.constants)
     r = c.ρ_ice / c.ρ_water
@@ -1041,7 +1041,7 @@ end
 
 Water content at field capacity, taken as a matric potential of
 −33 kPa (−1/3 bar), i.e. ``ψ_{fc} = -33\\,\\mathrm{kPa}/(ρ_w g)`` ≈ −3.37 m
-with ``ρ_w`` and ``g`` from the Era V contract.
+with ``ρ_w`` and ``g`` from the surface shared core (`SurfaceExchange`).
 """
 soil_field_capacity(h::AbstractHydraulicModel; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS) =
     soil_water_content(h, -33e3 / (c.ρ_water * grav(c)))
@@ -1305,7 +1305,7 @@ end
     step_soil_water!(col, forcing::SurfaceForcing, fluxes::SurfaceFluxes, dt;
                      sink = nothing) -> SoilWaterStep
 
-Couple the column to the Era V surface interface: rain from `forcing`
+Couple the column to the `SurfaceExchange` surface interface: rain from `forcing`
 (kg m⁻² s⁻¹) is the water input and the evaporation mass flux `fluxes.E`
 (kg m⁻² s⁻¹, upward; negative = dew) the evaporative demand, both
 converted to m s⁻¹ with ``ρ_w`` of the contract. Snow is left to a
@@ -1460,7 +1460,7 @@ geometric mean of the constituents,
 
 (`f_liq` the liquid fraction of the pore water by volume), ``S_r =
 (θ_{liq} + θ_{ice})/θ_s`` and [`kersten_number`](@ref). The conductivities of
-water and ice are the Era V contract's `k_water`, `k_ice`.
+water and ice are the surface shared core's `k_water`, `k_ice`.
 """
 function soil_thermal_conductivity(p::SoilThermalProperties, θ_s::Real, θ_liq::Real, θ_ice::Real;
                                    c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
@@ -1478,7 +1478,7 @@ end
 
 Volumetric heat capacity from the constituents (de Vries 1963),
 ``C = c_s(1-θ_s) + ρ_w c_w θ_{liq} + ρ_{ice} c_{ice} θ_{ice}`` (air
-neglected), with the densities from the Era V contract and the specific
+neglected), with the densities from the surface shared core (`SurfaceExchange`) and the specific
 heats delegated to `MoistThermodynamics` through it.
 """
 soil_heat_capacity(p::SoilThermalProperties, θ_s::Real, θ_liq::Real, θ_ice::Real;
@@ -1499,7 +1499,7 @@ temperature `T` < ``T_f``, by the generalised Clapeyron equation
     ψ = L_f (T - T_f) / (g T)
 
 ≈ −125 m (−1.2 MPa) per kelvin of undercooling. Zero at and above
-``T_f``. ``L_f``, ``g`` and ``T_f`` come from the Era V contract.
+``T_f``. ``L_f``, ``g`` and ``T_f`` come from the surface shared core (`SurfaceExchange`).
 """
 function freezing_matric_potential(T::Real; c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS)
     Tf = c.thermo.T_freeze

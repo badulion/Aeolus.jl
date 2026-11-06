@@ -8,7 +8,7 @@ angle: at grazing incidence clear glass is a mirror. The single glass
 class of the urban example had one fixed albedo and one fixed
 transmission. `src/urban_surface/glazing.jl`, part of `UrbanSurface`,
 replaces it with the first-principles optics of LBNL WINDOW and ISO 15099
-and a window facet that implements the Era V surface interface.
+and a window facet that implements the surface shared core (`SurfaceExchange`).
 
 ## 1. One pane: Fresnel plus Beer–Lambert
 

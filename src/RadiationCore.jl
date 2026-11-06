@@ -1,8 +1,8 @@
 module RadiationCore
 
-# Era III — shared radiation interface.
+# Shared radiation interface: the radiation shared core.
 #
-# This module owns the *contract* that every radiation component in Era III
+# This module owns the *contract* that every radiation component
 # speaks. It deliberately contains no physics: it defines the spectral
 # discretisation, the optical-property container, the flux container, and
 # the abstract solver/optics interfaces. Gas optics (Phase 32), the
@@ -167,7 +167,7 @@ efficiencies ripple on a scale far finer than an RRTMG band, so
 evaluating them once at the band centre is not good enough.
 
 This lives in `RadiationCore` rather than in any one optics module
-because four separate copies of it had appeared by the end of Era III
+because four separate copies of it had appeared by the end of the radiation work
 (in `SurfaceOptics`, `AerosolOptics`, `TwoStream` and, in spirit,
 `SolarGeometry`). It is a property of the spectral grid, so it belongs
 with the spectral grid.

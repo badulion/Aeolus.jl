@@ -1,7 +1,7 @@
 # Leaf photosynthesis
 
 Transpiration is the largest latent-heat flux over vegetated land, and
-stomata open to let CO₂ in. Before Era V can make evaporation respond to
+stomata open to let CO₂ in. Before the land surface can make evaporation respond to
 light, CO₂, humidity and soil water, it needs the rate at which a leaf
 *uses* CO₂. This page develops that rate as implemented in
 `src/Photosynthesis.jl`; stomatal conductance, the land column and the

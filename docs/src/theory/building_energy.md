@@ -49,7 +49,7 @@ solver.
 - An `EnvelopeElement` is closed on the outside by outdoor air through
   ``1/R_{se}`` plus an absorbed irradiance (the sol-air form), by a
   fixed ground temperature, or adiabatically.
-- A `FacetElement` is an `UrbanFacet`, so its outside is the full Era V
+- A `FacetElement` is an `UrbanFacet`, so its outside is the full surface shared core
   surface energy balance.
 - An `InternalMass` has one or both faces in the room.
 
@@ -119,8 +119,8 @@ substitute for data.
 
 ## 4. Validation
 
-All numbers below are measured by `test/era5_building_energy.jl` (the resolved
-zone vs 5R1C: `validation/era5_building_energy.jl`).
+All numbers below are measured by `test/building_energy.jl` (the resolved
+zone vs 5R1C: `validation/building_energy.jl`).
 
 | Check | Reference | Result |
 |:------|:----------|:-------|

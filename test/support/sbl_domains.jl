@@ -1,8 +1,8 @@
 # The GABLS1 and GABLS3 domains as their configurations build them
 # (examples/sbl/gabls1.toml, gabls3.toml), reduced for the suites. Shared
-# by test/era6_gabls1.jl, test/era6_gabls3.jl (the protocol, forcing and
+# by test/gabls1.jl, test/gabls3.jl (the protocol, forcing and
 # diagnostics on a built or briefly stepped domain) and
-# validation/era6_gabls1.jl, validation/era6_gabls3.jl (the reduced runs).
+# validation/gabls1.jl, validation/gabls3.jl (the reduced runs).
 
 using Aeolus.Config: load_run_config, build
 using Aeolus.SimulationDriver: SimulationDriverType

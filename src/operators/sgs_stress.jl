@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 55 (P55-b, #175) — the stress-form SGS momentum divergence.
+# Phase 55 (P55-b, #175) — the stress-form SGS momentum divergence.
 # =========================================================================
 #
 # Included into `module Operators`, after the FV kernels. One momentum-
@@ -52,7 +52,7 @@ end
 
 Add the divergence of a symmetric kinematic stress, `−∂τᵢⱼ/∂xⱼ`, to the
 face-centred momentum tendencies (`tu @ FaceX`, `tv @ FaceY`,
-`tw @ FaceZ`). The generic momentum-stress operator of Era VI: the
+`tw @ FaceZ`). The generic momentum-stress operator of the SGS closures: the
 diagonal stresses at cell centres are differenced to the faces of their own
 component, the off-diagonal stresses on the edges to the two faces they
 border (placement in [`StressTensor`](@ref)). It is conservative by

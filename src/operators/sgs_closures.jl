@@ -1,5 +1,5 @@
 # =========================================================================
-# Era VI, Phase 54 (P54-a, #167) — the SGS closure contract.
+# Phase 54 (P54-a, #167) — the SGS closure contract.
 # =========================================================================
 #
 # Included into `module Operators`. Every dynamical core (the Boussinesq
@@ -136,7 +136,7 @@ Add the SGS stress divergence to the momentum tendencies. `stress` is the
 
 * `:laplacian` (default): the Laplacian eddy-viscosity flux form
   `∂/∂xⱼ(ν ∂uᵢ/∂xⱼ)` of [`add_eddy_viscosity_u!`](@ref) (and `_v!`, `_w!`)
-  with `f.νh` — the pre-Era-VI operator, bit for bit;
+  with `f.νh` — the operator from before this contract, bit for bit;
 * `:symmetric`: the stress form `∂/∂xⱼ(2νᵢⱼSᵢⱼ)` of
   [`add_sgs_stress_divergence!`](@ref) with `νh = f.νh`, `νv = f.νv`
   (P55-b, #175).

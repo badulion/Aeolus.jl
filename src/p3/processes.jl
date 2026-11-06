@@ -11,7 +11,7 @@
 #
 # Thermodynamics is not re-derived here. Saturation vapour pressures,
 # latent heats, heat capacity and the saturation adjustment are those of
-# the Era IV contract `MoistThermodynamics`; vapour diffusivity, thermal
+# the shared core `MoistThermodynamics`; vapour diffusivity, thermal
 # conductivity, the liquid growth resistances F_k, F_d and the drop fall
 # speed are those of `Superdroplet`; the Khairoutdinov-Kogan autoconversion
 # is `AerosolCloud.autoconversion_rate`. What lives here is only what P3

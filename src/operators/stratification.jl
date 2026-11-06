@@ -1,4 +1,4 @@
-# Pointwise stratification fields — Era VI, Phase 58 (P58-a, #170).
+# Pointwise stratification fields — Phase 58 (P58-a, #170).
 #
 # N² and the gradient Richardson number at cell centres. The physics (the
 # N² of a θ difference, the Ri_g definition with its S² floor) is the

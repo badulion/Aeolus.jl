@@ -1079,7 +1079,7 @@ function _add_eddy_viscosity_w!(tw::Field{FaceZ}, w::Field{FaceZ},
     _fv!(_b_eddy_w!, interior(g), tw.data, w.data, νt.data, grid_metrics(g), wc, wf)
     return tw
 end
-# --- stress-form SGS momentum divergence (Era VI, P55-b, #175) -----------
+# --- stress-form SGS momentum divergence (P55-b, #175) -----------
 # −∂τᵢⱼ/∂xⱼ with τᵢⱼ = −2νᵢⱼSᵢⱼ on the C-grid. Placement (the locations
 # where the Laplacian kernels above form their fluxes):
 #

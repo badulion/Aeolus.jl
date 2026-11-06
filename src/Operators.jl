@@ -34,7 +34,7 @@ export ∂x, ∂y, ∂z, laplacian, divergence,
        spectrum_wavenumbers, PassotPouquetSpectrum, isotropic_turbulence_field!, dissipation_rate
 # #245: the FFTW planning policy (operators/fftw_planning.jl)
 export set_fftw_policy!, fftw_policy, fftw_planner_flags, save_fftw_wisdom, load_fftw_wisdom!
-# Era VI (P54-a, #167): the SGS closure contract (operators/sgs_closures.jl)
+# P54-a (#167): the SGS closure contract (operators/sgs_closures.jl)
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
        sgs_tracer_diffusivity!,
@@ -43,12 +43,12 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
        sgs_tke!,                # N-inflow-b (#258)
        flux_weights, sgs_weighted_form    # ONE-j (#460)
-# Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
+# P54-b (#173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
-# Era VI (P55-b, #175): the stress-form momentum divergence (operators/sgs_stress.jl)
+# P55-b (#175): the stress-form momentum divergence (operators/sgs_stress.jl)
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
-# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
+# P55-c (#181): the tensorial scalar eddy diffusivity (operators/scalar_tensor.jl)
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion, sgs_scalar_face_diffusivity
@@ -57,17 +57,17 @@ export moist_buoyancy_perturbation!, add_moist_buoyancy!   # ONE-e (#454)
 # The one damping-profile implementation behind add_sponge! and the fringe (P59-d, #185).
 export AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
        DampingProfile, sponge_profile, damping_rate, damping_coordinates
-# Era VI (P55-d, #176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
+# P55-d (#176): AMD and Vreman closures (operators/sgs_amd_vreman.jl)
 export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
        compute_vreman_νt!,
        sgs_buoyancy_parameter
-# Era VI, Phase 56 (P56-c, #178): a-priori SGS-stress analysis (operators/apriori.jl)
+# Phase 56 (P56-c, #178): a-priori SGS-stress analysis (operators/apriori.jl)
 export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
        eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
        lumley_invariants, apriori_metrics, dissipation_matched_cs
-# Era VI (P59-b, #184): the σ-model closure (operators/sigma_closure.jl)
+# P59-b (#184): the σ-model closure (operators/sigma_closure.jl)
 export SigmaModel, compute_sigma_νt!
-# Era VI (P55-e, #187): the stability-corrected anisotropic closure (operators/sgs_stability.jl)
+# P55-e (#187): the stability-corrected anisotropic closure (operators/sgs_stability.jl)
 export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 
@@ -438,7 +438,7 @@ as a tuple of rows, `g[a][b] = ∂u_a/∂x_b`:
 
 The single gradient stencil of the SGS closures: [`_strain_at`](@ref) (and so
 the static and dynamic Smagorinsky ν_t) is built from it, and the AMD /
-Vreman, σ, gradient-Richardson and TKE-production closures of Era VI read the
+Vreman, σ, gradient-Richardson and TKE-production closures read the
 same tensor. Halos of `u, v, w` must be filled.
 
 `idz_off` (default `idz`) is the inverse of the vertical distance used by
@@ -905,13 +905,13 @@ include("operators/spectra.jl")
 include("operators/apriori.jl")
 
 # -------------------------------------------------------------------------
-# Era VI: the SGS closure contract (wraps the kernels above).
+# The SGS closure contract (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_closures.jl")
 include("operators/lagrangian_sgs.jl")
-# Era VI (P54-d, #174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
+# P54-d (#174): wall-bounded flow diagnostics (Φ_m, stress budget, E11)
 include("operators/abl_diagnostics.jl")
-# Era VI, P55-d (#176): AMD and Vreman closures on the contract.
+# P55-d (#176): AMD and Vreman closures on the contract.
 include("operators/sgs_amd_vreman.jl")
 # The σ-model closure (P59-b, #184).
 include("operators/sigma_closure.jl")
@@ -939,18 +939,18 @@ using .FiniteVolume: AbstractRamp, SinSquaredRamp, NordstromRamp, smooth_step,
                      damping_coordinates, _add_damping!
 
 # -------------------------------------------------------------------------
-# Era VI: the stress-form SGS momentum divergence (wraps the kernels above).
+# The stress-form SGS momentum divergence (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/sgs_stress.jl")
 
 # -------------------------------------------------------------------------
-# Era VI: the tensorial scalar eddy diffusivity (wraps the kernels above).
+# The tensorial scalar eddy diffusivity (wraps the kernels above).
 # -------------------------------------------------------------------------
 include("operators/scalar_tensor.jl")
-# Pointwise N² and Ri_g (Era VI, P58-a).
+# Pointwise N² and Ri_g (P58-a).
 include("operators/stratification.jl")
 
-# Era VI: the stability-corrected anisotropic eddy viscosity / diffusivity
+# The stability-corrected anisotropic eddy viscosity / diffusivity
 # (P55-e; uses the contract, the scalar operators and the N² / Ri_g stencils).
 include("operators/sgs_stability.jl")
 

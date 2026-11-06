@@ -14,9 +14,9 @@ include("Grids.jl")
 include("Backends.jl")     # KA kernels + launch/reduction primitives (KA-a, #294); before Fields
 include("Fields.jl")
 include("BoundaryConditions.jl")
-# Era VI stability contract (Phase 58): pure, and needed by Operators.
+# The stability contract (Phase 58): pure, and needed by Operators.
 include("TurbulenceStability.jl")
-# MoistThermodynamics (Era IV, Phase 39) is dependency-free. It is included
+# MoistThermodynamics (Phase 39) is dependency-free. It is included
 # ahead of Operators, whose N² uses its saturated buoyancy frequency (#239),
 # and so also ahead of AerosolOptics (Kelvin coefficient, Köhler theory).
 include("MoistThermodynamics.jl")  # Phase 39
@@ -36,7 +36,7 @@ include("Particles.jl")
 include("ML.jl")
 include("DataAssimilation.jl")
 
-# --- Era II: numerical foundations for fidelity (Phases 21-31) -----------
+# --- Numerical foundations (Phases 21-31) -------------------------------
 include("StretchedGrids.jl")    # Phase 24
 include("CutCell.jl")           # Phases 21-22
 include("AdvectionSchemes.jl")  # Phases 26, 28
@@ -46,9 +46,9 @@ include("Multigrid.jl")         # Phase 29
 include("Nesting.jl")          # Phase 30 parent-child operators (N-nest-a, #250)
 include("AdaptiveMesh.jl")      # Phase 31 AMR (delegates to Nesting)
 
-# --- Era III: high-fidelity radiation (Phases 32-38) ---------------------
+# --- Radiation (Phases 32-38) --------------------------------------------
 include("RadiationCore.jl")     # shared spectral / optics / flux contract
-# Era V contract (surface exchange) needs MoistThermodynamics and the
+# The surface shared core (SurfaceExchange) needs MoistThermodynamics and the
 # RadiationCore albedo/emissivity generics, and SlabLand (Radiation.jl)
 # implements its surface interface, so it sits here.
 include("SurfaceExchange.jl")
@@ -60,8 +60,8 @@ include("TwoStream.jl")         # Phase 33
 include("MonteCarloRT.jl")      # Phase 34
 include("Radiosity.jl")         # Phase 35
 include("SolarGeometry.jl")     # Phase 38
-include("ColumnRadiation.jl")   # a model's mean column through the Era III stack (ONE-e, #454)
-# Era V, Phase 52 — lake / coastal-sea water column (needs SurfaceOptics).
+include("ColumnRadiation.jl")   # a model's mean column through the radiation stack (ONE-e, #454)
+# Phase 52 — lake / coastal-sea water column (needs SurfaceOptics).
 include("OceanMixedLayer.jl")
 
 include("AerosolCloud.jl")         # Phase 42
@@ -73,19 +73,19 @@ include("TurbulentMicrophysics.jl") # Phase 45
 include("Visibility.jl")           # Phase 44 (visibility diagnostic)
 include("RadiationFog.jl")         # Phase 44 (fog/dew coupling)
 
-# --- Era V: high-fidelity land, urban and surface exchange (Phases 46-53)
+# --- Land, urban and surface exchange (Phases 46-53) --------------------
 include("SoilColumn.jl")           # Phase 46 (#15): soil column, Richards equation
 include("Photosynthesis.jl")       # Phase 47 (Farquhar C3 / Collatz C4)
 include("LandSurface.jl")          # Phase 47 (#21): vegetated land column
 include("PlantCanopy.jl")          # Phase 48 (resolved plant canopy)
 include("UrbanSurface.jl")         # Phase 49 (urban facets; needs SurfaceExchange + SurfaceOptics)
 include("BuildingEnergy.jl")       # Phase 50 (indoor air + thermal mass; reuses UrbanSurface columns)
-include("Snowpack.jl")             # Phase 51 (#34): layered snowpack, Era V surface
-include("IceThermodynamics.jl")    # Era V, Phase 51: lake and sea ice (#37)
+include("Snowpack.jl")             # Phase 51 (#34): layered snowpack surface
+include("IceThermodynamics.jl")    # Phase 51: lake and sea ice (#37)
 include("AirSeaFlux.jl")           # Phase 52 wave-dependent roughness (#39)
 include("SurfaceTiles.jl")         # Phase 53 sub-grid tiles (#41)
 
-# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# --- Turbulence closure (Phases 54-60) -----------------------------------
 # (TurbulenceStability is included before Operators, above.)
 include("WallModels.jl")           # Phase 57 (#169): equilibrium wall laws, wall-stress operator
 include("LargeScaleForcing.jl")    # Phase 58 (#171): geostrophic, nudging, advective, T_s(t)
@@ -147,7 +147,7 @@ using .TurbulentMicrophysics
 using .Visibility                  # Phase 44
 using .RadiationFog                # Phase 44
 
-using .SurfaceExchange             # Era V contract
+using .SurfaceExchange             # surface shared core
 using .SoilColumn                  # Phase 46
 using .Photosynthesis              # Phase 47
 using .LandSurface                 # Phase 47 (#21)
@@ -155,16 +155,16 @@ using .PlantCanopy                 # Phase 48
 using .UrbanSurface                # Phase 49
 using .BuildingEnergy              # Phase 50
 using .Snowpack                    # Phase 51 (#34)
-using .IceThermodynamics           # Era V, Phase 51 (#37)
+using .IceThermodynamics           # Phase 51 (#37)
 using .OceanMixedLayer             # Phase 52 (#38)
 using .AirSeaFlux                  # Phase 52 (#39)
 using .SurfaceTiles                # Phase 53 sub-grid tiles (#41)
 
-# --- Era VI: high-fidelity turbulence closure (Phases 54-60) -------------
+# --- Turbulence closure (Phases 54-60) -----------------------------------
 using .TurbulenceStability         # Phase 58 stability contract (#170)
 using .Transition                  # Phase 59 transition diagnostics (#180)
 using .WallModels                  # Phase 57 (#169)
-using .LargeScaleForcing           # Era VI, Phase 58 (#171)
+using .LargeScaleForcing           # Phase 58 (#171)
 using .PrognosticSGS               # Phase 56 prognostic SGS TKE (#182)
 using .Components                  # ONE-a (#450): Model, Domain, the stage pipeline
 
@@ -195,7 +195,7 @@ export ∂x, ∂y, ∂z, divergence, laplacian, advect_centered!, advect_upwind!
        add_surface_flux!, add_sponge!,
        advect_weno5!,
        moist_buoyancy_perturbation!, add_moist_buoyancy!   # ONE-e (#454)
-# Era VI (P54-a, #167): the SGS closure contract
+# P54-a (#167): the SGS closure contract
 export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs!,
        sgs_state, restore_sgs_state!, add_sgs_momentum!, add_sgs_scalar!,
        sgs_tracer_diffusivity!,
@@ -203,32 +203,32 @@ export AbstractSGSClosure, SGSFields, sgs_fields, sgs_coefficients!, advance_sgs
        AbstractEddyViscosityClosure, sgs_viscosity!, turbulent_prandtl,
        StaticSmagorinsky, DynamicSmagorinsky, FunctionSGS,
        sgs_tke!                 # N-inflow-b (#258)
-# Era VI (P54-b, #173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
+# P54-b (#173): Lagrangian-averaged dynamic Smagorinsky (operators/lagrangian_sgs.jl)
 export LagrangianDynamicSmagorinsky
-# Era VI (P55-b, #175): the stress-form SGS momentum divergence
+# P55-b (#175): the stress-form SGS momentum divergence
 export StressTensor, add_stress_divergence!, sgs_stress_tensor!,
        add_sgs_stress_divergence!, sgs_stress_dissipation
-# Era VI (P55-c, #181): the tensorial scalar eddy diffusivity
+# P55-c (#181): the tensorial scalar eddy diffusivity
 export DiffusivityTensor, diagonal_tensor!, bounded_directions,
        add_tensor_diffusion_scalar!, isentropic_tensor!,
        sgs_scalar_tensor, IsentropicDiffusion
-# Era VI, Phase 54 (P54-c): LES analysis toolbox
+# Phase 54 (P54-c): LES analysis toolbox
 export box_filter!, gaussian_filter!, spectral_cutoff_filter!, staggered_solid_mask,
        isotropic_energy_spectrum, isotropic_random_field!, rescale_to_spectrum!,
        spectrum_wavenumbers, PassotPouquetSpectrum, isotropic_turbulence_field!, dissipation_rate
-# Era VI (P54-d, #174): wall-bounded flow diagnostics
+# P54-d (#174): wall-bounded flow diagnostics
 export phi_m_profile, total_stress_profile, streamwise_spectrum
-# Era VI (P55-d, #176): AMD and Vreman closures
+# P55-d (#176): AMD and Vreman closures
 export AMDClosure, VremanClosure, compute_amd_coefficients!, compute_amd_scalar_diffusivity!,
        compute_vreman_νt!,
        sgs_buoyancy_parameter
-# Era VI, Phase 56 (P56-c): a-priori SGS-stress analysis
+# Phase 56 (P56-c): a-priori SGS-stress analysis
 export SymmetricTensorField, subfilter_stress!, bardina_stress!, filtered_strain, filtered_strain!,
        eddy_viscosity_stress!, smagorinsky_stress!, sgs_dissipation, stress_eigvals,
        lumley_invariants, apriori_metrics, dissipation_matched_cs
-# Era VI (P59-b, #184): the σ-model closure
+# P59-b (#184): the σ-model closure
 export SigmaModel, compute_sigma_νt!
-# Era VI (P55-e, #187): the stability-corrected anisotropic closure
+# P55-e (#187): the stability-corrected anisotropic closure
 export StabilityCorrected, dynamic_sgs_coefficient, anisotropic_length_factors,
        sgs_stratification!
 # P58-e (#193): resolved TKE profile (turbulence-collapse runs)
@@ -308,7 +308,7 @@ export MLSGS, apply_mlsgs!
 export Observation, assimilate_nudging!
 
 # =========================================================================
-# Era II — numerical foundations for fidelity (Phases 21-31)
+# Numerical foundations (Phases 21-31)
 # =========================================================================
 
 # Phases 21-22 — cut-cell IBM + ghost-cell wall reconstruction
@@ -405,7 +405,7 @@ export NestedGrid, NestAxis, nested_grid, refinement_ratio, nest_offset,
        amr_total_mass, amr_error, total_cells, level_cells, block_bounds
 
 # =========================================================================
-# Era III — high-fidelity radiation (Phases 32-38)
+# Radiation (Phases 32-38)
 # =========================================================================
 
 # Shared radiation contract (spectral grids, optics, fluxes, interfaces)
@@ -436,7 +436,7 @@ export AbstractSolarPosition, MeeusPosition,
        partition_global_irradiance,
        cloud_optical_depth_column, cloud_shadow_transmittance!,
        cloud_shadow_map, combined_shadow_transmittance!, shade_direct_beam!
-# a model's mean column through the Era III stack (ONE-e, #454; from the urban glue)
+# a model's mean column through the radiation stack (ONE-e, #454; from the urban glue)
 export ColumnRadiationModel, column_radiation_solver, stitched_column, column_radiation!,
        column_heating_kday
 
@@ -542,10 +542,10 @@ export Facet, LongwaveSolution, RadiosityScene, ShortwaveSolution,
        view_factor_perpendicular_rectangles, view_factors
 
 # =========================================================================
-# Era IV — high-fidelity clouds and microphysics (Phases 39-45)
+# Clouds and microphysics (Phases 39-45)
 # =========================================================================
 
-# Phase 39 — exact moist thermodynamics (the Era IV shared contract)
+# Phase 39 — exact moist thermodynamics (the moist-thermodynamics shared core)
 export ThermodynamicConstants, DEFAULT_CONSTANTS,
        θ_per_heat,                     # ONE-e (#454)
        latent_heat_vapor, latent_heat_sublim, latent_heat_fusion,
@@ -744,7 +744,7 @@ export KOSCHMIEDER_THRESHOLD, MOR_THRESHOLD, VISIBILITY_WAVELENGTH,
 # Phase 44 — fog / dew condensation coupled to the vapour field
 export relaxation_fraction, fog_equilibrium, fog_condensation, fog_adjust!,
        dew_deposition, dew_exchange!, dew_exchange_columns!
-# Phase 44 (#9) — droplet-radiative feedback: fog droplets in the Era III
+# Phase 44 (#9) — droplet-radiative feedback: fog droplets in the
 # radiation (delegated to GasOptics/TwoStream/RadiationCore)
 export fog_effective_radius, FogRadiation, fog_radiation,
        fog_atmospheric_column, fog_radiative_transfer!,
@@ -758,10 +758,10 @@ export fog_effective_radius, FogRadiation, fog_radiation,
 # (the fog column adds methods to the generic `step!` and `run!`)
 
 # =========================================================================
-# Era V — high-fidelity land, urban and surface exchange (Phases 46-53)
+# Land, urban and surface exchange (Phases 46-53)
 # =========================================================================
 
-# Era V contract — SurfaceExchange: material constants, Monin–Obukhov
+# Surface shared core — SurfaceExchange: material constants, Monin–Obukhov
 # similarity, and the AbstractSurface interface. `surface_temperature`
 # (exported above with SlabLand) is its generic; `surface_albedo` /
 # `surface_emissivity` are the RadiationCore generics (exported above).
@@ -871,7 +871,7 @@ export CanopyScalarSolution, solve_canopy_scalar_column, canopy_displacement_hei
 
 # Phase 49 — UrbanSurface: per-facet multi-layer wall conduction. The
 # material-property accessors (volumetric_heat_capacity,
-# thermal_diffusivity, thermal_admittance) are generic names other Era V
+# thermal_diffusivity, thermal_admittance) are generic names other surface
 # modules may want, so they stay qualified: `Aeolus.UrbanSurface.thermal_admittance`.
 export ThermalMaterial, thermal_material, thermal_material_names,
        WallLayer, thermal_resistance, thermal_transmittance,
@@ -1034,7 +1034,7 @@ export effective_roughness, effective_scalar_roughness,
        BlendingHeightSolution, blended_forcing, BlendedMosaic, last_blending
 
 # =========================================================================
-# Era VI — high-fidelity turbulence closure (Phases 54-60)
+# Turbulence closure (Phases 54-60)
 # =========================================================================
 
 # Phase 58 — TurbulenceStability contract (#170): gradient-Richardson

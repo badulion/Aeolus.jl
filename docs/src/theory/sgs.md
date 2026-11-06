@@ -209,7 +209,7 @@ pressure solve stopped at a tolerance, wall boundaries, and the anelastic
 field. `:laplacian` keeps `νt_cfl = νt_max`, so its limits are unchanged bit
 for bit.
 
-Measured (`test/era6_sgs_stress_form.jl` (removed); spacing (15.625, 15.625, 6.25) m):
+Measured (`test/sgs_stress_form.jl` (removed); spacing (15.625, 15.625, 6.25) m):
 
 | test | result |
 | :-- | :-- |
@@ -353,7 +353,7 @@ linearisation as ν_t. The explicit cross terms are bounded by
 ``\kappa_h S_{max}/(1+S_{max}^2)``. They therefore do not tighten the
 explicit advective limit the IMEX step runs at.
 
-**Validation** (`test/era6_tensor_diffusion.jl` (removed), Berlin spacing
+**Validation** (`test/tensor_diffusion.jl` (removed), Berlin spacing
 15.625 × 15.625 × 6.25 m):
 
 | check | result |
@@ -370,7 +370,7 @@ explicit advective limit the IMEX step runs at.
 
 ## Stability correction
 
-P55-e (#187) is the one stability-corrected closure of Era VI (the
+P55-e (#187) is the one stability-corrected closure of the turbulence-closure work (the
 "stratification-dependent anisotropic" closure of P55 merged with the
 former "buoyancy-aware Smagorinsky" of P58). The constant-``C_s`` closure
 mixes at the same rate whatever the stratification: it keeps mixing where
@@ -445,7 +445,7 @@ the base closure's order of operations,
 `IsentropicDiffusion(StabilityCorrected(base, mesh), mesh)` gives the
 rotated tensor the corrected ``\kappa_v`` across the isentropes.
 
-Measured (the internal waves in `validation/era6_stratified_sgs.jl`):
+Measured (the internal waves in `validation/stratified_sgs.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -541,7 +541,7 @@ right spectrum but no energy transfer to small scales, and the dynamic
 procedure — which measures that transfer — correctly gives
 ``C_s ≈ 0``; it switches off in laminar shear too (``L_{ij}M_{ij} = 0``
 for a linear velocity profile), where the constant-coefficient model
-still dissipates. These are the tests in `test/era2_sgs_numerics.jl` (laminar shear) and `validation/era2_sgs_numerics.jl` (the turbulent fields).
+still dissipates. These are the tests in `test/sgs_numerics.jl` (laminar shear) and `validation/sgs_numerics.jl` (the turbulent fields).
 
 **Using it.** `step!(sim, dt; sgs = DynamicSmagorinsky(ws))` replaces
 the built-in closure (the eddy-viscosity terms are added where the
@@ -626,7 +626,7 @@ are filled from the boundary conditions. The plane / local
 Nothing stored inside an obstacle reaches a fluid coefficient: test 6
 below sets every solid face to NaN and to 1e30 and gets the same bits.
 
-Measured (isotropic turbulence and the 200 steps in `validation/era6_lagrangian_sgs.jl`):
+Measured (isotropic turbulence and the 200 steps in `validation/lagrangian_sgs.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -668,7 +668,7 @@ depending on the closure (Porté-Agel, Meneveau & Parlange 2000). Static
 Smagorinsky overshoots (``Φ_m`` up to 1.45-1.65 at 24³ with ``C_s =
 0.17``, P54-d), and in the half channel below LASI undershoots (``Φ_m ≈
 0.7`` in the log layer, mean ``C_s`` 0.04-0.06 near the wall). The
-classical fix is a damping function; Era VI uses none.
+classical fix is a damping function; the closures here use none.
 
 `LagrangianDynamicSmagorinsky(mesh; scale_dependent = true)` (P54-e,
 #186) is the scale-dependent Lagrangian model (LASD) of Bou-Zeid,
@@ -734,7 +734,7 @@ near-wall coefficient comes from the scale dependence, and the wall
 stress from the wall model (`WallModels`, #169, with the P57-b matching
 input, #183).
 
-Measured (isotropic, half-channel and 500-step runs in `validation/era6_lasd.jl`):
+Measured (isotropic, half-channel and 500-step runs in `validation/lasd.jl`):
 
 | test | result |
 | :-- | :-- |
@@ -822,7 +822,7 @@ same ~10 points as every other closure.
 
 ## Closure contract
 
-Era VI (#167) defines the interface between an SGS closure and the
+The SGS closure contract (#167) defines the interface between an SGS closure and the
 dynamical cores **once**, in `src/operators/sgs_closures.jl`, so that
 closures that need more than the velocity — buoyancy-aware mixing, a
 prognostic TKE, Reynolds-stress transport, a Lagrangian-averaged dynamic
@@ -952,7 +952,7 @@ form ``(1/W)\,∂_j(W κ_t ∂_jϕ)`` with the constraint weight (``ρ̄`` or
 ``ρ̄θ̄``) at cell centres and ``z`` faces; it conserves ``Σ W ϕ\,dV``.
 Without either keyword the kernel is the unmasked one, bit for bit.
 
-| property (`test/era6_scalar_sgs_diffusion.jl` (removed)) | result |
+| property (`test/scalar_sgs_diffusion.jl` (removed)) | result |
 | :-- | :-- |
 | `qv = sin(2πz/L_z)`, constant `κ₀`, `moisture = true`: amplitude vs the discrete amplification factor, `step!` / `step_rk3!` (100 steps) / ARK2 (20 steps) | 1.8e-15 / 2.6e-15 / 4.4e-16 relative (before #177: `step!` and `step_rk3!` left `qv` at amplitude 1, error 2.3) |
 | random positive `κ_t`, no-flux walls, 100 `step!`s: ``Σ qv``; ``Σ qv^2`` | conserved to 3.5e-15 relative; non-increasing at every step |
@@ -965,11 +965,11 @@ Without either keyword the kernel is the unmasked one, bit for bit.
 full resolved gradient ``g_{ij} = ∂u_i/∂x_j`` at a cell centre (diagonal:
 the face-to-face difference; off-diagonal: the centred difference over
 two cells of the component averaged to the centre); the strain rate of
-both Smagorinsky closures is built from it, and the Era VI closures that
+both Smagorinsky closures is built from it, and the other closures that
 need the gradient (AMD / Vreman, σ, the gradient Richardson number, TKE
 shear production) read the same tensor.
 
-**What was measured** (`test/era6_sgs_closure.jl`):
+**What was measured** (`test/sgs_closure.jl`):
 
 | property | result |
 | :-- | :-- |
@@ -989,7 +989,7 @@ In the Berlin case the SGS slot's providers are closure objects passed as
 
 ## Anisotropic minimum-dissipation and Vreman closures
 
-Era VI, P55-d (#176), `src/operators/sgs_amd_vreman.jl`. Two closures on
+P55-d (#176), `src/operators/sgs_amd_vreman.jl`. Two closures on
 the contract that use the spacing of each direction instead of one
 ``Δ = (ΔxΔyΔz)^{1/3}``, which matters on the Berlin grid (15.6 × 15.6 ×
 6.25 m), and that vanish in laminar flow, where Smagorinsky's
@@ -1063,7 +1063,7 @@ vanishes with the velocity, and in every regime it is at most
 only guards ``∂_l u_m ∂_l u_m = 0`` and leaves its buoyancy term off by
 default as unvalidated.
 
-Measured (`test/era6_amd_vreman.jl`): on ``θ = θ_s + Γz`` with velocity
+Measured (`test/amd_vreman.jl`): on ``θ = θ_s + Γz`` with velocity
 noise of amplitude ``ε = 10^{-2}, 10^{-4}, 10^{-6}`` m/s on the 40 × 40 ×
 25 m grid, max ``ν_t`` is 0.611, 6.1·10⁻³, 6.1·10⁻⁵ m²/s (the published
 ratio: 241, 2.4·10⁴, 2.4·10⁶). On the decaying-turbulence field with
@@ -1095,7 +1095,7 @@ one direction only. The minor form leaves round-off on a two-component
 shear ``u(z), v(z)``, and the square root turned that into
 ``ν_t ≈ 10^{-10}`` m²/s in the Berlin laminar check.
 
-**What was measured** (`test/era6_amd_vreman.jl`; decaying turbulence in `validation/era6_amd_vreman.jl`, `validation/era6_cbc_decay.jl`):
+**What was measured** (`test/amd_vreman.jl`; decaying turbulence in `validation/amd_vreman.jl`, `validation/cbc_decay.jl`):
 
 | property | AMD | Vreman | Smagorinsky 0.17 |
 | :-- | :-- | :-- | :-- |
@@ -1147,7 +1147,7 @@ In the Berlin case both are providers of the
 
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 
-The Era VI benchmark for SGS closures (Phase 54) is the wind-tunnel decay
+The benchmark for SGS closures (Phase 54) is the wind-tunnel decay
 of Comte-Bellot & Corrsin (1971, CBC): grid mesh ``M = 5.08`` cm, mean
 speed ``U_0 = 10`` m/s, spectra measured at ``tU_0/M = 42, 98, 171``
 (their table 3, in `test/data/cbc1971_table3.txt`; the tabulated spectra
@@ -1164,7 +1164,7 @@ shell sum over ``k ≤ k_c = (N/2)Δk``. CBC is an experiment, not DNS; the
 harness (`cbc_benchmark(closure; N)` in `test/support/cbc_benchmark_driver.jl`)
 accepts any spectrum function, so a tabulated DNS spectrum can replace it.
 
-Measured (three random seeds; `validation/era6_cbc_decay.jl` at 32³,
+Measured (three random seeds; `validation/cbc_decay.jl` at 32³,
 the former `examples/validation/cbc_decay.jl` at 64³, (removed by ONE-g, #456)):
 
 | ``N^3`` | closure | ``K_{98}/K_{42}`` vs CBC | ``K_{171}/K_{42}`` vs CBC | RMS ``\log_{10}E``, ``k ≤ \tfrac23 k_c`` (98 / 171) | ``E(k_c)``/CBC (98 / 171) |
@@ -1341,8 +1341,8 @@ operator is clipped at zero there. The gradient is
 `_velocity_gradient_at`, the one stencil of the contract, so there is no
 second stencil.
 
-**What was measured** (`validation/era6_sigma_sgs.jl`; decaying turbulence in
-`validation/era6_sigma_sgs.jl`; KH in `validation/era6_transition_kh.jl`; CBC in `validation/era6_cbc_decay.jl`):
+**What was measured** (`validation/sigma_sgs.jl`; decaying turbulence in
+`validation/sigma_sgs.jl`; KH in `validation/transition_kh.jl`; CBC in `validation/cbc_decay.jl`):
 
 | property | σ-model | Smagorinsky |
 | :-- | :-- | :-- |
@@ -1378,7 +1378,7 @@ laminar sheared layer (γ = 0), and σ gives 5.3e-4 against 2.0e-2 m²/s
 (2.7 %). On the laminar version of the current flow (level means of u, v;
 ``w = 0``) σ's ``ν_t`` is zero to the bit where Smagorinsky is on (the
 smoke check AMD and Vreman share), and for an exactly parallel turning
-profile (`validation/era6_sigma_sgs.jl`; on the Berlin mesh until #320). The smoke step
+profile (`validation/sigma_sgs.jl`; on the Berlin mesh until #320). The smoke step
 costs 17.8 ms against 16.5 ms with Smagorinsky.
 
 Those free-stream numbers were measured with a sponge that relaxed the

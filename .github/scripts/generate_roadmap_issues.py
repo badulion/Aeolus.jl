@@ -3,7 +3,7 @@
 
 Tiered by horizon: the near term is decomposed into concrete issues by
 hand (below), the mid term gets one issue per phase parsed from the
-roadmap, and the far term gets one tracking epic per era. Decomposing
+roadmap, and the far term gets one tracking epic per milestone. Decomposing
 work eight years out is fiction, so we do not.
 
 Run:  python3 .github/scripts/generate_roadmap_issues.py
@@ -14,40 +14,42 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 ROADMAP = ROOT / "docs/src/design/longterm_roadmap.md"
 OUT = ROOT / ".github/roadmap-issues.toml"
 
-ERAS = [
-    ("I",    "Era I — LES core and physics scaffolds",            1, 20,  "closed",
+# Milestones, named by content. The key is the GitHub label for the
+# milestone's issues (None: no open issues, so no label).
+MILESTONES = [
+    (None,                "LES core and physics scaffolds",           1, 20,  "closed",
      "The dynamical core, pluggable pressure solvers, physics scaffolds and the first urban flagship."),
-    ("II",   "Era II — Numerical foundations for fidelity",      21, 31,  "closed",
+    (None,                "Numerical foundations",                   21, 31,  "closed",
      "Cut-cell IBM, ghost-cell walls, adaptive dt, IMEX, WENO-Z/TENO, anelastic dynamics, multigrid, nesting, AMR. 2,094 tests."),
-    ("III",  "Era III — High-fidelity radiation",                32, 38,  "closed",
+    ("radiation",         "Radiation",                               32, 38,  "closed",
      "Correlated-k gas optics, two-stream, 3-D Monte-Carlo, urban radiosity, spectral BRDF, Mie aerosol, solar geometry. 4,881 tests."),
-    ("IV",   "Era IV — High-fidelity clouds and microphysics",   39, 45,  "open",
+    ("microphysics",      "Clouds and microphysics",                 39, 45,  "open",
      "Exact moist thermodynamics, bulk and Lagrangian microphysics, aerosol-cloud interaction, ice nucleation, fog. Phases 39, 41, 42 shipped."),
-    ("V",    "Era V — High-fidelity land, urban and surface exchange", 46, 53, "open",
+    ("surface",           "Land, urban and surface exchange",        46, 53,  "open",
      "Richards-equation soil, Farquhar photosynthesis, resolved canopy, production urban canopy, building energy, snow, water surfaces, heterogeneity."),
-    ("VI",   "Era VI — High-fidelity turbulence closure",        54, 59,  "open",
+    ("turbulence",        "Turbulence closure",                      54, 59,  "open",
      "Scale-dependent dynamic SGS, anisotropic closures, prognostic SGS stress, high-Re wall models, stable boundary layer, transition."),
-    ("VII",  "Era VII — High-fidelity chemistry and aerosol",    60, 66,  "open",
+    ("chemistry",         "Chemistry and aerosol",                   60, 66,  "open",
      "KPP mechanism, online photolysis, aqueous and heterogeneous chemistry, modal/sectional aerosol, SOA, emissions, deposition."),
-    ("VIII", "Era VIII — Real-world data, forcing and validation", 67, 73, "open",
+    ("real-world-data",   "Real-world data, forcing and validation", 67, 73,  "open",
      "ERA5 driver, mesoscale nesting, production geospatial ingestion, observation operators, benchmark library, provenance."),
-    ("IX",   "Era IX — Data assimilation and inverse problems",  74, 79,  "open",
+    ("data-assimilation", "Data assimilation and inverse problems",  74, 79,  "open",
      "Adjoint via AD, 4D-Var, ensemble Kalman filtering, hybrid assimilation, parameter and source inversion, UQ."),
-    ("X",    "Era X — Performance, scale and portability",       80, 87,  "open",
+    ("performance",       "Performance, scale and portability",      80, 87,  "open",
      "Production MPI, GPU port, multi-GPU, mixed precision, performance engineering, async I/O, spectral element, DG."),
-    ("XI",   "Era XI — Machine learning, applications, ecosystem", 88, 100, "open",
+    ("ml-ecosystem",      "Machine learning, applications, ecosystem", 88, 100, "open",
      "Neural closures and emulators, differentiable physics, foundation models, wildfire, wind energy, urban services, air quality, ecosystem."),
 ]
 # Technical debt is not a roadmap phase, so it gets its own milestone rather
-# than being filed under an era — which would otherwise leave a CLOSED era
-# milestone carrying open issues.
+# than being filed under a roadmap milestone — which would otherwise leave a
+# CLOSED milestone carrying open issues.
 DEBT_MILESTONE = ("Technical debt",
     "Caveats of shipped code: known biases, uneven coverage, disabled "
     "features and interfaces worth generalising. Not roadmap phases.")
-ERA_OF_PHASE = {}
-for roman, title, lo, hi, state, desc in ERAS:
+MILESTONE_OF_PHASE = {}
+for label, title, lo, hi, state, desc in MILESTONES:
     for p in range(lo, hi + 1):
-        ERA_OF_PHASE[p] = (roman, title)
+        MILESTONE_OF_PHASE[p] = (label, title)
 
 # Phases already delivered — no issues are created for these.
 DONE = set(range(1, 39)) | {39, 41, 42}
@@ -72,7 +74,7 @@ NEAR = {
 44: [("fallspeed", "Terminal-velocity spectrum and sub-grid precipitation fraction",
       "A proper size-dependent terminal velocity rather than a single fall speed, and a sub-grid precipitation fraction so partially precipitating cells behave correctly.", ["microphysics"]),
      ("fog", "Radiation fog with droplet-radiative feedback",
-      "Fog formation and dissipation with the droplet-radiative feedback that actually controls it - fog cools itself by radiating, which thickens it. Requires coupling the droplet field to the Era III radiation.", ["microphysics", "radiation"]),
+      "Fog formation and dissipation with the droplet-radiative feedback that actually controls it - fog cools itself by radiating, which thickens it. Requires coupling the droplet field to the radiation stack.", ["microphysics", "radiation"]),
      ("visibility", "Visibility diagnostic",
       "Visibility from droplet number and size (Koschmieder), for transport and air-quality applications.", ["microphysics"]),
      ("dewcoupling", "Re-enable fog/dew condensation coupling",
@@ -99,7 +101,7 @@ NEAR = {
 48: [("drag", "Leaf-area density and implicit canopy drag",
       "Resolved canopy drag with a leaf-area-density profile, treated IMPLICITLY so it is unconditionally stable. `apply_vegetation_drag!` currently ships disabled because explicit Euler is CFL-unstable at dt = 2 s - this issue is what fixes that.", ["land", "tech-debt"]),
      ("radiation", "Radiation attenuation through the canopy",
-      "Beer-Lambert or two-stream attenuation through the leaf-area profile, coupled to Era III radiation.", ["land", "radiation"]),
+      "Beer-Lambert or two-stream attenuation through the leaf-area profile, coupled to the radiation stack.", ["land", "radiation"]),
      ("leafenergy", "Leaf energy balance and leaf temperature",
       "Prognostic leaf temperature from the leaf-level energy balance, rather than assuming leaves are at air temperature.", ["land"]),
      ("profiles", "Within-canopy profile validation",
@@ -108,7 +110,7 @@ NEAR = {
       "Multi-layer conduction through roof, wall and ground facets with real material layers, replacing the single-slab surface.", ["urban"]),
      ("glazing", "Window and glazing transmission",
       "Shortwave transmission through glazing into the building interior, and its effect on the facade energy balance. Supersedes the glass_material.jl example add-on.", ["urban", "radiation"]),
-     ("facetcouple", "Couple facet temperatures to the Era III radiosity solver",
+     ("facetcouple", "Couple facet temperatures to the radiosity solver",
       "The radiosity solver already resolves every facet, but the surface energy balance collapses a whole facade to ONE temperature per column - a documented approximation in examples/urban. This issue removes it: each facet carries its own temperature and exchanges longwave with the others directly.", ["urban", "radiation", "tech-debt"]),
      ("anthro", "Anthropogenic heat from a building energy model",
       "Replace the prescribed diurnal anthropogenic heat profile with output from the Phase 50 building energy model.", ["urban"]),
@@ -141,23 +143,23 @@ NEAR = {
 # --------------------------------------------------------------- tech debt
 TECH_DEBT = [
  ("superdroplet-bias", "Assert superdroplet convergence rather than a loose threshold",
-  "IV",
-  "test/era4_superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.\n\nMeasured properties worth asserting instead:\n\n- The finite-N_sd BIAS converges: ~2.5% at N_sd=2^12, falling ~2.26x per 4x N_sd (about N^-0.6). It does NOT average away over seeds - holding N fixed and going from 10 to 160 seeds leaves it at ~0.03.\n- The collision RATE is correct: ensemble-mean number decay matches Golovin's analytic n0*exp(-b*L*t) to <=1.3%, improving 3.4x per 4x N_sd.\n\nReplace the threshold with these two.",
+  "microphysics",
+  "test/superdroplet.jl asserts a single-seed L1 error below 0.25 against Golovin at t=3600 s. That passes for the wrong reason: it tolerates Monte-Carlo noise rather than testing correctness.\n\nMeasured properties worth asserting instead:\n\n- The finite-N_sd BIAS converges: ~2.5% at N_sd=2^12, falling ~2.26x per 4x N_sd (about N^-0.6). It does NOT average away over seeds - holding N fixed and going from 10 to 160 seeds leaves it at ~0.03.\n- The collision RATE is correct: ensemble-mean number decay matches Golovin's analytic n0*exp(-b*L*t) to <=1.3%, improving 3.4x per 4x N_sd.\n\nReplace the threshold with these two.",
   ["microphysics", "tech-debt", "validation"]),
  ("coverage-41-42", "Raise test coverage of Phases 41 and 42",
-  "IV",
+  "microphysics",
   "Exported-surface coverage is 28/73 (38%) for `Superdroplet` and 12/56 (21%) for `AerosolCloud`. Whole subsystems are never called by the suite: `cell_from_state`, `advance_positions!`, `aerosol_from_vant_hoff`, `autoconversion_rate`, the Twomey/Albrecht susceptibility functions.\n\nThese modules were written by agents that were cut off mid-work; the tested paths work, but most of the surface is unexercised.",
   ["microphysics", "tech-debt"]),
  ("p41-unfound-defects", "Locate the two defects the Phase 41 author named but never fixed",
-  "IV",
+  "microphysics",
   "The agent that wrote `Superdroplet.jl` reported it was fixing four defects when it was cut off: \"recursive constructors, a bogus blend expression, the import form, and the substep criterion\".\n\nTwo were found and fixed - the import form, and a bracketing bug in the implicit growth step that collapsed growing pure-water droplets onto the floor. The **recursive constructors** and the **bogus blend expression** were never located. They may sit in untested code.\n\nAudit the module against that description.",
   ["microphysics", "tech-debt"]),
  ("rrtmgp-backend", "Optional RRTMGP backend behind AbstractGasOptics",
-  "III",
+  "radiation",
   "Phase 32 gas optics is a band-model reconstruction (Malkmus -> Domoto), not a fit to line-by-line data, because RRTMGP.jl needs a NetCDF/HDF5 stack that does not build on every target. Broadband fluxes land within a few percent of observations.\n\nAdd an optional RRTMGP-backed implementation behind the same `AbstractGasOptics` interface, selected at run time where it loads. The interface already supports this - no core change needed.",
   ["radiation", "tech-debt"]),
  ("export-collision-scan", "Add an export-collision check to the test suite",
-  "IV",
+  "microphysics",
   "Name collisions across modules have been caught three times by hand, each time only when something broke: `material_albedo`/`material_emissivity` (Phases 35 vs 36), `band_wavelength` (four copies), `effective_radius` (Phases 37 vs 41). An ambiguous export makes the name silently undefined at the top level.\n\nAdd a test that scans every module's export list and fails on any name exported by two modules without a shared generic declared in a contract module.",
   ["infrastructure", "tech-debt"]),
 ]
@@ -175,7 +177,7 @@ def parse_roadmap():
         title = re.sub(r"\s*(✅|🚧).*$", "", m.group(2)).strip()
         end = heads[i+1].start() if i + 1 < len(heads) else len(text)
         body = text[m.end():end].strip()
-        body = re.split(r"^---\s*$|^# Era ", body, flags=re.M)[0].strip()
+        body = re.split(r"^---\s*$|^# ", body, flags=re.M)[0].strip()
         val = ""
         vm = re.search(r"\*\*Validated by\*\*:\s*(.+?)(?:\n\n|\Z)", body, re.S)
         if vm:
@@ -183,6 +185,10 @@ def parse_roadmap():
             body = body[:vm.start()].strip()
         out[n] = (title, " ".join(body.split()), val)
     return out
+
+def dedup(labels):
+    """Drop repeated labels, keeping the first occurrence."""
+    return list(dict.fromkeys(labels))
 
 def esc(s):
     return s.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
@@ -199,7 +205,7 @@ def main():
         f"# Generated {datetime.date.today().isoformat()}.",
         "",
     ]
-    for roman, title, lo, hi, state, desc in ERAS:
+    for label, title, lo, hi, state, desc in MILESTONES:
         lines += ["[[milestone]]",
                   f'title = "{title}"',
                   f'state = "{state}"',
@@ -233,12 +239,12 @@ def main():
                   "\nPlus the standing gate in "
                   "[`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README "
                   "status updates are **not** part of this PR — they happen at "
-                  "phase/era closeout, after merge.\n")
+                  "phase/milestone closeout, after merge.\n")
 
     for p in sorted(set(list(NEAR) + list(phases))):
-        if p in DONE or p not in ERA_OF_PHASE:
+        if p in DONE or p not in MILESTONE_OF_PHASE:
             continue
-        roman, ms = ERA_OF_PHASE[p]
+        mlabel, ms = MILESTONE_OF_PHASE[p]
         ptitle, pbody, pval = phases.get(p, ("", "", ""))
         if p in NEAR:
             for slug, stitle, scope, labels in NEAR[p]:
@@ -250,8 +256,8 @@ def main():
                         f"\n## References\n\n- Roadmap: `docs/src/design/longterm_roadmap.md`, Phase {p}\n"
                         f"- Workflow: [`docs/CONTRIBUTING.md`](../blob/master/docs/CONTRIBUTING.md)\n")
                 emit(f"Phase {p} — {stitle}", ms,
-                     [f"era-{roman.lower()}", f"phase-{p}"] + labels, body)
-        elif roman in ("VI", "VII", "VIII"):
+                     dedup([mlabel, f"phase-{p}"] + labels), body)
+        elif mlabel in ("turbulence", "chemistry", "real-world-data"):
             body = (f"## Phase {p} — {ptitle}\n\n{pbody}\n"
                     + (f"\n**Validated by:** {pval}\n" if pval else "")
                     + "\n## Note\n\nThis phase has not been decomposed yet. Break it into "
@@ -259,28 +265,27 @@ def main():
                       "`docs/CONTRIBUTING.md`.\n"
                     + accept([]) +
                     f"\n## References\n\n- Roadmap: `docs/src/design/longterm_roadmap.md`, Phase {p}\n")
-            emit(f"Phase {p} — {ptitle}", ms, [f"era-{roman.lower()}", f"phase-{p}"], body)
+            emit(f"Phase {p} — {ptitle}", ms, [mlabel, f"phase-{p}"], body)
 
-    for roman, title, lo, hi, state, desc in ERAS:
-        if roman not in ("IX", "X", "XI"):
+    for label, title, lo, hi, state, desc in MILESTONES:
+        if label not in ("data-assimilation", "performance", "ml-ecosystem"):
             continue
         rows = "".join(
             f"- **Phase {p}** — {phases[p][0]}\n" for p in range(lo, hi + 1) if p in phases)
         body = (f"Tracking epic for **{title}**.\n\n{desc}\n\n"
                 f"## Phases\n\n{rows}\n"
-                "## Note\n\nThis era is far enough out that decomposing it now would be "
-                "guesswork. Break it into per-phase issues when the preceding era is "
+                "## Note\n\nThis milestone is far enough out that decomposing it now would be "
+                "guesswork. Break it into per-phase issues when the preceding milestone is "
                 "close to complete.\n\n"
                 "## References\n\n- Roadmap: `docs/src/design/longterm_roadmap.md`\n")
-        emit(f"{title} (epic)", title, [f"era-{roman.lower()}", "epic"], body)
+        emit(f"{title} (epic)", title, [label, "epic"], body)
 
-    for slug, title, era, body, labels in TECH_DEBT:
-        era_label = f"era-{era.lower()}"
+    for slug, title, area, body, labels in TECH_DEBT:
         emit(title, DEBT_MILESTONE[0],
-             sorted(set(labels + [era_label])), body + accept([]))
+             sorted(set(labels + [area])), body + accept([]))
 
     OUT.write_text("\n".join(lines))
-    print(f"wrote {OUT.relative_to(ROOT)}: {len(ERAS)} milestones, {n_issues} issues")
+    print(f"wrote {OUT.relative_to(ROOT)}: {len(MILESTONES)} milestones, {n_issues} issues")
 
 if __name__ == "__main__":
     main()

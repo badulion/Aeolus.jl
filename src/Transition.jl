@@ -1,7 +1,7 @@
 """
     Transition
 
-The Era VI owner of the laminar/turbulent and intermittency diagnostics
+The owner of the laminar/turbulent and intermittency diagnostics
 (Phase 59, P59-c, #180). Every later analysis that needs to know whether
 a region, or a moment, is turbulent (the stable-boundary-layer collapse,
 the CASES-99 "hockey stick", relaminarisation) calls these functions and

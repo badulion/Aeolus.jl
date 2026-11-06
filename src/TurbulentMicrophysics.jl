@@ -1,7 +1,7 @@
 """
     TurbulentMicrophysics
 
-Turbulence-microphysics interaction — Era IV, Phase 45.
+Turbulence-microphysics interaction — Phase 45.
 
 A grid cell of an LES is not uniformly saturated: unresolved turbulent
 fluctuations of total water `q_t` and liquid-ice potential temperature

@@ -1,7 +1,7 @@
 """
     OceanMixedLayer
 
-Lake and coastal-sea surface for Era V (Phase 52, issue #38): a layered
+Lake and coastal-sea surface (Phase 52, issue #38): a layered
 water column with a Kraus–Turner / Niiler–Kraus bulk mixed layer,
 shortwave penetration, a Fairall et al. (1996a) cool skin and a diurnal
 warm layer (Fairall et al. 1996b, the COARE form, or the prognostic

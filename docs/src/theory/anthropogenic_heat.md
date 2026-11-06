@@ -56,7 +56,7 @@ Three consequences hold exactly and are tested in closed form:
   rest from the canyon's air to the condenser's air.
 
 **Direct versus through the facets.** A facet element's outer face is
-closed by the Era V surface energy balance. Heat conducted out of the
+closed by the surface energy balance of `SurfaceExchange`. Heat conducted out of the
 building warms the skin and leaves as the facet's ``H``, ``LE`` and
 emitted long-wave. It is already in the facet fluxes, and adding
 `Q_envelope_facets` to the air again would count it twice. So
@@ -108,8 +108,8 @@ zones the set settles in a few passes; the loop is bounded.
 
 ## 3. Validation
 
-All numbers are measured by `test/era5_anthropogenic_heat.jl` (Toulouse:
-`validation/era5_anthropogenic_heat.jl`).
+All numbers are measured by `test/anthropogenic_heat.jl` (Toulouse:
+`validation/anthropogenic_heat.jl`).
 
 | check | reference | measured |
 |:--|:--|:--|

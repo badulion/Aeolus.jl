@@ -13,7 +13,7 @@ compared with published observations:
   walls and a roof.
 - **BUBBLE** (Basel, June 2002): the surface energy balance.
 
-The test is `validation/era5_urban_validation.jl`. The case is built in
+The test is `validation/urban_validation.jl`. The case is built in
 `validation/support/urban_validation_driver.jl`, which labels every input with its
 source, or as an assumption.
 

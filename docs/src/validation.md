@@ -10,7 +10,7 @@ a suite of their own in `validation/`, separate from
 
 ```bash
 julia --project=. validation/run.jl                          # all, in parallel
-julia --project=. validation/run.jl --only era6_gabls1.jl,era6_gabls3.jl
+julia --project=. validation/run.jl --only gabls1.jl,gabls3.jl
 julia --project=. validation/run.jl --list                   # the plan
 julia --project=. validation/runvalidation.jl                # all, serially
 ```
@@ -66,14 +66,14 @@ Fixtures and data that tests also use stay in `test/` (`test/support`,
    steps, the interface) in the module's test file.
 2. Put the run in `validation/<file>.jl`, with a header saying what it
    validates, the reference, and which test file covers the module.
-3. Add its include line to `validation/runvalidation.jl`, in its era's
+3. Add its include line to `validation/runvalidation.jl`, in its topic's
    block; tag it `heavy` with its measured `seconds` if it takes 45 s or
    more.
 4. Quote its measured numbers in the PR body.
 
 ## Known behaviour
 
-`era6_gabls3.jl` has a `@test_broken` on the jet height that sits within
+`gabls3.jl` has a `@test_broken` on the jet height that sits within
 one grid spacing of its envelope; sometimes it passes, which `@test_broken`
 reports as an error ("Unexpected Pass"). Under the former full tier it
 passed unexpectedly in 1 of 3 runs alone and 1 of 2 parallel runs. Until

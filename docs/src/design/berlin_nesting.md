@@ -163,7 +163,7 @@ and the box no longer keeps its own air. The full evening and night are
 the 24 h validation of #270.
 
 **Tests.** The physics of the nest is tested on synthetic boxes in
-`test/era2_nest_external.jl` (rule of #321): a window driven from outside
+`test/nest_external.jl` (rule of #321): a window driven from outside
 is `step_nested!`'s bit for bit; uniform state, Galilean invariance, mass, the warm-bubble
 export and the hooks in both domains (numbers on the [nested time-coupling
 page](../theory/nesting_time.md)). The Berlin wiring is checked by the
@@ -254,7 +254,7 @@ conserved exactly in the Berlin case, and no test asserts it: the child's
 sponge and θ relaxation toward the parent's mean profile, the parent's
 nudging and θ damping and both surfaces are sources, and see the
 residuals below. The synthetic conservation tests are in
-`test/era2_nest_twoway.jl` and `test/era2_nest_external.jl`.
+`test/nest_twoway.jl` and `test/nest_external.jl`.
 
 **Smoke test.** The nest's smoke variant "two-way" (buffer 1 and
 `z_anterp = 0`: the smoke child covers only 4 × 4 × 2 parent cells, so
@@ -359,7 +359,7 @@ generator's normal perturbation (`synthetic_normal_velocity`, #418).
 Before #418 it copied the perturbation into the parent's interface faces.
 The next window's boundary data returned it to the child, and the
 generator added the next one on top. On the 2 h sheared-CBL nest of
-`validation/era6_inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
+`validation/inflow_nest_longrun.jl` (Hellsten et al. 2021's two-way CBL
 with a 3 m s⁻¹ wind, r = 3), that made the child's kinetic energy ×12
 and the parent's ×2.5, with an overlap θ drift of +0.25 K against one-way
 with the generator. Two-way with the generator now meets the #268

@@ -1,6 +1,6 @@
 # Surface exchange and Monin–Obukhov similarity
 
-Every Era V surface model — soil, canopy, urban facet, snow, ice, ocean,
+Every surface model — soil, canopy, urban facet, snow, ice, ocean,
 sub-grid tile — ends in the same question: given the skin state and the
 air at the lowest model level, what are the momentum, heat and moisture
 fluxes between them? This page develops the answer implemented once, in

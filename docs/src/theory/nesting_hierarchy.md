@@ -16,8 +16,8 @@ Both reuse the operators of the [nesting page](nesting.md), the time
 coupling of the [time-coupling page](nesting_time.md), the boundary data
 of the [boundary page](nesting_boundaries.md) and the feedback of the
 [two-way page](nesting_twoway.md); nothing is forked. The tests are in
-`test/era2_nest_hierarchy.jl`; the long run is the validation case
-`validation/era2_nest_hierarchy_longrun.jl`.
+`test/nest_hierarchy.jl`; the long run is the validation case
+`validation/nest_hierarchy_longrun.jl`.
 
 ## Geometry: one map per axis
 
@@ -189,7 +189,7 @@ sponge, solid), recorded before the change, were reproduced bit for bit
 when the hierarchy landed (the generator and its checksums were removed
 later: tests compare within tolerances, not bits).
 
-## Measured (`test/era2_nest_hierarchy.jl`)
+## Measured (`test/nest_hierarchy.jl`)
 
 Configurations: **H3** root ``16^3`` (Δ = 100 m, periodic), child
 ``r = 2`` over the middle ``8^3`` parent cells, grandchild ``r = 2`` over
@@ -253,7 +253,7 @@ level each domain takes its own CFL step (root 7.14 s, two substeps per
 level at CFL 0.50) and lands on its parent's step ends; the composite
 ``∫θ`` drifts by ``2.8\times10^{-15}`` in 10 root steps.
 
-**Long run** (`validation/era2_nest_hierarchy_longrun.jl`, a validation run). A
+**Long run** (`validation/nest_hierarchy_longrun.jl`, a validation run). A
 forced neutral (Kolmogorov) flow in a ``16^3`` periodic box with
 Smagorinsky closure, child ``r = 2`` over the middle half and grandchild
 ``r = 2`` over the child's middle half, both links two-way with refluxing,

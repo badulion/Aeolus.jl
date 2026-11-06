@@ -1,5 +1,5 @@
 # Two more providers of the `:sgs` slot (P55-d, #176), both closures of the
-# Era VI contract from src/operators/sgs_amd_vreman.jl, passed as the `sgs`
+# SGS closure contract from src/operators/sgs_amd_vreman.jl, passed as the `sgs`
 # of every step like the providers in sgs.jl (which defines the slot):
 #
 #   :amd     Operators.AMDClosure — the anisotropic minimum-dissipation

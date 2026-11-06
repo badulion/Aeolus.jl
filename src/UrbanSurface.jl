@@ -24,7 +24,7 @@ Five parts:
      temperature) is an ordinary [`ColumnBoundary`](@ref), which is what
      lets Phase 50's `BuildingEnergy` reuse the same code for building
      thermal mass.
-  3. **Facets** — [`UrbanFacet`](@ref), an implementer of the Era V
+  3. **Facets** — [`UrbanFacet`](@ref), an implementer of the
      `SurfaceExchange.AbstractSurface` interface: a conduction column
      whose outer face is closed by the surface energy balance
      ``R_n = H + LE + G``, linearised about the current skin temperature

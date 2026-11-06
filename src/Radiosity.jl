@@ -2,7 +2,7 @@ module Radiosity
 
 # Phase 35 — Full urban radiosity.
 #
-# What this replaces. The Era-I urban example (`examples/urban/urban_physics.jl`)
+# What this replaces. The original urban example (`examples/urban/urban_physics.jl`)
 # treats urban radiation with two scalar diagnostics per ground cell: a binary
 # ray-marched shadow mask and a hemispherically ray-cast sky-view factor. Both
 # are geometrically sensible, but the *reflections* are not modelled at all —
@@ -374,7 +374,7 @@ end
 material_albedo(m::UrbanMaterials, i::Integer) = m.albedo[i]
 material_emissivity(m::UrbanMaterials, i::Integer) = m.emissivity[i]
 
-# Plug into the shared Era-III surface-optics contract. The methods are
+# Plug into the shared radiation surface-optics contract. The methods are
 # defined on the concrete `UrbanMaterials` (never on `AbstractSurfaceOptics`)
 # so that Phase 36's spectral implementation cannot be shadowed by them.
 RadiationCore.surface_albedo(m::UrbanMaterials, i::Integer) = m.albedo[i]
@@ -1397,7 +1397,7 @@ F_{sky} = \\frac{1}{\\pi}\\int_{2\\pi} V(\\hat{\\omega})\\cos\\theta \\, d\\omeg
 so sampling *with* density `cos θ/π` turns it into an unweighted average and
 removes the `cos θ` from the estimator — the same variance-reduction trick a
 Monte-Carlo renderer uses. Sampling uniformly in `(θ, φ)` and weighting
-afterwards, as the Era-I `compute_sky_view_factor` does, converges far more
+afterwards, as the original `compute_sky_view_factor` does, converges far more
 slowly near the horizon, which is exactly where urban obstruction lives.
 
 This is a genuinely **independent** estimate: it never touches the view-factor
@@ -1966,7 +1966,7 @@ unless noted:
   * `direct`        — the direct-beam component of `incident`
   * `diffuse_sky`   — the sky-diffuse component of `incident`
   * `interreflected`— `Σ_j F_ij B_j`, the part that came off other facets;
-                      this is the term the Era-I scheme omitted entirely
+                      this is the term the original scheme omitted entirely
   * `total_incident`, `total_absorbed`, `total_escaping` — scene totals in W
   * `effective_albedo` — `total_escaping / total_incident`
 """

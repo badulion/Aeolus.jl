@@ -1,4 +1,4 @@
-# Shared by test/era2_nest_boundary.jl and validation/era2_nest_boundary.jl.
+# Shared by test/nest_boundary.jl and validation/nest_boundary.jl.
 
 using Aeolus.Nesting
 

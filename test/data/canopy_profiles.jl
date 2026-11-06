@@ -1,4 +1,4 @@
-# Published within-canopy profiles used by test/era5_canopy_profiles.jl
+# Published within-canopy profiles used by test/canopy_profiles.jl
 # (issue #25; the column example examples/validation/canopy_profiles.jl
 # went with the single-column cases, ONE-g #456).
 #

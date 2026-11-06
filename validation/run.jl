@@ -2,7 +2,7 @@
 # confirm the physics works and stays stable. Not a merge gate. Stdlib only.
 #
 #   julia --project=. validation/run.jl                 # every validation run
-#   julia --project=. validation/run.jl --only era6_gabls1.jl,era6_gabls3.jl
+#   julia --project=. validation/run.jl --only gabls1.jl,gabls3.jl
 #   julia --project=. validation/run.jl --list          # the plan
 #
 # Options: see test/runner/runner.jl (the same runner as test/run.jl).

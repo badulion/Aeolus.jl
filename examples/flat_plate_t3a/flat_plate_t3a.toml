@@ -1,4 +1,4 @@
-# ERCOFTAC T3A-like bypass transition — Era VI, Phase 59 (P59-d, #185;
+# ERCOFTAC T3A-like bypass transition — Phase 59 (P59-d, #185;
 # formerly examples/transition/flat_plate_t3a.jl, then the `flat_plate` run
 # type; on the model since ONE-l, #475). A spatially developing
 # zero-pressure-gradient flat-plate boundary layer under free-stream

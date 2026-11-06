@@ -4,7 +4,7 @@ module StretchedGrids
 # Phase 24 — Stretched and terrain-following vertical coordinates.
 # =========================================================================
 #
-# Era I shipped a single mesh type, `RegularGrid`: uniform in all three
+# The LES core first shipped a single mesh type, `RegularGrid`: uniform in all three
 # directions. That is fine for an idealised periodic box but useless for
 # an atmospheric LES, where the interesting physics lives in the first
 # few tens of metres above the surface and the domain has to reach a

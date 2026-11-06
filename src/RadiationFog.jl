@@ -2,13 +2,13 @@
     RadiationFog
 
 Fog and dew condensation coupled consistently to the atmospheric vapour
-field — Era IV, Phase 44.
+field — Phase 44.
 
 This module owns radiation fog. Its *thermodynamic* half (#11): how much
 vapour condenses in the air (fog) or onto a cold surface (dew), where the
 latent heat goes, and why the step cannot overshoot saturation for any
 time step. Its *radiative* half (#9, `radiation_fog/coupling.jl`): the
-droplet field handed to the Era III radiation, so that fog cools itself
+droplet field handed to the radiation, so that fog cools itself
 by emitting longwave from its top — the feedback that thickens it. And a
 1-D radiation-fog column (`radiation_fog/column.jl`) that couples the
 two with turbulence, a surface energy balance and droplet settling,
@@ -75,7 +75,7 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              saturation_specific_humidity, exner_function
 using ..Backends: AbstractBackend, plane_map!, ordered_sum, backend, foreach_column!
 
-# Era III radiation and Era IV droplet physics the fog column delegates to
+# Radiation and droplet microphysics the fog column delegates to
 # (issue #9): no optics or transfer is computed in this module.
 using ..RadiationCore: SpectralGrid, OpticalProperties, RadiativeFluxes,
                        AtmosphericColumn, longwave_bands, shortwave_bands,

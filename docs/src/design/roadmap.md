@@ -284,8 +284,8 @@ knock them off in visibility order, starting with **R1 (shadows)**.
 ## Beyond the refinement plan
 
 The 27 items above are complete. The next decade of development is
-planned in **[Long-range roadmap (Eras II–XI)](longterm_roadmap.md)** —
-80 further phases organised into 10 eras, ordered physics-first, with
+planned in **[Long-range roadmap](longterm_roadmap.md)** —
+80 further phases organised into 10 milestones, ordered physics-first, with
 the standing rule that every phase ships a *validated production
 capability* rather than a scaffold.
 

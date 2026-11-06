@@ -167,7 +167,7 @@ hours; a validation run since the validation split, full tier since #438, run by
 after #320 removed the Berlin test suite, before which they were
 `test/berlin_parent.jl`). Check 5 never used the
 parent case, only the two cores and the TKE closure: it is the module
-test `validation/era2_anelastic_cbl.jl`. Checks 4 and 6 need a 24 h simulation
+test `validation/anelastic_cbl.jl`. Checks 4 and 6 need a 24 h simulation
 and were moved out of the suite to
 `examples/urban/berlin_parent_lindenberg_check.jl` (run by hand): the
 maintainer skipped all 24 h validation runs in this issue and deferred
@@ -203,7 +203,7 @@ s⁻¹, before the default became D = 0.
    isentropic-profile reference), uniform 24 × 24 × 40 grid, 5 h CBL
    (Q = 0.25 K m s⁻¹, Γ = 3 K/km) to ~2 km: z_i 2100 against 2325 m
    (Δz_i/z_i = +0.107), mixed-layer θ +0.23 K when measured in #259;
-   re-measured on master on 2026-10-07 (`validation/era2_anelastic_cbl.jl`):
+   re-measured on master on 2026-10-07 (`validation/anelastic_cbl.jl`):
    2175 against 2250 m (+0.034, one 75 m level), θ +0.22 K. The anelastic CBL is
    deeper and warmer because the same kinematic flux heats air whose
    density falls with height.

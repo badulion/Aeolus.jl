@@ -1,10 +1,10 @@
 """
     SurfaceExchange
 
-The Era V shared contract: the physics every surface model needs, in
+The surface shared core: the physics every surface model needs, in
 one place, so the soil, canopy, urban-facet, snow, sea-ice, ocean and
-tile models of Era V delegate rather than re-derive. It is to Era V what
-`RadiationCore` is to Era III and `MoistThermodynamics` to Era IV.
+tile models delegate rather than re-derive. It is to the surface models what
+`RadiationCore` is to radiation and `MoistThermodynamics` to microphysics.
 
 Three parts:
 
@@ -65,7 +65,7 @@ using ..RadiationCore: STEFAN_BOLTZMANN
 # methods of the RadiationCore generics — one function, not two.
 import ..RadiationCore: surface_albedo, surface_emissivity
 # MOST-consistent gradient-Richardson factors are an implementer of the
-# Era VI stability contract (P58-a, #170).
+# stability contract (P58-a, #170).
 import ..TurbulenceStability: AbstractRiStability, stability_factor_m, stability_factor_h
 
 export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
@@ -271,7 +271,7 @@ psi_h(sf::BusingerDyerLogLinear, ζ::Real) = ζ < 0 ? psi_h(_unstable(sf), ζ) :
 log_linear_slope(sf::BusingerDyerLogLinear) = sf.β_m
 
 # -------------------------------------------------------------------------
-# MOST-consistent gradient-Richardson stability factors (Era VI, P58-a)
+# MOST-consistent gradient-Richardson stability factors (P58-a)
 # -------------------------------------------------------------------------
 
 """
@@ -587,7 +587,7 @@ function _illinois(f, a::T, b::T, fa::T, fb::T, maxiter::Integer) where {T}
 end
 
 # =========================================================================
-# 3b. Maximum sustainable heat flux (Era VI, P58-e)
+# 3b. Maximum sustainable heat flux (P58-e)
 # =========================================================================
 #
 # With the wind U at height z held fixed, Monin–Obukhov similarity ties
@@ -839,7 +839,7 @@ end
 """
     AbstractSurface
 
-Supertype of every Era V surface model (slab, soil column, canopy, urban
+Supertype of every surface model (slab, soil column, canopy, urban
 facet, snowpack, sea ice, ocean mixed layer, tile mosaic). An implementer
 `S <: AbstractSurface` provides
 
@@ -924,7 +924,7 @@ Heat stored per unit surface area in the 1-D column below (or behind) a
 surface — a wall or roof conduction column, a lake or ocean water column.
 One generic owned by the contract, extended by each implementer
 (`UrbanSurface.ConductionColumn`, `OceanMixedLayer.WaterColumn`), so the
-name has a single binding when several Era V modules are loaded together.
+name has a single binding when several surface modules are loaded together.
 """
 function column_heat_content end
 

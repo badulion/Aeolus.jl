@@ -1,7 +1,7 @@
 """
     PrognosticSGS
 
-Era VI, Phase 56 (P56-b, #182): the Deardorff (1980) 1.5-order closure with a
+Phase 56 (P56-b, #182): the Deardorff (1980) 1.5-order closure with a
 prognostic subgrid-scale turbulent kinetic energy ``e``, with the
 coefficients of Moeng (1984),
 
