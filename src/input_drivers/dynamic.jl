@@ -727,8 +727,9 @@ function read_dynamic_driver(path::AbstractString; mesh = nothing, origin_lat = 
 end
 
 # The initial soil of a file: zsoil and init_soil_t / init_soil_m, a profile
-# or a volume (whose x, y must be the run's: read with the mesh). The fill
-# values are NaN in memory.
+# or a volume (whose x, y must be the run's when read with the mesh; a
+# reader without it, e.g. of the sounding tables, takes it unchecked). The
+# fill values are NaN in memory.
 function _read_soil(path, ds, mesh)
     z = _f64(ds["zsoil"].var[:])
     function rd(n)
@@ -737,8 +738,7 @@ function _read_soil(path, ds, mesh)
         A = Array{Float64}(v.var[ntuple(_ -> Colon(), ndims(v))...])
         fv = get(v.attrib, "_FillValue", nothing)
         fv === nothing || isnan(fv) || replace!(A, Float64(fv) => NaN)
-        if ndims(A) == 3
-            mesh === nothing && error("the dynamic driver $path holds a soil volume ($n): read it with the run's mesh (mesh = …)")
+        if ndims(A) == 3 && mesh !== nothing
             (haskey(ds, "x") && haskey(ds, "y")) || error("the dynamic driver $path holds a soil volume ($n) but no x, y")
             xs = collect(Float64, xnodes(mesh, CellCenter())); ys = collect(Float64, ynodes(mesh, CellCenter()))
             (_f64(ds["x"].var[:]) == xs && _f64(ds["y"].var[:]) == ys) ||

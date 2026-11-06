@@ -257,8 +257,8 @@ end
     @test isempty(check_driver(pv, DYNAMIC_SCHEMA))
     dv = read_dynamic_driver(pv; mesh = M, planes = false)
     @test isequal(dv.soil.t, T3) && dv.soil.m === nothing
-    # a volume needs the mesh, and must be on the run's grid
-    @test occursin("read it with the run's mesh", errmsg(() -> read_dynamic_driver(pv; planes = false)))
+    # read with the mesh, a volume must be on the run's grid (without it, unchecked)
+    @test isequal(read_dynamic_driver(pv; planes = false).soil.t, T3)
     m2 = RegularGrid(; size = (8, 6, 5), extent = (160.0, 60.0, 50.0), halo = (2, 2, 2))
     @test occursin("not on the run's horizontal grid", errmsg(() -> read_dynamic_driver(pv; mesh = m2, planes = false)))
     # zsoil must increase; °C is outside the schema's range

@@ -330,6 +330,8 @@ units` ("1" for a dimensionless one), as their docstrings give them; the
 model's option reference shows them.
 """
 const OPTION_UNITS = Dict{Tuple{Symbol,Symbol},String}(
+    (:ground_soil, :wave_t_mean) => "K", (:ground_soil, :wave_amplitude) => "K", (:ground_soil, :wave_day_max) => "d",
+    (:ground_soil, :wave_damping_depth) => "m",
     (:geostrophic, :U_g) => "m s^-1", (:geostrophic, :V_g) => "m s^-1", (:geostrophic, :τ) => "s",
     (:radiosity_sun, :aod380) => "1", (:radiosity_sun, :aod500) => "1", (:radiosity_sun, :precipitable_water) => "cm",
     (:radiosity_sun, :ozone) => "atm-cm", (:radiosity_sun, :albedo) => "1",
