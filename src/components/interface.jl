@@ -195,6 +195,28 @@ records the run's start.
 run_begin!(::AbstractComponent, d, t_end) = nothing
 
 """
+    spinup!(c, d::Domain, sp) -> Bool
+
+The surface spin-up (#519, PALM's `spinup_time`): called by the run loop
+of `aeolus run` before the first step of a fresh run (never on a
+restart), with `sp` the `[spinup]` options (`time`, `dt`, `forcing`,
+`pt_mean`, `pt_amplitude`, `soil_moisture`, `buildings`). A component
+with slow surfaces advances them alone over `sp.time` seconds before the
+start, at negative model times, against a prescribed near-surface air,
+without the 3-D atmosphere, and leaves the atmosphere as it found it.
+Returns whether it spun anything up. Default: `false`.
+"""
+spinup!(::AbstractComponent, d, sp) = false
+
+"""
+    spins_up(c) -> Bool
+
+Whether `c` runs its stages in the surface spin-up
+([`run_spinup_stages!`](@ref)). Default: `false`.
+"""
+spins_up(::AbstractComponent) = false
+
+"""
     run_end!(c, d::Domain)
 
 Called by the run loop after its last step, also when the run stops with
