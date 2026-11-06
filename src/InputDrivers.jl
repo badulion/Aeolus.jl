@@ -56,7 +56,7 @@ using Dates: Dates, now, UTC
 using ..Grids: xnodes, ynodes, znodes, CellCenter
 using ..IBM: SolidMask
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index, WindowedBoundaryData
-import ..BoundaryConditions: snapshot_values
+import ..BoundaryConditions: snapshot_values, blend_source
 import NCDatasets
 using ..NCIO: NCDataset, nc_create, nc_defvar!, nc_append_record!
 using ..MoistThermodynamics: DEFAULT_CONSTANTS, exner_function, virtual_temperature, PhasePartition

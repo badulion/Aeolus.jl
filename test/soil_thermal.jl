@@ -142,6 +142,60 @@ end
     @test atan(Gc, Gs) ≈ π / 4 atol = 0.005
 end
 
+@testset "Initial soil from data: a profile on the nodes (#521)" begin
+    zd = [0.035, 0.175, 0.64, 1.945]                       # ERA5's layer centres
+    g = clm_exponential_soil_grid(10)
+    # a linear profile is reproduced at every node between the levels (round-off)
+    lin(z) = 290.0 - 2.5z
+    T = soil_profile_on_nodes(zd, lin.(zd), g.z)
+    inside = zd[1] .<= g.z .<= zd[end]
+    @test maximum(abs.(T[inside] .- lin.(g.z[inside]))) < 1e-12
+    # above the first level the shallowest value, below the last the deepest (held)
+    @test all(T[g.z .< zd[1]] .== lin(zd[1])) && all(T[g.z .> zd[end]] .== lin(zd[end]))
+    @test count(g.z .> zd[end]) == 1                       # the CLM column's 2.87 m node (the 9th is at 1.73 m)
+    # a fill value (NaN) is skipped: interpolation across it
+    T2 = soil_profile_on_nodes(zd, [lin(zd[1]), NaN, lin(zd[3]), lin(zd[4])], g.z)
+    @test maximum(abs.(T2[inside] .- lin.(g.z[inside]))) < 1e-12
+    @test soil_profile_on_nodes(zd, fill(NaN, 4), g.z) === nothing
+    @test_throws ArgumentError soil_profile_on_nodes(zd[[2, 1, 3, 4]], lin.(zd), g.z)
+end
+
+@testset "Initial soil without data: the annual wave removes the slow mode (#521)" begin
+    # A 15 m column (the base 6.6 damping depths down) under the annual
+    # surface wave, 30 days of hourly steps. Started on the wave it stays on
+    # the analytic solution (Carslaw & Jaeger §2.6) within the discretisation
+    # error; started uniform at the mean (what [urban] t_soil0 does) it is
+    # off by the slow mode, which decays with τ of months.
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    g = uniform_soil_grid(15.0, 150)
+    θ = 0.3
+    k = soil_thermal_conductivity(p, soil_porosity(h), θ, 0.0)
+    C = soil_heat_capacity(p, soil_porosity(h), θ, 0.0)
+    d = soil_damping_depth(k, C)
+    @test 1.5 < d < 3.5                                     # "2–3 m in moist loam"
+    @test d ≈ sqrt(2 * (k / C) / (2π / SOIL_YEAR)) rtol = 1e-14
+    wave(z, t) = annual_soil_temperature(z, t; T_mean = 283.0, amplitude = 9.0, damping_depth = d,
+                                         t_max = 200 * 86400.0)
+    t0, dt, n = 120 * 86400.0, 3600.0, 30 * 24              # 30 days from day 120 (spring)
+    function run(Tinit)
+        col = SoilThermalColumn(SoilWaterColumn(g, h; θ = θ), p; T_soil = Tinit, hydrology = false,
+                                bottom = Aeolus.SoilColumn.BottomTemperature(283.0))
+        t = t0
+        for _ in 1:n
+            step_soil_heat!(col, dt, SkinTemperatureTop(wave(0.0, t + dt / 2)))
+            t += dt
+        end
+        return col.water.T_soil .- wave.(g.z, t)
+    end
+    top3 = g.z .<= 3.0
+    e_wave = maximum(abs.(run(wave.(g.z, t0))[top3]))
+    e_unif = maximum(abs.(run(283.0)[top3]))
+    @info "annual wave: max |T − T_analytic| over the top 3 m after 30 d" e_wave e_unif
+    @test e_wave < 0.05                                     # dz = 0.1 m, dt = 1 h
+    @test e_unif > 1.0                                      # the slow mode is still there
+end
+
 @testset "Energy conservation with freeze–thaw, zero curtain" begin
     g = clm5_soil_grid(12)
     hyd = [i <= 4 ? carsel_parrish_texture(:silt_loam) : carsel_parrish_texture(:clay) for i in 1:12]
@@ -258,3 +312,46 @@ end
 end
 
 end # testset
+
+using Aeolus.SurfaceExchange: has_packed_state, packed_state_length, pack_state!, unpack_state!
+
+@testset "Packed state: a column restored from it continues as the original (#526)" begin
+    # the checkpoint form of a column: the layer profiles, enthalpy, skin
+    # temperature, sub-steps, budgets and an aquifer's storage. The solver
+    # workspaces are scratch: overwritten with NaN before the restore, the
+    # continuation must not see them.
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    mk() = SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(10), h; θ = 0.25,
+                                             bottom = UnconfinedAquifer(W = 5.0)), p;
+                             T_soil = 288.0, bottom = BottomTemperature(288.0))
+    day = SurfaceForcing(sw_down = 600.0, lw_down = 340.0, T_air = 295.0, q_air = 0.008, U = 3.0, rain = 2e-4)
+    night = SurfaceForcing(sw_down = 0.0, lw_down = 290.0, T_air = 280.0, q_air = 0.004, U = 1.0)
+    a = mk()
+    @test has_packed_state(a)
+    for _ in 1:40; step_surface!(a, day, 60.0); end
+    n = packed_state_length(a)
+    @test n == 5 * 10 + 7 + 3 + 7                   # 4 water profiles + H; dt_sub, 6 water budgets; aquifer; skin, dt_sub, 5 heat budgets
+    buf = fill(NaN, n + 2)
+    @test pack_state!(buf, 2, a) == n + 2           # writes buf[2:n+1] only
+    @test isnan(buf[1]) && isnan(buf[end]) && all(isfinite, buf[2:n+1])
+    # b: another history, its scratch poisoned, then a's state
+    b = mk()
+    for _ in 1:13; step_surface!(b, night, 45.0); end
+    for ws in (b.ws, b.water.ws), f in fieldnames(typeof(ws))
+        fill!(getfield(ws, f), NaN)
+    end
+    @test unpack_state!(b, buf, 2) == n + 2
+    for _ in 1:30
+        step_surface!(a, night, 60.0); step_surface!(b, night, 60.0)
+    end
+    # the same arithmetic on the same numbers: agreement to round-off
+    for (x, y) in ((a.water.T_soil, b.water.T_soil), (a.water.θ_liq, b.water.θ_liq), (a.water.ψ, b.water.ψ), (a.H, b.H))
+        @test x ≈ y rtol = 1e-12
+    end
+    @test a.T_skin ≈ b.T_skin rtol = 1e-12
+    @test a.water.bottom.W ≈ b.water.bottom.W rtol = 1e-12
+    @test a.budget.surface ≈ b.budget.surface rtol = 1e-12
+    @test a.water.budget.drainage ≈ b.water.budget.drainage rtol = 1e-12
+    @test a.water.T_soil != mk().water.T_soil      # the comparison is not of an untouched column
+end

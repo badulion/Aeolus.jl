@@ -155,6 +155,7 @@ Aeolus.BoundaryConditions.WindowedBoundaryData
 Aeolus.BoundaryConditions.snapshot_values
 Aeolus.BoundaryConditions.window_fraction
 Aeolus.BoundaryConditions.blend_window!
+Aeolus.BoundaryConditions.blend_source
 ```
 
 Data that superpose a part of their own on the source's values —

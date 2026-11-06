@@ -66,6 +66,14 @@ checks that what is present is consistent:
   `ls_<name>_time`, or a shared `time_bc`), so a table round-trips without
   resampling; and the surface series `sfc_temperature`, `sfc_pressure`
   over `time_sfc` (schema only, like the `init_*` profiles).
+* **initial soil** (#521, PALM's PIDS `init_soil_t`, `init_soil_m`) —
+  `init_soil_t` (K) and `init_soil_m` (m³ m⁻³) on the coordinate `zsoil`
+  (m below the surface, positive down, strictly increasing: the levels'
+  centres), each a profile over `zsoil` or a volume over (`x`, `y`,
+  `zsoil`) on the run's horizontal grid; `NaN` (the `_FillValue`) marks a
+  level or a column without data (AeolusPrep.jl's ERA5 soil marks the
+  columns that are not land). What the urban site's soil starts from
+  (`[ground] soil_init`).
 
 Global attribute `dynamic_source`: `"sounding"`, `"case_table"` or
 `"parent"` (an Aeolus nest parent, [`NestBoundaryRecorder`](@ref)).
@@ -105,7 +113,17 @@ const DYNAMIC_SCHEMA = DriverSchema("dynamic", "standard",
           DriverVariable("sfc_temperature", ("time_sfc",), Float64; units = "K", required = false,
                          long_name = "surface (skin or screen-level) potential temperature", range = (100, 1000)),
           DriverVariable("sfc_pressure", ("time_sfc",), Float64; units = "Pa", required = false,
-                         long_name = "surface pressure", range = (1e3, 2e5))]);
+                         long_name = "surface pressure", range = (1e3, 2e5))],
+         [DriverVariable("zsoil", ("zsoil",), Float64; units = "m", required = false,
+                         long_name = "depth of the initial soil levels",
+                         doc = "below the surface, positive down, strictly increasing (the levels' centres)",
+                         range = (0, 100)),
+          DriverVariable("init_soil_t", ("zsoil",), Float64; units = "K", required = false,
+                         long_name = "initial soil temperature", range = (150, 400),
+                         alt_dims = (("x", "y", "zsoil"),), doc = "a profile or a volume; NaN: no data"),
+          DriverVariable("init_soil_m", ("zsoil",), Float64; units = "m3 m-3", required = false,
+                         long_name = "initial volumetric soil water content", range = (0, 1),
+                         alt_dims = (("x", "y", "zsoil"),), doc = "a profile or a volume; NaN: no data")]);
     attributes = [
         "init_time" => "the model start, ISO-8601 UTC (`\"\"`: a case without a calendar date); every time coordinate is in s since it",
         "dynamic_source" => "`\"sounding\"`, `\"case_table\"` or `\"parent\"` (an Aeolus nest parent)",
@@ -113,7 +131,10 @@ const DYNAMIC_SCHEMA = DriverSchema("dynamic", "standard",
             "a sounding driver's station name, station elevation (m) and number of launches",
         "subsidence_fields, subsidence_form" =>
             "with `ls_w_subs`: the fields subsidence acts on (space-separated) and its form (`Subsidence`)",
-        "nudging_tau" => "with `ls_nudge_*`: the nudging time scale (s, `ProfileNudging`)"])
+        "nudging_tau" => "with `ls_nudge_*`: the nudging time scale (s, `ProfileNudging`)",
+        "soil_source, soil_time, soil_layers" =>
+            "with `init_soil_*`: where the soil profiles come from (e.g. AeolusPrep.jl's ERA5 soil), " *
+            "their valid time and the source's layers (informative)"])
 
 # ---------------------------------------------------------------------------
 # boundary snapshots read from the file
@@ -170,6 +191,19 @@ Base.IndexStyle(::Type{SlabArray}) = IndexCartesian()
         end
     end
     throw(BoundsError(a, (i, j, k)))
+end
+
+# The time blend of a plane reads the one slab holding the plane's whole
+# box, found once, instead of searching the slabs at every point (#529).
+# A box no single slab holds keeps the point-by-point getindex.
+function blend_source(a::SlabArray, r::NTuple{3,UnitRange{Int}})
+    for s in a.slabs
+        sr = s.ranges
+        if all(d -> first(r[d]) >= first(sr[d]) && last(r[d]) <= last(sr[d]), 1:3)
+            return s.data, (first(sr[1]) - 1, first(sr[2]) - 1, first(sr[3]) - 1)
+        end
+    end
+    return a, (0, 0, 0)
 end
 
 function snapshot_values(s::FileSnapshot, name::Symbol)
@@ -361,6 +395,10 @@ a preprocessor makes in memory ([`sounding_dynamic_inputs`](@ref)):
   `:u_g`, `:theta_adv`, …, see [`LS_TABLES`](@ref));
 * `surface` — `(t, temperature, pressure)` series (a vector or `nothing`
   each), or `nothing`;
+* `soil` — the initial soil `(z, t, m)`: the depths `zsoil` (m, positive
+  down) and the temperature (K) and water content (m³ m⁻³), each a vector
+  over `z` (a profile), an `(Nx, Ny, Nz)` array (a volume) or `nothing`;
+  or `nothing`;
 * `boundary` — the [`FileBoundaryFeed`](@ref) of the boundary planes, or
   `nothing`;
 * `attributes` — the file's global attributes (in memory: what a writer
@@ -373,16 +411,32 @@ struct DynamicInputs
     fields::Dict{Symbol,Array{Float64,3}}
     tables::Dict{Symbol,ForcingTable{Float64}}
     surface::Union{Nothing,NamedTuple}
+    soil::Union{Nothing,NamedTuple}
     boundary::Union{Nothing,FileBoundaryFeed}
     attributes::Dict{String,Any}
 end
 
 DynamicInputs(; init_time::AbstractString = "", profiles = nothing, p_surface = nothing,
               fields = Dict{Symbol,Array{Float64,3}}(), tables = Dict{Symbol,ForcingTable{Float64}}(),
-              surface = nothing, boundary = nothing, attributes = Dict{String,Any}()) =
+              surface = nothing, soil = nothing, boundary = nothing, attributes = Dict{String,Any}()) =
     DynamicInputs(String(init_time), profiles, p_surface === nothing ? nothing : Float64(p_surface),
                   Dict{Symbol,Array{Float64,3}}(fields), Dict{Symbol,ForcingTable{Float64}}(tables),
-                  surface, boundary, Dict{String,Any}(attributes))
+                  surface, _soil_checked(soil), boundary, Dict{String,Any}(attributes))
+
+# the initial soil (z, t, m), checked: z positive and strictly increasing,
+# each of t and m a profile over z or a volume over (x, y, z)
+function _soil_checked(soil)
+    soil === nothing && return nothing
+    z = Float64.(collect(soil.z))
+    (!isempty(z) && z[1] > 0 && all(>(0), diff(z))) ||
+        throw(ArgumentError("dynamic driver: zsoil must be positive (m below the surface) and strictly increasing, got $z"))
+    chk(A, n) = A === nothing ? nothing :
+        (ndims(A) == 1 || ndims(A) == 3) && size(A, ndims(A)) == length(z) ? Array{Float64}(A) :
+        throw(ArgumentError("dynamic driver: $n is $(size(A)), expected ($(length(z)),) or (Nx, Ny, $(length(z)))"))
+    t, m = chk(soil.t, "init_soil_t"), chk(soil.m, "init_soil_m")
+    (t === nothing && m === nothing) && throw(ArgumentError("dynamic driver: zsoil without init_soil_t or init_soil_m"))
+    return (z = z, t = t, m = m)
+end
 
 """
     shift_table(tab, Δt) -> ForcingTable
@@ -551,6 +605,25 @@ function _write_static_part!(ds, d::DynamicInputs)
                                                                        "long_name" => v.long_name])[:] = a
         end
     end
+    so = d.soil
+    if so !== nothing
+        ds.dim["zsoil"] = length(so.z)
+        _defvar1!(ds, "zsoil", so.z, Dict{String,Any}("units" => "m", "positive" => "down",
+                                                     "long_name" => S["zsoil"].long_name))
+        for (n, A) in (("init_soil_t", so.t), ("init_soil_m", so.m))
+            A === nothing && continue
+            v = S[n]
+            if ndims(A) == 3
+                haskey(ds.dim, "x") || error("write_dynamic_driver: a soil volume ($n) needs the mesh")
+                size(A)[1:2] == (Int(ds.dim["x"]), Int(ds.dim["y"])) ||
+                    error("write_dynamic_driver: $n is $(size(A)), the mesh $((ds.dim["x"], ds.dim["y"]))")
+            end
+            dims = ndims(A) == 3 ? ("x", "y", "zsoil") : ("zsoil",)
+            var = NCDatasets.defVar(ds, n, Float64, dims; fillvalue = NaN,
+                                    attrib = ["units" => v.units, "long_name" => v.long_name])
+            var.var[ntuple(_ -> Colon(), ndims(A))...] = A
+        end
+    end
     return ds
 end
 
@@ -636,6 +709,11 @@ function read_dynamic_driver(path::AbstractString; mesh = nothing, origin_lat = 
             sv(n) = has(n) ? _f64(ds[n].var[:]) : nothing
             surface = (t = _f64(ds["time_sfc"].var[:]), temperature = sv("sfc_temperature"), pressure = sv("sfc_pressure"))
         end
+        soil = nothing
+        if has("init_soil_t") || has("init_soil_m")
+            has("zsoil") || error("the dynamic driver $path has initial soil but no zsoil")
+            soil = _read_soil(path, ds, mesh)
+        end
         feed = nothing
         if !isempty(layout)
             has("time_bc") || error("the dynamic driver $path has boundary planes but no time_bc")
@@ -653,11 +731,40 @@ function read_dynamic_driver(path::AbstractString; mesh = nothing, origin_lat = 
             feed = FileBoundaryFeed(String(path), t, st, layout, dims, 0,
                                     WindowedBoundaryData(e, _empty_snapshot(layout, dims), 0.0, 0.0), 0)
         end
-        d = DynamicInputs(init_time, profiles, ps, fields, tables, surface, feed, a)
+        d = DynamicInputs(init_time, profiles, ps, fields, tables, surface, soil, feed, a)
         feed === nothing || feed_window!(feed, 1)
         return d
     finally
         close(ds)
+    end
+end
+
+# The initial soil of a file: zsoil and init_soil_t / init_soil_m, a profile
+# or a volume (whose x, y must be the run's when read with the mesh; a
+# reader without it, e.g. of the sounding tables, takes it unchecked). The
+# fill values are NaN in memory.
+function _read_soil(path, ds, mesh)
+    z = _f64(ds["zsoil"].var[:])
+    function rd(n)
+        haskey(ds, n) || return nothing
+        v = ds[n]
+        A = Array{Float64}(v.var[ntuple(_ -> Colon(), ndims(v))...])
+        fv = get(v.attrib, "_FillValue", nothing)
+        fv === nothing || isnan(fv) || replace!(A, Float64(fv) => NaN)
+        if ndims(A) == 3 && mesh !== nothing
+            (haskey(ds, "x") && haskey(ds, "y")) || error("the dynamic driver $path holds a soil volume ($n) but no x, y")
+            xs = collect(Float64, xnodes(mesh, CellCenter())); ys = collect(Float64, ynodes(mesh, CellCenter()))
+            (_f64(ds["x"].var[:]) == xs && _f64(ds["y"].var[:]) == ys) ||
+                error("the dynamic driver $path: the soil volume $n is not on the run's horizontal grid " *
+                      "($(size(A, 1)) × $(size(A, 2)) cells, the run $(length(xs)) × $(length(ys))): re-run the preprocessor for this grid")
+        end
+        return A
+    end
+    try
+        return _soil_checked((z = z, t = rd("init_soil_t"), m = rd("init_soil_m")))
+    catch e
+        e isa ArgumentError && error("the dynamic driver $path: $(e.msg)")
+        rethrow()
     end
 end
 

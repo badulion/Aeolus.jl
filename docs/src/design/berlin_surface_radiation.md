@@ -226,6 +226,19 @@ filled the negative qv it left aloft, +8.9e-5 kg m⁻²). On master both
 are zero to round-off in both runs: transport ≤ 3e-18 kg m⁻² in
 magnitude, qv clamp 0; the water ledger closes to −1.7e-14 kg m⁻².
 
+### The initial soil (#521)
+
+The soil columns' slow modes cannot be spun up in hours. The CLM column's 3.43 m relaxes with τ ≈ 30 d, and the ground stack with τ ≈ 19 d (#519). So `[ground] soil_init` starts them from data, as PALM does:
+
+| `soil_init` | the start |
+| :-- | :-- |
+| `"auto"` (default) | `"driver"` if the domain's dynamic driver holds `init_soil_t` / `init_soil_m`, else `"uniform"` (a warning when a driver lacks them) |
+| `"driver"` | the driver's profile on each column's nodes (`SoilColumn.soil_profile_on_nodes`: linear in depth, NaN levels skipped, the shallowest value above the first level and the deepest below the last); the base `BottomTemperature` at the deepest level (PALM's rule); a volume per column, a column without data the mean profile of the others; the water clipped into the texture's ``(θ_r, θ_s]`` before the interpolation, with a log line |
+| `"annual_wave"` | the analytic wave ``T̄ + A e^{-z/d}\cos(ω(t - t_{max}) - z/d)`` (`SoilColumn.annual_soil_temperature`) on the run's date: `wave_t_mean` (default `t_soil0`), `wave_amplitude` (8 K), `wave_day_max` (day 200), `wave_damping_depth` (default the soil's at the class's water, `soil_damping_depth`, about 2–3 m); the base at the wave's value at the column's base; water `theta0` |
+| `"uniform"` | `t_soil0` everywhere, the base too; water `theta0` (before #521) |
+
+The nest parent's soil tiles take the same driver's profile, or a volume's mean profile, because a tile has no column of its own. A child without its own soil does not yet take the parent's (PALM's rule): that is open.
+
 ## Parent surface (#249)
 
 The nest (#246) puts the 1 km child inside a 6 × 6 km Aeolus parent

@@ -89,7 +89,8 @@ by matching the aggregate flux to the profile above it.
 """
 module SurfaceTiles
 
-using ..SurfaceExchange: AbstractSurface, SurfaceForcing, SurfaceFluxes,
+using ..SurfaceExchange: SurfaceExchange, has_packed_state, packed_state_length, pack_state!, unpack_state!,
+                         AbstractSurface, SurfaceForcing, SurfaceFluxes,
                          SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
                          AbstractStabilityFunctions, BusingerDyerBeljaarsHoltslag,
                          psi_m, psi_h, obukhov_length, _virtual_coefficient
@@ -188,6 +189,51 @@ function SurfaceMosaic(tiles::Union{Tuple,AbstractVector}, fractions::AbstractVe
 end
 SurfaceMosaic(tiles::Union{Tuple,AbstractVector}, fractions::Tuple; kw...) =
     SurfaceMosaic(tiles, collect(Float64, fractions); kw...)
+
+# the packed state (#526): the fractions (they may evolve,
+# set_mosaic_fractions!), the last tile fluxes (a flag, then 6 per tile,
+# zeros before the first step) and every tile's own state
+SurfaceExchange.has_packed_state(ts::SurfaceMosaic) = all(has_packed_state, ts.tiles)
+SurfaceExchange.packed_state_length(ts::SurfaceMosaic) =
+    1 + 7 * length(ts.tiles) + sum(packed_state_length, ts.tiles; init = 0)
+function SurfaceExchange.pack_state!(buf, i, ts::SurfaceMosaic)
+    n = length(ts.tiles)
+    for l in 1:n
+        buf[i+l-1] = ts.fractions[l]
+    end
+    i += n
+    has = length(ts.fluxes) == n
+    buf[i] = has ? 1.0 : 0.0
+    i += 1
+    for l in 1:n
+        f = has ? ts.fluxes[l] : SurfaceFluxes{Float64}(0, 0, 0, 0, 0, 0)
+        buf[i] = f.Rn; buf[i+1] = f.H; buf[i+2] = f.LE; buf[i+3] = f.G; buf[i+4] = f.τ; buf[i+5] = f.E
+        i += 6
+    end
+    for t in ts.tiles
+        i = pack_state!(buf, i, t)
+    end
+    return i
+end
+function SurfaceExchange.unpack_state!(ts::SurfaceMosaic, buf, i)
+    n = length(ts.tiles)
+    length(ts.fractions) == n || resize!(ts.fractions, n)
+    for l in 1:n
+        ts.fractions[l] = buf[i+l-1]
+    end
+    i += n
+    has = buf[i] != 0
+    i += 1
+    empty!(ts.fluxes)
+    for l in 1:n
+        has && push!(ts.fluxes, SurfaceFluxes{Float64}(buf[i], buf[i+1], buf[i+2], buf[i+3], buf[i+4], buf[i+5]))
+        i += 6
+    end
+    for t in ts.tiles
+        i = unpack_state!(t, buf, i)
+    end
+    return i
+end
 
 "Number of tiles in a [`SurfaceMosaic`](@ref)."
 ntiles(ts::SurfaceMosaic) = length(ts.tiles)

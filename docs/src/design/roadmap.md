@@ -2302,6 +2302,61 @@ without a retry (max CFL 0.46). The issue's premise proved wrong: it
 read as an instability of the default case, but the case is stable when
 stepped at its own dt; the failure was the forced step.
 
+**The guard's snapshot of the tiled surface (#526, 2026-11-06).** Profiling
+a 24 h Berlin run showed where the time went. The model domain is 100 m,
+200 × 200 × 60, with land-use tiles and ERA5 open faces, on 24 threads.
+The run loop took 1.75 s per step against 0.26 s for the model step
+alone.
+
+87 % of the main thread was the blow-up guard. Twice every 10 steps it
+snapshots the components, and the tiled surface's `checkpoint_state`
+was the generic structural walk: 4,538,305 objects and 346 MB, 7.2 s.
+Most of those bytes were solver scratch (35 workspace vectors per soil
+tile) and constants.
+
+Built: a packed checkpoint state.
+- `SurfaceExchange.pack_state!` / `unpack_state!` are implemented by
+  `SoilWaterColumn`, `SoilThermalColumn`, `SlabLand` and `SurfaceMosaic`.
+- `TiledSurfaceState` holds every tile's state in one vector, packed
+  over the columns in parallel. The walk stays for other surfaces and
+  for old checkpoints.
+
+Measured on that configuration (the real run loop, (240 s run − 40 s
+run) / 100 steps, 24 threads):
+
+| | surface `checkpoint_state` | serialized | run loop |
+| :-- | --: | --: | --: |
+| before | 6.8–7.9 s | 523 MB | 1.753 s/step |
+| after | 0.043 s | 50.6 MB | 0.357 s/step |
+
+That is 4.9× faster, a 24 h run in about 4.3 h instead of 21 h.
+
+The numbers vary between sessions. Two more sessions of the new code gave
+0.430 and 0.361 s/step. A free snapshot (the ceiling) gave 0.294, 0.306,
+0.325 and 0.345 s/step. Measured back to back, the new code was 0.361
+against 0.345: 0.016 s/step for the snapshot. Most of that is garbage
+collection (0.034 against 0.014 s/step), from the snapshot's 50 MB
+allocations.
+
+The real checkpoint/resume path was also checked: run 240 s, resume from
+the 120 s checkpoint, compare the 240 s states. The old and the new code
+give the same continuation to within run-to-run round-off (2.6e-9 after
+the resume, 2.9e-9 between two uninterrupted runs).
+
+That check also showed a resume of an open-box domain does not continue
+the uninterrupted run. The first step after it differs by up to 0.012 m/s
+at the east open face, the same with the old and the new surface state.
+That is pre-existing and not part of this change; its numbers are in
+the description of #526's PR, for an issue of its own.
+
+Tests: a column (with an aquifer), a mosaic and the whole component are
+restored into another history with the scratch poisoned (NaN), and must
+continue as the original (rtol 1e-12). A test expectation that proved too
+weak: the first component test poisoned the tiles through `unpack_state!`
+itself, so a dropped `T_skin` restore went unnoticed (identical
+histories). It now gives the surface a different history (three extra
+tile steps) and checks that a dropped `T_skin` fails it.
+
 **Open after these blocks**: #397 (FFTW MEASURE segfault);
 #238 (implausible Berlin nights).
 
@@ -2310,6 +2365,50 @@ stepped at its own dt; the failure was the forced step.
 Results need not be bit-identical across thread counts, machines,
 restarts or refactors; tests assert physics within stated tolerances
 (maintainer decision, 2026-10-16). See `docs/src/testing.md`.
+
+**FFTW threads in every model (#524, 2026-11-06).** Since KA-h (#298)
+`init_threads!` puts FFTW on `Threads.nthreads()`, but only the urban
+site's `build_case` called it: every other model domain, nested or not,
+kept FFTW at its start-up count of 1, so the pressure solver's FFTs ran
+on one core while the kernels ran on all of them. `Config.build` now
+calls `init_threads!` for every run before any plan is made; an explicit
+count (`[fftw] threads`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!`) is
+kept. Measured on a 200 × 200 × 60 open-box domain (Berlin, 100 m, 40
+steps, 24 Julia threads on 12 cores): the pressure solve went from 3.48 s
+(1 FFTW thread) to 0.89 s (12 threads), 8 % → 2 % of the step; the
+step's total did not change, so the remaining time is elsewhere (being
+profiled). Test: `config_model.jl` builds a non-urban run from a policy
+at 3 threads and expects `Threads.nthreads()`, and an explicit 2 kept.
+
+**The open faces' time blend reads the slabs directly (#529, 2026-11-06).**
+A dynamic driver's boundary record is a `SlabArray`, a storage-indexed view
+whose `getindex` searched the field's slabs and tested three ranges at
+every point. The blend of two records into each open plane read two such
+points per output point. Most planes are below the threading threshold
+(26 112 points against 16 384 per task; 18 of the 20 run serially), so
+this was a serial loop paying the search at every point. `blend_window!`
+now asks `blend_source(A, ranges)` for the dense array and offset behind
+the plane's box. A `SlabArray` returns the one slab holding the whole
+box, found once per plane, and a box no single slab holds keeps the
+point-by-point view.
+
+Measured on the Berlin 100 m domain (200 × 200 × 60, ERA5 open faces, 24
+threads), all 20 planes and 548 352 points:
+- one `boundary_values!` takes 2.69 ms before and 0.42 ms after
+  (2.55 and 0.36 ms in a second pair of runs);
+- per step, counted inside `step!`: 3.0 calls, 8.1 ms before and
+  1.8 ms after, out of a 0.26 s step. That is a 2.4 % gain.
+
+A deviation from the plan: the issue estimated the blend at 12 % of the
+step, from its share (95 of 785 samples) of the main thread's profile.
+The direct timing gives 3 %. The real run loop can't resolve 2.4 %: its
+s/step varied between 0.35 and 0.59 between sessions, for both versions.
+
+Test: `input_dynamic.jl` records a driver whose values differ at every
+point, field and time. Every plane takes the slab path, reads exactly what
+`getindex` reads (copied data) and blends to the same values; a box
+spanning more than one slab keeps the view. Shifting the slab offset by
+one point makes the test fail (43 errors).
 
 # Chemistry and aerosol
 
@@ -2395,6 +2494,37 @@ NetCDF) writes the dynamic driver, compared with the Lindenberg sounding
 for one date (θ RMSE 0.787 K, qv RMSE 0.718 g/kg). The reader now lives
 in AeolusPrep.jl (#457). **Phase 67b, open** (#57): MERRA-2, multi-day
 runs and the validation across several dates.
+
+**Initial soil profiles, shipped** (#521; AeolusPrep#6 / its PR #7 writes them).
+
+- **The driver.** It reads PALM's `init_soil_t` / `init_soil_m` over `zsoil`, as a profile or a volume (`alt_dims`, a new field of `DriverVariable`).
+- **Where they go.** The urban site's ground (`[ground] soil_init`: auto, uniform, driver, annual_wave) and the nest parent's soil tiles start from them. The base is held at the deepest level.
+- **The fallback without data.** It is the analytic annual wave (`SoilColumn.annual_soil_temperature`, `soil_damping_depth`).
+
+Measured:
+
+- **The wave start removes the slow mode.** On a 15 m loam column under the annual surface wave, 30 d of hourly steps from day 120: started on the wave it stays within 0.0045 K of the analytic solution over the top 3 m; started uniform at the mean it is 1.51 K off (d = 2.84 m).
+- **FLUXNET land column, uniform start vs annual wave** (a script, not a validation case: the climatology is assumed, MAT 8.3 °C / 7.8 °C, A = 9 K, maximum on day 200). Bias of G against the observed `Qg`:
+
+  | site | days 1–5 | days 6–35 |
+  | :-- | :-- | :-- |
+  | DE-Hai | −21.6 → −2.8 W m⁻² | −6.1 → +2.7 W m⁻² |
+  | DE-Gri | −13.6 → +5.4 W m⁻² | −3.5 → +5.9 W m⁻² |
+
+  RMSE: days 1–5 31.0 → 25.6 (DE-Hai) and 24.9 → 27.3 (DE-Gri); days 6–35 26.5 → 27.5 and 23.7 → 26.7 W m⁻². The 1 m soil temperatures of the two starts still differ by 6.0 K and 5.3 K after 35 d. The start is not a detail at the daily scale, and an assumed climatology is no substitute for ERA5's profile.
+
+Test expectations that were wrong:
+
+- Two CLM nodes below ERA5's deepest level (1.945 m): there is one, because the 9th node is at 1.73 m.
+- The water clipped after the interpolation: the code clips the driver's levels before, which is what it should do.
+
+A soil volume read without a mesh is no longer an error. The sounding reader opens the same file without one; the soil's consumer reads it with the mesh and checks x and y.
+
+**Deviations:**
+
+- `"auto"` without soil warns only when a driver exists; an idealised case logs info.
+- A nested child does not yet take the parent's mean profile (PALM's rule).
+- Per-column texture from data (SoilGrids) is the extension noted on #521.
 
 ### Phase 68 — Mesoscale model nesting
 Offline and online nesting into WRF, ICON and IFS output, with the

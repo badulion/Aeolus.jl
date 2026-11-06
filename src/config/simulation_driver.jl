@@ -31,6 +31,7 @@ using ..InputDrivers: InputDrivers, read_dynamic_driver, check_planes, check_cov
 using ..LargeScaleForcing: forcing_value
 using ..StretchedGrids: surface_refined_faces
 using ..Simulations: Simulations, BoussinesqSimulation, step!
+using ..Backends: Backends
 using ..TimeIntegration: CFLConstraints, _project!
 using ..StretchedGrids: StretchedGrid
 using ..Anelastic: AnelasticSimulation, MassWeightedSimulation, isentropic_reference
@@ -983,6 +984,11 @@ end
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
 function Config.build(::SimulationDriverType, cfg::RunConfig)
+    # FFTW on Julia's threads and BLAS pinned to one (KA-h, maintainer decision
+    # on #291) for every model, before any plan is made; an explicit count
+    # ([fftw] threads, AEOLUS_FFTW_THREADS, set_fftw_policy!) wins. Until #524
+    # only the urban site called it, so every other domain's FFTs ran on one thread.
+    Backends.init_threads!(Backends.default_backend())
     if Urban.urban_enabled(cfg) && !_nested(cfg)
         # the urban site (ONE-e #454, ONE-k #474): one domain, the site its
         # first component, stepped by its :timestepper component
@@ -1058,7 +1064,8 @@ end
 # (NEST-p3): its initial θ profile (`theta_profile`), the hydrostatic
 # reference state of a Boussinesq domain whose components convert fluxes
 # with one (`reference`), and the tile form of its static driver
-# (`static_tiles`, for [surface] model = "tiles").
+# (`static_tiles`, for [surface] model = "tiles", with the driver's
+# initial soil, `soil`, #521).
 function _domain_inputs(cfg, mesh, sim, dyn)
     θf = initial_theta_profile(cfg, dyn)
     out = (; theta_profile = θf)
@@ -1075,6 +1082,9 @@ function _domain_inputs(cfg, mesh, sim, dyn)
             throw(ConfigError("surface.model", "\"tiles\" reads the tile form of the domain's static_driver, which is \"none\" " *
                                                "(AeolusPrep.jl: aeolusprep static)"))
         out = merge(out, (; static_tiles = _read_tiles(path, mesh)))
+        # the initial soil of the tiles (#521): the dynamic driver's, if it holds one
+        dyn === nothing || dyn.soil === nothing ||
+            (out = merge(out, (; soil = (data = dyn.soil, path = cfg.domain.dynamic_driver))))
     end
     return out
 end

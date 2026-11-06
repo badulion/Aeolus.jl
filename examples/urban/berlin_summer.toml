@@ -387,6 +387,14 @@ dynamic_driver = "input/berlin_20190629_dynamic.nc"
   sand = 40
   clay = 20
   nlayers = 10
+  # the initial soil (#521): "auto" (the dynamic driver's init_soil_t /
+  # init_soil_m if it holds them, else uniform at t_soil0), "uniform",
+  # "driver" or "annual_wave" (the analytic annual wave of the wave_* options)
+  soil_init = "auto"
+  wave_t_mean = "none"          # K; "none": t_soil0
+  wave_amplitude = 8.0          # K
+  wave_day_max = 200.0          # day of the year of the surface maximum
+  wave_damping_depth = "none"   # m; "none": the soil's at the class's water
 
   [domain.surface_radiation]
   # the surface radiation (urban slot): provider `radiosity`

@@ -151,3 +151,22 @@ end
     tc2 = PU.TileClasses((; ts0 = 280.0, z0m = Dict("3" => 0.5)))
     @test tc2.Ts0 == 280.0 && tc2.z0m[PU.SURFACE_PARK] == 0.5
 end
+
+@testset "the tiles' soil from the domain's dynamic driver (#521)" begin
+    # a soil profile in the parent's driver: every soil tile holds it on its
+    # nodes, its base at the deepest level (PALM's rule; the urban site's
+    # GroundSoil, test/urban_soil_init.jl); without one, t_soil0 as before
+    z, t, w = [0.035, 0.175, 0.64, 1.945], [295.0, 292.0, 288.0, 284.0], [0.15, 0.20, 0.25, 0.30]
+    p = joinpath(mktempdir(), "parent_soil.nc")
+    Aeolus.InputDrivers.write_dynamic_driver(p, Aeolus.InputDrivers.DynamicInputs(; soil = (z = z, t = t, m = w)))
+    soil_tiles(r) = (ts = only(c for c in r.model.domains[1].components if c isa PU.TiledUrbanSurface);
+                     [s for col in ts.surface.columns if col !== nothing for s in col.surface.tiles
+                      if s isa Aeolus.SoilColumn.SoilThermalColumn])
+    tiles = soil_tiles(pd_build(pd_smoke(); overrides = ["dynamic_driver=\"$p\""]))
+    @test !isempty(tiles)
+    zn = tiles[1].water.grid.z
+    SC = Aeolus.SoilColumn
+    @test all(s -> isapprox(s.water.T_soil, SC.soil_profile_on_nodes(z, t, zn); rtol = 1e-12) && s.bottom.T == t[end], tiles)
+    @test all(s -> isapprox(s.water.θ_liq, SC.soil_profile_on_nodes(z, w, zn); rtol = 1e-12), tiles)
+    @test all(s -> all(==(288.0), s.water.T_soil) && s.bottom.T == 288.0, soil_tiles(pd_build(pd_smoke())))
+end
