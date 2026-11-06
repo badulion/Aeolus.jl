@@ -91,7 +91,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -124,7 +124,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -157,7 +157,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -190,7 +190,7 @@ Implement the Morrison-Milbrandt P3 scheme: predicted particle properties, a sin
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -223,7 +223,7 @@ Heterogeneous ice nucleation with prognostic ice-nucleating-particle species (du
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -256,7 +256,7 @@ Heterogeneous ice nucleation with prognostic ice-nucleating-particle species (du
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -289,7 +289,7 @@ Heterogeneous ice nucleation with prognostic ice-nucleating-particle species (du
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -322,7 +322,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -355,7 +355,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -388,7 +388,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -421,7 +421,7 @@ Sedimentation with a proper terminal-velocity spectrum, sub-grid precipitation f
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -454,7 +454,7 @@ Sub-grid supersaturation fluctuations and their effect on droplet growth and act
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -487,7 +487,7 @@ Sub-grid supersaturation fluctuations and their effect on droplet growth and act
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -520,7 +520,7 @@ Sub-grid supersaturation fluctuations and their effect on droplet growth and act
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -553,7 +553,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -586,7 +586,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -619,7 +619,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -652,7 +652,7 @@ CLM-style soil column: 10+ layers with Richards-equation water transport, temper
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -685,7 +685,7 @@ Farquhar photosynthesis coupled to Ball-Berry / Medlyn stomatal conductance, so 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -718,7 +718,7 @@ Farquhar photosynthesis coupled to Ball-Berry / Medlyn stomatal conductance, so 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -751,7 +751,7 @@ Farquhar photosynthesis coupled to Ball-Berry / Medlyn stomatal conductance, so 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -784,7 +784,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -817,7 +817,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -850,7 +850,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -883,7 +883,7 @@ Resolved-canopy drag with a leaf-area-density profile, implicit treatment so it 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -916,7 +916,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -949,7 +949,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -982,7 +982,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1015,7 +1015,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1048,7 +1048,7 @@ Full urban-canopy model matching or exceeding PALM's USM: per-facet (roof / wall
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1081,7 +1081,7 @@ Two-way coupled building interior: indoor air temperature, HVAC demand and its e
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1114,7 +1114,7 @@ Two-way coupled building interior: indoor air temperature, HVAC demand and its e
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1147,7 +1147,7 @@ Two-way coupled building interior: indoor air temperature, HVAC demand and its e
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1180,7 +1180,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1213,7 +1213,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1246,7 +1246,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1279,7 +1279,7 @@ Multi-layer snowpack with compaction, metamorphism, albedo ageing, liquid-water 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1312,7 +1312,7 @@ Lake and coastal-sea surface with a mixed-layer model, wave-dependent roughness 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1345,7 +1345,7 @@ Lake and coastal-sea surface with a mixed-layer model, wave-dependent roughness 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1378,7 +1378,7 @@ Lake and coastal-sea surface with a mixed-layer model, wave-dependent roughness 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1411,7 +1411,7 @@ Sub-grid tile approach with a blending-height formulation so a single grid cell 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1444,7 +1444,7 @@ Sub-grid tile approach with a blending-height formulation so a single grid cell 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1477,7 +1477,7 @@ Sub-grid tile approach with a blending-height formulation so a single grid cell 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1508,7 +1508,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1538,7 +1538,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1568,7 +1568,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1598,7 +1598,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1628,7 +1628,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1658,7 +1658,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1688,7 +1688,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1718,7 +1718,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1748,7 +1748,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1778,7 +1778,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1808,7 +1808,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1838,7 +1838,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1868,7 +1868,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1898,7 +1898,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1928,7 +1928,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1958,7 +1958,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -1988,7 +1988,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -2016,7 +2016,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -2044,7 +2044,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -2072,7 +2072,7 @@ This phase has not been decomposed yet. Break it into concrete issues before sta
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 
 ## References
 
@@ -2190,7 +2190,7 @@ Replace the threshold with these two.
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 """
 
 [[issue]]
@@ -2209,7 +2209,7 @@ These modules were written by agents that were cut off mid-work; the tested path
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 """
 
 [[issue]]
@@ -2230,7 +2230,7 @@ Audit the module against that description.
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 """
 
 [[issue]]
@@ -2249,7 +2249,7 @@ Add an optional RRTMGP-backed implementation behind the same `AbstractGasOptics`
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 """
 
 [[issue]]
@@ -2268,5 +2268,5 @@ Add a test that scans every module's export list and fails on any name exported 
 - [ ] Docstrings on new public functions; a new module also needs an `@autodocs` entry and a `docs/make.jl` line
 - [ ] No new export collisions
 
-Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README status updates are **not** part of this PR — they happen at phase/milestone closeout, after merge.
+Plus the standing gate in [`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own section of the roadmap (what was built, the numbers, bugs caught, wrong expectations) is part of this PR; the shared status ticks (the roadmap's Status checklist, the README) are not — they happen at closeout, after merge.
 """

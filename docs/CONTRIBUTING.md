@@ -375,27 +375,20 @@ There are three levels, because three different things go stale.
   docstrings exist but no page reaches them, and Documenter will say so.
 - **Changed behaviour or interface** means updating the affected theory
   or design page under `docs/src/`.
+- **The issue's own section of `docs/src/design/roadmap.md`** (its
+  phase's or epic's section; only that section), written as described
+  below.
 
-### After the PR is merged — closeout
+The roadmap section is written in the feature PR (maintainer decision,
+2026-11-06; before, it waited for a closeout PR). Only one branch touches
+an issue's section, so it does not collide; the numbers are freshest in
+the PR that measured them; and it lands exactly when the work does — an
+unmerged PR claims nothing on `master`. What it contains:
 
-Status updates are **not** part of the feature PR. They happen once it is
-merged, as a separate change on `master` made by the maintainer, or as a
-small dedicated closeout PR.
-
-Two reasons. A phase cannot honestly be marked ✅ SHIPPED while the PR
-delivering it is still open and might yet be rejected. And
-`roadmap.md` and `README.md` are shared files — if every
-phase-completing branch edited them, concurrent agents would conflict on
-precisely the two files most likely to be touched simultaneously. Keeping
-them off feature branches removes that class of conflict entirely.
-
-**When a phase's last issue is merged**, update
-`docs/src/design/roadmap.md`:
-
-- Tick the phase (✅) in the page's **Status** checklist.
 - Replace the planned description with **what was actually built**, and
   the numbers it was measured at. A shipped phase's entry is a record,
-  not a forecast.
+  not a forecast. When a phase has several issues, each PR adds its own
+  part.
 - **If the implementation deviated from the plan, say so and say why.**
   Phase 32 was planned as "bind RRTMGP.jl" and shipped as a Malkmus band
   model inverted through Domoto, because RRTMGP needs a binary stack that
@@ -414,6 +407,20 @@ A worked example of the tone, from the Phase 32 entry:
 > roughly 15× too weak. Those cancel for one particular column, which is
 > precisely why a single broadband number is not an adequate test of a
 > band model.
+
+### After the PR is merged — closeout
+
+Only the **shared status lines** wait for the merge: the roadmap's
+**Status** checklist and `README.md`. They happen as a separate change on
+`master` made by the maintainer, or as a small dedicated closeout PR.
+
+Two reasons. Every phase-completing branch would edit those same lines,
+so concurrent agents would conflict on precisely the lines most likely
+to be touched simultaneously. And a phase's or milestone's tick depends
+on other issues being merged too, which one feature branch cannot know.
+
+**When a phase's last issue is merged**, tick the phase (✅) in the
+roadmap's **Status** checklist (its section was written by the PRs).
 
 **When a milestone's last issue is merged**, additionally:
 

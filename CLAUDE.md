@@ -120,8 +120,9 @@ are gone, #320).
 
 ## Documentation is part of done
 
-Docs are not a follow-up task. But **status updates happen after the PR
-is merged, not inside it** — see the split below.
+Docs are not a follow-up task. The record of the work goes in the PR;
+only the **shared status ticks happen after it is merged** — see the
+split below (maintainer decision, 2026-11-06).
 
 **In every PR** (the code and its documentation land together)
 
@@ -131,25 +132,27 @@ is merged, not inside it** — see the split below.
   `docs/make.jl`.
 - If behaviour or an interface changed, update the affected theory or
   design page under `docs/src/`.
+- **The issue's own section of `docs/src/design/roadmap.md`**: what was
+  actually built and the numbers it was measured at; any bug the tests
+  caught and any test *expectation* that proved wrong; deviations from
+  the plan and why. Only that section — no Status ticks, no README.
 
 **After the PR is merged** — a separate *closeout* change, never part of
-the feature PR:
+the feature PR, only for the shared lines:
 
 - When a phase's last issue is merged: tick the phase (✅) in the Status
-  checklist of `docs/src/design/roadmap.md` and write in its section
-  **what was actually built and the numbers it was measured at**; record
-  any bug the tests caught and any test *expectation* that proved wrong.
+  checklist of `docs/src/design/roadmap.md`.
 - When a milestone's last issue is merged: close the milestone, tick it in
   the roadmap's Status checklist and in the README roadmap, capability summary, validation table and test
   count, add or extend the topic's theory page, and rebuild the docs
   (`julia --project=docs docs/make.jl`) checking for missing-docstring
   warnings.
 
-Two reasons status updates are kept out of the feature PR. A phase cannot
-honestly be marked SHIPPED while the PR delivering it is still open. And
-`roadmap.md` and `README.md` are shared files — if every
-phase-completing branch edited them, concurrent agents would collide on
-exactly the two files most likely to be touched at once.
+Why the split. The issue's section is touched by one branch only, and
+the numbers are freshest in the PR that measured them; it lands exactly
+when the work does. The Status checklist and `README.md` are shared lines
+every branch would edit, so concurrent agents would collide there, and a
+phase's or milestone's tick depends on other issues being merged too.
 
 Closeout is done by the maintainer on `master`, or by a small dedicated
 closeout PR. Agents do not push to `master`.
