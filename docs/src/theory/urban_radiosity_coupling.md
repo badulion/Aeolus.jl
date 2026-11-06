@@ -1,7 +1,7 @@
 # Facet temperatures coupled to radiosity
 
-The Era III radiosity solver (`src/Radiosity.jl`) resolves every roof,
-wall strip and street patch of a city block. The Era I urban example
+The radiosity solver (`src/Radiosity.jl`) resolves every roof,
+wall strip and street patch of a city block. The original urban example
 still averaged its solution back onto one surface temperature per grid
 column. A column with a street, the lower half of one facade and the
 upper half of another therefore had one temperature for all of them.

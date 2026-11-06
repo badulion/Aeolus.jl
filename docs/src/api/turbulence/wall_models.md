@@ -1,7 +1,7 @@
 # Wall models — WallModels
 
 `Aeolus.WallModels` (Phase 57, #169) owns every modelled wall stress of
-Era VI. Theory: [Wall models](../../theory/wall_models.md).
+the turbulence-closure work. Theory: [Wall models](../../theory/wall_models.md).
 
 - **Laws**: `AbstractWallLaw` with `friction_velocity`, `wall_stress`
   (kinematic, m² s⁻²) and `wall_drag` (``τ_w/U``); `SpaldingLaw`
@@ -30,7 +30,7 @@ Era VI. Theory: [Wall models](../../theory/wall_models.md).
   a `WallBoundedCase` advanced by `advance_channel!` / `run_channel!`
   (time-averaged U, Φ_m, stress budget, ⟨τ_w⟩), with the step size of
   `channel_dt`. Closure, wall law, formulation and stepper are keyword
-  arguments; the diagnostics are Operators' (see [Era VI](../turbulence.md)).
+  arguments; the diagnostics are Operators' (see [Turbulence closure](../turbulence.md)).
 - **Wall-model input** (P57-b, #183): `MatchingInput` (matching height
   `h_wm` / `h_wm_cells`, exponential time filter `T_f`, 3 × 3
   wall-parallel filter), `matching_input!` (the `wind` / `height` of

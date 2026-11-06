@@ -183,7 +183,7 @@ wall modelling the probe should be built at least two cells out.
 
 `test/fixtures/channel_cases.jl` (P54-d, #174; `src/wall_models/channel_cases.jl`
 until ONE-l, #475, when it left the package: the channel cases are not
-configurations of the model) is the shared harness every Era VI closure
+configurations of the model) is the shared harness every SGS closure
 is validated on, in the module tests. It adds no wall physics: the
 wall stress is `apply_wall_stress!` above, the SGS model is whatever
 `AbstractSGSClosure` is passed, and the diagnostics are Operators'

@@ -1,6 +1,6 @@
 # LandSurface — the vegetated land column
 
-`LandSurface` is Era V's vegetated land column (Phase 47, #21): a
+`LandSurface` is the vegetated land column (Phase 47, #21): a
 two-big-leaf (sunlit/shaded) canopy over a `SoilColumn.SoilThermalColumn`,
 coupled to the atmosphere through `SurfaceExchange`'s Monin–Obukhov solver
 and implementing `AbstractSurface`, so the tile framework can aggregate it

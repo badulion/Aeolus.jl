@@ -1,6 +1,6 @@
 # Water surfaces: mixed layer, cool skin and warm layer
 
-A lake or a coastal sea is the one Era V surface whose temperature a
+A lake or a coastal sea is the one surface whose temperature a
 model cannot simply prescribe: the heat it exchanges with the air is
 stored in, and redistributed through, metres to tens of metres of water.
 `src/OceanMixedLayer.jl` makes that temperature prognostic with three
@@ -20,7 +20,7 @@ T_s = T_1 + \Delta T_{warm}(\Delta z_1/2) - \Delta T_{cool},
 
 the top layer of the column, plus the warm layer's warming between the
 surface and the top layer's centre, minus the cool skin. Air–sea fluxes
-are *not* computed here: they come from the Era V contract
+are *not* computed here: they come from the surface shared core (`SurfaceExchange`)
 (`SurfaceExchange.turbulent_fluxes`) or, through the `flux` keyword of
 `step_surface!`, from a dedicated air–sea algorithm (`AirSeaFlux`, #39).
 Whatever the flux function returns is exactly what the column absorbs.

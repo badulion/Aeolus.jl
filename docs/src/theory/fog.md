@@ -1,7 +1,7 @@
 # Fog and dew
 
 This page covers the thermodynamic half of radiation fog in Aeolus
-(Era IV, Phase 44, `src/RadiationFog.jl`): how much vapour condenses
+(Phase 44, `src/RadiationFog.jl`): how much vapour condenses
 in the air or onto a surface, where the latent heat goes, and why the
 update cannot overshoot saturation. The droplet-radiative feedback that
 drives radiation fog — fog cooling itself by emitting longwave from its

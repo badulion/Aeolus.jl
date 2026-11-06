@@ -1,6 +1,6 @@
 # Stability functions and the gradient Richardson number
 
-Era VI (Phase 58, #170) puts every Richardson-number-dependent piece of
+Phase 58 (#170) puts every Richardson-number-dependent piece of
 turbulence physics behind one contract, `TurbulenceStability`. Before
 it the repository had two stability families that did not share code:
 the Monin–Obukhov ``φ/ψ`` functions of `SurfaceExchange` and a private

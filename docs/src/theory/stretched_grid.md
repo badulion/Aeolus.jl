@@ -131,6 +131,6 @@ The prognostic TKE closure of `PrognosticSGS` runs on a stretched grid
 since #259 (the SGS closure of the Berlin nesting parent; see the
 [SGS TKE theory page](sgs_tke.md)), and with it the positive flux-limited
 scalar advection `advect_positive!` with the centred reconstruction. The
-other Era VI closures, which have their own stencils, have not been
+other SGS closures, which have their own stencils, have not been
 tested on a stretched grid. Non-periodic lateral velocity boundaries are
 not solenoidal on either mesh; that is the open-boundary work of #251.

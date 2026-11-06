@@ -187,16 +187,16 @@ its 29 issues are closed and 19 are open:
   state and moist buoyancy (#131), numerics slots (#132), time
   integration and core options (#133, PR #161; the adaptive stepper
   became the default in PR #166), chemistry and deposition (#135).
-  Open: Era I add-ons (#134), the Monte-Carlo RT diagnostic (#136),
+  Open: LES-core add-ons (#134), the Monte-Carlo RT diagnostic (#136),
   visibility and fog feedback (#137).
 * **Wave 2:** the GMRES facet solve (#138) is merged; the per-facet
   walls (#139), park land column (#140), water surfaces (#141), aerosol
   optics (#142) and P3 slot (#143) are open.
 * **Waves 3–4 and the solver issues** (#144–#153) are open.
 
-None of this is a roadmap phase: the Era VI and Era VII groundwork it
+None of this is a roadmap phase: the turbulence-closure and chemistry groundwork it
 delivered (the dynamic Smagorinsky in `Operators`, the reduced
-chemistry in `src/Chemistry.jl`) is recorded under those eras in the
+chemistry in `src/Chemistry.jl`) is recorded under those milestones in the
 long-range roadmap, without marking a phase shipped.
 
 ## Layout

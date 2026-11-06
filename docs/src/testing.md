@@ -95,7 +95,7 @@ entry file (`runtests.jl`; the validation entry file has none).
   `summary.txt` and `summary.toml`. The path of a failing file's log is
   printed as soon as it finishes and again in the summary.
 - **Summary.** Per file: time and pass / fail / error / broken counts.
-  Per top-level `@testset` block ("Era IV", "Era VI", ...): the same
+  Per top-level `@testset` block ("Clouds and microphysics", "Turbulence", ...): the same
   counts as the serial run prints.
 - **Exit code.** Non-zero on any failure, error, error outside a
   `@testset`, or crashed job.
@@ -221,11 +221,11 @@ load 6.4 at the start, 110 files, all pass:
 | :-- | --: | --: |
 | Aeolus.jl | 1929 | 6 min 53 s |
 | Chemistry: urban NOx–O3–VOC mechanism (#135) | 31 | 0.6 s |
-| Era II | 376 | 2 min 09 s |
-| Era III | 316 | 17 s |
-| Era IV | 506 | 17 s |
-| Era V | 782 | 57 s |
-| Era VI | 159 | 14 s |
+| Numerics | 376 | 2 min 09 s |
+| Radiation | 316 | 17 s |
+| Clouds and microphysics | 506 | 17 s |
+| Land, urban and surface | 782 | 57 s |
+| Turbulence | 159 | 14 s |
 | **Total** | **4099** | **652 s wall** (with `using Aeolus`) |
 
 Before the reduction the same suite executed 123 087 assertions in 158
@@ -259,11 +259,11 @@ Counts per top-level block, fast tier (serial and parallel identical):
 | :-- | --: | --: |
 | Aeolus.jl | 182 | 0 |
 | Chemistry: urban NOx–O3–VOC mechanism (#135) | 3718 | 0 |
-| Era II | 2148 | 0 |
-| Era III | 4912 | 0 |
-| Era IV | 47392 | 0 |
-| Era V | 19269 | 3 |
-| Era VI | 3191 | 3 |
+| Numerics | 2148 | 0 |
+| Radiation | 4912 | 0 |
+| Clouds and microphysics | 47392 | 0 |
+| Land, urban and surface | 19269 | 3 |
+| Turbulence | 3191 | 3 |
 | Berlin case | 3378 | 0 |
 | **Total** | **84190** | **6** |
 

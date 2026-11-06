@@ -370,7 +370,7 @@ explicit advective limit the IMEX step runs at.
 
 ## Stability correction
 
-P55-e (#187) is the one stability-corrected closure of Era VI (the
+P55-e (#187) is the one stability-corrected closure of the turbulence-closure work (the
 "stratification-dependent anisotropic" closure of P55 merged with the
 former "buoyancy-aware Smagorinsky" of P58). The constant-``C_s`` closure
 mixes at the same rate whatever the stratification: it keeps mixing where
@@ -668,7 +668,7 @@ depending on the closure (Porté-Agel, Meneveau & Parlange 2000). Static
 Smagorinsky overshoots (``Φ_m`` up to 1.45-1.65 at 24³ with ``C_s =
 0.17``, P54-d), and in the half channel below LASI undershoots (``Φ_m ≈
 0.7`` in the log layer, mean ``C_s`` 0.04-0.06 near the wall). The
-classical fix is a damping function; Era VI uses none.
+classical fix is a damping function; the closures here use none.
 
 `LagrangianDynamicSmagorinsky(mesh; scale_dependent = true)` (P54-e,
 #186) is the scale-dependent Lagrangian model (LASD) of Bou-Zeid,
@@ -822,7 +822,7 @@ same ~10 points as every other closure.
 
 ## Closure contract
 
-Era VI (#167) defines the interface between an SGS closure and the
+The SGS closure contract (#167) defines the interface between an SGS closure and the
 dynamical cores **once**, in `src/operators/sgs_closures.jl`, so that
 closures that need more than the velocity — buoyancy-aware mixing, a
 prognostic TKE, Reynolds-stress transport, a Lagrangian-averaged dynamic
@@ -965,7 +965,7 @@ Without either keyword the kernel is the unmasked one, bit for bit.
 full resolved gradient ``g_{ij} = ∂u_i/∂x_j`` at a cell centre (diagonal:
 the face-to-face difference; off-diagonal: the centred difference over
 two cells of the component averaged to the centre); the strain rate of
-both Smagorinsky closures is built from it, and the Era VI closures that
+both Smagorinsky closures is built from it, and the other closures that
 need the gradient (AMD / Vreman, σ, the gradient Richardson number, TKE
 shear production) read the same tensor.
 
@@ -989,7 +989,7 @@ In the Berlin case the SGS slot's providers are closure objects passed as
 
 ## Anisotropic minimum-dissipation and Vreman closures
 
-Era VI, P55-d (#176), `src/operators/sgs_amd_vreman.jl`. Two closures on
+P55-d (#176), `src/operators/sgs_amd_vreman.jl`. Two closures on
 the contract that use the spacing of each direction instead of one
 ``Δ = (ΔxΔyΔz)^{1/3}``, which matters on the Berlin grid (15.6 × 15.6 ×
 6.25 m), and that vanish in laminar flow, where Smagorinsky's
@@ -1147,7 +1147,7 @@ In the Berlin case both are providers of the
 
 ## Decaying grid turbulence (Comte-Bellot and Corrsin)
 
-The Era VI benchmark for SGS closures (Phase 54) is the wind-tunnel decay
+The benchmark for SGS closures (Phase 54) is the wind-tunnel decay
 of Comte-Bellot & Corrsin (1971, CBC): grid mesh ``M = 5.08`` cm, mean
 speed ``U_0 = 10`` m/s, spectra measured at ``tU_0/M = 42, 98, 171``
 (their table 3, in `test/data/cbc1971_table3.txt`; the tabulated spectra

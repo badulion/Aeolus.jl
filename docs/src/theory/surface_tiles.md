@@ -4,7 +4,7 @@ A grid cell of tens to hundreds of metres is rarely one surface. An
 urban cell is roof, street, park and water; a rural one is field, wood
 and pond. `src/SurfaceTiles.jl` represents such a cell as a **mosaic of
 tiles** (Avissar & Pielke 1989; Koster & Suarez 1992): each tile is an
-ordinary Era V surface model — any
+ordinary surface model — any
 [`AbstractSurface`](@ref Aeolus.SurfaceExchange.AbstractSurface) — with
 an area fraction ``f_i``, ``\sum_i f_i = 1``.
 
@@ -64,7 +64,7 @@ convex, ``T_{rad} \ge \sum f_i T_i``: two black tiles at 280 K and 320 K
 radiate like one at 302.0 K, not 300 K. A mosaic reports ``T_{rad}`` as
 its `surface_temperature`.
 
-These optical rules are the same area weighting as the Era III optical
+These optical rules are the same area weighting as the radiation stack's optical
 mosaic `SurfaceOptics.TiledSurface`; the difference is that a
 `SurfaceMosaic` asks each tile for its (broadband) albedo rather than
 holding spectral optics itself.

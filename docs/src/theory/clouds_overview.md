@@ -1,6 +1,6 @@
-# Clouds and microphysics (Era IV): overview
+# Clouds and microphysics: overview
 
-Era IV (Phases 39–45) replaced the Kessler / two-moment scaffold with
+The clouds-and-microphysics work (Phases 39–45) replaced the Kessler / two-moment scaffold with
 schemes that represent cloud microstructure: a shared thermodynamic
 contract, a P3 bulk scheme, a superdroplet reference, aerosol
 activation, ice nucleation, fog and visibility, and sub-grid
@@ -11,8 +11,8 @@ the end.
 
 ## The contract: one thermodynamics for every scheme
 
-`MoistThermodynamics` plays the role for Era IV that `RadiationCore`
-plays for Era III: every scheme takes temperature, saturation, latent
+`MoistThermodynamics` plays the role for clouds and microphysics that
+`RadiationCore` plays for radiation: every scheme takes temperature, saturation, latent
 heat and buoyancy from it, so two schemes cannot disagree about whether
 a parcel is saturated.
 
@@ -108,7 +108,7 @@ accuracy the literature claims for it.
 | activation (42) | `AerosolCloud` | contract Köhler, AerosolOptics modes | CCN spectrum for 45 |
 | ice nucleation (43) | `IceNucleation` | Phase 37 aerosol modes, contract liquid fraction | nucleated ice into P3 |
 | precipitation fraction (44) | `P3Microphysics` | P3 process rates | — |
-| fog and dew (44) | `RadiationFog` | contract process adjustment, Era III gas and cloud optics | the urban case's `fog_dew` coupling |
+| fog and dew (44) | `RadiationFog` | contract process adjustment, the radiation stack's gas and cloud optics | the urban case's `fog_dew` coupling |
 | visibility (44) | `Visibility` | AerosolOptics Mie, GasOptics Rayleigh | — |
 | sub-grid supersaturation (45) | `TurbulentMicrophysics` | contract diagnosis, AerosolCloud CCN spectrum, Superdroplet growth | — |
 

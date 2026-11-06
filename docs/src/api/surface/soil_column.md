@@ -41,7 +41,7 @@ end
 col.budget          # infiltration, runoff, evaporation, drainage, extraction
 ```
 
-With heat and freeze–thaw, driven through the Era V surface interface:
+With heat and freeze–thaw, driven through the surface shared core (`SurfaceExchange`):
 
 ```julia
 using Aeolus, Aeolus.SoilColumn

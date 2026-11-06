@@ -1,6 +1,6 @@
 # Prognostic SGS TKE (Deardorff–Moeng) and Reynolds stress
 
-Era VI, Phase 56 (P56-b, #182). The 1.5-order closure of Deardorff (1980)
+Phase 56 (P56-b, #182). The 1.5-order closure of Deardorff (1980)
 carries the subgrid-scale turbulent kinetic energy ``e`` as a prognostic
 variable; the eddy viscosity follows from it, not from the resolved strain
 alone. Aeolus implements it with the coefficients of Moeng (1984) as

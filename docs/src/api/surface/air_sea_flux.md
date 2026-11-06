@@ -14,7 +14,7 @@ algorithm with cool skin and warm layer (`coare_fluxes`,
 prognostic `OceanMixedLayer.WaterColumn` with COARE fluxes. Theory and
 validation: [Sea spray and the full COARE algorithm](../../theory/sea_spray_coare.md).
 
-It extends the Era V contract rather than restating it: the
+It extends the surface shared core (`SurfaceExchange`) rather than restating it: the
 Monin–Obukhov solve is `SurfaceExchange.solve_surface_layer`,
 `COAREStability` is a further `AbstractStabilityFunctions` whose Kansas
 and stable branches are the contract's `BusingerDyerBeljaarsHoltslag`,

@@ -5,7 +5,7 @@ Radiation is the only term in the LES energy budget that is genuinely
 couples a cell to its neighbours, but a photon emitted at the surface
 can be absorbed ten kilometres above it, and a building can shade a
 street two hundred metres away. This page develops the theory behind
-Aeolus' radiation stack (Era III, `src/RadiationCore.jl` and the
+Aeolus' radiation stack (`src/RadiationCore.jl` and the
 modules built on it) from the transfer equation down to the specific
 approximations each module makes, and states honestly where each
 approximation breaks.
@@ -286,8 +286,8 @@ sunrise changes surface irradiance by tens of W/m². Aeolus implements
 the **Meeus** algorithm (`src/SolarGeometry.jl`): Julian day, geometric
 mean longitude and anomaly, equation of centre, apparent longitude with
 nutation, obliquity, declination and hour angle. Accuracy is better
-than 0.01° over the modern era, against roughly 1° for the sinusoidal
-approximation Era I used.
+than 0.01° for present-day dates, against roughly 1° for the sinusoidal
+approximation the original radiation scaffold used.
 
 Three corrections matter near the horizon, and all three are
 implemented:

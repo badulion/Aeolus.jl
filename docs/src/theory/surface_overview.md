@@ -1,6 +1,6 @@
-# Land, urban and surface exchange (Era V): overview
+# Land, urban and surface exchange: overview
 
-Era V (Phases 46–53) made the surface as detailed as the atmosphere
+The land, urban and surface-exchange work (Phases 46–53) made the surface as detailed as the atmosphere
 above it: soil, vegetation, a resolved plant canopy, urban facets and
 buildings, snow and ice, water surfaces, and the sub-grid mixing of all
 of them. This page shows the one interface they share, how the pieces
@@ -9,7 +9,7 @@ on its own page (list at the end).
 
 ## One interface, many surfaces
 
-Every surface model is an `AbstractSurface` of the Era V contract,
+Every surface model is an `AbstractSurface` of the surface shared core (`SurfaceExchange`),
 `SurfaceExchange` ([theory](surface_exchange.md)). An implementer
 provides its skin temperature, roughness lengths ``(z_{0m}, z_{0h},
 z_{0q})``, broadband albedo and emissivity (the `RadiationCore`
@@ -63,7 +63,7 @@ scheme conserves energy to 7e-15 W m⁻² where a lagged coupling leaks
 | `SoilThermalColumn` | Richards water + enthalpy heat with freeze–thaw + aquifer | 46 |
 | `VegetatedLandColumn` | two big leaves (`Photosynthesis`) over a `SoilThermalColumn` | 47 |
 | resolved canopy | `PlantCanopy` drag, two-stream and leaf energy in the LES column | 48 |
-| `UrbanFacet`, `WindowFacet`, `UrbanFacetScene` | conduction columns + glazing + the Era III radiosity | 49 |
+| `UrbanFacet`, `WindowFacet`, `UrbanFacetScene` | conduction columns + glazing + the radiosity solver | 49 |
 | `BuildingZone` | a zone air node implicit with its envelope of facets and columns | 50 |
 | `LayeredSnowpack`, `IceColumn` | snow layers; brine-pocket ice | 51 |
 | `WaterColumn`, `SeaSurface` | mixed layer with cool skin and warm layer; COARE fluxes | 52 |

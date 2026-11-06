@@ -66,7 +66,7 @@ Fixtures and data that tests also use stay in `test/` (`test/support`,
    steps, the interface) in the module's test file.
 2. Put the run in `validation/<file>.jl`, with a header saying what it
    validates, the reference, and which test file covers the module.
-3. Add its include line to `validation/runvalidation.jl`, in its era's
+3. Add its include line to `validation/runvalidation.jl`, in its topic's
    block; tag it `heavy` with its measured `seconds` if it takes 45 s or
    more.
 4. Quote its measured numbers in the PR body.

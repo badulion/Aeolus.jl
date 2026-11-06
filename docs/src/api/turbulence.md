@@ -1,6 +1,6 @@
-# Era VI — High-fidelity turbulence closure
+# Turbulence closure
 
-Era VI replaces the single Smagorinsky closure by a family of
+The turbulence-closure work replaces the single Smagorinsky closure by a family of
 subgrid-scale (SGS) models: Lagrangian-dynamic and scale-dependent
 coefficients, anisotropic and minimum-dissipation closures, prognostic
 TKE and Reynolds-stress transport, stability-aware mixing. They all plug
@@ -251,7 +251,7 @@ Aeolus.CutCell.wall_shear_stress(::Aeolus.Simulations.BoussinesqSimulation)
 ## Wall-bounded flow diagnostics (P54-d)
 
 Plane-averaged diagnostics of a horizontally periodic, wall-bounded run,
-shared by every Era VI benchmark. The cases that produce the flows —
+shared by every turbulence-closure benchmark. The cases that produce the flows —
 `half_channel_case` (the neutral ABL half channel of Porté-Agel et al.
 2000) and `channel_case` (the two-wall channel) — are the test fixture
 `test/fixtures/channel_cases.jl` (module `ChannelCases`; part of

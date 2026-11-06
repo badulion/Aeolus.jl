@@ -1,7 +1,7 @@
-# Era IV — High-fidelity clouds and microphysics
+# Clouds and microphysics
 
-The era is summarised, with its measured validation, in
-[Clouds and microphysics (Era IV): overview](../theory/clouds_overview.md).
+The clouds-and-microphysics work is summarised, with its measured validation, in
+[Clouds and microphysics: overview](../theory/clouds_overview.md).
 The theory behind these modules is developed in
 [P3 microphysics](../theory/p3.md),
 [Ice nucleation](../theory/ice_nucleation.md),

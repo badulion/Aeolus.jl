@@ -1,6 +1,6 @@
 # Sub-grid cloud and supersaturation PDF
 
-*Era IV, Phase 45 — module `TurbulentMicrophysics`.*
+*Phase 45 — module `TurbulentMicrophysics`.*
 
 An LES cell of tens of metres is not uniformly saturated. Unresolved
 fluctuations of total water ``q_t`` and liquid-ice potential temperature

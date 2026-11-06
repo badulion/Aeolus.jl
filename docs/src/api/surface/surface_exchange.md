@@ -1,7 +1,7 @@
 # Shared contract — SurfaceExchange
 
-`SurfaceExchange` is to Era V what `RadiationCore` is to Era III and
-`MoistThermodynamics` to Era IV: every surface model of the era — soil
+`SurfaceExchange` is to the surface what `RadiationCore` is to radiation
+and `MoistThermodynamics` to clouds and microphysics: every surface model — soil
 column, canopy, urban facets, building energy, snowpack, sea and lake
 ice, ocean mixed layer, sub-grid tiles — speaks it, so they agree on
 what a roughness length, a stability correction and a turbulent flux
@@ -18,7 +18,7 @@ mean. It holds three things:
   `BusingerDyerBeljaarsHoltslag`) and the surface-layer solver
   `solve_surface_layer`. A new family only needs `psi_m`/`psi_h` (and
   `phi_m`/`phi_h` for diagnostics) to plug into the solver. The
-  **maximum sustainable heat flux** (Era VI, P58-e, #193:
+  **maximum sustainable heat flux** (P58-e, #193:
   `max_sustainable_heat_flux`, `mshf_solution`, `flux_friction_velocity`,
   `surface_mshf_ratio`; closed form where `log_linear_slope` is defined)
   is the largest downward buoyancy flux MOST can carry at a given wind

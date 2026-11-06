@@ -392,7 +392,7 @@ The production kernel takes 0.55 ms per step of the 161 ms Berlin step
 
 ## Radiation (#130)
 
-Two couplings put the Era III radiation stack into the case. Both run at
+Two couplings put the radiation stack into the case. Both run at
 the `:radiation` cadence, around the radiosity solve.
 
 **`column_radiation`** (slot `:column_radiation`, provider `:twostream`,

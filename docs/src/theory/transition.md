@@ -1,6 +1,6 @@
 # Transition and wall-bounded flow
 
-Era VI resolves the near-wall layer instead of modelling it wherever a
+The turbulence-closure work resolves the near-wall layer instead of modelling it wherever a
 case is small enough to afford it: laminar and transitional channels,
 the wall-resolved stratified channel, and the laminar checks of the
 turbulence closures. This page collects the wall treatment those runs
@@ -125,7 +125,7 @@ point ``Δz/2 ≈ 3`` m from the wall, with a viscous sublayer of
 
 ## Laminar–turbulent transition
 
-Era VI (Phase 59, #180) gives the repository one owner for the
+Phase 59 (#180) gives the repository one owner for the
 laminar/turbulent and intermittency diagnostics, the module
 `Aeolus.Transition`. The stable-boundary-layer collapse (P58-e), the
 CASES-99 "hockey stick" (P58-d) and relaminarisation (P59-e) use these

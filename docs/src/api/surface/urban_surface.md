@@ -3,7 +3,7 @@
 `UrbanSurface` (Phase 49) replaces the single heat-capacity slab of the
 urban example with per-facet multi-layer conduction: every roof, wall and
 ground (road) facet is a 1-D column through real material layers, closed
-on the outside by the surface energy balance of the Era V contract and on
+on the outside by the surface energy balance of the surface shared core and on
 the inside by an interior boundary condition. The theory and the
 validation are on [Urban facet conduction](../../theory/urban_conduction.md).
 

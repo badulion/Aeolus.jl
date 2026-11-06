@@ -5,7 +5,7 @@ it is not: the roughness elements are the waves, which the wind itself
 raises, so ``z_0`` depends on the friction velocity it helps determine,
 and on how developed the sea is. This page describes `src/AirSeaFlux.jl`
 (Phase 52, issue #39), which supplies that roughness and the COARE bulk
-algorithm around it. The Monin–Obukhov solve itself is the Era V
+algorithm around it. The Monin–Obukhov solve itself is the surface shared core's
 contract's (see [Surface exchange](surface_exchange.md)); nothing here
 restates it.
 
@@ -126,7 +126,7 @@ converges the roughness–gustiness feedback (10–18 passes).
 
 `SeaSurface` wraps this as an `AbstractSurface` (seawater humidity
 ``e = 0.98\,e_{sat}``, water emissivity from `SurfaceOptics`) so the tile
-framework can aggregate open water with the other Era V surfaces. Its
+framework can aggregate open water with the other surfaces. Its
 skin temperature is prescribed; the ocean mixed layer, warm layer and
 cool skin that evolve it belong to `OceanMixedLayer`.
 

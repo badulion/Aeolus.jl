@@ -1,6 +1,6 @@
 # Shared contract — MoistThermodynamics (Phase 39)
 
-`MoistThermodynamics` is to Era IV what `RadiationCore` is to Era III:
+`MoistThermodynamics` is to clouds and microphysics what `RadiationCore` is to radiation:
 every microphysics scheme, activation parameterisation and cloud
 diagnostic in Phases 40–45 speaks it, so they agree on what temperature,
 saturation and buoyancy mean. It is *exact* in three respects that LES

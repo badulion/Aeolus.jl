@@ -1,6 +1,6 @@
-# Turbulence closure (Era VI): overview
+# Turbulence closure: overview
 
-Era VI (Phases 54–59) rebuilt the subgrid-scale (SGS) model, the walls
+The turbulence-closure work (Phases 54–59) rebuilt the subgrid-scale (SGS) model, the walls
 and the stable boundary layer around one closure contract. This page
 covers four things: that contract, how the closures, wall models and
 stability functions fit together, what the Berlin flagship runs by
@@ -44,14 +44,14 @@ bit for bit.
 
 | closure | type | laminar flow | phase | Berlin |
 | :-- | :-- | :-- | :-- | :-- |
-| static Smagorinsky | algebraic | ν_t > 0 in shear | Era I | `:smagorinsky` option |
+| static Smagorinsky | algebraic | ν_t > 0 in shear | LES core | `:smagorinsky` option |
 | plane / Lagrangian / scale-dependent (LASD) dynamic | dynamic Germano | decays to 0 | 54 | `:dynamic` option, LASD default |
 | AMD (scalar and buoyancy terms), Vreman | algebraic | 0 for shear (AMD also rotation) | 55 | `:amd`, `:vreman` options |
 | `StabilityCorrected` | wrapper, Ri_g | — | 55 | on for every eddy-viscosity provider |
 | Deardorff / Moeng TKE | prognostic e | decays | 56 | **`:tke`, default** |
 | differential Reynolds stress | prognostic τ_ij | decays | 56 | `:reynolds_stress` option, not with IMEX |
 | σ-model | algebraic | 0 for shear, rotation, 2-D, z³ at walls | 59 | `:sigma` option |
-| `MLSGS` | learned | — | Era I | `:mlsgs` option |
+| `MLSGS` | learned | — | LES core | `:mlsgs` option |
 
 The stability functions f_m(Ri) and f_h(Ri) are defined once, in
 `TurbulenceStability` ([theory](turbulence_stability.md)). The

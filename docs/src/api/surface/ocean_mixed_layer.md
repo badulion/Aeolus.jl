@@ -7,7 +7,7 @@ diurnal warm layer (Fairall 1996b / COARE, or Zeng & Beljaars 2005). The
 physics and the measured validation are in
 [Water surfaces: mixed layer, cool skin and warm layer](../../theory/ocean_mixed_layer.md).
 
-`WaterColumn` is an `AbstractSurface` of the Era V contract: its fluxes
+`WaterColumn` is an `AbstractSurface` of the surface shared core (`SurfaceExchange`): its fluxes
 come from `SurfaceExchange.turbulent_fluxes`, or from any
 `flux(col, forcing) -> SurfaceFluxes` passed to `step_surface!` — the
 hook for air–sea algorithms (`AirSeaFlux`, #39). Its emissivity default

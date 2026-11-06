@@ -1,6 +1,6 @@
 # Lake and sea ice — IceThermodynamics
 
-`IceThermodynamics` is the Era V model of floating ice (Phase 51, issue
+`IceThermodynamics` is the model of floating ice (Phase 51, issue
 #37): the energy-conserving multi-layer thermodynamics of Bitz &
 Lipscomb (1999) with brine pockets, a snow layer, surface and basal
 melt, basal accretion, sublimation, snow-ice formation, and an ocean or

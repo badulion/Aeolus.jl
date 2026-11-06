@@ -25,11 +25,12 @@ part an agent must follow every session — is in
 
 ## The shape of the work
 
-Development is organised into **eras** — coherent blocks of capability,
-each ending at a validation target — subdivided into **phases** of two
+Development is organised into **milestones** — coherent blocks of
+capability named by their content (radiation, clouds and microphysics,
+turbulence closure, …), each ending at a validation target — subdivided into **phases** of two
 to six weeks. The full plan is
 [`docs/src/design/longterm_roadmap.md`](src/design/longterm_roadmap.md):
-eleven eras, one hundred phases.
+eleven milestones, one hundred phases.
 
 A phase is too large to be a unit of work. Phases are therefore broken
 into **issues**, each one a self-contained piece that can be implemented,
@@ -38,30 +39,30 @@ on how clearly it can be seen:
 
 | Horizon | Decomposition |
 | :-- | :-- |
-| Current and next era | 3–5 issues per phase |
-| Two to four eras out | One issue per phase |
-| Beyond that | One tracking issue per era |
+| Current and next milestone | 3–5 issues per phase |
+| Two to four milestones out | One issue per phase |
+| Beyond that | One tracking issue per milestone |
 
-Decomposing work eight years out is fiction. Far-horizon eras carry a
+Decomposing work eight years out is fiction. Far-horizon milestones carry a
 single epic issue and are broken down when they come into view.
 
 ---
 
 ## Issues and milestones
 
-**Milestones map one-to-one onto eras.** Completed eras have closed
-milestones so the project board shows the real arc of the work and
+**Each block of work is one milestone**, named by its content. Completed
+blocks have closed milestones so the project board shows the real arc of the work and
 progress figures mean something.
 
 There are no retrospective issues for work that shipped before this
 workflow existed. Inventing an issue history that never happened would
 make the tracker lie.
 
-**Labels** carry the era, the phase and the subsystem, so the board can
+**Labels** carry the milestone's topic, the phase and the subsystem, so the board can
 be sliced either way:
 
 ```
-era-iv  phase-40  microphysics  radiation  numerics  urban
+microphysics  phase-40  radiation  numerics  urban  surface
 infrastructure  tech-debt  validation  docs
 ```
 
@@ -414,13 +415,13 @@ A worked example of the tone, from the Phase 32 entry:
 > precisely why a single broadband number is not an adequate test of a
 > band model.
 
-**When an era's last phase is merged**, additionally:
+**When a milestone's last issue is merged**, additionally:
 
-- **Close the era milestone.**
-- **Update the README** — era table, capability summary, validation table
+- **Close the milestone.**
+- **Update the README** — milestone table, capability summary, validation table
   and test count. The README carried "39 unit tests" long after the suite
   passed seven thousand; that is how a README rots.
-- **Add or extend the theory page** for the era's physics. Era III added
+- **Add or extend the theory page** for the topic's physics. The radiation milestone added
   `docs/src/theory/radiation.md`, explaining the transfer equation, why
   band-averaging is biased, and where plane-parallel breaks down — the
   reasoning behind the code, not a restatement of it.
@@ -436,7 +437,7 @@ A worked example of the tone, from the Phase 32 entry:
 
 ### What not to do
 
-Do not open a separate "update the docs" issue at the end of an era.
+Do not open a separate "update the docs" issue at the end of a milestone.
 By then nobody remembers which numbers were measured under which
 configuration, and the temptation is to quote figures from a run that no
 longer exists. Quote what you measured, when you measured it.
@@ -450,7 +451,7 @@ These are not style preferences. Each was learned by something breaking.
 ### One source of truth
 
 If two modules need the same physics, it lives in one place and the
-others delegate. Shared quantities belong in the era contract —
+others delegate. Shared quantities belong in a shared core —
 `RadiationCore` for radiation, `MoistThermodynamics` for
 thermodynamics — declared as a generic with no method, which
 implementers extend by dispatching on their own types.
@@ -478,7 +479,8 @@ an **example**, not a test harness: coupling new physics into it is
 welcome where it makes sense, but not required, and the example has no
 test suite of its own.
 
-*History.* From the end of Era V until 2026-10-06 the rule was the
+*History.* From the end of the land, urban and surface-exchange work
+(Phase 53) until 2026-10-06 the rule was the
 opposite: every physics PR had to wire its module into the Berlin run,
 enforced by `test/berlin_coverage.jl` (frozen coverage lists, deleted
 on 2026-10-06) and `test/berlin_smoke.jl`. It found real cross-module defects, but the

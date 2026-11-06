@@ -46,7 +46,7 @@ changing the algorithm (both default to the built-in one):
   from `AdvectionSchemes`;
 * `sgs = closure` — the subgrid-scale closure, any
   [`AbstractSGSClosure`](@ref Aeolus.Operators.AbstractSGSClosure) of the
-  Era VI contract ([`StaticSmagorinsky`](@ref Aeolus.Operators.StaticSmagorinsky),
+  SGS closure contract ([`StaticSmagorinsky`](@ref Aeolus.Operators.StaticSmagorinsky),
   [`DynamicSmagorinsky`](@ref Aeolus.Operators.DynamicSmagorinsky), an
   `ML.MLSGS`, …) or a plain function `f(νt, u, v, w)` that fills `νt`
   (wrapped in a [`FunctionSGS`](@ref Aeolus.Operators.FunctionSGS),
@@ -56,7 +56,7 @@ changing the algorithm (both default to the built-in one):
   closure — reproduces the built-in run bit for bit. The pre-contract
   keyword name `eddy_viscosity! = f(νt, u, v, w)` is still accepted.
   `step_rk3!`, `step_imex!`, `step_adaptive!` and the sound-proof cores
-  take the same keyword; see [Era VI](turbulence.md).
+  take the same keyword; see [Turbulence closure](turbulence.md).
 
 The pressure solver is chosen at construction (`solver = …`, any
 `AbstractPressureSolver`, e.g. `MultigridPoissonSolver` or

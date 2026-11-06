@@ -1,4 +1,4 @@
-# Era II — Numerical foundations
+# Numerical foundations
 
 These modules deliver the numerical fidelity needed for real-Reynolds
 urban LES: geometry that resolves walls rather than staircasing them,

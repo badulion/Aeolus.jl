@@ -12,7 +12,7 @@ measured size of the aggregation error are in
 A `SurfaceMosaic` is itself an `AbstractSurface`, so mosaics nest and a
 mosaic can be stepped wherever a single surface can. Any implementer of
 the contract can be a tile — `SlabLand` today, the soil, canopy, urban,
-snow, ice and ocean models of Era V as they land.
+snow, ice and ocean models of the surface shared core as they land.
 
 ```julia
 using Aeolus
@@ -45,7 +45,7 @@ ibl_height(DiffusionIBL(), 300.0; z0_up = 0.008, z0_down = 0.032)   # ≈ 26 m
 ```
 
 The energy mosaic is distinct from `SurfaceOptics.TiledSurface`, the
-optical (spectral-albedo) mosaic of Era III.
+optical (spectral-albedo) mosaic of the radiation stack.
 
 ```@autodocs
 Modules = [Aeolus.SurfaceTiles]

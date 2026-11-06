@@ -1,4 +1,4 @@
-# Era III — High-fidelity radiation
+# Radiation
 
 The theory behind these modules is developed in
 [Radiative transfer](../theory/radiation.md); the pages below are

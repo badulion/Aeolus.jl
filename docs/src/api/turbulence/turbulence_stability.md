@@ -1,6 +1,6 @@
 # Stability contract — TurbulenceStability
 
-`TurbulenceStability` is the Era VI stability contract: the
+`TurbulenceStability` is the stability contract: the
 gradient-Richardson stability functions ``f_m(Ri)``, ``f_h(Ri)`` as a
 dispatch hierarchy (`AbstractRiStability`), the one definition of the
 squared buoyancy frequency from a θ difference

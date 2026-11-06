@@ -4,7 +4,7 @@ P55-f (#191) validates the stability-corrected closure of P55-e
 (`StabilityCorrected`, [Smagorinsky-Lilly SGS → Stability
 correction](sgs.md#Stability-correction)) on two stably stratified,
 horizontally homogeneous flows. It adds no physics to `src/`: both cases
-are assembled from the Era V and Era VI modules, and only the
+are assembled from the surface and turbulence-closure modules, and only the
 wall-resolved, θ-walled variant of the P54-d channel builder is new
 (`channel_case(bottom_bc = :noslip, θ_walls = …)`).
 

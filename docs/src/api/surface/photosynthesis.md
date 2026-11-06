@@ -1,6 +1,6 @@
 # Photosynthesis — Farquhar C3 / Collatz C4
 
-`Photosynthesis` is Era V's leaf biochemistry (Phase 47, #19): given the
+`Photosynthesis` is the leaf biochemistry (Phase 47, #19): given the
 intercellular CO₂ `ci`, the photon flux a leaf absorbs and its
 temperature, how fast does it fix carbon? It implements the Farquhar,
 von Caemmerer & Berry (1980) model for C3 leaves and Collatz et al.

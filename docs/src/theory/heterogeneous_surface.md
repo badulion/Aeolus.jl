@@ -171,7 +171,7 @@ grid (32 × 16 × 16, 1.25 h), with three seeds checked. It asserts:
 - **No field observations.** The patchy-terrain campaigns (LITFASS-98,
   LITFASS-2003) publish area-averaged fluxes for a real landscape of
   forest, lake, farmland and villages. Reproducing them needs the
-  vegetated land surface of Era V (#21), which does not exist yet, and
+  vegetated land surface (#21), which does not exist yet, and
   the campaign's land-use and forcing data. The comparison above is
   with published LES, and only qualitatively: the numbers of Patton et
   al. were not available to compare against.

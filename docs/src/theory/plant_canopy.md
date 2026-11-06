@@ -153,7 +153,7 @@ transmittance is the hemispheric integral
 
 with ``\bar μ = \int_0^1 μ/G\,dμ`` and the up-scatter fractions ``β``,
 ``β_0`` of the CLM5.0 Technical Note (§2.3.1). Dividing by ``\bar μ``
-puts this in exactly the Meador–Weaver form solved by the Era III
+puts this in exactly the Meador–Weaver form solved by the radiation stack's
 `TwoStream` module, with optical depth ``Λ``, beam cosine ``1/K`` and
 
 ```math

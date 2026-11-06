@@ -7,7 +7,7 @@ contract. Both steps are saturation-limited and unconditionally stable
 in the time step. Theory: [Fog and dew](../../theory/fog.md).
 
 The same module carries the radiation-fog feedback (#9): the droplet
-field (LWC, `N_d`, `r_eff`) is passed to the Era III radiation —
+field (LWC, `N_d`, `r_eff`) is passed to the radiation stack —
 `GasOptics`, `TwoStream.MieCloudOptics`, `RadiationCore.combine_optics!`
 and the two-stream solver — through [`fog_atmospheric_column`](@ref) and
 [`fog_radiative_transfer!`](@ref), and a 1-D column ([`FogColumn`](@ref),

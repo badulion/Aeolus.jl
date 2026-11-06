@@ -1,7 +1,7 @@
 # Transition diagnostics — Transition
 
 `Transition` owns the laminar/turbulent and intermittency diagnostics of
-Era VI: the turbulent fraction ``γ(z)`` of the vorticity-fluctuation
+the turbulence-closure work: the turbulent fraction ``γ(z)`` of the vorticity-fluctuation
 indicator (`turbulent_fraction`, `turbulent_indicator!`,
 `laminar_mask!`), the time-series `intermittency_factor`, the flux
 Richardson number with resolved and SGS fluxes (`flux_richardson`), the

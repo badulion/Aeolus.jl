@@ -53,7 +53,7 @@ Aeolus.Operators.add_eddy_viscosity_w!
 Aeolus.Operators.add_eddy_diffusion_scalar!
 ```
 
-## Stratification (Era VI, P58-a)
+## Stratification (P58-a)
 
 Pointwise fields of the [`TurbulenceStability`](turbulence/turbulence_stability.md)
 contract.

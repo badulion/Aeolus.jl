@@ -1,6 +1,6 @@
 # Sub-grid supersaturation in activation and droplet growth
 
-*Era IV, Phase 45 (issue #13) — module `TurbulentMicrophysics`.*
+*Phase 45 (issue #13) — module `TurbulentMicrophysics`.*
 
 The [sub-grid cloud PDF](subgrid_cloud.md) says how a cell's saturation
 state is distributed. This page covers what that distribution does to

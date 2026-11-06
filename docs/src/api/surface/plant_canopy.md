@@ -28,7 +28,7 @@ step!(sim, 2.0; post_predictor! = (s, Δt) -> apply_canopy_drag!(s, drag, Δt))
 ## Radiation through the canopy
 
 The shortwave is solved per band with the canopy two-stream of Sellers
-(1985), using the Era III `TwoStream` layer formulae and adding solver;
+(1985), using the radiation stack's `TwoStream` layer formulae and adding solver;
 the sun angle can come straight from `SolarGeometry`.
 
 ```julia

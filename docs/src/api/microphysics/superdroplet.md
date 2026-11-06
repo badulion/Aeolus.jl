@@ -1,6 +1,6 @@
 # Superdroplet microphysics (Phase 41)
 
-`Superdroplet` is the Lagrangian probabilistic reference of Era IV
+`Superdroplet` is the Lagrangian probabilistic reference of the clouds-and-microphysics work
 (Shima et al. 2009). The droplet population is carried as computational
 particles, each with a multiplicity — the number of real droplets it
 stands for — plus the wet radius and dissolved solute mass those

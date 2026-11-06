@@ -1,6 +1,6 @@
 # Physics modules
 
-Era I physics components layered on the dynamical core, plus the I/O
+The original physics components layered on the dynamical core, plus the I/O
 and parallel-decomposition machinery.
 
 ## I/O and checkpointing
@@ -72,11 +72,11 @@ Modules = [Aeolus.Backends]
 Modules = [Aeolus.SpectralElement]
 ```
 
-## Radiation (Era I scaffold)
+## Radiation (scaffold)
 
-Superseded for production use by the Era III stack; retained because it
+Superseded for production use by the radiation stack ([Radiation](radiation.md)); retained because it
 is cheap and adequate for idealised cases. `SlabLand` is the first
-implementer of the Era V surface interface
+implementer of the surface shared core
 ([SurfaceExchange](surface/surface_exchange.md)): `surface_temperature` is
 the SurfaceExchange generic, and `step_surface!` computes its own
 Monin–Obukhov fluxes.
