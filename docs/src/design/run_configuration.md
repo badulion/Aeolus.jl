@@ -289,6 +289,37 @@ run is recorded with `replayable = false` and the keys in
 `run.toml` does not describe it completely. Everything that has a TOML form
 (constants, series, tables, named kinds) should use it.
 
+## Surface spin-up (`[spinup]`, #519)
+
+A run-level section, after PALM's `spinup_time`
+(`time_integration_spinup.f90`, PALM 25.10.1). Before the first step of a
+fresh run (not on `--resume`), the slow surfaces of every urban site
+advance alone over `time` seconds. They run at negative model times
+ending at the start:
+
+```toml
+[spinup]
+time          = 259200.0   # s; 0 = off (default)
+dt            = 60.0       # surface step; default the site's surface/soil period
+forcing       = "solar"    # or "driver": the dynamic driver's sfc_temperature
+pt_mean       = 290.0      # K; default the initial mean of the air above the surfaces
+pt_amplitude  = 4.0        # K
+soil_moisture = false      # PALM's calc_soil_moisture_during_spinup
+buildings     = true       # the city-mean building's zone and envelope take part
+```
+
+What runs, and what is held fixed:
+
+- **What runs.** Only the stages `Components.SPINUP_STAGES`: clock, radiation, shortwave modifiers, surface fluxes, sources and surface update. They run only for the couplings that say `in_spinup`: the surface exchange, the column radiation and radiosity, the cloud shadow, the shortwave modifiers, the soil and, if `buildings`, the city-mean building. There is no transport, microphysics, chemistry or core step.
+- **The air.** The surfaces see the initial state. The exception is θ in the air cell above each surface, which is the forcing. With `"solar"` it follows PALM: θ = `pt_mean` + `pt_amplitude` cos ζ(t − 1 h), using the case date's sun on every day of the spin-up. With `"driver"` it comes from the driver's `sfc_temperature`, linear in time, and the driver must cover the window. Whatever a step delivers into θ and the tracers is put back before the next step.
+- **What is frozen or left out.** The soil water is frozen unless `soil_moisture`. Windows (`:glass`) and traffic heat do not take part, as in PALM.
+- **The state afterwards.** The atmosphere, the clock, the surface exchange's schedule and its ledgers are as at the start: copied back, exactly. The first step's radiation runs. The spin-up books nothing into the budgets.
+- **The initial envelope.** Walls, roof and slab of the city-mean building start in steady conduction between the outdoor air and the room (`steady_envelope!`, built on `UrbanSurface.steady_conduction!`), not at a uniform temperature. The spin-up then only has to carry the diurnal cycle.
+- **Checks at load.** `dt` must divide the radiation period, and the radiation period must divide `time`. `forcing = "driver"` needs a `dynamic_driver`. A spin-up that no domain can take is an error, not a silent no-op.
+- **The report.** It goes in `results.toml` under `[spinup]`: steps, step size, wall time and, from two days on, the drift. The drift is the change of the daily-mean surface temperature per surface class over the last day, in K d⁻¹. The run warns above 0.5 K d⁻¹.
+
+Time scales, with the slowest eigenmode of each column: brick wall 9.3 h, roof 26 h, the ground stack 19 d, a 3.43 m soil column 30 d. The deep soil is therefore not spun up in days. It should come from data (soil profiles, #521). Two to three days are enough for walls and roofs.
+
 ## Running from `run.toml` versus `--resume`
 
 | command | run ID | starts from |

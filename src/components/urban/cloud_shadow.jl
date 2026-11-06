@@ -56,6 +56,8 @@ component_name(::Type{CloudShadow}) = :cloud_shadow
 modules_used(::Type{CloudShadow}) = (:SolarGeometry, :TwoStream, :RadiationCore)
 default_options(::Type{CloudShadow}) = (r_eff_liq = 10.0, r_eff_ice = 30.0)
 stages(::Type{CloudShadow}) = ((:radiation, 15, Cadence(:radiation; first = true)),)
+# the radiation reaches the surfaces in the surface spin-up too (#519)
+in_spinup(::Type{CloudShadow}) = true
 
 function build(::Type{CloudShadow}, case, o)
     m = case.mesh

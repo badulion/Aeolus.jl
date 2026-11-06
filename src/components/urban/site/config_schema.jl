@@ -899,6 +899,8 @@ function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, si
     if ob !== nothing && hb.elapsed > 0
         out["open_boundary_heat"] = Dict{String,Any}("lateral" => ob.lateral / hb.elapsed, "top" => ob.top / hb.elapsed)
     end
+    # the surface spin-up before the run (#519)
+    isempty(case.spin.report) || (out["spinup"] = case.spin.report)
     return out
 end
 

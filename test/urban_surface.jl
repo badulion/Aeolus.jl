@@ -209,3 +209,45 @@ wall_matrix(layers, ω) = foldl((M, l) -> layer_matrix(l, ω) * M, layers;
         @test rowley_convection_coefficient(2.5) ≈ 22.3
     end
 end
+
+# ---------------------------------------------------------------------------
+# The steady state of a column (#519): the initial envelope without a
+# relaxation transient
+# ---------------------------------------------------------------------------
+
+@testset "steady_conduction!: the composite-wall steady state (#519)" begin
+    layers = [WallLayer(:brick, 0.24), WallLayer(:gypsum_plaster, 0.015)]
+    R = sum(l -> l.thickness / l.material.conductivity, layers)        # independent of the code
+    # Dirichlet both sides: F = ΔT / R through every face, profile linear in each layer
+    col = ConductionColumn(layers; T = 300.0)
+    Fo, Fi = steady_conduction!(col, fixed_temperature_boundary(273.15), fixed_temperature_boundary(293.15))
+    @test Fo ≈ (273.15 - 293.15) / R rtol = 1e-12
+    @test Fi ≈ -Fo rtol = 1e-12
+    # the cell temperatures lie on the analytic piecewise-linear profile
+    zc = col.z
+    Texact(z) = z <= 0.24 ? 273.15 + 20 * (z / 0.72) / R :
+                273.15 + 20 * (0.24 / 0.72 + (z - 0.24) / 0.22) / R
+    @test maximum(abs.(col.T .- Texact.(zc))) < 1e-9
+    # Robin both sides (outdoor and indoor air): the U-value flux
+    h_o, h_i = 25.0, 1 / 0.13
+    col = ConductionColumn(layers; T = 300.0)
+    Fo, _ = steady_conduction!(col, convective_boundary(270.0, h_o), convective_boundary(294.0, h_i))
+    @test Fo ≈ (270.0 - 294.0) / (1 / h_o + R + 1 / h_i) rtol = 1e-12
+    # started there, the column does not move under the same conditions,
+    # for Crank–Nicolson and backward Euler and any step
+    T0 = copy(col.T)
+    for (θ, dt) in ((0.5, 60.0), (1.0, 3600.0), (0.5, 86400.0))
+        for _ in 1:24
+            step_conduction!(col, convective_boundary(270.0, h_o), convective_boundary(294.0, h_i), dt; θ = θ)
+        end
+        @test maximum(abs.(col.T .- T0)) < 1e-9          # round-off of the tridiagonal solves
+    end
+    # a uniform start under the same conditions moves by kelvins in the first day
+    u = ConductionColumn(layers; T = 294.0)
+    for _ in 1:24
+        step_conduction!(u, convective_boundary(270.0, h_o), convective_boundary(294.0, h_i), 3600.0)
+    end
+    @test maximum(abs.(u.T .- 294.0)) > 5.0
+    # two flux boundaries have no steady state
+    @test_throws ArgumentError steady_conduction!(col, heat_flux_boundary(0.0), heat_flux_boundary(10.0))
+end

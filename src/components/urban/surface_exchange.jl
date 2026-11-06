@@ -743,10 +743,32 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)
         bus.sensible[I] = 0.0
     end
     t_new = case.sim.t
-    t_new >= c.t_next - 1e-9 * c.P && step_all_surfaces!(c, case)
+    # (the step at the end of the surface spin-up is the run's first, #519)
+    t_new >= c.t_next - 1e-9 * c.P && t_new < case.spin.stop - 1e-9 * c.P && step_all_surfaces!(c, case)
     # with the TBLE ground, bus.u_star is the stress the ground applies (the
     # columns' u_τ at the end of the step), not the surface step's MOST u*
     c.tble === nothing || _tble_ustar!(c, case)
+    return nothing
+end
+
+# The surface spin-up (#519): the surfaces step every spin-up step `dt`
+# from `t0`; at the end the run's period is back, the schedule starts at
+# the start (the run's first surface step is at its first step), and what
+# the spin-up left in the ledgers and the pending store is dropped (the
+# spin-up books nothing; the run's budgets start there).
+in_spinup(::Type{SurfaceExchangeMOST}) = true
+function spinup_begin!(c::SurfaceExchangeMOST, case, sp, t0, dt)
+    case.spin.saved[:surface_exchange_P] = c.P
+    c.P, c.stepped, c.t_next, c.owed, c.τ_interval = dt, false, t0, 0.0, 0.0
+    return nothing
+end
+function spinup_end!(c::SurfaceExchangeMOST, case, t_end)
+    c.P = pop!(case.spin.saved, :surface_exchange_P)
+    c.stepped, c.t_next, c.owed, c.τ_interval = false, t_end, 0.0, 0.0
+    c.interval_err, c.n_split, c.evap = 0.0, 0, 0.0
+    for a in (c.pending, c.Q, c.eRn, c.eH, c.eLE, c.eG, c.edS, case.bus.sensible)
+        fill!(a, 0.0)
+    end
     return nothing
 end
 

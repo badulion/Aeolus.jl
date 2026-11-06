@@ -42,6 +42,8 @@ end
 component_name(::Type{SWModifiers}) = :sw_modifiers
 default_options(::Type{SWModifiers}) = (k_leaf = 0.5,)
 stages(::Type{SWModifiers}) = ((:sw_modifiers, 10, EVERY_STEP),)
+# the radiation reaches the surfaces in the surface spin-up too (#519)
+in_spinup(::Type{SWModifiers}) = true
 
 function build(::Type{SWModifiers}, case, o)
     veg_mask, LAI_map = park_lai_map(case)

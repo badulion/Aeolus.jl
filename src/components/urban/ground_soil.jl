@@ -338,3 +338,24 @@ function smoke_check(c::GroundSoil, case)
                 all(I -> case.bus.surface[I].T_skin == Ts[I], c.cols)]
 end
 
+
+# The surface spin-up (#519): the soil water is frozen (PALM's default,
+# calc_soil_moisture_during_spinup = .F.) unless [spinup] soil_moisture;
+# the columns' heat runs. The columns are the surface exchange's surfaces.
+function spinup_begin!(c::GroundSoil, case, sp, t0, dt)
+    sp.soil_moisture && return nothing
+    frozen = SoilThermalColumn[]
+    for s in case.bus.surface
+        (s isa SoilThermalColumn && s.hydrology) || continue
+        s.hydrology = false
+        push!(frozen, s)
+    end
+    case.spin.saved[:ground_soil_frozen] = frozen
+    return nothing
+end
+function spinup_end!(c::GroundSoil, case, t_end)
+    for s in pop!(case.spin.saved, :ground_soil_frozen, SoilThermalColumn[])
+        s.hydrology = true
+    end
+    return nothing
+end

@@ -98,7 +98,7 @@ export ThermalMaterial, thermal_material, thermal_material_names,
        ISO6946_SURFACE_RESISTANCE,
        ColumnBoundary, fixed_temperature_boundary, heat_flux_boundary,
        convective_boundary,
-       ConductionColumn, step_conduction!, face_temperature,
+       ConductionColumn, step_conduction!, steady_conduction!, face_temperature,
        column_heat_content, cell_centers,
        UrbanFacet, interior_heat_flux, set_interior_boundary!,
        set_interior_temperature!, facet_layer_temperatures,
@@ -596,6 +596,54 @@ function step_conduction!(col::ConductionColumn{T}, outer::ColumnBoundary,
     Fo_new = go * (T(outer.T_env) - Tn[1]) + so
     Fi_new = gi * (T(inner.T_env) - Tn[n]) + si
     return (θ * Fo_new + (1 - θ) * Fo_old, θ * Fi_new + (1 - θ) * Fi_old)
+end
+
+"""
+    steady_conduction!(col, outer, inner) -> (F_outer, F_inner)
+
+Set `col.T` to the steady state of the column between the boundary
+conditions `outer` and `inner` (any [`ColumnBoundary`](@ref); at least one
+must exchange heat, `h > 0`): the solution of the discrete equations of
+[`step_conduction!`](@ref) with the time derivative dropped,
+``R_i(T) = 0``, on the same face conductances. A column started there
+does not move under the same conditions (to round-off), whatever `dt`
+and `θ`; through a composite wall the profile is piecewise linear with the
+drop across each layer proportional to its resistance ``d/k``.
+
+Returns the boundary fluxes into the column, ``F_\\mathrm{outer} = -F_\\mathrm{inner}``
+(W m⁻²).
+
+This is the initial state of an envelope whose slowest error mode would
+otherwise have to decay in the run (#519): PALM initialises its urban
+walls linearly in the layer index between the surface and the inner
+temperature (`urban_surface_mod.f90`, `init_urban_surface`); the
+resistance-weighted profile here is that profile's exact steady form.
+"""
+function steady_conduction!(col::ConductionColumn{T}, outer::ColumnBoundary,
+                            inner::ColumnBoundary) where {T}
+    (outer.h > 0 || inner.h > 0) ||
+        throw(ArgumentError("steady_conduction!: two flux boundaries have no steady state"))
+    n = length(col.T)
+    a, b, c, d = col._a, col._b, col._c, col._d
+    K = col.K
+    go, so = _boundary_coefficients(outer, K[1])
+    gi, si = _boundary_coefficients(inner, K[n+1])
+    for i in 1:n
+        a[i] = i > 1 ? -K[i] : zero(T)
+        c[i] = i < n ? -K[i+1] : zero(T)
+        b[i] = (i > 1 ? K[i] : zero(T)) + (i < n ? K[i+1] : zero(T))
+        d[i] = zero(T)
+        if i == 1
+            b[i] += go
+            d[i] += go * T(outer.T_env) + so
+        end
+        if i == n
+            b[i] += gi
+            d[i] += gi * T(inner.T_env) + si
+        end
+    end
+    _thomas!(col.T, a, b, c, d)
+    return (go * (T(outer.T_env) - col.T[1]) + so, gi * (T(inner.T_env) - col.T[n]) + si)
 end
 
 # Thomas algorithm for a[i] x[i-1] + b[i] x[i] + c[i] x[i+1] = d[i].
