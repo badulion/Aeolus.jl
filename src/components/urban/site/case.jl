@@ -113,8 +113,11 @@ function find_coupling(case::UrbanSite, name::Symbol)
     return nothing
 end
 
-"Local hour of day at simulation time `t` (s)."
-hour_of_day(cfg::NamedTuple, t::Real) = (cfg.start_h + t / 3600) % 24.0
+"""
+Local hour of day in [0, 24) at simulation time `t` (s), also before the
+start (`t < 0`: the surface spin-up, #519).
+"""
+hour_of_day(cfg::NamedTuple, t::Real) = mod(cfg.start_h + t / 3600, 24.0)
 
 """
     case_weekday(cfg) -> 1 … 7
