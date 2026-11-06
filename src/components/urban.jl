@@ -52,7 +52,7 @@ using ..Aeolus.Operators: advect_centered!
 using ..Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..Aeolus.IBM: SolidMask, mark_solid!
 # the ground: surface classes, footprints and the static driver (CFG-f, #361)
-using ..Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL,
+using ..Aeolus.InputDrivers: SURFACE_STREET, SURFACE_ROOF, SURFACE_PARK, SURFACE_WATER, SURFACE_WALL, SURFACE_CLASSES,
                            Building, UrbanCity, polygon_bbox, point_in_polygon, rasterize_city,
                            solid_and_classes, tag_building_adjacent!,
                            StaticInputs, StaticTiles, read_static_driver, read_static_tiles,
@@ -81,7 +81,7 @@ import Random
 for f in ("config", "components", "geometry", "bus",
           "tracers", "budgets", "reference_state", "top_boundary",
           "open_boundary",
-          "case", "stages", "output", "diagnostics")
+          "case", "stages", "output", "diagnostics", "spinup")
     include(joinpath(@__DIR__, "urban", "site", f * ".jl"))
 end
 

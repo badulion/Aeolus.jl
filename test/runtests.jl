@@ -839,6 +839,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("naming_conventions.jl")  # work is grouped by content; ERA is the reanalysis (2026-11-06)
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
+    include("urban_spinup.jl")        # #519: the surface spin-up of the urban site (PALM spinup_time)
     include("urban_checks.jl")       # EX-a (#438): Berlin smoke matrix (49 runs, ledgers), parent smoke run, parent class fractions, parent_zi
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file
     include("input_dynamic.jl")       # CFG-g (#362): dynamic driver, sounding/case-table drivers, offline nest, the ERA5 box (CFG-h #363)

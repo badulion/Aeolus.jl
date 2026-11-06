@@ -32,6 +32,7 @@ into θ and qv and the window sun on the walls leaves the surface budget
 """
 mutable struct CityMeanBuildings <: UrbanComponent
     bem::Union{Nothing,CityBuildings}
+    spin::Bool                       # takes part in the surface spin-up ([spinup] buildings, #519)
 end
 
 component_name(::Type{CityMeanBuildings}) = :buildings_citymean
@@ -40,7 +41,11 @@ provider(::Type{CityMeanBuildings}) = :citymean
 modules_used(::Type{CityMeanBuildings}) = (:BuildingEnergy, :UrbanSurface)
 stages(::Type{CityMeanBuildings}) = ((:radiation, 20, Cadence(:radiation; first = true)),
                                      (:sources, 10, EVERY_STEP))
-build(::Type{CityMeanBuildings}, case, o) = CityMeanBuildings(nothing)
+build(::Type{CityMeanBuildings}, case, o) = CityMeanBuildings(nothing, true)
+# the zone and its envelope in the surface spin-up, unless [spinup] buildings = false (#519)
+in_spinup(c::CityMeanBuildings) = c.spin
+spinup_begin!(c::CityMeanBuildings, case, sp, t0, dt) = (c.spin = sp.buildings; nothing)
+spinup_end!(c::CityMeanBuildings, case, t_end) = (c.spin = true; nothing)
 
 function init!(c::CityMeanBuildings, case)
     g, mesh = case.geom, case.mesh

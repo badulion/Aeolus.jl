@@ -74,6 +74,8 @@ default_options(::Type{<:ColumnRadiation}) =
     (nz_upper = 60, r_eff_liq = 10.0, surface_sw = :twostream, p_surf = nothing)
 stages(::Type{<:ColumnRadiation}) = ((:radiation, 5, Cadence(:radiation; first = true)),
                                     (:column_tendency, 10, EVERY_STEP))
+# the radiation reaches the surfaces in the surface spin-up too (#519)
+in_spinup(::Type{<:ColumnRadiation}) = true
 smoke_variants(::Type{<:ColumnRadiation}) =
     ((label = "surface shortwave from Bird", options = Dict(:column_radiation => (surface_sw = :bird,))),)
 
