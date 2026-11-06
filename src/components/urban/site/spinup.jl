@@ -77,8 +77,9 @@ The surface step of the spin-up: `sp.dt`, or the site's surface step
 spinup_step(case, sp) = sp.dt !== nothing ? Float64(sp.dt) :
                         Float64(get(case.cfg.cadence, :surface, case.cfg.cadence[:soil]))
 
-"The name of surface class `c` (`InputDrivers.SURFACE_CLASSES`)."
-surface_class_name(c) = something(get(Dict(SURFACE_CLASSES), UInt8(c), nothing), string(Int(c)))
+"The name of surface class `c` (`InputDrivers.SURFACE_CLASSES`, and the site's `SURFACE_GLASS`)."
+surface_class_name(c) = UInt8(c) == SURFACE_GLASS ? "glass" :
+                        something(get(Dict(SURFACE_CLASSES), UInt8(c), nothing), string(Int(c)))
 
 "The columns with a surface: their (i, j, k_air)."
 _surface_cells(case) = [(I[1], I[2], case.bus.k_air[I]) for I in CartesianIndices(case.bus.k_air)
