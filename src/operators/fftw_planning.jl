@@ -60,9 +60,28 @@ function _fftw_policy!()
         st.threads = parse(Int, get(ENV, "AEOLUS_FFTW_THREADS", "1"))
         st.threads >= 1 || throw(ArgumentError("AEOLUS_FFTW_THREADS must be ≥ 1"))
         FFTW.set_num_threads(st.threads)
+        _fftw_own_threads!()
         st.resolved = true
     end
     return st
+end
+
+# FFTW's threaded transforms on FFTW's own thread pool, not on Julia tasks
+# (#397). FFTW.jl registers `spawnloop` as FFTW's thread callback when Julia
+# runs threaded: it spawns one task per job of an array that lives on the
+# C stack of the FFTW call waiting in `@sync`, and that caller may yield
+# while the jobs run. Planning under MEASURE (many threaded test runs)
+# then crashed with signal 11 in `spawn_apply`: a 256³ irfft at 10–14
+# threads, the 200 × 200 × 60 r2r of the Berlin domain at 12. Upstream:
+# JuliaMath/FFTW.jl#306, the unmerged fix #344. With no callback, FFTW
+# falls back to its own threads (fftw3 `threads/threads.c`). Remove this
+# when FFTW.jl ships the fix.
+function _fftw_own_threads!()
+    @static if FFTW.fftw_provider == "fftw"
+        ccall((:fftw_threads_set_callback, FFTW.libfftw3), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), C_NULL, C_NULL)
+        ccall((:fftwf_threads_set_callback, FFTW.libfftw3f), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), C_NULL, C_NULL)
+    end
+    return nothing
 end
 
 """
