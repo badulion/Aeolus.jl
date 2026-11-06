@@ -137,9 +137,9 @@ end
         k[] = n
         push!(costly, record_diagnostics!(w, Float64(n); step = n, dt = 1.0, limiter = lims[mod1(n, 3)],
                                           retries = n == 4 ? 2 : 0))
-        # rows are buffered: on disk after 4 rows, or with a costly row
-        n == 2 && @test w.ds.dim["time"] == 1         # row 1 was costly
-        n == 3 && @test w.ds.dim["time"] == 1
+        # rows are buffered, the costly ones too (#514): on disk after 4 rows
+        n == 3 && @test w.ds.dim["time"] == 0 && w.ds.dim["time_costly"] == 0
+        n == 4 && @test w.ds.dim["time"] == 4 && w.ds.dim["time_costly"] == 2   # rows 1 and 4
     end
     @test costly == [n in (1, 4, 7, 10) for n in 1:10]
     close(w)
