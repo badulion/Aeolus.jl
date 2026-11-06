@@ -237,9 +237,11 @@ def main():
                   "needs an `@autodocs` entry and a `docs/make.jl` line\n"
                   "- [ ] No new export collisions\n"
                   "\nPlus the standing gate in "
-                  "[`CLAUDE.md`](../blob/master/CLAUDE.md). Roadmap and README "
-                  "status updates are **not** part of this PR — they happen at "
-                  "phase/milestone closeout, after merge.\n")
+                  "[`CLAUDE.md`](../blob/master/CLAUDE.md). This issue's own "
+                  "section of the roadmap (what was built, the numbers, bugs "
+                  "caught, wrong expectations) is part of this PR; the shared "
+                  "status ticks (the roadmap's Status checklist, the README) "
+                  "are not — they happen at closeout, after merge.\n")
 
     for p in sorted(set(list(NEAR) + list(phases))):
         if p in DONE or p not in MILESTONE_OF_PHASE:
