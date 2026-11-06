@@ -38,7 +38,7 @@ building height · resolved vertical velocity at 30 m.</sub>
   kernel constants, Wiscombe's Mie benchmark, Golovin's analytic coalescence
   solution, the DYCOMS-II RF01 intercomparison, FLUXNET towers, the
   CAPITOUL and BUBBLE urban campaigns, ASHRAE 140 and the COARE reference code.
-- **A test suite run by CI on every pull request** (4,099 executed
+- **A test suite run by CI on every pull request** (4,117 executed
   assertions, about 11 min serially), and **a separate validation suite**
   of simulated cases (GABLS, channels, campaigns, benchmarks), run weekly.
   128,000 lines of source, 31,000 lines of tests, 8,000 lines of
@@ -445,7 +445,7 @@ the record of what each shipped phase measured, is
 - [x] **[Clouds and microphysics](docs/src/design/roadmap.md#clouds-and-microphysics)** *(Phases 39–45)* — moist thermodynamics, P3, superdroplets, activation, ice nucleation, fog and visibility
 - [x] **[Land, urban and surface exchange](docs/src/design/roadmap.md#land-urban-and-surface-exchange)** *(Phases 46–53)* — soil, photosynthesis, plant canopy, urban canopy, building energy, snow and ice, water surfaces, tiles
 - [x] **[Turbulence closure](docs/src/design/roadmap.md#turbulence-closure)** *(Phases 54–59)* — dynamic and Lagrangian SGS, AMD/Vreman/σ, TKE and Reynolds stress, wall models, stable boundary layer, transition
-- [ ] **[Model infrastructure](docs/src/design/roadmap.md#model-infrastructure)** — TOML run configuration and input drivers, one model, tests and CI shipped; structured logging and provenance (#293) open
+- [x] **[Model infrastructure](docs/src/design/roadmap.md#model-infrastructure)** — TOML run configuration and input drivers, one model, structured logging, run folders, diagnostics and provenance, tests and CI
 - [ ] **[Chemistry and aerosol](docs/src/design/roadmap.md#chemistry-and-aerosol)** *(Phases 60–66)* — KPP mechanisms, photolysis, aqueous chemistry, aerosol microphysics, emissions, deposition
 - [ ] **[Real-world data, forcing and validation](docs/src/design/roadmap.md#real-world-data-forcing-and-validation)** *(Phases 67–73)* — reanalysis and mesoscale driving, OSM ingestion, benchmarks, provenance; the ERA5 driver (67a) has shipped
 - [ ] **[Data assimilation and inverse problems](docs/src/design/roadmap.md#data-assimilation-and-inverse-problems)** *(Phases 74–79)* — adjoint, 4D-Var, ensemble Kalman, inversion, UQ
