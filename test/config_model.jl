@@ -106,6 +106,28 @@ end
     @test map(CMC.component_name, d.components) == (:advection, :coriolis, :sponge)
 end
 
+@testset "every model's build puts FFTW on Julia's threads (#524)" begin
+    # Before #524 only the urban site called init_threads!: a model domain kept
+    # FFTW at its start-up count of 1. The policy is put on a count that is
+    # not Julia's (3, chosen by no one) to tell the two apart in a 1-thread suite.
+    st = Aeolus.Operators._FFTW_POLICY
+    t0, e0 = st.threads, st.threads_explicit
+    nfftw() = Aeolus.Operators.FFTW.get_num_threads()
+    cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sgs]\nmodel = \"none\"\n"))
+    try
+        st.threads, st.threads_explicit = 3, false
+        Config.build(SimulationDriverType(), cfg)
+        @test Aeolus.fftw_policy().threads == Threads.nthreads() == nfftw()
+        # an explicit count is kept
+        Aeolus.Operators.set_fftw_policy!(; threads = 2)
+        Config.build(SimulationDriverType(), cfg)
+        @test Aeolus.fftw_policy().threads == 2 == nfftw()
+    finally
+        Aeolus.Backends.init_threads!(; fftw_threads = t0)
+        st.threads_explicit = e0
+    end
+end
+
 const CM_TWO = """
     schema_version = 2
     [time]

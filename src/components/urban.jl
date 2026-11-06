@@ -48,6 +48,7 @@ module Urban
 using ..Aeolus
 using ..Aeolus.Fields: set!, interior_view
 using ..Aeolus.Radiation: apply_radiative_cooling!
+using ..Aeolus.SurfaceExchange: has_packed_state, packed_state_length, pack_state!, unpack_state!
 using ..Aeolus.Operators: advect_centered!
 using ..Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..Aeolus.IBM: SolidMask, mark_solid!

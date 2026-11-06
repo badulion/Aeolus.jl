@@ -75,6 +75,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        SurfaceLayerSolution, solve_surface_layer, aerodynamic_resistance, bulk_richardson, obukhov_length,
        kinematic_heat_flux, similarity_theta, similarity_wind,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
+       has_packed_state, packed_state_length, pack_state!, unpack_state!,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
        net_radiation, turbulent_fluxes, step_surface!,
@@ -866,6 +867,27 @@ liquid-water surface:
 methods are what surface energy balances use.
 """
 abstract type AbstractSurface end
+
+"""
+    has_packed_state(s) -> Bool
+    packed_state_length(s) -> Int
+    pack_state!(buf, i, s) -> Int
+    unpack_state!(s, buf, i) -> Int
+
+The evolving state of a surface as consecutive `Float64`s (#526): what a
+checkpoint must hold to continue `s` exactly, without its constants (grid,
+material properties, roughness) or its scratch (solver workspaces).
+`pack_state!` writes `buf[i:i+n-1]` (`n = packed_state_length(s)`) and
+`unpack_state!` reads them back into a surface built from the same
+configuration; both return `i + n`. A surface without these methods has no
+packed form (`has_packed_state(s) == false`) and is checkpointed another
+way (`Aeolus.IO.structural_state`). Implemented by `SlabLand`,
+`SoilThermalColumn` and `SurfaceMosaic`.
+"""
+has_packed_state(::Any) = false
+function packed_state_length end
+function pack_state! end
+function unpack_state! end
 
 """
     SurfaceForcing(; sw_down = 0, lw_down = 350, T_air = 288.15, q_air = 0.008,

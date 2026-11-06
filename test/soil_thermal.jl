@@ -312,3 +312,46 @@ end
 end
 
 end # testset
+
+using Aeolus.SurfaceExchange: has_packed_state, packed_state_length, pack_state!, unpack_state!
+
+@testset "Packed state: a column restored from it continues as the original (#526)" begin
+    # the checkpoint form of a column: the layer profiles, enthalpy, skin
+    # temperature, sub-steps, budgets and an aquifer's storage. The solver
+    # workspaces are scratch: overwritten with NaN before the restore, the
+    # continuation must not see them.
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    mk() = SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(10), h; θ = 0.25,
+                                             bottom = UnconfinedAquifer(W = 5.0)), p;
+                             T_soil = 288.0, bottom = BottomTemperature(288.0))
+    day = SurfaceForcing(sw_down = 600.0, lw_down = 340.0, T_air = 295.0, q_air = 0.008, U = 3.0, rain = 2e-4)
+    night = SurfaceForcing(sw_down = 0.0, lw_down = 290.0, T_air = 280.0, q_air = 0.004, U = 1.0)
+    a = mk()
+    @test has_packed_state(a)
+    for _ in 1:40; step_surface!(a, day, 60.0); end
+    n = packed_state_length(a)
+    @test n == 5 * 10 + 7 + 3 + 7                   # 4 water profiles + H; dt_sub, 6 water budgets; aquifer; skin, dt_sub, 5 heat budgets
+    buf = fill(NaN, n + 2)
+    @test pack_state!(buf, 2, a) == n + 2           # writes buf[2:n+1] only
+    @test isnan(buf[1]) && isnan(buf[end]) && all(isfinite, buf[2:n+1])
+    # b: another history, its scratch poisoned, then a's state
+    b = mk()
+    for _ in 1:13; step_surface!(b, night, 45.0); end
+    for ws in (b.ws, b.water.ws), f in fieldnames(typeof(ws))
+        fill!(getfield(ws, f), NaN)
+    end
+    @test unpack_state!(b, buf, 2) == n + 2
+    for _ in 1:30
+        step_surface!(a, night, 60.0); step_surface!(b, night, 60.0)
+    end
+    # the same arithmetic on the same numbers: agreement to round-off
+    for (x, y) in ((a.water.T_soil, b.water.T_soil), (a.water.θ_liq, b.water.θ_liq), (a.water.ψ, b.water.ψ), (a.H, b.H))
+        @test x ≈ y rtol = 1e-12
+    end
+    @test a.T_skin ≈ b.T_skin rtol = 1e-12
+    @test a.water.bottom.W ≈ b.water.bottom.W rtol = 1e-12
+    @test a.budget.surface ≈ b.budget.surface rtol = 1e-12
+    @test a.water.budget.drainage ≈ b.water.budget.drainage rtol = 1e-12
+    @test a.water.T_soil != mk().water.T_soil      # the comparison is not of an untouched column
+end

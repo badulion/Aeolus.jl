@@ -42,7 +42,9 @@ GPUBackend(:cuda)                  # stub until Phase 81: errors on use
 library thread counts (below). `with_backend(f, backend)` runs `f` under
 a temporary default; it is process-global, not task-local. The Berlin
 case takes its backend from `CaseConfig.backend` and calls
-`init_threads!` first thing in `build_case`.
+`init_threads!` first thing in `build_case`; every other run gets it
+from `Config.build` (#524: until then a model domain's FFTs ran on one
+thread).
 
 ## The launch contract
 

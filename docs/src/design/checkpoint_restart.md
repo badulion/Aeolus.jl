@@ -199,6 +199,28 @@ state. The child's halos then read stale planes and the nested child
 diverged in its first step after the restart. Only `isbits` element types
 are copied now; the rest are walked.
 
+**The tiled surface's packed state (#526).** The walk's cost grows with
+the number of objects, not the bytes. The model domain's tiled urban
+surface (`TiledUrbanSurface`) is one column object per grid column with
+nested tiles. On the Berlin 100 m grid (200 × 200 columns, 86,229 soil
+tiles, 33,039 slabs) that is 4.5 million objects and 346 MB, 7.2 s per
+walk. The run monitor's blow-up guard snapshots the components twice
+every 10 steps, which made the guard 80 % of the run's wall time.
+
+The surface therefore checkpoints a packed form, `TiledSurfaceState`: the
+evolving state of every tile in one vector, written by the physics that
+owns it. The generic `pack_state!` / `unpack_state!` of
+`SurfaceExchange` are implemented by `SoilThermalColumn`
+(`SoilWaterColumn`), `SlabLand` and `SurfaceMosaic`. It leaves out the
+constants set by the configuration and the solvers' scratch.
+
+The risk the walk avoids, a piece of state left out, is covered by the
+tests. A column or surface restored into another history, with its
+scratch overwritten by NaN, must continue as the original
+(`test/soil_thermal.jl`, `test/components_parent.jl`). Dropping
+`T_skin` from the restore fails both. A surface type without a packed
+form still takes the walk, as do checkpoints written before #526.
+
 ## Nested runs
 
 `nest_state(run; window)` / `restore_nest_state!(run, s)` (#269) are the

@@ -30,6 +30,9 @@ using Aeolus.Radiation: SlabLand
 using Aeolus.SurfaceTiles: SurfaceMosaic, last_tile_fluxes, mosaic_fractions
 using Aeolus.LargeScaleForcing: AdvectiveTendencies, ProfileNudging, NudgingWeight
 using Aeolus.IO: checkpoint_state, restore_checkpoint_state!
+using Aeolus.SoilColumn: SoilThermalColumn, SoilWaterColumn, clm_exponential_soil_grid, carsel_parrish_texture,
+                         clm_soil_thermal_properties
+using Serialization: serialize, deserialize
 const PU = Aeolus.Urban
 const PC = Aeolus.Components
 
@@ -58,10 +61,12 @@ A tiled surface on `m`: every column a street tile (hot, dry, rough) and a
 park tile (cooler, moist), 70/30; the street of the odd columns forced at
 level 3 (its canopy the two levels below), of the even ones at level 1.
 """
-function p_tiles(m)
+function p_tiles(m; soil::Bool = false)
     nx, ny = m.Nx, m.Ny
     street() = SlabLand(; T = 308.0, C_s = 1e6, albedo = 0.12, emissivity = 0.95, z0m = 0.5, β = 0.0)
-    park() = SlabLand(; T = 299.0, C_s = 2e5, albedo = 0.2, emissivity = 0.97, z0m = 0.1, β = 0.6)
+    park() = soil ? SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(6), carsel_parrish_texture(:loam);
+                                                      θ = 0.25), clm_soil_thermal_properties(40, 20); T_soil = 292.0) :
+                    SlabLand(; T = 299.0, C_s = 2e5, albedo = 0.2, emissivity = 0.97, z0m = 0.1, β = 0.6)
     cols = Matrix{Union{Nothing,PU.ParentColumn}}(nothing, nx, ny)
     for I in CartesianIndices((nx, ny))
         kt = isodd(I[1]) ? 3 : 1
@@ -71,7 +76,7 @@ function p_tiles(m)
     pl = PU.ParentLanduse(nx, ny, m.dx, 0.0, 0.0, 1, zeros(Int, nx, ny, 5), z, z, z, String[])
     return PU.ParentSurface(pl, zeros(nx, ny, 5), z, z, z, z, z, zcentres(m), nothing, cols)
 end
-p_tiles_opts(sim) = (; surface = p_tiles(sim.mesh), period = 60.0, u_min = 0.5, reference = p_ref(sim))
+p_tiles_opts(sim; soil::Bool = false) = (; surface = p_tiles(sim.mesh; soil), period = 60.0, u_min = 0.5, reference = p_ref(sim))
 
 "Σ_k w_k Σ_ij (a − b) over the interior levels (J m⁻² with the heat weights)."
 wsum(w, a, b) = sum(w[k] * sum(view(a, :, :, k) .- view(b, :, :, k)) for k in eachindex(w))
@@ -128,20 +133,55 @@ end
 @testset "TiledUrbanSurface: a step through the pipeline on both cores, and its checkpoint ($core, $sch)" for
         core in (:anelastic,), sch in (:rk3,)
     mk() = (s = p_state!(p_core(core)); d0 = Domain(s; scheme = sch, validate = false);
-            Domain(s; scheme = sch, components = (CentredAdvection(), PC.build(PU.TiledUrbanSurface, p_tiles_opts(s), d0))))
+            Domain(s; scheme = sch, components = (CentredAdvection(), PC.build(PU.TiledUrbanSurface, p_tiles_opts(s; soil = true), d0))))
     d = mk()
     step!(d, 5.0)
     @test all(isfinite, interior_view(d.state.θ)) && all(isfinite, interior_view(d.state.u))
     ts = Components.slot_component(d, :surface)
-    st = checkpoint_state(ts)
+    # the packed state (#526), through a serialized round trip as a checkpoint file holds it
+    st = let io = IOBuffer(); serialize(io, checkpoint_state(ts)); seekstart(io); deserialize(io) end
+    @test st isa PU.TiledSurfaceState
+    @test st.tiles == checkpoint_state(ts).tiles       # copied, not computed
     d2 = mk()
-    step!(d2, 5.0)                                      # the same state, the tiles then overwritten
-    restore_checkpoint_state!(Components.slot_component(d2, :surface), st)
+    step!(d2, 5.0)                                      # the same air; the surface then given another
+    ts2 = Components.slot_component(d2, :surface)       # history (three more tile steps; the air is
+    for _ in 1:3                                        # not touched) and its scratch poisoned
+        PU.step_tiles!(ts2, d2.state, 600.0)
+    end
+    soil(x) = [t for col in x.surface.columns if col !== nothing for t in col.surface.tiles if t isa SoilThermalColumn]
+    slab(x) = [t for col in x.surface.columns if col !== nothing for t in col.surface.tiles if t isa SlabLand]
+    @test all(((a, b),) -> a.T_skin != b.T_skin && a.water.T_soil != b.water.T_soil && a.H != b.H, zip(soil(ts), soil(ts2)))
+    @test all(((a, b),) -> a.T != b.T, zip(slab(ts), slab(ts2)))
+    for col in ts2.surface.columns
+        col === nothing && continue
+        for t in col.surface.tiles
+            t isa SoilThermalColumn || continue          # the solver scratch: must not be read
+            for ws in (t.ws, t.water.ws), f in fieldnames(typeof(ws))
+                fill!(getfield(ws, f), NaN)
+            end
+        end
+    end
+    foreach(a -> fill!(a, NaN), (ts2.θsrc, ts2.qsrc, ts2.drag, ts2.ustar, ts2.wθ, ts2.wq))
+    empty!(ts2.sfc_mean)
+    @test any(col -> col !== nothing && any(t -> t isa SoilThermalColumn, col.surface.tiles), ts2.surface.columns)
+    restore_checkpoint_state!(ts2, st)
+    # every tile state back, as copied
+    @test all(((a, b),) -> a.T_skin == b.T_skin && a.water.T_soil == b.water.T_soil && a.H == b.H &&
+                           a.dt_sub == b.dt_sub && a.budget.surface == b.budget.surface, zip(soil(ts), soil(ts2)))
+    @test all(((a, b),) -> a.T == b.T, zip(slab(ts), slab(ts2)))
     for x in (d, d2)
         step!(x, 5.0); step!(x, 70.0)                   # into the second surface interval
     end
-    @test d.state.θ.data == d2.state.θ.data && d.state.u.data == d2.state.u.data
-    @test Components.slot_component(d, :surface).sfc_mean == Components.slot_component(d2, :surface).sfc_mean
+    # the same arithmetic on the same numbers: agreement to round-off
+    @test d2.state.θ.data ≈ d.state.θ.data rtol = 1e-12
+    @test d2.state.u.data ≈ d.state.u.data rtol = 1e-12
+    @test all(isfinite, interior_view(d2.state.θ))
+    s1, s2 = ts.sfc_mean, ts2.sfc_mean
+    @test keys(s1) == keys(s2) && all(k -> isapprox(s1[k], s2[k]; rtol = 1e-12), keys(s1))
+    # a surface built differently is refused
+    @test_throws ArgumentError restore_checkpoint_state!(ts2,
+        PU.TiledSurfaceState(st.ncolumns - 1, st.offsets[1:end-1], st.tiles, st.θsrc, st.qsrc, st.drag,
+                             st.ustar, st.t_surf, st.sw_down, st.lw_down, st.sfc_mean, st.wθ, st.wq))
 end
 
 @testset "PrescribedSurfaceFlux: Q Δt/Δz₁ into every column of the first level ($core)" for core in (:boussinesq,)

@@ -457,7 +457,77 @@ function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:post_predictor}, 
     return nothing
 end
 
-Aeolus.IO.checkpoint_state(c::TiledUrbanSurface) = Aeolus.IO.structural_state(c)
+"""
+    TiledSurfaceState
+
+The packed checkpoint state of a [`TiledUrbanSurface`](@ref) (#526): every
+built column's surface state in one vector (`SurfaceExchange.pack_state!`,
+column by column in the order of `columns`, `offsets[n]` the first entry
+of the `n`-th built column), plus copies of the component's own arrays.
+What is not here is set by the configuration (land use, fractions of the
+column, tile constants) or is scratch (the soil solvers' workspaces), so it
+restores into a surface built from the same configuration. It replaced the
+generic `structural_state` of the whole component, whose walk of every
+object took 7.2 s per snapshot on a 200 × 200 grid (86,229 soil tiles)
+and made the blow-up guard 80 % of a run's wall time.
+"""
+struct TiledSurfaceState
+    ncolumns::Int
+    offsets::Vector{Int}
+    tiles::Vector{Float64}
+    θsrc::Array{Float64,3}
+    qsrc::Array{Float64,3}
+    drag::Array{Float64,3}
+    ustar::Matrix{Float64}
+    t_surf::Float64
+    sw_down::Float64
+    lw_down::Float64
+    sfc_mean::Dict{Symbol,Float64}
+    wθ::Vector{Float64}
+    wq::Vector{Float64}
+end
+
+_built_columns(c::TiledUrbanSurface) = [col for col in c.surface.columns if col !== nothing]
+
+function _column_offsets(cols)
+    offsets = Vector{Int}(undef, length(cols) + 1)
+    offsets[1] = 1
+    for (n, col) in enumerate(cols)
+        offsets[n+1] = offsets[n] + packed_state_length(col.surface)
+    end
+    return offsets
+end
+
+function Aeolus.IO.checkpoint_state(c::TiledUrbanSurface)
+    cols = _built_columns(c)
+    # a surface type without a packed form: the generic walk
+    all(col -> has_packed_state(col.surface), cols) || return Aeolus.IO.structural_state(c)
+    offsets = _column_offsets(cols)
+    buf = Vector{Float64}(undef, offsets[end] - 1)
+    Threads.@threads for n in eachindex(cols)
+        pack_state!(buf, offsets[n], cols[n].surface)
+    end
+    return TiledSurfaceState(length(cols), offsets, buf, copy(c.θsrc), copy(c.qsrc), copy(c.drag),
+                             copy(c.ustar), c.t_surf[], c.sw_down[], c.lw_down[], copy(c.sfc_mean),
+                             copy(c.wθ), copy(c.wq))
+end
+
+function Aeolus.IO.restore_checkpoint_state!(c::TiledUrbanSurface, s::TiledSurfaceState)
+    cols = _built_columns(c)
+    length(cols) == s.ncolumns && _column_offsets(cols) == s.offsets ||
+        throw(ArgumentError("TiledUrbanSurface: the checkpoint holds $(s.ncolumns) columns of " *
+                            "$(length(s.tiles)) values, this surface is built differently"))
+    Threads.@threads for n in eachindex(cols)
+        unpack_state!(cols[n].surface, s.tiles, s.offsets[n])
+    end
+    copyto!(c.θsrc, s.θsrc); copyto!(c.qsrc, s.qsrc); copyto!(c.drag, s.drag); copyto!(c.ustar, s.ustar)
+    c.t_surf[] = s.t_surf; c.sw_down[] = s.sw_down; c.lw_down[] = s.lw_down
+    empty!(c.sfc_mean); merge!(c.sfc_mean, s.sfc_mean)
+    copyto!(c.wθ, s.wθ); copyto!(c.wq, s.wq)
+    return c
+end
+
+# checkpoints written before #526 (the generic walk), and surfaces without a packed form
 Aeolus.IO.restore_checkpoint_state!(c::TiledUrbanSurface, s::Aeolus.IO.StructuralState) = Aeolus.IO.restore_structural_state!(c, s)
 
 # ---------------------------------------------------------------------------

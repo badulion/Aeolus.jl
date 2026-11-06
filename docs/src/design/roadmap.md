@@ -2302,6 +2302,61 @@ without a retry (max CFL 0.46). The issue's premise proved wrong: it
 read as an instability of the default case, but the case is stable when
 stepped at its own dt; the failure was the forced step.
 
+**The guard's snapshot of the tiled surface (#526, 2026-11-06).** Profiling
+a 24 h Berlin run showed where the time went. The model domain is 100 m,
+200 × 200 × 60, with land-use tiles and ERA5 open faces, on 24 threads.
+The run loop took 1.75 s per step against 0.26 s for the model step
+alone.
+
+87 % of the main thread was the blow-up guard. Twice every 10 steps it
+snapshots the components, and the tiled surface's `checkpoint_state`
+was the generic structural walk: 4,538,305 objects and 346 MB, 7.2 s.
+Most of those bytes were solver scratch (35 workspace vectors per soil
+tile) and constants.
+
+Built: a packed checkpoint state.
+- `SurfaceExchange.pack_state!` / `unpack_state!` are implemented by
+  `SoilWaterColumn`, `SoilThermalColumn`, `SlabLand` and `SurfaceMosaic`.
+- `TiledSurfaceState` holds every tile's state in one vector, packed
+  over the columns in parallel. The walk stays for other surfaces and
+  for old checkpoints.
+
+Measured on that configuration (the real run loop, (240 s run − 40 s
+run) / 100 steps, 24 threads):
+
+| | surface `checkpoint_state` | serialized | run loop |
+| :-- | --: | --: | --: |
+| before | 6.8–7.9 s | 523 MB | 1.753 s/step |
+| after | 0.043 s | 50.6 MB | 0.357 s/step |
+
+That is 4.9× faster, a 24 h run in about 4.3 h instead of 21 h.
+
+The numbers vary between sessions. Two more sessions of the new code gave
+0.430 and 0.361 s/step. A free snapshot (the ceiling) gave 0.294, 0.306,
+0.325 and 0.345 s/step. Measured back to back, the new code was 0.361
+against 0.345: 0.016 s/step for the snapshot. Most of that is garbage
+collection (0.034 against 0.014 s/step), from the snapshot's 50 MB
+allocations.
+
+The real checkpoint/resume path was also checked: run 240 s, resume from
+the 120 s checkpoint, compare the 240 s states. The old and the new code
+give the same continuation to within run-to-run round-off (2.6e-9 after
+the resume, 2.9e-9 between two uninterrupted runs).
+
+That check also showed a resume of an open-box domain does not continue
+the uninterrupted run. The first step after it differs by up to 0.012 m/s
+at the east open face, the same with the old and the new surface state.
+That is pre-existing and not part of this change; its numbers are in
+the description of #526's PR, for an issue of its own.
+
+Tests: a column (with an aquifer), a mosaic and the whole component are
+restored into another history with the scratch poisoned (NaN), and must
+continue as the original (rtol 1e-12). A test expectation that proved too
+weak: the first component test poisoned the tiles through `unpack_state!`
+itself, so a dropped `T_skin` restore went unnoticed (identical
+histories). It now gives the surface a different history (three extra
+tile steps) and checks that a dropped `T_skin` fails it.
+
 **Open after these blocks**: #397 (FFTW MEASURE segfault);
 #238 (implausible Berlin nights).
 
@@ -2310,6 +2365,20 @@ stepped at its own dt; the failure was the forced step.
 Results need not be bit-identical across thread counts, machines,
 restarts or refactors; tests assert physics within stated tolerances
 (maintainer decision, 2026-10-16). See `docs/src/testing.md`.
+
+**FFTW threads in every model (#524, 2026-11-06).** Since KA-h (#298)
+`init_threads!` puts FFTW on `Threads.nthreads()`, but only the urban
+site's `build_case` called it: every other model domain, nested or not,
+kept FFTW at its start-up count of 1, so the pressure solver's FFTs ran
+on one core while the kernels ran on all of them. `Config.build` now
+calls `init_threads!` for every run before any plan is made; an explicit
+count (`[fftw] threads`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!`) is
+kept. Measured on a 200 × 200 × 60 open-box domain (Berlin, 100 m, 40
+steps, 24 Julia threads on 12 cores): the pressure solve went from 3.48 s
+(1 FFTW thread) to 0.89 s (12 threads), 8 % → 2 % of the step; the
+step's total did not change, so the remaining time is elsewhere (being
+profiled). Test: `config_model.jl` builds a non-urban run from a policy
+at 3 threads and expects `Threads.nthreads()`, and an explicit 2 kept.
 
 # Chemistry and aerosol
 
