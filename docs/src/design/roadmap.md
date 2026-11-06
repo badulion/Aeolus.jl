@@ -2448,6 +2448,33 @@ run.toml` replays it (within round-off: since #493 results need not be
 bit-identical). Archived reference output and
 compiler-flag provenance remain.
 
+### Spin-up (#519)
+
+**Surface spin-up, shipped** (#519, part B of the issue): PALM's `spinup_time` as a run-level `[spinup]` section. See [Run configuration](run_configuration.md#Surface-spin-up-([spinup],-#519)).
+
+- **How it runs.** The urban site's surfaces, radiation and building advance alone at negative times. The air above the surfaces is forced by PALM's solar sinusoid or by the dynamic driver's `sfc_temperature`. The soil water is frozen by default. Afterwards the atmosphere, the clock and the ledgers are exactly as at the start.
+- **The initial envelope.** The city-mean building now starts in steady conduction between outdoor air and room (`steady_conduction!`, `steady_envelope!`).
+- **Measured.** These runs are on the synthetic small city (radiation every 600 s, amplitude 4 K). The figure is the maximum over surface classes of the day-over-day drift of the daily-mean surface temperature:
+  - 2 d: roof 5.26 K/d with `dt = 300`, 2.91 K/d with `dt = 60`;
+  - 3 d: roof 0.144 / 0.026 K/d, street 0.25 / 0.21 K/d;
+  - 4 d (`dt = 300`): roof −0.007 K/d, street 0.13 K/d;
+  - water stays at 2–2.7 K/d, because its slab (C = 8 × 10⁶ J m⁻³ K⁻¹) is slow;
+  - cost: 4 d at `dt = 300` is 1152 steps in 31 s; 3 d at `dt = 60` is 4320 steps in 67 s.
+- **Time scales.** These are the slowest eigenmodes: brick wall 9.3 h, roof 26 h, ground stack 19 d, soil (3.43 m) 30 d. Deep soil is for #521 (profiles from data), not for the spin-up.
+- **Validation.** `validation/run.jl --only urban_checks.jl`: 33 pass, 0 fail (292 s).
+- **Test expectations that were wrong:**
+  - "the roof concrete is within 1 K of the room" was wrong: the analytic drop is 1.07 K. The test now asserts the analytic q·(R_si + R_plaster + R_concrete).
+  - The XPS assertion is the exact q·(d − Δz)/k.
+  - `config_model.jl`'s inventory of run-level sections gains `spinup` by design.
+- **Deviations from the issue's plan:**
+  - The forcing is θ only. Wind and humidity stay at the initial state, as in PALM, rather than coming from the driver.
+  - The solar forcing uses the case date's sun on every day.
+  - There is no separate `surface_time` / `surface_dt`: the section is `[spinup] time` / `dt`.
+- **Open:**
+  - part A (`[time] spinup`: output, statistics and checks skipping the turbulence spin-up);
+  - saving and reusing the spun-up state (PALM's `read_spinup_data`);
+  - moving the validation cases' own spin-up loops (`land_surface_fluxnet`, `anthropogenic_heat`, `building_energy`) onto it.
+
 ---
 
 # Data assimilation and inverse problems
