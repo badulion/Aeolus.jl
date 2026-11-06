@@ -140,9 +140,9 @@ the feature PR:
   and the numbers it was measured at**, record any bug the tests caught
   and any test *expectation* that proved wrong, and tick the phase in the
   README.
-- When an era's last phase is merged: close the era milestone, update the
-  README era table, capability summary, validation table and test count,
-  add or extend the era's theory page, and rebuild the docs
+- When a milestone's last issue is merged: close the milestone, update the
+  README milestone table, capability summary, validation table and test
+  count, add or extend the topic's theory page, and rebuild the docs
   (`julia --project=docs docs/make.jl`) checking for missing-docstring
   warnings.
 
@@ -174,7 +174,7 @@ in one place and the others delegate. This has been violated three times
 and caught three times: urban material tables, band-wavelength helpers,
 and Köhler theory — where three copies had drifted far enough to
 disagree about whether a particle activates. Shared quantities go in the
-era contract (`RadiationCore`, `MoistThermodynamics`) as a generic that
+shared core (`RadiationCore`, `MoistThermodynamics`) as a generic that
 implementers extend.
 
 **Minimal dependencies.** Use a well-maintained Julia package rather
@@ -216,8 +216,8 @@ weeks because nobody viewed the image at size.
 ## Layout
 
 ```
-src/            70 modules. Era contracts: RadiationCore, MoistThermodynamics, SurfaceExchange
-test/           runtests.jl + era*_*.jl and other module tests (the PR gate);
+src/            70 modules. Shared cores: RadiationCore, MoistThermodynamics, SurfaceExchange
+test/           runtests.jl + one test file per topic or module (the PR gate);
                 run.jl = parallel runner, test_tags.toml = weights
 validation/     runvalidation.jl + simulated validation cases (not a gate);
                 run.jl = the same runner
@@ -228,4 +228,7 @@ docs/src/       theory, design, API reference
 ```
 
 Roadmap: [`docs/src/design/longterm_roadmap.md`](docs/src/design/longterm_roadmap.md).
-Issues are grouped into milestones, one per era.
+Issues are grouped into milestones named by content (clouds and
+microphysics, turbulence closure, …), never into numbered periods.
+"Eras" are not used: the word is reserved for the ERA5 reanalysis
+(maintainer decision, 2026-11-06; `test/naming_conventions.jl`).
