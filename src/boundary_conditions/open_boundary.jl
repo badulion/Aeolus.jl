@@ -282,14 +282,32 @@ function blend_window!(dst::AbstractArray{T,3}, A::AbstractArray, B::AbstractArr
     _npts(r) == 0 && return dst
     checkbounds(A, r...); checkbounds(B, r...)
     checkbounds(dst, r[1] .- o[1], r[2] .- o[2], r[3] .- o[3])
+    # the dense array behind the storage points, found once (#529)
+    a, oa = blend_source(A, r)
+    b, ob = blend_source(B, r)
+    checkbounds(a, r[1] .- oa[1], r[2] .- oa[2], r[3] .- oa[3])
+    checkbounds(b, r[1] .- ob[1], r[2] .- ob[2], r[3] .- ob[3])
     # pointwise in time: one launch (KA-f, #297)
-    launch!(Backends.backend(dst), _blend_body!, r, dst, A, B, o, τ1, τT)
+    launch!(Backends.backend(dst), _blend_body!, r, dst, a, b, o, oa, ob, τ1, τT)
     return dst
 end
 _npts(r) = length(r[1]) * length(r[2]) * length(r[3])
 
-@inline function _blend_body!(i, j, k, dst, A, B, o, τ1, τT)
-    @inbounds dst[i - o[1], j - o[2], k - o[3]] = τ1 * A[i, j, k] + τT * B[i, j, k]
+"""
+    blend_source(A, ranges::NTuple{3,UnitRange{Int}}) -> (array, offset)
+
+The array [`blend_window!`](@ref) reads the storage points `ranges` of `A`
+from, and its index offset: `A[i, j, k] == array[i - offset[1], j -
+offset[2], k - offset[3]]` on `ranges`. The default is `A` itself with a
+zero offset. A storage-indexed view backed by smaller arrays (a dynamic
+driver's `SlabArray`) returns the dense array that holds the whole box,
+so the blend reads it directly instead of searching for every point (#529).
+"""
+blend_source(A::AbstractArray, ::NTuple{3,UnitRange{Int}}) = (A, (0, 0, 0))
+
+@inline function _blend_body!(i, j, k, dst, A, B, o, oa, ob, τ1, τT)
+    @inbounds dst[i - o[1], j - o[2], k - o[3]] =
+        τ1 * A[i - oa[1], j - oa[2], k - oa[3]] + τT * B[i - ob[1], j - ob[2], k - ob[3]]
     return nothing
 end
 

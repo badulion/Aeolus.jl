@@ -172,6 +172,19 @@ Base.IndexStyle(::Type{SlabArray}) = IndexCartesian()
     throw(BoundsError(a, (i, j, k)))
 end
 
+# The time blend of a plane reads the one slab holding the plane's whole
+# box, found once, instead of searching the slabs at every point (#529).
+# A box no single slab holds keeps the point-by-point getindex.
+function blend_source(a::SlabArray, r::NTuple{3,UnitRange{Int}})
+    for s in a.slabs
+        sr = s.ranges
+        if all(d -> first(r[d]) >= first(sr[d]) && last(r[d]) <= last(sr[d]), 1:3)
+            return s.data, (first(sr[1]) - 1, first(sr[2]) - 1, first(sr[3]) - 1)
+        end
+    end
+    return a, (0, 0, 0)
+end
+
 function snapshot_values(s::FileSnapshot, name::Symbol)
     v = get(s.slabs, name, nothing)
     v === nothing && throw(ArgumentError("FileBoundaryData: the run has an open-boundary plane for :$name, " *
