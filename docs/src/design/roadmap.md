@@ -2311,6 +2311,20 @@ Results need not be bit-identical across thread counts, machines,
 restarts or refactors; tests assert physics within stated tolerances
 (maintainer decision, 2026-10-16). See `docs/src/testing.md`.
 
+**FFTW threads in every model (#524, 2026-11-06).** Since KA-h (#298)
+`init_threads!` puts FFTW on `Threads.nthreads()`, but only the urban
+site's `build_case` called it: every other model domain, nested or not,
+kept FFTW at its start-up count of 1, so the pressure solver's FFTs ran
+on one core while the kernels ran on all of them. `Config.build` now
+calls `init_threads!` for every run before any plan is made; an explicit
+count (`[fftw] threads`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!`) is
+kept. Measured on a 200 × 200 × 60 open-box domain (Berlin, 100 m, 40
+steps, 24 Julia threads on 12 cores): the pressure solve went from 3.48 s
+(1 FFTW thread) to 0.89 s (12 threads), 8 % → 2 % of the step; the
+step's total did not change, so the remaining time is elsewhere (being
+profiled). Test: `config_model.jl` builds a non-urban run from a policy
+at 3 threads and expects `Threads.nthreads()`, and an explicit 2 kept.
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*
