@@ -118,10 +118,10 @@ follow the same order.
     - ✅ Phase 57 — Wall models for high Reynolds number
     - ✅ Phase 58 — Stable-boundary-layer and intermittent turbulence
     - ✅ Phase 59 — Transition and laminar-turbulent coexistence
-- ☐ **Model infrastructure**
+- ✅ **Model infrastructure**
     - ✅ Run configuration and input drivers (#311)
     - ✅ One model: core code, configuration and input drivers (#459)
-    - ☐ Structured logging, run folders, diagnostics and provenance (#293)
+    - ✅ Structured logging, run folders, diagnostics and provenance (#293, #514)
     - ✅ Tests, CI and documentation deployment (#316, #317, #320, #354)
     - ✅ Speed over bit-identity (#493)
 - ☐ **Chemistry and aerosol** *(Phases 60–66)*
@@ -2201,7 +2201,7 @@ across nests) and #461 (external LES validation) are separate.
 
 ---
 
-### Structured logging, run folders, diagnostics and provenance (epic #293, open)
+### Structured logging, run folders, diagnostics and provenance (epic #293)
 
 **✅ SHIPPED** (`src/logging/RunLog.jl`, `src/io/run_folder.jl`; LOG-a
 to LOG-g, #333–#338 and #347 / PRs #340, #344, #346, #370, #373, #388,
@@ -2227,6 +2227,48 @@ allocates 0 B with a hook installed; a run folder costs 11.6 ms per run.
 strings, so `resume = :latest` could restart the wrong run; the
 `diagnostics.nc` provenance of a restart that changed its config
 recorded the run's first config.
+
+**Budget restored (#514 / PR #515, 2026-11-06).** By November the same
+parts were **2.27 %** of a 3.71 ms step and the benchmark failed: the
+step had become 30 % faster (#493), the monitor had not, and nothing
+reran the benchmark. Without checking less often:
+- the attached guard repeats nothing `step_adaptive!` has done: it
+  sweeps only `νt`, `κt` (and a dry core's `qv`) and keeps the step's
+  rollback snapshot as the last good state instead of copying the state;
+- the remaining full checks are one fused, threaded sweep;
+- one pressure value is read between checks;
+- the costly `diagnostics.nc` rows go in the 5 s block write (each one
+  was 13.5 ms written at once, 0.085 ms of it the profiles).
+
+Measured on 64×64×32:
+- the default (attached) monitor's parts are **0.57 %** of a step on 1
+  thread and 0.46–0.55 % on 4–8; a due check costs 0.068 ms against
+  0.44 ms before;
+- timed step by step, what a run pays is **+1.1 to +1.5 %** on 1 thread
+  (master +2.8 to +3.1 %), about 2.5× the parts (cache effects). The
+  benchmark now prints both and asserts the parts.
+
+Against master, 13 blowup scenarios caught the same blowups at the
+same step in the same fields; under an attached monitor the crash
+checkpoint is one step older, and fixed-step runs are stopped 3–7 steps
+earlier. `les_tke` (32³, fixed FFTW planner) was bit-for-bit identical
+in field output, `diagnostics.nc` and `results.toml`.
+
+**Not met / loose ends**:
+- The benchmark was not run by anything, so the overrun went unnoticed
+  for a month; it is still a manual benchmark.
+- The fused finiteness test in `save_state!` was rejected: it was slower
+  serially (0.54 against 0.45 ms).
+- The per-step CSV row costs ~23 µs in a run against ~2 µs timed alone
+  (the largest remaining in-run cost).
+- `bitwise_reproducible` is still recorded in the provenance, although
+  #493 dropped bit-identity as a goal.
+- Asynchronous field-output and checkpoint writes are #516 (Performance
+  milestone).
+
+**Expectation that was wrong**: `test/logging_diagnostics_nc.jl` asserted
+that a costly row is on disk at once. That was the old policy, which #514
+changed on purpose, so the code was right and the expectation was stale.
 
 ### Tests, CI and documentation deployment (#316, #317, #320, #354)
 

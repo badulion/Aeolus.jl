@@ -21,7 +21,7 @@ measured, is in the [Roadmap](design/roadmap.md)):
 * ✅ [Clouds and microphysics](design/roadmap.md#Clouds-and-microphysics) (Phases 39–45)
 * ✅ [Land, urban and surface exchange](design/roadmap.md#Land,-urban-and-surface-exchange) (Phases 46–53)
 * ✅ [Turbulence closure](design/roadmap.md#Turbulence-closure) (Phases 54–59)
-* ☐ [Model infrastructure](design/roadmap.md#Model-infrastructure)
+* ✅ [Model infrastructure](design/roadmap.md#Model-infrastructure)
 * ☐ [Chemistry and aerosol](design/roadmap.md#Chemistry-and-aerosol) (Phases 60–66)
 * ☐ [Real-world data, forcing and validation](design/roadmap.md#Real-world-data,-forcing-and-validation) (Phases 67–73)
 * ☐ [Data assimilation and inverse problems](design/roadmap.md#Data-assimilation-and-inverse-problems) (Phases 74–79)
