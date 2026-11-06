@@ -2331,6 +2331,13 @@ run) / 100 steps, 24 threads):
 
 That is 4.9× faster, a 24 h run in about 4.3 h instead of 21 h.
 
+The numbers vary between sessions. Two more sessions of the new code gave
+0.430 and 0.361 s/step. A free snapshot (the ceiling) gave 0.294, 0.306,
+0.325 and 0.345 s/step. Measured back to back, the new code was 0.361
+against 0.345: 0.016 s/step for the snapshot. Most of that is garbage
+collection (0.034 against 0.014 s/step), from the snapshot's 50 MB
+allocations.
+
 The real checkpoint/resume path was also checked: run 240 s, resume from
 the 120 s checkpoint, compare the 240 s states. The old and the new code
 give the same continuation to within run-to-run round-off (2.6e-9 after
