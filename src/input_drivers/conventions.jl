@@ -94,11 +94,13 @@ file_fnv1a64(path::AbstractString) = string(fnv1a64(read(path)); base = 16, pad 
 
 """
     DriverVariable(name, dims, type; units = "", long_name, standard_name = "",
-                   required = true, range = nothing, doc = "")
+                   required = true, range = nothing, doc = "", alt_dims = ())
 
 One variable of a [`DriverSchema`](@ref): its `name`, its dimensions
 `dims` (Julia index order: `("x", "y")` is an `(Nx, Ny)` array; `"*"`
-matches any dimension name, `()` is a scalar), its
+matches any dimension name, `()` is a scalar) and the other dimensions it
+may have instead, `alt_dims` (a tuple of such tuples: PALM's `init_soil_t`
+is a profile over `zsoil` or a volume over `x, y, zsoil`), its
 element `type`, its CF `units`, `long_name` and `standard_name` (`""`
 where CF has none), whether a file must have it, and the closed `range`
 `(lo, hi)` its values must lie in (`nothing`: unchecked; `NaN` values,
@@ -114,11 +116,13 @@ struct DriverVariable
     required::Bool
     range::Union{Nothing,Tuple{Real,Real}}
     doc::String
+    alt_dims::Vector{Tuple{Vararg{String}}}
 end
 DriverVariable(name, dims, type; units = "", long_name = name, standard_name = "", required = true,
-               range = nothing, doc = "") =
+               range = nothing, doc = "", alt_dims = ()) =
     DriverVariable(String(name), Tuple(String.(dims)), type, String(units), String(long_name),
-                   String(standard_name), required, range, String(doc))
+                   String(standard_name), required, range, String(doc),
+                   Tuple{Vararg{String}}[Tuple(String.(a)) for a in alt_dims])
 
 """
     DriverSchema(kind, form, doc, variables; attributes = [])
@@ -207,8 +211,9 @@ function check_driver(path::AbstractString, schema::DriverSchema; source::Bool =
             end
             var = ds[v.name]
             dn = Tuple(String.(NCDatasets.dimnames(var)))
-            dims_ok = _dims_match(dn, v.dims)
-            dims_ok || push!(probs, "$path: $(v.name) is over $(dn), expected $(v.dims)")
+            dims_ok = any(w -> _dims_match(dn, w), (v.dims, v.alt_dims...))
+            dims_ok || push!(probs, "$path: $(v.name) is over $(dn), expected " *
+                                    join(string.((v.dims, v.alt_dims...)), " or "))
             T = eltype(var.var)
             T == v.type || push!(probs, "$path: $(v.name) has element type $T, expected $(v.type)")
             u = _attr(var, "units", "")
@@ -251,7 +256,7 @@ function schema_markdown(s::DriverSchema)
     for v in s.variables
         r = v.range === nothing ? "" : "[$(v.range[1]), $(v.range[2])]"
         sn = isempty(v.standard_name) ? "" : " (CF `$(v.standard_name)`)"
-        println(io, "| `$(v.name)` | ", isempty(v.dims) ? "scalar" : join(v.dims, ", "), " | `", v.type, "` | ",
+        println(io, "| `$(v.name)` | ", join((isempty(d) ? "scalar" : join(d, ", ") for d in (v.dims, v.alt_dims...)), " or "), " | `", v.type, "` | ",
                 isempty(v.units) ? "" : "`$(v.units)`", " | ", v.required ? "yes" : "no", " | ", r, " | ",
                 v.long_name, sn, isempty(v.doc) ? "" : ": " * v.doc, " |")
     end
