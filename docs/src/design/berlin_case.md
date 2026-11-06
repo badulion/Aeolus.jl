@@ -197,7 +197,7 @@ its 29 issues are closed and 19 are open:
 None of this is a roadmap phase: the turbulence-closure and chemistry groundwork it
 delivered (the dynamic Smagorinsky in `Operators`, the reduced
 chemistry in `src/Chemistry.jl`) is recorded under those milestones in the
-long-range roadmap, without marking a phase shipped.
+roadmap, without marking a phase shipped.
 
 ## Layout
 

@@ -436,7 +436,7 @@ julia --project=docs docs/make.jl     # build locally (never deploys)
 
 Development is organised into milestones named by content, each a coherent
 block of capability that ends with a validation target. Full plan:
-[`docs/src/design/longterm_roadmap.md`](docs/src/design/longterm_roadmap.md).
+[`docs/src/design/roadmap.md`](docs/src/design/roadmap.md).
 
 - [x] **LES core and physics scaffolds** — and the first urban flagship *(Phases 1–20)*
 - [x] **Numerical foundations** — cut-cell IBM, IMEX, WENO-Z/TENO,

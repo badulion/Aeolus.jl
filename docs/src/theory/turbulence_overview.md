@@ -7,7 +7,7 @@ stability functions fit together, what the Berlin flagship runs by
 default, and the measured validation. The physics of each piece is on
 its own page (list at the end). The numbers quoted here are taken from
 the merged PRs (#203–#231, #240–#244, #271) and the
-[long-range roadmap](../design/longterm_roadmap.md).
+[roadmap](../design/roadmap.md).
 
 ## One contract for every closure
 

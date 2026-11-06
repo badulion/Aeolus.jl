@@ -135,20 +135,19 @@ is merged, not inside it** — see the split below.
 **After the PR is merged** — a separate *closeout* change, never part of
 the feature PR:
 
-- When a phase's last issue is merged: mark the phase ✅ SHIPPED in
-  `docs/src/design/longterm_roadmap.md` with **what was actually built
-  and the numbers it was measured at**, record any bug the tests caught
-  and any test *expectation* that proved wrong, and tick the phase in the
-  README.
-- When a milestone's last issue is merged: close the milestone, update the
-  README milestone table, capability summary, validation table and test
+- When a phase's last issue is merged: tick the phase (✅) in the Status
+  checklist of `docs/src/design/roadmap.md` and write in its section
+  **what was actually built and the numbers it was measured at**; record
+  any bug the tests caught and any test *expectation* that proved wrong.
+- When a milestone's last issue is merged: close the milestone, tick it in
+  the roadmap's Status checklist and in the README roadmap, capability summary, validation table and test
   count, add or extend the topic's theory page, and rebuild the docs
   (`julia --project=docs docs/make.jl`) checking for missing-docstring
   warnings.
 
 Two reasons status updates are kept out of the feature PR. A phase cannot
 honestly be marked SHIPPED while the PR delivering it is still open. And
-`longterm_roadmap.md` and `README.md` are shared files — if every
+`roadmap.md` and `README.md` are shared files — if every
 phase-completing branch edited them, concurrent agents would collide on
 exactly the two files most likely to be touched at once.
 
@@ -227,7 +226,7 @@ docs/src/       theory, design, API reference
 .worktrees/     agent worktrees (gitignored)
 ```
 
-Roadmap: [`docs/src/design/longterm_roadmap.md`](docs/src/design/longterm_roadmap.md).
+Roadmap: [`docs/src/design/roadmap.md`](docs/src/design/roadmap.md).
 Issues are grouped into milestones named by content (clouds and
 microphysics, turbulence closure, …), never into numbered periods.
 "Eras" are not used: the word is reserved for the ERA5 reanalysis
