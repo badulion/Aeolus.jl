@@ -704,6 +704,11 @@ function step_guard(sim::BoussinesqSimulation{T}) where {T}
     return (finite = fin == 0, divergence = d, speed = s)
 end
 
+# what a passing step_guard (and `_all_finite`, after fast processes) has
+# verified finite: the attached blowup guard need not sweep it again (#514)
+Simulations.guard_covered(sim::BoussinesqSimulation) =
+    sim.has_moisture ? (:u, :v, :w, :p, :θ, :qv) : (:u, :v, :w, :p, :θ)
+
 # The reason a step is rejected, in the order of the separate checks it
 # replaces: non-finite state, then divergence, then the speed cap.
 function _guard_reason(sim, div_tol, u_cap)
@@ -844,6 +849,8 @@ function _step_adaptive!(sim, constraints::CFLConstraints;
     rec = sim.workspaces.rec
     t_guard = time_ns()
     save_state!(snapshot, sim)
+    # the step's start state, for an attached blowup guard (#514)
+    rec.depth == 1 && (rec.entry_snap = snapshot)
     # open-boundary buffers are state too: a retry must start from them
     bc_snap = open_boundary_snapshot(sim)
     # the closure's memory: the step commits it once (advance_sgs!); a
@@ -916,10 +923,14 @@ function _step_adaptive!(sim, constraints::CFLConstraints;
                 cb(sim, Δt_sub)
             end
         end
-        _all_finite(sim) ||
-            @warn("step_adaptive!: state became non-finite inside a fast process",
-                  subsystem = :timestepping, domain = current_domain(), dt = Δt,
-                  processes = Tuple(first.(procs)))
+        fin = _all_finite(sim)
+        fin || @warn("step_adaptive!: state became non-finite inside a fast process",
+                     subsystem = :timestepping, domain = current_domain(), dt = Δt,
+                     processes = Tuple(first.(procs)))
+        rec.depth == 1 && (rec.exit_verified = fin)
+    else
+        # the guard sweep of the accepted step covered the end state (#514)
+        rec.depth == 1 && (rec.exit_verified = true)
     end
 
     return (sim, Δt, n_retries)

@@ -349,7 +349,8 @@ end
 
 """
     checkpoint_payload(sim; sgs = nothing, components = (;), stepper = nothing,
-                       rng = nothing, extra = Dict(), buffers = nothing) -> Dict{Symbol,Any}
+                       rng = nothing, extra = Dict(), buffers = nothing,
+                       with_fields = true) -> Dict{Symbol,Any}
 
 The in-memory checkpoint that [`checkpoint!`](@ref) writes: everything
 it lists, self-contained (the field data and every component state are
@@ -357,19 +358,23 @@ copies, nothing is aliased to the run). [`write_checkpoint`](@ref) puts
 it on disk. The blowup guard (#335) holds the last good state of a run
 this way and writes it as the crash checkpoint. `buffers`, the `:fields`
 of an earlier payload of the same simulation, are reused for the field
-copies (no allocation); they then belong to the new payload.
+copies (no allocation; any array type, so also on a device backend, #514);
+they then belong to the new payload. With `with_fields = false` the
+payload's `:fields` is left empty for the caller to fill (the blowup
+guard puts the buffers of a rollback snapshot there, #514).
 """
 function checkpoint_payload(sim;
                             sgs = nothing, components = (;), stepper = nothing,
                             rng = nothing, extra::AbstractDict = Dict{Symbol,Any}(),
-                            buffers::Union{Nothing,AbstractDict} = nothing)
+                            buffers::Union{Nothing,AbstractDict} = nothing,
+                            with_fields::Bool = true)
     _require_checkpoint(sim)
     closure = sgs === nothing ? nothing : sgs_closure(sgs)
     comps = _component_dict(components)
     fields = Dict{Symbol,Any}()
-    for (k, f) in pairs(checkpoint_fields(sim))
+    with_fields && for (k, f) in pairs(checkpoint_fields(sim))
         b = buffers === nothing ? nothing : get(buffers, k, nothing)
-        fields[k] = b isa Array && size(b) == size(f.data) && eltype(b) == eltype(f.data) ?
+        fields[k] = typeof(b) == typeof(f.data) && size(b) == size(f.data) ?
                     copyto!(b, f.data) : copy(f.data)
     end
     return Dict{Symbol,Any}(

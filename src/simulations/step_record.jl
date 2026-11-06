@@ -54,9 +54,22 @@ the outermost step cores), `wall_pressure` (the pressure solves),
 also when a driver calls them between steps), `wall_guard`
 (`step_adaptive!`'s snapshot, post-step guard and rollbacks).
 
+**The step's own checks** (set by `step_adaptive!` for its outermost
+step, #514; reset at the start of every outermost step):
+
+| field | meaning |
+| :---- | :------ |
+| `entry_snap` | the rollback snapshot (`TimeIntegration.StateSnapshot`) the step saved its start state into, or `nothing` (a core without one) |
+| `exit_verified` | whether the step verified its end state finite itself (the post-step `step_guard`, and the check after its fast processes): every field of [`guard_covered`](@ref) |
+
+The blowup guard of an attached run monitor trusts them instead of
+repeating the sweep and the copy (`Aeolus.IO.BlowupGuard`).
+
 The hook ([`set_step_hook!`](@ref)) is called as `hook(sim, record)` at
-the end of every step, after the record is complete; the run monitor's
-`attach` mode installs one (`Aeolus.IO.with_monitor`).
+the end of every step, after the record is complete, and
+[`step_begun`](@ref)`(hook, sim, record)` at the start of every outermost
+step; the run monitor's `attach` mode installs one
+(`Aeolus.IO.with_monitor`).
 """
 mutable struct StepRecord
     hook::Any
@@ -91,12 +104,15 @@ mutable struct StepRecord
     wall_sgs::Float64
     wall_cfl::Float64
     wall_guard::Float64
+    # the step's own checks (#514)
+    entry_snap::Any
+    exit_verified::Bool
 end
 
 StepRecord() = StepRecord(nothing, 0, 0, UInt64(0), NaN, NaN, :fixed, 0,
                           NaN, NaN, NaN, NaN, :fixed,
                           0, 0.0, 0, NaN, NaN, 0, 0, NaN, 0, NaN,
-                          0.0, 0.0, 0.0, 0.0, 0.0)
+                          0.0, 0.0, 0.0, 0.0, 0.0, nothing, false)
 
 """
     reset_interval!(record::StepRecord) -> record
@@ -124,8 +140,33 @@ _wall(t0::UInt64) = (time_ns() - t0) / 1e9
     r.depth == 1 || return false
     r.t_wall0 = time_ns()
     r.t_sim0 = Float64(sim.t)
+    r.entry_snap = nothing
+    r.exit_verified = false
+    hk = r.hook
+    hk === nothing || step_begun(hk, sim, r)
     return true
 end
+
+"""
+    step_begun(hook, sim, record) -> nothing
+
+Called by the step cores at the start of every outermost step of `sim`
+with its diagnostics hook (#514), before the step touches the state. A
+no-op unless the hook's type extends it: the run monitor's hook keeps
+what a crash checkpoint needs besides the fields (the closure's memory,
+the components, the stepper) of the start of a step whose start state it
+may keep as the last good state.
+"""
+step_begun(hook, sim, r) = nothing
+
+"""
+    guard_covered(sim) -> Tuple of Symbols
+
+The fields of `checkpoint_fields(sim)` whose interior a passing
+post-step check of `step_adaptive!` has verified finite (#514): the
+fields the step's own `step_guard` sweeps. Empty for a core without one.
+"""
+guard_covered(sim) = ()
 
 # A step that throws: close its bracket without recording a step.
 @inline _step_abort!(r::StepRecord) = (r.depth = max(r.depth - 1, 0); nothing)

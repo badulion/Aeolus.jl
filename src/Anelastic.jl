@@ -82,7 +82,7 @@ using ..RunLog: current_domain   # structured events (LOG-a, #333)
 
 import ..PressureSolvers: solve!, poisson_axis_bcs, solver_stats
 import ..TimeSteppers: step!
-import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile, step_rk3!
+import ..Simulations: run!, kinetic_energy, max_divergence, mean_θ_profile, step_rk3!, guard_covered
 
 using ..Simulations: horizontal_mean, horizontal_variance, add_velocity_sponge!,
                      StepWorkspaces, axpy!, pressure_from_potential!, zero_storage!,
@@ -2343,6 +2343,9 @@ function step_adaptive!(sim::MassWeightedSimulation, constraints::CFLConstraints
     _step_end!(rec, sim, res[2], outer; retries = res[3])
     return res
 end
+
+# what its passing step_guard has verified finite (#514)
+guard_covered(::MassWeightedSimulation) = (:u, :v, :w, :p, :θ)
 
 _all_finite(sim::MassWeightedSimulation) =
     allfinite(interior_view(sim.u)) && allfinite(interior_view(sim.v)) &&

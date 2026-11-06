@@ -33,6 +33,7 @@ using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
+       step_begun, guard_covered,
        reset_interval!, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile, sponge_target,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
