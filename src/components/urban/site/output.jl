@@ -49,7 +49,7 @@ static_output_fields(case) = OutputVariable[
 # context is the domain)
 _on_domain(v::OutputVariable) =
     OutputVariable(v.name, v.units, v.long_name, v.dims, d -> v.getter(urban_case(d));
-                   eltype = v.eltype, group = v.group)
+                   eltype = v.eltype, group = v.group, standard_name = v.standard_name)
 
 """
     Components.outputs(case::UrbanSite) -> Vector{OutputVariable}
