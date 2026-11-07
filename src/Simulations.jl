@@ -29,7 +29,8 @@ using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPois
 using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gradient_slabs!,
                                 _divergence_into!
 # the blocked tendency + predictor sweep (SC-e, #405)
-using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs
+using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
+                                sweep_term, prepare!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
@@ -39,6 +40,23 @@ export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_h
        horizontal_mean, horizontal_variance, resolved_flux_wθ
 
 include("simulations/step_record.jl")   # the per-step record and diagnostics hook (#336)
+
+"""
+    SweepReport
+
+Which path the substages of a simulation's Boussinesq step core took
+(#533): `fused` and `unfused` count the substages, `fallback` holds the
+terms (`key => reason`, [`SWEEP_FALLBACKS`](@ref)) that kept the first
+unfused substage off the fused sweep. Logged once, when it is first
+recorded; written to the run's `results.toml` ([`sweep_report`](@ref)).
+"""
+mutable struct SweepReport
+    fused::Int
+    unfused::Int
+    fallback::Vector{Pair{String,String}}
+    reported::Bool
+end
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false)
 
 """
     StepWorkspaces()
@@ -61,9 +79,10 @@ mutable struct StepWorkspaces
     snapshot::Any
     imex::Any
     sweep::Any            # FiniteVolume.SweepBuffers of the blocked core (SC-e, #405)
+    fused::SweepReport    # which path the substages took (#533)
     rec::StepRecord
 end
-StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, StepRecord())
+StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, SweepReport(), StepRecord())
 
 """
     BoussinesqSimulation(mesh; kwargs...)
@@ -477,10 +496,12 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     fill_state_halos!(sim)
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
 
-    # Nothing between the base tendencies and the predictor: steps 2-7 and
-    # 11 in one blocked sweep (SC-e, #405), the same bits.
-    _blocked_core(sim, closure, body_force!, post_predictor!, momentum_advection) &&
-        return _blocked_projection!(sim, Δt, t_bc, stage)
+    # Every term between the base tendencies and the predictor is a sweep
+    # term: steps 2-7 and 11 in one fused sweep (SC-e #405, #533), the
+    # values of the passes below within round-off. Otherwise the passes
+    # below (the reference), and the run reports which term caused it.
+    _try_fused!(sim, Δt, t_bc, stage, closure, body_force!, post_predictor!, momentum_advection,
+                sim.has_viscosity ? sim.ν : nothing) && return sim
 
     # 2.-3. The tendencies from zero: momentum + scalar advection, then the
     #       molecular viscosity / diffusion (qv: the same molecular
@@ -583,57 +604,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     return sim
 end
 
-# Whether a substage of `_euler_projection!` has nothing that adds to the
-# tendencies or reads the state between the base tendencies (steps 2-3)
-# and the scalar update (step 11): the built-in momentum advection, no SGS
-# closure, buoyancy, Coriolis, surface flux, sponge, hooks or open
-# boundaries, on the CPU. The DNS core (SC-e, #405).
-_blocked_core(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection) =
-    momentum_advection === momentum_advect! && closure === nothing && body_force! === nothing &&
-    post_predictor! === nothing &&
-    !(sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) &&
-    !has_open_boundaries(sim.bcs) && Backends.backend(sim.u.data) isa Backends.CPUBackend
-
-# Steps 2-12 of `_euler_projection!` for a `_blocked_core`: the tendencies
-# and the predictors of u, v, w and of θ (qv) in one sweep
-# (`FiniteVolume.blocked_predictor!`), then the projection. The scalars'
-# update of step 11 moves before the projection, which does not read them;
-# the tendency fields are not used.
-function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage) where {T}
-    moist = sim.has_moisture
-    ii, jj, kk = interior(sim.mesh)
-    ns = sweep_slabs(Backends.backend(sim.u.data), length(ii) * length(jj) * length(kk), length(kk))
-    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, moist ? 5 : 4, ns, length(kk))
-    sim.workspaces.sweep = bufs
-    if sim.has_viscosity
-        _blocked_sweep!(bufs, sim, Δt, stage, sim.ν)
-    else
-        _blocked_sweep!(bufs, sim, Δt, stage, nothing)
-    end
-    update_open_boundaries!(sim, t_bc, Δt)
-    _project_velocity!(sim, _DivBy(Δt), stage)
-    if stage !== nothing                    # the halos of the RK3 combination (step 11)
-        _shell_map!(stage.c, (sim.θ.data,), (stage.ws.θ0,), sim.mesh)
-        moist && _shell_map!(stage.c, (sim.qv.data,), (stage.ws.q0,), sim.mesh)
-    end
-    sim.t += Δt
-    return sim
-end
-# the sweep with concrete arguments: the scalars' update is the axpy of
-# step 11 (`step!`), or with the RK3 combination and the step-start θ, qv
-_blocked_sweep!(bufs, sim, Δt, ::Nothing, ν) =
-    _blocked_sweep!(bufs, sim, Δt, ν, _Axpy(Δt), nothing, nothing)
-_blocked_sweep!(bufs, sim, Δt, stage, ν) =
-    _blocked_sweep!(bufs, sim, Δt, ν, _AxpyStage(_Axpy(Δt), stage.c), stage.ws.θ0, stage.ws.q0)
-function _blocked_sweep!(bufs, sim, Δt, ν, ps, θ0, q0)
-    s1 = (sim.θ, ps, θ0)
-    if sim.has_moisture
-        blocked_predictor!(bufs, sim.u, sim.v, sim.w, ν, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.mesh)
-    else
-        blocked_predictor!(bufs, sim.u, sim.v, sim.w, ν, _Axpy(Δt), s1, nothing, sim.mesh)
-    end
-    return nothing
-end
+include("simulations/fused_sweep.jl")   # the fused sweep: its terms, the fallback report (#533)
 
 # The tendencies of steps 2-3 in one launch (`_fused_tendencies!`), and the
 # zero of their halos (`zero_storage!` zeroed the whole storage).
