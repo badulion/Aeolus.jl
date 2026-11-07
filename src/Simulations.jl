@@ -414,13 +414,19 @@ Two keywords swap numerical operators without changing the algorithm:
     function `f(νt, u, v, w)`; still accepted (it is wrapped in a
     `FunctionSGS`, `κt = νt/Prₜ`). Pass one of `sgs`, `eddy_viscosity!`.
 
-**The hook-free core** (SC-e, #405). When nothing adds to the tendencies
-between advection/diffusion and the predictor (the default momentum
-advection, no SGS closure, buoyancy, Coriolis, surface flux, sponge,
-hooks or open boundaries: a DNS), the tendencies and the predictor of u,
-v, w, θ (and qv) run as one cache-blocked sweep
-(`FiniteVolume.blocked_predictor!`) with the same bits. The tendency
-fields `sim.tu, tv, tw, tθ, tqv` are then neither written nor read.
+**The fused sweep** (SC-e #405, #533). When every term between the base
+tendencies and the predictor is a sweep term
+([`FiniteVolume.sweep_term`](@ref Aeolus.Operators.FiniteVolume.sweep_term)),
+the tendencies and the predictor of u, v, w, θ (and qv) run as one
+cache-blocked sweep (`FiniteVolume.blocked_predictor!`), with the values
+of the separate passes within round-off; the tendency fields
+`sim.tu, tv, tw, tθ, tqv` are then neither written nor read. Today only
+the base tendencies (the built-in momentum advection and the molecular
+diffusion) and the pipeline components that provide a sweep term
+qualify: any SGS closure, buoyancy, Coriolis, surface flux, sponge, a
+`body_force!` function, a `post_predictor!` hook or open boundaries keep
+the substage on the unfused path, which the simulation records once
+with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`).
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):

@@ -3027,6 +3027,18 @@ same sweep, before the projection, which does not read them. The flagship
 child and parent have SGS, buoyancy and hooks, so they keep the SC-d path:
 SC-e does not change the flagship.
 
+**Since #533** the condition is a contract instead of a fixed list: the
+sweep composes a compile-time tuple of terms (`FiniteVolume.SweepTerm`:
+`footprint`, `add_tendency!`, `prepare!`, `sweep_inputs`), the base
+tendencies first, and a substage takes it when every term of the
+substage has a `sweep_term`. The ring holds `1 + max ry` rows and a slab
+keeps `max rz` edge planes per end, so a term with a wider stencil than
+the base's needs no change of the driver. A substage with a term that
+has none runs the passes above (the reference) and the run records the
+term and its documented reason (`Simulations.SWEEP_FALLBACKS`) in its
+`results.toml`. Plan step 1 moved only the base tendencies onto the
+interface; the terms follow in the later steps of #533.
+
 Three layouts were tried first (a prototype outside `src/`, momentum
 only, 256³, ms per substage, minimum of 3-6 processes at load < 4; its
 row loops were inlined, see below):

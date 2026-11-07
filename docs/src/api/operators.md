@@ -99,18 +99,52 @@ Aeolus.Operators.FiniteVolume.in_damping
 Aeolus.Operators.FiniteVolume._add_damping!
 ```
 
-## Blocked tendency + predictor sweep (SC-e)
+## The fused sweep: tendencies and predictor in one pass (SC-e, #533)
 
-The hook-free Boussinesq core (a DNS: no SGS, buoyancy, Coriolis, flux,
-sponge, hooks or open boundaries) computes its tendencies and the
-predictor in one sweep per k-slab, with the bits of the separate passes
-(see [the KA port](../design/ka_port.md), "SC-e").
+A substage of the Boussinesq core computes its tendencies and its
+predictor in one sweep per k-slab, row by row in cache, when every term
+between the base tendencies and the predictor is a **sweep term** (see
+[the KA port](../design/ka_port.md), "SC-e", and the roadmap section of
+#533). The tendency of a row is a compile-time tuple of terms: the base
+tendencies (advection and molecular diffusion) initialise it, each
+further term adds its point kernel. A term declares its stencil radius
+(`footprint`); the sweep's ring holds `1 + max ry` rows and its slabs keep
+`max rz` edge planes. Anything global (a horizontal mean, a precomputed
+eddy viscosity) is computed before the sweep, in `prepare!`.
+
+A component or built-in term without a sweep term keeps the substage on
+the unfused path, the reference implementation; the run logs which term
+caused it, once, and writes it to `results.toml` (`[fused_sweep.<domain>]`:
+`path`, `substages_fused`, `substages_unfused`, `fallback`). The
+documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
+the completeness guard `test/fused_sweep.jl`.
 
 ```@docs
+Aeolus.Operators.FiniteVolume.SweepTerm
+Aeolus.Operators.FiniteVolume.sweep_term
+Aeolus.Operators.FiniteVolume.footprint
+Aeolus.Operators.FiniteVolume.sweep_inputs
+Aeolus.Operators.FiniteVolume.prepare!
+Aeolus.Operators.FiniteVolume.add_tendency!
+Aeolus.Operators.FiniteVolume.add_row!
+Aeolus.Operators.FiniteVolume.SweepRow
+Aeolus.Operators.FiniteVolume.SWEEP_U
+Aeolus.Operators.FiniteVolume.BaseTendencies
+Aeolus.Operators.FiniteVolume.sweep_lags
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
 Aeolus.Operators.FiniteVolume.sweep_slabs
+Aeolus.Simulations.SWEEP_FALLBACKS
+Aeolus.Simulations.SweepReport
+Aeolus.Simulations.sweep_report
+Aeolus.Simulations.sweep_reason
+Aeolus.Simulations.sweep_key
+Aeolus.Simulations.hook_terms
+Aeolus.Simulations.hook_blockers
+Aeolus.Simulations.post_hook_blockers
+Aeolus.Components.sweep_type
+Aeolus.Components.sweep_report
 ```
 
 ## LES analysis toolbox (Phase 54)
