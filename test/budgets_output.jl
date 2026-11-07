@@ -364,6 +364,23 @@ end
     @test stage_budget(BOC.budgets(d).measured[:energy]).elapsed == 4.0
 end
 
+@testset "level meter: a domain without solid cells reads the field alone" begin
+    m = BO_MESH; Nz = m.Nz
+    θ = Field(CellCenter(), m); set!(θ, (x, y, z) -> 290.0 + 0.01z + 0.1 * sin(x / 50))
+    plain = LevelMeter(m, ones(Nz), ones(Nz), 1.0)
+    empty_mask = LevelMeter(m, ones(Nz), ones(Nz), 1.0, falses(size(θ.data)))
+    @test !plain.hassolid && !empty_mask.hassolid
+    solid = falses(size(θ.data)); solid[m.Hx+2, m.Hy+3, m.Hz+4] = true
+    sm = LevelMeter(m, ones(Nz), ones(Nz), 1.0, solid)
+    @test sm.hassolid
+    a = measure_levels!(zeros(Nz), plain, θ); b = measure_levels!(zeros(Nz), sm, θ)
+    sb = solid_levels!(zeros(Nz), sm)
+    # the air and the solid cell add up to the whole level (one addition of round-off)
+    @test a ≈ b .+ sb rtol = 1e-14
+    @test all(iszero, solid_levels!(zeros(Nz), plain))
+    @test sb[4] ≈ interior_view(θ)[2, 3, 4] * m.dz / (m.Nx * m.Ny) rtol = 1e-14
+end
+
 # ---------------------------------------------------------------------------
 # the catalogue and the configuration
 # ---------------------------------------------------------------------------
