@@ -100,6 +100,14 @@ end
     d = only(UC.build_model(cfg).domains)
     @test d.budgets === nothing
     @test !UC.budgets_enabled(UC.urban_case(d))
+    # the verify mode: every entry measured; the run stops at an urban coupling that
+    # changes the heat of the air while its declared writes say it does not
+    root = mktempdir()
+    rc = quiet_main(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\"",
+                     "--set", "budgets.verify_writes=true", "--set", "checks.urban_budgets={required = true}"])
+    @test rc == 0
+    res = TOML.parsefile(joinpath(only(readdir(root; join = true)), "output", "results.toml"))
+    @test res["budgets"]["closed"] === true && res["budgets"]["unattributed"] === false
 end
 
 @testset "urban run type: the GeoJSON ground from its static driver" begin

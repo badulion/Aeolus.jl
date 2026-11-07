@@ -19,6 +19,7 @@ component_name(::Type{<:VegDrag}) = :veg_drag
 modules_used(::Type{<:VegDrag}) = (:PlantCanopy,)
 default_options(::Type{<:VegDrag}) = (cd = 0.2, k_height = 3)
 stages(::Type{<:VegDrag}) = ((:post_predictor, 20, EVERY_STEP),)
+Components.budget_writes(::VegDrag, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)   # the drag (#539)
 
 function build(::Type{<:VegDrag}, case, o)
     veg_mask, LAI_map = park_lai_map(case)

@@ -42,6 +42,7 @@ end
 component_name(::Type{SWModifiers}) = :sw_modifiers
 default_options(::Type{SWModifiers}) = (k_leaf = 0.5,)
 stages(::Type{SWModifiers}) = ((:sw_modifiers, 10, EVERY_STEP),)
+Components.budget_writes(::SWModifiers, ::Val) = ()   # the irradiance on the bus (#539)
 # the radiation reaches the surfaces in the surface spin-up too (#519)
 in_spinup(::Type{SWModifiers}) = true
 

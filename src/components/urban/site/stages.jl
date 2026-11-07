@@ -66,6 +66,8 @@ Components.component_name(e::UrbanEntry) = e.name
 Components.section(e::UrbanEntry) = string(e.name)
 Components.stages(e::UrbanEntry) = e.stages
 Components.budget!(e::UrbanEntry, d::Domain, b) = budget!(e.c, urban_case(d), b)
+# what the budgets measure: the coupling's declaration (#539; default every quantity)
+Components.budget_writes(e::UrbanEntry, v::Val) = Components.budget_writes(e.c, v)
 function Components.run_stage!(e::UrbanEntry, d::Domain, v::Val{S}, dt) where {S}
     case = urban_case(d)
     t0 = time_ns()
@@ -104,6 +106,9 @@ Whether the site measures its budgets (`[budgets] enabled`, #539; a
 site built from options without the key: on).
 """
 budgets_enabled(case) = get(case.cfg, :budgets, (enabled = true,)).enabled
+
+# the :clock entry snapshots the surfaces and the water: nothing measured changes (#539)
+Components.budget_writes(::UrbanSite, ::Val{:clock}) = ()
 
 # the open faces' θ relaxation is booked as (:dynamics, :relaxation) after
 # the step (book_dynamics_heat!), not measured as an entry of its own
