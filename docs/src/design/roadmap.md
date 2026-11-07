@@ -2456,6 +2456,13 @@ Test (`open_boundaries.jl`), Orlanski outflow:
 - an old payload warns and diverges by more than 1e-2;
 - a differently built open box is refused.
 
+**The real run, through the CLI.** This is the Berlin 100 m configuration (200 × 200 × 60, ERA5 open faces), at 24 Julia threads, dt 2 s, with the `estimate` FFTW planner (a deterministic plan, and no #397 crash):
+1. `run` for 240 s, with checkpoints every 60 steps;
+2. set the 240 s checkpoint aside;
+3. `--resume`, which restores the 120 s checkpoint and runs to 240 s.
+
+The resumed state at 240 s equals the uninterrupted one in every field (u, v, w, θ, qv, p, νt, κt): max|Δ| = 0. Before the fix the same check gave 0.14 m/s in u after 60 steps.
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*
