@@ -125,7 +125,13 @@ mutable struct TiledUrbanSurface{R} <: AbstractComponent
     wθ::Vector{Float64}
     wq::Vector{Float64}
     temps::Base.RefValue{Any}        # (time, TileTemperatures) of the outputs of one record (#536)
+    drag_den::Array{Float64,4}       # the drag's u, v face denominators of one call (scratch, #538)
 end
+# the scratch of the drag (#538) sized from `drag`
+TiledUrbanSurface(ps, ref::R, period, U_min, θsrc, qsrc, drag, ustar, t_surf, sw_down, lw_down, sfc_mean, wθ, wq,
+                  temps) where {R} =
+    TiledUrbanSurface{R}(ps, ref, period, U_min, θsrc, qsrc, drag, ustar, t_surf, sw_down, lw_down, sfc_mean, wθ, wq,
+                         temps, ones(size(drag)..., 2))
 
 Components.component_name(::Type{<:TiledUrbanSurface}) = :tiled_surface
 Components.section(::Type{<:TiledUrbanSurface}) = "surface"
@@ -603,32 +609,73 @@ function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:surface_flux}, dt
 end
 
 # stage 8: the tiles' momentum flux as an implicit deceleration of the
-# canopy levels (the mean of the two columns a face separates), along the
-# instantaneous wind: the stress magnitude held from the surface step,
-# stable for any Δt
+# canopy levels, along the instantaneous wind: the stress magnitude held
+# from the surface step, stable for any Δt (#538). Two launches over the
+# canopy points (Jacobi): the denominators of the u and v faces from the
+# pre-drag velocities, then u, v divided by them, each point writing only
+# its own faces, so the result does not depend on the order the points run
+# in or the thread count. A face's drag is the mean of the two columns it
+# separates; at a non-periodic west / south face there is no column
+# beyond: a face whose normal velocity the boundary fixes (an open face,
+# `pinned_face_indices`) gets no drag, any other (no-flux) the drag of the
+# column it bounds (`neighbor_index`). The PALM canopy model discretises
+# its drag the same way (`plant_canopy_model_mod.f90`, `pcm_tendency`:
+# the speed at a u face with v averaged from its four neighbours; the u
+# loop from `nxlu`, which skips the boundary face of a non-cyclic inflow or
+# radiation boundary, `init_pegrid.f90`).
 function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:post_predictor}, Δt)
     sim = d.state
-    m = sim.mesh
-    Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
-    ud, vd = sim.u.data, sim.v.data
-    a = c.drag
-    U_min = c.U_min
-    @inbounds for k in axes(a, 3)
-        K = Hz + k
-        for j in 1:Ny, i in 1:Nx
-            im = i == 1 ? Nx : i - 1
-            jm = j == 1 ? Ny : j - 1
-            I, J = Hx + i, Hy + j
-            # u at the west face of (i, j): v averaged to it
+    m, bcs = sim.mesh, sim.bcs
+    Nx, Ny = m.Nx, m.Ny
+    a, den = c.drag, c.drag_den
+    kc = size(a, 3)
+    fill_halos!((sim.u, sim.v), bcs)
+    # the column standing for i - 1 at i = 1 (j - 1 at j = 1): the opposite
+    # edge on a periodic axis, 0 (no drag) at a pinned boundary face, the
+    # boundary column itself otherwise
+    pu = pinned_face_indices(Aeolus.Fields.location(sim.u), m, bcs)[1] != 0
+    pv = pinned_face_indices(Aeolus.Fields.location(sim.v), m, bcs)[2] != 0
+    iw = neighbor_index(m, bcs, 0, 1; outside = pu ? :none : :mirror)
+    js = neighbor_index(m, bcs, 0, 2; outside = pv ? :none : :mirror)
+    b = Aeolus.Backends.backend(a)
+    r = (1:Nx, 1:Ny, 1:kc)
+    Aeolus.Backends.launch!(b, _drag_denominators!, r, den, a, sim.u.data, sim.v.data, Float64(Δt), c.U_min,
+                            m.Hx, m.Hy, m.Hz, iw, js)
+    Aeolus.Backends.launch!(b, _drag_apply!, r, den, sim.u.data, sim.v.data, m.Hx, m.Hy, m.Hz)
+    return nothing
+end
+
+# the implicit denominators 1 + Δt a/U of the u (west) and v (south) face of
+# canopy point (i, j, k), from the pre-drag velocities; 1 where the face has
+# no drag (iw / js = 0: a boundary face the boundary fixes)
+@inline function _drag_denominators!(i, j, k, den, a, ud, vd, Δt, U_min, Hx, Hy, Hz, iw, js)
+    @inbounds begin
+        I, J, K = Hx + i, Hy + j, Hz + k
+        im = i == 1 ? iw : i - 1
+        jm = j == 1 ? js : j - 1
+        du = 1.0
+        if im != 0
             au = 0.5 * (a[im, j, k] + a[i, j, k])
             vf = 0.25 * (vd[I-1, J, K] + vd[I, J, K] + vd[I-1, J+1, K] + vd[I, J+1, K])
-            Uu = max(hypot(ud[I, J, K], vf), U_min)
-            ud[I, J, K] /= 1 + Δt * au / Uu
+            du = 1 + Δt * au / max(hypot(ud[I, J, K], vf), U_min)
+        end
+        dv = 1.0
+        if jm != 0
             av = 0.5 * (a[i, jm, k] + a[i, j, k])
             uf = 0.25 * (ud[I, J-1, K] + ud[I+1, J-1, K] + ud[I, J, K] + ud[I+1, J, K])
-            Uv = max(hypot(vd[I, J, K], uf), U_min)
-            vd[I, J, K] /= 1 + Δt * av / Uv
+            dv = 1 + Δt * av / max(hypot(vd[I, J, K], uf), U_min)
         end
+        den[i, j, k, 1] = du
+        den[i, j, k, 2] = dv
+    end
+    return nothing
+end
+
+@inline function _drag_apply!(i, j, k, den, ud, vd, Hx, Hy, Hz)
+    @inbounds begin
+        I, J, K = Hx + i, Hy + j, Hz + k
+        ud[I, J, K] /= den[i, j, k, 1]
+        vd[I, J, K] /= den[i, j, k, 2]
     end
     return nothing
 end
