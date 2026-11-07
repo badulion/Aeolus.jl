@@ -322,6 +322,8 @@ Write a **full-state, versioned** checkpoint of a run to `path` (format
 run bit for bit:
 
 * the fields of [`checkpoint_fields`](@ref) with their halos, and `sim.t`;
+* the open boundaries' buffers and outflow history
+  ([`open_boundary_checkpoint`](@ref Aeolus.BoundaryConditions.open_boundary_checkpoint), #528);
 * `sgs`: the closure the run steps with (an `AbstractSGSClosure`, or a
   legacy `f(νt, u, v, w)` function, stateless) — its memory via
   [`checkpoint_state`](@ref), i.e. the closure contract's `sgs_state`;
@@ -386,6 +388,7 @@ function checkpoint_payload(sim;
         :mesh           => _mesh_record(sim.mesh),
         :t              => sim.t,
         :fields         => fields,
+        :open_boundaries => open_boundary_checkpoint(sim),
         :parameters     => _parameters(sim),
         :reference      => checkpoint_reference(sim),
         :closure_type   => closure === nothing ? "" : string(nameof(typeof(closure))),
@@ -535,6 +538,14 @@ function restore_checkpoint!(sim, d::AbstractDict;
         _copy_same!(f.data, d[:fields][k], "field $k")
     end
     sim.t = d[:t]
+    # the open boundaries' buffers and history (#528); a checkpoint written
+    # before them restarts the open faces from the boundary data
+    ob = get(d, :open_boundaries, nothing)
+    ob === nothing && has_open_boundaries(sim) &&
+        @warn("restart!: $path holds no open-boundary state (written before #528): the open faces " *
+              "restart from the boundary data, so the outflow faces do not continue the run exactly",
+              subsystem = :checkpoint, domain = current_domain(), path)
+    restore_open_boundary_checkpoint!(sim, ob)
     closure === nothing || restore_checkpoint_state!(closure, d[:closure])
     for (k, v) in comps
         restore_checkpoint_state!(v, fc[k].state)

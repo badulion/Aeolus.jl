@@ -1237,6 +1237,80 @@ function combine_open_boundaries!(sim, a, snap::AbstractVector, b)
     end
     return sim
 end
+"""
+    open_boundary_checkpoint(sim) -> nothing | Vector{NamedTuple}
+
+The state of `sim`'s open boundaries a restart needs to continue the run
+(#528), as copies: per [`OpenBoundaryState`](@ref), `initialized`, the
+ledger of the last mass-flux correction (`t`, `Q`, `residual`, `δ`), every
+plane's buffer and, on a radiating face, the Orlanski history of each
+[`RadiationPlane`](@ref) (`hist`, `t_hist`, `has_hist`). `nothing` for a
+closed simulation.
+
+The buffers are state, not data: at an outflow point they hold the
+radiated values, which the boundary data cannot reproduce. Without them a
+restart refilled every buffer from the data (`initialized = false`), so
+the outflow face jumped at the first step after the resume. The phase
+speeds `c`, `prev` and the stage marks are rewritten at every step and
+are not stored.
+"""
+function open_boundary_checkpoint(sim)
+    has_open_boundaries(sim) || return nothing
+    return [(initialized = st.initialized, t = st.t, Q = st.Q, residual = st.residual, δ = st.δ,
+             planes = [copy(p.data) for p in st.planes],
+             radiation = Any[r === nothing ? nothing :
+                             (hist = copy(r.hist), t_hist = r.t_hist[], has_hist = r.has_hist[])
+                             for r in st.radiation])
+            for st in open_boundary_states(sim)]
+end
+
+"""
+    restore_open_boundary_checkpoint!(sim, state) -> sim
+
+Copy an [`open_boundary_checkpoint`](@ref) back into `sim`'s open
+boundaries, which must be built as the checkpointed ones (the same
+states, planes and radiating faces; an `ArgumentError` otherwise), and
+bind `sim`'s cell-centred fields to their planes: a restored state is
+`initialized`, so the first step skips the update that would bind them.
+`state = nothing` leaves them as they are.
+"""
+restore_open_boundary_checkpoint!(sim, ::Nothing) = sim
+function restore_open_boundary_checkpoint!(sim, s::AbstractVector)
+    sts = open_boundary_states(sim)
+    length(sts) == length(s) ||
+        throw(ArgumentError("restart!: the checkpoint has $(length(s)) open-boundary states, the simulation $(length(sts))"))
+    for (st, r) in zip(sts, s)
+        length(st.planes) == length(r.planes) && length(st.radiation) == length(r.radiation) ||
+            throw(ArgumentError("restart!: the open boundaries are built differently from the checkpoint's " *
+                                "($(length(r.planes)) planes, $(length(r.radiation)) radiating, in the checkpoint; " *
+                                "$(length(st.planes)), $(length(st.radiation)) here)"))
+        for (p, d) in zip(st.planes, r.planes)
+            size(p.data) == size(d) ||
+                throw(ArgumentError("restart!: open plane $(p.name) $(p.side) is $(size(p.data)), $(size(d)) in the checkpoint"))
+        end
+        for (rp, rr) in zip(st.radiation, r.radiation)
+            (rp === nothing) == (rr === nothing) && (rp === nothing || size(rp.hist) == size(rr.hist)) ||
+                throw(ArgumentError("restart!: the radiating faces differ from the checkpoint's"))
+        end
+    end
+    for (st, r) in zip(sts, s)
+        for (p, d) in zip(st.planes, r.planes)
+            copyto!(p.data, d)
+        end
+        for (rp, rr) in zip(st.radiation, r.radiation)
+            rp === nothing && continue
+            copyto!(rp.hist, rr.hist); rp.t_hist[] = rr.t_hist; rp.has_hist[] = rr.has_hist
+        end
+        st.initialized = r.initialized
+        st.t = r.t; st.Q = r.Q; st.residual = r.residual; st.δ = r.δ
+        # the cell-centred fields to their planes: an initialized state skips
+        # the first update (which binds them), and an unbound θ got the
+        # mirror halo instead of its boundary data at the first step
+        _bind!(st, sim)
+    end
+    return sim
+end
+
 struct _StageCombine{A, B}
     a::A
     b::B
