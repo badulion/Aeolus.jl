@@ -96,9 +96,9 @@ end
                                                    "surface", "surface", "radiation"]   # tiles, prescribed, mean_column (NEST-p3 #483)
     @test Set(sch.domain_sections) == Set(DOMAIN_SECTIONS)
     # run-level sections: the common ones and time, timestep (one scheme steps every domain, ONE-m #476),
-    # output, checks (no preprocess: AeolusPrep.jl, ONE-h)
+    # output, checks, budgets (one switch for every domain, #539) (no preprocess: AeolusPrep.jl, ONE-h)
     @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==
-          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "spinup", "checks"])
+          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "spinup", "checks", "budgets"])
     # a component is enabled by its own section
     cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sponge]\nalpha_max = 0.01\nz_start = 1200.0\n[sgs]\nmodel = \"none\"\n"))
     @test enabled_components(cfg) == Any[CentredAdvection, Coriolis, Sponge]
