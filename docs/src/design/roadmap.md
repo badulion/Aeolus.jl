@@ -3066,6 +3066,74 @@ segfaults at 10–14 threads; upstream; workaround
 `AEOLUS_FFTW_PLANNER=estimate`, documented in
 `benchmarks/bench_ka_scaling.jl`).
 
+#### The late slowdown of the Berlin step (#535)
+
+**Diagnosed: the machine's package power limit, not the code.** No code
+changed. The measurement protocol it calls for is in
+[Benchmarks](../benchmarks.md#Sustained-load:-power-and-thermal-limits).
+
+- **The question.** The Berlin 100 m step (200 × 200 × 60, dt = 2 s,
+  12 threads) went from 287 to 480–510 ms over its first ~300 steps, with
+  SGS doubling, at a fixed amount of work per step.
+- **How it was measured.** All timings were taken on master `9053fe04`,
+  FFTW `estimate`, one run at a time. A `step!` loop logged per step:
+  wall, core, pressure and SGS time, GC time, bytes allocated, the APU
+  package power (`amdgpu` hwmon `PPT`), Tctl and the mean clock. Every
+  30 steps it ran fixed-work canaries (an all-thread FMA chain and
+  triad), and every 60 steps a subnormal census of the 166,446 float
+  arrays reachable from the simulation. Two CLI runs had a 1 s sensor
+  sampler running next to them.
+- **Measured** (12 threads, 540 steps, plain steps only; every 30th step,
+  the tile update, is left out):
+
+  | steps | ms/step | SGS ms | package power | Tctl |
+  | :-- | --: | --: | --: | --: |
+  | 1–60 | 254–274 | 41–43 | 29–30 W | 100–101 °C |
+  | 61–165 | 274–344 | 41–49 | 25–28 W | 101 °C |
+  | 166–345 | 427–641 | 82–124 | 15.0 W | 86–98 °C |
+  | 346–390 | 253–267 | 41–45 | 28–30 W | 94–100 °C |
+  | 391–480 | 275–370 | 41–54 | 25–29 W | 101 °C |
+  | 481–540 | 508–538 | 101–107 | 15.0 W | 91–97 °C |
+  | 542–550, after 180 s idle | 237–253 | 40–42 | 34–47 W | 81–90 °C |
+
+  Classed by power: 299 ms/step boosted against 488 at the cap. Pressure
+  33 against ~60 ms/step, triad canary 40–50 against 26–36 GB/s. The CLI
+  (300 steps) shows the same: 255–279 ms at 29.5–30.2 W, 319–376 ms at
+  22.7–27.5 W, 443–487 ms at 14.9–15.1 W. The issue's numbers are this
+  15 W phase.
+- **The deciding evidence.** At step 346 the late state runs at the early
+  speed (253–267 ms) in the middle of the run, with nothing paused, as
+  soon as the power returns to 28–30 W. A data-dependent cost could not
+  do that. In the 15 W phase Tctl *falls*, so the limit is power, not
+  temperature.
+- **Ruled out:**
+  - Subnormals: 1 subnormal value in 126.5 M at every census, steps 1–301.
+    With flush-to-zero on every thread from step 1: 288 ms boosted and
+    444 ms capped, the same slowdown. Switched on late at the same 46.7 W:
+    244 → 236 ms, inside the ±10 ms step-to-step scatter.
+  - Allocations and GC: 7.4 MB/step from step 2 to 560, GC 0–2.5 ms per
+    plain step with no trend (17–28 ms/step in the CLI, flat).
+  - Data-dependent work and cache effects: excluded by the mid-run
+    recovery.
+- **Thread count.** At 6 threads the package stays at about 24 W and
+  never enters the 15 W phase: 280–324 ms/step over 450 steps (mean
+  ~305), against a 12-thread mean of ~380 ms over 540 steps. A property
+  of this laptop, not a constant for the code.
+- **Consequence for #531 and #533.** Their per-kernel tables (steps
+  32–61, right after the build) are boost-phase numbers. The overnight
+  0.604 s/step is the sustained mix of the phases. Fewer bytes per step
+  also mean less power per step, which helps most in the capped phase.
+- **Deviations from the issue's plan:**
+  - The late window was not rerun from a checkpoint on a cold machine.
+    The mid-run recovery and the 180 s idle pause answer the same
+    question without a restart.
+  - The late window was profiled per component (pressure, SGS, the rest
+    of the core) and not kernel by kernel with `bench_roofline.jl`:
+    every component slows together, in step with the power.
+  - Preheating with the light canary load for 240 s did not slow the
+    first steps (248 ms): it draws less power than the step, so it does
+    not use up the boost budget.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
