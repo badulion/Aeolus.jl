@@ -5,6 +5,9 @@
 #     tiles' area-mean fluxes × the step, exactly (the canopy levels' depth
 #     weights sum to one); u* = √(Σ fᵢ τᵢ / ρ̄₁); the drag is the implicit
 # deceleration u/(1 + Δt a/U); a checkpoint restores the tiles;
+#   * TiledUrbanSurface temperatures (#536): the area-weighted skin
+#     temperature and per class (NaN where a class is absent), the 2 m
+#     Monin–Obukhov value against a hand assembly, the interpolation branch;
 #   * PrescribedSurfaceFlux: Q Δt/Δz₁ into the first level of every column;
 #   * MeanColumnRadiation: the sun of the site's clock (sw ≈ 0 at night, a
 #     clear-sky noon sun by day), the heating applied as Ṫ Δt / Π̄, the
@@ -182,6 +185,75 @@ end
     @test_throws ArgumentError restore_checkpoint_state!(ts2,
         PU.TiledSurfaceState(st.ncolumns - 1, st.offsets[1:end-1], st.tiles, st.θsrc, st.qsrc, st.drag,
                              st.ustar, st.t_surf, st.sw_down, st.lw_down, st.sfc_mean, st.wθ, st.wq))
+end
+
+@testset "TiledUrbanSurface temperatures: area weighting, the 2 m Monin–Obukhov value and interpolation (#536, $core)" for
+        core in (:boussinesq, :anelastic)
+    SE = Aeolus.SurfaceExchange
+    sim = p_state!(p_core(core; moist = false))
+    d0 = Domain(sim; validate = false)
+    ts = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
+    d = Domain(sim; components = (CentredAdvection(), ts))
+    out = Dict(v.name => v for v in Components.outputs(ts))
+    @test collect(keys(out)) ⊆ collect(Components.output_names(PU.TiledUrbanSurface, nothing))
+    @test length(out) == length(Components.output_names(PU.TiledUrbanSurface, nothing))
+    get(n) = out[n].getter(d)
+    ref = ts.ref
+    zc = zcentres(sim.mesh)
+    Π(z) = Components.reference_exner(ref, zc, z; g = 9.81)
+    # the skin temperatures: street 308 K (70 %), park 299 K (30 %) in every
+    # column; the mean is one weighted sum, to round-off
+    @test all(isapprox.(get("surface_temperature"), 0.7 * 308.0 + 0.3 * 299.0; rtol = 1e-14))
+    @test all(get("surface_temperature_street") .== 308.0)          # copied, not computed
+    @test all(get("surface_temperature_park") .== 299.0)
+    @test all(n -> all(isnan, get("surface_temperature_$n")), ("roof", "water", "wall"))   # fraction 0: NaN
+    @test all(isapprox.(get("surface_theta"), (0.7 * 308.0 + 0.3 * 299.0) / Π(0.0); rtol = 1e-14))
+    @test out["surface_temperature"].standard_name == "surface_temperature" &&
+          out["temperature_2m"].standard_name == "air_temperature"
+    # the 2 m value by hand: column (2, 1), both tiles forced at level 1
+    # (z₁ = 50 m > 2 m: Monin–Obukhov), the surface-layer inputs assembled
+    # as the tiles' fluxes do (θ_a = T_a + g z/c_p, θ_s = T_s, dry air),
+    # solved, and θ(2 m) = [T_s + θ*/κ (ln(2/z0h) − ψh(2/L) + ψh(z0h/L))]/Π̄_s
+    col = ts.surface.columns[2, 1]
+    @test col.ktile == [1, 1]
+    θ1 = 300.0; T1 = θ1 * ref.π̄[1]
+    sf = BusingerDyerBeljaarsHoltslag()
+    κ = SE.DEFAULT_SURFACE_CONSTANTS.κ
+    cpd = Aeolus.MoistThermodynamics.DEFAULT_CONSTANTS.cp_dry
+    g0 = SE.grav(SE.DEFAULT_SURFACE_CONSTANTS)
+    θ2_tiles = map(col.surface.tiles) do t
+        z0 = roughness_lengths(t)
+        # the park's skin is moist (β = 0.6): q_s = β q_sat(T_s, p̄₁) over the dry air
+        qs = SE.surface_specific_humidity(t, SurfaceForcing(; T_air = T1, q_air = 0.0, U = 5.0, p = ref.p̄[1], z_ref = 50.0))
+        sol = solve_surface_layer(sf; U = hypot(5.0, 1.0), z_m = 50.0, θ_a = T1 + g0 / cpd * 50.0,
+                                  θ_s = surface_temperature(t), q_a = 0.0, q_s = qs,
+                                  z0m = z0.z0m, z0h = z0.z0h, U_min = 0.5)
+        L = sol.L
+        (surface_temperature(t) + sol.θ_star / κ * (log(2.0 / z0.z0h) - psi_h(sf, 2.0 / L) + psi_h(sf, z0.z0h / L))) / Π(0.0)
+    end
+    # the same solve and formula: agreement to round-off (the secant
+    # iteration converges to its own tolerance on both sides identically)
+    @test get("theta_2m")[2, 1] ≈ 0.7 * θ2_tiles[1] + 0.3 * θ2_tiles[2] rtol = 1e-12
+    @test get("temperature_2m")[2, 1] ≈ (0.7 * θ2_tiles[1] + 0.3 * θ2_tiles[2]) * Π(2.0) rtol = 1e-12
+    # each tile's 2 m θ between its skin's and the first level's (the street
+    # unstable, 8 K above the air; the park 1 K below it, stable)
+    θsk = [surface_temperature(t) / Π(0.0) for t in col.surface.tiles]
+    @test θ1 < θ2_tiles[1] < θsk[1] && θsk[2] < θ2_tiles[2] < θ1
+    # the 2 m air between the surface and the first level, in every column
+    T2, Tsfc = get("temperature_2m"), get("surface_temperature")
+    @test all(T1 .< T2 .< Tsfc)
+    # interpolation: a street tile whose surface (its displacement height,
+    # 49 m) puts its forcing level 1 m above it; θ = 300 K + 0.01 z (linear
+    # in the level centres), so θ at 49 + 2 = 51 m is exactly 300.51 K
+    set!(sim.θ, (x, y, z) -> 300.0 + 0.01z)
+    t = col.surface.tiles[1]
+    f = SurfaceForcing(; T_air = 300.5 * ref.π̄[1], U = 5.0, p = ref.p̄[1], z_ref = 1.0)
+    θc = [300.0 + 0.01z for z in zc]
+    @test PU.screen_theta(sf, t, f, θc, zc, 49.0, Π(49.0)) ≈ 300.51 rtol = 1e-14
+    # ... and below the first level centre, toward the skin's θ at the surface
+    @test PU.screen_theta(sf, t, f, θc, zc, 47.0, Π(47.0)) ≈ 308.0 / Π(47.0) + (300.5 - 308.0 / Π(47.0)) * 2 / 3 rtol = 1e-14
+    # the cache: one evaluation per model time
+    @test PU.tile_temperatures(ts, d) === PU.tile_temperatures(ts, d)
 end
 
 @testset "PrescribedSurfaceFlux: Q Δt/Δz₁ into every column of the first level ($core)" for core in (:boussinesq,)

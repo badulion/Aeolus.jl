@@ -32,7 +32,11 @@ The surface temperature `temperature` is `{kind = "constant", value}`,
 or `{kind = "driver"}`: the dynamic driver's `sfc_temperature` series (a
 potential temperature; its times read at the model time minus `[time]
 start`). Its outputs ([`outputs`](@ref)) are the boundary-layer
-diagnostics of the stable-boundary-layer cases.
+diagnostics of the stable-boundary-layer cases; `surface_theta` is the
+prescribed ``θ_s``, `surface_temperature` the absolute ``θ_s Π̄_s`` and
+`temperature_2m` ``θ_{2m} Π̄(2 m)``, with the Exner function of
+the domain's thermodynamic reference (`reference_exner`, #536; before
+#536 `surface_temperature` was the name of ``θ_s``).
 
 References: Monin & Obukhov (1954); Beare et al. (2006), Boundary-Layer
 Meteorol. 118, 247 (GABLS1); Basu & Porté-Agel (2006), J. Atmos. Sci. 63,
@@ -333,8 +337,8 @@ function sl_obukhov(c::SurfaceLayer)
     return wθ == 0 ? Inf : obukhov_length(u, -wθ / u, θs)
 end
 
-const _SL_OUTPUTS = ("u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "surface_temperature",
-                     "theta_2m", "wind_10m", "bl_height", "jet_speed", "jet_height", "inversion_height",
+const _SL_OUTPUTS = ("u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "surface_theta",
+                     "surface_temperature", "theta_2m", "temperature_2m", "wind_10m", "bl_height", "jet_speed", "jet_height", "inversion_height",
                      "wind_speed_profile", "stress_profile")
 
 output_names(::Type{<:SurfaceLayer}, opts) = _SL_OUTPUTS
@@ -352,10 +356,17 @@ function outputs(c::SurfaceLayer)
                        d -> sl(d).ρcp * mean_of(sl(d).wθ)),
         OutputVariable("obukhov_length", "m", "Obukhov length of the plane-mean u* and heat flux", :scalar,
                        d -> sl_obukhov(sl(d))),
-        OutputVariable("surface_temperature", "K", "prescribed surface potential temperature", :scalar,
+        OutputVariable("surface_theta", "K", "prescribed surface potential temperature", :scalar,
                        d -> surface_temperature(sl(d).Ts, clock(d))),
+        OutputVariable("surface_temperature", "K", "surface temperature: the prescribed theta_s times the reference " *
+                       "Exner function at the ground", :scalar,
+                       d -> surface_temperature(sl(d).Ts, clock(d)) * reference_exner(d, 0.0);
+                       standard_name = "surface_temperature"),
         OutputVariable("theta_2m", "K", "screen-level (2 m) potential temperature, plane mean", :scalar,
                        d -> sl_screen(sl(d), d).θ_screen),
+        OutputVariable("temperature_2m", "K", "screen-level (2 m) air temperature, plane mean: theta_2m times the " *
+                       "reference Exner function at 2 m", :scalar,
+                       d -> sl_screen(sl(d), d).θ_screen * reference_exner(d, 2.0); standard_name = "air_temperature"),
         OutputVariable("wind_10m", "m s-1", "10 m wind speed, plane mean", :scalar,
                        d -> sl_screen(sl(d), d).U_screen),
         OutputVariable("bl_height", "m", "boundary-layer height: the total stress falls to 5 % of its surface value, / 0.95",

@@ -504,6 +504,12 @@ end
     @test refused("output.variables=[\"qv\"]", "moisture") &&
           refused("output.variables=[\"budget_tracer\"]", "carries a tracer") &&
           refused("output.variables=[\"nonsense\"]", "no enabled component publishes")
+    # the rename of #536: the old name of the surface potential temperature is
+    # refused where no surface publishes the absolute one, and the message
+    # names the new one; the surface layer publishes both
+    @test refused("output.variables=[\"surface_temperature\"]", "surface_theta")
+    @test load(["surface.model=\"most\"", "output.variables=[\"surface_theta\",\"surface_temperature\",\"temperature_2m\"]"]).output.variables ==
+          ["surface_theta", "surface_temperature", "temperature_2m"]
     @test_throws Aeolus.Config.ConfigError load(["output.variables=[\"budget_energy\"]", "dynamics.theta0=0.0"])
     # a run with budgets selected writes their terms, and they close
     cfg = load(["time.duration=\"none\"", "time.nsteps=4", "surface_theta_flux.bottom=0.1",

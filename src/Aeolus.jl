@@ -775,7 +775,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        AbstractSurface, SurfaceForcing, SurfaceFluxes,
        roughness_lengths, moisture_availability,
        surface_specific_humidity, surface_latent_heat,
-       net_radiation, turbulent_fluxes, step_surface!
+       net_radiation, turbulent_fluxes, surface_layer_solution, step_surface!
 
 # Phase 46 (#15) — SoilColumn: CLM-style soil column, Richards equation.
 # Boundary-condition types (FreeDrainage, HeadTop, AtmosphericTop, …),

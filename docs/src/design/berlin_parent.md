@@ -132,6 +132,43 @@ ledger's surface term against the delivered sources to 1e-10.
 The tiles start at the child's `Ts0` = 285 K, 3.6 K below the 06:00 air,
 so the first surface steps cool the air (as in the child).
 
+### Surface and screen-level temperatures (#536)
+
+Besides its static maps (tile fractions, λp, z0, d) the tiled surface
+publishes maps of its temperatures (`Urban.tile_temperatures`, computed
+once per model time from the current state; K):
+
+- `surface_temperature`: the area-weighted skin temperature of the
+  column, ``Σ_i f_i T_{s,i}``;
+- `surface_temperature_<class>` (street, roof, park, water, wall): the
+  skin temperature of that tile, NaN where its fraction is 0;
+- `surface_theta`: ``Σ_i f_i T_{s,i}/Π̄(z_{s,i})``, the potential skin
+  temperature, with ``z_{s,i}`` the tile's surface height: its
+  displacement height (0 for park and water, the column's ``d`` for the
+  built tiles, whose surface layer is measured from it);
+- `theta_2m`, `temperature_2m`: ``Σ_i f_i θ_{2m,i}`` and
+  ``Σ_i f_i θ_{2m,i} Π̄(z_{s,i} + 2\,\mathrm{m})``, the screen level 2 m above
+  each tile's surface.
+
+``θ_{2m,i}`` is PALM's `calc_2m_temperature`
+(`diagnostic_output_quantities_mod.f90`) per tile (`Urban.screen_theta`).
+When the tile's forcing level is above 2 m (``z_{ref,i} > 2`` m) it is
+Monin–Obukhov similarity,
+``θ_{2m} = θ_s + θ_*/κ\,[\ln(2/z_{0h}) − ψ_h(2/L) + ψ_h(z_{0h}/L)]``,
+from the tile's surface layer in the current state: the one solve of its
+fluxes (`SurfaceExchange.surface_layer_solution`, factored out of
+`turbulent_fluxes` for this; the tile's z0h, the stability functions its
+fluxes use, `SurfaceExchange.default_stability_functions`). That solve
+works on the surface-referenced scale ``θ_s = T_s``, ``θ_a = T_a + Γ_d
+z_{ref}``; dividing by ``Π̄(z_{s,i})`` gives the model's θ (PALM's
+`pt_surface = t_surface/exner`). Otherwise the column's θ is interpolated
+linearly at ``z_{s,i} + 2`` m between the tile's surface (``T_s/Π̄``)
+and the level centres. ``Π̄`` is `Components.reference_exner` of the
+reference the surface converts its fluxes with: linear between level
+centres, and below the first the dry-adiabatic hydrostatic
+``Π̄_1 + g (z_1 − z)/(c_p θ̄_1)``. The tiles of a blended mosaic are
+evaluated at their own forcing levels, not at the blending height.
+
 ### Time integration
 
 The child steps the forward-Euler projection `step!` (`AdaptiveStep`,

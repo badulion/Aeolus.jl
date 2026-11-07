@@ -43,20 +43,19 @@
 
 The reference profiles (`p̄`, `ρ̄`, `π̄` per level and `cp`) a surface or
 radiation component converts its fluxes with: `opts.reference` (a
-[`CaseReference`](@ref)), else the domain's (`domain.drivers.reference`:
-the hydrostatic state of a Boussinesq domain's initial θ profile,
-[`domain_reference`](@ref)), or on the anelastic core its base state
-(`sim.ref`).
+[`CaseReference`](@ref)), else the domain's
+(`Components.thermodynamic_reference`: `domain.drivers.reference`, the
+hydrostatic state of a Boussinesq domain's initial θ profile,
+[`domain_reference`](@ref); or on the anelastic core its base state
+`sim.ref`). The absolute-temperature outputs (#536) read the same one.
 """
 function air_reference(opts, domain)
     r = Components.option(opts, :reference, nothing)
     r !== nothing && return r
-    r = get(domain.drivers, :reference, nothing)
-    r !== nothing && return r
-    s = domain.state
-    s isa BoussinesqSimulation &&
+    r = Components.thermodynamic_reference(domain)
+    r === nothing &&
         throw(ArgumentError("the Boussinesq core has no thermodynamic reference: give `reference` (a CaseReference)"))
-    return s.ref
+    return r
 end
 
 _moist(sim) = hasproperty(sim, :has_moisture) && sim.has_moisture
@@ -100,7 +99,15 @@ level), `ustar`, `t_surf` (the end of the current surface interval), the
 downwelling `sw_down`, `lw_down` (W m⁻²; set by the radiation, the
 options' values until then), `sfc_mean` (domain-mean J m⁻² of `Rn`, `H`,
 `LE`, `G`, `E` and what the air received, `delivered_H`, `delivered_E`),
-and the level weights `wθ`, `wq` of the delivered amounts.
+and the level weights `wθ`, `wq` of the delivered amounts, `temps` the
+cache of [`tile_temperatures`](@ref).
+
+Its outputs (#536, [`tile_temperatures`](@ref)): `surface_temperature`
+(the area-weighted skin temperature of each column, K),
+`surface_temperature_<class>` (street, roof, park, water, wall; NaN where
+the column has no such tile), `surface_theta` (the potential skin
+temperature, ``T_s/Π̄``), `theta_2m` and `temperature_2m` (the screen
+level, area-weighted over the tiles).
 """
 mutable struct TiledUrbanSurface{R} <: AbstractComponent
     surface::ParentSurface
@@ -117,6 +124,7 @@ mutable struct TiledUrbanSurface{R} <: AbstractComponent
     sfc_mean::Dict{Symbol,Float64}
     wθ::Vector{Float64}
     wq::Vector{Float64}
+    temps::Base.RefValue{Any}        # (time, TileTemperatures) of the outputs of one record (#536)
 end
 
 Components.component_name(::Type{<:TiledUrbanSurface}) = :tiled_surface
@@ -245,6 +253,167 @@ end
 
 const _SFC_KEYS = (:Rn, :H, :LE, :G, :E, :delivered_H, :delivered_E)
 
+# ---------------------------------------------------------------------------
+# the surface and screen-level temperatures of the tiles (#536)
+# ---------------------------------------------------------------------------
+
+"The surface classes with a temperature map of their own (`surface_temperature_<name>`)."
+const TILE_TEMPERATURE_CLASSES = SURFACE_CLASSES
+
+"The screen level (m above a tile's surface) of `theta_2m`, `temperature_2m`."
+const SCREEN_HEIGHT = 2.0
+
+"""
+    TileTemperatures
+
+The temperature maps of a [`TiledUrbanSurface`](@ref) at one time
+([`tile_temperatures`](@ref)), each `(Nx, Ny)` (K; NaN in a column
+without tiles): `Ts` the area-weighted skin temperature, `θs` the
+area-weighted potential skin temperature, `θ2`, `T2` the area-weighted
+2 m potential and absolute air temperature, and `Ts_class[:, :, c]` the
+skin temperature of class `c`'s tile (NaN where the column has none).
+"""
+struct TileTemperatures
+    Ts::Matrix{Float64}
+    θs::Matrix{Float64}
+    θ2::Matrix{Float64}
+    T2::Matrix{Float64}
+    Ts_class::Array{Float64,3}
+end
+
+"""
+    screen_theta(sf, t, f, θ_column, z_column, z_s, Π_s; z = 2.0, U_min = 0.5) -> θ(z)
+
+The potential temperature (referred to `p_ref`, the model's θ) at height
+`z` above the surface of tile `t` under the forcing `f` of its level,
+following PALM's `calc_2m_temperature`:
+
+  * when the forcing level is above `z` (`f.z_ref > z`), Monin–Obukhov
+    similarity from the tile's current surface layer
+    (`SurfaceExchange.surface_layer_solution`, the solve of its fluxes,
+    with the stability functions `sf`):
+    ``θ(z) = θ_s + θ_*/κ [\\ln(z/z_{0h}) - ψ_h(z/L) + ψ_h(z_{0h}/L)]``
+    (`similarity_theta`). The solve's θ scale is the tile's
+    surface-referenced one (``θ_s = T_s``), divided here by the Exner
+    value `Π_s` at the tile's surface;
+  * otherwise linear interpolation of the column's θ (`θ_column` at the
+    level centres `z_column`, m above the ground) at ``z_s + z``, with the
+    tile's potential skin temperature ``T_s/Π_s`` at its surface `z_s`
+    (held above the top level).
+
+`z_s` is the tile's surface height: its displacement height (0 for park
+and water, the column's ``d`` for the built tiles, whose surface layer is
+measured from it).
+"""
+function screen_theta(sf, t, f::SurfaceForcing, θcol, zcol, zs::Real, Πs::Real; z::Real = SCREEN_HEIGHT,
+                      U_min::Real = 0.5)
+    Ts = surface_temperature(t)
+    if f.z_ref > z
+        sol = surface_layer_solution(t, f; sf = sf, U_min = U_min)
+        return similarity_theta(sf, z; θ_s = Ts, θ_star = sol.θ_star, L = sol.L, z0h = roughness_lengths(t).z0h) / Πs
+    end
+    zq = zs + z
+    zl, θl = zs, Ts / Πs                       # the last point at or below zq
+    for k in eachindex(zcol)
+        zcol[k] <= zs && continue
+        zcol[k] >= zq && return θl + (θcol[k] - θl) * (zq - zl) / (zcol[k] - zl)
+        zl, θl = zcol[k], θcol[k]
+    end
+    return θl
+end
+
+"""
+    tile_temperatures(c::TiledUrbanSurface, d) -> TileTemperatures
+
+The temperature maps of the tiled surface `c` of domain `d` in the
+current state ([`TileTemperatures`](@ref)), computed once per model time
+(the outputs of one record share them). Every tile ``i`` of a column,
+with area fraction ``f_i``, skin temperature ``T_{s,i}`` and surface
+height ``z_{s,i}`` (its displacement height), gives
+
+  * ``θ_{s,i} = T_{s,i}/Π̄(z_{s,i})``,
+  * ``θ_{2m,i}`` ([`screen_theta`](@ref): Monin–Obukhov from the tile's
+    surface layer under the air of its forcing level when that level is
+    above 2 m, else interpolation) and ``T_{2m,i} = θ_{2m,i} Π̄(z_{s,i} + 2)``,
+
+with ``Π̄`` the Exner function of the reference the surface converts its
+fluxes with (`Components.reference_exner`; PALM's `exner` of the
+barometric `hyp`); each map is the area-weighted ``Σ_i f_i x_i``. The
+tiles of a blended mosaic are evaluated at their own levels too.
+"""
+function tile_temperatures(c::TiledUrbanSurface, d)
+    t = Components.clock(d)
+    x = c.temps[]
+    (x !== nothing && x[1] == t) && return x[2]
+    sim = d.state; m = sim.mesh; ps = c.surface; ref = c.ref
+    zc = last(Output.cell_centres(m))
+    g = hasproperty(ref, :g) ? ref.g : sim.g_accel
+    Π(z) = Components.reference_exner(ref, zc, z; g = g)
+    θd = sim.θ.data
+    qd = _moist(sim) ? sim.qv.data : nothing
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
+    sf = Aeolus.SurfaceExchange.default_stability_functions()   # the tiles' own (`turbulent_fluxes` without `sf`)
+    nc = length(TILE_TEMPERATURE_CLASSES)
+    nan() = fill(NaN, m.Nx, m.Ny)
+    out = TileTemperatures(nan(), nan(), nan(), nan(), fill(NaN, m.Nx, m.Ny, nc))
+    Threads.@threads for J in 1:m.Ny
+        θcol = Vector{Float64}(undef, m.Nz)
+        for I in 1:m.Nx
+            col = ps.columns[I, J]
+            col === nothing && continue
+            for k in 1:m.Nz
+                θcol[k] = θd[m.Hx+I, m.Hy+J, m.Hz+k]
+            end
+            air = _column_air(c, sim, θd, qd, I, J, maximum(col.ktile))
+            fs = parent_tile_forcings(ps, col, air)
+            tiles = _mosaic(col).tiles
+            fr = mosaic_fractions(col.surface)
+            Ts = θs = θ2 = T2 = 0.0
+            for n in eachindex(tiles)
+                tl = tiles[n]; zs = col.d[n]
+                Πs = Π(zs)
+                Tsn = surface_temperature(tl)
+                θ2n = screen_theta(sf, tl, fs[n], θcol, zc, zs, Πs; U_min = c.U_min)
+                Ts += fr[n] * Tsn; θs += fr[n] * Tsn / Πs
+                θ2 += fr[n] * θ2n; T2 += fr[n] * θ2n * Π(zs + SCREEN_HEIGHT)
+                cl = col.classes[n]
+                1 <= cl <= nc && fr[n] > 0 && (out.Ts_class[I, J, cl] = Tsn)
+            end
+            out.Ts[I, J] = Ts; out.θs[I, J] = θs; out.θ2[I, J] = θ2; out.T2[I, J] = T2
+        end
+    end
+    c.temps[] = (t, out)
+    return out
+end
+
+"The names of a tiled surface's outputs ([`tile_temperatures`](@ref))."
+const _TILE_OUTPUTS = ("surface_temperature",
+                       ("surface_temperature_" * last(p) for p in TILE_TEMPERATURE_CLASSES)...,
+                       "surface_theta", "theta_2m", "temperature_2m")
+
+Components.output_names(::Type{<:TiledUrbanSurface}, opts) = _TILE_OUTPUTS
+
+function Components.outputs(c::TiledUrbanSurface)
+    tt(d) = tile_temperatures(c, d)
+    vs = OutputVariable[
+        OutputVariable("surface_temperature", "K", "surface (skin) temperature, area-weighted over the tiles", :xy,
+                       d -> tt(d).Ts; standard_name = "surface_temperature")]
+    for (cl, name) in TILE_TEMPERATURE_CLASSES
+        k = Int(cl)
+        push!(vs, OutputVariable("surface_temperature_$name", "K",
+                                 "skin temperature of the $name tile (NaN where the column has none)", :xy,
+                                 d -> tt(d).Ts_class[:, :, k]))
+    end
+    append!(vs, OutputVariable[
+        OutputVariable("surface_theta", "K", "potential skin temperature T_s / Exner, area-weighted over the tiles", :xy,
+                       d -> tt(d).θs),
+        OutputVariable("theta_2m", "K", "2 m potential temperature, area-weighted over the tiles", :xy,
+                       d -> tt(d).θ2),
+        OutputVariable("temperature_2m", "K", "2 m air temperature, area-weighted over the tiles", :xy,
+                       d -> tt(d).T2; standard_name = "air_temperature")])
+    return vs
+end
+
 """
     build(TiledUrbanSurface, opts, domain)
 
@@ -279,7 +448,7 @@ function Components.build(::Type{<:TiledUrbanSurface}, opts, domain)
                         Float64(Components.option(opts, :u_min, 0.5)), copy(z), copy(z), copy(z),
                         fill(NaN, m.Nx, m.Ny), Ref(-Inf), Ref(Float64(Components.option(opts, :sw_down, 0.0))),
                         Ref(Float64(Components.option(opts, :lw_down, 350.0))),
-                        Dict{Symbol,Float64}(k => 0.0 for k in _SFC_KEYS), copy(hm.w), copy(wm.w))
+                        Dict{Symbol,Float64}(k => 0.0 for k in _SFC_KEYS), copy(hm.w), copy(wm.w), Ref{Any}(nothing))
 end
 
 "The land use of the tile form of a static driver (`StaticTiles`) as a [`ParentLanduse`](@ref)."
@@ -361,17 +530,24 @@ function step_tiles!(c::TiledUrbanSurface, sim, period::Real)
     return c
 end
 
-function _tile_column!(I, J, c, sim, θd, qd, zf, kmax, period)
-    m, ref, ps = sim.mesh, c.ref, c.surface
+# the air of column (I, J) at its levels 1:kf, as the tiles see it: T = θ Π̄_k,
+# q_v, the cell-centre wind (at least U_min), p̄_k
+function _column_air(c::TiledUrbanSurface, sim, θd, qd, I, J, kf)
+    m, ref = sim.mesh, c.ref
     Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    return [SurfaceForcing(; sw_down = c.sw_down[], lw_down = c.lw_down[],
+                           T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
+                           q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
+                           U = max(_cell_speed(sim, I, J, k), c.U_min), p = ref.p̄[k], z_ref = 10.0)
+            for k in 1:kf]
+end
+
+function _tile_column!(I, J, c, sim, θd, qd, zf, kmax, period)
+    ref, ps = c.ref, c.surface
     col = ps.columns[I, J]
     kf = maximum(col.ktile)
     U_min = c.U_min
-    air = [SurfaceForcing(; sw_down = c.sw_down[], lw_down = c.lw_down[],
-                          T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
-                          q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
-                          U = max(_cell_speed(sim, I, J, k), U_min), p = ref.p̄[k], z_ref = 10.0)
-           for k in 1:kf]
+    air = _column_air(c, sim, θd, qd, I, J, kf)
     agg = step_parent_column!(ps, col, air, period; U_min = U_min)
     tf = last_tile_fluxes(_mosaic(col))
     fr = mosaic_fractions(col.surface)

@@ -38,7 +38,7 @@ const T_AVG = (run_end(RUNS[1]) - 3600.0, T_END)
 results = map(RUNS) do r
     st = r.stats; stab = cfgval(r, "sgs.stability")
     series = [(t = s.t, u_star = s.u_star, wθ = s.wθ, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet,
-               θ2 = s.θ_screen, U10 = s.U_screen, Ts = s.T_s) for s in r.series]      # every 300 s
+               θ2 = s.θ_screen, U10 = s.U_screen, Ts = s.θ_s) for s in r.series]      # every 300 s
     @printf("%-8s %s: 03-%02d UTC h = %5.1f m  u* = %.3f m/s  H = %6.1f W/m²  L = %5.1f m  h/L = %4.1f  LLJ %.2f m/s at %3.0f m  (%d steps, %.0f s)\n",
             stab, TAG, round(Int, T_END / 3600), st.h, st.u_star, st.H0, st.L, st.h / st.L, st.S_max, st.z_jet,
             st.nsteps, st.wall_time)

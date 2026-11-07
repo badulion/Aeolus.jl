@@ -360,6 +360,12 @@ for its type). The core publishes `Components.CORE_OUTPUTS`:
   diagnostics;
 - the domain means and `w_rms` as time series; `u_squared` and
   `vorticity_y` as 3-D fields;
+- the absolute air temperature ``T = θ Π̄`` (`temperature`, its profile
+  and domain mean, #536) with the domain's thermodynamic reference
+  (`Components.thermodynamic_reference`: the reference driver every
+  Boussinesq domain built from a configuration with a positive initial θ has, an urban site's
+  `CaseReference`, or the anelastic base state; a bare Boussinesq core
+  made in Julia has none and its catalogue leaves them out);
 - the `budget_*` groups.
 
 `[output] variables` selects from the catalogues of the core and the
