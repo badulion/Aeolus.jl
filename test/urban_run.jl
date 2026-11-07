@@ -83,6 +83,25 @@ end
     @test rc == 2
 end
 
+@testset "urban run type: [budgets] enabled = false, the same configuration without the budgets (#539)" begin
+    # the configuration of the run above: its budget checks are dropped, the site builds no budgets
+    root = mktempdir()
+    chk = ["--set", "checks.urban_budgets={required = true}", "--set", "checks.energy_closure={required = true, tolerance = 1e-9}",
+           "--set", "checks.finite={required = true}", "--set", "budgets.enabled=false"]
+    rc = quiet_main(vcat(["run", SMALL_CITY, "--root", root, "--allow-uncommitted", "--set", "fftw.planner=\"estimate\""], chk))
+    @test rc == 0
+    run = only(readdir(root; join = true))
+    res = TOML.parsefile(joinpath(run, "output", "results.toml"))
+    @test res["budgets"] == Dict("enabled" => false)
+    @test !haskey(res, "air_heat") && res["finite"] === true
+    @test haskey(res["checks"], "finite") && !haskey(res["checks"], "urban_budgets") && !haskey(res["checks"], "energy_closure")
+    # the site's domain measures nothing
+    cfg = load_run_config(SMALL_CITY; overrides = ["budgets.enabled=false", "fftw.planner=\"estimate\""])
+    d = only(UC.build_model(cfg).domains)
+    @test d.budgets === nothing
+    @test !UC.budgets_enabled(UC.urban_case(d))
+end
+
 @testset "urban run type: the GeoJSON ground from its static driver" begin
     Aeolus.Operators.set_fftw_policy!(; planner = :estimate)
     cfg = load_run_config(SMALL_CITY)

@@ -524,6 +524,20 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "netcdf", String; default = "output.nc",
                 doc = "file name of the NetCDF-4 output in [output] path (the run folder's output/ by default)")
     end
+    # the measured budgets of the air (#539): on by default, off for production runs
+    bud = section("budgets"; doc = "The measured budgets of the air (ONE-c, #452; #539): which budgets a domain " *
+                                   "measures follows from the `budget_*` outputs and the closure checks; this " *
+                                   "section turns them all off, for model domains and urban sites alike.") do s
+        option!(s, "enabled", Bool; default = true,
+                doc = "measure the budgets the outputs and checks ask for; false: no budget is built or measured, " *
+                      "and the requested budget_* outputs and budget checks (the closure checks, urban_budgets) are " *
+                      "dropped with one warning, so the same configuration runs with --set budgets.enabled=false; " *
+                      "results.toml records [budgets] enabled = false")
+        option!(s, "verify_writes", Bool; default = false,
+                doc = "measure every stage entry for every budget, also those whose component declares it cannot " *
+                      "change the quantity (Components.budget_writes), and stop with an error when one did: the check " *
+                      "of the declarations, for tests and debugging (slower: the Berlin run's 9 passes per step become 50)")
+    end
     # one key per published check, `name = {required, tolerance}`, and the
     # reference comparisons (ONE-d, #453)
     chk = section("checks"; doc = "The checks the core and the enabled components publish, each enabled as " *
@@ -547,7 +561,7 @@ function Config.driver_sections(::SimulationDriverType)
     comps = Section[Components.schema(C) for C in COMPONENTS]
     # one section per exclusive slot (ONE-m, #476): the model's providers and
     # the urban site's of a slot pooled, each available on its domain kind
-    return Config.merge_sections(Section[tim, spn, out, chk, dom, grid, core, stepping, dyn, bnd, ini, comps...,
+    return Config.merge_sections(Section[tim, spn, out, bud, chk, dom, grid, core, stepping, dyn, bnd, ini, comps...,
                                          _coupling_sections()..., Urban.urban_sections()...];
                                  kind = domain_kind, kind_text = KIND_TEXT)
 end
@@ -989,6 +1003,7 @@ function Config.build(::SimulationDriverType, cfg::RunConfig)
     # ([fftw] threads, AEOLUS_FFTW_THREADS, set_fftw_policy!) wins. Until #524
     # only the urban site called it, so every other domain's FFTs ran on one thread.
     Backends.init_threads!(Backends.default_backend())
+    warn_budgets_off(cfg)
     if Urban.urban_enabled(cfg) && !_nested(cfg)
         # the urban site (ONE-e #454, ONE-k #474): one domain, the site its
         # first component, stepped by its :timestepper component
@@ -1046,10 +1061,51 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing, cfl = :config
     comps = build_components(Tuple(C => cfg[Components.section(C)] for C in COMPONENTS), d0)
     _any_coupling(cfg) && (comps = (comps..., SimulationCouplings(couplings)))
     # the budgets the [output] selection measures (ONE-c): off unless selected,
-    # and the closure checks [checks] enables (ONE-d)
-    qs = unique!(vcat(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())],
-                      Components.check_budgets(_published_enabled(cfg))))
-    return Components.with_budgets(Domain(d0; components = comps), qs)
+    # and the closure checks [checks] enables (ONE-d); none with [budgets]
+    # enabled = false (#539)
+    qs = budgets_enabled(cfg) ?
+         unique!(vcat(Symbol[q for n in cfg.output.variables for q in get(Components.BUDGET_OUTPUTS, n, ())],
+                      Components.check_budgets(_published_enabled(cfg)))) : Symbol[]
+    return Components.with_budgets(Domain(d0; components = comps), qs; verify = cfg.budgets.verify_writes)
+end
+
+"""
+    budgets_enabled(cfg) -> Bool
+
+Whether the run measures budgets: `[budgets] enabled` (#539).
+"""
+budgets_enabled(cfg) = Bool(cfg.budgets.enabled)
+
+"""
+    budget_dependents(cfg) -> (outputs, checks)
+
+What needs the measured budgets in `cfg`: the `budget_*` variables of
+`[output] variables` and the closure checks and `urban_budgets` that
+`[checks]` enables. With `[budgets] enabled = false` the run drops them
+(one warning at the build, [`warn_budgets_off`](@ref)), #539.
+"""
+function budget_dependents(cfg)
+    outs = String[n for n in cfg.output.variables if haskey(Components.BUDGET_OUTPUTS, n)]
+    chks = String[n for n in _published_enabled(cfg) if haskey(Components.CLOSURE_CHECKS, n) || n == "urban_budgets"]
+    return outs, chks
+end
+
+"""
+    warn_budgets_off(cfg)
+
+With `[budgets] enabled = false`: one warning that lists the outputs and
+checks the run drops ([`budget_dependents`](@ref)); nothing when none is
+requested or the budgets are on.
+"""
+function warn_budgets_off(cfg)
+    budgets_enabled(cfg) && return nothing
+    outs, chks = budget_dependents(cfg)
+    isempty(outs) && isempty(chks) && return nothing
+    what = vcat(isempty(outs) ? String[] : ["outputs " * join(outs, ", ")],
+                isempty(chks) ? String[] : ["checks " * join(chks, ", ")])
+    @warn("the budgets are off ([budgets] enabled = false): the run drops the $(join(what, " and the ")), " *
+          "which need them", subsystem = :budgets, event = :budgets_off, outputs = outs, checks = chks)
+    return nothing
 end
 
 # The fixed gradient (K m⁻¹) of the initial profile θ(z) at the top face of
@@ -1235,6 +1291,8 @@ function _output_writer(r::SimulationRun, rf, resume_t, dom = _domain(r))
     # a nest: each domain writes the selected variables it has
     names = length(Components.domains(r.model)) == 1 ? o.variables :
             (have = Set(v.name for v in cat); [n for n in o.variables if n in have])
+    # [budgets] enabled = false drops the budget outputs (#539; warned at the build)
+    budgets_enabled(cfg) || (names = [n for n in names if !haskey(Components.BUDGET_OUTPUTS, n)])
     vars = select_variables(cat, names)
     dir = o.path === nothing ? output_dir(rf) : mkpath(o.path)
     m = dom.state.mesh
@@ -1393,6 +1451,9 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     # results.toml: the components' numbers of the run and the checks [checks] enables
     extra = Dict{String,Any}()
     foreach(d -> foreach(c -> merge!(extra, Components.run_results(c, d)), d.components), doms)
+    # whether the budgets were measured (#539): always when they were off
+    (checks !== nothing || !isempty(extra) || !budgets_enabled(cfg)) &&
+        (get!(() -> Dict{String,Any}(), extra, "budgets")["enabled"] = budgets_enabled(cfg))
     if checks !== nothing
         _finish_checks(rf, cfg, evaluate_checks(checks); extra = extra)
     elseif !isempty(extra)
@@ -1426,6 +1487,8 @@ end
 function _check_runner(r::SimulationRun)
     cfg = r.cfg; c = cfg.checks; dom = _domain(r)
     settings = enabled_checks(_checks_table(cfg))
+    # [budgets] enabled = false drops the budget checks (#539; warned at the build)
+    budgets_enabled(cfg) || foreach(n -> delete!(settings, n), last(budget_dependents(cfg)))
     isempty(settings) && return nothing
     doms = Components.domains(r.model)
     cs = length(doms) == 1 ? Components.domain_checks(dom) : _nest_checks_merged(doms)

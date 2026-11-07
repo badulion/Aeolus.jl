@@ -15,6 +15,8 @@
 # unchanged; the catalogue and the config validation.
 
 using Test
+using Logging
+using TOML
 using Aeolus
 using Aeolus.BudgetSystem
 using Aeolus.Output
@@ -517,4 +519,35 @@ end
     # without a budget variable the domain measures nothing
     @test BOC.budgets(only(Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
                                                load(String[])).model.domains)) === nothing
+end
+
+@testset "config: [budgets] enabled = false drops the budget outputs and checks, with one warning" begin
+    load(ov) = load_run_config(IOBuffer(""); overrides = vcat(["grid.size=[8,8,8]", "fftw.planner=\"estimate\"",
+                                                               "time.duration=\"none\"", "time.nsteps=3",
+                                                               "surface_theta_flux.bottom=0.1", "output.series_cadence=0.0",
+                                                               "output.variables=[\"theta_mean\",\"budget_energy\",\"budget_momentum\"]",
+                                                               "checks.energy_closure={required=true}",
+                                                               "checks.finite={required=true}"], ov))
+    on, off = load(String[]), load(["budgets.enabled=false"])
+    @test on.budgets.enabled && !off.budgets.enabled && !on.budgets.verify_writes
+    @test Aeolus.SimulationDriver.budget_dependents(off) == (["budget_energy", "budget_momentum"], ["energy_closure"])
+    build(c) = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), c)
+    # one warning that lists them; no budgets built
+    d = @test_logs (:warn, r"budgets are off.*budget_energy, budget_momentum.*energy_closure") match_mode = :any begin
+        only(build(off).model.domains)
+    end
+    @test BOC.budgets(d) === nothing
+    @test Set(BOC.budgets(only(build(on).model.domains)) |> b -> keys(b.measured)) == Set([:energy, :momentum_x, :momentum_y])
+    @test_logs min_level = Logging.Warn only(build(on).model.domains)     # on: no warning
+    # the run: the same configuration, no budget output, the checks without the closure, results.toml records it
+    r = run_config(off; root = mktempdir(), console = devnull, repo = mktempdir())
+    res = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
+    @test res["budgets"]["enabled"] == false
+    @test haskey(res["checks"], "finite") && !haskey(res["checks"], "energy_closure")
+    NCDataset(joinpath(r.folder.path, "output", "output.nc")) do nc
+        @test haskey(nc, "theta_mean") && !any(k -> startswith(k, "budget_"), keys(nc))
+    end
+    r = run_config(on; root = mktempdir(), console = devnull, repo = mktempdir())
+    res = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
+    @test res["budgets"]["enabled"] == true && haskey(res["checks"], "energy_closure")
 end
