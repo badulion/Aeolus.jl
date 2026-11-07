@@ -292,6 +292,14 @@ stages(c::LargeScale) = c.zi === nothing ? (Stage(:clock), Stage(:body_force)) :
 
 run_stage!(c::LargeScale, d, ::Val{:clock}, dt) = (c.t0[] = clock(d); nothing)
 
+# what the budgets measure (#539): the clock and the boundary-layer tracker
+# read the state; the geostrophic pressure gradient alone pushes the
+# velocity, the other forcings (advective tendencies, subsidence, nudging,
+# the θ damping) may change any quantity
+budget_writes(::LargeScale, ::Val{:clock}) = ()
+budget_writes(::LargeScale, ::Val{:column_tendency}) = ()
+budget_writes(c::LargeScale, ::Val{:body_force}) = isempty(c.extra) ? (:momentum_x, :momentum_y) : BUDGET_QUANTITIES
+
 # The Coriolis parameter of the domain's Coriolis component; without one,
 # the core's own (0 on a model domain, whose rotation is the component's).
 _coriolis_f(::Tuple{}, s) = Float64(s.f_coriolis)

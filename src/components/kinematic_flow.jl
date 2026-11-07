@@ -61,6 +61,8 @@ function build(::Type{<:KinematicFlow}, opts, domain)
     return KinematicFlow(copy(s.u.data), copy(s.v.data), copy(s.w.data))
 end
 stages(::KinematicFlow) = (Stage(:clock), Stage(:post_predictor), Stage(:surface_update))
+# it prescribes the velocity: the budgets measure it on the momentum only (#539)
+budget_writes(::KinematicFlow, ::Val) = (:momentum_x, :momentum_y)
 
 function _prescribe!(c::KinematicFlow, d)
     s = d.state

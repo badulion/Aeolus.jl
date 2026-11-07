@@ -82,6 +82,10 @@ modules_used(::Type{<:GeostrophicCoupling}) = (:LargeScaleForcing,)
 default_options(::Type{<:GeostrophicCoupling}) =
     (U_g = 1.0, V_g = 0.0, mode = :pressure_gradient, τ = 1800.0, sponge_to_geostrophic = true)
 stages(::Type{<:GeostrophicCoupling}) = ((:body_force, 10, EVERY_STEP),)
+# the budgets measure it on the momentum only when it is the geostrophic
+# pressure gradient alone (#539); another forcing may change any quantity
+Components.budget_writes(c::GeostrophicCoupling, ::Val{:body_force}) =
+    c.forcing isa GeostrophicPressureGradient ? (:momentum_x, :momentum_y) : Components.BUDGET_QUANTITIES
 
 """
     sounding_zi_max(cfg) -> m

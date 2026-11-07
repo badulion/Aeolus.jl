@@ -41,6 +41,7 @@ function build(::Type{Towers}, opts, domain)
     return Towers(tower_sampler(m, hs; window = opts.window), opts.hours)
 end
 stages(::Towers) = (Stage(:output),)
+budget_writes(::Towers, ::Val) = ()          # it reads the state (#539)
 
 _in_hours(t, (h0, h1)) = (h = mod(t / 3600, 24); h0 <= h1 ? h0 <= h < h1 : (h >= h0 || h < h1))
 

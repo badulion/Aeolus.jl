@@ -28,6 +28,7 @@ modules_used(::Type{<:PollutantCoupling}) = (:Chemistry, :Operators)
 default_options(::Type{<:PollutantCoupling}) =
     (stacks = [(0.0, 0.0, 60.0), (-150.0, 150.0, 25.0), (200.0, -100.0, 40.0)], tau = 3600.0)
 stages(::Type{<:PollutantCoupling}) = ((:tracers, 10, EVERY_STEP),)
+Components.budget_writes(::PollutantCoupling, ::Val) = (:tracer,)   # its tracer alone (#539)
 
 function build(::Type{<:PollutantCoupling}, case, o)
     mesh = case.mesh
