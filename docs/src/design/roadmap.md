@@ -2410,6 +2410,35 @@ point, field and time. Every plane takes the slab path, reads exactly what
 spanning more than one slab keeps the view. Shifting the slab offset by
 one point makes the test fail (43 errors).
 
+**FFTW's threads on its own pool: the MEASURE planner no longer crashes
+(#397, 2026-11-06).** Planning a threaded transform under MEASURE crashed
+the process (signal 11 in `spawn_apply`) at 10–14 threads.
+
+FFTW.jl registers `spawnloop` as FFTW's thread callback. It spawns one
+Julia task per job, over a job array on the C stack of the FFTW call
+waiting in `@sync`, and that caller may yield while the jobs run. This is
+upstream JuliaMath/FFTW.jl#306, and the fix there (#344) is unmerged.
+FFTW.jl 1.10.0, the latest release, with FFTW_jll 3.3.12, still has it.
+
+Since #525 every model plans threaded, so this hit every run with an
+unlucky thread count. The FFTW policy (`_fftw_policy!`, the one place
+every plan's flags come from) now clears the callback when it first
+resolves. FFTW then runs its threaded transforms on its own threads.
+
+Measured on a Ryzen AI 9 HX 370 (12 cores), at 12 Julia and 12 FFTW
+threads, under MEASURE:
+- planning a 256³ irfft crashed 4 of 4 processes before, 0 of 4 after;
+- the Berlin r2r plus the 256³ irfft crashed 8 of 8 before, 0 of 8 after.
+
+The cost: the 200 × 200 × 60 r2r under ESTIMATE takes 1.6–1.7 ms on Julia
+tasks against 1.9–2.3 ms on FFTW's threads at `-t 12`, and both run
+1.7–2.5 ms at `-t 24`. That is about 2 ms of a 0.24 s Berlin step.
+
+Test: `fftw_threads.jl` (exclusive) plans the 256³ irfft under MEASURE
+in a `-t 12` subprocess and checks that the round trip recovers the input
+to 1e-12. With the fix disabled, the subprocess crashes and the test
+fails. Remove the workaround once FFTW.jl ships the fix.
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*

@@ -813,6 +813,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     end
 
     include("io_checkpoint.jl")   # #245: full-state checkpoints restart, FFTW policy
+    include("fftw_threads.jl")    # #397: threaded MEASURE planning on FFTW's own threads, no crash (subprocess, -t 12)
     include("logging_core.jl")    # #333: structured events, run log, test logger
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
