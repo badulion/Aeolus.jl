@@ -825,6 +825,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("config_simulation_driver.jl")  # CFG-b (#357): the model from a config round trip, resume, TGV
     include("components_pipeline.jl")  # ONE-a (#450): component interface, stage pipeline, master digests through Model
     include("budgets_output.jl")       # ONE-c (#452): the one budget system and the one output writer
+    include("thermodynamic_reference.jl")  # #536: the domain's thermodynamic reference, T = θ Π̄ outputs
     include("checks.jl")               # ONE-d (#453): in-model checks: [checks], results.toml, exit code 3
     include("config_model.jl")        # ONE-b (#451): one schema: bare config = dry LES, [[domain]], per-domain overrides, slots
     include("config_slots.jl")        # ONE-m (#476): one section per exclusive slot, a selector key, the provider's options only

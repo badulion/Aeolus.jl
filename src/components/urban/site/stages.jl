@@ -226,8 +226,9 @@ function build_domain!(case)
     cfg = case.cfg
     comps = (case, (UrbanEntry(c, pipeline_stages(typeof(c), cfg)) for c in case.couplings)...)
     # (a nested site is the domain of its [[domain]] block's id)
+    # (its thermodynamic reference, `Components.thermodynamic_reference`: the site's own, #536)
     d = Domain(case.sim; id = case.nest === nothing ? string(cfg.name) : string(case.nest.id), components = comps,
-               validate = false)
+               validate = false, drivers = (; reference = case.ref))
     db = DomainBudgets(case.budgets, (:energy,), Dict(:energy => case.sim.θ), Dict(:energy => case.sim.tθ);
                        nsub = 1, hour = t -> hour_of_day(cfg, t))
     case.domain = Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)

@@ -46,7 +46,7 @@ const OUTPUT_DIMS = (:xyz, :xy, :z, :k, :scalar)
 
 """
     OutputVariable(name, units, long_name, dims, getter; eltype = Float32 (Float64 for :scalar),
-                   group = false)
+                   group = false, standard_name = "")
 
 One variable of an output catalogue. `dims` is one of [`OUTPUT_DIMS`](@ref);
 `getter(ctx)` returns its value for the writer's context `ctx` (a model
@@ -56,7 +56,8 @@ the length of the writer's wavenumbers `k` for `:k`, a number for
 `:scalar`. With `group = true` (a `:scalar` variable) `getter` returns a
 `Dict{String,Float64}`: a **group** of scalars, written as
 `<name>__<key>` and defined as they appear (the budget terms, which
-appear as the run books them).
+appear as the run books them). A non-empty `standard_name` is written as
+the variable's CF `standard_name` attribute (e.g. `air_temperature`).
 """
 struct OutputVariable
     name::String
@@ -66,12 +67,13 @@ struct OutputVariable
     getter::Function
     eltype::DataType
     group::Bool
+    standard_name::String
     function OutputVariable(name::AbstractString, units::AbstractString, long_name::AbstractString,
                             dims::Symbol, getter::Function; eltype::DataType = dims === :scalar ? Float64 : Float32,
-                            group::Bool = false)
+                            group::Bool = false, standard_name::AbstractString = "")
         dims in OUTPUT_DIMS || throw(ArgumentError("OutputVariable $name: dims must be one of $(OUTPUT_DIMS), got :$dims"))
         group && dims !== :scalar && throw(ArgumentError("OutputVariable $name: a group is :scalar"))
-        return new(String(name), String(units), String(long_name), dims, getter, eltype, group)
+        return new(String(name), String(units), String(long_name), dims, getter, eltype, group, String(standard_name))
     end
 end
 
@@ -209,9 +211,10 @@ function OutputWriter(path::AbstractString; x, y, z, k = nothing, records = Outp
         nc_defvar!(ds, d, Float64, (d,); attributes = Dict("units" => time_units, "axis" => "T", "long_name" => ln))
     end
     for v in statics
-        nc_defvar!(ds, v.name, v.eltype, v.dims === :xy ? ("x", "y") : ("x", "y", "z");
-                   attributes = Dict("units" => v.units, "long_name" => v.long_name,
-                                     "coordinates" => v.dims === :xy ? "x y" : "x y z"))
+        a = Dict{String,Any}("units" => v.units, "long_name" => v.long_name,
+                             "coordinates" => v.dims === :xy ? "x y" : "x y z")
+        isempty(v.standard_name) || (a["standard_name"] = v.standard_name)
+        nc_defvar!(ds, v.name, v.eltype, v.dims === :xy ? ("x", "y") : ("x", "y", "z"); attributes = a)
         ds[v.name][ntuple(_ -> Colon(), v.dims === :xy ? 2 : 3)...] = v.eltype.(v.getter(ctx))
     end
     for st in (rs, ss), v in st.vars
@@ -224,6 +227,7 @@ function _defvar!(w::OutputWriter, st::_Stream, v::OutputVariable, name, units, 
     dims = v.dims === :xyz ? ("x", "y", "z", st.dim) : v.dims === :xy ? ("x", "y", st.dim) :
            v.dims === :z ? ("z", st.dim) : v.dims === :k ? ("k", st.dim) : (st.dim,)
     attrs = Dict{String,Any}("units" => units, "long_name" => long_name)
+    isempty(v.standard_name) || (attrs["standard_name"] = v.standard_name)
     v.dims === :scalar ||
         (attrs["coordinates"] = v.dims === :xyz ? "x y z" : v.dims === :xy ? "x y" : v.dims === :k ? "k" : "z")
     w.averaging === :mean && (attrs["cell_methods"] = "$(st.dim): mean")

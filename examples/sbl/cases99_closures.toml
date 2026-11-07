@@ -80,7 +80,7 @@ target = "geostrophic"
 [output]
 variables = ["u_profile", "v_profile", "theta_profile", "wind_speed_profile", "stress_profile", "heat_flux_profile",
              "u_star", "surface_wtheta", "surface_heat_flux", "obukhov_length", "bl_height", "jet_speed",
-             "jet_height", "inversion_height", "theta_2m", "wind_10m", "surface_temperature", "tower_threshold"]
+             "jet_height", "inversion_height", "theta_2m", "wind_10m", "surface_theta", "tower_threshold"]
 averaging = "mean"
 cadence = 3600.0
 series_cadence = 600.0

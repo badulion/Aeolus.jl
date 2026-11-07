@@ -132,7 +132,7 @@ const SE = Aeolus.SurfaceExchange
                    :BusingerDyerLogLinear, :psi_m, :psi_h, :phi_m, :phi_h, :solve_surface_layer,
                    :obukhov_length, :bulk_richardson, :AbstractSurface, :SurfaceForcing, :SurfaceFluxes,
                    :surface_temperature, :roughness_lengths, :surface_albedo,
-                   :surface_emissivity, :turbulent_fluxes, :step_surface!, :net_radiation))
+                   :surface_emissivity, :turbulent_fluxes, :surface_layer_solution, :step_surface!, :net_radiation))
         @test isempty(Test.detect_ambiguities(SE))
         # the fog column's mixing length uses the contract's κ, not a copy
         @test Aeolus.RadiationFog._KARMAN === DEFAULT_SURFACE_CONSTANTS.κ
