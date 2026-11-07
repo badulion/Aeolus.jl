@@ -78,7 +78,7 @@ export SurfaceConstants, DEFAULT_SURFACE_CONSTANTS,
        has_packed_state, packed_state_length, pack_state!, unpack_state!,
        surface_temperature, roughness_lengths, surface_albedo, surface_emissivity,
        moisture_availability, surface_specific_humidity, surface_latent_heat,
-       net_radiation, turbulent_fluxes, step_surface!,
+       net_radiation, turbulent_fluxes, surface_layer_solution, step_surface!,
        MOSTConsistent, most_gradient_richardson, most_stability_parameter,
        log_linear_slope, MSHFSolution, mshf_solution, max_sustainable_heat_flux,
        flux_friction_velocity, surface_mshf_ratio,
@@ -1010,12 +1010,49 @@ function net_radiation(s::AbstractSurface, f::SurfaceForcing;
 end
 
 """
-    turbulent_fluxes(s, forcing; sf = BusingerDyerBeljaarsHoltslag(),
+    default_stability_functions() -> BusingerDyerBeljaarsHoltslag()
+
+The stability functions of a surface's fluxes when none are passed
+([`surface_layer_solution`](@ref), [`turbulent_fluxes`](@ref)): what a
+diagnostic of the same surface layer (its 2 m temperature) must use too.
+"""
+default_stability_functions() = BusingerDyerBeljaarsHoltslag()
+
+"""
+    surface_layer_solution(s, forcing; sf = default_stability_functions(),
+                           c = DEFAULT_SURFACE_CONSTANTS, kwargs...) -> SurfaceLayerSolution
+
+The Monin–Obukhov solution ([`solve_surface_layer`](@ref)) between the
+skin of surface `s` (`surface_temperature`, `surface_specific_humidity`,
+`roughness_lengths`) and the forcing level of `forcing`, the air
+temperature referred to the surface by the dry adiabat, ``θ_a = T_a +
+Γ_d z_{ref}``, ``θ_s = T_s``: the one solve of [`turbulent_fluxes`](@ref)
+(its ``u_*``, ``θ_*``, ``L``, on that surface-referenced θ scale), and of
+the screen-level diagnostics of a tile (the 2 m temperature of a tiled
+surface, #536). `kwargs` (`U_min`, `gustiness`, …) go to
+`solve_surface_layer`.
+"""
+function surface_layer_solution(s::AbstractSurface, f::SurfaceForcing;
+                                sf::AbstractStabilityFunctions = default_stability_functions(),
+                                c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS, kwargs...)
+    Ts = surface_temperature(s)
+    z0 = roughness_lengths(s)
+    qa = PhasePartition(f.q_air)
+    θ_a = f.T_air + dry_adiabatic_lapse_rate(qa, c.thermo) * f.z_ref
+    q_s = surface_specific_humidity(s, f; c = c)
+    return solve_surface_layer(sf; U = f.U, z_m = f.z_ref, θ_a = θ_a, θ_s = Ts,
+                               q_a = f.q_air, q_s = q_s,
+                               z0m = z0.z0m, z0h = z0.z0h, z0q = z0.z0q, c = c, kwargs...)
+end
+
+"""
+    turbulent_fluxes(s, forcing; sf = default_stability_functions(),
                      c = DEFAULT_SURFACE_CONSTANTS, kwargs...) -> SurfaceFluxes
 
 Default flux computation for any [`AbstractSurface`](@ref): solves the
 surface layer between the skin (`surface_temperature`,
-`surface_specific_humidity`, `roughness_lengths`) and the forcing level,
+`surface_specific_humidity`, `roughness_lengths`) and the forcing level
+([`surface_layer_solution`](@ref), which takes `sf` and the `kwargs`),
 then
 
     τ = ρ u_*²,   H = -ρ c_pm u_* θ_*,   E = -ρ u_* q_*,   LE = L E
@@ -1027,16 +1064,9 @@ the air temperature referred to the surface by the dry adiabat,
 (`U_min`, `gustiness`, …) are passed to [`solve_surface_layer`](@ref).
 """
 function turbulent_fluxes(s::AbstractSurface, f::SurfaceForcing;
-                          sf::AbstractStabilityFunctions = BusingerDyerBeljaarsHoltslag(),
                           c::SurfaceConstants = DEFAULT_SURFACE_CONSTANTS, kwargs...)
-    Ts = surface_temperature(s)
-    z0 = roughness_lengths(s)
     qa = PhasePartition(f.q_air)
-    θ_a = f.T_air + dry_adiabatic_lapse_rate(qa, c.thermo) * f.z_ref
-    q_s = surface_specific_humidity(s, f; c = c)
-    sol = solve_surface_layer(sf; U = f.U, z_m = f.z_ref, θ_a = θ_a, θ_s = Ts,
-                              q_a = f.q_air, q_s = q_s,
-                              z0m = z0.z0m, z0h = z0.z0h, z0q = z0.z0q, c = c, kwargs...)
+    sol = surface_layer_solution(s, f; c = c, kwargs...)
     ρ = air_density(f.T_air, f.p, qa, c.thermo)
     cp = heat_capacity_moist(qa, c.thermo)
     H = -ρ * cp * sol.u_star * sol.θ_star
