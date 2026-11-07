@@ -515,10 +515,14 @@ function step_tiles!(c::TiledUrbanSurface, sim, period::Real)
     # one work item per column (KA-m, #301): a column steps its own tiles
     # and writes only its own sources and u*; the area sums of its fluxes
     # are its partials, folded in column-major order (the same bits at
-    # every thread count)
+    # every thread count). A column's cost follows its tiles (a soil
+    # column's sub-stepped heat and water solves against a slab's one
+    # balance: 2-60 µs on Berlin's columns), so the threads claim runs of
+    # columns as they go (`schedule = :dynamic`, #537) instead of equal
+    # row groups.
     sRn, sH, sLE, sG, sE = column_sum(Aeolus.Backends.backend(c.θsrc), _tile_column!,
                                       (1:m.Nx, 1:m.Ny), c, sim, θd, qd, zf, kmax, period;
-                                      weight = TILE_COLUMN_WEIGHT)
+                                      weight = TILE_COLUMN_WEIGHT, schedule = :dynamic)
     n = m.Nx * m.Ny
     for (key, v) in ((:Rn, sRn), (:H, sH), (:LE, sLE), (:G, sG), (:E, sE))
         c.sfc_mean[key] += v / n * period

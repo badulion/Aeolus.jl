@@ -148,6 +148,42 @@ end
         @test agree(column_sum(b, colsum, (cr, crj), X; weight = 7), ref)
     end
 
+    @testset "dynamic column schedule: every index once, the same folded totals (#537)" begin
+        # guided self-scheduling: every index claimed exactly once, whatever
+        # the cost of each (here a cost growing 100-fold along the range)
+        for n in (1, 7, 1000, 40_000)
+            hits = zeros(Int, n)
+            Aeolus.Backends.dynamic_columns!((c, h) -> (@inbounds h[c] += 1; nothing), n, (hits,))
+            @test all(==(1), hits)
+        end
+        work = zeros(500)
+        Aeolus.Backends.dynamic_columns!(500, (work,)) do c, w
+            s = 0.0
+            for k in 1:c; s += sin(k); end              # uneven cost
+            @inbounds w[c] = s
+        end
+        @test work ≈ [sum(sin, 1:c) for c in 1:500] rtol = 1e-12        # summation order per index unchanged
+        # foreach_column! / column_sum: the schedule changes the split only,
+        # so partials and totals are the same as the static schedule's
+        X = randn(Xoshiro(537), 13, 11, 7)
+        cr, crj = 2:12, 3:10
+        colsum(i, j, A) = (s = 0.0; @inbounds(for k in axes(A, 3); s += A[i, j, k]; end); (s, s^2))
+        Ps, Pd = zeros(length(cr) * length(crj), 2), zeros(length(cr) * length(crj), 2)
+        foreach_column!(b, colsum, (cr, crj), X; partials = Ps, weight = 7)
+        foreach_column!(b, colsum, (cr, crj), X; partials = Pd, weight = 7, schedule = :dynamic)
+        @test agree(Pd, Ps)                              # one row per column, the same terms
+        @test all(agree.(column_sum(b, colsum, (cr, crj), X; weight = 7, schedule = :dynamic),
+                         column_sum(b, colsum, (cr, crj), X; weight = 7)))
+        out = zeros(13, 11)
+        foreach_column!(b, (i, j, o, A) -> (@inbounds o[i, j] = colsum(i, j, A)[1]; nothing), (cr, crj), out, X;
+                        weight = 7, schedule = :dynamic)
+        @test agree(vec(out[cr, crj]), Ps[:, 1]) && all(iszero, out[1, :])
+        ids = zeros(Int, 9)
+        foreach_column!(b, (n, v) -> (@inbounds v[n] += n; nothing), (2:8,), ids; weight = 4096, schedule = :dynamic)
+        @test ids == [0; 2:8; 0]
+        @test_throws ArgumentError foreach_column!(b, (i, j) -> nothing, (cr, crj); schedule = :guided)
+    end
+
     @testset "pcg! solves an SPD system (dense reference); breakdown and zero rhs" begin
         n, σ = 6, 0.3
         Ad = dense_shifted(n, σ)
