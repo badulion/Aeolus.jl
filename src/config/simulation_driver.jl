@@ -410,9 +410,10 @@ function Config.driver_sections(::SimulationDriverType)
         option!(s, "moisture", Bool; default = false,
                 doc = "carry the water-vapour mixing ratio qv (boussinesq only)")
         option!(s, "p_surface", Optional{Float64}; range = (0, Inf), open_lower = true, units = "Pa",
-                doc = "the ground pressure of the hydrostatic reference state of the components that convert fluxes " *
-                      "with one on the boussinesq core ([surface] model = \"tiles\" or \"prescribed\", [radiation]); " *
-                      "\"none\": the dynamic driver's, else 101325 Pa")
+                doc = "the ground pressure of the hydrostatic reference state of the boussinesq core (from the initial " *
+                      "theta profile): the components that convert fluxes with one ([surface] model = \"tiles\" or " *
+                      "\"prescribed\", [radiation]) and the absolute temperature outputs (temperature, " *
+                      "temperature_2m, surface_temperature); \"none\": the dynamic driver's, else 101325 Pa")
     end
     bnd = section("boundaries"; doc = "Boundary conditions per axis.") do s
         for ax in ("x", "y", "z")
@@ -1062,16 +1063,17 @@ end
 
 # The domain's inputs the components read besides its dynamic driver
 # (NEST-p3): its initial θ profile (`theta_profile`), the hydrostatic
-# reference state of a Boussinesq domain whose components convert fluxes
-# with one (`reference`), and the tile form of its static driver
-# (`static_tiles`, for [surface] model = "tiles", with the driver's
-# initial soil, `soil`, #521).
+# reference state of a Boussinesq domain (`reference`: the one its
+# components convert fluxes with and θ becomes T with, PALM's `hyp` from
+# the initial θ and the surface pressure; every Boussinesq domain since
+# #536, `Components.thermodynamic_reference`), and the tile form of its
+# static driver (`static_tiles`, for [surface] model = "tiles", with the
+# driver's initial soil, `soil`, #521).
 function _domain_inputs(cfg, mesh, sim, dyn)
     θf = initial_theta_profile(cfg, dyn)
     out = (; theta_profile = θf)
     enabled = enabled_components(cfg)
-    needs_ref = any(C -> C in enabled, (Urban.TiledUrbanSurface, Urban.PrescribedSurfaceFlux, Urban.MeanColumnRadiation))
-    if needs_ref && sim isa BoussinesqSimulation
+    if sim isa BoussinesqSimulation
         ps = cfg.dynamics.p_surface
         ps === nothing && (ps = dyn === nothing || dyn.p_surface === nothing ? 101325.0 : dyn.p_surface)
         out = merge(out, (; reference = Urban.domain_reference(mesh, θf, ps; g = cfg.dynamics.g)))

@@ -14,6 +14,7 @@ The names in the core's output catalogue ([`core_outputs`](@ref)):
 | `heat_flux_profile` | z | the total (resolved + SGS) upward θ flux, at the cell centres (the mean of its two faces; the bottom face holds the wall flux the components apply, [`wall_theta_flux`](@ref)), `Operators.total_heat_flux_profile` |
 | `w_variance_profile`, `resolved_tke_profile` | z | the plane variance of w at the cell centres (`Operators.w_variance_profile`) and the resolved TKE per level (`Operators.resolved_tke_profile`) |
 | `u_mean`, `v_mean`, `w_mean`, `theta_mean`, `qv_mean` | scalar | domain means (time series) |
+| `temperature`, `temperature_profile`, `temperature_mean` | 3-D, z, scalar | the absolute air temperature ``T = θ\\,Π̄(z)`` (K, CF `air_temperature`) with the Exner function of the domain's thermodynamic reference ([`thermodynamic_reference`](@ref), #536): its 3-D field, horizontal means per level and domain mean |
 | `budget_energy`, `budget_water`, `budget_momentum`, `budget_tracer` | scalar group | the measured budgets ([`with_budgets`](@ref)): cumulative storage, every attributed term and the closure (time series) |
 | `u_squared` | 3-D | ``u^2`` at the x faces: its time mean (`averaging = "mean"`) less the square of the mean `u` is the variance of u |
 | `w_rms` | scalar | the root-mean-square of w over the interior faces (m s⁻¹): the amplitude of a growing mode |
@@ -26,7 +27,9 @@ The names in the core's output catalogue ([`core_outputs`](@ref)):
 
 `qv*` need moisture; `budget_water` needs moisture, `budget_tracer` a
 component that carries a tracer, `budget_energy` on the Boussinesq core
-`θ₀ > 0`.
+`θ₀ > 0`; `temperature*` a thermodynamic reference (every domain built from
+a configuration has one; a bare Boussinesq core made in Julia does not,
+and its catalogue leaves them out).
 """
 const CORE_OUTPUTS = ("u", "v", "w", "p", "theta", "qv",
                       "u_profile", "v_profile", "theta_profile", "qv_profile",
@@ -35,7 +38,7 @@ const CORE_OUTPUTS = ("u", "v", "w", "p", "theta", "qv",
                       "budget_energy", "budget_water", "budget_momentum", "budget_tracer",
                       "kinetic_energy", "dissipation", "dissipation_sgs", "energy_spectrum",
                       "u_squared", "w_rms", "turbulent_fraction_profile", "shear_production_profile", "buoyancy_production_profile",
-                      "vorticity_y")
+                      "vorticity_y", "temperature", "temperature_profile", "temperature_mean")
 
 """
     DEFAULT_OUTPUTS
@@ -130,16 +133,24 @@ function _vorticity_y(d)
     return ω
 end
 
-# the domain mean: level means weighted by the level thickness
-function _domain_mean(f)
+# the domain mean: level means weighted by the level thickness (of the
+# field times a per-level factor `w`, e.g. the reference Exner function)
+function _domain_mean(f, w = nothing)
     m = f.mesh
     dz = hasproperty(m, :dzc) ? [m.dzc[m.Hz+k] for k in 1:m.Nz] : fill(Float64(m.dz), m.Nz)
     S = _level_sums(f)
     acc = 0.0
     @inbounds for k in eachindex(S)
-        acc += S[k] * dz[k]
+        acc += S[k] * dz[k] * (w === nothing ? 1.0 : w[k])
     end
     return acc / (m.Nx * m.Ny * sum(dz))
+end
+
+# the absolute air temperature T = θ Π̄_k of the interior cells (#536)
+function _temperature(d)
+    π̄ = required_reference(d).π̄
+    θ = interior_view(d.state.θ)
+    return θ .* reshape(π̄, 1, 1, length(π̄))
 end
 
 # the cumulative terms of a measured budget, by "<stage>__<name>", with the
@@ -202,6 +213,15 @@ function core_outputs(d::Domain)
                        :scalar, d -> _dissipation(d).sgs),
         OutputVariable("energy_spectrum", "m3 s-2", "shell-summed kinetic-energy spectrum E(k)", :k,
                        d -> (s = d.state; last(isotropic_energy_spectrum(s.u, s.v, s.w))))]
+    if thermodynamic_reference(d) !== nothing
+        append!(vs, OutputVariable[
+            OutputVariable("temperature", "K", "air temperature, theta times the reference Exner function", :xyz,
+                           _temperature; standard_name = "air_temperature"),
+            OutputVariable("temperature_profile", "K", "horizontal mean of the air temperature", :z,
+                           d -> _profile(d.state.θ) .* required_reference(d).π̄; standard_name = "air_temperature"),
+            OutputVariable("temperature_mean", "K", "domain mean of the air temperature", :scalar,
+                           d -> _domain_mean(d.state.θ, required_reference(d).π̄); standard_name = "air_temperature")])
+    end
     if moist
         append!(vs, OutputVariable[
             OutputVariable("qv", "kg kg-1", "water vapour mixing ratio", :xyz, d -> iv(d.state.qv)),

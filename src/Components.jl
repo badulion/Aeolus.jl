@@ -82,6 +82,7 @@ import ..TimeSteppers: step!
 export AbstractComponent, Stage, PIPELINE, SLOTS, Domain, Model,
        CentredAdvection, SGS, Coriolis, Sponge, SurfaceThetaFlux, LargeScale, SurfaceLayer, Towers, ParentStatistics, KinematicFlow, Fringe,
        DomainBudgets, with_budgets, BUDGET_QUANTITIES, CORE_OUTPUTS, DEFAULT_OUTPUTS, domain_catalogue,
+       thermodynamic_reference, reference_exner,
        CORE_CHECKS, domain_checks, NestLink, ModelNest, nested_model, nest_window!, NestStepFailure,
        NEST_EXCHANGE, nest_exchange, NEST_INFLOW_DEFAULTS,
        BoundaryLayerTracker, nudging_height, parcel_zi, surface_friction_velocity
@@ -90,6 +91,7 @@ include("components/interface.jl")
 include("components/pipeline.jl")
 include("components/domain.jl")
 include("components/budgets.jl")
+include("components/reference.jl")
 include("components/outputs.jl")
 include("components/checks.jl")
 include("components/nesting.jl")

@@ -43,20 +43,19 @@
 
 The reference profiles (`p̄`, `ρ̄`, `π̄` per level and `cp`) a surface or
 radiation component converts its fluxes with: `opts.reference` (a
-[`CaseReference`](@ref)), else the domain's (`domain.drivers.reference`:
-the hydrostatic state of a Boussinesq domain's initial θ profile,
-[`domain_reference`](@ref)), or on the anelastic core its base state
-(`sim.ref`).
+[`CaseReference`](@ref)), else the domain's
+(`Components.thermodynamic_reference`: `domain.drivers.reference`, the
+hydrostatic state of a Boussinesq domain's initial θ profile,
+[`domain_reference`](@ref); or on the anelastic core its base state
+`sim.ref`). The absolute-temperature outputs (#536) read the same one.
 """
 function air_reference(opts, domain)
     r = Components.option(opts, :reference, nothing)
     r !== nothing && return r
-    r = get(domain.drivers, :reference, nothing)
-    r !== nothing && return r
-    s = domain.state
-    s isa BoussinesqSimulation &&
+    r = Components.thermodynamic_reference(domain)
+    r === nothing &&
         throw(ArgumentError("the Boussinesq core has no thermodynamic reference: give `reference` (a CaseReference)"))
-    return s.ref
+    return r
 end
 
 _moist(sim) = hasproperty(sim, :has_moisture) && sim.has_moisture
