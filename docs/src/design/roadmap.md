@@ -2611,6 +2611,11 @@ that proved wrong in the first draft: the closure tolerance was scaled
 by the largest term, which is 2e-15 for a budget that barely changes;
 round-off is relative to the quantity's content.
 
+Suites: `test/run.jl` 4425 of 4426 passed in 115 files; the one failure
+was `config_model.jl`'s list of run-level sections, which `[budgets]`
+joins by design (expectation updated; 49/49 after). Validation
+`urban_checks.jl`: 33/33.
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*
