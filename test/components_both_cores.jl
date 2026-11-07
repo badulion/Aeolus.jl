@@ -369,6 +369,53 @@ bc_warm!(sim) = (sim isa BoussinesqSimulation && set!(sim.θ, (x, y, z) -> 300.0
     @test length(BCC.outputs(tw)[1].getter(d)) == BC_MESH.Nz
 end
 
+@testset "the surface layer's temperatures: θ_s, θ_s Π̄_s and θ_2m Π̄(2 m) (#536, $core)" for core in (:boussinesq, :anelastic)
+    sim = bc_warm!(bc_core(core))
+    set!(sim.u, (x, y, z) -> 5.0)
+    # the Boussinesq domain's reference: the hydrostatic state of θ = 300 K from 1000 hPa
+    # (what a config builds); the anelastic core's is its isentropic base state
+    drv = core === :boussinesq ? (; reference = Aeolus.Urban.domain_reference(BC_MESH, z -> 300.0, 1e5)) : (;)
+    d0 = Domain(sim; validate = false, drivers = drv)
+    d = Domain(d0; components = (CentredAdvection(), BCC.build_components((SurfaceLayer => bc_sl_opts(280.0),), d0)...))
+    sl = only(c for c in d.components if c isa SurfaceLayer)
+    step!(d, 2.0)
+    out = Dict(v.name => v for v in BCC.outputs(sl))
+    @test out["surface_temperature"].standard_name == "surface_temperature"
+    ref = BCC.thermodynamic_reference(d)
+    zc = [(k - 0.5) * BC_MESH.dz for k in 1:BC_MESH.Nz]
+    Π(z) = BCC.reference_exner(ref, zc, z; g = 9.81)
+    # the renamed variable: the prescribed θ_s(t), 280 K cooling 1 K/h, at t = 2 s
+    θs = out["surface_theta"].getter(d)
+    @test θs ≈ 280.0 - 2.0 / 3600 rtol = 1e-14
+    # one multiplication each: equal to round-off
+    @test out["surface_temperature"].getter(d) ≈ θs * Π(0.0) rtol = 1e-14
+    θ2 = out["theta_2m"].getter(d)
+    T2 = out["temperature_2m"].getter(d)
+    @test T2 ≈ θ2 * Π(2.0) rtol = 1e-14
+    # Π̄ of the isentropic θ = 300 K from 1000 hPa: Π(z) = 1 − g z/(c_p θ),
+    # to the O(Δz²) of the discrete balance at Δz = 250 m (≈ 2e-5): 1e-4
+    cp = ref.cp
+    @test Π(0.0) ≈ 1.0 rtol = 1e-4
+    # the dry adiabat below z₁, exactly: the difference of two Π ≈ 1 carries
+    # ε/6.5e-5 ≈ 3e-12 of relative round-off
+    @test Π(0.0) - Π(2.0) ≈ 9.81 * 2.0 / (cp * 300.0) rtol = 1e-10
+    # a stable surface layer (surface 20 K below the air): the 2 m air lies
+    # between the surface and the first level, in θ and in T
+    T1 = mean(interior_view(sim.θ)[:, :, 1]) * ref.π̄[1]
+    @test θs < θ2 < mean(interior_view(sim.θ)[:, :, 1])
+    @test out["surface_temperature"].getter(d) < T2 < T1
+    # without a reference (a bare Boussinesq core) the absolute values are refused, with the reason
+    if core === :boussinesq
+        s2 = bc_warm!(bc_core(core)); e0 = Domain(s2; validate = false)
+        e = Domain(e0; components = (CentredAdvection(), BCC.build_components((SurfaceLayer => bc_sl_opts(280.0),), e0)...))
+        step!(e, 2.0)
+        sl2 = only(c for c in e.components if c isa SurfaceLayer)
+        v = only(x for x in BCC.outputs(sl2) if x.name == "surface_temperature")
+        err = try v.getter(e); nothing catch x; x end
+        @test err isa ArgumentError && occursin("no thermodynamic reference", sprint(showerror, err))
+    end
+end
+
 "A domain on `core` with every SBL component (and the ONE-a ones)."
 function bc_sbl_domain(core; scheme = :euler, cfl = nothing)
     sim = bc_state!(bc_core(core; ν = 0.2))

@@ -54,7 +54,7 @@ end
 # the output variables of the time series, under the names the scripts use
 const SERIES_NAMES = (u_star = "u_star", wθ = "surface_wtheta", H = "surface_heat_flux", h = "bl_height",
                       S_max = "jet_speed", z_jet = "jet_height", θ_screen = "theta_2m", U_screen = "wind_10m",
-                      T_s = "surface_temperature", z_inv = "inversion_height", L = "obukhov_length")
+                      θ_s = "surface_theta", z_inv = "inversion_height", L = "obukhov_length")
 # the profiles of the records
 const PROFILE_NAMES = (U = "u_profile", V = "v_profile", θ = "theta_profile", S = "wind_speed_profile",
                        τ = "stress_profile", wθ = "heat_flux_profile", V_s = "tower_threshold")

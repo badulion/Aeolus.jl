@@ -49,6 +49,20 @@ The variables a run writes when `[output] variables` is not given: `u`,
 """
 const DEFAULT_OUTPUTS = ("u", "v", "w", "theta", "u_mean", "v_mean", "w_mean", "theta_mean")
 
+"""
+    OUTPUT_RENAMES
+
+Hints for output names whose meaning changed, appended to the problem of
+a selection no enabled component publishes: since #536
+`surface_temperature` is an absolute (skin) temperature, published by
+`[surface] model = "most"` and `"tiles"`; the surface potential
+temperature is `surface_theta`.
+"""
+const OUTPUT_RENAMES = Dict(
+    "surface_temperature" => "; since #536 surface_temperature is the absolute surface (skin) temperature of " *
+                             "[surface] model = \"most\" or \"tiles\", and the prescribed surface potential " *
+                             "temperature (its old meaning) is surface_theta")
+
 "The budget quantities each `budget_*` output variable turns on."
 const BUDGET_OUTPUTS = Dict("budget_energy" => (:energy,), "budget_water" => (:water,),
                             "budget_momentum" => (:momentum_x, :momentum_y), "budget_tracer" => (:tracer,))
@@ -290,7 +304,8 @@ function output_problems(names, types_opts; moisture::Bool, theta0::Real, core::
             n == "budget_energy" && core === :boussinesq && theta0 <= 0 &&
                 push!(probs, "budget_energy needs dynamics.theta0 > 0 (the Boussinesq reference density p_ref / (R_d theta0))")
         elseif !haskey(comp, n)
-            push!(probs, "$n: no enabled component publishes it (the core's: $(join(CORE_OUTPUTS, ", ")))")
+            push!(probs, "$n: no enabled component publishes it (the core's: $(join(CORE_OUTPUTS, ", ")))" *
+                         get(OUTPUT_RENAMES, n, ""))
         end
     end
     return probs

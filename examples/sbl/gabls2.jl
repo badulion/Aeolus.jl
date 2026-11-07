@@ -51,7 +51,7 @@ results = map(RUNS) do r
     # the series rows in the script's units: 2 m and surface temperatures in °C
     toC(θ) = θ * (P_SFC / 1e5)^EXPONENT - 273.15
     series = [(t = s.t, u_star = s.u_star, H = s.H, h = s.h, S_max = s.S_max, z_jet = s.z_jet, z_inv = s.z_inv,
-               T2 = toC(s.θ_screen), U10 = s.U_screen, Ts = toC(s.T_s)) for s in r.series]
+               T2 = toC(s.θ_screen), U10 = s.U_screen, Ts = toC(s.θ_s)) for s in r.series]
     @printf("%-8s %s: %d steps, %.0f s\n", stab, TAG, r.stats.nsteps, r.stats.wall_time)
     # the hockey-stick thresholds of the tower levels (the last record: the fit to every bin of the run)
     ok = .!isnan.(r.stats.V_s)
