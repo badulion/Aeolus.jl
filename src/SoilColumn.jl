@@ -377,11 +377,12 @@ struct VanGenuchtenMualem{T<:AbstractFloat} <: AbstractHydraulicModel
     l::T
     ψ_e::T
     S_c::T     # [1 + (α|ψ_e|)^n]^{-m}, = 1 for the classical model
+    f_c::T     # Mualem's 1 - (1 - S_c^{1/m})^m, the conductivity's normalisation (once, not per call: #537)
     function VanGenuchtenMualem{T}(θ_r, θ_s, α, n, K_s, l, ψ_e) where {T}
         (0 <= θ_r < θ_s < 1 && α > 0 && n > 1 && K_s > 0 && ψ_e <= 0) ||
             throw(ArgumentError("VanGenuchtenMualem: need 0 ≤ θ_r < θ_s < 1, α > 0, n > 1, K_s > 0, ψ_e ≤ 0"))
         S_c = (1 + (α * -ψ_e)^n)^(-(1 - 1 / n))
-        new{T}(θ_r, θ_s, α, n, K_s, l, ψ_e, S_c)
+        new{T}(θ_r, θ_s, α, n, K_s, l, ψ_e, S_c, _mualem_f(T(S_c), 1 - 1 / T(n)))   # as K evaluated it
     end
 end
 VanGenuchtenMualem(θ_r::Real, θ_s::Real, α::Real, n::Real, K_s::Real, l::Real = 0.5,
@@ -409,9 +410,9 @@ function soil_hydraulic_conductivity(h::VanGenuchtenMualem, ψ::Real)
     m = _vg_m(h)
     Γ = _vg_Γ(h, ψ)
     Se = Γ / h.S_c
-    f(x) = 1 - (1 - x^(1 / m))^m
-    return h.K_s * Se^h.l * (f(Γ) / f(h.S_c))^2
+    return h.K_s * Se^h.l * (_mualem_f(Γ, m) / h.f_c)^2
 end
+_mualem_f(x, m) = 1 - (1 - x^(1 / m))^m
 function soil_water_capacity(h::VanGenuchtenMualem, ψ::Real)
     ψ >= h.ψ_e && return 0.0
     m = _vg_m(h)
