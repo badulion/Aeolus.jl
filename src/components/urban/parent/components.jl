@@ -89,7 +89,10 @@ each tile's forcing level ``k_i``, uniformly per volume over their depth
 ``Z_i``: ``\\dot θ_k = f_i H_i/(Z_i ρ̄_k c_p Π̄_k)``, ``\\dot q_k = f_i
 E_i/(Z_i ρ̄_k)`` and a deceleration ``f_i τ_i/(Z_i ρ̄_k)``. Stage 8
 (`:post_predictor`) applies that deceleration implicitly along the
-instantaneous wind, ``u ← u/(1 + Δt a/U)`` with ``U ≥ U_{min}``. The
+instantaneous wind, ``u ← u/(1 + Δt a/U)`` with ``U ≥ U_{min}``, at the
+u and v faces of the canopy levels (``a`` the mean of the two columns a
+face separates; every factor from the pre-drag velocities; no drag on an
+open boundary face, one-sided at a no-flux one; #538). The
 friction velocity ``u_* = \\sqrt{Σ f_i τ_i/ρ̄_1}`` is the surface value of
 a TKE closure ([`surface_friction_velocity`](@ref)).
 
@@ -100,7 +103,8 @@ downwelling `sw_down`, `lw_down` (W m⁻²; set by the radiation, the
 options' values until then), `sfc_mean` (domain-mean J m⁻² of `Rn`, `H`,
 `LE`, `G`, `E` and what the air received, `delivered_H`, `delivered_E`),
 and the level weights `wθ`, `wq` of the delivered amounts, `temps` the
-cache of [`tile_temperatures`](@ref).
+cache of [`tile_temperatures`](@ref), `drag_den` the drag's scratch (the
+u and v face denominators of one call).
 
 Its outputs (#536, [`tile_temperatures`](@ref)): `surface_temperature`
 (the area-weighted skin temperature of each column, K),
