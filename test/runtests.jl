@@ -813,6 +813,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     end
 
     include("io_checkpoint.jl")   # #245: full-state checkpoints restart, FFTW policy
+    include("fftw_threads.jl")    # #397: threaded MEASURE planning on FFTW's own threads, no crash (subprocess, -t 12)
     include("logging_core.jl")    # #333: structured events, run log, test logger
     include("logging_run_folder.jl")  # #334: run folder, run.toml provenance, dirty-tree policy
     include("logging_diagnostics.jl") # #335: diagnostics registry, CSV writer, progress line
@@ -839,6 +840,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("naming_conventions.jl")  # work is grouped by content; ERA is the reanalysis (2026-11-06)
     include("config_berlin.jl")       # CFG-c (#358): the Berlin configs of the urban driver vs Julia-built, round trip
     include("urban_run.jl")           # EX-a (#438): urban run type in src: synthetic city, results.toml, the parent alone
+    include("urban_spinup.jl")        # #519: the surface spin-up of the urban site (PALM spinup_time)
     include("urban_soil_init.jl")     # #521: the initial soil from the dynamic driver (PALM PIDS), the annual wave
     include("urban_checks.jl")       # EX-a (#438): Berlin smoke matrix (49 runs, ledgers), parent smoke run, parent class fractions, parent_zi
     include("input_static.jl")        # CFG-f (#361): static driver, rasterisation, Berlin ground from one file

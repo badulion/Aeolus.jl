@@ -98,7 +98,7 @@ end
     # run-level sections: the common ones and time, timestep (one scheme steps every domain, ONE-m #476),
     # output, checks (no preprocess: AeolusPrep.jl, ONE-h)
     @test Set(s.name for s in sch.sections if !is_domain_section(sch, s.name)) ==
-          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "checks"])
+          Set(["run", "fftw", "logging", "checkpoint", "output", "time", "spinup", "checks"])
     # a component is enabled by its own section
     cfg = load_run_config(IOBuffer("[coriolis]\nf = 1e-4\n[sponge]\nalpha_max = 0.01\nz_start = 1200.0\n[sgs]\nmodel = \"none\"\n"))
     @test enabled_components(cfg) == Any[CentredAdvection, Coriolis, Sponge]

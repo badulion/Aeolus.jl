@@ -236,3 +236,34 @@ end
     attaches(c, S) && _attributed_in_core!(d.budgets, c, d, v, dt)
     return _run_in_core(Base.tail(cs), d, v, dt)
 end
+
+"""
+    SPINUP_STAGES
+
+The stages of the surface spin-up (#519), in order: the clock, the
+radiation, the shortwave modifiers, the surface fluxes, the sources and
+the surface update; none of the transport, microphysics or core stages.
+"""
+const SPINUP_STAGES = (:clock, :radiation, :sw_modifiers, :surface_flux, :sources, :surface_update)
+
+"""
+    run_spinup_stages!(d, dt, t0, t1; first = false)
+
+One step of the surface spin-up of domain `d` from `t0` to `t1`: the
+[`SPINUP_STAGES`](@ref) of the components that [`spins_up`](@ref), each
+on its cadence (`first = true`: every cadenced entry runs, the spin-up's
+first step), without the domain's budgets (the spin-up books nothing).
+"""
+function run_spinup_stages!(d, dt, t0, t1; first::Bool = false)
+    for S in SPINUP_STAGES
+        _run_spin(d.components, d, Val(S), dt, t0, t1, first)
+    end
+    return d
+end
+@inline _run_spin(::Tuple{}, d, ::Val, dt, t0, t1, first) = nothing
+@inline function _run_spin(cs::Tuple, d, v::Val{S}, dt, t0, t1, first) where {S}
+    c = Base.first(cs)
+    e = _entry(c, S)
+    (e !== nothing && spins_up(c) && (first || _due(e, t0, t1))) && run_stage!(c, d, v, dt)
+    return _run_spin(Base.tail(cs), d, v, dt, t0, t1, first)
+end

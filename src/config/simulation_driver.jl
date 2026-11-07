@@ -483,6 +483,33 @@ function Config.driver_sections(::SimulationDriverType)
                 doc = "the model time at the start: the run ends at start + duration; the dynamic driver's times " *
                       "(s since its init_time) are read at the model time − start, a [checks.reference] window is in model time")
     end
+    spn = section("spinup"; doc = "The surface spin-up before the run (#519; PALM's spinup_time): the slow " *
+                                  "surfaces (soil, ground, roofs, building envelopes) advance alone over `time` " *
+                                  "seconds before the start, at negative model times, against a prescribed " *
+                                  "near-surface air and the sun, without the 3-D atmosphere, which starts as " *
+                                  "initialised. A fresh run only (a restart has spun up already). An urban site's surfaces.") do s
+        option!(s, "time", Float64; default = 0.0, range = (0, Inf), units = "s",
+                doc = "the spin-up's length; 0: none. PALM recommends ≥ 24 h (Maronga et al. 2020); the slowest " *
+                      "modes of the soil (≈ 30 d) are not removed by any spin-up of hours (#521: initial soil profiles)")
+        option!(s, "dt", Optional{Float64}; range = (0, Inf), open_lower = true, units = "s",
+                doc = "the surfaces' step during the spin-up; \"none\": their step in the run (an urban site: " *
+                      "surface_period or soil_period). It divides the radiation period")
+        option!(s, "forcing", Symbol; default = :solar, allowed = [:solar, :driver],
+                doc = "the air the surfaces see: solar (PALM: θ = pt_mean + pt_amplitude cos(solar zenith), " *
+                      "lagged 1 h) or driver (the dynamic driver's sfc_temperature series, which must cover " *
+                      "the spin-up); the wind and humidity stay at the initial state")
+        option!(s, "pt_mean", Optional{Float64}; range = (0, Inf), open_lower = true, units = "K",
+                doc = "solar forcing: the mean potential temperature of the air; \"none\": the initial " *
+                      "mean of the air cells next to the surfaces")
+        option!(s, "pt_amplitude", Float64; default = 0.0, range = (0, Inf), units = "K",
+                doc = "solar forcing: the amplitude multiplying cos(solar zenith) (negative at night)")
+        option!(s, "soil_moisture", Bool; default = false,
+                doc = "the soil water evolves during the spin-up (PALM's calc_soil_moisture_during_spinup); " *
+                      "false: frozen at its initial state")
+        option!(s, "buildings", Bool; default = true,
+                doc = "the building energy model (zone, envelope, HVAC) runs during the spin-up " *
+                      "(PALM's indoor_during_spinup, default off there)")
+    end
     out = section("output"; doc = "") do s
         option!(s, "variables", Vector{String}; default = collect(String, Components.DEFAULT_OUTPUTS),
                 doc = "the variables written, from the output catalogues of the core and the enabled components " *
@@ -520,7 +547,7 @@ function Config.driver_sections(::SimulationDriverType)
     comps = Section[Components.schema(C) for C in COMPONENTS]
     # one section per exclusive slot (ONE-m, #476): the model's providers and
     # the urban site's of a slot pooled, each available on its domain kind
-    return Config.merge_sections(Section[tim, out, chk, dom, grid, core, stepping, dyn, bnd, ini, comps...,
+    return Config.merge_sections(Section[tim, spn, out, chk, dom, grid, core, stepping, dyn, bnd, ini, comps...,
                                          _coupling_sections()..., Urban.urban_sections()...];
                                  kind = domain_kind, kind_text = KIND_TEXT)
 end
@@ -697,6 +724,29 @@ function _urban_site_checks(cfg)
         n in own || push!(e, ConfigError("checks.$n", "an urban site publishes no check $n (its checks: $(join(sort!(collect(own)), ", ")))"))
     end
     isempty(cfg.checks.reference) || push!(e, ConfigError("checks.reference", "an urban site takes no reference comparisons yet"))
+    append!(e, _spinup_checks(cfg))
+    return e
+end
+
+# the surface spin-up of an urban site (#519): its step divides the
+# radiation period, which divides its length (each radiation interval of
+# the spin-up is whole), and the driver forcing needs a driver
+_divides(a, b) = (q = b / a; q >= 1 - 1e-9 && abs(q - round(q)) < 1e-9 * max(1, q))
+function _spinup_checks(cfg)
+    e = ConfigError[]
+    sp, u = cfg.spinup, cfg.urban
+    sp.time > 0 || return e
+    P = u.radiation_period
+    dt = something(sp.dt, something(u.surface_period, u.soil_period))
+    _divides(dt, P) ||
+        push!(e, ConfigError("spinup.dt", "the spin-up's surface step ($dt s) divides the radiation period " *
+                                          "(urban.radiation_period = $P s)"))
+    _divides(P, sp.time) ||
+        push!(e, ConfigError("spinup.time", "the spin-up is a whole number of radiation periods " *
+                                            "(urban.radiation_period = $P s), got $(sp.time) s"))
+    (sp.forcing === :driver && cfg.domain.dynamic_driver === nothing) &&
+        push!(e, ConfigError("spinup.forcing", "driver forcing reads the dynamic driver's sfc_temperature series: " *
+                                               "set the domain's dynamic_driver, or forcing = \"solar\""))
     return e
 end
 
@@ -1243,6 +1293,8 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     means === nothing || (comps = merge(comps, (; output_means = means)))
     resume!(ck, sim; components = comps, stepper = r.stepper)
     n = ck.last_step
+    # the surface spin-up (#519), before the first step of a fresh run
+    n == 0 && _spinup!(cfg, doms)
     # a domain whose core step a component takes (the urban site, ONE-k
     # #474): it picks every step and lands on the end itself
     taker = Components.core_taker(dom)
@@ -1347,6 +1399,24 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
         Config.write_results(rf, extra; dir = cfg.output.path)
     end
     return r
+end
+
+# The surface spin-up of a fresh run (#519): every domain's components
+# that have slow surfaces advance them over [spinup] time before the
+# start ([`Components.spinup!`](@ref)). A spin-up that no component takes
+# is a configuration error, not a silent no-op.
+function _spinup!(cfg, doms)
+    t = cfg.spinup.time
+    t > 0 || return false
+    sp = (time = Float64(t), dt = cfg.spinup.dt, forcing = cfg.spinup.forcing, pt_mean = cfg.spinup.pt_mean,
+          pt_amplitude = Float64(cfg.spinup.pt_amplitude), soil_moisture = cfg.spinup.soil_moisture,
+          buildings = cfg.spinup.buildings)
+    done = false
+    for d in doms, c in d.components
+        done |= Components.spinup!(c, d, sp)
+    end
+    done || throw(ConfigError("spinup.time", "no domain of the run has surfaces to spin up (an urban site's)"))
+    return true
 end
 
 # the enabled checks of a run: the domain's published checks and the

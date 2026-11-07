@@ -72,15 +72,15 @@ using ..MoistThermodynamics: ThermodynamicConstants, DEFAULT_CONSTANTS,
                              latent_heat_vapor, wet_bulb_temperature,
                              specific_humidity_from_relative_humidity
 using ..UrbanSurface: UrbanSurface, ConductionColumn, ColumnBoundary, WallLayer,
-                      UrbanFacet, step_conduction!, face_temperature,
+                      UrbanFacet, step_conduction!, steady_conduction!, face_temperature,
                       column_heat_content, thermal_resistance,
-                      fixed_temperature_boundary, heat_flux_boundary,
+                      fixed_temperature_boundary, heat_flux_boundary, convective_boundary,
                       set_interior_boundary!, ISO6946_SURFACE_RESISTANCE,
                       volumetric_heat_capacity, UrbanFacetScene,
                       example_wall_layers, example_roof_layers
 using ..Fields: interior_view
 
-export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass,
+export AbstractZoneElement, EnvelopeElement, FacetElement, InternalMass, steady_envelope!,
        BuildingZone, ZoneForcing, ZoneBudget, step_zone!, facet_fluxes,
        zone_air_temperature, zone_heat_content, zone_heat_loss_coefficient,
        zone_mean_radiant_temperature, zone_operative_temperature,
@@ -214,6 +214,25 @@ mutable struct FacetElement{T<:AbstractFloat} <: AbstractZoneElement
     _dfl::SurfaceFluxes{T}        # their derivative w.r.t. the air temperature
     _skin::NTuple{2,T}            # (T_skin of base solve, derivative)
     _w::_AffineWork{T}
+end
+
+"""
+    steady_envelope!(el::EnvelopeElement, T_out, T_in) -> el
+
+Start `el`'s wall in the steady state between the outside and the zone
+air: the outer face exchanges with the outdoor air `T_out` (K) through
+`h_outside` (an `exterior = :ground` element: held at its `T_ground`),
+an adiabatic one stays adiabatic), the inner face with `T_in` through `h_inside`
+(`UrbanSurface.steady_conduction!`). A wall started uniform at the zone
+temperature must instead relax over its slowest time scale — 9 h for the
+example brick wall, 26 h for the example roof (#519) — and its outer flux
+is wrong by the whole indoor–outdoor difference at the start.
+"""
+function steady_envelope!(el::EnvelopeElement, T_out::Real, T_in::Real)
+    outer = el.exterior === :air ? convective_boundary(T_out, el.h_outside) :
+            el.exterior === :ground ? fixed_temperature_boundary(el.T_ground) : heat_flux_boundary(0.0)
+    steady_conduction!(el.column, outer, convective_boundary(T_in, el.h_inside))
+    return el
 end
 
 function FacetElement(facet::UrbanFacet{T}, area::Real; name::Symbol = facet.kind) where {T}
@@ -2073,11 +2092,16 @@ building (Deru et al. 2011) but not checked against it here; the illustrative
 infiltration 0.3 h⁻¹; a packaged DX unit (COP 3.0) and a gas boiler.
 `start_weekday` (1 = Monday): the weekday of day 1; the coupling passes
 `case_weekday(cfg)` (29 June 2019, the case day, is a Saturday).
+`T_outdoor` (K): the outdoor air at the start; given, the walls, the roof
+and the ground slab start in their steady state between it (the slab:
+its ground) and `T_air` ([`steady_envelope!`](@ref), #519), otherwise
+uniform at `T_air`.
 """
 function city_buildings(heightmap::AbstractMatrix, wall_cells::AbstractVector{CartesianIndex{2}},
                         dx::Real, dy::Real, dz::Real, wall_area::Real;
                         floor_height::Real = 3.96, glazing::Real = 0.33,
-                        start_weekday::Integer = 4, T_air::Real = 297.15)
+                        start_weekday::Integer = 4, T_air::Real = 297.15,
+                        T_outdoor::Union{Nothing,Real} = nothing)
     cell = dx * dy
     built = heightmap .> 0
     A_roof = count(built) * cell
@@ -2091,6 +2115,9 @@ function city_buildings(heightmap::AbstractMatrix, wall_cells::AbstractVector{Ca
     slab = EnvelopeElement([WallLayer(:xps_insulation, 0.05), WallLayer(:concrete, 0.20)], A_roof;
                            exterior = :ground, T_ground = 285.15, h_inside = 1 / 0.17,
                            T = T_air, name = :slab)
+    # with the outdoor air known, the envelope starts in its steady state
+    # (#519) instead of uniform at the zone air
+    T_outdoor === nothing || foreach(el -> steady_envelope!(el, T_outdoor, T_air), (walls, roof, slab))
     n_floors = V / A_roof / floor_height
     floors = InternalMass([WallLayer(:concrete, 0.20)], max(n_floors - 1, 0.01) * A_roof;
                           sides = 2, T = T_air, name = :floors)

@@ -55,6 +55,8 @@ modules_used(::Type{<:RadiositySun}) = (:Radiosity, :SolarGeometry, :SurfaceOpti
 default_options(::Type{<:RadiositySun}) =
     (aod380 = 0.24, aod500 = 0.16, precipitable_water = 2.0, ozone = 0.33, albedo = 0.15)
 stages(::Type{<:RadiositySun}) = ((:radiation, 10, Cadence(:radiation; first = true)),)
+# the radiation reaches the surfaces in the surface spin-up too (#519)
+in_spinup(::Type{<:RadiositySun}) = true
 
 build(::Type{<:RadiositySun}, case, o) =
     RadiositySun(BirdClearSky(; aod380 = o.aod380, aod500 = o.aod500,

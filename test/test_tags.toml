@@ -23,6 +23,10 @@
 exclusive = true
 reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the -t 24 ones would compete with the parallel jobs for every core, so it runs alone"
 
+["fftw_threads.jl"]
+exclusive = true
+reason = "starts a julia -t 12 subprocess planning a 256³ irfft under MEASURE (#397); with the parallel jobs it would compete for every core"
+
 # --- heavy (started first) ----------------------------------------------------
 
 ["config_simulation_driver.jl"]

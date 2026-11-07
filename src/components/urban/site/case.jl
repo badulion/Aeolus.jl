@@ -75,7 +75,7 @@ lid) — `open`, the heat of the open faces of a `lateral = :open`
 case ([`OpenBoundaryHeat`](@ref), `nothing` for a periodic one), and
 `nest`, what the model gives a site that is a nested domain
 ([`UrbanNest`](@ref): its parent domain and the nest it joins), or
-`nothing`.
+`nothing`, and `spin`, its surface spin-up ([`SpinupState`](@ref), #519).
 
 It is the first component of its domain (section `[urban]`, component
 name `:urban`): it runs the site's own work in the pipeline's stages and
@@ -103,6 +103,7 @@ mutable struct UrbanSite{M, S, G<:Geometry, O<:NamedTuple} <: AbstractComponent
     top::Union{Nothing,TopHeatFlux}   # the fixed-gradient θ top's heat flux (#254)
     open::Union{Nothing,OpenBoundaryHeat}   # the open faces' heat (#262)
     nest::Union{Nothing,UrbanNest}   # the parent domain of a nested site (NEST-p3, #483), or nothing
+    spin::Any                        # the surface spin-up's state (SpinupState, site/spinup.jl, #519)
 end
 
 "The enabled coupling called `name`, or `nothing`."
@@ -113,8 +114,11 @@ function find_coupling(case::UrbanSite, name::Symbol)
     return nothing
 end
 
-"Local hour of day at simulation time `t` (s)."
-hour_of_day(cfg::NamedTuple, t::Real) = (cfg.start_h + t / 3600) % 24.0
+"""
+Local hour of day in [0, 24) at simulation time `t` (s), also before the
+start (`t < 0`: the surface spin-up, #519).
+"""
+hour_of_day(cfg::NamedTuple, t::Real) = mod(cfg.start_h + t / 3600, 24.0)
 
 """
     case_weekday(cfg) -> 1 … 7
@@ -227,7 +231,7 @@ function build_case(cfg::NamedTuple; nest::Union{Nothing,UrbanNest} = nothing)
     case = UrbanSite(cfg, mesh, sim, geom, bus, TracerRegistry(), budgets, ref,
                 UrbanComponent[], nothing, nothing, clock,
                 nothing, nothing, Dict{Tuple{Symbol,Symbol},Float64}(), (;),
-                top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref), nest)
+                top_heat_flux(cfg, sim, ref), open_boundary_heat(cfg, sim, ref), nest, SpinupState())
     # a building the box edge cuts is solid on the open faces (#262): zero
     # velocity there, and no mass-flux correction through it; then the open
     # faces get their data before any stage reads them (the transport runs

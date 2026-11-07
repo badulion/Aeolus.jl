@@ -284,3 +284,44 @@ isdefined(@__MODULE__, :test_box) || include(joinpath(@__DIR__, "support", "buil
         @test_throws ArgumentError iso13790_zone(zg)
     end
 end
+
+@testset "steady_envelope!: the envelope starts in its steady state (#519)" begin
+    roof = EnvelopeElement(example_roof_layers(), 100.0; h_inside = 1 / 0.10, T = 297.15)
+    steady_envelope!(roof, 283.15, 297.15)
+    R = sum(l -> l.thickness / l.material.conductivity, example_roof_layers())
+    U = 1 / (1 / roof.h_outside + R + 0.10)
+    col = roof.column
+    # the outer and inner face fluxes are the U-value flux (W m⁻²)
+    Fo = roof.h_outside * (283.15 - face_temperature(col, convective_boundary(283.15, roof.h_outside), :outer))
+    Fi = roof.h_inside * (face_temperature(col, convective_boundary(297.15, roof.h_inside), :inner) - 297.15)
+    @test Fo ≈ U * (283.15 - 297.15) rtol = 1e-10
+    @test Fi ≈ Fo rtol = 1e-10
+    # the drop from the room to the concrete's outer face is q (R_si + R_plaster + R_concrete)
+    # (analytic, 1.07 K here): the concrete lies within it, the XPS takes the rest
+    q = abs(U * (283.15 - 297.15))
+    L = example_roof_layers()
+    inner_R = 0.10 + L[4].thickness / L[4].material.conductivity + L[3].thickness / L[3].material.conductivity
+    conc = findall(==(3), col.layer)
+    @test all(0 .< 297.15 .- col.T[conc] .< q * inner_R)
+    xps = findall(==(2), col.layer)
+    # inside a layer the steady profile is linear: between the first and last
+    # XPS cell centres the drop is q (d − Δz) / k
+    d, k, nc = L[2].thickness, L[2].material.conductivity, length(xps)
+    @test col.T[last(xps)] - col.T[first(xps)] ≈ q * (d - d / nc) / k rtol = 1e-9
+    # a ground slab is held at its ground; an adiabatic outside is uniform at the room
+    slab = EnvelopeElement([WallLayer(:xps_insulation, 0.05), WallLayer(:concrete, 0.20)], 100.0;
+                           exterior = :ground, T_ground = 285.15, T = 297.15)
+    steady_envelope!(slab, 250.0, 297.15)                  # the outdoor air does not enter
+    @test slab.column.T[1] < slab.column.T[end] < 297.15
+    adi = EnvelopeElement(example_wall_layers(), 10.0; exterior = :adiabatic, T = 280.0)
+    steady_envelope!(adi, 250.0, 297.15)
+    @test maximum(abs.(adi.column.T .- 297.15)) < 1e-9
+    # city_buildings: with T_outdoor the walls start steady, without it uniform at T_air
+    hm = zeros(8, 8); hm[3:5, 3:5] .= 20.0
+    wc = [CartesianIndex(2, 3)]
+    cb0 = city_buildings(hm, wc, 10.0, 10.0, 5.0, 1200.0)
+    cb1 = city_buildings(hm, wc, 10.0, 10.0, 5.0, 1200.0; T_outdoor = 283.15)
+    w0, w1 = cb0.zone.envelope[1].column, cb1.zone.envelope[1].column
+    @test all(==(297.15), w0.T)                            # the uniform start (copied value)
+    @test w1.T[1] < w1.T[end] < 297.15 && w1.T[1] > 283.15
+end
