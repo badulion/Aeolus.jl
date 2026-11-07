@@ -2634,6 +2634,28 @@ compiler-flag provenance remain.
   - saving and reusing the spun-up state (PALM's `read_spinup_data`);
   - moving the validation cases' own spin-up loops (`land_surface_fluxnet`, `anthropogenic_heat`, `building_energy`) onto it.
 
+### Temperature outputs (#536)
+
+**Absolute air, 2 m and surface (skin) temperatures, shipped** (#536). See [Output](../api/output.md#Temperatures-(#536)) and [the parent's surface](berlin_parent.md#Surface-and-screen-level-temperatures-(#536)).
+
+- **What was built.**
+  - The core's `temperature` (3-D), `temperature_profile`, `temperature_mean`: ``T = θ Π̄_k`` (K, CF `standard_name = air_temperature`; `OutputVariable` gained a `standard_name`).
+  - `SurfaceLayer` (`[surface] model = "most"`): the old `surface_temperature` (the prescribed θ_s) is renamed **`surface_theta`**, without deprecation; `surface_temperature` is now θ_s Π̄_s and `temperature_2m` θ_2m Π̄(2 m). The sbl examples, `examples/sbl/runs.jl` (key `θ_s`) and the gabls scripts use the new name. Selecting `surface_temperature` where no surface publishes it is refused with a message naming `surface_theta`.
+  - `TiledUrbanSurface` (`"tiles"`): the maps `surface_temperature` (area-weighted skin T), `surface_temperature_<street|roof|park|water|wall>` (NaN where the fraction is 0), `surface_theta`, `theta_2m`, `temperature_2m` (PALM's `calc_2m_temperature` per tile: Monin–Obukhov from the tile's own surface layer when its forcing level is above 2 m, else interpolation; area-weighted).
+- **The reference (one source of truth).** `Components.thermodynamic_reference(d)`: the domain's `drivers.reference`, else the anelastic base state. The model's config now builds the hydrostatic reference (`Urban.domain_reference`, from the initial θ and `[dynamics] p_surface`, else the driver's, else 1013.25 hPa: PALM's `hyp`) for every Boussinesq domain whose initial θ is positive, not only those with a tiled surface or the column radiation (a buoyancy-free run at θ = 0, the Taylor–Green vortex, has none, and selecting a temperature there is a configuration error that says why); an urban site's domain carries its own `CaseReference`. `Urban.air_reference` delegates to it. `Components.reference_exner(ref, zc, z; g)` reads Π̄ between level centres and, below the first, uses the hydrostatic dry adiabat ``Π̄_1 + g(z_1 − z)/(c_p θ̄_1)`` (no second Exner or hydrostatic integration). A bare Boussinesq core made in Julia has no reference: its catalogue leaves the `temperature*` variables out, and the surfaces' absolute values throw an `ArgumentError` saying why. Chosen over omitting the variables in configured runs, because the reference costs nothing and every configured domain then has the outputs.
+- **One solve.** `SurfaceExchange.surface_layer_solution` is the solve of `turbulent_fluxes`, factored out, with `default_stability_functions()`; the tiles' 2 m value calls it, so it uses the same inputs and stability functions as their fluxes.
+- **Measured** (tests): T = θ Π̄ to 4 ε; Π̄ of a constant θ against the analytic ``Π_s − g z/(c_p θ)``: ≤ 1e-12 on a stretched grid (RK4 of the continuous equation), and 2.1e-7, 8.4e-7, 1.4e-5 at Δz = 25, 50, 200 m on a uniform grid (the discrete anelastic balance, O(Δz²)); the 2 m value against a hand assembly of the same solve to 1e-12.
+BERLIN_PLACEHOLDER
+- **A bug the tests caught.** Building the reference for every Boussinesq domain at first included the buoyancy-free runs that start at θ = 0 (`theta0 = 0`: the Taylor–Green vortex). Π̄ then came out as `(-Inf)^κ`, and 5 files of the full suite failed (8 failures, 6 errors: `config_simulation_driver`, `config_cli`, `config_examples`, `checks`, `dns_vs_les`). Now the reference is built only when the initial θ is positive at every level and g > 0, or when a component needs one.
+- **Test expectations that were wrong:**
+  - The hand-assembled 2 m value first left out the park tile's surface humidity (β = 0.6): q_s enters the stability through θ_v. The code was right.
+  - "Both tiles are unstable": the park (299 K under 300 K air) is stable; the test now asserts that each tile's θ_2m lies between its skin's and the air's.
+- **Deviations from the issue's plan:**
+  - A tile's surface is at its displacement height ``z_{s,i}`` (0 for park and water, the column's ``d`` for built tiles), so its θ_s is ``T_s/Π̄(z_s)`` and its 2 m level is ``z_s + 2`` m. The issue says Π̄(surface); this matches the tile's own surface layer, whose forcing height is measured from ``d``.
+  - The 2 m value is computed from the current state (a fresh solve per output), not from scales stored at the last surface step. No checkpoint state is needed, and a restarted run writes the same values.
+  - The old name is rejected only where no surface publishes `surface_temperature`. With `"most"` or `"tiles"` the name is valid, with its new meaning.
+  - The tiles of a blended mosaic are evaluated at their own forcing levels, not at the blending height.
+
 ---
 
 # Data assimilation and inverse problems

@@ -117,3 +117,13 @@ end
         @test all(isfinite, T)
     end
 end
+
+@testset "config: a buoyancy-free domain (θ = 0) has no reference; temperature refused with the reason" begin
+    load(ov) = load_run_config(IOBuffer(""); overrides = vcat(["grid.size=[8,8,8]", "fftw.planner=\"estimate\"",
+                                                               "dynamics.theta0=0.0", "time.duration=\"none\"",
+                                                               "time.nsteps=1"], ov))
+    build(cfg) = only(Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model.domains)
+    @test thermodynamic_reference(build(load(String[]))) === nothing
+    err = try build(load(["output.variables=[\"temperature\"]"])); nothing catch e; e end
+    @test err isa Aeolus.Config.ConfigError && occursin("not positive", sprint(showerror, err))
+end

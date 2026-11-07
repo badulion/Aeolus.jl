@@ -1065,15 +1065,28 @@ end
 # (NEST-p3): its initial θ profile (`theta_profile`), the hydrostatic
 # reference state of a Boussinesq domain (`reference`: the one its
 # components convert fluxes with and θ becomes T with, PALM's `hyp` from
-# the initial θ and the surface pressure; every Boussinesq domain since
-# #536, `Components.thermodynamic_reference`), and the tile form of its
-# static driver (`static_tiles`, for [surface] model = "tiles", with the
-# driver's initial soil, `soil`, #521).
+# the initial θ and the surface pressure; since #536 every Boussinesq
+# domain whose initial θ is a temperature, `Components.thermodynamic_reference`;
+# not the buoyancy-free ones that start at θ = 0, `theta0 = 0`), and the
+# tile form of its static driver (`static_tiles`, for [surface] model =
+# "tiles", with the driver's initial soil, `soil`, #521).
 function _domain_inputs(cfg, mesh, sim, dyn)
     θf = initial_theta_profile(cfg, dyn)
     out = (; theta_profile = θf)
     enabled = enabled_components(cfg)
-    if sim isa BoussinesqSimulation
+    needs_ref = any(C -> C in enabled, (Urban.TiledUrbanSurface, Urban.PrescribedSurfaceFlux, Urban.MeanColumnRadiation))
+    # a θ that is not a temperature (θ ≤ 0 somewhere: the buoyancy-free runs)
+    # has no hydrostatic state; a component that needs one fails in its build
+    zc = last(cell_centres(mesh))
+    physical = cfg.dynamics.g > 0 && all(z -> θf(z) > 0, zc)
+    if sim isa BoussinesqSimulation && !physical && !needs_ref
+        bad = [n for n in cfg.output.variables if n in _ABSOLUTE_T_OUTPUTS]
+        isempty(bad) ||
+            throw(ConfigError("output.variables", "$(join(bad, ", ")): an absolute temperature needs the hydrostatic " *
+                                                  "reference of the initial theta, which is not positive here " *
+                                                  "(dynamics.theta0 or [initial] theta > 0 K, dynamics.g > 0)"))
+    end
+    if sim isa BoussinesqSimulation && (physical || needs_ref)
         ps = cfg.dynamics.p_surface
         ps === nothing && (ps = dyn === nothing || dyn.p_surface === nothing ? 101325.0 : dyn.p_surface)
         out = merge(out, (; reference = Urban.domain_reference(mesh, θf, ps; g = cfg.dynamics.g)))
@@ -1090,6 +1103,10 @@ function _domain_inputs(cfg, mesh, sim, dyn)
     end
     return out
 end
+
+# the outputs that turn θ into an absolute temperature with the domain's reference (#536)
+const _ABSOLUTE_T_OUTPUTS = ("temperature", "temperature_profile", "temperature_mean", "surface_temperature",
+                             "temperature_2m")
 
 # the tile form of a static driver on `mesh`, at the anchor it records
 function _read_tiles(path, mesh)

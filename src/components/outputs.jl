@@ -28,7 +28,7 @@ The names in the core's output catalogue ([`core_outputs`](@ref)):
 `qv*` need moisture; `budget_water` needs moisture, `budget_tracer` a
 component that carries a tracer, `budget_energy` on the Boussinesq core
 `θ₀ > 0`; `temperature*` a thermodynamic reference (every domain built from
-a configuration has one; a bare Boussinesq core made in Julia does not,
+a configuration with a positive initial θ has one; a bare Boussinesq core made in Julia does not,
 and its catalogue leaves them out).
 """
 const CORE_OUTPUTS = ("u", "v", "w", "p", "theta", "qv",
