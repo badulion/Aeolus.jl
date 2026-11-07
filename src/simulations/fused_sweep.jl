@@ -187,11 +187,13 @@ end
     sweep_report(sim) -> Dict{String,Any}
 
 The `results.toml` table of which path the step core of `sim` took
-(#533): `path` (`"fused"`: every substage ran the fused sweep,
-`"unfused"`, `"mixed"`, or `"unfused"` with the core's reason when the
-step core taken has no fused sweep), `substages_fused`,
-`substages_unfused`, and `fallback`, the `"term: reason"` of every term
-that kept it off the fused sweep ([`SWEEP_FALLBACKS`](@ref)).
+(#533): `path` (`"fused"`: every substage ran the fused sweep, `"unfused"`,
+`"mixed"`; `"unfused"` with the core's reason when the step core taken
+has no fused sweep) and `fallback`, the `"term: reason"` of every term that
+kept it off the fused sweep ([`SWEEP_FALLBACKS`](@ref)). The substage
+counts stay in the simulation's [`SweepReport`](@ref)
+(`sim.workspaces.fused`): they restart with a resumed session, and a
+resumed run's `results.toml` is that of an uninterrupted run.
 """
 function sweep_report(sim)
     r = sim.workspaces.fused
@@ -200,8 +202,7 @@ function sweep_report(sim)
         fb = [_blocker("builtin.core")]
     end
     path = r.unfused == 0 && r.fused > 0 ? "fused" : r.fused == 0 ? "unfused" : "mixed"
-    return Dict{String,Any}("path" => path, "substages_fused" => r.fused, "substages_unfused" => r.unfused,
-                            "fallback" => String[string(first(p), ": ", last(p)) for p in fb])
+    return Dict{String,Any}("path" => path, "fallback" => String[string(first(p), ": ", last(p)) for p in fb])
 end
 
 # Steps 2-12 of `_euler_projection!` in the fused sweep when every term of

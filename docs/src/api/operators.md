@@ -115,7 +115,7 @@ eddy viscosity) is computed before the sweep, in `prepare!`.
 A component or built-in term without a sweep term keeps the substage on
 the unfused path, the reference implementation; the run logs which term
 caused it, once, and writes it to `results.toml` (`[fused_sweep.<domain>]`:
-`path`, `substages_fused`, `substages_unfused`, `fallback`). The
+`path` and `fallback`). The
 documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
 the completeness guard `test/fused_sweep.jl`.
 

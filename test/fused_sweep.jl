@@ -333,8 +333,8 @@ noop = (s, Δt) -> nothing
             @test all(isnan, a.tu.data)          # the fused path: tendencies unused
             ra = SIMs.sweep_report(a); rr = SIMs.sweep_report(r)
             nsub = drv === step! ? 3 : 9
-            @test ra["path"] == "fused" && ra["substages_fused"] == nsub && isempty(ra["fallback"])
-            @test rr["path"] == "unfused" && rr["substages_unfused"] == nsub &&
+            @test ra["path"] == "fused" && a.workspaces.fused.fused == nsub && isempty(ra["fallback"])
+            @test rr["path"] == "unfused" && r.workspaces.fused.unfused == nsub &&
                   rr["fallback"] == ["builtin.body_force: " * SIMs.sweep_reason("builtin.body_force")]
         end
     end
@@ -352,7 +352,7 @@ end
         step!(a, 0.5; hook...); step!(a, 0.5; hook...)
         @test !any(isnan, interior_view(a.tu))       # the tendencies were written
         rep = SIMs.sweep_report(a)
-        @test rep["path"] == "unfused" && rep["substages_unfused"] == 2 && rep["substages_fused"] == 0
+        @test rep["path"] == "unfused" && a.workspaces.fused.unfused == 2 && a.workspaces.fused.fused == 0
         @test any(startswith(key * ":"), rep["fallback"])
         @test !occursin("no documented reason", join(rep["fallback"]))
     end
@@ -410,14 +410,14 @@ end
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"), small)
     @test rc == 0
     fs = only(values(res["fused_sweep"]))
-    @test fs["path"] == "fused" && fs["substages_fused"] > 0 && fs["substages_unfused"] == 0 && isempty(fs["fallback"])
+    @test fs["path"] == "fused" && isempty(fs["fallback"])
     # the dry convective boundary layer: SGS, buoyancy, a θ flux and a sponge
     rc, res = run(joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"),
                   vcat(small, ["checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]))
     @test rc == 0
     fs = only(values(res["fused_sweep"]))
     who = Set(first.(split.(fs["fallback"], ":")))
-    @test fs["path"] == "unfused" && fs["substages_fused"] == 0
+    @test fs["path"] == "unfused"
     @test issubset(["builtin.sgs", "builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
     @test !occursin("no documented reason", join(fs["fallback"]))
 end
