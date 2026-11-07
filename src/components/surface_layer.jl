@@ -172,6 +172,11 @@ function build(::Type{<:SurfaceLayer}, opts, domain)
 end
 
 stages(::SurfaceLayer) = (Stage(:surface_flux), Stage(:tendencies), Stage(:post_predictor))
+# what the budgets measure (#539): the fluxes are computed in :surface_flux, the
+# heat flux enters tθ in :tendencies, the wall stress the velocity after the predictor
+budget_writes(::SurfaceLayer, ::Val{:surface_flux}) = ()
+budget_writes(::SurfaceLayer, ::Val{:tendencies}) = (:energy,)
+budget_writes(::SurfaceLayer, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)
 
 # cell-centre wind and θ of the first level of column (i, j)
 @inline function _first_level(s, i, j)
