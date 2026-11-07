@@ -423,6 +423,16 @@ This config is, bit for bit, the simulation the script built before
     `reference_file`. The run writes `output/results.toml` and ends with
     exit code 3 when a required check failed ([Checks](checks.md), ONE-d
     #453). Every shipped model config enables at least `finite`.
+  * `[budgets]` (#539): `enabled = true` (default) measures the budgets
+    the `budget_*` outputs and the closure checks ask for; `enabled =
+    false` builds none, in model domains and urban sites alike, for
+    production runs. The requested budget outputs and budget checks
+    (`*_closure`, `urban_budgets`) are then dropped with one warning that
+    lists them, so the same file runs with `--set budgets.enabled=false`,
+    and `results.toml` records `[budgets] enabled = false`.
+    `verify_writes = true` measures every stage entry and stops at a
+    component that changed a budget its declared writes
+    (`Components.budget_writes`) leave out (tests, debugging).
   * The domain's `dynamic_driver` names a dynamic driver: its profiles set the
     initial u, v, θ (and qv), replacing the `[initial]` tables. Lateral
     faces set to `"open"` (`boundaries.x`, `y`) take its boundary planes,
