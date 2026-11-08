@@ -3190,6 +3190,88 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+##### Step 4: the SGS closures inside the sweep
+
+Branch `issue/533-s4-sgs` (from step 1). What was built:
+- **One term for the closure**, `Operators.SGSTerm`
+  (`src/operators/sgs_sweep.jl`): its `prepare!` is the `compute_sgs!`
+  of the separate loops (and qv's own diffusivity, AMD), before the sweep;
+  its row kernel adds the momentum, θ and qv tendencies from the
+  precomputed coefficients. The row kernels (`FiniteVolume.EddyMomentum`,
+  `StressMomentum`, `EddyScalar`, `TensorScalar`,
+  `src/operators/fused_sweep_sgs.jl`) run the point bodies of the
+  whole-field operators themselves (`_b_eddy_u!` …, `_b_sgs_stress_div!`,
+  `_b_stress_div!`, `_b_eddy_scalar!`), writing into the sweep's row
+  buffer through a row adapter (`_RowField`): one source of truth, and
+  the fused step is bit-identical to one loop per term in every test. The
+  tensor face fluxes became value functions (`_tensor_fx/fy/fz`) shared
+  by the stored-flux launches and the sweep, which evaluates each interior
+  face twice instead of storing it.
+- **Which kernel, from the closure contract**: the momentum part from a
+  new generic `sgs_momentum_sweep` (default: the eddy viscosity of the
+  default `add_sgs_momentum!`, Laplacian or stress form by `sgs_stress`;
+  the Reynolds-stress closure its stored stress); θ's from the existing
+  `sgs_scalar_face_diffusivity` (diagonal) or `sgs_scalar_tensor`; qv's
+  from a new trait `sgs_tracer_own_diffusivity` (AMD `true`), checked at
+  run time against `sgs_tracer_diffusivity!` (a closure whose two answers
+  disagree stops with an error instead of fusing the wrong flux).
+  `SolidMaskedSGS` (the urban site's mask) now forwards
+  `sgs_scalar_face_diffusivity`, `sgs_scalar_tensor`, `sgs_explicit_stress`
+  and the two new generics to the closure it wraps.
+- **Every closure of the core is fused**: Smagorinsky (built-in `C_s`
+  and `StaticSmagorinsky`), dynamic (plane, local, masked), Lagrangian
+  dynamic, Vreman, σ, `FunctionSGS`, `MLSGS`, AMD, the prognostic TKE
+  closure (also with a solid mask and on a stretched grid),
+  stability-corrected, isentropic tensor diffusion, the Reynolds-stress
+  closure and both `SolidMaskedSGS` uses; both `sgs_stress` forms
+  (the stress form on a `RegularGrid` only, as the operator).
+  `builtin.sgs` left `SWEEP_FALLBACKS`; a closure without a sweep form
+  (one outside Aeolus with its own stress) is reported by its type
+  (`Main.X: no sweep_term …`).
+- **Footprint** (1, 1, 1): with νt precomputed, every SGS body reads the
+  state at most one point away (the compact flux differences; the
+  tensor's cross terms at the diagonal neighbours); νt, κh, the tensor
+  and a stored stress are inputs the predictor never overwrites, so they
+  do not enter the lag. The ring and edges stay those of the base term
+  (2 rows, 1 plane); the reversed-slab tests check the front edge.
+- **The decision** receives the closure with its `sgs_stress`
+  (`Simulations.SGSChoice`), so the decision functions of step 1 keep
+  their signatures. `_sweep_terms` infers a two-type union; a fused
+  `step_rk3!` with Smagorinsky or AMD allocates what one loop per term
+  does (32 and 48 bytes, the keyword call).
+
+**Not inside the sweep, by design**: the TKE equation of `TKEClosure`
+(and the stress transport of the Reynolds-stress closure) runs in
+`advance_sgs!`, once per step after the projection, on its own field `e`
+that the sweep's buffer does not carry; its masked diffusion
+(`add_eddy_diffusion_scalar!(…; mask)`) belongs to that update and is
+already one fused plane loop (KA-l). The urban tracers' masked SGS
+diffusion (`TracerSGSDiffusion`) is a component outside the core.
+
+**Tests** (`test/fused_sweep_sgs.jl`, 5635 assertions, 150 s): the sweep
+over (base, SGS term) against the separate loops + predictor for the 15
+closures above, both stress forms, 1–5 slabs forward and reversed,
+serial and threaded, Euler and the RK3 combination, dry and moist,
+periodic, walls and stretched (within ROUNDOFF_RTOL; measured
+bit-identical); `step!`/`step_rk3!` with `loop_fusion = "always"` against
+`"never"` for every closure; a closure without a sweep form reported and
+refused by `"always"`; the stress form on a stretched grid keeps the
+operator's error; footprint, inference, allocation; a guard that every
+closure type with its own `add_sgs_momentum!`, `add_sgs_scalar!` or
+`sgs_tracer_diffusivity!` method has the matching sweep generic.
+`test/fused_sweep.jl`: `builtin.sgs` removed from its expectations.
+
+**Bugs the tests caught** (code wrong): the first `SGSTerm` boxed its
+parts per substage (1.5 kB per `step_rk3!`): the momentum part inferred
+as `Symbol` on the stress check's path, and qv's part depended on the
+run's moisture; fixed (see above). **Expectations that proved wrong**:
+the stress form on a stretched grid was in the first agreement matrix
+(the operator refuses it; it is now tested as an error); "the Reynolds
+stress acted" failed on its initial isotropic stress, which has no
+divergence (now three committed steps first, and θ's anomaly compared).
+
+STEP4_MEASURED
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
