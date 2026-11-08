@@ -349,13 +349,24 @@ stores ``\\sum f_i G_i Δt = \\bar G Δt`` — exactly the aggregate `G`
 returned here.
 """
 function step_surface!(ts::SurfaceMosaic, f::SurfaceForcing, dt::Real; kwargs...)
-    ts.fluxes = [_f64(_step(t, f, dt, kwargs)) for t in ts.tiles]
-    return aggregate_fluxes(ts.fluxes, ts.fractions)
+    fl = Vector{SurfaceFluxes{Float64}}(undef, length(ts.tiles))
+    for (l, t) in enumerate(ts.tiles)
+        fl[l] = _f64(_step(t, f, dt, kwargs))
+    end
+    ts.fluxes = fl
+    return aggregate_fluxes(fl, ts.fractions)
 end
 function step_surface!(ts::SurfaceMosaic, fs::AbstractVector{<:SurfaceForcing}, dt::Real; kwargs...)
     _check_forcings(ts, fs)
-    ts.fluxes = [_f64(_step(t, f, dt, kwargs)) for (t, f) in zip(ts.tiles, fs)]
-    return aggregate_fluxes(ts.fluxes, ts.fractions)
+    # a new vector of the known length and type, filled in a loop (a
+    # comprehension over the abstractly typed tiles goes through
+    # collect's type widening per element)
+    fl = Vector{SurfaceFluxes{Float64}}(undef, length(ts.tiles))
+    for l in eachindex(fl)
+        fl[l] = _f64(_step(ts.tiles[l], fs[l], dt, kwargs))
+    end
+    ts.fluxes = fl
+    return aggregate_fluxes(fl, ts.fractions)
 end
 
 """
