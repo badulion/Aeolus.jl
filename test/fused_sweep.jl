@@ -388,11 +388,9 @@ noop = (s, Δt) -> nothing
 end
 
 @testset "a built-in term or a hook keeps one loop per term, and is reported" begin
-    for (kw, hook, key) in (((θ₀ = 300.0,), NamedTuple(), "builtin.buoyancy"),
-                            ((f_coriolis = 1e-4,), NamedTuple(), "builtin.coriolis"),
-                            ((C_s = 0.17,), NamedTuple(), "builtin.sgs"),
-                            ((θ_flux_bottom = 0.1,), NamedTuple(), "builtin.surface_flux"),
-                            ((sponge_α_max = 0.01, sponge_z_start = 80.0), NamedTuple(), "builtin.sponge"),
+    # (buoyancy, Coriolis, surface flux and sponge are fused since plan step 2:
+    # test/fused_sweep_pointwise.jl)
+    for (kw, hook, key) in (((C_s = 0.17,), NamedTuple(), "builtin.sgs"),
                             (NamedTuple(), (post_predictor! = noop,), "builtin.post_predictor"))
         a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, kw...))
         fill!(a.tu.data, NaN)
@@ -404,9 +402,9 @@ end
         @test !occursin("no documented reason", join(rep["not_fusable"]))
     end
     # several terms: every one is reported
-    a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4))
-    step!(a, 0.5)
-    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.buoyancy", "builtin.coriolis"])
+    a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17))
+    step!(a, 0.5; post_predictor! = noop)
+    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.sgs", "builtin.post_predictor"])
     # a core without a fused sweep (the anelastic core) reports its reason
     an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
     @test SIMs.sweep_report(an)["substages_fused"] == "none" &&
@@ -431,10 +429,10 @@ end
     step!(b, 0.5)
     @test SIMs.sweep_report(b)["substages_fused"] == "all"
     # ... and an error naming every term without one, before anything is stepped
-    c = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4)), :always)
+    c = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17)), :always)
     t0 = c.t
-    err = try step!(c, 0.5); nothing catch e; e end
-    @test err isa ArgumentError && occursin("builtin.buoyancy", err.msg) && occursin("builtin.coriolis", err.msg)
+    err = try step!(c, 0.5; post_predictor! = noop); nothing catch e; e end
+    @test err isa ArgumentError && occursin("builtin.sgs", err.msg) && occursin("builtin.post_predictor", err.msg)
     @test c.t == t0                                             # exact: the clock did not advance
     # invalid settings, and always on a core without a fused form
     @test_throws ArgumentError SIMs.set_loop_fusion!(a, :sometimes)
@@ -496,7 +494,9 @@ end
     fs = only(values(res["loop_fusion"]))
     who = Set(first.(split.(fs["not_fusable"], ":")))
     @test fs["substages_fused"] == "none" && fs["setting"] == "if_possible"
-    @test issubset(["builtin.sgs", "builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
+    @test "builtin.sgs" in who
+    # fused since plan step 2: never reported
+    @test !("builtin.buoyancy" in who)
     @test !occursin("no documented reason", join(fs["not_fusable"]))
     # the key: never on the DNS; always on the CBL stops the run (rc ≠ 0)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"),
@@ -513,10 +513,14 @@ end
 @testset "type stability and allocation" begin
     s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2))
     # the plan is a concrete term tuple or nothing (a two-type union the caller splits)
-    @test (@inferred Union{Nothing,Tuple{FVs.BaseTendencies{Float64}}} SIMs._sweep_terms(
-               s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)) == (FVs.BaseTendencies(s.ν),)
-    sb = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
-    @test SIMs._sweep_terms(sb, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, sb.ν) === nothing
+    # (the base term, then the built-in pointwise terms of plan step 2, switched off)
+    plan = SIMs._sweep_terms(s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)
+    @test (@inferred Union{Nothing,typeof(plan)} SIMs._sweep_terms(
+               s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)) isa typeof(plan)
+    @test first(plan) == FVs.BaseTendencies(s.ν) && !any(t -> t.on, Base.tail(plan))
+    sb = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, C_s = 0.17))
+    @test SIMs._sweep_terms(sb, SIMs._active_sgs(sb, nothing, nothing), nothing, nothing,
+                            Aeolus.Operators.momentum_advect!, sb.ν) === nothing
     step_rk3!(s, 0.1); step_rk3!(s, 0.1)
     bufs = s.workspaces.sweep
     @test bufs isa FVs.SweepBuffers
@@ -581,10 +585,11 @@ end
         "_advance_scalar!" => :predictor,
         "add_sgs_momentum!" => "builtin.sgs", "add_sgs_scalar!" => "builtin.sgs", "_add_sgs_tracer!" => "builtin.sgs",
         "compute_sgs!" => "builtin.sgs", "momentum_advection" => "builtin.momentum_advection",
-        "has_buoyancy" => "builtin.buoyancy", "add_buoyancy!" => "builtin.buoyancy",
-        "has_coriolis" => "builtin.coriolis", "add_coriolis!" => "builtin.coriolis",
-        "has_surface_flux" => "builtin.surface_flux", "add_surface_flux!" => "builtin.surface_flux",
-        "has_sponge" => "builtin.sponge", "add_velocity_sponge!" => "builtin.sponge",
+        # the built-in pointwise terms of plan step 2 (Simulations._builtin_terms)
+        "has_buoyancy" => :pointwise, "add_buoyancy!" => :pointwise,
+        "has_coriolis" => :pointwise, "add_coriolis!" => :pointwise,
+        "has_surface_flux" => :pointwise, "add_surface_flux!" => :pointwise,
+        "has_sponge" => :pointwise, "add_velocity_sponge!" => :pointwise,
         "body_force!" => "builtin.body_force", "post_predictor!" => "builtin.post_predictor",
         "update_open_boundaries!" => "builtin.open_boundaries")
     seen = Set{String}()

@@ -30,7 +30,8 @@ using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gr
                                 _divergence_into!
 # the blocked tendency + predictor sweep (SC-e, #405)
 using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
-                                sweep_term, prepare!
+                                sweep_term, prepare!, OptionalTerm, BuoyancyTerm, CoriolisTerm,
+                                SurfaceFluxTerm, sponge_term
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
@@ -80,10 +81,11 @@ mutable struct StepWorkspaces
     snapshot::Any
     imex::Any
     sweep::Any            # FiniteVolume.SweepBuffers of the blocked core (SC-e, #405)
+    sponge::Any           # the core sponge's targets in the fused sweep (SpongeTargets, #533)
     fused::SweepReport    # fused and separate substages (#533)
     rec::StepRecord
 end
-StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, SweepReport(), StepRecord())
+StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, nothing, SweepReport(), StepRecord())
 
 """
     BoussinesqSimulation(mesh; kwargs...)
@@ -421,13 +423,14 @@ tendencies and the predictor is a sweep term
 the tendencies and the predictor of u, v, w, θ (and qv) run as one
 cache-blocked sweep (`FiniteVolume.blocked_predictor!`), with the values
 of the separate passes within round-off; the tendency fields
-`sim.tu, tv, tw, tθ, tqv` are then neither written nor read. Today only
-the base tendencies (the built-in momentum advection and the molecular
-diffusion) and the pipeline components that provide a sweep term
-qualify: any SGS closure, buoyancy, Coriolis, surface flux, sponge, a
-`body_force!` function, a `post_predictor!` hook or open boundaries keep
-the substage with one loop per term, which the simulation records once
-with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`).
+`sim.tu, tv, tw, tθ, tqv` are then neither written nor read. Today the
+base tendencies (the built-in momentum advection and the molecular
+diffusion), the built-in buoyancy, Coriolis, surface flux and sponge
+(#533 plan step 2) and the pipeline components that provide a sweep term
+qualify: any SGS closure, a `body_force!` function, a `post_predictor!`
+hook or open boundaries keep the substage with one loop per term, which
+the simulation records once with the reason ([`sweep_report`](@ref),
+`SWEEP_FALLBACKS`).
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):

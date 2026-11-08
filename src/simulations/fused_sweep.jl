@@ -33,10 +33,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                      "νt and κh precomputed as inputs of the sweep, plan step 4",
     "builtin.momentum_advection" => "a momentum-advection operator other than the built-in centred one " *
                                     "is a whole-field function; only momentum_advect! is the sweep's base term",
-    "builtin.buoyancy" => "add_buoyancy! (dry and moist): pointwise, plan step 2",
-    "builtin.coriolis" => "add_coriolis!: pointwise (four-point average), plan step 2",
-    "builtin.surface_flux" => "add_surface_flux!: pointwise on the first and last level, plan step 2",
-    "builtin.sponge" => "add_velocity_sponge!: pointwise toward a target profile, plan step 2",
     "builtin.body_force" => "a body_force! hook passed to the core as a function is a whole-field operator; " *
                             "only the pipeline's components can be expressed as sweep terms",
     "builtin.post_predictor" => "post-predictor operators (the post_predictor! hook) run on the predicted " *
@@ -130,15 +126,58 @@ function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_pred
                       momentum_advection, ν)
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
     has_open_boundaries(sim.bcs) && return nothing
-    (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
     post_predictor! === nothing || return nothing
     momentum_advection === momentum_advect! || return nothing
     closure === nothing || return nothing          # SGS terms in the sweep: plan step 4
-    base = BaseTendencies(ν)
-    body_force! === nothing && return (base,)
+    core = (BaseTendencies(ν), _builtin_terms(sim)...)
+    body_force! === nothing && return core
     ht = hook_terms(body_force!, sim)
     ht === nothing && return nothing
-    return (base, ht...)
+    return (core..., ht...)
+end
+
+# The built-in pointwise terms of steps 5-6b, in the order of the passes,
+# each switched by its flag (one tuple type per simulation type, #533 plan
+# step 2).
+function _builtin_terms(sim::BoussinesqSimulation)
+    g = sim.mesh
+    return (OptionalTerm(sim.has_buoyancy, BuoyancyTerm(sim.θ₀, sim.g_accel / sim.θ₀)),
+            OptionalTerm(sim.has_coriolis, CoriolisTerm(sim.f_coriolis)),
+            OptionalTerm(sim.has_surface_flux, SurfaceFluxTerm(sim.θ_flux_bottom, sim.θ_flux_top, g)),
+            OptionalTerm(sim.has_sponge, sponge_term(sim.sponge_α_max, sim.sponge_z_start, _sponge_targets(sim), g)))
+end
+
+"""
+    SpongeTargets{T}
+
+The targets `u, v, w` of the core's sponge (`sim.sponge_target`) in the
+concrete form the fused sweep's damping term reads: each a number, a
+level vector or a 3-D array of eltype `T` (a `Field` by its data). Made
+once per simulation and target (`sim.workspaces.sponge`): the stored
+`sponge_target` is a NamedTuple of abstract fields, read here once
+instead of every substage. A level vector or array of eltype `T` is the
+stored one, so an in-place update of it (the nest's sponge target) is
+seen; another eltype is converted once.
+"""
+struct SpongeTargets{T}
+    u::Union{T, Vector{T}, Array{T,3}}
+    v::Union{T, Vector{T}, Array{T,3}}
+    w::Union{T, Vector{T}, Array{T,3}}
+    src::NamedTuple
+end
+_starget(::Type{T}, x::Real) where {T} = T(x)
+_starget(::Type{T}, x::AbstractVector) where {T} = x isa Vector{T} ? x : Vector{T}(x)
+_starget(::Type{T}, x::AbstractArray{<:Any,3}) where {T} = x isa Array{T,3} ? x : Array{T,3}(x)
+_starget(::Type{T}, x::Field) where {T} = _starget(T, x.data)
+# the targets are the simulation's own arrays (on its backend): no extra input
+Operators.FiniteVolume.sweep_inputs(::Operators.FiniteVolume.DampingTerm{A, P, C, <:SpongeTargets}) where {A, P, C} = ()
+function _sponge_targets(sim::BoussinesqSimulation{T}) where {T}
+    c = sim.workspaces.sponge
+    c isa SpongeTargets{T} && c.src === sim.sponge_target && return c
+    tg = sim.sponge_target
+    c = SpongeTargets{T}(_starget(T, tg.u), _starget(T, tg.v), _starget(T, tg.w), tg)
+    sim.workspaces.sponge = c
+    return c
 end
 
 # Every term that keeps a substage off the fused sweep, `key => reason`
@@ -149,10 +188,6 @@ function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_p
     has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
     closure === nothing || push!(out, _blocker("builtin.sgs"))
-    sim.has_buoyancy && push!(out, _blocker("builtin.buoyancy"))
-    sim.has_coriolis && push!(out, _blocker("builtin.coriolis"))
-    sim.has_surface_flux && push!(out, _blocker("builtin.surface_flux"))
-    sim.has_sponge && push!(out, _blocker("builtin.sponge"))
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))
     post_predictor! === nothing || append!(out, post_hook_blockers(post_predictor!, sim))
     return out
