@@ -123,11 +123,16 @@ struct DampingTerm{A, P<:DampingProfile, C<:Tuple, G} <: SweepTerm
     j0::Int
     k0::Int
 end
-function DampingTerm(p::DampingProfile, axis::Int, coords::Tuple, targets, g::AbstractMesh)
-    axis in (1, 3) || throw(ArgumentError("DampingTerm: axis 1 (x) or 3 (z), got $axis"))
+@inline DampingTerm(p::DampingProfile, axis::Int, coords::Tuple, targets, g::AbstractMesh) =
+    DampingTerm(p, Val(axis), coords, targets, g)
+# the axis as a `Val`, so that the term's type does not rest on constant
+# propagation through the constructor (the callers in the step pass `Val`)
+function DampingTerm(p::DampingProfile, ::Val{A}, coords::Tuple, targets, g::AbstractMesh) where {A}
+    A in (1, 3) || throw(ArgumentError("DampingTerm: axis 1 (x) or 3 (z), got $A"))
+    _check_damping_targets(targets, g)
     ii, jj, kk = interior(g)
-    return DampingTerm{axis, typeof(p), typeof(coords), typeof(targets)}(p, coords, targets, first(ii) - 1,
-                                                                          first(jj) - 1, first(kk) - 1)
+    return DampingTerm{A, typeof(p), typeof(coords), typeof(targets)}(p, coords, targets, first(ii) - 1,
+                                                                       first(jj) - 1, first(kk) - 1)
 end
 footprint(::DampingTerm) = (0, 0, 0)
 
@@ -167,6 +172,20 @@ _tarray(::Type{T}, ::Union{Real,AbstractVector}) where {T} = Array{T,3}(undef, 0
 _tarray(::Type{T}, x::Field) where {T} = _tarray(T, x.data)
 _tarray(::Type{T}, x::Array{T,3}) where {T} = x
 _tarray(::Type{T}, x::AbstractArray{<:Real,3}) where {T} = Array{T,3}(x)
+
+# A level-vector target needs Nz values, as `_add_damping!` checks: the sweep
+# indexes it by level without bounds checks (review of #533 step 2).
+_check_damping_targets(g, m) = nothing
+function _check_damping_targets(g::Union{Tuple,NamedTuple}, m)
+    _check_damping_target(g[1], m); _check_damping_target(g[2], m); _check_damping_target(g[3], m)
+    return nothing
+end
+function _check_damping_targets(g::DampingTargets, m)
+    for n in 1:3
+        g.kind[n] == 1 && _check_damping_target(g.v[n], m)
+    end
+    return nothing
+end
 
 # component n's target of a tuple or a NamedTuple (u, v, w)
 @inline _dtarget(g::Union{Tuple,NamedTuple}, n) = g[n]
@@ -242,7 +261,7 @@ heights) toward `targets` (fields `u, v, w`, or a tuple) as a term of the
 fused sweep.
 """
 sponge_term(α_max, z_start, targets, g::AbstractMesh) =
-    DampingTerm(sponge_profile(α_max, z_start, g.z0 + g.Lz), 3,
+    DampingTerm(sponge_profile(α_max, z_start, g.z0 + g.Lz), Val(3),
                 (damping_levels(g, FaceX()), damping_levels(g, FaceY()), damping_levels(g, FaceZ())), targets, g)
 
 """

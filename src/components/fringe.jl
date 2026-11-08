@@ -172,7 +172,7 @@ end
 function FiniteVolume.sweep_term(c::Fringe, d)
     g = d.state.mesh
     coords = (xnodes(g, FaceX()), xnodes(g, FaceY()), xnodes(g, FaceZ()))
-    return FringeSweep(c, d.state, FiniteVolume.DampingTerm(c.fringe.profile, 1, coords, c.target, g))
+    return FringeSweep(c, d.state, FiniteVolume.DampingTerm(c.fringe.profile, Val(1), coords, c.target, g))
 end
 FiniteVolume.footprint(t::FringeSweep) = FiniteVolume.footprint(t.term)
 FiniteVolume.sweep_inputs(t::FringeSweep) = FiniteVolume.sweep_inputs(t.term)
