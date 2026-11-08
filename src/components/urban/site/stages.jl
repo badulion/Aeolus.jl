@@ -72,6 +72,7 @@ Components.sweep_type(e::UrbanEntry) = typeof(e.c)
 Aeolus.Operators.FiniteVolume.sweep_term(e::UrbanEntry, d::Domain) = Aeolus.Operators.FiniteVolume.sweep_term(e.c, d)
 Aeolus.Operators.FiniteVolume.post_sweep_term(e::UrbanEntry, d::Domain, Δt) =
     _entry_post_term(Aeolus.Operators.FiniteVolume.post_sweep_term(e.c, d, Δt), e, d, Δt)
+Components.post_after_sweep(e::UrbanEntry) = Components.post_after_sweep(e.c)
 # a coupling's whole-field form after the sweep runs through its entry (timed)
 _entry_post_term(t, e, d, Δt) = t
 _entry_post_term(::Aeolus.Operators.FiniteVolume.AfterSweep, e, d, Δt) = Components.run_after_sweep(e, d, Δt)

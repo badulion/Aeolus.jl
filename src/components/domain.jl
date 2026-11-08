@@ -187,15 +187,34 @@ _post_stage_terms(::Tuple{}, d, Δt) = ()
 function _post_stage_terms(cs::Tuple, d, Δt)
     rest = _post_stage_terms(Base.tail(cs), d, Δt)
     attaches(first(cs), :post_predictor) || return rest
-    t = _in_rows_or_after(FiniteVolume.post_sweep_term(first(cs), d, Δt), first(cs), d, Δt)
+    t = _post_term(first(cs), d, Δt)
     (t === nothing || rest === nothing) && return nothing
     return (t, rest...)
 end
+# (a component that runs after the sweep never builds its row form: for the
+# wall stresses that is several Nx × Ny arrays per substage, thrown away)
+_post_term(c, d, Δt) = post_after_sweep(c) ? run_after_sweep(c, d, Δt) :
+    _in_rows_or_after(FiniteVolume.post_sweep_term(c, d, Δt), c, d, Δt)
+
+"""
+    post_after_sweep(c) -> Bool
+
+Whether the `:post_predictor` component `c` of a domain runs its own
+whole-field `run_stage!` after the fused sweep (`true`) rather than its
+[`post_sweep_term`](@ref Aeolus.Operators.FiniteVolume.post_sweep_term)
+on the sweep's rows (`false`, the default: the term decides, and one
+with a stencil still goes after the sweep). `true` for the components
+whose row form has a stencil (the wall stresses, the canopy drags), so
+the domain does not build a row form it would not use (#533 step 6).
+A component that returns `true` must have a post term.
+"""
+post_after_sweep(c) = false
 # A component's post term runs on the sweep's rows when it is pointwise
 # (footprint 0: the prescribed flow, the IBM correction); one with a
 # stencil runs its own whole-field `run_stage!` after the sweep. Measured
-# (#533 step 6, `benchmarks/bench_post_sweep.jl`, 128² × 64): the canopy
-# drag, facade and ground wall stresses on the rows cost 1.4–2.2× their
+# (#533 step 6, 128² × 64, per-operator scratch runs of
+# `benchmarks/bench_post_sweep.jl`): the canopy drag, facade and ground
+# wall stresses on the rows cost 1.3–2.2× their
 # whole-field passes after the sweep (their faces are a sparse list, which
 # the whole-field pass walks in one launch, and at many slabs most of
 # their points fall in the deferred bands); the sweep with all four on
@@ -213,7 +232,7 @@ function Simulations.post_hook_blockers(h::_PostHook, sim)
     h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))
     Δt = zero(sim.t)                      # (only whether a component has a post term is asked)
     for c in h.d.components
-        attaches(c, :post_predictor) && FiniteVolume.post_sweep_term(c, h.d, Δt) === nothing &&
+        attaches(c, :post_predictor) && !post_after_sweep(c) && FiniteVolume.post_sweep_term(c, h.d, Δt) === nothing &&
             push!(out, Simulations._blocker(sweep_type(c)))
     end
     return out

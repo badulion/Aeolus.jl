@@ -271,6 +271,8 @@ function FiniteVolume.finish!(p::SurfaceLayerPostTerm, sim, Δt)
 end
 FiniteVolume.post_sweep_term(c::SurfaceLayer, d, Δt) =
     SurfaceLayerPostTerm(c, wall_stress_term(d.state, c.wm, Δt; side = :bottom))
+# (a domain runs its whole-field stage after the sweep: footprint 1)
+post_after_sweep(::SurfaceLayer) = true
 
 # ---------------------------------------------------------------------------
 # diagnostics: the outputs

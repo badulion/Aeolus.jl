@@ -32,3 +32,4 @@ run_stage!(c::VegDrag, case, ::Val{:post_predictor}, dt) =
 
 # in the fused sweep (#533 step 6): the same drag on the sweep's delayed rows
 FiniteVolume.post_sweep_term(c::VegDrag, d, Δt) = Aeolus.PlantCanopy.canopy_drag_term(c.drag, d.state, Δt)
+Components.post_after_sweep(::VegDrag) = true     # (footprint 1: a domain runs it after the sweep)

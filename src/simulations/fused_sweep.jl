@@ -164,7 +164,7 @@ function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_p
     sim.has_sponge && push!(out, _blocker("builtin.sponge"))
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))
     post_predictor! === nothing || append!(out, post_hook_blockers(post_predictor!, sim))
-    return out
+    return unique!(out)                   # (both hooks name the budgets, a component may sit in both)
 end
 
 

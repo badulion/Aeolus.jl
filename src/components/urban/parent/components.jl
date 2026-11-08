@@ -696,6 +696,7 @@ function FiniteVolume.post_sweep_term(c::TiledUrbanSurface, d, Δt)
     iw, js = _drag_edge_columns(sim)
     return TiledDragTerm(c.drag, c.drag_den, Float64(Δt), c.U_min, m.Hx, m.Hy, m.Hz, iw, js)
 end
+Components.post_after_sweep(::TiledUrbanSurface) = true    # (footprint 1: a domain runs it after the sweep)
 
 # the work of one canopy point of the drag's denominators (ten loads, two
 # square roots and two divisions) in pointwise-copy equivalents, for the

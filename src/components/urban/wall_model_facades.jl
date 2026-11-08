@@ -184,3 +184,4 @@ function FiniteVolume.post_sweep_term(c::WallModelFacades, d, Δt)
     t === nothing || return t
     return FiniteVolume.AfterSweep(() -> run_stage!(c, urban_case(d), Val(:post_predictor), Δt))
 end
+Components.post_after_sweep(::WallModelFacades) = true     # (footprint 1: a domain runs it after the sweep)

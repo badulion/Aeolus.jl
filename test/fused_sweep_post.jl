@@ -500,6 +500,38 @@ end
     @test any(startswith("Components.SurfaceLayer:"), rep["not_fusable"])
 end
 
+@testset "post hook: no row form built for a component that runs after the sweep; budgets reported once" begin
+    # review of #533 step 6: the domain built the SurfaceLayer's row form (wall_stress_term: three
+    # Nx × Ny arrays and the face lists) every substage, then ran its run_stage! instead
+    g2 = RegularGrid(; size = (64, 48, 12), extent = (640.0, 480.0, 120.0), halo = (3, 3, 3))
+    s = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2, θ₀ = 300.0,
+                                       bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)); U = 2.0)
+    d0 = CPp.Domain(s; validate = false)
+    sl = CPp.build(CPp.SurfaceLayer, (; model = :most, z0m = 0.1, z0h = nothing,
+                                    temperature = Dict{String,Any}("kind" => "constant", "value" => 302.0),
+                                    stability = Dict{String,Any}("family" => "businger_dyer_beljaars_holtslag"),
+                                    rho_cp = 1206.0), d0)
+    d = CPp.Domain(d0; components = (CPp.CentredAdvection(), sl))
+    CPp.run_stage!(sl, d, Val(:surface_flux), 1.0)
+    h = CPp.core_hooks(d).post_predictor!
+    @test CPp.post_after_sweep(sl)
+    SIMp.post_hook_terms(h, s, 0.5); SIMp.post_hook_blockers(h, s)
+    plane = 8 * g2.Nx * g2.Ny                  # bytes of one Float64 Nx × Ny array
+    @test (@allocated FVp.post_sweep_term(sl, d, 0.5)) > plane      # the row form costs planes ...
+    @test (@allocated SIMp.post_hook_terms(h, s, 0.5)) < plane      # ... the hook builds none
+    @test (@allocated SIMp.post_hook_blockers(h, s)) < plane
+    @test SIMp.post_hook_terms(h, s, 0.5) isa Tuple{FVp.AfterSweep}
+    # with budgets on, both hooks name them: the report lists them once
+    s2 = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2, θ₀ = 300.0))
+    d2 = CPp.Domain(s2; validate = false)
+    kf = CPp.build(CPp.KinematicFlow, (; kind = :uniform, omega = 0.0, center = (0.0, 0.0), velocity = (1.0, 0.5, 0.0)), d2)
+    db = CPp.with_budgets(CPp.Domain(d2; components = (CPp.CentredAdvection(), kf)), (:energy,))
+    step!(db, 0.5)
+    nf = CPp.sweep_report(db)["not_fusable"]
+    @test count(startswith("builtin.budgets:"), nf) == 1
+    @test allunique(nf)
+end
+
 @testset "the urban site's couplings: post terms, the sweep = the site's post-predictor hook" begin
     cfg = load_run_config(joinpath(@__DIR__, "data", "urban", "small_city.toml");
                           overrides = ["fftw.planner=\"estimate\""])

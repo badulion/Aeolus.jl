@@ -770,6 +770,7 @@ function FiniteVolume.post_sweep_term(c::SurfaceExchangeMOST, d, Δt)
     t = Aeolus.WallModels.wall_stress_term(sim, c.wm, Δt; kw..., wind = wind, height = height)
     return t === nothing ? after : GroundStressTerm(t, c, case, height)
 end
+Components.post_after_sweep(::SurfaceExchangeMOST) = true  # (footprint 1: a domain runs it after the sweep)
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)
     bus = case.bus
