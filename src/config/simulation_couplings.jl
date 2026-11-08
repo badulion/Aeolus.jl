@@ -492,17 +492,20 @@ The microphysics, tracer and particles therefore run after the core, not
 in stage 5 as the design places them; that is a change of the splitting
 order, made when they become components of their own.
 """
-struct SimulationCouplings{S<:Tuple} <: Components.AbstractComponent
+struct SimulationCouplings{S<:Tuple,O} <: Components.AbstractComponent
     c::SimCouplings
     st::S
     step::Base.RefValue{Int}            # the step count of the particles' record cadence
+    # `O`: whether there are obstacles (`c.solid`), in the type so that the
+    # sweep term's type follows from the component's type (#533 step 2)
+    SimulationCouplings{S,O}(c::SimCouplings, st::S, step) where {S<:Tuple,O} = new{S,O}(c, st, step)
 end
 function SimulationCouplings(c::SimCouplings)
     st = (Components.Stage(:surface_flux),
           (c.slab === nothing ? () : (Components.Stage(:tendencies),))...,
           (c.solid === nothing ? () : (Components.Stage(:body_force),))...,
           Components.Stage(:surface_update))
-    return SimulationCouplings(c, st, Ref(0))
+    return SimulationCouplings{typeof(st), c.solid !== nothing}(c, st, Ref(0))
 end
 
 Components.component_name(::Type{<:SimulationCouplings}) = :couplings
@@ -520,11 +523,14 @@ function Components.run_stage!(c::SimulationCouplings, d, ::Val{:body_force}, dt
 end
 # the fused sweep (#533): the floor flux of :tendencies is pointwise; the
 # obstacles' IBM penalty (:body_force) has no sweep form yet (plan step 5),
-# so with obstacles the component has none. (Asked once per in-core stage
-# it attaches to: without obstacles that is :tendencies only.)
-Operators.FiniteVolume.sweep_term(c::SimulationCouplings, d) =
-    c.c.solid !== nothing || c.c.slab === nothing ? nothing :
-    Operators.FiniteVolume.SurfaceFluxTerm(c.c.slab.Q, 0.0, d.state.mesh)
+# so with obstacles the component has none. The answer depends on the type
+# only (obstacles are its parameter `O`): a return type of
+# Union{Nothing, SurfaceFluxTerm} made the plan's tuple length a run-time
+# value again (review of #533 step 2). Without a slab the component does
+# not attach to :tendencies, so its zero flux term is switched off.
+Operators.FiniteVolume.sweep_term(::SimulationCouplings{<:Any,true}, d) = nothing
+Operators.FiniteVolume.sweep_term(c::SimulationCouplings{<:Any,false}, d) =
+    Operators.FiniteVolume.SurfaceFluxTerm(c.c.slab === nothing ? 0.0 : c.c.slab.Q, 0.0, d.state.mesh)
 function Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_update}, dt)
     c.step[] += 1
     return _after_step!(c.c, d.state, dt, c.step[])
