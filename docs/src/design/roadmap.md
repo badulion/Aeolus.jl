@@ -3123,17 +3123,39 @@ Between updates the median step is unchanged within the noise (≈ 338 ms
 at 2 threads, ≈ 245 at 6 and 12). The mean falls by more than the
 amortised update (at 12 threads, 22 ms against 18.6) because the GC no
 longer collects the update's 2.9 GB of garbage during the steps after it.
-The fluxes, sources, u* and skin temperatures of two updates are
-bit-identical to master at 1, 3, 4 and 12 threads.
+The fluxes, sources, u* and skin temperatures of two updates, and the
+area sums of the surface, are bit-identical to master's 1-thread run.
+On the final code this was checked at 1, 3, 4 and 12 threads (the 12-
+thread check by the review).
 
 **Bug the validation caught.** A first version wrote a mosaic's tile
 fluxes into its own vector instead of a new one per step.
 `validation/urban_checks.jl` check 3 holds `last_tile_fluxes` of one step
 and steps on, and its held fluxes became the next step's (H 175.9 against
 −5.6 W m⁻²). The code was wrong, not the check, so the new vector per step
-is back. A new test in `surface_tiles.jl` guards it. Filling that vector in
-a loop instead of a comprehension saved 1.69 → 1.50 s per update at 1
-thread (one run each).
+is back. A new test in `surface_tiles.jl` guards it. The `680d5818` row of
+the table above was measured with that in-place write, so it slightly
+flatters that stage. Filling the new vector in a loop instead of a
+comprehension (`cdd8b26e`) was first credited with 1.69 → 1.50 s per update
+at 1 thread from one run each. Three interleaved runs each under the lock
+disagree: 1.489 / 1.496 / 1.508 s before and 1.482 / 1.475 / 1.479 s after
+(minimum of 4 updates per run), about 1 %, and 54.2 → 50.4 MB allocated
+per update. The first figure was noise. Nearly all of the 1-thread gain
+comes from the boxes and the lazy vectors.
+
+**Review.** The PR gate runs at 1 thread, where a `:dynamic` launch takes
+the serial path, so a claiming bug would have passed it. `dynamic_columns!`
+takes `ntasks`. `backends.jl` runs 4 claimers that yield after every index
+on one thread, and checks that every index is claimed once, the guided run
+lengths (1:125, then 126:234 for 1000 indices) and the partials. The
+thread-invariance worker's `columns` section records a dynamic launch. Its
+subprocess level could not be run: on master the section already fails
+before that entry, at the aq_chem Berlin `build_case` (`parent_driver =
+"aeolus"` with no parent domain), and `flagship` fails the same way. A
+scratch copy of the entry gave the same rows and totals, bit for bit, at
+1, 4 and 24 threads, and the same over 20 repeats in each process.
+`backends.jl`, `components_parent.jl` and `thread_invariance.jl` pass at
+`--threads 4` and `24`.
 
 **Deviations.** The issue suspected rows of unequal land use. Once the
 GC spikes were gone, the per-row cost at 1 thread was 7.0–9.9 ms. The
