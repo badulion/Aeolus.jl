@@ -87,7 +87,7 @@ struct ImmersedWalls{L<:AbstractWallLaw, T<:AbstractFloat}
     dq::Vector{T}
     stats::Dict{Symbol,Any}
     pair_rows::Union{Nothing,Vector{Int32}}   # the pairs / faces of each (component, K, J) row, or nothing
-    face_rows::Union{Nothing,Vector{Int32}}   # when not sorted so (FiniteVolume.row_index; the fused sweep, #533)
+    face_rows::Union{Nothing,Vector{Int32}}   # when not sorted so, then by I (FiniteVolume.row_index; the fused sweep, #533)
     row_dims::NTuple{2,Int}
 end
 
@@ -108,6 +108,9 @@ function ImmersedWalls(faces::Vector{ImmersedWallFace{L}}, ν::T, Δ::NTuple{3,T
     rowid(f) = (Int(f.c) - 1) * nJ * nK + (Int(f.K) - 1) * nJ + Int(f.J)
     pair_rows = FiniteVolume.row_index(e -> rowid(faces[e]), n, 3 * nJ * nK)
     face_rows = FiniteVolume.row_index(p -> rowid(faces[ent[ptr[p]]]), nf, 3 * nJ * nK)
+    # within a row also by I (the term bisects for the sweep's x-ranges)
+    pair_rows === nothing || FiniteVolume.rows_sorted(pair_rows, e -> faces[e].I) || (pair_rows = nothing)
+    face_rows === nothing || FiniteVolume.rows_sorted(face_rows, p -> faces[ent[ptr[p]]].I) || (face_rows = nothing)
     return ImmersedWalls{L,T}(faces, ν, Δ, dims, ptr, ent, pair_c, pair_dA, face_c,
                               Int32.(single), Int32[ent[ptr[p]] for p in single], multi,
                               _segments(pair_c), _segments(face_c), _identity_entries(ent),
@@ -455,8 +458,8 @@ component, footprint 1), then every face of the row updated with the sum
 of its pairs' drag and its pairs' ``τ_w ΔA`` recorded, on the sweep's
 delayed rows. The pairs and faces of a row are found through the row
 pointers of `iw` (`pair_rows`, `face_rows`), which exist when the pairs
-are sorted by component, then k, j (as [`immersed_walls`](@ref) builds
-them). The same per-face values as the whole-field
+are sorted by component, then k, j, i (as [`immersed_walls`](@ref) builds
+them); the part of a row the sweep asks for is found by bisection. The same per-face values as the whole-field
 operator; `finish!` folds the same diagnostics into `iw.stats`.
 """
 struct ImmersedWallTerm{W<:ImmersedWalls,T} <: FiniteVolume.PostTerm
@@ -473,7 +476,7 @@ end
 
 The post term of the fused sweep that does what
 `apply_immersed_wall_stress!(sim, iw, Δt)` does, or `nothing` when the
-pairs of `iw` are not sorted by component, k, j (an `ImmersedWalls` built
+pairs of `iw` are not sorted by component, k, j, i (an `ImmersedWalls` built
 from an arbitrary pair list), which its row pointers need.
 """
 function immersed_wall_term(iw::ImmersedWalls{L,T}, Δt::Real) where {L,T}
@@ -487,8 +490,7 @@ function FiniteVolume.post_row!(t::ImmersedWallTerm, ::Val{1}, J, K, I1, I2, st)
     iw = t.iw
     faces = iw.faces
     for c in 1:3
-        for n in FiniteVolume.row_entries(t.pair_rows, _iw_row(t, c, J, K))
-            I1 <= Int(@inbounds faces[n].I) <= I2 || continue
+        for n in FiniteVolume.row_entries(t.pair_rows, _iw_row(t, c, J, K), e -> Int(@inbounds faces[e].I), I1, I2)
             _iw_drag_body!(n, iw.a, faces, st.u, st.v, st.w, iw.Δ, iw.ν)
         end
     end
@@ -499,11 +501,10 @@ function FiniteVolume.post_row!(t::ImmersedWallTerm, ::Val{2}, J, K, I1, I2, st)
     faces, ptr, ent, a, Δ = iw.faces, iw.face_ptr, iw.face_entry, iw.a, iw.Δ
     dV = Δ[1] * Δ[2] * Δ[3]
     for c in 1:3
-        for p in FiniteVolume.row_entries(t.face_rows, _iw_row(t, c, J, K))
+        for p in FiniteVolume.row_entries(t.face_rows, _iw_row(t, c, J, K), q -> Int(@inbounds faces[ent[ptr[q]]].I), I1, I2)
             @inbounds begin
                 e1, e2 = ptr[p], ptr[p+1] - 1
                 f = faces[ent[e1]]
-                I1 <= Int(f.I) <= I2 || continue
                 A = zero(eltype(a))
                 for e in e1:e2
                     A += a[ent[e]]

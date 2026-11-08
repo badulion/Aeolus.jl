@@ -685,7 +685,8 @@ end
 the velocity before any face is changed (`_canopy_factor_body!`, footprint
 1 in each direction), then the update (`_canopy_apply_body!`), on the
 sweep's delayed rows; the faces of a row are found in the face list
-(sorted by component, then k, j, i) through its row pointer `drag.rows`. The same per-face
+(sorted by component, then k, j, i) through its row pointer `drag.rows`,
+the part of the row the sweep asks for by bisection. The same per-face
 values as the whole-field drag; its force, which `apply_canopy_drag!`
 returns, is the ordered fold of `drag.dq` ([`canopy_drag_force`](@ref)).
 """
@@ -715,9 +716,8 @@ FiniteVolume.footprint(::CanopyDragTerm) = (1, 1, 1)
     j, k = J - t.Hy, K - t.Hz
     (1 <= j <= t.Ny && 1 <= k <= t.Nz) || return nothing
     for c in 1:3
-        for n in FiniteVolume.row_entries(d.rows, (c - 1) * t.Ny * t.Nz + (k - 1) * t.Ny + j)
-            I = t.Hx + Int(@inbounds act[n][2])
-            I1 <= I <= I2 || continue
+        for n in FiniteVolume.row_entries(d.rows, (c - 1) * t.Ny * t.Nz + (k - 1) * t.Ny + j,
+                                          e -> t.Hx + Int(@inbounds act[e][2]), I1, I2)
             if ph === Val(1)
                 _canopy_factor_body!(n, d.fac, act, d.a_u, d.a_v, d.a_w, st.u, st.v, st.w, d.C_d, t.Δt,
                                      t.Hx, t.Hy, t.Hz)

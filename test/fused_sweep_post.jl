@@ -272,6 +272,19 @@ grids = (("regular", g, FieldBoundaryConditions(:periodic)),
     @test (@inferred FVp.post_plan((FPDrag(0.1, s), FPScale(0.1)), 1)) isa NTuple{2,NTuple{8,Int}}
 end
 
+@testset "row pointers: the entries of a row, and of an x-range of it by bisection" begin
+    # rows 1..5 of a list sorted by row, then x (repeated x and empty rows included)
+    rows = [1, 1, 1, 3, 3, 3, 3, 3, 4, 5, 5]
+    xs = [2, 5, 5, 1, 1, 4, 7, 9, 3, 6, 6]
+    ptr = FVp.row_index(e -> rows[e], length(rows), 5)
+    @test [collect(FVp.row_entries(ptr, r)) for r in 1:5] == [[1, 2, 3], Int[], [4, 5, 6, 7, 8], [9], [10, 11]]
+    @test FVp.row_index(e -> reverse(rows)[e], length(rows), 5) === nothing
+    @test FVp.rows_sorted(ptr, e -> xs[e]) && !FVp.rows_sorted(ptr, e -> -xs[e])
+    for r in 1:5, I1 in 0:10, I2 in I1-1:10
+        @test FVp.row_entries(ptr, r, e -> xs[e], I1, I2) == filter(e -> I1 <= xs[e] <= I2, FVp.row_entries(ptr, r))
+    end
+end
+
 @testset "driver: the sweep = predictor + the operators' whole-field passes" begin
     for (gname, mesh, bcs) in grids
         nk = length(interior(mesh)[3])

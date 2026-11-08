@@ -443,10 +443,9 @@ function FiniteVolume.post_row!(t::WallStressTerm{W,M,WI,H,US,WO,T}, ::Val{1}, J
     (1 <= k <= t.kmax && 1 <= j <= t.Ny) || return nothing
     u, v, ν, h0 = st.u, st.v, t.wm.ν, t.dz / 2
     ptr, ci = t.cols
-    @inbounds for e in FiniteVolume.row_entries(ptr, (k - 1) * t.Ny + j)
+    @inbounds for e in FiniteVolume.row_entries(ptr, (k - 1) * t.Ny + j, q -> t.Hx + Int(ci[q]), I1, I2)
         i = Int(ci[e])
         I = t.Hx + i
-        I1 <= I <= I2 || continue
         uc = (u[I, J, K] + u[I+1, J, K]) / 2
         vc = (v[I, J, K] + v[I, J+1, K]) / 2
         Uc = sqrt(uc^2 + vc^2)
@@ -468,10 +467,9 @@ function FiniteVolume.post_row!(t::WallStressTerm{W,M,WI,H,US,WO,T}, ::Val{2}, J
     u, v, a, Δt, dz = st.u, st.v, t.a, t.Δt, t.dz
     r = (k - 1) * t.Ny + j
     ptr, fi = t.ufaces
-    @inbounds for e in FiniteVolume.row_entries(ptr, r)
+    @inbounds for e in FiniteVolume.row_entries(ptr, r, q -> t.Hx + Int(fi[q]), I1, I2)
         i = Int(fi[e])
         I = t.Hx + i
-        I1 <= I <= I2 || continue
         iw = _west(t, i)
         l = _lev(t, i, j)
         lw = iw == 0 ? 0 : _lev(t, iw, j)
@@ -485,11 +483,10 @@ function FiniteVolume.post_row!(t::WallStressTerm{W,M,WI,H,US,WO,T}, ::Val{2}, J
         t.dqu[i, j, s] = u[I, J, K] - u0
     end
     js = _south(t, j)
-    ptr, fi = t.vfaces
-    @inbounds for e in FiniteVolume.row_entries(ptr, r)
-        i = Int(fi[e])
+    pv, fv = t.vfaces                      # (new names: a closure must not capture a reassigned variable)
+    @inbounds for e in FiniteVolume.row_entries(pv, r, q -> t.Hx + Int(fv[q]), I1, I2)
+        i = Int(fv[e])
         I = t.Hx + i
-        I1 <= I <= I2 || continue
         l = _lev(t, i, j)
         ls = js == 0 ? 0 : _lev(t, i, js)
         fl = _face_levels(l, ls)

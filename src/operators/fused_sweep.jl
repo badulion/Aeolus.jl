@@ -291,6 +291,38 @@ end
 @inline row_entries(ptr::AbstractVector{Int32}, r::Integer) = @inbounds Int(ptr[r]):Int(ptr[r+1])-1
 
 """
+    row_entries(ptr, r, x, I1, I2) -> UnitRange{Int}
+
+The entries `e` of row `r` with `I1 ≤ x(e) ≤ I2`, found by bisection, for
+a list whose entries are non-decreasing in `x` within each row
+([`rows_sorted`](@ref)). The sweep calls a post term on parts of a row
+(the inner points, and after the sweep the x-ends), so a scan of the
+whole row with a test per entry would visit each entry three times.
+"""
+@inline function row_entries(ptr::AbstractVector{Int32}, r::Integer, x::F, I1, I2) where {F}
+    e = row_entries(ptr, r)
+    lo, hi = first(e), last(e) + 1
+    while lo < hi
+        m = (lo + hi) >>> 1
+        x(m) < I1 ? (lo = m + 1) : (hi = m)
+    end
+    s, hi = lo, last(e) + 1
+    while lo < hi
+        m = (lo + hi) >>> 1
+        x(m) <= I2 ? (lo = m + 1) : (hi = m)
+    end
+    return s:lo-1
+end
+
+"Whether the entries of every row of `ptr` are non-decreasing in `x(e)` (the condition of the bisecting [`row_entries`](@ref))."
+function rows_sorted(ptr::AbstractVector{Int32}, x::F) where {F}
+    for r in 1:length(ptr)-1, e in Int(ptr[r]):Int(ptr[r+1])-2
+        x(e) <= x(e + 1) || return false
+    end
+    return true
+end
+
+"""
     AfterSweep(f)
 
 A post-predictor operator that needs the whole predicted field (a plane

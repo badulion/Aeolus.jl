@@ -160,6 +160,7 @@ Aeolus.Operators.FiniteVolume.post_plan
 Aeolus.Operators.FiniteVolume.post_delay
 Aeolus.Operators.FiniteVolume.row_index
 Aeolus.Operators.FiniteVolume.row_entries
+Aeolus.Operators.FiniteVolume.rows_sorted
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
