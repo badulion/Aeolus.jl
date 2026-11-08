@@ -3190,6 +3190,116 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+##### Step 5: near-wall terms, nest registers and open faces (#533)
+
+**Built** (branch `issue/533-s5-nearwall-open`):
+
+- **Open lateral faces** no longer keep a substage off the fused sweep
+  (`builtin.open_boundaries` removed from `SWEEP_FALLBACKS`). Nothing
+  had to change in the sweep: the boundary update (the data, the
+  radiating outflow from the stage-start layers `mark_open_boundary_stage!`
+  records, the mass correction) already ran after the sweep and before
+  the projection in `_blocked_projection!`; the sweep updates the same
+  interior points as the separate `axpy!` passes, and the update reads
+  only the velocity and the stage-start layers, so moving θ's update
+  before it changes nothing. Verified: `step!`/`step_rk3!` with
+  `loop_fusion = "always"` against `"never"`, Dirichlet, Orlanski and
+  convective outflow, regular and stretched grids, dry and moist, serial
+  and threaded: bit-identical in every case tried (the test asserts
+  round-off, `agree`).
+- **`SurfaceLayer`**: its first-level heat flux is a sweep term,
+  `Components.SurfaceHeatFluxTerm` (`tθ += wθ[i, j]/Δz` on the first
+  level, `wθ` the step's per-column solve as input; a row kernel that
+  returns at once off the first level). Its implicit wall stress is a
+  post-predictor operator (plan step 6), so its allowlist entry stays
+  with that reason only, and a domain with it is still unfused.
+- **Immersed walls / `Urban.WallModelFacades`**: the removal of the
+  stencil's flux through the walls (`remove_stencil_wall_flux!`) is a
+  sweep term, `WallModels.StencilWallFluxTerm`. The fluxes depend only
+  on the stage-start velocity and `ν_t`, so its `prepare!`
+  (`stencil_wall_fluxes!`, one work item per pair, the force folded as
+  before into `stats[:F_stencil]`) computes them before the sweep; each
+  row subtracts the fluxes of its pairs, grouped by storage row once
+  (`wall_rows`, cached in the component), a face's pairs in pair order:
+  the reference's operations in the same order. The flux expression is
+  one function (`_iw_pair_x`) shared by the separate pass and the sweep.
+  The facade stress itself is post-predictor (step 6): the entry stays
+  with that reason.
+- **IBM penalty** (`IBM.IBMPenaltyTerm`): the row body of the penalty
+  launch, `_ibm_row_body!`, writes exactly the faces of its storage row,
+  so the sweep runs it unchanged on its tendency buffer (`_RowOut`, a
+  view that maps `out[I, J, K]` to the row buffer); `τ = penalty_time ×
+  Δt` is set in `prepare!` through a slot the component keeps.
+  `SimulationCouplings` uses it when the obstacles are its only in-core
+  part; with a slab its floor flux (plan step 2's surface-flux term)
+  keeps it unfused, and its entry names only that.
+- **Nest flux registers**: the register hooks (`Nesting._RegisterHook`,
+  `_HookChain`) and `Urban.NestingCoupling`'s `:body_force` book the
+  stage's interface fluxes from the stage-start state and add no
+  tendency, so their terms (`Nesting.RegisterBookingTerm`,
+  `Urban.NestFluxBookingTerm`) do the booking in `prepare!` and nothing in
+  the rows. `Urban.NestingCoupling` is removed from the allowlist. A
+  two-way nest (16³ parent, 16³ child, no SGS) runs fused in both domains,
+  agrees with the unfused nest, and conserves the composite ∫θ to
+  4.2e-15 (relative, 4 steps), the same as unfused.
+
+**Tests**: `test/fused_sweep_nearwall.jl` (634 assertions): each term
+and all three composed through `blocked_predictor!` against base
+tendencies + the term's whole-field pass + predictor at 1-5 slabs (also
+in reverse slab order), serial and threaded, dry and moist, Euler and the
+RK3 stage combination; `step!`/`step_rk3!` of a domain with the surface
+layer's tendency part, a wall-flux component and `SimulationCouplings`
+with obstacles, fused = unfused; the facade wall model's adapter on the
+synthetic city (`small_city.toml`) against its stage; `@inferred` term
+construction; a composed sweep with `prepare!` allocates 32 bytes, building
+the terms ≤ 256 bytes. All comparisons at ROUNDOFF_RTOL (1e-10); all
+measured bit-identical. Also run with `-t 4` (real slabs): green.
+
+**Bug the tests caught** (the code was wrong): the completeness guard
+looks up `sweep_term(::C, ::Any)`; the first urban methods were typed
+`d::Domain`, so the guard did not see `NestingCoupling`'s term. They now
+take an untyped domain, as the step-1 methods do.
+
+**Measured**: `step_rk3!` at 128 × 128 × 64, `loop_fusion = "never"`
+(what these cases ran before this step) and `"always"` built in the same
+process and interleaved, 5 rounds of 6 steps each after 2 warm-up steps,
+one process per thread count under the benchmark lock (short runs, not
+the sustained-power protocol of #535; 1-minute load at start 2.6–5.7
+from other agents' unlocked jobs), s/step, minimum (median):
+
+| case | threads | one loop per term | fused |
+| :-- | --: | --: | --: |
+| open box, `FunctionBoundaryData`, Orlanski outflow | 1 | 0.171 (0.179) | 0.167 (0.168) |
+| | 12 | 0.213 (0.224) | 0.197 (0.215) |
+| open box, `ProfileBoundaryData`, Orlanski outflow | 1 | 0.226 (0.234) | 0.234 (0.247) |
+| | 12 | 0.166 (0.167) | 0.160 (0.161) |
+| surface layer, tendency part only (test wrapper) | 1 | 0.166 (0.173) | 0.159 (0.164) |
+| | 12 | 0.156 (0.159) | 0.146 (0.148) |
+| surface layer, the full component (unfused both) | 12 | — | 0.150 (0.159) |
+
+Fused is 4–8 % faster at 12 threads; at 1 thread the two agree within the
+noise (the same `openp` code measured 0.17–0.23 s/step in different
+processes, so the 1-thread rows carry no signal). The cases scale badly
+from 1 to 12 threads for reasons outside the sweep: the open-boundary
+update alone takes 0.014 s per call at both 1 and 12 threads (three per
+RK3 step, ~25 % of the 12-thread step; 0.027 s with the function data),
+and the surface layer's per-column MOST solve (stage 3) is a serial loop.
+Those are not this issue's terms; they are noted as open problems. The
+full `SurfaceLayer` component stays unfused until plan step 6 (its wall
+stress), so a GABLS-type case gains nothing from this step alone.
+
+**Not done here**: `Urban.UrbanSite`'s `:tendencies` (the captures of
+the top and open-face heat, a reduction, and the open faces' θ relaxation,
+a `ReferenceDamping` term that steps 2 and 3 build) keeps its entry; the
+slab's floor flux of `SimulationCouplings` waits for step 2's surface-flux
+term; the post-predictor parts of `SurfaceLayer` and `WallModelFacades`
+are step 6. So no configured near-wall case (GABLS1, the urban site) is
+fused yet by this step alone; the open box and a nest without SGS are.
+Bytes per point against `bench_roofline.jl`, 2/6/24 threads and the
+sustained-power protocol were not measured. Validation: `urban_checks.jl`
+33/33 passed (the urban site is not fused by this step; its run is
+unchanged).
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
