@@ -26,7 +26,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        runs_serially, launch!, launch_weighted!, launch_points!, ka_backend, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
-       plane_map!, apply_transform!,
+       plane_map!, row_map!, apply_transform!,
        pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
        CounterRNG, counter_rng, counter_xoshiro, set_stream!,
        foreach_column!, foreach_cell!, column_sums, column_sum
@@ -1083,6 +1083,48 @@ plane_map!(partials::AbstractVector, b::AbstractBackend, plane::F,
 plane_map!(partials::AbstractVector, plane::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
            args::Vararg{Any,M}) where {F, M} =
     plane_map!(partials, _host_backend(), plane, map(UnitRange{Int}, ranges), args...)
+
+"""
+    row_map!(partials::AbstractMatrix, [backend,] row, ranges::NTuple{3,UnitRange{Int}}, args...)
+        -> partials
+
+`partials[b, c] = row(j, k, ranges[1], args...)` for `j = ranges[2][b]`,
+`k = ranges[3][c]`: a function of one i-row, one work item per row (in
+chunks of rows, as a 1-D [`launch_weighted!`](@ref) over the rows with the
+row length as weight). Every partial is computed by one task in the row
+function's own fixed loop order, so `partials` is identical at every
+thread count and with `serial = true`. Combine the rows of a plane, then
+the planes, in ascending order ([`ordered_sum`](@ref) of each column, then
+of those).
+
+The row parallelism of [`plane_map!`](@ref): a plane per work item leaves
+threads idle when the planes are few (60 levels at 24 threads: 3 planes
+for some threads, 2 for others), a row per work item does not (#554). The
+row function carries its own `@inbounds` and may write any point of its
+own row `(j, k)`, and only of it.
+"""
+function row_map!(partials::AbstractMatrix, b::AbstractBackend, row::F,
+                  (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args::Vararg{Any,M}) where {F, M}
+    size(partials) == (length(jr), length(kr)) ||
+        throw(DimensionMismatch("partials has size $(size(partials)), the rows $((length(jr), length(kr)))"))
+    nj = length(jr)
+    launch_weighted!(b, length(ir), _row_map_body!, (1:length(partials),), partials, row, ir,
+                     first(jr) - 1, first(kr) - 1, nj, args)
+    return partials
+end
+row_map!(partials::AbstractMatrix, b::AbstractBackend, row::F,
+         ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
+    row_map!(partials, b, row, map(UnitRange{Int}, ranges), args...)
+row_map!(partials::AbstractMatrix, row::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+         args::Vararg{Any,M}) where {F, M} =
+    row_map!(partials, _host_backend(), row, map(UnitRange{Int}, ranges), args...)
+
+# row n of a row_map! (column-major over (j, k), as `partials`)
+@inline function _row_map_body!(n, out, row::F, ir, oj, ok, nj, args::A) where {F, A}
+    kk, jj = divrem(n - 1, nj)
+    @inbounds out[n] = row(jj + 1 + oj, kk + 1 + ok, ir, args...)
+    return nothing
+end
 
 # ---- column partials: one sum over k per (i, j) ----------------------------
 

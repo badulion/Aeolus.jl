@@ -189,6 +189,7 @@ of this rule.
 | `plane_reduce!(p, [b,] body, ranges, args...)` | `p[c]` = canonical plane sum of the *indexed* `body(i, j, k, args...)`; a tuple-valued body sums each component into `p::NTuple` of vectors (KA-b) |
 | `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body, which must only read (KA-b); a tuple-valued body gives the component-wise maxima, several in one sweep (KA-j) |
 | `plane_map!(p, [b,] plane, ranges, args...)` | `p[c]` = `plane(k, ranges[1], ranges[2], args...)`: a whole-plane function in its own fixed loop order, one work item per plane (KA-b) |
+| `row_map!(p, [b,] row, ranges, args...)` | `p[b, c]` = `row(j, k, ranges[1], args...)`: a whole-row function in its own fixed loop order, one work item per i-row (#554); combine the rows of a plane, then the planes, in ascending order |
 
 `plane_reduce!` is the general form. Its body follows the launch
 contract: it may read a stencil (a strain rate, a centred `w`), may
