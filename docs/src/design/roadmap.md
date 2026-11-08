@@ -3282,8 +3282,8 @@ jobs running (1-minute load 3.6–24 over the runs):
 (two processes at 192³; the seconds differ by up to 40 % between them,
 boost phase against sustained power and load, the ratios by 3 %.) By
 the byte count: the passes of these forcings move 19 field-passes per
-substage (read u, v, θ for the means and θ twice for the subsidences,
-read-modify-write tu, tv, tθ, tθ, tθ, tu …: 152 B/point), the fused
+substage (5 reads: u, v, θ for the nudging, θ for each subsidence; 7
+read-modify-writes of tendency fields: 152 B/point), the fused
 form 3 (the plane sums of u, v, θ: 24 B/point), and the substage's base
 tendencies and predictor become fused too. **Not measured**: a configured
 case (GABLS, the urban site) — none is fused yet, since SGS, the surface
@@ -3291,8 +3291,9 @@ layer, buoyancy or the urban couplings keep it on one loop per term
 (plan steps 2, 4, 5); their step runs the reference code as before. Bytes
 against `bench_roofline.jl` were not measured.
 
-**Deviation**: the plan put `UrbanSite` in step 5 in the allowlist and
-step 3 in the task; done here. The reductions are computed in `prepare!`
+**Deviation**: the allowlist named plan step 5 for `UrbanSite`; it is
+done in step 3, since its in-core work is reductions of the stage-start
+state (the captures) and a damping, the column form above. The reductions are computed in `prepare!`
 as a separate read pass of u, v, θ per substage; folding them into the
 previous substage's sweep (the means of the predicted state) is a later
 optimisation.
