@@ -541,15 +541,42 @@ end
     @test (@allocated SIMp.post_hook_terms(h, s, 0.5)) < plane      # ... the hook builds none
     @test (@allocated SIMp.post_hook_blockers(h, s)) < plane
     @test SIMp.post_hook_terms(h, s, 0.5) isa Tuple{FVp.AfterSweep}
-    # with budgets on, both hooks name them: the report lists them once
-    s2 = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2, θ₀ = 300.0))
-    d2 = CPp.Domain(s2; validate = false)
-    kf = CPp.build(CPp.KinematicFlow, (; kind = :uniform, omega = 0.0, center = (0.0, 0.0), velocity = (1.0, 0.5, 0.0)), d2)
-    db = CPp.with_budgets(CPp.Domain(d2; components = (CPp.CentredAdvection(), kf)), (:energy,))
-    step!(db, 0.5)
-    nf = CPp.sweep_report(db)["not_fusable"]
-    @test count(startswith("builtin.budgets:"), nf) == 1
-    @test allunique(nf)
+end
+
+@testset "post hook with the budgets on: fused, the post-predictor stage booked as by the hook" begin
+    # integration of #533 steps 6 and 7: with the budgets on, an attributed post-predictor
+    # component runs in its budget context after the sweep (an AfterSweep), so the substage stays
+    # fused. Its bookings (measured on the predicted state) must equal those of loop_fusion =
+    # "never", within round-off of the largest term (the same expressions in another order of
+    # the passes: ROUNDOFF-level, 1e-10 relative is a generous bound for 3 steps).
+    g2 = RegularGrid(; size = (20, 16, 12), extent = (200.0, 160.0, 60.0), halo = (3, 3, 3))
+    for scheme in (:euler, :rk3)
+        mk() = begin
+            s2 = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2, θ₀ = 300.0); U = 2.0)
+            s2.has_buoyancy = false                  # (its term is plan step 2, not on this branch)
+            d2 = CPp.Domain(s2; scheme = scheme, validate = false)
+            kf = CPp.build(CPp.KinematicFlow, (; kind = :solid_body_rotation, omega = 0.01, center = (100.0, 80.0),
+                                               velocity = (0.0, 0.0, 0.0)), d2)
+            CPp.with_budgets(CPp.Domain(d2; components = (CPp.CentredAdvection(), kf)), (:energy, :momentum_x, :momentum_y))
+        end
+        a = mk(); r = mk()
+        SIMp.set_loop_fusion!(a.state, :always); SIMp.set_loop_fusion!(r.state, :never)
+        post = SIMp.post_hook_terms(CPp.core_hooks(a).post_predictor!, a.state, 0.5)
+        @test post isa Tuple{FVp.AfterSweep}
+        for _ in 1:3
+            step!(CPp.Model(a), 0.5); step!(CPp.Model(r), 0.5)
+        end
+        rep = CPp.sweep_report(a)
+        @test rep["substages_fused"] == "all" && isempty(rep["not_fusable"])
+        @test _fp_agree(a.state, r.state)
+        for (q, sb) in CPp.budgets(a).measured
+            A = Aeolus.BudgetSystem.stage_budget(sb); R = Aeolus.BudgetSystem.stage_budget(CPp.budgets(r).measured[q])
+            @test Set(keys(A.terms)) == Set(keys(R.terms))
+            big = max(maximum(abs, values(R.terms)), eps())
+            @test all(k -> abs(A.terms[k] - R.terms[k]) <= 1e-10 * big, keys(R.terms))
+            q === :momentum_x && @test any(k -> k[1] === :post_predictor, keys(A.terms))
+        end
+    end
 end
 
 @testset "the urban site's couplings: post terms, the sweep = the site's post-predictor hook" begin
@@ -562,8 +589,14 @@ end
     names = [CPp.component_name(c) for c in d.components if CPp.attaches(c, :post_predictor)]
     @test issubset([:ibm, :wall_model_facades, :surface_exchange], names)
     Δt = 0.5
-    post = CPp._post_stage_terms(d.components, d, Δt)
+    # the domain's rule without the budgets (the site always has them: with them, every
+    # attributed coupling runs in its budget context after the sweep, checked below)
+    pcs = Tuple(c for c in d.components if CPp.attaches(c, :post_predictor))
+    post = map(c -> CPp._post_term(nothing, c, d, Δt), pcs)
     @test post isa Tuple && length(post) == length(names)
+    postb = CPp._post_stage_terms(d.components, d, Δt)
+    @test length(postb) == length(names) &&
+          all(((t, c),) -> !CPp.attributed(c, Val(:post_predictor)) || t isa FVp.AfterSweep, zip(postb, pcs))
     # every coupling has its row form; the domain keeps the pointwise IBM correction on the
     # rows and runs the ones with a stencil after the sweep (_in_rows_or_after)
     rows = Tuple(FVp.post_sweep_term(c, d, Δt) for c in d.components if CPp.attaches(c, :post_predictor))
@@ -572,8 +605,9 @@ end
           any(t -> t isa Aeolus.WallModels.ImmersedWallTerm, rows) &&
           any(t -> t isa Aeolus.Urban.GroundStressTerm, rows)
     @test count(t -> t isa FVp.AfterSweep, post) == count(t -> FVp.footprint(t) != (0, 0, 0), rows)
-    # with the budgets on (always, at the site) the hook is not fused: plan step 7
-    @test SIMp.post_hook_terms(case.post_predictor, case.sim, Δt) === nothing
+    # with the budgets on (always, at the site) every attributed coupling runs in its budget
+    # context after the sweep (integration of steps 6 and 7)
+    @test SIMp.post_hook_terms(case.post_predictor, case.sim, Δt) isa Tuple
     s = case.sim
     SIMp.fill_state_halos!(s)
     save = deepcopy((s.u.data, s.v.data, s.w.data, s.θ.data, s.qv.data))

@@ -102,6 +102,7 @@ function Simulations._sweep_blockers(sim::MassWeightedSimulation, closure, body_
     sim.has_surface_flux && push!(out, Simulations._blocker("builtin.anelastic_surface_flux"))
     sim.has_sponge && push!(out, Simulations._blocker("builtin.anelastic_sponge"))
     body_force! === nothing || append!(out, Simulations.hook_blockers(body_force!, sim))
+    Simulations._hook_books_per_point(sim, body_force!) && push!(out, Simulations._blocker("builtin.budgets_per_point"))
     if post_predictor! !== nothing        # (no post terms in these cores yet, #533 step 6)
         append!(out, Simulations.post_hook_blockers(post_predictor!, sim))
         push!(out, Simulations._blocker("builtin.anelastic_post_predictor"))
@@ -146,6 +147,7 @@ function _mw_sweep_terms(sim::MassWeightedSimulation, closure, body_force!, post
     body_force! === nothing && return (base, extra...)
     ht = Simulations.hook_terms(body_force!, sim)
     ht === nothing && return nothing
+    Simulations._books_per_point(sim, ht) && return nothing
     return (base, extra..., ht...)
 end
 
@@ -163,6 +165,7 @@ function _fused_mw!(sim::MassWeightedSimulation{S,T}, Δt::T, closure, body_forc
     Simulations._prepare_terms!(terms, sim, Δt)
     ax = Simulations._Axpy(Δt)
     Simulations.fused_predictor!(sim, bufs, terms, ax, (sim.θ, ax, nothing), nothing, nothing)
+    Simulations._finish_sweep_terms!(terms, sim, Δt)   # the budget term books (#533 step 7)
     _project_mass_weighted!(sim, Wc, Wf)        # 8.-10. (does not read θ, updated in the sweep)
     pressure_from_potential!(sim.p, sim.φ, Δt)  # 12.
     sim.t += Δt

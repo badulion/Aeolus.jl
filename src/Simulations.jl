@@ -31,7 +31,7 @@ using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gr
 # the blocked tendency + predictor sweep (SC-e, #405)
 using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
                                 sweep_term, prepare!, pointwise_predictor!, TendencyFields, term_tendencies!,
-                                PostTerm, post_sweep_term, finish!
+                                PostTerm, post_sweep_term, finish!, finish_sweep!, books
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,

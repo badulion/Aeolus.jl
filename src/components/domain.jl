@@ -146,28 +146,32 @@ _any_attached(cs, stages) = any(c -> any(s -> attaches(c, s), stages), cs)
 # The body-force hook is a tuple of sweep terms when every component of
 # stages 6 and 7 has one (`FiniteVolume.sweep_term(c, d)`), in the
 # pipeline's order (:tendencies, then :body_force, each in the domain's
-# component order), and the budgets are off (they measure the in-core
-# components on whole tendency fields and count the substages in the
-# hook: plan step 7). Otherwise `nothing`, and the core runs the hook.
+# component order). With the budgets on, the tuple starts with the
+# domain's `SweepBudget` (it counts the substages and books the in-core
+# components), and the term of each attributed component is a
+# `FiniteVolume.BookedTerm` (plan step 7). Otherwise `nothing`, and the
+# core runs the hook.
 function Simulations.hook_terms(h::_ForceHook, sim)
-    h.d.budgets === nothing || return nothing
-    a = _stage_terms(h.d.components, h.d, :tendencies)
+    d = h.d
+    bk = d.budgets === nothing ? nothing : _sweep_budget(d.budgets, d, sim)
+    a = _stage_terms(d.components, d, Val(:tendencies), 1, bk)
     a === nothing && return nothing
-    b = _stage_terms(h.d.components, h.d, :body_force)
+    b = _stage_terms(d.components, d, Val(:body_force), 2, bk)
     b === nothing && return nothing
-    return (a..., b...)
+    return bk === nothing ? (a..., b...) : (bk, a..., b...)
 end
-_stage_terms(::Tuple{}, d, S::Symbol) = ()
-function _stage_terms(cs::Tuple, d, S::Symbol)
-    rest = _stage_terms(Base.tail(cs), d, S)
-    attaches(first(cs), S) || return rest
-    t = FiniteVolume.sweep_term(first(cs), d)
+_stage_terms(::Tuple{}, d, ::Val, si, bk) = ()
+function _stage_terms(cs::Tuple, d, v::Val{S}, si, bk) where {S}
+    rest = _stage_terms(Base.tail(cs), d, v, si, bk)
+    c = first(cs)
+    attaches(c, S) || return rest
+    t = FiniteVolume.sweep_term(c, d)
     (t === nothing || rest === nothing) && return nothing
-    return (t, rest...)
+    nc = length(d.components)
+    return (_booked_term(t, bk, c, v, _sweep_slot(si, nc - length(cs) + 1, nc)), rest...)
 end
 function Simulations.hook_blockers(h::_ForceHook, sim)
     out = Pair{String,String}[]
-    h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))
     for c in h.d.components
         (attaches(c, :tendencies) || attaches(c, :body_force)) && FiniteVolume.sweep_term(c, h.d) === nothing &&
             push!(out, Simulations._blocker(sweep_type(c)))
@@ -177,12 +181,14 @@ end
 # The post-predictor hook in the fused sweep (#533 plan step 6): a tuple of
 # post terms, one per component of stage 8 in the domain's order, when each
 # has one (`FiniteVolume.post_sweep_term(c, d, Δt)`: a row operator of the
-# sweep, or `AfterSweep`, its whole-field form after the sweep) and the
-# budgets are off (they attribute the stage on the whole state: plan step 7).
-function Simulations.post_hook_terms(h::_PostHook, sim, Δt)
-    h.d.budgets === nothing || return nothing
-    return _post_stage_terms(h.d.components, h.d, Δt)
-end
+# sweep, or `AfterSweep`, its whole-field form after the sweep). With the
+# budgets on, a component the budgets attribute runs as an `AfterSweep` of
+# its budget context (`_attributed_in_core!`, measured on the predicted
+# state as the hook does: the change it makes to the state is the same
+# after the sweep, and θ, qv, which the sweep has already advanced, are
+# not changed by a post-predictor operator), so the stage stays fused
+# (integration of #533 steps 6 and 7).
+Simulations.post_hook_terms(h::_PostHook, sim, Δt) = _post_stage_terms(h.d.components, h.d, Δt)
 _post_stage_terms(::Tuple{}, d, Δt) = ()
 function _post_stage_terms(cs::Tuple, d, Δt)
     rest = _post_stage_terms(Base.tail(cs), d, Δt)
@@ -193,8 +199,19 @@ function _post_stage_terms(cs::Tuple, d, Δt)
 end
 # (a component that runs after the sweep never builds its row form: for the
 # wall stresses that is several Nx × Ny arrays per substage, thrown away)
-_post_term(c, d, Δt) = post_after_sweep(c) ? run_after_sweep(c, d, Δt) :
+_post_term(c, d, Δt) = _post_term(d.budgets, c, d, Δt)
+_post_term(::Nothing, c, d, Δt) = post_after_sweep(c) ? run_after_sweep(c, d, Δt) :
     _in_rows_or_after(FiniteVolume.post_sweep_term(c, d, Δt), c, d, Δt)
+_post_term(b, c, d, Δt) = attributed(c, Val(:post_predictor)) ?
+    FiniteVolume.AfterSweep(_RunPostBooked(b, c, d, Δt)) : _post_term(nothing, c, d, Δt)
+# a post-predictor component in its budget context, after the sweep
+struct _RunPostBooked{B,C,D,T} <: Function
+    b::B
+    c::C
+    d::D
+    Δt::T
+end
+(r::_RunPostBooked)() = (_attributed_in_core!(r.b, r.c, r.d, Val(:post_predictor), r.Δt); nothing)
 
 """
     post_after_sweep(c) -> Bool
@@ -229,7 +246,6 @@ _in_rows_or_after(t::FiniteVolume.PostTerm, c, d, Δt) =
     FiniteVolume.footprint(t) == (0, 0, 0) ? t : run_after_sweep(c, d, Δt)
 function Simulations.post_hook_blockers(h::_PostHook, sim)
     out = Pair{String,String}[]
-    h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))
     Δt = zero(sim.t)                      # (only whether a component has a post term is asked)
     for c in h.d.components
         attaches(c, :post_predictor) && !post_after_sweep(c) && FiniteVolume.post_sweep_term(c, h.d, Δt) === nothing &&

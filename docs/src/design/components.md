@@ -283,6 +283,18 @@ obstacles) are not air.
   (`add_heat!`) opts out with `Components.attributed(c, Val(stage)) =
   false`, so it is not counted twice: the urban site's open faces, whose
   θ relaxation is `(:dynamics, :relaxation)` (ONE-e, #454).
+- **Inside the fused sweep** (#533 plan step 7): when every in-core term
+  of a substage has a fused form, the core runs no body-force hook and
+  writes no tendency array. The sweep's term tuple then starts with the
+  domain's `Components.SweepBudget`, which counts the substage (the
+  hook's work) before the sweep, and each attributed component's term is
+  a `FiniteVolume.BookedTerm`: per row, while the row is in cache, it
+  sums each booked field of the tendency buffer (u, v, θ, qv; air cells
+  only where the budget leaves solid cells out) before and after it adds
+  its contribution, into per-level sums. After the sweep the budget term
+  books `scale × w_k ×` those sums as the context `(stage, component)`
+  (`BudgetSystem.book_context!`): the same bookings, without the two
+  passes over the tendency field per component, quantity and substage.
 - **The core step** is one context (`:dynamics`). Whatever the core does
   beyond the components inside it is split into `(:dynamics, :transport)`
   (what the transport conserves; over the whole column it is the

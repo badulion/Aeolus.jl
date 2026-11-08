@@ -158,12 +158,18 @@ of its own `run_stage!`: measured, their row forms cost 1.4–2.2× their
 whole-field passes (`benchmarks/bench_post_sweep.jl`; the roadmap's #533
 step 6).
 
+With the budgets on, the sweep books the in-core components' contributions
+itself (plan step 7): a `BookedTerm` sums the booked fields of each row
+before and after its term into `LevelSums`, and the term's
+`finish_sweep!` (the domain's budget term) books them after the sweep.
+
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
 Aeolus.Operators.FiniteVolume.sweep_term
 Aeolus.Operators.FiniteVolume.footprint
 Aeolus.Operators.FiniteVolume.sweep_inputs
 Aeolus.Operators.FiniteVolume.prepare!
+Aeolus.Operators.FiniteVolume.finish_sweep!
 Aeolus.Operators.FiniteVolume.add_tendency!
 Aeolus.Operators.FiniteVolume.add_row!
 Aeolus.Operators.FiniteVolume.SweepRow
@@ -190,6 +196,9 @@ Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
 Aeolus.Operators.FiniteVolume.sweep_slabs
+Aeolus.Operators.FiniteVolume.LevelSums
+Aeolus.Operators.FiniteVolume.BookedTerm
+Aeolus.Operators.FiniteVolume.SWEEP_BOOKED
 Aeolus.Simulations.SWEEP_FALLBACKS
 Aeolus.Simulations.SweepReport
 Aeolus.Simulations.sweep_report

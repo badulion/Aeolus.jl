@@ -340,6 +340,47 @@ end
     end
 end
 
+# a damping of w that also heats θ by γ w: a component whose tendency the energy budget books
+struct FCHeatComponent <: AbstractComponent end
+CPc.component_name(::Type{FCHeatComponent}) = :fcheatcomponent
+CPc.section(::Type{FCHeatComponent}) = "FCHeatComponent"
+CPc.stages(::FCHeatComponent) = (Stage(:body_force),)
+CPc.run_stage!(c::FCHeatComponent, d, ::Val{:body_force}, dt) = (fc_damp_ref!(d.state, FCDamp(0.01, 1e-3)); nothing)
+FVc.sweep_term(c::FCHeatComponent, d) = FCDamp(0.01, 1e-3)
+
+@testset "budgets with the other step cores and the per-point form (integration of #533 steps 7 and 8)" begin
+    # The fused sound-proof core books the in-core component through the budget term's
+    # finish_sweep! as the hook does (bookings within 1e-10 of the largest term: the same
+    # expressions, summed per row instead of per field); the per-point form has no per-level sums,
+    # so with budgets on it keeps one loop per term and names builtin.budgets_per_point.
+    for scheme in (:euler, :rk3)
+        mk(; pp = false) = (s = mkan(; ν = 1.0, per_point = pp);
+                            CPc.with_budgets(Domain(Domain(s; scheme = scheme, validate = false);
+                                                    components = (CentredAdvection(), FCHeatComponent())),
+                                             (:energy, :momentum_x)))
+        a = mk(); r = mk(); SIMc.set_loop_fusion!(r.state, :never)
+        for _ in 1:3
+            step!(CPc.Model(a), 2.0); step!(CPc.Model(r), 2.0)
+        end
+        @test _fc_agree(a.state, r.state)
+        @test CPc.sweep_report(a)["substages_fused"] == "all"
+        for (q, sb) in CPc.budgets(a).measured
+            A = Aeolus.BudgetSystem.stage_budget(sb); R = Aeolus.BudgetSystem.stage_budget(CPc.budgets(r).measured[q])
+            @test Set(keys(A.terms)) == Set(keys(R.terms))
+            big = maximum(abs, values(R.terms))
+            @test big > 0 && all(k -> abs(A.terms[k] - R.terms[k]) <= 1e-10 * big, keys(R.terms))
+            q === :energy && @test haskey(A.terms, (:body_force, :fcheatcomponent))
+        end
+        p = mk(; pp = true)
+        step!(CPc.Model(p), 2.0)
+        rep = CPc.sweep_report(p)
+        @test rep["substages_fused"] == "none" && any(startswith("builtin.budgets_per_point:"), rep["not_fusable"])
+        pd = mk(; pp = true); SIMc.set_loop_fusion!(pd.state, :always)
+        err = try step!(CPc.Model(pd), 2.0); nothing catch e; e end
+        @test err isa ArgumentError && occursin("builtin.budgets_per_point", err.msg)
+    end
+end
+
 @testset "sound-proof cores: terms without a fused form are reported" begin
     for (kw, hook, key) in (((f_coriolis = 1e-4,), NamedTuple(), "builtin.anelastic_coriolis"),
                             ((C_s = 0.17,), NamedTuple(), "builtin.anelastic_sgs"),

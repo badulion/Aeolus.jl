@@ -105,6 +105,16 @@ global goes here. Default nothing.
 prepare!(::SweepTerm, sim, Δt) = nothing
 
 """
+    finish_sweep!(t::SweepTerm, sim, Δt)
+
+The work of term `t` after the sweep of a substage of length `Δt` on
+`sim`, before the projection: the reduction of what its kernel
+accumulated during the sweep (the budgets' per-level sums, #533 plan
+step 7). Default nothing.
+"""
+finish_sweep!(::SweepTerm, sim, Δt) = nothing
+
+"""
     SweepRow
 
 The view of the sweep's tendency buffer on one row that a term's

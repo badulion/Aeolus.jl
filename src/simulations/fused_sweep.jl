@@ -45,9 +45,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                  "correction around the predictor are not yet verified inside the sweep",
     "builtin.imex_sgs" => "step_imex!'s explicit SGS parts (the transposed stress of sgs_stress = :symmetric, " *
                           "the off-diagonal part of a scalar diffusivity tensor) are whole-field operators",
-    "builtin.budgets" => "the measured budgets count the substages and attribute the in-core components " *
-                         "on whole tendency fields (budget_open!/budget_close!); booked inside the sweep " *
-                         "from plan step 7",
     # --- built-in terms of the sound-proof cores (`_mass_weighted_step!`) -----
     "builtin.anelastic_sgs" => "the SGS closure of the sound-proof cores (W-weighted flux form): νt and κh " *
                                "precomputed as inputs of the sweep, as plan step 4 for the Boussinesq core",
@@ -57,6 +54,8 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                         "levels, the term of plan step 2 not yet wired into these cores",
     "builtin.anelastic_sponge" => "add_velocity_sponge! in the sound-proof cores: pointwise, the term of plan " *
                                   "step 2 not yet wired into these cores",
+    "builtin.budgets_per_point" => "with the budgets on, the in-core terms are booked per level inside the " *
+                                   "ring-buffer sweep; the per-point (GPU) form has no per-level sums yet",
     "builtin.anelastic_post_predictor" => "the post-predictor operators of the sound-proof cores: the post terms " *
                                           "of plan step 6 are wired into the Boussinesq core only",
     # --- components of :tendencies / :body_force -----------------------------
@@ -157,7 +156,20 @@ function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_pred
     body_force! === nothing && return (base,)
     ht = hook_terms(body_force!, sim)
     ht === nothing && return nothing
+    _books_per_point(sim, ht) && return nothing
     return (base, ht...)
+end
+
+# whether the substages of `sim` run in the per-point form (#533 step 8)
+_per_point_form(sim) = !(Backends.backend(sim.u.data) isa Backends.CPUBackend && !sim.workspaces.fused.per_point)
+# a term tuple that books its budgets per level, in the per-point form,
+# which has no per-level sums (integration of steps 7 and 8)
+_books_per_point(sim, ts::Tuple) = _per_point_form(sim) && any(books, ts)
+# the same for a body-force hook (only when reporting)
+function _hook_books_per_point(sim, body_force!)
+    body_force! === nothing && return false
+    ht = hook_terms(body_force!, sim)
+    return ht !== nothing && _books_per_point(sim, ht)
 end
 
 # Every term that keeps a substage off the fused sweep, `key => reason`
@@ -172,6 +184,7 @@ function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_p
     sim.has_surface_flux && push!(out, _blocker("builtin.surface_flux"))
     sim.has_sponge && push!(out, _blocker("builtin.sponge"))
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))
+    _hook_books_per_point(sim, body_force!) && push!(out, _blocker("builtin.budgets_per_point"))
     post_predictor! === nothing || append!(out, post_hook_blockers(post_predictor!, sim))
     return unique!(out)                   # (both hooks name the budgets, a component may sit in both)
 end
@@ -321,6 +334,11 @@ end
 _post_halos(sim, ::Tuple{}) = nothing
 _post_halos(sim, ::Tuple) = _VelocityHalos(sim)
 
+# the sweep terms' `finish_sweep!` (the budget term books its sums, #533 step 7)
+@inline _finish_sweep_terms!(::Tuple{}, sim, Δt) = nothing
+@inline _finish_sweep_terms!(ts::Tuple, sim, Δt) =
+    (finish_sweep!(first(ts), sim, Δt); _finish_sweep_terms!(Base.tail(ts), sim, Δt))
+
 # Steps 2-12 of `_euler_projection!` in the fused sweep over `terms`: the
 # tendencies and the predictors of u, v, w and of θ (qv) in one sweep
 # (`FiniteVolume.blocked_predictor!`), with the post-predictor operators
@@ -336,6 +354,7 @@ function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage,
     _prepare_terms!(post, sim, Δt)
     _blocked_sweep!(bufs, terms, post, sim, Δt, stage)
     _finish_terms!(post, sim, Δt)
+    _finish_sweep_terms!(terms, sim, Δt)
     update_open_boundaries!(sim, t_bc, Δt)
     _project_velocity!(sim, _DivBy(Δt), stage)
     if stage !== nothing                    # the halos of the RK3 combination (step 11)
@@ -456,6 +475,7 @@ function _fused_tendencies_into!(sim::BoussinesqSimulation, Δt, terms)
     else
         _term_tendencies_on!(sim, terms, nothing)
     end
+    _finish_sweep_terms!(terms, sim, Δt)     # the budget term books (#533 step 7)
     return nothing
 end
 function _term_tendencies_on!(sim, terms, qv)
