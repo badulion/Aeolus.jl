@@ -3224,6 +3224,121 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+**Step 6: post-predictor operators inside the sweep** (branch
+`issue/533-s6-post-predictor`, from `issue/533-sweep-interface`, with
+#538 / PR #543 merged in so the tiled surface's drag is built on its
+order-independent Jacobi form). What was built:
+- **The interface** (`src/operators/fused_sweep.jl`): `PostTerm`, built by
+  `post_sweep_term(x, ctx, Δt)` (`nothing` = not expressible), with
+  `footprint`, `prepare!`, `finish!` and the row kernel
+  `post_row!(t, Val(1|2), J, K, I1, I2, st)`: phase 1 computes the
+  factors of a row from values no face of the operator has changed yet,
+  phase 2 applies them (Jacobi, as the whole-field operators).
+  `AfterSweep(f)` is an operator that needs the whole predicted field:
+  `f()` runs after the sweep, and so does every operator after it.
+- **The driver**: a new `blocked_predictor!(bufs, terms, post, halo!, …)`
+  method (the old signature calls it with no post terms). A footprint-0
+  term runs on a row right after its predictor; a term of y-radius `r`
+  computes factors `r` rows and applies them `2r` rows behind its input
+  (`post_plan`: per term the factor and apply widths in x, y, z and the
+  two delays, growing by each term's radius). Points whose stencil
+  reaches a halo, a slab's edge planes or a point an earlier term
+  deferred run after the sweep in the same two phases, with the velocity
+  halos filled (`_post_deferred!`). The slab loop is one loop over
+  `t in j1 : j2 + lag + post_delay`.
+- **The model's operators** as post terms, each against its existing
+  whole-field method: `KinematicFlowTerm` (radius 0), `IBMCorrectionTerm`
+  (radius 0; a face scaled once per adjacent solid cell, the boundary
+  faces in `finish!`), `CanopyDragTerm` (`PlantCanopy`, footprint 1),
+  `ImmersedWallTerm` (facades, footprint 1), `WallStressTerm` (bottom
+  wall, local formulation; wrapped by `SurfaceLayerPostTerm` and by the
+  urban ground's `GroundStressTerm`) and `TiledDragTerm` (#538's
+  kernels). The sparse face lists get row pointers (`row_index`,
+  compressed sparse rows) and a row's x-range is found by bisection
+  (`row_entries(ptr, r, x, I1, I2)`). The ground stress runs as an
+  `AfterSweep` for TBLE, non-local formulations or an unprimed matching
+  filter; the facades when their pairs are not sorted.
+- **Removed from `SWEEP_FALLBACKS`**: `Components.KinematicFlow`,
+  `Urban.VegDrag`, `Urban.IBMCoupling`, `Urban.SurfaceExchangeMOST`,
+  `Urban.TiledUrbanSurface`. `builtin.post_predictor` now names only a
+  `post_predictor!` passed to the core as a plain function; the
+  `SurfaceLayer` and `WallModelFacades` entries keep only their
+  tendency parts (plan step 5). The completeness guard
+  (`test/fused_sweep.jl`) checks per stage.
+
+**Measured** (`benchmarks/bench_post_sweep.jl 128 64 15`: 128² × 64
+cells, 16 buildings, 26 368 facade pairs, 150 528 canopy faces; one
+Euler substage of advection + diffusion + predictor + the IBM correction,
+facade and ground wall stress and canopy drag; ms per substage, median
+of 15 calls interleaved call by call between the four forms within one
+process, each process about a minute, under the benchmark lock; Ryzen AI
+9 HX 370 at the 15 W cap):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 11.42 | 9.49 | 7.98 | 7.03 |
+| sweep, all four after it | 10.09 | 7.12 | 6.15 | 5.32 |
+| sweep, all four on its rows | 13.99 | 11.34 | 9.59 | 8.56 |
+| sweep, what a domain runs | 10.15 | 7.31 | 6.39 | 5.36 |
+
+The row forms of the operators with a stencil are slower than their
+whole-field passes: per operator (1 / 12 threads, increase over the
+sweep alone against the whole-field pass) canopy drag 4.4 / 2.9 ms
+against 2.1 / 1.3 ms, facades 2.6 / 2.0 against 1.5 / 1.4, ground stress
+1.2 / 0.8 against 0.7 / 0.6. The whole-field passes walk a sparse face
+list in one launch; on the rows the same faces are found per row, and at
+many slabs most of them fall in the deferred bands (12 slabs of 5–6
+planes). The pointwise IBM correction on the rows costs what its pass
+costs (0.5 against 0.7 ms at 1 thread, 0.3 against 0.4 at 12, in single-
+operator runs). Hence the last row: a domain keeps footprint-0 terms on
+the rows and runs a component whose term has a stencil through its own
+`run_stage!` after the sweep (`Components._in_rows_or_after`). Against
+one loop per term, the configurations this step makes fusable now step
+11 % (1 thread) to 24 % (12 threads) faster in this setup. The first
+row-form version (bisection per row, the whole row scanned for each
+x-range) was slower still; the row pointers and the bisection of the
+x-range took the 12-thread canopy increase from 4.0 to 2.9 ms. No
+allocation: `blocked_predictor!` with six post terms allocates 0 bytes
+serial and at most 64 kB threaded (the tasks).
+**Not measured**: bytes per step, 24 threads, the configured cases (the
+urban site stays unfused, below).
+
+**Tests** (`test/fused_sweep_post.jl`, 1538 assertions): the driver
+with synthetic radius-0 and radius-1 Jacobi terms, chained and with an
+`AfterSweep`, against predictor + whole-field passes at 1–5 slabs, the
+slabs also in reverse order, serial and threaded, regular and stretched
+grids, dry and moist, Euler and RK3 stages (round-off tolerance); each
+model operator in the sweep against its whole-field method, diagnostics
+included (`iw.stats`, the ground's `u_star`, the canopy force, the
+surface layer's stress sums); domains with `KinematicFlow` and tiles,
+`loop_fusion = "always"` against `"never"` over 3 steps; the small-city
+urban site's post-predictor hook against the sweep with its couplings
+(row forms and the domain's mix, 1 and 3 slabs); the row pointers and
+bisection against a filter; type stability and allocation. Mutation
+checks: a delay of `r` rows instead of `2r`, dropping the IBM neighbour
+cell and dropping the ground stress's west-column contribution each
+fail. Targeted runs: `fused_sweep.jl`, `fused_sweep_post.jl`,
+`urban_run.jl`, `urban_checks.jl`, `components_parent.jl`,
+`plant_canopy.jl`, `wall_models.jl`, `components_both_cores.jl`,
+`cutcell.jl`, `naming_conventions.jl` pass. Validation
+`urban_checks.jl`: 33 / 33.
+
+**Test expectation that proved wrong**: the first surface-layer
+comparison called the reference and the sweep twice without refilling
+the halos between, so the second call compared against stale halos; a
+substage refills them (step 1), and the test now does. The code was
+right.
+
+**Deviations**: (1) the operators with a stencil run after the sweep
+in a domain, by the measurement above, not on the delayed rows; the row
+forms stay, tested, for operators where that changes. (2) The urban
+site always books budgets, so its post-predictor hook is not fused
+until plan step 7 (`post_hook_terms` returns `nothing` with budgets);
+its couplings are tested at term level. (3) A term on the rows is not
+timed through `UrbanEntry` (only its `AfterSweep` is). (4) Post terms
+do not read θ or qv: the sweep advances the scalars before them, the
+whole-field order after.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall

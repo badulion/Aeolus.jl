@@ -2,20 +2,23 @@
 # one Euler substage's tendencies + predictor + the urban chain of
 # post-predictor operators (implicit IBM correction, facade wall stress,
 # ground wall stress on the roofs and the street, an elevated canopy drag),
-# three ways:
+# four ways:
 #
 #   loops    one loop per term: the fused tendency launch, the predictor
 #            passes, then each operator's whole-field method (the reference);
 #   after    the fused sweep without post terms, then each operator's
 #            whole-field method after it (every operator an AfterSweep);
 #   rows     the fused sweep with the operators on its delayed rows (and
-#            their deferred points after it).
+#            their deferred points after it);
+#   mixed    what a domain runs (Components._in_rows_or_after): the
+#            pointwise IBM correction on the rows, the operators with a
+#            stencil whole-field after the sweep.
 #
 #   julia --project=. -t 12 benchmarks/bench_post_sweep.jl [N] [Nz] [calls]
 #
 # Prints ms per substage (median of `calls`) for each way, interleaved
 # call by call so that the power cap's boost and sustained phases hit all
-# three alike. The domain: N × N × Nz cells of 2 m × 2 m × 2 m, 16
+# four alike. The domain: N × N × Nz cells of 2 m × 2 m × 2 m, 16
 # buildings of 10 % of N square and up to Nz/3 tall, a canopy over a
 # quarter of the columns between Nz/3 and Nz/2.
 
@@ -92,7 +95,17 @@ function rows!()
     return nothing
 end
 
-ways = (("loops", loops!), ("after", after!), ("rows", rows!))
+rest!() = (apply_immersed_wall_stress!(s, iw, Δt); apply_wall_stress!(s, wm, Δt; mask = lev);
+           apply_canopy_drag!(s, dr, Δt); nothing)
+function mixed!()
+    post = (ibm_correction_term(sm; dt = Δt), FV.AfterSweep(rest!))
+    foreach(t -> FV.prepare!(t, s, Δt), post)
+    FV.blocked_predictor!(bufs, terms, post, h, s.u, s.v, s.w, SIM._Axpy(Δt), s1, nothing, g)
+    foreach(t -> FV.finish!(t, s, Δt), post)
+    return nothing
+end
+
+ways = (("loops", loops!), ("after", after!), ("rows", rows!), ("mixed", mixed!))
 for (_, f) in ways
     restore!(); f(); restore!(); f()
 end

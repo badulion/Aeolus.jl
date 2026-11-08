@@ -198,8 +198,11 @@ end
 # drag, facade and ground wall stresses on the rows cost 1.4–2.2× their
 # whole-field passes after the sweep (their faces are a sparse list, which
 # the whole-field pass walks in one launch, and at many slabs most of
-# their points fall in the deferred bands), while the IBM correction on
-# the rows cost 0.1–0.2 ms less than its 0.4–0.7 ms pass. The row forms stay (the
+# their points fall in the deferred bands); the sweep with all four on
+# the rows was slower than one loop per term (8.6 against 7.0 ms at 12
+# threads), with the three after it 1.3–1.7 ms faster (5.4 ms). The
+# pointwise IBM correction on the rows costs what its pass costs (within
+# 0.25 ms). The row forms stay (the
 # modules' `*_term` constructors) for operators where that changes.
 _in_rows_or_after(::Nothing, c, d, Δt) = nothing
 _in_rows_or_after(t::FiniteVolume.AfterSweep, c, d, Δt) = t
