@@ -273,7 +273,7 @@ end
                 BoussinesqSimulation(m; θ₀ = 300.0, bcs = open_boundary_conditions(m, obdata))
     # a strong drag in the last column and row only: the west face of
     # column 1 and the south face of row 1 see it only through a periodic wrap
-    function run(kind, Δt = 10.0)
+    function run(kind, Δt = 10.0; edge = false)
         sim = box(kind)
         interior_view(sim.u) .= 5.0; interior_view(sim.v) .= 1.0
         # an open box's boundary data loaded, as in a run (its faces hold
@@ -282,6 +282,7 @@ end
         ts, d = drag_surface(sim)
         fill!(ts.drag, 0.0)
         ts.drag[Nx, :, :] .= 1.0; ts.drag[:, Ny, :] .= 1.0
+        edge && (ts.drag[1, :, :] .= 1.0; ts.drag[:, 1, :] .= 1.0)
         drag!(ts, d, Δt)
         return sim, ts
     end
@@ -310,6 +311,17 @@ end
         @test isapprox(s.u.data[Hx+Nx, Hy+1, K], sp.u.data[Hx+Nx, Hy+1, K]; rtol = 1e-14)
         @test all(s.u.data[Hx+Nx, Hy+1:Hy+Ny-1, K] .< 4.0)
     end
+    # with a strong drag in column 1 and row 1 as well, the open and the
+    # no-flux rule part (above, both leave the face alone because the
+    # bounding column has no drag): the open face keeps its boundary value
+    # (no drag at a pinned face), the no-flux face takes the bounding
+    # column's drag (a = 1, Δt a/U ≈ 2 for u, ≈ 2-10 for v)
+    so, _ = run(:open; edge = true)
+    @test all(so.u.data[Hx+1, Hy+1:Hy+Ny, K] .== 5.0)          # untouched (copied)
+    @test all(so.v.data[Hx+1:Hx+Nx, Hy+1, K] .== 1.0)
+    sn, _ = run(:noflux; edge = true)
+    @test all(sn.u.data[Hx+1, Hy+1:Hy+Ny, K] .< 2.0)           # 5/(1 + 10/5.1) ≈ 1.7
+    @test all(sn.v.data[Hx+1:Hx+Nx, Hy+1, K] .< 0.5)           # 1/(1 + 10/U), U ≤ 5.1
     # one-sided at a no-flux face: the strong drag in column 1 alone acts in
     # full (a = a₁, not the periodic mean (a_Nx + a₁)/2)
     sim = box(:noflux)
