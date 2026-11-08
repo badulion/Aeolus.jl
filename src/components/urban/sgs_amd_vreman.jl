@@ -150,6 +150,16 @@ function _OPS.sgs_tracer_diffusivity!(κ, c::SolidMaskedSGS, f::SGSFields, sim, 
     k === f.κh || (k.data[c.solid] .= 0)              # f.κh is masked already
     return k
 end
+# the forms of the wrapped closure's tendencies (its face diffusivity, its
+# tensor, its stress), which the fused sweep (#533) and the nest's flux
+# registers read: the masked coefficients go through the same kernels
+_OPS.sgs_explicit_stress(c::SolidMaskedSGS) = _OPS.sgs_explicit_stress(c.closure)
+_OPS.sgs_scalar_face_diffusivity(c::SolidMaskedSGS, f::SGSFields, sim) =
+    _OPS.sgs_scalar_face_diffusivity(c.closure, f, sim)
+_OPS.sgs_scalar_tensor(c::SolidMaskedSGS, f::SGSFields, sim) = _OPS.sgs_scalar_tensor(c.closure, f, sim)
+_OPS.sgs_momentum_sweep(c::SolidMaskedSGS, f::SGSFields, sim, stress::Symbol) =
+    _OPS.sgs_momentum_sweep(c.closure, f, sim, stress)
+_OPS.sgs_tracer_own_diffusivity(c::SolidMaskedSGS) = _OPS.sgs_tracer_own_diffusivity(c.closure)
 
 """
     sgs_compare_diagnostics(case) -> Vector{Diagnostic}
