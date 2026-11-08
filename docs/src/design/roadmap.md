@@ -3066,6 +3066,92 @@ segfaults at 10–14 threads; upstream; workaround
 `AEOLUS_FFTW_PLANNER=estimate`, documented in
 `benchmarks/bench_ka_scaling.jl`).
 
+#### The tile surface update (#537)
+
+Part of #531 (the Berlin step). The tiled surface's update
+(`step_tiles!`, every 60 s, so every 30 steps at Δt = 2 s) took 3.5 s at
+1 thread and scaled 4.7× on 12. What was built:
+
+- **No boxed closure locals.** The profile showed the update was mostly
+  not physics: `solve_surface_layer`'s closures `scales` and `F`, and
+  `SoilColumn._phase_state`'s `Heq` and `dHeq`, assigned names the
+  enclosing function also assigns, so Julia shared them in `Core.Box`es.
+  Every surface-layer solve allocated ~9 KB and ran its iteration by
+  dynamic dispatch. Every layer evaluation of a soil column returned an
+  uninferred tuple. The closures' locals are now `local`. The surface-layer
+  fix reaches every surface that calls the solve, not only the tiles.
+- **No vectors per column.** The air of a column (`ColumnAir`) and its
+  tiles' forcings (`TileForcings`, collected by `parent_tile_forcings`)
+  are lazy vectors. `soil_enthalpy` and `soil_ice_mass` sum without a
+  temporary. The Mualem normalisation `f(S_c)` is a field of
+  `VanGenuchtenMualem`, not two powers per conductivity call. Per
+  column: 64 KB → 1.3 KB allocated. What remains is the dynamic dispatch
+  on the abstractly typed tiles and the mosaic's tile-flux vector.
+- **A dynamic schedule for column launches.** `foreach_column!` and
+  `column_sum` take `schedule = :dynamic`
+  (`Backends.dynamic_columns!`): guided self-scheduling from an atomic
+  counter, each run half the remaining columns' share per thread. No
+  machine constant. The partials are still folded in column order, so the
+  totals are the same bits under either schedule and at any thread count.
+  The tile update uses it: a Berlin column costs 2–60 µs, set by its
+  number of soil tiles.
+
+**Measured** (Ryzen AI 9 HX 370; Berlin `berlin_100m_20250824.toml`,
+200 × 200 columns, FFTW `estimate`; every run under the shared bench lock;
+before = master `9053fe04`; one update = the minimum of 4 after 2 steps):
+
+| threads | 1 | 2 | 6 | 12 | 24 |
+| :-- | --: | --: | --: | --: | --: |
+| one update, before | 3.524 s | 2.000 s | 1.030 s | 0.742 s | 0.662 s |
+| after: boxes, allocations, static rows (`680d5818`) | | 1.063 s | 0.420 s | 0.230 s | 0.198 s |
+| after: + dynamic schedule | 1.497 s | 0.800 s | 0.301 s | 0.183 s | 0.143 s |
+| speed-up | 2.4× | 2.5× | 3.4× | 4.1× | 4.6× |
+| allocated per update | 2,882 → 50 MB | | | | |
+
+The update now scales 8.2× on 12 threads and 10.5× on 24, against 4.7×
+and 5.3× before. Berlin steps 32–61, which include one update (mean
+ms/step; minimum over 1 run at 1 thread, 3 runs at 2, 6 and 12):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| mean step, before | 656.4 | 407.2 | 282.5 | 277.5 |
+| mean step, after | 585.2 | 362.2 | 261.8 | 255.4 |
+| the step with the update, before → after | 4298 → 2258 | 2444 → 1170 | 1518 → 704 | 1154 → 450 |
+| GC during the 30 steps, before → after (ms/step) | | 8.8 → 1.6 | 13.0 → 2.0 | 13.1 → 1.9 |
+
+Between updates the median step is unchanged within the noise (≈ 338 ms
+at 2 threads, ≈ 245 at 6 and 12). The mean falls by more than the
+amortised update (at 12 threads, 22 ms against 18.6) because the GC no
+longer collects the update's 2.9 GB of garbage during the steps after it.
+The fluxes, sources, u* and skin temperatures of two updates are
+bit-identical to master at 1, 3, 4 and 12 threads.
+
+**Bug the validation caught.** A first version wrote a mosaic's tile
+fluxes into its own vector instead of a new one per step.
+`validation/urban_checks.jl` check 3 holds `last_tile_fluxes` of one step
+and steps on, and its held fluxes became the next step's (H 175.9 against
+−5.6 W m⁻²). The code was wrong, not the check, so the new vector per step
+is back. A new test in `surface_tiles.jl` guards it. Filling that vector in
+a loop instead of a comprehension saved 1.69 → 1.50 s per update at 1
+thread (one run each).
+
+**Deviations.** The issue suspected rows of unequal land use. Once the
+GC spikes were gone, the per-row cost at 1 thread was 7.0–9.9 ms. The
+real imbalance is the static split itself: 50 blocks of 4 rows over 12
+tasks, plus cores of unequal speed. Most of the gain came from the type
+instabilities, which the issue did not name. The staggered update
+(1/N of the columns per step) is left to the maintainer, as the issue
+proposed. The van Genuchten powers are now about half of the update
+(Richards sub-steps of the soil tiles).
+
+Tests: `surface_exchange.jl` and `soil_thermal.jl` (no allocation in a
+solve, a slab's fluxes, a coupled soil step unfrozen and frozen, with
+its energy ledger), `components_parent.jl` (`step_tiles!` against a
+column-by-column reference over three surface steps of an uneven air),
+`backends.jl` (the dynamic schedule: every index once, totals equal to
+the static schedule's), `surface_tiles.jl`.
+`validation/run.jl --only urban_checks.jl`: 33 pass.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
