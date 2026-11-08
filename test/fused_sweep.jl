@@ -467,13 +467,7 @@ end
         @test rr["substages_fused"] == "none" && only(rr["not_fusable"]) == "Main.FSDampWhole: " *
               "no sweep_term and no documented reason in Simulations.SWEEP_FALLBACKS"
     end
-    # with the budgets on the hook counts the substages: unfused, reported
-    # (the energy budget needs the reference θ₀, so buoyancy is on too)
-    s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
-    d = Domain(Domain(s; validate = false); components = (CentredAdvection(), FSDampComponent(0.05)))
-    db = CPs.with_budgets(d, (:energy,))
-    step!(db, 0.5)
-    @test any(startswith("builtin.budgets:"), CPs.sweep_report(db)["not_fusable"])
+    # the budgets inside the sweep (plan step 7): test/fused_sweep_budgets.jl
 end
 
 @testset "results.toml [loop_fusion] and the [timestep] loop_fusion key" begin

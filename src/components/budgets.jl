@@ -35,10 +35,13 @@ mutable struct DomainBudgets
     nsub::Int
     hour::Any
     exchange::Union{Nothing,Tuple{Symbol,Symbol}}
+    sweep::Any       # the budget term of the fused sweep (`SweepBudget`, #533), built at its first use
 end
 DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing, exchange = nothing) =
     DomainBudgets(b, collect(Symbol, quantities), Dict{Symbol,Any}(state), Dict{Symbol,Any}(tendency),
                   0, 0.0, Int(nsub), hour, exchange)
+DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange) =
+    DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange, nothing)
 
 """
     NEST_EXCHANGE
@@ -250,6 +253,114 @@ function _count_substage!(b::DomainBudgets, sim)
     b.calls += 1
     return nothing
 end
+
+# --- the in-core components inside the fused sweep (#533 plan step 7) -------
+# With the budgets on and every in-core term fusable, the core runs no
+# body-force hook: the sweep's term tuple starts with the domain's
+# `SweepBudget`, which counts the substage before the sweep (the hook's
+# `_count_substage!`) and books after it what each attributed component's
+# term (a `FiniteVolume.BookedTerm`) added to the tendencies, per level,
+# summed in the sweep: the same bookings as `_attributed_in_core!`'s
+# contexts on the whole tendency fields, without their two passes per
+# component and quantity.
+
+"""
+    SweepBudget
+
+The budget term of a domain's fused sweep (#533 plan step 7): its
+`prepare!` counts the substage (the body-force hook's work with the
+budgets on), its `finish_sweep!` books what each attributed in-core
+component added to the core tendencies during the sweep, summed per level
+by its `FiniteVolume.BookedTerm` into `sums`, as the attribution context
+`(stage, component)` of every measured quantity with a core tendency
+([`book_context!`](@ref Aeolus.BudgetSystem.book_context!), scaled by the
+substage's weight × Δt as `_attributed_in_core!` scales its contexts).
+Adds nothing to the tendencies. Built once per domain, at the first fused
+substage (`slots`: the `(stage, name)` of each booked term's slot,
+`active` the slots in use, `quantity[f]` the budget of booked field `f`).
+"""
+struct SweepBudget{L<:FiniteVolume.LevelSums,C} <: FiniteVolume.SweepTerm
+    b::DomainBudgets
+    sums::L
+    components::C
+    slots::Vector{Tuple{Symbol,Symbol}}
+    active::Vector{Int}
+    quantity::NTuple{4,Symbol}
+    rest::Vector{Float64}
+end
+FiniteVolume.footprint(::SweepBudget) = (0, 0, 0)
+@inline FiniteVolume.add_row!(::SweepBudget, buf, a, b, s, j, k, ii, st) = nothing
+function FiniteVolume.prepare!(t::SweepBudget, sim, Δt)
+    _count_substage!(t.b, sim)
+    fill!(t.sums.acc, 0.0)
+    return nothing
+end
+function FiniteVolume.finish_sweep!(t::SweepBudget, sim, Δt)
+    scale = _substage_weight(t.b) * Δt
+    acc = t.sums.acc; rest = t.rest
+    for slot in t.active, f in 1:4
+        t.sums.on[f] || continue
+        sb = t.b.budgets.measured[t.quantity[f]]
+        w = sb.meter.w
+        @inbounds for k in eachindex(rest)
+            rest[k] = scale * w[k] * acc[f, slot, k]
+        end
+        stage, name = t.slots[slot]
+        book_context!(sb, stage, name, rest)
+    end
+    return nothing
+end
+
+# the slot of the term of component number `pos` in stage `si` (1:
+# :tendencies, 2: :body_force) of `nc` components
+_sweep_slot(si, pos, nc) = (si - 1) * nc + pos
+
+# the domain's budget term, built at the first fused substage (and again
+# if the domain's components changed); a concrete type for the hook terms
+function _sweep_budget(b::DomainBudgets, d::Domain, sim)
+    S = SweepBudget{FiniteVolume.LevelSums{fieldtype(LevelMeter, :fluid)},typeof(d.components)}
+    c = b.sweep
+    c isa S && c.components === d.components && return c
+    return _build_sweep_budget(b, d, sim)::S
+end
+@noinline function _build_sweep_budget(b::DomainBudgets, d::Domain, sim)
+    cs = d.components; nc = length(cs)
+    tends = (sim.tu, sim.tv, sim.tθ, sim.has_moisture ? sim.tqv : nothing)
+    on = fill(false, 4); masked = fill(false, 4); quantity = fill(:none, 4)
+    fluid = nothing
+    for q in b.quantities
+        x = b.tendency[q]
+        x === nothing && continue
+        f = findfirst(t -> t === x, tends)
+        f === nothing && throw(ArgumentError("budgets: the core tendency of $q is not one the fused sweep books"))
+        m = b.budgets.measured[q].meter
+        on[f] = true; quantity[f] = q
+        masked[f] = any(iszero, m.fluid)
+        if masked[f]
+            fluid === nothing || fluid == m.fluid ||
+                throw(ArgumentError("budgets: the fused sweep books with one solid mask; $q's differs"))
+            fluid = m.fluid
+        end
+    end
+    fluid === nothing && (fluid = first(values(b.budgets.measured)).meter.fluid)
+    slots = fill((:none, :none), 2nc); active = Int[]
+    for (si, S) in enumerate((:tendencies, :body_force)), (pos, c) in enumerate(cs)
+        attaches(c, S) && attributed(c, Val(S)) && FiniteVolume.sweep_term(c, d) !== nothing || continue
+        slot = _sweep_slot(si, pos, nc)
+        slots[slot] = (S, component_name(c)); push!(active, slot)
+    end
+    g = sim.mesh
+    sums = FiniteVolume.LevelSums(2nc, g.Nz, Tuple(on), Tuple(masked), fluid, g.Hx, g.Hy, g.Hz)
+    t = SweepBudget(b, sums, cs, slots, active, Tuple(quantity), zeros(g.Nz))
+    b.sweep = t
+    return t
+end
+
+# the term of an in-core component inside the sweep: booked when the budgets
+# attribute its entry
+@inline _booked_term(t, ::Nothing, c, v::Val, slot) = t
+@inline _booked_term(t, bk::SweepBudget, c, v::Val, slot) =
+    attributed(c, v) ? FiniteVolume.BookedTerm(t, bk.sums, slot) : t
 
 # the core step: one deferring context per quantity (the dynamics)
 _dynamics_open!(::Nothing, d) = nothing
