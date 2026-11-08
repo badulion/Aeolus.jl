@@ -586,9 +586,9 @@ end
         "has_surface_flux" => "builtin.surface_flux", "add_surface_flux!" => "builtin.surface_flux",
         "has_sponge" => "builtin.sponge", "add_velocity_sponge!" => "builtin.sponge",
         "body_force!" => "builtin.body_force", "post_predictor!" => "builtin.post_predictor",
-        "update_open_boundaries!" => "builtin.open_boundaries")
+        "update_open_boundaries!" => :projection)   # after the sweep, before the projection (#533 step 5)
     seen = Set{String}()
-    for m in eachmatch(r"\bsim\.(has_\w+)|\b(add_\w+!|_add_\w+!|compute_sgs!|advect_centered!|laplacian|axpy!|_advance_scalar!|_base_tendencies!|zero_storage!)\(|\b(body_force!|post_predictor!|momentum_advection)\(", body)
+    for m in eachmatch(r"\bsim\.(has_\w+)|\b(add_\w+!|_add_\w+!|compute_sgs!|advect_centered!|laplacian|axpy!|_advance_scalar!|_base_tendencies!|zero_storage!)\(|\b(body_force!|post_predictor!|momentum_advection|update_open_boundaries!)\(", body)
         name = something(m.captures...)
         push!(seen, name)
         haskey(builtin, name) || println("  [#533] a built-in term of _euler_projection! not classified: $name")
@@ -598,6 +598,15 @@ end
         v = get(builtin, name, nothing)
         v isa String && @test haskey(SIMs.SWEEP_FALLBACKS, v)
     end
+    # the open-boundary update (:projection) runs on the predicted velocity:
+    # after the predictor and before the projection, in the reference and in
+    # the fused step (after the sweep), so an open box takes the fused step (#533 step 5)
+    @test "update_open_boundaries!" in seen
+    _fs_order(txt, names...) = (ps = [findfirst(n, txt) for n in names]; all(!isnothing, ps) && issorted(first.(ps)))
+    @test _fs_order(body, "axpy!(sim.w, Δt, sim.tw)", "update_open_boundaries!(", "_project_velocity!(")
+    fs = read(joinpath(pkgdir(Aeolus), "src", "simulations", "fused_sweep.jl"), String)
+    a2 = findfirst("function _blocked_projection!", fs); b2 = findnext("\nend\n", fs, last(a2))
+    @test _fs_order(fs[first(a2):last(b2)], "_blocked_sweep!(", "update_open_boundaries!(", "_project_velocity!(")
     # the base term covers what it claims: a moist, viscous sweep was checked above
     # no stale entries: every reason is reported by the code (built-ins) or
     # belongs to an in-core component without a sweep term

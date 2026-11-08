@@ -425,9 +425,12 @@ of the separate passes within round-off; the tendency fields
 the base tendencies (the built-in momentum advection and the molecular
 diffusion) and the pipeline components that provide a sweep term
 qualify: any SGS closure, buoyancy, Coriolis, surface flux, sponge, a
-`body_force!` function, a `post_predictor!` hook or open boundaries keep
-the substage with one loop per term, which the simulation records once
-with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`).
+`body_force!` function or a `post_predictor!` hook keep the substage with
+one loop per term, which the simulation records once with the reason
+([`sweep_report`](@ref), `SWEEP_FALLBACKS`). Open lateral faces do not:
+their update (the boundary data, the radiating outflow from the
+stage-start layers, the mass correction) runs after the sweep and before
+the projection, as after the separate predictor passes.
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):

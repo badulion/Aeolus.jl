@@ -41,8 +41,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                             "only the pipeline's components can be expressed as sweep terms",
     "builtin.post_predictor" => "post-predictor operators (the post_predictor! hook) run on the predicted " *
                                 "field; the delayed-row scheme of the sweep for them is plan step 6",
-    "builtin.open_boundaries" => "open lateral faces: the radiating outflow and the boundary data's mass " *
-                                 "correction around the predictor are not yet verified inside the sweep",
     "builtin.backend" => "the ring-buffer sweep runs on the CPU backend; the per-point form for a GPU is plan step 8",
     "builtin.core" => "this step core (step_imex!, the anelastic core) has no fused sweep yet, plan step 8",
     "builtin.budgets" => "the measured budgets count the substages and attribute the in-core components " *
@@ -55,20 +53,25 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "Components.Fringe" => "fringe relaxation toward the inflow state, pointwise with a mask: plan step 2",
     "Components.LargeScale" => "geostrophic forcing, nudging and advective tendencies need horizontal-mean " *
                                "profiles of the stage-start state (prepare!): plan step 3",
-    "Components.SurfaceLayer" => "the MOST wall stress and surface fluxes on the first level, its " *
-                                 "post-predictor correction: plan steps 5 and 6",
+    "Components.SurfaceLayer" => "the implicit MOST wall stress on the predicted first level " *
+                                 "(apply_wall_stress!, post-predictor): plan step 6; its heat flux is a sweep term",
     "Components.KinematicFlow" => "overwrites the predicted velocity with a prescribed flow (post-predictor): " *
                                   "plan step 6",
-    "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise) and the obstacles' IBM penalty " *
-                                              "(a mask): plan steps 2 and 5",
+    "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise, the surface-flux term of plan " *
+                                              "step 2); the obstacles' IBM penalty is a sweep term, used when no " *
+                                              "slab is on",
     # --- the urban site ------------------------------------------------------
     "Urban.UrbanSite" => "captures the top and open-face heat fluxes of the stage-start state, a reduction " *
                          "(prepare!): plan step 5",
     "Urban.GeostrophicCoupling" => "geostrophic pressure gradient, pointwise: plan step 2",
     "Urban.MoistBuoyancy" => "moist (virtual θ) buoyancy, pointwise: plan step 2",
-    "Urban.WallModelFacades" => "the facade wall model's stress on cells next to walls (masks as inputs) and " *
-                                "its post-predictor correction: plan steps 5 and 6",
-    "Urban.NestingCoupling" => "the nest's flux registers and boundary relaxation of the child: plan step 5",
+    "Urban.WallModelFacades" => "the facade wall model's implicit stress on the predicted faces next to walls " *
+                                "(apply_immersed_wall_stress!, post-predictor): plan step 6; its removal of the " *
+                                "stencil's facade flux is a sweep term",
+    "Urban.NestingCoupling" => "the two-way child's interface-flux booking (:body_force) reads only the " *
+                               "stage-start state and could run in prepare!, but every urban domain also has " *
+                               "Urban.UrbanSite's :tendencies stage, so no configuration could run it fused or " *
+                               "test it yet: with UrbanSite's sweep term (plan step 5 rest)",
     "Urban.VegDrag" => "implicit vegetation drag on the predicted velocity (post-predictor): plan step 6",
     "Urban.IBMCoupling" => "immersed-boundary forcing on the predicted velocity (post-predictor): plan step 6",
     "Urban.SurfaceExchangeMOST" => "surface exchange on the predicted near-wall cells (post-predictor): plan step 6",
@@ -129,7 +132,6 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
                       momentum_advection, ν)
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
-    has_open_boundaries(sim.bcs) && return nothing
     (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
     post_predictor! === nothing || return nothing
     momentum_advection === momentum_advect! || return nothing
@@ -146,7 +148,6 @@ end
 function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection)
     out = Pair{String,String}[]
     Backends.backend(sim.u.data) isa Backends.CPUBackend || push!(out, _blocker("builtin.backend"))
-    has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
     closure === nothing || push!(out, _blocker("builtin.sgs"))
     sim.has_buoyancy && push!(out, _blocker("builtin.buoyancy"))
