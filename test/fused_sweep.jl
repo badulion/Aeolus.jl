@@ -586,7 +586,7 @@ end
         "has_surface_flux" => "builtin.surface_flux", "add_surface_flux!" => "builtin.surface_flux",
         "has_sponge" => "builtin.sponge", "add_velocity_sponge!" => "builtin.sponge",
         "body_force!" => "builtin.body_force", "post_predictor!" => "builtin.post_predictor",
-        "update_open_boundaries!" => "builtin.open_boundaries")
+        "update_open_boundaries!" => :projection)   # after the sweep, before the projection (#533 step 5)
     seen = Set{String}()
     for m in eachmatch(r"\bsim\.(has_\w+)|\b(add_\w+!|_add_\w+!|compute_sgs!|advect_centered!|laplacian|axpy!|_advance_scalar!|_base_tendencies!|zero_storage!)\(|\b(body_force!|post_predictor!|momentum_advection)\(", body)
         name = something(m.captures...)

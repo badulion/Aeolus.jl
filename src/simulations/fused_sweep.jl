@@ -41,8 +41,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                             "only the pipeline's components can be expressed as sweep terms",
     "builtin.post_predictor" => "post-predictor operators (the post_predictor! hook) run on the predicted " *
                                 "field; the delayed-row scheme of the sweep for them is plan step 6",
-    "builtin.open_boundaries" => "open lateral faces: the radiating outflow and the boundary data's mass " *
-                                 "correction around the predictor are not yet verified inside the sweep",
     "builtin.backend" => "the ring-buffer sweep runs on the CPU backend; the per-point form for a GPU is plan step 8",
     "builtin.core" => "this step core (step_imex!, the anelastic core) has no fused sweep yet, plan step 8",
     "builtin.budgets" => "the measured budgets count the substages and attribute the in-core components " *
@@ -129,7 +127,6 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
                       momentum_advection, ν)
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
-    has_open_boundaries(sim.bcs) && return nothing
     (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
     post_predictor! === nothing || return nothing
     momentum_advection === momentum_advect! || return nothing
@@ -146,7 +143,6 @@ end
 function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection)
     out = Pair{String,String}[]
     Backends.backend(sim.u.data) isa Backends.CPUBackend || push!(out, _blocker("builtin.backend"))
-    has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
     closure === nothing || push!(out, _blocker("builtin.sgs"))
     sim.has_buoyancy && push!(out, _blocker("builtin.buoyancy"))
