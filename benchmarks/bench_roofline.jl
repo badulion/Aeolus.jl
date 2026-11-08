@@ -478,16 +478,24 @@ end
 # ROOFLINE_ALTERNATE=1 (with ROOFLINE_PROF=0): the steps alternate between
 # loop_fusion = "never" and "if_possible" in one process, so both see the
 # same clock and power state (a 15 W cap moves separate processes by up to
-# 1.8x, #535); `nsteps` steps of each, min and median per setting.
+# 1.8x, #535); `nsteps` steps of each, min and median per setting. The
+# order within a pair swaps every step (never first, then if_possible
+# first), so neither setting always follows the other's cache and clock
+# state. The "if_possible" steps' own substage counts (fused, one loop per
+# term) are printed, so the log shows whether every one of them fused.
 function bench_alternate(model, d, stepper, name, nsteps)
     SIMS = Aeolus.Simulations
     ts = Dict("never" => Float64[], "if_possible" => Float64[])
-    for _ in 1:nsteps, lf in ("never", "if_possible")
+    nf = 0; nu = 0
+    r = d.state.workspaces.fused
+    for n in 1:nsteps, lf in (isodd(n) ? ("never", "if_possible") : ("if_possible", "never"))
         SIMS.set_loop_fusion!(d.state, lf)
+        f0, u0 = r.fused, r.unfused
         push!(ts[lf], @elapsed stepper())
+        lf == "if_possible" && (nf += r.fused - f0; nu += r.unfused - u0)
     end
     rep = Aeolus.Components.sweep_report(d)
-    println("loop fusion ($(name)), both settings: substages fused ", rep["substages_fused"],
+    println("loop fusion ($(name)), \"if_possible\" steps: $nf substages fused, $nu with one loop per term",
             isempty(rep["not_fusable"]) ? "" : " (not fusable: " * join(first.(split.(rep["not_fusable"], ":")), ", ") * ")")
     med(v) = (w = sort(v); n = length(w); isodd(n) ? w[(n+1)÷2] : (w[n÷2] + w[n÷2+1]) / 2)
     for lf in ("never", "if_possible")
