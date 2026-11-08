@@ -196,7 +196,7 @@ part_inputs(p::EddyScalar) = (p.Kh, p.Kv)
 part_inputs(p::TensorScalar) = (p.K11, p.K22, p.K33, p.K12, p.K13, p.K23)
 
 # the scalar part of field f (SWEEP_Θ or SWEEP_QV) of state array ϕ
-@inline add_scalar_row!(::Nothing, f, buf, a, b, s, j, k, ii, ϕ, m) = nothing
+@inline add_scalar_row!(p, f, buf, a, b, s, j, k, ii, ::Nothing, m) = nothing   # dry: no qv
 @inline add_scalar_row!(p::EddyScalar, f, buf, a, b, s, j, k, ii, ϕ::AbstractArray, m) =
     _sgs_scalar_row!(buf, a, b, f, s, j, k, ii, ϕ, p.Kh, p.Kv, p.s, m)
 @inline add_scalar_row!(p::TensorScalar, f, buf, a, b, s, j, k, ii, ϕ::AbstractArray, m) =

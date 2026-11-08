@@ -124,7 +124,7 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 # is a sweep term (the base tendencies first, with viscosity `ν` or
 # `nothing`), else `nothing`. Type-stable per configuration: a tuple type
 # or Nothing.
-function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
+@inline function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
                       momentum_advection, ν)
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
     has_open_boundaries(sim.bcs) && return nothing

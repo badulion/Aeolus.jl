@@ -25,7 +25,7 @@ _sgs_choice(c, stress::Symbol) = SGSChoice(c, stress)
 # `nothing` when it cannot run inside the sweep (its momentum or scalar
 # tendency has no part the sweep evaluates).
 _sgs_terms(sim, ::Nothing) = ()
-function _sgs_terms(sim, c::SGSChoice)
+@inline function _sgs_terms(sim, c::SGSChoice)
     t = Operators.sgs_sweep_term(c.closure, sim, c.stress, sim.lap_θ)
     return t === nothing ? nothing : (t,)
 end

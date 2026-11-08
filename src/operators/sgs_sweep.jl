@@ -48,7 +48,8 @@ function _eddy_momentum_part(f::SGSFields, g::AbstractMesh, stress::Symbol)
         g isa RegularGrid || return nothing        # the operator refuses it: the separate loops say why
         return _FV.EddyMomentum(f.νh.data, f.νv.data, true, T(1 / g.dx), T(1 / g.dy), T(1 / g.dz))
     end
-    _check_sgs_stress(stress)
+    _check_sgs_stress(stress)                     # throws: neither form
+    return nothing
 end
 
 """
@@ -83,9 +84,9 @@ end
 
 The SGS closure of a Boussinesq substage as a term of the fused sweep
 (#533 plan step 4): `closure` and its coefficient storage `f`; the parts
-`mom` (momentum), `θ` and `qv` (`nothing` when dry); `scratch`, the field
-`_add_sgs_tracer!` computes qv's own diffusivity into, and `own`, whether
-it does ([`sgs_tracer_own_diffusivity`](@ref)). Built by
+`mom` (momentum), `θ` and `qv` (evaluated when `moist`); `scratch`, the
+field `_add_sgs_tracer!` computes qv's own diffusivity into, and `own`,
+whether it does ([`sgs_tracer_own_diffusivity`](@ref)). Built by
 [`sgs_sweep_term`](@ref). Its [`prepare!`](@ref FiniteVolume.prepare!)
 computes the coefficients (`compute_sgs!`) from the stage-start state, as
 the separate loops do; inside the sweep they are inputs.
@@ -98,6 +99,7 @@ struct SGSTerm{C, F<:SGSFields, M, S1, S2, K} <: _FV.SweepTerm
     qv::S2
     scratch::K
     own::Bool
+    moist::Bool
 end
 
 """
@@ -110,23 +112,25 @@ use); `nothing` when its momentum or scalar tendency has no part the
 sweep can evaluate (the substage then runs one loop per term, with the
 closure's type as the reason).
 """
-function sgs_sweep_term(c::AbstractSGSClosure, sim, stress::Symbol, scratch)
+@inline function sgs_sweep_term(c::AbstractSGSClosure, sim, stress::Symbol, scratch)
     f = sgs_fields(c, sim)
     mom = sgs_momentum_sweep(c, f, sim, stress)
     mom === nothing && return nothing
     θp = _scalar_part(c, f, sim)
     θp === nothing && return nothing
     moist = hasproperty(sim, :has_moisture) && sim.has_moisture
-    own = moist && sgs_tracer_own_diffusivity(c)
-    qp = !moist ? nothing :
-         own ? _FV.EddyScalar(scratch.data, scratch.data, one(eltype(scratch.data))) : θp
-    return SGSTerm(c, f, mom, θp, qp, scratch, own)
+    # qv's part is a type of the closure, not of the run (dry: not evaluated)
+    own = sgs_tracer_own_diffusivity(c)
+    qp = own ? _FV.EddyScalar(scratch.data, scratch.data, _unit_scale(θp, eltype(scratch.data))) : θp
+    return SGSTerm(c, f, mom, θp, qp, scratch, own, moist)
 end
+# the factor of qv's own diffusion (the 1 of `add_eddy_diffusion_scalar!(tϕ, ϕ, κ)`)
+# in the type of θ's, so the term's type does not depend on the closure's flags
+_unit_scale(p::_FV.EddyScalar, ::Type{T}) where {T} = oftype(p.s, 1)
+_unit_scale(p, ::Type{T}) where {T} = one(T)
 
-_FV.footprint(t::SGSTerm) = map(max, _FV.part_footprint(t.mom), _FV.part_footprint(t.θ),
-                                t.qv === nothing ? (0, 0, 0) : _FV.part_footprint(t.qv))
-_FV.sweep_inputs(t::SGSTerm) = (_FV.part_inputs(t.mom)..., _FV.part_inputs(t.θ)...,
-                                (t.qv === nothing ? () : _FV.part_inputs(t.qv))...)
+_FV.footprint(t::SGSTerm) = map(max, _FV.part_footprint(t.mom), _FV.part_footprint(t.θ), _FV.part_footprint(t.qv))
+_FV.sweep_inputs(t::SGSTerm) = (_FV.part_inputs(t.mom)..., _FV.part_inputs(t.θ)..., _FV.part_inputs(t.qv)...)
 
 # The coefficients from the stage-start state (velocity, θ, qv halos
 # filled by the core), then qv's own diffusivity: what the separate loops
@@ -136,7 +140,7 @@ function _FV.prepare!(t::SGSTerm, sim, Δt)
     (f.νh === t.f.νh && f.νv === t.f.νv && f.κh === t.f.κh && f.κv === t.f.κv) ||
         throw(ArgumentError("SGSTerm: compute_sgs! of $(nameof(typeof(t.closure))) wrote other fields " *
                             "than its sgs_fields"))
-    if t.qv !== nothing
+    if t.moist
         κ = sgs_tracer_diffusivity!(t.scratch, t.closure, f, sim, sim.qv)
         (κ !== f.κh) == t.own ||
             throw(ArgumentError("SGSTerm: sgs_tracer_diffusivity! and sgs_tracer_own_diffusivity of " *
