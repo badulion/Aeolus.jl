@@ -1660,8 +1660,8 @@ end
 end
 
 """
-    foreach_column!(backend, body!, cols, args...; partials = nothing, weight = 1)
-        -> partials
+    foreach_column!(backend, body!, cols, args...; partials = nothing, weight = 1,
+                    schedule = :static) -> partials
 
 Run the column body `body!(i, j, args...)` (`cols = (ir, jr)`, the
 `(i, j)` columns of a surface) or `body!(n, args...)` (`cols = (nr,)`, a
@@ -1766,7 +1766,7 @@ foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,AbstractUnitRange{<
 # ---- the dynamic (guided) schedule of column launches (#537) ---------------
 
 """
-    dynamic_columns!(body!, n, args::Tuple)
+    dynamic_columns!(body!, n, args::Tuple; ntasks = Threads.nthreads())
 
 Run `body!(c, args...)` for `c = 1:n` on all Julia threads, each thread
 claiming the next contiguous run of indices from a shared atomic counter
@@ -1780,13 +1780,20 @@ obey the [`launch!`](@ref) contract (no index writes what another reads
 or writes); which thread runs which index is not reproducible, so the
 results must not depend on it.
 
+`ntasks` (default: the thread count, at most `n`) is the number of
+claiming tasks. More tasks than threads is allowed — they then share the
+threads — which lets a test exercise several interleaved claimers on a
+single-threaded process.
+
 Reference: Polychronopoulos, C. D. & Kuck, D. J. (1987). Guided
 self-scheduling: a practical scheduling scheme for parallel
 supercomputers. *IEEE Trans. Comput.*, C-36, 1425-1439.
 """
-function dynamic_columns!(body!::F, n::Int, args::A) where {F, A<:Tuple}
+function dynamic_columns!(body!::F, n::Int, args::A;
+                          ntasks::Integer = Threads.nthreads()) where {F, A<:Tuple}
     n <= 0 && return nothing
-    nt = min(Threads.nthreads(), n)
+    ntasks >= 1 || throw(ArgumentError("dynamic_columns!: ntasks must be ≥ 1, got $ntasks"))
+    nt = min(Int(ntasks), n)
     next = Threads.Atomic{Int}(1)
     @sync for _ in 1:nt
         Threads.@spawn _claim_runs!(body!, next, n, nt, args)

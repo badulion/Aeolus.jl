@@ -188,8 +188,8 @@ end
 end
 
 @testset "TiledUrbanSurface: the surface step against a column-by-column reference (#537)" begin
-    # step_tiles! (lazy forcings, the mosaic's fluxes in place, the column
-    # launch) against the plain construction: each column's air as a vector
+    # step_tiles! (lazy forcings, the mosaic's tile fluxes filled in a loop,
+    # the dynamic column launch) against the plain construction: each column's air as a vector
     # of forcings by hand, step_parent_column!, the canopy sources and u* by
     # hand. The same arithmetic per column; the area sums are folded in
     # another order (a threaded launch folds the column partials), so they

@@ -163,6 +163,31 @@ end
             @inbounds w[c] = s
         end
         @test work ≈ [sum(sin, 1:c) for c in 1:500] rtol = 1e-12        # summation order per index unchanged
+        # several claimers interleaved, also on a single-threaded process (the
+        # PR gate runs at 1 thread): 4 tasks that yield after every index, so
+        # all of them claim runs from the one counter while the others are
+        # mid-run. Every index once; each run contiguous and of the guided
+        # length max(1, ⌊R/(2 n_t)⌋) — the first run of 1000 indices over 4
+        # claimers is 1:125, the next starts at 126 with ⌊875/8⌋ = 109.
+        owner = zeros(Int, 1000); hits = zeros(Int, 1000)
+        Aeolus.Backends.dynamic_columns!(1000, (owner, hits); ntasks = 4) do c, o, h
+            @inbounds o[c] = Int(objectid(current_task()) % typemax(Int)); @inbounds h[c] += 1
+            yield()
+        end
+        @test all(==(1), hits)
+        @test length(unique(owner)) == 4                  # every claimer took part
+        @test all(==(owner[1]), owner[1:125]) && owner[126] != owner[1] && all(==(owner[126]), owner[126:234])
+        @test count(c -> owner[c] != owner[c - 1], 2:1000) >= 4      # runs, not one block per claimer
+        @test_throws ArgumentError Aeolus.Backends.dynamic_columns!((c,) -> nothing, 5, (); ntasks = 0)
+        # the partials of a column launch under interleaved claimers: the rows
+        # equal the serial loop's (a copy per column, the same arithmetic)
+        Y = randn(Xoshiro(5370), 9, 6, 5)
+        ys(i, j, A) = (yield(); s = 0.0; @inbounds(for k in axes(A, 3); s += A[i, j, k]; end); (s, abs(s)))
+        Pref = permutedims(reduce(hcat, [collect(ys(i, j, Y)) for j in 1:6 for i in 1:9]))
+        Pint = zeros(54, 2)
+        Aeolus.Backends.dynamic_columns!(Aeolus.Backends._column_run_store_body!, 54,
+                                         (ys, (1:9, 1:6), Pint, (Y,)); ntasks = 3)
+        @test agree(Pint, Pref)
         # foreach_column! / column_sum: the schedule changes the split only,
         # so partials and totals are the same as the static schedule's
         X = randn(Xoshiro(537), 13, 11, 7)
