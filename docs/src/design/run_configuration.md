@@ -30,6 +30,7 @@ seed = 1
 
 [timestep]             # run level: one scheme steps every domain
 scheme = "rk3"
+loop_fusion = "if_possible"   # "always" | "never": all tendency terms in one pass (#533)
 
 [time]                 # run level: one clock for every domain
 dt = "adaptive"        # or a fixed step in seconds

@@ -66,6 +66,10 @@ Components.component_name(e::UrbanEntry) = e.name
 Components.section(e::UrbanEntry) = string(e.name)
 Components.stages(e::UrbanEntry) = e.stages
 Components.budget!(e::UrbanEntry, d::Domain, b) = budget!(e.c, urban_case(d), b)
+# the fused sweep (#533): the wrapped coupling's term and documented reason
+# (a dynamic call, as the stage call: the coupling field is abstract)
+Components.sweep_type(e::UrbanEntry) = typeof(e.c)
+Aeolus.Operators.FiniteVolume.sweep_term(e::UrbanEntry, d::Domain) = Aeolus.Operators.FiniteVolume.sweep_term(e.c, d)
 function Components.run_stage!(e::UrbanEntry, d::Domain, v::Val{S}, dt) where {S}
     case = urban_case(d)
     t0 = time_ns()

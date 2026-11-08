@@ -142,12 +142,72 @@ end
 
 _any_attached(cs, stages) = any(c -> any(s -> attaches(c, s), stages), cs)
 
+# --- the hooks in the fused sweep (#533) ------------------------------------
+# The body-force hook is a tuple of sweep terms when every component of
+# stages 6 and 7 has one (`FiniteVolume.sweep_term(c, d)`), in the
+# pipeline's order (:tendencies, then :body_force, each in the domain's
+# component order), and the budgets are off (they measure the in-core
+# components on whole tendency fields and count the substages in the
+# hook: plan step 7). Otherwise `nothing`, and the core runs the hook.
+function Simulations.hook_terms(h::_ForceHook, sim)
+    h.d.budgets === nothing || return nothing
+    a = _stage_terms(h.d.components, h.d, :tendencies)
+    a === nothing && return nothing
+    b = _stage_terms(h.d.components, h.d, :body_force)
+    b === nothing && return nothing
+    return (a..., b...)
+end
+_stage_terms(::Tuple{}, d, S::Symbol) = ()
+function _stage_terms(cs::Tuple, d, S::Symbol)
+    rest = _stage_terms(Base.tail(cs), d, S)
+    attaches(first(cs), S) || return rest
+    t = FiniteVolume.sweep_term(first(cs), d)
+    (t === nothing || rest === nothing) && return nothing
+    return (t, rest...)
+end
+function Simulations.hook_blockers(h::_ForceHook, sim)
+    out = Pair{String,String}[]
+    h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))
+    for c in h.d.components
+        (attaches(c, :tendencies) || attaches(c, :body_force)) && FiniteVolume.sweep_term(c, h.d) === nothing &&
+            push!(out, Simulations._blocker(sweep_type(c)))
+    end
+    return out
+end
+# the post-predictor stage: no operator runs in the sweep before plan step 6;
+# its components are reported
+function Simulations.post_hook_blockers(h::_PostHook, sim)
+    out = [Simulations._blocker("builtin.post_predictor")]
+    for c in h.d.components
+        attaches(c, :post_predictor) && push!(out, Simulations._blocker(sweep_type(c)))
+    end
+    return out
+end
+"""
+    sweep_type(c) -> Type
+
+The type whose [`sweep_term`](@ref Aeolus.Operators.FiniteVolume.sweep_term)
+and documented reason (`Simulations.SWEEP_FALLBACKS`) stand for component
+`c` in the fused sweep (#533): its own type, or the wrapped coupling's
+for a wrapper (the urban site's `UrbanEntry`).
+"""
+sweep_type(c) = typeof(c)
+
+"""
+    sweep_report(d::Domain) -> Dict{String,Any}
+
+The `results.toml` table `[loop_fusion.<id>]` of the step core of `d`:
+its setting and whether its substages ran fused (#533,
+`Simulations.sweep_report`).
+"""
+sweep_report(d::Domain) = Simulations.sweep_report(d.state)
+
 """
     core_hooks(d::Domain) -> NamedTuple
 
 The keywords of the core step that run stages 6–8: `body_force!` and
 `post_predictor!` (`nothing` where no component attaches, which keeps the
-core's hook-free fast path; with the budgets on the body-force hook is
+core's hook-free fused sweep; with the budgets on the body-force hook is
 always there, it counts the substages), `sgs` (the `:sgs` component's
 closure) and `sgs_stress` (its momentum divergence, [`sgs_stress`](@ref)).
 The Boussinesq Euler step also takes `momentum_advection` (the
@@ -189,6 +249,14 @@ _chain(::Nothing, ::Nothing) = nothing
 _chain(a, ::Nothing) = a
 _chain(::Nothing, b) = b
 _chain(a, b) = _Chained(a, b)
+# a nest's hook chained with the domain's: both
+Simulations.hook_terms(h::_Chained, sim) =
+    (a = Simulations.hook_terms(h.a, sim); b = Simulations.hook_terms(h.b, sim);
+     a === nothing || b === nothing ? nothing : (a..., b...))
+Simulations.hook_blockers(h::_Chained, sim) =
+    vcat(Simulations.hook_blockers(h.a, sim), Simulations.hook_blockers(h.b, sim))
+Simulations.post_hook_blockers(h::_Chained, sim) =
+    unique!(vcat(Simulations.post_hook_blockers(h.a, sim), Simulations.post_hook_blockers(h.b, sim)))
 
 # The pipeline's hooks with a nest's (ModelNest): the nest's body-force
 # hook (the flux registers) before the domain's, its post-predictor hook

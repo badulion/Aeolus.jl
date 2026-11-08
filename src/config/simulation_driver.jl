@@ -468,6 +468,13 @@ function Config.driver_sections(::SimulationDriverType)
     stepping = slot_section("timestep"; key = "scheme", doc = "The time-stepping scheme.") do s
         provider!(s, "rk3"; default = [:model], doc = "step_rk3!, SSP-RK3, on either core.")
         provider!(s, "euler"; doc = "step!, the forward-Euler projection, on either core.")
+        option!(s, "loop_fusion", Symbol; default = :if_possible, allowed = [:if_possible, :always, :never],
+                doc = "compute all tendency terms and the predictor in one cache-blocked pass over the grid " *
+                      "(loop fusion, #533; PALM's loop_optimization = 'cache'): if_possible (fused when every " *
+                      "term has a fused form, otherwise one loop per term, and results.toml [loop_fusion] names " *
+                      "the terms without one), always (fused, or the run stops at its first step naming them), " *
+                      "never (one loop per term, the reference). Results agree within round-off. The Boussinesq " *
+                      "core only: an anelastic core runs one loop per term")
     end
     tim = section("time"; doc = "The clock: a fixed dt or adaptive steps, for a duration or a number of steps.") do s
         option!(s, "dt", OneOf(Float64, Symbol); default = :adaptive, allowed = [:adaptive], range = (0, Inf),
@@ -1034,6 +1041,7 @@ function _build_domain(cfg; mesh = _mesh(cfg.grid), bcs = nothing, cfl = :config
     else
         BoussinesqSimulation(mesh; θ₀ = d.theta0, moisture = d.moisture, kw...)
     end
+    Simulations.set_loop_fusion!(sim, cfg.timestep.loop_fusion)   # #533
     couplings = _couplings(cfg, mesh)
     _initialise!(sim, cfg, dyn)
     dyn === nothing || _initialise_dynamic!(sim, dyn, cfg)
@@ -1412,6 +1420,10 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     # results.toml: the components' numbers of the run and the checks [checks] enables
     extra = Dict{String,Any}()
     foreach(d -> foreach(c -> merge!(extra, Components.run_results(c, d)), d.components), doms)
+    # each domain's loop-fusion setting and whether its substages ran fused,
+    # with the terms without a fused form (#533); so every run writes
+    # results.toml, also one without checks or component results
+    extra["loop_fusion"] = Dict{String,Any}(d.id => Components.sweep_report(d) for d in doms)
     if checks !== nothing
         _finish_checks(rf, cfg, evaluate_checks(checks); extra = extra)
     elseif !isempty(extra)
