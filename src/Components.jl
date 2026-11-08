@@ -50,7 +50,9 @@ using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, Busi
 using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!, wall_stress_term
 using ..LargeScaleForcing: GeostrophicPressureGradient, AdvectiveTendencies, Subsidence, ProfileNudging,
                            SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature, _zc,
-                           forcing_value, NudgingWeight, ReferenceDamping
+                           forcing_value, NudgingWeight, ReferenceDamping,
+                           ColumnForcing, column_forcing!, column_forcing_supported, reset_column_forcing!,
+                           finish_column_forcing!, add_column_rows!, add_column_point!   # the fused sweep (#533)
 using ..Operators: sponge_profile
 using ..Operators: FiniteVolume                                      # the vertical metrics of ω_y (#505)
 using ..InputDrivers: shift_table

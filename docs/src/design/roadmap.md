@@ -3224,6 +3224,116 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+**Step 3: terms that need a reduction of the stage-start state**
+(branch `issue/533-s3-reductions`). What was built:
+- **The column form of the large-scale forcings**
+  (`src/large_scale_forcing/fused_sweep.jl`, in `LargeScaleForcing`, the
+  one place it is computed): every forcing is, per level, affine in its
+  field's own column, `c0 + cm (φ[k−1] − φ[k]) + cp (φ[k+1] − φ[k]) +
+  λ (r − φ[k])`. `column_forcing!` fills these coefficients
+  (`ColumnForcing`, scratch held by the component, opaque to the
+  structural checkpoint) before the sweep: the geostrophic pressure
+  gradient and the advective tendencies are `c0`; nudging and the
+  mean-gradient subsidence `c0` from the plane means; the local (upwind)
+  subsidence `cm`/`cp`; a `ReferenceDamping` `λ`, `r` (a table, a
+  function, a number, a level vector or `:mean`; two dampings of one
+  field combine into one rate and its weighted target). The plane sums
+  are taken once per field per substage, in the order of
+  `_plane_mean_level!` (so the means are those of the passes), and give
+  the records too (`tendency_integrals`, `damping_tendency`).
+  `add_column_rows!` adds a row: per level and field a constant, a
+  damping or the full stencil loop, chosen once per row; untouched
+  levels and fields are skipped.
+- **`Components.LargeScale`** has a sweep term (`LargeScaleTerm`):
+  `prepare!` evaluates the forcings with the window of `run_stage!`
+  (`clock = :step` or `:core`, the substage's `sim.t`) and the Coriolis
+  parameter of the domain's `Coriolis` component. The reductions are of
+  the stage-start state exactly as the whole-field method reads it: in
+  `_euler_projection!` nothing changes the interior between the halo fill
+  and the body-force hook, and `prepare!` runs at that point
+  (`_blocked_projection!`, before the sweep). Its `SWEEP_FALLBACKS` entry
+  was reworded, not removed: a forcing without a column form (a damping
+  toward a 3-D target, `Field` or array; a forcing type of another
+  module) still makes the component return `nothing`, and the report
+  then names this reason instead of "no documented reason"
+  (`column_forcing_supported`, decided by types so the term infers).
+- **`Urban.UrbanSite`** has a sweep term (`UrbanSiteTerm`): `prepare!`
+  runs the captures of its `:tendencies` stage (the fixed-gradient top's
+  heat flux, the open faces' heat) on the stage-start state; the open
+  faces' θ relaxation (`ReferenceDamping` toward the boundary profile) is
+  put into `OpenBoundaryHeat.sweep`'s column coefficients
+  (`capture_boundary_heat!(…; fused = true)`) instead of the tendency
+  field. Its allowlist entry is removed. No urban domain is fused yet
+  (the other urban couplings, SGS and the open boundaries keep it on one
+  loop per term), so this is checked at the term level.
+
+**Tests** (`test/fused_sweep_reductions.jl`, 804 assertions): every
+forcing's column form against `apply_forcing!` on regular and stretched
+grids, dry and moist, and its records; `LargeScale` (all forcings at
+once, both subsidence forms, five dampings) inside `blocked_predictor!`
+against base + `run_stage!` + predictor for 1–5 slabs (also reversed),
+serial and threaded, dry and moist, Euler and RK3; `step!`/`step_rk3!`
+of a domain with `LargeScale` fused (`loop_fusion = "always"`) against
+one loop per term (`"never"`) for both clocks, every substage fused, the
+tendency fields untouched; the term type-stable (`@inferred hook_terms`);
+an unsupported forcing reported; the urban site's term on the small
+synthetic city, periodic (top flux) and `lateral = "open"` (relaxation):
+the same records as the stage, the relaxation tendency = the stage's.
+Tolerance: the per-level contributions are summed before they are added
+and the upwind difference is written as `cp (φ[k+1] − φ[k])`, so the
+states agree within `agree` (ROUNDOFF_RTOL = 1e-10).
+
+**Test expectation that proved wrong**: the records were first compared
+with a tolerance relative to the record itself; a damping toward the
+slab mean has records that are zero up to round-off (1e-13 point by
+point, exactly 0 from the plane sums), so the tolerance is now relative
+to the summed terms (1e-12 of λ_max N |φ|_max). The code was right.
+
+**Allocations**: `prepare!` allocates per substage, not per point; the
+first version allocated more than the passes (75 kB per RK3 step against
+53 kB), from functions passed through unspecialised arguments
+(`forcing_mean(w_s, …)` boxed a Float64 per level) and a loop variable of
+unstable type; with function barriers 12.7 kB per step (12 704 B on the
+20×12×12 test case with all forcings, and the same 12 704 B at 24×16×24:
+the test asserts the count does not change with the grid, so an
+allocation per level, row or point fails it).
+
+**Measured**: a viscous Boussinesq domain with `LargeScale` (advective
+θ and u, nudging of u, v, θ, mean-gradient and local subsidence of θ;
+`step_rk3!`, `AEOLUS_FFTW_PLANNER=estimate`), one loop per term
+(`loop_fusion = "never"`, the code this configuration runs on the base
+branch) and fused, interleaved in one process (2 steps each, 6 rounds,
+minimum, < 60 s per process, under the benchmark lock), with the fused
+DNS core alone as the floor; s/step, Ryzen AI 9 HX 370, other agents'
+jobs running (1-minute load 3.6–24 over the runs):
+
+| grid | threads | one loop per term | fused | DNS core alone | speed-up |
+| :-- | --: | --: | --: | --: | --: |
+| 128³ | 1 | 0.207 | 0.183 | 0.167 | 1.13 |
+| 128³ | 6 | 0.179 | 0.152 | 0.155 | 1.18 |
+| 128³ | 12 | 0.196 | 0.171 | 0.152 | 1.15 |
+| 192³ | 1 | 0.823 / 0.586 | 0.718 / 0.510 | 0.621 / 0.459 | 1.15 / 1.15 |
+| 192³ | 12 | 0.473 / 0.560 | 0.369 / 0.423 | 0.358 / 0.429 | 1.28 / 1.32 |
+
+(two processes at 192³; the seconds differ by up to 40 % between them,
+boost phase against sustained power and load, the ratios by 3 %.) By
+the byte count: the passes of these forcings move 19 field-passes per
+substage (5 reads: u, v, θ for the nudging, θ for each subsidence; 7
+read-modify-writes of tendency fields: 152 B/point), the fused
+form 3 (the plane sums of u, v, θ: 24 B/point), and the substage's base
+tendencies and predictor become fused too. **Not measured**: a configured
+case (GABLS, the urban site) — none is fused yet, since SGS, the surface
+layer, buoyancy or the urban couplings keep it on one loop per term
+(plan steps 2, 4, 5); their step runs the reference code as before. Bytes
+against `bench_roofline.jl` were not measured.
+
+**Deviation**: the allowlist named plan step 5 for `UrbanSite`; it is
+done in step 3, since its in-core work is reductions of the stage-start
+state (the captures) and a damping, the column form above. The reductions are computed in `prepare!`
+as a separate read pass of u, v, θ per substage; folding them into the
+previous substage's sweep (the means of the predicted state) is a later
+optimisation.
+
 **Step 6: post-predictor operators inside the sweep** (branch
 `issue/533-s6-post-predictor`, from `issue/533-sweep-interface`, with
 #538 / PR #543 merged in so the tiled surface's drag is built on its

@@ -35,6 +35,8 @@ export ForcingTable, forcing_value, forcing_mean,
        Sounding, SoundingLaunch, read_sounding, sounding_profiles, sounding_time,
        ReferenceDamping, damping_tendency     # N-parent-b (#254)
 export ProfileNudging, NudgingWeight, nudging_weight, Subsidence, tendency_integrals
+export ColumnForcing, column_forcing!, column_forcing_supported, reset_column_forcing!, finish_column_forcing!,
+       add_column_rows!, add_column_point!   # #533
 
 # =========================================================================
 # Tables and their interpolation
@@ -767,5 +769,7 @@ end
 include("large_scale_forcing/sounding.jl")
 
 include("large_scale_forcing/reference_damping.jl")   # N-parent-b (#254)
+
+include("large_scale_forcing/fused_sweep.jl")   # the forcings in the fused sweep (#533)
 
 end # module

@@ -116,6 +116,43 @@ function Components.run_stage!(case::UrbanSite, d::Domain, ::Val{:tendencies}, d
     case.open === nothing || capture_boundary_heat!(case.open, case.sim, sgs)
     return nothing
 end
+# In the fused sweep (#533 plan step 3): the captures read the stage-start
+# state (and the SGS diffusivities), which the sweep only reads until the
+# predictor overwrites a row, so they run in the term's `prepare!`, in the
+# order of the stage above; the open faces' θ relaxation goes into the
+# column coefficients of `case.open.sweep`, which the sweep adds row by
+# row. The stage method above stays the reference.
+"""
+    UrbanSiteTerm
+
+The fused-sweep term of the [`UrbanSite`](@ref) (#533): in `prepare!` the
+captures of its `:tendencies` stage (the fixed-gradient top's heat flux,
+the open faces' heat) from the stage-start state; inside the sweep the
+open faces' θ relaxation (`col`, the `LargeScaleForcing.ColumnForcing` of
+`case.open`; `nothing`, no tendency, for a periodic case).
+"""
+struct UrbanSiteTerm{S<:UrbanSite, K} <: Aeolus.Operators.FiniteVolume.SweepTerm
+    case::S
+    col::K
+end
+Aeolus.Operators.FiniteVolume.sweep_term(case::UrbanSite, d) =
+    UrbanSiteTerm(case, case.open === nothing ? nothing : case.open.sweep)
+Aeolus.Operators.FiniteVolume.footprint(::UrbanSiteTerm) = (0, 0, 0)
+function Aeolus.Operators.FiniteVolume.prepare!(t::UrbanSiteTerm, sim, Δt)
+    case = t.case
+    sgs = get(case.step_kwargs, :sgs, nothing)
+    case.top === nothing || capture_top_flux!(case.top, case.sim, sgs)
+    case.open === nothing || capture_boundary_heat!(case.open, case.sim, sgs; fused = true)
+    return nothing
+end
+Aeolus.Operators.FiniteVolume.add_row!(::UrbanSiteTerm{S,Nothing}, buf, a, b, s, j, k, ii, st) where {S} = nothing
+Aeolus.Operators.FiniteVolume.add_row!(t::UrbanSiteTerm, buf, a, b, s, j, k, ii, st) =
+    Aeolus.LargeScaleForcing.add_column_rows!(t.col, buf, a, b, s, j, k, ii, st)
+# the point forms, for the per-point form of the sweep (integration of #533 steps 3 and 8)
+@inline Aeolus.Operators.FiniteVolume.add_tendency!(::UrbanSiteTerm{S,Nothing}, tb, i, j, k, st) where {S} = nothing
+@inline Aeolus.Operators.FiniteVolume.add_tendency!(t::UrbanSiteTerm, tb, i, j, k, st) =
+    Aeolus.LargeScaleForcing.add_column_point!(t.col, tb, i, j, k, st)
+
 # The sanity check, after the stages that follow the core (and before the
 # budgets close): a non-finite wind or surface temperature, or a blowup a
 # coupling flagged, marks the site blown up and ends the step with an

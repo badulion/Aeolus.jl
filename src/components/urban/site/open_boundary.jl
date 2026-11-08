@@ -219,6 +219,7 @@ mutable struct OpenBoundaryHeat{D}
     crate::Vector{Float64}
     relax::Vector{Float64}
     damping::D
+    sweep::Aeolus.LargeScaleForcing.ColumnForcing   # the θ relaxation in the fused sweep (#533), scratch
     total::Float64
     ctotal::Float64
     rtotal::Float64
@@ -254,18 +255,23 @@ function open_boundary_heat(cfg::NamedTuple, sim, ref)
                                    [θi(0.0, 0.0, z) for z in zc])
     end
     return OpenBoundaryHeat(wc, wf, wfd, heat, m.Lx * m.Ly, zeros(Nz), zeros(Nz), zeros(Nz),
-                            zeros(Nz), zeros(Nz), damping, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                            zeros(Nz), zeros(Nz), damping,
+                            Aeolus.LargeScaleForcing.ColumnForcing(), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 end
 
 """
-    capture_boundary_heat!(ob::OpenBoundaryHeat, sim, closure) -> ob
+    capture_boundary_heat!(ob::OpenBoundaryHeat, sim, closure; fused = false) -> ob
 
 In the body-force hook of a dynamics (sub)step: apply the θ relaxation
 toward the boundary data (if any) and record, per level, the heat rate of
 the open faces with the state and the SGS diffusivity (`closure`, or the
-core's built-in Smagorinsky) the step's tendencies were built from.
+core's built-in Smagorinsky) the step's tendencies were built from. With
+`fused` (the urban site's term in the fused sweep, #533) the relaxation
+is not added to the tendency field but put into `ob.sweep`'s column
+coefficients (`LargeScaleForcing.column_forcing!`, the same records),
+which the sweep adds.
 """
-function capture_boundary_heat!(ob::OpenBoundaryHeat, sim, closure)
+function capture_boundary_heat!(ob::OpenBoundaryHeat, sim, closure; fused::Bool = false)
     m = sim.mesh
     fill!(ob.lev, 0.0); fill!(ob.clev, 0.0)
     cl = Aeolus.Operators._active_sgs(sim, closure, nothing)
@@ -286,8 +292,14 @@ function capture_boundary_heat!(ob::OpenBoundaryHeat, sim, closure)
         ob.rate[k] = -(ob.lev[k] - ob.clev[k]) / ob.A
         ob.crate[k] = -ob.clev[k] / ob.A
     end
+    if fused
+        LSF = Aeolus.LargeScaleForcing
+        LSF.reset_column_forcing!(ob.sweep, sim)
+        ob.damping === nothing || LSF.column_forcing!(ob.sweep, sim, ob.damping, sim.t, 0.0)
+        LSF.finish_column_forcing!(ob.sweep)
+    end
     if ob.damping !== nothing
-        apply_forcing!(sim, ob.damping, sim.t, 0.0)
+        fused || apply_forcing!(sim, ob.damping, sim.t, 0.0)
         lv = damping_tendency(ob.damping).levels
         V = m.dx * m.dy * m.dz
         @inbounds for k in eachindex(ob.relax)
