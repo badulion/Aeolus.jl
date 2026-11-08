@@ -3309,6 +3309,39 @@ has no stage argument): one attached to both is switched on once, at
 the one such component today, has no term when it attaches to
 `:body_force` (obstacles).
 
+**Review of step 2** (bugs, the code was wrong; a regression test each in
+the "review of step 2" testset of `test/fused_sweep_pointwise.jl`):
+- `DampingTerm` did not check a level-vector target's length, which
+  `_add_damping!` does: under `"if_possible"` a sponge target of `Nz + 4`
+  values ran on its first `Nz`, a shorter one read out of bounds. It now
+  throws the same `DimensionMismatch`. The axis is passed as a `Val`
+  (with the check the constructor was no longer inlined, and the term's
+  axis parameter, until then found by constant propagation, became
+  unknown: the full suite's `step_rk3!` allocation test caught it, 6.7 kB
+  per step).
+- `SimulationCouplings`' `sweep_term` returned
+  `Union{Nothing, SurfaceFluxTerm}`, so the plan's tuple length was again a
+  run-time value (`hook_terms` inferred as a `Vararg` tuple) for every TOML
+  run with a slab surface. Obstacles are now a type parameter of the
+  component and the term's type follows from it; "the plan type depends on
+  the component types only" holds now for every component with a sweep
+  term.
+- The step core did not specialise on `body_force!`/`post_predictor!`
+  (an argument of a `Function` type that is only passed on is not
+  specialised on), so a `Domain`'s plan was built and the sweep entered
+  through a dynamic call. `step!` (Euler, 20 × 12 × 12, 1 thread) of a
+  domain with a `Coriolis` component allocated 1120 B fused, now 0;
+  Coriolis + `SurfaceThetaFlux` + `Sponge` 4832 → 2368 B (one loop per term:
+  1488 B, the sponge component's own). What remains is the plan tuple
+  itself, heap-allocated once per substage when it holds more than the
+  built-in terms (496 B with Coriolis and `SurfaceThetaFlux`): plan
+  construction, independent of the grid, not in the sweep. The CBL timings
+  above were taken before this fix (a dynamic call per substage, against
+  77–242 ms per step) and were not re-measured.
+- The core sponge's 3-D targets (a `Field`, a halo-padded array:
+  `DampingTargets` kind 2) are now tested in `step!`/`step_rk3!`, fused
+  against one loop per term, on both grids, serial and threaded.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
