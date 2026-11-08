@@ -3277,6 +3277,15 @@ by up to 2× between processes; compare only within a row.
 | 12, b | 0.1756 | 0.1715 | 0.1923 | 0.2123 |
 | 1, a | 0.2024 | 0.2268 | 0.2147 | 0.2480 |
 | 1, b | 0.2271 | 0.2336 | 0.2300 | 0.2523 |
+| 12, c | 0.0931 | 0.0971 | 0.1151 | 0.1327 |
+| 1, c | 0.1280 | 0.1331 | 0.1373 | 0.1554 |
+| 12, d | 0.0877 | 0.0917 | 0.1047 | 0.1223 |
+| 1, d | 0.1114 | 0.1186 | 0.1261 | 0.1446 |
+
+Rows c are the review's rerun (3 steps × 5 repetitions), rows d a rerun
+after the review's fix (6 steps × 3 repetitions); both interleaved, under
+the lock, short runs (boost phase, #535). Row "12, b" (budgets on 2 %
+faster than off) is noise.
 
 - Budget passes per step: **9** fused (one per quantity at the step's
   start, the dynamics' close and the step's end), against **27** on one
@@ -3289,12 +3298,23 @@ by up to 2× between processes; compare only within a row.
   3.3 %. Micro-benchmark of one 128³ sweep: 15.4 → 16.1–17.7 ms with
   booking at 1 thread (+4–14 %), 4.0–4.3 → 4.3–4.4 ms at 12 threads
   (+2–8 %); one meter pass is 0.4–0.7 ms.
-- Result: with loop fusion, budgets on cost 0–3 % of the step at 12
-  threads and 3–12 % at 1 thread. On one loop per term they cost
-  10–25 %.
+- Result: with loop fusion, budgets on cost from noise level up to 5 %
+  of the step at 12 threads (+0.6, −2.3, +4.3, +4.6 % in runs a–d) and
+  3–12 % at 1 thread. On one loop per term they cost 10–25 %.
 - **Not measured**: Berlin and a configured non-urban case (they do not
   run fused before plan steps 2–6), 2/6/24 threads, and bytes per step
   against `bench_roofline.jl`.
+
+**Bug the review caught**: the budget term decided its booked slots by
+`sweep_term` when it was first built, and it is built (and cached) at the
+first substage that asks for the sweep's terms, also an unfused one. A
+component whose sweep term appeared only later was summed in the sweep
+but never booked, its share falling silently into the dynamics' term
+with the closure still round-off. No component behaves like this today
+(every `sweep_term` is static). Now every attributed in-core entry has a
+booked slot; one whose component added nothing sums to 0 and books
+nothing. Regression test: "a sweep term that appears after the budget
+term was built is booked" (it fails, 4 assertions, without the fix).
 
 **Deviations**:
 - The issue's "per-thread, per-level partial sums reduced after the
