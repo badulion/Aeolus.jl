@@ -160,6 +160,7 @@ _OPS.sgs_scalar_tensor(c::SolidMaskedSGS, f::SGSFields, sim) = _OPS.sgs_scalar_t
 _OPS.sgs_momentum_sweep(c::SolidMaskedSGS, f::SGSFields, sim, stress::Symbol) =
     _OPS.sgs_momentum_sweep(c.closure, f, sim, stress)
 _OPS.sgs_tracer_own_diffusivity(c::SolidMaskedSGS) = _OPS.sgs_tracer_own_diffusivity(c.closure)
+_OPS.sgs_sweep_wrapped(c::SolidMaskedSGS) = c.closure
 
 """
     sgs_compare_diagnostics(case) -> Vector{Diagnostic}

@@ -113,6 +113,7 @@ sweep can evaluate (the substage then runs one loop per term, with the
 closure's type as the reason).
 """
 @inline function sgs_sweep_term(c::AbstractSGSClosure, sim, stress::Symbol, scratch)
+    sgs_sweep_form_matches(c, sim, scratch) || return nothing
     f = sgs_fields(c, sim)
     mom = sgs_momentum_sweep(c, f, sim, stress)
     mom === nothing && return nothing
@@ -124,6 +125,89 @@ closure's type as the reason).
     qp = own ? _FV.EddyScalar(scratch.data, scratch.data, _unit_scale(θp, eltype(scratch.data))) : θp
     return SGSTerm(c, f, mom, θp, qp, scratch, own, moist)
 end
+# ---- the sweep form matches the closure's own tendencies ------------------
+#
+# The sweep evaluates the kernels the contract generics name, not the
+# closure's `add_sgs_momentum!` / `add_sgs_scalar!` / `sgs_tracer_diffusivity!`.
+# A closure (from any module) that overrides one of those without the
+# matching sweep form would get the default kernel inside the sweep: other
+# physics than with one loop per term. So the method of each sweep generic
+# that dispatch selects for the closure must be at least as specific as
+# the method of the tendency it stands for; otherwise the closure stays
+# out of the sweep and is reported by its type.
+
+# the closure argument's type in the method `m` (argument `n` of the signature)
+function _closure_param(m::Method, n::Int)
+    p = Base.unwrap_unionall(m.sig).parameters[n]
+    p isa TypeVar && (p = p.ub)
+    return Base.rewrap_unionall(p, m.sig)
+end
+_closure_type(fn, argtypes::Tuple, n::Int) = _closure_param(which(fn, Tuple{argtypes...}), n + 1)
+
+# the wrapped closure whose sweep forms a wrapper forwards to, or nothing
+sgs_sweep_wrapped(::AbstractSGSClosure) = nothing
+sgs_sweep_wrapped(c::IsentropicDiffusion) = c.inner
+
+function _sweep_form_matches_uncached(c, sim, scratch)
+    C, F, S = typeof(c), typeof(sgs_fields(c, sim)), typeof(sim)
+    Tu, Tθ, K = typeof(sim.tu), typeof(sim.θ), typeof(scratch)
+    tend = _closure_type(add_sgs_momentum!, (Tu, Tu, Tu, C, F, S), 4)
+    _closure_type(sgs_momentum_sweep, (C, F, S, Symbol), 1) <: tend || return false
+    tend = _closure_type(add_sgs_scalar!, (Tθ, Tθ, C, F, S), 3)
+    _closure_type(sgs_scalar_face_diffusivity, (C, F, S), 1) <: tend || return false
+    Tk = _closure_type(sgs_scalar_tensor, (C, F, S), 1)
+    (Tk <: tend || Tk === AbstractSGSClosure) || return false     # (the default: no tensor)
+    tend = _closure_type(sgs_tracer_diffusivity!, (K, C, F, S, Tθ), 2)
+    _closure_type(sgs_tracer_own_diffusivity, (C,), 1) <: tend || return false
+    inner = sgs_sweep_wrapped(c)
+    return inner === nothing || sgs_sweep_form_matches(inner, sim, scratch)
+end
+
+# per closure and simulation type, recomputed when methods were added
+# (an entry by reference: looking it up allocates nothing)
+mutable struct _SweepFormEntry
+    C::Any
+    S::Any
+    world::UInt
+    ok::Bool
+end
+const _SWEEP_FORM_CACHE = Dict{UInt, _SweepFormEntry}()
+const _SWEEP_FORM_LOCK = ReentrantLock()
+
+"""
+    sgs_sweep_form_matches(c::AbstractSGSClosure, sim, scratch) -> Bool
+
+Whether the fused sweep evaluates what the closure's own tendencies do
+(#533): for each of `add_sgs_momentum!`, `add_sgs_scalar!` and
+`sgs_tracer_diffusivity!`, the method dispatch selects for `c` of the
+generic the sweep reads instead ([`sgs_momentum_sweep`](@ref),
+[`sgs_scalar_face_diffusivity`](@ref) and [`sgs_scalar_tensor`](@ref),
+[`sgs_tracer_own_diffusivity`](@ref)) is at least as specific, and so for
+the closure a wrapper forwards to (`sgs_sweep_wrapped`). A closure that
+overrides a tendency without its sweep form returns `false` and runs one
+loop per term. Cached per closure and simulation type.
+"""
+@noinline function sgs_sweep_form_matches(c::AbstractSGSClosure, sim, scratch)
+    C, S = typeof(c), typeof(sim)
+    key = hash(S, hash(C))
+    w = Base.get_world_counter()
+    lock(_SWEEP_FORM_LOCK)
+    try
+        e = get(_SWEEP_FORM_CACHE, key, nothing)
+        (e !== nothing && e.C === C && e.S === S && e.world == w) && return e.ok
+    finally
+        unlock(_SWEEP_FORM_LOCK)
+    end
+    ok = _sweep_form_matches_uncached(c, sim, scratch)::Bool
+    lock(_SWEEP_FORM_LOCK)
+    try
+        _SWEEP_FORM_CACHE[key] = _SweepFormEntry(C, S, w, ok)
+    finally
+        unlock(_SWEEP_FORM_LOCK)
+    end
+    return ok
+end
+
 # the factor of qv's own diffusion (the 1 of `add_eddy_diffusion_scalar!(tϕ, ϕ, κ)`)
 # in the type of θ's, so the term's type does not depend on the closure's flags
 _unit_scale(p::_FV.EddyScalar, ::Type{T}) where {T} = oftype(p.s, 1)

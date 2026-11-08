@@ -697,6 +697,7 @@ sgs_scalar_face_diffusivity(::ReynoldsStressClosure, f::SGSFields, sim) = nothin
 # `sgs_scalar_tensor`)
 function Operators.sgs_momentum_sweep(c::ReynoldsStressClosure, f::SGSFields, sim, stress::Symbol)
     g = mesh(sim.u)
+    g isa RegularGrid || return nothing     # as `_add_stress_divergence!`: its separate loop says why
     S = c.S
     return Operators.FiniteVolume.StressMomentum(S.τ11, S.τ22, S.τ33, S.τ12, S.τ13, S.τ23,
                                                  1 / g.dx, 1 / g.dy, 1 / g.dz)

@@ -16,7 +16,11 @@
 #      stress form on a stretched grid keeps the reference's error;
 #   4. footprint, type stability and allocation;
 #   5. the guard: every closure of Aeolus that adds its own momentum,
-#      scalar or tracer tendency adds the matching sweep form.
+#      scalar or tracer tendency adds the matching sweep form;
+#   6. at run time, a closure from any module that adds its own tendency
+#      without the matching sweep form (also inside SolidMaskedSGS) stays
+#      out of the sweep, reported by its type, and the Reynolds stress has
+#      no sweep form on a stretched grid (`sgs_sweep_form_matches`).
 #
 # Tolerance: the sweep evaluates the separate loops' point bodies, in the
 # same order, so the agreement is round-off (`agree`, ROUNDOFF_RTOL of
@@ -111,6 +115,32 @@ OPg.sgs_coefficients!(f::OPg.SGSFields, ::SGTestStress, sim) = (fill!(f.νh.data
 OPg.sgs_explicit_stress(::SGTestStress) = true
 OPg.add_sgs_momentum!(tu, tv, tw, ::SGTestStress, f::OPg.SGSFields, sim; stress::Symbol = :laplacian) =
     (OPg.add_eddy_viscosity_u!(tu, sim.u, f.νh); nothing)     # (only u: its own, odd stress)
+
+# closures from outside Aeolus that override a tendency the sweep would
+# otherwise take from the contract defaults (the review of #533 step 4:
+# like validation/fixtures/sgs_validation.jl's BackgroundGradient, which
+# adds a background θ flux in its own add_sgs_scalar!)
+abstract type SGTestBase <: OPg.AbstractSGSClosure end
+function OPg.sgs_coefficients!(f::OPg.SGSFields, ::SGTestBase, sim)
+    nz = size(f.νh.data, 3)
+    f.νh.data .= 0.01 .+ 0.001 .* reshape(1:nz, 1, 1, nz)     # varies in z: a background flux would show
+    f.κh.data .= f.νh.data
+    return f
+end
+struct SGTestScalar <: SGTestBase end            # θ: its own flux, no sweep form
+function OPg.add_sgs_scalar!(tϕ, ϕ, c::SGTestScalar, f::OPg.SGSFields, sim)
+    OPg.add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh)
+    interior_view(tϕ) .+= 1e-3                   # a background flux divergence the default does not add
+    return nothing
+end
+struct SGTestMom <: SGTestBase end               # momentum: its own (eddy-viscosity, doubled) form
+OPg.add_sgs_momentum!(tu, tv, tw, ::SGTestMom, f::OPg.SGSFields, sim; stress::Symbol = :laplacian) =
+    foreach(_ -> OPg.add_sgs_momentum!(tu, tv, tw, StaticSmagorinsky(0.17), f, sim; stress), 1:2)
+struct SGTestTracer <: SGTestBase end            # qv: its own diffusivity, no trait
+OPg.sgs_tracer_diffusivity!(κ, ::SGTestTracer, f::OPg.SGSFields, sim, ϕ) = (κ.data .= 2 .* f.κh.data; κ)
+struct SGTestFace <: SGTestBase end              # θ: its own flux and the matching face form
+OPg.add_sgs_scalar!(tϕ, ϕ, ::SGTestFace, f::OPg.SGSFields, sim) = OPg.add_eddy_diffusion_scalar!(tϕ, ϕ, f.κh, 2.0)
+OPg.sgs_scalar_face_diffusivity(::SGTestFace, f::OPg.SGSFields, sim) = (f.κh, f.κh, 0.5)
 
 @testset "fused sweep: the SGS closures (#533 step 4)" begin
 
@@ -238,6 +268,43 @@ end
     @test OPg.sgs_sweep_term(StaticSmagorinsky(0.17), s, :symmetric, s.lap_θ) === nothing
     @test_throws ArgumentError step!(s, 0.3; sgs = StaticSmagorinsky(0.17), sgs_stress = :symmetric)
     @test_throws ArgumentError OPg.sgs_sweep_term(StaticSmagorinsky(0.17), s, :lagrangian, s.lap_θ)
+end
+
+@testset "a closure's own tendency without its sweep form stays out of the sweep" begin
+    # the sweep would take the default kernel for it: other physics than
+    # one loop per term. Each runs one loop per term, reported by its type,
+    # and agrees with loop_fusion = "never"; one with the matching face form fuses.
+    for (c, moist, fuses) in ((SGTestScalar(), false, false), (SGTestMom(), false, false),
+                              (SGTestTracer(), true, false), (SGTestTracer(), false, false),
+                              (Aeolus.Urban.SolidMaskedSGS(SGTestScalar(), mask), false, false),
+                              (SGTestFace(), true, true))
+        a = _sg_seed!(BoussinesqSimulation(g; ν = 1e-3, moisture = moist, bcs = walls)); r = deepcopy(a)
+        SIMg.set_loop_fusion!(r, :never)
+        @test (OPg.sgs_sweep_term(c, a, :laplacian, a.lap_θ) === nothing) == !fuses
+        for _ in 1:2
+            step_rk3!(a, 0.3; sgs = c); step_rk3!(r, 0.3; sgs = c)
+        end
+        ok = _sg_agree(a, r)
+        ok || println("  [#533 s4] own-tendency mismatch: $(typeof(c)) moist=$moist")
+        @test ok
+        rep = SIMg.sweep_report(a)
+        if fuses
+            @test rep["substages_fused"] == "all"
+        else
+            @test rep["substages_fused"] == "none" && length(rep["not_fusable"]) == 1 &&
+                  occursin(string(nameof(typeof(c))), only(rep["not_fusable"]))
+        end
+    end
+    # the check follows methods added later (the cache is per world)
+    a = _sg_seed!(BoussinesqSimulation(g; ν = 1e-3))
+    @test OPg.sgs_sweep_term(SGTestMom(), a, :laplacian, a.lap_θ) === nothing
+    @eval OPg.sgs_momentum_sweep(::SGTestMom, f::OPg.SGSFields, sim, stress::Symbol) =
+        OPg._eddy_momentum_part(f, sim.mesh, stress)
+    @test Base.invokelatest(OPg.sgs_sweep_term, SGTestMom(), a, :laplacian, a.lap_θ) isa OPg.SGSTerm
+    # the Reynolds stress has a RegularGrid stencil only, as its separate loop
+    s = _sg_seed!(BoussinesqSimulation(sg; ν = 1e-3, bcs = swalls))
+    rsm = ReynoldsStressClosure(g)
+    @test OPg.sgs_momentum_sweep(rsm, OPg.sgs_fields(rsm, s), s, :laplacian) === nothing
 end
 
 @testset "footprint, inputs, type stability, allocation" begin
