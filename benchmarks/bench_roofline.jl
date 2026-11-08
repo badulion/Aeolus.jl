@@ -5,6 +5,7 @@
 #   julia -t N --project=. benchmarks/bench_roofline.jl stream
 #   julia -t N --project=. benchmarks/bench_roofline.jl flagship [nwarm=2] [nsteps=9]
 #   julia -t N --project=. benchmarks/bench_roofline.jl dns      [N=256] [nwarm=1] [nsteps=3]
+#   julia -t N --project=. benchmarks/bench_roofline.jl config   <toml> [nwarm=2] [nsteps=6] [--set k=v ...]
 #   julia --project=. benchmarks/bench_roofline.jl merge  case ref_threads log1 log2 ...
 #
 # stream: STREAM copy and triad (Threads.@threads :static, first touch by
@@ -17,6 +18,14 @@
 #   its 192 × 192 × 53 parent, the #265 default), `nwarm` steps, then
 #   `nsteps` timed steps (at most 11 steps in all: #392, and long Berlin
 #   runs are paused).
+# config: any configured run (a TOML file, e.g. the dry CBL, GABLS1, the LES
+#   of examples/dns_vs_les), with `--set` overrides (the grid size,
+#   `timestep.loop_fusion="never"` for the reference of #533): `nwarm` steps,
+#   then `nsteps` timed steps (`step_adaptive!(model)`, or `step!(model, dt)` of a
+#   fixed-step run) (#533 step 4).
+#   The case name in the ROW lines is the file's base name. With
+#   ROOFLINE_PROF=0 ROOFLINE_ALTERNATE=1 the timed steps alternate between
+#   loop_fusion "never" and "if_possible" in the one process.
 # dns: `step_rk3!` of the 256³ decaying-turbulence DNS
 #   (test/fixtures/dns_decay.jl, as in KA-o's `dns` mode). The per-step
 #   history of `dns_step!` (on the reduction primitives since #400) is
@@ -68,7 +77,7 @@
 # (JULIA_EXCLUSIVE=1, taskset) can be checked in the log.
 
 const MODE = get(ARGS, 1, "stream")
-const PROF = MODE in ("flagship", "dns") && get(ENV, "ROOFLINE_PROF", "1") != "0"
+const PROF = MODE in ("flagship", "dns", "config") && get(ENV, "ROOFLINE_PROF", "1") != "0"
 
 using Printf
 
@@ -432,6 +441,70 @@ function bench_dns(N; nwarm = 1, nsteps = 3)
     end
 end
 
+function bench_config(path, sets; nwarm = 2, nsteps = 6)
+    CP = Aeolus.Components
+    cfg = load_run_config(path; overrides = vcat(["output.variables=[]"], sets))
+    model = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
+    d = only(model.domains)
+    dt = cfg.time.dt
+    # an adaptive run: its CFL step; a fixed one: its dt
+    stepper() = d.cfl === nothing ? step!(model, Float64(dt); checked = false) : CP.step_adaptive!(model)
+    for _ in 1:nwarm
+        stepper()
+    end
+    name = splitext(basename(path))[1]
+    if !PROF && get(ENV, "ROOFLINE_ALTERNATE", "0") == "1"
+        return bench_alternate(model, d, stepper, name, nsteps)
+    end
+    t = 0.0
+    RECORDING[] = true
+    g0 = Base.gc_time_ns()
+    o0 = OVERHEAD_NS[]
+    for _ in 1:nsteps
+        t += @elapsed stepper()
+    end
+    GC_NS[] = Base.gc_time_ns() - g0
+    RECORDING[] = false
+    ov = (OVERHEAD_NS[] - o0) / 1e6 / nsteps          # the profiler's own time, per step
+    t -= ov * nsteps / 1e3
+    for d in model.domains
+        rep = CP.sweep_report(d)
+        println("loop fusion ($(name)): ", rep["setting"], ", substages fused: ", rep["substages_fused"],
+                isempty(rep["not_fusable"]) ? "" : " (not fusable: " * join(first.(split.(rep["not_fusable"], ":")), ", ") * ")")
+    end
+    dump_stats(name, nsteps, 1e3t / nsteps; step_overhead_ms = ov)
+end
+
+# ROOFLINE_ALTERNATE=1 (with ROOFLINE_PROF=0): the steps alternate between
+# loop_fusion = "never" and "if_possible" in one process, so both see the
+# same clock and power state (a 15 W cap moves separate processes by up to
+# 1.8x, #535); `nsteps` steps of each, min and median per setting. The
+# order within a pair swaps every step (never first, then if_possible
+# first), so neither setting always follows the other's cache and clock
+# state. The "if_possible" steps' own substage counts (fused, one loop per
+# term) are printed, so the log shows whether every one of them fused.
+function bench_alternate(model, d, stepper, name, nsteps)
+    SIMS = Aeolus.Simulations
+    ts = Dict("never" => Float64[], "if_possible" => Float64[])
+    nf = 0; nu = 0
+    r = d.state.workspaces.fused
+    for n in 1:nsteps, lf in (isodd(n) ? ("never", "if_possible") : ("if_possible", "never"))
+        SIMS.set_loop_fusion!(d.state, lf)
+        f0, u0 = r.fused, r.unfused
+        push!(ts[lf], @elapsed stepper())
+        lf == "if_possible" && (nf += r.fused - f0; nu += r.unfused - u0)
+    end
+    rep = Aeolus.Components.sweep_report(d)
+    println("loop fusion ($(name)), \"if_possible\" steps: $nf substages fused, $nu with one loop per term",
+            isempty(rep["not_fusable"]) ? "" : " (not fusable: " * join(first.(split.(rep["not_fusable"], ":")), ", ") * ")")
+    med(v) = (w = sort(v); n = length(w); isodd(n) ? w[(n+1)÷2] : (w[n÷2] + w[n÷2+1]) / 2)
+    for lf in ("never", "if_possible")
+        @printf("%s: min %.2f  median %.2f ms per step (%d steps)\n", lf, 1e3minimum(ts[lf]), 1e3med(ts[lf]), nsteps)
+        row(name, "step_min_" * lf, 1e3minimum(ts[lf]))
+        row(name, "step_median_" * lf, 1e3med(ts[lf]))
+    end
+end
+
 argint(i, d) = length(ARGS) >= i ? parse(Int, ARGS[i]) : d
 init_threads!()
 affinity()
@@ -444,6 +517,16 @@ elseif MODE == "dns"
     N = argint(2, 256)
     stream("dns$N")
     bench_dns(N; nwarm = argint(3, 1), nsteps = argint(4, 3))
+elseif MODE == "config"
+    pos = String[]; sets = String[]
+    let i = 2
+        while i <= length(ARGS)
+            ARGS[i] == "--set" ? (push!(sets, ARGS[i+1]); i += 2) : (push!(pos, ARGS[i]); i += 1)
+        end
+    end
+    stream(splitext(basename(pos[1]))[1])
+    bench_config(pos[1], sets; nwarm = length(pos) >= 2 ? parse(Int, pos[2]) : 2,
+                 nsteps = length(pos) >= 3 ? parse(Int, pos[3]) : 6)
 else
-    error("unknown mode $MODE (stream, flagship, dns, merge)")
+    error("unknown mode $MODE (stream, flagship, dns, config, merge)")
 end

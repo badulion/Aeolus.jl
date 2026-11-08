@@ -29,8 +29,6 @@ reasons of the terms that kept it with one loop per term in its
 """
 const SWEEP_FALLBACKS = Dict{String,String}(
     # --- built-in terms of `_euler_projection!` ------------------------------
-    "builtin.sgs" => "the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): " *
-                     "νt and κh precomputed as inputs of the sweep, plan step 4",
     "builtin.momentum_advection" => "a momentum-advection operator other than the built-in centred one " *
                                     "is a whole-field function; only momentum_advect! is the sweep's base term",
     "builtin.buoyancy" => "add_buoyancy! (dry and moist): pointwise, plan step 2",
@@ -126,19 +124,20 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 # is a sweep term (the base tendencies first, with viscosity `ν` or
 # `nothing`), else `nothing`. Type-stable per configuration: a tuple type
 # or Nothing.
-function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
+@inline function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
                       momentum_advection, ν)
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
     has_open_boundaries(sim.bcs) && return nothing
     (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
     post_predictor! === nothing || return nothing
     momentum_advection === momentum_advect! || return nothing
-    closure === nothing || return nothing          # SGS terms in the sweep: plan step 4
+    sgs = _sgs_terms(sim, closure)                 # () or the closure's term (plan step 4)
+    sgs === nothing && return nothing
     base = BaseTendencies(ν)
-    body_force! === nothing && return (base,)
+    body_force! === nothing && return (base, sgs...)
     ht = hook_terms(body_force!, sim)
     ht === nothing && return nothing
-    return (base, ht...)
+    return (base, sgs..., ht...)
 end
 
 # Every term that keeps a substage off the fused sweep, `key => reason`
@@ -148,7 +147,7 @@ function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_p
     Backends.backend(sim.u.data) isa Backends.CPUBackend || push!(out, _blocker("builtin.backend"))
     has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
-    closure === nothing || push!(out, _blocker("builtin.sgs"))
+    _sgs_blockers!(out, sim, closure)
     sim.has_buoyancy && push!(out, _blocker("builtin.buoyancy"))
     sim.has_coriolis && push!(out, _blocker("builtin.coriolis"))
     sim.has_surface_flux && push!(out, _blocker("builtin.surface_flux"))

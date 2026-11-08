@@ -152,6 +152,34 @@ Aeolus.Components.sweep_type
 Aeolus.Components.sweep_report
 ```
 
+### The SGS closure inside the sweep (#533 step 4)
+
+The closure's coefficients are computed before the sweep
+(`compute_sgs!`, in the term's `prepare!`), its momentum, θ and qv
+tendencies inside it, by the point bodies of the separate loops'
+operators. Which body each tendency uses comes from the closure contract:
+`sgs_momentum_sweep` (momentum), `sgs_scalar_face_diffusivity` or
+`sgs_scalar_tensor` (θ, and qv unless `sgs_tracer_own_diffusivity`). A
+closure that adds its own `add_sgs_momentum!`, `add_sgs_scalar!` or
+`sgs_tracer_diffusivity!` adds the matching generic (guard:
+`test/fused_sweep_sgs.jl`); one without a sweep form, or whose own
+tendency is more specific than its sweep form (`sgs_sweep_form_matches`,
+checked at run time), runs one loop per term and is reported by its
+type.
+
+```@docs
+Aeolus.Operators.SGSTerm
+Aeolus.Operators.sgs_sweep_term
+Aeolus.Operators.sgs_momentum_sweep
+Aeolus.Operators.sgs_tracer_own_diffusivity
+Aeolus.Operators.sgs_sweep_form_matches
+Aeolus.Operators.FiniteVolume.EddyMomentum
+Aeolus.Operators.FiniteVolume.StressMomentum
+Aeolus.Operators.FiniteVolume.EddyScalar
+Aeolus.Operators.FiniteVolume.TensorScalar
+Aeolus.Simulations.SGSChoice
+```
+
 ## LES analysis toolbox (Phase 54)
 
 Explicit filters, the isotropic energy spectrum and the isotropic
