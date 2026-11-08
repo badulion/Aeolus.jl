@@ -23,7 +23,9 @@
 #   `timestep.loop_fusion="never"` for the reference of #533): `nwarm` steps,
 #   then `nsteps` timed steps (`step_adaptive!(model)`, or `step!(model, dt)` of a
 #   fixed-step run) (#533 step 4).
-#   The case name in the ROW lines is the file's base name.
+#   The case name in the ROW lines is the file's base name. With
+#   ROOFLINE_PROF=0 ROOFLINE_ALTERNATE=1 the timed steps alternate between
+#   loop_fusion "never" and "if_possible" in the one process.
 # dns: `step_rk3!` of the 256³ decaying-turbulence DNS
 #   (test/fixtures/dns_decay.jl, as in KA-o's `dns` mode). The per-step
 #   history of `dns_step!` (on the reduction primitives since #400) is
@@ -451,6 +453,9 @@ function bench_config(path, sets; nwarm = 2, nsteps = 6)
         stepper()
     end
     name = splitext(basename(path))[1]
+    if !PROF && get(ENV, "ROOFLINE_ALTERNATE", "0") == "1"
+        return bench_alternate(model, d, stepper, name, nsteps)
+    end
     t = 0.0
     RECORDING[] = true
     g0 = Base.gc_time_ns()
@@ -468,6 +473,28 @@ function bench_config(path, sets; nwarm = 2, nsteps = 6)
                 isempty(rep["not_fusable"]) ? "" : " (not fusable: " * join(first.(split.(rep["not_fusable"], ":")), ", ") * ")")
     end
     dump_stats(name, nsteps, 1e3t / nsteps; step_overhead_ms = ov)
+end
+
+# ROOFLINE_ALTERNATE=1 (with ROOFLINE_PROF=0): the steps alternate between
+# loop_fusion = "never" and "if_possible" in one process, so both see the
+# same clock and power state (a 15 W cap moves separate processes by up to
+# 1.8x, #535); `nsteps` steps of each, min and median per setting.
+function bench_alternate(model, d, stepper, name, nsteps)
+    SIMS = Aeolus.Simulations
+    ts = Dict("never" => Float64[], "if_possible" => Float64[])
+    for _ in 1:nsteps, lf in ("never", "if_possible")
+        SIMS.set_loop_fusion!(d.state, lf)
+        push!(ts[lf], @elapsed stepper())
+    end
+    rep = Aeolus.Components.sweep_report(d)
+    println("loop fusion ($(name)), both settings: substages fused ", rep["substages_fused"],
+            isempty(rep["not_fusable"]) ? "" : " (not fusable: " * join(first.(split.(rep["not_fusable"], ":")), ", ") * ")")
+    med(v) = (w = sort(v); n = length(w); isodd(n) ? w[(n+1)÷2] : (w[n÷2] + w[n÷2+1]) / 2)
+    for lf in ("never", "if_possible")
+        @printf("%s: min %.2f  median %.2f ms per step (%d steps)\n", lf, 1e3minimum(ts[lf]), 1e3med(ts[lf]), nsteps)
+        row(name, "step_min_" * lf, 1e3minimum(ts[lf]))
+        row(name, "step_median_" * lf, 1e3med(ts[lf]))
+    end
 end
 
 argint(i, d) = length(ARGS) >= i ? parse(Int, ARGS[i]) : d
