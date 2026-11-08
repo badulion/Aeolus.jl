@@ -460,12 +460,13 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real; kwargs...) where {T}
 end
 
 function _step_euler!(sim::BoussinesqSimulation{T}, dt::Real;
-                      body_force!::Union{Nothing, Function} = nothing,
-                      post_predictor!::Union{Nothing, Function} = nothing,
+                      body_force!::B = nothing,
+                      post_predictor!::P = nothing,
                       momentum_advection::F = momentum_advect!,
                       sgs = nothing,
                       eddy_viscosity! = nothing,
-                      sgs_stress::Symbol = :laplacian) where {T, F}
+                      sgs_stress::Symbol = :laplacian) where {T, F, B<:Union{Nothing, Function},
+                                                              P<:Union{Nothing, Function}}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)          # no-op unless an open face is unfilled
@@ -498,10 +499,10 @@ end
 # boundaries are evaluated (the end of this Euler step; step_rk3! passes the
 # Shu–Osher substage times).
 function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
-                            closure::C, body_force!, post_predictor!,
+                            closure::C, body_force!::B, post_predictor!::P,
                             momentum_advection::F,
                             sgs_stress::Symbol = :laplacian,
-                            t_bc = sim.t + Δt, stage = nothing) where {T, C, F}
+                            t_bc = sim.t + Δt, stage = nothing) where {T, C, F, B, P}
     # 1. Halo fill so all stencils see valid neighbours.
     fill_state_halos!(sim)
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
@@ -812,10 +813,11 @@ end
 
 function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                     sgs = nothing, eddy_viscosity! = nothing,
-                    body_force!::Union{Nothing, Function} = nothing,
-                    post_predictor!::Union{Nothing, Function} = nothing,
+                    body_force!::B = nothing,
+                    post_predictor!::P = nothing,
                     sgs_stress::Symbol = :laplacian,
-                    workspace::RK3Workspace = rk3_workspace(sim)) where {T}
+                    workspace::RK3Workspace = rk3_workspace(sim)) where {T, B<:Union{Nothing, Function},
+                                                                         P<:Union{Nothing, Function}}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     _check_sgs_stress(sgs_stress)
@@ -861,9 +863,9 @@ end
 
 # One projected Euler-like substep — shared with step! (the pressure
 # projection), without step!'s commit of the closure memory.
-_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force! = nothing,
-              post_predictor! = nothing, sgs_stress::Symbol = :laplacian,
-              t_bc = sim.t + Δt, stage = nothing) =
+_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force!::B = nothing,
+              post_predictor!::P = nothing, sgs_stress::Symbol = :laplacian,
+              t_bc = sim.t + Δt, stage = nothing) where {B, P} =
     _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advect!,
                        sgs_stress, t_bc, stage)
 

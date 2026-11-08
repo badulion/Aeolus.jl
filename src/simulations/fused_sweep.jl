@@ -119,8 +119,11 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 # is a sweep term (the base tendencies first, with viscosity `ν` or
 # `nothing`), else `nothing`. Type-stable per configuration: a tuple type
 # or Nothing.
-function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
-                      momentum_advection, ν)
+# (The hooks' types are parameters: an argument of a Function type that is
+# only passed on is otherwise not specialised on, and the plan's type
+# would be left to a dynamic call; review of #533 step 2.)
+function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!::B, post_predictor!::P,
+                      momentum_advection, ν) where {B, P}
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
     has_open_boundaries(sim.bcs) && return nothing
     post_predictor! === nothing || return nothing
@@ -289,8 +292,8 @@ end
 # Steps 2-12 of `_euler_projection!` in the fused sweep when every term of
 # the substage is a sweep term; `false` (and the substage counted as
 # unfused) otherwise.
-function _try_fused!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, closure, body_force!,
-                     post_predictor!, momentum_advection, ν) where {T}
+function _try_fused!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, closure, body_force!::B,
+                     post_predictor!::P, momentum_advection, ν) where {T, B, P}
     setting = sim.workspaces.fused.loop_fusion
     if setting === :never                  # one loop per term, by choice: nothing to report
         sim.workspaces.fused.unfused += 1
