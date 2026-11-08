@@ -311,7 +311,7 @@ end
     a.sponge_target = r.sponge_target = (u = 2.0, v = -1.0, w = 0)
     step!(a, 0.5); step!(r, 0.5)
     @test _fp_agree(a, r)
-    @test a.workspaces.sponge.u == 2.0                   # exact: the target, copied
+    @test a.workspaces.sponge.targets.c[1] == 2.0        # exact: the target, copied
 end
 
 @testset "components: Coriolis, SurfaceThetaFlux, Sponge, Fringe in the fused sweep" begin
@@ -379,7 +379,22 @@ end
                                                           _FP_CP.SurfaceThetaFlux(0.1, 0.0),
                                                           _FP_CP.Sponge(0.02, 70.0, (u = 0.0, v = 0.0, w = 0.0))))
     ht = @inferred _FP_SIM.hook_terms(_FP_CP.core_hooks(d).body_force!, d.state)
-    @test ht isa Tuple && length(ht) == 3 && isconcretetype(typeof(ht))
+    @test ht isa Tuple && isconcretetype(typeof(ht))
+    @test count(t -> t.on, ht) == 3                  # each attached at one stage (an OptionalTerm per stage)
+    # a component without a sweep term next to one with: still a concrete tuple
+    # (LargeScale attaches at run time; inference once widened this to a Vararg tuple)
+    lsf = (u_g = 8.0, v_g = -2.0, z_g = NaN, advective_tendencies = false, subsidence = false, nudging = false,
+           sounding_nudging_tau = Inf, nudging_factor = 1.2, nudging_depth = 200.0, divergence = 0.0,
+           damping_rate = 0.0, damping_frac = 0.25, damping_target = :initial)
+    s2 = _fp_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
+    d0 = Domain(s2; scheme = :rk3, validate = false)
+    d2 = Domain(d0; components = (CentredAdvection(),
+                                  _FP_CP.build_components((_FP_CP.Coriolis => (; f = 1e-3), _FP_CP.LargeScale => lsf), d0)...))
+    @test _FP_SIM.hook_terms(_FP_CP.core_hooks(d2).body_force!, s2) === nothing   # LargeScale: plan step 3
+    @test Base.return_types(_FP_SIM.hook_terms, typeof.((_FP_CP.core_hooks(d2).body_force!, s2))) ==
+          [Union{Nothing, NTuple{2,_FP_FV.OptionalTerm{_FP_FV.CoriolisTerm{Float64}}}}]
+    step!(d2, 1.0)                                   # (the widened plan crashed Julia 1.13's code generation)
+
 end
 
 end

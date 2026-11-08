@@ -448,8 +448,10 @@ end
                  Domain(d0; components = (CentredAdvection(), c)))
         a = mk(FSDampComponent(0.05)); r = mk(FSDampWhole(0.05))
         h = CPs.core_hooks(a)
-        @test SIMs.hook_terms(h.body_force!, a.state) == (FSDamp(0.05, 0.0),)
-        @test (@inferred SIMs.hook_terms(h.body_force!, a.state)) isa Tuple{FSDamp{Float64}}
+        # (each component's term is switched by its attachment, per stage: #533 step 2)
+        @test SIMs.hook_terms(h.body_force!, a.state) ==
+              (FVs.OptionalTerm(false, FSDamp(0.05, 0.0)), FVs.OptionalTerm(true, FSDamp(0.05, 0.0)))
+        @test (@inferred SIMs.hook_terms(h.body_force!, a.state)) isa NTuple{2,FVs.OptionalTerm{FSDamp{Float64}}}
         @test SIMs.hook_terms(CPs.core_hooks(r).body_force!, r.state) === nothing
         fill!(a.state.tw.data, NaN)
         for _ in 1:3
