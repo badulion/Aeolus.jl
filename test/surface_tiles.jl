@@ -347,3 +347,17 @@ using Aeolus.SoilColumn
     @test b.tiles[1].T ≈ a.tiles[1].T rtol = 1e-12
     @test b.tiles[2].H ≈ a.tiles[2].H rtol = 1e-12
 end
+
+@testset "last_tile_fluxes: a step's vector is not overwritten by the next step (#537)" begin
+    # validation/urban_checks.jl keeps a step's tile fluxes and steps on;
+    # writing them in place (tried in #537) silently changed what it held
+    m = SurfaceMosaic([SlabLand(; T = 310.0), SlabLand(; T = 290.0)], [0.4, 0.6])
+    f = SurfaceForcing(sw_down = 600.0, lw_down = 330.0, T_air = 295.0, q_air = 0.008, U = 3.0)
+    fl1 = step_surface!(m, f, 600.0)
+    tf1 = last_tile_fluxes(m)
+    H1 = [t.H for t in tf1]                     # copied
+    step_surface!(m, f, 600.0)
+    @test [t.H for t in tf1] == H1              # the held vector is that step's
+    @test fl1.H ≈ 0.4 * tf1[1].H + 0.6 * tf1[2].H rtol = 1e-14
+    @test last_tile_fluxes(m)[1].H != H1[1]     # the new step's fluxes differ (the slabs moved)
+end

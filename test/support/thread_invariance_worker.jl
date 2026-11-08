@@ -46,7 +46,8 @@
 #               sedimentation schemes), dew exchange, dry deposition, the
 #               Berlin aq_chem emissions, facet
 #               scenes (implicit, direct, lagged), the dynamic roughness, and
-#               the partials of a foreach_column! launch;
+#               the partials of a foreach_column! launch (static and
+#               dynamic schedule, #537);
 #   fft         (KA-h, #298) one solve of every spectral pressure solver —
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
@@ -581,6 +582,13 @@ function section_columns()
     P = foreach_column!(b, (i, j, A) -> (s = 0.0; @inbounds(for k in axes(A, 3); s += A[i, j, k]; end);
                                          (s, abs(s))), (1:96, 1:80), A; partials = zeros(96 * 80, 2))
     record!("columns/foreach_column!", vcat(vec(P), column_sums(P)))
+    # the dynamic (guided) schedule, #537: a cost that differs between columns;
+    # threaded at -t > 1, the serial loop at -t 1 — the same rows either way
+    cs(i, j, A) = (s = 0.0; @inbounds(for _ in 1:(1 + (i * j) % 7), k in axes(A, 3); s += A[i, j, k]; end);
+                   (s, abs(s)))
+    Pd = foreach_column!(b, cs, (1:96, 1:80), A; partials = zeros(96 * 80, 2), schedule = :dynamic)
+    record!("columns/foreach_column!(dynamic)", vcat(vec(Pd), column_sums(Pd),
+                                                     collect(column_sum(b, cs, (1:96, 1:80), A; schedule = :dynamic))))
 end
 
 # --------------------------------------------------------------------------

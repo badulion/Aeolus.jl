@@ -2101,6 +2101,19 @@ weight, or `plane_reduce!` with per-plane partials. `weight` is the work
 of one column in grid points (its levels, or its root solves), so that
 the serial threshold counts the real work.
 
+**Schedule (#537).** By default a column launch is split like any other
+launch, into equal row groups. A body whose cost differs between columns
+passes `schedule = :dynamic`: the threads then claim contiguous runs of
+columns from an atomic counter, each run half of the remaining columns'
+share per thread
+([`dynamic_columns!`](@ref Aeolus.Backends.dynamic_columns!), guided
+self-scheduling), so they finish together on any core count or mix of
+fast and slow cores. Nothing is tuned to a machine. The partials are
+stored per column and folded in column order as before, so the totals
+do not depend on the schedule. The tiled surface of a domain
+(`TiledUrbanSurface`: 2–60 µs per Berlin column, set by its tiles) uses
+it.
+
 **What runs per column.**
 
 * Surface exchange (`step_all_surfaces!`): the columns are grouped by
