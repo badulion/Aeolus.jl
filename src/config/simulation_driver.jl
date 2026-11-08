@@ -22,7 +22,7 @@ module SimulationDriver
 
 using Random: Xoshiro, randn
 using ..Grids: RegularGrid, CellCenter
-using ..Operators: PassotPouquetSpectrum, isotropic_turbulence_field!, spectrum_wavenumbers
+using ..Operators: Operators, PassotPouquetSpectrum, isotropic_turbulence_field!, spectrum_wavenumbers
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, FluxBC, open_boundary_conditions, open_boundary_states,
                             set_boundary_data!

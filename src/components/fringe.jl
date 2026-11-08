@@ -159,3 +159,24 @@ function outputs(c::Fringe)
     return OutputVariable[OutputVariable("skin_friction", "1", "skin friction coefficient 2 tau_w / U_inf^2 of the plate",
                                          :xy, cf)]
 end
+
+# --- the fused sweep (#533) ---------------------------------------------------
+# The relaxation of `add_fringe!` (the damping profile along x) as a sweep
+# term; the target is refreshed to the substage's time before the sweep, as
+# `run_stage!` does before its pass.
+struct FringeSweep{F<:Fringe, S, X<:FiniteVolume.SweepTerm} <: FiniteVolume.SweepTerm
+    c::F
+    sim::S
+    term::X
+end
+function FiniteVolume.sweep_term(c::Fringe, d)
+    g = d.state.mesh
+    coords = (xnodes(g, FaceX()), xnodes(g, FaceY()), xnodes(g, FaceZ()))
+    return FringeSweep(c, d.state, FiniteVolume.DampingTerm(c.fringe.profile, Val(1), coords, c.target, g))
+end
+FiniteVolume.footprint(t::FringeSweep) = FiniteVolume.footprint(t.term)
+FiniteVolume.sweep_inputs(t::FringeSweep) = FiniteVolume.sweep_inputs(t.term)
+FiniteVolume.prepare!(t::FringeSweep, sim, Δt) =
+    (t.c.update! === nothing || t.c.update!(t.c.target, t.sim.t); nothing)
+@inline FiniteVolume.add_row!(t::FringeSweep, buf, a, b, s, j, k, ii, st) =
+    FiniteVolume.add_row!(t.term, buf, a, b, s, j, k, ii, st)

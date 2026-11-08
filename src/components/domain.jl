@@ -157,13 +157,27 @@ function Simulations.hook_terms(h::_ForceHook, sim)
     b === nothing && return nothing
     return (a..., b...)
 end
+# Whether a component attaches to a stage is known only at run time
+# (`stages(c)` may depend on its options), so a component with a sweep term
+# enters as an `OptionalTerm` switched by its attachment: the tuple type
+# depends only on the component types (#533 step 2; with the attachment
+# deciding the tuple's length, inference widened a domain of Coriolis and
+# LargeScale to a Vararg tuple). One without a sweep term blocks where it
+# attaches and adds nothing where it does not. A component's sweep term is
+# all it adds in stages 6 and 7, so one attached to both is switched on
+# once, at :tendencies.
 _stage_terms(::Tuple{}, d, S::Symbol) = ()
 function _stage_terms(cs::Tuple, d, S::Symbol)
     rest = _stage_terms(Base.tail(cs), d, S)
-    attaches(first(cs), S) || return rest
-    t = FiniteVolume.sweep_term(first(cs), d)
+    t = _stage_term(first(cs), d, S)
     (t === nothing || rest === nothing) && return nothing
-    return (t, rest...)
+    return (t..., rest...)
+end
+function _stage_term(c, d, S::Symbol)
+    on = attaches(c, S) && !(S === :body_force && attaches(c, :tendencies))
+    t = FiniteVolume.sweep_term(c, d)
+    t === nothing && return on ? nothing : ()
+    return (FiniteVolume.OptionalTerm(on, t),)
 end
 function Simulations.hook_blockers(h::_ForceHook, sim)
     out = Pair{String,String}[]

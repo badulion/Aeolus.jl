@@ -75,6 +75,8 @@ mutable struct GeostrophicCoupling{F<:AbstractLargeScaleForcing,ZU,ZV} <: UrbanC
     dtv_sp::Float64
     ū::Float64
     v̄::Float64
+    fu::Vector{Float64}           # the level tendencies of the pressure gradient in the fused sweep (#533)
+    fv::Vector{Float64}
 end
 
 component_name(::Type{<:GeostrophicCoupling}) = :geostrophic
@@ -143,8 +145,9 @@ function build(::Type{<:GeostrophicCoupling}, case, o)
                  !core_targets
     zu = sponge_ref ? Field(FaceX(), case.sim.mesh) : nothing
     zv = sponge_ref ? Field(FaceY(), case.sim.mesh) : nothing
+    nz = case.sim.mesh.Nz
     return GeostrophicCoupling(F, o.mode, Float64(o.U_g), Float64(o.V_g), sponge_ref, zu, zv,
-                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, zeros(nz), zeros(nz))
 end
 
 # the level mean of a geostrophic wind component over the step [t, t + dt]
@@ -179,6 +182,69 @@ function run_stage!(c::GeostrophicCoupling, case, ::Val{:body_force}, dt)
         c.dtv_sp = _imean(sim.tv) - tv1
     end
     c.ū, c.v̄ = _imean(sim.u), _imean(sim.v)
+    return nothing
+end
+
+# --- the fused sweep (#533) ---------------------------------------------------
+# The pressure-gradient mode as a sweep term: before the sweep the level
+# tendencies (−f V̄_g, f Ū_g) of the substage (`geostrophic_level_tendency`,
+# the evaluation of `apply_forcing!`) and the diagnostics `run_stage!`
+# records; in the sweep each u, v row adds its level's value and, with the
+# sponge retargeted, the constant −α(z)(0 − U_g) of `add_sponge!` on the
+# zero field. The recorded mean tendencies `dtu`, `dtv`, `dtu_sp`, `dtv_sp`
+# are the level means of what is added (`run_stage!` takes them as the
+# difference of the tendency fields' means: equal within round-off). The
+# nudging mode relaxes plane means (ProfileNudging): no sweep term yet.
+struct GeostrophicSweep{C<:GeostrophicCoupling, S, P, Z} <: FVK.SweepTerm
+    c::C
+    sim::S
+    p::P                          # the core's sponge profile (sponge_ref)
+    zu::Z                         # the heights of the u and v levels
+    zv::Z
+    k0::Int
+end
+function FVK.sweep_term(c::GeostrophicCoupling, d)
+    c.forcing isa GeostrophicPressureGradient || return nothing
+    sim = d.state; m = sim.mesh
+    p = FVK.sponge_profile(sim.sponge_α_max, sim.sponge_z_start, m.z0 + m.Lz)
+    return GeostrophicSweep(c, sim, p, FVK.damping_levels(m, FaceX()), FVK.damping_levels(m, FaceY()), m.Hz)
+end
+FVK.footprint(::GeostrophicSweep) = (0, 0, 0)
+function FVK.prepare!(t::GeostrophicSweep, sim, Δt)
+    c = t.c; m = sim.mesh; F = c.forcing
+    c.U_g = _level_mean(F.U_g, sim, sim.t, Δt)
+    c.V_g = _level_mean(F.V_g, sim, sim.t, Δt)
+    T = eltype(sim.tu)
+    su = sv = 0.0
+    for k in 1:m.Nz
+        c.fu[k], c.fv[k] = Aeolus.LargeScaleForcing.geostrophic_level_tendency(T, m, F.U_g, F.V_g, sim.f_coriolis, sim.t, sim.t + Δt, k)
+        su += c.fu[k]; sv += c.fv[k]
+    end
+    c.dtu, c.dtv = su / m.Nz, sv / m.Nz
+    if c.sponge_ref
+        su = sv = 0.0
+        for k in 1:m.Nz
+            su -= _sponge_ref_rate(t.p, t.zu[k], c.U_g)
+            sv -= _sponge_ref_rate(t.p, t.zv[k], c.V_g)
+        end
+        c.dtu_sp, c.dtv_sp = su / m.Nz, sv / m.Nz
+    end
+    c.ū, c.v̄ = _imean(sim.u), _imean(sim.v)
+    return nothing
+end
+# λ(z)(0 − U): what add_sponge! subtracts on a zero field toward U (0 outside the layer)
+@inline _sponge_ref_rate(p, ξ, U) = FVK.in_damping(p, ξ) ? FVK.damping_rate(p, ξ) * (0.0 - U) : 0.0
+@inline function FVK.add_row!(t::GeostrophicSweep, buf, a, b, s, j, k, ii, st)
+    c = t.c
+    kl = k - t.k0
+    @inbounds begin
+        FVK._row_add!(buf, a, b, FVK.SWEEP_U, s, ii, c.fu[kl])
+        FVK._row_add!(buf, a, b, FVK.SWEEP_V, s, ii, c.fv[kl])
+        if c.sponge_ref
+            FVK.in_damping(t.p, t.zu[kl]) && FVK._row_add!(buf, a, b, FVK.SWEEP_U, s, ii, -_sponge_ref_rate(t.p, t.zu[kl], c.U_g))
+            FVK.in_damping(t.p, t.zv[kl]) && FVK._row_add!(buf, a, b, FVK.SWEEP_V, s, ii, -_sponge_ref_rate(t.p, t.zv[kl], c.V_g))
+        end
+    end
     return nothing
 end
 

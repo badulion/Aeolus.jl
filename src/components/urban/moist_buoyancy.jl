@@ -131,3 +131,45 @@ function smoke_check(c::MoistBuoyancy, case)
             "0.608 = 1/ε − 1 from the MoistThermodynamics molar masses" => abs(a - 0.608) < 1e-3]
 end
 
+
+# --- the fused sweep (#533) ---------------------------------------------------
+# The perturbation (θ_ρ − θ)′ needs the level means over the fluid cells of
+# the stage-start state, so it is computed before the sweep, into `Δ`, as
+# `run_stage!` computes it; the sweep adds g/θ₀ times its value at the w
+# face (the expression of `add_moist_buoyancy!`, which skips the bottom face).
+struct MoistBuoyancySweep{C<:MoistBuoyancy, Q} <: FVK.SweepTerm
+    c::C
+    qv::Q                         # the interior view of the qv tracer
+    coef::Float64
+    Hx::Int
+    Hy::Int
+    Hz::Int
+end
+"""
+    moist_buoyancy_sweep(c::MoistBuoyancy, mesh, qv) -> SweepTerm
+
+The term of the fused sweep (#533) that adds the moist buoyancy of `c`
+(the qv tracer's interior view `qv`) on `mesh`: the same values as its
+`run_stage!` (`moist_buoyancy_perturbation!`, `add_moist_buoyancy!`).
+"""
+moist_buoyancy_sweep(c::MoistBuoyancy, m, qv) = MoistBuoyancySweep(c, qv, c.g / c.θ₀, m.Hx, m.Hy, m.Hz)
+FVK.sweep_term(c::MoistBuoyancy, d) =
+    moist_buoyancy_sweep(c, d.state.mesh, interior_view(tracer(urban_case(d), :qv)))
+FVK.footprint(::MoistBuoyancySweep) = (0, 0, 0)
+FVK.sweep_inputs(t::MoistBuoyancySweep) = (t.c.Δ,)
+function FVK.prepare!(t::MoistBuoyancySweep, sim, Δt)
+    c = t.c
+    moist_buoyancy_perturbation!(c.Δ, interior_view(sim.θ), t.qv, c.qc, c.fluid)
+    return nothing
+end
+@inline function FVK.add_row!(t::MoistBuoyancySweep, buf, a, b, s, j, k, ii, st)
+    kl = k - t.Hz
+    kl >= 2 && kl <= size(t.c.Δ, 3) && _moist_b_row!(buf, a, b, s, j - t.Hy, kl, ii, t.Hx, t.c.Δ, t.coef)
+    return nothing
+end
+@noinline function _moist_b_row!(buf, a, b, s, jl, kl, ii, Hx, Δ, coef)
+    @inbounds @simd ivdep for i in ii
+        buf[i, a, b, FVK.SWEEP_W, s] += coef * 0.5 * (Δ[i-Hx, jl, kl-1] + Δ[i-Hx, jl, kl])
+    end
+    return nothing
+end

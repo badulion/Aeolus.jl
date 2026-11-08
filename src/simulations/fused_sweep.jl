@@ -33,10 +33,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                      "νt and κh precomputed as inputs of the sweep, plan step 4",
     "builtin.momentum_advection" => "a momentum-advection operator other than the built-in centred one " *
                                     "is a whole-field function; only momentum_advect! is the sweep's base term",
-    "builtin.buoyancy" => "add_buoyancy! (dry and moist): pointwise, plan step 2",
-    "builtin.coriolis" => "add_coriolis!: pointwise (four-point average), plan step 2",
-    "builtin.surface_flux" => "add_surface_flux!: pointwise on the first and last level, plan step 2",
-    "builtin.sponge" => "add_velocity_sponge!: pointwise toward a target profile, plan step 2",
     "builtin.body_force" => "a body_force! hook passed to the core as a function is a whole-field operator; " *
                             "only the pipeline's components can be expressed as sweep terms",
     "builtin.post_predictor" => "post-predictor operators (the post_predictor! hook) run on the predicted " *
@@ -49,23 +45,20 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                          "on whole tendency fields (budget_open!/budget_close!); booked inside the sweep " *
                          "from plan step 7",
     # --- components of :tendencies / :body_force -----------------------------
-    "Components.Coriolis" => "f-plane Coriolis, pointwise: plan step 2",
-    "Components.SurfaceThetaFlux" => "prescribed θ flux on the boundary levels, pointwise: plan step 2",
-    "Components.Sponge" => "Rayleigh damping toward a profile, pointwise: plan step 2",
-    "Components.Fringe" => "fringe relaxation toward the inflow state, pointwise with a mask: plan step 2",
     "Components.LargeScale" => "geostrophic forcing, nudging and advective tendencies need horizontal-mean " *
                                "profiles of the stage-start state (prepare!): plan step 3",
     "Components.SurfaceLayer" => "the MOST wall stress and surface fluxes on the first level, its " *
                                  "post-predictor correction: plan steps 5 and 6",
     "Components.KinematicFlow" => "overwrites the predicted velocity with a prescribed flow (post-predictor): " *
                                   "plan step 6",
-    "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise) and the obstacles' IBM penalty " *
-                                              "(a mask): plan steps 2 and 5",
+    "SimulationDriver.SimulationCouplings" => "the obstacles' IBM penalty (a mask, :body_force): plan step 5; " *
+                                              "without obstacles the slab's floor flux runs in the sweep",
     # --- the urban site ------------------------------------------------------
     "Urban.UrbanSite" => "captures the top and open-face heat fluxes of the stage-start state, a reduction " *
                          "(prepare!): plan step 5",
-    "Urban.GeostrophicCoupling" => "geostrophic pressure gradient, pointwise: plan step 2",
-    "Urban.MoistBuoyancy" => "moist (virtual θ) buoyancy, pointwise: plan step 2",
+    "Urban.GeostrophicCoupling" => "mode = :nudging relaxes the plane means of the stage-start state " *
+                                   "(LargeScaleForcing.ProfileNudging): plan step 3; the pressure-gradient " *
+                                   "mode runs in the sweep",
     "Urban.WallModelFacades" => "the facade wall model's stress on cells next to walls (masks as inputs) and " *
                                 "its post-predictor correction: plan steps 5 and 6",
     "Urban.NestingCoupling" => "the nest's flux registers and boundary relaxation of the child: plan step 5",
@@ -126,19 +119,61 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 # is a sweep term (the base tendencies first, with viscosity `ν` or
 # `nothing`), else `nothing`. Type-stable per configuration: a tuple type
 # or Nothing.
-function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
-                      momentum_advection, ν)
+# (The hooks' types are parameters: an argument of a Function type that is
+# only passed on is otherwise not specialised on, and the plan's type
+# would be left to a dynamic call; review of #533 step 2.)
+function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!::B, post_predictor!::P,
+                      momentum_advection, ν) where {B, P}
     Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
     has_open_boundaries(sim.bcs) && return nothing
-    (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
     post_predictor! === nothing || return nothing
     momentum_advection === momentum_advect! || return nothing
     closure === nothing || return nothing          # SGS terms in the sweep: plan step 4
-    base = BaseTendencies(ν)
-    body_force! === nothing && return (base,)
+    core = (BaseTendencies(ν), _builtin_terms(sim)...)
+    body_force! === nothing && return core
     ht = hook_terms(body_force!, sim)
     ht === nothing && return nothing
-    return (base, ht...)
+    return (core..., ht...)
+end
+
+# The built-in pointwise terms of steps 5-6b, in the order of the passes,
+# each switched by its flag (one tuple type per simulation type, #533 plan
+# step 2).
+function _builtin_terms(sim::BoussinesqSimulation)
+    g = sim.mesh
+    return (OptionalTerm(sim.has_buoyancy, BuoyancyTerm(sim.θ₀, sim.g_accel / sim.θ₀)),
+            OptionalTerm(sim.has_coriolis, CoriolisTerm(sim.f_coriolis)),
+            OptionalTerm(sim.has_surface_flux, SurfaceFluxTerm(sim.θ_flux_bottom, sim.θ_flux_top, g)),
+            OptionalTerm(sim.has_sponge, sponge_term(sim.sponge_α_max, sim.sponge_z_start, _sponge_targets(sim), g)))
+end
+
+"""
+    SpongeTargets{T}
+
+The targets `u, v, w` of the core's sponge (`sim.sponge_target`) in the
+concrete form the fused sweep's damping term reads
+([`DampingTargets`](@ref Aeolus.Operators.FiniteVolume.DampingTargets):
+each a number, a level vector or a 3-D array of eltype `T`, a `Field` by
+its data). Made once per simulation and target (`sim.workspaces.sponge`):
+the stored `sponge_target` is a NamedTuple of abstract fields, read here
+once instead of every substage. A level vector or array of eltype `T` is
+the stored one, so an in-place update of it (the nest's sponge target) is
+seen; another eltype is converted once.
+"""
+struct SpongeTargets{T}
+    targets::DampingTargets{T}
+    src::NamedTuple
+end
+function _sponge_targets(sim::BoussinesqSimulation{T}) where {T}
+    c = sim.workspaces.sponge
+    c isa SpongeTargets{T} && c.src === sim.sponge_target && return c.targets
+    return _new_sponge_targets!(sim)
+end
+@noinline function _new_sponge_targets!(sim::BoussinesqSimulation{T}) where {T}
+    tg = sim.sponge_target
+    c = SpongeTargets{T}(DampingTargets{T}(tg.u, tg.v, tg.w), tg)
+    sim.workspaces.sponge = c
+    return c.targets
 end
 
 # Every term that keeps a substage off the fused sweep, `key => reason`
@@ -149,10 +184,6 @@ function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_p
     has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
     closure === nothing || push!(out, _blocker("builtin.sgs"))
-    sim.has_buoyancy && push!(out, _blocker("builtin.buoyancy"))
-    sim.has_coriolis && push!(out, _blocker("builtin.coriolis"))
-    sim.has_surface_flux && push!(out, _blocker("builtin.surface_flux"))
-    sim.has_sponge && push!(out, _blocker("builtin.sponge"))
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))
     post_predictor! === nothing || append!(out, post_hook_blockers(post_predictor!, sim))
     return out
@@ -261,8 +292,8 @@ end
 # Steps 2-12 of `_euler_projection!` in the fused sweep when every term of
 # the substage is a sweep term; `false` (and the substage counted as
 # unfused) otherwise.
-function _try_fused!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, closure, body_force!,
-                     post_predictor!, momentum_advection, ν) where {T}
+function _try_fused!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, closure, body_force!::B,
+                     post_predictor!::P, momentum_advection, ν) where {T, B, P}
     setting = sim.workspaces.fused.loop_fusion
     if setting === :never                  # one loop per term, by choice: nothing to report
         sim.workspaces.fused.unfused += 1
