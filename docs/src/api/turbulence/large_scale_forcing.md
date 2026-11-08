@@ -60,7 +60,8 @@ coefficients into a `ColumnForcing` before the sweep, from the plane sums
 of the stage-start state (nudging, mean-gradient subsidence, a damping
 toward the slab mean) and with the records `apply_forcing!` keeps
 (`tendency_integrals`, `damping_tendency`); `add_column_rows!` adds them
-row by row inside the sweep. The large-scale forcing component
+row by row inside the sweep (`add_column_point!` point by point, in the
+per-point form of the sweep). The large-scale forcing component
 (`Components.LargeScale`) and the urban site's open-face θ relaxation use
 it; `apply_forcing!` stays the reference. `column_forcing_supported`
 says which forcings have the form (all but a damping toward a 3-D target).

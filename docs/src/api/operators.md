@@ -163,6 +163,15 @@ itself (plan step 7): a `BookedTerm` sums the booked fields of each row
 before and after its term into `LevelSums`, and the term's
 `finish_sweep!` (the domain's budget term) books them after the sweep.
 
+How the steps combine (the integration of steps 3, 6, 7 and 8): the
+per-point form runs the post terms after its predictor on every point
+(the schedule `post_plan` gives a point outside the sweep's widths);
+with the budgets on, a post-predictor component the budgets attribute
+runs in its budget context as an `AfterSweep`, and a term tuple that
+`books` stays in the ring-buffer sweep (the per-point form has no
+per-level sums: `builtin.budgets_per_point`); the sound-proof cores and
+the fused IMEX launch call `finish_sweep!` as the Boussinesq core does.
+
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
 Aeolus.Operators.FiniteVolume.sweep_term
@@ -199,6 +208,7 @@ Aeolus.Operators.FiniteVolume.sweep_slabs
 Aeolus.Operators.FiniteVolume.LevelSums
 Aeolus.Operators.FiniteVolume.BookedTerm
 Aeolus.Operators.FiniteVolume.SWEEP_BOOKED
+Aeolus.Operators.FiniteVolume.books
 Aeolus.Simulations.SWEEP_FALLBACKS
 Aeolus.Simulations.SweepReport
 Aeolus.Simulations.sweep_report
