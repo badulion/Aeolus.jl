@@ -26,7 +26,9 @@
 #      book in prepare!, the fused nest = the unfused one, and the
 #      composite ∫θ is conserved to round-off;
 #   5. the urban facade wall model's adapter on the synthetic city, and
-#      the type stability and allocation of the terms.
+#      the type stability and allocation of the terms;
+#   6. the near-wall terms are regular-grid only, as their references: on a
+#      stretched mesh they refuse as the references do.
 #
 # Tolerances: every term evaluates the floating-point expressions of its
 # whole-field reference, in the same order, so the agreement is round-off
@@ -393,6 +395,21 @@ end
     build() = (NWFV.sweep_term(sl, d0), NWW.stencil_wall_flux_term(s, iw; rows = rows), NWI.ibm_penalty_term(sm, 3.0, slot))
     build()
     @test (@allocated build()) <= 256
+end
+
+# The three near-wall terms are regular-grid only, as their whole-field
+# references are: SolidMask (the IBM penalty's and the immersed walls' mask)
+# is defined on a RegularGrid only, the walls' spacings and the surface
+# layer's first-level flux divide by the uniform `mesh.dz`. On a z-stretched
+# mesh the term refuses as its reference does, before any stepping.
+@testset "near-wall terms on a stretched grid: refused as their references" begin
+    str = StretchedGrid(; size = (16, 12, 10), extent = (800.0, 600.0, 400.0), stretching = (:tanh, 1.5))
+    s = BoussinesqSimulation(str; ν = 1e-2, bcs = wall_bcs)
+    d0 = Domain(s; validate = false)
+    sl = only(NWC.build_components((NWC.SurfaceLayer => _nw_sl_opts(),), d0))
+    @test_throws FieldError NWC.run_stage!(sl, d0, Val(:tendencies), 0.1)
+    @test_throws FieldError NWFV.sweep_term(sl, d0)
+    @test_throws MethodError NWI.SolidMask(str)
 end
 
 end
