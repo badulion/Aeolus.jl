@@ -11,59 +11,6 @@ using Aeolus.Operators: advance_sgs!, sgs_state, restore_sgs_state!
 using Aeolus.Backends: CPUBackend, with_backend
 using Random: Xoshiro, randn
 
-@testset "prognostic SGS TKE (P56-b, #182)" begin
-
-@testset "1. free decay at l = Δ (c_ε = 0.70)" begin
-    m = RegularGrid(; size = (4, 4, 4), extent = (40.0, 40.0, 40.0))
-    sim = BoussinesqSimulation(m)
-    Δ, e0, T = 10.0, 1.0, 600.0
-    @test tke_dissipation_coefficient(Δ, Δ) ≈ 0.70
-    exact(t) = (e0^-0.5 + 0.70 * t / (2Δ))^-2           # de/dt = −c_ε e^{3/2}/l
-    c = TKEClosure(m; e0 = e0, dissipation = :exact)
-    for _ in 1:60
-        advance_sgs!(c, sim, T / 60)
-    end
-    @test maximum(abs.(interior_view(c.e) .- exact(T))) / exact(T) < 1e-6   # measured ≤ 1.7e-14
-    @test tke_statistics(c).clips == 0
-end
-
-@testset "2. shear equilibrium: C_s = c_k^{3/4} c_ε^{-1/4}; critical Ri" begin
-    S, Δ = 0.05, 10.0
-    eq = 0.1 / 0.7 * Δ^2 * S^2                            # e = (c_k/c_ε) l² S²
-    @test tke_equilibrium(S^2, 0.0, Δ) ≈ eq rtol = 1e-12
-    # ν_t = c_k Δ √e at that e is Smagorinsky's with C_s = c_k^{3/4} c_ε^{-1/4} = 0.19441
-    @test sqrt(0.1 * Δ * sqrt(eq) / (Δ^2 * S)) ≈ 0.1^0.75 * 0.70^-0.25 rtol = 1e-12
-    Ric = tke_critical_richardson()
-    @test Ric ≈ 1 / (1 + 0.19 / (0.1 * 0.76^2)) rtol = 1e-14
-    @test tke_equilibrium(S^2, 0.25 * S^2, Δ) == 0          # above Ri_c: no equilibrium
-    # below l = Δ, P_s + P_b = ε is linear in x = l/Δ: the closed-form root
-    Ri = 0.2; a = 0.1 * 0.76^2
-    x = (1 / Ri - 1 - 0.19 / a) / (2 + 0.51 / a)
-    @test tke_equilibrium(S^2, Ri * S^2, Δ) ≈ (x * Δ * sqrt(Ri) * S / 0.76)^2 rtol = 1e-10
-end
-
-@testset "contract: pure coefficients, exact rollback" begin
-    m = RegularGrid(; size = (8, 8, 8), extent = (2π, 2π, 2π), halo = (3, 3, 3))
-    sim = BoussinesqSimulation(m)
-    rng = Xoshiro(5)
-    for f in (sim.u, sim.v, sim.w)
-        interior_view(f) .= 0.3 .* randn(rng, 8, 8, 8)
-    end
-    c = TKEClosure(m)
-    initialize_tke!(c, sim)
-    e0 = copy(c.e.data)
-    compute_sgs!(c, sim); compute_sgs!(c, sim)
-    @test c.e.data == e0                                   # coefficients change no memory
-    νt = interior_view(sim.νt)
-    @test minimum(νt) >= 0 && all(interior_view(sim.κt) .>= νt)   # κ_t = (1 + 2l/Δ) ν_t
-    snap = sgs_state(c)
-    advance_sgs!(c, sim, 0.01)
-    @test c.e.data != e0
-    restore_sgs_state!(c, snap)
-    @test c.e.data == e0 && tke_statistics(c).steps == 0   # copied back, not computed
-end
-
-
 # The update of e (#554): row-parallel, branch-free and vectorised. Checked
 # against a plain scalar transcription of the branching update it replaced
 # (#304): the same e within round-off (the expressions are the same, only
@@ -118,6 +65,96 @@ function tke_update_reference(c, Δt, pb1, pb2)
     end
     return e, sums
 end
+
+# The dual strain rate (#554: a bulk loop without checks, the k faces with
+# the k checks only, the rest of the shell with the halo fold) against the
+# scatter it replaced (#304): every velocity point of the interior adds
+# each of its 18 flux shares to the cells it borders, the first halo layer
+# is folded onto its images (`_fold_halos!`), and the sum is divided by the
+# cell thickness on a StretchedGrid. The same shares added in a different
+# order: agreement within round-off of a sum of ~100 terms.
+const _DUAL_TARGETS = (
+    u = ((:_ux_e, ((0,0,0),)), (:_ux_w, ((1,0,0),)),
+         (:_uy_n, ((1,0,0), (0,0,0), (1,-1,0), (0,-1,0))), (:_uy_s, ((1,1,0), (0,1,0), (1,0,0), (0,0,0))),
+         (:_uz_t, ((1,0,0), (0,0,0), (1,0,-1), (0,0,-1))), (:_uz_b, ((1,0,1), (0,0,1), (1,0,0), (0,0,0)))),
+    v = ((:_vy_n, ((0,0,0),)), (:_vy_s, ((0,1,0),)),
+         (:_vx_e, ((0,1,0), (-1,1,0), (0,0,0), (-1,0,0))), (:_vx_w, ((1,1,0), (0,1,0), (1,0,0), (0,0,0))),
+         (:_vz_t, ((0,1,0), (0,0,0), (0,1,-1), (0,0,-1))), (:_vz_b, ((0,1,1), (0,0,1), (0,1,0), (0,0,0)))),
+    w = ((:_wz_t, ((0,0,0),)), (:_wz_b, ((0,0,1),)),
+         (:_wx_e, ((0,0,1), (-1,0,1), (0,0,0), (-1,0,0))), (:_wx_w, ((1,0,1), (0,0,1), (1,0,0), (0,0,0))),
+         (:_wy_n, ((0,0,1), (0,-1,1), (0,0,0), (0,-1,0))), (:_wy_s, ((0,1,1), (0,0,1), (0,1,0), (0,0,0)))))
+
+function dual_strain_scatter(sim, g, bcs)
+    PS = Aeolus.PrognosticSGS
+    m = PS._dual_metrics(g)
+    d = zeros(size(sim.θ.data))
+    for (q, list) in ((sim.u.data, _DUAL_TARGETS.u), (sim.v.data, _DUAL_TARGETS.v), (sim.w.data, _DUAL_TARGETS.w))
+        for K in g.Hz+1:g.Hz+g.Nz, J in g.Hy+1:g.Hy+g.Ny, I in g.Hx+1:g.Hx+g.Nx, (f, offs) in list
+            x = getfield(PS, f)(q, m, I, J, K)
+            for o in offs
+                d[I-o[1], J-o[2], K-o[3]] += x
+            end
+        end
+    end
+    PS._fold_halos!(d, bcs, g)
+    for K in g.Hz+1:g.Hz+g.Nz
+        d[:, :, K] .= PS._per_volume.(Ref(m), d[:, :, K], K)
+    end
+    return d
+end
+
+@testset "prognostic SGS TKE (P56-b, #182)" begin
+
+@testset "1. free decay at l = Δ (c_ε = 0.70)" begin
+    m = RegularGrid(; size = (4, 4, 4), extent = (40.0, 40.0, 40.0))
+    sim = BoussinesqSimulation(m)
+    Δ, e0, T = 10.0, 1.0, 600.0
+    @test tke_dissipation_coefficient(Δ, Δ) ≈ 0.70
+    exact(t) = (e0^-0.5 + 0.70 * t / (2Δ))^-2           # de/dt = −c_ε e^{3/2}/l
+    c = TKEClosure(m; e0 = e0, dissipation = :exact)
+    for _ in 1:60
+        advance_sgs!(c, sim, T / 60)
+    end
+    @test maximum(abs.(interior_view(c.e) .- exact(T))) / exact(T) < 1e-6   # measured ≤ 1.7e-14
+    @test tke_statistics(c).clips == 0
+end
+
+@testset "2. shear equilibrium: C_s = c_k^{3/4} c_ε^{-1/4}; critical Ri" begin
+    S, Δ = 0.05, 10.0
+    eq = 0.1 / 0.7 * Δ^2 * S^2                            # e = (c_k/c_ε) l² S²
+    @test tke_equilibrium(S^2, 0.0, Δ) ≈ eq rtol = 1e-12
+    # ν_t = c_k Δ √e at that e is Smagorinsky's with C_s = c_k^{3/4} c_ε^{-1/4} = 0.19441
+    @test sqrt(0.1 * Δ * sqrt(eq) / (Δ^2 * S)) ≈ 0.1^0.75 * 0.70^-0.25 rtol = 1e-12
+    Ric = tke_critical_richardson()
+    @test Ric ≈ 1 / (1 + 0.19 / (0.1 * 0.76^2)) rtol = 1e-14
+    @test tke_equilibrium(S^2, 0.25 * S^2, Δ) == 0          # above Ri_c: no equilibrium
+    # below l = Δ, P_s + P_b = ε is linear in x = l/Δ: the closed-form root
+    Ri = 0.2; a = 0.1 * 0.76^2
+    x = (1 / Ri - 1 - 0.19 / a) / (2 + 0.51 / a)
+    @test tke_equilibrium(S^2, Ri * S^2, Δ) ≈ (x * Δ * sqrt(Ri) * S / 0.76)^2 rtol = 1e-10
+end
+
+@testset "contract: pure coefficients, exact rollback" begin
+    m = RegularGrid(; size = (8, 8, 8), extent = (2π, 2π, 2π), halo = (3, 3, 3))
+    sim = BoussinesqSimulation(m)
+    rng = Xoshiro(5)
+    for f in (sim.u, sim.v, sim.w)
+        interior_view(f) .= 0.3 .* randn(rng, 8, 8, 8)
+    end
+    c = TKEClosure(m)
+    initialize_tke!(c, sim)
+    e0 = copy(c.e.data)
+    compute_sgs!(c, sim); compute_sgs!(c, sim)
+    @test c.e.data == e0                                   # coefficients change no memory
+    νt = interior_view(sim.νt)
+    @test minimum(νt) >= 0 && all(interior_view(sim.κt) .>= νt)   # κ_t = (1 + 2l/Δ) ν_t
+    snap = sgs_state(c)
+    advance_sgs!(c, sim, 0.01)
+    @test c.e.data != e0
+    restore_sgs_state!(c, snap)
+    @test c.e.data == e0 && tke_statistics(c).steps == 0   # copied back, not computed
+end
+
 
 @testset "the update of e: rows, branch-free, vectorised (#554)" begin
     # the branch-free mixing length is the branching one, value for value
@@ -174,6 +211,33 @@ end
                 @test c.stats[sn] ≈ ref[rn] * V0 rtol = 1e-11
             end
             @test abs(c.stats[8] - ref[3] * V0) < 1e-11 * scale
+        end
+    end
+end
+
+
+@testset "dual strain: bulk, k faces and shell against the scatter (#554)" begin
+    for (gname, mk) in (("regular", n -> RegularGrid(; size = n, extent = (120.0, 100.0, 80.0), halo = (2, 2, 2))),
+                        ("stretched", n -> StretchedGrid(; size = n, extent = (120.0, 100.0, 240.0), halo = (2, 2, 2),
+                                                         stretching = (:tanh, 1.5)))),
+        n in ((12, 10, 8), (3, 1, 4)),
+        bcs in (FieldBoundaryConditions(:periodic, :periodic, :wall), FieldBoundaryConditions(:noflux, :noflux, :wall))
+        g = mk(n)
+        sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs)
+        rng = Xoshiro(17)
+        for f in (sim.u, sim.v, sim.w)
+            interior_view(f) .= randn(rng, size(interior_view(f)))
+            fill_halos!(f, bcs)
+        end
+        ref = dual_strain_scatter(sim, g, bcs)
+        for b in (CPUBackend(serial = true), CPUBackend(threshold = 0))
+            D = Aeolus.Fields.Field(Aeolus.Grids.CellCenter(), g)
+            D.data .= NaN                                 # every cell written, the halos zeroed
+            with_backend(b) do
+                dual_strain!(D, sim.u, sim.v, sim.w, bcs)
+            end
+            # round-off of a reordered sum: 1e-13 of the largest |D| (measured ≤ 4e-16)
+            @test maximum(abs.(D.data .- ref)) <= 1e-13 * maximum(abs.(ref))
         end
     end
 end
