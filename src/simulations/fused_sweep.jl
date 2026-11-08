@@ -53,8 +53,9 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "Components.SurfaceThetaFlux" => "prescribed θ flux on the boundary levels, pointwise: plan step 2",
     "Components.Sponge" => "Rayleigh damping toward a profile, pointwise: plan step 2",
     "Components.Fringe" => "fringe relaxation toward the inflow state, pointwise with a mask: plan step 2",
-    "Components.LargeScale" => "geostrophic forcing, nudging and advective tendencies need horizontal-mean " *
-                               "profiles of the stage-start state (prepare!): plan step 3",
+    "Components.LargeScale" => "has a fused form (plan step 3) except with a forcing without a column form: " *
+                               "a ReferenceDamping toward a 3-D target, or a forcing type of another module " *
+                               "(LargeScaleForcing.column_forcing_supported)",
     "Components.SurfaceLayer" => "the MOST wall stress and surface fluxes on the first level, its " *
                                  "post-predictor correction: plan steps 5 and 6",
     "Components.KinematicFlow" => "overwrites the predicted velocity with a prescribed flow (post-predictor): " *
@@ -62,8 +63,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise) and the obstacles' IBM penalty " *
                                               "(a mask): plan steps 2 and 5",
     # --- the urban site ------------------------------------------------------
-    "Urban.UrbanSite" => "captures the top and open-face heat fluxes of the stage-start state, a reduction " *
-                         "(prepare!): plan step 5",
     "Urban.GeostrophicCoupling" => "geostrophic pressure gradient, pointwise: plan step 2",
     "Urban.MoistBuoyancy" => "moist (virtual θ) buoyancy, pointwise: plan step 2",
     "Urban.WallModelFacades" => "the facade wall model's stress on cells next to walls (masks as inputs) and " *
