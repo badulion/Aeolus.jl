@@ -163,7 +163,9 @@ end
 # depends only on the component types (#533 step 2; with the attachment
 # deciding the tuple's length, inference widened a domain of Coriolis and
 # LargeScale to a Vararg tuple). One without a sweep term blocks where it
-# attaches and adds nothing where it does not.
+# attaches and adds nothing where it does not. A component's sweep term is
+# all it adds in stages 6 and 7, so one attached to both is switched on
+# once, at :tendencies.
 _stage_terms(::Tuple{}, d, S::Symbol) = ()
 function _stage_terms(cs::Tuple, d, S::Symbol)
     rest = _stage_terms(Base.tail(cs), d, S)
@@ -172,7 +174,7 @@ function _stage_terms(cs::Tuple, d, S::Symbol)
     return (t..., rest...)
 end
 function _stage_term(c, d, S::Symbol)
-    on = attaches(c, S)
+    on = attaches(c, S) && !(S === :body_force && attaches(c, :tendencies))
     t = FiniteVolume.sweep_term(c, d)
     t === nothing && return on ? nothing : ()
     return (FiniteVolume.OptionalTerm(on, t),)
