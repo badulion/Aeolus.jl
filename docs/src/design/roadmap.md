@@ -3743,6 +3743,102 @@ boxed (+176 B per stage, +352 B per ARK2 step over `"never"`); concrete
 arguments through a function barrier. Both measured equal to `"never"`
 after the fix.
 
+**Steps 3, 6, 7 and 8 integrated** (branch `issue/533-integration`, on
+top of step 1; steps 2, 4 and 5 have no PR yet and are not in it). Merge
+order, interface-changing steps first: step 8 (#548: `BaseTerm`,
+`add_tendency!` required of every term), step 6 (#549: post terms), step 7
+(#546: `finish_sweep!`, the budget term in the hook's tuple), step 3
+(#547). Textual conflicts (allowlist, imports, API page, `runtests.jl`,
+these sub-sections) were resolved as unions; `SWEEP_FALLBACKS` holds the
+union of the removals. Conflicts between the steps' intent, each found by
+a test and fixed here:
+- **Per-point form × post terms** (6 × 8): `fused_predictor!` gains the post
+  terms; the per-point form runs them after its predictor on every point
+  (new `pointwise_predictor!` method, the schedule `post_plan` gives a point
+  outside the sweep's widths). Tested against predictor + whole-field
+  passes and a `KinematicFlow`/tiles domain against `"never"`.
+- **Sound-proof cores × post terms** (6 × 8): those cores have no post terms;
+  with step 6 the pipeline's post hook names no blocker, so a new key
+  `builtin.anelastic_post_predictor` says why such a substage is unfused.
+- **Post hook × budgets** (6 × 7): step 6 refused a post hook with budgets
+  and named `builtin.budgets`, which step 7 removed. An attributed
+  post-predictor component now runs in its budget context as an
+  `AfterSweep`, so the substage stays fused (bookings against `"never"`
+  within 1e-10 of the largest term). The urban site, which always books
+  budgets, is therefore no longer kept out by its post hook.
+- **Point kernels** (3, 7 × 8): step 8's guard requires `add_tendency!` of
+  every `SweepTerm`; `LargeScaleTerm`, `UrbanSiteTerm` (new
+  `LargeScaleForcing.add_column_point!`, the same expression per point),
+  `BookedTerm` and `SweepBudget` get one. The per-point form has no
+  per-level sums (a level is shared by many work items), so a tuple that
+  `books` stays unfused there (`builtin.budgets_per_point`).
+- **Budgets in the other cores** (7 × 8): the sound-proof cores and the
+  fused IMEX launch never called `finish_sweep!`, so their fused in-core
+  bookings were dropped, and `_build_sweep_budget` read `sim.has_moisture`,
+  which the sound-proof cores lack (FieldError). Fixed; an anelastic domain
+  with budgets, fused against `"never"`, is tested.
+
+**Tests**: full suite 121 / 121 files, 8933 assertions, 0 failures
+(`fused_sweep_post.jl` 1614, `fused_sweep_cores.jl` 549,
+`fused_sweep_reductions.jl` 823, `fused_sweep_budgets.jl` 677,
+`fused_sweep.jl` 788); validation `urban_checks.jl` 33 / 33, `gabls1.jl`
+8 / 8. Two step-6 test expectations changed because step 7 landed (not
+weakened: the post hook with budgets was expected unfused "until step 7";
+it is now asserted fused, with its bookings compared to `"never"`).
+
+**Still not fusable** (`SWEEP_FALLBACKS`): buoyancy, Coriolis, surface
+flux, sponge, fringe, the urban geostrophic coupling and moist buoyancy,
+the slab's floor flux (step 2); the SGS closure (step 4); open lateral
+faces, the surface layer's heat flux, the facade flux removal, the IBM
+penalty, the nest registers (step 5); and by design a `body_force!` /
+`post_predictor!` passed as a plain function, another momentum
+advection, a `LargeScale` damping toward a 3-D target, `step_imex!`'s
+explicit SGS halves, the sound-proof cores' Coriolis / surface flux /
+sponge / SGS / post terms, budgets in the per-point form.
+
+**Measured** (Ryzen AI 9 HX 370, `fftw.planner = "estimate"`, each
+thread count one process under the benchmark lock, `"if_possible"` and
+`"never"` alternated in 4 turns of 5 steps after 3 warm-up steps, median
+s/step; package power logged: 1 t 17 W, 2 t 21 W, 6-24 t 28-29 W, all
+in the boost phase at Tctl 98-101 °C, none in the 15 W capped phase).
+Berlin 100 m (`berlin_100m_20250824.toml`, a copy with absolute driver
+paths): `loop_fusion = "always"` refuses, naming
+`builtin.open_boundaries`, `builtin.sgs`, `builtin.buoyancy`,
+`Components.Coriolis` (steps 5, 4, 2): every urban component (tiles,
+budgets, large-scale forcing, the site) has its fused form now, the
+remaining blockers are the three unmerged steps. So no substage fuses and
+both settings run the same code:
+
+| threads | 1 | 2 | 6 | 12 | 24 |
+| :-- | --: | --: | --: | --: | --: |
+| `"if_possible"` | 0.464 | 0.314 | 0.232 | 0.242 | 0.254 |
+| `"never"` | 0.465 | 0.313 | 0.229 | 0.236 | 0.253 |
+
+(differences 0-3 %, within the turn-to-turn spread; one turn per process
+contains the 30-step tile update and is ~2× slower, hence medians). #531
+measured 397 / 280 / 268 ms at 2 / 6 / 12 threads on master d6a140c6 in
+the same phase; the base is faster since (#514, #537, #538, #539), not this
+branch. Bytes (`bench_roofline.jl`'s compulsory model, run on this config
+at 6 threads, 9 steps): 8.71 GB/step = 3629 B/point (#531: ~3400 model,
+3630 counted); budget sums 1.92 GB (22 %), the TKE closure's N² and
+coefficients 0.61 GB (7 %). Dry CBL example (32³): 1.2 / 1.1 ms at 1
+thread, 1.3 / 1.4 ms at 6 (`"if_possible"` / `"never"`; blockers SGS,
+buoyancy, sponge, surface θ flux); GABLS1 (64³, dt 0.5 s fixed): 61.5 /
+60.4 ms at 1 thread, 38.5 / 38.5 ms at 6 (blockers SGS, buoyancy,
+`SurfaceLayer` heat flux, Coriolis, sponge). Neither fuses, so no fused
+gain is measurable on a configured case until steps 2, 4 and 5 land.
+
+**Plan step 9** (recompute νt inside the sweep): from the bytes above, the
+νt chain is `_n2_body!` (θ, qv → N², 24 B/point) and `_coefficients_body!`
+(e, N², l_wall → νt, κt, 40 B/point), 4 calls per step, 0.61 GB/step; a
+step-4 sweep reads νt, κt as inputs (16 B/point per substage). Recomputing
+them inside the sweep would replace this with the e and l_wall reads,
+saving at most ~190 B/point per step (~5 % of 3629), ~15 ms/step at the
+triad, while recomputing `c_k l √e` and the stability length 4-6 times per
+point for the face averages of the eddy stencils. Not worth it now: the
+budget sums (22 %, #539) and steps 2, 4, 5 (which make Berlin fusable at
+all) come first; revisit after step 4 is measured.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
