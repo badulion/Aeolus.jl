@@ -49,6 +49,7 @@ mutable struct WallModelFacades <: UrbanComponent
     z0m_glass::Float64
     sgs::Bool                # the step has an eddy viscosity whose facade flux is removed
     sgs_walls::Bool          # the :sgs closure books facade production from τ_w (#232)
+    rows::Any                # the walls by storage row, for the fused sweep (WallModels.wall_rows; built once)
 end
 
 component_name(::Type{WallModelFacades}) = :wall_model_facades
@@ -56,7 +57,7 @@ modules_used(::Type{WallModelFacades}) = (:WallModels, :IBM)
 stages(::Type{WallModelFacades}) = ((:body_force, 40, EVERY_STEP),
                                     (:post_predictor, 12, EVERY_STEP))
 
-build(::Type{WallModelFacades}, case, o) = WallModelFacades(nothing, NaN, NaN, false, false)
+build(::Type{WallModelFacades}, case, o) = WallModelFacades(nothing, NaN, NaN, false, false, nothing)
 
 function init!(c::WallModelFacades, case)
     sm::SolidMask = case.geom.sm
@@ -71,6 +72,7 @@ function init!(c::WallModelFacades, case)
     # the facade's material: the class of the building column behind it
     lawof(i, j, k) = sfc[i, j] == SURFACE_GLASS ? law_glass : law_wall
     c.iw = immersed_walls(case.sim, sm, lawof)
+    c.rows = nothing                         # the fused sweep's row index of these walls: rebuilt on use
     # The prognostic SGS closure of the :sgs slot books its shear production
     # at the facades from the wall-model stress, not from the stencil flux
     # this coupling removes (#232): attach the walls to it.
@@ -91,9 +93,22 @@ end
 # test is made here)
 function run_stage!(c::WallModelFacades, case, ::Val{:body_force}, dt)
     sim = case.sim
-    c.sgs = (hasproperty(sim, :has_sgs) && sim.has_sgs) || haskey(case.step_kwargs, :eddy_viscosity!)
+    c.sgs = _facade_sgs(case)
     remove_stencil_wall_flux!(sim, c.iw; sgs = c.sgs)
     return nothing
+end
+_facade_sgs(case) = (hasproperty(case.sim, :has_sgs) && case.sim.has_sgs) || haskey(case.step_kwargs, :eddy_viscosity!)
+
+# The same removal inside the fused sweep (#533 step 5): the fluxes from the
+# stage-start state before the sweep, subtracted row by row
+# (WallModels.StencilWallFluxTerm). The modelled stress (:post_predictor)
+# is a post-predictor operator.
+function Aeolus.Operators.FiniteVolume.sweep_term(c::WallModelFacades, d)
+    c.iw === nothing && return nothing                    # before init!
+    case = urban_case(d)
+    c.sgs = _facade_sgs(case)
+    c.rows === nothing && (c.rows = Aeolus.WallModels.wall_rows(c.iw))
+    return Aeolus.WallModels.stencil_wall_flux_term(case.sim, c.iw; rows = c.rows, sgs = c.sgs)
 end
 
 run_stage!(c::WallModelFacades, case, ::Val{:post_predictor}, dt) =
