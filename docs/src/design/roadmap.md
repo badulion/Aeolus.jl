@@ -3244,9 +3244,14 @@ against their whole-field passes at 1-5 slabs and in the per-point form;
 the three sound-proof drivers fused against `"never"` (ν on/off, buoyancy
 on/off, three backends, per point, and through an anelastic `Domain`),
 `(1/W)∇·(Wu)` < 1e-12 after the Euler steps (measured ~1e-17 s⁻¹);
-every blocker reported and refused under `"always"`; allocation (the
-fused sound-proof steps allocate what the unfused ones do: 0 B per
-`step_anelastic!`, 704 B per `step_rk3!`; `term_tendencies!` 0 B); and
+every blocker reported and refused under `"always"`; allocation (every
+step core, fused or unfused under `"if_possible"`, allocates no more than
+under `"never"`; on the serial backend, or on the test grid where the
+launches stay below the threading threshold, that is 0 B per `step!` and
+`step_anelastic!`, 704 B per anelastic `step_rk3!`, 0 B per
+`term_tendencies!`; threaded, each launch allocates its task closures,
+fewer fused: anelastic 128 × 128 × 64 at 6 threads, 77 kB fused against
+133 kB per `step_anelastic!`, 233 kB against 400 kB per `step_rk3!`); and
 two guards: every `SweepTerm` in Aeolus has the point kernel the
 per-point form needs, and every built-in term of `_mass_weighted_step!`
 and of `_explicit_tendencies!` is in the sweep or documented. All
@@ -3296,6 +3301,17 @@ cannot share the first kernel without a ring buffer, since a neighbour's
 stencil still reads the point. The IMEX explicit part is fused without
 its stage combination (the combination reads the tendencies of earlier
 stages and feeds an implicit solve per field).
+
+**Bugs the review caught** (code wrong, now tested in "no allocation
+added by the fused or the unfused report, any step core"): the unfused
+report built its blocker closure on every unfused substage, and Julia
+boxed it (+16 B per `step!`, +32 B per `step_rk3!` with a term without a
+fused form; the base allocated 0 B there); the blockers are now built
+from the passed-through arguments inside the `@noinline` reporter. The
+fused IMEX launch passed a `Union`-typed `qv` and backend on, which were
+boxed (+176 B per stage, +352 B per ARK2 step over `"never"`); concrete
+arguments through a function barrier. Both measured equal to `"never"`
+after the fix.
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
