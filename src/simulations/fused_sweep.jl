@@ -45,9 +45,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                  "correction around the predictor are not yet verified inside the sweep",
     "builtin.backend" => "the ring-buffer sweep runs on the CPU backend; the per-point form for a GPU is plan step 8",
     "builtin.core" => "this step core (step_imex!, the anelastic core) has no fused sweep yet, plan step 8",
-    "builtin.budgets" => "the measured budgets count the substages and attribute the in-core components " *
-                         "on whole tendency fields (budget_open!/budget_close!); booked inside the sweep " *
-                         "from plan step 7",
     # --- components of :tendencies / :body_force -----------------------------
     "Components.Coriolis" => "f-plane Coriolis, pointwise: plan step 2",
     "Components.SurfaceThetaFlux" => "prescribed θ flux on the boundary levels, pointwise: plan step 2",
@@ -283,6 +280,10 @@ end
 @inline _prepare_terms!(ts::Tuple, sim, Δt) =
     (prepare!(first(ts), sim, Δt); _prepare_terms!(Base.tail(ts), sim, Δt))
 
+@inline _finish_terms!(::Tuple{}, sim, Δt) = nothing
+@inline _finish_terms!(ts::Tuple, sim, Δt) =
+    (finish_sweep!(first(ts), sim, Δt); _finish_terms!(Base.tail(ts), sim, Δt))
+
 # Steps 2-12 of `_euler_projection!` in the fused sweep over `terms`: the
 # tendencies and the predictors of u, v, w and of θ (qv) in one sweep
 # (`FiniteVolume.blocked_predictor!`), then the projection. The scalars'
@@ -297,6 +298,7 @@ function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage,
     sim.workspaces.sweep = bufs
     _prepare_terms!(terms, sim, Δt)
     _blocked_sweep!(bufs, terms, sim, Δt, stage)
+    _finish_terms!(terms, sim, Δt)
     update_open_boundaries!(sim, t_bc, Δt)
     _project_velocity!(sim, _DivBy(Δt), stage)
     if stage !== nothing                    # the halos of the RK3 combination (step 11)

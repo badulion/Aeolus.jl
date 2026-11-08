@@ -146,28 +146,32 @@ _any_attached(cs, stages) = any(c -> any(s -> attaches(c, s), stages), cs)
 # The body-force hook is a tuple of sweep terms when every component of
 # stages 6 and 7 has one (`FiniteVolume.sweep_term(c, d)`), in the
 # pipeline's order (:tendencies, then :body_force, each in the domain's
-# component order), and the budgets are off (they measure the in-core
-# components on whole tendency fields and count the substages in the
-# hook: plan step 7). Otherwise `nothing`, and the core runs the hook.
+# component order). With the budgets on, the tuple starts with the
+# domain's `SweepBudget` (it counts the substages and books the in-core
+# components), and the term of each attributed component is a
+# `FiniteVolume.BookedTerm` (plan step 7). Otherwise `nothing`, and the
+# core runs the hook.
 function Simulations.hook_terms(h::_ForceHook, sim)
-    h.d.budgets === nothing || return nothing
-    a = _stage_terms(h.d.components, h.d, :tendencies)
+    d = h.d
+    bk = d.budgets === nothing ? nothing : _sweep_budget(d.budgets, d, sim)
+    a = _stage_terms(d.components, d, Val(:tendencies), 1, bk)
     a === nothing && return nothing
-    b = _stage_terms(h.d.components, h.d, :body_force)
+    b = _stage_terms(d.components, d, Val(:body_force), 2, bk)
     b === nothing && return nothing
-    return (a..., b...)
+    return bk === nothing ? (a..., b...) : (bk, a..., b...)
 end
-_stage_terms(::Tuple{}, d, S::Symbol) = ()
-function _stage_terms(cs::Tuple, d, S::Symbol)
-    rest = _stage_terms(Base.tail(cs), d, S)
-    attaches(first(cs), S) || return rest
-    t = FiniteVolume.sweep_term(first(cs), d)
+_stage_terms(::Tuple{}, d, ::Val, si, bk) = ()
+function _stage_terms(cs::Tuple, d, v::Val{S}, si, bk) where {S}
+    rest = _stage_terms(Base.tail(cs), d, v, si, bk)
+    c = first(cs)
+    attaches(c, S) || return rest
+    t = FiniteVolume.sweep_term(c, d)
     (t === nothing || rest === nothing) && return nothing
-    return (t, rest...)
+    nc = length(d.components)
+    return (_booked_term(t, bk, c, v, _sweep_slot(si, nc - length(cs) + 1, nc)), rest...)
 end
 function Simulations.hook_blockers(h::_ForceHook, sim)
     out = Pair{String,String}[]
-    h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))
     for c in h.d.components
         (attaches(c, :tendencies) || attaches(c, :body_force)) && FiniteVolume.sweep_term(c, h.d) === nothing &&
             push!(out, Simulations._blocker(sweep_type(c)))

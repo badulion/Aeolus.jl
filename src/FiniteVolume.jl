@@ -1877,5 +1877,7 @@ end
 # The fused sweep of the step core: the local-term interface and its
 # driver (SC-e #405, #533).
 include("operators/fused_sweep.jl")
+# the budgets inside the sweep: per-level sums of what booked terms add (#533 plan step 7)
+include("operators/fused_sweep_budgets.jl")
 
 end # module

@@ -318,6 +318,36 @@ function budget_close!(hl::StageBudget, θ; exchange::Union{Nothing,Tuple{Symbol
 end
 
 """
+    book_context!(b, stage, name, Δ::AbstractVector) -> b
+
+Book the change `Δ` (per level, `Nz` values, in the units of the budget
+and already scaled: for a tendency, `scale ×` its per-level content) of
+an attribution context `(stage, name)` that was measured outside the
+budget, nested in the innermost open context. The bookings of
+`budget_open!(b, stage, name, x; scale)`, the work, `budget_close!(b, x)`
+when the work changed only `x` and by `Δ / scale`: `Δ` counts as booked
+for the enclosing context (the dynamics), and is stored under
+`(stage, name)` (deferred while a deferring context is open), but there
+is no pass over the field. The fused sweep of the step core books its
+in-core terms this way (#533 plan step 7): it sums what each term adds to
+the tendencies per level while the row is in cache. A no-op unless a step
+is being attributed.
+"""
+function book_context!(hl::StageBudget, stage::Symbol, name::Symbol, Δ::AbstractVector)
+    hl.active || return hl
+    Nz = hl.meter.Nz
+    length(Δ) == Nz || throw(DimensionMismatch("book_context!: $(length(Δ)) levels, the budget has $Nz"))
+    if !isempty(hl.stack)
+        parent = hl.stack[end]
+        @inbounds for k in 1:Nz
+            parent.booked[k] += Δ[k]
+        end
+    end
+    any(!iszero, Δ) && _book!(hl, (stage, name), Δ)
+    return hl
+end
+
+"""
     budget_discard!(b) -> b
 
 Drop what the contexts nested in the innermost deferring context booked
