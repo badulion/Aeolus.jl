@@ -3190,6 +3190,77 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+#### The TKE equation's update in one cache-blocked pass (#554)
+
+Follow-up to #533 (plan step 4): `advance_sgs!(::TKEClosure)`, about 41
+of the 231 ms in kernels per Berlin step at 6 threads.
+
+**Part 1: the two slow kernels** (branch `issue/554-tke-blocked`, on
+#545). Both were limited by computation, not bandwidth, and in both the
+cause was a branch in every cell that kept the row loop scalar.
+
+- The update of e (`_update!`, was `_tke_update_plane`): one work item
+  per i-row (`Backends.row_map!`, the row form of `plane_map!`); the point
+  body computes every case and selects (`ifelse`: solid cells, clipping,
+  the exact-dissipation fallback, the surface flux terms), the dissipation
+  form is a type parameter, and `tke_length_scale` is branch-free with a
+  square root without the `DomainError` branch. The row loop is `@simd`
+  and vectorises. e is unchanged (max |Δe| = 0 against the old kernel);
+  the budget sums are reordered into vector lanes (within 3e-14).
+  200×200×60 with a solid mask, min / median of 45 interleaved calls
+  (each with a 0.9 ms copy of e): 6 threads 9.60 / 10.29 → 3.22 / 3.85 ms,
+  12 threads 5.62 / 6.39 → 3.12 / 3.31 ms, 1 thread 35.2 → 9.4 ms.
+- The dual strain rate (`_dual_strain!`): profiled first. The bulk cells
+  alone, launched with a body without the "bulk or shell" branch, cost
+  10.5 of the kernel's 41 ms at 1 thread. Now one work item per i-row: a
+  bulk row is its two end cells through the halo-fold body and a
+  branch-free loop between; a row of a k face (away from the i, j
+  boundaries) checks k only (`_DualBoxK`); only the halo cells are zeroed.
+  Same shares, same order: D unchanged (max |ΔD| = 0). 200×200×60: 1
+  thread 40.9 → 15.6 ms (stretched 47.0 → 19.3), 6 threads 9.08 / 11.98 →
+  4.00 / 5.42 ms, 12 threads 7.06 / 8.40 → 3.53 / 4.09 ms.
+
+**Berlin** (`bench_roofline.jl` flagship profile of the 200×200×60 run,
+dt = 2 s, 9 steps; one process per setting, in the order base 6, new 6,
+new 12, base 12; package power logged: 18.5–19.2 W mean, 33–38 W peak,
+~1.7–1.9 GHz mean clock in every run, so the comparison is at the same
+power limit), ms per step:
+
+| kernel | 6 threads before → after | 12 threads before → after |
+| :-- | --: | --: |
+| dual strain | 10.54 → 4.65 | 7.86 → 3.66 |
+| update of e + budget sums | 8.89 → 2.55 | 5.55 → 2.57 |
+| sum | 19.4 → 7.2 | 13.4 → 6.2 |
+
+The time in launches per step fell 221.7 → 210.6 ms at 6 threads (the
+profiler's per-step totals at 12 threads are not usable: its overhead
+correction exceeds the step). The update is now at ~54 GB/s of compulsory
+traffic, the DRAM triad (52.6 GB/s): bandwidth-bound, which part 2's
+single pass addresses.
+
+**Tests** (`test/tke.jl`): the update against a scalar transcription of
+the branching update (regular grid with mask, wall distance and first
+level; stretched grid; both dissipation forms; serial and threaded): e
+within 4 eps (measured 0), sums within 1e-11 (measured ≤ 3.1e-15, the
+cancelling transport sum 3.4e-14 of the production scale). The dual
+strain against the scatter it replaced (each velocity point adding its 18
+shares to the cells it borders, the halo fold, the per-volume division):
+regular and stretched, 12×10×8 and 3×1×4, periodic and no-flux lateral
+boundaries, serial and threaded, within 1e-13 of max |D| (measured ≤
+3.8e-16). `thread_invariance.jl`: `row_map!` serial against threaded; the
+worker's sgs section agrees at -t 1/4/12 in all 109 results.
+
+**Expectation that was wrong** (the test's, not the code's): the first
+version of the update test drew its random fields with `rand(rng, n)`
+for a size tuple `n`, which picks one element of the tuple instead of an
+array, so e was a constant and no cell clipped; caught by the test's own
+`clips > 0` check, fixed to `rand(rng, n...)`.
+
+**Open for part 2**: the update as one cache-blocked pass (N² → ν, κt →
+D → advection of e → masked diffusion → update), on the blocked driver
+of #545. The dual strain's bulk is now compute-bound at ~23 GB/s
+(6 threads): every flux share is evaluated by up to four cells.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
