@@ -397,4 +397,84 @@ end
 
 end
 
+# --- the review of step 2 -----------------------------------------------------
+@testset "review of step 2: target checks, 3-D sponge targets, concrete plans" begin
+    # a level-vector target of the wrong length is refused as by the
+    # whole-field kernel (the sweep reads it without bounds checks)
+    for n in (g.Nz + 4, g.Nz - 3), mode in (:never, :if_possible, :always)
+        s = BoussinesqSimulation(g; ν = 1e-2, sponge_α_max = 0.05, sponge_z_start = 60.0,
+                                 sponge_target = (u = ones(n), v = 0.0))
+        _FP_SIM.set_loop_fusion!(s, mode)
+        @test_throws DimensionMismatch step!(s, 0.1)
+    end
+    @test_throws DimensionMismatch _FP_FV.sponge_term(0.05, 60.0, (u = ones(g.Nz + 1), v = 0.0, w = 0.0), g)
+    fr = Aeolus.Transition.FringeRegion(x_start = 100.0, x_end = 200.0, rise = 40.0, fall = 20.0, λ_max = 0.3)
+    s = BoussinesqSimulation(g; ν = 1e-2)
+    @test_throws DimensionMismatch _FP_FV.sweep_term(_FP_CP.Fringe(fr, (u = ones(3), v = 0.0, w = 0.0), nothing, 1.0),
+                                                     (state = s,))
+
+    # the core's sponge toward 3-D targets (a Field, a halo-padded array):
+    # the DampingTargets kind 2, fused = one loop per term
+    for (gname, mesh, bcs) in grids, drv in (step!, step_rk3!), (bn, b) in _FP_BACKENDS
+        with_backend(b) do
+            zs = mesh.z0 + 0.5 * mesh.Lz
+            mk() = (tu = _fp_rand!(Field(FaceX(), mesh), 0.5, 0.2; seed = 41);
+                    tv = _fp_rand!(Field(FaceY(), mesh), -0.3, 0.2; seed = 42);
+                    _fp_seed!(BoussinesqSimulation(mesh; ν = 1e-2, θ₀ = 300.0, bcs = bcs, sponge_α_max = 0.05,
+                                                   sponge_z_start = zs, sponge_target = (u = tu, v = tv.data, w = 0.0))))
+            a = mk(); r = mk(); z = mk()
+            _FP_SIM.set_loop_fusion!(a, :always); _FP_SIM.set_loop_fusion!(r, :never)
+            z.has_sponge = false
+            for _ in 1:3
+                drv(a, 0.5); drv(r, 0.5); drv(z, 0.5)
+            end
+            @test a.workspaces.sponge.targets.kind == (2, 2, 0)
+            ok = _fp_agree(a, r)
+            ok || println("  [#533 step 2] 3-D sponge target mismatch: $gname $drv $bn")
+            @test ok
+            @test !agree(interior_view(a.u), interior_view(z.u))      # the sponge acted
+            @test _FP_SIM.sweep_report(a)["substages_fused"] == "all"
+        end
+    end
+
+    # SimulationCouplings: the sweep term's type follows from the component's
+    # type (obstacles are its parameter), so the plan stays one concrete tuple
+    SD = Aeolus.SimulationDriver
+    land = Aeolus.Radiation.SlabLand(; T = 300.0)
+    slab = SD.SlabSurface(land, 0.01, 295.0, 1200.0, 0.0, 1.0, 0.0, 0.07, 0.0)
+    c = SD.SimulationCouplings(SD.SimCouplings(0.0, slab, nothing, nothing, nothing, nothing, nothing, 0.0))
+    s3 = _fp_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
+    d3 = Domain(Domain(s3; validate = false); components = (CentredAdvection(), _FP_CP.Coriolis(1e-3), c,
+                                                            _FP_CP.Sponge(0.02, 70.0, (u = 0.0, v = 0.0, w = 0.0))))
+    @test Base.return_types(_FP_FV.sweep_term, typeof.((c, d3))) == [_FP_FV.SurfaceFluxTerm{Float64}]
+    h3 = _FP_CP.core_hooks(d3).body_force!
+    rt = Base.return_types(_FP_SIM.hook_terms, typeof.((h3, s3)))
+    @test length(rt) == 1 && isconcretetype(rt[1])
+    co = SD.SimulationCouplings(SD.SimCouplings(0.0, slab, nothing, nothing, nothing, nothing, Aeolus.IBM.SolidMask(g), 0.0))
+    @test Base.return_types(_FP_FV.sweep_term, typeof.((co, d3))) == [Nothing]
+    # no slab: the component does not attach to :tendencies, its term is off
+    cn = SD.SimulationCouplings(SD.SimCouplings(0.0, nothing, zeros(g.Nx, g.Ny), nothing, nothing, nothing, nothing, 0.0))
+    dn = Domain(Domain(_fp_seed!(BoussinesqSimulation(g; ν = 1e-2)); validate = false); components = (CentredAdvection(), cn))
+    @test _FP_CP.core_hooks(dn).body_force! === nothing          # attached to no force stage
+    htn = _FP_SIM.hook_terms(_FP_CP._ForceHook(dn), dn.state)
+    @test htn isa Tuple && length(htn) == 2 && !any(t -> t.on, htn)
+
+    # a Domain's hooks are specialised on: the plan is built without a
+    # dynamic call (an unspecialised Function argument once left it to one,
+    # 1-2 kB per substage)
+    for comps in ((CentredAdvection(),), (CentredAdvection(), _FP_CP.Coriolis(1e-3)))
+        sd = _fp_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
+        dd = Domain(Domain(sd; validate = false); components = comps)
+        _FP_SIM.set_loop_fusion!(sd, :always)
+        foreach(_ -> step!(dd, 0.5), 1:3)
+        n = @allocated step!(dd, 0.5)
+        println("  [#533 step 2] step! of a domain with $(length(comps) - 1) pointwise component(s), fused: $n bytes")
+        @test n <= 64
+    end
+    s4 = _fp_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-3, sponge_α_max = 0.01,
+                                        sponge_z_start = 70.0))
+    foreach(_ -> step!(s4, 0.5), 1:3)
+    @test (@allocated step!(s4, 0.5)) <= 64      # forward Euler too, not only RK3
+end
+
 end
