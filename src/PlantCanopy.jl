@@ -116,6 +116,7 @@ module PlantCanopy
 using ..Grids: RegularGrid
 using ..BoundaryConditions: fill_halos!
 using ..Backends: launch!, backend     # KA-k (#307): the canopy drag is a launch
+using ..Operators: FiniteVolume        # the canopy drag as a post term of the fused sweep (#533)
 using ..RadiationCore: _gauss_legendre
 using ..P3Microphysics: lgamma_lanczos
 using ..RadiationCore: STEFAN_BOLTZMANN
@@ -491,6 +492,7 @@ struct ResolvedCanopyDrag{T<:AbstractFloat}
     act::Vector{NTuple{4,Int32}}
     fac::Vector{T}
     dq::Vector{T}
+    rows::Vector{Int32}          # the faces of each (component, k, j) row of `act` (FiniteVolume.row_index, #533)
 end
 function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
                             C_d::Real = 0.2) where {T}
@@ -515,8 +517,10 @@ function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
     for (c, ac) in enumerate((a_u, a_v, a_w)), k in 1:Nz, j in 1:Ny, i in 1:Nx
         ac[i, j, k] > 0 && push!(act, (Int32(c), Int32(i), Int32(j), Int32(k)))
     end
+    rows = FiniteVolume.row_index(n -> (Int(act[n][1]) - 1) * Ny * Nz + (Int(act[n][4]) - 1) * Ny + Int(act[n][3]),
+                                  length(act), 3 * Ny * Nz)
     return ResolvedCanopyDrag{T}(T(C_d), a, a_u, a_v, a_w, act, ones(T, length(act)),
-                                 zeros(T, length(act)))
+                                 zeros(T, length(act)), rows)
 end
 
 """
@@ -626,13 +630,7 @@ function apply_canopy_drag!(sim, drag::ResolvedCanopyDrag{T}, dt::Real) where {T
     launch!(b, _canopy_apply_body!, r, drag.dq, drag.fac, act, u, v, w, Hx, Hy, Hz)
     # 3. The momentum removed, folded per component in the list order
     #    (k, j, i: the order of the former loop).
-    Fx = zero(T); Fy = zero(T); Fz = zero(T)
-    @inbounds for n in eachindex(act)
-        c = act[n][1]; d = drag.dq[n]
-        c == 1 ? (Fx += d) : c == 2 ? (Fy += d) : (Fz += d)
-    end
-    dV = mesh.dx * mesh.dy * mesh.dz
-    return (Fx = Fx * dV / Δt, Fy = Fy * dV / Δt, Fz = Fz * dV / Δt)
+    return canopy_drag_force(drag, mesh, Δt)
 end
 
 # The drag factor of listed face n (pointwise; reads u, v, w only): the
@@ -676,6 +674,79 @@ end
         dq[n] = q[I, J, K] - q0
     end
     return nothing
+end
+
+"""
+    CanopyDragTerm
+
+[`apply_canopy_drag!`](@ref) as a post term of the fused sweep
+(`Operators.FiniteVolume.PostTerm`, #533 step 6), built by
+[`canopy_drag_term`](@ref): the factor of every listed face of a row from
+the velocity before any face is changed (`_canopy_factor_body!`, footprint
+1 in each direction), then the update (`_canopy_apply_body!`), on the
+sweep's delayed rows; the faces of a row are found in the face list
+(sorted by component, then k, j, i) through its row pointer `drag.rows`,
+the part of the row the sweep asks for by bisection. The same per-face
+values as the whole-field drag; its force, which `apply_canopy_drag!`
+returns, is the ordered fold of `drag.dq` ([`canopy_drag_force`](@ref)).
+"""
+struct CanopyDragTerm{T,D<:ResolvedCanopyDrag{T}} <: FiniteVolume.PostTerm
+    drag::D
+    Δt::T
+    Hx::Int
+    Hy::Int
+    Hz::Int
+    Ny::Int
+    Nz::Int
+end
+
+"""
+    canopy_drag_term(drag::ResolvedCanopyDrag, sim, dt) -> CanopyDragTerm
+
+The post term of the fused sweep that does what
+`apply_canopy_drag!(sim, drag, dt)` does.
+"""
+canopy_drag_term(drag::ResolvedCanopyDrag{T}, sim, dt::Real) where {T} =
+    CanopyDragTerm(drag, T(dt), sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz, sim.mesh.Ny, sim.mesh.Nz)
+FiniteVolume.footprint(::CanopyDragTerm) = (1, 1, 1)
+
+@inline function _canopy_row!(t::CanopyDragTerm, ph, J, K, I1, I2, st)
+    d = t.drag
+    act = d.act
+    j, k = J - t.Hy, K - t.Hz
+    (1 <= j <= t.Ny && 1 <= k <= t.Nz) || return nothing
+    for c in 1:3
+        for n in FiniteVolume.row_entries(d.rows, (c - 1) * t.Ny * t.Nz + (k - 1) * t.Ny + j,
+                                          e -> t.Hx + Int(@inbounds act[e][2]), I1, I2)
+            if ph === Val(1)
+                _canopy_factor_body!(n, d.fac, act, d.a_u, d.a_v, d.a_w, st.u, st.v, st.w, d.C_d, t.Δt,
+                                     t.Hx, t.Hy, t.Hz)
+            else
+                _canopy_apply_body!(n, d.dq, d.fac, act, st.u, st.v, st.w, t.Hx, t.Hy, t.Hz)
+            end
+        end
+    end
+    return nothing
+end
+FiniteVolume.post_row!(t::CanopyDragTerm, ph::Val{1}, J, K, I1, I2, st) = _canopy_row!(t, ph, J, K, I1, I2, st)
+FiniteVolume.post_row!(t::CanopyDragTerm, ph::Val{2}, J, K, I1, I2, st) = _canopy_row!(t, ph, J, K, I1, I2, st)
+
+"""
+    canopy_drag_force(drag::ResolvedCanopyDrag, mesh, dt) -> (Fx, Fy, Fz)
+
+The volume-integrated kinematic force of the last drag step (what
+[`apply_canopy_drag!`](@ref) returns): the change of every listed face,
+folded per component in the list order.
+"""
+function canopy_drag_force(drag::ResolvedCanopyDrag{T}, mesh, dt::Real) where {T}
+    Fx = zero(T); Fy = zero(T); Fz = zero(T)
+    @inbounds for n in eachindex(drag.act)
+        c = drag.act[n][1]; d = drag.dq[n]
+        c == 1 ? (Fx += d) : c == 2 ? (Fy += d) : (Fz += d)
+    end
+    dV = mesh.dx * mesh.dy * mesh.dz
+    Δt = T(dt)
+    return (Fx = Fx * dV / Δt, Fy = Fy * dV / Δt, Fz = Fz * dV / Δt)
 end
 
 # =========================================================================

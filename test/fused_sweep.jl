@@ -254,6 +254,9 @@ const _FS_WRAPPERS = Dict{Type,String}(
 )
 
 _fs_own_sweep_term(C) = which(FVs.sweep_term, Tuple{C, Any}) !== which(FVs.sweep_term, Tuple{Any, Any})
+# the fused form a component needs at stage S: a post term in :post_predictor (#533 step 6), a sweep term otherwise
+_fs_own_post_term(C) = which(FVs.post_sweep_term, Tuple{C, Any, Any}) !== which(FVs.post_sweep_term, Tuple{Any, Any, Any})
+_fs_own_term(C, S) = S === :post_predictor ? _fs_own_post_term(C) : _fs_own_sweep_term(C)
 
 @testset "fused sweep: local-term interface and driver (#533)" begin
 
@@ -551,7 +554,7 @@ end
     for C in types
         haskey(_FS_WRAPPERS, C) && continue
         key = SIMs.sweep_key(C)
-        has = _fs_own_sweep_term(C)
+        has = all(S -> _fs_own_term(C, S), [S for (T, S) in found if T === C])
         documented = haskey(SIMs.SWEEP_FALLBACKS, key)
         has || documented || println("  [#533] $key runs inside the core with neither a sweep_term nor a reason " *
                                      "in Simulations.SWEEP_FALLBACKS")

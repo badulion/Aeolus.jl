@@ -4,7 +4,7 @@
 #   julia -t N --project=. test/support/thread_invariance_worker.jl OUT SECTIONS [MODE]
 #
 # Runs SECTIONS (comma list of primitives, dns, reductions, smoke, flagship,
-# nested, fft, fv, pcg, multigrid, steps, radiation, hooks, columns,
+# nested, fft, fv, pcg, multigrid, steps, radiation, hooks, columns, canopy,
 # advection, sgs) and writes
 # `key => summary` for every checked quantity to OUT (Serialization): a
 # float array as its fingerprint, a float as itself, integer data (masks,
@@ -45,8 +45,10 @@
 #               launch threaded (threshold 0): fog adjustment, Kessler (both
 #               sedimentation schemes), dew exchange, dry deposition, the
 #               Berlin aq_chem emissions, facet
-#               scenes (implicit, direct, lagged), the dynamic roughness, and
-#               the partials of a foreach_column! launch;
+#               scenes (implicit, direct, lagged), the dynamic roughness,
+#               and the partials of a foreach_column! launch;
+#   canopy      (#538) the tiled surface's canopy drag (both launches) on a
+#               random wind and drag, threaded (threshold 0);
 #   fft         (KA-h, #298) one solve of every spectral pressure solver —
 #               FFT, CosineFFT for all 8 axis-BC combinations, Stretched for
 #               the 4 lateral pairs — at 64×64×32 and 128×128×64, with FFTW
@@ -584,6 +586,38 @@ function section_columns()
 end
 
 # --------------------------------------------------------------------------
+# #538: the tiled surface's canopy drag, two launches over the canopy points
+# (Jacobi) on a random wind and drag, two canopy levels; threaded in the
+# default mode (threshold 0), serial in `serial`
+section_canopy() = record!("canopy/drag", ti_canopy_drag(MODE == "serial" ? BACKEND : CPUBackend(threshold = 0)))
+
+"The u, v of a random wind after one canopy drag of a `TiledUrbanSurface` (#538) on backend `b`."
+function ti_canopy_drag(b)
+    U = Aeolus.Urban
+    m = RegularGrid(; size = (96, 80, 8), extent = (9600.0, 8000.0, 800.0), halo = (2, 2, 2))
+    sim = BoussinesqSimulation(m; θ₀ = 300.0, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
+                               θ_bcs = FieldBoundaryConditions(:periodic, :periodic, :noflux))
+    slab(T) = Aeolus.Radiation.SlabLand(; T = T, C_s = 1e6, albedo = 0.12, emissivity = 0.95, z0m = 0.5, β = 0.0)
+    cols = Matrix{Union{Nothing,U.ParentColumn}}(nothing, m.Nx, m.Ny)
+    for I in CartesianIndices(cols)
+        cols[I] = U.ParentColumn(Aeolus.SurfaceTiles.SurfaceMosaic([slab(300.0)], [1.0]), UInt8[1], [0.0], [3], 3)
+    end
+    z = zeros(m.Nx, m.Ny)
+    pl = U.ParentLanduse(m.Nx, m.Ny, m.dx, 0.0, 0.0, 1, zeros(Int, m.Nx, m.Ny, 5), z, z, z, String[])
+    zc = [m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz]
+    surf = U.ParentSurface(pl, zeros(m.Nx, m.Ny, 5), z, z, z, z, z, zc, nothing, cols)
+    ts = Aeolus.Components.build(U.TiledUrbanSurface, (; surface = surf, period = 60.0, u_min = 0.5,
+                                 reference = Aeolus.Anelastic.isentropic_reference(m; θ_const = 300.0)),
+                                 Domain(sim; validate = false))
+    d = Domain(sim; components = (Aeolus.Components.CentredAdvection(), ts))
+    interior_view(sim.u) .= 5 .+ 2 .* randn(Xoshiro(538), size(interior_view(sim.u)))
+    interior_view(sim.v) .= 1 .+ 2 .* randn(Xoshiro(539), size(interior_view(sim.v)))
+    ts.drag .= 0.05 .* rand(Xoshiro(540), size(ts.drag))
+    with_backend(() -> Aeolus.Components.run_stage!(ts, d, Val(:post_predictor), 2.0), b)
+    return vcat(vec(sim.u.data), vec(sim.v.data))
+end
+
+# --------------------------------------------------------------------------
 # KA-i (#303): the multigrid V-cycle on launch! (colour-indexed RBGS, residual,
 # restriction, prolongation, canonical means and norms).
 include(joinpath(@__DIR__, "multigrid_cases.jl"))
@@ -1028,6 +1062,7 @@ for s in SECTIONS
     s == "steps"      ? section_steps() :
     s == "radiation"  ? section_radiation() :
     s == "columns"    ? section_columns() :
+    s == "canopy"     ? section_canopy() :
     s == "advection"  ? section_advection() :
                         error("unknown section $s")
     @printf("thread-invariance worker: -t %d %s: %s in %.1f s\n", Threads.nthreads(), MODE, s, time() - ts)

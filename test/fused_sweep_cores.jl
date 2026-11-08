@@ -346,6 +346,7 @@ end
                             ((θ_flux_bottom = 0.1,), NamedTuple(), "builtin.anelastic_surface_flux"),
                             ((sponge_α_max = 0.01, sponge_z_start = 1000.0), NamedTuple(), "builtin.anelastic_sponge"),
                             (NamedTuple(), (post_predictor! = noop,), "builtin.post_predictor"),
+                            (NamedTuple(), (post_predictor! = noop,), "builtin.anelastic_post_predictor"),
                             (NamedTuple(), (body_force! = noop,), "builtin.body_force"))
         a = mkan(; ν = 1.0, kw...)
         fill!(a.tu.data, NaN)

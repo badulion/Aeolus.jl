@@ -39,8 +39,8 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "builtin.sponge" => "add_velocity_sponge!: pointwise toward a target profile, plan step 2",
     "builtin.body_force" => "a body_force! hook passed to the core as a function is a whole-field operator; " *
                             "only the pipeline's components can be expressed as sweep terms",
-    "builtin.post_predictor" => "post-predictor operators (the post_predictor! hook) run on the predicted " *
-                                "field; the delayed-row scheme of the sweep for them is plan step 6",
+    "builtin.post_predictor" => "a post_predictor! hook passed to the core as a function is a whole-field " *
+                                "operator; only the pipeline's components can be expressed as post terms",
     "builtin.open_boundaries" => "open lateral faces: the radiating outflow and the boundary data's mass " *
                                  "correction around the predictor are not yet verified inside the sweep",
     "builtin.imex_sgs" => "step_imex!'s explicit SGS parts (the transposed stress of sgs_stress = :symmetric, " *
@@ -57,6 +57,8 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                         "levels, the term of plan step 2 not yet wired into these cores",
     "builtin.anelastic_sponge" => "add_velocity_sponge! in the sound-proof cores: pointwise, the term of plan " *
                                   "step 2 not yet wired into these cores",
+    "builtin.anelastic_post_predictor" => "the post-predictor operators of the sound-proof cores: the post terms " *
+                                          "of plan step 6 are wired into the Boussinesq core only",
     # --- components of :tendencies / :body_force -----------------------------
     "Components.Coriolis" => "f-plane Coriolis, pointwise: plan step 2",
     "Components.SurfaceThetaFlux" => "prescribed θ flux on the boundary levels, pointwise: plan step 2",
@@ -64,10 +66,8 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "Components.Fringe" => "fringe relaxation toward the inflow state, pointwise with a mask: plan step 2",
     "Components.LargeScale" => "geostrophic forcing, nudging and advective tendencies need horizontal-mean " *
                                "profiles of the stage-start state (prepare!): plan step 3",
-    "Components.SurfaceLayer" => "the MOST wall stress and surface fluxes on the first level, its " *
-                                 "post-predictor correction: plan steps 5 and 6",
-    "Components.KinematicFlow" => "overwrites the predicted velocity with a prescribed flow (post-predictor): " *
-                                  "plan step 6",
+    "Components.SurfaceLayer" => "the MOST surface heat flux into the first level (:tendencies): plan step 5 " *
+                                 "(its post-predictor wall stress has a post term)",
     "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise) and the obstacles' IBM penalty " *
                                               "(a mask): plan steps 2 and 5",
     # --- the urban site ------------------------------------------------------
@@ -75,14 +75,9 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                          "(prepare!): plan step 5",
     "Urban.GeostrophicCoupling" => "geostrophic pressure gradient, pointwise: plan step 2",
     "Urban.MoistBuoyancy" => "moist (virtual θ) buoyancy, pointwise: plan step 2",
-    "Urban.WallModelFacades" => "the facade wall model's stress on cells next to walls (masks as inputs) and " *
-                                "its post-predictor correction: plan steps 5 and 6",
+    "Urban.WallModelFacades" => "the removal of the stencil's facade flux from the momentum tendency " *
+                                "(:body_force, masks as inputs): plan step 5 (its post-predictor stress has a post term)",
     "Urban.NestingCoupling" => "the nest's flux registers and boundary relaxation of the child: plan step 5",
-    "Urban.VegDrag" => "implicit vegetation drag on the predicted velocity (post-predictor): plan step 6",
-    "Urban.IBMCoupling" => "immersed-boundary forcing on the predicted velocity (post-predictor): plan step 6",
-    "Urban.SurfaceExchangeMOST" => "surface exchange on the predicted near-wall cells (post-predictor): plan step 6",
-    "Urban.TiledUrbanSurface" => "the tiled surface's fluxes into the predicted first level (post-predictor): " *
-                                 "plan step 6",
 )
 
 "The key of type `T` in [`SWEEP_FALLBACKS`](@ref): `\"<module>.<type>\"`."
@@ -124,12 +119,29 @@ terms. Called once per simulation, when reporting.
 """
 hook_blockers(hook, sim) = hook_terms(hook, sim) === nothing ? [_blocker("builtin.body_force")] : Pair{String,String}[]
 """
+    post_hook_terms(hook, sim, Δt) -> Union{Tuple,Nothing}
+
+The post terms ([`PostTerm`](@ref Aeolus.Operators.FiniteVolume.PostTerm))
+that do what the core's `post_predictor!` hook does to the predicted
+velocity of `sim` in a substage of length `Δt`, in its order, or
+`nothing` when one of them has none. A plain function (a user hook) is
+`nothing`; the pipeline's hook (`Components._PostHook`) asks each of its
+components' [`post_sweep_term`](@ref Aeolus.Operators.FiniteVolume.post_sweep_term).
+"""
+post_hook_terms(hook, sim, Δt) = nothing
+
+"""
     post_hook_blockers(hook, sim) -> Vector{Pair{String,String}}
 
-What keeps the core's `post_predictor!` hook out of the fused sweep (no
-post-predictor operator runs inside it before plan step 6).
+What keeps the core's `post_predictor!` hook out of the fused sweep,
+`key => reason` ([`SWEEP_FALLBACKS`](@ref)); a plain function is
+`builtin.post_predictor`.
 """
 post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
+
+# the post terms of a substage: none without a hook
+_post_terms(sim, ::Nothing, Δt) = ()
+_post_terms(sim, post_predictor!, Δt) = post_hook_terms(post_predictor!, sim, Δt)
 
 # The terms of one substage of `_euler_projection!` if every one of them
 # is a sweep term (the base tendencies first, with viscosity `ν` or
@@ -139,7 +151,6 @@ function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_pred
                       momentum_advection, ν)
     has_open_boundaries(sim.bcs) && return nothing
     (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
-    post_predictor! === nothing || return nothing
     momentum_advection === momentum_advect! || return nothing
     closure === nothing || return nothing          # SGS terms in the sweep: plan step 4
     base = BaseTendencies(ν)
@@ -162,7 +173,7 @@ function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_p
     sim.has_sponge && push!(out, _blocker("builtin.sponge"))
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))
     post_predictor! === nothing || append!(out, post_hook_blockers(post_predictor!, sim))
-    return out
+    return unique!(out)                   # (both hooks name the budgets, a component may sit in both)
 end
 
 
@@ -282,25 +293,49 @@ function _try_fused!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, closure,
         _note_unfused!(sim, closure, body_force!, post_predictor!, momentum_advection)
         return false
     end
+    post = _post_terms(sim, post_predictor!, Δt)
+    if post === nothing
+        setting === :always && _refuse_unfused(sim, closure, body_force!, post_predictor!, momentum_advection)
+        _note_unfused!(sim, closure, body_force!, post_predictor!, momentum_advection)
+        return false
+    end
     sim.workspaces.fused.fused += 1
-    _blocked_projection!(sim, Δt, t_bc, stage, terms)
+    _blocked_projection!(sim, Δt, t_bc, stage, terms, post)
     return true
 end
 
 @inline _prepare_terms!(::Tuple{}, sim, Δt) = nothing
 @inline _prepare_terms!(ts::Tuple, sim, Δt) =
     (prepare!(first(ts), sim, Δt); _prepare_terms!(Base.tail(ts), sim, Δt))
+@inline _finish_terms!(::Tuple{}, sim, Δt) = nothing
+@inline _finish_terms!(ts::Tuple, sim, Δt) =
+    (finish!(first(ts), sim, Δt); _finish_terms!(Base.tail(ts), sim, Δt))
+
+# the halos of the predicted velocity, for the post terms' points that run
+# after the sweep (the hooks' operators fill them as they start)
+struct _VelocityHalos{S}
+    sim::S
+end
+(h::_VelocityHalos)() = (fill_halos!(h.sim.u, h.sim.bcs); fill_halos!(h.sim.v, h.sim.bcs);
+                         fill_halos!(h.sim.w, h.sim.bcs); nothing)
+_post_halos(sim, ::Tuple{}) = nothing
+_post_halos(sim, ::Tuple) = _VelocityHalos(sim)
 
 # Steps 2-12 of `_euler_projection!` in the fused sweep over `terms`: the
 # tendencies and the predictors of u, v, w and of θ (qv) in one sweep
-# (`FiniteVolume.blocked_predictor!`), then the projection. The scalars'
-# update of step 11 moves before the projection, which does not read them;
-# the tendency fields are not used.
-function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, terms::Tuple) where {T}
+# (`FiniteVolume.blocked_predictor!`), with the post-predictor operators
+# `post` on the rows behind the predictor (step 7b), then the projection.
+# The scalars' update of step 11 moves before the projection, which does
+# not read them, and before the post-predictor operators, which do not
+# read them either; the tendency fields are not used.
+function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, terms::Tuple,
+                              post::Tuple = ()) where {T}
     moist = sim.has_moisture
     bufs = _fused_buffers!(sim, terms, moist ? 5 : 4)
     _prepare_terms!(terms, sim, Δt)
-    _blocked_sweep!(bufs, terms, sim, Δt, stage)
+    _prepare_terms!(post, sim, Δt)
+    _blocked_sweep!(bufs, terms, post, sim, Δt, stage)
+    _finish_terms!(post, sim, Δt)
     update_open_boundaries!(sim, t_bc, Δt)
     _project_velocity!(sim, _DivBy(Δt), stage)
     if stage !== nothing                    # the halos of the RK3 combination (step 11)
@@ -312,22 +347,23 @@ function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage,
 end
 # the sweep with concrete arguments: the scalars' update is the axpy of
 # step 11 (`step!`), or with the RK3 combination and the step-start θ, qv
-_blocked_sweep!(bufs, terms, sim, Δt, ::Nothing) =
-    _blocked_sweep!(bufs, terms, sim, Δt, _Axpy(Δt), nothing, nothing)
-_blocked_sweep!(bufs, terms, sim, Δt, stage) =
-    _blocked_sweep!(bufs, terms, sim, Δt, _AxpyStage(_Axpy(Δt), stage.c), stage.ws.θ0, stage.ws.q0)
-function _blocked_sweep!(bufs, terms, sim, Δt, ps, θ0, q0)
+_blocked_sweep!(bufs, terms, post, sim, Δt, ::Nothing) =
+    _blocked_sweep!(bufs, terms, post, sim, Δt, _Axpy(Δt), nothing, nothing)
+_blocked_sweep!(bufs, terms, post, sim, Δt, stage) =
+    _blocked_sweep!(bufs, terms, post, sim, Δt, _AxpyStage(_Axpy(Δt), stage.c), stage.ws.θ0, stage.ws.q0)
+function _blocked_sweep!(bufs, terms, post, sim, Δt, ps, θ0, q0)
     s1 = (sim.θ, ps, θ0)
+    h = _post_halos(sim, post)
     if sim.has_moisture
-        fused_predictor!(sim, bufs, terms, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.tqv)
+        fused_predictor!(sim, bufs, terms, post, h, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.tqv)
     else
-        fused_predictor!(sim, bufs, terms, _Axpy(Δt), s1, nothing, nothing)
+        fused_predictor!(sim, bufs, terms, post, h, _Axpy(Δt), s1, nothing, nothing)
     end
     return nothing
 end
 
 """
-    fused_predictor!(sim, bufs, terms, pu, s1, s2, tqv)
+    fused_predictor!(sim, bufs, terms, [post, halo!,] pu, s1, s2, tqv)
 
 The fused tendencies and predictor of a substage of any step core over
 `sim`'s `u, v, w` (and the scalars `s1 = (θ, ps, snap)`, `s2` or
@@ -339,14 +375,21 @@ which writes the tendencies to `sim.tu, tv, tw, tθ` (and `tqv`, `nothing`
 for a dry core) on that backend's KernelAbstractions device. The per-point
 form also runs on the CPU, on `KernelAbstractions.CPU()`, when
 `sim.workspaces.fused.per_point` is set (the stand-in that tests it).
+`post` (default none) are the post-predictor operators
+([`PostTerm`](@ref Aeolus.Operators.FiniteVolume.PostTerm)s) and `halo!()`
+fills the predicted velocity's halos for them: on the rows behind the
+predictor in the ring sweep, after the predictor on every point in the
+per-point form (#533 steps 6 and 8).
 """
-function fused_predictor!(sim, bufs, terms, pu, s1, s2, tqv)
+fused_predictor!(sim, bufs, terms, pu, s1, s2, tqv) =
+    fused_predictor!(sim, bufs, terms, (), nothing, pu, s1, s2, tqv)
+function fused_predictor!(sim, bufs, terms, post::Tuple, halo!::H, pu, s1, s2, tqv) where {H}
     b = Backends.backend(sim.u.data)
     if b isa Backends.CPUBackend && !sim.workspaces.fused.per_point
-        blocked_predictor!(bufs, terms, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
+        blocked_predictor!(bufs, terms, post, halo!, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
     else
         tf = TendencyFields(sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, tqv === nothing ? nothing : tqv.data)
-        pointwise_predictor!(Backends.ka_backend(b), tf, terms, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
+        pointwise_predictor!(Backends.ka_backend(b), tf, terms, post, halo!, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
     end
     return nothing
 end

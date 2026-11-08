@@ -102,8 +102,11 @@ function Simulations._sweep_blockers(sim::MassWeightedSimulation, closure, body_
     sim.has_surface_flux && push!(out, Simulations._blocker("builtin.anelastic_surface_flux"))
     sim.has_sponge && push!(out, Simulations._blocker("builtin.anelastic_sponge"))
     body_force! === nothing || append!(out, Simulations.hook_blockers(body_force!, sim))
-    post_predictor! === nothing || append!(out, Simulations.post_hook_blockers(post_predictor!, sim))
-    return out
+    if post_predictor! !== nothing        # (no post terms in these cores yet, #533 step 6)
+        append!(out, Simulations.post_hook_blockers(post_predictor!, sim))
+        push!(out, Simulations._blocker("builtin.anelastic_post_predictor"))
+    end
+    return unique!(out)
 end
 
 # Steps 2-7 and 11 of `_mass_weighted_step!` in the fused sweep, then the

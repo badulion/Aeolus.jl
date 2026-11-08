@@ -47,7 +47,7 @@ using ..StretchedGrids: StretchedGrid
 using ..BoundaryConditions: fill_halos!
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, BusingerDyerBeljaarsHoltslag,
                          solve_surface_layer, kinematic_heat_flux, similarity_theta, similarity_wind, obukhov_length
-using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!
+using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!, wall_stress_term
 using ..LargeScaleForcing: GeostrophicPressureGradient, AdvectiveTendencies, Subsidence, ProfileNudging,
                            SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature, _zc,
                            forcing_value, NudgingWeight, ReferenceDamping

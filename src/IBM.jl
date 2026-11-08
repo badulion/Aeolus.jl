@@ -15,6 +15,7 @@ using ..Grids: RegularGrid, interior
 using ..Fields: Field, interior_view
 using ..Backends: launch_weighted!, backend     # KA-k (#307): the direct forcing is a launch over the faces
 using ..Simulations: BoussinesqSimulation
+using ..Operators: FiniteVolume                  # the post term of the fused sweep (#533)
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index
 
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
@@ -210,6 +211,89 @@ function implicit_ibm_correction!(sim, sm::SolidMask; τ::Real = 0.0, dt::Real =
     q = (sim.u.data, sim.v.data, sim.w.data)
     _ibm_faces!(_scale_op, sm, q, q, factor)
     return sim
+end
+
+"""
+    IBMCorrectionTerm
+
+[`implicit_ibm_correction!`](@ref) as a post term of the fused sweep
+(`Operators.FiniteVolume.PostTerm`, #533 step 6): each face touching a
+solid cell is scaled by the factor once per solid cell it touches, on the
+row right after the row's predictor (pointwise, footprint 0). A face is
+scaled by the same cells, in the same order, as the whole-field
+correction; the faces beyond the interior (the east u faces, the v faces
+of row `Ny+1`, the w faces of level `Nz+1`) are scaled by `finish!`.
+Built by [`ibm_correction_term`](@ref).
+"""
+struct IBMCorrectionTerm{M<:AbstractArray{Bool,3},T} <: FiniteVolume.PostTerm
+    mk::M
+    x::T
+    i1::Int
+    i2::Int
+    j1::Int
+    j2::Int
+    k1::Int
+    k2::Int
+end
+
+"""
+    ibm_correction_term(sm; τ = 0.0, dt = 0.0) -> IBMCorrectionTerm
+
+The post term of the fused sweep that does what
+`implicit_ibm_correction!(sim, sm; τ, dt)` does (the same factor).
+"""
+function ibm_correction_term(sm::SolidMask; τ::Real = 0.0, dt::Real = 0.0)
+    factor = τ > 0 ? 1 / (1 + dt / τ) : 0.0
+    ii, jj, kk = interior(sm.mesh)
+    return IBMCorrectionTerm(sm.mask, factor, first(ii), last(ii), first(jj), last(jj), first(kk), last(kk))
+end
+FiniteVolume.footprint(::IBMCorrectionTerm) = (0, 0, 0)
+
+# q scaled n times by x (the whole-field correction scales once per solid cell)
+@inline function _scale_n!(q, i, j, k, x, n)
+    n == 0 && return nothing
+    @inbounds begin
+        y = q[i, j, k]
+        for _ in 1:n
+            y *= x
+        end
+        q[i, j, k] = y
+    end
+    return nothing
+end
+
+@inline function FiniteVolume.post_row!(t::IBMCorrectionTerm, ::Val{2}, j, k, ia, ib, st)
+    mk, i1, i2 = t.mk, t.i1, t.i2
+    a0 = _row_any(mk, i1, i2, j, k)
+    ay = j - 1 >= t.j1 && _row_any(mk, i1, i2, j - 1, k)
+    az = k - 1 >= t.k1 && _row_any(mk, i1, i2, j, k - 1)
+    (a0 || ay || az) || return nothing
+    u, v, w, x = st.u, st.v, st.w, t.x
+    @inbounds for i in ia:ib
+        s0 = a0 && mk[i, j, k]
+        _scale_n!(u, i, j, k, x, (i > i1 && a0 && mk[i-1, j, k]) + s0)
+        _scale_n!(v, i, j, k, x, (ay && mk[i, j-1, k]) + s0)
+        _scale_n!(w, i, j, k, x, (az && mk[i, j, k-1]) + s0)
+    end
+    return nothing
+end
+
+# the faces beyond the interior, as the whole-field correction scales them
+function FiniteVolume.finish!(t::IBMCorrectionTerm, sim, Δt)
+    mk, x = t.mk, t.x
+    u, v, w = sim.u.data, sim.v.data, sim.w.data
+    @inbounds begin
+        for k in t.k1:t.k2, j in t.j1:t.j2
+            mk[t.i2, j, k] && _scale_n!(u, t.i2 + 1, j, k, x, 1)
+        end
+        for k in t.k1:t.k2, i in t.i1:t.i2
+            mk[i, t.j2, k] && _scale_n!(v, i, t.j2 + 1, k, x, 1)
+        end
+        for j in t.j1:t.j2, i in t.i1:t.i2
+            mk[i, j, t.k2] && _scale_n!(w, i, j, t.k2 + 1, x, 1)
+        end
+    end
+    return nothing
 end
 
 # =========================================================================

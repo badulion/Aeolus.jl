@@ -137,6 +137,27 @@ other backend the same term tuple runs in the per-point form
 `Backends.launch_points!`), tested on `KernelAbstractions.CPU()` as the
 stand-in for a GPU.
 
+**Post-predictor operators** (#533 step 6) are `PostTerm`s: an implicit
+drag, a penalty or a prescribed flow that corrects the predicted
+velocity before the projection (the core's `post_predictor!` stage). A
+post term with footprint 0 runs on a row right after its predictor; one
+with y-radius `r` computes its factors `r` rows and applies them `2r`
+rows behind its input, so every factor reads values its own operator
+has not changed yet (Jacobi, as the whole-field operators). Points whose
+stencil reaches a halo, a slab's edge planes or a point an earlier
+operator deferred run after the sweep, in the same two phases, with the
+halos filled (`post_plan`). An operator that needs the whole predicted
+field is an `AfterSweep`: its whole-field method runs after the sweep,
+and so does every operator after it. Post terms do not read θ or qv,
+which the sweep has already advanced (the whole-field order runs the
+post-predictor stage before the scalars' update). A domain puts a
+component's post term on the rows only when it is pointwise (the
+prescribed flow, the IBM correction) and runs one with a stencil (canopy
+drag, facade and ground wall stress, the tiles' drag) as an `AfterSweep`
+of its own `run_stage!`: measured, their row forms cost 1.4–2.2× their
+whole-field passes (`benchmarks/bench_post_sweep.jl`; the roadmap's #533
+step 6).
+
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
 Aeolus.Operators.FiniteVolume.sweep_term
@@ -155,6 +176,16 @@ Aeolus.Operators.FiniteVolume.term_tendencies!
 Aeolus.Operators.FiniteVolume.pointwise_predictor!
 Aeolus.Simulations.fused_predictor!
 Aeolus.Operators.FiniteVolume.sweep_lags
+Aeolus.Operators.FiniteVolume.PostTerm
+Aeolus.Operators.FiniteVolume.post_sweep_term
+Aeolus.Operators.FiniteVolume.post_row!
+Aeolus.Operators.FiniteVolume.finish!
+Aeolus.Operators.FiniteVolume.AfterSweep
+Aeolus.Operators.FiniteVolume.post_plan
+Aeolus.Operators.FiniteVolume.post_delay
+Aeolus.Operators.FiniteVolume.row_index
+Aeolus.Operators.FiniteVolume.row_entries
+Aeolus.Operators.FiniteVolume.rows_sorted
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
@@ -167,6 +198,8 @@ Aeolus.Simulations.sweep_key
 Aeolus.Simulations.hook_terms
 Aeolus.Simulations.hook_blockers
 Aeolus.Simulations.post_hook_blockers
+Aeolus.Simulations.post_hook_terms
+Aeolus.Components.run_after_sweep
 Aeolus.Components.sweep_type
 Aeolus.Components.sweep_report
 ```
