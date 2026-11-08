@@ -35,6 +35,7 @@ using Aeolus.WallModels: RoughLogLaw, WallModel, immersed_walls, apply_immersed_
 using Aeolus.Radiation: SlabLand
 using Aeolus.SurfaceTiles: SurfaceMosaic
 using Aeolus.Anelastic: isentropic_reference
+using Aeolus.Config: load_run_config
 using Random: Xoshiro, randn, rand
 
 const FVp = Aeolus.Operators.FiniteVolume
@@ -409,6 +410,163 @@ _fp_diag_agree(a, b) = all(i -> agree(collect(Float64, Iterators.flatten(a[i])),
             end
         end
     end
+end
+
+
+# ---------------------------------------------------------------------------
+# 3. components: the hooks' post terms, and steps on the fused sweep
+# ---------------------------------------------------------------------------
+
+@testset "components: a domain with post-predictor components steps fused = one loop per term" begin
+    g2 = RegularGrid(; size = (20, 16, 12), extent = (200.0, 160.0, 60.0), halo = (3, 3, 3))
+    for scheme in (:euler, :rk3), what in (:kinematic, :tiles)
+        mk() = begin
+            s = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2); U = 2.0)
+            d0 = CPp.Domain(s; scheme = scheme, validate = false)
+            c = what === :kinematic ?
+                CPp.build(CPp.KinematicFlow, (; kind = :solid_body_rotation, omega = 0.01, center = (100.0, 80.0),
+                                              velocity = (0.0, 0.0, 0.0)), d0) : first(_fp_tiles(s))
+            CPp.Domain(d0; components = (CPp.CentredAdvection(), c))
+        end
+        a = mk(); r = mk()
+        SIMp.set_loop_fusion!(a.state, :always); SIMp.set_loop_fusion!(r.state, :never)
+        h = CPp.core_hooks(a)
+        post = SIMp.post_hook_terms(h.post_predictor!, a.state, 0.5)
+        @test post isa Tuple{what === :kinematic ? CPp.KinematicFlowTerm : Aeolus.Urban.TiledDragTerm}
+        fill!(a.state.tu.data, NaN)
+        for _ in 1:3
+            step!(a, 0.5); step!(r, 0.5)
+        end
+        ok = _fp_agree(a.state, r.state)
+        ok || println("  [#533 s6] domain mismatch: $what $scheme")
+        @test ok
+        @test all(isnan, a.state.tu.data)            # fused: the tendency fields unused
+        ra = CPp.sweep_report(a)
+        @test ra["substages_fused"] == "all" && isempty(ra["not_fusable"])
+        @test a.state.workspaces.fused.fused == (scheme === :rk3 ? 9 : 3)
+    end
+    # a plain post_predictor! function still keeps one loop per term
+    s = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2))
+    step!(s, 0.5; post_predictor! = (sim, Δt) -> nothing)
+    @test SIMp.sweep_report(s)["not_fusable"] == ["builtin.post_predictor: " * SIMp.sweep_reason("builtin.post_predictor")]
+end
+
+@testset "SurfaceLayer: the wall stress in the sweep, with its substage stress sums" begin
+    g2 = RegularGrid(; size = (16, 12, 12), extent = (160.0, 120.0, 120.0), halo = (3, 3, 3))
+    mk() = begin
+        s = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2, θ₀ = 300.0,
+                                           bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)); U = 2.0)
+        interior_view(s.u) .+= 4.0
+        d0 = CPp.Domain(s; validate = false)
+        sl = CPp.build(CPp.SurfaceLayer, (; model = :most, z0m = 0.1, z0h = nothing,
+                                        temperature = Dict{String,Any}("kind" => "constant", "value" => 302.0),
+                                        stability = Dict{String,Any}("family" => "businger_dyer_beljaars_holtslag"),
+                                        rho_cp = 1206.0), d0)
+        d = CPp.Domain(d0; components = (CPp.CentredAdvection(), sl))
+        CPp.run_stage!(sl, d, Val(:surface_flux), 1.0)
+        (s, sl, d)
+    end
+    (r, slr, dr), (a, sla, da) = mk(), mk()
+    post = SIMp.post_hook_terms(CPp.core_hooks(da).post_predictor!, a, 0.5)
+    @test post isa Tuple{CPp.SurfaceLayerPostTerm}
+    snap = (copy(r.θ.data), copy(r.qv.data))
+    for n in 1:2
+        SIMp.fill_state_halos!(r); SIMp.fill_state_halos!(a)      # step 1 of a substage (the operators refill some halos)
+        _fp_reference!(r, g2, 0.5, (() -> CPp.run_stage!(slr, dr, Val(:post_predictor), 0.5),), false, snap)
+        _fp_sweep!(a, g2, 0.5, (FVp.post_sweep_term(sla, da, 0.5),), false, snap, 2)
+        @test _fp_agree(a, r)
+        @test agree(slr.τ, sla.τ) && slr.nsub[] == sla.nsub[] == n && slr.τ[1] != 0
+    end
+    # the domain is not fused for the surface layer's heat flux (:tendencies), only
+    rep = (step!(da, 0.5); CPp.sweep_report(da))
+    @test !any(startswith("builtin.post_predictor"), rep["not_fusable"])
+    @test any(startswith("Components.SurfaceLayer:"), rep["not_fusable"])
+end
+
+@testset "the urban site's couplings: post terms, the sweep = the site's post-predictor hook" begin
+    cfg = load_run_config(joinpath(@__DIR__, "data", "urban", "small_city.toml");
+                          overrides = ["fftw.planner=\"estimate\""])
+    m = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
+    d = only(m.domains)
+    case = Aeolus.Urban.urban_case(d)
+    step!(m, 1.0)                                  # the ground's matching-input filter is primed after a step
+    names = [CPp.component_name(c) for c in d.components if CPp.attaches(c, :post_predictor)]
+    @test issubset([:ibm, :wall_model_facades, :surface_exchange], names)
+    Δt = 0.5
+    post = CPp._post_stage_terms(d.components, d, Δt)
+    @test post isa Tuple && length(post) == length(names)
+    @test !any(t -> t isa FVp.AfterSweep, post)      # every coupling on the sweep's rows
+    @test any(t -> t isa Aeolus.IBM.IBMCorrectionTerm, post) &&
+          any(t -> t isa Aeolus.WallModels.ImmersedWallTerm, post) &&
+          any(t -> t isa Aeolus.Urban.GroundStressTerm, post)
+    # with the budgets on (always, at the site) the hook is not fused: plan step 7
+    @test SIMp.post_hook_terms(case.post_predictor, case.sim, Δt) === nothing
+    s = case.sim
+    SIMp.fill_state_halos!(s)
+    save = deepcopy((s.u.data, s.v.data, s.w.data, s.θ.data, s.qv.data))
+    restore!() = foreach((x, y) -> copyto!(x, y), (s.u.data, s.v.data, s.w.data, s.θ.data, s.qv.data), save)
+    snap = (copy(s.θ.data), copy(s.qv.data))
+    _fp_reference!(s, s.mesh, Δt, (() -> case.post_predictor(s, Δt),), false, snap)
+    ref = deepcopy((s.u, s.v, s.w, s.θ, s.qv)); τA = case.couplings[findfirst(c -> c isa Aeolus.Urban.WallModelFacades,
+                                                                                    case.couplings)].iw.stats[:τA]
+    ustar = copy(case.bus.u_star)
+    r0 = (restore!(); _fp_reference!(s, s.mesh, Δt, (), false, snap); interior_view(s.u) |> copy)
+    @test !agree(r0, interior_view(ref[1]))                     # the couplings acted
+    for ns in (1, 3)
+        restore!()
+        _fp_sweep!(s, s.mesh, Δt, CPp._post_stage_terms(d.components, d, Δt), false, snap, ns)
+        @test all(i -> agree(interior_view((s.u, s.v, s.w, s.θ, s.qv)[i]), interior_view(ref[i])), 1:5)
+        @test agree(case.couplings[findfirst(c -> c isa Aeolus.Urban.WallModelFacades, case.couplings)].iw.stats[:τA], τA)
+        @test agree(case.bus.u_star, ustar)
+    end
+end
+
+
+# ---------------------------------------------------------------------------
+# 4. type stability and allocation
+# ---------------------------------------------------------------------------
+
+_fp_call(bufs, terms, post, h, s, s1, g) =
+    FVp.blocked_predictor!(bufs, terms, post, h, s.u, s.v, s.w, SIMp._Axpy(1e-3), s1, nothing, g)
+function _fp_allocs(bufs, terms, post, h, s, s1, g)
+    _fp_call(bufs, terms, post, h, s, s1, g)
+    n = typemax(Int)
+    for _ in 1:3
+        n = min(n, @allocated _fp_call(bufs, terms, post, h, s, s1, g))
+    end
+    return n
+end
+
+@testset "type stability and allocation" begin
+    sm, lev = _fp_buildings(gU)
+    for (bn, b) in _FP_BACKENDS
+        with_backend(b) do
+            s = _fp_seed!(BoussinesqSimulation(gU; ν = 1e-2); U = 2.0)
+            iw = immersed_walls(s, sm, RoughLogLaw(0.05))
+            dr = ResolvedCanopyDrag(gU, _fp_lad(gU); C_d = 0.2)
+            post = (ibm_correction_term(sm; dt = 0.1), immersed_wall_term(iw, 0.1),
+                    wall_stress_term(s, WallModel(RoughLogLaw(0.1)), 0.1; mask = lev), canopy_drag_term(dr, s, 0.1),
+                    FPDrag(1.0, s), FPScale(0.5))
+            terms = (FVp.BaseTendencies(s.ν),)
+            bufs = FVp.sweep_buffers(nothing, s.u.data, 4, 3, gU.Nz)
+            s1 = (s.θ, SIMp._Axpy(1e-3), nothing)
+            h = SIMp._VelocityHalos(s)
+            n = _fp_allocs(bufs, terms, post, h, s, s1, gU)
+            println("  [#533 s6] blocked_predictor! with six post terms allocates $n bytes ($bn)")
+            # serial: nothing; threaded: the task closures of the launches (the slab launch, the
+            # edge launch, two per post term after the sweep) and the halo fills, none per point
+            @test bn == "serial" ? n == 0 : n <= 64_000
+            @test (@inferred FVp.post_plan(post, 1)) isa NTuple{6,NTuple{8,Int}}
+        end
+    end
+    g2 = RegularGrid(; size = (20, 16, 12), extent = (200.0, 160.0, 60.0), halo = (3, 3, 3))
+    s = _fp_seed!(BoussinesqSimulation(g2; ν = 1e-2))
+    d0 = CPp.Domain(s; validate = false)
+    kf = CPp.build(CPp.KinematicFlow, (; kind = :uniform, omega = 0.0, center = (0.0, 0.0), velocity = (1.0, 0.5, 0.0)), d0)
+    d = CPp.Domain(d0; components = (CPp.CentredAdvection(), kf))
+    h = CPp.core_hooks(d).post_predictor!
+    @test (@inferred SIMp.post_hook_terms(h, s, 0.5)) isa Tuple{CPp.KinematicFlowTerm{Array{Float64,3}}}
+    @test (@inferred SIMp._post_terms(s, nothing, 0.5)) === ()
 end
 
 end

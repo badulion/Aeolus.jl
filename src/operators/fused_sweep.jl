@@ -380,12 +380,12 @@ end
 # its own face, then phase 1 and phase 2 over its deferred points; an
 # AfterSweep runs its whole-field operator
 _post_deferred!(b, ::Tuple{}, ::Tuple{}, halo!, st, ii, jj, kk, ns) = nothing
-function _post_deferred!(b, post::Tuple, plan::Tuple, halo!, st, ii, jj, kk, ns)
+function _post_deferred!(b, post::Tuple, plan::Tuple, halo!::H, st, ii, jj, kk, ns) where {H}   # (H: specialise on a callable struct)
     _post_deferred1!(b, first(post), first(plan), halo!, st, ii, jj, kk, ns)
     return _post_deferred!(b, Base.tail(post), Base.tail(plan), halo!, st, ii, jj, kk, ns)
 end
 _post_deferred1!(b, t::AfterSweep, e, halo!, st, ii, jj, kk, ns) = (t.f(); nothing)
-function _post_deferred1!(b, t::PostTerm, e, halo!, st, ii, jj, kk, ns)
+function _post_deferred1!(b, t::PostTerm, e, halo!::H, st, ii, jj, kk, ns) where {H}
     fx, fy, fz, ax, ay, az = e
     footprint(t) == (0, 0, 0) || halo!()
     launch!(b, _post_deferred_row!, (jj, kk), t, Val(1), fx, fy, fz, st, ii, jj, kk, ns)
@@ -647,9 +647,9 @@ blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTendencies,Vararg{SweepT
                    u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, pu, s1, s2, g::AbstractMesh) =
     blocked_predictor!(bufs, terms, (), nothing, u, v, w, pu, s1, s2, g)
 function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTendencies,Vararg{SweepTerm}},
-                            post::Tuple{Vararg{PostTerm}}, halo!,
+                            post::Tuple{Vararg{PostTerm}}, halo!::H,
                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                            pu, s1, s2, g::AbstractMesh)
+                            pu, s1, s2, g::AbstractMesh) where {H}
     ii, jj, kk = interior(g)
     ns = bufs.ns
     lag, lz = sweep_lags(terms)

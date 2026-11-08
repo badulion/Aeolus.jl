@@ -303,7 +303,7 @@ end
 
 # the halos of the predicted velocity, for the post terms' points that run
 # after the sweep (the hooks' operators fill them as they start)
-struct _VelocityHalos{S} <: Function
+struct _VelocityHalos{S}
     sim::S
 end
 (h::_VelocityHalos)() = (fill_halos!(h.sim.u, h.sim.bcs); fill_halos!(h.sim.v, h.sim.bcs);
