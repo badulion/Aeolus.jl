@@ -68,7 +68,7 @@ The term of the fused sweep that does what `x` (a component, with `ctx`
 its domain; or a built-in operator of the core, with `ctx` the
 simulation) adds to the tendencies, or `nothing` (the default) when `x`
 cannot be expressed as a local term yet. A substage with one `nothing`
-takes the unfused path, and the run reports which term caused it (#533).
+runs one loop per term, and the run reports which term caused it (#533).
 """
 sweep_term(x, ctx) = nothing
 

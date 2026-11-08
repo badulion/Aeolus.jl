@@ -1,6 +1,6 @@
 # The fused sweep of the Boussinesq step core: which terms a substage adds
 # to its tendencies, whether all of them run inside the sweep, and the
-# report of the substages that fall back to the unfused path (#533).
+# report of the substages that fall back to one loop per term (#533).
 # Included into `module Simulations`, after `_euler_projection!`.
 #
 # A substage takes the fused sweep (`FiniteVolume.blocked_predictor!`)
@@ -8,7 +8,7 @@
 # `SweepTerm` ([`FiniteVolume.sweep_term`](@ref Aeolus.Operators.FiniteVolume.sweep_term)):
 # the built-in ones of the core and the components of stages 6 and 7
 # (through the body-force hook, `Components._ForceHook`). Otherwise it runs
-# the unfused path, the reference implementation, and the simulation's
+# separate loops, one per term (the reference implementation), and the simulation's
 # `SweepReport` records which terms caused it, once, with the documented
 # reason of `SWEEP_FALLBACKS`.
 
@@ -24,7 +24,7 @@ This is the explicit allowlist of the completeness guard
 (`test/fused_sweep.jl`): every component that attaches to `:tendencies`,
 `:body_force` or `:post_predictor` and every built-in term has a
 `sweep_term` or an entry here, and no entry is stale. A run reports the
-reasons of the terms that kept it on the unfused path in its
+reasons of the terms that kept it with one loop per term in its
 `results.toml` (`[fused_sweep]`, [`sweep_report`](@ref)).
 """
 const SWEEP_FALLBACKS = Dict{String,String}(
@@ -90,7 +90,7 @@ sweep_reason(key::AbstractString) =
     get(SWEEP_FALLBACKS, key, "no sweep_term and no documented reason in Simulations.SWEEP_FALLBACKS")
 sweep_reason(T::Type) = sweep_reason(sweep_key(T))
 
-# one blocker of the fused sweep: what, and why (only built on the report path)
+# one blocker of the fused sweep: what, and why (only built when reporting)
 _blocker(key::AbstractString) = (key => sweep_reason(key))
 _blocker(T::Type) = (sweep_key(T) => sweep_reason(T))
 
@@ -111,7 +111,7 @@ hook_terms(hook, sim) = nothing
 
 What keeps the core's hook `hook` out of the fused sweep, `key => reason`
 ([`SWEEP_FALLBACKS`](@ref)); empty when [`hook_terms`](@ref) has its
-terms. Called once per simulation, on the report path.
+terms. Called once per simulation, when reporting.
 """
 hook_blockers(hook, sim) = hook_terms(hook, sim) === nothing ? [_blocker("builtin.body_force")] : Pair{String,String}[]
 """
@@ -142,7 +142,7 @@ function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_pred
 end
 
 # Every term that keeps a substage off the fused sweep, `key => reason`
-# (the report path; allocates).
+# (only when reporting; allocates).
 function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection)
     out = Pair{String,String}[]
     Backends.backend(sim.u.data) isa Backends.CPUBackend || push!(out, _blocker("builtin.backend"))
@@ -176,9 +176,9 @@ const _LOGGED_LOCK = ReentrantLock()
     r.reported = true
     who = join((first(p) for p in r.fallback), ", ")
     fresh = lock(() -> who in _LOGGED_FALLBACKS ? false : (push!(_LOGGED_FALLBACKS, who); true), _LOGGED_LOCK)
-    fresh && @info("the step core takes the unfused path: " * who *
+    fresh && @info("the step core runs one loop per term (not the fused sweep): " * who *
                    " (no fused sweep term; results.toml [fused_sweep])",
-                   subsystem = :timestepping, event = :unfused_sweep,
+                   subsystem = :timestepping, event = :not_fused,
                    reasons = join((string(first(p), ": ", last(p)) for p in r.fallback), "; "))
     return nothing
 end
@@ -186,11 +186,11 @@ end
 """
     sweep_report(sim) -> Dict{String,Any}
 
-The `results.toml` table of which path the step core of `sim` took
-(#533): `path` (`"fused"`: every substage ran the fused sweep, `"unfused"`,
-`"mixed"`; `"unfused"` with the core's reason when the step core taken
-has no fused sweep) and `fallback`, the `"term: reason"` of every term that
-kept it off the fused sweep ([`SWEEP_FALLBACKS`](@ref)). The substage
+The `results.toml` table of whether the substages of `sim`'s step core
+ran the fused sweep (#533): `substages_fused` (`"all"`, `"some"` or
+`"none"`; `"none"` with the core's reason when the step core has no fused
+sweep) and `not_fusable`, the `"term: reason"` of every term that kept a
+substage on separate loops (one per term) ([`SWEEP_FALLBACKS`](@ref)). The substage
 counts stay in the simulation's [`SweepReport`](@ref)
 (`sim.workspaces.fused`): they restart with a resumed session, and a
 resumed run's `results.toml` is that of an uninterrupted run.
@@ -201,8 +201,9 @@ function sweep_report(sim)
     if r.fused == 0 && r.unfused == 0
         fb = [_blocker("builtin.core")]
     end
-    path = r.unfused == 0 && r.fused > 0 ? "fused" : r.fused == 0 ? "unfused" : "mixed"
-    return Dict{String,Any}("path" => path, "fallback" => String[string(first(p), ": ", last(p)) for p in fb])
+    sub = r.unfused == 0 && r.fused > 0 ? "all" : r.fused == 0 ? "none" : "some"
+    return Dict{String,Any}("substages_fused" => sub,
+                            "not_fusable" => String[string(first(p), ": ", last(p)) for p in fb])
 end
 
 # Steps 2-12 of `_euler_projection!` in the fused sweep when every term of

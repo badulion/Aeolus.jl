@@ -10,10 +10,10 @@
 #      rows and two planes (ring of 3 rows, 2 edge planes per slab end)
 #      and a term with a reduction in `prepare!` give, inside the sweep,
 #      the whole-field passes of the same terms followed by the predictor;
-#   3. step! and step_rk3! on the fused path agree with the unfused path
-#      (the reference) and report which path they took; a component with a
-#      sweep term keeps a domain on the fused path, one without moves it to
-#      the unfused path and is reported with its reason, also in a run's
+#   3. step! and step_rk3! on the fused sweep agree with the separate loops
+#      (the reference) and report whether they ran it; a component with a
+#      sweep term keeps a domain on the fused sweep, one without moves it to
+#      the separate loops and is reported with its reason, also in a run's
 #      results.toml;
 #   4. type stability and allocation of the driver;
 #   5. the completeness guard: every component attached to :tendencies,
@@ -377,17 +377,17 @@ noop = (s, Δt) -> nothing
                 drv(a, 0.5); drv(r, 0.5; body_force! = noop)   # a no-op hook: the unfused reference
             end
             @test _fs_agree(a, r)
-            @test all(isnan, a.tu.data)          # the fused path: tendencies unused
+            @test all(isnan, a.tu.data)          # the fused sweep: tendencies unused
             ra = SIMs.sweep_report(a); rr = SIMs.sweep_report(r)
             nsub = drv === step! ? 3 : 9
-            @test ra["path"] == "fused" && a.workspaces.fused.fused == nsub && isempty(ra["fallback"])
-            @test rr["path"] == "unfused" && r.workspaces.fused.unfused == nsub &&
-                  rr["fallback"] == ["builtin.body_force: " * SIMs.sweep_reason("builtin.body_force")]
+            @test ra["substages_fused"] == "all" && a.workspaces.fused.fused == nsub && isempty(ra["not_fusable"])
+            @test rr["substages_fused"] == "none" && r.workspaces.fused.unfused == nsub &&
+                  rr["not_fusable"] == ["builtin.body_force: " * SIMs.sweep_reason("builtin.body_force")]
         end
     end
 end
 
-@testset "a built-in term or a hook keeps the unfused path, and is reported" begin
+@testset "a built-in term or a hook keeps one loop per term, and is reported" begin
     for (kw, hook, key) in (((θ₀ = 300.0,), NamedTuple(), "builtin.buoyancy"),
                             ((f_coriolis = 1e-4,), NamedTuple(), "builtin.coriolis"),
                             ((C_s = 0.17,), NamedTuple(), "builtin.sgs"),
@@ -399,21 +399,21 @@ end
         step!(a, 0.5; hook...); step!(a, 0.5; hook...)
         @test !any(isnan, interior_view(a.tu))       # the tendencies were written
         rep = SIMs.sweep_report(a)
-        @test rep["path"] == "unfused" && a.workspaces.fused.unfused == 2 && a.workspaces.fused.fused == 0
-        @test any(startswith(key * ":"), rep["fallback"])
-        @test !occursin("no documented reason", join(rep["fallback"]))
+        @test rep["substages_fused"] == "none" && a.workspaces.fused.unfused == 2 && a.workspaces.fused.fused == 0
+        @test any(startswith(key * ":"), rep["not_fusable"])
+        @test !occursin("no documented reason", join(rep["not_fusable"]))
     end
     # several terms: every one is reported
     a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4))
     step!(a, 0.5)
-    @test Set(first.(split.(SIMs.sweep_report(a)["fallback"], ":"))) == Set(["builtin.buoyancy", "builtin.coriolis"])
+    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.buoyancy", "builtin.coriolis"])
     # a core without a fused sweep (the anelastic core) reports its reason
     an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
-    @test SIMs.sweep_report(an)["path"] == "unfused" &&
-          SIMs.sweep_report(an)["fallback"] == ["builtin.core: " * SIMs.sweep_reason("builtin.core")]
+    @test SIMs.sweep_report(an)["substages_fused"] == "none" &&
+          SIMs.sweep_report(an)["not_fusable"] == ["builtin.core: " * SIMs.sweep_reason("builtin.core")]
 end
 
-@testset "components: a sweep term keeps the fused path, a missing one is reported" begin
+@testset "components: a sweep term keeps the fused sweep, a missing one is reported" begin
     for drv in (:euler, :rk3)
         mk(c) = (s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2));
                  d0 = Domain(s; scheme = drv, validate = false);
@@ -429,12 +429,12 @@ end
         end
         @test _fs_agree(a.state, r.state)
         @test all(isnan, a.state.tw.data)
-        # without the damping the state differs: the component acted on both paths
+        # without the damping the state differs: the component acted in both variants
         z = mk(FSDampWhole(0.0)); foreach(_ -> step!(z, 0.5), 1:3)
         @test !agree(interior_view(z.state.w), interior_view(a.state.w))
         ra = CPs.sweep_report(a); rr = CPs.sweep_report(r)
-        @test ra["path"] == "fused" && isempty(ra["fallback"])
-        @test rr["path"] == "unfused" && only(rr["fallback"]) == "Main.FSDampWhole: " *
+        @test ra["substages_fused"] == "all" && isempty(ra["not_fusable"])
+        @test rr["substages_fused"] == "none" && only(rr["not_fusable"]) == "Main.FSDampWhole: " *
               "no sweep_term and no documented reason in Simulations.SWEEP_FALLBACKS"
     end
     # with the budgets on the hook counts the substages: unfused, reported
@@ -443,10 +443,10 @@ end
     d = Domain(Domain(s; validate = false); components = (CentredAdvection(), FSDampComponent(0.05)))
     db = CPs.with_budgets(d, (:energy,))
     step!(db, 0.5)
-    @test any(startswith("builtin.budgets:"), CPs.sweep_report(db)["fallback"])
+    @test any(startswith("builtin.budgets:"), CPs.sweep_report(db)["not_fusable"])
 end
 
-@testset "results.toml: the run records its path ([fused_sweep])" begin
+@testset "results.toml: the run records whether its substages were fused ([fused_sweep])" begin
     ex = joinpath(pkgdir(Aeolus), "examples")
     run(cfg, sets) = (root = mktempdir();
                       rc = Aeolus.main(String["run", cfg, collect(Iterators.flatten(("--set", x) for x in sets))...,
@@ -458,16 +458,16 @@ end
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"), small)
     @test rc == 0
     fs = only(values(res["fused_sweep"]))
-    @test fs["path"] == "fused" && isempty(fs["fallback"])
+    @test fs["substages_fused"] == "all" && isempty(fs["not_fusable"])
     # the dry convective boundary layer: SGS, buoyancy, a θ flux and a sponge
     rc, res = run(joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"),
                   vcat(small, ["checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]))
     @test rc == 0
     fs = only(values(res["fused_sweep"]))
-    who = Set(first.(split.(fs["fallback"], ":")))
-    @test fs["path"] == "unfused"
+    who = Set(first.(split.(fs["not_fusable"], ":")))
+    @test fs["substages_fused"] == "none"
     @test issubset(["builtin.sgs", "builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
-    @test !occursin("no documented reason", join(fs["fallback"]))
+    @test !occursin("no documented reason", join(fs["not_fusable"]))
 end
 
 @testset "type stability and allocation" begin
@@ -483,7 +483,7 @@ end
     step_rk3!(s, 0.1)
     @test s.workspaces.sweep === bufs
     n = @allocated step_rk3!(s, 0.1)
-    println("  [#533] step_rk3! on the fused path allocates $n bytes")
+    println("  [#533] step_rk3! with the fused sweep allocates $n bytes")
     @test n <= 64          # (measured 16 bytes, as before #533)
     # a composed sweep allocates nothing
     SIMs.fill_state_halos!(s)
@@ -522,7 +522,7 @@ end
         documented && push!(listed, key)
     end
     # the urban couplings that declare an in-core stage are among them (no
-    # in-core work through a path the method scan misses)
+    # in-core work through a route the method scan misses)
     for C in Aeolus.Urban.URBAN_COMPONENTS
         isconcretetype(C) || continue
         any(st -> st[1] in CPs.IN_CORE, Aeolus.Urban.stages(C)) || continue

@@ -44,7 +44,7 @@ include("simulations/step_record.jl")   # the per-step record and diagnostics ho
 """
     SweepReport
 
-Which path the substages of a simulation's Boussinesq step core took
+Whether the substages of a simulation's Boussinesq step core took
 (#533): `fused` and `unfused` count the substages, `fallback` holds the
 terms (`key => reason`, [`SWEEP_FALLBACKS`](@ref)) that kept the first
 unfused substage off the fused sweep. Logged once, when it is first
@@ -79,7 +79,7 @@ mutable struct StepWorkspaces
     snapshot::Any
     imex::Any
     sweep::Any            # FiniteVolume.SweepBuffers of the blocked core (SC-e, #405)
-    fused::SweepReport    # which path the substages took (#533)
+    fused::SweepReport    # fused and separate substages (#533)
     rec::StepRecord
 end
 StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, SweepReport(), StepRecord())
@@ -425,7 +425,7 @@ the base tendencies (the built-in momentum advection and the molecular
 diffusion) and the pipeline components that provide a sweep term
 qualify: any SGS closure, buoyancy, Coriolis, surface flux, sponge, a
 `body_force!` function, a `post_predictor!` hook or open boundaries keep
-the substage on the unfused path, which the simulation records once
+the substage with one loop per term, which the simulation records once
 with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`).
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
@@ -610,7 +610,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     return sim
 end
 
-include("simulations/fused_sweep.jl")   # the fused sweep: its terms, the fallback report (#533)
+include("simulations/fused_sweep.jl")   # the fused sweep: its terms, the report of terms that cannot be fused (#533)
 
 # The tendencies of steps 2-3 in one launch (`_fused_tendencies!`), and the
 # zero of their halos (`zero_storage!` zeroed the whole storage).

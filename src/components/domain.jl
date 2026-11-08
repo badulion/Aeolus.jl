@@ -196,7 +196,7 @@ sweep_type(c) = typeof(c)
 """
     sweep_report(d::Domain) -> Dict{String,Any}
 
-The `results.toml` table of which path the step core of `d` took (#533,
+The `results.toml` table of whether the step core of `d` took (#533,
 `Simulations.sweep_report`).
 """
 sweep_report(d::Domain) = Simulations.sweep_report(d.state)
@@ -206,7 +206,7 @@ sweep_report(d::Domain) = Simulations.sweep_report(d.state)
 
 The keywords of the core step that run stages 6–8: `body_force!` and
 `post_predictor!` (`nothing` where no component attaches, which keeps the
-core's hook-free fast path; with the budgets on the body-force hook is
+core's hook-free fused sweep; with the budgets on the body-force hook is
 always there, it counts the substages), `sgs` (the `:sgs` component's
 closure) and `sgs_stress` (its momentum divergence, [`sgs_stress`](@ref)).
 The Boussinesq Euler step also takes `momentum_advection` (the

@@ -113,9 +113,9 @@ further term adds its point kernel. A term declares its stencil radius
 eddy viscosity) is computed before the sweep, in `prepare!`.
 
 A component or built-in term without a sweep term keeps the substage on
-the unfused path, the reference implementation; the run logs which term
+separate loops, one per term (the reference implementation); the run logs which term
 caused it, once, and writes it to `results.toml` (`[fused_sweep.<domain>]`:
-`path` and `fallback`). The
+`substages_fused` and `not_fusable`). The
 documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
 the completeness guard `test/fused_sweep.jl`.
 

@@ -3099,13 +3099,13 @@ memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
   with an urban site: `UrbanEntry` holds its coupling in an abstract field,
   so its `sweep_term` infers as `Any` and the decision is a dynamic
   dispatch per substage. Harmless today (every urban coupling returns
-  `nothing` and takes the unfused path); the entry is made concrete when
+  `nothing` and runs one loop per term); the entry is made concrete when
   the urban terms move into the sweep.
-- **Fallback reporting**: an unfused substage is counted in the
+- **Reporting what cannot be fused**: a substage that is not fused is counted in the
   simulation's `SweepReport`; the first one records every term that kept
   it off the sweep with its documented reason and logs it once per
-  process (`event = :unfused_sweep`). A run writes
-  `[fused_sweep.<domain>]` (`path`, `fallback`) to `results.toml`. The
+  process (`event = :not_fused`). A run writes
+  `[fused_sweep.<domain>]` (`substages_fused` = `"all"`/`"some"`/`"none"`, `not_fusable`) to `results.toml`. The
   reasons live in one allowlist, `Simulations.SWEEP_FALLBACKS`.
 - **The completeness guard** (`test/fused_sweep.jl`): every method of
   `Components.run_stage!` / `Urban.run_stage!` on `:tendencies`,
@@ -3115,10 +3115,10 @@ memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
   and no entry is stale. Today only the base tendencies are sweep terms;
   everything else is allowlisted with the plan step that will move it.
 
-**No behaviour change in the step.** The DNS core takes the fused path as before
-(bit-identical to the unfused path in the tests, which compare within
-ROUNDOFF_RTOL); every configuration with another term takes the unfused
-path as before. `step_rk3!` on the fused path allocates 16 bytes per step
+**No behaviour change in the step.** The DNS core takes the fused sweep as before
+(bit-identical to one loop per term in the tests, which compare within
+ROUNDOFF_RTOL); every configuration with another term runs one loop per term
+as before. `step_rk3!` on the fused sweep allocates 16 bytes per step
 (as before); a composed sweep with test terms allocates 0. One output
 change: since every run records `[fused_sweep]`, every `aeolus run` now
 writes `output/results.toml` (also into a configured `output.path`), where
@@ -3157,7 +3157,7 @@ Equal within the noise (±4 %): no regression, as expected for the same
 arithmetic in the same loops. **Not measured** in this step, although the
 issue asks for them per step: bytes per step against `bench_roofline.jl`,
 24 threads, and the configured cases (Berlin, a non-urban case with SGS).
-Nothing on their hot path changed (they take the unfused path as
+Nothing on their hot path changed (they run one loop per term as
 before); the byte reduction and those measurements come with plan step 2
 on.
 
@@ -3165,7 +3165,7 @@ on.
 the first version wrote the
 substage counts to `results.toml`; `checks.jl` (a resumed run's
 `results.toml` equals an uninterrupted run's) caught it, since the counts
-restart with a session. `results.toml` now has the path and the reasons;
+restart with a session. `results.toml` now has `substages_fused` and the reasons;
 the counts stay in the `SweepReport`.
 
 **Deviations**: the issue's "lag 1 + max ry" is implemented as a ring of
