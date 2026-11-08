@@ -5,6 +5,7 @@
 #   julia -t N --project=. benchmarks/bench_roofline.jl stream
 #   julia -t N --project=. benchmarks/bench_roofline.jl flagship [nwarm=2] [nsteps=9]
 #   julia -t N --project=. benchmarks/bench_roofline.jl dns      [N=256] [nwarm=1] [nsteps=3]
+#   julia -t N --project=. benchmarks/bench_roofline.jl config   <toml> [nwarm=2] [nsteps=6] [--set k=v ...]
 #   julia --project=. benchmarks/bench_roofline.jl merge  case ref_threads log1 log2 ...
 #
 # stream: STREAM copy and triad (Threads.@threads :static, first touch by
@@ -17,6 +18,12 @@
 #   its 192 × 192 × 53 parent, the #265 default), `nwarm` steps, then
 #   `nsteps` timed steps (at most 11 steps in all: #392, and long Berlin
 #   runs are paused).
+# config: any configured run (a TOML file, e.g. the dry CBL, GABLS1, the LES
+#   of examples/dns_vs_les), with `--set` overrides (the grid size,
+#   `timestep.loop_fusion="never"` for the reference of #533): `nwarm` steps,
+#   then `nsteps` timed steps (`step_adaptive!(model)`, or `step!(model, dt)` of a
+#   fixed-step run) (#533 step 4).
+#   The case name in the ROW lines is the file's base name.
 # dns: `step_rk3!` of the 256³ decaying-turbulence DNS
 #   (test/fixtures/dns_decay.jl, as in KA-o's `dns` mode). The per-step
 #   history of `dns_step!` (on the reduction primitives since #400) is
@@ -68,7 +75,7 @@
 # (JULIA_EXCLUSIVE=1, taskset) can be checked in the log.
 
 const MODE = get(ARGS, 1, "stream")
-const PROF = MODE in ("flagship", "dns") && get(ENV, "ROOFLINE_PROF", "1") != "0"
+const PROF = MODE in ("flagship", "dns", "config") && get(ENV, "ROOFLINE_PROF", "1") != "0"
 
 using Printf
 
@@ -432,6 +439,37 @@ function bench_dns(N; nwarm = 1, nsteps = 3)
     end
 end
 
+function bench_config(path, sets; nwarm = 2, nsteps = 6)
+    CP = Aeolus.Components
+    cfg = load_run_config(path; overrides = vcat(["output.variables=[]"], sets))
+    model = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
+    d = only(model.domains)
+    dt = cfg.time.dt
+    # an adaptive run: its CFL step; a fixed one: its dt
+    stepper() = d.cfl === nothing ? step!(model, Float64(dt); checked = false) : CP.step_adaptive!(model)
+    for _ in 1:nwarm
+        stepper()
+    end
+    name = splitext(basename(path))[1]
+    t = 0.0
+    RECORDING[] = true
+    g0 = Base.gc_time_ns()
+    o0 = OVERHEAD_NS[]
+    for _ in 1:nsteps
+        t += @elapsed stepper()
+    end
+    GC_NS[] = Base.gc_time_ns() - g0
+    RECORDING[] = false
+    ov = (OVERHEAD_NS[] - o0) / 1e6 / nsteps          # the profiler's own time, per step
+    t -= ov * nsteps / 1e3
+    for d in model.domains
+        rep = CP.sweep_report(d)
+        println("loop fusion ($(name)): ", rep["setting"], ", substages fused: ", rep["substages_fused"],
+                isempty(rep["not_fusable"]) ? "" : " (not fusable: " * join(first.(split.(rep["not_fusable"], ":")), ", ") * ")")
+    end
+    dump_stats(name, nsteps, 1e3t / nsteps; step_overhead_ms = ov)
+end
+
 argint(i, d) = length(ARGS) >= i ? parse(Int, ARGS[i]) : d
 init_threads!()
 affinity()
@@ -444,6 +482,16 @@ elseif MODE == "dns"
     N = argint(2, 256)
     stream("dns$N")
     bench_dns(N; nwarm = argint(3, 1), nsteps = argint(4, 3))
+elseif MODE == "config"
+    pos = String[]; sets = String[]
+    let i = 2
+        while i <= length(ARGS)
+            ARGS[i] == "--set" ? (push!(sets, ARGS[i+1]); i += 2) : (push!(pos, ARGS[i]); i += 1)
+        end
+    end
+    stream(splitext(basename(pos[1]))[1])
+    bench_config(pos[1], sets; nwarm = length(pos) >= 2 ? parse(Int, pos[2]) : 2,
+                 nsteps = length(pos) >= 3 ? parse(Int, pos[3]) : 6)
 else
-    error("unknown mode $MODE (stream, flagship, dns, merge)")
+    error("unknown mode $MODE (stream, flagship, dns, config, merge)")
 end
