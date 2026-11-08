@@ -3331,7 +3331,22 @@ the order 1, 2, 6, 12, one process each:
 | | speed-up | 1.21 | 1.42 | 1.51 | 1.59 |
 
 The gain is that of steps 2 and 4 together (without either the CBL runs
-unfused). **Bytes** (profiled runs, 128 × 128 × 64, one Euler substage per
+unfused). Re-measured after the review fixes (the same scratch merge
+with the fixes added, the order of the two settings swapped every step,
+one process per thread count, load 1.3–2.6), 128 × 128 × 64, ms per step,
+min (median) of 8 steps each:
+
+| threads | 1 | 2 | 6 | 12 | 24 |
+| :-- | --: | --: | --: | --: | --: |
+| never | 50.4 (51.3) | 32.7 (35.2) | 19.3 (20.9) | 16.3 (17.0) | 16.6 (17.3) |
+| fused | 43.3 (43.3) | 23.2 (26.0) | 13.2 (14.4) | 10.6 (11.0) | 11.1 (11.7) |
+| speed-up (median) | 1.19 | 1.35 | 1.45 | 1.55 | 1.48 |
+
+24 threads (SMT) gain nothing over 12 in either setting. These numbers
+stand for steps 2 + 4 without step 7's budgets; with step 7 merged the
+CBL's `[checks]` can stay on, which is not measured here. Full suite on
+this branch: 118 jobs, 10894 assertions, 0 failed; validation
+`gabls1.jl` 8/8, `gabls3.jl` 19/19. **Bytes** (profiled runs, 128 × 128 × 64, one Euler substage per
 step, the compulsory model of `bench_roofline.jl`, the FFT's pencil items
 left out): 547 MB per step (521 B/point) with `"never"`, 218 MB (208
 B/point) fused; time in launches 29.0 → 19.7 ms at 1 thread, 18.5 → 9.5
