@@ -453,7 +453,8 @@ end
                                               "--root", root, "--allow-uncommitted"]; io = IOBuffer(), err = IOBuffer());
                       (rc, TOML.parsefile(joinpath(only(readdir(root; join = true)), "output", "results.toml"))))
     small = ["grid.size=[8,8,8]", "fftw.planner=\"estimate\"", "time.duration=\"none\"", "time.nsteps=3"]
-    # a DNS (the Taylor–Green vortex): every substage fused
+    # a DNS (the Taylor–Green vortex): every substage fused; a run without
+    # [checks] or component results writes results.toml too (since #533)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"), small)
     @test rc == 0
     fs = only(values(res["fused_sweep"]))

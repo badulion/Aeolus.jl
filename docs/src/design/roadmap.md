@@ -3093,8 +3093,14 @@ memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
 - **The decision**: `Simulations._blocked_core` (a fixed list) became
   `_sweep_terms`: the substage is fused when every term is a sweep term,
   the pipeline's body-force hook contributing its components' terms
-  (`hook_terms`, in pipeline order; budgets on keep the hook). Type-stable:
-  a concrete term tuple or `nothing`.
+  (`hook_terms`, in pipeline order; budgets on keep the hook). Type-stable
+  (a concrete term tuple or `nothing`, `@inferred` in the tests) for the
+  built-in terms and concretely typed components; not yet for a domain
+  with an urban site: `UrbanEntry` holds its coupling in an abstract field,
+  so its `sweep_term` infers as `Any` and the decision is a dynamic
+  dispatch per substage. Harmless today (every urban coupling returns
+  `nothing` and takes the unfused path); the entry is made concrete when
+  the urban terms move into the sweep.
 - **Fallback reporting**: an unfused substage is counted in the
   simulation's `SweepReport`; the first one records every term that kept
   it off the sweep with its documented reason and logs it once per
@@ -3109,18 +3115,26 @@ memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
   and no entry is stale. Today only the base tendencies are sweep terms;
   everything else is allowlisted with the plan step that will move it.
 
-**No behaviour change.** The DNS core takes the fused path as before
+**No behaviour change in the step.** The DNS core takes the fused path as before
 (bit-identical to the unfused path in the tests, which compare within
 ROUNDOFF_RTOL); every configuration with another term takes the unfused
 path as before. `step_rk3!` on the fused path allocates 16 bytes per step
-(as before); a composed sweep with test terms allocates 0.
+(as before); a composed sweep with test terms allocates 0. One output
+change: since every run records `[fused_sweep]`, every `aeolus run` now
+writes `output/results.toml` (also into a configured `output.path`), where
+a run without `[checks]` and without component results wrote none before.
 
-**Tests** (`test/fused_sweep.jl`, 727 assertions): the base term against
+**Tests** (`test/fused_sweep.jl`, 779 assertions): the base term against
 the fused tendencies + predictor for 1–5 slabs, serial and threaded,
 regular and stretched, dry and moist, Euler and the RK3 combination;
 three synthetic terms composed (pointwise; radius 2 in y and z, which
 needs the 3-row ring and 2 edge planes; a `prepare!` horizontal-mean
-reduction) against their whole-field passes; `step!`/`step_rk3!` fused
+reduction) against their whole-field passes, with the slabs also run in
+reverse order (one thread runs them forward, where slab s reads slab
+s+1's front planes before they are touched, so only the back edge was
+checked; reversed, a front edge kept shallower than a term's rz fails —
+mutation-checked: 1 front plane instead of 2 fails exactly the 20
+reversed comparisons); `step!`/`step_rk3!` fused
 against unfused; built-in terms, hooks, budgets and components reported
 with their reasons; a test component with a sweep term keeps a domain
 fused and agrees with its `run_stage!` reference; `results.toml` of a
@@ -3140,9 +3154,15 @@ the same code was up to 40 % at 12 threads):
 | step 1 | 1.420 | 0.830 | 0.518 | 0.450 |
 
 Equal within the noise (±4 %): no regression, as expected for the same
-arithmetic in the same loops.
+arithmetic in the same loops. **Not measured** in this step, although the
+issue asks for them per step: bytes per step against `bench_roofline.jl`,
+24 threads, and the configured cases (Berlin, a non-urban case with SGS).
+Nothing on their hot path changed (they take the unfused path as
+before); the byte reduction and those measurements come with plan step 2
+on.
 
-**Test expectation that was wrong**: the first version wrote the
+**Bug the tests caught** (the code was wrong, the expectation right):
+the first version wrote the
 substage counts to `results.toml`; `checks.jl` (a resumed run's
 `results.toml` equals an uninterrupted run's) caught it, since the counts
 restart with a session. `results.toml` now has the path and the reasons;

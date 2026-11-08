@@ -1413,7 +1413,8 @@ function Simulations.run!(::SimulationDriverType, r::SimulationRun, rf::RunFolde
     extra = Dict{String,Any}()
     foreach(d -> foreach(c -> merge!(extra, Components.run_results(c, d)), d.components), doms)
     # which path each domain's step core took: the fused sweep, or the
-    # unfused one and the terms that caused it (#533)
+    # unfused one and the terms that caused it (#533); so every run writes
+    # results.toml, also one without checks or component results
     extra["fused_sweep"] = Dict{String,Any}(d.id => Components.sweep_report(d) for d in doms)
     if checks !== nothing
         _finish_checks(rf, cfg, evaluate_checks(checks); extra = extra)
