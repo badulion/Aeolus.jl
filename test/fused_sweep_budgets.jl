@@ -178,6 +178,18 @@ TBC.section(::Type{TBHeaterComp}) = "heater"
 TBC.stages(::TBHeaterComp) = (Stage(:tendencies),)
 TBF.sweep_term(c::TBHeaterComp, d) = c.t
 
+# A damping whose sweep term appears only later (`on[]` false: no fused
+# form, the substage runs one loop per term)
+struct TBLateComp <: AbstractComponent
+    term::TBForce{Float64,Vector{Float64}}
+    on::Base.RefValue{Bool}
+end
+TBC.component_name(::Type{TBLateComp}) = :tblatecomp
+TBC.section(::Type{TBLateComp}) = "tblatecomp"
+TBC.stages(::TBLateComp) = (Stage(:tendencies),)
+TBC.run_stage!(c::TBLateComp, d, ::Val{:tendencies}, dt) = (tb_ref!(d.state, c.term); nothing)
+TBF.sweep_term(c::TBLateComp, d) = c.on[] ? c.term : nothing
+
 # ---------------------------------------------------------------------------
 
 @testset "budgets inside the fused sweep (#533 plan step 7)" begin
@@ -350,6 +362,38 @@ println("  [#533 s7] domain budgets: largest difference to the reference, relati
     want = ρ0 * cp * 1e-3 * mesh.dz * d.state.t
     @test r.terms[(:tendencies, :heater)] ≈ want rtol = 1e-12
     @test abs(r.closure) <= 1e-12 * maximum(abs, values(r.terms))
+end
+
+@testset "a sweep term that appears after the budget term was built is booked" begin
+    # review finding: the budget term is built (and cached) at the first
+    # substage that asks for the sweep's terms, also when that substage
+    # runs unfused because a component has no sweep term yet; the
+    # component's term, once it appears, must still be booked
+    mesh, bcs = grids[1][2], grids[1][3]
+    mk(on) = tb_domain(mesh, bcs, false, :rk3, nothing; quiet = false, qs = (:energy, :momentum_x),
+                       extra = (TBLateComp(TBForce(0.03, 0.2, 0.0, 0.0, tb_profile(mesh)), Ref(on)),))
+    a = mk(false); r = mk(false)
+    TBS.set_loop_fusion!(a.state, :if_possible); TBS.set_loop_fusion!(r.state, :never)
+    late(d) = d.components[findfirst(c -> c isa TBLateComp, d.components)]
+    step!(Model(a), 0.4); step!(Model(r), 0.4)
+    @test TBC.sweep_report(a)["substages_fused"] == "none"
+    @test a.budgets.sweep isa TBC.SweepBudget        # built while unfused
+    late(a).on[] = true; late(r).on[] = true
+    for _ in 1:2
+        step!(Model(a), 0.4); step!(Model(r), 0.4)
+    end
+    @test TBC.sweep_report(a)["substages_fused"] == "some"   # the first step's 3 unfused, the rest fused
+    @test a.state.workspaces.fused.fused == 6
+    for q in (:energy, :momentum_x)
+        A = stage_budget(TBC.budgets(a).measured[q]); R = stage_budget(TBC.budgets(r).measured[q])
+        big = maximum(abs, values(R.terms))
+        @test R.terms[(:tendencies, :tblatecomp)] != 0     # it books something
+        @test Set(keys(A.terms)) == Set(keys(R.terms))
+        for (key, v) in R.terms
+            @test abs(A.terms[key] - v) <= TB_RTOL * big
+        end
+        @test abs(A.closure) <= 1e-12 * big
+    end
 end
 
 @testset "type stability and allocation" begin

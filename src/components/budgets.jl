@@ -275,9 +275,12 @@ by its `FiniteVolume.BookedTerm` into `sums`, as the attribution context
 `(stage, component)` of every measured quantity with a core tendency
 ([`book_context!`](@ref Aeolus.BudgetSystem.book_context!), scaled by the
 substage's weight × Δt as `_attributed_in_core!` scales its contexts).
-Adds nothing to the tendencies. Built once per domain, at the first fused
-substage (`slots`: the `(stage, name)` of each booked term's slot,
-`active` the slots in use, `quantity[f]` the budget of booked field `f`).
+Adds nothing to the tendencies. Built once per domain, at the first
+substage that asks for the sweep's terms (`slots`: the `(stage, name)` of
+each slot, `active` the slots of every attributed in-core entry, whether
+or not its component has a sweep term yet: a slot whose component added
+nothing sums to 0 and books nothing; `quantity[f]` the budget of booked
+field `f`).
 """
 struct SweepBudget{L<:FiniteVolume.LevelSums,C} <: FiniteVolume.SweepTerm
     b::DomainBudgets
@@ -345,7 +348,9 @@ end
     fluid === nothing && (fluid = first(values(b.budgets.measured)).meter.fluid)
     slots = fill((:none, :none), 2nc); active = Int[]
     for (si, S) in enumerate((:tendencies, :body_force)), (pos, c) in enumerate(cs)
-        attaches(c, S) && attributed(c, Val(S)) && FiniteVolume.sweep_term(c, d) !== nothing || continue
+        # the slot set is the one `_booked_term` wraps (not decided by
+        # `sweep_term`, which may return a term only later)
+        attaches(c, S) && attributed(c, Val(S)) || continue
         slot = _sweep_slot(si, pos, nc)
         slots[slot] = (S, component_name(c)); push!(active, slot)
     end
