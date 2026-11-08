@@ -3317,8 +3317,8 @@ the "review of step 2" testset of `test/fused_sweep_pointwise.jl`):
   throws the same `DimensionMismatch`. The axis is passed as a `Val`
   (with the check the constructor was no longer inlined, and the term's
   axis parameter, until then found by constant propagation, became
-  unknown: the full suite's `step_rk3!` allocation test caught it, 6.7 kB
-  per step).
+  unknown: `step_rk3!` then allocated 6.7 kB per step, which the
+  allocation test of the built-in plan rejects).
 - `SimulationCouplings`' `sweep_term` returned
   `Union{Nothing, SurfaceFluxTerm}`, so the plan's tuple length was again a
   run-time value (`hook_terms` inferred as a `Vararg` tuple) for every TOML
