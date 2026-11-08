@@ -3285,16 +3285,28 @@ The row forms of the operators with a stencil are slower than their
 whole-field passes: per operator (1 / 12 threads, increase over the
 sweep alone against the whole-field pass) canopy drag 4.4 / 2.9 ms
 against 2.1 / 1.3 ms, facades 2.6 / 2.0 against 1.5 / 1.4, ground stress
-1.2 / 0.8 against 0.7 / 0.6. The whole-field passes walk a sparse face
+1.2 / 0.8 against 0.7 / 0.6 (ratio 1.3–2.2× at 12 threads). These
+per-operator numbers come from scratch runs (the committed benchmark
+times only the four forms of the table), as does the bisection figure
+below. The whole-field passes walk a sparse face
 list in one launch; on the rows the same faces are found per row, and at
 many slabs most of them fall in the deferred bands (12 slabs of 5–6
 planes). The pointwise IBM correction on the rows costs what its pass
 costs (0.5 against 0.7 ms at 1 thread, 0.3 against 0.4 at 12, in single-
 operator runs). Hence the last row: a domain keeps footprint-0 terms on
 the rows and runs a component whose term has a stencil through its own
-`run_stage!` after the sweep (`Components._in_rows_or_after`). Against
-one loop per term, the configurations this step makes fusable now step
-11 % (1 thread) to 24 % (12 threads) faster in this setup. The first
+`run_stage!` after the sweep (`Components._in_rows_or_after`, and
+`Components.post_after_sweep` for the components known to have a stencil,
+so their row form is not built). Against one loop per term, the domain's
+mix is 11 % (1 thread) to 24 % (12 threads) faster **per substage of
+tendencies + predictor + post-predictor operators, without the pressure
+projection, in this synthetic setup with the urban operators** — which in
+a real run stay unfused while the urban site books budgets (deviation 2).
+The gain per step is smaller (the projection is not in it), and no
+configured case was measured: the configurations this step does make
+fusable today are domains with `KinematicFlow` (on the rows) or
+`TiledUrbanSurface` (after the sweep), and `SurfaceLayer` once plan
+step 5 lands. The first
 row-form version (bisection per row, the whole row scanned for each
 x-range) was slower still; the row pointers and the bisection of the
 x-range took the 12-thread canopy increase from 4.0 to 2.9 ms. No
@@ -3329,9 +3341,28 @@ the halos between, so the second call compared against stale halos; a
 substage refills them (step 1), and the test now does. The code was
 right.
 
+**Bugs the review caught** (each with a test in `fused_sweep_post.jl`):
+(1) the domain built every post-predictor component's row form each
+substage before deciding to run its `run_stage!` after the sweep; for
+the wall stresses that is three Nx × Ny arrays and the face lists per
+substage (0.19–0.36 ms and about 860 kB at 128² × 64, 1 thread, 2–3.5 %
+of the substage). `Components.post_after_sweep(c)` now decides first;
+the test asserts the hook allocates less than one Nx × Ny plane where
+the row form allocates more. Latent until plan step 5 (the surface layer)
+or step 7 (budgets) lands. (2) With budgets on, both hooks named
+`builtin.budgets`, and the report listed it twice; the blocker list is
+now de-duplicated.
+
 **Deviations**: (1) the operators with a stencil run after the sweep
-in a domain, by the measurement above, not on the delayed rows; the row
-forms stay, tested, for operators where that changes. (2) The urban
+in a domain, by the measurement above, not on the delayed rows. Their
+row forms (`CanopyDragTerm`, `ImmersedWallTerm`, `WallStressTerm` /
+`SurfaceLayerPostTerm`, `GroundStressTerm`, `TiledDragTerm`) are tested
+but no configuration runs them; on the rows run only `KinematicFlowTerm`
+and `IBMCorrectionTerm`. Removing `Urban.VegDrag`,
+`Urban.SurfaceExchangeMOST` and `Urban.TiledUrbanSurface` from
+`SWEEP_FALLBACKS` means their substage stays fused with a whole-field
+pass after the sweep, not that they run on the rows. Whether to keep the
+row forms (about 400 lines) is left to review. (2) The urban
 site always books budgets, so its post-predictor hook is not fused
 until plan step 7 (`post_hook_terms` returns `nothing` with budgets);
 its couplings are tested at term level. (3) A term on the rows is not
