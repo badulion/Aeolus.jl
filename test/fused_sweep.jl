@@ -496,7 +496,7 @@ end
     @test fs["substages_fused"] == "none" && fs["setting"] == "if_possible"
     @test "builtin.sgs" in who
     # fused since plan step 2: never reported
-    @test !("builtin.buoyancy" in who)
+    @test isempty(intersect(who, ["builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"]))
     @test !occursin("no documented reason", join(fs["not_fusable"]))
     # the key: never on the DNS; always on the CBL stops the run (rc ≠ 0)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"),

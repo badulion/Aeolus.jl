@@ -45,10 +45,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                          "on whole tendency fields (budget_open!/budget_close!); booked inside the sweep " *
                          "from plan step 7",
     # --- components of :tendencies / :body_force -----------------------------
-    "Components.Coriolis" => "f-plane Coriolis, pointwise: plan step 2",
-    "Components.SurfaceThetaFlux" => "prescribed θ flux on the boundary levels, pointwise: plan step 2",
-    "Components.Sponge" => "Rayleigh damping toward a profile, pointwise: plan step 2",
-    "Components.Fringe" => "fringe relaxation toward the inflow state, pointwise with a mask: plan step 2",
     "Components.LargeScale" => "geostrophic forcing, nudging and advective tendencies need horizontal-mean " *
                                "profiles of the stage-start state (prepare!): plan step 3",
     "Components.SurfaceLayer" => "the MOST wall stress and surface fluxes on the first level, its " *

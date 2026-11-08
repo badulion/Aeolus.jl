@@ -37,3 +37,6 @@ function run_stage!(c::SurfaceThetaFlux, d, ::Val{:tendencies}, dt)
 end
 
 wall_theta_flux(c::SurfaceThetaFlux, d) = (c.bottom, c.top)
+
+# the fused sweep (#533): the flux of the first and last level, pointwise
+FiniteVolume.sweep_term(c::SurfaceThetaFlux, d) = FiniteVolume.SurfaceFluxTerm(c.bottom, c.top, d.state.mesh)
