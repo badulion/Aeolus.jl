@@ -445,7 +445,10 @@ end
         SIMp.set_loop_fusion!(a.state, :always); SIMp.set_loop_fusion!(r.state, :never)
         h = CPp.core_hooks(a)
         post = SIMp.post_hook_terms(h.post_predictor!, a.state, 0.5)
-        @test post isa Tuple{what === :kinematic ? CPp.KinematicFlowTerm : Aeolus.Urban.TiledDragTerm}
+        # the pointwise prescribed flow on the sweep's rows; the tiles' drag (footprint 1)
+        # runs its whole-field stage after the sweep (the measured choice of _in_rows_or_after)
+        @test post isa Tuple{what === :kinematic ? CPp.KinematicFlowTerm : FVp.AfterSweep}
+        what === :tiles && @test FVp.post_sweep_term(last(a.components), a, 0.5) isa Aeolus.Urban.TiledDragTerm
         fill!(a.state.tu.data, NaN)
         for _ in 1:3
             step!(a, 0.5); step!(r, 0.5)
@@ -481,7 +484,8 @@ end
     end
     (r, slr, dr), (a, sla, da) = mk(), mk()
     post = SIMp.post_hook_terms(CPp.core_hooks(da).post_predictor!, a, 0.5)
-    @test post isa Tuple{CPp.SurfaceLayerPostTerm}
+    @test post isa Tuple{FVp.AfterSweep}                      # the domain runs it after the sweep (footprint 1) ...
+    @test FVp.post_sweep_term(sla, da, 0.5) isa CPp.SurfaceLayerPostTerm   # ... its row form, checked here
     snap = (copy(r.θ.data), copy(r.qv.data))
     for n in 1:2
         SIMp.fill_state_halos!(r); SIMp.fill_state_halos!(a)      # step 1 of a substage (the operators refill some halos)
@@ -508,10 +512,14 @@ end
     Δt = 0.5
     post = CPp._post_stage_terms(d.components, d, Δt)
     @test post isa Tuple && length(post) == length(names)
-    @test !any(t -> t isa FVp.AfterSweep, post)      # every coupling on the sweep's rows
-    @test any(t -> t isa Aeolus.IBM.IBMCorrectionTerm, post) &&
-          any(t -> t isa Aeolus.WallModels.ImmersedWallTerm, post) &&
-          any(t -> t isa Aeolus.Urban.GroundStressTerm, post)
+    # every coupling has its row form; the domain keeps the pointwise IBM correction on the
+    # rows and runs the ones with a stencil after the sweep (_in_rows_or_after)
+    rows = Tuple(FVp.post_sweep_term(c, d, Δt) for c in d.components if CPp.attaches(c, :post_predictor))
+    @test !any(t -> t isa FVp.AfterSweep, rows)
+    @test any(t -> t isa Aeolus.IBM.IBMCorrectionTerm, rows) &&
+          any(t -> t isa Aeolus.WallModels.ImmersedWallTerm, rows) &&
+          any(t -> t isa Aeolus.Urban.GroundStressTerm, rows)
+    @test count(t -> t isa FVp.AfterSweep, post) == count(t -> FVp.footprint(t) != (0, 0, 0), rows)
     # with the budgets on (always, at the site) the hook is not fused: plan step 7
     @test SIMp.post_hook_terms(case.post_predictor, case.sim, Δt) === nothing
     s = case.sim
@@ -525,9 +533,9 @@ end
     ustar = copy(case.bus.u_star)
     r0 = (restore!(); _fp_reference!(s, s.mesh, Δt, (), false, snap); interior_view(s.u) |> copy)
     @test !agree(r0, interior_view(ref[1]))                     # the couplings acted
-    for ns in (1, 3)
+    for ns in (1, 3), terms in (rows, post)
         restore!()
-        _fp_sweep!(s, s.mesh, Δt, CPp._post_stage_terms(d.components, d, Δt), false, snap, ns)
+        _fp_sweep!(s, s.mesh, Δt, terms, false, snap, ns)
         @test all(i -> agree(interior_view((s.u, s.v, s.w, s.θ, s.qv)[i]), interior_view(ref[i])), 1:5)
         @test agree(case.couplings[findfirst(c -> c isa Aeolus.Urban.WallModelFacades, case.couplings)].iw.stats[:τA], τA)
         @test agree(case.bus.u_star, ustar)

@@ -187,10 +187,24 @@ _post_stage_terms(::Tuple{}, d, Δt) = ()
 function _post_stage_terms(cs::Tuple, d, Δt)
     rest = _post_stage_terms(Base.tail(cs), d, Δt)
     attaches(first(cs), :post_predictor) || return rest
-    t = FiniteVolume.post_sweep_term(first(cs), d, Δt)
+    t = _in_rows_or_after(FiniteVolume.post_sweep_term(first(cs), d, Δt), first(cs), d, Δt)
     (t === nothing || rest === nothing) && return nothing
     return (t, rest...)
 end
+# A component's post term runs on the sweep's rows when it is pointwise
+# (footprint 0: the prescribed flow, the IBM correction); one with a
+# stencil runs its own whole-field `run_stage!` after the sweep. Measured
+# (#533 step 6, `benchmarks/bench_post_sweep.jl`, 128² × 64): the canopy
+# drag, facade and ground wall stresses on the rows cost 1.4–2.2× their
+# whole-field passes after the sweep (their faces are a sparse list, which
+# the whole-field pass walks in one launch, and at many slabs most of
+# their points fall in the deferred bands), while the IBM correction on
+# the rows cost 0.1–0.2 ms less than its 0.4–0.7 ms pass. The row forms stay (the
+# modules' `*_term` constructors) for operators where that changes.
+_in_rows_or_after(::Nothing, c, d, Δt) = nothing
+_in_rows_or_after(t::FiniteVolume.AfterSweep, c, d, Δt) = t
+_in_rows_or_after(t::FiniteVolume.PostTerm, c, d, Δt) =
+    FiniteVolume.footprint(t) == (0, 0, 0) ? t : run_after_sweep(c, d, Δt)
 function Simulations.post_hook_blockers(h::_PostHook, sim)
     out = Pair{String,String}[]
     h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))

@@ -137,7 +137,13 @@ halos filled (`post_plan`). An operator that needs the whole predicted
 field is an `AfterSweep`: its whole-field method runs after the sweep,
 and so does every operator after it. Post terms do not read θ or qv,
 which the sweep has already advanced (the whole-field order runs the
-post-predictor stage before the scalars' update).
+post-predictor stage before the scalars' update). A domain puts a
+component's post term on the rows only when it is pointwise (the
+prescribed flow, the IBM correction) and runs one with a stencil (canopy
+drag, facade and ground wall stress, the tiles' drag) as an `AfterSweep`
+of its own `run_stage!`: measured, their row forms cost 1.4–2.2× their
+whole-field passes (`benchmarks/bench_post_sweep.jl`; the roadmap's #533
+step 6).
 
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
