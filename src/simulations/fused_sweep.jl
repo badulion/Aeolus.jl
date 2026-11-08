@@ -68,6 +68,10 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "Urban.WallModelFacades" => "the facade wall model's implicit stress on the predicted faces next to walls " *
                                 "(apply_immersed_wall_stress!, post-predictor): plan step 6; its removal of the " *
                                 "stencil's facade flux is a sweep term",
+    "Urban.NestingCoupling" => "the two-way child's interface-flux booking (:body_force) reads only the " *
+                               "stage-start state and could run in prepare!, but every urban domain also has " *
+                               "Urban.UrbanSite's :tendencies stage, so no configuration could run it fused or " *
+                               "test it yet: with UrbanSite's sweep term (plan step 5 rest)",
     "Urban.VegDrag" => "implicit vegetation drag on the predicted velocity (post-predictor): plan step 6",
     "Urban.IBMCoupling" => "immersed-boundary forcing on the predicted velocity (post-predictor): plan step 6",
     "Urban.SurfaceExchangeMOST" => "surface exchange on the predicted near-wall cells (post-predictor): plan step 6",

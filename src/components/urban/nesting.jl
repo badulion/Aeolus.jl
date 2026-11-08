@@ -622,28 +622,6 @@ function run_stage!(c::NestingCoupling, case, ::Val{:body_force}, dt)
     return nothing
 end
 
-# Inside the fused sweep (#533 step 5): the booking reads only the
-# stage-start state (and the step's SGS diffusivity), which the sweep does
-# not change before a row's predictor, so it runs before the sweep
-# (`prepare!`) and adds nothing to the rows.
-"""
-    NestFluxBookingTerm
-
-The fused-sweep term of [`NestingCoupling`](@ref)'s `:body_force` stage:
-the two-way child's θ flux through the interface planes booked into the
-flux registers in `prepare!` (the stage itself, from the stage-start
-state); no tendency.
-"""
-struct NestFluxBookingTerm{C<:NestingCoupling,K} <: Aeolus.Operators.FiniteVolume.SweepTerm
-    c::C
-    case::K
-end
-Aeolus.Operators.FiniteVolume.footprint(::NestFluxBookingTerm) = (0, 0, 0)
-Aeolus.Operators.FiniteVolume.prepare!(t::NestFluxBookingTerm, sim, Δt) =
-    run_stage!(t.c, t.case, Val(:body_force), Δt)
-@inline Aeolus.Operators.FiniteVolume.add_row!(::NestFluxBookingTerm, buf, a, b, s, j, k, ii, st) = nothing
-Aeolus.Operators.FiniteVolume.sweep_term(c::NestingCoupling, d) = NestFluxBookingTerm(c, urban_case(d))
-
 function run_stage!(c::NestingCoupling, case, ::Val{:nest_feedback}, dt)
     external_driver(c) && return nothing
     if offline(c)
