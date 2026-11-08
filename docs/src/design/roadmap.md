@@ -3340,8 +3340,9 @@ term; the post-predictor parts of `SurfaceLayer` and `WallModelFacades`
 are step 6. So no configured near-wall case (GABLS1, the urban site) is
 fused yet by this step alone; the open box and a nest without SGS are.
 Bytes per point against `bench_roofline.jl`, 2/6/24 threads and the
-sustained-power protocol were not measured. Validation: `urban_checks.jl`
-33/33 passed (the urban site is not fused by this step; its run is
+sustained-power protocol were not measured. Full suite green on the final
+branch (118 jobs, 5886 assertions). Validation: `urban_checks.jl` 33/33
+and `gabls1.jl` 8/8 (the urban site is not fused by this step; its run is
 unchanged).
 
 ### Phase 85 — Asynchronous and in-situ workflows
