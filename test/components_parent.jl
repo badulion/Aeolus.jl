@@ -225,7 +225,7 @@ end
     @test 1.8 < e1 / e2 < 2.2 && 1.8 < e2 / e3 < 2.2
 end
 
-@testset "TiledUrbanSurface canopy drag: Jacobi, independent of loop order and threads (#538)" begin
+@testset "TiledUrbanSurface canopy drag: Jacobi, independent of loop order (and threads, $(Threads.nthreads()) here) (#538)" begin
     rng = MersenneTwister(538)
     m = RegularGrid(; size = (40, 30, 8), extent = (4000.0, 3000.0, 800.0), halo = (2, 2, 2))
     sim = p_core(:boussinesq; mesh = m)
@@ -238,7 +238,12 @@ end
     jacobi_reference!(ts, sim, 2.0)
     uj, vj = copy(sim.u.data), copy(sim.v.data)
     B = Aeolus.Backends
-    for b in (B.CPUBackend(; serial = true), B.CPUBackend(; threshold = 1))   # serial; threaded (> 1 thread)
+    # serial, and the threaded backend: threaded only when this process has
+    # more than one thread (`test/run.jl --threads 4`); at test/run.jl's
+    # default of 1 thread both run serially. Across 1/4/12 processes the
+    # drag is checked by the thread-invariance harness, section `canopy`
+    # (AEOLUS_THREAD_TESTS=1, test/thread_invariance.jl)
+    for b in (B.CPUBackend(; serial = true), B.CPUBackend(; threshold = 1))
         reset!()
         B.with_backend(b) do
             drag!(ts, d, 2.0)
