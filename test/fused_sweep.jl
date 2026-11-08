@@ -390,7 +390,6 @@ end
 @testset "a built-in term or a hook keeps one loop per term, and is reported" begin
     for (kw, hook, key) in (((θ₀ = 300.0,), NamedTuple(), "builtin.buoyancy"),
                             ((f_coriolis = 1e-4,), NamedTuple(), "builtin.coriolis"),
-                            ((C_s = 0.17,), NamedTuple(), "builtin.sgs"),
                             ((θ_flux_bottom = 0.1,), NamedTuple(), "builtin.surface_flux"),
                             ((sponge_α_max = 0.01, sponge_z_start = 80.0), NamedTuple(), "builtin.sponge"),
                             (NamedTuple(), (post_predictor! = noop,), "builtin.post_predictor"))
@@ -496,7 +495,8 @@ end
     fs = only(values(res["loop_fusion"]))
     who = Set(first.(split.(fs["not_fusable"], ":")))
     @test fs["substages_fused"] == "none" && fs["setting"] == "if_possible"
-    @test issubset(["builtin.sgs", "builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
+    @test issubset(["builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
+    @test !any(startswith("Operators."), who)               # its SGS closure has a fused form (#533 step 4)
     @test !occursin("no documented reason", join(fs["not_fusable"]))
     # the key: never on the DNS; always on the CBL stops the run (rc ≠ 0)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"),
@@ -579,8 +579,9 @@ end
         "has_viscosity" => :base, "has_moisture" => :base, "advect_centered!" => :base,
         "laplacian" => :base, "_base_tendencies!" => :base, "zero_storage!" => :base, "axpy!" => :predictor,
         "_advance_scalar!" => :predictor,
-        "add_sgs_momentum!" => "builtin.sgs", "add_sgs_scalar!" => "builtin.sgs", "_add_sgs_tracer!" => "builtin.sgs",
-        "compute_sgs!" => "builtin.sgs", "momentum_advection" => "builtin.momentum_advection",
+        # the SGS closure's term (Operators.SGSTerm, #533 step 4; test/fused_sweep_sgs.jl)
+        "add_sgs_momentum!" => :sgs, "add_sgs_scalar!" => :sgs, "_add_sgs_tracer!" => :sgs,
+        "compute_sgs!" => :sgs, "momentum_advection" => "builtin.momentum_advection",
         "has_buoyancy" => "builtin.buoyancy", "add_buoyancy!" => "builtin.buoyancy",
         "has_coriolis" => "builtin.coriolis", "add_coriolis!" => "builtin.coriolis",
         "has_surface_flux" => "builtin.surface_flux", "add_surface_flux!" => "builtin.surface_flux",
