@@ -164,6 +164,38 @@ function _fs_sweep!(a, mesh, Δt, terms, rk3, snap, ns)
     return bufs
 end
 
+# The same sweep with the slabs run one after another in reverse order
+# (ns, ns−1, …, 1), then the edge planes: the body of blocked_predictor!
+# with its slab launch replaced. In forward order (what one thread runs)
+# slab s reads slab s+1's front planes before slab s+1 has touched them, so
+# only the back edge is exercised; in reverse order slab s+1 has finished
+# when slab s reads its front planes, so a front edge kept shallower than a
+# term's rz reads an updated plane and fails the comparison. Together the
+# two orders bound what concurrent slabs can see, deterministically, at
+# any thread count (#533 review).
+function _fs_sweep_reversed!(a, mesh, Δt, terms, rk3, snap, ns)
+    moist = a.has_moisture
+    ii, jj, kk = interior(mesh)
+    lag, lz = FVs.sweep_lags(terms)
+    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, length(kk); lag = lag, lz = lz)
+    foreach(t -> FVs.prepare!(t, a, Δt), terms)
+    c = SIMs._Lin2r(0.75, 0.25)
+    ps = rk3 ? SIMs._AxpyStage(SIMs._Axpy(Δt), c) : SIMs._Axpy(Δt)
+    s1 = (a.θ, ps, rk3 ? snap[1] : nothing)
+    s2 = moist ? (a.qv, ps, rk3 ? snap[2] : nothing) : nothing
+    pu = SIMs._Axpy(Δt)
+    st = (u = a.u.data, v = a.v.data, w = a.w.data, θ = FVs._sweep_field(s1), qv = FVs._sweep_field(s2),
+          m = FVs.grid_metrics(mesh))
+    p1, p2 = FVs._sweep_pred(s1), FVs._sweep_pred(s2)
+    for s in ns:-1:1
+        FVs._b_sweep_slab!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+    end
+    for n in 1:2lz*ns, j in jj, i in ii
+        FVs._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)
+    end
+    return bufs
+end
+
 # ---------------------------------------------------------------------------
 # components: one with a sweep term, one without
 # ---------------------------------------------------------------------------
@@ -250,6 +282,12 @@ grids = (("regular", g, FieldBoundaryConditions(:periodic)),
                     ok || println("  [#533] base mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns")
                     @test ok
                     @test all(t -> all(isnan, t.data), (a.tu, a.tv, a.tw, a.tθ, a.tqv))
+                    if ns > 1 && bn == "serial"         # the slabs in reverse order (front edge)
+                        a = mk()
+                        _fs_sweep_reversed!(a, mesh, Δt, (FVs.BaseTendencies(a.ν),), rk3, snap, ns)
+                        @test all(f -> agree(interior_view(f[1]), interior_view(f[2])),
+                                  ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
+                    end
                 end
             end
         end
@@ -305,6 +343,15 @@ end
                     ok || println("  [#533] composed mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns")
                     @test ok
                     @test all(t -> all(isnan, t.data), (a.tu, a.tv, a.tw, a.tθ, a.tqv))
+                    # the slabs in reverse order: the front edge planes (rz = 2) are kept
+                    if ns > 1 && bn == "serial"
+                        a = mk()
+                        _fs_sweep_reversed!(a, mesh, Δt, (FVs.BaseTendencies(a.ν), extra...), rk3, snap, ns)
+                        ok = all(f -> agree(interior_view(f[1]), interior_view(f[2])),
+                                 ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
+                        ok || println("  [#533] reversed-slab mismatch: $gname moist=$moist rk3=$rk3 ns=$ns")
+                        @test ok
+                    end
                 end
             end
         end
