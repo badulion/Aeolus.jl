@@ -407,10 +407,7 @@ end
     a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4))
     step!(a, 0.5)
     @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.buoyancy", "builtin.coriolis"])
-    # a core without a fused sweep (the anelastic core) reports its reason
-    an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
-    @test SIMs.sweep_report(an)["substages_fused"] == "none" &&
-          SIMs.sweep_report(an)["not_fusable"] == ["builtin.core: " * SIMs.sweep_reason("builtin.core")]
+    # (the anelastic core's fused sweep and its report: test/fused_sweep_cores.jl, #533 step 8)
 end
 
 @testset "loop_fusion: if_possible, always, never" begin
@@ -436,10 +433,10 @@ end
     err = try step!(c, 0.5); nothing catch e; e end
     @test err isa ArgumentError && occursin("builtin.buoyancy", err.msg) && occursin("builtin.coriolis", err.msg)
     @test c.t == t0                                             # exact: the clock did not advance
-    # invalid settings, and always on a core without a fused form
+    # invalid settings; every core takes every setting (#533 step 8)
     @test_throws ArgumentError SIMs.set_loop_fusion!(a, :sometimes)
     an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
-    @test_throws ArgumentError SIMs.set_loop_fusion!(an, :always)
+    @test SIMs.loop_fusion(SIMs.set_loop_fusion!(an, :always)) === :always
     @test SIMs.loop_fusion(SIMs.set_loop_fusion!(an, :never)) === :never
 end
 
@@ -602,7 +599,8 @@ end
     # no stale entries: every reason is reported by the code (built-ins) or
     # belongs to an in-core component without a sweep term
     fsrc = read(joinpath(pkgdir(Aeolus), "src", "simulations", "fused_sweep.jl"), String) *
-           read(joinpath(pkgdir(Aeolus), "src", "components", "domain.jl"), String)
+           read(joinpath(pkgdir(Aeolus), "src", "components", "domain.jl"), String) *
+           read(joinpath(pkgdir(Aeolus), "src", "anelastic", "fused_sweep.jl"), String)
     for key in keys(SIMs.SWEEP_FALLBACKS)
         if startswith(key, "builtin.")
             occursin("\"$key\"", replace(fsrc, r"const SWEEP_FALLBACKS = Dict\{String,String\}\((?s:.*?)\n\)\n" => "")) ||

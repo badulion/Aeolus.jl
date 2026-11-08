@@ -46,8 +46,11 @@ cache. A term implements
 
   * [`footprint`](@ref)`(t) -> (rx, ry, rz)`, the stencil radius over the
     state it reads (required);
-  * [`add_tendency!`](@ref)`(t, tb, i, j, k, st)`, its point kernel, or
-    [`add_row!`](@ref) for a whole row (required, one of the two);
+  * [`add_tendency!`](@ref)`(t, tb, i, j, k, st)`, its point kernel
+    (required: the per-point form of the sweep for a GPU,
+    [`pointwise_predictor!`](@ref), calls it), and optionally
+    [`add_row!`](@ref), a row form of its own for the CPU's ring-buffer
+    sweep;
   * [`sweep_inputs`](@ref)`(t)`, the extra read-only arrays it reads
     (default none);
   * [`prepare!`](@ref)`(t, sim, Δt)`, its work before the sweep:
@@ -155,6 +158,29 @@ keep it `@noinline` with the arrays as arguments (the rule of
 end
 
 """
+    BaseTerm <: SweepTerm
+
+A term that starts a row of the fused sweep: the base tendencies of a step
+core (the advection and molecular diffusion), the first term of every
+term tuple. It writes the row (`=`) where every other term adds to it, by
+`init_row!(t, buf, a, b, s, j, k, ii, st)` (the ring-buffer sweep) and
+`init_point!(t, tb, i, j, k, st)` (the per-point form). The Boussinesq
+core's is [`BaseTendencies`](@ref); the sound-proof cores' is
+`Anelastic.WeightedBaseTendencies` (the `W`-weighted advection, #533
+plan step 8).
+"""
+abstract type BaseTerm <: SweepTerm end
+
+"""
+    init_point!(t::BaseTerm, tb, i, j, k, st)
+
+Write the base term `t`'s tendencies at storage point `(i, j, k)` into
+`tb` (`tb[i, SWEEP_U] = …`): the point form of `init_row!`, used by the
+per-point (GPU) form of the sweep, [`pointwise_predictor!`](@ref).
+"""
+function init_point! end
+
+"""
     BaseTendencies(ν)
 
 The base tendencies of the Boussinesq core as the first term of the
@@ -162,7 +188,7 @@ sweep, the one that initialises a row: `−∂(uⱼuᵢ)/∂xⱼ + ν∇²uᵢ` 
 w and `−∂(uⱼϕ)/∂xⱼ + ν∇²ϕ` for θ and qv (SC-d's fused expressions,
 `_fused_tendencies!`); `ν = nothing` drops the diffusion.
 """
-struct BaseTendencies{V} <: SweepTerm
+struct BaseTendencies{V} <: BaseTerm
     ν::V
 end
 footprint(::BaseTendencies) = (1, 1, 1)
@@ -173,6 +199,18 @@ footprint(::BaseTendencies) = (1, 1, 1)
     _trows!(buf, a, b, s, j, k, ii, st.u, st.v, st.w, st.θ, st.qv, st.m, t.ν)
 init_row!(t::SweepTerm, args...) =
     throw(ArgumentError("init_row!: the first term of a sweep initialises the row; $(typeof(t)) only adds to it"))
+@inline function init_point!(t::BaseTendencies, tb, i, j, k, st)
+    u, v, w, m, ν = st.u, st.v, st.w, st.m, t.ν
+    tb[i, SWEEP_U] = _tend_u(i, j, k, u, v, w, m, ν)
+    tb[i, SWEEP_V] = _tend_v(i, j, k, u, v, w, m, ν)
+    tb[i, SWEEP_W] = _tend_w(i, j, k, u, v, w, m, ν)
+    _init_point_sc!(tb, SWEEP_Θ, i, j, k, u, v, w, st.θ, m, ν)
+    _init_point_sc!(tb, SWEEP_QV, i, j, k, u, v, w, st.qv, m, ν)
+    return nothing
+end
+@inline _init_point_sc!(tb, f, i, j, k, u, v, w, ::Nothing, m, ν) = nothing
+@inline _init_point_sc!(tb, f, i, j, k, u, v, w, ϕ::AbstractArray, m, ν) =
+    (tb[i, f] = _tend_ϕ(i, j, k, u, v, w, ϕ, m, ν); nothing)
 
 """
     sweep_lags(terms::Tuple) -> (lag, lz)
@@ -416,7 +454,7 @@ end
 
 The tendencies of a substage and its predictor in one sweep (SC-e #405,
 #533): the tendency of each field is the sum of the `terms` (a tuple; the
-first, [`BaseTendencies`](@ref), initialises it, every further
+first, a [`BaseTerm`](@ref) such as [`BaseTendencies`](@ref), initialises it, every further
 [`SweepTerm`](@ref) adds its [`add_tendency!`](@ref) in tuple order), then
 `u ← pu(u, tu)` (likewise v, w) and, for each scalar `s = (ϕ, ps, snap)`
 (or `nothing`), `ϕ ← ps(ϕ, tϕ)` (`ps(ϕ, tϕ, snap[i, j, k])` when `snap` is
@@ -427,7 +465,7 @@ tendencies stay in `bufs` ([`sweep_buffers`](@ref) with the
 blocked so each field is streamed once. Every halo a term reads must be
 filled; nothing else may read or write the fields meanwhile.
 """
-function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTendencies,Vararg{SweepTerm}},
+function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                             pu, s1, s2, g::AbstractMesh)
     ii, jj, kk = interior(g)
@@ -446,5 +484,153 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTendencies,Vara
     launch_weighted!(b, cld(length(ii) * length(jj) * length(kk), ns), _b_sweep_slab!, (1:ns,),
                      terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
     launch!(b, _b_sweep_edge!, (ii, jj, 1:2lz*ns), st, pu, p1, p2, bufs.edge, kk, ns, lz)
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# the tendencies written to fields: the per-point (GPU) form and the
+# fused tendency launch (#533 plan step 8)
+# ---------------------------------------------------------------------------
+
+"""
+    TendencyFields(tu, tv, tw, tθ, tqv)
+
+The tendency fields' storage arrays seen as the five-index buffer of the
+sweep: `tf[i, j, k, f, 1]` is `tu[i, j, k]` for `f = SWEEP_U`, … `tqv` for
+`SWEEP_QV` (`tθ`, `tqv` may be `nothing` when the core has no such
+scalar). A [`SweepRow`](@ref) over it (`a = j`, `b = k`, `s = 1`) is the
+row a term's [`add_tendency!`](@ref) writes into when the tendencies go to
+the fields instead of the ring buffer: in the per-point form of the sweep
+([`pointwise_predictor!`](@ref)) and in [`term_tendencies!`](@ref). `f` is
+a constant in every term kernel, so the branch on it folds away.
+"""
+struct TendencyFields{T,A<:AbstractArray{T,3},S,Q} <: AbstractArray{T,5}
+    u::A
+    v::A
+    w::A
+    θ::S
+    qv::Q
+end
+Base.size(t::TendencyFields) = (size(t.u)..., 5, 1)
+@inline function Base.getindex(t::TendencyFields, i::Int, j::Int, k::Int, f::Int, s::Int)
+    @inbounds f == 1 ? t.u[i, j, k] : f == 2 ? t.v[i, j, k] : f == 3 ? t.w[i, j, k] :
+                       f == 4 ? t.θ[i, j, k] : t.qv[i, j, k]
+end
+@inline function Base.setindex!(t::TendencyFields, x, i::Int, j::Int, k::Int, f::Int, s::Int)
+    @inbounds if f == 1
+        t.u[i, j, k] = x
+    elseif f == 2
+        t.v[i, j, k] = x
+    elseif f == 3
+        t.w[i, j, k] = x
+    elseif f == 4
+        t.θ[i, j, k] = x
+    else
+        t.qv[i, j, k] = x
+    end
+    return t
+end
+
+# the composed point: the base term writes, the others add, in order
+@inline function _term_point!(terms::Tuple, tb, i, j, k, st)
+    init_point!(first(terms), tb, i, j, k, st)
+    _add_points!(Base.tail(terms), tb, i, j, k, st)
+    return nothing
+end
+@inline _add_points!(::Tuple{}, tb, i, j, k, st) = nothing
+@inline function _add_points!(ts::Tuple, tb, i, j, k, st)
+    add_tendency!(first(ts), tb, i, j, k, st)
+    return _add_points!(Base.tail(ts), tb, i, j, k, st)
+end
+
+# one point of the per-point form: every term's tendency into the fields
+@inline function _b_term_point!(i, j, k, terms, st, tf)
+    _term_point!(terms, SweepRow(tf, j, k, 1), i, j, k, st)
+    return nothing
+end
+# one row (j, k) of the fused tendency launch on the CPU (the ring sweep's
+# row kernels, writing the fields)
+@inline function _b_term_row!(j, k, terms, st, tf, ii)
+    _term_rows!(tf, j, k, 1, j, k, ii, terms, st)
+    return nothing
+end
+# the predictor of one point from the tendency fields
+@inline function _b_point_predictor!(i, j, k, st, tf, pu, p1, p2)
+    u, v, w = st.u, st.v, st.w
+    @inbounds begin
+        u[i, j, k] = pu(u[i, j, k], tf.u[i, j, k])
+        v[i, j, k] = pu(v[i, j, k], tf.v[i, j, k])
+        w[i, j, k] = pu(w[i, j, k], tf.w[i, j, k])
+    end
+    _point_sc!(i, j, k, st.θ, tf.θ, p1)
+    _point_sc!(i, j, k, st.qv, tf.qv, p2)
+    return nothing
+end
+@inline _point_sc!(i, j, k, ::Nothing, t, p) = nothing
+@inline function _point_sc!(i, j, k, ϕ, t, (ps, snap))
+    @inbounds ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], t[i, j, k], snap, i, j, k)
+    return nothing
+end
+
+_sweep_state(u, v, w, θ, qv, g) = (u = u.data, v = v.data, w = w.data, θ = _data(θ), qv = _data(qv),
+                                   m = grid_metrics(g))
+_data(::Nothing) = nothing
+_data(f::Field) = f.data
+
+"""
+    term_tendencies!(tf::TendencyFields, terms, u, v, w, θ, qv, g; ka = nothing)
+
+Write the sum of the `terms` (a [`BaseTerm`](@ref) first, then any
+[`SweepTerm`](@ref)s) into the interior of the tendency fields `tf` in one
+launch: the loop fusion of the separate passes of the same terms, without
+the predictor (the explicit part of `step_imex!`, whose tendencies are
+kept for the stage combinations, #533 plan step 8). `θ`, `qv` are the
+scalar fields or `nothing`. On the CPU (`ka = nothing`) one i-row per work
+item, the row kernels of the ring-buffer sweep; with a KernelAbstractions
+backend `ka`, the per-point form (one work item per point, the GPU's).
+Halos of the state must be filled; the tendencies' halos are not written.
+"""
+function term_tendencies!(tf::TendencyFields, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
+                          u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, θ, qv, g::AbstractMesh;
+                          ka = nothing)
+    ii, jj, kk = interior(g)
+    st = _sweep_state(u, v, w, θ, qv, g)
+    b = Backends.backend(u.data)
+    _check_inputs(b, terms)
+    if ka === nothing
+        launch_weighted!(b, length(ii), _b_term_row!, (jj, kk), terms, st, tf, ii)
+    else
+        Backends.launch_points!(ka, _b_term_point!, (ii, jj, kk), terms, st, tf)
+    end
+    return nothing
+end
+
+"""
+    pointwise_predictor!(ka, tf::TendencyFields, terms, u, v, w, pu, s1, s2, g)
+
+The per-point form of [`blocked_predictor!`](@ref), for a GPU (#533 plan
+step 8; SC-d's form): one KernelAbstractions kernel on backend `ka` with
+one work item per point evaluates every term of `terms` there (the
+[`BaseTerm`](@ref)'s `init_point!`, then each [`add_tendency!`](@ref) in
+order) and writes the sum into the tendency fields `tf`; a second kernel
+applies the predictor (`u ← pu(u, tu)`, and each scalar `s = (ϕ, ps,
+snap)` as in `blocked_predictor!`). No ring buffer: the predictor cannot
+run in the first kernel, since a neighbour's stencil still reads the
+point. The values are those of the ring-buffer sweep within round-off
+(the same expressions). Tested on `KernelAbstractions.CPU()` as the
+stand-in for a GPU.
+"""
+function pointwise_predictor!(ka, tf::TendencyFields, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
+                              u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
+                              pu, s1, s2, g::AbstractMesh)
+    (s1 === nothing && s2 !== nothing) && throw(ArgumentError("pointwise_predictor!: s2 without s1"))
+    (s1 === nothing || tf.θ !== nothing) && (s2 === nothing || tf.qv !== nothing) ||
+        throw(ArgumentError("pointwise_predictor!: a scalar without its tendency field"))
+    I3 = interior(g)
+    b = Backends.backend(u.data)
+    _check_inputs(b, terms)
+    st = (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))
+    Backends.launch_points!(ka, _b_term_point!, I3, terms, st, tf)
+    Backends.launch_points!(ka, _b_point_predictor!, I3, st, tf, pu, _sweep_pred(s1), _sweep_pred(s2))
     return nothing
 end

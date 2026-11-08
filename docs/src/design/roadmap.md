@@ -3190,6 +3190,129 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+**Step 8: the other step cores and the GPU form** (branch
+`issue/533-s8-other-cores`, on top of step 1). What was built:
+- **The sound-proof cores** (`src/anelastic/fused_sweep.jl`):
+  `step_anelastic!`, `step_pseudo_incompressible!` and their `step_rk3!`
+  run steps 2-7 and 11 of `_mass_weighted_step!` in the fused sweep. The
+  base term is `Anelastic.WeightedBaseTendencies` (the `W`-weighted
+  flux-form advection + `ν∇²`), the buoyancy `g(θ − θ̄)/θ̄` is
+  `Anelastic.AnelasticBuoyancy` (footprint `(0, 0, 1)`), components come
+  through the body-force hook as in the Boussinesq core. The point
+  functions of `weighted_momentum_advect!`, `weighted_scalar_advect!` and
+  `add_anelastic_buoyancy!` were split out of their kernel bodies
+  (`_wmom_u` …, `_anelastic_buoyancy`), so the passes and the sweep share
+  one expression each. Coriolis, surface flux, sponge and SGS of these
+  cores are reported with their own keys (`builtin.anelastic_*`): the
+  step-2/4 terms are built for the Boussinesq core and still have to be
+  wired in here.
+- **The explicit part of `step_imex!`**: one fused tendency launch
+  (`FiniteVolume.term_tendencies!`, the ring sweep's row kernels writing
+  `sim.tu … tqv`) when every term of `_explicit_tendencies!` is a sweep
+  term; the term tuple is the Boussinesq core's (`_sweep_terms` with no
+  closure, no post-predictor and no diffusion). No predictor in the
+  launch: the stage combinations and the implicit solves read the
+  tendencies, so this is loop fusion of the terms only. The explicit SGS
+  halves (`sgs_stress = :symmetric`, a scalar diffusivity tensor) are
+  reported (`builtin.imex_sgs`); with the Laplacian SGS (implicit) the
+  explicit part is fused.
+- **The GPU form**: `Backends.launch_points!` (one KA work item per point
+  on any KA backend; all KA kernels stay in `Backends.jl`) and
+  `FiniteVolume.pointwise_predictor!`: kernel 1 evaluates the composed
+  term tuple per point (`init_point!` of the base term, then every
+  `add_tendency!`) into the tendency fields (`FiniteVolume.TendencyFields`,
+  the fields seen as the sweep's five-index buffer), kernel 2 the
+  predictor. `Simulations.fused_predictor!` picks the ring sweep on a
+  CPU backend and the per-point form otherwise; the per-point form also
+  runs on `KernelAbstractions.CPU()` when `sim.workspaces.fused.per_point`
+  is set, the stand-in the tests use (no GPU here).
+- **Interface**: `BaseTerm <: SweepTerm` for the row-initialising terms
+  (`init_row!`, `init_point!`; `blocked_predictor!` takes
+  `Tuple{BaseTerm, Vararg{SweepTerm}}`); `add_tendency!` is now required
+  of every term (the per-point form calls it; `add_row!` stays an
+  optional CPU row form). `builtin.backend` and `builtin.core` left
+  `SWEEP_FALLBACKS`; `set_loop_fusion!` accepts `"always"` on every core.
+
+**Tests** (`test/fused_sweep_cores.jl`, 486 assertions): the per-point
+form against the ring sweep (1-5 slabs, serial and threaded, regular
+and stretched, dry and moist, Euler and the RK3 combination, with a
+pointwise and a radius-2 test term); `step!`/`step_rk3!` in the per-point
+form against the ring sweep; IMEX ARK2 and Rosenbrock2 fused against
+`"never"` (dry, moist, three backends, per point), with a component's term
+through the hook; the sound-proof base term and buoyancy in the sweep
+against their whole-field passes at 1-5 slabs and in the per-point form;
+the three sound-proof drivers fused against `"never"` (ν on/off, buoyancy
+on/off, three backends, per point, and through an anelastic `Domain`),
+`(1/W)∇·(Wu)` < 1e-12 after the Euler steps (measured ~1e-17 s⁻¹);
+every blocker reported and refused under `"always"`; allocation (every
+step core, fused or unfused under `"if_possible"`, allocates no more than
+under `"never"`; on the serial backend, or on the test grid where the
+launches stay below the threading threshold, that is 0 B per `step!` and
+`step_anelastic!`, 704 B per anelastic `step_rk3!`, 0 B per
+`term_tendencies!`; threaded, each launch allocates its task closures,
+fewer fused: anelastic 128 × 128 × 64 at 6 threads, 77 kB fused against
+133 kB per `step_anelastic!`, 233 kB against 400 kB per `step_rk3!`); and
+two guards: every `SweepTerm` in Aeolus has the point kernel the
+per-point form needs, and every built-in term of `_mass_weighted_step!`
+and of `_explicit_tendencies!` is in the sweep or documented. All
+agreements are within ROUNDOFF_RTOL and measured bit-identical (the same
+expressions in the same order).
+
+**A test expectation that was wrong**: the first version asserted
+`∇·(ρ̄u) < 1e-9` after every sound-proof driver. It failed for `step_rk3!`
+(its combination with the seeded, unprojected `uⁿ` is not constrained;
+the unfused reference gives the same 1.8e-3) and for the
+pseudo-incompressible core (whose constraint is on `ρ̄θ̄u`, not `ρ̄u`). The
+code was right; the check is now the core's own constraint after the
+Euler steps.
+
+**Measured**: anelastic `step_rk3!`, 128 × 128 × 64, ν = 1, buoyancy on,
+`AEOLUS_FFTW_PLANNER=estimate`; `"never"` (the code path of the base
+branch for this configuration) and fused interleaved in one process (4
+rounds of 3 steps each, minimum), two processes per thread count under the
+benchmark lock, each process < 40 s (short-run protocol of #535, so the
+boost phase is not separated); 1-minute load 2-12 from other agents'
+unlocked jobs. s/step (Ryzen AI 9 HX 370):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 0.132 / 0.134 | 0.144 / 0.115 | 0.111 / 0.102 | 0.267 / 0.119 |
+| fused | 0.107 / 0.103 | 0.116 / 0.089 | 0.085 / 0.080 | 0.185 / 0.091 |
+| speed-up | 1.23 / 1.30 | 1.23 / 1.30 | 1.30 / 1.28 | 1.45 / 1.31 |
+
+The first 12-thread process ran under load 8.7 (both variants slow, the
+ratio is still within one process). Compulsory traffic of the part that
+moved into the sweep (model, counted as `bench_roofline.jl` counts: each
+array once per launch): one loop per term streams 47 arrays per point per
+substage (zeroing 4 tendencies, 3 momentum launches of 4 arrays, the θ
+advection 5, 4 Laplacians + 4 axpys 16, the buoyancy 2, 4 predictors 8),
+the sweep 4 (u, v, w, θ read and written, tendencies in cache): 376 →
+32 B/point per substage. The projection (FFT/tridiagonal solve,
+divergence, correction) is unchanged and is the rest of the step.
+**Not measured**: the hardware-counter bytes and the effective GB/s against
+the STREAM triad, 24 threads, IMEX timings (a RegularGrid-only scheme no
+configured case uses), and the per-point form on a real GPU (none here;
+on the CPU it is a correctness stand-in, slower than the ring sweep by
+design).
+
+**Deviations**: the GPU form writes the tendencies to the tendency fields
+and runs the predictor as a second kernel (SC-d's form): the predictor
+cannot share the first kernel without a ring buffer, since a neighbour's
+stencil still reads the point. The IMEX explicit part is fused without
+its stage combination (the combination reads the tendencies of earlier
+stages and feeds an implicit solve per field).
+
+**Bugs the review caught** (code wrong, now tested in "no allocation
+added by the fused or the unfused report, any step core"): the unfused
+report built its blocker closure on every unfused substage, and Julia
+boxed it (+16 B per `step!`, +32 B per `step_rk3!` with a term without a
+fused form; the base allocated 0 B there); the blockers are now built
+from the passed-through arguments inside the `@noinline` reporter. The
+fused IMEX launch passed a `Union`-typed `qv` and backend on, which were
+boxed (+176 B per stage, +352 B per ARK2 step over `"never"`); concrete
+arguments through a function barrier. Both measured equal to `"never"`
+after the fix.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall

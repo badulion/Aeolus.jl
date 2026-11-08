@@ -30,7 +30,7 @@ using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gr
                                 _divergence_into!
 # the blocked tendency + predictor sweep (SC-e, #405)
 using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
-                                sweep_term, prepare!
+                                sweep_term, prepare!, pointwise_predictor!, TendencyFields, term_tendencies!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
@@ -44,7 +44,7 @@ include("simulations/step_record.jl")   # the per-step record and diagnostics ho
 """
     SweepReport
 
-Whether the substages of a simulation's Boussinesq step core took
+Whether the substages of a simulation's step core took the fused sweep
 (#533): `fused` and `unfused` count the substages, `fallback` holds the
 terms (`key => reason`, [`SWEEP_FALLBACKS`](@ref)) that kept the first
 unfused substage off the fused sweep. Logged once, when it is first
@@ -56,8 +56,9 @@ mutable struct SweepReport
     fallback::Vector{Pair{String,String}}
     reported::Bool
     loop_fusion::Symbol   # the setting: :if_possible, :always or :never (`set_loop_fusion!`)
+    per_point::Bool       # the per-point (GPU) form also on the CPU, on KA's CPU backend (tests; #533 step 8)
 end
-SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible)
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, false)
 
 """
     StepWorkspaces()

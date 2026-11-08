@@ -124,6 +124,19 @@ without one; PALM's `loop_optimization = 'cache'` stops the same way) or
 documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
 the completeness guard `test/fused_sweep.jl`.
 
+Every step core has the fused form (#533 plan step 8): `step!` and
+`step_rk3!` of the Boussinesq core; the sound-proof cores
+(`step_anelastic!`, `step_pseudo_incompressible!` and their `step_rk3!`),
+whose base term is the `W`-weighted advection
+(`Anelastic.WeightedBaseTendencies`, with `Anelastic.AnelasticBuoyancy`);
+and the explicit part of `step_imex!`, as one fused tendency launch
+without the predictor (`term_tendencies!`; the stage combinations read the
+tendencies). On a CPU backend the sweep runs with its ring buffer; on any
+other backend the same term tuple runs in the per-point form
+(`pointwise_predictor!`, one KernelAbstractions work item per point,
+`Backends.launch_points!`), tested on `KernelAbstractions.CPU()` as the
+stand-in for a GPU.
+
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
 Aeolus.Operators.FiniteVolume.sweep_term
@@ -134,7 +147,13 @@ Aeolus.Operators.FiniteVolume.add_tendency!
 Aeolus.Operators.FiniteVolume.add_row!
 Aeolus.Operators.FiniteVolume.SweepRow
 Aeolus.Operators.FiniteVolume.SWEEP_U
+Aeolus.Operators.FiniteVolume.BaseTerm
+Aeolus.Operators.FiniteVolume.init_point!
 Aeolus.Operators.FiniteVolume.BaseTendencies
+Aeolus.Operators.FiniteVolume.TendencyFields
+Aeolus.Operators.FiniteVolume.term_tendencies!
+Aeolus.Operators.FiniteVolume.pointwise_predictor!
+Aeolus.Simulations.fused_predictor!
 Aeolus.Operators.FiniteVolume.sweep_lags
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers

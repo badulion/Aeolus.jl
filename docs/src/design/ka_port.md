@@ -3039,6 +3039,17 @@ term and its documented reason (`Simulations.SWEEP_FALLBACKS`) in its
 `results.toml`. Plan step 1 moved only the base tendencies onto the
 interface; the terms follow in the later steps of #533.
 
+**#533 plan step 8** gave the other step cores the same sweep (the
+explicit part of `step_imex!` as one fused tendency launch, the
+sound-proof cores with the `W`-weighted advection as their base term) and
+added the GPU form: `Backends.launch_points!`, a KA kernel with one work
+item per point on any KA backend, runs the composed term tuple
+(`FiniteVolume.pointwise_predictor!`: the tendencies per point into the
+tendency fields, then the predictor), without the ring buffer, which
+only pays where a core reuses a row from cache. The step cores choose the
+form by backend (`Simulations.fused_predictor!`); on the CPU the
+per-point form runs on `KernelAbstractions.CPU()` as the tested stand-in.
+
 Three layouts were tried first (a prototype outside `src/`, momentum
 only, 256³, ms per substage, minimum of 3-6 processes at load < 4; its
 row loops were inlined, see below):
