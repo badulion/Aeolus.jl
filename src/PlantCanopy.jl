@@ -492,6 +492,7 @@ struct ResolvedCanopyDrag{T<:AbstractFloat}
     act::Vector{NTuple{4,Int32}}
     fac::Vector{T}
     dq::Vector{T}
+    rows::Vector{Int32}          # the faces of each (component, k, j) row of `act` (FiniteVolume.row_index, #533)
 end
 function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
                             C_d::Real = 0.2) where {T}
@@ -516,8 +517,10 @@ function ResolvedCanopyDrag(mesh::RegularGrid{T}, lad::AbstractArray{<:Real,3};
     for (c, ac) in enumerate((a_u, a_v, a_w)), k in 1:Nz, j in 1:Ny, i in 1:Nx
         ac[i, j, k] > 0 && push!(act, (Int32(c), Int32(i), Int32(j), Int32(k)))
     end
+    rows = FiniteVolume.row_index(n -> (Int(act[n][1]) - 1) * Ny * Nz + (Int(act[n][4]) - 1) * Ny + Int(act[n][3]),
+                                  length(act), 3 * Ny * Nz)
     return ResolvedCanopyDrag{T}(T(C_d), a, a_u, a_v, a_w, act, ones(T, length(act)),
-                                 zeros(T, length(act)))
+                                 zeros(T, length(act)), rows)
 end
 
 """
@@ -682,7 +685,7 @@ end
 the velocity before any face is changed (`_canopy_factor_body!`, footprint
 1 in each direction), then the update (`_canopy_apply_body!`), on the
 sweep's delayed rows; the faces of a row are found in the face list
-(sorted by component, then k, j, i) by bisection. The same per-face
+(sorted by component, then k, j, i) through its row pointer `drag.rows`. The same per-face
 values as the whole-field drag; its force, which `apply_canopy_drag!`
 returns, is the ordered fold of `drag.dq` ([`canopy_drag_force`](@ref)).
 """
@@ -692,7 +695,8 @@ struct CanopyDragTerm{T,D<:ResolvedCanopyDrag{T}} <: FiniteVolume.PostTerm
     Hx::Int
     Hy::Int
     Hz::Int
-    seg::NTuple{3,UnitRange{Int}}
+    Ny::Int
+    Nz::Int
 end
 
 """
@@ -701,20 +705,17 @@ end
 The post term of the fused sweep that does what
 `apply_canopy_drag!(sim, drag, dt)` does.
 """
-function canopy_drag_term(drag::ResolvedCanopyDrag{T}, sim, dt::Real) where {T}
-    m, act = sim.mesh, drag.act
-    seg = ntuple(c -> searchsortedfirst(act, c; by = e -> e isa Integer ? e : Int(e[1])):
-                      searchsortedlast(act, c; by = e -> e isa Integer ? e : Int(e[1])), 3)
-    return CanopyDragTerm(drag, T(dt), m.Hx, m.Hy, m.Hz, seg)
-end
+canopy_drag_term(drag::ResolvedCanopyDrag{T}, sim, dt::Real) where {T} =
+    CanopyDragTerm(drag, T(dt), sim.mesh.Hx, sim.mesh.Hy, sim.mesh.Hz, sim.mesh.Ny, sim.mesh.Nz)
 FiniteVolume.footprint(::CanopyDragTerm) = (1, 1, 1)
 
 @inline function _canopy_row!(t::CanopyDragTerm, ph, J, K, I1, I2, st)
     d = t.drag
     act = d.act
     j, k = J - t.Hy, K - t.Hz
+    (1 <= j <= t.Ny && 1 <= k <= t.Nz) || return nothing
     for c in 1:3
-        for n in FiniteVolume.row_range(n -> (Int(@inbounds act[n][4]), Int(@inbounds act[n][3])), t.seg[c], (k, j))
+        for n in FiniteVolume.row_entries(d.rows, (c - 1) * t.Ny * t.Nz + (k - 1) * t.Ny + j)
             I = t.Hx + Int(@inbounds act[n][2])
             I1 <= I <= I2 || continue
             if ph === Val(1)

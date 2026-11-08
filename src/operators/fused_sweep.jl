@@ -263,26 +263,32 @@ prepare!(::PostTerm, sim, Δt) = nothing
 footprint(t::PostTerm) = throw(ArgumentError("footprint: the post term $(typeof(t)) declares no footprint"))
 
 """
-    row_range(key, r::UnitRange, (k, j)) -> UnitRange
+    row_index(rowid, n, nrows) -> Union{Vector{Int32},Nothing}
 
-The entries `n ∈ r` of a sparse list sorted by `(k, j)` (then by `i`)
-whose `key(n) == (k, j)`: the faces of one row of a post term's face list,
-found by bisection (two searches, no index stored).
+The row pointer of a sparse list of `n` entries sorted by row (`rowid(e)`
+in `1:nrows`, non-decreasing in `e`): the entries of row `r` are
+[`row_entries`](@ref)`(ptr, r)` (compressed sparse rows), so a post term
+finds the faces of one row of the sweep in O(1). `nothing` when the
+entries are not sorted by row.
 """
-@inline function row_range(key::F, r::UnitRange{Int}, kj::Tuple{Int,Int}) where {F}
-    lo, hi = first(r), last(r) + 1
-    while lo < hi
-        mid = (lo + hi) >>> 1
-        key(mid) < kj ? (lo = mid + 1) : (hi = mid)
+function row_index(rowid::F, n::Integer, nrows::Integer) where {F}
+    ptr = zeros(Int32, nrows + 1)
+    prev = 1
+    for e in 1:n
+        r = rowid(e)
+        (prev <= r <= nrows) || return nothing
+        ptr[r+1] += 1
+        prev = r
     end
-    a = lo
-    hi = last(r) + 1
-    while lo < hi
-        mid = (lo + hi) >>> 1
-        key(mid) <= kj ? (lo = mid + 1) : (hi = mid)
+    ptr[1] = 1
+    for r in 1:nrows
+        ptr[r+1] += ptr[r]
     end
-    return a:lo-1
+    return ptr
 end
+
+"The entries of row `r` of a sparse list with the row pointer `ptr` ([`row_index`](@ref))."
+@inline row_entries(ptr::AbstractVector{Int32}, r::Integer) = @inbounds Int(ptr[r]):Int(ptr[r+1])-1
 
 """
     AfterSweep(f)
