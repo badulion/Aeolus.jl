@@ -23,7 +23,7 @@ using Random: AbstractRNG
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        dense_blas_threads, with_dense_blas,
-       runs_serially, launch!, launch_weighted!, range_map!,
+       runs_serially, launch!, launch_weighted!, launch_points!, ka_backend, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
        plane_map!, apply_transform!,
@@ -557,6 +557,52 @@ launch_weighted!(b::CPUBackend, weight::Integer, body!::F, ranges::NTuple{N,Unit
 launch_weighted!(b::GPUBackend, weight, body!, ranges::Tuple, args...) =
     _gpu_error(b, "launch_weighted!")
 launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
+
+# ---- one point per work item, on any KernelAbstractions backend --------------
+
+# The GPU form of a launch: one work item per point (i, j, k), no row loop
+# and no serial path. On a GPU, neighbouring work items are neighbouring i,
+# so the loads of a stencil coalesce. On KA's CPU backend it runs too (KA
+# then loops over each workgroup's points), slower than `launch!`'s rows
+# (no vectorised i-loop, ka_port.md); there it is the stand-in that tests
+# the GPU form (#533 plan step 8).
+@kernel inbounds = true function _points3_kernel!(body!, oi, oj, ok, args)
+    a, b, c = @index(Global, NTuple)
+    body!(a + oi, b + oj, c + ok, args...)
+end
+
+"""
+    launch_points!(ka, body!, (ir, jr, kr), args...)
+
+Run `body!(i, j, k, args...)` once for every storage index of the 3-D
+ranges as a KernelAbstractions kernel on the KA backend `ka` (a
+`KernelAbstractions.Backend`: `KernelAbstractions.CPU()`, or a GPU's),
+one work item per point, then wait for it. The contract of
+[`launch!`](@ref): a body writes only its own point and reads nothing
+another point writes in the same launch; the results do not depend on the
+order. The workgroup size is KA's default for `ka`. This is the launch of
+the GPU form of the fused sweep (`FiniteVolume.pointwise_predictor!`,
+#533); on the CPU, `launch!` (one i-row per work item) is the faster one.
+"""
+function launch_points!(ka::KA.Backend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}},
+                        args::Vararg{Any,M}) where {F, M}
+    (isempty(ir) || isempty(jr) || isempty(kr)) && return nothing
+    kern = _points3_kernel!(ka)
+    kern(body!, first(ir) - 1, first(jr) - 1, first(kr) - 1, args;
+         ndrange = (length(ir), length(jr), length(kr)))
+    KA.synchronize(ka)
+    return nothing
+end
+
+"""
+    ka_backend(b::AbstractBackend) -> KernelAbstractions.Backend
+
+The KernelAbstractions backend kernels of `b` run on: `KA.CPU()` for a
+[`CPUBackend`](@ref); a [`GPUBackend`](@ref) has none until its extension
+package provides it (an error).
+"""
+ka_backend(b::CPUBackend) = b.ka
+ka_backend(b::GPUBackend) = _gpu_error(b, "ka_backend")
 
 # ---- pointwise map ----------------------------------------------------------
 

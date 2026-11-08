@@ -43,11 +43,20 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                 "field; the delayed-row scheme of the sweep for them is plan step 6",
     "builtin.open_boundaries" => "open lateral faces: the radiating outflow and the boundary data's mass " *
                                  "correction around the predictor are not yet verified inside the sweep",
-    "builtin.backend" => "the ring-buffer sweep runs on the CPU backend; the per-point form for a GPU is plan step 8",
-    "builtin.core" => "this step core (step_imex!, the anelastic core) has no fused sweep yet, plan step 8",
+    "builtin.imex_sgs" => "step_imex!'s explicit SGS parts (the transposed stress of sgs_stress = :symmetric, " *
+                          "the off-diagonal part of a scalar diffusivity tensor) are whole-field operators",
     "builtin.budgets" => "the measured budgets count the substages and attribute the in-core components " *
                          "on whole tendency fields (budget_open!/budget_close!); booked inside the sweep " *
                          "from plan step 7",
+    # --- built-in terms of the sound-proof cores (`_mass_weighted_step!`) -----
+    "builtin.anelastic_sgs" => "the SGS closure of the sound-proof cores (W-weighted flux form): νt and κh " *
+                               "precomputed as inputs of the sweep, as plan step 4 for the Boussinesq core",
+    "builtin.anelastic_coriolis" => "add_coriolis! in the sound-proof cores: pointwise, the term of plan step 2 " *
+                                    "not yet wired into these cores",
+    "builtin.anelastic_surface_flux" => "add_surface_flux! in the sound-proof cores: pointwise on the boundary " *
+                                        "levels, the term of plan step 2 not yet wired into these cores",
+    "builtin.anelastic_sponge" => "add_velocity_sponge! in the sound-proof cores: pointwise, the term of plan " *
+                                  "step 2 not yet wired into these cores",
     # --- components of :tendencies / :body_force -----------------------------
     "Components.Coriolis" => "f-plane Coriolis, pointwise: plan step 2",
     "Components.SurfaceThetaFlux" => "prescribed θ flux on the boundary levels, pointwise: plan step 2",
@@ -128,7 +137,6 @@ post_hook_blockers(hook, sim) = [_blocker("builtin.post_predictor")]
 # or Nothing.
 function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!, post_predictor!,
                       momentum_advection, ν)
-    Backends.backend(sim.u.data) isa Backends.CPUBackend || return nothing
     has_open_boundaries(sim.bcs) && return nothing
     (sim.has_buoyancy || sim.has_coriolis || sim.has_surface_flux || sim.has_sponge) && return nothing
     post_predictor! === nothing || return nothing
@@ -145,7 +153,6 @@ end
 # (only when reporting; allocates).
 function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection)
     out = Pair{String,String}[]
-    Backends.backend(sim.u.data) isa Backends.CPUBackend || push!(out, _blocker("builtin.backend"))
     has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
     closure === nothing || push!(out, _blocker("builtin.sgs"))
@@ -160,10 +167,16 @@ end
 
 
 # an unfused substage: counted; its blockers recorded and logged once
-function _note_unfused!(sim, closure, body_force!, post_predictor!, momentum_advection)
+_note_unfused!(sim, closure, body_force!, post_predictor!, momentum_advection) =
+    _note_unfused_by!(sim, _sweep_blockers, sim, closure, body_force!, post_predictor!, momentum_advection)
+# the same with the blockers from `blockers(args...)` (any step core). The
+# blockers are built only inside the @noinline reporter: a closure built here
+# and passed on was boxed on every unfused substage (16 B; review of #533
+# step 8, test/fused_sweep_cores.jl "no allocation when unfused").
+function _note_unfused_by!(sim, blockers::F, args::Vararg{Any,N}) where {F,N}
     r = sim.workspaces.fused
     r.unfused += 1
-    r.reported || _report_unfused!(r, sim, closure, body_force!, post_predictor!, momentum_advection)
+    r.reported || _report_unfused!(r, blockers, args...)
     return nothing
 end
 # the blocker sets logged so far: each is logged once per process (a run's
@@ -171,8 +184,8 @@ end
 # its own in results.toml)
 const _LOGGED_FALLBACKS = Set{String}()
 const _LOGGED_LOCK = ReentrantLock()
-@noinline function _report_unfused!(r::SweepReport, sim, closure, body_force!, post_predictor!, momentum_advection)
-    r.fallback = _sweep_blockers(sim, closure, body_force!, post_predictor!, momentum_advection)
+@noinline function _report_unfused!(r::SweepReport, blockers::F, args::Vararg{Any,N}) where {F,N}
+    r.fallback = blockers(args...)
     r.reported = true
     who = join((first(p) for p in r.fallback), ", ")
     fresh = lock(() -> who in _LOGGED_FALLBACKS ? false : (push!(_LOGGED_FALLBACKS, who); true), _LOGGED_LOCK)
@@ -202,19 +215,17 @@ one loop per term (PALM's `'vector'`, the reference implementation):
     scheme is not implemented for its `loop_optimization`);
   * `:never`: one loop per term.
 
-The results agree within round-off either way. Only `step!` and
-`step_rk3!` of the Boussinesq core have the fused form; `step_imex!` and
-the anelastic core always run one loop per term, so `:always` is refused
-for an anelastic core. The TOML key is
+The results agree within round-off either way. Every step core has the
+fused form (#533 plan step 8): `step!` and `step_rk3!` of the Boussinesq
+core, the explicit part of `step_imex!` (one fused tendency launch, no
+predictor) and the sound-proof cores (`step_anelastic!`,
+`step_pseudo_incompressible!`, their `step_rk3!`). The TOML key is
 `[timestep] loop_fusion` (`"if_possible"`, `"always"`, `"never"`).
 """
 function set_loop_fusion!(sim, setting)
     m = Symbol(setting)
     m in LOOP_FUSION_SETTINGS ||
         throw(ArgumentError("loop_fusion must be one of $(join(LOOP_FUSION_SETTINGS, ", ")), got $(repr(setting))"))
-    m === :always && !(sim isa BoussinesqSimulation) &&
-        throw(ArgumentError("loop_fusion = \"always\": the $(nameof(typeof(sim))) core has no fused form yet " *
-                            "(#533 plan step 8); use \"if_possible\" or \"never\""))
     sim.workspaces.fused.loop_fusion = m
     return sim
 end
@@ -227,8 +238,9 @@ The loop-fusion setting of `sim` ([`set_loop_fusion!`](@ref)).
 loop_fusion(sim) = sim.workspaces.fused.loop_fusion
 
 # loop_fusion = :always and a term without a fused form: stop, naming them
-@noinline function _refuse_unfused(sim, closure, body_force!, post_predictor!, momentum_advection)
-    bl = _sweep_blockers(sim, closure, body_force!, post_predictor!, momentum_advection)
+_refuse_unfused(sim, closure, body_force!, post_predictor!, momentum_advection) =
+    _refuse_unfused(_sweep_blockers(sim, closure, body_force!, post_predictor!, momentum_advection))
+@noinline function _refuse_unfused(bl::Vector)
     throw(ArgumentError("loop_fusion = \"always\", but these terms have no fused form yet: " *
                         join((string(first(p), " (", last(p), ")") for p in bl), "; ") *
                         ". Use loop_fusion = \"if_possible\" or \"never\"."))
@@ -240,8 +252,7 @@ end
 The `results.toml` table (`[loop_fusion.<domain>]`) of whether the
 substages of `sim`'s step core ran fused (#533): `setting` (the
 [`set_loop_fusion!`](@ref) setting), `substages_fused` (`"all"`, `"some"` or
-`"none"`; `"none"` with the core's reason when the step core has no fused
-sweep) and `not_fusable`, the `"term: reason"` of every term that kept a
+`"none"`; `"none"` also before the first substage) and `not_fusable`, the `"term: reason"` of every term that kept a
 substage on separate loops (one per term) ([`SWEEP_FALLBACKS`](@ref)). The substage
 counts stay in the simulation's [`SweepReport`](@ref)
 (`sim.workspaces.fused`): they restart with a resumed session, and a
@@ -250,9 +261,6 @@ resumed run's `results.toml` is that of an uninterrupted run.
 function sweep_report(sim)
     r = sim.workspaces.fused
     fb = r.fallback
-    if r.fused == 0 && r.unfused == 0
-        fb = [_blocker("builtin.core")]
-    end
     sub = r.unfused == 0 && r.fused > 0 ? "all" : r.fused == 0 ? "none" : "some"
     return Dict{String,Any}("setting" => string(r.loop_fusion), "substages_fused" => sub,
                             "not_fusable" => String[string(first(p), ": ", last(p)) for p in fb])
@@ -290,11 +298,7 @@ end
 # the tendency fields are not used.
 function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, terms::Tuple) where {T}
     moist = sim.has_moisture
-    ii, jj, kk = interior(sim.mesh)
-    lag, lz = sweep_lags(terms)
-    ns = sweep_slabs(Backends.backend(sim.u.data), length(ii) * length(jj) * length(kk), length(kk); lz = lz)
-    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, moist ? 5 : 4, ns, length(kk); lag = lag, lz = lz)
-    sim.workspaces.sweep = bufs
+    bufs = _fused_buffers!(sim, terms, moist ? 5 : 4)
     _prepare_terms!(terms, sim, Δt)
     _blocked_sweep!(bufs, terms, sim, Δt, stage)
     update_open_boundaries!(sim, t_bc, Δt)
@@ -315,9 +319,109 @@ _blocked_sweep!(bufs, terms, sim, Δt, stage) =
 function _blocked_sweep!(bufs, terms, sim, Δt, ps, θ0, q0)
     s1 = (sim.θ, ps, θ0)
     if sim.has_moisture
-        blocked_predictor!(bufs, terms, sim.u, sim.v, sim.w, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.mesh)
+        fused_predictor!(sim, bufs, terms, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.tqv)
     else
-        blocked_predictor!(bufs, terms, sim.u, sim.v, sim.w, _Axpy(Δt), s1, nothing, sim.mesh)
+        fused_predictor!(sim, bufs, terms, _Axpy(Δt), s1, nothing, nothing)
+    end
+    return nothing
+end
+
+"""
+    fused_predictor!(sim, bufs, terms, pu, s1, s2, tqv)
+
+The fused tendencies and predictor of a substage of any step core over
+`sim`'s `u, v, w` (and the scalars `s1 = (θ, ps, snap)`, `s2` or
+`nothing`), in the form that suits the backend (#533 plan step 8): the
+ring-buffer sweep ([`blocked_predictor!`](@ref Aeolus.Operators.FiniteVolume.blocked_predictor!),
+buffers `bufs`) on a CPU backend; on any other backend the per-point form
+([`pointwise_predictor!`](@ref Aeolus.Operators.FiniteVolume.pointwise_predictor!)),
+which writes the tendencies to `sim.tu, tv, tw, tθ` (and `tqv`, `nothing`
+for a dry core) on that backend's KernelAbstractions device. The per-point
+form also runs on the CPU, on `KernelAbstractions.CPU()`, when
+`sim.workspaces.fused.per_point` is set (the stand-in that tests it).
+"""
+function fused_predictor!(sim, bufs, terms, pu, s1, s2, tqv)
+    b = Backends.backend(sim.u.data)
+    if b isa Backends.CPUBackend && !sim.workspaces.fused.per_point
+        blocked_predictor!(bufs, terms, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
+    else
+        tf = TendencyFields(sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, tqv === nothing ? nothing : tqv.data)
+        pointwise_predictor!(Backends.ka_backend(b), tf, terms, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
+    end
+    return nothing
+end
+
+# the sweep's buffers for `terms` over `sim` (`nf` fields), kept in its workspaces;
+# `nothing` for the per-point form, which has none
+function _fused_buffers!(sim, terms, nf)
+    b = Backends.backend(sim.u.data)
+    (b isa Backends.CPUBackend && !sim.workspaces.fused.per_point) || return nothing
+    ii, jj, kk = interior(sim.mesh)
+    lag, lz = sweep_lags(terms)
+    ns = sweep_slabs(b, length(ii) * length(jj) * length(kk), length(kk); lz = lz)
+    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, nf, ns, length(kk); lag = lag, lz = lz)
+    sim.workspaces.sweep = bufs
+    return bufs
+end
+
+# ---------------------------------------------------------------------------
+# the explicit part of step_imex! (#533 plan step 8)
+# ---------------------------------------------------------------------------
+
+# The explicit tendencies of an IMEX stage (`TimeIntegration._explicit_tendencies!`:
+# advection without diffusion, buoyancy, Coriolis, surface flux, sponge, the
+# body force) in one fused launch into sim.tu … tqv when every term is a sweep
+# term (`term_tendencies!`; the tendencies stay in the fields, the stage
+# combinations read them); `false` (counted as unfused) otherwise. The state's
+# halos are filled. `sgsT`, `Ks`: the explicit halves of the SGS split.
+function _try_fused_tendencies!(sim::BoussinesqSimulation{T}, Δt, body_force!, momentum_advection,
+                                sgsT, Ks) where {T}
+    r = sim.workspaces.fused
+    if r.loop_fusion === :never
+        r.unfused += 1
+        return false
+    end
+    explicit_sgs = sgsT !== nothing || Ks !== nothing
+    terms = explicit_sgs ? nothing : _sweep_terms(sim, nothing, body_force!, nothing, momentum_advection, nothing)
+    if terms === nothing
+        r.loop_fusion === :always && _refuse_unfused(_imex_blockers(sim, body_force!, momentum_advection, explicit_sgs))
+        _note_unfused_by!(sim, _imex_blockers, sim, body_force!, momentum_advection, explicit_sgs)
+        return false
+    end
+    r.fused += 1
+    _fused_tendencies_into!(sim, Δt, terms)
+    return true
+end
+function _imex_blockers(sim, body_force!, momentum_advection, explicit_sgs::Bool)
+    out = _sweep_blockers(sim, nothing, body_force!, nothing, momentum_advection)
+    explicit_sgs && push!(out, _blocker("builtin.imex_sgs"))
+    return out
+end
+function _fused_tendencies_into!(sim::BoussinesqSimulation, Δt, terms)
+    moist = sim.has_moisture
+    # the halos as `fill!(t, 0)` left them (the stage combinations copy whole storage)
+    if moist
+        _shell_map!(_Zero(), (sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, sim.tqv.data), nothing, sim.mesh)
+    else
+        _shell_map!(_Zero(), (sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data), nothing, sim.mesh)
+    end
+    _prepare_terms!(terms, sim, Δt)
+    # concrete arguments only (no `Union` of qv or `ka`): a Union passed on
+    # to the launch boxed 176 B per stage (review of #533 step 8)
+    if moist
+        _term_tendencies_on!(sim, terms, sim.qv)
+    else
+        _term_tendencies_on!(sim, terms, nothing)
+    end
+    return nothing
+end
+function _term_tendencies_on!(sim, terms, qv)
+    tf = TendencyFields(sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, sim.tqv.data)
+    b = Backends.backend(sim.u.data)
+    if b isa Backends.CPUBackend && !sim.workspaces.fused.per_point
+        term_tendencies!(tf, terms, sim.u, sim.v, sim.w, sim.θ, qv, sim.mesh)
+    else
+        term_tendencies!(tf, terms, sim.u, sim.v, sim.w, sim.θ, qv, sim.mesh; ka = Backends.ka_backend(b))
     end
     return nothing
 end
