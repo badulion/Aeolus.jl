@@ -2714,6 +2714,39 @@ compiler-flag provenance remain.
   - The old name is rejected only where no surface publishes `surface_temperature`. With `"most"` or `"tiles"` the name is valid, with its new meaning.
   - The tiles of a blended mosaic are evaluated at their own forcing levels, not at the blending height.
 
+### Canopy drag of the tiled surface (#538)
+
+**A threaded, order-independent drag that does not wrap across open faces** (#538, from the kernel-by-kernel measurement of #531). See [the parent's surface coupling](berlin_parent.md#Surface-coupling).
+
+- **What was built.** The `:post_predictor` stage of `TiledUrbanSurface`, ``u ← u/(1 + Δt a/U)`` at the u and v faces of the canopy levels, was a serial k, j, i loop on the main thread that damped u in place and then read it for the v face (Gauss–Seidel, loop-order dependent), with a periodic wrap (`im = i == 1 ? Nx : i - 1`) at every lateral face. It is now:
+  - two launches over the canopy points: the u and v face denominators from the pre-drag velocities (Jacobi) into a scratch array of the component (`drag_den`), then the division; each point writes only its own two faces, so the result does not depend on the loop order or the thread count;
+  - the neighbour column of a west/south boundary face from the boundary conditions, through the existing helpers: periodic, the opposite edge (as before); a face whose normal velocity the boundary fixes (`pinned_face_indices`: an open face), no drag, since that value is the boundary's and the open-boundary update overwrites it; any other non-periodic face (no-flux), the drag of the column it bounds (`neighbor_index`, one-sided). The east/north boundary faces lie in the halo and were never touched;
+  - the halos of u and v filled first (the old loop read the halo values left from before the predictor);
+  - the speed as ``\sqrt{u^2 + \bar v^2}`` instead of `hypot` (3× cheaper in this kernel), and the denominators launched with a work weight (`DRAG_POINT_WEIGHT = 8`, ten loads, two roots and two divisions per point): Berlin's canopy is one level, 40,000 points, which unweighted ran on two tasks at any thread count (the launch's 16,384 points per task).
+- **Discretisation reference.** PALM's canopy drag (`plant_canopy_model_mod.f90`, `pcm_tendency`, u component): the speed at a u face with v averaged from its four neighbours, and the u loop starting at `nxlu`, which skips the boundary face of a non-cyclic inflow or radiation boundary (`init_pegrid.f90`). The open-face rule here is the same. PALM takes the cell's LAD at a face, rather than averaging (sharp canopy edges); the face mean of the two columns is kept, as it was.
+- **Measured** (Berlin 100 m config, 200 × 200 × 60, open ERA5 faces, warm state after 6 steps, FFTW `estimate`, under the shared bench lock; the stage per call, median of 200 calls, the old code on the same commit in a separate worktree, interleaved; 3 calls per step):
+
+  | threads | 1 | 2 | 6 | 12 |
+  | :-- | --: | --: | --: | --: |
+  | drag stage before (ms/call) | 2.10 | 2.12 | 2.14 | 2.12 |
+  | after (ms/call, incl. the u, v halo fill) | 0.36 | 0.24 | 0.24 | 0.21 |
+  | of which the halo fill (ms) | 0.13 | 0.11 | 0.07 | 0.07 |
+  | per step, before → after (ms) | 6.3 → 1.1 | 6.4 → 0.7 | 6.4 → 0.7 | 6.4 → 0.6 |
+  | Berlin step median before / after (ms, 20 steps) | 500.5 / 485.4 | 330.3 / 327.7 | 239.3 / 240.3 | 243.7 / 238.6 |
+
+  The step medians differ by less than their run-to-run spread (±5 ms; an unlocked first 1-thread run measured 578 ms and did not repeat), so the ~5 ms saving is visible only at 1 thread. Kernel micro-benchmark (200 × 200 × 1, the two launches, without the fill): `hypot` unweighted 0.75 / 0.43 / 0.77 / 0.82 ms at 1/2/6/12 threads; `sqrt` with weight 8: 0.24 / 0.14 / 0.08 / 0.07 ms.
+- **Against the old loop**, on the warm Berlin state, one call at Δt = 2 s: interior faces (2…N) differ by at most 3.7e-5 m/s in u and 2.9e-4 m/s in v, against a drag change of up to 8.1e-2 (u) and 3.1e-2 m/s (v) in that call: the Gauss–Seidel ordering's second-order term. The west u and south v boundary faces (open) were damped by up to 1.1e-2 and 1.2e-2 m/s by the drag of the opposite edge; now 0 (and the open-boundary update overwrites them in both versions).
+- **Tests** (`test/components_parent.jl`, three new testsets):
+  - a uniform wind with a drag recomputed from it, ``a = cU^2`` (``du/dt = -c|U|u``): the implicit step is ``1/u ← 1/u + cΔt``, exact, so 100 steps agree with ``u_0/(1 + cu_0t)`` to 1e-12; a uniform (u, v) keeps its direction to 1e-14; a held a (``du/dt = -a``) converges at first order: errors 0.143, 0.076, 0.039 m/s at Δt = 4, 2, 1 s (ratios 1.88, 1.94);
+  - a random 40 × 30 field against an explicit Jacobi reference applied in reverse loop order, serial and threaded (`with_backend`, threshold 1): 1e-14; against the former loop: 2.6e-3 (u) and 3.7e-3 m/s (v), below 0.1 × the drag change (0.197 m/s) and ε² max|U|;
+  - periodic, open and no-flux boxes with a strong drag in the last column and row only: the periodic box damps the west/south boundary faces (wrap), the open box leaves them at the boundary values, the no-flux box applies the bounding column's drag (zero there, and the full a₁, not (a_Nx + a₁)/2, when only column 1 drags); the interior faces next to the strong column agree with the periodic box to 1e-14.
+  - Targeted runs: `components_parent`, `config_parent_domain`, `urban_run`, `urban_checks`, `plant_canopy` 228 pass, 0 fail; validation `urban_checks.jl` 33 pass, 0 fail (349 s).
+- **Test expectation that was wrong.** The first open-box test expected the pinned west face to keep the interior's 5 m/s; it held 0, because the box's boundary data had not been loaded (`update_open_boundaries!`) and the halo fill writes the data into that face. The code was right; the test now loads the data first, as a run does.
+- **Deviations from the issue's plan:**
+  - The drag is a launch over (i, j, k) in two passes, not one: a single pass cannot read the pre-drag neighbours that other work items write. The scratch is a component field, built with an outer constructor of the old arity so `build` is unchanged.
+  - At an open face the boundary-normal face is skipped (PALM's choice) rather than given a one-sided drag; one-sided averaging is used at a no-flux face, which has no boundary data.
+- **Open:** `PlantCanopy.ResolvedCanopyDrag` averages its LAD to the faces with the same periodic wrap at construction ("as the LES is horizontally periodic"); a vegetated column at an open edge would see the opposite edge's leaves. Not in the Berlin run, and left for its own issue. With #533 this pointwise drag becomes a `:post_predictor` term of the fused sweep.
+
 ---
 
 # Data assimilation and inverse problems
