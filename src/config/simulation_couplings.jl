@@ -23,7 +23,8 @@
 # the slab's floor flux in :tendencies, the obstacles' penalty in
 # :body_force, and the rest right after the core in :surface_update.
 
-using ..IBM: SolidMask, add_ibm_penalty!
+using ..IBM: SolidMask, add_ibm_penalty!, ibm_penalty_term
+using ..Operators: FiniteVolume
 using ..Radiation: SlabLand, step_land!, surface_temperature, apply_radiative_cooling!
 using ..Microphysics: apply_kessler_step!
 using ..Chemistry: apply_linear_chemistry!
@@ -496,13 +497,14 @@ struct SimulationCouplings{S<:Tuple} <: Components.AbstractComponent
     c::SimCouplings
     st::S
     step::Base.RefValue{Int}            # the step count of the particles' record cadence
+    invτ::Base.RefValue{Float64}        # 1/τ of the IBM penalty in the fused sweep (IBM.IBMPenaltyTerm)
 end
 function SimulationCouplings(c::SimCouplings)
     st = (Components.Stage(:surface_flux),
           (c.slab === nothing ? () : (Components.Stage(:tendencies),))...,
           (c.solid === nothing ? () : (Components.Stage(:body_force),))...,
           Components.Stage(:surface_update))
-    return SimulationCouplings(c, st, Ref(0))
+    return SimulationCouplings(c, st, Ref(0), Ref(NaN))
 end
 
 Components.component_name(::Type{<:SimulationCouplings}) = :couplings
@@ -518,6 +520,12 @@ function Components.run_stage!(c::SimulationCouplings, d, ::Val{:body_force}, dt
     add_ibm_penalty!(d.state, c.c.solid; τ = c.c.penalty_time * dt)
     return nothing
 end
+# The penalty inside the fused sweep (#533 step 5), when it is the only
+# in-core part (no slab): `IBM.IBMPenaltyTerm`. The slab's floor flux is the
+# surface-flux term of plan step 2; until it has a sweep term a run with a
+# slab keeps one loop per term.
+FiniteVolume.sweep_term(c::SimulationCouplings, d) =
+    c.c.slab === nothing && c.c.solid !== nothing ? ibm_penalty_term(c.c.solid, c.c.penalty_time, c.invτ) : nothing
 function Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_update}, dt)
     c.step[] += 1
     return _after_step!(c.c, d.state, dt, c.step[])
