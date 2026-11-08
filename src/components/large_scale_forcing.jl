@@ -52,9 +52,10 @@ struct LargeScale{G, E<:Tuple, U, V, Z} <: AbstractComponent
     t0::Base.RefValue{Float64}
     clock::Symbol
     zi::Z
+    sweep::ColumnForcing          # the coefficients of the fused sweep's term (#533), scratch
 end
-LargeScale(geostrophic, extra::Tuple, U_g, V_g, t0::Base.RefValue{Float64}) =
-    LargeScale(geostrophic, extra, U_g, V_g, t0, :step, nothing)
+LargeScale(geostrophic, extra::Tuple, U_g, V_g, t0::Base.RefValue{Float64}, clock::Symbol = :step, zi = nothing) =
+    LargeScale(geostrophic, extra, U_g, V_g, t0, clock, zi, ColumnForcing())
 function LargeScale(geostrophic, extra::Tuple; U_g = nothing, V_g = nothing, clock::Symbol = :step,
                     zi = nothing, t0::Real = 0.0)
     clock in (:step, :core) || throw(ArgumentError("LargeScale: clock is :step or :core, got :$clock"))
@@ -298,7 +299,8 @@ _coriolis_f(::Tuple{}, s) = Float64(s.f_coriolis)
 _coriolis_f(cs::Tuple, s) = first(cs) isa Coriolis ? first(cs).f : _coriolis_f(Base.tail(cs), s)
 
 "The start of the time window of the (sub)step of `c` on `d` ([`LargeScale`](@ref)'s `clock`)."
-forcing_time(c::LargeScale, d) = c.clock === :core ? Float64(d.state.t) : c.t0[]
+forcing_time(c::LargeScale, d) = _forcing_time(c, d.state)
+_forcing_time(c::LargeScale, sim) = c.clock === :core ? Float64(sim.t) : c.t0[]
 
 function run_stage!(c::LargeScale, d, ::Val{:body_force}, dt)
     s = d.state; t0 = forcing_time(c, d)
@@ -308,6 +310,47 @@ function run_stage!(c::LargeScale, d, ::Val{:body_force}, dt)
 end
 
 run_stage!(c::LargeScale, d, ::Val{:column_tendency}, dt) = (track!(c.zi, d.state); nothing)
+
+# --- in the fused sweep (#533 plan step 3) -----------------------------------
+# Every forcing is, per level, affine in its field's own column; the
+# reductions it needs (the plane means of nudging, mean-gradient
+# subsidence, a damping toward the slab mean) are of the stage-start state,
+# which the sweep only reads until the predictor overwrites a row. So
+# `prepare!` computes the per-level coefficients before the sweep
+# (`LargeScaleForcing.column_forcing!`, with the time window and Coriolis
+# parameter of `run_stage!`) and the term adds them row by row. The
+# whole-field `run_stage!` above stays the reference.
+
+"""
+    LargeScaleTerm
+
+The fused-sweep term of a [`LargeScale`](@ref) component (#533): its
+forcings' column coefficients (`LargeScaleForcing.ColumnForcing`, held by
+the component) computed in `prepare!` from the stage-start state, added
+by the sweep's row kernel; `f` is the Coriolis parameter the geostrophic
+pressure gradient takes. A component whose forcings all have a column
+form (`LargeScaleForcing.column_forcing_supported`: every forcing of
+`LargeScaleForcing` but a damping toward a 3-D target) has one.
+"""
+struct LargeScaleTerm{C<:LargeScale} <: FiniteVolume.SweepTerm
+    c::C
+    f::Float64
+end
+FiniteVolume.sweep_term(c::LargeScale, d) =
+    column_forcing_supported(c.geostrophic) && column_forcing_supported(c.extra) ?
+        LargeScaleTerm(c, _coriolis_f(d.components, d.state)) : nothing
+FiniteVolume.footprint(::LargeScaleTerm) = (0, 0, 1)        # the local subsidence's upwind level
+function FiniteVolume.prepare!(t::LargeScaleTerm, sim, Δt)
+    c = t.c; col = c.sweep
+    t0 = _forcing_time(c, sim)
+    reset_column_forcing!(col, sim)
+    c.geostrophic === nothing || column_forcing!(col, sim, c.geostrophic, t0, Δt; f = t.f)
+    column_forcing!(col, sim, c.extra, t0, Δt)
+    finish_column_forcing!(col)
+    return nothing
+end
+FiniteVolume.add_row!(t::LargeScaleTerm, buf, a, b, s, j, k, ii, st) =
+    add_column_rows!(t.c.sweep, buf, a, b, s, j, k, ii, st)
 
 checkpoint_state(c::LargeScale) = c.zi === nothing ? nothing : (zi = checkpoint_state(c.zi),)
 restore_checkpoint_state!(c::LargeScale, s::NamedTuple) = (restore_checkpoint_state!(c.zi, s.zi); c)
