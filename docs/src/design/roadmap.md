@@ -3263,8 +3263,9 @@ sponge, a time-dependent fringe target), `loop_fusion = "always"` against
 `run_stage!`'s (exact for the level means and wind means, rtol 1e-9 for
 the mean tendencies, which `run_stage!` takes as a difference of
 tendency-field means); `step_rk3!` with all four built-in terms allocates
-16 bytes (as the DNS). Full suite green (118 jobs, 5949 assertions);
-`urban_run.jl`, `urban_checks.jl` green.
+16 bytes (as the DNS). Full suite green (118 jobs, 5949 assertions, before
+the last two `hook_terms` commits; the files they touch re-run green after);
+`urban_run.jl`, `urban_checks.jl` green; validation `urban_checks.jl` 33/33.
 
 **Measured**: a configured case whose only terms besides advection and
 diffusion are these: the dry CBL of `examples/dry_convective_bl` with
