@@ -70,3 +70,24 @@ end
 run_stage!(c::KinematicFlow, d, ::Val{:clock}, dt) = _prescribe!(c, d)
 run_stage!(c::KinematicFlow, d, ::Val{:post_predictor}, dt) = _prescribe!(c, d)
 run_stage!(c::KinematicFlow, d, ::Val{:surface_update}, dt) = _prescribe!(c, d)
+
+# The prescription in the fused sweep (#533 step 6): each predicted row is
+# overwritten with the prescribed one right after its predictor
+# (pointwise, footprint 0). The halos keep their stage-start values, the
+# prescribed ones the stage started from; the projection refills them.
+struct KinematicFlowTerm{A<:AbstractArray} <: FiniteVolume.PostTerm
+    u::A
+    v::A
+    w::A
+end
+FiniteVolume.footprint(::KinematicFlowTerm) = (0, 0, 0)
+@inline function FiniteVolume.post_row!(t::KinematicFlowTerm, ::Val{2}, j, k, i1, i2, st)
+    u, v, w, pu, pv, pw = st.u, st.v, st.w, t.u, t.v, t.w
+    @inbounds @simd for i in i1:i2
+        u[i, j, k] = pu[i, j, k]
+        v[i, j, k] = pv[i, j, k]
+        w[i, j, k] = pw[i, j, k]
+    end
+    return nothing
+end
+FiniteVolume.post_sweep_term(c::KinematicFlow, d, Δt) = KinematicFlowTerm(c.u, c.v, c.w)

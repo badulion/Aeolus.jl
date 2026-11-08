@@ -174,15 +174,48 @@ function Simulations.hook_blockers(h::_ForceHook, sim)
     end
     return out
 end
-# the post-predictor stage: no operator runs in the sweep before plan step 6;
-# its components are reported
+# The post-predictor hook in the fused sweep (#533 plan step 6): a tuple of
+# post terms, one per component of stage 8 in the domain's order, when each
+# has one (`FiniteVolume.post_sweep_term(c, d, Δt)`: a row operator of the
+# sweep, or `AfterSweep`, its whole-field form after the sweep) and the
+# budgets are off (they attribute the stage on the whole state: plan step 7).
+function Simulations.post_hook_terms(h::_PostHook, sim, Δt)
+    h.d.budgets === nothing || return nothing
+    return _post_stage_terms(h.d.components, h.d, Δt)
+end
+_post_stage_terms(::Tuple{}, d, Δt) = ()
+function _post_stage_terms(cs::Tuple, d, Δt)
+    rest = _post_stage_terms(Base.tail(cs), d, Δt)
+    attaches(first(cs), :post_predictor) || return rest
+    t = FiniteVolume.post_sweep_term(first(cs), d, Δt)
+    (t === nothing || rest === nothing) && return nothing
+    return (t, rest...)
+end
 function Simulations.post_hook_blockers(h::_PostHook, sim)
-    out = [Simulations._blocker("builtin.post_predictor")]
+    out = Pair{String,String}[]
+    h.d.budgets === nothing || push!(out, Simulations._blocker("builtin.budgets"))
+    Δt = zero(sim.t)                      # (only whether a component has a post term is asked)
     for c in h.d.components
-        attaches(c, :post_predictor) && push!(out, Simulations._blocker(sweep_type(c)))
+        attaches(c, :post_predictor) && FiniteVolume.post_sweep_term(c, h.d, Δt) === nothing &&
+            push!(out, Simulations._blocker(sweep_type(c)))
     end
     return out
 end
+
+"""
+    run_after_sweep(c, d, Δt) -> FiniteVolume.AfterSweep
+
+The post term of a `:post_predictor` component `c` of domain `d` that
+needs the whole predicted field: its own `run_stage!` (the whole-field
+reference), run after the fused sweep (#533).
+"""
+run_after_sweep(c, d, Δt) = FiniteVolume.AfterSweep(_RunPost(c, d, Δt))
+struct _RunPost{C,D,T} <: Function
+    c::C
+    d::D
+    Δt::T
+end
+(r::_RunPost)() = (run_stage!(r.c, r.d, Val(:post_predictor), r.Δt); nothing)
 """
     sweep_type(c) -> Type
 

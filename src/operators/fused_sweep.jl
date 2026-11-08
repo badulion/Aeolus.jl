@@ -226,6 +226,19 @@ pipeline's), each on the output of the one before.
 abstract type PostTerm end
 
 """
+    post_sweep_term(x, ctx, Δt) -> Union{PostTerm,Nothing}
+
+The post term of the fused sweep that does what `x` (a component of the
+`:post_predictor` stage, with `ctx` its domain) does to the predicted
+velocity in a substage of length `Δt`: a [`PostTerm`](@ref) that runs on
+the sweep's rows, an [`AfterSweep`](@ref) (its whole-field form after the
+sweep, when it needs the whole predicted field), or `nothing` (the
+default) when it has no fused form yet; the substage then runs one loop
+per term and the run reports why (#533).
+"""
+post_sweep_term(x, ctx, Δt) = nothing
+
+"""
     post_row!(t::PostTerm, phase::Val, j, k, i1, i2, st)
 
 Phase `Val(1)` of post term `t` on the faces `(i1:i2, j, k)` (storage
@@ -248,6 +261,28 @@ diagnostics (forces, stress statistics) from the per-face values its
 finish!(::PostTerm, sim, Δt) = nothing
 prepare!(::PostTerm, sim, Δt) = nothing
 footprint(t::PostTerm) = throw(ArgumentError("footprint: the post term $(typeof(t)) declares no footprint"))
+
+"""
+    row_range(key, r::UnitRange, (k, j)) -> UnitRange
+
+The entries `n ∈ r` of a sparse list sorted by `(k, j)` (then by `i`)
+whose `key(n) == (k, j)`: the faces of one row of a post term's face list,
+found by bisection (two searches, no index stored).
+"""
+@inline function row_range(key::F, r::UnitRange{Int}, kj::Tuple{Int,Int}) where {F}
+    lo, hi = first(r), last(r) + 1
+    while lo < hi
+        mid = (lo + hi) >>> 1
+        key(mid) < kj ? (lo = mid + 1) : (hi = mid)
+    end
+    a = lo
+    hi = last(r) + 1
+    while lo < hi
+        mid = (lo + hi) >>> 1
+        key(mid) <= kj ? (lo = mid + 1) : (hi = mid)
+    end
+    return a:lo-1
+end
 
 """
     AfterSweep(f)

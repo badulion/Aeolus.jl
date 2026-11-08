@@ -1,7 +1,7 @@
 # The wall-stress operator: the stress of a wall law applied, implicitly,
 # to the first velocity level next to the z-walls of a RegularGrid.
 
-export AbstractWallModel, WallModel, apply_wall_stress!
+export AbstractWallModel, WallModel, apply_wall_stress!, wall_stress_term
 
 """
     AbstractWallModel
@@ -322,4 +322,156 @@ end
 @inline function _face_levels(k1::Int, k2::Int)
     k1 == k2 && return ((k1, 1.0), (0, 0.0))
     return ((k1, k1 == 0 ? 0.0 : 0.5), (k2, k2 == 0 ? 0.0 : 0.5))
+end
+
+# ---------------------------------------------------------------------------
+# the wall stress as a post term of the fused sweep (#533 step 6)
+# ---------------------------------------------------------------------------
+
+"""
+    WallStressTerm
+
+[`apply_wall_stress!`](@ref) with an equilibrium [`WallModel`](@ref) on the
+bottom walls, `formulation = :local`, as a post term of the fused sweep
+(`Operators.FiniteVolume.PostTerm`, #533 step 6), built by
+[`wall_stress_term`](@ref). Phase 1 of a row computes the coefficient
+``a`` of every column whose wall level is the row's (the resolved speed
+reads the column's four faces, footprint 1 in x and y), with `ustar` and
+`wind_out`; phase 2 updates the u and v faces of the row from the mean of
+the two columns' coefficients and keeps each face's change, which
+`finish!` folds into the force, in the order of the whole-field operator
+(`F`, the `(Fx, Fy)` it returns). The non-local formulations need plane
+means of the predicted velocity, so they have no row form.
+"""
+struct WallStressTerm{W<:WallModel,M,WI,H,US,WO,T<:AbstractFloat} <: FiniteVolume.PostTerm
+    wm::W
+    mask::M
+    wind::WI
+    height::H
+    ustar::US
+    wind_out::WO
+    a::Matrix{T}
+    dqu::Array{T,3}
+    dqv::Array{T,3}
+    Δt::T
+    dz::T
+    dV::T
+    Hx::Int
+    Hy::Int
+    Hz::Int
+    Nx::Int
+    Ny::Int
+    Nz::Int
+    kmax::Int
+    xper::Bool
+    yper::Bool
+    F::Base.RefValue{NTuple{2,T}}
+end
+
+"""
+    wall_stress_term(sim, wm::WallModel, Δt; side = :bottom, mask = nothing,
+                     formulation = :local, wind = nothing, height = nothing,
+                     ustar = nothing, wind_out = nothing) -> Union{WallStressTerm,Nothing}
+
+The post term of the fused sweep that does what
+`apply_wall_stress!(sim, wm, Δt; …)` does with the same keywords, or
+`nothing` for what it has no row form of: a top wall (`side ≠ :bottom`)
+or a non-local formulation (`:schumann`, `:moeng`: plane means of the
+predicted velocity).
+"""
+function wall_stress_term(sim, wm::WallModel, Δt::Real; side::Symbol = :bottom, mask = nothing,
+                          formulation::Symbol = :local, wind = nothing, height = nothing,
+                          ustar = nothing, wind_out = nothing)
+    (side === :bottom && formulation === :local) || return nothing
+    m = sim.mesh
+    T = typeof(float(m.dz))
+    Nx, Ny, Nz = m.Nx, m.Ny, m.Nz
+    kmax = mask === nothing ? 1 : maximum(((i, j),) -> _level(mask, i, j, 1, Nz), Iterators.product(1:Nx, 1:Ny); init = 0)
+    return WallStressTerm(wm, mask, wind, height, ustar, wind_out, zeros(T, Nx, Ny), zeros(T, Nx, Ny, 2),
+                          zeros(T, Nx, Ny, 2), T(Δt), T(m.dz), T(m.dx * m.dy * m.dz), m.Hx, m.Hy, m.Hz, Nx, Ny, Nz,
+                          kmax, sim.bcs.west isa Periodic, sim.bcs.south isa Periodic, Ref((zero(T), zero(T))))
+end
+FiniteVolume.footprint(::WallStressTerm) = (1, 1, 0)
+
+@inline _lev(t::WallStressTerm, i, j) = _level(t.mask, i, j, 1, t.Nz)
+@inline _west(t::WallStressTerm, i) = i > 1 ? i - 1 : (t.xper ? t.Nx : 0)
+@inline _south(t::WallStressTerm, j) = j > 1 ? j - 1 : (t.yper ? t.Ny : 0)
+@inline _wout!(::Nothing, i, j, x) = nothing
+@inline _wout!(o::AbstractMatrix, i, j, x) = (@inbounds o[i, j] = x; nothing)
+
+# phase 1: the coefficient of every column of row j whose wall is at level k
+function FiniteVolume.post_row!(t::WallStressTerm{W,M,WI,H,US,WO,T}, ::Val{1}, J, K, I1, I2, st) where {W,M,WI,H,US,WO,T}
+    k, j = K - t.Hz, J - t.Hy
+    1 <= k <= t.kmax || return nothing
+    u, v, ν, h0 = st.u, st.v, t.wm.ν, t.dz / 2
+    @inbounds for I in I1:I2
+        i = I - t.Hx
+        _lev(t, i, j) == k || continue
+        uc = (u[I, J, K] + u[I+1, J, K]) / 2
+        vc = (v[I, J, K] + v[I, J+1, K]) / 2
+        Uc = sqrt(uc^2 + vc^2)
+        Ue = t.wind === nothing ? Uc : T(t.wind[i, j])
+        L = _law(t.wm.law, i, j)
+        h = _height(t.height, i, j, h0)
+        t.a[i, j] = t.wind === nothing ? wall_drag(L, Ue, h; ν = ν) : _input_drag(L, Ue, Uc, h, ν)
+        _wout!(t.ustar, i, j, friction_velocity(L, Ue, h; ν = ν))
+        _wout!(t.wind_out, i, j, Ue)
+    end
+    return nothing
+end
+
+# phase 2: the u and v faces of row j at level k, from the mean of the two
+# columns' coefficients (a column contributes only at its own wall level)
+function FiniteVolume.post_row!(t::WallStressTerm{W,M,WI,H,US,WO,T}, ::Val{2}, J, K, I1, I2, st) where {W,M,WI,H,US,WO,T}
+    k, j = K - t.Hz, J - t.Hy
+    1 <= k <= t.kmax || return nothing
+    u, v, a, Δt, dz = st.u, st.v, t.a, t.Δt, t.dz
+    js = _south(t, j)
+    @inbounds for I in I1:I2
+        i = I - t.Hx
+        iw = _west(t, i)
+        l = _lev(t, i, j)
+        lw = iw == 0 ? 0 : _lev(t, iw, j)
+        ls = js == 0 ? 0 : _lev(t, i, js)
+        fl = _face_levels(l, lw)
+        for s in 1:2
+            fl[s][1] == k || continue
+            A = zero(T)
+            l == k && (A += a[i, j])
+            iw != 0 && lw == k && (A += a[iw, j])
+            u0 = u[I, J, K]
+            u[I, J, K] = (u0 - Δt * (zero(T) / 2) / dz) / (1 + Δt * (A / 2) / dz)
+            t.dqu[i, j, s] = u[I, J, K] - u0
+        end
+        fl = _face_levels(l, ls)
+        for s in 1:2
+            fl[s][1] == k || continue
+            A = zero(T)
+            l == k && (A += a[i, j])
+            js != 0 && ls == k && (A += a[i, js])
+            v0 = v[I, J, K]
+            v[I, J, K] = (v0 - Δt * (zero(T) / 2) / dz) / (1 + Δt * (A / 2) / dz)
+            t.dqv[i, j, s] = v[I, J, K] - v0
+        end
+    end
+    return nothing
+end
+
+# the force, folded over the faces in the order of `_apply_coefficients!`
+function FiniteVolume.finish!(t::WallStressTerm{W,M,WI,H,US,WO,T}, sim, Δt) where {W,M,WI,H,US,WO,T}
+    Fx = Fy = zero(T)
+    @inbounds for j in 1:t.Ny, i in 1:t.Nx
+        iw, js = _west(t, i), _south(t, j)
+        l = _lev(t, i, j)
+        fl = _face_levels(l, iw == 0 ? 0 : _lev(t, iw, j))
+        for s in 1:2
+            fl[s][1] == 0 || (Fx += t.dqu[i, j, s])
+        end
+        fl = _face_levels(l, js == 0 ? 0 : _lev(t, i, js))
+        for s in 1:2
+            fl[s][1] == 0 || (Fy += t.dqv[i, j, s])
+        end
+    end
+    t.F[] = (zero(T) + Fx * t.dV / t.Δt, zero(T) + Fy * t.dV / t.Δt)
+    return nothing
 end

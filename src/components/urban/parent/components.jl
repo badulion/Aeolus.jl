@@ -634,19 +634,67 @@ function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:post_predictor}, 
     a, den = c.drag, c.drag_den
     kc = size(a, 3)
     fill_halos!((sim.u, sim.v), bcs)
-    # the column standing for i - 1 at i = 1 (j - 1 at j = 1): the opposite
-    # edge on a periodic axis, 0 (no drag) at a pinned boundary face, the
-    # boundary column itself otherwise
-    pu = pinned_face_indices(Aeolus.Fields.location(sim.u), m, bcs)[1] != 0
-    pv = pinned_face_indices(Aeolus.Fields.location(sim.v), m, bcs)[2] != 0
-    iw = neighbor_index(m, bcs, 0, 1; outside = pu ? :none : :mirror)
-    js = neighbor_index(m, bcs, 0, 2; outside = pv ? :none : :mirror)
+    iw, js = _drag_edge_columns(sim)
     b = Aeolus.Backends.backend(a)
     r = (1:Nx, 1:Ny, 1:kc)
     Aeolus.Backends.launch_weighted!(b, DRAG_POINT_WEIGHT, _drag_denominators!, r, den, a, sim.u.data, sim.v.data,
                                      Float64(Δt), c.U_min, m.Hx, m.Hy, m.Hz, iw, js)
     Aeolus.Backends.launch!(b, _drag_apply!, r, den, sim.u.data, sim.v.data, m.Hx, m.Hy, m.Hz)
     return nothing
+end
+
+# the column standing for i - 1 at i = 1 (j - 1 at j = 1): the opposite
+# edge on a periodic axis, 0 (no drag) at a pinned boundary face, the
+# boundary column itself otherwise
+function _drag_edge_columns(sim)
+    m, bcs = sim.mesh, sim.bcs
+    pu = pinned_face_indices(Aeolus.Fields.location(sim.u), m, bcs)[1] != 0
+    pv = pinned_face_indices(Aeolus.Fields.location(sim.v), m, bcs)[2] != 0
+    return (neighbor_index(m, bcs, 0, 1; outside = pu ? :none : :mirror),
+            neighbor_index(m, bcs, 0, 2; outside = pv ? :none : :mirror))
+end
+
+# The drag in the fused sweep (#533 step 6): the same two kernels on the
+# sweep's rows, the denominators of a row one row behind its input (they
+# read v at j + 1 and u at j − 1) and the division one row later, so every
+# denominator reads pre-drag velocities (post_plan); the points at the
+# lateral boundaries run after the sweep with the halos filled, as the
+# whole-field stage.
+struct TiledDragTerm{A<:AbstractArray{Float64,3},D<:AbstractArray{Float64,4}} <: FiniteVolume.PostTerm
+    a::A
+    den::D
+    Δt::Float64
+    U_min::Float64
+    Hx::Int
+    Hy::Int
+    Hz::Int
+    iw::Int
+    js::Int
+end
+FiniteVolume.footprint(::TiledDragTerm) = (1, 1, 0)
+function FiniteVolume.post_row!(t::TiledDragTerm, ::Val{1}, J, K, I1, I2, st)
+    k = K - t.Hz
+    1 <= k <= size(t.a, 3) || return nothing
+    j = J - t.Hy
+    for I in I1:I2
+        _drag_denominators!(I - t.Hx, j, k, t.den, t.a, st.u, st.v, t.Δt, t.U_min, t.Hx, t.Hy, t.Hz, t.iw, t.js)
+    end
+    return nothing
+end
+function FiniteVolume.post_row!(t::TiledDragTerm, ::Val{2}, J, K, I1, I2, st)
+    k = K - t.Hz
+    1 <= k <= size(t.a, 3) || return nothing
+    j = J - t.Hy
+    for I in I1:I2
+        _drag_apply!(I - t.Hx, j, k, t.den, st.u, st.v, t.Hx, t.Hy, t.Hz)
+    end
+    return nothing
+end
+function FiniteVolume.post_sweep_term(c::TiledUrbanSurface, d, Δt)
+    sim = d.state
+    m = sim.mesh
+    iw, js = _drag_edge_columns(sim)
+    return TiledDragTerm(c.drag, c.drag_den, Float64(Δt), c.U_min, m.Hx, m.Hy, m.Hz, iw, js)
 end
 
 # the work of one canopy point of the drag's denominators (ten loads, two

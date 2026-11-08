@@ -720,11 +720,55 @@ function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:post_predictor}, dt)
         apply_wall_stress!(case.sim, c.wm, dt; side = :bottom, mask = case.bus.k_air,
                            formulation = c.formulation, ustar = case.bus.u_star,
                            wind_out = c.U_wall, wind = wind, height = height)
-        @inbounds for I in eachindex(height)
-            case.bus.k_air[I] <= case.mesh.Nz && (c.h_wall[I] = c.h_match[I] = height[I])
-        end
+        _record_matching_height!(c, case, height)
     end
     return nothing
+end
+
+# The ground's wall stress in the fused sweep (#533 step 6): the row form of
+# `apply_wall_stress!` (`WallModels.wall_stress_term`) for the equilibrium
+# law with the local formulation, at the first air cell or with the
+# time-filtered matching input once the filter is primed (its wind is the
+# filter's, not read from the predicted field). The TBLE columns, the
+# non-local formulations (plane means of the predicted velocity) and an
+# input sampled from the predicted field (no filter, or its first call)
+# run the whole-field stage after the sweep.
+struct GroundStressTerm{W<:FiniteVolume.PostTerm,C,H} <: FiniteVolume.PostTerm
+    t::W
+    c::C
+    case::Any
+    height::H
+end
+FiniteVolume.footprint(p::GroundStressTerm) = FiniteVolume.footprint(p.t)
+FiniteVolume.post_row!(p::GroundStressTerm, ph::Val{1}, j, k, i1, i2, st) = FiniteVolume.post_row!(p.t, ph, j, k, i1, i2, st)
+FiniteVolume.post_row!(p::GroundStressTerm, ph::Val{2}, j, k, i1, i2, st) = FiniteVolume.post_row!(p.t, ph, j, k, i1, i2, st)
+function FiniteVolume.finish!(p::GroundStressTerm, sim, Δt)
+    FiniteVolume.finish!(p.t, sim, Δt)
+    p.height === nothing || _record_matching_height!(p.c, p.case, p.height)
+    return nothing
+end
+function _record_matching_height!(c::SurfaceExchangeMOST, case, height)
+    @inbounds for I in eachindex(height)
+        case.bus.k_air[I] <= case.mesh.Nz && (c.h_wall[I] = c.h_match[I] = height[I])
+    end
+    return nothing
+end
+
+function FiniteVolume.post_sweep_term(c::SurfaceExchangeMOST, d, Δt)
+    case = urban_case(d)
+    sim = case.sim
+    after = FiniteVolume.AfterSweep(() -> run_stage!(c, case, Val(:post_predictor), Δt))
+    c.tble === nothing || return after
+    kw = (side = :bottom, mask = case.bus.k_air, formulation = c.formulation, ustar = case.bus.u_star,
+          wind_out = c.U_wall)
+    if c.plain_input
+        t = Aeolus.WallModels.wall_stress_term(sim, c.wm, Δt; kw...)
+        return t === nothing ? after : GroundStressTerm(t, c, case, nothing)
+    end
+    (c.input.T_f > 0 && c.input.primed) || return after
+    wind, height = matching_input!(c.input, sim; side = :bottom, mask = case.bus.k_air)
+    t = Aeolus.WallModels.wall_stress_term(sim, c.wm, Δt; kw..., wind = wind, height = height)
+    return t === nothing ? after : GroundStressTerm(t, c, case, height)
 end
 
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:surface_update}, dt)

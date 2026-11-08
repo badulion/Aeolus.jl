@@ -28,6 +28,13 @@ using Aeolus.Grids: interior
 using Aeolus.Backends: CPUBackend, with_backend
 using Aeolus.Simulations: BoussinesqSimulation, step_rk3!
 using Aeolus.BoundaryConditions: FieldBoundaryConditions, fill_halos!
+using Aeolus.IBM: SolidMask, mark_solid!, implicit_ibm_correction!, ibm_correction_term
+using Aeolus.PlantCanopy: ResolvedCanopyDrag, apply_canopy_drag!, canopy_drag_term, canopy_drag_force
+using Aeolus.WallModels: RoughLogLaw, WallModel, immersed_walls, apply_immersed_wall_stress!, immersed_wall_term,
+                         apply_wall_stress!, wall_stress_term
+using Aeolus.Radiation: SlabLand
+using Aeolus.SurfaceTiles: SurfaceMosaic
+using Aeolus.Anelastic: isentropic_reference
 using Random: Xoshiro, randn, rand
 
 const FVp = Aeolus.Operators.FiniteVolume
@@ -131,6 +138,7 @@ end
 _fp_ref!(s, t::FPScale) = fp_scale_ref!(s, t)
 _fp_ref!(s, t::FPDrag) = fp_drag_ref!(s, t)
 _fp_ref!(s, t::FVp.AfterSweep) = t.f()
+_fp_ref!(s, f::Function) = f()          # an operator's whole-field reference
 
 # the reference: base tendencies, the velocity predictor, the post
 # operators' whole-field forms, then the scalars' predictor (the order of
@@ -164,7 +172,9 @@ end
 function _fp_sweep!(a, mesh, Δt, post, rk3, snap, ns)
     terms = (FVp.BaseTendencies(a.ν),)
     bufs, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, ns, terms)
+    foreach(t -> FVp.prepare!(t, a, Δt), post)
     FVp.blocked_predictor!(bufs, terms, post, _fp_halos!(a), a.u, a.v, a.w, SIMp._Axpy(Δt), s1, s2, mesh)
+    foreach(t -> FVp.finish!(t, a, Δt), post)
     return a
 end
 # the slabs one after another in reverse order, then the edge planes and
@@ -182,6 +192,7 @@ function _fp_sweep_reversed!(a, mesh, Δt, post, rk3, snap, ns)
           m = FVp.grid_metrics(mesh))
     p1, p2 = FVp._sweep_pred(s1), FVp._sweep_pred(s2)
     plan = FVp.post_plan(post, lz)
+    foreach(t -> FVp.prepare!(t, a, Δt), post)
     for s in ns:-1:1
         FVp._b_sweep_slab!(s, terms, post, plan, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
     end
@@ -189,7 +200,54 @@ function _fp_sweep_reversed!(a, mesh, Δt, post, rk3, snap, ns)
         FVp._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)
     end
     FVp._post_deferred!(CPUBackend(serial = true), post, plan, _fp_halos!(a), st, ii, jj, kk, ns)
+    foreach(t -> FVp.finish!(t, a, Δt), post)
     return a
+end
+
+
+# ---------------------------------------------------------------------------
+# the model's post-predictor operators: a synthetic setup for each
+# ---------------------------------------------------------------------------
+
+# two buildings, one across the periodic x boundary; the first air level
+# of every column (the ground wall's level mask, roofs included)
+function _fp_buildings(mesh)
+    sm = SolidMask(mesh)
+    mark_solid!(sm, (x, y, z) -> (40 < x < 80 && 20 < y < 70 && z < 60) ||
+                                 ((x > 170 || x < 20) && 90 < y < 130 && z < 35))
+    m = mesh
+    lev = [something(findfirst(k -> !sm.mask[m.Hx+i, m.Hy+j, m.Hz+k], 1:m.Nz), m.Nz + 1) for i in 1:m.Nx, j in 1:m.Ny]
+    return sm, lev
+end
+# an elevated, patchy crown (levels 9-14, so the sweep reaches it inside
+# its slabs as well as on their edges)
+function _fp_lad(mesh)
+    rng = Xoshiro(22)
+    lad = zeros(mesh.Nx, mesh.Ny, mesh.Nz)
+    for k in 9:14, j in 1:mesh.Ny, i in 1:mesh.Nx
+        (i + j) % 3 == 0 || (lad[i, j, k] = 0.5 + rand(rng))
+    end
+    return lad
+end
+# a tiled surface (one street tile per column, forced at level 3), its
+# drag replaced by a random one over 14 levels
+function _fp_tiles(sim)
+    m = sim.mesh
+    cols = Matrix{Union{Nothing,Aeolus.Urban.ParentColumn}}(nothing, m.Nx, m.Ny)
+    for I in CartesianIndices((m.Nx, m.Ny))
+        st = SlabLand(; T = 308.0, C_s = 1e6, albedo = 0.12, emissivity = 0.95, z0m = 0.5, β = 0.0)
+        cols[I] = Aeolus.Urban.ParentColumn(SurfaceMosaic([st], [1.0]), UInt8[1], [0.0], [3], 3)
+    end
+    z = zeros(m.Nx, m.Ny)
+    pl = Aeolus.Urban.ParentLanduse(m.Nx, m.Ny, m.dx, 0.0, 0.0, 1, zeros(Int, m.Nx, m.Ny, 5), z, z, z, String[])
+    ps = Aeolus.Urban.ParentSurface(pl, zeros(m.Nx, m.Ny, 5), z, z, z, z, z,
+                                    [m.z0 + (k - 0.5) * m.dz for k in 1:m.Nz], nothing, cols)
+    d0 = CPp.Domain(sim; validate = false)
+    ts = CPp.build(Aeolus.Urban.TiledUrbanSurface,
+                   (; surface = ps, period = 60.0, u_min = 0.5, reference = isentropic_reference(m; θ_const = 300.0)), d0)
+    ts.drag = 0.05 .* rand(Xoshiro(538), m.Nx, m.Ny, 14)
+    ts.drag_den = ones(m.Nx, m.Ny, 14, 2)
+    return ts, CPp.Domain(sim; components = (CPp.CentredAdvection(), ts), validate = false)
 end
 
 @testset "fused sweep: post-predictor operators (#533 step 6)" begin
@@ -245,6 +303,108 @@ end
                             @test ok
                         end
                     end
+                end
+            end
+        end
+    end
+end
+
+
+# ---------------------------------------------------------------------------
+# 2. each operator of the model inside the sweep = its whole-field method
+# ---------------------------------------------------------------------------
+
+gU = RegularGrid(; size = (20, 16, 24), extent = (200.0, 160.0, 120.0), halo = (3, 3, 3))
+ugrids = (("periodic", FieldBoundaryConditions(:periodic)),
+          ("walls", FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)))
+
+# Each setup: (name, mk(sim, Δt) -> (post terms, reference closure, diagnostics closure)).
+# The diagnostics closure returns what the operator records besides the
+# velocity (forces, wall statistics, u*), compared with `agree` as well.
+function _fp_setups(sm, lev, lad)
+    wind = 3.0 .+ rand(Xoshiro(7), gU.Nx, gU.Ny)
+    height = fill(gU.dz, gU.Nx, gU.Ny)
+    return (
+        ("kinematic flow", (s, Δt) -> begin
+            pu, pv, pw = (0.2 .* randn(Xoshiro(n), size(s.u.data)) for n in 1:3)
+            ((CPp.KinematicFlowTerm(pu, pv, pw),),
+             () -> (copyto!(s.u.data, pu); copyto!(s.v.data, pv); copyto!(s.w.data, pw)), () -> ())
+        end),
+        ("IBM, τ = 0", (s, Δt) -> ((ibm_correction_term(sm; dt = Δt),),
+                                   () -> implicit_ibm_correction!(s, sm; dt = Δt), () -> ())),
+        ("IBM, τ = 2 s (each face scaled once per solid cell)",
+         (s, Δt) -> ((ibm_correction_term(sm; τ = 2.0, dt = Δt),),
+                     () -> implicit_ibm_correction!(s, sm; τ = 2.0, dt = Δt), () -> ())),
+        ("tiled surface's canopy drag (#538)", (s, Δt) -> begin
+            ts, d = _fp_tiles(s)
+            ((FVp.post_sweep_term(ts, d, Δt),), () -> CPp.run_stage!(ts, d, Val(:post_predictor), Δt), () -> ())
+        end),
+        ("resolved canopy drag", (s, Δt) -> begin
+            dr = ResolvedCanopyDrag(gU, lad; C_d = 0.2)
+            F = Ref{Any}(nothing)
+            ((canopy_drag_term(dr, s, Δt),), () -> (F[] = apply_canopy_drag!(s, dr, Δt)),
+             () -> (F[] === nothing ? Tuple(canopy_drag_force(dr, s.mesh, Δt)) : Tuple(F[])))
+        end),
+        ("facade wall stress", (s, Δt) -> begin
+            iw = immersed_walls(s, sm, RoughLogLaw(0.05))
+            ((immersed_wall_term(iw, Δt),), () -> apply_immersed_wall_stress!(s, iw, Δt),
+             () -> (iw.stats[:F]..., iw.stats[:τA], iw.stats[:area], iw.stats[:τ_min]))
+        end),
+        ("ground wall stress, first level", (s, Δt) -> begin
+            wm = WallModel(RoughLogLaw(0.1))
+            t = wall_stress_term(s, wm, Δt)
+            F = Ref{Any}(nothing)
+            ((t,), () -> (F[] = apply_wall_stress!(s, wm, Δt)),
+             () -> (F[] === nothing ? t.F[] : Tuple(F[])))
+        end),
+        ("ground wall stress, roofs, matching wind, u* out", (s, Δt) -> begin
+            wm = WallModel(RoughLogLaw(0.1))
+            us, wo = zeros(gU.Nx, gU.Ny), zeros(gU.Nx, gU.Ny)
+            kw = (mask = lev, wind = wind, height = height, ustar = us, wind_out = wo)
+            t = wall_stress_term(s, wm, Δt; kw...)
+            F = Ref{Any}(nothing)
+            ((t,), () -> (F[] = apply_wall_stress!(s, wm, Δt; kw...)),
+             () -> (F[] === nothing ? t.F[] : Tuple(F[]), copy(us), copy(wo)))
+        end),
+        ("urban chain: IBM, facades, ground, canopy", (s, Δt) -> begin
+            iw = immersed_walls(s, sm, RoughLogLaw(0.05))
+            wm = WallModel(RoughLogLaw(0.1))
+            dr = ResolvedCanopyDrag(gU, lad; C_d = 0.2)
+            ((ibm_correction_term(sm; dt = Δt), immersed_wall_term(iw, Δt), wall_stress_term(s, wm, Δt; mask = lev),
+              canopy_drag_term(dr, s, Δt)),
+             () -> (implicit_ibm_correction!(s, sm; dt = Δt); apply_immersed_wall_stress!(s, iw, Δt);
+                    apply_wall_stress!(s, wm, Δt; mask = lev); apply_canopy_drag!(s, dr, Δt)),
+             () -> (iw.stats[:τA], iw.stats[:F]...))
+        end),
+    )
+end
+
+_fp_diag_agree(a, b) = all(i -> agree(collect(Float64, Iterators.flatten(a[i])), collect(Float64, Iterators.flatten(b[i]))),
+                           eachindex(a))
+
+@testset "$oname: inside the sweep = its whole-field method" for (oname, _) in _fp_setups(_fp_buildings(gU)..., _fp_lad(gU))
+    sm, lev = _fp_buildings(gU)
+    setup = Dict(_fp_setups(sm, lev, _fp_lad(gU)))[oname]
+    for (bname, bcs) in ugrids, rk3 in (false, true), (bn, b) in _FP_BACKENDS
+        with_backend(b) do
+            mk() = _fp_seed!(BoussinesqSimulation(gU; ν = 1e-2, bcs = bcs); U = 2.0)
+            Δt = 0.5
+            r = mk()
+            snap = (copy(r.θ.data), copy(r.qv.data))
+            post, ref, diag = setup(r, Δt)
+            _fp_reference!(r, gU, Δt, (ref,), rk3, snap)
+            dr = diag()
+            r0 = _fp_reference!(mk(), gU, Δt, (), rk3, snap)
+            @test !agree(interior_view(r.u), interior_view(r0.u)) || !agree(interior_view(r.w), interior_view(r0.w))
+            for ns in 1:5
+                for rev in (false, true)
+                    (rev && (ns == 1 || bn != "serial")) && continue
+                    a = mk()
+                    post, ref, diag = setup(a, Δt)
+                    (rev ? _fp_sweep_reversed! : _fp_sweep!)(a, gU, Δt, post, rk3, snap, ns)
+                    ok = _fp_agree(a, r) && _fp_diag_agree(diag(), dr)
+                    ok || println("  [#533 s6] $oname: mismatch $bname rk3=$rk3 $bn ns=$ns reversed=$rev")
+                    @test ok
                 end
             end
         end

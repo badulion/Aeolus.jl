@@ -29,3 +29,6 @@ end
 run_stage!(c::VegDrag, case, ::Val{:post_predictor}, dt) =
     (apply_canopy_drag!(case.sim, c.drag, dt); nothing)
 
+
+# in the fused sweep (#533 step 6): the same drag on the sweep's delayed rows
+FiniteVolume.post_sweep_term(c::VegDrag, d, Δt) = Aeolus.PlantCanopy.canopy_drag_term(c.drag, d.state, Δt)
