@@ -3190,6 +3190,124 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+**Step 7: budgets inside the sweep** (branch `issue/533-s7-budgets`, on
+top of step 1). Budgets on no longer force one loop per term
+(`builtin.budgets` left the allowlist). What was built:
+- **Booked terms** (`src/operators/fused_sweep_budgets.jl`):
+  `BookedTerm(term, sums, slot)` wraps the sweep term of an attributed
+  in-core component. It adds exactly what its term adds; per row it sums
+  each booked field of the tendency buffer (u, v, θ, qv: the core
+  tendencies of the momentum, energy and water budgets) over i before and
+  after the term's `add_row!` (air cells only where the budget's meter
+  leaves solid cells out) and adds the difference to
+  `LevelSums.acc[f, slot, k]`. The rows are in L1, so this moves no DRAM
+  bytes. No reduction across threads is needed: every row (j, k) of a
+  slab, edge planes included, is computed by that slab's task, so each
+  level's sum has one writer, and its summation order (i in a row, rows in
+  j order) does not depend on the slab count.
+- **`finish_sweep!(t, sim, Δt)`**, a new optional method of the term
+  interface, called after the sweep and before the projection (default
+  nothing).
+- **The budget term** (`Components.SweepBudget`, components/budgets.jl):
+  with the budgets on, `hook_terms` returns `(SweepBudget, terms…)`, the
+  attributed components' terms wrapped as `BookedTerm`s (an entry with
+  `attributed(c, Val(stage)) = false` stays unwrapped and its effect stays
+  in the dynamics' share, as before). Its `prepare!` counts the substage
+  (the hook's `_count_substage!`, so the RK3 weights and the discard of a
+  retried step work unchanged) and zeroes the sums. Its `finish_sweep!`
+  books `weight × Δt × w_k × acc` per component and quantity through the
+  new `BudgetSystem.book_context!`. That function does what
+  `budget_open!` … `budget_close!` of a nested tendency context does with
+  a change measured elsewhere: it counts as booked for the dynamics'
+  context, and it is deferred while that context is open. It is built
+  once per domain (cached in `DomainBudgets.sweep`); `hook_terms` stays
+  `@inferred` and allocates 0 bytes.
+- **Compatible with #539 (PR #541, not merged)**: the sweep books every
+  quantity whose core tendency it holds. For a quantity a component's
+  `budget_writes` leaves out, the per-level sums are exactly 0 and nothing
+  is booked, the same outcome as #541's skipped nested context. At
+  integration: the extra `verify` field of `DomainBudgets` next to
+  `sweep`, and `book_context!` may set #541's `changed` flag. The sums
+  read the meter's mask through `!iszero` / `Bool`, so they work with
+  both #541's one-byte mask and the `Float64` mask on this base.
+
+**Tests** (`test/fused_sweep_budgets.jl`, 657 assertions):
+- The level sums of a pointwise term (u, v, w, θ, qv, with a heating
+  profile) and of a radius-2 term (3-row ring, 2 edge planes) match the
+  per-level sums of the terms' whole-field contributions, for 1–5 slabs
+  (also in reverse slab order), serial and threaded, regular and
+  stretched grids, dry and moist, θ and qv masked by a random solid mask.
+  Largest relative difference: 8.6e-12 (tolerance 1e-10, round-off of the
+  before/after cancellation, eps × Σ|t|). Booking does not change the
+  state.
+- A domain with budgets on (energy, momentum_x, momentum_y; water when
+  moist) and three in-core components, one of them not attributed, runs
+  fully fused (`loop_fusion = "always"`). Its budgets agree term by term
+  with the same domain on one loop per term (`"never"`, the reference
+  contexts on the whole tendency fields). This holds for Euler and RK3,
+  regular and stretched grids, dry and moist. Largest difference: 2.2e-14
+  of the largest term.
+- The closure stays within the existing 1e-12 of the largest term. The
+  attributed heating equals the analytic ρ₀ c_p Σ_k Q_k Δz_k n_air,k/(Nx
+  Ny) t to 1e-12. The fused run makes exactly 2 passes fewer per
+  attributed component, quantity and substage.
+- A retried adaptive step (a term whose `prepare!` throws on the first
+  attempt) books its fused in-core term once.
+- The sweep with booked terms allocates 0 bytes.
+- In `test/fused_sweep.jl`, the step-1 assertion "budgets on → reported
+  `builtin.budgets`" is gone; it was expected to go in this step.
+- Targeted suites green: fused_sweep, fused_sweep_budgets,
+  budgets_output, components_both_cores, config_simulation_driver,
+  model_nesting, nest_twoway, urban_run, urban_checks (1883 assertions).
+
+**Measured** (`bench_budgets.jl`, a scratch script). The case is
+synthetic: 128³ periodic Boussinesq RK3, centred advection, and one
+`:body_force` component with a sweep term (pointwise damping of u, v, θ).
+Its buoyancy is switched off, because no real component or built-in term
+other than the base has a fused form on this branch (plan steps 2–6).
+Budgets: energy, momentum_x, momentum_y. The variants were interleaved in
+one process, 4 steps × 6 repetitions, minimum s/step, under the
+benchmark lock. Other agents' unlocked jobs kept the 1-minute load at 4–8
+and the power cap (#535) applies, so the absolute 12-thread numbers moved
+by up to 2× between processes; compare only within a row.
+
+| threads, run | fused off | fused on | per-term loops off | per-term loops on |
+| :-- | --: | --: | --: | --: |
+| 12, a | 0.1254 | 0.1261 | 0.1396 | 0.1744 |
+| 12, b | 0.1756 | 0.1715 | 0.1923 | 0.2123 |
+| 1, a | 0.2024 | 0.2268 | 0.2147 | 0.2480 |
+| 1, b | 0.2271 | 0.2336 | 0.2300 | 0.2523 |
+
+- Budget passes per step: **9** fused (one per quantity at the step's
+  start, the dynamics' close and the step's end), against **27** on one
+  loop per term (+2 per in-core component, quantity and substage). The
+  modelled bytes of those passes on this base (field + `Float64` mask,
+  16 B/pt per pass) are 144 against 432 B/pt per step, and half that
+  with #541's mask. The booking itself adds no DRAM traffic.
+- Split at 1 thread (profile of 15 fused steps, budgets on): the meter
+  passes take 4.3 % of the step and the row sums of the booked term
+  3.3 %. Micro-benchmark of one 128³ sweep: 15.4 → 16.1–17.7 ms with
+  booking at 1 thread (+4–14 %), 4.0–4.3 → 4.3–4.4 ms at 12 threads
+  (+2–8 %); one meter pass is 0.4–0.7 ms.
+- Result: with loop fusion, budgets on cost 0–3 % of the step at 12
+  threads and 3–12 % at 1 thread. On one loop per term they cost
+  10–25 %.
+- **Not measured**: Berlin and a configured non-urban case (they do not
+  run fused before plan steps 2–6), 2/6/24 threads, and bytes per step
+  against `bench_roofline.jl`.
+
+**Deviations**:
+- The issue's "per-thread, per-level partial sums reduced after the
+  sweep" became per-level sums with one writer each, because the slabs
+  own their levels. The GPU per-point form (plan step 8) will need real
+  per-thread partial sums.
+- A row sums the whole booked row before and after each booked term
+  rather than the per-point difference. This works for row-form terms
+  too, at the price of one cancellation per row, which is no worse than
+  the reference's per-level cancellation.
+- Possible later saving: adjacent booked terms could reuse the previous
+  term's "after" sums as their "before" sums, halving the row sums.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
