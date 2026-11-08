@@ -22,7 +22,7 @@
 #     ROUNDOFF_RTOL, integer data exactly); the differing keys are listed
 #     otherwise.
 #     AEOLUS_THREAD_SECTIONS selects sections (default
-#     "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,advection,sgs";
+#     "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,canopy,advection,sgs";
 #     reductions: the KA-b #296 reduction call sites; nested: short nested
 #     runs, KA-f #297; fft: every spectral pressure solver with FFTW on the
 #     process's threads, KA-h #298; fv: the finite-volume kernels and a
@@ -31,7 +31,8 @@
 #     steps: every step core, KA-j #306; hooks: the dynamics hooks and
 #     immersed-wall operators, KA-k #307; radiation: radiosity, optics,
 #     two-stream, cloud shadow, Monte Carlo and superdroplets, KA-n #305;
-#     columns: the column-physics kernels, KA-m #301; advection: scalar
+#     columns: the column-physics kernels, KA-m #301; canopy: the tiled
+#     surface's canopy drag, #538; advection: scalar
 #     transport, limiter, momentum advection, KA-e #302; sgs: every SGS
 #     closure's coefficients, commits and short LES runs, KA-l #304).
 #     Every port PR runs and quotes it:
@@ -100,7 +101,7 @@ ti_read(path) = Dict{String,Any}(deserialize(path))
 
     if get(ENV, "AEOLUS_THREAD_TESTS", "0") == "1"
         counts = parse.(Int, split(get(ENV, "AEOLUS_THREAD_COUNTS", "1,4,24"), ','))
-        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,advection,sgs")
+        sections = get(ENV, "AEOLUS_THREAD_SECTIONS", "primitives,dns,reductions,smoke,flagship,nested,fft,fv,pcg,multigrid,steps,radiation,hooks,columns,canopy,advection,sgs")
         project = dirname(Base.active_project())
         dir = mktempdir()
         results = Dict{Int,Dict{String,Any}}()

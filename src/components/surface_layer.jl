@@ -229,13 +229,20 @@ const _SL_RK3_WEIGHTS = (1 / 6, 1 / 6, 2 / 3)
 # stage 8: the wall stress on the predicted velocity, every (sub)step; the
 # plane-mean stress the step applied, weighted as the scheme combines its substages
 function run_stage!(c::SurfaceLayer, d, ::Val{:post_predictor}, dt)
-    s = d.state; m = s.mesh
+    _sl_post_begin!(c)
+    F = apply_wall_stress!(d.state, c.wm, dt; side = :bottom)
+    _sl_post_end!(c, F, d.state.mesh)
+    return nothing
+end
+function _sl_post_begin!(c::SurfaceLayer)
     c.nsub[] += 1
     # the first substage of an attempt (a retried adaptive step repeats the
     # core step without the stages before it) starts the step's sums afresh
     (!c.rk3 || mod1(c.nsub[], 3) == 1) && (c.τ[3] = 0.0; c.τ[4] = 0.0)
+    return nothing
+end
+function _sl_post_end!(c::SurfaceLayer, F, m)
     w = c.rk3 ? _SL_RK3_WEIGHTS[mod1(c.nsub[], 3)] : 1.0
-    F = apply_wall_stress!(s, c.wm, dt; side = :bottom)
     A = m.Lx * m.Ly
     c.τ[3] += w * (-F.Fx) / A
     c.τ[4] += w * (-F.Fy) / A
@@ -244,6 +251,28 @@ function run_stage!(c::SurfaceLayer, d, ::Val{:post_predictor}, dt)
     end
     return nothing
 end
+
+# The wall stress in the fused sweep (#533 step 6): the row form of
+# `apply_wall_stress!` (`WallModels.wall_stress_term`), with the stage's
+# substage count and stress sums around it
+struct SurfaceLayerPostTerm{C<:SurfaceLayer,W<:FiniteVolume.PostTerm} <: FiniteVolume.PostTerm
+    c::C
+    t::W
+end
+FiniteVolume.footprint(p::SurfaceLayerPostTerm) = FiniteVolume.footprint(p.t)
+FiniteVolume.post_row!(p::SurfaceLayerPostTerm, ph::Val{1}, j, k, i1, i2, st) = FiniteVolume.post_row!(p.t, ph, j, k, i1, i2, st)
+FiniteVolume.post_row!(p::SurfaceLayerPostTerm, ph::Val{2}, j, k, i1, i2, st) = FiniteVolume.post_row!(p.t, ph, j, k, i1, i2, st)
+FiniteVolume.prepare!(p::SurfaceLayerPostTerm, sim, Δt) = _sl_post_begin!(p.c)
+function FiniteVolume.finish!(p::SurfaceLayerPostTerm, sim, Δt)
+    FiniteVolume.finish!(p.t, sim, Δt)
+    Fx, Fy = p.t.F[]
+    _sl_post_end!(p.c, (Fx = Fx, Fy = Fy), sim.mesh)
+    return nothing
+end
+FiniteVolume.post_sweep_term(c::SurfaceLayer, d, Δt) =
+    SurfaceLayerPostTerm(c, wall_stress_term(d.state, c.wm, Δt; side = :bottom))
+# (a domain runs its whole-field stage after the sweep: footprint 1)
+post_after_sweep(::SurfaceLayer) = true
 
 # ---------------------------------------------------------------------------
 # diagnostics: the outputs

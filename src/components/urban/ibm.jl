@@ -36,3 +36,8 @@ function smoke_check(c::IBMCoupling, case)
             "|u_h| inside the buildings < 0.3 × max outside" => u_in < 0.3 * u_out]
 end
 
+
+# in the fused sweep (#533 step 6): the same correction on each row right
+# after its predictor
+FiniteVolume.post_sweep_term(c::IBMCoupling, d, Δt) =
+    Aeolus.IBM.ibm_correction_term(c.sm; τ = 0.0, dt = Δt)

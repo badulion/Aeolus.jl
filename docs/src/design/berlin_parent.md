@@ -122,8 +122,15 @@ shortwave and longwave of the last radiation call. A tile forced at level
 below it, ``1 … \max(1, k_i − 1)``, uniformly per volume over their depth
 ``Z_i``: ``\dot θ_k = f_i H_i/(Z_i ρ̄_k c_p Π̄_k)`` (the child's
 `ref_θ_per_heat` conversion), ``\dot q_k = f_i E_i/(Z_i ρ̄_k)``, and the
-stress as an implicit deceleration along the wind
-(`apply_parent_drag!`, post-predictor). The held sources are delivered
+stress as an implicit deceleration along the wind (the
+`:post_predictor` stage of `TiledUrbanSurface`, ``u ← u/(1 + Δt a/U)``
+at every u and v face of the canopy levels, ``a`` the mean of the two
+columns the face separates). Since #538 both face factors come from the
+pre-drag velocities (Jacobi: independent of the loop order and the
+thread count; two threaded launches), and a non-periodic west or south
+face takes its neighbour from the boundary conditions: an open face's
+normal velocity is the boundary's and gets no drag, a no-flux face takes
+the drag of the column it bounds, never the opposite edge's. The held sources are delivered
 exactly over the time each surface step covers (a step that crosses the
 end of an interval takes the next surface step's sources for the rest),
 so the air receives what the tiles gave away: the smoke test checks the

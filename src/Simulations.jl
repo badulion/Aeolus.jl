@@ -30,7 +30,7 @@ using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gr
                                 _divergence_into!
 # the blocked tendency + predictor sweep (SC-e, #405)
 using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
-                                sweep_term, prepare!
+                                sweep_term, prepare!, PostTerm, post_sweep_term, finish!
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
@@ -425,9 +425,12 @@ of the separate passes within round-off; the tendency fields
 the base tendencies (the built-in momentum advection and the molecular
 diffusion) and the pipeline components that provide a sweep term
 qualify: any SGS closure, buoyancy, Coriolis, surface flux, sponge, a
-`body_force!` function, a `post_predictor!` hook or open boundaries keep
-the substage with one loop per term, which the simulation records once
-with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`).
+`body_force!` or `post_predictor!` function or open boundaries keep the
+substage with one loop per term, which the simulation records once with
+the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`). The pipeline's
+post-predictor components run inside the sweep on the rows behind the
+predictor when they have a post term
+([`FiniteVolume.post_sweep_term`](@ref Aeolus.Operators.FiniteVolume.post_sweep_term)).
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):

@@ -2714,6 +2714,40 @@ compiler-flag provenance remain.
   - The old name is rejected only where no surface publishes `surface_temperature`. With `"most"` or `"tiles"` the name is valid, with its new meaning.
   - The tiles of a blended mosaic are evaluated at their own forcing levels, not at the blending height.
 
+### Canopy drag of the tiled surface (#538)
+
+**A threaded, order-independent drag that does not wrap across open faces** (#538, from the kernel-by-kernel measurement of #531). See [the parent's surface coupling](berlin_parent.md#Surface-coupling).
+
+- **What was built.** The `:post_predictor` stage of `TiledUrbanSurface`, ``u ← u/(1 + Δt a/U)`` at the u and v faces of the canopy levels, was a serial k, j, i loop on the main thread that damped u in place and then read it for the v face (Gauss–Seidel, loop-order dependent), with a periodic wrap (`im = i == 1 ? Nx : i - 1`) at every lateral face. It is now:
+  - two launches over the canopy points: the u and v face denominators from the pre-drag velocities (Jacobi) into a scratch array of the component (`drag_den`), then the division; each point writes only its own two faces, so the result does not depend on the loop order or the thread count;
+  - the neighbour column of a west/south boundary face from the boundary conditions, through the existing helpers: periodic, the opposite edge (as before); a face whose normal velocity the boundary fixes (`pinned_face_indices`: an open face), no drag, since that value is the boundary's and the open-boundary update overwrites it; any other non-periodic face (no-flux), the drag of the column it bounds (`neighbor_index`, one-sided). The east/north boundary faces lie in the halo and were never touched;
+  - the halos of u and v filled first (the old loop read the halo values left from before the predictor);
+  - the speed as ``\sqrt{u^2 + \bar v^2}`` instead of `hypot` (3× cheaper in this kernel), and the denominators launched with a work weight (`DRAG_POINT_WEIGHT = 8`, ten loads, two roots and two divisions per point): Berlin's canopy is one level, 40,000 points, which unweighted ran on two tasks at any thread count (the launch's 16,384 points per task).
+- **Discretisation reference.** PALM's canopy drag (`plant_canopy_model_mod.f90`, `pcm_tendency`, u component): the speed at a u face with v averaged from its four neighbours, and the u loop starting at `nxlu`, which skips the boundary face of a non-cyclic inflow or radiation boundary (`init_pegrid.f90`). The open-face rule here is the same. PALM takes the cell's LAD at a face, rather than averaging (sharp canopy edges); the face mean of the two columns is kept, as it was.
+- **Measured** (Berlin 100 m config, 200 × 200 × 60, open ERA5 faces, warm state after 6 steps, FFTW `estimate`, under the shared bench lock; the stage per call, median of 200 calls, the old code on the same commit in a separate worktree, interleaved; 3 calls per step):
+
+  | threads | 1 | 2 | 6 | 12 |
+  | :-- | --: | --: | --: | --: |
+  | drag stage before (ms/call) | 2.10 | 2.12 | 2.14 | 2.12 |
+  | after (ms/call, incl. the u, v halo fill) | 0.36 | 0.24 | 0.24 | 0.21 |
+  | of which the halo fill (ms) | 0.13 | 0.11 | 0.07 | 0.07 |
+  | per step, before → after (ms) | 6.3 → 1.1 | 6.4 → 0.7 | 6.4 → 0.7 | 6.4 → 0.6 |
+  | Berlin step median before / after (ms, 20 steps) | 488.3–500.5 / 485.4–493.6 | 330.3 / 327.7 | 239.3 / 240.3 | 243.7 / 238.6 |
+
+  The step saving (0.4–5 ms by the stage numbers) is not resolved at any thread count: at 1 thread three interleaved runs of the old code gave 488.3, 492.4 and 500.5 ms and three of the final code 493.6, 492.6 and 485.4 ms; at 2, 6 and 12 threads the differences (−2.6, +1.0, −5.1 ms) are inside the run-to-run spread of about ±5 ms. Two runs of the intermediate `hypot` code at 1 thread were elevated (578.2 and 533.0 ms, the latter interleaved with 488.3 ms of the old code) although its drag stage took only 1.1 ms; the final code did not reproduce this. The stage numbers carry the result. The stage allocates about 30 KB per call when threaded (the halo fill and the two launches' tasks; 0 B at 1 thread), about 90 KB per step against 7.6 MB per step for the whole Berlin step at 12 threads. Kernel micro-benchmark (200 × 200 × 1, the two launches, without the fill): `hypot` unweighted 0.75 / 0.43 / 0.77 / 0.82 ms at 1/2/6/12 threads; `sqrt` with weight 8: 0.24 / 0.14 / 0.08 / 0.07 ms.
+- **Against the old loop**, on the warm Berlin state, one call at Δt = 2 s: interior faces (2…N) differ by at most 3.7e-5 m/s in u and 2.9e-4 m/s in v, against a drag change of up to 8.1e-2 (u) and 3.1e-2 m/s (v) in that call: the Gauss–Seidel ordering's second-order term. The west u and south v boundary faces (open) were damped by up to 1.1e-2 and 1.2e-2 m/s by the drag of the opposite edge; now 0 (and the open-boundary update overwrites them in both versions).
+- **Tests** (`test/components_parent.jl`, three new testsets):
+  - a uniform wind with a drag recomputed from it, ``a = cU^2`` (``du/dt = -c|U|u``): the implicit step is ``1/u ← 1/u + cΔt``, exact, so 100 steps agree with ``u_0/(1 + cu_0t)`` to 1e-12; a uniform (u, v) keeps its direction to 1e-14; a held a (``du/dt = -a``) converges at first order: errors 0.143, 0.076, 0.039 m/s at Δt = 4, 2, 1 s (ratios 1.88, 1.94);
+  - a random 40 × 30 field against an explicit Jacobi reference applied in reverse loop order, with the serial and the threaded backend (`with_backend`, threshold 1): 1e-14; the threaded backend is threaded only when the suite runs with more than one thread (passes at `test/run.jl --threads 4`; at the default of 1 thread both run serially); against the former loop: 2.6e-3 (u) and 3.7e-3 m/s (v), below 0.1 × the drag change (0.197 m/s) and ε² max|U|;
+  - periodic, open and no-flux boxes with a strong drag in the last column and row: the periodic box damps the west/south boundary faces (wrap), the open box leaves them at the boundary values, the no-flux box applies the bounding column's drag (zero there, and the full a₁, not (a_Nx + a₁)/2, when only column 1 drags); the interior faces next to the strong column agree with the periodic box to 1e-14. With a drag in column 1 and row 1 as well, the open box still keeps the boundary values while the no-flux box damps the faces (u < 2, v < 0.5 m/s): this subtest fails (2 of 126) with the `pinned_face_indices` check removed, which the first version of the test did not (review finding);
+  - the thread-invariance harness has a new section `canopy` (one drag on a random 96 × 80 wind, two canopy levels, threaded launches): `AEOLUS_THREAD_TESTS=1 AEOLUS_THREAD_SECTIONS=canopy AEOLUS_THREAD_COUNTS=1,4,12`, 10 pass, 0 fail. It is its own section because `columns` currently stops at its aq_chem emissions case (the Berlin smoke config is rejected: `parent_driver = "aeolus"` without a parent domain), which predates this issue.
+  - Targeted runs: `components_parent`, `config_parent_domain`, `urban_run`, `urban_checks`, `plant_canopy`, `naming_conventions` 230 pass, 0 fail; validation `urban_checks.jl` 33 pass, 0 fail (313 s, and 315 s after the review fixes). Full suite after the review fixes: 4482 pass, 0 fail (116 jobs, 514 s).
+- **Test expectation that was wrong.** The first open-box test expected the pinned west face to keep the interior's 5 m/s; it held 0, because the box's boundary data had not been loaded (`update_open_boundaries!`) and the halo fill writes the data into that face. The code was right; the test now loads the data first, as a run does.
+- **Deviations from the issue's plan:**
+  - The drag is a launch over (i, j, k) in two passes, not one: a single pass cannot read the pre-drag neighbours that other work items write. The scratch is a component field, built with an outer constructor of the old arity so `build` is unchanged.
+  - At an open face the boundary-normal face is skipped (PALM's choice) rather than given a one-sided drag; one-sided averaging is used at a no-flux face, which has no boundary data.
+- **Open:** `PlantCanopy.ResolvedCanopyDrag` averages its LAD to the faces with the same periodic wrap at construction ("as the LES is horizontally periodic"); a vegetated column at an open edge would see the opposite edge's leaves. Not in the Berlin run, and left for its own issue. With #533 this pointwise drag becomes a `:post_predictor` term of the fused sweep.
+
 ---
 
 # Data assimilation and inverse problems
@@ -3189,6 +3223,154 @@ term's ry = 1 included), the same rule counted from the base. Plan step
 sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
+
+**Step 6: post-predictor operators inside the sweep** (branch
+`issue/533-s6-post-predictor`, from `issue/533-sweep-interface`, with
+#538 / PR #543 merged in so the tiled surface's drag is built on its
+order-independent Jacobi form). What was built:
+- **The interface** (`src/operators/fused_sweep.jl`): `PostTerm`, built by
+  `post_sweep_term(x, ctx, Δt)` (`nothing` = not expressible), with
+  `footprint`, `prepare!`, `finish!` and the row kernel
+  `post_row!(t, Val(1|2), J, K, I1, I2, st)`: phase 1 computes the
+  factors of a row from values no face of the operator has changed yet,
+  phase 2 applies them (Jacobi, as the whole-field operators).
+  `AfterSweep(f)` is an operator that needs the whole predicted field:
+  `f()` runs after the sweep, and so does every operator after it.
+- **The driver**: a new `blocked_predictor!(bufs, terms, post, halo!, …)`
+  method (the old signature calls it with no post terms). A footprint-0
+  term runs on a row right after its predictor; a term of y-radius `r`
+  computes factors `r` rows and applies them `2r` rows behind its input
+  (`post_plan`: per term the factor and apply widths in x, y, z and the
+  two delays, growing by each term's radius). Points whose stencil
+  reaches a halo, a slab's edge planes or a point an earlier term
+  deferred run after the sweep in the same two phases, with the velocity
+  halos filled (`_post_deferred!`). The slab loop is one loop over
+  `t in j1 : j2 + lag + post_delay`.
+- **The model's operators** as post terms, each against its existing
+  whole-field method: `KinematicFlowTerm` (radius 0), `IBMCorrectionTerm`
+  (radius 0; a face scaled once per adjacent solid cell, the boundary
+  faces in `finish!`), `CanopyDragTerm` (`PlantCanopy`, footprint 1),
+  `ImmersedWallTerm` (facades, footprint 1), `WallStressTerm` (bottom
+  wall, local formulation; wrapped by `SurfaceLayerPostTerm` and by the
+  urban ground's `GroundStressTerm`) and `TiledDragTerm` (#538's
+  kernels). The sparse face lists get row pointers (`row_index`,
+  compressed sparse rows) and a row's x-range is found by bisection
+  (`row_entries(ptr, r, x, I1, I2)`). The ground stress runs as an
+  `AfterSweep` for TBLE, non-local formulations or an unprimed matching
+  filter; the facades when their pairs are not sorted.
+- **Removed from `SWEEP_FALLBACKS`**: `Components.KinematicFlow`,
+  `Urban.VegDrag`, `Urban.IBMCoupling`, `Urban.SurfaceExchangeMOST`,
+  `Urban.TiledUrbanSurface`. `builtin.post_predictor` now names only a
+  `post_predictor!` passed to the core as a plain function; the
+  `SurfaceLayer` and `WallModelFacades` entries keep only their
+  tendency parts (plan step 5). The completeness guard
+  (`test/fused_sweep.jl`) checks per stage.
+
+**Measured** (`benchmarks/bench_post_sweep.jl 128 64 15`: 128² × 64
+cells, 16 buildings, 26 368 facade pairs, 150 528 canopy faces; one
+Euler substage of advection + diffusion + predictor + the IBM correction,
+facade and ground wall stress and canopy drag; ms per substage, median
+of 15 calls interleaved call by call between the four forms within one
+process, each process about a minute, under the benchmark lock; Ryzen AI
+9 HX 370 at the 15 W cap):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 11.42 | 9.49 | 7.98 | 7.03 |
+| sweep, all four after it | 10.09 | 7.12 | 6.15 | 5.32 |
+| sweep, all four on its rows | 13.99 | 11.34 | 9.59 | 8.56 |
+| sweep, what a domain runs | 10.15 | 7.31 | 6.39 | 5.36 |
+
+The row forms of the operators with a stencil are slower than their
+whole-field passes: per operator (1 / 12 threads, increase over the
+sweep alone against the whole-field pass) canopy drag 4.4 / 2.9 ms
+against 2.1 / 1.3 ms, facades 2.6 / 2.0 against 1.5 / 1.4, ground stress
+1.2 / 0.8 against 0.7 / 0.6 (ratio 1.3–2.2× at 12 threads). These
+per-operator numbers come from scratch runs (the committed benchmark
+times only the four forms of the table), as does the bisection figure
+below. The whole-field passes walk a sparse face
+list in one launch; on the rows the same faces are found per row, and at
+many slabs most of them fall in the deferred bands (12 slabs of 5–6
+planes). The pointwise IBM correction on the rows costs what its pass
+costs (0.5 against 0.7 ms at 1 thread, 0.3 against 0.4 at 12, in single-
+operator runs). Hence the last row: a domain keeps footprint-0 terms on
+the rows and runs a component whose term has a stencil through its own
+`run_stage!` after the sweep (`Components._in_rows_or_after`, and
+`Components.post_after_sweep` for the components known to have a stencil,
+so their row form is not built). Against one loop per term, the domain's
+mix is 11 % (1 thread) to 24 % (12 threads) faster **per substage of
+tendencies + predictor + post-predictor operators, without the pressure
+projection, in this synthetic setup with the urban operators** — which in
+a real run stay unfused while the urban site books budgets (deviation 2).
+The gain per step is smaller (the projection is not in it), and no
+configured case was measured: the configurations this step does make
+fusable today are domains with `KinematicFlow` (on the rows) or
+`TiledUrbanSurface` (after the sweep), and `SurfaceLayer` once plan
+step 5 lands. The first
+row-form version (bisection per row, the whole row scanned for each
+x-range) was slower still; the row pointers and the bisection of the
+x-range took the 12-thread canopy increase from 4.0 to 2.9 ms. No
+allocation: `blocked_predictor!` with six post terms allocates 0 bytes
+serial and at most 64 kB threaded (the tasks).
+**Not measured**: bytes per step, 24 threads, the configured cases (the
+urban site stays unfused, below).
+
+**Tests** (`test/fused_sweep_post.jl`, 1538 assertions): the driver
+with synthetic radius-0 and radius-1 Jacobi terms, chained and with an
+`AfterSweep`, against predictor + whole-field passes at 1–5 slabs, the
+slabs also in reverse order, serial and threaded, regular and stretched
+grids, dry and moist, Euler and RK3 stages (round-off tolerance); each
+model operator in the sweep against its whole-field method, diagnostics
+included (`iw.stats`, the ground's `u_star`, the canopy force, the
+surface layer's stress sums); domains with `KinematicFlow` and tiles,
+`loop_fusion = "always"` against `"never"` over 3 steps; the small-city
+urban site's post-predictor hook against the sweep with its couplings
+(row forms and the domain's mix, 1 and 3 slabs); the row pointers and
+bisection against a filter; type stability and allocation. Mutation
+checks: a delay of `r` rows instead of `2r`, dropping the IBM neighbour
+cell and dropping the ground stress's west-column contribution each
+fail. Targeted runs: `fused_sweep.jl`, `fused_sweep_post.jl`,
+`urban_run.jl`, `urban_checks.jl`, `components_parent.jl`,
+`plant_canopy.jl`, `wall_models.jl`, `components_both_cores.jl`,
+`cutcell.jl`, `naming_conventions.jl` pass. After the review fixes:
+full suite 118 / 118 files, 6814 assertions, 0 failures
+(`fused_sweep_post.jl` 1545); validation `urban_checks.jl` 33 / 33,
+`gabls1.jl` 8 / 8.
+
+**Test expectation that proved wrong**: the first surface-layer
+comparison called the reference and the sweep twice without refilling
+the halos between, so the second call compared against stale halos; a
+substage refills them (step 1), and the test now does. The code was
+right.
+
+**Bugs the review caught** (each with a test in `fused_sweep_post.jl`):
+(1) the domain built every post-predictor component's row form each
+substage before deciding to run its `run_stage!` after the sweep; for
+the wall stresses that is three Nx × Ny arrays and the face lists per
+substage (0.19–0.36 ms and about 860 kB at 128² × 64, 1 thread, 2–3.5 %
+of the substage). `Components.post_after_sweep(c)` now decides first;
+the test asserts the hook allocates less than one Nx × Ny plane where
+the row form allocates more. Latent until plan step 5 (the surface layer)
+or step 7 (budgets) lands. (2) With budgets on, both hooks named
+`builtin.budgets`, and the report listed it twice; the blocker list is
+now de-duplicated.
+
+**Deviations**: (1) the operators with a stencil run after the sweep
+in a domain, by the measurement above, not on the delayed rows. Their
+row forms (`CanopyDragTerm`, `ImmersedWallTerm`, `WallStressTerm` /
+`SurfaceLayerPostTerm`, `GroundStressTerm`, `TiledDragTerm`) are tested
+but no configuration runs them; on the rows run only `KinematicFlowTerm`
+and `IBMCorrectionTerm`. Removing `Urban.VegDrag`,
+`Urban.SurfaceExchangeMOST` and `Urban.TiledUrbanSurface` from
+`SWEEP_FALLBACKS` means their substage stays fused with a whole-field
+pass after the sweep, not that they run on the rows. Whether to keep the
+row forms (about 400 lines) is left to review. (2) The urban
+site always books budgets, so its post-predictor hook is not fused
+until plan step 7 (`post_hook_terms` returns `nothing` with budgets);
+its couplings are tested at term level. (3) A term on the rows is not
+timed through `UrbanEntry` (only its `AfterSweep` is). (4) Post terms
+do not read θ or qv: the sweep advances the scalars before them, the
+whole-field order after.
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit

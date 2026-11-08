@@ -175,3 +175,13 @@ function smoke_check(c::WallModelFacades, case)
                 iw.stats[:F_stencil][1] * W.u + iw.stats[:F_stencil][2] * W.v < 0]
 end
 
+
+# The post-predictor stress in the fused sweep (#533 step 6): the same
+# drag and face update on the sweep's delayed rows; the whole-field stage
+# after the sweep when the walls' pair list is not sorted for the row search.
+function FiniteVolume.post_sweep_term(c::WallModelFacades, d, Δt)
+    t = Aeolus.WallModels.immersed_wall_term(c.iw, Δt)
+    t === nothing || return t
+    return FiniteVolume.AfterSweep(() -> run_stage!(c, urban_case(d), Val(:post_predictor), Δt))
+end
+Components.post_after_sweep(::WallModelFacades) = true     # (footprint 1: a domain runs it after the sweep)

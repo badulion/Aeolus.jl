@@ -50,6 +50,7 @@ using ..Aeolus.Fields: set!, interior_view
 using ..Aeolus.Radiation: apply_radiative_cooling!
 using ..Aeolus.SurfaceExchange: has_packed_state, packed_state_length, pack_state!, unpack_state!
 using ..Aeolus.Operators: advect_centered!
+using ..Aeolus.Operators: FiniteVolume     # the post terms of the fused sweep (#533)
 using ..Aeolus.AdvectionSchemes: advect_positive!, FluxLimiterWorkspace
 using ..Aeolus.IBM: SolidMask, mark_solid!
 # the ground: surface classes, footprints and the static driver (CFG-f, #361)
