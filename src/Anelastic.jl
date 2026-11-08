@@ -1186,7 +1186,11 @@ function weighted_momentum_advect!(tu::Field{FaceX,T}, tv::Field{FaceY,T},
 end
 
 # --- u-momentum, west face of cell (i,j,k) --------------------------------
-@inline function _wmom_u_body!(i, j, k, tud, ud, vd, wd, Wc, Wf, idx, idy, idz)
+@inline _wmom_u_body!(i, j, k, tud, ud, vd, wd, Wc, Wf, idx, idy, idz) =
+    (@inbounds tud[i, j, k] -= _wmom_u(i, j, k, ud, vd, wd, Wc, Wf, idx, idy, idz); nothing)
+# the weighted flux divergence (1/W) ∂(W uⱼu)/∂xⱼ at a u point (also the
+# fused sweep's base term, WeightedBaseTendencies, #533)
+@inline function _wmom_u(i, j, k, ud, vd, wd, Wc, Wf, idx, idy, idz)
     @inbounds begin
         iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
         uce = 0.5*(ud[i,   j, k] + ud[i+1, j, k])
@@ -1205,13 +1209,15 @@ end
         uwb = 0.5*(ud[i,   j, k-1] + ud[i, j, k  ])
         d_wu_dz = (wft*wut*uwt - wfb*wub*uwb) * idz * iwc
 
-        tud[i, j, k] -= d_uu_dx + d_vu_dy + d_wu_dz
+        r = d_uu_dx + d_vu_dy + d_wu_dz
     end
-    return nothing
+    return r
 end
 
 # --- v-momentum, south face of cell (i,j,k) -------------------------------
-@inline function _wmom_v_body!(i, j, k, tvd, ud, vd, wd, Wc, Wf, idx, idy, idz)
+@inline _wmom_v_body!(i, j, k, tvd, ud, vd, wd, Wc, Wf, idx, idy, idz) =
+    (@inbounds tvd[i, j, k] -= _wmom_v(i, j, k, ud, vd, wd, Wc, Wf, idx, idy, idz); nothing)
+@inline function _wmom_v(i, j, k, ud, vd, wd, Wc, Wf, idx, idy, idz)
     @inbounds begin
         iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
         uve = 0.5*(ud[i+1, j-1, k] + ud[i+1, j, k])
@@ -1230,13 +1236,15 @@ end
         vwb = 0.5*(vd[i, j,   k-1] + vd[i, j, k  ])
         d_wv_dz = (wft*wvt*vwt - wfb*wvb*vwb) * idz * iwc
 
-        tvd[i, j, k] -= d_uv_dx + d_vv_dy + d_wv_dz
+        r = d_uv_dx + d_vv_dy + d_wv_dz
     end
-    return nothing
+    return r
 end
 
 # --- w-momentum, bottom face of cell (i,j,k) ------------------------------
-@inline function _wmom_w_body!(i, j, k, twd, ud, vd, wd, Wc, Wf, idx, idy, idz)
+@inline _wmom_w_body!(i, j, k, twd, ud, vd, wd, Wc, Wf, idx, idy, idz) =
+    (@inbounds twd[i, j, k] -= _wmom_w(i, j, k, ud, vd, wd, Wc, Wf, idx, idy, idz); nothing)
+@inline function _wmom_w(i, j, k, ud, vd, wd, Wc, Wf, idx, idy, idz)
     @inbounds begin
         iwf = 1 / Wf[k]; wcb = Wc[k-1]; wct_ = Wc[k]
         uwe = 0.5*(ud[i+1, j, k-1] + ud[i+1, j, k])
@@ -1255,9 +1263,9 @@ end
         wbot = 0.5*(wd[i, j, k-1] + wd[i, j, k  ])
         d_ww_dz = (wct_*wtop*wtop - wcb*wbot*wbot) * idz * iwf
 
-        twd[i, j, k] -= d_uw_dx + d_vw_dy + d_ww_dz
+        r = d_uw_dx + d_vw_dy + d_ww_dz
     end
-    return nothing
+    return r
 end
 
 """
@@ -1281,7 +1289,9 @@ function weighted_scalar_advect!(tϕ::Field{CellCenter,T},
     return tϕ
 end
 
-@inline function _wscal_body!(i, j, k, tf, ud, vd, wd, f, Wc, Wf, idx, idy, idz)
+@inline _wscal_body!(i, j, k, tf, ud, vd, wd, f, Wc, Wf, idx, idy, idz) =
+    (@inbounds tf[i, j, k] -= _wscal(i, j, k, ud, vd, wd, f, Wc, Wf, idx, idy, idz); nothing)
+@inline function _wscal(i, j, k, ud, vd, wd, f, Wc, Wf, idx, idy, idz)
     @inbounds begin
         iwc = 1 / Wc[k]; wfb = Wf[k]; wft = Wf[k+1]
         uϕe = ud[i+1,j,k] * 0.5 * (f[i,  j,k] + f[i+1,j,k])
@@ -1290,10 +1300,9 @@ end
         vϕs = vd[i,j,  k] * 0.5 * (f[i,j-1,k] + f[i,j,  k])
         wϕt = wft * wd[i,j,k+1] * 0.5 * (f[i,j,k  ] + f[i,j,k+1])
         wϕb = wfb * wd[i,j,k  ] * 0.5 * (f[i,j,k-1] + f[i,j,k  ])
-        tf[i,j,k] -= (uϕe - uϕw) * idx + (vϕn - vϕs) * idy +
-                     (wϕt - wϕb) * idz * iwc
+        r = (uϕe - uϕw) * idx + (vϕn - vϕs) * idy + (wϕt - wϕb) * idz * iwc
     end
-    return nothing
+    return r
 end
 
 """
@@ -1328,14 +1337,17 @@ function add_anelastic_buoyancy!(tw::Field{FaceZ,T}, θ::Field{CellCenter,T},
     return tw
 end
 
-@inline function _anelastic_buoyancy_body!(i, j, k, twd, θd, θ̄f, gacc)
+@inline _anelastic_buoyancy_body!(i, j, k, twd, θd, θ̄f, gacc) =
+    (@inbounds twd[i, j, k] += _anelastic_buoyancy(i, j, k, θd, θ̄f, gacc); nothing)
+# g (θ − θ̄)/θ̄ at a w point (also the fused sweep's AnelasticBuoyancy, #533)
+@inline function _anelastic_buoyancy(i, j, k, θd, θ̄f, gacc)
     @inbounds begin
         θ̄k = θ̄f[k]
         coef = gacc / θ̄k
         θface = 0.5 * (θd[i,j,k-1] + θd[i,j,k])
-        twd[i,j,k] += coef * (θface - θ̄k)
+        r = coef * (θface - θ̄k)
     end
-    return nothing
+    return r
 end
 
 # =========================================================================
@@ -1786,6 +1798,10 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
     fill_halos!((sim.u, sim.v, sim.w, sim.θ), (sim.bcs, sim.bcs, sim.bcs, sim.θ_bcs))
     mark_open_boundary_stage!(sim)         # radiating outflow: step-start layers (N-open-c)
 
+    # Every term a sweep term: steps 2-12 in the fused sweep (#533 plan step
+    # 8), the values of the passes below within round-off (the reference).
+    _try_fused_mw!(sim, Δt, closure, body_force!, post_predictor!, Wc, Wf) && return sim
+
     # 2. advection, weighted flux form
     zero_storage!(sim.tu); zero_storage!(sim.tv); zero_storage!(sim.tw)
     zero_storage!(sim.tθ)
@@ -1849,6 +1865,8 @@ function _mass_weighted_step!(sim::MassWeightedSimulation{S,T}, dt::Real;
     commit && closure !== nothing && advance_sgs!(closure, sim, Δt)   # once per step (not per RK3 substage)
     return sim
 end
+
+include("anelastic/fused_sweep.jl")   # the fused sweep of the sound-proof cores (#533)
 
 # -------------------------------------------------------------------------
 # SSP-RK3 (ONE-j, #460)
