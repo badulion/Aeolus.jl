@@ -1877,5 +1877,7 @@ end
 # The fused sweep of the step core: the local-term interface and its
 # driver (SC-e #405, #533).
 include("operators/fused_sweep.jl")
+# its pointwise terms: buoyancy, Coriolis, boundary fluxes, damping (#533 plan step 2)
+include("operators/sweep_pointwise.jl")
 
 end # module
