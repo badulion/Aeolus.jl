@@ -55,7 +55,8 @@ module PrognosticSGS
 using ..Grids: RegularGrid, CellCenter, interior
 using ..StretchedGrids: StretchedGrid
 using ..Fields: Field, interior_view, mesh, interior_map!
-using ..Backends: Backends, launch!, plane_reduce!, plane_map!, row_map!, range_map!, ordered_sum
+using ..Backends: Backends, launch!, launch_weighted!, plane_reduce!, plane_map!, row_map!, range_map!,
+    ordered_sum
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
@@ -620,29 +621,87 @@ end
 @inline _fold_src(I, H, N, lo, hi, n) =
     n == 1 ? I : n == 2 ? (lo == I ? H : 0) : (hi == I ? H + N + 1 : 0)
 
+# A cell of the shell (the interior cells next to a boundary): the shares of
+# every source cell the halo fold assigns to it, each source's candidate
+# points checked against the box.
 @inline function _dual_strain_body!(I, J, K, d, u, v, w, m, bx, Hx, Nx, lox, hix, Hy, Ny, loy, hiy,
                                     Hz, Nz, loz, hiz)
     T = eltype(d)
     acc = zero(T)
-    # the bulk: one source cell, all of its candidate points inside
-    if (Hx + 1 < I < Hx + Nx) & (Hy + 1 < J < Hy + Ny) & (Hz + 1 < K < Hz + Nz)
-        acc = _dual_raw(u, v, w, m, _AllIn(), I, J, K)
-    else
-        for nz in 1:3
-            sz = _fold_src(K, Hz, Nz, loz, hiz, nz)
-            sz == 0 && continue
-            for ny in 1:3
-                sy = _fold_src(J, Hy, Ny, loy, hiy, ny)
-                sy == 0 && continue
-                for nx in 1:3
-                    sx = _fold_src(I, Hx, Nx, lox, hix, nx)
-                    sx == 0 && continue
-                    acc += _dual_raw(u, v, w, m, bx, sx, sy, sz)
-                end
+    for nz in 1:3
+        sz = _fold_src(K, Hz, Nz, loz, hiz, nz)
+        sz == 0 && continue
+        for ny in 1:3
+            sy = _fold_src(J, Hy, Ny, loy, hiy, ny)
+            sy == 0 && continue
+            for nx in 1:3
+                sx = _fold_src(I, Hx, Nx, lox, hix, nx)
+                sx == 0 && continue
+                acc += _dual_raw(u, v, w, m, bx, sx, sy, sz)
             end
         end
     end
     @inbounds d[I, J, K] = _per_volume(m, acc, K)
+    return nothing
+end
+
+# A cell of a k face away from the i and j boundaries: the k fold only, and
+# only k checked (the i, j candidates are inside), the same shares in the
+# same order as `_dual_strain_body!`.
+struct _DualBoxK
+    k1::Int; k2::Int
+end
+@inline _inbox(b::_DualBoxK, i, j, k) = b.k1 <= k <= b.k2
+@inline function _dual_kface_body!(I, J, K, d, u, v, w, m, bz, Hz, Nz, loz, hiz)
+    T = eltype(d)
+    acc = zero(T)
+    for nz in 1:3
+        sz = _fold_src(K, Hz, Nz, loz, hiz, nz)
+        sz == 0 && continue
+        acc += _dual_raw(u, v, w, m, bz, I, J, sz)
+    end
+    @inbounds d[I, J, K] = _per_volume(m, acc, K)
+    return nothing
+end
+
+# A cell of the bulk: one source cell, all of its candidate points inside,
+# no checks. No branch in the row loop, so the compiler vectorises it (#554:
+# a branch on "bulk or shell" in every cell kept the loop scalar, 4x slower).
+@inline function _dual_bulk_body!(I, J, K, d, u, v, w, m)
+    @inbounds d[I, J, K] = _per_volume(m, _dual_raw(u, v, w, m, _AllIn(), I, J, K), K)
+    return nothing
+end
+
+# Row n of the interior (j fastest): a bulk row (j, k both away from the
+# boundaries) is its two end cells in the shell and a branch-free loop over
+# the cells between; a row next to a j or k boundary is all shell.
+function _dual_strain_row!(n, d, u, v, w, m, bx, ii, jj, kk, fold)
+    kq, jq = divrem(n - 1, length(jj))
+    J, K = first(jj) + jq, first(kk) + kq
+    _dual_row!(J, K, d, u, v, w, m, bx, ii, jj, kk, fold...)
+    return nothing
+end
+@noinline function _dual_row!(J, K, d, u, v, w, m, bx, ii, jj, kk, fold::Vararg{Int,12})
+    i1, i2 = first(ii), last(ii)
+    if (first(jj) < J < last(jj)) & (first(kk) < K < last(kk))
+        _dual_strain_body!(i1, J, K, d, u, v, w, m, bx, fold...)
+        for I in i1+1:i2-1
+            _dual_bulk_body!(I, J, K, d, u, v, w, m)
+        end
+        i2 > i1 && _dual_strain_body!(i2, J, K, d, u, v, w, m, bx, fold...)
+    elseif first(jj) < J < last(jj)       # a row of a k face: only k is checked between its ends
+        _dual_strain_body!(i1, J, K, d, u, v, w, m, bx, fold...)
+        bz = _DualBoxK(first(kk), last(kk))
+        Hz, Nz, loz, hiz = fold[9], fold[10], fold[11], fold[12]
+        for I in i1+1:i2-1
+            _dual_kface_body!(I, J, K, d, u, v, w, m, bz, Hz, Nz, loz, hiz)
+        end
+        i2 > i1 && _dual_strain_body!(i2, J, K, d, u, v, w, m, bx, fold...)
+    else
+        for I in ii
+            _dual_strain_body!(I, J, K, d, u, v, w, m, bx, fold...)
+        end
+    end
     return nothing
 end
 
@@ -651,15 +710,42 @@ _dual_metrics(g::StretchedGrid) = _DualLevels(1 / g.dx^2, 1 / g.dy^2, g.dzc, g.d
 
 function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::Union{RegularGrid,StretchedGrid})
     d = D.data
-    fill!(d, zero(eltype(d)))
+    b = Backends.backend(d)
+    _zero_halos!(d, g)
     ii, jj, kk = interior(g)
     bx = _DualBox(first(ii), last(ii), first(jj), last(jj), first(kk), last(kk))
     lox, hix = _images(bcs.west, g.Hx, g.Nx)
     loy, hiy = _images(bcs.south, g.Hy, g.Ny)
     loz, hiz = _images(bcs.bottom, g.Hz, g.Nz)
-    launch!(Backends.backend(d), _dual_strain_body!, (ii, jj, kk), d, u.data, v.data, w.data,
-            _dual_metrics(g), bx, g.Hx, g.Nx, lox, hix, g.Hy, g.Ny, loy, hiy, g.Hz, g.Nz, loz, hiz)
+    m = _dual_metrics(g)
+    fold = (g.Hx, g.Nx, lox, hix, g.Hy, g.Ny, loy, hiy, g.Hz, g.Nz, loz, hiz)
+    # one work item per i-row (in chunks of rows, the row length as weight)
+    launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*g.Nz,), d, u.data, v.data, w.data, m, bx,
+                     ii, jj, kk, fold)
     return D
+end
+
+# zero the halo cells of a storage array (the interior is overwritten): the
+# whole low and high k planes, then the j and i halo strips of the interior
+# planes (a fill of the whole array cost about as much as the bulk at 1
+# thread's bandwidth)
+function _zero_halos!(d, g)
+    z = zero(eltype(d))
+    sx, sy, sz = size(d)
+    k1, k2 = g.Hz + 1, g.Hz + g.Nz
+    j1, j2 = g.Hy + 1, g.Hy + g.Ny
+    i1, i2 = g.Hx + 1, g.Hx + g.Nx
+    fill!(view(d, :, :, 1:k1-1), z)
+    fill!(view(d, :, :, k2+1:sz), z)
+    @inbounds for k in k1:k2
+        for j in 1:j1-1, i in 1:sx; d[i, j, k] = z; end
+        for j in j2+1:sy, i in 1:sx; d[i, j, k] = z; end
+        for j in j1:j2
+            for i in 1:i1-1; d[i, j, k] = z; end
+            for i in i2+1:sx; d[i, j, k] = z; end
+        end
+    end
+    return d
 end
 
 # The dual on a StretchedGrid. The momentum operator there differences the
