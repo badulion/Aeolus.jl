@@ -1716,6 +1716,15 @@ conserve `Σ W uᵢ ΔV`. A closure without a weighted form (a full-tensor scala
 flux, an explicit Reynolds stress: `sgs_weighted_form`) is refused. The
 molecular term `ν∇²` stays unweighted (the `O(∂ln ρ̄/∂z)` correction is
 negligible at molecular `ν`).
+
+**The fused sweep** (#533): when every term of steps 2-6 has a fused form
+(the weighted advection and `ν∇²`, the buoyancy, and the pipeline
+components with a sweep term), steps 2-7 and 11 run in one cache-blocked
+pass ([`WeightedBaseTendencies`](@ref), [`AnelasticBuoyancy`](@ref);
+`[timestep] loop_fusion`, `Simulations.set_loop_fusion!`), with the values
+of the passes above within round-off. Coriolis, surface flux, sponge, an
+SGS closure, a `body_force!` function, a `post_predictor!` hook and open
+faces keep the separate passes, and the simulation's report names them.
 """
 step_anelastic!(sim::AnelasticSimulation, dt::Real; kwargs...) =
     _step_mass_weighted!(sim, dt; kwargs...)
