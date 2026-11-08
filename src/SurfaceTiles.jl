@@ -341,35 +341,21 @@ the tiles actually applied. `forcing` is one `SurfaceForcing` for the
 whole cell or a vector with one per tile (e.g. tile-specific wind at a
 blending height). `kwargs` are passed on to every tile's
 `step_surface!`. The per-tile fluxes are kept in
-[`last_tile_fluxes`](@ref) (the mosaic's own vector, overwritten by
-every step: copy it to keep a step's values).
+[`last_tile_fluxes`](@ref): a new vector per step, so a vector read
+before a step keeps that step's values (a caller relies on it, #537).
 
 Conservation: if each tile stores ``G_i\\,Δt`` per unit area, the cell
 stores ``\\sum f_i G_i Δt = \\bar G Δt`` — exactly the aggregate `G`
 returned here.
 """
 function step_surface!(ts::SurfaceMosaic, f::SurfaceForcing, dt::Real; kwargs...)
-    fl = _tile_flux_store!(ts)
-    for (l, t) in enumerate(ts.tiles)
-        fl[l] = _f64(_step(t, f, dt, kwargs))
-    end
-    return aggregate_fluxes(fl, ts.fractions)
+    ts.fluxes = [_f64(_step(t, f, dt, kwargs)) for t in ts.tiles]
+    return aggregate_fluxes(ts.fluxes, ts.fractions)
 end
 function step_surface!(ts::SurfaceMosaic, fs::AbstractVector{<:SurfaceForcing}, dt::Real; kwargs...)
     _check_forcings(ts, fs)
-    fl = _tile_flux_store!(ts)
-    for (l, (t, f)) in enumerate(zip(ts.tiles, fs))
-        fl[l] = _f64(_step(t, f, dt, kwargs))
-    end
-    return aggregate_fluxes(fl, ts.fractions)
-end
-# The tile fluxes of a step are written into the mosaic's own vector (one
-# per tile), not into a new one per step (#537: a tiled surface steps tens
-# of thousands of mosaics per surface step).
-function _tile_flux_store!(ts::SurfaceMosaic)
-    n = length(ts.tiles)
-    length(ts.fluxes) == n || resize!(ts.fluxes, n)
-    return ts.fluxes
+    ts.fluxes = [_f64(_step(t, f, dt, kwargs)) for (t, f) in zip(ts.tiles, fs)]
+    return aggregate_fluxes(ts.fluxes, ts.fractions)
 end
 
 """
