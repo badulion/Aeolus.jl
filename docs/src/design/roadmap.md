@@ -3252,7 +3252,7 @@ sweep term for that, and asserts `Coriolis` stays fused);
 SGS closure and the post-predictor hook, and the dry CBL reports only
 `builtin.sgs`.
 
-**Tests** (`test/fused_sweep_pointwise.jl`, 732 assertions): each term in
+**Tests** (`test/fused_sweep_pointwise.jl`, 780 assertions after the review fixes): each term in
 `blocked_predictor!` against the base tendencies + its `add_*!` operator
 or `run_stage!` + the predictor, for 1–5 slabs (and reversed), serial and
 threaded, regular and stretched, dry and moist, Euler and RK3 (agreement
@@ -3263,8 +3263,9 @@ sponge, a time-dependent fringe target), `loop_fusion = "always"` against
 `run_stage!`'s (exact for the level means and wind means, rtol 1e-9 for
 the mean tendencies, which `run_stage!` takes as a difference of
 tendency-field means); `step_rk3!` with all four built-in terms allocates
-16 bytes (as the DNS). Full suite green (118 jobs, 5949 assertions, before
-the last two `hook_terms` commits; the files they touch re-run green after);
+16 bytes (as the DNS). Full suite green on the final branch (118 jobs, 5997
+assertions; validation `urban_checks.jl` 33/33 and `gabls1.jl` 8/8 with
+it);
 `urban_run.jl`, `urban_checks.jl` green; validation `urban_checks.jl` 33/33.
 
 **Measured**: a configured case whose only terms besides advection and
