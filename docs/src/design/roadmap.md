@@ -3219,15 +3219,30 @@ Branch `issue/533-s4-sgs` (from step 1). What was built:
   `sgs_scalar_face_diffusivity`, `sgs_scalar_tensor`, `sgs_explicit_stress`
   and the two new generics to the closure it wraps.
 - **Every closure of the core is fused**: Smagorinsky (built-in `C_s`
-  and `StaticSmagorinsky`), dynamic (plane, local, masked), Lagrangian
+  and `StaticSmagorinsky`), dynamic (plane-averaged; the local and
+  masked variants go through the same contract defaults but are not
+  tested), Lagrangian
   dynamic, Vreman, σ, `FunctionSGS`, `MLSGS`, AMD, the prognostic TKE
   closure (also with a solid mask and on a stretched grid),
   stability-corrected, isentropic tensor diffusion, the Reynolds-stress
   closure and both `SolidMaskedSGS` uses; both `sgs_stress` forms
-  (the stress form on a `RegularGrid` only, as the operator).
+  (the stress form, and the Reynolds stress's divergence, on a
+  `RegularGrid` only, as the operators).
   `builtin.sgs` left `SWEEP_FALLBACKS`; a closure without a sweep form
-  (one outside Aeolus with its own stress) is reported by its type
-  (`Main.X: no sweep_term …`).
+  is reported by its type (`Main.X: no sweep_term …`).
+- **The sweep form must match the closure's own tendencies**
+  (`Operators.sgs_sweep_form_matches`, added after the review): the sweep
+  evaluates the kernels the contract generics name, not the closure's
+  `add_sgs_momentum!`/`add_sgs_scalar!`/`sgs_tracer_diffusivity!`. So for
+  each of those, the method dispatch selects of the generic the sweep
+  reads instead (`sgs_momentum_sweep`; `sgs_scalar_face_diffusivity` and
+  `sgs_scalar_tensor`; `sgs_tracer_own_diffusivity`) must be at least as
+  specific as the tendency's, also for the closure a wrapper forwards to
+  (`sgs_sweep_wrapped`: `IsentropicDiffusion`, `SolidMaskedSGS`);
+  otherwise the closure runs one loop per term and is reported by its
+  type. Cached per closure and simulation type and per world (a method
+  defined later is seen); the step's allocation is unchanged (32 and 48
+  bytes).
 - **Footprint** (1, 1, 1): with νt precomputed, every SGS body reads the
   state at most one point away (the compact flux differences; the
   tensor's cross terms at the diagonal neighbours); νt, κh, the tensor
@@ -3240,15 +3255,22 @@ Branch `issue/533-s4-sgs` (from step 1). What was built:
   `step_rk3!` with Smagorinsky or AMD allocates what one loop per term
   does (32 and 48 bytes, the keyword call).
 
-**Not inside the sweep, by design**: the TKE equation of `TKEClosure`
-(and the stress transport of the Reynolds-stress closure) runs in
-`advance_sgs!`, once per step after the projection, on its own field `e`
-that the sweep's buffer does not carry; its masked diffusion
-(`add_eddy_diffusion_scalar!(…; mask)`) belongs to that update and is
-already one fused plane loop (KA-l). The urban tracers' masked SGS
-diffusion (`TracerSGSDiffusion`) is a component outside the core.
+**Not done: the masked scalar diffusion of plan step 4.** The plan
+names "the prognostic TKE closure (PrognosticSGS), including the masked
+scalar diffusion". What this branch fuses is the TKE closure's
+tendencies of u, v, w, θ and qv (mask included). Not inside the sweep:
+the TKE equation of `TKEClosure` (and the stress transport of the
+Reynolds-stress closure) runs in `advance_sgs!`, once per step after the
+projection, on its own field `e`, which the sweep's buffer does not
+carry; its masked diffusion (`add_eddy_diffusion_scalar!(…; mask)`) is
+part of that update (already one plane loop, KA-l). The urban tracers'
+masked SGS diffusion (`TracerSGSDiffusion`) is a component outside the
+core. Whether either has to move into the sweep for step 4 to count as
+done is left to the maintainer.
 
-**Tests** (`test/fused_sweep_sgs.jl`, 5635 assertions, 284 s in the parallel runner beside six other files): the sweep
+**Tests** (`test/fused_sweep_sgs.jl`, 5656 assertions, 80–101 s alone
+and 284 s beside six other files, so tagged `heavy` in
+`test/test_tags.toml`): the sweep
 over (base, SGS term) against the separate loops + predictor for the 15
 closures above, both stress forms, 1–5 slabs forward and reversed,
 serial and threaded, Euler and the RK3 combination, dry and moist,
@@ -3257,8 +3279,13 @@ bit-identical); `step!`/`step_rk3!` with `loop_fusion = "always"` against
 `"never"` for every closure; a closure without a sweep form reported and
 refused by `"always"`; the stress form on a stretched grid keeps the
 operator's error; footprint, inference, allocation; a guard that every
-closure type with its own `add_sgs_momentum!`, `add_sgs_scalar!` or
-`sgs_tracer_diffusivity!` method has the matching sweep generic.
+closure type of Aeolus with its own `add_sgs_momentum!`, `add_sgs_scalar!` or
+`sgs_tracer_diffusivity!` method has the matching sweep generic; and, at
+run time, closures defined in the test (own θ flux, own momentum, own
+tracer diffusivity, the θ one inside `SolidMaskedSGS`) stay out of the
+sweep, are reported by type and agree with `"never"`, one with the
+matching face form fuses, a sweep method defined later is picked up, and
+the Reynolds stress has no sweep form on a stretched grid.
 `test/fused_sweep.jl`: `builtin.sgs` removed from its expectations.
 
 **Bugs the tests caught** (code wrong): the first `SGSTerm` boxed its
@@ -3269,6 +3296,16 @@ the stress form on a stretched grid was in the first agreement matrix
 (the operator refuses it; it is now tested as an error); "the Reynolds
 stress acted" failed on its initial isotropic stress, which has no
 divergence (now three committed steps first, and θ's anomaly compared).
+**Bugs the review caught** (code wrong): nothing checked that the sweep's
+kernels are the closure's own; a closure from outside Aeolus that
+overrides `add_sgs_scalar!` without a face form (like the validation
+fixture `BackgroundGradient`, which adds a background θ flux) would have
+fused with the default diagonal kernel and silently dropped that flux.
+Latent in the repository (that run also passes a plain-function body
+force, which keeps it off the sweep); fixed by
+`sgs_sweep_form_matches` (above). The Reynolds stress's sweep form
+did not refuse a stretched grid (shadowed by its tensor's refusal);
+it now does.
 
 **Measured** (Ryzen AI 9 HX 370, 15 W cap, under the benchmark lock).
 On this branch alone no configured case with SGS fuses: the dry CBL still
