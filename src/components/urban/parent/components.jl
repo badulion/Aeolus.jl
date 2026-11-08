@@ -643,15 +643,24 @@ function Components.run_stage!(c::TiledUrbanSurface, d, ::Val{:post_predictor}, 
     js = neighbor_index(m, bcs, 0, 2; outside = pv ? :none : :mirror)
     b = Aeolus.Backends.backend(a)
     r = (1:Nx, 1:Ny, 1:kc)
-    Aeolus.Backends.launch!(b, _drag_denominators!, r, den, a, sim.u.data, sim.v.data, Float64(Δt), c.U_min,
-                            m.Hx, m.Hy, m.Hz, iw, js)
+    Aeolus.Backends.launch_weighted!(b, DRAG_POINT_WEIGHT, _drag_denominators!, r, den, a, sim.u.data, sim.v.data,
+                                     Float64(Δt), c.U_min, m.Hx, m.Hy, m.Hz, iw, js)
     Aeolus.Backends.launch!(b, _drag_apply!, r, den, sim.u.data, sim.v.data, m.Hx, m.Hy, m.Hz)
     return nothing
 end
 
+# the work of one canopy point of the drag's denominators (ten loads, two
+# square roots and two divisions) in pointwise-copy equivalents, for the
+# launch's serial threshold and points per task: the canopy is often one
+# level (40 000 points on a 200 × 200 grid), which unweighted would run
+# on two tasks whatever the thread count
+const DRAG_POINT_WEIGHT = 8
+
 # the implicit denominators 1 + Δt a/U of the u (west) and v (south) face of
 # canopy point (i, j, k), from the pre-drag velocities; 1 where the face has
-# no drag (iw / js = 0: a boundary face the boundary fixes)
+# no drag (iw / js = 0: a boundary face the boundary fixes). The speed is
+# √(u² + v²), not `hypot` (3× slower here; wind speeds are far from the
+# range where the plain form under- or overflows), as PALM's SQRT
 @inline function _drag_denominators!(i, j, k, den, a, ud, vd, Δt, U_min, Hx, Hy, Hz, iw, js)
     @inbounds begin
         I, J, K = Hx + i, Hy + j, Hz + k
@@ -661,13 +670,13 @@ end
         if im != 0
             au = 0.5 * (a[im, j, k] + a[i, j, k])
             vf = 0.25 * (vd[I-1, J, K] + vd[I, J, K] + vd[I-1, J+1, K] + vd[I, J+1, K])
-            du = 1 + Δt * au / max(hypot(ud[I, J, K], vf), U_min)
+            du = 1 + Δt * au / max(sqrt(ud[I, J, K]^2 + vf^2), U_min)
         end
         dv = 1.0
         if jm != 0
             av = 0.5 * (a[i, jm, k] + a[i, j, k])
             uf = 0.25 * (ud[I, J-1, K] + ud[I+1, J-1, K] + ud[I, J, K] + ud[I+1, J, K])
-            dv = 1 + Δt * av / max(hypot(vd[I, J, K], uf), U_min)
+            dv = 1 + Δt * av / max(sqrt(vd[I, J, K]^2 + uf^2), U_min)
         end
         den[i, j, k, 1] = du
         den[i, j, k, 2] = dv
