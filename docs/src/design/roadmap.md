@@ -3332,8 +3332,10 @@ cell and dropping the ground stress's west-column contribution each
 fail. Targeted runs: `fused_sweep.jl`, `fused_sweep_post.jl`,
 `urban_run.jl`, `urban_checks.jl`, `components_parent.jl`,
 `plant_canopy.jl`, `wall_models.jl`, `components_both_cores.jl`,
-`cutcell.jl`, `naming_conventions.jl` pass. Validation
-`urban_checks.jl`: 33 / 33.
+`cutcell.jl`, `naming_conventions.jl` pass. After the review fixes:
+full suite 118 / 118 files, 6814 assertions, 0 failures
+(`fused_sweep_post.jl` 1545); validation `urban_checks.jl` 33 / 33,
+`gabls1.jl` 8 / 8.
 
 **Test expectation that proved wrong**: the first surface-layer
 comparison called the reference and the sweep twice without refilling
