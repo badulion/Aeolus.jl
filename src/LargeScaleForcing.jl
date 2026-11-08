@@ -538,14 +538,27 @@ end
 # former serial loops at every thread count.
 @inline function _gpg_level!(k, tu::AbstractArray{T}, tv, m, U_g, V_g, f, t, t1) where {T}
     Nx, Ny, Hx, Hy, Hz = m.Nx, m.Ny, m.Hx, m.Hy, m.Hz
-    z = _zc(m, k)
-    fu = T(-(f * forcing_mean(V_g, z, t, t1)))
-    fv = T(f * forcing_mean(U_g, z, t, t1))
+    fu, fv = geostrophic_level_tendency(T, m, U_g, V_g, f, t, t1, k)
     @inbounds for j in 1:Ny, i in 1:Nx
         tu[Hx+i, Hy+j, Hz+k] += fu
         tv[Hx+i, Hy+j, Hz+k] += fv
     end
     return nothing
+end
+
+"""
+    geostrophic_level_tendency(T, m, U_g, V_g, f, t, t1, k) -> (fu, fv)
+
+The tendencies `(−f V̄_g, +f Ū_g)` (eltype `T`) that a
+[`GeostrophicPressureGradient`](@ref) adds on every u and v point of the
+interior level `k` of mesh `m` over the step `[t, t1]` (the step means of
+`U_g`, `V_g` at the level's centre height). The one evaluation behind
+`apply_forcing!` and the urban site's geostrophic term of the fused sweep
+(#533).
+"""
+@inline function geostrophic_level_tendency(::Type{T}, m, U_g, V_g, f, t, t1, k) where {T}
+    z = _zc(m, k)
+    return T(-(f * forcing_mean(V_g, z, t, t1))), T(f * forcing_mean(U_g, z, t, t1))
 end
 
 _has_moisture(sim) = hasproperty(sim, :qv) && hasproperty(sim, :tqv) &&

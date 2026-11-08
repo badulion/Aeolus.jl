@@ -51,13 +51,14 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                  "post-predictor correction: plan steps 5 and 6",
     "Components.KinematicFlow" => "overwrites the predicted velocity with a prescribed flow (post-predictor): " *
                                   "plan step 6",
-    "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise) and the obstacles' IBM penalty " *
-                                              "(a mask): plan steps 2 and 5",
+    "SimulationDriver.SimulationCouplings" => "the obstacles' IBM penalty (a mask, :body_force): plan step 5; " *
+                                              "without obstacles the slab's floor flux runs in the sweep",
     # --- the urban site ------------------------------------------------------
     "Urban.UrbanSite" => "captures the top and open-face heat fluxes of the stage-start state, a reduction " *
                          "(prepare!): plan step 5",
-    "Urban.GeostrophicCoupling" => "geostrophic pressure gradient, pointwise: plan step 2",
-    "Urban.MoistBuoyancy" => "moist (virtual θ) buoyancy, pointwise: plan step 2",
+    "Urban.GeostrophicCoupling" => "mode = :nudging relaxes the plane means of the stage-start state " *
+                                   "(LargeScaleForcing.ProfileNudging): plan step 3; the pressure-gradient " *
+                                   "mode runs in the sweep",
     "Urban.WallModelFacades" => "the facade wall model's stress on cells next to walls (masks as inputs) and " *
                                 "its post-predictor correction: plan steps 5 and 6",
     "Urban.NestingCoupling" => "the nest's flux registers and boundary relaxation of the child: plan step 5",

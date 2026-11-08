@@ -518,6 +518,13 @@ function Components.run_stage!(c::SimulationCouplings, d, ::Val{:body_force}, dt
     add_ibm_penalty!(d.state, c.c.solid; τ = c.c.penalty_time * dt)
     return nothing
 end
+# the fused sweep (#533): the floor flux of :tendencies is pointwise; the
+# obstacles' IBM penalty (:body_force) has no sweep form yet (plan step 5),
+# so with obstacles the component has none. (Asked once per in-core stage
+# it attaches to: without obstacles that is :tendencies only.)
+Operators.FiniteVolume.sweep_term(c::SimulationCouplings, d) =
+    c.c.solid !== nothing || c.c.slab === nothing ? nothing :
+    Operators.FiniteVolume.SurfaceFluxTerm(c.c.slab.Q, 0.0, d.state.mesh)
 function Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_update}, dt)
     c.step[] += 1
     return _after_step!(c.c, d.state, dt, c.step[])
