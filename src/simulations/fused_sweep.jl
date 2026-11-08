@@ -168,12 +168,15 @@ end
 
 # an unfused substage: counted; its blockers recorded and logged once
 _note_unfused!(sim, closure, body_force!, post_predictor!, momentum_advection) =
-    _note_unfused!(sim, () -> _sweep_blockers(sim, closure, body_force!, post_predictor!, momentum_advection))
-# the same with the blockers from `blockers()` (any step core; only called when reporting)
-function _note_unfused!(sim, blockers)
+    _note_unfused_by!(sim, _sweep_blockers, sim, closure, body_force!, post_predictor!, momentum_advection)
+# the same with the blockers from `blockers(args...)` (any step core). The
+# blockers are built only inside the @noinline reporter: a closure built here
+# and passed on was boxed on every unfused substage (16 B; review of #533
+# step 8, test/fused_sweep_cores.jl "no allocation when unfused").
+function _note_unfused_by!(sim, blockers::F, args::Vararg{Any,N}) where {F,N}
     r = sim.workspaces.fused
     r.unfused += 1
-    r.reported || _report_unfused!(r, blockers)
+    r.reported || _report_unfused!(r, blockers, args...)
     return nothing
 end
 # the blocker sets logged so far: each is logged once per process (a run's
@@ -181,8 +184,8 @@ end
 # its own in results.toml)
 const _LOGGED_FALLBACKS = Set{String}()
 const _LOGGED_LOCK = ReentrantLock()
-@noinline function _report_unfused!(r::SweepReport, blockers)
-    r.fallback = blockers()
+@noinline function _report_unfused!(r::SweepReport, blockers::F, args::Vararg{Any,N}) where {F,N}
+    r.fallback = blockers(args...)
     r.reported = true
     who = join((first(p) for p in r.fallback), ", ")
     fresh = lock(() -> who in _LOGGED_FALLBACKS ? false : (push!(_LOGGED_FALLBACKS, who); true), _LOGGED_LOCK)
@@ -381,9 +384,8 @@ function _try_fused_tendencies!(sim::BoussinesqSimulation{T}, Δt, body_force!, 
     explicit_sgs = sgsT !== nothing || Ks !== nothing
     terms = explicit_sgs ? nothing : _sweep_terms(sim, nothing, body_force!, nothing, momentum_advection, nothing)
     if terms === nothing
-        bl = () -> _imex_blockers(sim, body_force!, momentum_advection, explicit_sgs)
-        r.loop_fusion === :always && _refuse_unfused(bl())
-        _note_unfused!(sim, bl)
+        r.loop_fusion === :always && _refuse_unfused(_imex_blockers(sim, body_force!, momentum_advection, explicit_sgs))
+        _note_unfused_by!(sim, _imex_blockers, sim, body_force!, momentum_advection, explicit_sgs)
         return false
     end
     r.fused += 1
@@ -404,9 +406,22 @@ function _fused_tendencies_into!(sim::BoussinesqSimulation, Δt, terms)
         _shell_map!(_Zero(), (sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data), nothing, sim.mesh)
     end
     _prepare_terms!(terms, sim, Δt)
-    b = Backends.backend(sim.u.data)
-    ka = b isa Backends.CPUBackend && !sim.workspaces.fused.per_point ? nothing : Backends.ka_backend(b)
+    # concrete arguments only (no `Union` of qv or `ka`): a Union passed on
+    # to the launch boxed 176 B per stage (review of #533 step 8)
+    if moist
+        _term_tendencies_on!(sim, terms, sim.qv)
+    else
+        _term_tendencies_on!(sim, terms, nothing)
+    end
+    return nothing
+end
+function _term_tendencies_on!(sim, terms, qv)
     tf = TendencyFields(sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, sim.tqv.data)
-    term_tendencies!(tf, terms, sim.u, sim.v, sim.w, sim.θ, moist ? sim.qv : nothing, sim.mesh; ka = ka)
+    b = Backends.backend(sim.u.data)
+    if b isa Backends.CPUBackend && !sim.workspaces.fused.per_point
+        term_tendencies!(tf, terms, sim.u, sim.v, sim.w, sim.θ, qv, sim.mesh)
+    else
+        term_tendencies!(tf, terms, sim.u, sim.v, sim.w, sim.θ, qv, sim.mesh; ka = Backends.ka_backend(b))
+    end
     return nothing
 end

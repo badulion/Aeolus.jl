@@ -392,6 +392,36 @@ end
     @test n <= 64           # the launch's task closure on the threaded backend, none per point
 end
 
+# Review of step 8: the step drivers, fused and unfused under "if_possible",
+# allocate no more than with one loop per term ("never"). Two bugs this
+# caught: the unfused report's blocker closure was boxed on every unfused
+# substage (+16 B per step!), and the fused IMEX launch boxed its Union-typed
+# arguments (+176 B per stage). Measured after the fix: equal bytes.
+@testset "no allocation added by the fused or the unfused report, any step core" begin
+    drivers = (("step!", s -> step!(s, 0.1)), ("step_rk3!", s -> step_rk3!(s, 0.1)),
+               ("step_imex! ARK2", s -> step_imex!(s, 0.1, ARK2())),
+               ("step_imex! Rosenbrock2", s -> step_imex!(s, 0.1, Rosenbrock2())))
+    for (lab, kw) in (("fusable", (;)), ("unfused (Coriolis)", (; f_coriolis = 1e-4))), moist in (false, true),
+        (dn, drv) in drivers
+        mk(setting) = SIMc.set_loop_fusion!(_fc_seed!(BoussinesqSimulation(g; ν = 1e-2, moisture = moist, kw...)), setting)
+        a = mk(:if_possible); r = mk(:never)
+        bytes(s) = (drv(s); drv(s); @allocated drv(s))
+        n, nr = bytes(a), bytes(r)
+        n <= nr || println("  [#533 s8] $dn $lab moist=$moist allocates $n bytes, $nr with one loop per term")
+        @test n <= nr
+        @test SIMc.sweep_report(a)["substages_fused"] == (isempty(kw) ? "all" : "none")
+    end
+    # the sound-proof cores, unfused (Coriolis has no fused form there)
+    for drv in (ANc.step_anelastic!, step_rk3!)
+        a = mkan(; ν = 1.0, f_coriolis = 1e-4)
+        r = SIMc.set_loop_fusion!(mkan(; ν = 1.0, f_coriolis = 1e-4), :never)
+        bytes(s) = (drv(s, 1.0); drv(s, 1.0); @allocated drv(s, 1.0))
+        n, nr = bytes(a), bytes(r)
+        @test n <= nr
+        @test SIMc.sweep_report(a)["substages_fused"] == "none"
+    end
+end
+
 @testset "guards: point kernels, built-in terms of the other cores" begin
     # every sweep term defined in Aeolus has the point kernel the per-point
     # (GPU) form calls; every base term both of its initialising kernels

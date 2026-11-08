@@ -151,9 +151,8 @@ function _fused_mw!(sim::MassWeightedSimulation{S,T}, Δt::T, closure, body_forc
     r = sim.workspaces.fused
     terms = _mw_sweep_terms(sim, closure, body_force!, post_predictor!, base, extra)
     if terms === nothing
-        bl = () -> Simulations._sweep_blockers(sim, closure, body_force!, post_predictor!, nothing)
-        r.loop_fusion === :always && Simulations._refuse_unfused(bl())
-        Simulations._note_unfused!(sim, bl)
+        r.loop_fusion === :always && Simulations._refuse_unfused(sim, closure, body_force!, post_predictor!, nothing)
+        Simulations._note_unfused!(sim, closure, body_force!, post_predictor!, nothing)
         return false
     end
     r.fused += 1
