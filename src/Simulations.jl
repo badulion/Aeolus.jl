@@ -34,7 +34,7 @@ using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, 
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
-       step_begun, guard_covered,
+       step_begun, guard_covered, set_loop_fusion!, loop_fusion,
        reset_interval!, run!, step_rk3!, kinetic_energy, max_divergence,
        max_νt, mean_θ_profile, sponge_target,
        horizontal_mean, horizontal_variance, resolved_flux_wθ
@@ -55,8 +55,9 @@ mutable struct SweepReport
     unfused::Int
     fallback::Vector{Pair{String,String}}
     reported::Bool
+    loop_fusion::Symbol   # the setting: :if_possible, :always or :never (`set_loop_fusion!`)
 end
-SweepReport() = SweepReport(0, 0, Pair{String,String}[], false)
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible)
 
 """
     StepWorkspaces()

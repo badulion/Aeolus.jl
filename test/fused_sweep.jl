@@ -413,6 +413,36 @@ end
           SIMs.sweep_report(an)["not_fusable"] == ["builtin.core: " * SIMs.sweep_reason("builtin.core")]
 end
 
+@testset "loop_fusion: if_possible, always, never" begin
+    # never: one loop per term although the DNS has a fused form; the
+    # results agree with the fused step within round-off (ROUNDOFF_RTOL)
+    a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2)); r = deepcopy(a)
+    @test SIMs.loop_fusion(a) === :if_possible                  # the default
+    SIMs.set_loop_fusion!(r, "never")
+    fill!(a.tu.data, NaN); fill!(r.tu.data, NaN)
+    step_rk3!(a, 0.5); step_rk3!(r, 0.5)
+    @test all(isnan, a.tu.data) && !any(isnan, interior_view(r.tu))   # fused vs one loop per term
+    @test _fs_agree(a, r)
+    rr = SIMs.sweep_report(r)
+    @test rr["setting"] == "never" && rr["substages_fused"] == "none" && isempty(rr["not_fusable"])
+    @test SIMs.sweep_report(a)["setting"] == "if_possible" && SIMs.sweep_report(a)["substages_fused"] == "all"
+    # always: fine where every term has a fused form ...
+    b = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2)), :always)
+    step!(b, 0.5)
+    @test SIMs.sweep_report(b)["substages_fused"] == "all"
+    # ... and an error naming every term without one, before anything is stepped
+    c = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4)), :always)
+    t0 = c.t
+    err = try step!(c, 0.5); nothing catch e; e end
+    @test err isa ArgumentError && occursin("builtin.buoyancy", err.msg) && occursin("builtin.coriolis", err.msg)
+    @test c.t == t0                                             # exact: the clock did not advance
+    # invalid settings, and always on a core without a fused form
+    @test_throws ArgumentError SIMs.set_loop_fusion!(a, :sometimes)
+    an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
+    @test_throws ArgumentError SIMs.set_loop_fusion!(an, :always)
+    @test SIMs.loop_fusion(SIMs.set_loop_fusion!(an, :never)) === :never
+end
+
 @testset "components: a sweep term keeps the fused sweep, a missing one is reported" begin
     for drv in (:euler, :rk3)
         mk(c) = (s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2));
@@ -446,7 +476,7 @@ end
     @test any(startswith("builtin.budgets:"), CPs.sweep_report(db)["not_fusable"])
 end
 
-@testset "results.toml: the run records whether its substages were fused ([fused_sweep])" begin
+@testset "results.toml [loop_fusion] and the [timestep] loop_fusion key" begin
     ex = joinpath(pkgdir(Aeolus), "examples")
     run(cfg, sets) = (root = mktempdir();
                       rc = Aeolus.main(String["run", cfg, collect(Iterators.flatten(("--set", x) for x in sets))...,
@@ -457,17 +487,27 @@ end
     # [checks] or component results writes results.toml too (since #533)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"), small)
     @test rc == 0
-    fs = only(values(res["fused_sweep"]))
+    fs = only(values(res["loop_fusion"]))
     @test fs["substages_fused"] == "all" && isempty(fs["not_fusable"])
     # the dry convective boundary layer: SGS, buoyancy, a θ flux and a sponge
     rc, res = run(joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"),
                   vcat(small, ["checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]))
     @test rc == 0
-    fs = only(values(res["fused_sweep"]))
+    fs = only(values(res["loop_fusion"]))
     who = Set(first.(split.(fs["not_fusable"], ":")))
-    @test fs["substages_fused"] == "none"
+    @test fs["substages_fused"] == "none" && fs["setting"] == "if_possible"
     @test issubset(["builtin.sgs", "builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
     @test !occursin("no documented reason", join(fs["not_fusable"]))
+    # the key: never on the DNS; always on the CBL stops the run (rc ≠ 0)
+    rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"),
+                  vcat(small, ["timestep.loop_fusion=\"never\""]))
+    fs = only(values(res["loop_fusion"]))
+    @test rc == 0 && fs["setting"] == "never" && fs["substages_fused"] == "none"
+    root = mktempdir()
+    rc = Aeolus.main(String["run", joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"),
+                            collect(Iterators.flatten(("--set", x) for x in vcat(small, ["timestep.loop_fusion=\"always\""])))...,
+                            "--root", root, "--allow-uncommitted"]; io = IOBuffer(), err = IOBuffer())
+    @test rc != 0
 end
 
 @testset "type stability and allocation" begin

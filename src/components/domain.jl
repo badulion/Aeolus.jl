@@ -196,7 +196,8 @@ sweep_type(c) = typeof(c)
 """
     sweep_report(d::Domain) -> Dict{String,Any}
 
-The `results.toml` table of whether the step core of `d` took (#533,
+The `results.toml` table `[loop_fusion.<id>]` of the step core of `d`:
+its setting and whether its substages ran fused (#533,
 `Simulations.sweep_report`).
 """
 sweep_report(d::Domain) = Simulations.sweep_report(d.state)

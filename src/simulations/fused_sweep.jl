@@ -25,7 +25,7 @@ This is the explicit allowlist of the completeness guard
 `:body_force` or `:post_predictor` and every built-in term has a
 `sweep_term` or an entry here, and no entry is stale. A run reports the
 reasons of the terms that kept it with one loop per term in its
-`results.toml` (`[fused_sweep]`, [`sweep_report`](@ref)).
+`results.toml` (`[loop_fusion]`, [`sweep_report`](@ref)).
 """
 const SWEEP_FALLBACKS = Dict{String,String}(
     # --- built-in terms of `_euler_projection!` ------------------------------
@@ -177,17 +177,69 @@ const _LOGGED_LOCK = ReentrantLock()
     who = join((first(p) for p in r.fallback), ", ")
     fresh = lock(() -> who in _LOGGED_FALLBACKS ? false : (push!(_LOGGED_FALLBACKS, who); true), _LOGGED_LOCK)
     fresh && @info("the step core runs one loop per term (not the fused sweep): " * who *
-                   " (no fused sweep term; results.toml [fused_sweep])",
+                   " (no fused form; results.toml [loop_fusion])",
                    subsystem = :timestepping, event = :not_fused,
                    reasons = join((string(first(p), ": ", last(p)) for p in r.fallback), "; "))
     return nothing
 end
 
+const LOOP_FUSION_SETTINGS = (:if_possible, :always, :never)
+
+"""
+    set_loop_fusion!(sim, setting) -> sim
+
+Whether the substages of `sim`'s Boussinesq step core compute all their
+tendency terms and the predictor in one fused, cache-blocked pass over
+the grid (loop fusion, #533; PALM's `loop_optimization = 'cache'`) or in
+one loop per term (PALM's `'vector'`, the reference implementation):
+
+  * `:if_possible` (the default): fused when every term of the substage
+    has a fused form ([`sweep_term`](@ref Aeolus.Operators.FiniteVolume.sweep_term)),
+    otherwise one loop per term; the terms without a fused form are
+    logged once and written to `results.toml` (`[loop_fusion]`);
+  * `:always`: fused, or an `ArgumentError` at the first substage that
+    names every term without a fused form (PALM stops the same way when a
+    scheme is not implemented for its `loop_optimization`);
+  * `:never`: one loop per term.
+
+The results agree within round-off either way. Only `step!` and
+`step_rk3!` of the Boussinesq core have the fused form; `step_imex!` and
+the anelastic core always run one loop per term, so `:always` is refused
+for an anelastic core. The TOML key is
+`[timestep] loop_fusion` (`"if_possible"`, `"always"`, `"never"`).
+"""
+function set_loop_fusion!(sim, setting)
+    m = Symbol(setting)
+    m in LOOP_FUSION_SETTINGS ||
+        throw(ArgumentError("loop_fusion must be one of $(join(LOOP_FUSION_SETTINGS, ", ")), got $(repr(setting))"))
+    m === :always && !(sim isa BoussinesqSimulation) &&
+        throw(ArgumentError("loop_fusion = \"always\": the $(nameof(typeof(sim))) core has no fused form yet " *
+                            "(#533 plan step 8); use \"if_possible\" or \"never\""))
+    sim.workspaces.fused.loop_fusion = m
+    return sim
+end
+
+"""
+    loop_fusion(sim) -> Symbol
+
+The loop-fusion setting of `sim` ([`set_loop_fusion!`](@ref)).
+"""
+loop_fusion(sim) = sim.workspaces.fused.loop_fusion
+
+# loop_fusion = :always and a term without a fused form: stop, naming them
+@noinline function _refuse_unfused(sim, closure, body_force!, post_predictor!, momentum_advection)
+    bl = _sweep_blockers(sim, closure, body_force!, post_predictor!, momentum_advection)
+    throw(ArgumentError("loop_fusion = \"always\", but these terms have no fused form yet: " *
+                        join((string(first(p), " (", last(p), ")") for p in bl), "; ") *
+                        ". Use loop_fusion = \"if_possible\" or \"never\"."))
+end
+
 """
     sweep_report(sim) -> Dict{String,Any}
 
-The `results.toml` table of whether the substages of `sim`'s step core
-ran the fused sweep (#533): `substages_fused` (`"all"`, `"some"` or
+The `results.toml` table (`[loop_fusion.<domain>]`) of whether the
+substages of `sim`'s step core ran fused (#533): `setting` (the
+[`set_loop_fusion!`](@ref) setting), `substages_fused` (`"all"`, `"some"` or
 `"none"`; `"none"` with the core's reason when the step core has no fused
 sweep) and `not_fusable`, the `"term: reason"` of every term that kept a
 substage on separate loops (one per term) ([`SWEEP_FALLBACKS`](@ref)). The substage
@@ -202,7 +254,7 @@ function sweep_report(sim)
         fb = [_blocker("builtin.core")]
     end
     sub = r.unfused == 0 && r.fused > 0 ? "all" : r.fused == 0 ? "none" : "some"
-    return Dict{String,Any}("substages_fused" => sub,
+    return Dict{String,Any}("setting" => string(r.loop_fusion), "substages_fused" => sub,
                             "not_fusable" => String[string(first(p), ": ", last(p)) for p in fb])
 end
 
@@ -211,8 +263,14 @@ end
 # unfused) otherwise.
 function _try_fused!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage, closure, body_force!,
                      post_predictor!, momentum_advection, ν) where {T}
+    setting = sim.workspaces.fused.loop_fusion
+    if setting === :never                  # one loop per term, by choice: nothing to report
+        sim.workspaces.fused.unfused += 1
+        return false
+    end
     terms = _sweep_terms(sim, closure, body_force!, post_predictor!, momentum_advection, ν)
     if terms === nothing
+        setting === :always && _refuse_unfused(sim, closure, body_force!, post_predictor!, momentum_advection)
         _note_unfused!(sim, closure, body_force!, post_predictor!, momentum_advection)
         return false
     end

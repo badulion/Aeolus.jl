@@ -3105,8 +3105,22 @@ memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
   simulation's `SweepReport`; the first one records every term that kept
   it off the sweep with its documented reason and logs it once per
   process (`event = :not_fused`). A run writes
-  `[fused_sweep.<domain>]` (`substages_fused` = `"all"`/`"some"`/`"none"`, `not_fusable`) to `results.toml`. The
+  `[loop_fusion.<domain>]` (`setting`, `substages_fused` =
+  `"all"`/`"some"`/`"none"`, `not_fusable`) to `results.toml`. The
   reasons live in one allowlist, `Simulations.SWEEP_FALLBACKS`.
+- **The input key** `[timestep] loop_fusion = "if_possible" | "always" |
+  "never"` (`Simulations.set_loop_fusion!`), added in review on the
+  model of PALM's `loop_optimization` namelist parameter (`'cache'` /
+  `'vector'`, `parin.f90`, `check_parameters.f90:269`). `"if_possible"`
+  is the default and today's behaviour; `"always"` stops the run at its
+  first step with an error naming every term without a fused form, as
+  PALM stops when a scheme is not implemented for its
+  `loop_optimization` (PAC0038, PAC0040); `"never"` runs one loop per term
+  (the reference). The anelastic core refuses `"always"` (no fused form
+  before plan step 8). Once every term has a fused form (plan step 6),
+  `"always"` can become the default. The report's first names, `path` /
+  `fallback`, were renamed in review to `substages_fused` / `not_fusable`,
+  and its table from `[fused_sweep]` to `[loop_fusion]`, to match the key.
 - **The completeness guard** (`test/fused_sweep.jl`): every method of
   `Components.run_stage!` / `Urban.run_stage!` on `:tendencies`,
   `:body_force` or `:post_predictor` (19 types today) and every built-in
@@ -3120,7 +3134,7 @@ memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
 ROUNDOFF_RTOL); every configuration with another term runs one loop per term
 as before. `step_rk3!` on the fused sweep allocates 16 bytes per step
 (as before); a composed sweep with test terms allocates 0. One output
-change: since every run records `[fused_sweep]`, every `aeolus run` now
+change: since every run records `[loop_fusion]`, every `aeolus run` now
 writes `output/results.toml` (also into a configured `output.path`), where
 a run without `[checks]` and without component results wrote none before.
 

@@ -114,8 +114,13 @@ eddy viscosity) is computed before the sweep, in `prepare!`.
 
 A component or built-in term without a sweep term keeps the substage on
 separate loops, one per term (the reference implementation); the run logs which term
-caused it, once, and writes it to `results.toml` (`[fused_sweep.<domain>]`:
-`substages_fused` and `not_fusable`). The
+caused it, once, and writes it to `results.toml` (`[loop_fusion.<domain>]`:
+`setting`, `substages_fused` and `not_fusable`). The input key
+`[timestep] loop_fusion` (`Simulations.set_loop_fusion!`) chooses
+`"if_possible"` (the default: fused where every term has a fused form),
+`"always"` (fused, or the run stops at its first step naming the terms
+without one; PALM's `loop_optimization = 'cache'` stops the same way) or
+`"never"` (one loop per term). The
 documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
 the completeness guard `test/fused_sweep.jl`.
 
