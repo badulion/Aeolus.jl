@@ -53,20 +53,21 @@ const SWEEP_FALLBACKS = Dict{String,String}(
     "Components.Fringe" => "fringe relaxation toward the inflow state, pointwise with a mask: plan step 2",
     "Components.LargeScale" => "geostrophic forcing, nudging and advective tendencies need horizontal-mean " *
                                "profiles of the stage-start state (prepare!): plan step 3",
-    "Components.SurfaceLayer" => "the MOST wall stress and surface fluxes on the first level, its " *
-                                 "post-predictor correction: plan steps 5 and 6",
+    "Components.SurfaceLayer" => "the implicit MOST wall stress on the predicted first level " *
+                                 "(apply_wall_stress!, post-predictor): plan step 6; its heat flux is a sweep term",
     "Components.KinematicFlow" => "overwrites the predicted velocity with a prescribed flow (post-predictor): " *
                                   "plan step 6",
-    "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise) and the obstacles' IBM penalty " *
-                                              "(a mask): plan steps 2 and 5",
+    "SimulationDriver.SimulationCouplings" => "the slab's floor flux (pointwise, the surface-flux term of plan " *
+                                              "step 2); the obstacles' IBM penalty is a sweep term, used when no " *
+                                              "slab is on",
     # --- the urban site ------------------------------------------------------
     "Urban.UrbanSite" => "captures the top and open-face heat fluxes of the stage-start state, a reduction " *
                          "(prepare!): plan step 5",
     "Urban.GeostrophicCoupling" => "geostrophic pressure gradient, pointwise: plan step 2",
     "Urban.MoistBuoyancy" => "moist (virtual θ) buoyancy, pointwise: plan step 2",
-    "Urban.WallModelFacades" => "the facade wall model's stress on cells next to walls (masks as inputs) and " *
-                                "its post-predictor correction: plan steps 5 and 6",
-    "Urban.NestingCoupling" => "the nest's flux registers and boundary relaxation of the child: plan step 5",
+    "Urban.WallModelFacades" => "the facade wall model's implicit stress on the predicted faces next to walls " *
+                                "(apply_immersed_wall_stress!, post-predictor): plan step 6; its removal of the " *
+                                "stencil's facade flux is a sweep term",
     "Urban.VegDrag" => "implicit vegetation drag on the predicted velocity (post-predictor): plan step 6",
     "Urban.IBMCoupling" => "immersed-boundary forcing on the predicted velocity (post-predictor): plan step 6",
     "Urban.SurfaceExchangeMOST" => "surface exchange on the predicted near-wall cells (post-predictor): plan step 6",
