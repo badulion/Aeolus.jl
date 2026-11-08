@@ -3066,6 +3066,96 @@ segfaults at 10–14 threads; upstream; workaround
 `AEOLUS_FFTW_PLANNER=estimate`, documented in
 `benchmarks/bench_ka_scaling.jl`).
 
+#### Fused sweep for every term (#533)
+
+Follow-up to SC-e (#405): a contract so that any term, built-in or
+component, can run inside the blocked tendency + predictor sweep, and
+any configuration gets the fused step (umbrella #531: the step is
+memory-bandwidth bound). Planned in nine steps, one PR each (the issue).
+
+**Step 1: the local-term interface and its driver** (branch
+`issue/533-sweep-interface`). What was built:
+- **The interface** (`src/operators/fused_sweep.jl`, moved out of
+  `FiniteVolume.jl`): `SweepTerm` with `sweep_term(x, ctx)` (`nothing` =
+  not sweepable), `footprint(t) -> (rx, ry, rz)`, `sweep_inputs(t)`,
+  `prepare!(t, sim, Δt)` and the point kernel
+  `add_tendency!(t, tb, i, j, k, st)` (`tb[i, SWEEP_W] += …`), or its row
+  form `add_row!` (a `@noinline` `@simd ivdep` loop by default, the rule
+  of SC-e).
+- **The driver**: `blocked_predictor!(bufs, terms, u, v, w, pu, s1, s2, g)`
+  takes a compile-time tuple of terms. The first, `BaseTendencies(ν)`
+  (SC-d's advection + molecular diffusion), initialises a row; every
+  further term adds in tuple order. The ring holds `1 + max ry` rows (the
+  predictor lags `max ry` rows) and each slab keeps `max rz` edge planes
+  per end (`sweep_lags`; SC-e's fixed 2 rows and 1 plane are the case
+  ry = rz = 1). `sweep_buffers` and `sweep_slabs` take the lag and the
+  edge depth; nothing depends on the machine.
+- **The decision**: `Simulations._blocked_core` (a fixed list) became
+  `_sweep_terms`: the substage is fused when every term is a sweep term,
+  the pipeline's body-force hook contributing its components' terms
+  (`hook_terms`, in pipeline order; budgets on keep the hook). Type-stable:
+  a concrete term tuple or `nothing`.
+- **Fallback reporting**: an unfused substage is counted in the
+  simulation's `SweepReport`; the first one records every term that kept
+  it off the sweep with its documented reason and logs it once per
+  process (`event = :unfused_sweep`). A run writes
+  `[fused_sweep.<domain>]` (`path`, `fallback`) to `results.toml`. The
+  reasons live in one allowlist, `Simulations.SWEEP_FALLBACKS`.
+- **The completeness guard** (`test/fused_sweep.jl`): every method of
+  `Components.run_stage!` / `Urban.run_stage!` on `:tendencies`,
+  `:body_force` or `:post_predictor` (19 types today) and every built-in
+  term of `_euler_projection!` (found in its source: the `add_*!` calls
+  and the `sim.has_*` switches) has a `sweep_term` or an allowlist entry,
+  and no entry is stale. Today only the base tendencies are sweep terms;
+  everything else is allowlisted with the plan step that will move it.
+
+**No behaviour change.** The DNS core takes the fused path as before
+(bit-identical to the unfused path in the tests, which compare within
+ROUNDOFF_RTOL); every configuration with another term takes the unfused
+path as before. `step_rk3!` on the fused path allocates 16 bytes per step
+(as before); a composed sweep with test terms allocates 0.
+
+**Tests** (`test/fused_sweep.jl`, 727 assertions): the base term against
+the fused tendencies + predictor for 1–5 slabs, serial and threaded,
+regular and stretched, dry and moist, Euler and the RK3 combination;
+three synthetic terms composed (pointwise; radius 2 in y and z, which
+needs the 3-row ring and 2 edge planes; a `prepare!` horizontal-mean
+reduction) against their whole-field passes; `step!`/`step_rk3!` fused
+against unfused; built-in terms, hooks, budgets and components reported
+with their reasons; a test component with a sweep term keeps a domain
+fused and agrees with its `run_stage!` reference; `results.toml` of a
+Taylor–Green DNS run (`fused`) and of the dry CBL (`unfused`: SGS,
+buoyancy, `SurfaceThetaFlux`, `Sponge`).
+
+**Measured**: 256³ DNS `step_rk3!` (`bench_ka_scaling.jl dns 256 1 3`,
+`AEOLUS_FFTW_PLANNER=estimate`), base `origin/master` 9053fe04 and this
+branch alternately, one process each, under the benchmark lock; minimum
+of 2 processes, s/step (Ryzen AI 9 HX 370; the 1-minute load at start was
+1.0–8.4, other agents' unlocked jobs, so the spread between processes of
+the same code was up to 40 % at 12 threads):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| base | 1.477 | 0.852 | 0.499 | 0.453 |
+| step 1 | 1.420 | 0.830 | 0.518 | 0.450 |
+
+Equal within the noise (±4 %): no regression, as expected for the same
+arithmetic in the same loops.
+
+**Test expectation that was wrong**: the first version wrote the
+substage counts to `results.toml`; `checks.jl` (a resumed run's
+`results.toml` equals an uninterrupted run's) caught it, since the counts
+restart with a session. `results.toml` now has the path and the reasons;
+the counts stay in the `SweepReport`.
+
+**Deviations**: the issue's "lag 1 + max ry" is implemented as a ring of
+`1 + max ry` rows with the predictor `max ry` rows behind (the base
+term's ry = 1 included), the same rule counted from the base. Plan step
+1 does not yet book budgets or run post-predictor operators in the
+sweep; a `body_force!` passed as a plain function always falls back (only
+pipeline components can be terms). The interface's `SweepRow` indexes
+fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
