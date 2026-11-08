@@ -111,7 +111,8 @@ of the interior indices of each component along that axis and
 `targets = (tu, tv, tw)` its targets (each a number, a level vector, a
 `Field` or a halo-padded array, as `_add_damping!`). The arithmetic is that
 of `_add_damping!`, the one damping kernel; along z the rate is taken
-once per row. `targets` may also be any object with fields `u, v, w`.
+once per row. `targets` may also be a NamedTuple `(u, v, w)` or, along z,
+a [`DampingTargets`](@ref).
 Footprint `(0, 0, 0)`.
 """
 struct DampingTerm{A, P<:DampingProfile, C<:Tuple, G} <: SweepTerm
@@ -129,26 +130,70 @@ function DampingTerm(p::DampingProfile, axis::Int, coords::Tuple, targets, g::Ab
                                                                           first(jj) - 1, first(kk) - 1)
 end
 footprint(::DampingTerm) = (0, 0, 0)
-_dtargets(g::Tuple) = g
-_dtargets(g) = (g.u, g.v, g.w)
+
+"""
+    DampingTargets(tu, tv, tw)
+
+Targets of a [`DampingTerm`](@ref) whose kinds are known only at run time
+(the core's sponge target, a NamedTuple of abstract fields): each a
+number, a level vector or a 3-D array of eltype `T`, kept in fields of
+concrete type (`kind` 0, 1, 2 per component; the unused slots hold empty
+arrays), so the sweep branches on the kind once per row and every call
+stays concretely typed. Build it once and keep it: it allocates.
+"""
+struct DampingTargets{T}
+    kind::NTuple{3,Int}
+    c::NTuple{3,T}
+    v::NTuple{3,Vector{T}}
+    a::NTuple{3,Array{T,3}}
+end
+function DampingTargets{T}(tu, tv, tw) where {T}
+    kind = (_tkind(tu)::Int, _tkind(tv)::Int, _tkind(tw)::Int)
+    c = (_tconst(T, tu)::T, _tconst(T, tv)::T, _tconst(T, tw)::T)
+    v = (_tlevels(T, tu)::Vector{T}, _tlevels(T, tv)::Vector{T}, _tlevels(T, tw)::Vector{T})
+    a = (_tarray(T, tu)::Array{T,3}, _tarray(T, tv)::Array{T,3}, _tarray(T, tw)::Array{T,3})
+    return DampingTargets{T}(kind, c, v, a)
+end
+# one method per kind (the arguments may be of abstract type: no closures, no unions)
+_tkind(::Real) = 0
+_tkind(::AbstractVector) = 1
+_tkind(::Any) = 2
+_tconst(::Type{T}, x::Real) where {T} = T(x)
+_tconst(::Type{T}, ::Any) where {T} = zero(T)
+_tlevels(::Type{T}, x::Vector{T}) where {T} = x
+_tlevels(::Type{T}, x::AbstractVector) where {T} = Vector{T}(x)
+_tlevels(::Type{T}, ::Any) where {T} = T[]
+_tarray(::Type{T}, ::Union{Real,AbstractVector}) where {T} = Array{T,3}(undef, 0, 0, 0)
+_tarray(::Type{T}, x::Field) where {T} = _tarray(T, x.data)
+_tarray(::Type{T}, x::Array{T,3}) where {T} = x
+_tarray(::Type{T}, x::AbstractArray{<:Real,3}) where {T} = Array{T,3}(x)
+
+# component n's target of a tuple or a NamedTuple (u, v, w)
+@inline _dtarget(g::Union{Tuple,NamedTuple}, n) = g[n]
 # the 3-D targets are inputs (a number or a level vector is not checked)
 _input3(x::Field) = (x.data,)
 _input3(x::AbstractArray{<:Any,3}) = (x,)
 _input3(x) = ()
 sweep_inputs(t::DampingTerm) = _damping_inputs(t.targets)
-function _damping_inputs(g)
-    tu, tv, tw = _dtargets(g)
-    return (_input3(tu)..., _input3(tv)..., _input3(tw)...)
-end
+_damping_inputs(g::Union{Tuple,NamedTuple}) = (_input3(g[1])..., _input3(g[2])..., _input3(g[3])...)
+_damping_inputs(g::DampingTargets) = g.a
 
 @inline function add_row!(t::DampingTerm{3}, buf, a, b, s, j, k, ii, st)
     kl = k - t.k0
-    tu, tv, tw = _dtargets(t.targets)
     @inbounds begin
-        _damp_row_z!(buf, a, b, SWEEP_U, s, j, k, ii, st.u, t.p, t.coords[1][kl], tu, kl)
-        _damp_row_z!(buf, a, b, SWEEP_V, s, j, k, ii, st.v, t.p, t.coords[2][kl], tv, kl)
-        _damp_row_z!(buf, a, b, SWEEP_W, s, j, k, ii, st.w, t.p, t.coords[3][kl], tw, kl)
+        _damp_z!(buf, a, b, SWEEP_U, s, j, k, ii, st.u, t.p, t.coords[1][kl], t.targets, 1, kl)
+        _damp_z!(buf, a, b, SWEEP_V, s, j, k, ii, st.v, t.p, t.coords[2][kl], t.targets, 2, kl)
+        _damp_z!(buf, a, b, SWEEP_W, s, j, k, ii, st.w, t.p, t.coords[3][kl], t.targets, 3, kl)
     end
+    return nothing
+end
+@inline _damp_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, g, n, kl) =
+    _damp_row_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, _dtarget(g, n), kl)
+@inline function _damp_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, g::DampingTargets, n, kl)
+    kd = g.kind[n]
+    kd == 0 ? _damp_row_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, g.c[n], kl) :
+    kd == 1 ? _damp_row_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, g.v[n], kl) :
+              _damp_row_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, g.a[n], kl)
     return nothing
 end
 @noinline function _damp_row_z!(buf, a, b, f, s, j, k, ii, fd, p, ξ, target, kl)
@@ -162,10 +207,10 @@ end
 
 @inline function add_row!(t::DampingTerm{1}, buf, a, b, s, j, k, ii, st)
     kl = k - t.k0
-    tu, tv, tw = _dtargets(t.targets)
-    _damp_row_x!(buf, a, b, SWEEP_U, s, j, k, ii, st.u, t.p, t.coords[1], t.i0, tu, kl)
-    _damp_row_x!(buf, a, b, SWEEP_V, s, j, k, ii, st.v, t.p, t.coords[2], t.i0, tv, kl)
-    _damp_row_x!(buf, a, b, SWEEP_W, s, j, k, ii, st.w, t.p, t.coords[3], t.i0, tw, kl)
+    g = t.targets
+    _damp_row_x!(buf, a, b, SWEEP_U, s, j, k, ii, st.u, t.p, t.coords[1], t.i0, _dtarget(g, 1), kl)
+    _damp_row_x!(buf, a, b, SWEEP_V, s, j, k, ii, st.v, t.p, t.coords[2], t.i0, _dtarget(g, 2), kl)
+    _damp_row_x!(buf, a, b, SWEEP_W, s, j, k, ii, st.w, t.p, t.coords[3], t.i0, _dtarget(g, 3), kl)
     return nothing
 end
 @noinline function _damp_row_x!(buf, a, b, f, s, j, k, ii, fd, p, c, i0, target, kl)

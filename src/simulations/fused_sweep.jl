@@ -148,33 +148,29 @@ end
     SpongeTargets{T}
 
 The targets `u, v, w` of the core's sponge (`sim.sponge_target`) in the
-concrete form the fused sweep's damping term reads: each a number, a
-level vector or a 3-D array of eltype `T` (a `Field` by its data). Made
-once per simulation and target (`sim.workspaces.sponge`): the stored
-`sponge_target` is a NamedTuple of abstract fields, read here once
-instead of every substage. A level vector or array of eltype `T` is the
-stored one, so an in-place update of it (the nest's sponge target) is
+concrete form the fused sweep's damping term reads
+([`DampingTargets`](@ref Aeolus.Operators.FiniteVolume.DampingTargets):
+each a number, a level vector or a 3-D array of eltype `T`, a `Field` by
+its data). Made once per simulation and target (`sim.workspaces.sponge`):
+the stored `sponge_target` is a NamedTuple of abstract fields, read here
+once instead of every substage. A level vector or array of eltype `T` is
+the stored one, so an in-place update of it (the nest's sponge target) is
 seen; another eltype is converted once.
 """
 struct SpongeTargets{T}
-    u::Union{T, Vector{T}, Array{T,3}}
-    v::Union{T, Vector{T}, Array{T,3}}
-    w::Union{T, Vector{T}, Array{T,3}}
+    targets::DampingTargets{T}
     src::NamedTuple
 end
-_starget(::Type{T}, x::Real) where {T} = T(x)
-_starget(::Type{T}, x::AbstractVector) where {T} = x isa Vector{T} ? x : Vector{T}(x)
-_starget(::Type{T}, x::AbstractArray{<:Any,3}) where {T} = x isa Array{T,3} ? x : Array{T,3}(x)
-_starget(::Type{T}, x::Field) where {T} = _starget(T, x.data)
-# the targets are the simulation's own arrays (on its backend): no extra input
-Operators.FiniteVolume.sweep_inputs(::Operators.FiniteVolume.DampingTerm{A, P, C, <:SpongeTargets}) where {A, P, C} = ()
 function _sponge_targets(sim::BoussinesqSimulation{T}) where {T}
     c = sim.workspaces.sponge
-    c isa SpongeTargets{T} && c.src === sim.sponge_target && return c
+    c isa SpongeTargets{T} && c.src === sim.sponge_target && return c.targets
+    return _new_sponge_targets!(sim)
+end
+@noinline function _new_sponge_targets!(sim::BoussinesqSimulation{T}) where {T}
     tg = sim.sponge_target
-    c = SpongeTargets{T}(_starget(T, tg.u), _starget(T, tg.v), _starget(T, tg.w), tg)
+    c = SpongeTargets{T}(DampingTargets{T}(tg.u, tg.v, tg.w), tg)
     sim.workspaces.sponge = c
-    return c
+    return c.targets
 end
 
 # Every term that keeps a substage off the fused sweep, `key => reason`
