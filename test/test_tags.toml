@@ -37,6 +37,11 @@ seconds = 65
 weight = "heavy"
 seconds = 60
 
+["fused_sweep_reductions.jl"]
+weight = "heavy"
+seconds = 173
+reason = "every large-scale forcing at 1-5 slabs, serial and threaded, two grids, step! and step_rk3! (#533 step 3)"
+
 ["urban_run.jl"]
 weight = "heavy"
 seconds = 53

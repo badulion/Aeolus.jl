@@ -3259,8 +3259,10 @@ to the summed terms (1e-12 of λ_max N |φ|_max). The code was right.
 first version allocated more than the passes (75 kB per RK3 step against
 53 kB), from functions passed through unspecialised arguments
 (`forcing_mean(w_s, …)` boxed a Float64 per level) and a loop variable of
-unstable type; with function barriers 12.7 kB per step (16³ test case,
-all forcings).
+unstable type; with function barriers 12.7 kB per step (12 704 B on the
+20×12×12 test case with all forcings, and the same 12 704 B at 24×16×24:
+the test asserts the count does not change with the grid, so an
+allocation per level, row or point fails it).
 
 **Measured**: a viscous Boussinesq domain with `LargeScale` (advective
 θ and u, nudging of u, v, θ, mean-gradient and local subsidence of θ;

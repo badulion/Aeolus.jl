@@ -299,33 +299,47 @@ end
     end
 end
 
-@testset "LargeScale term: type-stable, no allocation per point; unsupported forcing reported" begin
-    s = _fr_seed!(BoussinesqSimulation(g; ν = 1e-2))
-    geo, extra = _fr_forcings(g, false)
+# the fused RK3 step of a domain with every forcing on `mesh`, after warm-up
+function _fr_alloc_domain(mesh)
+    s = _fr_seed!(BoussinesqSimulation(mesh; ν = 1e-2))
+    geo, extra = _fr_forcings(mesh, false)
     d = Domain(Domain(s; scheme = :rk3, validate = false);
                components = (CentredAdvection(), LargeScale(geo, extra)))
+    for _ in 1:3
+        step!(d, 0.2)
+    end
+    return d
+end
+
+@testset "LargeScale term: type-stable, no allocation per level, row or point; unsupported forcing reported" begin
+    d = _fr_alloc_domain(g)
     h = CPr.core_hooks(d)
     T = typeof(FVr.sweep_term(d.components[2], d))
     @test T <: CPr.LargeScaleTerm
     @test (@inferred SIMr.hook_terms(h.body_force!, d.state)) isa Tuple{T}
-    for _ in 1:3
-        step!(d, 0.2)
-    end
     n = @allocated step!(d, 0.2)
-    println("  [#533 s3] step! (RK3) of a domain with LargeScale, fused, allocates $n bytes")
-    # the forcings' records are NamedTuples behind Refs (as apply_forcing!'s), a
-    # few small allocations per substage; nothing per point (16³ points would be ≫ 1e5 bytes)
+    # the same case with twice the levels and more columns: an allocation per
+    # level (the first version of prepare! boxed a Float64 per level), per row
+    # or per point would make the two differ; the forcings' records are
+    # NamedTuples behind Refs (as apply_forcing!'s), a fixed number of small
+    # allocations per substage, so the counts agree (64 B: allocator rounding)
+    g2 = RegularGrid(; size = (24, 16, 24), extent = (200.0, 120.0, 120.0), halo = (3, 3, 3))
+    d2 = _fr_alloc_domain(g2)
+    n2 = @allocated step!(d2, 0.2)
+    println("  [#533 s3] step! (RK3) with LargeScale, fused, allocates $n bytes at 20×12×12, $n2 bytes at 24×16×24")
+    @test abs(n2 - n) <= 64
     @test n < 20_000
     @test CPr.sweep_report(d)["substages_fused"] == "all"
+    @test CPr.sweep_report(d2)["substages_fused"] == "all"
     # a damping toward a 3-D target has no column form: one loop per term, reported
-    s2 = _fr_seed!(BoussinesqSimulation(g; ν = 1e-2))
-    d2 = Domain(Domain(s2; validate = false);
+    s3 = _fr_seed!(BoussinesqSimulation(g; ν = 1e-2))
+    d3 = Domain(Domain(s3; validate = false);
                 components = (CentredAdvection(),
-                              LargeScale(nothing, (ReferenceDamping(:θ, sponge_profile(0.01, 60.0, 120.0), _fr_field3(s2)),))))
-    @test FVr.sweep_term(d2.components[2], d2) === nothing
-    step!(d2, 0.2)
-    @test CPr.sweep_report(d2)["substages_fused"] == "none"
-    @test any(startswith("Components.LargeScale:"), CPr.sweep_report(d2)["not_fusable"])
+                              LargeScale(nothing, (ReferenceDamping(:θ, sponge_profile(0.01, 60.0, 120.0), _fr_field3(s3)),))))
+    @test FVr.sweep_term(d3.components[2], d3) === nothing
+    step!(d3, 0.2)
+    @test CPr.sweep_report(d3)["substages_fused"] == "none"
+    @test any(startswith("Components.LargeScale:"), CPr.sweep_report(d3)["not_fusable"])
 end
 
 
