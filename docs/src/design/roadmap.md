@@ -3817,8 +3817,8 @@ both settings run the same code:
 (differences 0-3 %, within the turn-to-turn spread; one turn per process
 contains the 30-step tile update and is ~2× slower, hence medians). #531
 measured 397 / 280 / 268 ms at 2 / 6 / 12 threads on master d6a140c6 in
-the same phase; the base is faster since (#514, #537, #538, #539), not this
-branch. Bytes (`bench_roofline.jl`'s compulsory model, run on this config
+the same phase; the difference is in the base this branch starts from
+(both settings here run the same code), not measured further. Bytes (`bench_roofline.jl`'s compulsory model, run on this config
 at 6 threads, 9 steps): 8.71 GB/step = 3629 B/point (#531: ~3400 model,
 3630 counted); budget sums 1.92 GB (22 %), the TKE closure's N² and
 coefficients 0.61 GB (7 %). Dry CBL example (32³): 1.2 / 1.1 ms at 1
