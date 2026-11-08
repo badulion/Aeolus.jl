@@ -3248,7 +3248,7 @@ that the sweep's buffer does not carry; its masked diffusion
 already one fused plane loop (KA-l). The urban tracers' masked SGS
 diffusion (`TracerSGSDiffusion`) is a component outside the core.
 
-**Tests** (`test/fused_sweep_sgs.jl`, 5635 assertions, 150 s): the sweep
+**Tests** (`test/fused_sweep_sgs.jl`, 5635 assertions, 284 s in the parallel runner beside six other files): the sweep
 over (base, SGS term) against the separate loops + predictor for the 15
 closures above, both stress forms, 1–5 slabs forward and reversed,
 serial and threaded, Euler and the RK3 combination, dry and moist,
@@ -3270,7 +3270,52 @@ the stress form on a stretched grid was in the first agreement matrix
 stress acted" failed on its initial isotropic stress, which has no
 divergence (now three committed steps first, and θ's anomaly compared).
 
-STEP4_MEASURED
+**Measured** (Ryzen AI 9 HX 370, 15 W cap, under the benchmark lock).
+On this branch alone no configured case with SGS fuses: the dry CBL still
+needs the pointwise terms (step 2) and the budgets (step 7), GABLS1 and
+GABLS3 also `LargeScale` (step 3) and `SurfaceLayer` (steps 5, 6). The
+CBL was therefore measured on a scratch merge of this branch with step 2
+(`issue/533-s2-pointwise`; the conflicts in `_sweep_terms` resolved with
+the SGS term between the base and the built-in terms, the order of the
+passes), with its `[checks]` removed so no budget is measured
+(`sweep_report`: every substage fused, no term reported). The fused step
+agrees with `loop_fusion = "never"` after 10 steps (max |Δ| of u, w, θ:
+0). `bench_roofline.jl config … 2 8` with `ROOFLINE_PROF=0
+ROOFLINE_ALTERNATE=1` (each step alternates the two settings in one
+process), min of 8 steps of each, ms per step; the thread counts run in
+the order 1, 2, 6, 12, one process each:
+
+| grid | setting | 1 | 2 | 6 | 12 |
+| :-- | :-- | --: | --: | --: | --: |
+| 32³ (the example) | never | 1.01 | 0.81 | 0.96 | 1.39 |
+| | fused | 0.93 | 0.60 | 0.64 | 0.89 |
+| 128 × 128 × 64 | never | 46.3 | 31.2 | 19.7 | 16.7 |
+| | fused | 38.2 | 22.0 | 13.0 | 10.5 |
+| | speed-up | 1.21 | 1.42 | 1.51 | 1.59 |
+
+The gain is that of steps 2 and 4 together (without either the CBL runs
+unfused). **Bytes** (profiled runs, 128 × 128 × 64, one Euler substage per
+step, the compulsory model of `bench_roofline.jl`, the FFT's pencil items
+left out): 547 MB per step (521 B/point) with `"never"`, 218 MB (208
+B/point) fused; time in launches 29.0 → 19.7 ms at 1 thread, 18.5 → 9.5
+ms at 6. GABLS1 and GABLS3 not measured fused (above); they run one loop
+per term as before; their validation runs on this branch pass
+(`validation/run.jl --only gabls1.jl,gabls3.jl`: 8 and 19 checks, 104 s
+and 83 s).
+
+**Plan step 9 (recompute νt in the sweep) would not pay on this
+evidence.** The coefficient pass (`_b_smagorinsky!`, reads u, v, w, writes
+νt) is 33.6 MB = 32 B/point, 15 % of the fused step's compulsory bytes;
+with the sweep's own read of νt, recomputing would remove at most 40
+B/point (19 %). But the pass is not at the bandwidth roof: 5.2 ms at 1
+thread (6.4 GB/s, against a DRAM triad of 43 GB/s) and 1.55 ms at 6 (21.7
+GB/s, against 52.6), so its time is mostly the strain rate's arithmetic,
+which recomputing keeps (and multiplies, unless the strain goes into a
+rolling plane buffer and the term's footprint grows to 2). Its bytes at
+the roof are 0.64 ms + 0.16 ms (the νt read) of the 13.0 ms fused step at
+6 threads, about 6 %, and nothing measurable at 1–2 threads. Worth
+revisiting only if a closure's coefficient pass is found at the roof
+(the dynamic and AMD closures, Berlin at 12–24 threads).
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
