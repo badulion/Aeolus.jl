@@ -55,7 +55,7 @@ module PrognosticSGS
 using ..Grids: RegularGrid, CellCenter, interior
 using ..StretchedGrids: StretchedGrid
 using ..Fields: Field, interior_view, mesh, interior_map!
-using ..Backends: Backends, launch!, plane_reduce!, plane_map!, range_map!, ordered_sum
+using ..Backends: Backends, launch!, plane_reduce!, plane_map!, row_map!, range_map!, ordered_sum
 using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homogeneous_bcs,
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
@@ -91,18 +91,22 @@ the rate every sink is written with. `s` stays finite where `l → 0`
 ``e = 0``, ``l = \\min(Δ, l_{wall})`` and ``s = 0``.
 """
 @inline function tke_length_scale(e, N2, Δ; l_wall = oftype(float(Δ), Inf), c_l = 0.76)
-    sq = sqrt(max(e, zero(e)))
+    # Both cases computed and one selected (`ifelse`), with a square root of
+    # an argument that is never negative (`_sqrt_nonneg`, no domain check):
+    # the same values as the branch on N² > 0, but a loop over cells can
+    # then be vectorised (the TKE update, #554).
+    sq = _sqrt_nonneg(max(e, zero(e)))
     lmax = min(Δ, l_wall)
-    if N2 > 0
-        N = sqrt(N2)
-        l = min(lmax, c_l * sq / N)
-        s = max(sq / lmax, N / c_l)
-    else
-        l = lmax
-        s = sq / lmax
-    end
+    stable = N2 > 0
+    N = _sqrt_nonneg(max(N2, zero(N2)))
+    l = ifelse(stable, min(lmax, c_l * sq / N), lmax)
+    s = ifelse(stable, max(sq / lmax, N / c_l), sq / lmax)
     return l, s
 end
+# √x for x ≥ 0 or NaN (the caller guarantees it): the LLVM intrinsic, which
+# has no branch to `DomainError`; the same, correctly rounded, value
+@inline _sqrt_nonneg(x::Union{Float32,Float64}) = Base.sqrt_llvm(x)
+@inline _sqrt_nonneg(x) = sqrt(x)
 
 """
     tke_dissipation_coefficient(l, Δ; c_ε0 = 0.19, c_ε1 = 0.51, factor = 1) -> c_ε
@@ -297,6 +301,7 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC, SX} <: AbstractSGS
     snap::Array{T,3}
     stats::Vector{T}      # see tke_statistics
     snapstats::Vector{T}
+    rowsums::Matrix{NTuple{8,T}}   # scratch: the budget sums of every i-row (_update!)
 end
 
 const _NSTATS = 10
@@ -352,7 +357,8 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
                       θ₀ === nothing ? T(NaN) : T(θ₀), g_accel === nothing ? T(NaN) : T(g_accel),
                       qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, surface_flux, transport, dissipation, adv,
                       transport ? _reconstruction(adv) : nothing, mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
-                      similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS))
+                      similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS),
+                      Matrix{NTuple{8,T}}(undef, g.Ny, g.Nz))
     walls === nothing || attach_immersed_walls!(c, walls)
     return c
 end
@@ -421,7 +427,7 @@ end
 #
 # KA-l (#304): the pointwise parts of the closure (coefficients, production
 # factors, the update of e, the initialisation) are point bodies run by
-# `launch!` (the update by `plane_map!`, which also sums its budget).
+# `launch!` (the update by `row_map!`, which also sums its budget).
 function _coefficients!(ν::Field, κt::Field, c::TKEClosure{T}, N2::Field) where {T}
     g = mesh(c.e)
     launch!(Backends.backend(ν.data), _coefficients_body!, interior(g), ν.data, κt.data, c.e.data,
@@ -899,25 +905,25 @@ _storage(A) = (1:size(A, 1), 1:size(A, 2), 1:size(A, 3))
 _tke_volume_sum(a, c, V0, ::RegularGrid) = sum(a) * V0
 _tke_volume_sum(a, c, V0, g::StretchedGrid) = sum(sum(view(a, :, :, k)) * c.vrel[k] for k in 1:g.Nz) * V0
 
-# The update of e, fused with the volume sums of its budget (KA-l, #304):
-# one work item per plane (`plane_map!`, measured 1.02x the old loop where
-# the eight-lane `plane_reduce!` took 1.09x) updates the plane's cells in
-# their loop order, each adding its contributions (P_s, P_b, transport, wall
-# work, dissipation, buoyant destruction, clip count, clipped energy) to the
-# plane's running sums; the planes are combined in ascending k. e is the
-# loop's bit for bit; the sums are a named one-time change of order (per
-# plane instead of one running sum over the domain).
+# The update of e, fused with the volume sums of its budget (KA-l, #304;
+# rows #554): one work item per i-row (`row_map!`) updates the row's cells in
+# ascending i, each adding its contributions (P_s, P_b, transport, wall work,
+# dissipation, buoyant destruction, clip count, clipped energy) to the row's
+# running sums; the rows of a plane are combined in ascending j, the planes
+# in ascending k. e is pointwise, the same bits at any thread count; the
+# sums are thread-invariant and differ from the per-plane running sums of
+# KA-l (a plane per work item, which left threads idle with 60 planes at 12
+# or more threads) only in the order of the additions.
 function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     g = mesh(c.e)
     V0 = T(_tke_volume0(g))
     par = (Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, Nz = g.Nz, V0 = V0, Δt = Δt, pb1 = T(pbs[1]),
            pb2 = T(pbs[2]), ck = c.c_k, cl = c.c_l, cε0 = c.c_ε0, cε1 = c.c_ε1,
-           sfac = c.surface_factor, exact = c.dissipation === :exact)
-    parts = Vector{NTuple{8,T}}(undef, g.Nz)
-    plane_map!(parts, Backends.backend(c.e.data), _tke_update_plane, interior(g),
-               c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data, c.Δk, c.vrel,
-               c.l_wall, c.first_level, c.mask, par)
-    sPs, sPb, sT, sPw, sε, sB, nclip, eclip = ntuple(n -> ordered_sum(map(p -> p[n], parts)), Val(8))
+           sfac = c.surface_factor)
+    # the dissipation form as a type, so the row loop is compiled for one
+    exact = c.dissipation === :exact
+    exact ? _update_rows!(c, par, Val(true)) : _update_rows!(c, par, Val(false))
+    sPs, sPb, sT, sPw, sε, sB, nclip, eclip = _sum_rows(c.rowsums)
     st = c.stats
     st[1] += nclip; st[2] += eclip
     st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
@@ -927,67 +933,97 @@ function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
     return c
 end
 
-# one plane: the cells in their loop order, each updating e and adding its
-# contributions to the plane's running sums
-function _tke_update_plane(K, ir, jr, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level, mask, p)
-    T = eltype(ed)
-    acc = ntuple(_ -> zero(T), Val(8))
-    for J in jr, I in ir
-        acc = map(+, acc, _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall,
-                                           first_level, mask, p))
+_update_rows!(c, par, exact::Val) =
+    row_map!(c.rowsums, Backends.backend(c.e.data), _tke_update_row, interior(mesh(c.e)),
+             c.e.data, c.ν.data, c.N2.data, c.D.data, c.tend.data, c.Pw.data, c.Δk, c.vrel,
+             c.l_wall, c.first_level, c.mask, par, exact)
+
+# the row sums of `row_map!` combined: the rows of a plane in ascending j,
+# then the planes in ascending k (component by component)
+function _sum_rows(rows::AbstractMatrix{NTuple{N,T}}) where {N, T}
+    tot = ntuple(_ -> zero(T), Val(N))
+    @inbounds for k in axes(rows, 2)
+        pl = ntuple(_ -> zero(T), Val(N))
+        for j in axes(rows, 1)
+            pl = map(+, pl, rows[j, k])
+        end
+        tot = map(+, tot, pl)
     end
-    return acc
+    return tot
 end
 
+# One row: every cell updates e and adds its contributions to the row's
+# sums. `@simd` lets the compiler vectorise the loop over i (the body has
+# no branches), which reorders the row's sums into vector lanes: a fixed
+# order for a given build, the same at any thread count. Measured 4x the
+# scalar loop at 200x200x60 (#554).
+function _tke_update_row(J, K, ir, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level, mask, p,
+                         exact::Val)
+    T = eltype(ed)
+    a1 = a2 = a3 = a4 = a5 = a6 = a7 = a8 = zero(T)
+    @simd for I in ir
+        r = _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level, mask,
+                             p, exact)
+        a1 += r[1]; a2 += r[2]; a3 += r[3]; a4 += r[4]
+        a5 += r[5]; a6 += r[6]; a7 += r[7]; a8 += r[8]
+    end
+    return (a1, a2, a3, a4, a5, a6, a7, a8)
+end
+
+# The update of one cell, and its contributions to the budget sums. Every
+# case is computed and the result selected (`ifelse`), so the row loop has
+# no branches: a solid cell computes from whatever its fields hold and then
+# gets e = 0 and no contribution; the exact dissipation step falls back to
+# the linearised one where it does not apply (l = 0 or e* = 0). The values
+# selected are the expressions of the branching form (#304), bit for bit.
 @inline function _tke_update_body(I, J, K, ed, nd, n2, dd, td, pw, Δk, vrel, l_wall, first_level,
-                                  mask, p)
+                                  mask, p, ::Val{EXACT}) where {EXACT}
     T = eltype(ed)
     z = zero(T)
     i, j, k = I - p.Hx, J - p.Hy, K - p.Hz
     @inbounds begin
-        if _solid(mask, I, J, K)
-            ed[I, J, K] = z
-            return (z, z, z, z, z, z, z, z)
-        end
+        solid = _solid(mask, I, J, K)
         Δt = p.Δt
         Δ = Δk[k]; vr = vrel[k]; V = p.V0 * vr
         e = ed[I, J, K]
         N2 = n2[I, J, K]
         l, s = tke_length_scale(e, N2, Δ; l_wall = _lwall(l_wall, i, j, k, T), c_l = p.cl)
-        fac = _first(first_level, i, j, k) ? p.sfac : one(T)
+        fac = ifelse(_first(first_level, i, j, k), p.sfac, one(T))
         cε = tke_dissipation_coefficient(l, Δ; c_ε0 = p.cε0, c_ε1 = p.cε1, factor = fac)
         Ps = nd[I, J, K] * dd[I, J, K] + pw[I, J, K]
         κv = (1 + 2l / Δ) * nd[I, J, K]
-        Psf = (k == 1 ? p.pb1 : z) + (k == p.Nz ? p.pb2 : z)
+        Psf = ifelse(k == 1, p.pb1, z) + ifelse(k == p.Nz, p.pb2, z)
         Pb = -κv * N2 + Psf
         # sources: P_s and the positive buoyancy production; sinks, linear in
         # e: dissipation c_ε s e, the buoyant destruction κ_t N² = r_N e
         # (r_N = (1+2l/Δ) c_k N²/s, finite as e → 0) and a stable surface flux
-        src = Ps + (N2 < 0 ? -κv * N2 : z) + max(Psf, z)
-        rb = (N2 > 0 && s > 0 ? (1 + 2l / Δ) * p.ck * N2 / s : z) +
-             (Psf < 0 ? -Psf / max(e, floatmin(T)) : z)
+        src = Ps + ifelse(N2 < 0, -κv * N2, z) + max(Psf, z)
+        rb = ifelse((N2 > 0) & (s > 0), (1 + 2l / Δ) * p.ck * N2 / s, z) +
+             ifelse(Psf < 0, -Psf / max(e, floatmin(T)), z)
         tr = td[I, J, K]
         estar = e + Δt * (tr + src)
-        nclip = z; eclip = z
-        if estar < 0
-            nclip = one(T); eclip = -(estar * V)
-            estar = z
-        end
+        clip = estar < 0
+        nclip = ifelse(clip, one(T), z)
+        eclip = ifelse(clip, -(estar * V), z)
+        estar = ifelse(clip, z, estar)
+        # the linearised implicit sinks
         rε = cε * s
-        if p.exact && l > 0 && estar > 0
-            e1 = inv(inv(sqrt(estar)) + cε * Δt / (2l))^2
-            enew = e1 / (1 + Δt * rb)
-            dε = (estar - e1) / Δt
-            dB = (e1 - enew) / Δt
-        else
-            R = rε + rb
-            enew = estar / (1 + Δt * R)
-            rem = (estar - enew) / Δt
-            dε = R > 0 ? rem * (rε / R) : z
-            dB = R > 0 ? rem * (rb / R) : z
+        R = rε + rb
+        enew = estar / (1 + Δt * R)
+        rem = (estar - enew) / Δt
+        dε = ifelse(R > 0, rem * (rε / R), z)
+        dB = ifelse(R > 0, rem * (rb / R), z)
+        if EXACT        # the exact dissipation step, where l > 0 and e* > 0
+            ok = (l > 0) & (estar > 0)
+            e1 = inv(inv(_sqrt_nonneg(estar)) + cε * Δt / (2l))^2
+            ex = e1 / (1 + Δt * rb)
+            dε = ifelse(ok, (estar - e1) / Δt, dε)
+            dB = ifelse(ok, (e1 - ex) / Δt, dB)
+            enew = ifelse(ok, ex, enew)
         end
-        ed[I, J, K] = enew
-        return (Ps * vr, Pb * vr, tr * vr, pw[I, J, K] * vr, dε * vr, dB * vr, nclip, eclip)
+        ed[I, J, K] = ifelse(solid, z, enew)
+        return ifelse(solid, (z, z, z, z, z, z, z, z),
+                      (Ps * vr, Pb * vr, tr * vr, pw[I, J, K] * vr, dε * vr, dB * vr, nclip, eclip))
     end
 end
 
