@@ -182,6 +182,19 @@ makes ``e^*`` negative it is set to zero and booked
 Because ``e`` is the closure's memory, `sgs_state` / `restore_sgs_state!`
 make a step `step_adaptive!` rejects exact.
 
+**One cache-blocked pass** (#554). On the CPU the part of the commit that
+reads ``e`` (``ν_t``, the flux-limited advection, the ``2ν_t`` diffusion,
+the update and its budget sums) runs row by row on the blocked driver of
+the fused sweep (`FiniteVolume.blocked_update!`): a pipeline two rows
+ahead keeps ``ν_t``, the face fluxes and the limiter's ratio in small
+rings, and the new ``e`` is written back once no later row reads the old
+one. Every value is computed by the point body of the separate loop, so
+``e`` and the budget sums agree with the separate loops to round-off
+(measured identical). ``N^2``, the dual strain and the wall production do
+not read ``e`` and stay separate loops before it. `[timestep] loop_fusion
+= "never"` runs the separate loops; the run's `results.toml`
+(`[loop_fusion]`, `tke_update_blocked`) says which ran.
+
 ``e = 0`` is a fixed point of the equation (``ν_t = 0`` produces nothing):
 [`initialize_tke!`](@ref Aeolus.PrognosticSGS.initialize_tke!) seeds the
 local equilibrium of the initial flow

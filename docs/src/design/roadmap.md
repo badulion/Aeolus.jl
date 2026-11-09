@@ -3190,6 +3190,270 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+#### The TKE equation's update in one cache-blocked pass (#554)
+
+Follow-up to #533 (plan step 4): `advance_sgs!(::TKEClosure)`, about 41
+of the 231 ms in kernels per Berlin step at 6 threads.
+
+**Part 1: the two slow kernels** (branch `issue/554-tke-blocked`, on
+#545). Both were limited by computation, not bandwidth, and in both the
+cause was a branch in every cell that kept the row loop scalar.
+
+- The update of e (`_update!`, was `_tke_update_plane`): one work item
+  per i-row (`Backends.row_map!`, the row form of `plane_map!`); the point
+  body computes every case and selects (`ifelse`: solid cells, clipping,
+  the exact-dissipation fallback, the surface flux terms), the dissipation
+  form is a type parameter, and `tke_length_scale` is branch-free with a
+  square root without the `DomainError` branch. The row loop is `@simd`
+  and vectorises. e is unchanged (max |Δe| = 0 against the old kernel);
+  the budget sums are reordered into vector lanes (within 3e-14).
+  200×200×60 with a solid mask, min / median of 45 interleaved calls
+  (each with a 0.9 ms copy of e): 6 threads 9.60 / 10.29 → 3.22 / 3.85 ms,
+  12 threads 5.62 / 6.39 → 3.12 / 3.31 ms, 1 thread 35.2 → 9.4 ms.
+- The dual strain rate (`_dual_strain!`): profiled first. The bulk cells
+  alone, launched with a body without the "bulk or shell" branch, cost
+  10.5 of the kernel's 41 ms at 1 thread. Now one work item per i-row: a
+  bulk row is its two end cells through the halo-fold body and a
+  branch-free loop between; a row of a k face (away from the i, j
+  boundaries) checks k only (`_DualBoxK`); only the halo cells are zeroed.
+  Same shares, same order: D unchanged (max |ΔD| = 0). 200×200×60: 1
+  thread 40.9 → 15.6 ms (stretched 47.0 → 19.3), 6 threads 9.08 / 11.98 →
+  4.00 / 5.42 ms, 12 threads 7.06 / 8.40 → 3.53 / 4.09 ms.
+
+**Berlin** (`bench_roofline.jl` flagship profile of the 200×200×60 run,
+dt = 2 s, 9 steps; one process per setting, in the order base 6, new 6,
+new 12, base 12; package power logged: 18.5–19.2 W mean, 33–38 W peak,
+~1.7–1.9 GHz mean clock in every run, so the comparison is at the same
+power limit), ms per step:
+
+| kernel | 6 threads before → after | 12 threads before → after |
+| :-- | --: | --: |
+| dual strain | 10.54 → 4.65 | 7.86 → 3.66 |
+| update of e + budget sums | 8.89 → 2.55 | 5.55 → 2.57 |
+| sum | 19.4 → 7.2 | 13.4 → 6.2 |
+
+These before / after pairs ran in separate processes from two checkouts,
+not interleaved in one process, and the 12-thread per-kernel figures come
+from the same profiler whose 12-thread per-step totals are not usable
+(below); the final measurement further down repeats the comparison as
+alternating processes. The time in launches per step fell 221.7 → 210.6 ms at 6 threads (the
+profiler's per-step totals at 12 threads are not usable: its overhead
+correction exceeds the step). The update is now at ~54 GB/s of compulsory
+traffic, the DRAM triad (52.6 GB/s): bandwidth-bound, which part 2's
+single pass addresses.
+
+**Tests** (`test/tke.jl`): the update against a scalar transcription of
+the branching update (regular grid with mask, wall distance and first
+level; stretched grid; both dissipation forms; serial and threaded): e
+within 4 eps (measured 0), sums within 1e-11 (measured ≤ 3.1e-15, the
+cancelling transport sum 3.4e-14 of the production scale). The dual
+strain against the scatter it replaced (each velocity point adding its 18
+shares to the cells it borders, the halo fold, the per-volume division):
+regular and stretched, 12×10×8 and 3×1×4, periodic and no-flux lateral
+boundaries, serial and threaded, within 1e-13 of max |D| (measured ≤
+3.8e-16). `thread_invariance.jl`: `row_map!` serial against threaded; the
+worker's sgs section agrees at -t 1/4/12 in all 109 results.
+
+**Expectation that was wrong** (the test's, not the code's): the first
+version of the update test drew its random fields with `rand(rng, n)`
+for a size tuple `n`, which picks one element of the tuple instead of an
+array, so e was a constant and no cell clipped; caught by the test's own
+`clips > 0` check, fixed to `rand(rng, n...)`.
+
+**Part 2: the update as one cache-blocked pass.**
+
+- **One driver.** The slab and ring machinery of #533 is now
+  `FiniteVolume.blocked_update!`, generic over a `BlockedUpdate`
+  (`update_lags`, `compute_rows!`, `write_row!`, `write_point!`,
+  optionally `begin_slab!`). The predictor is one such update
+  (`blocked_predictor!` builds it, unchanged results, `fused_sweep.jl`
+  green); the TKE update is the other (`src/prognostic_sgs/tke_blocked.jl`).
+  `reverse_slabs` replaces the test's copy of the driver body.
+- **The pass.** The part of `advance_sgs!` that reads e runs row by row:
+  per slab and j-row, a pipeline two rows ahead computes ν, the
+  reconstructed and upwind x, z face fluxes and the limiter's ratio of row
+  j+1 and the y faces between rows j+1 and j+2, limits the y faces between
+  j and j+1, then finishes row j (its x, z faces limited, the divergence,
+  the diffusion with 2ν, the update with its budget sums). ν, the fluxes
+  and the ratio live in small rings of 2–3 rows over planes k0−1:k1+1;
+  the new e goes into the driver's ring. Every value is computed by the
+  point body of the separate loop (`_coefficients_body!`, `_b_rflux_*!`,
+  `_b_uflux_*!`, `_b_limit_ratio!`, `_b_limit_*!`, `_b_flux_div!`,
+  `_b_eddy_scalar!` / `_masked!`, `_tke_update_row`) through array
+  adapters on the rings: one source of truth, and the values are those of
+  the separate loops.
+- **Footprint.** A face flux of a reconstruction with halo hr reads e hr
+  cells from the face, the ratio its six faces, a limited face the ratios
+  of its two cells: the new e reads the old e hr + 1 cells away, so
+  lz = hr + 1 edge planes (2 centred, 4 WENO-Z5). Because the pipeline
+  carries the stencil in its rings, the lag in j is max(1, hr − 2) rows,
+  not hr + 1 (`tke_blocked_lags`). Without transport the update is
+  pointwise and runs in place.
+- **Halos.** The separate loops fill the halos of ν and of the ratio from
+  the interior; the pass computes both on the boundary shell first, fills
+  their halos the same way, and copies the halo cells into its rings. This
+  reproduces periodic, mirror and open faces (an open face mirrors fields
+  without boundary data). The shell's ratio evaluates each face flux by its
+  body where the ratio reads it (`_FaceFlux`, 6 launches): storing the
+  shell's fluxes first took 42 launches and 3.3 ms at 6 threads (200×200×60),
+  now 0.8 ms.
+- **Not fused**: N² and the dual strain do not read e and stay separate
+  loops before the pass, as does the wall production (a scatter over the
+  wall faces; with walls attached ν is also stored, because the stencil
+  share reads it). ν is not stored otherwise. In `src/`, nothing outside
+  `advance_sgs!` and `tke_budget` (which computes its own) reads the
+  closure's `ν`, `κt`, `tend` or `Pw`; the diagnostics, the output and the
+  urban couplings read `sim.νt` / `sim.κt` and `c.e`. The first version of
+  this section said "nothing reads them" without checking `validation/`:
+  `validation/anelastic_cbl.jl` built its SGS heat flux from `c.κt`, which
+  the pass leaves 0 in most of the interior of a fresh closure (found in
+  review; the validation now reads `sim.κt`, as `gabls1.jl` does). The pass
+  writes ν and κt on the boundary shell only, so their interior holds an
+  earlier call's values; the `advance_sgs!` docstring says so and where the
+  step's coefficients are read.
+- **Settings and report.** `loop_fusion = "never"` runs the separate loops
+  (`_advance_separate!`, the reference); `"always"` refuses a case the
+  pass cannot run (only a GPU backend now). `sweep_report` (results.toml
+  `[loop_fusion]`) gains `tke_update_blocked` (`all`/`some`/`none`) and
+  `tke_not_blocked` (the reason).
+
+**Measured** (all under the benchmark lock, settings interleaved within
+one process, min / median of 45 calls of the whole `advance_sgs!`, each
+call including a copy of e: 0.8–0.9 ms; e identical, max |Δe| = 0):
+
+| case | 6 threads separate → blocked | 12 threads separate → blocked |
+| :-- | --: | --: |
+| 200×200×60, centred, solid mask | 29.48 / 31.16 → 20.53 / 22.57 ms | 29.71 / 30.48 → 15.20 / 17.59 ms |
+| 200×200×60, WENO-Z5 (halo 3) | 31.76 / 33.62 → 25.01 / 26.89 ms | 33.37 / 34.12 → 25.77 / 28.11 ms |
+| 200×200×60 stretched, centred | 29.81 / 31.22 → 16.60 / 18.29 ms | 31.48 / 32.65 → 15.13 / 17.96 ms |
+| Berlin 100 m state (204×204×64 storage) | 29.90 / 31.10 → 16.56 / 17.85 ms | 30.91 / 31.71 → 14.03 / 15.01 ms |
+
+Package power (mean / peak, mean clock): synthetic 23–24 W / 39 W,
+2.0–2.1 GHz; Berlin 20.5–20.9 W / 39–44 W, 1.75–1.96 GHz. Each before and
+after pair ran in one process, interleaved, so at the same limit.
+
+Berlin per-kernel profile (`roofline_cfg.jl flagship`, dt = 2 s, 9 steps;
+order never 6, if_possible 6, if_possible 12, never 12; 17.6–19.2 W mean):
+the kernels the pass replaces (one ν call, nine flux/limiter kernels, ratio,
+divergence, `_double!`, the e diffusion, the update) took **21.7 ms per step
+at 6 threads and 22.8 ms at 12**; the pass (`_b_sweep_slab!` +
+`_b_sweep_edge!` + the shell's ν and ratio) takes **9.3 and 8.1 ms**. The
+time in launches fell from 211.8 to 195.9 ms per step at 6 threads. The
+profiler's compulsory traffic of those kernels is 453 bytes per point
+before and 112 after (the slab sweep 77, the edge write-back 33, the
+shell 3). The sweep runs at ~25 GB/s at 6 threads, below the DRAM triad
+(52.6 GB/s): it is now limited by computation. At one thread the pass
+costs 41.4 ms against 43.9 ms for the separate kernels it replaces (the
+same arithmetic). The flux bodies' upwind branch (`_face_x`: `if vel ≥ 0`)
+keeps their row loops scalar.
+
+Deviations from the plan and the estimate: N² and D are not computed in
+the pass (above); the issue's estimate of 41 → 15–20 ms for the whole
+`advance_sgs!` came out at 29.9 → 16.6 ms (6 threads) for what the
+reference costs today, after part 1. The WENO-Z5 case gains least: with 6
+slabs of 10 planes, lz = 4 makes 8 of every 10 planes edge planes, and
+each slab computes ν, the fluxes and the ratio on one extra plane at each
+end (12 planes of work for 10). The slab count caps the threads that
+work: `sweep_slabs` gives at most nk ÷ 2lz slabs, one work item each, so
+with 60 levels 7 for WENO-Z5 and 15 for centred; at the cap every plane is
+an edge plane and further threads are idle. That is why WENO-Z5 gains
+nothing from 6 to 12 threads (25.01 → 25.77 ms; 24.06 ms at 24 threads in
+the review's rerun) and the centred case is slower at 24 than at 12 (16.35
+against 15.20 ms). Part of the 12-thread ratios is also the reference's
+poor scaling: the separate loops take 29.48 / 29.71 / 31.42 ms at 6 / 12 /
+24 threads (centred, masked).
+
+**Tests** (`test/tke_blocked.jl`): the pass against the separate loops at
+1–5 slabs and in reverse slab order, serial and threaded (also run at
+`-t 4`), on a regular grid (WENO-Z5 and centred) and a stretched grid,
+with a solid mask and wall-modelled immersed walls, a surface value, a
+prescribed surface heat flux, transport on and off, both dissipation forms
+(741 checks); no-flux lateral faces; a 6×1×3 column; an open box (halo 2
+and 3). e within 4 eps of max e (measured 0 in every case), the budget
+sums within 1e-12 relative (measured ≤ 2.0e-16); the limiter acted (3202
+cells with ratio < 1). `advance_sgs!` under `if_possible` and `never`
+agrees, and the report says which ran. `test/tke.jl`'s update test now calls the
+separate loops for its ν, D and transport, which the pass does not store.
+The thread-invariance worker's sgs section (`AEOLUS_THREAD_TESTS=1`)
+agrees. No bug was caught by the tests: the pass agreed exactly on the
+first run. The one wrong decision was an open-face exclusion: it kept
+Berlin on the separate loops (the first Berlin measurement showed equal
+times) until the open face's fill of ν and the ratio was checked (a
+mirror) and tested.
+
+**Review.** Twelve findings (two the same, three confirmations); fixed, each with a test and a commit:
+
+- `validation/anelastic_cbl.jl` read the closure's `c.κt`, which the pass
+  does not keep (above). It reads `sim.κt` now; the `advance_sgs!`
+  docstring says what the pass leaves in `ν`, `κt`, `tend`, `Pw`. Test:
+  three steps blocked and separate give the same e, `sim.νt`, `sim.κt`
+  (within 1e-12 of their maxima). The validation now gives z_i 2175 m on
+  both cores (Δz_i/z_i = 0.000) and Δθ_ML = +0.24 K (2026-10-07: +0.034
+  and +0.22 K).
+- Every blocked-vs-separate test ran the separate loops first on the same
+  closure, whose interior ν and ratio would have hidden a boundary cell the
+  pass failed to compute. `tkb_run!` sets ν, κt and the ratio to NaN before
+  each run; with the shell's ν disabled the main set then fails.
+- The pass's entry was type-unstable (a `Union` reconstruction field, the
+  dissipation form as a `Val` of a runtime value, the wall production a
+  `Union`, the rings out of the closure's `RefValue{Any}` abstract), so
+  `blocked_update!` was reached by a dynamic call: 3312 B per call, not the
+  "large named tuple" this section first blamed. Now 0 B, as the separate
+  loops; the test asserts no more bytes than them (0 without walls).
+- The gate runs each file at one thread, so the "threaded" cases ran the
+  slabs one after another; a `-t 4` subprocess now runs WENO-Z5 and centred,
+  with and without the mask, at 2–5 slabs against the separate loops.
+- The `[timestep] loop_fusion` and `set_loop_fusion!` docs now say the
+  setting also chooses the TKE update, on either core (test on an
+  anelastic core). `sweep_slabs` documents the cap above.
+  `_sqrt_nonneg` notes that `Base.sqrt_llvm` is internal, falls back to
+  `sqrt` if it goes, and is tested against `sqrt` bit for bit.
+
+Rejected: `tke_not_blocked` "never cleared": the reason explains the
+fallbacks that the `"some"` count reports, and the counters and the reason
+live in the same `SweepReport` (new with every session), so they cannot
+disagree on resume. Splitting the slabs in j beyond the cap needs edge rows
+in j too; left open. Confirmed by the review: one source of truth, the
+race and footprint argument, the speed-ups (reruns at 2 and 24 threads).
+
+**Final measurement** (after the review's fixes; Berlin 100 m state after
+3 steps, the closure's solid mask, centred, open lateral faces; all under
+the benchmark lock with package power logged). The whole `advance_sgs!`,
+min / median of 45 calls, each with a 0.9 ms copy of e. Before = the base
+branch (`issue/533-sweep-interface`, f18feb68), in alternating processes
+base, new, base, new per thread count (the two runs of each agree within
+1 ms; quoted: the first pair); separate → blocked = `loop_fusion` "never"
+against "if_possible", interleaved in one process (part 1 is in both).
+e is the same in all three (max |Δe| = 0).
+
+| threads | before (base branch) | separate (part 1) | blocked (parts 1 + 2) |
+| --: | --: | --: | --: |
+| 1 | 113.32 / 116.67 ms | 59.70 / 60.88 ms | 50.70 / 51.38 ms (50.11 / 50.54 in its own process) |
+| 6 | 42.07 / 45.14 ms | 30.05 / 31.66 ms | 17.01 / 19.70 ms (16.63 / 18.27) |
+| 12 | 38.85 / 40.10 ms | 30.84 / 32.44 ms | 14.32 / 16.05 ms (14.43 / 15.78) |
+
+Power (mean / peak, mean clock): 1 thread 15.8–16.3 W / 18–23 W, 1.46–1.54
+GHz; 6 threads 17.2–18.4 W / 26–32 W, 1.66–1.74 GHz; 12 threads
+17.6–18.5 W / 30–31 W, 1.77–1.86 GHz; before and after within 1 W of each
+other at every thread count, so at the same power limit.
+
+Per-kernel profile at 6 threads (`roofline_cfg.jl flagship`, dt = 2 s,
+9 steps; base, never, if_possible; 17.3–17.5 W mean): the time in launches
+per step is 227.8 (base) → 213.5 (never) → 200.6 ms (if_possible). The
+kernels the pass replaces take 22.7 ms per step and 453 bytes per point of
+compulsory traffic; the pass takes 9.6 ms and 112 bytes per point (slab
+sweep 7.72 ms / 77 B, edge write-back 0.33 ms / 33 B, the shell's ν and
+ratio 1.52 ms / 3 B). The dual strain is 10.03 → 4.59 ms and the update of
+e (now inside the pass) was 9.30 ms in the base branch.
+
+**Open**: the flux bodies vectorise poorly (the upwind branch), which now
+bounds the pass; N² and D could join the pass (D's row kernel already
+exists); the slab cap (j-blocks with edge rows in j); with walls attached
+ν is computed twice per step (stored for the wall production and again in
+the rings); the Reynolds-stress closure (`_rsm_update_plane`) could use
+the same driver (plan step 4) and the urban `TracerSGSDiffusion` loops
+(plan step 3).
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall

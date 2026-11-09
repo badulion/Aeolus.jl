@@ -207,6 +207,12 @@ The results agree within round-off either way. Only `step!` and
 the anelastic core always run one loop per term, so `:always` is refused
 for an anelastic core. The TOML key is
 `[timestep] loop_fusion` (`"if_possible"`, `"always"`, `"never"`).
+
+The setting also chooses the update of a prognostic TKE closure
+(`PrognosticSGS.TKEClosure`, #554), on either core: one cache-blocked
+pass unless `:never`, which runs its separate loops; `:always` refuses a
+case the pass cannot run (a GPU backend). [`sweep_report`](@ref) records
+which ran (`tke_update_blocked`).
 """
 function set_loop_fusion!(sim, setting)
     m = Symbol(setting)
@@ -246,6 +252,12 @@ substage on separate loops (one per term) ([`SWEEP_FALLBACKS`](@ref)). The subst
 counts stay in the simulation's [`SweepReport`](@ref)
 (`sim.workspaces.fused`): they restart with a resumed session, and a
 resumed run's `results.toml` is that of an uninterrupted run.
+
+With a prognostic TKE closure (`PrognosticSGS.TKEClosure`) the table also
+has `tke_update_blocked` (`"all"`, `"some"` or `"none"`): whether the
+closure's update of e ran as one cache-blocked pass (#554) or as separate
+loops (the reference, and what `loop_fusion = "never"` runs), and
+`tke_not_blocked`, the reason when the blocked pass could not run.
 """
 function sweep_report(sim)
     r = sim.workspaces.fused
@@ -254,8 +266,13 @@ function sweep_report(sim)
         fb = [_blocker("builtin.core")]
     end
     sub = r.unfused == 0 && r.fused > 0 ? "all" : r.fused == 0 ? "none" : "some"
-    return Dict{String,Any}("setting" => string(r.loop_fusion), "substages_fused" => sub,
-                            "not_fusable" => String[string(first(p), ": ", last(p)) for p in fb])
+    d = Dict{String,Any}("setting" => string(r.loop_fusion), "substages_fused" => sub,
+                         "not_fusable" => String[string(first(p), ": ", last(p)) for p in fb])
+    if r.tke_blocked + r.tke_separate > 0         # a TKE closure's update of e (#554)
+        d["tke_update_blocked"] = r.tke_separate == 0 ? "all" : r.tke_blocked == 0 ? "none" : "some"
+        isempty(r.tke_reason) || (d["tke_not_blocked"] = r.tke_reason)
+    end
+    return d
 end
 
 # Steps 2-12 of `_euler_projection!` in the fused sweep when every term of

@@ -90,6 +90,10 @@ ti_read(path) = Dict{String,Any}(deserialize(path))
                               (k, ir, jr, C) -> (s = 0.0; @inbounds(for j in jr, i in ir
                                   x = 0.5 * C[i, j, k]; C[i, j, k] -= x; s += x end); s), I3, C);
                               vcat(p, vec(C)))),
+                          ("row_map! (fused, #554)", b -> (C = copy(B); p = row_map!(zeros(16, 8), b,
+                              (j, k, ir, C) -> (s = 0.0; @inbounds(for i in ir
+                                  x = 0.5 * C[i, j, k]; C[i, j, k] -= x; s += x end); s), I3, C);
+                              vcat(vec(p), vec(C)))),
                           ("range_max (NaN)", b -> range_max(b, (i, j, k, A) -> (@inbounds abs(A[i, j, k])), I3, A)))
             r1, r2 = f(ser), f(thr)
             (r1 isa Bool ? r1 == r2 : values_agree(r1, r2)) || push!(bad, what)

@@ -56,8 +56,11 @@ mutable struct SweepReport
     fallback::Vector{Pair{String,String}}
     reported::Bool
     loop_fusion::Symbol   # the setting: :if_possible, :always or :never (`set_loop_fusion!`)
+    tke_blocked::Int      # updates of a TKE closure's e as one cache-blocked pass (#554)
+    tke_separate::Int     # ... as separate loops
+    tke_reason::String    # why the blocked pass could not run ("" when it could, or by setting)
 end
-SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible)
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, 0, 0, "")
 
 """
     StepWorkspaces()

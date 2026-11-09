@@ -175,24 +175,15 @@ end
 # any thread count (#533 review).
 function _fs_sweep_reversed!(a, mesh, Δt, terms, rk3, snap, ns)
     moist = a.has_moisture
-    ii, jj, kk = interior(mesh)
+    nk = length(interior(mesh)[3])
     lag, lz = FVs.sweep_lags(terms)
-    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, length(kk); lag = lag, lz = lz)
+    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz)
     foreach(t -> FVs.prepare!(t, a, Δt), terms)
     c = SIMs._Lin2r(0.75, 0.25)
     ps = rk3 ? SIMs._AxpyStage(SIMs._Axpy(Δt), c) : SIMs._Axpy(Δt)
     s1 = (a.θ, ps, rk3 ? snap[1] : nothing)
     s2 = moist ? (a.qv, ps, rk3 ? snap[2] : nothing) : nothing
-    pu = SIMs._Axpy(Δt)
-    st = (u = a.u.data, v = a.v.data, w = a.w.data, θ = FVs._sweep_field(s1), qv = FVs._sweep_field(s2),
-          m = FVs.grid_metrics(mesh))
-    p1, p2 = FVs._sweep_pred(s1), FVs._sweep_pred(s2)
-    for s in ns:-1:1
-        FVs._b_sweep_slab!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
-    end
-    for n in 1:2lz*ns, j in jj, i in ii
-        FVs._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)
-    end
+    FVs.blocked_predictor!(bufs, terms, a.u, a.v, a.w, SIMs._Axpy(Δt), s1, s2, mesh; reverse_slabs = true)
     return bufs
 end
 
