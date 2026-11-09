@@ -212,7 +212,10 @@ The setting also chooses the update of a prognostic TKE closure
 (`PrognosticSGS.TKEClosure`, #554), on either core: one cache-blocked
 pass unless `:never`, which runs its separate loops; `:always` refuses a
 case the pass cannot run (a GPU backend). [`sweep_report`](@ref) records
-which ran (`tke_update_blocked`).
+which ran (`tke_update_blocked`). Likewise the update of a Reynolds-stress
+closure that transports its stresses (`PrognosticSGS.ReynoldsStressClosure`,
+#560; `:always` also refuses its `:weno5` off-diagonal scheme;
+`reynolds_stress_update_blocked`).
 """
 function set_loop_fusion!(sim, setting)
     m = Symbol(setting)

@@ -439,6 +439,23 @@ no second flux operator. `sim.νt` holds ``ν_t`` and `sim.κt` holds
 
    This is the counterpart of the TKE closure's ``e_s``.
 
+**One cache-blocked pass** (#560). With `transport`, on the CPU, steps 1
+to 4 (``ν_t``, the flux-limited advection of the diagonals, the plain
+advection of the off-diagonals, the ``2ν_t`` diffusion and the source
+update with its budget sums) run row by row on the blocked driver
+(`FiniteVolume.blocked_update!`) with the pipeline of the TKE pass: one
+set of flux and ratio rings per diagonal, the six new stresses held in
+the driver's ring until no later row reads the old ones. The ring holds
+``h_r`` rows (3 with WENO-Z5) because the plain advection of the
+off-diagonals reads the stresses ``h_r`` rows back; the slabs keep
+``h_r + 1`` edge planes (`rsm_blocked_lags`). Every value is computed by
+the point body of the separate loop: the stresses and the budget sums
+agree with the separate loops to round-off (measured identical).
+`[timestep] loop_fusion = "never"` runs the separate loops; `results.toml`
+(`[loop_fusion]`, `reynolds_stress_update_blocked`) says which ran.
+Without transport (the urban `:reynolds_stress` option, whose stresses
+the `:transport` stage moves) the update is one pointwise pass already.
+
 `sgs_state` / `restore_sgs_state!` make a rejected adaptive step exact.
 `step_imex!` refuses the closure through the contract trait
 `Operators.sgs_explicit_stress`, because its implicit operator can only
