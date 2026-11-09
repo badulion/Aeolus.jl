@@ -74,10 +74,19 @@ function compute_rows!(op::_EddyDiffusionUpdate, ring, edge, r, s, j, k0, k1, ii
     for k in k0:k1
         buf, a, b = _row_slot(ring, edge, r, j, k, k0, k1, lz)
         _zero_line!(tl, ii)
-        Backends._row!(_b_eddy_scalar_masked!, ii, j, k, tl, op.q, op.kh, op.kv, op.mask, op.wc, op.wf,
-                       op.idx, op.idy, op.idz)
+        _diffusion_row!(tl, ii, j, k, op.q, op.kh, op.kv, op.mask, op.wc, op.wf, op.idx, op.idy, op.idz)
         sums = _diffusion_step_row!(buf, a, b, s, op.q, op.td, op.dt, j, k, ii)
         @inbounds op.rowsums[j - op.J1 + 1, k - op.K1 + 1] = sums
+    end
+    return nothing
+end
+
+# the tendency of row (j, k) by the point body of the separate loop, in a
+# row loop of its own (`ivdep`: the body writes only its own point of the
+# line, which nothing else in the row reads)
+@noinline function _diffusion_row!(tl, ii, j, k, q, kh, kv, mask, wc, wf, idx, idy, idz)
+    @inbounds @simd ivdep for i in ii
+        _b_eddy_scalar_masked!(i, j, k, tl, q, kh, kv, mask, wc, wf, idx, idy, idz)
     end
     return nothing
 end
