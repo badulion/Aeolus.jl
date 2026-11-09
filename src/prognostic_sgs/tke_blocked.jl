@@ -47,8 +47,9 @@
 # computes ν and the ratio of the interior cells next to the boundary (the
 # shell) before the sweep, fills those two halos as the separate loops do,
 # and copies the halo cells into its rings; every boundary condition whose
-# first halo layer is a function of the first interior layer is then
-# reproduced (open faces are not; they run the separate loops).
+# first halo layer is a function of the first interior layer (periodic,
+# mirror, an open face's mirror for fields without boundary data) is then
+# reproduced.
 
 using ..AdvectionSchemes: _b_rflux_x!, _b_rflux_y!, _b_rflux_z!, _b_uflux_x!, _b_uflux_y!,
     _b_uflux_z!, _b_limit_ratio!, _b_limit_x!, _b_limit_y!, _b_limit_z!, _b_flux_div!,
@@ -56,7 +57,6 @@ using ..AdvectionSchemes: _b_rflux_x!, _b_rflux_y!, _b_rflux_z!, _b_uflux_x!, _b
 using ..Operators.FiniteVolume: BlockedUpdate, blocked_update!, sweep_buffers, sweep_slabs,
     SweepBuffers, _row_slot, grid_metrics, _b_eddy_scalar!, _b_eddy_scalar_masked!
 import ..Operators.FiniteVolume: update_lags, begin_slab!, compute_rows!, write_row!, write_point!
-using ..BoundaryConditions: AbstractOpenBoundary
 using ..Simulations: StepWorkspaces
 
 # -------------------------------------------------------------------------
@@ -409,16 +409,13 @@ end
 # the pass
 # -------------------------------------------------------------------------
 
-# the reason the blocked pass cannot run for (c, sim), or nothing
+# The reason the blocked pass cannot run for (c, sim), or nothing. Open
+# faces need nothing of their own: ν and the ratio carry no boundary data,
+# so an open face fills their halos as the mirror of the first interior
+# layer, which the boundary shell reproduces (tested).
 function _tke_blocked_blocker(c::TKEClosure, sim)
     Backends.backend(c.e.data) isa Backends.CPUBackend ||
         return "the cache-blocked TKE update runs on the CPU backend only"
-    if c.transport
-        bcs = sim.bcs
-        any(f -> getfield(bcs, f) isa AbstractOpenBoundary, fieldnames(typeof(bcs))) &&
-            return "open lateral faces: the halos of ν and of the limiter's ratio there are not " *
-                   "reproduced by the blocked pass"
-    end
     return nothing
 end
 

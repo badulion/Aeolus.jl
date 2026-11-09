@@ -117,6 +117,28 @@ end
     end
 end
 
+@testset "TKE blocked pass: open lateral faces and top (#554)" begin
+    # an open box (boundary data, a wall below): ν and the ratio have no
+    # boundary data, so their open-face halos are the mirror of the first
+    # interior layer, which the pass's boundary shell reproduces
+    for halo in (2, 3)
+        g = RegularGrid(; size = (12, 10, 16), extent = (120.0, 100.0, 160.0), halo = (halo, halo, halo))
+        bcs = open_boundary_conditions(g, ProfileBoundaryData(u = 3.0, v = -1.0, w = 0.0, θ = 300.0); halo = halo)
+        sim, c = tkb_case(g; bcs = bcs)
+        Aeolus.BoundaryConditions.update_open_boundaries!(sim, 0.0, 0.4)
+        @test TKB._tke_blocked_blocker(c, sim) === nothing
+        e0 = copy(c.e.data)
+        ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
+        for ns in (1, 2), rev in (false, true)
+            (ns > 1 && 2 * TKB.tke_blocked_lags(c)[2] * ns > g.Nz) && continue
+            e, s = tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, reverse_slabs = rev),
+                            c, sim, e0, 0.4)
+            @test maximum(abs.(e .- ref_e)) <= 4eps() * maximum(abs, ref_e)
+            @test tkb_stats_agree(s, ref_s)
+        end
+    end
+end
+
 @testset "TKE blocked pass: advance_sgs!, loop_fusion, report, allocation (#554)" begin
     g = RegularGrid(; size = (16, 12, 16), extent = (160.0, 120.0, 160.0), halo = (3, 3, 3))
     sim, c = tkb_case(g)

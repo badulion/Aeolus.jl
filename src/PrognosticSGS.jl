@@ -951,6 +951,16 @@ the sum over the pieces is the step):
    exact (`dissipation`), so ``e^{n+1} ≥ 0``;
 5. ``e = 0`` in solids; the first air cell of each column set to
    [`tke_surface_value`](@ref) when `surface` is given (booked).
+
+On the CPU, steps 1 (``ν_t``) to 5 run as one cache-blocked pass, row by
+row, on `Operators.FiniteVolume.blocked_update!` (#554; the footprint in
+[`tke_blocked_lags`](@ref)); ``N^2``, ``D`` and the wall production stay
+separate loops before it. The step core's `loop_fusion` setting
+(`Simulations.set_loop_fusion!`) chooses: `:never` runs every step as
+separate whole-field loops (the reference, which agrees to round-off);
+`:always` refuses a case the pass cannot run (a GPU backend). Which form ran is recorded in `Simulations.sweep_report`. The
+blocked pass keeps neither ``ν_t``, ``κ_t``, the transport nor (without
+walls) ``P_w`` in the closure's scratch fields; the separate loops do.
 """
 function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     Δt = T(dt)
