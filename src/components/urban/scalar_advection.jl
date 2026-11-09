@@ -244,7 +244,8 @@ per-level sums to round-off. The core's `loop_fusion` setting chooses
 (`Simulations.set_loop_fusion!`): `:never` runs the separate loops (zero
 the tendency, the masked diffusion, the plane sums, the update; the
 reference), `:always` refuses a case the pass cannot run. Which ran is in
-`Simulations.sweep_report` (`tracer_diffusion_blocked`). `d.tend` is
+`Simulations.sweep_report` (`tracer_diffusion_blocked`). The pass runs at
+the slab count of the scratch made with `d` (one per thread). `d.tend` is
 written only by the separate loops.
 """
 function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, κ = case.sim.κt,
@@ -260,8 +261,12 @@ function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, �
                                   nothing
     if setting !== :never && why === nothing
         # one cache-blocked pass (#559): q and the per-level sums
+        # at the scratch's slab count (made once with the struct, which
+        # cannot take a new one: a different count would allocate a scratch
+        # every call)
         Aeolus.Operators.blocked_eddy_diffusion!(d.blocked, Sq, St, q, κ, κv, dt;
-                                                 mask = d.mask, weights = d.weights)
+                                                 mask = d.mask, weights = d.weights,
+                                                 ns = Aeolus.Operators.nslabs(d.blocked))
         _note_tracer!(sim, true, nothing)
     else
         setting === :always &&

@@ -38,6 +38,9 @@ mutable struct EddyDiffusionScratch{B<:SweepBuffers, L<:AbstractMatrix, T}  # mu
     const rowsums::Matrix{NTuple{2,T}}
 end
 
+# the number of slabs the scratch holds
+nslabs(sc::EddyDiffusionScratch) = size(sc.td, 2)
+
 function _eddy_diffusion_scratch(old, data::AbstractArray{T,3}, ns::Int, ny::Int, nz::Int) where {T}
     B = SweepBuffers{FiniteVolume._buf_type(data)}
     L = typeof(similar(data, 0, 0))

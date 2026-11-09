@@ -108,14 +108,21 @@ end
     # a stretched grid has no masked diffusion: the reason names it
     gs = StretchedGrid(; size = (6, 6, 6), extent = (60.0, 60.0, 60.0))
     @test occursin("RegularGrid", something(TDU._tracer_blocked_blocker(Field(CellCenter(), gs)), ""))
-    # the pass reuses its scratch and allocates nothing on a serial backend
+    # the pass reuses its scratch, at the scratch's slab count, and
+    # allocates nothing on a serial backend (review of #559: a scratch made
+    # for 3 slabs where the backend's default is 1 was replaced by a new
+    # one, 31 kB, on every call, and the agreement test above ran 1 slab
+    # whatever `ns` it asked for)
     Aeolus.Simulations.set_loop_fusion!(case.sim, :if_possible)
     with_backend(CPUBackend(serial = true)) do
-        ds = tdc_diffusion(g, d.mask, d.weights, d.bcs; ns = 1)
-        κ = case.sim.κt
-        TDU.sgs_diffuse!(ds, case, q, _TD_DT; water = true, κ = κ, κv = κ)
-        a = @allocated TDU.sgs_diffuse!(ds, case, q, _TD_DT; water = true, κ = κ, κv = κ)
-        @test a == 0
+        for ns in (1, 3)
+            ds = tdc_diffusion(g, d.mask, d.weights, d.bcs; ns = ns)
+            κ = case.sim.κt
+            TDU.sgs_diffuse!(ds, case, q, _TD_DT; water = true, κ = κ, κv = κ)
+            a = @allocated TDU.sgs_diffuse!(ds, case, q, _TD_DT; water = true, κ = κ, κv = κ)
+            @test a == 0
+            @test Aeolus.Operators.nslabs(ds.blocked) == ns
+        end
     end
 end
 
