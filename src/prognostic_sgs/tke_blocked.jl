@@ -114,6 +114,25 @@ end
 Base.size(r::_Doubled) = size(r.a)
 @inline Base.getindex(r::_Doubled, I::Integer, J::Integer, K::Integer) = @inbounds 2 * r.a[I, J, K]
 
+# a face flux evaluated where it is read, by the flux body itself writing
+# into a one-value sink (the shell's ratio: no flux array, one launch)
+struct _Sink{T} <: AbstractArray{T,3}
+    r::Base.RefValue{T}
+end
+Base.size(::_Sink) = (1, 1, 1)
+@inline Base.setindex!(s::_Sink, x, I::Integer, J::Integer, K::Integer) = (s.r[] = x; s)
+struct _FaceFlux{T, F, A<:Tuple} <: AbstractArray{T,3}
+    body!::F
+    args::A
+end
+_FaceFlux{T}(body!::F, args::A) where {T, F, A} = _FaceFlux{T, F, A}(body!, args)
+Base.size(::_FaceFlux) = (0, 0, 0)
+@inline function Base.getindex(f::_FaceFlux{T}, I::Integer, J::Integer, K::Integer) where {T}
+    s = _Sink{T}(Ref(zero(T)))
+    f.body!(I, J, K, s, f.args...)
+    return s.r[]
+end
+
 # a field of zeros (the wall production without walls) and a sink (κt,
 # which the update recomputes)
 struct _Zeros{T} <: AbstractArray{T,3} end
@@ -367,26 +386,22 @@ function _shell_coefficients!(c::TKEClosure, bcs)
     return nothing
 end
 
-# the limiter's ratio of the shell cells into c.ws.ratio (from their face
-# fluxes, into the workspace's face arrays), then its halos filled with
-# e's conditions, as `advect_positive!` fills them
+# the limiter's ratio of the shell cells into c.ws.ratio, each face flux
+# evaluated by its body where the ratio reads it (`_FaceFlux`), then its
+# halos filled with e's conditions, as `advect_positive!` fills them
 function _shell_ratio!(c::TKEClosure{T}, sim, Δt::T, ebcs) where {T}
     g = mesh(c.e)
-    ws = c.ws; r = c.recon
+    r = c.recon
     b = Backends.backend(c.e.data)
     ed = c.e.data; ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
     idx = 1 / g.dx; idy = 1 / g.dy; dzm = _dz_metric(g)
+    fx = _FaceFlux{T}(_b_rflux_x!, (ud, ed, r)); lx = _FaceFlux{T}(_b_uflux_x!, (ud, ed))
+    fy = _FaceFlux{T}(_b_rflux_y!, (vd, ed, r)); ly = _FaceFlux{T}(_b_uflux_y!, (vd, ed))
+    fz = _FaceFlux{T}(_b_rflux_z!, (wd, ed, r)); lz = _FaceFlux{T}(_b_uflux_z!, (wd, ed))
     for box in _shell_boxes(interior(g))
-        launch!(b, _b_rflux_x!, _xfaces(box), ws.Fx.data, ud, ed, r)
-        launch!(b, _b_rflux_y!, _yfaces(box), ws.Fy.data, vd, ed, r)
-        launch!(b, _b_rflux_z!, _zfaces(box), ws.Fz.data, wd, ed, r)
-        launch!(b, _b_uflux_x!, _xfaces(box), ws.Lx.data, ud, ed)
-        launch!(b, _b_uflux_y!, _yfaces(box), ws.Ly.data, vd, ed)
-        launch!(b, _b_uflux_z!, _zfaces(box), ws.Lz.data, wd, ed)
-        launch!(b, _b_limit_ratio!, box, ws.ratio.data, ws.Fx.data, ws.Fy.data, ws.Fz.data, ed,
-                ws.Lx.data, ws.Ly.data, ws.Lz.data, Δt, idx, idy, dzm)
+        launch!(b, _b_limit_ratio!, box, c.ws.ratio.data, fx, fy, fz, ed, lx, ly, lz, Δt, idx, idy, dzm)
     end
-    fill_halos!(ws.ratio, ebcs)
+    fill_halos!(c.ws.ratio, ebcs)
     return nothing
 end
 
