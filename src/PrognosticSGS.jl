@@ -104,9 +104,15 @@ the rate every sink is written with. `s` stays finite where `l → 0`
     s = ifelse(stable, max(sq / lmax, N / c_l), sq / lmax)
     return l, s
 end
-# √x for x ≥ 0 or NaN (the caller guarantees it): the LLVM intrinsic, which
-# has no branch to `DomainError`; the same, correctly rounded, value
-@inline _sqrt_nonneg(x::Union{Float32,Float64}) = Base.sqrt_llvm(x)
+# √x for x ≥ 0 or NaN (or a negative x whose result an `ifelse` discards):
+# the LLVM intrinsic, which has no branch to `DomainError`; the same,
+# correctly rounded, value as `sqrt` (IEEE 754). `Base.sqrt_llvm` is an
+# unexported Base internal (Julia 1.10-1.13): should it go, `sqrt` is used
+# (the same values, with the domain check that keeps the row loop scalar);
+# test/tke.jl compares the two.
+@static if isdefined(Base, :sqrt_llvm)
+    @inline _sqrt_nonneg(x::Union{Float32,Float64}) = Base.sqrt_llvm(x)
+end
 @inline _sqrt_nonneg(x) = sqrt(x)
 
 """

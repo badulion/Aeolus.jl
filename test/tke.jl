@@ -165,6 +165,16 @@ end
         lr, sr = N2 > 0 ? (min(4.0, 0.76 * sq / sqrt(N2)), max(sq / 4.0, sqrt(N2) / 0.76)) : (4.0, sq / 4.0)
         @test isequal(l, lr) && isequal(s, sr)          # the same two expressions, selected
     end
+    # its square root (Base.sqrt_llvm, an unexported Base internal) is
+    # `sqrt`, bit for bit (both correctly rounded), on 0, subnormals, the
+    # extremes, Inf, NaN and random values, in both precisions; a Julia
+    # that drops or changes the internal fails here, not in the physics
+    for T in (Float32, Float64)
+        xs = T[0, -zero(T), nextfloat(zero(T)), floatmin(T), floatmax(T), Inf, NaN, 1, 2, 1e-30, 0.76]
+        xs = vcat(xs, exp.(T(40) .* (rand(Xoshiro(10), T, 1000) .- T(0.5))))
+        @test all(x -> isequal(Aeolus.PrognosticSGS._sqrt_nonneg(x), sqrt(x)), xs)
+        @test isnan(Aeolus.PrognosticSGS._sqrt_nonneg(-one(T)))   # no DomainError: NaN, discarded by ifelse
+    end
     n = (24, 20, 12)
     rg = RegularGrid(; size = n, extent = (240.0, 200.0, 120.0), halo = (3, 3, 3))
     sg = StretchedGrid(; size = n, extent = (240.0, 200.0, 360.0), halo = (3, 3, 3), stretching = (:tanh, 1.5))
