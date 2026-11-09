@@ -13,7 +13,7 @@
 # sweep); N², D and the wall production, which do not read e, stay
 # separate loops before it.
 #
-# Per slab (planes k0:k1) and j-row, a pipeline of intermediate rows, each
+# Per block (planes k0:k1, rows j0:j1) and j-row, a pipeline of intermediate rows, each
 # in a small ring of its own (`_TKERings`, planes k0−1:k1+1):
 #
 #   step j:  ν of row j+1 (the coefficient body); the reconstructed and
@@ -40,7 +40,11 @@
 # two rows ahead of the row it finishes and its rings carry the rest, so
 # the old e of row j − lag is read by no later step for `lag = max(1, hr −
 # 2)`: the y faces of step j read rows ≥ j + 2 − hr, the diffusion of row
-# j rows ≥ j − 1.
+# j rows ≥ j − 1. When the sweep is split in j as well (#558), a row
+# range keeps `ly = lz` edge rows per end (the reach is the same in j),
+# and a range after the first starts its pipeline one row early: ν and
+# the ratio of row j0 − 1 are computed from the old e, as the front
+# computes them, instead of copied from the halo.
 #
 # Halos. The separate loops fill the halos of ν (with the velocity
 # conditions) and of the ratio (with e's) from the interior. The pass
@@ -54,16 +58,16 @@
 using ..AdvectionSchemes: _b_rflux_x!, _b_rflux_y!, _b_rflux_z!, _b_uflux_x!, _b_uflux_y!,
     _b_uflux_z!, _b_limit_ratio!, _b_limit_x!, _b_limit_y!, _b_limit_z!, _b_flux_div!,
     _dz_metric, _xfaces, _yfaces, _zfaces, required_halo, _check_halo, _check_stretched_recon
-using ..Operators.FiniteVolume: BlockedUpdate, blocked_update!, sweep_buffers, sweep_slabs,
-    SweepBuffers, _row_slot, grid_metrics, _b_eddy_scalar!, _b_eddy_scalar_masked!
-import ..Operators.FiniteVolume: update_lags, begin_slab!, compute_rows!, write_row!, write_point!
+using ..Operators.FiniteVolume: BlockedUpdate, blocked_update!, sweep_buffers, sweep_blocks,
+    SweepBuffers, SweepBlock, block_slot, grid_metrics, _b_eddy_scalar!, _b_eddy_scalar_masked!
+import ..Operators.FiniteVolume: update_lags, edge_rows, begin_block!, compute_rows!, write_row!, write_point!
 using ..Simulations: StepWorkspaces
 
 # -------------------------------------------------------------------------
 # array adapters: a whole-field body reads and writes the rings
 # -------------------------------------------------------------------------
 
-# a ring of NR rows of slab s: (I, J, K) ↦ buf[I, K − koff, mod(J, NR) + 1, s]
+# a ring of NR rows of block s: (I, J, K) ↦ buf[I, K − koff, mod(J, NR) + 1, s]
 struct _Ring{T, NR, A<:AbstractArray{T,4}} <: AbstractArray{T,3}
     buf::A
     koff::Int
@@ -76,7 +80,7 @@ Base.size(r::_Ring{T,NR}) where {T, NR} = (size(r.buf, 1), size(r.buf, 2), NR)
 @inline Base.setindex!(r::_Ring{T,NR}, x, I::Integer, J::Integer, K::Integer) where {T, NR} =
     (@inbounds r.buf[I, K - r.koff, mod(J, NR) + 1, r.s] = x; r)
 
-# one row of slab s, whatever (J, K): (I, J, K) ↦ buf[I, s]
+# one row of block s, whatever (J, K): (I, J, K) ↦ buf[I, s]
 struct _Line{T, A<:AbstractMatrix{T}} <: AbstractArray{T,3}
     buf::A
     s::Int
@@ -146,7 +150,7 @@ Base.size(::_Discard) = (0, 0, 0)
 # the rings of the pipeline
 # -------------------------------------------------------------------------
 
-# Per slab s, planes k0−1:k1+1 (`kl = k − k0 + 2`; the z faces k0−1:k1+2):
+# Per block s, planes k0−1:k1+1 (`kl = k − k0 + 2`; the z faces k0−1:k1+2):
 # ν and the ratio of three rows, the x and z face fluxes (reconstructed H,
 # upwind L) of two rows, the y face fluxes of three face rows, and one row
 # of the tendency of e.
@@ -194,8 +198,10 @@ end
 _TKEUpdate(p::NamedTuple, inplace::Bool) = _TKEUpdate{typeof(p), inplace}(p)
 
 update_lags(op::_TKEUpdate) = (op.p.lag, op.p.lz)
+# the new e reads the old e `lz` cells away in j as in k (`tke_blocked_lags`)
+edge_rows(op::_TKEUpdate) = op.p.lz
 
-# the rings of slab s as 3-D arrays
+# the rings of block s as 3-D arrays
 @inline function _rings(p, s, k0)
     rg = p.rg; ko = k0 - 2
     return (ν = _Ring{3}(rg.ν, ko, s), R = _Ring{3}(rg.R, ko, s),
@@ -250,6 +256,14 @@ end
 # ratio of row Jn, the y faces between Jn and Jn+1 (halo rows: ν and the
 # ratio copied), then the y faces between Jn−1 and Jn limited.
 function _advance_front!(p, rs, Jn, k0, k1, ii)
+    _front_row!(p, rs, Jn, k0, k1, ii)
+    z = zero(eltype(p.e))
+    for K in k0:k1
+        Backends._row!(_b_limit_y!, ii, Jn, K, rs.FyH, rs.R, rs.FyL, z)
+    end
+    return nothing
+end
+function _front_row!(p, rs, Jn, k0, k1, ii)
     _ν_row!(p, rs, Jn, k0 - 1, k1 + 1, ii)
     iw = first(ii)-1:last(ii)+1
     kin = _inner_planes(p, k0, k1)
@@ -278,25 +292,30 @@ function _advance_front!(p, rs, Jn, k0, k1, ii)
             _copy_row!(rs.R, p.Rf, iw, Jn, K)
         end
     end
-    z = zero(eltype(p.e))
-    for K in k0:k1
-        Backends._row!(_b_limit_y!, ii, Jn, K, rs.FyH, rs.R, rs.FyL, z)
-    end
     return nothing
 end
 
-function begin_slab!(op::_TKEUpdate, s, k0, k1, ii, jj)
+# The rows before the first row j0 of a block: ν and the ratio of row
+# j0 − 1 (copied from the halo, or for a row range after the first (#558)
+# computed as the front computes them), the y faces j0, then the front
+# at j0.
+function begin_block!(op::_TKEUpdate, blk::SweepBlock, ii)
     p = op.p
     p.r === nothing && return nothing             # no transport: nothing ahead
-    rs = _rings(p, s, k0)
-    J1 = first(jj)
-    iw = first(ii)-1:last(ii)+1
-    for K in k0-1:k1+1                            # the halo row before the first
-        _copy_row!(rs.ν, p.νf, iw, J1 - 1, K)
-        _copy_row!(rs.R, p.Rf, iw, J1 - 1, K)
+    k0, k1, j0 = blk.k0, blk.k1, blk.j0
+    rs = _rings(p, blk.n, k0)
+    if j0 == p.J1
+        iw = first(ii)-1:last(ii)+1
+        for K in k0-1:k1+1                        # the halo row before the first
+            _copy_row!(rs.ν, p.νf, iw, j0 - 1, K)
+            _copy_row!(rs.R, p.Rf, iw, j0 - 1, K)
+        end
+        _yfaces_row!(p, rs, j0, k0, k1, ii)
+    else                                          # an interior row: its own front
+        _yfaces_row!(p, rs, j0 - 1, k0, k1, ii)
+        _front_row!(p, rs, j0 - 1, k0, k1, ii)
     end
-    _yfaces_row!(p, rs, J1, k0, k1, ii)
-    _advance_front!(p, rs, J1, k0, k1, ii)
+    _advance_front!(p, rs, j0, k0, k1, ii)
     return nothing
 end
 
@@ -322,13 +341,14 @@ end
     return nothing
 end
 
-function compute_rows!(op::_TKEUpdate{P,INPLACE}, ring, edge, r, s, J, k0, k1, ii, lz) where {P, INPLACE}
+function compute_rows!(op::_TKEUpdate{P,INPLACE}, ring, edge, blk::SweepBlock, J, ii) where {P, INPLACE}
     p = op.p
-    rs = _rings(p, s, k0)
+    k0, k1 = blk.k0, blk.k1
+    rs = _rings(p, blk.n, k0)
     if p.r === nothing                            # no transport: ν and the update, in place
         _ν_row!(p, rs, J, k0, k1, ii)              # (planes k0:k1: no neighbour read)
         for K in k0:k1
-            out = INPLACE ? p.e : _rowslot(ring, edge, r, J, K, k0, k1, lz, s)
+            out = INPLACE ? p.e : _rowslot(ring, edge, blk, J, K)
             _update_row!(p, rs, J, K, ii, _ReadWrite(p.e, out), p.ztd)
         end
         return nothing
@@ -342,14 +362,14 @@ function compute_rows!(op::_TKEUpdate{P,INPLACE}, ring, edge, r, s, J, k0, k1, i
     for K in k0:k1
         Backends._row!(_b_limit_x!, xf, J, K, rs.FxH, rs.R, rs.FxL, z)
         _tendency_row!(p, rs, J, K, ii)
-        _update_row!(p, rs, J, K, ii, _ReadWrite(p.e, _rowslot(ring, edge, r, J, K, k0, k1, lz, s)), rs.td)
+        _update_row!(p, rs, J, K, ii, _ReadWrite(p.e, _rowslot(ring, edge, blk, J, K)), rs.td)
     end
     return nothing
 end
 
-@inline function _rowslot(ring, edge, r, J, K, k0, k1, lz, s)
-    buf, a, b = _row_slot(ring, edge, r, J, K, k0, k1, lz)
-    return _Slot(buf, a, b, s)
+@inline function _rowslot(ring, edge, blk, J, K)
+    buf, a, b, n = block_slot(ring, edge, blk, J, K)
+    return _Slot(buf, a, b, n)
 end
 
 # the update of row (J, K) and its budget sums (the row loop of `_update!`)
@@ -361,10 +381,10 @@ end
 end
 
 # the new e from the driver's buffers (nothing to write when updated in place)
-write_row!(::_TKEUpdate{P,true}, ring, a, b, s, j, k, ii) where {P} = nothing
+write_row!(::_TKEUpdate{P,true}, ring, a, b, n, j, k, ii) where {P} = nothing
 write_point!(::_TKEUpdate{P,true}, edge, i, j, k, e, s) where {P} = nothing
-write_row!(op::_TKEUpdate{P,false}, ring, a, b, s, j, k, ii) where {P} =
-    _write_e_row!(op.p.e, ring, a, b, s, j, k, ii)
+write_row!(op::_TKEUpdate{P,false}, ring, a, b, n, j, k, ii) where {P} =
+    _write_e_row!(op.p.e, ring, a, b, n, j, k, ii)
 @noinline function _write_e_row!(ed, ring, a, b, s, j, k, ii)
     @inbounds @simd ivdep for i in ii
         ed[i, j, k] = ring[i, a, b, 1, s]
@@ -446,7 +466,8 @@ The ring lag (j-rows) and the edge planes per slab end of the
 cache-blocked TKE update of `c` (#554): with transport and a
 reconstruction of halo `hr`, the new e reads the old e `hr + 1` cells
 away, so `lz = hr + 1` and `lag = max(1, hr − 2)` (the pipeline runs two
-rows ahead); without transport the update is pointwise, `(1, 1)`.
+rows ahead); without transport the update is pointwise, `(1, 1)`. A
+split in j keeps `lz` edge rows per row-range end as well (#558).
 """
 function tke_blocked_lags(c::TKEClosure)
     c.transport || return (1, 1)
@@ -456,9 +477,11 @@ end
 
 # The e update of `advance_sgs!` as one cache-blocked pass (see the top of
 # this file); N² and the dual strain (and the wall production) as separate
-# loops before it. `ns`: the slab count (default: one per thread);
-# `reverse_slabs`: the driver's test hook.
-function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, reverse_slabs::Bool = false) where {T}
+# loops before it. `ns`, `nt`: the slabs and row ranges (default:
+# `sweep_blocks`, one block per thread); `reverse_slabs`: the driver's test
+# hook.
+function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, nt = nothing,
+                           reverse_slabs::Bool = false) where {T}
     g = mesh(c.e)
     bcs = sim.bcs
     fill_halos!(sim.u, bcs); fill_halos!(sim.v, bcs); fill_halos!(sim.w, bcs)
@@ -481,11 +504,15 @@ function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, reverse_
     ii, jj, kk = interior(g)
     lag, lz = tke_blocked_lags(c)
     b = Backends.backend(c.e.data)
-    nsl = ns === nothing ? sweep_slabs(b, length(ii) * length(jj) * length(kk), length(kk); lz = lz) : ns
+    nsd, ntd = ns === nothing || nt === nothing ?
+        sweep_blocks(b, length(ii) * length(jj) * length(kk), length(kk), length(jj); lz = lz, ly = lz) : (0, 0)
+    nsl = ns === nothing ? nsd : ns
+    ntl = nt === nothing ? ntd : nt
     old = c.blocked[]
     bufs = sweep_buffers(old isa _TKEBlockedScratch ? old.bufs : nothing, c.e.data, 1, nsl, length(kk);
-                         lag = lag, lz = lz)
-    rings = _tke_rings(old isa _TKEBlockedScratch ? old.rings : nothing, c.e.data, cld(length(kk), nsl) + 2, nsl)
+                         lag = lag, lz = lz, nt = ntl, ly = lz)
+    rings = _tke_rings(old isa _TKEBlockedScratch ? old.rings : nothing, c.e.data, cld(length(kk), nsl) + 2,
+                       nsl * ntl)
     (old isa _TKEBlockedScratch && old.bufs === bufs && old.rings === rings) ||
         (c.blocked[] = _TKEBlockedScratch(bufs, rings))
     par = _update_params(c, Δt, _surface_buoyancy(c, sim))

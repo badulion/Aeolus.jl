@@ -3,9 +3,11 @@
 #
 #   1. `FiniteVolume.blocked_predictor!` over the base term alone is the
 #      fused tendency launch followed by the predictor passes, for 1-5
-#      slabs, on the serial and threaded backends, regular and stretched
-#      grids, dry and moist, with and without the RK3 stage combination,
-#      and neither reads nor writes the tendency fields (SC-e's test);
+#      slabs times 1-3 row ranges in j (#558), on the serial and threaded
+#      backends, regular and stretched grids, dry and moist, with and
+#      without the RK3 stage combination, and neither reads nor writes the
+#      tendency fields (SC-e's test); the blocks also run concurrently in a
+#      -t 4 subprocess;
 #   2. composed terms: a pointwise term, a term whose stencil reaches two
 #      rows and two planes (ring of 3 rows, 2 edge planes per slab end)
 #      and a term with a reduction in `prepare!` give, inside the sweep,
@@ -150,11 +152,11 @@ function _fs_reference!(r, mesh, Δt, extra, rk3, snap)
     return r
 end
 
-function _fs_sweep!(a, mesh, Δt, terms, rk3, snap, ns)
+function _fs_sweep!(a, mesh, Δt, terms, rk3, snap, ns, nt = 1)
     moist = a.has_moisture
     nk = length(interior(mesh)[3])
     lag, lz = FVs.sweep_lags(terms)
-    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz)
+    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz, nt = nt, ly = lag)
     foreach(t -> FVs.prepare!(t, a, Δt), terms)
     c = SIMs._Lin2r(0.75, 0.25)
     ps = rk3 ? SIMs._AxpyStage(SIMs._Axpy(Δt), c) : SIMs._Axpy(Δt)
@@ -164,20 +166,21 @@ function _fs_sweep!(a, mesh, Δt, terms, rk3, snap, ns)
     return bufs
 end
 
-# The same sweep with the slabs run one after another in reverse order
-# (ns, ns−1, …, 1), then the edge planes: the body of blocked_predictor!
-# with its slab launch replaced. In forward order (what one thread runs)
-# slab s reads slab s+1's front planes before slab s+1 has touched them, so
-# only the back edge is exercised; in reverse order slab s+1 has finished
-# when slab s reads its front planes, so a front edge kept shallower than a
-# term's rz reads an updated plane and fails the comparison. Together the
-# two orders bound what concurrent slabs can see, deterministically, at
-# any thread count (#533 review).
-function _fs_sweep_reversed!(a, mesh, Δt, terms, rk3, snap, ns)
+# The same sweep with the blocks run one after another in reverse order
+# (nb, nb−1, …, 1), then the edge planes and rows: the body of
+# blocked_predictor! with its block launch replaced. In forward order (what
+# one thread runs) slab s reads slab s+1's front planes before slab s+1 has
+# touched them, so only the back edge is exercised; in reverse order slab
+# s+1 has finished when slab s reads its front planes, so a front edge kept
+# shallower than a term's rz reads an updated plane and fails the
+# comparison; likewise for the row ranges in j. Together the two orders
+# bound what concurrent blocks can see, deterministically, at any thread
+# count (#533 review).
+function _fs_sweep_reversed!(a, mesh, Δt, terms, rk3, snap, ns, nt = 1)
     moist = a.has_moisture
     nk = length(interior(mesh)[3])
     lag, lz = FVs.sweep_lags(terms)
-    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz)
+    bufs = FVs.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz, nt = nt, ly = lag)
     foreach(t -> FVs.prepare!(t, a, Δt), terms)
     c = SIMs._Lin2r(0.75, 0.25)
     ps = rk3 ? SIMs._AxpyStage(SIMs._Axpy(Δt), c) : SIMs._Axpy(Δt)
@@ -253,7 +256,7 @@ sg = StretchedGrid(; size = (12, 10, 16), extent = (240.0, 200.0, 600.0), stretc
 grids = (("regular", g, FieldBoundaryConditions(:periodic)),
          ("stretched, walls", sg, FieldBoundaryConditions(:periodic, :periodic; bottom = :noslip, top = :wall)))
 
-@testset "base term: = fused tendencies + predictor, for any slab count" begin
+@testset "base term: = fused tendencies + predictor, for any slab and row-range count" begin
     for (gname, mesh, bcs) in grids
         nk = length(interior(mesh)[3])
         for moist in (false, true), rk3 in (false, true), (bn, b) in _FS_BACKENDS
@@ -264,18 +267,18 @@ grids = (("regular", g, FieldBoundaryConditions(:periodic)),
                 r = mk()
                 snap = (copy(r.θ.data), copy(r.qv.data))
                 _fs_reference!(r, mesh, Δt, (), rk3, snap)
-                for ns in 1:min(5, nk ÷ 2)
+                for ns in 1:min(5, nk ÷ 2), nt in 1:3
                     a = mk()
                     foreach(t -> fill!(t.data, NaN), (a.tu, a.tv, a.tw, a.tθ, a.tqv))   # neither read nor written
-                    _fs_sweep!(a, mesh, Δt, (FVs.BaseTendencies(a.ν),), rk3, snap, ns)
+                    _fs_sweep!(a, mesh, Δt, (FVs.BaseTendencies(a.ν),), rk3, snap, ns, nt)
                     ok = all(f -> agree(interior_view(f[1]), interior_view(f[2])),
                              ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
-                    ok || println("  [#533] base mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns")
+                    ok || println("  [#533] base mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns nt=$nt")
                     @test ok
                     @test all(t -> all(isnan, t.data), (a.tu, a.tv, a.tw, a.tθ, a.tqv))
-                    if ns > 1 && bn == "serial"         # the slabs in reverse order (front edge)
+                    if ns * nt > 1 && bn == "serial"    # the blocks in reverse order (front edge)
                         a = mk()
-                        _fs_sweep_reversed!(a, mesh, Δt, (FVs.BaseTendencies(a.ν),), rk3, snap, ns)
+                        _fs_sweep_reversed!(a, mesh, Δt, (FVs.BaseTendencies(a.ν),), rk3, snap, ns, nt)
                         @test all(f -> agree(interior_view(f[1]), interior_view(f[2])),
                                   ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
                     end
@@ -283,12 +286,16 @@ grids = (("regular", g, FieldBoundaryConditions(:periodic)),
             end
         end
     end
-    # the buffers: reused when they fit; a slab count, lag or edge depth they do not fit is refused
+    # the buffers: reused when they fit; a block count, lag or edge depth they do not fit is refused
     s = BoussinesqSimulation(g; ν = 1e-2)
     b2 = FVs.sweep_buffers(nothing, s.u.data, 4, 2, 12)
     @test FVs.sweep_buffers(b2, s.u.data, 4, 2, 12) === b2
     @test FVs.sweep_buffers(b2, s.u.data, 4, 3, 12) !== b2
     @test FVs.sweep_buffers(b2, s.u.data, 4, 2, 12; lag = 2) !== b2
+    @test FVs.sweep_buffers(b2, s.u.data, 4, 2, 12; nt = 2) !== b2
+    b22 = FVs.sweep_buffers(nothing, s.u.data, 4, 2, 12; nt = 2, ly = 1)
+    @test FVs.sweep_buffers(b22, s.u.data, 4, 2, 12; nt = 2, ly = 1) === b22
+    @test size(b22.ring, 3) == 2 + 2 && size(b22.ring, 5) == 4      # ring rows + edge rows, ns·nt blocks
     base = (FVs.BaseTendencies(s.ν),)
     s1 = (s.θ, SIMs._Axpy(0.1), nothing)
     @test_throws DimensionMismatch FVs.blocked_predictor!(FVs.sweep_buffers(nothing, s.u.data, 4, 7, 12),
@@ -298,10 +305,25 @@ grids = (("regular", g, FieldBoundaryConditions(:periodic)),
     # only the base term initialises a row
     @test_throws MethodError FVs.blocked_predictor!(b2, (FSDamp(0.1, 0.0),), s.u, s.v, s.w,
                                                     SIMs._Axpy(0.1), s1, nothing, g)
-    @test FVs.sweep_slabs(CPUBackend(serial = true), 10^9, 256) == 1
-    @test FVs.sweep_slabs(CPUBackend(threshold = 0), 10^9, 256) == min(Threads.nthreads(), 128)
-    @test FVs.sweep_slabs(CPUBackend(threshold = 0), 10^9, 256; lz = 2) == min(Threads.nthreads(), 64)
-    @test FVs.sweep_slabs(CPUBackend(threshold = 0), 10^9, 3) == 1
+    # more row ranges than rows is refused
+    @test_throws DimensionMismatch FVs.blocked_predictor!(FVs.sweep_buffers(nothing, s.u.data, 4, 1, 12; nt = 13),
+                                                          base, s.u, s.v, s.w, SIMs._Axpy(0.1), s1, nothing, g)
+end
+
+@testset "sweep_blocks: the split into slabs and row ranges (#558)" begin
+    @test FVs.sweep_blocks(CPUBackend(serial = true), 10^9, 256, 256) == (1, 1)
+    # the split of T threads (no thread count needed: the rule itself)
+    sb = FVs._split_blocks
+    for T in (1, 2, 4, 6, 12, 24), (nk, nj) in ((60, 200), (12, 12), (3, 3), (256, 256)), (lz, ly) in ((1, 1), (2, 2), (4, 4))
+        ns, nt = sb(T, nk, nj, lz, ly)
+        @test ns * nt <= T                                   # at most one block per thread
+        @test ns == 1 || 2lz * ns <= nk                      # at least 2lz planes per slab
+        @test nt == 1 || 2ly * nt <= nj                      # at least 2ly rows per range
+    end
+    # the cap of #554 is lifted: 60 levels, WENO-Z5 (lz = ly = 4), 200 rows
+    @test prod(sb(12, 60, 200, 4, 4)) == 12 && prod(sb(24, 60, 200, 4, 4)) == 24
+    @test prod(sb(24, 60, 200, 2, 2)) == 24 && prod(sb(24, 60, 200, 1, 1)) == 24
+    @test sb(1, 60, 200, 4, 4) == (1, 1) && sb(24, 3, 3, 1, 1) == (1, 1)
 end
 
 @testset "composed terms: the sweep = the terms' whole-field passes + predictor" begin
@@ -324,23 +346,23 @@ end
                 @test !agree(interior_view(r.u), interior_view(r0.u)) &&
                       !agree(interior_view(r.w), interior_view(r0.w)) &&
                       !agree(interior_view(r.θ), interior_view(r0.θ))
-                for ns in 1:min(5, nk ÷ 4)
+                for ns in 1:min(5, nk ÷ 4), nt in 1:3
                     a = mk()
                     foreach(t -> fill!(t.data, NaN), (a.tu, a.tv, a.tw, a.tθ, a.tqv))
-                    bufs = _fs_sweep!(a, mesh, Δt, (FVs.BaseTendencies(a.ν), extra...), rk3, snap, ns)
-                    @test bufs.lag == 2 && bufs.lz == 2 && size(bufs.ring, 3) == 3
+                    bufs = _fs_sweep!(a, mesh, Δt, (FVs.BaseTendencies(a.ν), extra...), rk3, snap, ns, nt)
+                    @test bufs.lag == 2 && bufs.lz == 2 && size(bufs.ring, 3) == 3 + (nt > 1 ? 4 : 0)
                     ok = all(f -> agree(interior_view(f[1]), interior_view(f[2])),
                              ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
-                    ok || println("  [#533] composed mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns")
+                    ok || println("  [#533] composed mismatch: $gname moist=$moist rk3=$rk3 $bn ns=$ns nt=$nt")
                     @test ok
                     @test all(t -> all(isnan, t.data), (a.tu, a.tv, a.tw, a.tθ, a.tqv))
-                    # the slabs in reverse order: the front edge planes (rz = 2) are kept
-                    if ns > 1 && bn == "serial"
+                    # the blocks in reverse order: the front edge planes and rows (rz = ry = 2) are kept
+                    if ns * nt > 1 && bn == "serial"
                         a = mk()
-                        _fs_sweep_reversed!(a, mesh, Δt, (FVs.BaseTendencies(a.ν), extra...), rk3, snap, ns)
+                        _fs_sweep_reversed!(a, mesh, Δt, (FVs.BaseTendencies(a.ν), extra...), rk3, snap, ns, nt)
                         ok = all(f -> agree(interior_view(f[1]), interior_view(f[2])),
                                  ((a.u, r.u), (a.v, r.v), (a.w, r.w), (a.θ, r.θ), (a.qv, r.qv)))
-                        ok || println("  [#533] reversed-slab mismatch: $gname moist=$moist rk3=$rk3 ns=$ns")
+                        ok || println("  [#533] reversed-block mismatch: $gname moist=$moist rk3=$rk3 ns=$ns nt=$nt")
                         @test ok
                     end
                 end
@@ -606,4 +628,72 @@ end
     end
 end
 
+end
+
+# The blocks of the sweep run concurrently only with more than one thread;
+# the test gate runs each file at one thread, where the threaded backends
+# above run them one after another. So the concurrent case runs here in a
+# -t 4 subprocess (#558): the base term, dry and moist, at 1 to 4 slabs
+# times 1 to 4 row ranges, against the one-block sweep (which the sets
+# above compare with the separate passes): every field within 4 eps of its
+# maximum (the same expressions per point; measured 0).
+const _FS_THREADED = """
+using Aeolus
+using Aeolus.Fields: interior_view
+using Aeolus.Backends: CPUBackend, with_backend
+using Random: Xoshiro, randn
+const FVs = Aeolus.Operators.FiniteVolume
+const SIMs = Aeolus.Simulations
+g = RegularGrid(; size = (20, 17, 16), extent = (200.0, 170.0, 160.0), halo = (3, 3, 3))
+function mk(moist)
+    s = BoussinesqSimulation(g; ν = 1e-2, moisture = moist)
+    rng = Xoshiro(558)
+    for f in (s.u, s.v, s.w)
+        interior_view(f) .= 0.3 .* randn(rng, size(interior_view(f)))
+    end
+    interior_view(s.θ) .= 300 .+ 0.1 .* randn(rng, size(interior_view(s.θ)))
+    moist && (interior_view(s.qv) .= 0.008 .+ 1e-4 .* randn(rng, size(interior_view(s.qv))))
+    SIMs.fill_state_halos!(s)
+    return s
+end
+function sweep!(s, ns, nt)
+    terms = (FVs.BaseTendencies(s.ν),)
+    bufs = FVs.sweep_buffers(nothing, s.u.data, s.has_moisture ? 5 : 4, ns, 16; nt = nt)
+    s2 = s.has_moisture ? (s.qv, SIMs._Axpy(0.3), nothing) : nothing
+    FVs.blocked_predictor!(bufs, terms, s.u, s.v, s.w, SIMs._Axpy(0.3), (s.θ, SIMs._Axpy(0.3), nothing), s2, g)
+    return map(f -> copy(interior_view(f)), s.has_moisture ? (s.u, s.v, s.w, s.θ, s.qv) : (s.u, s.v, s.w, s.θ))
+end
+worst = 0.0; runs = 0
+for moist in (false, true)
+    ref = with_backend(() -> sweep!(mk(moist), 1, 1), CPUBackend(serial = true))
+    for ns in 1:4, nt in 1:4
+        ns * nt > 1 || continue
+        out = with_backend(() -> sweep!(mk(moist), ns, nt), CPUBackend(threshold = 0))
+        for (a, r) in zip(out, ref)
+            global worst = max(worst, maximum(abs.(a .- r)) / maximum(abs, r))
+        end
+        global runs += 1
+    end
+end
+print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst)
+"""
+
+@testset "fused sweep: blocks run concurrently, -t 4 (#558)" begin
+    if Threads.nthreads() >= 4
+        @test true            # the sets above ran the blocks concurrently
+    else
+        project = dirname(Base.active_project())
+        cmd = `$(Base.julia_cmd()) --startup-file=no -t 4 --project=$project -e $_FS_THREADED`
+        out = IOBuffer(); err = IOBuffer()
+        p = run(pipeline(ignorestatus(cmd); stdout = out, stderr = err))
+        msg = String(take!(out))
+        success(p) || @info "fused_sweep.jl: the -t 4 subprocess failed" String(take!(err))
+        @test success(p)
+        m = match(r"threads (\d+) runs (\d+) worst ([0-9.eE+-]+)", msg)
+        @test m !== nothing
+        if m !== nothing
+            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) == 30
+            @test parse(Float64, m[3]) <= 4eps()
+        end
+    end
 end
