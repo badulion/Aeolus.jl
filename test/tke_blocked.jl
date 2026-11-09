@@ -169,6 +169,18 @@ end
             @test ab <= as
             solid || @test ab == 0
         end
+        # every variant of N² computed inside the pass (#556: the variant is
+        # chosen in `_with_n2_args`, each branch with concrete arguments),
+        # on the regular and the stretched grid: 0 bytes as well
+        sg = StretchedGrid(; size = (16, 12, 16), extent = (160.0, 120.0, 240.0), halo = (2, 2, 2),
+                           stretching = (:tanh, 1.5))
+        for gg in (g, sg), buoyancy in (:none, :moist, :cloudy), tr in (true, false)
+            sa, ca = tkb_case(gg; transport = tr, buoyancy = buoyancy)
+            advance_sgs!(ca, sa, 0.4)
+            ab = @allocated advance_sgs!(ca, sa, 0.4)
+            ab == 0 || @info "allocation of the blocked pass (#556)" typeof(gg) buoyancy tr ab
+            @test ab == 0
+        end
     end
     sim2, c2 = tkb_case(g)
     advance_sgs!(c2, sim2, 0.4)

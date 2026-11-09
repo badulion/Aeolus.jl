@@ -991,10 +991,12 @@ not output: read the step's coefficients from `sim.νt` / `sim.κt`
 ([`sgs_coefficients!`](@ref)), and ``N^2`` and ``D`` from
 `Operators.buoyancy_frequency_squared!` and [`dual_strain!`](@ref). The
 separate loops leave this step's values in them; the blocked pass does
-not keep them: it writes ``ν_t``, ``κ_t`` and ``N^2`` only on the
-one-cell boundary shell and ``D`` not at all (and all of them, with
-``P_w``, when walls are attached), so their interior keeps the values of
-an earlier call, and `tend` is not written.
+not keep them. Without walls it writes ``ν_t``, ``κ_t`` and (with
+buoyancy) ``N^2`` only on the one-cell boundary shell, and only with
+transport (without transport, none of them), and ``D`` not at all; with
+walls attached it writes ``N^2``, ``D``, ``P_w`` and ``ν_t``, ``κ_t``
+everywhere. What it does not write keeps the values of an earlier call,
+and `tend` is not written.
 """
 function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     Δt = T(dt)
