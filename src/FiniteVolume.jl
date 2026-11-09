@@ -1546,20 +1546,21 @@ function _isentropic_tensor!(K11, K22, K33, K12, K13, K23, θ::Field{CellCenter}
     return nothing
 end
 
-# (`@inbounds` inside: an inlined callee does not inherit the caller's, and
-# a bounds check on the mask kept the row loops of the masked diffusion
-# from vectorising, #559. The callers check the mask's storage size and
-# the weights' length, `_check_mask_weights`.)
+# (`@propagate_inbounds`: an inlined callee does not inherit the caller's
+# `@inbounds`, and a bounds check on the mask kept the row loops of the
+# masked diffusion from vectorising, #559. Every caller's point body is
+# `@inbounds`; the entry points check the mask's storage size and the
+# weights' length, `_check_mask_weights` / `_level_weights`.)
 @inline _open(::Type{T}, ::Nothing, i, j, k) where {T} = one(T)
-@inline _open(::Type{T}, mask, i, j, k) where {T} = @inbounds T(!mask[i,j,k])
+Base.@propagate_inbounds _open(::Type{T}, mask, i, j, k) where {T} = T(!mask[i,j,k])
 @inline _vertical_divergence(fzT, fzB, idz, ::Nothing, ::Nothing, k) = (fzT - fzB) * idz
-@inline _vertical_divergence(fzT, fzB, idz, wc, wf, k) =
-    @inbounds (wf[k+1] * fzT - wf[k] * fzB) * idz / wc[k]
+Base.@propagate_inbounds _vertical_divergence(fzT, fzB, idz, wc, wf, k) =
+    (wf[k+1] * fzT - wf[k] * fzB) * idz / wc[k]
 # the same for a w-located tendency: its vertical fluxes sit at the cell
 # centres k (top) and k-1 (bottom), its control volume around face k
 @inline _vertical_divergence_w(fzT, fzB, idz, ::Nothing, ::Nothing, k) = (fzT - fzB) * idz
-@inline _vertical_divergence_w(fzT, fzB, idz, wc, wf, k) =
-    @inbounds (wc[k] * fzT - wc[k-1] * fzB) * idz / wf[k]
+Base.@propagate_inbounds _vertical_divergence_w(fzT, fzB, idz, wc, wf, k) =
+    (wc[k] * fzT - wc[k-1] * fzB) * idz / wf[k]
 # =========================================================================
 # WENO-5 scalar advection (Phase 10) — staggered.
 # =========================================================================
