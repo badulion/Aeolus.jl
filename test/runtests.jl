@@ -1030,6 +1030,7 @@ end
     include("stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
     include("tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("reynolds_stress_blocked.jl") # #560: the Reynolds-stress source update allocates nothing per cell (E6)
     include("wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("transition_kh.jl")      # P59-c: turbulent fraction γ, intermittency, Ri_f, growth_rate (#180)
 end

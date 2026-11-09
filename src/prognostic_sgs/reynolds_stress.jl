@@ -208,7 +208,9 @@ function _jacobi3(τ)
     a = MMatrix{3,3,T}(T(τ[1]), T(τ[4]), T(τ[5]), T(τ[4]), T(τ[2]), T(τ[6]), T(τ[5]), T(τ[6]), T(τ[3]))
     v = MMatrix{3,3,T}(one(T), zero(T), zero(T), zero(T), one(T), zero(T), zero(T), zero(T), one(T))
     scale = abs(a[1, 1]) + abs(a[2, 2]) + abs(a[3, 3]) + abs(a[1, 2]) + abs(a[1, 3]) + abs(a[2, 3])
-    for _ in 1:50
+    # (@inbounds: a bounds check's error path would let `a` escape to the
+    # heap, 192 B per projected cell, #560)
+    @inbounds for _ in 1:50
         off = abs(a[1, 2]) + abs(a[1, 3]) + abs(a[2, 3])
         off <= eps(T) * scale && break
         for (p, q) in ((1, 2), (1, 3), (2, 3))
@@ -807,8 +809,10 @@ function _rsm_transport!(c::ReynoldsStressClosure, sim, Δt, sbcs)
     return c
 end
 
-# Gaussian elimination with partial pivoting, A (n×n) x = b in place (b ← x)
-function _solve!(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+# Gaussian elimination with partial pivoting, A (n×n) x = b in place (b ← x).
+# Inlined: the caller's stack-allocated A and b then stay on the stack (a
+# call would make them escape to the heap, 368 B per cell, #560).
+@inline function _solve!(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     n = length(b)
     @inbounds for p in 1:n
         piv = p; amax = abs(A[p, p])
