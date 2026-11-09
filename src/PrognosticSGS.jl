@@ -975,22 +975,26 @@ the sum over the pieces is the step):
 5. ``e = 0`` in solids; the first air cell of each column set to
    [`tke_surface_value`](@ref) when `surface` is given (booked).
 
-On the CPU, steps 1 (``ν_t``) to 5 run as one cache-blocked pass, row by
-row, on `Operators.FiniteVolume.blocked_update!` (#554; the footprint in
-[`tke_blocked_lags`](@ref)); ``N^2``, ``D`` and the wall production stay
-separate loops before it. The step core's `loop_fusion` setting
+On the CPU, steps 1 to 5 run as one cache-blocked pass, row by row, on
+`Operators.FiniteVolume.blocked_update!` (#554; the footprint in
+[`tke_blocked_lags`](@ref)), ``N^2`` and ``D`` included (#556). With
+immersed walls attached, ``N^2``, ``ν_t``, ``D`` and the wall production
+run as separate loops before the pass (the wall production corrects
+``D`` and reads ``ν_t`` of every cell). The step core's `loop_fusion` setting
 (`Simulations.set_loop_fusion!`) chooses: `:never` runs every step as
 separate whole-field loops (the reference, which agrees to round-off);
 `:always` refuses a case the pass cannot run (a GPU backend). Which form
 ran is recorded in `Simulations.sweep_report`.
 
-The closure's scratch fields `ν`, `κt`, `tend` and `Pw` are not output:
-read the step's coefficients from `sim.νt` / `sim.κt`
-([`sgs_coefficients!`](@ref)). The separate loops leave this step's values
-in them; the blocked pass does not keep them: it writes ``ν_t``, ``κ_t``
-only on the one-cell boundary shell (and everywhere, with ``P_w``, when
-walls are attached), so their interior keeps the values of an earlier
-call, and `tend` is not written.
+The closure's scratch fields `ν`, `κt`, `N2`, `D`, `tend` and `Pw` are
+not output: read the step's coefficients from `sim.νt` / `sim.κt`
+([`sgs_coefficients!`](@ref)), and ``N^2`` and ``D`` from
+`Operators.buoyancy_frequency_squared!` and [`dual_strain!`](@ref). The
+separate loops leave this step's values in them; the blocked pass does
+not keep them: it writes ``ν_t``, ``κ_t`` and ``N^2`` only on the
+one-cell boundary shell and ``D`` not at all (and all of them, with
+``P_w``, when walls are attached), so their interior keeps the values of
+an earlier call, and `tend` is not written.
 """
 function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     Δt = T(dt)
