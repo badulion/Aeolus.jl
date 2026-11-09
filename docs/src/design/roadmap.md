@@ -3537,6 +3537,35 @@ expectation proved wrong: the pass agreed exactly on the first run.
 Berlin closure has no solid mask (`c.mask === nothing`); #555's Berlin
 rows say "the closure's solid mask", which its own log contradicts.
 
+**Review** (independent reviewer, fresh eyes on the diff against
+`issue/554-tke-blocked`). Checked: N² and D at slab and row edges (the
+two-row N² ring is filled for every interior row before ν and the update
+read it; halo rows and planes are never read from it), the halos the
+bodies read (θ, qv, the condensate's scratch copy filled in
+`_with_n2_args`; u, v, w before the pass), the D halo fold (`_dual_row!`
+writes only its row and reads nothing from it), the shell's N² on open
+faces, the stretched Δz (`dzc[k]`, the storage index the removed loop
+used), the per-slab rings under threads, and every reader of `c.N2` /
+`c.D` (the list above holds; the Reynolds-stress closure has its own).
+No correctness bug found. Fixed: the allocation check covered only the
+dry N², and now asserts 0 bytes for the none, moist and cloudy variants
+on the regular and stretched grids, with and without transport (measured
+0); the `advance_sgs!` docstring said the pass writes ν_t, κ_t and N² on
+the boundary shell, but without transport it writes none of them.
+Re-measured under the lock (same script, one process per thread count,
+15 rounds; e identical, max |Δe| = 0):
+
+| threads | separate (`never`) | old pass | new pass | N² loop alone | D loop alone | power mean / peak, clock |
+| --: | --: | --: | --: | --: | --: | :-- |
+| 6 | 30.47 / 32.35 | 18.03 / 20.96 | 18.08 / 19.52 | 1.54 / 1.72 | 4.24 / 5.61 | 12.0 / 23.6 W, 1.63 GHz |
+| 12 | 31.47 / 32.58 | 15.37 / 17.12 | 13.45 / 15.02 | 1.90 / 2.10 | 3.88 / 4.20 | 12.9 / 27.8 W, 1.79 GHz |
+
+This confirms the implementer's numbers: at 6 threads the new pass is no
+faster at the minimum (+0.05 ms) and 1.4 ms faster at the median; at 12
+threads 1.9 ms (min) and 2.1 ms (median) faster. Against #555's form the
+pass is 1.7× (6 threads, min) and 2.3× (12) faster than the separate
+loops.
+
 **Open**: the cost of D itself (above); the open items of #554.
 
 ### Phase 85 — Asynchronous and in-situ workflows
