@@ -257,7 +257,11 @@ With a prognostic TKE closure (`PrognosticSGS.TKEClosure`) the table also
 has `tke_update_blocked` (`"all"`, `"some"` or `"none"`): whether the
 closure's update of e ran as one cache-blocked pass (#554) or as separate
 loops (the reference, and what `loop_fusion = "never"` runs), and
-`tke_not_blocked`, the reason when the blocked pass could not run.
+`tke_not_blocked`, the reason when the blocked pass could not run. With a
+Reynolds-stress closure that transports its stresses
+(`PrognosticSGS.ReynoldsStressClosure`, `transport = true`) it has
+`reynolds_stress_update_blocked` and `reynolds_stress_not_blocked`
+likewise (#560).
 """
 function sweep_report(sim)
     r = sim.workspaces.fused
@@ -271,6 +275,10 @@ function sweep_report(sim)
     if r.tke_blocked + r.tke_separate > 0         # a TKE closure's update of e (#554)
         d["tke_update_blocked"] = r.tke_separate == 0 ? "all" : r.tke_blocked == 0 ? "none" : "some"
         isempty(r.tke_reason) || (d["tke_not_blocked"] = r.tke_reason)
+    end
+    if r.rsm_blocked + r.rsm_separate > 0         # a Reynolds-stress closure's update (#560)
+        d["reynolds_stress_update_blocked"] = r.rsm_separate == 0 ? "all" : r.rsm_blocked == 0 ? "none" : "some"
+        isempty(r.rsm_reason) || (d["reynolds_stress_not_blocked"] = r.rsm_reason)
     end
     return d
 end

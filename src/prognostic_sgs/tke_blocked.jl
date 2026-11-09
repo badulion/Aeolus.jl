@@ -408,10 +408,11 @@ end
 write_row!(::_TKEUpdate{P,true}, ring, a, b, s, j, k, ii) where {P} = nothing
 write_point!(::_TKEUpdate{P,true}, edge, i, j, k, e, s) where {P} = nothing
 write_row!(op::_TKEUpdate{P,false}, ring, a, b, s, j, k, ii) where {P} =
-    _write_e_row!(op.p.e, ring, a, b, s, j, k, ii)
-@noinline function _write_e_row!(ed, ring, a, b, s, j, k, ii)
+    _write_field_row!(op.p.e, ring, a, b, 1, s, j, k, ii)
+# row (j, k) of a field from field f of the driver's ring
+@noinline function _write_field_row!(ed, ring, a, b, f, s, j, k, ii)
     @inbounds @simd ivdep for i in ii
-        ed[i, j, k] = ring[i, a, b, 1, s]
+        ed[i, j, k] = ring[i, a, b, f, s]
     end
     return nothing
 end
