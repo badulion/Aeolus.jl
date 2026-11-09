@@ -958,4 +958,8 @@ include("operators/sgs_stability.jl")
 # θ only (ONE-e, #454; from the urban case's glue).
 include("operators/moist_buoyancy.jl")
 
+# A scalar's explicit eddy-diffusion step as one cache-blocked pass, on the
+# blocked driver of FiniteVolume (#559; the urban tracer diffusion).
+include("operators/eddy_diffusion_blocked.jl")
+
 end # module
