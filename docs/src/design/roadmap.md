@@ -3565,8 +3565,13 @@ minimal case of `sim`, `mesh` and `budgets`):
 - **A `-t 4` subprocess.** Both cores, κh ≠ κv, both halo kinds, 2–5 slabs
   running concurrently (16 runs, all within the tolerances above).
 
-No test expectation proved wrong. Validation `urban_checks.jl`: see
-below.
+No test expectation proved wrong. Validation `urban_checks.jl` (under
+the lock, after the vectorisation fix): 1 job, 33 checks passed, in 829 s.
+Its synthetic city diffuses qv, ql and the chemistry species with the
+blocked pass, and its ledgers close. The targeted tests passed:
+`tracer_diffusion_blocked`, `tke_blocked`, `tke`, `anelastic`,
+`sgs_closure`, `urban_run`, `urban_checks`, `fused_sweep`, `checks`, the
+config tests and `naming_conventions`.
 
 **Deviations from the plan.**
 - **Not in the same pass as the tracer's advection.** The diffusion of a
