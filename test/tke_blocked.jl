@@ -157,13 +157,23 @@ end
     @test tkb_stats_agree(s_b, s_s)
     r = Aeolus.Simulations.sweep_report(sim)
     @test r["tke_update_blocked"] == "some" && !haskey(r, "tke_not_blocked")
-    # allocation: the pass reuses its scratch (measured: as many bytes as the
-    # separate loops' launches; bounded at 64 KiB per call on a serial backend)
+    # allocation: the pass reuses its scratch, and its entry is type-stable
+    # (the cached scratch in the closure's `Any` slot is split to a concrete
+    # type, the dissipation form and the wall production are types), so on a
+    # serial backend it allocates nothing of its own: no more than the
+    # separate loops (0 bytes; with walls both allocate the 368 B of the
+    # wall production); with and without transport, both dissipation forms
     Aeolus.Simulations.set_loop_fusion!(sim, :if_possible)
     with_backend(CPUBackend(serial = true)) do
-        advance_sgs!(c, sim, 0.4)
-        a = @allocated advance_sgs!(c, sim, 0.4)
-        @test a <= 64 * 1024
+        for (tr, diss, solid) in ((true, :semi_implicit, false), (false, :exact, false), (true, :exact, true))
+            sa, ca = tkb_case(g; transport = tr, dissipation = diss, mask = solid, walls = solid)
+            advance_sgs!(ca, sa, 0.4)
+            TKB._advance_separate!(ca, sa, 0.4)
+            ab = @allocated advance_sgs!(ca, sa, 0.4)
+            as = @allocated TKB._advance_separate!(ca, sa, 0.4)
+            @test ab <= as
+            solid || @test ab == 0
+        end
     end
     sim2, c2 = tkb_case(g)
     advance_sgs!(c2, sim2, 0.4)

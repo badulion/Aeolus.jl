@@ -150,14 +150,28 @@ Base.size(::_Discard) = (0, 0, 0)
 # ν and the ratio of three rows, the x and z face fluxes (reconstructed H,
 # upwind L) of two rows, the y face fluxes of three face rows, and one row
 # of the tendency of e.
-struct _TKERings{A<:AbstractArray, M<:AbstractMatrix}
-    ν::A; R::A
-    FxH::A; FxL::A; FzH::A; FzL::A
-    FyH::A; FyL::A
-    td::M
+# (mutable, as `SweepBuffers`: kept in the closure's `Any` slot without a
+# box per step; the fields are `const`)
+mutable struct _TKERings{A<:AbstractArray, M<:AbstractMatrix}
+    const ν::A; const R::A
+    const FxH::A; const FxL::A; const FzH::A; const FzL::A
+    const FyH::A; const FyL::A
+    const td::M
 end
 
+# (the split, as in `sweep_buffers`, keeps a cached `old::Any` from the
+# closure's `RefValue{Any}` from making the rings, and with them the update
+# and its launch, abstract: a concrete ring type costs no allocation)
 function _tke_rings(old, data::AbstractArray{T,3}, nkl::Int, ns::Int) where {T}
+    R = _ring_type(data)
+    return old isa _TKERings{R, _row_type(data)} ? _tke_rings_(old, data, nkl, ns) :
+                                                    _tke_rings_(nothing, data, nkl, ns)
+end
+_ring_type(::Array{T,3}) where {T} = Array{T,4}
+_ring_type(a::AbstractArray) = typeof(similar(a, 0, 0, 0, 0))
+_row_type(::Array{T,3}) where {T} = Matrix{T}
+_row_type(a::AbstractArray) = typeof(similar(a, 0, 0))
+function _tke_rings_(old, data::AbstractArray{T,3}, nkl::Int, ns::Int) where {T}
     sx = size(data, 1)
     old isa _TKERings && size(old.ν, 1) == sx && size(old.ν, 2) >= nkl && size(old.ν, 4) == ns &&
         return old
@@ -456,7 +470,6 @@ function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, reverse_
         fill_halos!(c.ν, bcs)
         _wall_production!(c, sim, bcs)
     end
-    pw = walls ? c.Pw.data : _Zeros{T}()
     ebcs = passive_scalar_bcs(sim.θ_bcs)
     if c.transport
         _check_stretched_recon(c.recon, g)
@@ -476,19 +489,38 @@ function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, reverse_
     (old isa _TKEBlockedScratch && old.bufs === bufs && old.rings === rings) ||
         (c.blocked[] = _TKEBlockedScratch(bufs, rings))
     par = _update_params(c, Δt, _surface_buoyancy(c, sim))
-    inplace = !c.transport
-    p = (e = c.e.data, νf = c.ν.data, Rf = c.transport ? c.ws.ratio.data : c.ν.data,
-         u = sim.u.data, v = sim.v.data, w = sim.w.data, n2 = c.N2.data, dd = c.D.data, pw = pw,
-         r = c.transport ? c.recon : nothing, discard = _Discard{T}(), ztd = _Zeros{T}(),
-         Δk = c.Δk, vrel = c.vrel, l_wall = c.l_wall, first_level = c.first_level, mask = c.mask,
-         Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, ck = c.c_k, cl = c.c_l, Δt = Δt,
-         idx = 1 / g.dx, idy = 1 / g.dy, idz = _idz_mask(g), dzm = _dz_metric(g), m = grid_metrics(g),
-         par = par, exact = Val(c.dissipation === :exact), rg = rings, rowsums = c.rowsums,
-         J1 = first(jj), J2 = last(jj), Kb = first(kk), Kt = last(kk), lag = lag, lz = lz)
-    blocked_update!(bufs, _TKEUpdate(p, inplace), b, g; reverse_slabs = reverse_slabs)
+    # the wall production and the dissipation form as types, split here so
+    # the update and its launch are concrete (no dynamic call, no allocation)
+    exact = c.dissipation === :exact
+    if walls
+        exact ? _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, c.Pw.data, Val(true), reverse_slabs) :
+                _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, c.Pw.data, Val(false), reverse_slabs)
+    else
+        exact ? _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, _Zeros{T}(), Val(true), reverse_slabs) :
+                _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, _Zeros{T}(), Val(false), reverse_slabs)
+    end
     _book_sums!(c, par.V0)
     c.surface === nothing || _surface!(c, Δt)
     return c
+end
+
+function _tke_pass!(c::TKEClosure{T}, sim, Δt::T, bufs, rings, par, b, g, pw, exact::Val,
+                    reverse_slabs::Bool) where {T}
+    ii, jj, kk = interior(g)
+    lag, lz = tke_blocked_lags(c)
+    # without transport (no reconstruction: `c.recon === nothing`, known
+    # from the closure's type) the update is pointwise and writes e in place
+    inplace = c.recon === nothing
+    p = (e = c.e.data, νf = c.ν.data, Rf = c.transport ? c.ws.ratio.data : c.ν.data,
+         u = sim.u.data, v = sim.v.data, w = sim.w.data, n2 = c.N2.data, dd = c.D.data, pw = pw,
+         r = c.recon, discard = _Discard{T}(), ztd = _Zeros{T}(),
+         Δk = c.Δk, vrel = c.vrel, l_wall = c.l_wall, first_level = c.first_level, mask = c.mask,
+         Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, ck = c.c_k, cl = c.c_l, Δt = Δt,
+         idx = 1 / g.dx, idy = 1 / g.dy, idz = _idz_mask(g), dzm = _dz_metric(g), m = grid_metrics(g),
+         par = par, exact = exact, rg = rings, rowsums = c.rowsums,
+         J1 = first(jj), J2 = last(jj), Kb = first(kk), Kt = last(kk), lag = lag, lz = lz)
+    blocked_update!(bufs, _TKEUpdate(p, inplace), b, g; reverse_slabs = reverse_slabs)
+    return nothing
 end
 
 # 1/Δz of the masked diffusion (a RegularGrid only; never read otherwise)
