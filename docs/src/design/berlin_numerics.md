@@ -107,7 +107,9 @@ lateral halos): no flux through a face next to a building and solid cells
 untouched, so vapour neither leaks into the building interiors nor draws
 on the stale value they hold. On a sound-proof core it passes the
 constraint weights, giving `(1/W)∇·(W κt ∇q)`, which conserves `Σ W q`;
-on the anelastic core that is the ledger's `Σ ρ̄ q`. The diffusion books
+on the anelastic core that is the ledger's `Σ ρ̄ q`. On the CPU the step
+runs as one cache-blocked pass (`Operators.blocked_eddy_diffusion!`, #559;
+the separate loops under `loop_fusion = "never"`). The diffusion books
 its change of water as `sgs_diffusion` (zero to round-off) plus
 `density_redistribution`. Its `smoke_check` asserts that the diffusion
 alone conserves `Σ q V` (`Σ W q V`) to 1e-12 and that `κt ≥ 0`.
