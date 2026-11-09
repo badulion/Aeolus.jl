@@ -15,7 +15,7 @@
 # What stays here is what has no RegularGrid twin in FiniteVolume:
 #
 #   * the vertical metrics of the core      `Simulations._dzc/_dzf/_dz_min`
-#   * N² of the TKE closure                 `_buoyancy_frequency_squared!`
+#   * the Δz of N² (the TKE closure)        `Operators._n2_dz`
 #
 # Control volumes of the staggered grid in z (storage index k):
 #
@@ -33,11 +33,13 @@ _check_boussinesq_mesh(::StretchedGrid) = nothing
 
 # --- N² of the stratification (the TKE closure's buoyancy term, #259) ------
 
-import ..Operators: _buoyancy_frequency_squared!
-using ..Operators: _n2_cell, _humidity_data, _θref
+import ..Operators: _n2_dz
 
 """
-    _buoyancy_frequency_squared!(N2, θ, qv, θ₀, g, m::StretchedGrid)
+    _n2_dz(m::StretchedGrid)
+
+The Δz of ``N^2`` on a StretchedGrid: the cell thickness `dzc` of every
+storage level (`Operators._n2_body!` reads it per level).
 
 ``N^2_k = (g/θ_0)(θ_{v,k+1/2} - θ_{v,k-1/2})/Δz_c[k]``: the face values of
 the uniform form (the mean of the two adjacent centres) differenced over
@@ -55,16 +57,4 @@ first stretched one of the nesting parent, #259). With condensate
 (condensate loading, the saturated N² in cells with ``q_c > 0``), over
 the same ``Δz_c[k]``.
 """
-function _buoyancy_frequency_squared!(N2::Field{CellCenter}, θ::Field{CellCenter}, qv,
-                                      θ₀, g, m::StretchedGrid)
-    qd = _humidity_data(qv)
-    θd, nd = θ.data, N2.data
-    ii, jj, kk = interior(m)
-    @inbounds for k in kk
-        dz = m.dzc[k]
-        for j in jj, i in ii
-            nd[i, j, k] = _n2_cell(θd, qd, i, j, k, dz, g, _θref(θ₀, k))
-        end
-    end
-    return N2
-end
+_n2_dz(m::StretchedGrid) = m.dzc

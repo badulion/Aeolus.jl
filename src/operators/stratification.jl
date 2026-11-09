@@ -148,16 +148,28 @@ _humidity_data(q) = q.data
 _humidity_data(q::_Cloudy) = q
 
 function _buoyancy_frequency_squared!(N2::Field{CellCenter}, θ::Field{CellCenter}, qv,
-                                      θ₀, g, m::RegularGrid)
-    launch!(Backends.backend(N2.data), _n2_body!, interior(m), N2.data, θ.data, _humidity_data(qv),
-            m.dz, g, θ₀)
+                                      θ₀, g, m::AbstractMesh)
+    launch!(Backends.backend(N2.data), _n2_body!, interior(m), N2.data, n2_args(θ, qv, θ₀, g, m)...)
     return N2
 end
+
+# The arguments of `_n2_body!` after the cell's output array: θ, the
+# humidity (nothing, qv or `_Cloudy`), the layer thickness Δz (a number on a
+# RegularGrid; on a StretchedGrid the cell thickness `dzc` of every storage
+# level, `_n2_dz` in `src/stretched/boussinesq.jl`), g and θ₀. The one set of
+# arguments of the whole-field loop and of the row-by-row N² of the
+# cache-blocked TKE pass (#556), so both run the same body.
+n2_args(θ::Field, qv, θ₀, g, m) = (θ.data, _humidity_data(qv), _n2_dz(m), g, θ₀)
+_n2_dz(m::RegularGrid) = m.dz
+
+# the Δz of N² at storage level k: one number, or a value per level
+@inline _dz_level(dz::Real, k) = dz
+@inline _dz_level(dz::AbstractVector, k) = @inbounds dz[k]
 
 # KA-l (#304): the N², Ri_g and S² kernels are point bodies run by `launch!`
 # over the interior (the loops' expressions, bit for bit).
 @inline function _n2_body!(i, j, k, nd, θd, qd, dz, g, θ₀)
-    @inbounds nd[i, j, k] = _n2_cell(θd, qd, i, j, k, dz, g, _θref(θ₀, k))
+    @inbounds nd[i, j, k] = _n2_cell(θd, qd, i, j, k, _dz_level(dz, k), g, _θref(θ₀, k))
     return nothing
 end
 
