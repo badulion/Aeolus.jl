@@ -207,6 +207,12 @@ The results agree within round-off either way. Only `step!` and
 the anelastic core always run one loop per term, so `:always` is refused
 for an anelastic core. The TOML key is
 `[timestep] loop_fusion` (`"if_possible"`, `"always"`, `"never"`).
+
+The setting also chooses the update of a prognostic TKE closure
+(`PrognosticSGS.TKEClosure`, #554), on either core: one cache-blocked
+pass unless `:never`, which runs its separate loops; `:always` refuses a
+case the pass cannot run (a GPU backend). [`sweep_report`](@ref) records
+which ran (`tke_update_blocked`).
 """
 function set_loop_fusion!(sim, setting)
     m = Symbol(setting)

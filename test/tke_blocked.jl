@@ -14,7 +14,7 @@
 
 using Test
 using Aeolus
-using Aeolus.Fields: interior_view
+using Aeolus.Fields: interior_view, set!
 using Aeolus.Operators: advance_sgs!
 using Aeolus.Backends: CPUBackend, with_backend
 using Aeolus.IBM: SolidMask, mark_solid!
@@ -206,4 +206,28 @@ end
         @test maximum(y) > 0
         @test maximum(abs.(x .- y)) <= 1e-12 * maximum(abs, y)
     end
+end
+
+@testset "TKE blocked pass: loop_fusion on an anelastic core (#554)" begin
+    # the setting chooses the TKE update on either core (documented in
+    # set_loop_fusion! and [timestep] loop_fusion): blocked by default,
+    # the separate loops under "never"; e agrees within 4 eps of max e
+    g = RegularGrid(; size = (10, 8, 12), extent = (100.0, 80.0, 120.0), halo = (3, 3, 3))
+    θf(z) = 300 + 3e-3 * z
+    out = map((:if_possible, :never)) do setting
+        sim = Aeolus.Anelastic.AnelasticSimulation(g; ref = Aeolus.Anelastic.reference_from_profile(g, θf, 101325.0),
+                                                   θ_flux_bottom = 0.05)
+        set!(sim.θ, (x, y, z) -> θf(z))
+        rng = Xoshiro(7)
+        for f in (sim.u, sim.v, sim.w)
+            interior_view(f) .= randn(rng, size(interior_view(f)))
+        end
+        c = TKEClosure(g; transport = true)
+        initialize_tke!(c, sim; e_min = 1e-3)
+        Aeolus.Simulations.set_loop_fusion!(sim, setting)
+        advance_sgs!(c, sim, 0.4)
+        (e = copy(interior_view(c.e)), rep = Aeolus.Simulations.sweep_report(sim)["tke_update_blocked"])
+    end
+    @test out[1].rep == "all" && out[2].rep == "none"
+    @test maximum(abs.(out[1].e .- out[2].e)) <= 4eps() * maximum(out[2].e)
 end
