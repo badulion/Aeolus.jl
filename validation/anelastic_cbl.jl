@@ -61,7 +61,9 @@ function _cbl_run(core; N = 24, Nz = 40, L = 3000.0, H = 3000.0, Q = 0.25, Γ = 
     for _ in 1:round(Int, hours * 3600 / dt)
         step!(sim, dt; sgs = c)
     end
-    zf, fl = _cbl_heat_flux(sim, c.κt)
+    # the κt of the step (sim.κt, as gabls1.jl); the closure's own κt is
+    # scratch that the cache-blocked TKE update (#554) does not keep
+    zf, fl = _cbl_heat_flux(sim, sim.κt)
     zi = boundary_layer_height(zf, fl; method = :min_flux)
     θm = vec(sum(interior_view(sim.θ); dims = (1, 2))) ./ N^2
     zc = [(k - 0.5) * m.dz for k in 1:Nz]

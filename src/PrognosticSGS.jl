@@ -958,9 +958,16 @@ row, on `Operators.FiniteVolume.blocked_update!` (#554; the footprint in
 separate loops before it. The step core's `loop_fusion` setting
 (`Simulations.set_loop_fusion!`) chooses: `:never` runs every step as
 separate whole-field loops (the reference, which agrees to round-off);
-`:always` refuses a case the pass cannot run (a GPU backend). Which form ran is recorded in `Simulations.sweep_report`. The
-blocked pass keeps neither ``ν_t``, ``κ_t``, the transport nor (without
-walls) ``P_w`` in the closure's scratch fields; the separate loops do.
+`:always` refuses a case the pass cannot run (a GPU backend). Which form
+ran is recorded in `Simulations.sweep_report`.
+
+The closure's scratch fields `ν`, `κt`, `tend` and `Pw` are not output:
+read the step's coefficients from `sim.νt` / `sim.κt`
+([`sgs_coefficients!`](@ref)). The separate loops leave this step's values
+in them; the blocked pass does not keep them: it writes ``ν_t``, ``κ_t``
+only on the one-cell boundary shell (and everywhere, with ``P_w``, when
+walls are attached), so their interior keeps the values of an earlier
+call, and `tend` is not written.
 """
 function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     Δt = T(dt)

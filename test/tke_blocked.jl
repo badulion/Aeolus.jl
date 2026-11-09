@@ -179,3 +179,31 @@ end
     advance_sgs!(c2, sim2, 0.4)
     @test Aeolus.Simulations.sweep_report(sim2)["tke_update_blocked"] == "all"
 end
+
+@testset "TKE blocked pass: the step's νt and κt (sim) agree with the separate loops (#554)" begin
+    # Output and diagnostics read the step's coefficients from sim.νt /
+    # sim.κt (sgs_coefficients!, from the committed e), not the closure's
+    # scratch ν / κt, which the blocked pass does not keep (a validation
+    # read c.κt and lost most of its SGS heat flux; review of #554). Two
+    # identical runs of three steps, blocked and separate: e, νt and κt
+    # agree within 1e-12 of their maxima (e is the same bits per update;
+    # the flow then evolves through the same arithmetic, so only round-off
+    # of a different summation order could separate them).
+    g = RegularGrid(; size = (12, 10, 16), extent = (120.0, 100.0, 160.0), halo = (3, 3, 3))
+    runs = map((:if_possible, :never)) do setting
+        sim, c = tkb_case(g; mask = true)
+        Aeolus.Simulations.set_loop_fusion!(sim, setting)
+        for _ in 1:3
+            step!(sim, 0.05; sgs = c)
+        end
+        (e = copy(interior_view(c.e)), νt = copy(interior_view(sim.νt)), κt = copy(interior_view(sim.κt)),
+         rep = Aeolus.Simulations.sweep_report(sim)["tke_update_blocked"])
+    end
+    b, s = runs
+    @test b.rep == "all" && s.rep == "none"
+    for f in (:e, :νt, :κt)
+        x, y = getfield(b, f), getfield(s, f)
+        @test maximum(y) > 0
+        @test maximum(abs.(x .- y)) <= 1e-12 * maximum(abs, y)
+    end
+end
