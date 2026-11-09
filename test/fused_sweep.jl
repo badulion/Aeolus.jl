@@ -324,6 +324,10 @@ end
     @test prod(sb(12, 60, 200, 4, 4)) == 12 && prod(sb(24, 60, 200, 4, 4)) == 24
     @test prod(sb(24, 60, 200, 2, 2)) == 24 && prod(sb(24, 60, 200, 1, 1)) == 24
     @test sb(1, 60, 200, 4, 4) == (1, 1) && sb(24, 3, 3, 1, 1) == (1, 1)
+    # slabs no taller than 20 planes where the threads allow (whole columns measured slower)
+    @test all(T -> cld(60, sb(T, 60, 200, 1, 1)[1]) <= 20, (3, 6, 12, 24))
+    @test sb(2, 60, 200, 1, 1) == (2, 1)                     # fewer threads than the 3 slabs
+    @test sb(24, 60, 3, 1, 1) == (24, 1)                     # one row range: k alone, as before
 end
 
 @testset "composed terms: the sweep = the terms' whole-field passes + predictor" begin

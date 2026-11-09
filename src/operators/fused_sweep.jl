@@ -264,31 +264,40 @@ The blocks of the blocked sweep (#558): `ns` slabs in k (at least `2lz`
 planes each) times `nt` row ranges in j (at least `2ly` rows each), one
 work item each, when a launch of `npoints` runs threaded; else `(1, 1)`.
 
-A slab keeps `lz` edge planes at each end and a row range `ly` edge rows
-(their new values wait in a buffer until every block is done, then a
-second launch writes them), and each block recomputes a few planes and
-rows of intermediate values its neighbours also compute. With `T`
-threads the split minimises the estimated time of the slowest thread,
-`cld(ns·nt, T) · (nk/ns)(nj/nt) · (1 + c_edge·f_edge)`, where `f_edge` is
-the fraction of edge points, over `ns·nt ≤ T`. In k alone (#533, #554)
-the slabs capped the threads that work at `nk ÷ 2lz`: with 60 levels 30
-for the predictor (`lz = 1`), 15 for the centred TKE update (`lz = 2`)
-and 7 for WENO-Z5 (`lz = 4`), where 8 of every 10 planes of a slab were
-edge planes; the row ranges lift the cap to `(nk ÷ 2lz)(nj ÷ 2ly)`.
+A slab keeps `lz` edge planes at each end and a row range `ly` edge rows:
+their new values wait in a buffer until every block is done, then a
+second launch writes them. In k alone (#533, #554) the slabs capped the
+threads that work at `nk ÷ 2lz`: with 60 levels 30 for the predictor
+(`lz = 1`), 15 for the centred TKE update (`lz = 2`) and 7 for WENO-Z5
+(`lz = 4`), where 8 of every 10 planes of a slab were edge planes. The
+row ranges lift the cap to `(nk ÷ 2lz)(nj ÷ 2ly)`.
+
+The rule, from measurements on 200 × 200 × 60 at 6, 12 and 24 threads
+(docs/src/design/roadmap.md, #558): slabs no taller than 20 planes
+(`_SLAB_PLANES`) where the thread count allows (taller slabs keep too
+many rows of every field in cache: whole 60-level columns ran 10-110 %
+slower), then the least estimated time `cld(ns·nt, T) / (ns·nt) · (1 +
+c·f_edge)` for `T` threads, a fraction `f_edge` of edge points and `c =
+0.5` (`_C_EDGE`): the most blocks up to one per thread, and among those
+the fewest edge points.
 """
 function sweep_blocks(b, npoints::Integer, nk::Integer, nj::Integer; lz::Integer = 1, ly::Integer = 1)
     Backends.runs_serially(b, npoints) && return (1, 1)
     return _split_blocks(Threads.nthreads(), nk, nj, lz, ly)
 end
 
-# the weight of an edge point against an inner one (measured, #558)
+# the tallest slab the split prefers, and the weight of an edge point
+# against an inner one (measured, #558)
+const _SLAB_PLANES = 20
 const _C_EDGE = 0.5
 
 function _split_blocks(T::Integer, nk::Integer, nj::Integer, lz::Integer, ly::Integer)
-    best, bc = (1, 1), Inf
-    for ns in 1:max(1, min(T, nk ÷ (2lz))), nt in 1:max(1, min(T ÷ ns, nj ÷ (2ly)))
+    nsmax = max(1, min(T, nk ÷ (2lz)))
+    nsmin = min(nsmax, cld(nk, _SLAB_PLANES))
+    best, bc = (nsmax, 1), Inf
+    for ns in nsmin:nsmax, nt in 1:max(1, min(T ÷ ns, nj ÷ (2ly)))
         fe = 1 - (1 - (ns > 1 ? min(1, 2lz * ns / nk) : 0.0)) * (1 - (nt > 1 ? min(1, 2ly * nt / nj) : 0.0))
-        c = cld(ns * nt, T) * (nk / ns) * (nj / nt) * (1 + _C_EDGE * fe)
+        c = cld(ns * nt, T) / (ns * nt) * (1 + _C_EDGE * fe)
         c < bc * (1 - 1e-9) && ((best, bc) = ((ns, nt), c))
     end
     return best
