@@ -53,9 +53,15 @@ function tkb_case(g; transport = true, dissipation = :semi_implicit, mask = fals
     return sim, c
 end
 
-# e and the statistics after one update by `f!`, from the same start
+# e and the statistics after one update by `f!`, from the same start. The
+# scratch the blocked pass reads at the boundary (ν, κt, the limiter's
+# ratio) is first set to NaN: a reference run on the same closure leaves
+# correct values in their interior, which would hide a boundary cell the
+# pass failed to compute itself (a NaN read reaches e).
 function tkb_run!(f!, c, sim, e0, Δt)
     copyto!(c.e.data, e0); fill!(c.stats, 0)
+    fill!(c.ν.data, NaN); fill!(c.κt.data, NaN)
+    c.ws === nothing || fill!(c.ws.ratio.data, NaN)
     f!(c, sim, Δt)
     return copy(c.e.data), tke_statistics(c)
 end
