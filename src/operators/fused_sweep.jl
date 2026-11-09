@@ -246,6 +246,13 @@ _buf_type(a::AbstractArray) = typeof(similar(a, 0, 0, 0, 0, 0))
 
 The number of slabs of the blocked sweep: one per thread (at least `2lz`
 planes each) when a launch of `npoints` runs threaded, else one.
+
+Each slab is one work item, so `nk ÷ 2lz` caps the threads that work: with
+60 levels 30 for the predictor (`lz = 1`), 15 for the centred TKE update
+(`lz = 2`) and 7 for WENO-Z5 (`lz = 4`, #554). At the cap every plane of a
+slab is an edge plane (written back by the second launch), and threads
+beyond it are idle; splitting the slabs in j as well would need edge rows
+in j too (not done).
 """
 sweep_slabs(b, npoints::Integer, nk::Integer; lz::Integer = 1) =
     Backends.runs_serially(b, npoints) ? 1 : clamp(Threads.nthreads(), 1, max(1, nk ÷ (2lz)))
