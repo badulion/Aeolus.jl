@@ -181,7 +181,9 @@ end
         c = TKEClosure(g; mask = mask, dissipation = diss, first_level = fl,
                        wall_distance = 1.0 .+ 30 .* rand(rng, n...))
         initialize_tke!(c, sim; e_min = 1e-4)
-        advance_sgs!(c, sim, 0.5)                       # ν, N², D, the transport current
+        # ν, N², D, the transport current: the separate loops keep them in the
+        # scratch fields (the blocked pass of #554 does not store ν or the transport)
+        Aeolus.PrognosticSGS._advance_separate!(c, sim, 0.5)
         # every case of the update: N² of both signs, e = 0 (l = 0 in stable
         # air), a large negative transport (clipping), surface fluxes of
         # both signs, a wall-model production

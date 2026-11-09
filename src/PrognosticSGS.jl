@@ -303,6 +303,7 @@ struct TKEClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, WS, RC, SX} <: AbstractSGS
     stats::Vector{T}      # see tke_statistics
     snapstats::Vector{T}
     rowsums::Matrix{NTuple{8,T}}   # scratch: the budget sums of every i-row (_update!)
+    blocked::Base.RefValue{Any}    # scratch of the cache-blocked update (#554), built on first use
 end
 
 const _NSTATS = 10
@@ -359,7 +360,7 @@ function TKEClosure(g::Union{RegularGrid{T},StretchedGrid{T}}; e = nothing, e0::
                       qv, cloud_humidity(qc, p, g), lw, fl, mk, surface, surface_flux, transport, dissipation, adv,
                       transport ? _reconstruction(adv) : nothing, mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), mkf(), Ref{Any}(nothing), T[], ws,
                       similar(ef.data), zeros(T, _NSTATS), zeros(T, _NSTATS),
-                      Matrix{NTuple{8,T}}(undef, g.Ny, g.Nz))
+                      Matrix{NTuple{8,T}}(undef, g.Ny, g.Nz), Ref{Any}(nothing))
     walls === nothing || attach_immersed_walls!(c, walls)
     return c
 end
@@ -952,8 +953,32 @@ the sum over the pieces is the step):
    [`tke_surface_value`](@ref) when `surface` is given (booked).
 """
 function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
-    g = mesh(c.e)
     Δt = T(dt)
+    setting = _fusion_setting(sim)
+    if setting === :never                         # the separate loops, by choice
+        _advance_separate!(c, sim, Δt)
+        _note_tke!(sim, false, nothing)
+        return c
+    end
+    why = _tke_blocked_blocker(c, sim)
+    if why === nothing
+        _advance_blocked!(c, sim, Δt)
+        _note_tke!(sim, true, nothing)
+    else
+        setting === :always &&
+            throw(ArgumentError("loop_fusion = \"always\", but the TKE update has no blocked form here: $why"))
+        _advance_separate!(c, sim, Δt)
+        _note_tke!(sim, false, why)
+    end
+    return c
+end
+
+# The update of e as separate whole-field loops: the reference of the
+# cache-blocked pass (`_advance_blocked!`, prognostic_sgs/tke_blocked.jl),
+# and the form `loop_fusion = "never"` runs. It leaves ν, κt, D, the
+# transport and Pw of the step in the closure's scratch fields.
+function _advance_separate!(c::TKEClosure{T}, sim, Δt::T) where {T}
+    g = mesh(c.e)
     bcs = sim.bcs
     fill_halos!(sim.u, bcs); fill_halos!(sim.v, bcs); fill_halos!(sim.w, bcs)
     _stratification!(c, sim)
@@ -1001,21 +1026,31 @@ _tke_volume_sum(a, c, V0, g::StretchedGrid) = sum(sum(view(a, :, :, k)) * c.vrel
 # KA-l (a plane per work item, which left threads idle with 60 planes at 12
 # or more threads) only in the order of the additions.
 function _update!(c::TKEClosure{T}, Δt::T, pbs) where {T}
-    g = mesh(c.e)
-    V0 = T(_tke_volume0(g))
-    par = (Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, Nz = g.Nz, V0 = V0, Δt = Δt, pb1 = T(pbs[1]),
-           pb2 = T(pbs[2]), ck = c.c_k, cl = c.c_l, cε0 = c.c_ε0, cε1 = c.c_ε1,
-           sfac = c.surface_factor)
+    par = _update_params(c, Δt, pbs)
     # the dissipation form as a type, so the row loop is compiled for one
     exact = c.dissipation === :exact
     exact ? _update_rows!(c, par, Val(true)) : _update_rows!(c, par, Val(false))
+    _book_sums!(c, par.V0)
+    c.surface === nothing || _surface!(c, Δt)
+    return c
+end
+
+# the parameters of the point body of the update
+function _update_params(c::TKEClosure{T}, Δt::T, pbs) where {T}
+    g = mesh(c.e)
+    return (Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, Nz = g.Nz, V0 = T(_tke_volume0(g)), Δt = Δt,
+            pb1 = T(pbs[1]), pb2 = T(pbs[2]), ck = c.c_k, cl = c.c_l, cε0 = c.c_ε0, cε1 = c.c_ε1,
+            sfac = c.surface_factor)
+end
+
+# the row sums of the step (c.rowsums) into the statistics
+function _book_sums!(c::TKEClosure, V0)
     sPs, sPb, sT, sPw, sε, sB, nclip, eclip = _sum_rows(c.rowsums)
     st = c.stats
     st[1] += nclip; st[2] += eclip
     st[4] = sPs * V0; st[5] = sPb * V0; st[6] = sε * V0; st[7] = sB * V0; st[8] = sT * V0
     st[9] += 1
     st[10] = sPw * V0
-    c.surface === nothing || _surface!(c, Δt)
     return c
 end
 
@@ -1318,6 +1353,7 @@ end
     return nothing
 end
 
+include("prognostic_sgs/tke_blocked.jl")      # #554: the update as one cache-blocked pass
 include("prognostic_sgs/reynolds_stress.jl")
 
 end # module
