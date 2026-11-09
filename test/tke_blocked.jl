@@ -23,53 +23,7 @@ using Random: Xoshiro, randn
 
 const TKB = Aeolus.PrognosticSGS
 
-# A closure on a random flow: θ stably stratified with noise (N² of both
-# signs), e with zeros and a large range (the limiter active), a first
-# level, wall distance; optionally a solid mask with wall-modelled
-# immersed walls and a surface value.
-function tkb_case(g; transport = true, dissipation = :semi_implicit, mask = false, walls = false,
-                  surface = false, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs, θ_flux_bottom = 0.05)
-    rng = Xoshiro(554)
-    n = (g.Nx, g.Ny, g.Nz)
-    for f in (sim.u, sim.v, sim.w)
-        interior_view(f) .= 2.0 .* randn(rng, size(interior_view(f)))
-    end
-    interior_view(sim.θ) .= 300 .+ 0.02 .* randn(rng, n) .+ reshape(0.004 .* (1:g.Nz), 1, 1, :)
-    sm = nothing
-    if mask
-        sm = SolidMask(g)
-        mark_solid!(sm, (x, y, z) -> (0.3 < x / (g.Nx * g.dx) < 0.5) && (0.2 < y / (g.Ny * g.dy) < 0.6) &&
-                                     z < 0.4 * g.Nz * g.dz)
-    end
-    fl = falses(n); fl[:, :, 1] .= true
-    sv = surface ? (u_star = 0.3 .+ 0.1 .* rand(rng, g.Nx, g.Ny), k = ones(Int, g.Nx, g.Ny)) : nothing
-    c = TKEClosure(g; mask = sm === nothing ? nothing : sm.mask, transport = transport,
-                   dissipation = dissipation, first_level = fl, surface = sv,
-                   wall_distance = 1.0 .+ 30 .* rand(rng, n...),
-                   walls = walls ? immersed_walls(sim, sm, RoughLogLaw(0.1)) : nothing)
-    initialize_tke!(c, sim; e_min = 1e-3)
-    interior_view(c.e) .*= 4 .* rand(rng, n...) .* (rand(rng, n...) .> 0.15)
-    return sim, c
-end
-
-# e and the statistics after one update by `f!`, from the same start. The
-# scratch the blocked pass reads at the boundary (ν, κt, the limiter's
-# ratio) is first set to NaN: a reference run on the same closure leaves
-# correct values in their interior, which would hide a boundary cell the
-# pass failed to compute itself (a NaN read reaches e).
-function tkb_run!(f!, c, sim, e0, Δt)
-    copyto!(c.e.data, e0); fill!(c.stats, 0)
-    fill!(c.ν.data, NaN); fill!(c.κt.data, NaN)
-    c.ws === nothing || fill!(c.ws.ratio.data, NaN)
-    f!(c, sim, Δt)
-    return copy(c.e.data), tke_statistics(c)
-end
-
-tkb_stats_agree(a, b) = a.clips == b.clips && a.steps == b.steps &&
-    all(isapprox(getfield(a, f), getfield(b, f); rtol = 1e-12, atol = 1e-12 * abs(a.shear))
-        for f in (:clipped_energy, :surface_energy, :shear, :buoyancy, :dissipation,
-                  :buoyant_destruction, :transport, :wall))
+include(joinpath(@__DIR__, "support", "tke_blocked_cases.jl"))
 
 @testset "TKE update as one cache-blocked pass (#554)" begin
     n = (14, 10, 40)        # 40 levels: 5 slabs of the WENO-Z5 pass (4 edge planes per end)
@@ -230,4 +184,56 @@ end
     end
     @test out[1].rep == "all" && out[2].rep == "none"
     @test maximum(abs.(out[1].e .- out[2].e)) <= 4eps() * maximum(out[2].e)
+end
+
+# The slabs of the pass run concurrently only with more than one thread;
+# the test gate runs each file at one thread, where the "threaded" cases
+# above run the slabs one after another. So the concurrent case runs here
+# in a -t 4 subprocess (skipped when this process already has 4 threads,
+# where the main set ran them concurrently): WENO-Z5 and centred, with the
+# solid mask, at 2 to 5 slabs, against the separate loops (e within 4 eps
+# of max e, the budget sums as above).
+const _TKB_THREADED = """
+using Aeolus
+using Aeolus.Backends: CPUBackend, with_backend
+const TKB = Aeolus.PrognosticSGS
+include($(repr(joinpath(@__DIR__, "support", "tke_blocked_cases.jl"))))
+n = (14, 10, 40); worst = 0.0; stats_ok = true; runs = 0
+for h in (2, 3), solid in (false, true)
+    g = RegularGrid(; size = n, extent = (140.0, 100.0, 200.0), halo = (h, h, h))
+    sim, c = tkb_case(g; mask = solid, surface = true)
+    e0 = copy(c.e.data)
+    ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
+    for ns in 2:5
+        2 * TKB.tke_blocked_lags(c)[2] * ns > g.Nz && continue
+        e, s = with_backend(CPUBackend(threshold = 0)) do
+            tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns), c, sim, e0, 0.4)
+        end
+        global worst = max(worst, maximum(abs.(e .- ref_e)) / maximum(abs, ref_e))
+        global stats_ok &= tkb_stats_agree(s, ref_s)
+        global runs += 1
+    end
+end
+print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok)
+"""
+
+@testset "TKE blocked pass: slabs run concurrently, -t 4 (#554)" begin
+    if Threads.nthreads() >= 4
+        @test true            # the main set above ran the slabs concurrently
+    else
+        project = dirname(Base.active_project())
+        cmd = `$(Base.julia_cmd()) --startup-file=no -t 4 --project=$project -e $_TKB_THREADED`
+        out = IOBuffer(); err = IOBuffer()
+        p = run(pipeline(ignorestatus(cmd); stdout = out, stderr = err))
+        msg = String(take!(out))
+        success(p) || @info "tke_blocked.jl: the -t 4 subprocess failed" String(take!(err))
+        @test success(p)
+        m = match(r"threads (\d+) runs (\d+) worst ([0-9.eE+-]+) stats (true|false)", msg)
+        @test m !== nothing
+        if m !== nothing
+            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 10
+            @test parse(Float64, m[3]) <= 4eps()
+            @test m[4] == "true"
+        end
+    end
 end
