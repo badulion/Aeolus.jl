@@ -246,7 +246,17 @@ for h in (2, 3), solid in (false, true)
         global runs += 1
     end
 end
-print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok)
+# a test that names only the slabs gets one row range (not the default
+# split's count for another slab count), and vice versa
+g = RegularGrid(; size = n, extent = (140.0, 200.0, 200.0), halo = (2, 2, 2))
+sim, c = tkb_case(g)
+splits = with_backend(CPUBackend(threshold = 0)) do
+    map(((2, nothing), (nothing, 3))) do (ns, nt)
+        TKB._advance_blocked!(c, sim, 0.4; ns = ns, nt = nt)
+        (c.blocked[].bufs.ns, c.blocked[].bufs.nt)
+    end
+end
+print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok, " splits ", splits)
 """
 
 @testset "TKE blocked pass: blocks run concurrently, -t 4 (#554, #558)" begin
@@ -267,5 +277,6 @@ print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats 
             @test parse(Float64, m[3]) <= 4eps()
             @test m[4] == "true"
         end
+        @test occursin("splits ((2, 1), (1, 3))", msg)
     end
 end

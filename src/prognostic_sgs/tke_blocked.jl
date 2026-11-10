@@ -504,10 +504,11 @@ function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, nt = not
     ii, jj, kk = interior(g)
     lag, lz = tke_blocked_lags(c)
     b = Backends.backend(c.e.data)
-    nsd, ntd = ns === nothing || nt === nothing ?
-        sweep_blocks(b, length(ii) * length(jj) * length(kk), length(kk), length(jj); lz = lz, ly = lz) : (0, 0)
-    nsl = ns === nothing ? nsd : ns
-    ntl = nt === nothing ? ntd : nt
+    # (a test that names one of the two gets 1 for the other, not a
+    # default chosen for a different split)
+    nsl, ntl = ns === nothing && nt === nothing ?
+        sweep_blocks(b, length(ii) * length(jj) * length(kk), length(kk), length(jj); lz = lz, ly = lz) :
+        (something(ns, 1), something(nt, 1))
     old = c.blocked[]
     bufs = sweep_buffers(old isa _TKEBlockedScratch ? old.bufs : nothing, c.e.data, 1, nsl, length(kk);
                          lag = lag, lz = lz, nt = ntl, ly = lz)
