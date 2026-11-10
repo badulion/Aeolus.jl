@@ -62,7 +62,8 @@ using ..AdvectionSchemes: _b_rflux_x!, _b_rflux_y!, _b_rflux_z!, _b_uflux_x!, _b
     _b_uflux_z!, _b_limit_ratio!, _b_limit_x!, _b_limit_y!, _b_limit_z!, _b_flux_div!,
     _dz_metric, _xfaces, _yfaces, _zfaces, required_halo, _check_halo, _check_stretched_recon
 using ..Operators.FiniteVolume: BlockedUpdate, blocked_update!, sweep_buffers, sweep_slabs,
-    SweepBuffers, _row_slot, grid_metrics, _b_eddy_scalar!, _b_eddy_scalar_masked!
+    SweepBuffers, _row_slot, _Line, _zero_line!, _write_ring_row!, grid_metrics, _b_eddy_scalar!,
+    _b_eddy_scalar_masked!
 import ..Operators.FiniteVolume: update_lags, begin_slab!, compute_rows!, write_row!, write_point!
 using ..Simulations: StepWorkspaces
 
@@ -82,15 +83,6 @@ Base.size(r::_Ring{T,NR}) where {T, NR} = (size(r.buf, 1), size(r.buf, 2), NR)
     @inbounds r.buf[I, K - r.koff, mod(J, NR) + 1, r.s]
 @inline Base.setindex!(r::_Ring{T,NR}, x, I::Integer, J::Integer, K::Integer) where {T, NR} =
     (@inbounds r.buf[I, K - r.koff, mod(J, NR) + 1, r.s] = x; r)
-
-# one row of slab s, whatever (J, K): (I, J, K) ↦ buf[I, s]
-struct _Line{T, A<:AbstractMatrix{T}} <: AbstractArray{T,3}
-    buf::A
-    s::Int
-end
-Base.size(r::_Line) = (size(r.buf, 1), 1, 1)
-@inline Base.getindex(r::_Line, I::Integer, J::Integer, K::Integer) = @inbounds r.buf[I, r.s]
-@inline Base.setindex!(r::_Line, x, I::Integer, J::Integer, K::Integer) = (@inbounds r.buf[I, r.s] = x; r)
 
 # the driver's slot of one row of field f: (I, J, K) ↦ buf[I, a, b, f, s]
 struct _Slot{T, A<:AbstractArray{T,5}} <: AbstractArray{T,3}
@@ -379,13 +371,6 @@ function begin_slab!(op::_TKEUpdate, s, k0, k1, ii, jj)
     return nothing
 end
 
-@noinline function _zero_line!(td, ii)
-    @inbounds for I in ii
-        td[I, 1, 1] = zero(eltype(td))
-    end
-    return nothing
-end
-
 # the tendency of a flux-limited scalar ϕ on row (J, K) into the line td:
 # the divergence of its limited fluxes `f` and the diffusion with 2ν, in
 # the order of the separate loops (0, −div, + diffusion)
@@ -447,14 +432,7 @@ end
 write_row!(::_TKEUpdate{P,true}, ring, a, b, s, j, k, ii) where {P} = nothing
 write_point!(::_TKEUpdate{P,true}, edge, i, j, k, e, s) where {P} = nothing
 write_row!(op::_TKEUpdate{P,false}, ring, a, b, s, j, k, ii) where {P} =
-    _write_field_row!(op.p.e, ring, a, b, 1, s, j, k, ii)
-# row (j, k) of a field from field f of the driver's ring
-@noinline function _write_field_row!(ed, ring, a, b, f, s, j, k, ii)
-    @inbounds @simd ivdep for i in ii
-        ed[i, j, k] = ring[i, a, b, f, s]
-    end
-    return nothing
-end
+    _write_ring_row!(op.p.e, ring, a, b, s, j, k, ii)
 @inline function write_point!(op::_TKEUpdate{P,false}, edge, i, j, k, e, s) where {P}
     @inbounds op.p.e[i, j, k] = edge[i, j, e, 1, s]
     return nothing

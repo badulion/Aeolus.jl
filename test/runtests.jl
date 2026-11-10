@@ -1024,6 +1024,7 @@ end
     include("tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
     include("tke_blocked.jl")       # #554: the TKE update as one cache-blocked pass
     include("reynolds_stress_blocked.jl") # #560: the Reynolds-stress update, allocation, one cache-blocked pass
+    include("tracer_diffusion_blocked.jl")   # #559: the urban tracer diffusion as one cache-blocked pass
     include("wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("transition_kh.jl")      # P59-c: turbulent fraction γ, intermittency, Ri_f, growth_rate (#180)
 end

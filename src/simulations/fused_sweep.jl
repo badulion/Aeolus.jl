@@ -217,7 +217,9 @@ closure that transports its stresses (`PrognosticSGS.ReynoldsStressClosure`,
 #560; under `:if_possible` blocked only with centred advection on several
 threads, where it was measured faster; `:always` runs it with every other
 scheme and refuses `:weno5`;
-`reynolds_stress_update_blocked`).
+`reynolds_stress_update_blocked`), and the SGS diffusion of the urban
+tracers (`TracerSGSDiffusion`, #559: one cache-blocked pass per tracer,
+`Operators.blocked_eddy_diffusion!`; `tracer_diffusion_blocked`).
 """
 function set_loop_fusion!(sim, setting)
     m = Symbol(setting)
@@ -266,7 +268,9 @@ loops (the reference, and what `loop_fusion = "never"` runs), and
 Reynolds-stress closure that transports its stresses
 (`PrognosticSGS.ReynoldsStressClosure`, `transport = true`) it has
 `reynolds_stress_update_blocked` and `reynolds_stress_not_blocked`
-likewise (#560).
+likewise (#560), and `tracer_diffusion_blocked` and
+`tracer_diffusion_not_blocked` for the SGS diffusion of the urban tracers
+(`TracerSGSDiffusion`, #559).
 """
 function sweep_report(sim)
     r = sim.workspaces.fused
@@ -284,6 +288,10 @@ function sweep_report(sim)
     if r.rsm_blocked + r.rsm_separate > 0         # a Reynolds-stress closure's update (#560)
         d["reynolds_stress_update_blocked"] = r.rsm_separate == 0 ? "all" : r.rsm_blocked == 0 ? "none" : "some"
         isempty(r.rsm_reason) || (d["reynolds_stress_not_blocked"] = r.rsm_reason)
+    end
+    if r.tracer_blocked + r.tracer_separate > 0   # the urban tracers' SGS diffusion (#559)
+        d["tracer_diffusion_blocked"] = r.tracer_separate == 0 ? "all" : r.tracer_blocked == 0 ? "none" : "some"
+        isempty(r.tracer_reason) || (d["tracer_diffusion_not_blocked"] = r.tracer_reason)
     end
     return d
 end

@@ -62,8 +62,11 @@ mutable struct SweepReport
     rsm_blocked::Int      # updates of a Reynolds-stress closure (with transport) as one cache-blocked pass (#560)
     rsm_separate::Int     # ... as separate loops
     rsm_reason::String    # why its blocked pass could not run
+    tracer_blocked::Int   # SGS diffusion steps of an urban tracer as one cache-blocked pass (#559)
+    tracer_separate::Int  # ... as separate loops
+    tracer_reason::String # why the blocked pass could not run
 end
-SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, 0, 0, "", 0, 0, "")
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, 0, 0, "", 0, 0, "", 0, 0, "")
 
 """
     StepWorkspaces()

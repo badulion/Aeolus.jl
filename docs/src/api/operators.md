@@ -127,8 +127,10 @@ the completeness guard `test/fused_sweep.jl`.
 The slab and ring machinery is one driver, `blocked_update!`, generic
 over the update it runs (a `BlockedUpdate`, #554): the substage predictor
 (`blocked_predictor!`), the update of a `TKEClosure`'s SGS energy
-(`advance_sgs!`, `PrognosticSGS`) and the update of a
-`ReynoldsStressClosure`'s six stresses with transport (#560).
+(`advance_sgs!`, `PrognosticSGS`), the update of a
+`ReynoldsStressClosure`'s six stresses with transport (#560), and a
+scalar's explicit eddy-diffusion step (`blocked_eddy_diffusion!`, #559:
+the SGS diffusion of the urban tracers, `Urban.TracerSGSDiffusion`).
 
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
@@ -152,6 +154,8 @@ Aeolus.Operators.FiniteVolume.write_row!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
 Aeolus.Operators.FiniteVolume.sweep_slabs
+Aeolus.Operators.blocked_eddy_diffusion!
+Aeolus.Operators.EddyDiffusionScratch
 Aeolus.Simulations.SWEEP_FALLBACKS
 Aeolus.Simulations.SweepReport
 Aeolus.Simulations.sweep_report

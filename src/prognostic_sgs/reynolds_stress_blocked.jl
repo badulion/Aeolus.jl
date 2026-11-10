@@ -162,7 +162,7 @@ end
 function write_row!(op::_RSCUpdate, ring, a, b, s, j, k, ii)
     τ = op.p.τ
     for m in 1:6
-        _write_field_row!(τ[m], ring, a, b, m, s, j, k, ii)
+        _write_ring_row!(τ[m], ring, a, b, s, j, k, ii, m)
     end
     return nothing
 end
