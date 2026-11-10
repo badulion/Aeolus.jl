@@ -4230,7 +4230,7 @@ arguments through a function barrier. Both measured equal to `"never"`
 after the fix.
 
 **Steps 3, 6, 7 and 8 integrated** (branch `issue/533-integration`, on
-top of step 1; steps 2, 4 and 5 have no PR yet and are not in it). Merge
+top of step 1; steps 2, 5 and 4 followed, see "Steps 2, 5 and 4 added" below). Merge
 order, interface-changing steps first: step 8 (#548: `BaseTerm`,
 `add_tendency!` required of every term), step 6 (#549: post terms), step 7
 (#546: `finish_sweep!`, the budget term in the hook's tuple), step 3
@@ -4324,6 +4324,83 @@ triad, while recomputing `c_k l √e` and the stability length 4-6 times per
 point for the face averages of the eddy stencils. Not worth it now: the
 budget sums (22 %, #539) and steps 2, 4, 5 (which make Berlin fusable at
 all) come first; revisit after step 4 is measured.
+
+**Steps 2, 5 and 4 added** (2026-11-10, for the HPC benchmark #566;
+merge commits 11b4c255, ab30c1d0, b42068dd, in that order). Textual
+conflicts as unions; `SWEEP_FALLBACKS` takes every step's removals
+(`builtin.sgs`, `builtin.open_boundaries`, Coriolis, the surface θ flux,
+sponge, fringe, moist buoyancy, `SurfaceLayer`, `WallModelFacades`,
+`SimulationCouplings` gone). The plan of a Boussinesq substage is
+(base, SGS, built-in pointwise terms, hook terms), the order of the
+separate passes. Conflicts between the steps' intent, each with a test:
+- **Component terms × budgets** (2 × 7): a component's term is
+  `OptionalTerm(on, BookedTerm(term))`; `OptionalTerm` forwards
+  `finish_sweep!` and `books` (by type, so the per-point refusal does not
+  depend on a run-time switch). `fused_sweep_budgets.jl`.
+- **Point kernels** (2, 4, 5 × 8): step 2's built-in `OptionalTerm`s are in
+  every Boussinesq plan, so a fallback for terms without `add_tendency!`
+  would have unfused every per-point substage. Point kernels instead, each
+  the row form's arithmetic at one point: `SurfaceFluxTerm`, `DampingTerm`,
+  `OptionalTerm`, `FringeSweep`, `SpongeSweep`, `GeostrophicSweep`,
+  `MoistBuoyancySweep` (step 2); `IBMPenaltyTerm`, `StencilWallFluxTerm`,
+  `RegisterBookingTerm` (step 5); `SGSTerm` with the parts' point forms
+  `add_part_point!` / `add_scalar_point!` (step 4). Tested in the per-point
+  form against `"never"` (`fused_sweep_pointwise.jl`,
+  `fused_sweep_nearwall.jl`, `fused_sweep_sgs.jl` with `step_rk3!` for
+  every closure).
+- **IMEX** (2 × 8): `step_imex!`'s explicit part fuses buoyancy, Coriolis,
+  the surface flux and the sponge (`fused_sweep_cores.jl`, against `"never"`).
+- **Open faces in the sound-proof cores** (5 × 8): step 5 verified the
+  open-face update after the sweep for the Boussinesq core only; new key
+  `builtin.anelastic_open_boundaries`.
+- **`SimulationCouplings`** (2 × 5): step 2 made the obstacles a type
+  parameter, step 5 added the IBM penalty term but none for the slab's
+  floor flux, and with step 2's single term the penalty would have been
+  booked at `:tendencies`. New generic `Components.stage_sweep_term(c, d,
+  Val(S))`: the floor flux at `:tendencies`, the penalty at `:body_force`,
+  each in its stage's place and budget context; the type parameter is the
+  obstacles' type (with a `Bool` the penalty term's type was not inferred).
+  `fused_sweep_nearwall.jl` (slab with obstacles, Euler and RK3, against
+  `"never"`; a fresh `SlabLand` per run, a shared one is mutable state).
+- **Urban site term** (3 × 4): step 3's `UrbanSiteTerm{S,Nothing} where {S}`
+  and `UrbanSiteTerm` methods of `add_row!` / `add_tendency!` were
+  ambiguous for a periodic site; until step 4 the site never fused, so no
+  run called them, and with step 4 every urban step threw and failed after
+  its retries. Fixed (`S<:UrbanSite`); the urban tests in
+  `fused_sweep_reductions.jl` and `fused_sweep_post.jl` caught it, and no
+  ambiguity is left among the sweep interface's functions.
+- **Order of `prepare!`** (4 × 3, 5): the facade wall flux and the site's
+  top-flux capture read the substage's νt in `prepare!`, which the SGS
+  term's `prepare!` writes; the SGS term comes before the hook terms.
+
+Test expectations made outdated by the combination (not weakened): the
+examples of unfused terms (SGS, buoyancy, Coriolis, the surface layer,
+couplings with obstacles) are fused now, so the tests check them fused
+against `"never"`, and the unfused examples are a `body_force!` /
+`post_predictor!` function or the anelastic core's SGS; the dry CBL
+example fuses every substage (`"all"`), its unfused run and the
+`"always"` refusal use the anelastic core.
+
+**Tests**: full suite 124 / 124 files, 16313 assertions, 0 failures (`fused_sweep_sgs.jl` 5832, `fused_sweep_post.jl` 1614, `fused_sweep_pointwise.jl` 893, `fused_sweep_reductions.jl` 823, `fused_sweep.jl` 753, `fused_sweep_budgets.jl` 679, `fused_sweep_nearwall.jl` 654, `fused_sweep_cores.jl` 581; `urban_run.jl` 42, `urban_checks.jl` 20). Validation: `gabls1.jl` 8 / 8, `gabls3.jl` 19 / 19, `urban_checks.jl` 33 / 33.
+
+**Berlin 100 m** (`berlin_100m_20250824.toml`, copy with absolute driver
+paths, 12 threads, FFTW 12, `measure` planner): `[loop_fusion.main]`
+`substages_fused = "all"`, `not_fusable = []` (on `issue/533-sweep-interface`
+the same config: `"none"`, 8 blockers). Fields after 50 steps against
+`"never"`: max |Δu| 4.8e-7 m/s, |Δw| 1.5e-8 m/s, θ, v, qv identical in
+the Float32 output. Wall time of steps 2-50 (one run each, under the
+benchmark lock, one tile update inside): `"if_possible"` 0.270 and 0.250
+s/step, `"never"` 0.364, `issue/533-sweep-interface` 0.340; about 26-31 %
+less than `"never"`. A single 49-step window, not the 4-turn protocol
+above: an indication, the HPC benchmark (#566) measures it properly.
+
+**Still not fusable**: the sound-proof cores' SGS, Coriolis, surface
+flux, sponge, open faces and post terms (step 2's and 4's terms are not
+wired into them); `Urban.NestingCoupling` (no term) and
+`GeostrophicCoupling`'s nudging mode; by design a `body_force!` /
+`post_predictor!` function, another momentum advection, a `LargeScale`
+damping toward a 3-D target, `step_imex!`'s explicit SGS halves, budgets
+in the per-point form.
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
