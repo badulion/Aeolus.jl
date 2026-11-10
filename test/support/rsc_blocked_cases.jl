@@ -12,9 +12,10 @@ using Random: Xoshiro, randn
 # signs), the stresses from the local equilibrium, scaled at random with
 # zeros and random off-diagonals (so the limiter and the realizability
 # projection act), a first level, wall distance; optionally a solid mask,
-# rotation and a surface value.
+# rotation, a surface value and a water-vapour field (`moist`: N² and the
+# buoyancy gradient of θ_v).
 function rsc_case(g; transport = true, advection = :auto, mask = false, rotation = false,
-                  surface = false, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
+                  surface = false, moist = false, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
     sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs, θ_flux_bottom = 0.05)
     rng = Xoshiro(560)
     n = (g.Nx, g.Ny, g.Nz)
@@ -29,11 +30,16 @@ function rsc_case(g; transport = true, advection = :auto, mask = false, rotation
                                      z < 0.4 * g.Nz * g.dz)
     end
     fl = falses(n); fl[:, :, 1] .= true
+    qv = nothing
+    if moist
+        qv = Field(CellCenter(), g)
+        interior_view(qv) .= 0.01 .+ 0.002 .* rand(rng, n...)
+    end
     sv = surface ? (u_star = 0.3 .+ 0.1 .* rand(rng, g.Nx, g.Ny), k = ones(Int, g.Nx, g.Ny)) : nothing
     c = ReynoldsStressClosure(g; mask = sm === nothing ? nothing : sm.mask, transport = transport,
                               advection = advection, first_level = fl, surface = sv,
                               wall_distance = 1.0 .+ 30 .* rand(rng, n...),
-                              Ω = rotation ? (0.0, 3e-5, 5e-5) : :auto)
+                              Ω = rotation ? (0.0, 3e-5, 5e-5) : :auto, qv = moist ? qv : :auto)
     initialize_reynolds_stress!(c, sim; e_min = 1e-3)
     for m in 1:3
         interior_view(c.τ[m]) .*= (0.5 .+ rand(rng, n...)) .* (rand(rng, n...) .> 0.1)

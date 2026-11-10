@@ -89,16 +89,23 @@ end
     @test rsc_diff(τs, ref) > 1e-6
 end
 
-@testset "Reynolds-stress blocked pass: no-flux lateral faces, a short column, TENO5 (#560)" begin
-    for (bcs, n, adv) in ((FieldBoundaryConditions(:noflux, :noflux, :wall), (9, 7, 12), :weno_z5),
-                          (FieldBoundaryConditions(:periodic, :periodic, :wall), (6, 1, 3), :weno_z5),
-                          (FieldBoundaryConditions(:periodic, :periodic, :wall), (9, 7, 16), :teno5))
-        g = RegularGrid(; size = n, extent = 10.0 .* n, halo = (3, 3, 3))
-        sim, c = rsc_case(g; bcs = bcs, advection = adv, mask = n[3] >= 12)
+@testset "Reynolds-stress blocked pass: no-flux lateral faces, a short column, TENO5, WENO-Z7, moist (#560)" begin
+    # WENO-Z7 (halo 4): lag 4 and 5 edge planes per slab end; moist: the
+    # update reads q_v (N² and the θ_v gradient) through the pass's arguments
+    per = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    for (bcs, n, adv, h, moist) in ((FieldBoundaryConditions(:noflux, :noflux, :wall), (9, 7, 12), :weno_z5, 3, false),
+                                    (per, (6, 1, 3), :weno_z5, 3, false),
+                                    (per, (9, 7, 16), :teno5, 3, false),
+                                    (per, (9, 7, 20), :weno_z7, 4, false),
+                                    (per, (9, 7, 16), :weno_z5, 3, true))
+        g = RegularGrid(; size = n, extent = 10.0 .* n, halo = (h, h, h))
+        sim, c = rsc_case(g; bcs = bcs, advection = adv, mask = n[3] >= 12, moist = moist)
+        moist && @test RSB._qv(c, sim) !== nothing
+        @test RSB.rsm_blocked_lags(c) == (h, h + 1)
         τ0 = map(f -> copy(f.data), c.τ)
         ref, ref_s = rsc_run!(RSB._rsm_advance_separate!, c, sim, τ0, 0.4)
         for ns in (1, 2)
-            (ns > 1 && 8ns > g.Nz) && continue
+            (ns > 1 && 2 * (h + 1) * ns > g.Nz) && continue
             τb, s = rsc_run!((c, sim, Δt) -> RSB._rsm_advance_blocked!(c, sim, Δt; ns = ns), c, sim, τ0, 0.4)
             @test rsc_diff(τb, ref) <= 4eps()
             @test rsc_stats_agree(s, ref_s)
