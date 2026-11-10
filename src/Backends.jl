@@ -1875,22 +1875,34 @@ function dynamic_columns!(body!::F, n::Int, args::A;
     ntasks >= 1 || throw(ArgumentError("dynamic_columns!: ntasks must be ≥ 1, got $ntasks"))
     nt = min(Int(ntasks), n)
     next = Threads.Atomic{Int}(1)
-    @sync for _ in 1:nt
-        Threads.@spawn _claim_runs!(body!, next, n, nt, args)
+    if launch_trace_enabled()                 # the launch trace (#566): each claimed run timed
+        tok = trace_begin(:dynamic_columns)
+        @sync for _ in 1:nt
+            Threads.@spawn _claim_runs!(body!, next, n, nt, args, tok)
+        end
+        trace_end!(tok)
+    else
+        @sync for _ in 1:nt
+            Threads.@spawn _claim_runs!(body!, next, n, nt, args, nothing)
+        end
     end
     return nothing
 end
 
-@noinline function _claim_runs!(body!::F, next::Threads.Atomic{Int}, n::Int, nt::Int, args::A) where {F, A<:Tuple}
+# `tok`: a launch-trace token, or `nothing` (then nothing is timed)
+@noinline function _claim_runs!(body!::F, next::Threads.Atomic{Int}, n::Int, nt::Int, args::A,
+                                tok) where {F, A<:Tuple}
     while true
         r = n - next[] + 1                    # remaining (a stale read only sizes the run)
         r <= 0 && return nothing
         len = max(1, r ÷ (2nt))
         lo = Threads.atomic_add!(next, len)   # the run [lo, lo + len - 1] is this task's
         lo > n && return nothing
+        t0 = tok === nothing ? UInt64(0) : time_ns()
         for c in lo:min(lo + len - 1, n)
             body!(c, args...)
         end
+        tok === nothing || trace_work!(tok, t0)
     end
 end
 
