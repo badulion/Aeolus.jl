@@ -912,6 +912,7 @@ include("chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition
     include("stretched_boussinesq.jl") # #151 Boussinesq core + Poisson on a StretchedGrid
     include("timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
     include("advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
+    include("advection_branchfree.jl")   # #557: branch-free face values, against the branching form
     include("anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("multigrid.jl")   # Phase  29     geometric multigrid
 end
