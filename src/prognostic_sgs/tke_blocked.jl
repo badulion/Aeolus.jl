@@ -8,24 +8,31 @@
 # D, the wall production, the flux-limited advection of e (reconstructed
 # and upwind face fluxes, the limiter's ratio, its halo, the limited
 # fluxes, their divergence), K = 2ν, the masked diffusion, the update. Here
-# the part that reads e runs row by row on the blocked driver of #533
+# all of it runs row by row on the blocked driver of #533
 # (`FiniteVolume.blocked_update!`, the slabs and the ring of the predictor
-# sweep); N², D and the wall production, which do not read e, stay
-# separate loops before it.
+# sweep). N² and D joined the pass in #556; with immersed walls attached
+# they, ν and the wall production stay separate loops before it (the wall
+# production corrects D and reads ν of every cell).
 #
 # Per slab (planes k0:k1) and j-row, a pipeline of intermediate rows, each
 # in a small ring of its own (`_TKERings`, planes k0−1:k1+1):
 #
-#   step j:  ν of row j+1 (the coefficient body); the reconstructed and
+#   step j:  N² and ν of row j+1 (the N² and coefficient bodies); the reconstructed and
 #            upwind x and z face fluxes of row j+1 and the y faces between
 #            rows j+1 and j+2; the limiter's ratio of row j+1; the y faces
 #            between rows j and j+1 limited (ratios of rows j and j+1);
 #   row j:   its x and z faces limited, the flux divergence, the diffusion
-#            with 2ν (rows j−1:j+1 of ν), the update of e with its budget
-#            sums, into the driver's ring (or edge buffer).
+#            with 2ν (rows j−1:j+1 of ν), the dual strain D of the row
+#            (`_dual_row!`), the update of e with its budget sums, into the
+#            driver's ring (or edge buffer).
+#
+# N² of a cell reads θ (and qv, qc) one cell away in z, D the velocities
+# one cell away: neither field is written by the pass, so they add nothing
+# to the footprint in e below. N² is kept two rows (front and update), D
+# one row.
 #
 # Every value is computed by the point body of the separate loop
-# (`_coefficients_body!`, `AdvectionSchemes._b_rflux_*!`, `_b_uflux_*!`,
+# (`Operators._n2_body!`, `_dual_row!`, `_coefficients_body!`, `AdvectionSchemes._b_rflux_*!`, `_b_uflux_*!`,
 # `_b_limit_ratio!`, `_b_limit_*!`, `_b_flux_div!`, `FiniteVolume.
 # _b_eddy_scalar!` / `_b_eddy_scalar_masked!`, `_tke_update_row`), reading
 # and writing the rings through array adapters (`_Ring`, `_Line`, …): one
@@ -156,7 +163,9 @@ mutable struct _TKERings{A<:AbstractArray, M<:AbstractMatrix}
     const ν::A; const R::A
     const FxH::A; const FxL::A; const FzH::A; const FzL::A
     const FyH::A; const FyL::A
+    const N2::A                   # N² of two rows (#556)
     const td::M
+    const D::M                    # one row of the dual strain (#556)
 end
 
 # (the split, as in `sweep_buffers`, keeps a cached `old::Any` from the
@@ -176,7 +185,8 @@ function _tke_rings_(old, data::AbstractArray{T,3}, nkl::Int, ns::Int) where {T}
     old isa _TKERings && size(old.ν, 1) == sx && size(old.ν, 2) >= nkl && size(old.ν, 4) == ns &&
         return old
     r(nr, extra = 0) = similar(data, sx, nkl + extra, nr, ns)
-    return _TKERings(r(3), r(3), r(2), r(2), r(2, 1), r(2, 1), r(3), r(3), similar(data, sx, ns))
+    return _TKERings(r(3), r(3), r(2), r(2), r(2, 1), r(2, 1), r(3), r(3), r(2), similar(data, sx, ns),
+                     similar(data, sx, ns))
 end
 
 # -------------------------------------------------------------------------
@@ -202,7 +212,9 @@ update_lags(op::_TKEUpdate) = (op.p.lag, op.p.lz)
             FxH = _Ring{2}(rg.FxH, ko, s), FxL = _Ring{2}(rg.FxL, ko, s),
             FzH = _Ring{2}(rg.FzH, ko, s), FzL = _Ring{2}(rg.FzL, ko, s),
             FyH = _Ring{3}(rg.FyH, ko, s), FyL = _Ring{3}(rg.FyL, ko, s),
-            td = _Line(rg.td, s))
+            td = _Line(rg.td, s),
+            n2 = p.n2a === nothing ? p.n2 : _Ring{2}(rg.N2, ko, s),
+            dd = p.da === nothing ? p.dd : _Line(rg.D, s))
 end
 
 # the interior planes among k0−1:k1+1
@@ -222,12 +234,28 @@ end
     return nothing
 end
 
-# ν of row J, planes ka:kb (interior: the coefficient body; halo: copied)
+# N² of row (J, K) into its ring, by the body of the whole-field loop
+# (when the pass computes it: `p.n2a`, the body's arguments)
+@inline _n2_row!(p, rs, J, K, ii) =
+    p.n2a === nothing ? nothing : Backends._row!(_n2_body!, ii, J, K, rs.n2, p.n2a...)
+
+# the dual strain of row (J, K) into its line, by the row kernel of the
+# whole-field loop (when the pass computes it: `p.da`, its arguments)
+@inline function _dual_strain_row_!(p, rs, J, K)
+    p.da === nothing && return nothing
+    a = p.da
+    _dual_row!(J, K, rs.dd, p.u, p.v, p.w, a.m, a.bx, a.ii, a.jj, a.kk, a.fold...)
+    return nothing
+end
+
+# ν of row J, planes ka:kb (interior: N² and the coefficient body; halo:
+# copied)
 function _ν_row!(p, rs, J, ka, kb, ii)
     iw = first(ii)-1:last(ii)+1
     for K in ka:kb
         if p.J1 <= J <= p.J2 && p.Kb <= K <= p.Kt
-            Backends._row!(_coefficients_body!, ii, J, K, rs.ν, p.discard, p.e, p.n2, p.Δk, p.mask,
+            _n2_row!(p, rs, J, K, ii)
+            Backends._row!(_coefficients_body!, ii, J, K, rs.ν, p.discard, p.e, rs.n2, p.Δk, p.mask,
                            p.l_wall, p.Hx, p.Hy, p.Hz, p.ck, p.cl)
             _copy_ends!(rs.ν, p.νf, ii, J, K)
         else
@@ -352,9 +380,11 @@ end
     return _Slot(buf, a, b, s)
 end
 
-# the update of row (J, K) and its budget sums (the row loop of `_update!`)
+# the update of row (J, K) and its budget sums (the row loop of `_update!`),
+# after the row's dual strain
 @inline function _update_row!(p, rs, J, K, ii, ed, td)
-    sums = _tke_update_row(J, K, ii, ed, rs.ν, p.n2, p.dd, td, p.pw, p.Δk, p.vrel, p.l_wall,
+    _dual_strain_row_!(p, rs, J, K)
+    sums = _tke_update_row(J, K, ii, ed, rs.ν, rs.n2, rs.dd, td, p.pw, p.Δk, p.vrel, p.l_wall,
                            p.first_level, p.mask, p.par, p.exact)
     @inbounds p.rowsums[J - p.J1 + 1, K - p.Kb + 1] = sums
     return nothing
@@ -388,12 +418,15 @@ function _shell_boxes((ii, jj, kk))
 end
 
 # ν (and κt) of the shell cells into c.ν, c.κt, then ν's halos filled as
-# the separate loops fill them
-function _shell_coefficients!(c::TKEClosure, bcs)
+# the separate loops fill them. N² is read from `n2`; when the pass
+# computes it (`n2a`, the arguments of its body) the shell's N² is first
+# computed into `n2` (c.N2).
+function _shell_coefficients!(c::TKEClosure, bcs, n2a, n2)
     g = mesh(c.e)
     b = Backends.backend(c.e.data)
     for box in _shell_boxes(interior(g))
-        launch!(b, _coefficients_body!, box, c.ν.data, c.κt.data, c.e.data, c.N2.data, c.Δk, c.mask,
+        n2a === nothing || launch!(b, _n2_body!, box, n2, n2a...)
+        launch!(b, _coefficients_body!, box, c.ν.data, c.κt.data, c.e.data, n2, c.Δk, c.mask,
                 c.l_wall, g.Hx, g.Hy, g.Hz, c.c_k, c.c_l)
     end
     fill_halos!(c.ν, bcs)
@@ -454,28 +487,45 @@ function tke_blocked_lags(c::TKEClosure)
     return (max(1, hr - 2), hr + 1)
 end
 
-# The e update of `advance_sgs!` as one cache-blocked pass (see the top of
-# this file); N² and the dual strain (and the wall production) as separate
-# loops before it. `ns`: the slab count (default: one per thread);
-# `reverse_slabs`: the driver's test hook.
+# The update of `advance_sgs!` as one cache-blocked pass (see the top of
+# this file). Without immersed walls the pass computes N² and the dual
+# strain D row by row (#556); with walls, N², ν, D and the wall
+# production run as separate loops before it (the wall production corrects
+# D and reads ν of every cell). `ns`: the slab count (default: one per
+# thread); `reverse_slabs`: the driver's test hook.
 function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, reverse_slabs::Bool = false) where {T}
-    g = mesh(c.e)
     bcs = sim.bcs
     fill_halos!(sim.u, bcs); fill_halos!(sim.v, bcs); fill_halos!(sim.w, bcs)
-    _stratification!(c, sim)
-    dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
-    walls = c.walls[] !== nothing
-    if walls                                      # the stencil share reads the stored ν
+    if c.walls[] !== nothing                      # the stencil share reads the stored ν
+        _stratification!(c, sim)
+        dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
         _coefficients!(c.ν, c.κt, c, c.N2)
         fill_halos!(c.ν, bcs)
         _wall_production!(c, sim, bcs)
+        _advance_blocked_e!(c, sim, Δt, nothing, c.N2.data, nothing, c.D.data, c.Pw.data, ns, reverse_slabs)
+    else
+        da = _dual_args(bcs, mesh(c.e))
+        _with_n2_args(c, sim) do n2a                 # (nothing: no buoyancy, N² = 0)
+            n2 = n2a === nothing ? _Zeros{T}() : c.N2.data
+            _advance_blocked_e!(c, sim, Δt, n2a, n2, da, nothing, _Zeros{T}(), ns, reverse_slabs)
+        end
     end
+    return c
+end
+
+# The pass and the shell before it. N² is computed by the pass when `n2a`
+# (the arguments of its body) is given, else read from `n2`; likewise D
+# when `da` (the arguments of its row kernel) is given, else read from `dd`.
+function _advance_blocked_e!(c::TKEClosure{T}, sim, Δt::T, n2a, n2, da, dd, pw, ns, reverse_slabs::Bool) where {T}
+    g = mesh(c.e)
+    bcs = sim.bcs
+    walls = c.walls[] !== nothing
     ebcs = passive_scalar_bcs(sim.θ_bcs)
     if c.transport
         _check_stretched_recon(c.recon, g)
         _check_halo(c.recon, g)
         fill_halos!(c.e, ebcs)
-        walls || _shell_coefficients!(c, bcs)
+        walls || _shell_coefficients!(c, bcs, n2a, n2)
         _shell_ratio!(c, sim, Δt, ebcs)
     end
     ii, jj, kk = interior(g)
@@ -489,30 +539,27 @@ function _advance_blocked!(c::TKEClosure{T}, sim, Δt::T; ns = nothing, reverse_
     (old isa _TKEBlockedScratch && old.bufs === bufs && old.rings === rings) ||
         (c.blocked[] = _TKEBlockedScratch(bufs, rings))
     par = _update_params(c, Δt, _surface_buoyancy(c, sim))
-    # the wall production and the dissipation form as types, split here so
-    # the update and its launch are concrete (no dynamic call, no allocation)
-    exact = c.dissipation === :exact
-    if walls
-        exact ? _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, c.Pw.data, Val(true), reverse_slabs) :
-                _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, c.Pw.data, Val(false), reverse_slabs)
+    # the dissipation form as a type, split here so the update and its
+    # launch are concrete (no dynamic call, no allocation)
+    if c.dissipation === :exact
+        _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, pw, Val(true), reverse_slabs, n2a, n2, da, dd)
     else
-        exact ? _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, _Zeros{T}(), Val(true), reverse_slabs) :
-                _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, _Zeros{T}(), Val(false), reverse_slabs)
+        _tke_pass!(c, sim, Δt, bufs, rings, par, b, g, pw, Val(false), reverse_slabs, n2a, n2, da, dd)
     end
     _book_sums!(c, par.V0)
     c.surface === nothing || _surface!(c, Δt)
-    return c
+    return nothing
 end
 
 function _tke_pass!(c::TKEClosure{T}, sim, Δt::T, bufs, rings, par, b, g, pw, exact::Val,
-                    reverse_slabs::Bool) where {T}
+                    reverse_slabs::Bool, n2a, n2, da, dd) where {T}
     ii, jj, kk = interior(g)
     lag, lz = tke_blocked_lags(c)
     # without transport (no reconstruction: `c.recon === nothing`, known
     # from the closure's type) the update is pointwise and writes e in place
     inplace = c.recon === nothing
     p = (e = c.e.data, νf = c.ν.data, Rf = c.transport ? c.ws.ratio.data : c.ν.data,
-         u = sim.u.data, v = sim.v.data, w = sim.w.data, n2 = c.N2.data, dd = c.D.data, pw = pw,
+         u = sim.u.data, v = sim.v.data, w = sim.w.data, n2a = n2a, n2 = n2, da = da, dd = dd, pw = pw,
          r = c.recon, discard = _Discard{T}(), ztd = _Zeros{T}(),
          Δk = c.Δk, vrel = c.vrel, l_wall = c.l_wall, first_level = c.first_level, mask = c.mask,
          Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, ck = c.c_k, cl = c.c_l, Δt = Δt,

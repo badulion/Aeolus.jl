@@ -61,6 +61,47 @@ include(joinpath(@__DIR__, "support", "tke_blocked_cases.jl"))
     @test nlim[] > 0          # the limiter was exercised
 end
 
+@testset "TKE blocked pass: N² and D row by row, every N² variant (#556)" begin
+    # Without immersed walls the pass computes N² (by `Operators._n2_body!`)
+    # and the dual strain (by `_dual_row!`) row by row instead of reading
+    # c.N2 / c.D (set to NaN before each run by `tkb_run!`). The four
+    # variants of N² (none, dry above, moist θ_v, cloudy θ_ρ with the
+    # saturated form where qc > 0), on the three grids, with and without
+    # transport and the mask; e within 4 eps of max e and the budget sums
+    # as above (the same bodies: expected the same bits).
+    n = (14, 10, 24)
+    rg = RegularGrid(; size = n, extent = (140.0, 100.0, 120.0), halo = (3, 3, 3))
+    rg2 = RegularGrid(; size = n, extent = (140.0, 100.0, 120.0), halo = (2, 2, 2))
+    sg = StretchedGrid(; size = n, extent = (140.0, 100.0, 240.0), halo = (2, 2, 2), stretching = (:tanh, 1.5))
+    nsat = Ref(0)            # cloudy cases with saturated cells
+    for (gname, g) in (("regular WENO-Z5", rg), ("regular centred", rg2), ("stretched", sg)),
+        buoyancy in (:none, :moist, :cloudy), transport in (true, false), solid in (false, true)
+        solid && g isa StretchedGrid && continue
+        sim, c = tkb_case(g; transport = transport, mask = solid, buoyancy = buoyancy, surface = true)
+        e0 = copy(c.e.data)
+        ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
+        buoyancy === :none && @test all(iszero, interior_view(c.N2))
+        buoyancy === :cloudy && (nsat[] += any(>(0), interior_view(c.cloud.qc)))
+        @test maximum(abs, interior_view(c.D)) > 0
+        lz = TKB.tke_blocked_lags(c)[2]
+        for (bname, b) in (("serial", CPUBackend(serial = true)), ("threaded", CPUBackend(threshold = 0))),
+            ns in 1:3, rev in (false, true)
+            (ns > 1 && 2lz * ns > g.Nz) && continue
+            (rev && ns == 1) && continue
+            e, s = with_backend(b) do
+                tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, reverse_slabs = rev),
+                         c, sim, e0, 0.4)
+            end
+            ok_e = maximum(abs.(e .- ref_e)) <= 4eps() * maximum(abs, ref_e)
+            ok_s = tkb_stats_agree(s, ref_s)
+            ok_e && ok_s || @info "TKE blocked pass disagrees (#556)" gname buoyancy transport solid bname ns rev maximum(abs.(e .- ref_e)) s ref_s
+            @test ok_e
+            @test ok_s
+        end
+    end
+    @test nsat[] > 0
+end
+
 @testset "TKE blocked pass: no-flux lateral faces, a short column (#554)" begin
     for (bcs, n) in ((FieldBoundaryConditions(:noflux, :noflux, :wall), (9, 7, 12)),
                      (FieldBoundaryConditions(:periodic, :periodic, :wall), (6, 1, 3)))
@@ -128,6 +169,18 @@ end
             @test ab <= as
             solid || @test ab == 0
         end
+        # every variant of N² computed inside the pass (#556: the variant is
+        # chosen in `_with_n2_args`, each branch with concrete arguments),
+        # on the regular and the stretched grid: 0 bytes as well
+        sg = StretchedGrid(; size = (16, 12, 16), extent = (160.0, 120.0, 240.0), halo = (2, 2, 2),
+                           stretching = (:tanh, 1.5))
+        for gg in (g, sg), buoyancy in (:none, :moist, :cloudy), tr in (true, false)
+            sa, ca = tkb_case(gg; transport = tr, buoyancy = buoyancy)
+            advance_sgs!(ca, sa, 0.4)
+            ab = @allocated advance_sgs!(ca, sa, 0.4)
+            ab == 0 || @info "allocation of the blocked pass (#556)" typeof(gg) buoyancy tr ab
+            @test ab == 0
+        end
     end
     sim2, c2 = tkb_case(g)
     advance_sgs!(c2, sim2, 0.4)
@@ -191,17 +244,17 @@ end
 # above run the slabs one after another. So the concurrent case runs here
 # in a -t 4 subprocess (skipped when this process already has 4 threads,
 # where the main set ran them concurrently): WENO-Z5 and centred, with the
-# solid mask, at 2 to 5 slabs, against the separate loops (e within 4 eps
-# of max e, the budget sums as above).
+# solid mask, dry, moist and cloudy N² (#556), at 2 to 5 slabs, against
+# the separate loops (e within 4 eps of max e, the budget sums as above).
 const _TKB_THREADED = """
 using Aeolus
 using Aeolus.Backends: CPUBackend, with_backend
 const TKB = Aeolus.PrognosticSGS
 include($(repr(joinpath(@__DIR__, "support", "tke_blocked_cases.jl"))))
 n = (14, 10, 40); worst = 0.0; stats_ok = true; runs = 0
-for h in (2, 3), solid in (false, true)
+for h in (2, 3), (solid, buoyancy) in ((false, :dry), (true, :dry), (false, :cloudy), (true, :moist))
     g = RegularGrid(; size = n, extent = (140.0, 100.0, 200.0), halo = (h, h, h))
-    sim, c = tkb_case(g; mask = solid, surface = true)
+    sim, c = tkb_case(g; mask = solid, surface = true, buoyancy = buoyancy)
     e0 = copy(c.e.data)
     ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
     for ns in 2:5
@@ -231,7 +284,7 @@ print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats 
         m = match(r"threads (\d+) runs (\d+) worst ([0-9.eE+-]+) stats (true|false)", msg)
         @test m !== nothing
         if m !== nothing
-            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 10
+            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 20
             @test parse(Float64, m[3]) <= 4eps()
             @test m[4] == "true"
         end
