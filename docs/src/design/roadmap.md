@@ -3727,6 +3727,36 @@ branch did not keep the flux loops scalar (LLVM if-converted it), and in
 Berlin, which uses the centred scheme, the flux bodies were not what
 bounded the pass.
 
+**Review** (independent, before the PR):
+
+- Checked: both stencils are now read at every face, also the downwind
+  one the branch skipped. Every reader has the halo for both
+  (`required_halo` covers the union; `_check_halo` guards the sweeps),
+  the TKE pass reads e from the field, not from a ring, and a value read
+  on the discarded side only feeds a discarded `ifelse` operand. Zero
+  and negative-zero velocities take the left stencil as before; a NaN
+  velocity takes the right one as before. No store was dropped. The
+  face bodies return the element type for Float64 and Float32 arrays,
+  and `advect_positive!` allocates the same per call as on the base
+  (128–192 bytes, the launches).
+- Fixed: the centred shortcut was justified as "the mean of (a, b) and
+  (b, a) is the same number". Its two stencils are in fact the same
+  cells in the same order, so the gathered tuples are identical; the
+  comment says so and a test checks that the stencils are equal.
+- Re-measured the one- and six-thread runs under the lock (power 18.6 /
+  20.0 W mean, 1.67 / 1.86 GHz): `advect_positive!` WENO-Z5 39.00 / 39.77
+  → 32.44 / 33.19 ms at 1 thread, 17.47 / 18.31 → 15.82 / 16.78 ms at 6;
+  the WENO-Z5 TKE pass 68.51 / 70.64 → 60.19 / 62.38 ms at 1 thread,
+  25.42 / 27.56 → 21.57 / 23.33 ms at 6; centred `advect_positive!`
+  unchanged (20.15 → 20.17, 15.19 → 15.14 ms min). The Berlin pass read
+  50.90 / 53.33 → 52.87 / 54.37 ms at 1 thread and 16.16 / 17.82 →
+  16.43 / 17.89 ms at 6: within the ±2 ms of this interleaving, since the
+  centred code is the same instructions old and new (the centred
+  `advect_positive!` above agrees to 0.02 ms).
+- Full suite under the lock: 119 files, 8300 passed, 0 failed (8.0 min).
+  Validation under the lock: gabls1.jl 8/8, gabls3.jl 19/19,
+  urban_checks.jl 33/33, anelastic_cbl.jl 3/3 passed.
+
 **Deviations.** The moist-N² `@inbounds` fix (above) was not in the plan.
 The issue's premise holds only for the higher-order reconstructions,
 where if-conversion doubled the arithmetic, and for first-order upwind.
@@ -3735,7 +3765,10 @@ where if-conversion doubled the arithmetic, and for first-order upwind.
 open item) and the update of e (18 %). The
 higher-order schemes' advection at 6+ threads gains little, probably
 from the memory traffic of its 14 launches (not profiled); loop fusion of `advect_positive!` itself
-(as the TKE pass does) would address that.
+(as the TKE pass does) would address that. Two branching bodies remain
+outside this issue: `FiniteVolume._advect_weno5!` (`advect_weno5!`) has
+its own WENO-5 upwinded with `?:`, and the cloudy N² keeps its `qc > 0`
+branch (its IR not inspected).
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
