@@ -1253,6 +1253,17 @@ computed, one is chosen), and at one thread the limiter ran 240 µs
 instead of 1800 µs on random-sign fluxes, where the branch mispredicted
 on half the faces.
 
+**Face values without a branch (#557).** The face bodies (`_face_x/y/z`)
+upwinded with `if vel >= 0`. LLVM still vectorised their row loops, by
+if-conversion: masked loads for the right-biased stencil and both
+reconstructions evaluated in every lane. They now gather both stencils
+and choose with `ifelse`. For a mirror-symmetric reconstruction
+(`mirror_symmetric`: WENO-Z, TENO, WENO-JS, centred, first-order upwind)
+they choose the *inputs* of one reconstruction, so each face is
+reconstructed once. The values are bit-identical. The limiter's ratio and
+TENO's cut-off use `ifelse` too. Measured in the #557 section of the
+roadmap.
+
 **Scratch.** `apply_positivity_limiter!(…; ratio = nothing)` and
 `advect_positive!(…; workspace = nothing)` throw an `ArgumentError` when
 the backend runs threaded: a time loop allocates the scratch once. The
