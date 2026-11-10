@@ -124,22 +124,91 @@ without one; PALM's `loop_optimization = 'cache'` stops the same way) or
 documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
 the completeness guard `test/fused_sweep.jl`.
 
+Every step core has the fused form (#533 plan step 8): `step!` and
+`step_rk3!` of the Boussinesq core; the sound-proof cores
+(`step_anelastic!`, `step_pseudo_incompressible!` and their `step_rk3!`),
+whose base term is the `W`-weighted advection
+(`Anelastic.WeightedBaseTendencies`, with `Anelastic.AnelasticBuoyancy`);
+and the explicit part of `step_imex!`, as one fused tendency launch
+without the predictor (`term_tendencies!`; the stage combinations read the
+tendencies). On a CPU backend the sweep runs with its ring buffer; on any
+other backend the same term tuple runs in the per-point form
+(`pointwise_predictor!`, one KernelAbstractions work item per point,
+`Backends.launch_points!`), tested on `KernelAbstractions.CPU()` as the
+stand-in for a GPU.
+
+**Post-predictor operators** (#533 step 6) are `PostTerm`s: an implicit
+drag, a penalty or a prescribed flow that corrects the predicted
+velocity before the projection (the core's `post_predictor!` stage). A
+post term with footprint 0 runs on a row right after its predictor; one
+with y-radius `r` computes its factors `r` rows and applies them `2r`
+rows behind its input, so every factor reads values its own operator
+has not changed yet (Jacobi, as the whole-field operators). Points whose
+stencil reaches a halo, a slab's edge planes or a point an earlier
+operator deferred run after the sweep, in the same two phases, with the
+halos filled (`post_plan`). An operator that needs the whole predicted
+field is an `AfterSweep`: its whole-field method runs after the sweep,
+and so does every operator after it. Post terms do not read θ or qv,
+which the sweep has already advanced (the whole-field order runs the
+post-predictor stage before the scalars' update). A domain puts a
+component's post term on the rows only when it is pointwise (the
+prescribed flow, the IBM correction) and runs one with a stencil (canopy
+drag, facade and ground wall stress, the tiles' drag) as an `AfterSweep`
+of its own `run_stage!`: measured, their row forms cost 1.4–2.2× their
+whole-field passes (`benchmarks/bench_post_sweep.jl`; the roadmap's #533
+step 6).
+
+With the budgets on, the sweep books the in-core components' contributions
+itself (plan step 7): a `BookedTerm` sums the booked fields of each row
+before and after its term into `LevelSums`, and the term's
+`finish_sweep!` (the domain's budget term) books them after the sweep.
+
+How the steps combine (the integration of steps 3, 6, 7 and 8): the
+per-point form runs the post terms after its predictor on every point
+(the schedule `post_plan` gives a point outside the sweep's widths);
+with the budgets on, a post-predictor component the budgets attribute
+runs in its budget context as an `AfterSweep`, and a term tuple that
+`books` stays in the ring-buffer sweep (the per-point form has no
+per-level sums: `builtin.budgets_per_point`); the sound-proof cores and
+the fused IMEX launch call `finish_sweep!` as the Boussinesq core does.
+
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
 Aeolus.Operators.FiniteVolume.sweep_term
 Aeolus.Operators.FiniteVolume.footprint
 Aeolus.Operators.FiniteVolume.sweep_inputs
 Aeolus.Operators.FiniteVolume.prepare!
+Aeolus.Operators.FiniteVolume.finish_sweep!
 Aeolus.Operators.FiniteVolume.add_tendency!
 Aeolus.Operators.FiniteVolume.add_row!
 Aeolus.Operators.FiniteVolume.SweepRow
 Aeolus.Operators.FiniteVolume.SWEEP_U
+Aeolus.Operators.FiniteVolume.BaseTerm
+Aeolus.Operators.FiniteVolume.init_point!
 Aeolus.Operators.FiniteVolume.BaseTendencies
+Aeolus.Operators.FiniteVolume.TendencyFields
+Aeolus.Operators.FiniteVolume.term_tendencies!
+Aeolus.Operators.FiniteVolume.pointwise_predictor!
+Aeolus.Simulations.fused_predictor!
 Aeolus.Operators.FiniteVolume.sweep_lags
+Aeolus.Operators.FiniteVolume.PostTerm
+Aeolus.Operators.FiniteVolume.post_sweep_term
+Aeolus.Operators.FiniteVolume.post_row!
+Aeolus.Operators.FiniteVolume.finish!
+Aeolus.Operators.FiniteVolume.AfterSweep
+Aeolus.Operators.FiniteVolume.post_plan
+Aeolus.Operators.FiniteVolume.post_delay
+Aeolus.Operators.FiniteVolume.row_index
+Aeolus.Operators.FiniteVolume.row_entries
+Aeolus.Operators.FiniteVolume.rows_sorted
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
 Aeolus.Operators.FiniteVolume.sweep_slabs
+Aeolus.Operators.FiniteVolume.LevelSums
+Aeolus.Operators.FiniteVolume.BookedTerm
+Aeolus.Operators.FiniteVolume.SWEEP_BOOKED
+Aeolus.Operators.FiniteVolume.books
 Aeolus.Simulations.SWEEP_FALLBACKS
 Aeolus.Simulations.SweepReport
 Aeolus.Simulations.sweep_report
@@ -148,8 +217,60 @@ Aeolus.Simulations.sweep_key
 Aeolus.Simulations.hook_terms
 Aeolus.Simulations.hook_blockers
 Aeolus.Simulations.post_hook_blockers
+Aeolus.Simulations.post_hook_terms
+Aeolus.Components.run_after_sweep
 Aeolus.Components.sweep_type
 Aeolus.Components.sweep_report
+```
+
+### Pointwise terms of the sweep (#533 plan step 2)
+
+The core's buoyancy, Coriolis, surface flux and sponge, and the
+components `Coriolis`, `SurfaceThetaFlux`, `Sponge`, `Fringe`, the urban
+site's geostrophic forcing (pressure-gradient mode) and moist buoyancy and
+the slab's floor flux, as sweep terms. Each evaluates the expression of its
+whole-field kernel, which stays the reference. The built-in ones are
+`OptionalTerm`s on the core's switches, so a Boussinesq configuration has
+one compiled sweep whatever is switched on.
+
+```@docs
+Aeolus.Operators.FiniteVolume.BuoyancyTerm
+Aeolus.Operators.FiniteVolume.CoriolisTerm
+Aeolus.Operators.FiniteVolume.SurfaceFluxTerm
+Aeolus.Operators.FiniteVolume.DampingTerm
+Aeolus.Operators.FiniteVolume.DampingTargets
+Aeolus.Operators.FiniteVolume.sponge_term
+Aeolus.Operators.FiniteVolume.damping_levels
+Aeolus.Operators.FiniteVolume.OptionalTerm
+Aeolus.Simulations.SpongeTargets
+```
+
+### The SGS closure inside the sweep (#533 step 4)
+
+The closure's coefficients are computed before the sweep
+(`compute_sgs!`, in the term's `prepare!`), its momentum, θ and qv
+tendencies inside it, by the point bodies of the separate loops'
+operators. Which body each tendency uses comes from the closure contract:
+`sgs_momentum_sweep` (momentum), `sgs_scalar_face_diffusivity` or
+`sgs_scalar_tensor` (θ, and qv unless `sgs_tracer_own_diffusivity`). A
+closure that adds its own `add_sgs_momentum!`, `add_sgs_scalar!` or
+`sgs_tracer_diffusivity!` adds the matching generic (guard:
+`test/fused_sweep_sgs.jl`); one without a sweep form, or whose own
+tendency is more specific than its sweep form (`sgs_sweep_form_matches`,
+checked at run time), runs one loop per term and is reported by its
+type.
+
+```@docs
+Aeolus.Operators.SGSTerm
+Aeolus.Operators.sgs_sweep_term
+Aeolus.Operators.sgs_momentum_sweep
+Aeolus.Operators.sgs_tracer_own_diffusivity
+Aeolus.Operators.sgs_sweep_form_matches
+Aeolus.Operators.FiniteVolume.EddyMomentum
+Aeolus.Operators.FiniteVolume.StressMomentum
+Aeolus.Operators.FiniteVolume.EddyScalar
+Aeolus.Operators.FiniteVolume.TensorScalar
+Aeolus.Simulations.SGSChoice
 ```
 
 ## LES analysis toolbox (Phase 54)

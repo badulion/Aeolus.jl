@@ -648,6 +648,13 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
     include("ka_step.jl")    # KA-j (#306): step cores on kernels, fused CFL / step guard, per-sim workspaces
     include("fused_sweep.jl")   # #533: the fused sweep's local-term interface, fallback report, completeness guard
+    include("fused_sweep_reductions.jl")   # #533 plan step 3: LargeScale and the urban site in the fused sweep
+    include("fused_sweep_post.jl")   # #533 step 6: the post-predictor operators inside the fused sweep
+    include("fused_sweep_budgets.jl")   # #533 plan step 7: the budgets booked inside the fused sweep
+    include("fused_sweep_cores.jl")   # #533 step 8: the fused sweep in step_imex! and the sound-proof cores, the per-point (GPU) form
+    include("fused_sweep_pointwise.jl")   # #533 step 2: buoyancy, Coriolis, surface flux, sponge, fringe in the sweep
+    include("fused_sweep_nearwall.jl")   # #533 step 5: open faces, near-wall and urban terms in the fused sweep
+    include("fused_sweep_sgs.jl")   # #533 step 4: the SGS closures inside the fused sweep
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
 
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin

@@ -38,3 +38,6 @@ function run_stage!(c::Coriolis, d, ::Val{:tendencies}, dt)
 end
 
 limit_dt(c::Coriolis, d) = d.cfl === nothing ? nothing : (d.cfl.C_coriolis / abs(c.f), :coriolis)
+
+# the fused sweep (#533): the same term, pointwise
+FiniteVolume.sweep_term(c::Coriolis, d) = FiniteVolume.CoriolisTerm(c.f)

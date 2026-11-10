@@ -95,6 +95,7 @@ using ..TimeIntegration: CFLConstraints, adaptive_dt, StateSnapshot, save_state!
 using ..Backends: interior_all_finite, plane_partials!, ordered_sum
 using ..Operators: divergence
 using ..Operators.FiniteVolume: DampingProfile, SinSquaredRamp, damping_rate
+using ..Operators: FiniteVolume              # the fused sweep's term interface (#533)
 using ..TimeSteppers: step!
 
 import ..BoundaryConditions: boundary_values!, snapshot_values, blend_window!

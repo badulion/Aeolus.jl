@@ -36,6 +36,7 @@ using Aeolus.IO: checkpoint_state, restore_checkpoint_state!
 using Aeolus.SoilColumn: SoilThermalColumn, SoilWaterColumn, clm_exponential_soil_grid, carsel_parrish_texture,
                          clm_soil_thermal_properties
 using Serialization: serialize, deserialize
+using Random: MersenneTwister
 const PU = Aeolus.Urban
 const PC = Aeolus.Components
 
@@ -119,8 +120,8 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
     @test Components.surface_friction_velocity(ts, d) === ts.ustar
     # the drag: u ← u / (1 + Δt a / U) at the west face of column (1, 1) (a
     # the mean of the two columns it separates, U the speed there, the
-    # stress along the wind); the first face the sweep updates, so its v
-    # neighbours are still the predictor's
+    # stress along the wind); every factor from the pre-drag velocities
+    # (Jacobi, #538), so the v neighbours are the predictor's
     m = sim.mesh
     I, J, K = m.Hx + 1, m.Hy + 1, m.Hz + 1
     fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
@@ -131,6 +132,209 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
     @test sim.u.data[I, J, K] ≈ u0 / (1 + dt * a / max(hypot(u0, vf), 0.5)) rtol = 1e-14
     @test sim.u.data[I, J, K] < u0
     @test sim.u.data[I, J, m.Hz+3] == 5.0              # above every canopy: no drag
+end
+
+# --- the canopy drag of the tiled surface (#538) -----------------------------
+
+"A tiled surface on the core `sim` with a drag `a` (m s⁻², per column and canopy level) of our choosing."
+function drag_surface(sim)
+    d0 = Domain(sim; validate = false)
+    ts = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
+    return ts, Domain(sim; components = (CentredAdvection(), ts))
+end
+drag!(ts, d, Δt) = Components.run_stage!(ts, d, Val(:post_predictor), Δt)
+
+"""
+The drag as an explicit Jacobi reference: both factors of every face from
+copies of the pre-drag u, v (periodic wrap), applied in the reverse loop
+order (k, j, i descending).
+"""
+function jacobi_reference!(ts, sim, Δt)
+    m = sim.mesh; Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
+    u0 = copy(sim.u.data); v0 = copy(sim.v.data); a = ts.drag
+    for k in reverse(axes(a, 3)), j in Ny:-1:1, i in Nx:-1:1
+        I, J, K = Hx + i, Hy + j, Hz + k
+        au = 0.5 * (a[mod1(i - 1, Nx), j, k] + a[i, j, k])
+        vf = 0.25 * (v0[I-1, J, K] + v0[I, J, K] + v0[I-1, J+1, K] + v0[I, J+1, K])
+        sim.u.data[I, J, K] = u0[I, J, K] / (1 + Δt * au / max(hypot(u0[I, J, K], vf), ts.U_min))
+        av = 0.5 * (a[i, mod1(j - 1, Ny), k] + a[i, j, k])
+        uf = 0.25 * (u0[I, J-1, K] + u0[I+1, J-1, K] + u0[I, J, K] + u0[I+1, J, K])
+        sim.v.data[I, J, K] = v0[I, J, K] / (1 + Δt * av / max(hypot(v0[I, J, K], uf), ts.U_min))
+    end
+    return sim
+end
+
+"The former drag loop (before #538): in place, Gauss–Seidel ordering k, j, i, periodic wrap."
+function gauss_seidel_reference!(ts, sim, Δt)
+    m = sim.mesh; Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
+    fill_halos!(sim.u, sim.bcs); fill_halos!(sim.v, sim.bcs)
+    ud, vd, a = sim.u.data, sim.v.data, ts.drag
+    for k in axes(a, 3), j in 1:Ny, i in 1:Nx
+        im = i == 1 ? Nx : i - 1; jm = j == 1 ? Ny : j - 1
+        I, J, K = Hx + i, Hy + j, Hz + k
+        au = 0.5 * (a[im, j, k] + a[i, j, k])
+        vf = 0.25 * (vd[I-1, J, K] + vd[I, J, K] + vd[I-1, J+1, K] + vd[I, J+1, K])
+        ud[I, J, K] /= 1 + Δt * au / max(hypot(ud[I, J, K], vf), ts.U_min)
+        av = 0.5 * (a[i, jm, k] + a[i, j, k])
+        uf = 0.25 * (ud[I, J-1, K] + ud[I+1, J-1, K] + ud[I, J, K] + ud[I+1, J, K])
+        vd[I, J, K] /= 1 + Δt * av / max(hypot(vd[I, J, K], uf), ts.U_min)
+    end
+    return sim
+end
+
+@testset "TiledUrbanSurface canopy drag: the analytic decay of a uniform wind (#538)" begin
+    sim = p_state!(p_core(:boussinesq))
+    ts, d = drag_surface(sim)
+    m = sim.mesh; Hz = m.Hz
+    kc = size(ts.drag, 3)
+    canopy(f) = view(interior_view(f), :, :, 1:kc)
+    # (1) a drag the surface recomputes from the wind, a = c U² (τ = ρ C_D U²
+    # over the canopy depth): du/dt = -c |U| u, whose solution for a
+    # uniform u₀ is u = u₀/(1 + c u₀ t). The implicit step
+    # u ← u/(1 + Δt c u) is 1/u ← 1/u + c Δt: exact at every step, so the
+    # tolerance is round-off (≈ 100 steps × a few ulp)
+    interior_view(sim.u) .= 6.0; interior_view(sim.v) .= 0.0
+    c = 2e-3; Δt = 2.0; n = 100
+    for _ in 1:n
+        ts.drag .= c * canopy(sim.u) .^ 2      # uniform, so the face mean is the column value
+        drag!(ts, d, Δt)
+    end
+    @test all(isapprox.(canopy(sim.u), 6.0 / (1 + c * 6.0 * n * Δt); rtol = 1e-12))
+    @test all(interior_view(sim.u)[:, :, kc+1:end] .== 6.0)   # above the canopy: untouched (copied)
+    @test maximum(abs, canopy(sim.v)) < 1e-14
+    # (2) the drag along the wind: a uniform (u, v) keeps its direction
+    # (one factor for both components), to round-off
+    interior_view(sim.u) .= 4.0; interior_view(sim.v) .= 3.0
+    ts.drag .= 0.01
+    drag!(ts, d, 5.0)
+    @test all(isapprox.(canopy(sim.v) ./ canopy(sim.u), 0.75; rtol = 1e-14))
+    @test all(isapprox.(canopy(sim.u), 4.0 / (1 + 5.0 * 0.01 / 5.0); rtol = 1e-14))
+    # (3) a held deceleration a (between two surface steps): du/dt = -a,
+    # u = u₀ - a t. The implicit form is first order in Δt: its error at
+    # t = 20 s is ≈ t Δt a²/u (0.16 m/s at Δt = 4 s, 8 % of the decrease)
+    # and halves with Δt (ratio 2 ± 10 %, the Δt² remainder)
+    err(Δt) = begin
+        interior_view(sim.u) .= 6.0; interior_view(sim.v) .= 0.0
+        ts.drag .= 0.1
+        for _ in 1:round(Int, 20 / Δt); drag!(ts, d, Δt); end
+        maximum(abs, canopy(sim.u) .- (6.0 - 0.1 * 20))
+    end
+    e1, e2, e3 = err(4.0), err(2.0), err(1.0)
+    @test 0 < e1 < 0.1 * 2.0                            # within 10 % of the 2 m/s decrease
+    @test 1.8 < e1 / e2 < 2.2 && 1.8 < e2 / e3 < 2.2
+end
+
+@testset "TiledUrbanSurface canopy drag: Jacobi, independent of loop order (and threads, $(Threads.nthreads()) here) (#538)" begin
+    rng = MersenneTwister(538)
+    m = RegularGrid(; size = (40, 30, 8), extent = (4000.0, 3000.0, 800.0), halo = (2, 2, 2))
+    sim = p_core(:boussinesq; mesh = m)
+    ts, d = drag_surface(sim)
+    interior_view(sim.u) .= 5 .+ 2 .* randn(rng, size(interior_view(sim.u)))
+    interior_view(sim.v) .= 1 .+ 2 .* randn(rng, size(interior_view(sim.v)))
+    ts.drag .= 0.05 .* rand(rng, size(ts.drag))          # Δt a/U ≤ 0.2 (Δt = 2 s, U ≥ U_min = 0.5)
+    u0, v0 = copy(sim.u.data), copy(sim.v.data)
+    reset!() = (copyto!(sim.u.data, u0); copyto!(sim.v.data, v0))
+    jacobi_reference!(ts, sim, 2.0)
+    uj, vj = copy(sim.u.data), copy(sim.v.data)
+    B = Aeolus.Backends
+    # serial, and the threaded backend: threaded only when this process has
+    # more than one thread (`test/run.jl --threads 4`); at test/run.jl's
+    # default of 1 thread both run serially. Across 1/4/12 processes the
+    # drag is checked by the thread-invariance harness, section `canopy`
+    # (AEOLUS_THREAD_TESTS=1, test/thread_invariance.jl)
+    for b in (B.CPUBackend(; serial = true), B.CPUBackend(; threshold = 1))
+        reset!()
+        B.with_backend(b) do
+            drag!(ts, d, 2.0)
+        end
+        # the same arithmetic per face as the reference, in any order: round-off only
+        @test isapprox(interior_view(sim.u), view(uj, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz); rtol = 1e-14)
+        @test isapprox(interior_view(sim.v), view(vj, m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz); rtol = 1e-14)
+    end
+    # against the former Gauss–Seidel loop: they differ where a face read an
+    # already-damped neighbour, by the second order of the drag increment,
+    # |Δq| ≲ ε² max|U| with ε = max Δt a/U over the faces
+    reset!()
+    gauss_seidel_reference!(ts, sim, 2.0)
+    I3 = (m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+size(ts.drag, 3))
+    du = maximum(abs, view(sim.u.data, I3...) .- view(uj, I3...))
+    dv = maximum(abs, view(sim.v.data, I3...) .- view(vj, I3...))
+    ε = 2.0 * maximum(ts.drag) / ts.U_min
+    Umax = maximum(hypot.(view(u0, I3...), view(v0, I3...)))
+    @test 0 < max(du, dv) <= ε^2 * Umax
+    # the change the drag itself made is far larger: the difference is the
+    # ordering's, not the drag's
+    @test max(du, dv) < 0.1 * maximum(abs, view(uj, I3...) .- view(u0, I3...))
+end
+
+@testset "TiledUrbanSurface canopy drag at non-periodic faces: no wrap across the domain (#538)" begin
+    m = RegularGrid(; size = (6, 4, 8), extent = (600.0, 400.0, 800.0), halo = (2, 2, 2))
+    Hx, Hy, Hz, Nx, Ny = m.Hx, m.Hy, m.Hz, m.Nx, m.Ny
+    obdata = ProfileBoundaryData(u = 5.0, v = 1.0, w = 0.0, θ = 300.0)
+    box(kind) = kind === :periodic ? BoussinesqSimulation(m; θ₀ = 300.0, pbcs()...) :
+                kind === :noflux ? BoussinesqSimulation(m; θ₀ = 300.0, bcs = FieldBoundaryConditions(:noflux, :noflux, :wall),
+                                                        θ_bcs = FieldBoundaryConditions(:noflux, :noflux, :noflux)) :
+                BoussinesqSimulation(m; θ₀ = 300.0, bcs = open_boundary_conditions(m, obdata))
+    # a strong drag in the last column and row only: the west face of
+    # column 1 and the south face of row 1 see it only through a periodic wrap
+    function run(kind, Δt = 10.0; edge = false)
+        sim = box(kind)
+        interior_view(sim.u) .= 5.0; interior_view(sim.v) .= 1.0
+        # an open box's boundary data loaded, as in a run (its faces hold
+        # them; before this call they hold zeros)
+        kind === :open && update_open_boundaries!(sim, 0.0, 0.0)
+        ts, d = drag_surface(sim)
+        fill!(ts.drag, 0.0)
+        ts.drag[Nx, :, :] .= 1.0; ts.drag[:, Ny, :] .= 1.0
+        edge && (ts.drag[1, :, :] .= 1.0; ts.drag[:, 1, :] .= 1.0)
+        drag!(ts, d, Δt)
+        return sim, ts
+    end
+    K = Hz + 1
+    # periodic: the face between column Nx and column 1 is a real face, damped
+    sp, _ = run(:periodic)
+    @test all(sp.u.data[Hx+1, Hy+1:Hy+Ny-1, K] .< 4.0)
+    @test all(sp.v.data[Hx+1:Hx+Nx-1, Hy+1, K] .< 1.0)
+    # open faces: the west / south boundary face of the normal velocity is the
+    # boundary's (pinned_face_indices; the open-boundary update overwrites it):
+    # no drag, so it keeps the boundary value (u = 5, v = 1), not the
+    # opposite edge's drag
+    for kind in (:open, :noflux)
+        s, ts = run(kind)
+        if kind === :open
+            @test all(s.u.data[Hx+1, Hy+1:Hy+Ny-1, K] .== 5.0)    # untouched (copied)
+            @test all(s.v.data[Hx+1:Hx+Nx-1, Hy+1, K] .== 1.0)
+        else
+            # a no-flux face is no boundary data: one-sided, the drag of
+            # the column it bounds (zero there; u/1 is exact)
+            @test all(s.u.data[Hx+1, Hy+1:Hy+Ny-1, K] .== 5.0)
+            @test all(s.v.data[Hx+1:Hx+Nx-1, Hy+1, K] .== 1.0)
+        end
+        # the interior faces next to the strong column are damped as in the
+        # periodic box (the mean of the two columns, a = 0.5)
+        @test isapprox(s.u.data[Hx+Nx, Hy+1, K], sp.u.data[Hx+Nx, Hy+1, K]; rtol = 1e-14)
+        @test all(s.u.data[Hx+Nx, Hy+1:Hy+Ny-1, K] .< 4.0)
+    end
+    # with a strong drag in column 1 and row 1 as well, the open and the
+    # no-flux rule part (above, both leave the face alone because the
+    # bounding column has no drag): the open face keeps its boundary value
+    # (no drag at a pinned face), the no-flux face takes the bounding
+    # column's drag (a = 1, Δt a/U ≈ 2 for u, ≈ 2-10 for v)
+    so, _ = run(:open; edge = true)
+    @test all(so.u.data[Hx+1, Hy+1:Hy+Ny, K] .== 5.0)          # untouched (copied)
+    @test all(so.v.data[Hx+1:Hx+Nx, Hy+1, K] .== 1.0)
+    sn, _ = run(:noflux; edge = true)
+    @test all(sn.u.data[Hx+1, Hy+1:Hy+Ny, K] .< 2.0)           # 5/(1 + 10/5.1) ≈ 1.7
+    @test all(sn.v.data[Hx+1:Hx+Nx, Hy+1, K] .< 0.5)           # 1/(1 + 10/U), U ≤ 5.1
+    # one-sided at a no-flux face: the strong drag in column 1 alone acts in
+    # full (a = a₁, not the periodic mean (a_Nx + a₁)/2)
+    sim = box(:noflux)
+    interior_view(sim.u) .= 5.0; interior_view(sim.v) .= 0.0
+    ts, d = drag_surface(sim)
+    fill!(ts.drag, 0.0); ts.drag[1, :, :] .= 1.0
+    drag!(ts, d, 10.0)
+    @test all(isapprox.(sim.u.data[Hx+1, Hy+1:Hy+Ny, K], 5.0 / (1 + 10.0 * 1.0 / 5.0); rtol = 1e-14))
 end
 
 @testset "TiledUrbanSurface: a step through the pipeline on both cores, and its checkpoint ($core, $sch)" for

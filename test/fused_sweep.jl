@@ -254,6 +254,9 @@ const _FS_WRAPPERS = Dict{Type,String}(
 )
 
 _fs_own_sweep_term(C) = which(FVs.sweep_term, Tuple{C, Any}) !== which(FVs.sweep_term, Tuple{Any, Any})
+# the fused form a component needs at stage S: a post term in :post_predictor (#533 step 6), a sweep term otherwise
+_fs_own_post_term(C) = which(FVs.post_sweep_term, Tuple{C, Any, Any}) !== which(FVs.post_sweep_term, Tuple{Any, Any, Any})
+_fs_own_term(C, S) = S === :post_predictor ? _fs_own_post_term(C) : _fs_own_sweep_term(C)
 
 @testset "fused sweep: local-term interface and driver (#533)" begin
 
@@ -388,11 +391,12 @@ noop = (s, Δt) -> nothing
 end
 
 @testset "a built-in term or a hook keeps one loop per term, and is reported" begin
-    for (kw, hook, key) in (((θ₀ = 300.0,), NamedTuple(), "builtin.buoyancy"),
-                            ((f_coriolis = 1e-4,), NamedTuple(), "builtin.coriolis"),
-                            ((C_s = 0.17,), NamedTuple(), "builtin.sgs"),
-                            ((θ_flux_bottom = 0.1,), NamedTuple(), "builtin.surface_flux"),
-                            ((sponge_α_max = 0.01, sponge_z_start = 80.0), NamedTuple(), "builtin.sponge"),
+    # (buoyancy, Coriolis, surface flux and sponge are fused since plan step 2:
+    # test/fused_sweep_pointwise.jl; the SGS closures since plan step 4:
+    # test/fused_sweep_sgs.jl. Those were this test's examples until the
+    # integration of steps 2 and 4 made them outdated; the hooks passed as
+    # functions are what is left)
+    for (kw, hook, key) in ((NamedTuple(), (body_force! = noop,), "builtin.body_force"),
                             (NamedTuple(), (post_predictor! = noop,), "builtin.post_predictor"))
         a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, kw...))
         fill!(a.tu.data, NaN)
@@ -404,13 +408,10 @@ end
         @test !occursin("no documented reason", join(rep["not_fusable"]))
     end
     # several terms: every one is reported
-    a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4))
-    step!(a, 0.5)
-    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.buoyancy", "builtin.coriolis"])
-    # a core without a fused sweep (the anelastic core) reports its reason
-    an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
-    @test SIMs.sweep_report(an)["substages_fused"] == "none" &&
-          SIMs.sweep_report(an)["not_fusable"] == ["builtin.core: " * SIMs.sweep_reason("builtin.core")]
+    a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17))
+    step!(a, 0.5; post_predictor! = noop, body_force! = noop)
+    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.body_force", "builtin.post_predictor"])
+    # (the anelastic core's fused sweep and its report: test/fused_sweep_cores.jl, #533 step 8)
 end
 
 @testset "loop_fusion: if_possible, always, never" begin
@@ -431,15 +432,16 @@ end
     step!(b, 0.5)
     @test SIMs.sweep_report(b)["substages_fused"] == "all"
     # ... and an error naming every term without one, before anything is stepped
-    c = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, f_coriolis = 1e-4)), :always)
+    c = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17)), :always)
     t0 = c.t
-    err = try step!(c, 0.5); nothing catch e; e end
-    @test err isa ArgumentError && occursin("builtin.buoyancy", err.msg) && occursin("builtin.coriolis", err.msg)
+    # (SGS was this test's example until #533 step 4 fused it: a body_force! function instead)
+    err = try step!(c, 0.5; post_predictor! = noop, body_force! = noop); nothing catch e; e end
+    @test err isa ArgumentError && occursin("builtin.body_force", err.msg) && occursin("builtin.post_predictor", err.msg)
     @test c.t == t0                                             # exact: the clock did not advance
-    # invalid settings, and always on a core without a fused form
+    # invalid settings; every core takes every setting (#533 step 8)
     @test_throws ArgumentError SIMs.set_loop_fusion!(a, :sometimes)
     an = Aeolus.Anelastic.AnelasticSimulation(RegularGrid(; size = (8, 8, 8), extent = (1.0, 1.0, 1.0)))
-    @test_throws ArgumentError SIMs.set_loop_fusion!(an, :always)
+    @test SIMs.loop_fusion(SIMs.set_loop_fusion!(an, :always)) === :always
     @test SIMs.loop_fusion(SIMs.set_loop_fusion!(an, :never)) === :never
 end
 
@@ -450,8 +452,10 @@ end
                  Domain(d0; components = (CentredAdvection(), c)))
         a = mk(FSDampComponent(0.05)); r = mk(FSDampWhole(0.05))
         h = CPs.core_hooks(a)
-        @test SIMs.hook_terms(h.body_force!, a.state) == (FSDamp(0.05, 0.0),)
-        @test (@inferred SIMs.hook_terms(h.body_force!, a.state)) isa Tuple{FSDamp{Float64}}
+        # (each component's term is switched by its attachment, per stage: #533 step 2)
+        @test SIMs.hook_terms(h.body_force!, a.state) ==
+              (FVs.OptionalTerm(false, FSDamp(0.05, 0.0)), FVs.OptionalTerm(true, FSDamp(0.05, 0.0)))
+        @test (@inferred SIMs.hook_terms(h.body_force!, a.state)) isa NTuple{2,FVs.OptionalTerm{FSDamp{Float64}}}
         @test SIMs.hook_terms(CPs.core_hooks(r).body_force!, r.state) === nothing
         fill!(a.state.tw.data, NaN)
         for _ in 1:3
@@ -467,13 +471,7 @@ end
         @test rr["substages_fused"] == "none" && only(rr["not_fusable"]) == "Main.FSDampWhole: " *
               "no sweep_term and no documented reason in Simulations.SWEEP_FALLBACKS"
     end
-    # with the budgets on the hook counts the substages: unfused, reported
-    # (the energy budget needs the reference θ₀, so buoyancy is on too)
-    s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
-    d = Domain(Domain(s; validate = false); components = (CentredAdvection(), FSDampComponent(0.05)))
-    db = CPs.with_budgets(d, (:energy,))
-    step!(db, 0.5)
-    @test any(startswith("builtin.budgets:"), CPs.sweep_report(db)["not_fusable"])
+    # the budgets inside the sweep (plan step 7): test/fused_sweep_budgets.jl
 end
 
 @testset "results.toml [loop_fusion] and the [timestep] loop_fusion key" begin
@@ -494,29 +492,45 @@ end
                   vcat(small, ["checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]))
     @test rc == 0
     fs = only(values(res["loop_fusion"]))
+    # (with plan steps 2 and 4 merged every term of it has a fused form: the
+    # old expectation that SGS, buoyancy, the θ flux and the sponge keep it
+    # unfused was made outdated by the integration)
+    @test fs["substages_fused"] == "all" && isempty(fs["not_fusable"]) && fs["setting"] == "if_possible"
+    # the same case on the anelastic core, whose SGS closure has no fused form yet
+    an = ["core.model=\"anelastic\"", "checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]
+    rc, res = run(joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"), vcat(small, an))
+    @test rc == 0
+    fs = only(values(res["loop_fusion"]))
     who = Set(first.(split.(fs["not_fusable"], ":")))
-    @test fs["substages_fused"] == "none" && fs["setting"] == "if_possible"
-    @test issubset(["builtin.sgs", "builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"], who)
+    @test fs["substages_fused"] == "none" && "builtin.anelastic_sgs" in who
     @test !occursin("no documented reason", join(fs["not_fusable"]))
-    # the key: never on the DNS; always on the CBL stops the run (rc ≠ 0)
+    # the key: never on the DNS; always on the anelastic CBL stops the run (rc ≠ 0)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"),
                   vcat(small, ["timestep.loop_fusion=\"never\""]))
     fs = only(values(res["loop_fusion"]))
     @test rc == 0 && fs["setting"] == "never" && fs["substages_fused"] == "none"
     root = mktempdir()
+    er = IOBuffer()
     rc = Aeolus.main(String["run", joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"),
-                            collect(Iterators.flatten(("--set", x) for x in vcat(small, ["timestep.loop_fusion=\"always\""])))...,
-                            "--root", root, "--allow-uncommitted"]; io = IOBuffer(), err = IOBuffer())
-    @test rc != 0
+                            collect(Iterators.flatten(("--set", x) for x in vcat(small, an, ["timestep.loop_fusion=\"always\""])))...,
+                            "--root", root, "--allow-uncommitted"]; io = IOBuffer(), err = er)
+    @test rc != 0 && occursin("builtin.anelastic_sgs", String(take!(er)))
 end
 
 @testset "type stability and allocation" begin
     s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2))
     # the plan is a concrete term tuple or nothing (a two-type union the caller splits)
-    @test (@inferred Union{Nothing,Tuple{FVs.BaseTendencies{Float64}}} SIMs._sweep_terms(
-               s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)) == (FVs.BaseTendencies(s.ν),)
-    sb = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0))
-    @test SIMs._sweep_terms(sb, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, sb.ν) === nothing
+    # (the base term, then the built-in pointwise terms of plan step 2, switched off)
+    plan = SIMs._sweep_terms(s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)
+    @test (@inferred Union{Nothing,typeof(plan)} SIMs._sweep_terms(
+               s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)) isa typeof(plan)
+    @test first(plan) == FVs.BaseTendencies(s.ν) && !any(t -> t.on, Base.tail(plan))
+    sb = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, C_s = 0.17))
+    # (with plan step 4 the closure is a term of the plan, after the base:
+    # step 2's expectation that it refuses was made outdated by the integration)
+    pb = SIMs._sweep_terms(sb, SIMs._sgs_choice(SIMs._active_sgs(sb, nothing, nothing), :laplacian),
+                           nothing, nothing, Aeolus.Operators.momentum_advect!, sb.ν)
+    @test pb isa Tuple && pb[2] isa Aeolus.Operators.SGSTerm && length(pb) == length(plan) + 1
     step_rk3!(s, 0.1); step_rk3!(s, 0.1)
     bufs = s.workspaces.sweep
     @test bufs isa FVs.SweepBuffers
@@ -554,7 +568,7 @@ end
     for C in types
         haskey(_FS_WRAPPERS, C) && continue
         key = SIMs.sweep_key(C)
-        has = _fs_own_sweep_term(C)
+        has = all(S -> _fs_own_term(C, S), [S for (T, S) in found if T === C])
         documented = haskey(SIMs.SWEEP_FALLBACKS, key)
         has || documented || println("  [#533] $key runs inside the core with neither a sweep_term nor a reason " *
                                      "in Simulations.SWEEP_FALLBACKS")
@@ -579,16 +593,18 @@ end
         "has_viscosity" => :base, "has_moisture" => :base, "advect_centered!" => :base,
         "laplacian" => :base, "_base_tendencies!" => :base, "zero_storage!" => :base, "axpy!" => :predictor,
         "_advance_scalar!" => :predictor,
-        "add_sgs_momentum!" => "builtin.sgs", "add_sgs_scalar!" => "builtin.sgs", "_add_sgs_tracer!" => "builtin.sgs",
-        "compute_sgs!" => "builtin.sgs", "momentum_advection" => "builtin.momentum_advection",
-        "has_buoyancy" => "builtin.buoyancy", "add_buoyancy!" => "builtin.buoyancy",
-        "has_coriolis" => "builtin.coriolis", "add_coriolis!" => "builtin.coriolis",
-        "has_surface_flux" => "builtin.surface_flux", "add_surface_flux!" => "builtin.surface_flux",
-        "has_sponge" => "builtin.sponge", "add_velocity_sponge!" => "builtin.sponge",
+        # the SGS closure's term (Operators.SGSTerm, #533 step 4; test/fused_sweep_sgs.jl)
+        "add_sgs_momentum!" => :sgs, "add_sgs_scalar!" => :sgs, "_add_sgs_tracer!" => :sgs,
+        "compute_sgs!" => :sgs, "momentum_advection" => "builtin.momentum_advection",
+        # the built-in pointwise terms of plan step 2 (Simulations._builtin_terms)
+        "has_buoyancy" => :pointwise, "add_buoyancy!" => :pointwise,
+        "has_coriolis" => :pointwise, "add_coriolis!" => :pointwise,
+        "has_surface_flux" => :pointwise, "add_surface_flux!" => :pointwise,
+        "has_sponge" => :pointwise, "add_velocity_sponge!" => :pointwise,
         "body_force!" => "builtin.body_force", "post_predictor!" => "builtin.post_predictor",
-        "update_open_boundaries!" => "builtin.open_boundaries")
+        "update_open_boundaries!" => :projection)   # after the sweep, before the projection (#533 step 5)
     seen = Set{String}()
-    for m in eachmatch(r"\bsim\.(has_\w+)|\b(add_\w+!|_add_\w+!|compute_sgs!|advect_centered!|laplacian|axpy!|_advance_scalar!|_base_tendencies!|zero_storage!)\(|\b(body_force!|post_predictor!|momentum_advection)\(", body)
+    for m in eachmatch(r"\bsim\.(has_\w+)|\b(add_\w+!|_add_\w+!|compute_sgs!|advect_centered!|laplacian|axpy!|_advance_scalar!|_base_tendencies!|zero_storage!)\(|\b(body_force!|post_predictor!|momentum_advection|update_open_boundaries!)\(", body)
         name = something(m.captures...)
         push!(seen, name)
         haskey(builtin, name) || println("  [#533] a built-in term of _euler_projection! not classified: $name")
@@ -598,11 +614,21 @@ end
         v = get(builtin, name, nothing)
         v isa String && @test haskey(SIMs.SWEEP_FALLBACKS, v)
     end
+    # the open-boundary update (:projection) runs on the predicted velocity:
+    # after the predictor and before the projection, in the reference and in
+    # the fused step (after the sweep), so an open box takes the fused step (#533 step 5)
+    @test "update_open_boundaries!" in seen
+    _fs_order(txt, names...) = (ps = [findfirst(n, txt) for n in names]; all(!isnothing, ps) && issorted(first.(ps)))
+    @test _fs_order(body, "axpy!(sim.w, Δt, sim.tw)", "update_open_boundaries!(", "_project_velocity!(")
+    fs = read(joinpath(pkgdir(Aeolus), "src", "simulations", "fused_sweep.jl"), String)
+    a2 = findfirst("function _blocked_projection!", fs); b2 = findnext("\nend\n", fs, last(a2))
+    @test _fs_order(fs[first(a2):last(b2)], "_blocked_sweep!(", "update_open_boundaries!(", "_project_velocity!(")
     # the base term covers what it claims: a moist, viscous sweep was checked above
     # no stale entries: every reason is reported by the code (built-ins) or
     # belongs to an in-core component without a sweep term
     fsrc = read(joinpath(pkgdir(Aeolus), "src", "simulations", "fused_sweep.jl"), String) *
-           read(joinpath(pkgdir(Aeolus), "src", "components", "domain.jl"), String)
+           read(joinpath(pkgdir(Aeolus), "src", "components", "domain.jl"), String) *
+           read(joinpath(pkgdir(Aeolus), "src", "anelastic", "fused_sweep.jl"), String)
     for key in keys(SIMs.SWEEP_FALLBACKS)
         if startswith(key, "builtin.")
             occursin("\"$key\"", replace(fsrc, r"const SWEEP_FALLBACKS = Dict\{String,String\}\((?s:.*?)\n\)\n" => "")) ||

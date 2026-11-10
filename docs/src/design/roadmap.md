@@ -2714,6 +2714,40 @@ compiler-flag provenance remain.
   - The old name is rejected only where no surface publishes `surface_temperature`. With `"most"` or `"tiles"` the name is valid, with its new meaning.
   - The tiles of a blended mosaic are evaluated at their own forcing levels, not at the blending height.
 
+### Canopy drag of the tiled surface (#538)
+
+**A threaded, order-independent drag that does not wrap across open faces** (#538, from the kernel-by-kernel measurement of #531). See [the parent's surface coupling](berlin_parent.md#Surface-coupling).
+
+- **What was built.** The `:post_predictor` stage of `TiledUrbanSurface`, ``u ← u/(1 + Δt a/U)`` at the u and v faces of the canopy levels, was a serial k, j, i loop on the main thread that damped u in place and then read it for the v face (Gauss–Seidel, loop-order dependent), with a periodic wrap (`im = i == 1 ? Nx : i - 1`) at every lateral face. It is now:
+  - two launches over the canopy points: the u and v face denominators from the pre-drag velocities (Jacobi) into a scratch array of the component (`drag_den`), then the division; each point writes only its own two faces, so the result does not depend on the loop order or the thread count;
+  - the neighbour column of a west/south boundary face from the boundary conditions, through the existing helpers: periodic, the opposite edge (as before); a face whose normal velocity the boundary fixes (`pinned_face_indices`: an open face), no drag, since that value is the boundary's and the open-boundary update overwrites it; any other non-periodic face (no-flux), the drag of the column it bounds (`neighbor_index`, one-sided). The east/north boundary faces lie in the halo and were never touched;
+  - the halos of u and v filled first (the old loop read the halo values left from before the predictor);
+  - the speed as ``\sqrt{u^2 + \bar v^2}`` instead of `hypot` (3× cheaper in this kernel), and the denominators launched with a work weight (`DRAG_POINT_WEIGHT = 8`, ten loads, two roots and two divisions per point): Berlin's canopy is one level, 40,000 points, which unweighted ran on two tasks at any thread count (the launch's 16,384 points per task).
+- **Discretisation reference.** PALM's canopy drag (`plant_canopy_model_mod.f90`, `pcm_tendency`, u component): the speed at a u face with v averaged from its four neighbours, and the u loop starting at `nxlu`, which skips the boundary face of a non-cyclic inflow or radiation boundary (`init_pegrid.f90`). The open-face rule here is the same. PALM takes the cell's LAD at a face, rather than averaging (sharp canopy edges); the face mean of the two columns is kept, as it was.
+- **Measured** (Berlin 100 m config, 200 × 200 × 60, open ERA5 faces, warm state after 6 steps, FFTW `estimate`, under the shared bench lock; the stage per call, median of 200 calls, the old code on the same commit in a separate worktree, interleaved; 3 calls per step):
+
+  | threads | 1 | 2 | 6 | 12 |
+  | :-- | --: | --: | --: | --: |
+  | drag stage before (ms/call) | 2.10 | 2.12 | 2.14 | 2.12 |
+  | after (ms/call, incl. the u, v halo fill) | 0.36 | 0.24 | 0.24 | 0.21 |
+  | of which the halo fill (ms) | 0.13 | 0.11 | 0.07 | 0.07 |
+  | per step, before → after (ms) | 6.3 → 1.1 | 6.4 → 0.7 | 6.4 → 0.7 | 6.4 → 0.6 |
+  | Berlin step median before / after (ms, 20 steps) | 488.3–500.5 / 485.4–493.6 | 330.3 / 327.7 | 239.3 / 240.3 | 243.7 / 238.6 |
+
+  The step saving (0.4–5 ms by the stage numbers) is not resolved at any thread count: at 1 thread three interleaved runs of the old code gave 488.3, 492.4 and 500.5 ms and three of the final code 493.6, 492.6 and 485.4 ms; at 2, 6 and 12 threads the differences (−2.6, +1.0, −5.1 ms) are inside the run-to-run spread of about ±5 ms. Two runs of the intermediate `hypot` code at 1 thread were elevated (578.2 and 533.0 ms, the latter interleaved with 488.3 ms of the old code) although its drag stage took only 1.1 ms; the final code did not reproduce this. The stage numbers carry the result. The stage allocates about 30 KB per call when threaded (the halo fill and the two launches' tasks; 0 B at 1 thread), about 90 KB per step against 7.6 MB per step for the whole Berlin step at 12 threads. Kernel micro-benchmark (200 × 200 × 1, the two launches, without the fill): `hypot` unweighted 0.75 / 0.43 / 0.77 / 0.82 ms at 1/2/6/12 threads; `sqrt` with weight 8: 0.24 / 0.14 / 0.08 / 0.07 ms.
+- **Against the old loop**, on the warm Berlin state, one call at Δt = 2 s: interior faces (2…N) differ by at most 3.7e-5 m/s in u and 2.9e-4 m/s in v, against a drag change of up to 8.1e-2 (u) and 3.1e-2 m/s (v) in that call: the Gauss–Seidel ordering's second-order term. The west u and south v boundary faces (open) were damped by up to 1.1e-2 and 1.2e-2 m/s by the drag of the opposite edge; now 0 (and the open-boundary update overwrites them in both versions).
+- **Tests** (`test/components_parent.jl`, three new testsets):
+  - a uniform wind with a drag recomputed from it, ``a = cU^2`` (``du/dt = -c|U|u``): the implicit step is ``1/u ← 1/u + cΔt``, exact, so 100 steps agree with ``u_0/(1 + cu_0t)`` to 1e-12; a uniform (u, v) keeps its direction to 1e-14; a held a (``du/dt = -a``) converges at first order: errors 0.143, 0.076, 0.039 m/s at Δt = 4, 2, 1 s (ratios 1.88, 1.94);
+  - a random 40 × 30 field against an explicit Jacobi reference applied in reverse loop order, with the serial and the threaded backend (`with_backend`, threshold 1): 1e-14; the threaded backend is threaded only when the suite runs with more than one thread (passes at `test/run.jl --threads 4`; at the default of 1 thread both run serially); against the former loop: 2.6e-3 (u) and 3.7e-3 m/s (v), below 0.1 × the drag change (0.197 m/s) and ε² max|U|;
+  - periodic, open and no-flux boxes with a strong drag in the last column and row: the periodic box damps the west/south boundary faces (wrap), the open box leaves them at the boundary values, the no-flux box applies the bounding column's drag (zero there, and the full a₁, not (a_Nx + a₁)/2, when only column 1 drags); the interior faces next to the strong column agree with the periodic box to 1e-14. With a drag in column 1 and row 1 as well, the open box still keeps the boundary values while the no-flux box damps the faces (u < 2, v < 0.5 m/s): this subtest fails (2 of 126) with the `pinned_face_indices` check removed, which the first version of the test did not (review finding);
+  - the thread-invariance harness has a new section `canopy` (one drag on a random 96 × 80 wind, two canopy levels, threaded launches): `AEOLUS_THREAD_TESTS=1 AEOLUS_THREAD_SECTIONS=canopy AEOLUS_THREAD_COUNTS=1,4,12`, 10 pass, 0 fail. It is its own section because `columns` currently stops at its aq_chem emissions case (the Berlin smoke config is rejected: `parent_driver = "aeolus"` without a parent domain), which predates this issue.
+  - Targeted runs: `components_parent`, `config_parent_domain`, `urban_run`, `urban_checks`, `plant_canopy`, `naming_conventions` 230 pass, 0 fail; validation `urban_checks.jl` 33 pass, 0 fail (313 s, and 315 s after the review fixes). Full suite after the review fixes: 4482 pass, 0 fail (116 jobs, 514 s).
+- **Test expectation that was wrong.** The first open-box test expected the pinned west face to keep the interior's 5 m/s; it held 0, because the box's boundary data had not been loaded (`update_open_boundaries!`) and the halo fill writes the data into that face. The code was right; the test now loads the data first, as a run does.
+- **Deviations from the issue's plan:**
+  - The drag is a launch over (i, j, k) in two passes, not one: a single pass cannot read the pre-drag neighbours that other work items write. The scratch is a component field, built with an outer constructor of the old arity so `build` is unchanged.
+  - At an open face the boundary-normal face is skipped (PALM's choice) rather than given a one-sided drag; one-sided averaging is used at a no-flux face, which has no boundary data.
+- **Open:** `PlantCanopy.ResolvedCanopyDrag` averages its LAD to the faces with the same periodic wrap at construction ("as the LES is horizontally periodic"); a vegetated column at an open edge would see the opposite edge's leaves. Not in the Berlin run, and left for its own issue. With #533 this pointwise drag becomes a `:post_predictor` term of the fused sweep.
+
 ---
 
 # Data assimilation and inverse problems
@@ -3189,6 +3223,1184 @@ term's ry = 1 included), the same rule counted from the base. Plan step
 sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
+
+**Step 2: pointwise terms** (branch `issue/533-s2-pointwise`). What was
+built:
+- **Terms** (`src/operators/sweep_pointwise.jl`): `BuoyancyTerm` (dry,
+  or moist `θᵥ = θ(1 + 0.61 qv)` when the sweep carries qv; footprint
+  (0, 0, 1)), `CoriolisTerm` (the four-point averages; (1, 1, 0)),
+  `SurfaceFluxTerm` (rows of the first and last level only),
+  `DampingTerm` (the one damping kernel's `−λ(ξ)(φ − φ_target)`; along z
+  the rate once per row: the sponge, `sponge_term`; along x per point: the
+  fringe) and `OptionalTerm(on, term)`. Each evaluates its whole-field
+  kernel's expression in the same order; the kernels stay (the reference
+  and every other caller). `damping_levels(g, loc)`: the level heights
+  without a copy.
+- **Built-in terms** (`Simulations._builtin_terms`): buoyancy, Coriolis,
+  surface flux and sponge follow the base tendencies as `OptionalTerm`s on
+  `sim.has_*`, so every Boussinesq configuration has one plan type (one
+  compiled sweep whatever is switched on; one branch per row and term).
+  The sponge's targets (`sim.sponge_target`, a NamedTuple of abstract
+  fields) are read once into `DampingTargets` (kind + one concrete slot
+  per kind), cached in a new `StepWorkspaces` slot `sponge`, rebuilt when
+  the target is replaced; an in-place update of a level vector (the nest)
+  is seen.
+- **Components**: `Coriolis`, `SurfaceThetaFlux`, `Sponge` (a retargeted
+  sponge refreshes its level targets in `prepare!` from the stage-start
+  state, as `run_stage!` does before its pass), `Fringe` (target refreshed
+  to the substage time in `prepare!`), the urban `MoistBuoyancy`
+  (perturbation with its fluid-cell level means in `prepare!`, the w-face
+  sum in the sweep) and `GeostrophicCoupling` in its pressure-gradient
+  mode (level tendencies and the recorded diagnostics in `prepare!`,
+  `LargeScaleForcing.geostrophic_level_tendency` now the one evaluation
+  behind `apply_forcing!` too; the retargeted sponge's constant per row).
+  `SimulationCouplings`: the slab's floor flux is a `SurfaceFluxTerm`;
+  with obstacles its IBM penalty (plan step 5) keeps it unfused.
+- **Allowlist**: `builtin.buoyancy`, `.coriolis`, `.surface_flux`,
+  `.sponge`, `Components.Coriolis`, `.SurfaceThetaFlux`, `.Sponge`,
+  `.Fringe` and `Urban.MoistBuoyancy` removed. Kept with a narrowed
+  reason: `Urban.GeostrophicCoupling` (the nudging mode relaxes plane
+  means: plan step 3) and `SimulationDriver.SimulationCouplings` (the IBM
+  penalty: plan step 5). The urban terms are not exercised end to end in a
+  run yet: `Urban.UrbanSite` (step 5) keeps every urban domain unfused.
+
+**Bug the tests caught** (the code was wrong): a domain with `Coriolis`
+and `LargeScale` (components_both_cores.jl) crashed Julia 1.13.3's code
+generation (segfault in `box_union`). Whether a component attaches to a
+stage is a run-time value (`LargeScale`'s stages depend on its options),
+and with it deciding the plan's length inference widened `hook_terms` to
+`Union{Nothing, Tuple{Vararg{CoriolisTerm}}}`; the substage then went
+through a dynamic call. Step 1 never met it because every real component
+returned `nothing`. Each component with a sweep term now enters
+`hook_terms` as `OptionalTerm(attached, term)` at every in-core stage, so
+the plan type depends on the component types only (regression test in
+`test/fused_sweep_pointwise.jl`). The first `SpongeTargets` with
+`Union{T, Vector{T}, Array{T,3}}` fields was replaced by `DampingTargets`
+at the same time (no unions in the sweep's arguments).
+
+**Test expectations that changed** (right for step 1, outdated by this
+step): `components_pipeline.jl` expected a stage-6 `Coriolis` component to
+turn the fused sweep off (it now uses a recorder component without a
+sweep term for that, and asserts `Coriolis` stays fused);
+`test/fused_sweep.jl`'s examples of terms that are not fused are now the
+SGS closure and the post-predictor hook, and the dry CBL reports only
+`builtin.sgs`.
+
+**Tests** (`test/fused_sweep_pointwise.jl`, 780 assertions after the review fixes): each term in
+`blocked_predictor!` against the base tendencies + its `add_*!` operator
+or `run_stage!` + the predictor, for 1–5 slabs (and reversed), serial and
+threaded, regular and stretched, dry and moist, Euler and RK3 (agreement
+at ROUNDOFF_RTOL; measured bit-identical); `step!`/`step_rk3!` with every
+built-in pointwise term and domains with the components (rest and `mean`
+sponge, a time-dependent fringe target), `loop_fusion = "always"` against
+`"never"` (also at 6 threads); the geostrophic diagnostics against
+`run_stage!`'s (exact for the level means and wind means, rtol 1e-9 for
+the mean tendencies, which `run_stage!` takes as a difference of
+tendency-field means); `step_rk3!` with all four built-in terms allocates
+16 bytes (as the DNS). Full suite green on the final branch (118 jobs, 5997
+assertions; validation `urban_checks.jl` 33/33 and `gabls1.jl` 8/8 with
+it);
+`urban_run.jl`, `urban_checks.jl` green; validation `urban_checks.jl` 33/33.
+
+**Measured**: a configured case whose only terms besides advection and
+diffusion are these: the dry CBL of `examples/dry_convective_bl` with
+`[sgs] model = "none"`, `[coriolis] f = 1e-4`, `dynamics.nu = 1`, RK3,
+192 × 192 × 64 (built-in buoyancy; `SurfaceThetaFlux`, `Sponge`, `Coriolis`
+components; `loop_fusion = "if_possible"` reports every substage fused).
+`step!(domain)` (`benchmarks/bench_loop_fusion.jl`, case `bench_loop_fusion_cbl.toml`) with `"never"` (one loop per term: these cases' code
+before this step) and `"if_possible"`, alternating in blocks of 3 steps
+within one process (4 blocks; minimum per setting; short runs, the
+interleaving guards against the boost/sustained drift of #535), two
+processes per thread count, under the benchmark lock, other agents'
+unlocked tests running (1-min load 1.2–14); ms/step, the minimum of the
+two processes, and the speed-up of each process (Ryzen AI 9 HX 370):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 282 | 196 | 142 | 112 |
+| fused | 242 | 152 | 95.6 | 77.7 |
+| speed-up per process | 1.25, 1.16 | 1.26, 1.29 | 1.48, 1.52 | 1.45, 1.44 |
+
+The first 1-thread process ran at a 1-min load of 15 (681 / 544 ms); the
+ratio within a process is the robust number. The
+byte model of the issue (compulsory arrays per substage, counted once per
+kernel as `bench_roofline.jl` does) for the tendency + predictor part of
+this case: one loop per term streams 8 (base tendencies) + 2 (buoyancy) + 4
+(Coriolis) + 1.5 (sponge, top quarter) + 6 (u, v, w predictor) + 3 (θ with
+the RK3 combination) ≈ 24.5 arrays, the fused sweep 5 (u, v, w, θ, the
+step-start θ): 196 → 40 B per point and substage; the projection is
+unchanged. A model, not a hardware count: **not measured** in this step
+are the bytes by counter, the STREAM-relative GB/s, 24 threads and a
+second machine.
+
+**Deviations**: the urban `GeostrophicCoupling` records its mean
+tendencies `dtu`, `dtv`, `dtu_sp`, `dtv_sp` as the level means of what it
+adds (in `run_stage!` a difference of two tendency-field means; equal
+within round-off). `hook_terms` now holds one `OptionalTerm` per component
+and in-core stage (an off one costs a branch per row). A component's
+sweep term stands for everything it adds in stages 6 and 7 (the interface
+has no stage argument): one attached to both is switched on once, at
+`:tendencies` (step 1 would have added it at both). `SimulationCouplings`,
+the one such component today, has no term when it attaches to
+`:body_force` (obstacles).
+
+**Review of step 2** (bugs, the code was wrong; a regression test each in
+the "review of step 2" testset of `test/fused_sweep_pointwise.jl`):
+- `DampingTerm` did not check a level-vector target's length, which
+  `_add_damping!` does: under `"if_possible"` a sponge target of `Nz + 4`
+  values ran on its first `Nz`, a shorter one read out of bounds. It now
+  throws the same `DimensionMismatch`. The axis is passed as a `Val`
+  (with the check the constructor was no longer inlined, and the term's
+  axis parameter, until then found by constant propagation, became
+  unknown: `step_rk3!` then allocated 6.7 kB per step, which the
+  allocation test of the built-in plan rejects).
+- `SimulationCouplings`' `sweep_term` returned
+  `Union{Nothing, SurfaceFluxTerm}`, so the plan's tuple length was again a
+  run-time value (`hook_terms` inferred as a `Vararg` tuple) for every TOML
+  run with a slab surface. Obstacles are now a type parameter of the
+  component and the term's type follows from it; "the plan type depends on
+  the component types only" holds now for every component with a sweep
+  term.
+- The step core did not specialise on `body_force!`/`post_predictor!`
+  (an argument of a `Function` type that is only passed on is not
+  specialised on), so a `Domain`'s plan was built and the sweep entered
+  through a dynamic call. `step!` (Euler, 20 × 12 × 12, 1 thread) of a
+  domain with a `Coriolis` component allocated 1120 B fused, now 0;
+  Coriolis + `SurfaceThetaFlux` + `Sponge` 4832 → 2368 B (one loop per term:
+  1488 B, the sponge component's own). What remains is the plan tuple
+  itself, heap-allocated once per substage when it holds more than the
+  built-in terms (496 B with Coriolis and `SurfaceThetaFlux`): plan
+  construction, independent of the grid, not in the sweep. The CBL timings
+  above were taken before this fix (a dynamic call per substage, against
+  77–242 ms per step) and were not re-measured.
+- The core sponge's 3-D targets (a `Field`, a halo-padded array:
+  `DampingTargets` kind 2) are now tested in `step!`/`step_rk3!`, fused
+  against one loop per term, on both grids, serial and threaded.
+
+**Step 3: terms that need a reduction of the stage-start state**
+(branch `issue/533-s3-reductions`). What was built:
+- **The column form of the large-scale forcings**
+  (`src/large_scale_forcing/fused_sweep.jl`, in `LargeScaleForcing`, the
+  one place it is computed): every forcing is, per level, affine in its
+  field's own column, `c0 + cm (φ[k−1] − φ[k]) + cp (φ[k+1] − φ[k]) +
+  λ (r − φ[k])`. `column_forcing!` fills these coefficients
+  (`ColumnForcing`, scratch held by the component, opaque to the
+  structural checkpoint) before the sweep: the geostrophic pressure
+  gradient and the advective tendencies are `c0`; nudging and the
+  mean-gradient subsidence `c0` from the plane means; the local (upwind)
+  subsidence `cm`/`cp`; a `ReferenceDamping` `λ`, `r` (a table, a
+  function, a number, a level vector or `:mean`; two dampings of one
+  field combine into one rate and its weighted target). The plane sums
+  are taken once per field per substage, in the order of
+  `_plane_mean_level!` (so the means are those of the passes), and give
+  the records too (`tendency_integrals`, `damping_tendency`).
+  `add_column_rows!` adds a row: per level and field a constant, a
+  damping or the full stencil loop, chosen once per row; untouched
+  levels and fields are skipped.
+- **`Components.LargeScale`** has a sweep term (`LargeScaleTerm`):
+  `prepare!` evaluates the forcings with the window of `run_stage!`
+  (`clock = :step` or `:core`, the substage's `sim.t`) and the Coriolis
+  parameter of the domain's `Coriolis` component. The reductions are of
+  the stage-start state exactly as the whole-field method reads it: in
+  `_euler_projection!` nothing changes the interior between the halo fill
+  and the body-force hook, and `prepare!` runs at that point
+  (`_blocked_projection!`, before the sweep). Its `SWEEP_FALLBACKS` entry
+  was reworded, not removed: a forcing without a column form (a damping
+  toward a 3-D target, `Field` or array; a forcing type of another
+  module) still makes the component return `nothing`, and the report
+  then names this reason instead of "no documented reason"
+  (`column_forcing_supported`, decided by types so the term infers).
+- **`Urban.UrbanSite`** has a sweep term (`UrbanSiteTerm`): `prepare!`
+  runs the captures of its `:tendencies` stage (the fixed-gradient top's
+  heat flux, the open faces' heat) on the stage-start state; the open
+  faces' θ relaxation (`ReferenceDamping` toward the boundary profile) is
+  put into `OpenBoundaryHeat.sweep`'s column coefficients
+  (`capture_boundary_heat!(…; fused = true)`) instead of the tendency
+  field. Its allowlist entry is removed. No urban domain is fused yet
+  (the other urban couplings, SGS and the open boundaries keep it on one
+  loop per term), so this is checked at the term level.
+
+**Tests** (`test/fused_sweep_reductions.jl`, 804 assertions): every
+forcing's column form against `apply_forcing!` on regular and stretched
+grids, dry and moist, and its records; `LargeScale` (all forcings at
+once, both subsidence forms, five dampings) inside `blocked_predictor!`
+against base + `run_stage!` + predictor for 1–5 slabs (also reversed),
+serial and threaded, dry and moist, Euler and RK3; `step!`/`step_rk3!`
+of a domain with `LargeScale` fused (`loop_fusion = "always"`) against
+one loop per term (`"never"`) for both clocks, every substage fused, the
+tendency fields untouched; the term type-stable (`@inferred hook_terms`);
+an unsupported forcing reported; the urban site's term on the small
+synthetic city, periodic (top flux) and `lateral = "open"` (relaxation):
+the same records as the stage, the relaxation tendency = the stage's.
+Tolerance: the per-level contributions are summed before they are added
+and the upwind difference is written as `cp (φ[k+1] − φ[k])`, so the
+states agree within `agree` (ROUNDOFF_RTOL = 1e-10).
+
+**Test expectation that proved wrong**: the records were first compared
+with a tolerance relative to the record itself; a damping toward the
+slab mean has records that are zero up to round-off (1e-13 point by
+point, exactly 0 from the plane sums), so the tolerance is now relative
+to the summed terms (1e-12 of λ_max N |φ|_max). The code was right.
+
+**Allocations**: `prepare!` allocates per substage, not per point; the
+first version allocated more than the passes (75 kB per RK3 step against
+53 kB), from functions passed through unspecialised arguments
+(`forcing_mean(w_s, …)` boxed a Float64 per level) and a loop variable of
+unstable type; with function barriers 12.7 kB per step (12 704 B on the
+20×12×12 test case with all forcings, and the same 12 704 B at 24×16×24:
+the test asserts the count does not change with the grid, so an
+allocation per level, row or point fails it).
+
+**Measured**: a viscous Boussinesq domain with `LargeScale` (advective
+θ and u, nudging of u, v, θ, mean-gradient and local subsidence of θ;
+`step_rk3!`, `AEOLUS_FFTW_PLANNER=estimate`), one loop per term
+(`loop_fusion = "never"`, the code this configuration runs on the base
+branch) and fused, interleaved in one process (2 steps each, 6 rounds,
+minimum, < 60 s per process, under the benchmark lock), with the fused
+DNS core alone as the floor; s/step, Ryzen AI 9 HX 370, other agents'
+jobs running (1-minute load 3.6–24 over the runs):
+
+| grid | threads | one loop per term | fused | DNS core alone | speed-up |
+| :-- | --: | --: | --: | --: | --: |
+| 128³ | 1 | 0.207 | 0.183 | 0.167 | 1.13 |
+| 128³ | 6 | 0.179 | 0.152 | 0.155 | 1.18 |
+| 128³ | 12 | 0.196 | 0.171 | 0.152 | 1.15 |
+| 192³ | 1 | 0.823 / 0.586 | 0.718 / 0.510 | 0.621 / 0.459 | 1.15 / 1.15 |
+| 192³ | 12 | 0.473 / 0.560 | 0.369 / 0.423 | 0.358 / 0.429 | 1.28 / 1.32 |
+
+(two processes at 192³; the seconds differ by up to 40 % between them,
+boost phase against sustained power and load, the ratios by 3 %.) By
+the byte count: the passes of these forcings move 19 field-passes per
+substage (5 reads: u, v, θ for the nudging, θ for each subsidence; 7
+read-modify-writes of tendency fields: 152 B/point), the fused
+form 3 (the plane sums of u, v, θ: 24 B/point), and the substage's base
+tendencies and predictor become fused too. **Not measured**: a configured
+case (GABLS, the urban site) — none is fused yet, since SGS, the surface
+layer, buoyancy or the urban couplings keep it on one loop per term
+(plan steps 2, 4, 5); their step runs the reference code as before. Bytes
+against `bench_roofline.jl` were not measured.
+
+**Deviation**: the allowlist named plan step 5 for `UrbanSite`; it is
+done in step 3, since its in-core work is reductions of the stage-start
+state (the captures) and a damping, the column form above. The reductions are computed in `prepare!`
+as a separate read pass of u, v, θ per substage; folding them into the
+previous substage's sweep (the means of the predicted state) is a later
+optimisation.
+
+**Step 4: the SGS closures inside the sweep** (branch `issue/533-s4-sgs`).
+
+Branch `issue/533-s4-sgs` (from step 1). What was built:
+- **One term for the closure**, `Operators.SGSTerm`
+  (`src/operators/sgs_sweep.jl`): its `prepare!` is the `compute_sgs!`
+  of the separate loops (and qv's own diffusivity, AMD), before the sweep;
+  its row kernel adds the momentum, θ and qv tendencies from the
+  precomputed coefficients. The row kernels (`FiniteVolume.EddyMomentum`,
+  `StressMomentum`, `EddyScalar`, `TensorScalar`,
+  `src/operators/fused_sweep_sgs.jl`) run the point bodies of the
+  whole-field operators themselves (`_b_eddy_u!` …, `_b_sgs_stress_div!`,
+  `_b_stress_div!`, `_b_eddy_scalar!`), writing into the sweep's row
+  buffer through a row adapter (`_RowField`): one source of truth, and
+  the fused step is bit-identical to one loop per term in every test. The
+  tensor face fluxes became value functions (`_tensor_fx/fy/fz`) shared
+  by the stored-flux launches and the sweep, which evaluates each interior
+  face twice instead of storing it.
+- **Which kernel, from the closure contract**: the momentum part from a
+  new generic `sgs_momentum_sweep` (default: the eddy viscosity of the
+  default `add_sgs_momentum!`, Laplacian or stress form by `sgs_stress`;
+  the Reynolds-stress closure its stored stress); θ's from the existing
+  `sgs_scalar_face_diffusivity` (diagonal) or `sgs_scalar_tensor`; qv's
+  from a new trait `sgs_tracer_own_diffusivity` (AMD `true`), checked at
+  run time against `sgs_tracer_diffusivity!` (a closure whose two answers
+  disagree stops with an error instead of fusing the wrong flux).
+  `SolidMaskedSGS` (the urban site's mask) now forwards
+  `sgs_scalar_face_diffusivity`, `sgs_scalar_tensor`, `sgs_explicit_stress`
+  and the two new generics to the closure it wraps.
+- **Every closure of the core is fused**: Smagorinsky (built-in `C_s`
+  and `StaticSmagorinsky`), dynamic (plane-averaged; the local and
+  masked variants go through the same contract defaults but are not
+  tested), Lagrangian
+  dynamic, Vreman, σ, `FunctionSGS`, `MLSGS`, AMD, the prognostic TKE
+  closure (also with a solid mask and on a stretched grid),
+  stability-corrected, isentropic tensor diffusion, the Reynolds-stress
+  closure and both `SolidMaskedSGS` uses; both `sgs_stress` forms
+  (the stress form, and the Reynolds stress's divergence, on a
+  `RegularGrid` only, as the operators).
+  `builtin.sgs` left `SWEEP_FALLBACKS`; a closure without a sweep form
+  is reported by its type (`Main.X: no sweep_term …`).
+- **The sweep form must match the closure's own tendencies**
+  (`Operators.sgs_sweep_form_matches`, added after the review): the sweep
+  evaluates the kernels the contract generics name, not the closure's
+  `add_sgs_momentum!`/`add_sgs_scalar!`/`sgs_tracer_diffusivity!`. So for
+  each of those, the method dispatch selects of the generic the sweep
+  reads instead (`sgs_momentum_sweep`; `sgs_scalar_face_diffusivity` and
+  `sgs_scalar_tensor`; `sgs_tracer_own_diffusivity`) must be at least as
+  specific as the tendency's, also for the closure a wrapper forwards to
+  (`sgs_sweep_wrapped`: `IsentropicDiffusion`, `SolidMaskedSGS`);
+  otherwise the closure runs one loop per term and is reported by its
+  type. Cached per closure and simulation type and per world (a method
+  defined later is seen); the step's allocation is unchanged (32 and 48
+  bytes).
+- **Footprint** (1, 1, 1): with νt precomputed, every SGS body reads the
+  state at most one point away (the compact flux differences; the
+  tensor's cross terms at the diagonal neighbours); νt, κh, the tensor
+  and a stored stress are inputs the predictor never overwrites, so they
+  do not enter the lag. The ring and edges stay those of the base term
+  (2 rows, 1 plane); the reversed-slab tests check the front edge.
+- **The decision** receives the closure with its `sgs_stress`
+  (`Simulations.SGSChoice`), so the decision functions of step 1 keep
+  their signatures. `_sweep_terms` infers a two-type union; a fused
+  `step_rk3!` with Smagorinsky or AMD allocates what one loop per term
+  does (32 and 48 bytes, the keyword call).
+
+**Not done: the masked scalar diffusion of plan step 4.** The plan
+names "the prognostic TKE closure (PrognosticSGS), including the masked
+scalar diffusion". What this branch fuses is the TKE closure's
+tendencies of u, v, w, θ and qv (mask included). Not inside the sweep:
+the TKE equation of `TKEClosure` (and the stress transport of the
+Reynolds-stress closure) runs in `advance_sgs!`, once per step after the
+projection, on its own field `e`, which the sweep's buffer does not
+carry; its masked diffusion (`add_eddy_diffusion_scalar!(…; mask)`) is
+part of that update (already one plane loop, KA-l). The urban tracers'
+masked SGS diffusion (`TracerSGSDiffusion`) is a component outside the
+core. Whether either has to move into the sweep for step 4 to count as
+done is left to the maintainer.
+
+**Tests** (`test/fused_sweep_sgs.jl`, 5656 assertions, 80–101 s alone
+and 284 s beside six other files, so tagged `heavy` in
+`test/test_tags.toml`): the sweep
+over (base, SGS term) against the separate loops + predictor for the 15
+closures above, both stress forms, 1–5 slabs forward and reversed,
+serial and threaded, Euler and the RK3 combination, dry and moist,
+periodic, walls and stretched (within ROUNDOFF_RTOL; measured
+bit-identical); `step!`/`step_rk3!` with `loop_fusion = "always"` against
+`"never"` for every closure; a closure without a sweep form reported and
+refused by `"always"`; the stress form on a stretched grid keeps the
+operator's error; footprint, inference, allocation; a guard that every
+closure type of Aeolus with its own `add_sgs_momentum!`, `add_sgs_scalar!` or
+`sgs_tracer_diffusivity!` method has the matching sweep generic; and, at
+run time, closures defined in the test (own θ flux, own momentum, own
+tracer diffusivity, the θ one inside `SolidMaskedSGS`) stay out of the
+sweep, are reported by type and agree with `"never"`, one with the
+matching face form fuses, a sweep method defined later is picked up, and
+the Reynolds stress has no sweep form on a stretched grid.
+`test/fused_sweep.jl`: `builtin.sgs` removed from its expectations.
+
+**Bugs the tests caught** (code wrong): the first `SGSTerm` boxed its
+parts per substage (1.5 kB per `step_rk3!`): the momentum part inferred
+as `Symbol` on the stress check's path, and qv's part depended on the
+run's moisture; fixed (see above). **Expectations that proved wrong**:
+the stress form on a stretched grid was in the first agreement matrix
+(the operator refuses it; it is now tested as an error); "the Reynolds
+stress acted" failed on its initial isotropic stress, which has no
+divergence (now three committed steps first, and θ's anomaly compared).
+**Bugs the review caught** (code wrong): nothing checked that the sweep's
+kernels are the closure's own; a closure from outside Aeolus that
+overrides `add_sgs_scalar!` without a face form (like the validation
+fixture `BackgroundGradient`, which adds a background θ flux) would have
+fused with the default diagonal kernel and silently dropped that flux.
+Latent in the repository (that run also passes a plain-function body
+force, which keeps it off the sweep); fixed by
+`sgs_sweep_form_matches` (above). The Reynolds stress's sweep form
+did not refuse a stretched grid (shadowed by its tensor's refusal);
+it now does.
+
+**Measured** (Ryzen AI 9 HX 370, 15 W cap, under the benchmark lock).
+On this branch alone no configured case with SGS fuses: the dry CBL still
+needs the pointwise terms (step 2) and the budgets (step 7), GABLS1 and
+GABLS3 also `LargeScale` (step 3) and `SurfaceLayer` (steps 5, 6). The
+CBL was therefore measured on a scratch merge of this branch with step 2
+(`issue/533-s2-pointwise`; the conflicts in `_sweep_terms` resolved with
+the SGS term between the base and the built-in terms, the order of the
+passes), with its `[checks]` removed so no budget is measured
+(`sweep_report`: every substage fused, no term reported). The fused step
+agrees with `loop_fusion = "never"` after 10 steps (max |Δ| of u, w, θ:
+0). `bench_roofline.jl config … 2 8` with `ROOFLINE_PROF=0
+ROOFLINE_ALTERNATE=1` (each step alternates the two settings in one
+process), min of 8 steps of each, ms per step; the thread counts run in
+the order 1, 2, 6, 12, one process each:
+
+| grid | setting | 1 | 2 | 6 | 12 |
+| :-- | :-- | --: | --: | --: | --: |
+| 32³ (the example) | never | 1.01 | 0.81 | 0.96 | 1.39 |
+| | fused | 0.93 | 0.60 | 0.64 | 0.89 |
+| 128 × 128 × 64 | never | 46.3 | 31.2 | 19.7 | 16.7 |
+| | fused | 38.2 | 22.0 | 13.0 | 10.5 |
+| | speed-up | 1.21 | 1.42 | 1.51 | 1.59 |
+
+The gain is that of steps 2 and 4 together (without either the CBL runs
+unfused). Re-measured after the review fixes (the same scratch merge
+with the fixes added, the order of the two settings swapped every step,
+one process per thread count, load 1.3–2.6), 128 × 128 × 64, ms per step,
+min (median) of 8 steps each:
+
+| threads | 1 | 2 | 6 | 12 | 24 |
+| :-- | --: | --: | --: | --: | --: |
+| never | 50.4 (51.3) | 32.7 (35.2) | 19.3 (20.9) | 16.3 (17.0) | 16.6 (17.3) |
+| fused | 43.3 (43.3) | 23.2 (26.0) | 13.2 (14.4) | 10.6 (11.0) | 11.1 (11.7) |
+| speed-up (median) | 1.19 | 1.35 | 1.45 | 1.55 | 1.48 |
+
+24 threads (SMT) gain nothing over 12 in either setting. These numbers
+stand for steps 2 + 4 without step 7's budgets; with step 7 merged the
+CBL's `[checks]` can stay on, which is not measured here. Full suite on
+this branch: 118 jobs, 10894 assertions, 0 failed; validation
+`gabls1.jl` 8/8, `gabls3.jl` 19/19. **Bytes** (profiled runs, 128 × 128 × 64, one Euler substage per
+step, the compulsory model of `bench_roofline.jl`, the FFT's pencil items
+left out): 547 MB per step (521 B/point) with `"never"`, 218 MB (208
+B/point) fused; time in launches 29.0 → 19.7 ms at 1 thread, 18.5 → 9.5
+ms at 6. GABLS1 and GABLS3 not measured fused (above); they run one loop
+per term as before; their validation runs on this branch pass
+(`validation/run.jl --only gabls1.jl,gabls3.jl`: 8 and 19 checks, 104 s
+and 83 s).
+
+**Plan step 9 (recompute νt in the sweep) would not pay on this
+evidence.** The coefficient pass (`_b_smagorinsky!`, reads u, v, w, writes
+νt) is 33.6 MB = 32 B/point, 15 % of the fused step's compulsory bytes;
+with the sweep's own read of νt, recomputing would remove at most 40
+B/point (19 %). But the pass is not at the bandwidth roof: 5.2 ms at 1
+thread (6.4 GB/s, against a DRAM triad of 43 GB/s) and 1.55 ms at 6 (21.7
+GB/s, against 52.6), so its time is mostly the strain rate's arithmetic,
+which recomputing keeps (and multiplies, unless the strain goes into a
+rolling plane buffer and the term's footprint grows to 2). Its bytes at
+the roof are 0.64 ms + 0.16 ms (the νt read) of the 13.0 ms fused step at
+6 threads, about 6 %, and nothing measurable at 1–2 threads. Worth
+revisiting only if a closure's coefficient pass is found at the roof
+(the dynamic and AMD closures, Berlin at 12–24 threads).
+
+**Step 5: near-wall terms, nest registers and open faces** (branch
+`issue/533-s5-nearwall-open`). What was built:
+
+- **Open lateral faces** no longer keep a substage off the fused sweep
+  (`builtin.open_boundaries` removed from `SWEEP_FALLBACKS`). Nothing
+  had to change in the sweep: the boundary update (the data, the
+  radiating outflow from the stage-start layers `mark_open_boundary_stage!`
+  records, the mass correction) already ran after the sweep and before
+  the projection in `_blocked_projection!`; the sweep updates the same
+  interior points as the separate `axpy!` passes, and the update reads
+  only the velocity and the stage-start layers, so moving θ's update
+  before it changes nothing. Verified: `step!`/`step_rk3!` with
+  `loop_fusion = "always"` against `"never"`, Dirichlet, Orlanski and
+  convective outflow, regular and stretched grids, dry and moist, serial
+  and threaded: bit-identical in every case tried (the test asserts
+  round-off, `agree`).
+- **`SurfaceLayer`**: its first-level heat flux is a sweep term,
+  `Components.SurfaceHeatFluxTerm` (`tθ += wθ[i, j]/Δz` on the first
+  level, `wθ` the step's per-column solve as input; a row kernel that
+  returns at once off the first level). Its implicit wall stress is a
+  post-predictor operator (plan step 6), so its allowlist entry stays
+  with that reason only, and a domain with it is still unfused.
+- **Immersed walls / `Urban.WallModelFacades`**: the removal of the
+  stencil's flux through the walls (`remove_stencil_wall_flux!`) is a
+  sweep term, `WallModels.StencilWallFluxTerm`. The fluxes depend only
+  on the stage-start velocity and `ν_t`, so its `prepare!`
+  (`stencil_wall_fluxes!`, one work item per pair, the force folded as
+  before into `stats[:F_stencil]`) computes them before the sweep; each
+  row subtracts the fluxes of its pairs, grouped by storage row once
+  (`wall_rows`, cached in the component), a face's pairs in pair order:
+  the reference's operations in the same order. The flux expression is
+  one function (`_iw_pair_x`) shared by the separate pass and the sweep.
+  The facade stress itself is post-predictor (step 6): the entry stays
+  with that reason.
+- **IBM penalty** (`IBM.IBMPenaltyTerm`): the row body of the penalty
+  launch, `_ibm_row_body!`, writes exactly the faces of its storage row,
+  so the sweep runs it unchanged on its tendency buffer (`_RowOut`, a
+  view that maps `out[I, J, K]` to the row buffer); `τ = penalty_time ×
+  Δt` is set in `prepare!` through a slot the component keeps.
+  `SimulationCouplings` uses it when the obstacles are its only in-core
+  part; with a slab its floor flux (plan step 2's surface-flux term)
+  keeps it unfused, and its entry names only that.
+- **Nest flux registers**: the register hooks (`Nesting._RegisterHook`,
+  `_HookChain`) and `Urban.NestingCoupling`'s `:body_force` book the
+  stage's interface fluxes from the stage-start state and add no
+  tendency, so the hooks' term (`Nesting.RegisterBookingTerm`) does the
+  booking in `prepare!` and nothing in the rows. A two-way nest (16³
+  parent, 16³ child, no SGS) runs fused in both domains, agrees with the
+  unfused nest, and conserves the composite ∫θ to 4.2e-15 (relative,
+  4 steps), the same as unfused. `Urban.NestingCoupling` keeps its
+  allowlist entry: every urban domain also carries `Urban.UrbanSite`'s
+  `:tendencies` stage, which is still unfused, so a term for the coupling
+  could not run in any configuration nor be tested. A first version
+  removed the entry with an untested `Urban.NestFluxBookingTerm`; the
+  review caught it and the term was withdrawn until `UrbanSite` has its
+  sweep term.
+- **Regular grids only**, as the whole-field references: `SolidMask`
+  (the mask of the IBM penalty and of the immersed walls) exists on a
+  `RegularGrid` only, and the walls' spacings and the surface layer's
+  first-level flux divide by the uniform `mesh.dz`. On a z-stretched mesh
+  the surface-layer term and its stage both throw before any stepping;
+  a test asserts the refusal.
+
+**Tests**: `test/fused_sweep_nearwall.jl` (634 assertions): each term
+and all three composed through `blocked_predictor!` against base
+tendencies + the term's whole-field pass + predictor at 1-5 slabs (also
+in reverse slab order), serial and threaded, dry and moist, Euler and the
+RK3 stage combination; `step!`/`step_rk3!` of a domain with the surface
+layer's tendency part, a wall-flux component and `SimulationCouplings`
+with obstacles, fused = unfused; the facade wall model's adapter on the
+synthetic city (`small_city.toml`) against its stage; the refusal on a
+stretched mesh; `@inferred` term construction; allocation (below). All
+comparisons at ROUNDOFF_RTOL (1e-10); all measured bit-identical. Also
+run with `-t 4` (real slabs): green. The completeness guard in
+`test/fused_sweep.jl` now also captures `update_open_boundaries!` and
+checks that it sits after the predictor/sweep and before the projection
+(the review found that its map entry had never been matched).
+
+**Allocation**: `prepare!` allocates 32 bytes (the store of
+`stats[:F_stencil]`). On a 20 × 12 × 16 grid with one thread the
+composed sweep allocates nothing more (the test bound is 1024 bytes).
+With `-t 4` on 64 × 64 × 32 (review measurement) `blocked_predictor!`
+with base + surface flux + wall flux + IBM penalty allocated 3456 B
+(1 slab) and 11504 B (4 slabs), against 1216 B and 7024 B for the base
+terms alone: the task closures of the threaded launch, a constant per
+call, not per point or per wall.
+
+**Bug the tests caught** (the code was wrong): the completeness guard
+looks up `sweep_term(::C, ::Any)`; the first urban methods were typed
+`d::Domain`, so the guard did not see `NestingCoupling`'s term. They now
+take an untyped domain, as the step-1 methods do.
+
+**Measured**: `step_rk3!` at 128 × 128 × 64, `loop_fusion = "never"`
+(what these cases ran before this step) and `"always"` built in the same
+process and interleaved, 5 rounds of 6 steps each after 2 warm-up steps,
+one process per thread count under the benchmark lock (short runs, not
+the sustained-power protocol of #535; 1-minute load at start 2.6–5.7
+from other agents' unlocked jobs), s/step, minimum (median):
+
+| case | threads | one loop per term | fused |
+| :-- | --: | --: | --: |
+| open box, `FunctionBoundaryData`, Orlanski outflow | 1 | 0.171 (0.179) | 0.167 (0.168) |
+| | 12 | 0.213 (0.224) | 0.197 (0.215) |
+| open box, `ProfileBoundaryData`, Orlanski outflow | 1 | 0.226 (0.234) | 0.234 (0.247) |
+| | 12 | 0.166 (0.167) | 0.160 (0.161) |
+| surface layer, tendency part only (test wrapper) | 1 | 0.166 (0.173) | 0.159 (0.164) |
+| | 12 | 0.156 (0.159) | 0.146 (0.148) |
+| surface layer, the full component (unfused: its wall stress) | 12 | 0.150 (0.159) | — |
+
+The last row is the full `SurfaceLayer` component, unfused (its wall
+stress keeps it off the sweep), so it belongs in neither column as a
+fused number (an earlier draft put it in the fused column); it is the
+fair baseline for the surface-layer case. The test wrapper that runs
+only the tendency part unfused was systematically 3–7 % *slower* than
+the full unfused component, which does strictly more work, in all four
+12-thread runs (implementer, review, two re-runs during the review
+fixes; s/step min, wrapper unfused / full unfused / fused tendency
+part): 0.156 / 0.150 / 0.146, 0.138 / 0.134 / 0.127, 0.162 / 0.151 /
+0.145, 0.142 / 0.138 / 0.129. So about half of the apparent gain is the
+wrapper. Against the full unfused component the fused tendency part is
+3–7 % faster at 12 threads; at 1 thread it ranges from 2 % slower to 4 %
+faster (full unfused / fused: 0.156 / 0.153, 0.195 / 0.198, 0.146 /
+0.140), within the noise.
+
+For the open box with `FunctionBoundaryData` the fused step was 1–13 %
+faster at 12 threads in the three runs that timed both, and equal within
+noise at 1 thread. The 1- and 12-thread numbers do not reproduce between
+runs, so no scaling statement is made from them: with
+`FunctionBoundaryData` the whole step measured 0.171 (1 thread) vs 0.213
+(12 threads) in the implementer's run, 0.169 vs 0.284 in the review's
+run (1-minute load about 20 during the 12-thread part), 0.210 vs 0.195
+and 0.178 vs 0.171 in the two re-runs (load 2–4), all `"never"`.
+`update_open_boundaries!` alone, with `FunctionBoundaryData`, measured
+0.0137–0.0193 s per call at 1 thread and 0.0152–0.0352 s at 12 threads
+(three calls per RK3 step); in the re-runs at load 2–4 it did not get
+faster with threads (0.0142 vs 0.0152 s). The surface layer's per-column
+MOST solve (stage 3) is a serial loop. Neither is one of this issue's
+terms; both are listed as open problems. The full `SurfaceLayer`
+component stays unfused until plan step 6 (its wall stress), so a
+GABLS-type case gains nothing from this step alone.
+
+**Not done here**: `Urban.UrbanSite`'s `:tendencies` (the captures of
+the top and open-face heat, a reduction, and the open faces' θ relaxation,
+a `ReferenceDamping` term that steps 2 and 3 build) keeps its entry; the
+slab's floor flux of `SimulationCouplings` waits for step 2's surface-flux
+term; the post-predictor parts of `SurfaceLayer` and `WallModelFacades`
+are step 6. So no configured near-wall case (GABLS1, the urban site) is
+fused yet by this step alone; the open box and a nest without SGS are.
+Bytes per point against `bench_roofline.jl`, 2/6/24 threads and the
+sustained-power protocol were not measured. Full suite green on the final
+branch (118 jobs, 5886 assertions). Validation: `urban_checks.jl` 33/33
+and `gabls1.jl` 8/8 (the urban site is not fused by this step; its run is
+unchanged).
+
+**Step 6: post-predictor operators inside the sweep** (branch
+`issue/533-s6-post-predictor`, from `issue/533-sweep-interface`, with
+#538 / PR #543 merged in so the tiled surface's drag is built on its
+order-independent Jacobi form). What was built:
+- **The interface** (`src/operators/fused_sweep.jl`): `PostTerm`, built by
+  `post_sweep_term(x, ctx, Δt)` (`nothing` = not expressible), with
+  `footprint`, `prepare!`, `finish!` and the row kernel
+  `post_row!(t, Val(1|2), J, K, I1, I2, st)`: phase 1 computes the
+  factors of a row from values no face of the operator has changed yet,
+  phase 2 applies them (Jacobi, as the whole-field operators).
+  `AfterSweep(f)` is an operator that needs the whole predicted field:
+  `f()` runs after the sweep, and so does every operator after it.
+- **The driver**: a new `blocked_predictor!(bufs, terms, post, halo!, …)`
+  method (the old signature calls it with no post terms). A footprint-0
+  term runs on a row right after its predictor; a term of y-radius `r`
+  computes factors `r` rows and applies them `2r` rows behind its input
+  (`post_plan`: per term the factor and apply widths in x, y, z and the
+  two delays, growing by each term's radius). Points whose stencil
+  reaches a halo, a slab's edge planes or a point an earlier term
+  deferred run after the sweep in the same two phases, with the velocity
+  halos filled (`_post_deferred!`). The slab loop is one loop over
+  `t in j1 : j2 + lag + post_delay`.
+- **The model's operators** as post terms, each against its existing
+  whole-field method: `KinematicFlowTerm` (radius 0), `IBMCorrectionTerm`
+  (radius 0; a face scaled once per adjacent solid cell, the boundary
+  faces in `finish!`), `CanopyDragTerm` (`PlantCanopy`, footprint 1),
+  `ImmersedWallTerm` (facades, footprint 1), `WallStressTerm` (bottom
+  wall, local formulation; wrapped by `SurfaceLayerPostTerm` and by the
+  urban ground's `GroundStressTerm`) and `TiledDragTerm` (#538's
+  kernels). The sparse face lists get row pointers (`row_index`,
+  compressed sparse rows) and a row's x-range is found by bisection
+  (`row_entries(ptr, r, x, I1, I2)`). The ground stress runs as an
+  `AfterSweep` for TBLE, non-local formulations or an unprimed matching
+  filter; the facades when their pairs are not sorted.
+- **Removed from `SWEEP_FALLBACKS`**: `Components.KinematicFlow`,
+  `Urban.VegDrag`, `Urban.IBMCoupling`, `Urban.SurfaceExchangeMOST`,
+  `Urban.TiledUrbanSurface`. `builtin.post_predictor` now names only a
+  `post_predictor!` passed to the core as a plain function; the
+  `SurfaceLayer` and `WallModelFacades` entries keep only their
+  tendency parts (plan step 5). The completeness guard
+  (`test/fused_sweep.jl`) checks per stage.
+
+**Measured** (`benchmarks/bench_post_sweep.jl 128 64 15`: 128² × 64
+cells, 16 buildings, 26 368 facade pairs, 150 528 canopy faces; one
+Euler substage of advection + diffusion + predictor + the IBM correction,
+facade and ground wall stress and canopy drag; ms per substage, median
+of 15 calls interleaved call by call between the four forms within one
+process, each process about a minute, under the benchmark lock; Ryzen AI
+9 HX 370 at the 15 W cap):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 11.42 | 9.49 | 7.98 | 7.03 |
+| sweep, all four after it | 10.09 | 7.12 | 6.15 | 5.32 |
+| sweep, all four on its rows | 13.99 | 11.34 | 9.59 | 8.56 |
+| sweep, what a domain runs | 10.15 | 7.31 | 6.39 | 5.36 |
+
+The row forms of the operators with a stencil are slower than their
+whole-field passes: per operator (1 / 12 threads, increase over the
+sweep alone against the whole-field pass) canopy drag 4.4 / 2.9 ms
+against 2.1 / 1.3 ms, facades 2.6 / 2.0 against 1.5 / 1.4, ground stress
+1.2 / 0.8 against 0.7 / 0.6 (ratio 1.3–2.2× at 12 threads). These
+per-operator numbers come from scratch runs (the committed benchmark
+times only the four forms of the table), as does the bisection figure
+below. The whole-field passes walk a sparse face
+list in one launch; on the rows the same faces are found per row, and at
+many slabs most of them fall in the deferred bands (12 slabs of 5–6
+planes). The pointwise IBM correction on the rows costs what its pass
+costs (0.5 against 0.7 ms at 1 thread, 0.3 against 0.4 at 12, in single-
+operator runs). Hence the last row: a domain keeps footprint-0 terms on
+the rows and runs a component whose term has a stencil through its own
+`run_stage!` after the sweep (`Components._in_rows_or_after`, and
+`Components.post_after_sweep` for the components known to have a stencil,
+so their row form is not built). Against one loop per term, the domain's
+mix is 11 % (1 thread) to 24 % (12 threads) faster **per substage of
+tendencies + predictor + post-predictor operators, without the pressure
+projection, in this synthetic setup with the urban operators** — which in
+a real run stay unfused while the urban site books budgets (deviation 2).
+The gain per step is smaller (the projection is not in it), and no
+configured case was measured: the configurations this step does make
+fusable today are domains with `KinematicFlow` (on the rows) or
+`TiledUrbanSurface` (after the sweep), and `SurfaceLayer` once plan
+step 5 lands. The first
+row-form version (bisection per row, the whole row scanned for each
+x-range) was slower still; the row pointers and the bisection of the
+x-range took the 12-thread canopy increase from 4.0 to 2.9 ms. No
+allocation: `blocked_predictor!` with six post terms allocates 0 bytes
+serial and at most 64 kB threaded (the tasks).
+**Not measured**: bytes per step, 24 threads, the configured cases (the
+urban site stays unfused, below).
+
+**Tests** (`test/fused_sweep_post.jl`, 1538 assertions): the driver
+with synthetic radius-0 and radius-1 Jacobi terms, chained and with an
+`AfterSweep`, against predictor + whole-field passes at 1–5 slabs, the
+slabs also in reverse order, serial and threaded, regular and stretched
+grids, dry and moist, Euler and RK3 stages (round-off tolerance); each
+model operator in the sweep against its whole-field method, diagnostics
+included (`iw.stats`, the ground's `u_star`, the canopy force, the
+surface layer's stress sums); domains with `KinematicFlow` and tiles,
+`loop_fusion = "always"` against `"never"` over 3 steps; the small-city
+urban site's post-predictor hook against the sweep with its couplings
+(row forms and the domain's mix, 1 and 3 slabs); the row pointers and
+bisection against a filter; type stability and allocation. Mutation
+checks: a delay of `r` rows instead of `2r`, dropping the IBM neighbour
+cell and dropping the ground stress's west-column contribution each
+fail. Targeted runs: `fused_sweep.jl`, `fused_sweep_post.jl`,
+`urban_run.jl`, `urban_checks.jl`, `components_parent.jl`,
+`plant_canopy.jl`, `wall_models.jl`, `components_both_cores.jl`,
+`cutcell.jl`, `naming_conventions.jl` pass. After the review fixes:
+full suite 118 / 118 files, 6814 assertions, 0 failures
+(`fused_sweep_post.jl` 1545); validation `urban_checks.jl` 33 / 33,
+`gabls1.jl` 8 / 8.
+
+**Test expectation that proved wrong**: the first surface-layer
+comparison called the reference and the sweep twice without refilling
+the halos between, so the second call compared against stale halos; a
+substage refills them (step 1), and the test now does. The code was
+right.
+
+**Bugs the review caught** (each with a test in `fused_sweep_post.jl`):
+(1) the domain built every post-predictor component's row form each
+substage before deciding to run its `run_stage!` after the sweep; for
+the wall stresses that is three Nx × Ny arrays and the face lists per
+substage (0.19–0.36 ms and about 860 kB at 128² × 64, 1 thread, 2–3.5 %
+of the substage). `Components.post_after_sweep(c)` now decides first;
+the test asserts the hook allocates less than one Nx × Ny plane where
+the row form allocates more. Latent until plan step 5 (the surface layer)
+or step 7 (budgets) lands. (2) With budgets on, both hooks named
+`builtin.budgets`, and the report listed it twice; the blocker list is
+now de-duplicated.
+
+**Deviations**: (1) the operators with a stencil run after the sweep
+in a domain, by the measurement above, not on the delayed rows. Their
+row forms (`CanopyDragTerm`, `ImmersedWallTerm`, `WallStressTerm` /
+`SurfaceLayerPostTerm`, `GroundStressTerm`, `TiledDragTerm`) are tested
+but no configuration runs them; on the rows run only `KinematicFlowTerm`
+and `IBMCorrectionTerm`. Removing `Urban.VegDrag`,
+`Urban.SurfaceExchangeMOST` and `Urban.TiledUrbanSurface` from
+`SWEEP_FALLBACKS` means their substage stays fused with a whole-field
+pass after the sweep, not that they run on the rows. Whether to keep the
+row forms (about 400 lines) is left to review. (2) The urban
+site always books budgets, so its post-predictor hook is not fused
+until plan step 7 (`post_hook_terms` returns `nothing` with budgets);
+its couplings are tested at term level. (3) A term on the rows is not
+timed through `UrbanEntry` (only its `AfterSweep` is). (4) Post terms
+do not read θ or qv: the sweep advances the scalars before them, the
+whole-field order after.
+
+**Step 7: budgets inside the sweep** (branch `issue/533-s7-budgets`, on
+top of step 1). Budgets on no longer force one loop per term
+(`builtin.budgets` left the allowlist). What was built:
+- **Booked terms** (`src/operators/fused_sweep_budgets.jl`):
+  `BookedTerm(term, sums, slot)` wraps the sweep term of an attributed
+  in-core component. It adds exactly what its term adds; per row it sums
+  each booked field of the tendency buffer (u, v, θ, qv: the core
+  tendencies of the momentum, energy and water budgets) over i before and
+  after the term's `add_row!` (air cells only where the budget's meter
+  leaves solid cells out) and adds the difference to
+  `LevelSums.acc[f, slot, k]`. The rows are in L1, so this moves no DRAM
+  bytes. No reduction across threads is needed: every row (j, k) of a
+  slab, edge planes included, is computed by that slab's task, so each
+  level's sum has one writer, and its summation order (i in a row, rows in
+  j order) does not depend on the slab count.
+- **`finish_sweep!(t, sim, Δt)`**, a new optional method of the term
+  interface, called after the sweep and before the projection (default
+  nothing).
+- **The budget term** (`Components.SweepBudget`, components/budgets.jl):
+  with the budgets on, `hook_terms` returns `(SweepBudget, terms…)`, the
+  attributed components' terms wrapped as `BookedTerm`s (an entry with
+  `attributed(c, Val(stage)) = false` stays unwrapped and its effect stays
+  in the dynamics' share, as before). Its `prepare!` counts the substage
+  (the hook's `_count_substage!`, so the RK3 weights and the discard of a
+  retried step work unchanged) and zeroes the sums. Its `finish_sweep!`
+  books `weight × Δt × w_k × acc` per component and quantity through the
+  new `BudgetSystem.book_context!`. That function does what
+  `budget_open!` … `budget_close!` of a nested tendency context does with
+  a change measured elsewhere: it counts as booked for the dynamics'
+  context, and it is deferred while that context is open. It is built
+  once per domain (cached in `DomainBudgets.sweep`); `hook_terms` stays
+  `@inferred` and allocates 0 bytes.
+- **Compatible with #539 (PR #541, not merged)**: the sweep books every
+  quantity whose core tendency it holds. For a quantity a component's
+  `budget_writes` leaves out, the per-level sums are exactly 0 and nothing
+  is booked, the same outcome as #541's skipped nested context. At
+  integration: the extra `verify` field of `DomainBudgets` next to
+  `sweep`, and `book_context!` may set #541's `changed` flag. The sums
+  read the meter's mask through `!iszero` / `Bool`, so they work with
+  both #541's one-byte mask and the `Float64` mask on this base.
+
+**Tests** (`test/fused_sweep_budgets.jl`, 657 assertions):
+- The level sums of a pointwise term (u, v, w, θ, qv, with a heating
+  profile) and of a radius-2 term (3-row ring, 2 edge planes) match the
+  per-level sums of the terms' whole-field contributions, for 1–5 slabs
+  (also in reverse slab order), serial and threaded, regular and
+  stretched grids, dry and moist, θ and qv masked by a random solid mask.
+  Largest relative difference: 8.6e-12 (tolerance 1e-10, round-off of the
+  before/after cancellation, eps × Σ|t|). Booking does not change the
+  state.
+- A domain with budgets on (energy, momentum_x, momentum_y; water when
+  moist) and three in-core components, one of them not attributed, runs
+  fully fused (`loop_fusion = "always"`). Its budgets agree term by term
+  with the same domain on one loop per term (`"never"`, the reference
+  contexts on the whole tendency fields). This holds for Euler and RK3,
+  regular and stretched grids, dry and moist. Largest difference: 2.2e-14
+  of the largest term.
+- The closure stays within the existing 1e-12 of the largest term. The
+  attributed heating equals the analytic ρ₀ c_p Σ_k Q_k Δz_k n_air,k/(Nx
+  Ny) t to 1e-12. The fused run makes exactly 2 passes fewer per
+  attributed component, quantity and substage.
+- A retried adaptive step (a term whose `prepare!` throws on the first
+  attempt) books its fused in-core term once.
+- The sweep with booked terms allocates 0 bytes.
+- In `test/fused_sweep.jl`, the step-1 assertion "budgets on → reported
+  `builtin.budgets`" is gone; it was expected to go in this step.
+- Targeted suites green: fused_sweep, fused_sweep_budgets,
+  budgets_output, components_both_cores, config_simulation_driver,
+  model_nesting, nest_twoway, urban_run, urban_checks (1883 assertions).
+
+**Measured** (`bench_budgets.jl`, a scratch script). The case is
+synthetic: 128³ periodic Boussinesq RK3, centred advection, and one
+`:body_force` component with a sweep term (pointwise damping of u, v, θ).
+Its buoyancy is switched off, because no real component or built-in term
+other than the base has a fused form on this branch (plan steps 2–6).
+Budgets: energy, momentum_x, momentum_y. The variants were interleaved in
+one process, 4 steps × 6 repetitions, minimum s/step, under the
+benchmark lock. Other agents' unlocked jobs kept the 1-minute load at 4–8
+and the power cap (#535) applies, so the absolute 12-thread numbers moved
+by up to 2× between processes; compare only within a row.
+
+| threads, run | fused off | fused on | per-term loops off | per-term loops on |
+| :-- | --: | --: | --: | --: |
+| 12, a | 0.1254 | 0.1261 | 0.1396 | 0.1744 |
+| 12, b | 0.1756 | 0.1715 | 0.1923 | 0.2123 |
+| 1, a | 0.2024 | 0.2268 | 0.2147 | 0.2480 |
+| 1, b | 0.2271 | 0.2336 | 0.2300 | 0.2523 |
+| 12, c | 0.0931 | 0.0971 | 0.1151 | 0.1327 |
+| 1, c | 0.1280 | 0.1331 | 0.1373 | 0.1554 |
+| 12, d | 0.0877 | 0.0917 | 0.1047 | 0.1223 |
+| 1, d | 0.1114 | 0.1186 | 0.1261 | 0.1446 |
+
+Rows c are the review's rerun (3 steps × 5 repetitions), rows d a rerun
+after the review's fix (6 steps × 3 repetitions); both interleaved, under
+the lock, short runs (boost phase, #535). Row "12, b" (budgets on 2 %
+faster than off) is noise.
+
+- Budget passes per step: **9** fused (one per quantity at the step's
+  start, the dynamics' close and the step's end), against **27** on one
+  loop per term (+2 per in-core component, quantity and substage). The
+  modelled bytes of those passes on this base (field + `Float64` mask,
+  16 B/pt per pass) are 144 against 432 B/pt per step, and half that
+  with #541's mask. The booking itself adds no DRAM traffic.
+- Split at 1 thread (profile of 15 fused steps, budgets on): the meter
+  passes take 4.3 % of the step and the row sums of the booked term
+  3.3 %. Micro-benchmark of one 128³ sweep: 15.4 → 16.1–17.7 ms with
+  booking at 1 thread (+4–14 %), 4.0–4.3 → 4.3–4.4 ms at 12 threads
+  (+2–8 %); one meter pass is 0.4–0.7 ms.
+- Result: with loop fusion, budgets on cost from noise level up to 5 %
+  of the step at 12 threads (+0.6, −2.3, +4.3, +4.6 % in runs a–d) and
+  3–12 % at 1 thread. On one loop per term they cost 10–25 %.
+- **Not measured**: Berlin and a configured non-urban case (they do not
+  run fused before plan steps 2–6), 2/6/24 threads, and bytes per step
+  against `bench_roofline.jl`.
+
+**Bug the review caught**: the budget term decided its booked slots by
+`sweep_term` when it was first built, and it is built (and cached) at the
+first substage that asks for the sweep's terms, also an unfused one. A
+component whose sweep term appeared only later was summed in the sweep
+but never booked, its share falling silently into the dynamics' term
+with the closure still round-off. No component behaves like this today
+(every `sweep_term` is static). Now every attributed in-core entry has a
+booked slot; one whose component added nothing sums to 0 and books
+nothing. Regression test: "a sweep term that appears after the budget
+term was built is booked" (it fails, 4 assertions, without the fix).
+
+**Deviations**:
+- The issue's "per-thread, per-level partial sums reduced after the
+  sweep" became per-level sums with one writer each, because the slabs
+  own their levels. The GPU per-point form (plan step 8) will need real
+  per-thread partial sums.
+- A row sums the whole booked row before and after each booked term
+  rather than the per-point difference. This works for row-form terms
+  too, at the price of one cancellation per row, which is no worse than
+  the reference's per-level cancellation.
+- Possible later saving: adjacent booked terms could reuse the previous
+  term's "after" sums as their "before" sums, halving the row sums.
+
+**Step 8: the other step cores and the GPU form** (branch
+`issue/533-s8-other-cores`, on top of step 1). What was built:
+- **The sound-proof cores** (`src/anelastic/fused_sweep.jl`):
+  `step_anelastic!`, `step_pseudo_incompressible!` and their `step_rk3!`
+  run steps 2-7 and 11 of `_mass_weighted_step!` in the fused sweep. The
+  base term is `Anelastic.WeightedBaseTendencies` (the `W`-weighted
+  flux-form advection + `ν∇²`), the buoyancy `g(θ − θ̄)/θ̄` is
+  `Anelastic.AnelasticBuoyancy` (footprint `(0, 0, 1)`), components come
+  through the body-force hook as in the Boussinesq core. The point
+  functions of `weighted_momentum_advect!`, `weighted_scalar_advect!` and
+  `add_anelastic_buoyancy!` were split out of their kernel bodies
+  (`_wmom_u` …, `_anelastic_buoyancy`), so the passes and the sweep share
+  one expression each. Coriolis, surface flux, sponge and SGS of these
+  cores are reported with their own keys (`builtin.anelastic_*`): the
+  step-2/4 terms are built for the Boussinesq core and still have to be
+  wired in here.
+- **The explicit part of `step_imex!`**: one fused tendency launch
+  (`FiniteVolume.term_tendencies!`, the ring sweep's row kernels writing
+  `sim.tu … tqv`) when every term of `_explicit_tendencies!` is a sweep
+  term; the term tuple is the Boussinesq core's (`_sweep_terms` with no
+  closure, no post-predictor and no diffusion). No predictor in the
+  launch: the stage combinations and the implicit solves read the
+  tendencies, so this is loop fusion of the terms only. The explicit SGS
+  halves (`sgs_stress = :symmetric`, a scalar diffusivity tensor) are
+  reported (`builtin.imex_sgs`); with the Laplacian SGS (implicit) the
+  explicit part is fused.
+- **The GPU form**: `Backends.launch_points!` (one KA work item per point
+  on any KA backend; all KA kernels stay in `Backends.jl`) and
+  `FiniteVolume.pointwise_predictor!`: kernel 1 evaluates the composed
+  term tuple per point (`init_point!` of the base term, then every
+  `add_tendency!`) into the tendency fields (`FiniteVolume.TendencyFields`,
+  the fields seen as the sweep's five-index buffer), kernel 2 the
+  predictor. `Simulations.fused_predictor!` picks the ring sweep on a
+  CPU backend and the per-point form otherwise; the per-point form also
+  runs on `KernelAbstractions.CPU()` when `sim.workspaces.fused.per_point`
+  is set, the stand-in the tests use (no GPU here).
+- **Interface**: `BaseTerm <: SweepTerm` for the row-initialising terms
+  (`init_row!`, `init_point!`; `blocked_predictor!` takes
+  `Tuple{BaseTerm, Vararg{SweepTerm}}`); `add_tendency!` is now required
+  of every term (the per-point form calls it; `add_row!` stays an
+  optional CPU row form). `builtin.backend` and `builtin.core` left
+  `SWEEP_FALLBACKS`; `set_loop_fusion!` accepts `"always"` on every core.
+
+**Tests** (`test/fused_sweep_cores.jl`, 486 assertions): the per-point
+form against the ring sweep (1-5 slabs, serial and threaded, regular
+and stretched, dry and moist, Euler and the RK3 combination, with a
+pointwise and a radius-2 test term); `step!`/`step_rk3!` in the per-point
+form against the ring sweep; IMEX ARK2 and Rosenbrock2 fused against
+`"never"` (dry, moist, three backends, per point), with a component's term
+through the hook; the sound-proof base term and buoyancy in the sweep
+against their whole-field passes at 1-5 slabs and in the per-point form;
+the three sound-proof drivers fused against `"never"` (ν on/off, buoyancy
+on/off, three backends, per point, and through an anelastic `Domain`),
+`(1/W)∇·(Wu)` < 1e-12 after the Euler steps (measured ~1e-17 s⁻¹);
+every blocker reported and refused under `"always"`; allocation (every
+step core, fused or unfused under `"if_possible"`, allocates no more than
+under `"never"`; on the serial backend, or on the test grid where the
+launches stay below the threading threshold, that is 0 B per `step!` and
+`step_anelastic!`, 704 B per anelastic `step_rk3!`, 0 B per
+`term_tendencies!`; threaded, each launch allocates its task closures,
+fewer fused: anelastic 128 × 128 × 64 at 6 threads, 77 kB fused against
+133 kB per `step_anelastic!`, 233 kB against 400 kB per `step_rk3!`); and
+two guards: every `SweepTerm` in Aeolus has the point kernel the
+per-point form needs, and every built-in term of `_mass_weighted_step!`
+and of `_explicit_tendencies!` is in the sweep or documented. All
+agreements are within ROUNDOFF_RTOL and measured bit-identical (the same
+expressions in the same order).
+
+**A test expectation that was wrong**: the first version asserted
+`∇·(ρ̄u) < 1e-9` after every sound-proof driver. It failed for `step_rk3!`
+(its combination with the seeded, unprojected `uⁿ` is not constrained;
+the unfused reference gives the same 1.8e-3) and for the
+pseudo-incompressible core (whose constraint is on `ρ̄θ̄u`, not `ρ̄u`). The
+code was right; the check is now the core's own constraint after the
+Euler steps.
+
+**Measured**: anelastic `step_rk3!`, 128 × 128 × 64, ν = 1, buoyancy on,
+`AEOLUS_FFTW_PLANNER=estimate`; `"never"` (the code path of the base
+branch for this configuration) and fused interleaved in one process (4
+rounds of 3 steps each, minimum), two processes per thread count under the
+benchmark lock, each process < 40 s (short-run protocol of #535, so the
+boost phase is not separated); 1-minute load 2-12 from other agents'
+unlocked jobs. s/step (Ryzen AI 9 HX 370):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 0.132 / 0.134 | 0.144 / 0.115 | 0.111 / 0.102 | 0.267 / 0.119 |
+| fused | 0.107 / 0.103 | 0.116 / 0.089 | 0.085 / 0.080 | 0.185 / 0.091 |
+| speed-up | 1.23 / 1.30 | 1.23 / 1.30 | 1.30 / 1.28 | 1.45 / 1.31 |
+
+The first 12-thread process ran under load 8.7 (both variants slow, the
+ratio is still within one process). Compulsory traffic of the part that
+moved into the sweep (model, counted as `bench_roofline.jl` counts: each
+array once per launch): one loop per term streams 47 arrays per point per
+substage (zeroing 4 tendencies, 3 momentum launches of 4 arrays, the θ
+advection 5, 4 Laplacians + 4 axpys 16, the buoyancy 2, 4 predictors 8),
+the sweep 4 (u, v, w, θ read and written, tendencies in cache): 376 →
+32 B/point per substage. The projection (FFT/tridiagonal solve,
+divergence, correction) is unchanged and is the rest of the step.
+**Not measured**: the hardware-counter bytes and the effective GB/s against
+the STREAM triad, 24 threads, IMEX timings (a RegularGrid-only scheme no
+configured case uses), and the per-point form on a real GPU (none here;
+on the CPU it is a correctness stand-in, slower than the ring sweep by
+design).
+
+**Deviations**: the GPU form writes the tendencies to the tendency fields
+and runs the predictor as a second kernel (SC-d's form): the predictor
+cannot share the first kernel without a ring buffer, since a neighbour's
+stencil still reads the point. The IMEX explicit part is fused without
+its stage combination (the combination reads the tendencies of earlier
+stages and feeds an implicit solve per field).
+
+**Bugs the review caught** (code wrong, now tested in "no allocation
+added by the fused or the unfused report, any step core"): the unfused
+report built its blocker closure on every unfused substage, and Julia
+boxed it (+16 B per `step!`, +32 B per `step_rk3!` with a term without a
+fused form; the base allocated 0 B there); the blockers are now built
+from the passed-through arguments inside the `@noinline` reporter. The
+fused IMEX launch passed a `Union`-typed `qv` and backend on, which were
+boxed (+176 B per stage, +352 B per ARK2 step over `"never"`); concrete
+arguments through a function barrier. Both measured equal to `"never"`
+after the fix.
+
+**Steps 3, 6, 7 and 8 integrated** (branch `issue/533-integration`, on
+top of step 1; steps 2, 5 and 4 followed, see "Steps 2, 5 and 4 added" below). Merge
+order, interface-changing steps first: step 8 (#548: `BaseTerm`,
+`add_tendency!` required of every term), step 6 (#549: post terms), step 7
+(#546: `finish_sweep!`, the budget term in the hook's tuple), step 3
+(#547). Textual conflicts (allowlist, imports, API page, `runtests.jl`,
+these sub-sections) were resolved as unions; `SWEEP_FALLBACKS` holds the
+union of the removals. Conflicts between the steps' intent, each found by
+a test and fixed here:
+- **Per-point form × post terms** (6 × 8): `fused_predictor!` gains the post
+  terms; the per-point form runs them after its predictor on every point
+  (new `pointwise_predictor!` method, the schedule `post_plan` gives a point
+  outside the sweep's widths). Tested against predictor + whole-field
+  passes and a `KinematicFlow`/tiles domain against `"never"`.
+- **Sound-proof cores × post terms** (6 × 8): those cores have no post terms;
+  with step 6 the pipeline's post hook names no blocker, so a new key
+  `builtin.anelastic_post_predictor` says why such a substage is unfused.
+- **Post hook × budgets** (6 × 7): step 6 refused a post hook with budgets
+  and named `builtin.budgets`, which step 7 removed. An attributed
+  post-predictor component now runs in its budget context as an
+  `AfterSweep`, so the substage stays fused (bookings against `"never"`
+  within 1e-10 of the largest term). The urban site, which always books
+  budgets, is therefore no longer kept out by its post hook.
+- **Point kernels** (3, 7 × 8): step 8's guard requires `add_tendency!` of
+  every `SweepTerm`; `LargeScaleTerm`, `UrbanSiteTerm` (new
+  `LargeScaleForcing.add_column_point!`, the same expression per point),
+  `BookedTerm` and `SweepBudget` get one. The per-point form has no
+  per-level sums (a level is shared by many work items), so a tuple that
+  `books` stays unfused there (`builtin.budgets_per_point`).
+- **Budgets in the other cores** (7 × 8): the sound-proof cores and the
+  fused IMEX launch never called `finish_sweep!`, so their fused in-core
+  bookings were dropped, and `_build_sweep_budget` read `sim.has_moisture`,
+  which the sound-proof cores lack (FieldError). Fixed; an anelastic domain
+  with budgets, fused against `"never"`, is tested.
+
+**Tests**: full suite 121 / 121 files, 8933 assertions, 0 failures
+(`fused_sweep_post.jl` 1614, `fused_sweep_cores.jl` 549,
+`fused_sweep_reductions.jl` 823, `fused_sweep_budgets.jl` 677,
+`fused_sweep.jl` 788); validation `urban_checks.jl` 33 / 33, `gabls1.jl`
+8 / 8. Two step-6 test expectations changed because step 7 landed (not
+weakened: the post hook with budgets was expected unfused "until step 7";
+it is now asserted fused, with its bookings compared to `"never"`).
+
+**Still not fusable** (`SWEEP_FALLBACKS`): buoyancy, Coriolis, surface
+flux, sponge, fringe, the urban geostrophic coupling and moist buoyancy,
+the slab's floor flux (step 2); the SGS closure (step 4); open lateral
+faces, the surface layer's heat flux, the facade flux removal, the IBM
+penalty, the nest registers (step 5); and by design a `body_force!` /
+`post_predictor!` passed as a plain function, another momentum
+advection, a `LargeScale` damping toward a 3-D target, `step_imex!`'s
+explicit SGS halves, the sound-proof cores' Coriolis / surface flux /
+sponge / SGS / post terms, budgets in the per-point form.
+
+**Measured** (Ryzen AI 9 HX 370, `fftw.planner = "estimate"`, each
+thread count one process under the benchmark lock, `"if_possible"` and
+`"never"` alternated in 4 turns of 5 steps after 3 warm-up steps, median
+s/step; package power logged: 1 t 17 W, 2 t 21 W, 6-24 t 28-29 W, all
+in the boost phase at Tctl 98-101 °C, none in the 15 W capped phase).
+Berlin 100 m (`berlin_100m_20250824.toml`, a copy with absolute driver
+paths): `loop_fusion = "always"` refuses, naming
+`builtin.open_boundaries`, `builtin.sgs`, `builtin.buoyancy`,
+`Components.Coriolis` (steps 5, 4, 2): every urban component (tiles,
+budgets, large-scale forcing, the site) has its fused form now, the
+remaining blockers are the three unmerged steps. So no substage fuses and
+both settings run the same code:
+
+| threads | 1 | 2 | 6 | 12 | 24 |
+| :-- | --: | --: | --: | --: | --: |
+| `"if_possible"` | 0.464 | 0.314 | 0.232 | 0.242 | 0.254 |
+| `"never"` | 0.465 | 0.313 | 0.229 | 0.236 | 0.253 |
+
+(differences 0-3 %, within the turn-to-turn spread; one turn per process
+contains the 30-step tile update and is ~2× slower, hence medians). #531
+measured 397 / 280 / 268 ms at 2 / 6 / 12 threads on master d6a140c6 in
+the same phase; the difference is in the base this branch starts from
+(both settings here run the same code), not measured further. Bytes (`bench_roofline.jl`'s compulsory model, run on this config
+at 6 threads, 9 steps): 8.71 GB/step = 3629 B/point (#531: ~3400 model,
+3630 counted); budget sums 1.92 GB (22 %), the TKE closure's N² and
+coefficients 0.61 GB (7 %). Dry CBL example (32³): 1.2 / 1.1 ms at 1
+thread, 1.3 / 1.4 ms at 6 (`"if_possible"` / `"never"`; blockers SGS,
+buoyancy, sponge, surface θ flux); GABLS1 (64³, dt 0.5 s fixed): 61.5 /
+60.4 ms at 1 thread, 38.5 / 38.5 ms at 6 (blockers SGS, buoyancy,
+`SurfaceLayer` heat flux, Coriolis, sponge). Neither fuses, so no fused
+gain is measurable on a configured case until steps 2, 4 and 5 land.
+
+**Plan step 9** (recompute νt inside the sweep): from the bytes above, the
+νt chain is `_n2_body!` (θ, qv → N², 24 B/point) and `_coefficients_body!`
+(e, N², l_wall → νt, κt, 40 B/point), 4 calls per step, 0.61 GB/step; a
+step-4 sweep reads νt, κt as inputs (16 B/point per substage). Recomputing
+them inside the sweep would replace this with the e and l_wall reads,
+saving at most ~190 B/point per step (~5 % of 3629), ~15 ms/step at the
+triad, while recomputing `c_k l √e` and the stability length 4-6 times per
+point for the face averages of the eddy stencils. Not worth it now: the
+budget sums (22 %, #539) and steps 2, 4, 5 (which make Berlin fusable at
+all) come first; revisit after step 4 is measured.
+
+**Steps 2, 5 and 4 added** (2026-11-10, for the HPC benchmark #566;
+merge commits 11b4c255, ab30c1d0, b42068dd, in that order). Textual
+conflicts as unions; `SWEEP_FALLBACKS` takes every step's removals
+(`builtin.sgs`, `builtin.open_boundaries`, Coriolis, the surface θ flux,
+sponge, fringe, moist buoyancy, `SurfaceLayer`, `WallModelFacades`,
+`SimulationCouplings` gone). The plan of a Boussinesq substage is
+(base, SGS, built-in pointwise terms, hook terms), the order of the
+separate passes. Conflicts between the steps' intent, each with a test:
+- **Component terms × budgets** (2 × 7): a component's term is
+  `OptionalTerm(on, BookedTerm(term))`; `OptionalTerm` forwards
+  `finish_sweep!` and `books` (by type, so the per-point refusal does not
+  depend on a run-time switch). `fused_sweep_budgets.jl`.
+- **Point kernels** (2, 4, 5 × 8): step 2's built-in `OptionalTerm`s are in
+  every Boussinesq plan, so a fallback for terms without `add_tendency!`
+  would have unfused every per-point substage. Point kernels instead, each
+  the row form's arithmetic at one point: `SurfaceFluxTerm`, `DampingTerm`,
+  `OptionalTerm`, `FringeSweep`, `SpongeSweep`, `GeostrophicSweep`,
+  `MoistBuoyancySweep` (step 2); `IBMPenaltyTerm`, `StencilWallFluxTerm`,
+  `RegisterBookingTerm` (step 5); `SGSTerm` with the parts' point forms
+  `add_part_point!` / `add_scalar_point!` (step 4). Tested in the per-point
+  form against `"never"` (`fused_sweep_pointwise.jl`,
+  `fused_sweep_nearwall.jl`, `fused_sweep_sgs.jl` with `step_rk3!` for
+  every closure).
+- **IMEX** (2 × 8): `step_imex!`'s explicit part fuses buoyancy, Coriolis,
+  the surface flux and the sponge (`fused_sweep_cores.jl`, against `"never"`).
+- **Open faces in the sound-proof cores** (5 × 8): step 5 verified the
+  open-face update after the sweep for the Boussinesq core only; new key
+  `builtin.anelastic_open_boundaries`.
+- **`SimulationCouplings`** (2 × 5): step 2 made the obstacles a type
+  parameter, step 5 added the IBM penalty term but none for the slab's
+  floor flux, and with step 2's single term the penalty would have been
+  booked at `:tendencies`. New generic `Components.stage_sweep_term(c, d,
+  Val(S))`: the floor flux at `:tendencies`, the penalty at `:body_force`,
+  each in its stage's place and budget context; the type parameter is the
+  obstacles' type (with a `Bool` the penalty term's type was not inferred).
+  `fused_sweep_nearwall.jl` (slab with obstacles, Euler and RK3, against
+  `"never"`; a fresh `SlabLand` per run, a shared one is mutable state).
+- **Urban site term** (3 × 4): step 3's `UrbanSiteTerm{S,Nothing} where {S}`
+  and `UrbanSiteTerm` methods of `add_row!` / `add_tendency!` were
+  ambiguous for a periodic site; until step 4 the site never fused, so no
+  run called them, and with step 4 every urban step threw and failed after
+  its retries. Fixed (`S<:UrbanSite`); the urban tests in
+  `fused_sweep_reductions.jl` and `fused_sweep_post.jl` caught it, and no
+  ambiguity is left among the sweep interface's functions.
+- **Order of `prepare!`** (4 × 3, 5): the facade wall flux and the site's
+  top-flux capture read the substage's νt in `prepare!`, which the SGS
+  term's `prepare!` writes; the SGS term comes before the hook terms.
+
+Test expectations made outdated by the combination (not weakened): the
+examples of unfused terms (SGS, buoyancy, Coriolis, the surface layer,
+couplings with obstacles) are fused now, so the tests check them fused
+against `"never"`, and the unfused examples are a `body_force!` /
+`post_predictor!` function or the anelastic core's SGS; the dry CBL
+example fuses every substage (`"all"`), its unfused run and the
+`"always"` refusal use the anelastic core.
+
+**Tests**: full suite 124 / 124 files, 16313 assertions, 0 failures (`fused_sweep_sgs.jl` 5832, `fused_sweep_post.jl` 1614, `fused_sweep_pointwise.jl` 893, `fused_sweep_reductions.jl` 823, `fused_sweep.jl` 753, `fused_sweep_budgets.jl` 679, `fused_sweep_nearwall.jl` 654, `fused_sweep_cores.jl` 581; `urban_run.jl` 42, `urban_checks.jl` 20). Validation: `gabls1.jl` 8 / 8, `gabls3.jl` 19 / 19, `urban_checks.jl` 33 / 33.
+
+**Berlin 100 m** (`berlin_100m_20250824.toml`, copy with absolute driver
+paths, 12 threads, FFTW 12, `measure` planner): `[loop_fusion.main]`
+`substages_fused = "all"`, `not_fusable = []` (on `issue/533-sweep-interface`
+the same config: `"none"`, 8 blockers). Fields after 50 steps against
+`"never"`: max |Δu| 4.8e-7 m/s, |Δw| 1.5e-8 m/s, θ, v, qv identical in
+the Float32 output. Wall time of steps 2-50 (one run each, under the
+benchmark lock, one tile update inside): `"if_possible"` 0.270 and 0.250
+s/step, `"never"` 0.364, `issue/533-sweep-interface` 0.340; about 26-31 %
+less than `"never"`. A single 49-step window, not the 4-turn protocol
+above: an indication, the HPC benchmark (#566) measures it properly.
+
+**Still not fusable**: the sound-proof cores' SGS, Coriolis, surface
+flux, sponge, open faces and post terms (step 2's and 4's terms are not
+wired into them); `Urban.NestingCoupling` (no term) and
+`GeostrophicCoupling`'s nudging mode; by design a `body_force!` /
+`post_predictor!` function, another momentum advection, a `LargeScale`
+damping toward a 3-D target, `step_imex!`'s explicit SGS halves, budgets
+in the per-point form.
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit

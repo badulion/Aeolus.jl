@@ -30,7 +30,10 @@ using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gr
                                 _divergence_into!
 # the blocked tendency + predictor sweep (SC-e, #405)
 using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
-                                sweep_term, prepare!
+                                sweep_term, prepare!, pointwise_predictor!, TendencyFields, term_tendencies!,
+                                PostTerm, post_sweep_term, finish!, finish_sweep!, books,
+                                OptionalTerm, BuoyancyTerm, CoriolisTerm, SurfaceFluxTerm, sponge_term,
+                                DampingTargets
 import ..TimeSteppers: step!    # extend the generic `step!` from TimeSteppers
 
 export BoussinesqSimulation, StepWorkspaces, StepRecord, step_record, set_step_hook!, step_hook,
@@ -44,7 +47,7 @@ include("simulations/step_record.jl")   # the per-step record and diagnostics ho
 """
     SweepReport
 
-Whether the substages of a simulation's Boussinesq step core took
+Whether the substages of a simulation's step core took the fused sweep
 (#533): `fused` and `unfused` count the substages, `fallback` holds the
 terms (`key => reason`, [`SWEEP_FALLBACKS`](@ref)) that kept the first
 unfused substage off the fused sweep. Logged once, when it is first
@@ -56,8 +59,9 @@ mutable struct SweepReport
     fallback::Vector{Pair{String,String}}
     reported::Bool
     loop_fusion::Symbol   # the setting: :if_possible, :always or :never (`set_loop_fusion!`)
+    per_point::Bool       # the per-point (GPU) form also on the CPU, on KA's CPU backend (tests; #533 step 8)
 end
-SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible)
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, false)
 
 """
     StepWorkspaces()
@@ -80,10 +84,11 @@ mutable struct StepWorkspaces
     snapshot::Any
     imex::Any
     sweep::Any            # FiniteVolume.SweepBuffers of the blocked core (SC-e, #405)
+    sponge::Any           # the core sponge's targets in the fused sweep (SpongeTargets, #533)
     fused::SweepReport    # fused and separate substages (#533)
     rec::StepRecord
 end
-StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, SweepReport(), StepRecord())
+StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, nothing, SweepReport(), StepRecord())
 
 """
     BoussinesqSimulation(mesh; kwargs...)
@@ -421,13 +426,20 @@ tendencies and the predictor is a sweep term
 the tendencies and the predictor of u, v, w, θ (and qv) run as one
 cache-blocked sweep (`FiniteVolume.blocked_predictor!`), with the values
 of the separate passes within round-off; the tendency fields
-`sim.tu, tv, tw, tθ, tqv` are then neither written nor read. Today only
-the base tendencies (the built-in momentum advection and the molecular
-diffusion) and the pipeline components that provide a sweep term
-qualify: any SGS closure, buoyancy, Coriolis, surface flux, sponge, a
-`body_force!` function, a `post_predictor!` hook or open boundaries keep
-the substage with one loop per term, which the simulation records once
-with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`).
+`sim.tu, tv, tw, tθ, tqv` are then neither written nor read. Today the
+base tendencies (the built-in momentum advection and the molecular
+diffusion), the built-in buoyancy, Coriolis, surface flux and sponge
+(#533 plan step 2) and the pipeline components that provide a sweep term
+qualify: any SGS closure or a `body_force!` or `post_predictor!` function
+keeps the substage with one loop per term, which the simulation records
+once with the reason ([`sweep_report`](@ref), `SWEEP_FALLBACKS`). The
+pipeline's post-predictor components run inside the sweep on the rows
+behind the predictor when they have a post term
+([`FiniteVolume.post_sweep_term`](@ref Aeolus.Operators.FiniteVolume.post_sweep_term)).
+Open lateral faces do not keep it out: their update (the boundary data,
+the radiating outflow from the stage-start layers, the mass correction)
+runs after the sweep and before the projection, as after the separate
+predictor passes (#533 plan step 5).
 
   * `sgs_stress = :laplacian` — the form of the SGS momentum divergence,
     passed to [`add_sgs_momentum!`](@ref Aeolus.Operators.add_sgs_momentum!):
@@ -457,12 +469,13 @@ function step!(sim::BoussinesqSimulation{T}, dt::Real; kwargs...) where {T}
 end
 
 function _step_euler!(sim::BoussinesqSimulation{T}, dt::Real;
-                      body_force!::Union{Nothing, Function} = nothing,
-                      post_predictor!::Union{Nothing, Function} = nothing,
+                      body_force!::B = nothing,
+                      post_predictor!::P = nothing,
                       momentum_advection::F = momentum_advect!,
                       sgs = nothing,
                       eddy_viscosity! = nothing,
-                      sgs_stress::Symbol = :laplacian) where {T, F}
+                      sgs_stress::Symbol = :laplacian) where {T, F, B<:Union{Nothing, Function},
+                                                              P<:Union{Nothing, Function}}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)          # no-op unless an open face is unfilled
@@ -495,10 +508,10 @@ end
 # boundaries are evaluated (the end of this Euler step; step_rk3! passes the
 # Shu–Osher substage times).
 function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
-                            closure::C, body_force!, post_predictor!,
+                            closure::C, body_force!::B, post_predictor!::P,
                             momentum_advection::F,
                             sgs_stress::Symbol = :laplacian,
-                            t_bc = sim.t + Δt, stage = nothing) where {T, C, F}
+                            t_bc = sim.t + Δt, stage = nothing) where {T, C, F, B, P}
     # 1. Halo fill so all stencils see valid neighbours.
     fill_state_halos!(sim)
     mark_open_boundary_stage!(sim)   # radiating outflow: stage-start layers (N-open-c)
@@ -507,8 +520,8 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     # term: steps 2-7 and 11 in one fused sweep (SC-e #405, #533), the
     # values of the passes below within round-off. Otherwise the passes
     # below (the reference), and the run reports which term caused it.
-    _try_fused!(sim, Δt, t_bc, stage, closure, body_force!, post_predictor!, momentum_advection,
-                sim.has_viscosity ? sim.ν : nothing) && return sim
+    _try_fused!(sim, Δt, t_bc, stage, _sgs_choice(closure, sgs_stress), body_force!, post_predictor!,
+                momentum_advection, sim.has_viscosity ? sim.ν : nothing) && return sim
 
     # 2.-3. The tendencies from zero: momentum + scalar advection, then the
     #       molecular viscosity / diffusion (qv: the same molecular
@@ -612,6 +625,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
 end
 
 include("simulations/fused_sweep.jl")   # the fused sweep: its terms, the report of terms that cannot be fused (#533)
+include("simulations/fused_sweep_sgs.jl")   # the SGS closure as a term of the fused sweep (#533 step 4)
 
 # The tendencies of steps 2-3 in one launch (`_fused_tendencies!`), and the
 # zero of their halos (`zero_storage!` zeroed the whole storage).
@@ -809,10 +823,11 @@ end
 
 function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
                     sgs = nothing, eddy_viscosity! = nothing,
-                    body_force!::Union{Nothing, Function} = nothing,
-                    post_predictor!::Union{Nothing, Function} = nothing,
+                    body_force!::B = nothing,
+                    post_predictor!::P = nothing,
                     sgs_stress::Symbol = :laplacian,
-                    workspace::RK3Workspace = rk3_workspace(sim)) where {T}
+                    workspace::RK3Workspace = rk3_workspace(sim)) where {T, B<:Union{Nothing, Function},
+                                                                         P<:Union{Nothing, Function}}
     Δt = T(dt)
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     _check_sgs_stress(sgs_stress)
@@ -858,9 +873,9 @@ end
 
 # One projected Euler-like substep — shared with step! (the pressure
 # projection), without step!'s commit of the closure memory.
-_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force! = nothing,
-              post_predictor! = nothing, sgs_stress::Symbol = :laplacian,
-              t_bc = sim.t + Δt, stage = nothing) =
+_rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force!::B = nothing,
+              post_predictor!::P = nothing, sgs_stress::Symbol = :laplacian,
+              t_bc = sim.t + Δt, stage = nothing) where {B, P} =
     _euler_projection!(sim, Δt, closure, body_force!, post_predictor!, momentum_advect!,
                        sgs_stress, t_bc, stage)
 

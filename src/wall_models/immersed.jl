@@ -4,7 +4,7 @@
 # wall is removed, so the two are never counted twice.
 
 export ImmersedWalls, immersed_walls, remove_stencil_wall_flux!,
-       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!
+       apply_immersed_wall_stress!, immersed_wall_count, immersed_wall_drag!, immersed_wall_term
 
 """
     ImmersedWallFace
@@ -86,6 +86,9 @@ struct ImmersedWalls{L<:AbstractWallLaw, T<:AbstractFloat}
     Af::Vector{T}
     dq::Vector{T}
     stats::Dict{Symbol,Any}
+    pair_rows::Union{Nothing,Vector{Int32}}   # the pairs / faces of each (component, K, J) row, or nothing
+    face_rows::Union{Nothing,Vector{Int32}}   # when not sorted so, then by I (FiniteVolume.row_index; the fused sweep, #533)
+    row_dims::NTuple{2,Int}
 end
 
 function ImmersedWalls(faces::Vector{ImmersedWallFace{L}}, ν::T, Δ::NTuple{3,T},
@@ -101,11 +104,18 @@ function ImmersedWalls(faces::Vector{ImmersedWallFace{L}}, ν::T, Δ::NTuple{3,T
     stats = Dict{Symbol,Any}(:F => (zero(T), zero(T), zero(T)), :τA => zero(T),
                              :area => zero(T), :τ_min => zero(T),
                              :F_stencil => (zero(T), zero(T), zero(T)))
+    nJ, nK = maximum(d -> d[2], dims), maximum(d -> d[3], dims)
+    rowid(f) = (Int(f.c) - 1) * nJ * nK + (Int(f.K) - 1) * nJ + Int(f.J)
+    pair_rows = FiniteVolume.row_index(e -> rowid(faces[e]), n, 3 * nJ * nK)
+    face_rows = FiniteVolume.row_index(p -> rowid(faces[ent[ptr[p]]]), nf, 3 * nJ * nK)
+    # within a row also by I (the term bisects for the sweep's x-ranges)
+    pair_rows === nothing || FiniteVolume.rows_sorted(pair_rows, e -> faces[e].I) || (pair_rows = nothing)
+    face_rows === nothing || FiniteVolume.rows_sorted(face_rows, p -> faces[ent[ptr[p]]].I) || (face_rows = nothing)
     return ImmersedWalls{L,T}(faces, ν, Δ, dims, ptr, ent, pair_c, pair_dA, face_c,
                               Int32.(single), Int32[ent[ptr[p]] for p in single], multi,
                               _segments(pair_c), _segments(face_c), _identity_entries(ent),
                               zeros(T, n), zeros(T, n), zeros(T, n),
-                              zeros(T, nf), zeros(T, nf), stats)
+                              zeros(T, nf), zeros(T, nf), stats, pair_rows, face_rows, (nJ, nK))
 end
 
 # The index ranges of components 1, 2, 3 when `c` is sorted (the order
@@ -410,10 +420,17 @@ function apply_immersed_wall_stress!(sim, iw::ImmersedWalls{L,T}, Δt::Real) whe
     launch!(b, _iw_face1_body!, (1:length(sf),), sf, sp, u, v, w, faces, a, iw.Af, iw.dq, iw.τdA, dt, Δ, dV)
     launch!(b, _iw_faceN_body!, (1:length(mf),), mf, u, v, w, faces, ptr, ent, a, iw.Af, iw.dq, iw.τdA,
             dt, Δ, dV)
-    # 3. the diagnostics, folded in a fixed order: the force over the faces
-    #    (in the order of their first pair), τ_w ΔA, the area and the
-    #    smallest drag over the pairs (in their order) — the order of the
-    #    former loops over `faces`, so the same bits
+    # 3. the diagnostics
+    return _iw_stats!(iw, dt)
+end
+
+# The diagnostics of the last wall-stress step, folded in a fixed order: the
+# force over the faces (in the order of their first pair), τ_w ΔA, the area
+# and the smallest drag over the pairs (in their order) — the order of the
+# former loops over `faces`, so the same bits.
+function _iw_stats!(iw::ImmersedWalls{L,T}, dt::T) where {L,T}
+    Δ, a = iw.Δ, iw.a
+    dV = Δ[1] * Δ[2] * Δ[3]
     F1, F2, F3 = _fold3(iw.dq, iw.face_c, iw.face_seg, iw.Af)    # (a face with Σ a = 0 is skipped)
     τA = zero(T); area = zero(T); τmin = T(Inf)
     τdA, dA = iw.τdA, iw.pair_dA
@@ -425,9 +442,85 @@ function apply_immersed_wall_stress!(sim, iw::ImmersedWalls{L,T}, Δt::Real) whe
     iw.stats[:F] = Fo
     iw.stats[:τA] = τA
     iw.stats[:area] = area
-    iw.stats[:τ_min] = isempty(faces) ? zero(T) : τmin
+    iw.stats[:τ_min] = isempty(iw.faces) ? zero(T) : τmin
     return Fo
 end
+
+"""
+    ImmersedWallTerm
+
+[`apply_immersed_wall_stress!`](@ref) as a post term of the fused sweep
+(`Operators.FiniteVolume.PostTerm`, #533 step 6), built by
+[`immersed_wall_term`](@ref): the drag of every (face, wall) pair of a row
+from the velocity before any face is changed (`_iw_drag_body!`; the
+tangential speed reads the four neighbouring faces of the other
+component, footprint 1), then every face of the row updated with the sum
+of its pairs' drag and its pairs' ``τ_w ΔA`` recorded, on the sweep's
+delayed rows. The pairs and faces of a row are found through the row
+pointers of `iw` (`pair_rows`, `face_rows`), which exist when the pairs
+are sorted by component, then k, j, i (as [`immersed_walls`](@ref) builds
+them); the part of a row the sweep asks for is found by bisection. The same per-face values as the whole-field
+operator; `finish!` folds the same diagnostics into `iw.stats`.
+"""
+struct ImmersedWallTerm{W<:ImmersedWalls,T} <: FiniteVolume.PostTerm
+    iw::W
+    dt::T
+    pair_rows::Vector{Int32}
+    face_rows::Vector{Int32}
+    nJ::Int
+    nK::Int
+end
+
+"""
+    immersed_wall_term(iw::ImmersedWalls, Δt) -> Union{ImmersedWallTerm,Nothing}
+
+The post term of the fused sweep that does what
+`apply_immersed_wall_stress!(sim, iw, Δt)` does, or `nothing` when the
+pairs of `iw` are not sorted by component, k, j, i (an `ImmersedWalls` built
+from an arbitrary pair list), which its row pointers need.
+"""
+function immersed_wall_term(iw::ImmersedWalls{L,T}, Δt::Real) where {L,T}
+    (iw.pair_rows === nothing || iw.face_rows === nothing) && return nothing
+    return ImmersedWallTerm(iw, T(Δt), iw.pair_rows, iw.face_rows, iw.row_dims[1], iw.row_dims[2])
+end
+FiniteVolume.footprint(::ImmersedWallTerm) = (1, 1, 1)
+@inline _iw_row(t::ImmersedWallTerm, c, J, K) = (c - 1) * t.nJ * t.nK + (K - 1) * t.nJ + J
+
+function FiniteVolume.post_row!(t::ImmersedWallTerm, ::Val{1}, J, K, I1, I2, st)
+    iw = t.iw
+    faces = iw.faces
+    for c in 1:3
+        for n in FiniteVolume.row_entries(t.pair_rows, _iw_row(t, c, J, K), e -> Int(@inbounds faces[e].I), I1, I2)
+            _iw_drag_body!(n, iw.a, faces, st.u, st.v, st.w, iw.Δ, iw.ν)
+        end
+    end
+    return nothing
+end
+function FiniteVolume.post_row!(t::ImmersedWallTerm, ::Val{2}, J, K, I1, I2, st)
+    iw = t.iw
+    faces, ptr, ent, a, Δ = iw.faces, iw.face_ptr, iw.face_entry, iw.a, iw.Δ
+    dV = Δ[1] * Δ[2] * Δ[3]
+    for c in 1:3
+        for p in FiniteVolume.row_entries(t.face_rows, _iw_row(t, c, J, K), q -> Int(@inbounds faces[ent[ptr[q]]].I), I1, I2)
+            @inbounds begin
+                e1, e2 = ptr[p], ptr[p+1] - 1
+                f = faces[ent[e1]]
+                A = zero(eltype(a))
+                for e in e1:e2
+                    A += a[ent[e]]
+                end
+                qe = _iw_face_update!(p, f, A, st.u, st.v, st.w, iw.Af, iw.dq, t.dt)
+                for e in e1:e2
+                    n = ent[e]
+                    Δd = Δ[faces[n].d]
+                    iw.τdA[n] = (a[n] * Δd * qe) * (dV / Δd)
+                end
+            end
+        end
+    end
+    return nothing
+end
+FiniteVolume.finish!(t::ImmersedWallTerm, sim, Δt) = (_iw_stats!(t.iw, t.dt); nothing)
 
 # Face p of an ImmersedWalls: q ← q / (1 + Δt Σ a) over its pairs (summed in
 # their order), Af[p] = Σ a, dq[p] = the change (0 when Σ a = 0, the face
@@ -551,10 +644,21 @@ end
                                 νT, sgs, Δ) where {T}
     @inbounds begin
         f = faces[n]
+        c = Int(f.c)
+        t = c == 1 ? tu : c == 2 ? tv : tw
+        x = _iw_pair_x(f, u, v, w, nt, νT, sgs, Δ)
+        t[Int(f.I), Int(f.J), Int(f.K)] -= x
+        flux[n] = x
+    end
+    return nothing
+end
+# the stencil's flux of pair `f` through its wall: the one expression of the
+# removal, in the separate pass above and in the fused sweep (#533)
+@inline function _iw_pair_x(f, u, v, w, nt, νT, sgs, Δ)
+    @inbounds begin
         c, d, s = Int(f.c), Int(f.d), Int(f.s)
         I, J, K = Int(f.I), Int(f.J), Int(f.K)
         q = c == 1 ? u : c == 2 ? v : w
-        t = c == 1 ? tu : c == 2 ? tv : tw
         Ni, Nj, Nk = I + s * (d == 1), J + s * (d == 2), K
         ci, cj, ck = (c == 1), (c == 2), (c == 3)
         νe = νT
@@ -562,11 +666,8 @@ end
             νe += (nt[I, J, K] + nt[I-ci, J-cj, K-ck] +
                    nt[Ni, Nj, Nk] + nt[Ni-ci, Nj-cj, Nk-ck]) / 4
         end
-        x = νe * (q[Ni, Nj, Nk] - q[I, J, K]) / Δ[d]^2
-        t[I, J, K] -= x
-        flux[n] = x
+        return νe * (q[Ni, Nj, Nk] - q[I, J, K]) / Δ[d]^2
     end
-    return nothing
 end
 
 # One work item = a block of `_IW_BLOCK` consecutive faces: their pairs in
@@ -590,3 +691,147 @@ end
 
 # whether the face index lists the pairs in their own order (1, 2, …, n)
 _identity_entries(ent) = (@inbounds for e in eachindex(ent); ent[e] == e || return false; end; true)
+
+# ---------------------------------------------------------------------------
+# the removal inside the fused sweep (#533 step 5)
+# ---------------------------------------------------------------------------
+# The fluxes depend only on the stage-start velocity and ν_t, which the
+# sweep does not change before a row's predictor: they are computed for
+# every pair before the sweep (`prepare!`, one work item per pair, and the
+# force folded as above), then each row of the sweep subtracts the fluxes
+# of its pairs from its tendency buffer, a face's pairs in pair order: the
+# operations of `remove_stencil_wall_flux!` in the same order.
+
+"""
+    stencil_wall_fluxes!(sim, iw::ImmersedWalls; ν, νt, sgs) -> (Fx, Fy, Fz)
+
+The fluxes [`remove_stencil_wall_flux!`](@ref) removes, per pair, into
+`iw.flux`, and their force into `iw.stats[:F_stencil]`, without touching
+the tendencies (the fused sweep subtracts them, [`StencilWallFluxTerm`](@ref)).
+The keywords are those of `remove_stencil_wall_flux!`.
+"""
+function stencil_wall_fluxes!(sim, iw::ImmersedWalls{L,T};
+                              ν::Real = (hasproperty(sim, :has_viscosity) && sim.has_viscosity) ? sim.ν : 0,
+                              νt = sim.νt,
+                              sgs::Bool = hasproperty(sim, :has_sgs) && sim.has_sgs) where {L,T}
+    u, v, w = sim.u.data, sim.v.data, sim.w.data
+    nt = νt isa AbstractArray ? νt : νt.data
+    Δ = iw.Δ
+    dV = Δ[1] * Δ[2] * Δ[3]
+    n = length(iw.faces)
+    n > 0 && launch!(backend(u), _iw_flux_only!, (1:n,), u, v, w, nt, iw.faces, iw.flux, T(ν), sgs, Δ)
+    F1, F2, F3 = _fold3(iw.flux, iw.pair_c, iw.pair_seg)
+    Fo = (F1 * dV, F2 * dV, F3 * dV)
+    iw.stats[:F_stencil] = Fo
+    return Fo
+end
+@inline function _iw_flux_only!(n, u, v, w, nt, faces, flux, νT, sgs, Δ)
+    @inbounds flux[n] = _iw_pair_x(faces[n], u, v, w, nt, νT, sgs, Δ)
+    return nothing
+end
+
+"""
+    StencilWallFluxTerm
+
+The fused-sweep term ([`FiniteVolume.SweepTerm`](@ref Aeolus.Operators.FiniteVolume.SweepTerm))
+of [`remove_stencil_wall_flux!`](@ref): its `prepare!` computes every
+pair's flux from the stage-start state ([`stencil_wall_fluxes!`](@ref)),
+its row kernel subtracts the fluxes of the row's faces from their
+tendencies (`rowptr`/`rowent`: the pairs of storage row `(J, K)`, row
+`J + (K − 1) nJ`, in face order). Built by
+[`stencil_wall_flux_term`](@ref); the wall faces are inputs, so the term
+reads no state in its kernel (footprint 0).
+"""
+struct StencilWallFluxTerm{W<:ImmersedWalls,F,V,N} <: FiniteVolume.SweepTerm
+    iw::W
+    faces::F
+    flux::V
+    rowptr::Vector{Int32}
+    rowent::Vector{Int32}
+    nJ::Int
+    i1::Int
+    i2::Int
+    ν::Float64
+    νt::N
+    sgs::Bool
+end
+FiniteVolume.footprint(::StencilWallFluxTerm) = (0, 0, 0)
+FiniteVolume.sweep_inputs(t::StencilWallFluxTerm) = (t.flux,)
+FiniteVolume.prepare!(t::StencilWallFluxTerm, sim, Δt) =
+    (stencil_wall_fluxes!(sim, t.iw; ν = t.ν, νt = t.νt, sgs = t.sgs); nothing)
+@noinline function FiniteVolume.add_row!(t::StencilWallFluxTerm, buf, a, b, s, j, k, ii, st)
+    r = j + (k - 1) * t.nJ
+    @inbounds e1, e2 = Int(t.rowptr[r]), Int(t.rowptr[r+1]) - 1
+    e1 > e2 && return nothing
+    _iw_row!(buf, a, b, s, e1, e2, t.rowent, t.faces, t.flux, t.i1, t.i2)
+end
+@noinline function _iw_row!(buf, a, b, s, e1, e2, rowent, faces, flux, i1, i2)
+    @inbounds for e in e1:e2
+        n = Int(rowent[e])
+        f = faces[n]
+        I = Int(f.I)
+        i1 <= I <= i2 && (buf[I, a, b, Int(f.c), s] -= flux[n])
+    end
+    return nothing
+end
+
+# The point kernel of the per-point (GPU) form (#533 step 8; integration of
+# steps 5 and 8): the pairs of the point's row whose face is at i, in the
+# row's order (a face's pairs in pair order, as the row kernel subtracts
+# them). A row holds few pairs; rows without walls return at once.
+@inline function FiniteVolume.add_tendency!(t::StencilWallFluxTerm, tb, i, j, k, st)
+    r = j + (k - 1) * t.nJ
+    @inbounds for e in Int(t.rowptr[r]):Int(t.rowptr[r+1])-1
+        n = Int(t.rowent[e])
+        f = t.faces[n]
+        Int(f.I) == i && (tb[i, Int(f.c)] -= t.flux[n])
+    end
+    return nothing
+end
+
+"""
+    wall_rows(iw::ImmersedWalls) -> (rowptr, rowent, nJ)
+
+The pairs of `iw` grouped by storage row `(J, K)` (row `J + (K − 1) nJ`,
+`nJ` the largest y-size of the u, v, w arrays): compressed sparse rows,
+the pairs of a row in face order and a face's pairs in pair order (the
+order of `remove_stencil_wall_flux!`'s subtraction).
+"""
+function wall_rows(iw::ImmersedWalls)
+    nJ = maximum(d -> d[2], iw.dims); nK = maximum(d -> d[3], iw.dims)
+    nr = nJ * nK
+    order = iw.ordered ? collect(Int32, eachindex(iw.faces)) : Int32.(iw.face_entry)
+    cnt = zeros(Int32, nr + 1)
+    for n in order
+        f = iw.faces[n]
+        cnt[Int(f.J) + (Int(f.K) - 1) * nJ + 1] += 1
+    end
+    rowptr = Int32.(cumsum(cnt) .+ 1)        # (cumsum widens Int32)
+    fillp = rowptr[1:nr]
+    rowent = Vector{Int32}(undef, length(order))
+    for n in order                         # stable: face order kept within a row
+        f = iw.faces[n]
+        r = Int(f.J) + (Int(f.K) - 1) * nJ
+        rowent[fillp[r]] = n
+        fillp[r] += 1
+    end
+    return rowptr, rowent, nJ
+end
+
+"""
+    stencil_wall_flux_term(sim, iw::ImmersedWalls; rows = wall_rows(iw), ν, νt, sgs)
+        -> StencilWallFluxTerm
+
+The fused-sweep term of `remove_stencil_wall_flux!(sim, iw; ν, νt, sgs)`
+(the same keywords and defaults). `rows` (from [`wall_rows`](@ref)) is
+kept by the caller, so building the term each substage allocates nothing
+per wall.
+"""
+function stencil_wall_flux_term(sim, iw::ImmersedWalls; rows = wall_rows(iw),
+                                ν::Real = (hasproperty(sim, :has_viscosity) && sim.has_viscosity) ? sim.ν : 0,
+                                νt = sim.νt,
+                                sgs::Bool = hasproperty(sim, :has_sgs) && sim.has_sgs)
+    ii = first(interior(sim.mesh))
+    return StencilWallFluxTerm(iw, iw.faces, iw.flux, rows[1], rows[2], rows[3], first(ii), last(ii),
+                               Float64(ν), νt, sgs)
+end

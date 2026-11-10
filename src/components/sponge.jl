@@ -89,3 +89,23 @@ function run_stage!(c::Sponge, d, ::Val{:body_force}, dt)
     add_velocity_sponge!(d.state, c.α_max, c.z_start, c.target)
     return nothing
 end
+
+# --- the fused sweep (#533) ---------------------------------------------------
+# The damping of `add_velocity_sponge!` as a sweep term
+# (`FiniteVolume.sponge_term`); a retargeted sponge refreshes its level
+# targets from the stage-start state before the sweep, as `run_stage!` does
+# before its pass.
+struct SpongeSweep{S<:Sponge, D, X<:FiniteVolume.SweepTerm} <: FiniteVolume.SweepTerm
+    c::S
+    d::D
+    term::X
+end
+FiniteVolume.sweep_term(c::Sponge, d) =
+    SpongeSweep(c, d, FiniteVolume.sponge_term(c.α_max, c.z_start, c.target, d.state.mesh))
+FiniteVolume.footprint(t::SpongeSweep) = FiniteVolume.footprint(t.term)
+FiniteVolume.sweep_inputs(t::SpongeSweep) = FiniteVolume.sweep_inputs(t.term)
+FiniteVolume.prepare!(t::SpongeSweep, sim, Δt) = (t.c.kind === :rest || _retarget!(t.c, t.d, Δt); nothing)
+@inline FiniteVolume.add_row!(t::SpongeSweep, buf, a, b, s, j, k, ii, st) =
+    FiniteVolume.add_row!(t.term, buf, a, b, s, j, k, ii, st)
+@inline FiniteVolume.add_tendency!(t::SpongeSweep, tb, i, j, k, st) =    # the per-point form (#533 step 8)
+    FiniteVolume.add_tendency!(t.term, tb, i, j, k, st)

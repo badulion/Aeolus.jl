@@ -42,15 +42,17 @@ using ..Simulations: Simulations, BoussinesqSimulation, step_rk3!, add_velocity_
 using ..PrognosticSGS: TKEClosure, initialize_tke!
 using ..IBM: SolidMask, first_level_cells, wall_distance
 using ..BoundaryConditions: Periodic, NoSlipWall
-using ..Grids: CellCenter
+using ..Grids: CellCenter, FaceX, FaceY, FaceZ, xnodes   # FaceX…, xnodes: the fringe in the fused sweep (#533)
 using ..StretchedGrids: StretchedGrid
 using ..BoundaryConditions: fill_halos!
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, BusingerDyerBeljaarsHoltslag,
                          solve_surface_layer, kinematic_heat_flux, similarity_theta, similarity_wind, obukhov_length
-using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!
+using ..WallModels: MOSTWallLaw, WallModel, apply_wall_stress!, wall_stress_term
 using ..LargeScaleForcing: GeostrophicPressureGradient, AdvectiveTendencies, Subsidence, ProfileNudging,
                            SurfaceTemperatureSeries, apply_forcing!, forcing_mean, surface_temperature, _zc,
-                           forcing_value, NudgingWeight, ReferenceDamping
+                           forcing_value, NudgingWeight, ReferenceDamping,
+                           ColumnForcing, column_forcing!, column_forcing_supported, reset_column_forcing!,
+                           finish_column_forcing!, add_column_rows!, add_column_point!   # the fused sweep (#533)
 using ..Operators: sponge_profile
 using ..Operators: FiniteVolume                                      # the vertical metrics of ω_y (#505)
 using ..InputDrivers: shift_table
@@ -70,7 +72,7 @@ using ..Fields: interior_view, set!
 using ..Backends: plane_partials!
 using ..MoistThermodynamics: DEFAULT_CONSTANTS, R_d, virtual_temperature, PhasePartition
 using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weight, budget_start!,
-                      budget_begin_step!, budget_end_step!, budget_open!, budget_close!, budget_discard!,
+                      budget_begin_step!, budget_end_step!, budget_open!, budget_close!, budget_discard!, book_context!,
                       stage_budget
 using ..Output: OutputVariable, check_catalogue, cell_centres
 using ..Checks: Check, ReferenceProfile, reference_check

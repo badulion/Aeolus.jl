@@ -15,7 +15,7 @@
 #
 # Component order everywhere: (11, 22, 33, 12, 13, 23).
 
-using ..Operators: StressTensor, add_stress_divergence!, DiffusivityTensor,
+using ..Operators: Operators, StressTensor, add_stress_divergence!, DiffusivityTensor,
                    add_tensor_diffusion_scalar!, bounded_directions, _θv_face_dir,
                    _scalar_bcs
 import ..Operators: add_sgs_momentum!, add_sgs_scalar!, sgs_scalar_tensor,
@@ -691,6 +691,17 @@ add_sgs_scalar!(tϕ, ϕ, c::ReynoldsStressClosure, f::SGSFields, sim) =
 
 sgs_scalar_tensor(c::ReynoldsStressClosure, f::SGSFields, sim) = c.K
 sgs_scalar_face_diffusivity(::ReynoldsStressClosure, f::SGSFields, sim) = nothing   # a tensor
+
+# The fused sweep (#533 plan step 4): the stored stress's divergence, the
+# kernel of `add_stress_divergence!` (its scalar part is the tensor `c.K`,
+# `sgs_scalar_tensor`)
+function Operators.sgs_momentum_sweep(c::ReynoldsStressClosure, f::SGSFields, sim, stress::Symbol)
+    g = mesh(sim.u)
+    g isa RegularGrid || return nothing     # as `_add_stress_divergence!`: its separate loop says why
+    S = c.S
+    return Operators.FiniteVolume.StressMomentum(S.τ11, S.τ22, S.τ33, S.τ12, S.τ13, S.τ23,
+                                                 1 / g.dx, 1 / g.dy, 1 / g.dz)
+end
 
 # ---- the commit ----------------------------------------------------------
 
