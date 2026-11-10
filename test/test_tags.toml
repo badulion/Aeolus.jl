@@ -27,6 +27,10 @@ reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the
 exclusive = true
 reason = "starts a julia -t 12 subprocess planning a 256³ irfft under MEASURE (#397); with the parallel jobs it would compete for every core"
 
+["launch_trace.jl"]
+exclusive = true
+reason = "times the launch trace's off path against the plain loop (ns per launch) and starts a julia -t 4 subprocess (#566)"
+
 # --- heavy (started first) ----------------------------------------------------
 
 ["config_simulation_driver.jl"]
