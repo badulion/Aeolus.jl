@@ -646,6 +646,7 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
     end
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
+    include("launch_trace.jl")   # #566: the launch trace (thread busy/idle per launch, AEOLUS_LAUNCH_TRACE=1)
     include("ka_step.jl")    # KA-j (#306): step cores on kernels, fused CFL / step guard, per-sim workspaces
     include("fused_sweep.jl")   # #533: the fused sweep's local-term interface, fallback report, completeness guard
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
