@@ -172,6 +172,11 @@ runs in its budget context as an `AfterSweep`, and a term tuple that
 per-level sums: `builtin.budgets_per_point`); the sound-proof cores and
 the fused IMEX launch call `finish_sweep!` as the Boussinesq core does.
 
+The slab and ring machinery is one driver, `blocked_update!`, generic
+over the update it runs (a `BlockedUpdate`, #554): the substage predictor
+(`blocked_predictor!`) and the update of a `TKEClosure`'s SGS energy
+(`advance_sgs!`, `PrognosticSGS`).
+
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
 Aeolus.Operators.FiniteVolume.sweep_term
@@ -202,6 +207,12 @@ Aeolus.Operators.FiniteVolume.row_index
 Aeolus.Operators.FiniteVolume.row_entries
 Aeolus.Operators.FiniteVolume.rows_sorted
 Aeolus.Operators.FiniteVolume.blocked_predictor!
+Aeolus.Operators.FiniteVolume.BlockedUpdate
+Aeolus.Operators.FiniteVolume.blocked_update!
+Aeolus.Operators.FiniteVolume.update_lags
+Aeolus.Operators.FiniteVolume.begin_slab!
+Aeolus.Operators.FiniteVolume.compute_rows!
+Aeolus.Operators.FiniteVolume.write_row!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
 Aeolus.Operators.FiniteVolume.sweep_slabs

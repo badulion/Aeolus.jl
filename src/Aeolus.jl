@@ -289,7 +289,7 @@ export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        runs_serially, launch!, launch_weighted!, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, interior_map!,
-       plane_reduce!, range_max, plane_map!, apply_transform!,
+       plane_reduce!, range_max, plane_map!, row_map!, apply_transform!,
        pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
        CounterRNG, counter_rng, counter_xoshiro, set_stream!,
        foreach_column!, foreach_cell!, column_sums, column_sum
