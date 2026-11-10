@@ -8,16 +8,18 @@
 # `u ← u + Δt·tu` reads both back and writes u. The fused sweep runs both
 # per block, while the block is in cache:
 #
-#   * the k-range is cut into `ns` slabs, one task each;
-#   * a slab is swept j-row by j-row: the tendencies of row j (every k of
+#   * the k-range is cut into `ns` slabs and the j-range into `nt` row
+#     ranges (#558), one task per block (slab × row range);
+#   * a block is swept j-row by j-row: the tendencies of row j (every k of
 #     the slab) go into a ring of `lag + 1` rows, then row j − lag gets its
 #     predictor. `lag` is the largest y-radius of the terms' footprints (1
 #     for the base tendencies' j ± 1 stencils): no later tendency of the
-#     slab reads row j − lag, so the update can be in place;
+#     block reads row j − lag, so the update can be in place;
 #   * the slab's first and last `lz` planes (`lz` the largest z-radius) are
 #     read by the neighbouring slabs' stencils, so their tendencies are kept
-#     (`edge`) and their predictor runs in a second launch, after every slab
-#     is done.
+#     (`edge`) and their predictor runs in a second launch, after every
+#     block is done; likewise the first and last `ly` rows of a row range
+#     (kept in extra rows of the ring, written by a third launch).
 #
 # What a row's tendency is, is a compile-time tuple of *terms* (#533):
 # the first initialises the row (the base tendencies of SC-d: advection
@@ -199,10 +201,16 @@ end
 """
     SweepBuffers
 
-The scratch of [`blocked_predictor!`](@ref): `ring[i, kl, r, f, s]`, the
-tendencies of field `f` on `lag + 1` j-rows (`r`) of slab `s`'s inner
-planes (`kl = k − k0 + 1`), and `edge[i, j, e, f, s]`, those of its first
-(`e ≤ lz`) and last (`e > lz`) `lz` planes. `ns` slabs, `nf` fields.
+The scratch of [`blocked_update!`](@ref) for a sweep cut into `ns` slabs
+in k and `nt` row ranges in j, `nb = ns·nt` blocks (block `n = (t − 1)·ns
++ s`), `nf` fields:
+
+  * `ring[i, kl, r, f, n]`: the new values of block `n`'s inner planes
+    (`kl = k − k0 + 1`) on the `lag + 1` ring rows `r ≤ lag + 1`, and on
+    its `2ly` edge rows in j (`r = lag + 1 + d`, `d ≤ ly` the first and
+    `d > ly` the last `ly` rows of its row range; `ly = 0` when `nt = 1`);
+  * `edge[i, j, e, f, s]`: those of slab `s`'s first (`e ≤ lz`) and last
+    (`e > lz`) `lz` planes, every row.
 """
 mutable struct SweepBuffers{A<:AbstractArray}    # mutable: kept in an `Any` slot without a box per step
     ring::A
@@ -211,30 +219,38 @@ mutable struct SweepBuffers{A<:AbstractArray}    # mutable: kept in an `Any` slo
     nf::Int
     lag::Int
     lz::Int
+    nt::Int
+    ly::Int
 end
 
 """
-    sweep_buffers(old, data, nf, ns, nk; lag = 1, lz = 1) -> SweepBuffers
+    sweep_buffers(old, data, nf, ns, nk; lag = 1, lz = 1, nt = 1, ly = 1) -> SweepBuffers
 
-Buffers for `ns` slabs of a k-range of length `nk`, `nf` fields shaped like
-the storage array `data`, a ring of `lag + 1` rows and `lz` edge planes
-per slab end ([`sweep_lags`](@ref)); `old` (a `SweepBuffers` or
-`nothing`) is returned when it already fits.
+Buffers for `ns` slabs of a k-range of length `nk` and `nt` row ranges in
+j, `nf` fields shaped like the storage array `data`, a ring of `lag + 1`
+rows, `lz` edge planes per slab end and, when `nt > 1`, `ly` edge rows
+per row-range end ([`sweep_lags`](@ref), [`edge_rows`](@ref)); `old` (a
+`SweepBuffers` or `nothing`) is returned when it already fits.
 """
 function sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int;
-                       lag::Int = 1, lz::Int = 1) where {T}
+                       lag::Int = 1, lz::Int = 1, nt::Int = 1, ly::Int = 1) where {T}
     # (the split keeps a cached `old::Any` from a dynamic call: no allocation)
-    return old isa SweepBuffers{_buf_type(data)} ? _sweep_buffers(old, data, nf, ns, nk, lag, lz) :
-                                                   _sweep_buffers(nothing, data, nf, ns, nk, lag, lz)
+    return old isa SweepBuffers{_buf_type(data)} ? _sweep_buffers(old, data, nf, ns, nk, lag, lz, nt, ly) :
+                                                   _sweep_buffers(nothing, data, nf, ns, nk, lag, lz, nt, ly)
 end
-function _sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int, lag::Int, lz::Int) where {T}
-    (lag >= 1 && lz >= 1) || throw(ArgumentError("sweep_buffers: lag and lz are ≥ 1, got $lag, $lz"))
-    old isa SweepBuffers && old.ns == ns && old.nf == nf && old.lag == lag && old.lz == lz &&
+function _sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int, lag::Int, lz::Int,
+                        nt::Int, ly::Int) where {T}
+    (lag >= 1 && lz >= 1 && ly >= 1) ||
+        throw(ArgumentError("sweep_buffers: lag, lz and ly are ≥ 1, got $lag, $lz, $ly"))
+    (ns >= 1 && nt >= 1) || throw(ArgumentError("sweep_buffers: ns and nt are ≥ 1, got $ns, $nt"))
+    lye = nt > 1 ? ly : 0
+    old isa SweepBuffers && old.ns == ns && old.nt == nt && old.nf == nf && old.lag == lag &&
+        old.lz == lz && old.ly == lye &&
         size(old.edge, 1) == size(data, 1) && size(old.edge, 2) == size(data, 2) &&
         size(old.ring, 2) >= cld(nk, ns) && return old
-    ring = similar(data, size(data, 1), cld(nk, ns), lag + 1, nf, ns)
+    ring = similar(data, size(data, 1), cld(nk, ns), lag + 1 + 2lye, nf, ns * nt)
     edge = similar(data, size(data, 1), size(data, 2), 2lz, nf, ns)
-    return SweepBuffers(ring, edge, ns, nf, lag, lz)
+    return SweepBuffers(ring, edge, ns, nf, lag, lz, nt, lye)
 end
 
 # the buffers' array type (a concrete type, so `sweep_buffers` infers)
@@ -242,21 +258,52 @@ _buf_type(::Array{T,3}) where {T} = Array{T,5}
 _buf_type(a::AbstractArray) = typeof(similar(a, 0, 0, 0, 0, 0))
 
 """
-    sweep_slabs(backend, npoints, nk; lz = 1) -> Int
+    sweep_blocks(backend, npoints, nk, nj; lz = 1, ly = 1) -> (ns, nt)
 
-The number of slabs of the blocked sweep: one per thread (at least `2lz`
-planes each) when a launch of `npoints` runs threaded, else one.
+The blocks of the blocked sweep (#558): `ns` slabs in k (at least `2lz`
+planes each) times `nt` row ranges in j (at least `2ly` rows each), one
+work item each, when a launch of `npoints` runs threaded; else `(1, 1)`.
 
-Each slab is one work item, so `nk ÷ 2lz` caps the threads that work: with
-60 levels 30 for the predictor (`lz = 1`), 15 for the centred TKE update
-(`lz = 2`) and 7 for WENO-Z5 (`lz = 4`, #554). At the cap every plane of a
-slab is an edge plane (written back by the second launch), and threads
-beyond it are idle; splitting the slabs in j as well would need edge rows
-in j too (not done).
+A slab keeps `lz` edge planes at each end and a row range `ly` edge rows:
+their new values wait in a buffer until every block is done, then a
+second launch writes them. In k alone (#533, #554) the slabs capped the
+threads that work at `nk ÷ 2lz`: with 60 levels 30 for the predictor
+(`lz = 1`), 15 for the centred TKE update (`lz = 2`) and 7 for WENO-Z5
+(`lz = 4`), where 8 of every 10 planes of a slab were edge planes. The
+row ranges lift the cap to `(nk ÷ 2lz)(nj ÷ 2ly)`.
+
+The rule, from measurements on 200 × 200 × 60 at 6, 12 and 24 threads
+(docs/src/design/roadmap.md, #558): slabs no taller than 20 planes
+(`_SLAB_PLANES`) where the thread count allows (taller slabs keep too
+many rows of every field in cache: whole 60-level columns ran 10-110 %
+slower), then the least estimated time `cld(ns·nt, T) / (ns·nt) · (1 +
+c·f_edge)` for `T` threads, a fraction `f_edge` of edge points and `c =
+0.5` (`_C_EDGE`): the most blocks up to one per thread, and among those
+the fewest edge points.
 """
-sweep_slabs(b, npoints::Integer, nk::Integer; lz::Integer = 1) =
-    Backends.runs_serially(b, npoints) ? 1 : clamp(Threads.nthreads(), 1, max(1, nk ÷ (2lz)))
+function sweep_blocks(b, npoints::Integer, nk::Integer, nj::Integer; lz::Integer = 1, ly::Integer = 1)
+    Backends.runs_serially(b, npoints) && return (1, 1)
+    return _split_blocks(Threads.nthreads(), nk, nj, lz, ly)
+end
 
+# the tallest slab the split prefers, and the weight of an edge point
+# against an inner one (measured, #558)
+const _SLAB_PLANES = 20
+const _C_EDGE = 0.5
+
+function _split_blocks(T::Integer, nk::Integer, nj::Integer, lz::Integer, ly::Integer)
+    nsmax = max(1, min(T, nk ÷ (2lz)))
+    nsmin = min(nsmax, cld(nk, _SLAB_PLANES))
+    best, bc = (nsmax, 1), Inf
+    for ns in nsmin:nsmax, nt in 1:max(1, min(T ÷ ns, nj ÷ (2ly)))
+        fe = 1 - (1 - (ns > 1 ? min(1, 2lz * ns / nk) : 0.0)) * (1 - (nt > 1 ? min(1, 2ly * nt / nj) : 0.0))
+        c = cld(ns * nt, T) / (ns * nt) * (1 + _C_EDGE * fe)
+        c < bc * (1 - 1e-9) && ((best, bc) = ((ns, nt), c))
+    end
+    return best
+end
+
+# the part s of ns of the range kk (slabs in k, row ranges in j)
 @inline function _slab(kk, ns, s)
     nk = length(kk)
     return first(kk) + ((s - 1) * nk) ÷ ns, first(kk) + (s * nk) ÷ ns - 1
@@ -264,7 +311,8 @@ end
 
 # the edge slot of plane k of the slab k0:k1 (0: an inner plane): the
 # first lz planes are slots 1:lz, the last lz planes slots lz+1:2lz (a
-# slab shorter than 2lz, the one slab of a short column: front first)
+# slab shorter than 2lz, the one slab of a short column: front first).
+# The same for the edge rows of a row range (ly, j0:j1).
 @inline _edge_slot(k, k0, k1, lz) = k - k0 < lz ? k - k0 + 1 : k1 - k < lz ? 2lz - (k1 - k) : 0
 
 # ---------------------------------------------------------------------------
@@ -351,30 +399,51 @@ end
     BlockedUpdate
 
 The supertype of an update that [`blocked_update!`](@ref) runs over the
-interior, slab by slab and j-row by j-row: the new values of a row are
+interior, block by block (a slab of planes times a range of j-rows, a
+[`SweepBlock`](@ref)) and j-row by j-row: the new values of a row are
 computed while its neighbourhood is in cache, kept in the driver's ring
-(or, on a slab's edge planes, its edge buffer) while later rows still read
-the old values, and written back `lag` rows later (#533, #554). Two
-updates use it: the predictor of a Boussinesq substage
-([`blocked_predictor!`](@ref)) and the update of the SGS TKE
+(or, on a block's edge planes and edge rows, its edge buffers) while
+later rows still read the old values, and written back `lag` rows later
+(#533, #554, #558). Two updates use it: the predictor of a Boussinesq
+substage ([`blocked_predictor!`](@ref)) and the update of the SGS TKE
 (`PrognosticSGS`, `advance_sgs!` of a `TKEClosure`). An update implements
 
   * `update_lags(op) -> (lag, lz)`: rows between computing a row and
     writing it back (no row computed later reads the old values of row
     `j − lag`), and the edge planes at each end of a slab (a slab reads
     the old values of at most `lz` planes of its neighbours), both ≥ 1;
-  * `compute_rows!(op, ring, edge, r, s, j, k0, k1, ii, lz)`: the new
-    values of row `j` of slab `s` (planes `k0:k1`), each plane into
-    `ring[:, k − k0 + 1, r, :, s]` or, on an edge plane `e =
-    _edge_slot(k, k0, k1, lz) > 0`, into `edge[:, j, e, :, s]`;
-  * `write_row!(op, ring, a, b, s, j, k, ii)`: row `(j, k)` from
-    `ring[:, a, b, :, s]` into the fields;
+  * `edge_rows(op) -> ly`: the rows of its neighbours a row range reads
+    the old values of (default `lag`);
+  * `compute_rows!(op, ring, edge, blk, j, ii)`: the new values of row `j`
+    of block `blk`, plane `k` into the slot
+    [`block_slot`](@ref)`(ring, edge, blk, j, k)`;
+  * `write_row!(op, buf, a, b, n, j, k, ii)`: row `(j, k)` from
+    `buf[:, a, b, :, n]` into the fields;
   * `write_point!(op, edge, i, j, k, e, s)`: one point of an edge plane;
-  * `begin_slab!(op, s, k0, k1, ii, jj)`: work at the start of a slab
-    (default none), e.g. the rows a pipelined update needs before the
-    first.
+  * `begin_block!(op, blk, ii)`: work at the start of a block (default
+    none), e.g. the rows a pipelined update needs before the first.
 """
 abstract type BlockedUpdate end
+
+"""
+    SweepBlock
+
+One block of [`blocked_update!`](@ref): number `n` (its ring), slab `s`
+(its edge planes), planes `k0:k1`, rows `j0:j1`, the ring lag `lag`, `lz`
+edge planes per slab end and `ly` edge rows per row-range end (0 when the
+sweep is not split in j).
+"""
+struct SweepBlock
+    n::Int
+    s::Int
+    k0::Int
+    k1::Int
+    j0::Int
+    j1::Int
+    lag::Int
+    lz::Int
+    ly::Int
+end
 
 """
     update_lags(op::BlockedUpdate) -> (lag, lz)
@@ -385,64 +454,96 @@ The ring lag (in j-rows) and the edge planes per slab end of the update
 function update_lags end
 
 """
-    begin_slab!(op::BlockedUpdate, s, k0, k1, ii, jj)
+    edge_rows(op::BlockedUpdate) -> Int
 
-The work of update `op` at the start of slab `s` (planes `k0:k1`) before
-its first row ([`BlockedUpdate`](@ref)). Default none.
+The edge rows per row-range end of the update `op` when the sweep is
+split in j: the j-radius of the old values a new value reads. The
+default, the ring lag, holds for an update that writes a row back as
+soon as no later row reads it ([`BlockedUpdate`](@ref)).
 """
-begin_slab!(::BlockedUpdate, s, k0, k1, ii, jj) = nothing
+edge_rows(op::BlockedUpdate) = update_lags(op)[1]
 
 """
-    compute_rows!(op::BlockedUpdate, ring, edge, r, s, j, k0, k1, ii, lz)
+    begin_block!(op::BlockedUpdate, blk::SweepBlock, ii)
 
-The new values of row `j` (planes `k0:k1` of slab `s`) into the driver's
-ring slot `r` or edge buffer ([`BlockedUpdate`](@ref)).
+The work of update `op` at the start of block `blk` before its first row
+([`BlockedUpdate`](@ref)). Default none.
+"""
+begin_block!(::BlockedUpdate, blk::SweepBlock, ii) = nothing
+
+"""
+    compute_rows!(op::BlockedUpdate, ring, edge, blk::SweepBlock, j, ii)
+
+The new values of row `j` (planes `blk.k0:blk.k1`) of block `blk` into
+the driver's buffers, each plane into its [`block_slot`](@ref)
+([`BlockedUpdate`](@ref)).
 """
 function compute_rows! end
 
 """
-    write_row!(op::BlockedUpdate, ring, a, b, s, j, k, ii)
+    write_row!(op::BlockedUpdate, buf, a, b, n, j, k, ii)
     write_point!(op::BlockedUpdate, edge, i, j, k, e, s)
 
-Write the new values of row `(j, k)` from `ring[:, a, b, :, s]`, or of the
-edge-plane point `(i, j, k)` from `edge[i, j, e, :, s]`, into the fields
-([`BlockedUpdate`](@ref)).
+Write the new values of row `(j, k)` from `buf[:, a, b, :, n]` (the ring
+or an edge row), or of the edge-plane point `(i, j, k)` from
+`edge[i, j, e, :, s]`, into the fields ([`BlockedUpdate`](@ref)).
 """
 function write_row! end
 @doc (@doc write_row!) function write_point! end
 
-# the slot of plane k of row j: the edge buffer on an edge plane, else the ring
-@inline _row_slot(ring, edge, r, j, k, k0, k1, lz) =
-    (e = _edge_slot(k, k0, k1, lz); e > 0 ? (edge, j, e) : (ring, k - k0 + 1, r))
+"""
+    block_slot(ring, edge, blk::SweepBlock, j, k) -> (buf, a, b, n)
 
-# slab s: the j-row sweep (one launch item per slab; slabs write disjoint
-# planes and read the others' only on their edge planes, not yet updated)
-function _b_sweep_slab!(s, op, ring, edge, ii, jj, kk, ns, lag, lz)
+Where the new values of row `(j, k)` of block `blk` go,
+`buf[:, a, b, :, n]`: on an edge plane the slab's edge buffer
+(`edge[:, j, e, :, s]`), on an edge row the block's edge rows in the ring
+(`ring[:, k − k0 + 1, lag + 1 + d, :, n]`), else the ring row
+`mod(j, lag + 1) + 1`.
+"""
+@inline function block_slot(ring, edge, blk::SweepBlock, j, k)
+    e = _edge_slot(k, blk.k0, blk.k1, blk.lz)
+    e > 0 && return (edge, j, e, blk.s)
+    d = blk.ly > 0 ? _edge_slot(j, blk.j0, blk.j1, blk.ly) : 0
+    return (ring, k - blk.k0 + 1, d > 0 ? blk.lag + 1 + d : mod(j, blk.lag + 1) + 1, blk.n)
+end
+
+@inline function _block(n, kk, jj, ns, nt, lag, lz, ly)
+    s = (n - 1) % ns + 1
     k0, k1 = _slab(kk, ns, s)
-    nr = lag + 1
-    begin_slab!(op, s, k0, k1, ii, jj)
-    for j in jj
-        compute_rows!(op, ring, edge, mod(j, nr) + 1, s, j, k0, k1, ii, lz)
+    j0, j1 = _slab(jj, nt, (n - 1) ÷ ns + 1)
+    return SweepBlock(n, s, k0, k1, j0, j1, lag, lz, ly)
+end
+
+# block n: the j-row sweep (one launch item per block; blocks write
+# disjoint points and read the others' only on their edge planes and edge
+# rows, not yet updated)
+function _b_sweep_block!(n, op, ring, edge, ii, jj, kk, ns, nt, lag, lz, ly)
+    blk = _block(n, kk, jj, ns, nt, lag, lz, ly)
+    begin_block!(op, blk, ii)
+    for j in blk.j0:blk.j1
+        compute_rows!(op, ring, edge, blk, j, ii)
         jp = j - lag
-        jp >= first(jj) && _write_rows!(op, ring, mod(jp, nr) + 1, s, jp, k0, k1, ii, lz)
+        jp >= blk.j0 && _write_rows!(op, ring, blk, jp, ii)
     end
-    for jp in max(first(jj), last(jj) - lag + 1):last(jj)
-        _write_rows!(op, ring, mod(jp, nr) + 1, s, jp, k0, k1, ii, lz)
+    for jp in max(blk.j0, blk.j1 - lag + 1):blk.j1
+        _write_rows!(op, ring, blk, jp, ii)
     end
     return nothing
 end
-@inline function _write_rows!(op, ring, rp, s, jp, k0, k1, ii, lz)
-    for k in k0+lz:k1-lz
-        write_row!(op, ring, k - k0 + 1, rp, s, jp, k, ii)
+@inline function _write_rows!(op, ring, blk, jp, ii)
+    blk.ly > 0 && _edge_slot(jp, blk.j0, blk.j1, blk.ly) > 0 && return nothing    # an edge row
+    rp = mod(jp, blk.lag + 1) + 1
+    for k in blk.k0+blk.lz:blk.k1-blk.lz
+        write_row!(op, ring, k - blk.k0 + 1, rp, blk.n, jp, k, ii)
     end
     return nothing
 end
 
-# the edge planes, after every slab: (i, j, n), n = (s − 1)·2lz + e for
+# the edge planes, after every block: (i, j, m), m = (s − 1)·2lz + e for
 # edge slot e of slab s
-@inline function _b_sweep_edge!(i, j, n, op, edge, kk, ns, lz)
-    s = (n - 1) ÷ (2lz) + 1
-    e = (n - 1) % (2lz) + 1
+@inline function _b_sweep_edge!(i, j, m, op, edge, kk, ns, lz)
+    s = (m - 1) ÷ (2lz) + 1
+    e = (m - 1) % (2lz) + 1
     k0, k1 = _slab(kk, ns, s)
     if e <= lz
         k = k0 + e - 1
@@ -455,39 +556,66 @@ end
     return nothing
 end
 
+# the edge rows, after every block: (kl, d, n), plane k0 + kl − 1 of edge
+# row d of block n (the inner planes; an edge plane went to `edge`)
+@inline function _b_sweep_yedge!(kl, d, n, op, ring, ii, jj, kk, ns, nt, lag, lz, ly)
+    blk = _block(n, kk, jj, ns, nt, lag, lz, ly)
+    k = blk.k0 + kl - 1
+    (k < blk.k0 + lz || k > blk.k1 - lz) && return nothing
+    if d <= ly
+        j = blk.j0 + d - 1
+        j > blk.j1 && return nothing
+    else
+        j = blk.j1 - (2ly - d)
+        (j < blk.j0 || j - blk.j0 < ly) && return nothing  # a front slot already
+    end
+    write_row!(op, ring, kl, lag + 1 + d, n, j, k, ii)
+    return nothing
+end
+
 """
     blocked_update!(bufs::SweepBuffers, op::BlockedUpdate, b, g; reverse_slabs = false)
 
 Run the update `op` ([`BlockedUpdate`](@ref)) over the interior of the
-mesh `g` on backend `b`: the k-range cut into `bufs.ns` slabs (one launch
-item each), each swept j-row by j-row with its new rows held in the ring
-of `bufs` until `update_lags(op)[1]` rows later, then the slabs' edge
-planes in a second launch. `bufs` ([`sweep_buffers`](@ref)) must have the
-lags of `op` and as many fields as `op` writes. `reverse_slabs = true`
-runs the slabs one after another in reverse order, serially: with the
-forward order of one thread, the two orders bound what concurrent slabs
-can see (a test hook, #533 review).
+mesh `g` on backend `b`: the k-range cut into `bufs.ns` slabs and the
+j-range into `bufs.nt` row ranges, one launch item per block
+([`SweepBlock`](@ref)), each block swept j-row by j-row with its new rows
+held in the ring of `bufs` until `update_lags(op)[1]` rows later; then
+the slabs' edge planes and the row ranges' edge rows in a second and
+third launch. `bufs` ([`sweep_buffers`](@ref)) must have the lags and
+edge rows of `op` and as many fields as `op` writes. `reverse_slabs =
+true` runs the blocks one after another in reverse order, serially: with
+the forward order of one thread, the two orders bound what concurrent
+blocks can see (a test hook, #533 review).
 """
 function blocked_update!(bufs::SweepBuffers, op::BlockedUpdate, b, g::AbstractMesh;
                          reverse_slabs::Bool = false)
     ii, jj, kk = interior(g)
-    ns = bufs.ns
+    ns, nt = bufs.ns, bufs.nt
     lag, lz = update_lags(op)
-    bufs.lag == lag && bufs.lz == lz && size(bufs.ring, 2) >= cld(length(kk), ns) &&
-        (ns == 1 || 2lz * ns <= length(kk)) ||
+    ly = nt > 1 ? edge_rows(op) : 0
+    bufs.lag == lag && bufs.lz == lz && bufs.ly == ly && size(bufs.ring, 2) >= cld(length(kk), ns) &&
+        (ns == 1 || 2lz * ns <= length(kk)) && nt <= length(jj) ||
         throw(DimensionMismatch("blocked_update!: buffers do not fit ($ns slabs over $(length(kk)) " *
-                                "planes, lag $lag, $lz edge planes)"))
+                                "planes, $nt row ranges over $(length(jj)) rows, lag $lag, $lz edge " *
+                                "planes, $ly edge rows)"))
+    nb = ns * nt
     if reverse_slabs
-        for s in ns:-1:1
-            _b_sweep_slab!(s, op, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+        for n in nb:-1:1
+            _b_sweep_block!(n, op, bufs.ring, bufs.edge, ii, jj, kk, ns, nt, lag, lz, ly)
         end
-        for n in 1:2lz*ns, j in jj, i in ii
-            _b_sweep_edge!(i, j, n, op, bufs.edge, kk, ns, lz)
+        for m in 1:2lz*ns, j in jj, i in ii
+            _b_sweep_edge!(i, j, m, op, bufs.edge, kk, ns, lz)
+        end
+        for n in 1:nb, d in 1:2ly, kl in 1:size(bufs.ring, 2)
+            _b_sweep_yedge!(kl, d, n, op, bufs.ring, ii, jj, kk, ns, nt, lag, lz, ly)
         end
     else
-        launch_weighted!(b, cld(length(ii) * length(jj) * length(kk), ns), _b_sweep_slab!, (1:ns,),
-                         op, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+        launch_weighted!(b, cld(length(ii) * length(jj) * length(kk), nb), _b_sweep_block!, (1:nb,),
+                         op, bufs.ring, bufs.edge, ii, jj, kk, ns, nt, lag, lz, ly)
         launch!(b, _b_sweep_edge!, (ii, jj, 1:2lz*ns), op, bufs.edge, kk, ns, lz)
+        ly > 0 && launch_weighted!(b, length(ii), _b_sweep_yedge!, (1:size(bufs.ring, 2), 1:2ly, 1:nb),
+                                   op, bufs.ring, ii, jj, kk, ns, nt, lag, lz, ly)
     end
     return nothing
 end
@@ -506,10 +634,10 @@ struct _PredictorUpdate{TT<:Tuple, ST, PU, P1, P2} <: BlockedUpdate
     p2::P2
 end
 update_lags(op::_PredictorUpdate) = sweep_lags(op.terms)
-@inline function compute_rows!(op::_PredictorUpdate, ring, edge, r, s, j, k0, k1, ii, lz)
-    for k in k0:k1
-        buf, a, b = _row_slot(ring, edge, r, j, k, k0, k1, lz)
-        _term_rows!(buf, a, b, s, j, k, ii, op.terms, op.st)
+@inline function compute_rows!(op::_PredictorUpdate, ring, edge, blk::SweepBlock, j, ii)
+    for k in blk.k0:blk.k1
+        buf, a, b, n = block_slot(ring, edge, blk, j, k)
+        _term_rows!(buf, a, b, n, j, k, ii, op.terms, op.st)
     end
     return nothing
 end
@@ -561,7 +689,8 @@ first, [`BaseTendencies`](@ref), initialises it, every further
 an array), over the interior of `g`. Within round-off the whole-field
 passes of the same terms followed by the predictor passes, but the
 tendencies stay in `bufs` ([`sweep_buffers`](@ref) with the
-[`sweep_lags`](@ref) of `terms`, `bufs.nf` ≥ 3 + the number of scalars),
+[`sweep_lags`](@ref) of `terms`, `ly = lag` when it splits in j, `bufs.nf`
+≥ 3 + the number of scalars),
 blocked so each field is streamed once. Every halo a term reads must be
 filled; nothing else may read or write the fields meanwhile. The sweep is
 the [`blocked_update!`](@ref) driver running the predictor
@@ -579,6 +708,7 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTendencies,Vara
         (ns == 1 || 2lz * ns <= length(kk)) ||
         throw(DimensionMismatch("blocked_predictor!: buffers do not fit ($ns slabs over $(length(kk)) " *
                                 "planes, lag $lag, $lz edge planes)"))
+    # (the edge rows of a split in j are checked by blocked_update!)
     b = Backends.backend(u.data)
     _check_inputs(b, terms)
     st = (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))

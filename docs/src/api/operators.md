@@ -124,8 +124,10 @@ without one; PALM's `loop_optimization = 'cache'` stops the same way) or
 documented reasons are `Simulations.SWEEP_FALLBACKS`, the allowlist of
 the completeness guard `test/fused_sweep.jl`.
 
-The slab and ring machinery is one driver, `blocked_update!`, generic
-over the update it runs (a `BlockedUpdate`, #554): the substage predictor
+The block and ring machinery is one driver, `blocked_update!`, generic
+over the update it runs (a `BlockedUpdate`, #554); it cuts the interior
+into slabs of planes times ranges of j-rows, one block per thread
+(`sweep_blocks`, #558). It runs the substage predictor
 (`blocked_predictor!`) and the update of a `TKEClosure`'s SGS energy
 (`advance_sgs!`, `PrognosticSGS`).
 
@@ -144,13 +146,16 @@ Aeolus.Operators.FiniteVolume.sweep_lags
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.BlockedUpdate
 Aeolus.Operators.FiniteVolume.blocked_update!
+Aeolus.Operators.FiniteVolume.SweepBlock
 Aeolus.Operators.FiniteVolume.update_lags
-Aeolus.Operators.FiniteVolume.begin_slab!
+Aeolus.Operators.FiniteVolume.edge_rows
+Aeolus.Operators.FiniteVolume.begin_block!
 Aeolus.Operators.FiniteVolume.compute_rows!
+Aeolus.Operators.FiniteVolume.block_slot
 Aeolus.Operators.FiniteVolume.write_row!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
-Aeolus.Operators.FiniteVolume.sweep_slabs
+Aeolus.Operators.FiniteVolume.sweep_blocks
 Aeolus.Simulations.SWEEP_FALLBACKS
 Aeolus.Simulations.SweepReport
 Aeolus.Simulations.sweep_report

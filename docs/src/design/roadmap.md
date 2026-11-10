@@ -3454,6 +3454,200 @@ the rings); the Reynolds-stress closure (`_rsm_update_plane`) could use
 the same driver (plan step 4) and the urban `TracerSGSDiffusion` loops
 (plan step 3).
 
+#### The blocked sweep split in j as well (#558)
+
+The slab cap of #554 is lifted: `FiniteVolume.blocked_update!` cuts the
+interior into `ns` slabs in k times `nt` row ranges in j, one launch item
+per block (`SweepBlock`). The predictor and the TKE pass both get it from
+the one driver.
+
+**What was built.**
+
+- **Edge rows.** A row range keeps its first and last `ly` rows out of
+  the in-place write, as a slab keeps its edge planes. Their new values
+  go to `2ly` extra rows of the block's ring (`block_slot`). A third
+  launch writes them after every block is done. A point that is both
+  goes to the edge-plane buffer.
+- **`ly` per update** (`edge_rows`): the reach in j of the old values a
+  new value reads. The predictor's is its ring lag (the terms' largest
+  y-radius). The TKE pass's is `lz = hr + 1`, not its lag `max(1, hr −
+  2)`, because its pipeline runs two rows ahead.
+- **The TKE pipeline at a range's first row.** For a range after the
+  first, row j0 − 1 is interior, so its ν and limiter ratio are computed
+  from the old e by the front's own code (`_front_row!`). They are not
+  copied from the halo. The pipeline's end already reads up to `hr + 1`
+  rows past j1, which are the next range's edge rows.
+- **Interface.** `begin_slab!` became `begin_block!(op, blk, ii)`, and
+  `compute_rows!` takes the block. `block_slot`, `edge_rows` and
+  `SweepBlock` are new. `sweep_slabs` became
+  `sweep_blocks(b, npoints, nk, nj; lz, ly) -> (ns, nt)`.
+- **The split rule** (`_split_blocks`). Slabs are no taller than 20
+  planes where the thread count allows. Among those splits it takes the
+  least `cld(ns·nt, T)/(ns·nt) · (1 + 0.5 f_edge)`, i.e. as many blocks
+  as threads with the fewest edge points. At 60 levels and 200 rows this
+  gives (3, 2), (3, 4) and (3, 8) at 6, 12 and 24 threads, for every lz.
+
+**The rule's wrong first guess.** The first rule minimised edge points
+alone. On 60 levels it chose whole columns (ns = 1: (1, 6) at 6
+threads), which have the fewest edge planes. A scan of every split at 6,
+12 and 24 threads on 200 × 200 × 60 (the TKE pass centred and WENO-Z5,
+and the predictor; interleaved, 27 calls each) put ns = 1 10–110 %
+behind the best split. A block's rows of every field over 60 planes no
+longer stay in cache. The best splits had slabs of 10–30 planes. The
+20-plane bound comes from this one machine and grid width; it was not
+measured at other widths.
+
+**Measurements.** All runs were under the benchmark lock with package
+power logged. Min / median in ms; "k only" is the #554 split
+(`(min(T, nk ÷ 2lz), 1)`), run interleaved in one process with the new
+split (45 calls each, 24 for the whole step). e is the same with both
+splits and the separate loops (max |Δe| = 0). The TKE rows time `_advance_blocked!` (N², D and the shell included),
+each call with a copy of e. The predictor rows time `blocked_predictor!`
+with the base term.
+
+Synthetic 200 × 200 × 60 (`bench_p2_setup.jl` of #554):
+
+| case | threads | separate | k only | blocks |
+| :-- | --: | --: | --: | --: |
+| TKE centred, solid mask | 6 | 33.23 / 35.31 | (6, 1) 23.40 / 24.78 | (3, 2) 22.92 / 24.14 |
+| | 12 | 35.73 / 40.10 | (12, 1) 22.64 / 25.24 | (3, 4) 21.50 / 24.69 |
+| | 24 | 33.34 / 35.07 | (15, 1) 20.57 / 22.80 | (3, 8) 19.16 / 20.66 |
+| TKE WENO-Z5 | 6 | 36.72 / 39.56 | (6, 1) 29.29 / 31.54 | (3, 2) 28.03 / 31.07 |
+| | 12 | 40.29 / 41.81 | (7, 1) 29.14 / 33.64 | (3, 4) 27.01 / 31.90 |
+| | 24 | 34.16 / 35.89 | (7, 1) 27.94 / 31.35 | (3, 8) 24.08 / 26.17 |
+| predictor (base term) | 6 | | (6, 1) 4.22 / 5.42 | (3, 2) 3.78 / 4.56 |
+| | 12 | | (12, 1) 5.44 / 6.21 | (3, 4) 4.00 / 4.98 |
+| | 24 | | (24, 1) 7.19 / 7.77 | (3, 8) 4.26 / 4.64 |
+
+The Berlin 100 m state after 3 steps (centred reconstruction, no closure
+mask, open lateral faces) is below. The second run repeated 12 and 24
+threads.
+
+| | threads | separate | k only | blocks |
+| :-- | --: | --: | --: | --: |
+| TKE pass | 6 | 41.21 / 51.67 | (6, 1) 23.65 / 31.26 | (3, 2) 23.31 / 31.49 |
+| | 12 | 32.92 / 34.90 | (12, 1) 16.13 / 18.24 | (3, 4) 15.38 / 17.64 |
+| | 12, again | 37.08 / 42.32 | (12, 1) 22.24 / 28.31 | (3, 4) 22.57 / 26.76 |
+| | 24 | 33.80 / 36.86 | (15, 1) 17.84 / 19.63 | (3, 8) 18.91 / 20.77 |
+| | 24, again | 34.98 / 38.21 | (15, 1) 18.78 / 21.21 | (3, 8) 20.27 / 22.97 |
+| whole step (24 calls) | 6 | | 294.75 / 320.08 | 291.59 / 327.39 |
+| | 12 | | 223.39 / 232.14 | 224.15 / 232.54 |
+| | 24 | | 239.48 / 248.08 | 241.53 / 249.90 |
+
+Package power per run, mean / peak and mean clock:
+
+| run | 6 threads | 12 threads | 24 threads |
+| :-- | :-- | :-- | :-- |
+| synthetic | 23.0 / 33.6 W, 2.01 GHz | 28.8 / 30.7 W, 2.53 GHz | 22.7 / 31.0 W, 2.31 GHz |
+| Berlin | 28.6 / 30.6 W, 2.56 GHz | 22.7 / 30.5 W, 2.34 GHz | 22.8 / 29.8 W, 2.45 GHz |
+| Berlin, again | | 29.8 / 43.4 W, 2.58 GHz | 19.9 / 30.3 W, 2.21 GHz |
+
+Other agents' unlocked work shared the machine: the 1-min load was 3.3
+to 11.5 at the start of a run. Only the interleaved pairs inside one
+process compare. The rows from different processes do not.
+
+What the numbers say:
+
+- **The predictor gains most**, 26 % at 12 threads and 41 % at 24 (min).
+  The #554 split gave it 24 slabs of 2–3 planes at 24 threads, all of
+  them edge planes, and it ran slower than at 6 threads.
+- **WENO-Z5 gains 7 % at 12 threads and 14 % at 24**, where the #554
+  split capped it at 7 slabs.
+- **The centred TKE pass gains 2–7 % on the synthetic case** (within
+  the run-to-run spread at 6 and 12 threads).
+- **On Berlin it gains nothing.** At 24 threads the new split is 6–8 %
+  slower in both runs (17.84 → 18.91 and 18.78 → 20.27 ms min).
+- **The Berlin step does not change** (within 1 %). Berlin's substages
+  are not fused (open boundaries, the SGS closure and buoyancy have no
+  sweep form yet; `substages_fused = "none"`), so only the TKE pass
+  uses the driver there.
+- **Past 12 threads little scales.** The best 24-thread splits in the
+  scan used 12–15 blocks about as well as 24. The machine has 12 cores,
+  4 fast and 8 compact, with two hardware threads each.
+
+**Tests.**
+
+- **`test/fused_sweep.jl`.** The predictor at 1–5 slabs times 1–3 row
+  ranges, forward and reversed block order, regular and stretched, dry
+  and moist, Euler and RK3, against the separate passes. The same for
+  the composed terms of reach 2 (`ly = 2`).
+- **The rule's bounds** (≤ one block per thread, ≥ 2lz planes and ≥ 2ly
+  rows per block, slabs ≤ 20 planes where the threads allow) and its
+  picks at 60 × 200.
+- **A `-t 4` subprocess** runs 30 splits concurrently against the
+  one-block sweep. The worst difference is 0, against a tolerance of
+  4 eps of each field's maximum.
+- **`test/tke_blocked.jl`.** 1–2 slabs times 2–6 row ranges, both
+  orders (320 checks), on WENO-Z5, centred and stretched grids. With
+  transport on and off, both dissipation forms, and the solid mask with
+  immersed walls. At 6 ranges of 23 rows every row is an edge row.
+  No-flux faces, the short column and the open box also run with 2
+  ranges. The `-t 4` subprocess adds (1, 2), (1, 4) and (2, 2).
+- **Tolerances and results.** e must agree within 4 eps of max e
+  (measured 0) and the budget sums within 1e-12 relative.
+- **The thread-invariance worker** (`AEOLUS_THREAD_TESTS=1`, sections
+  dns, fv, steps and sgs, at 1, 4 and 24 threads) agrees. Its
+  "columns" section stops at the urban nesting check, which this change
+  does not touch.
+- **No bug was caught.** The split agreed on the first run.
+- **Mutation check.** With the TKE edge rows one shallower (`ly = lz −
+  1`), the j-split cases fail in both orders, by up to 4e-3 of max e.
+
+**Deviations.** `sweep_slabs` is gone (`sweep_blocks` replaces it). The
+issue's alternative, "choose the slab count from lz and Nz and give the
+remaining threads row ranges", is what the rule does in effect. The
+20-plane bound, not lz, sets the slab count. #555's record says the
+Berlin timing "ran with the closure's solid mask". The #554 script
+printed `c.mask === nothing` as "mask true", and this run's closure has
+no mask. The Berlin cases above and #554's ran without one.
+
+**Review.** An independent review re-read the driver and the TKE
+pipeline for every configuration of the issue and checked them with
+small scripts:
+
+- **Concurrent blocks, 8 threads.** 150 random splits (1–7 slabs times
+  1–12 row ranges) of the TKE pass on 20 × 37 × 30, centred and
+  WENO-Z5, regular and stretched, with and without the solid mask and
+  immersed walls, three steps each, against the separate loops: worst
+  |Δe| 0 relative to max e, budget sums agree.
+- **Allocation.** On the serial backend at (2, 3) the pass allocates 0 B
+  (368 B with walls, the same as the separate loops). Threaded, it
+  allocates the launches' task closures: 24.7 kB against 16.4 kB for
+  the separate loops at 8 threads, from one more launch (the edge rows).
+- **No reader of a removed name.** `sweep_slabs`, `begin_slab!` and
+  `_row_slot` have no caller left in src/, test/, validation/,
+  examples/ or benchmarks/.
+- **Fixed: the test hook's default for the other count.**
+  `_advance_blocked!(c, sim, Δt; nt = 3)` took ns from the default
+  split for a different block count: at -t 4 it ran (4, 3). It now takes
+  1 for the one not named. The -t 4 subprocess of `test/tke_blocked.jl`
+  checks it (it printed ((2, 1), (4, 3)) before the fix).
+- **Berlin TKE pass again, on a quiet machine** (1-min load 1.3–2.2,
+  33 calls per split, interleaved; 20.7 / 31.3 W at 2.06 GHz with 24
+  threads, 19.0 / 30.2 W at 1.93 GHz with 12; min / median ms):
+
+  | threads | the rule's choice | #554's k only | best of the scan |
+  | --: | :-- | :-- | :-- |
+  | 12 | (3, 4) 14.21 / 15.77 | (12, 1) 15.13 / 16.19 | (3, 4) |
+  | 24 | (3, 8) 16.56 / 19.46 | (15, 1) 16.05 / 18.25 | (6, 2) 15.08 / 17.96 |
+
+  At 12 threads the rule picks the fastest split, 6 % ahead of k only.
+  At 24 threads it is 3 % (min) to 7 % (median) behind k only, as the
+  implementer measured; every 12-block split ((3, 4), (4, 3), (6, 2))
+  ran faster than the 24-block one, and no 24-thread split beat the
+  best at 12 threads. On this machine (12 cores, two hardware threads
+  each) a block per hardware thread is too many; the rule does not know
+  the core count. Not changed here: one machine.
+
+**Open.**
+
+- The rule is tuned on one machine and one grid width (200).
+- The centred pass on Berlin prefers the #554 split at 24 threads, and
+  12 blocks to 24 (see the review).
+- The step gains nothing on Berlin until its substages run fused.
+- Past 12 threads the sweeps are limited by memory bandwidth and the
+  compact cores, not by the block count.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall

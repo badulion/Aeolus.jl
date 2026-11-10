@@ -309,8 +309,10 @@ function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage,
     moist = sim.has_moisture
     ii, jj, kk = interior(sim.mesh)
     lag, lz = sweep_lags(terms)
-    ns = sweep_slabs(Backends.backend(sim.u.data), length(ii) * length(jj) * length(kk), length(kk); lz = lz)
-    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, moist ? 5 : 4, ns, length(kk); lag = lag, lz = lz)
+    ns, nt = sweep_blocks(Backends.backend(sim.u.data), length(ii) * length(jj) * length(kk), length(kk),
+                          length(jj); lz = lz, ly = lag)
+    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, moist ? 5 : 4, ns, length(kk);
+                         lag = lag, lz = lz, nt = nt, ly = lag)
     sim.workspaces.sweep = bufs
     _prepare_terms!(terms, sim, Δt)
     _blocked_sweep!(bufs, terms, sim, Δt, stage)

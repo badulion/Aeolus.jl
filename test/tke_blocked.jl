@@ -61,6 +61,36 @@ include(joinpath(@__DIR__, "support", "tke_blocked_cases.jl"))
     @test nlim[] > 0          # the limiter was exercised
 end
 
+@testset "TKE blocked pass: split in j as well (#558)" begin
+    # slabs times row ranges: 23 rows cut into 1 to 6 ranges (at 6, ranges
+    # of 3-4 rows, shorter than the 2lz = 8 edge rows of WENO-Z5, so every
+    # row is an edge row), 1 or 2 slabs, both block orders; regular grids
+    # (WENO-Z5, centred), a stretched grid; transport on and off, both
+    # dissipation forms, the solid mask with wall-modelled immersed walls
+    n = (12, 23, 20)
+    rg = RegularGrid(; size = n, extent = (120.0, 230.0, 200.0), halo = (3, 3, 3))
+    rg2 = RegularGrid(; size = n, extent = (120.0, 230.0, 200.0), halo = (2, 2, 2))
+    sg = StretchedGrid(; size = n, extent = (120.0, 230.0, 400.0), halo = (2, 2, 2), stretching = (:tanh, 1.5))
+    for (gname, g) in (("regular WENO-Z5", rg), ("regular centred", rg2), ("stretched", sg)),
+        (transport, diss, solid) in ((true, :semi_implicit, false), (true, :exact, true), (false, :exact, false))
+        solid && g isa StretchedGrid && continue
+        sim, c = tkb_case(g; transport = transport, dissipation = diss, mask = solid,
+                          walls = solid && g === rg, surface = true)
+        e0 = copy(c.e.data)
+        ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
+        scale = maximum(abs, ref_e)
+        for ns in 1:2, nt in 2:6, rev in (false, true)
+            e, s = tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, nt = nt, reverse_slabs = rev),
+                            c, sim, e0, 0.4)
+            ok_e = maximum(abs.(e .- ref_e)) <= 4eps() * scale
+            ok_s = tkb_stats_agree(s, ref_s)
+            ok_e && ok_s || @info "TKE blocked pass (split in j) disagrees" gname transport diss solid ns nt rev maximum(abs.(e .- ref_e)) s ref_s
+            @test ok_e
+            @test ok_s
+        end
+    end
+end
+
 @testset "TKE blocked pass: no-flux lateral faces, a short column (#554)" begin
     for (bcs, n) in ((FieldBoundaryConditions(:noflux, :noflux, :wall), (9, 7, 12)),
                      (FieldBoundaryConditions(:periodic, :periodic, :wall), (6, 1, 3)))
@@ -68,9 +98,10 @@ end
         sim, c = tkb_case(g; bcs = bcs)
         e0 = copy(c.e.data)
         ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
-        for ns in (1, 2)
+        for ns in (1, 2), nt in (1, 2)
             (ns > 1 && 8ns > g.Nz) && continue
-            e, s = tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns), c, sim, e0, 0.4)
+            nt > g.Ny && continue
+            e, s = tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, nt = nt), c, sim, e0, 0.4)
             @test maximum(abs.(e .- ref_e)) <= 4eps() * maximum(abs, ref_e)
             @test tkb_stats_agree(s, ref_s)
         end
@@ -89,9 +120,9 @@ end
         @test TKB._tke_blocked_blocker(c, sim) === nothing
         e0 = copy(c.e.data)
         ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
-        for ns in (1, 2), rev in (false, true)
+        for ns in (1, 2), nt in (1, 2), rev in (false, true)
             (ns > 1 && 2 * TKB.tke_blocked_lags(c)[2] * ns > g.Nz) && continue
-            e, s = tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, reverse_slabs = rev),
+            e, s = tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, nt = nt, reverse_slabs = rev),
                             c, sim, e0, 0.4)
             @test maximum(abs.(e .- ref_e)) <= 4eps() * maximum(abs, ref_e)
             @test tkb_stats_agree(s, ref_s)
@@ -186,38 +217,49 @@ end
     @test maximum(abs.(out[1].e .- out[2].e)) <= 4eps() * maximum(out[2].e)
 end
 
-# The slabs of the pass run concurrently only with more than one thread;
+# The blocks of the pass run concurrently only with more than one thread;
 # the test gate runs each file at one thread, where the "threaded" cases
-# above run the slabs one after another. So the concurrent case runs here
+# above run the blocks one after another. So the concurrent case runs here
 # in a -t 4 subprocess (skipped when this process already has 4 threads,
 # where the main set ran them concurrently): WENO-Z5 and centred, with the
-# solid mask, at 2 to 5 slabs, against the separate loops (e within 4 eps
-# of max e, the budget sums as above).
+# solid mask, at 2 to 5 slabs, and at 1 or 2 slabs times 2 or 4 row ranges
+# (#558), against the separate loops (e within 4 eps of max e, the budget
+# sums as above).
 const _TKB_THREADED = """
 using Aeolus
 using Aeolus.Backends: CPUBackend, with_backend
 const TKB = Aeolus.PrognosticSGS
 include($(repr(joinpath(@__DIR__, "support", "tke_blocked_cases.jl"))))
-n = (14, 10, 40); worst = 0.0; stats_ok = true; runs = 0
+n = (14, 20, 40); worst = 0.0; stats_ok = true; runs = 0
 for h in (2, 3), solid in (false, true)
-    g = RegularGrid(; size = n, extent = (140.0, 100.0, 200.0), halo = (h, h, h))
+    g = RegularGrid(; size = n, extent = (140.0, 200.0, 200.0), halo = (h, h, h))
     sim, c = tkb_case(g; mask = solid, surface = true)
     e0 = copy(c.e.data)
     ref_e, ref_s = tkb_run!(TKB._advance_separate!, c, sim, e0, 0.4)
-    for ns in 2:5
+    for (ns, nt) in ((2, 1), (3, 1), (4, 1), (5, 1), (1, 2), (1, 4), (2, 2))
         2 * TKB.tke_blocked_lags(c)[2] * ns > g.Nz && continue
         e, s = with_backend(CPUBackend(threshold = 0)) do
-            tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns), c, sim, e0, 0.4)
+            tkb_run!((c, sim, Δt) -> TKB._advance_blocked!(c, sim, Δt; ns = ns, nt = nt), c, sim, e0, 0.4)
         end
         global worst = max(worst, maximum(abs.(e .- ref_e)) / maximum(abs, ref_e))
         global stats_ok &= tkb_stats_agree(s, ref_s)
         global runs += 1
     end
 end
-print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok)
+# a test that names only the slabs gets one row range (not the default
+# split's count for another slab count), and vice versa
+g = RegularGrid(; size = n, extent = (140.0, 200.0, 200.0), halo = (2, 2, 2))
+sim, c = tkb_case(g)
+splits = with_backend(CPUBackend(threshold = 0)) do
+    map(((2, nothing), (nothing, 3))) do (ns, nt)
+        TKB._advance_blocked!(c, sim, 0.4; ns = ns, nt = nt)
+        (c.blocked[].bufs.ns, c.blocked[].bufs.nt)
+    end
+end
+print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok, " splits ", splits)
 """
 
-@testset "TKE blocked pass: slabs run concurrently, -t 4 (#554)" begin
+@testset "TKE blocked pass: blocks run concurrently, -t 4 (#554, #558)" begin
     if Threads.nthreads() >= 4
         @test true            # the main set above ran the slabs concurrently
     else
@@ -231,9 +273,10 @@ print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats 
         m = match(r"threads (\d+) runs (\d+) worst ([0-9.eE+-]+) stats (true|false)", msg)
         @test m !== nothing
         if m !== nothing
-            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 10
+            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 16
             @test parse(Float64, m[3]) <= 4eps()
             @test m[4] == "true"
         end
+        @test occursin("splits ((2, 1), (1, 3))", msg)
     end
 end
