@@ -116,6 +116,9 @@ const BT = Aeolus.Backends
         @test kv["nest_last_name"] == "nested!"
         @test kv["nest_summary"] == "1,4"
         @test kv["nest_records_ok"] == "true" && kv["nest_values_ok"] == "true"
+        # 3b. the dynamic column schedule (#537) is traced as one launch
+        @test kv["dyn_count"] == "1" && kv["dyn_name"] == "dynamic_columns"
+        @test kv["dyn_record_ok"] == "true" && parse(Float64, kv["dyn_busy_max"]) >= 0.03
         off, on = parse(Float64, kv["cost_off"]), parse(Float64, kv["cost_on"])
         @info "launch trace, 64×64×16 launch on 4 threads: off $(round(off * 1e6; digits = 1)) µs, on $(round(on * 1e6; digits = 1)) µs"
         rm(out; force = true)
