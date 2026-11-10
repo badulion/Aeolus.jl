@@ -95,6 +95,18 @@ put("nest_summary", "$(s.launches),$(s.nested)")
 put("nest_records_ok", all(check_record, rs[1:end-1]) && check_record(rs[end]; busy = false))
 put("nest_values_ok", all(a -> all(==(3.0), a), arrs))   # 2 warm-up + 1 traced launch per array
 
+# 3b. the dynamic column schedule (#537), which runs its own tasks: one
+# record named dynamic_columns, the column that spins 30 ms on one thread
+spincol!(c, t) = spin!(c, t)
+B.dynamic_columns!(spincol!, 64, (0.0,))
+B.reset_launch_trace!()
+B.dynamic_columns!(spincol!, 64, (0.03,))
+rs = B.launch_trace()
+put("dyn_count", length(rs))
+put("dyn_name", isempty(rs) ? "" : first(rs).name)
+put("dyn_record_ok", !isempty(rs) && check_record(first(rs)))
+put("dyn_busy_max", isempty(rs) ? 0.0 : maximum(first(rs).busy) * 1e-9)
+
 # 4. the cost of the trace on a small threaded launch (4 tasks, 65 536 points)
 function per_launch(b, a, n)
     t0 = time_ns()
