@@ -3601,10 +3601,49 @@ Berlin timing "ran with the closure's solid mask". The #554 script
 printed `c.mask === nothing` as "mask true", and this run's closure has
 no mask. The Berlin cases above and #554's ran without one.
 
+**Review.** An independent review re-read the driver and the TKE
+pipeline for every configuration of the issue and checked them with
+small scripts:
+
+- **Concurrent blocks, 8 threads.** 150 random splits (1–7 slabs times
+  1–12 row ranges) of the TKE pass on 20 × 37 × 30, centred and
+  WENO-Z5, regular and stretched, with and without the solid mask and
+  immersed walls, three steps each, against the separate loops: worst
+  |Δe| 0 relative to max e, budget sums agree.
+- **Allocation.** On the serial backend at (2, 3) the pass allocates 0 B
+  (368 B with walls, the same as the separate loops). Threaded, it
+  allocates the launches' task closures: 24.7 kB against 16.4 kB for
+  the separate loops at 8 threads, from one more launch (the edge rows).
+- **No reader of a removed name.** `sweep_slabs`, `begin_slab!` and
+  `_row_slot` have no caller left in src/, test/, validation/,
+  examples/ or benchmarks/.
+- **Fixed: the test hook's default for the other count.**
+  `_advance_blocked!(c, sim, Δt; nt = 3)` took ns from the default
+  split for a different block count: at -t 4 it ran (4, 3). It now takes
+  1 for the one not named. The -t 4 subprocess of `test/tke_blocked.jl`
+  checks it (it printed ((2, 1), (4, 3)) before the fix).
+- **Berlin TKE pass again, on a quiet machine** (1-min load 1.3–2.2,
+  33 calls per split, interleaved; 20.7 / 31.3 W at 2.06 GHz with 24
+  threads, 19.0 / 30.2 W at 1.93 GHz with 12; min / median ms):
+
+  | threads | the rule's choice | #554's k only | best of the scan |
+  | --: | :-- | :-- | :-- |
+  | 12 | (3, 4) 14.21 / 15.77 | (12, 1) 15.13 / 16.19 | (3, 4) |
+  | 24 | (3, 8) 16.56 / 19.46 | (15, 1) 16.05 / 18.25 | (6, 2) 15.08 / 17.96 |
+
+  At 12 threads the rule picks the fastest split, 6 % ahead of k only.
+  At 24 threads it is 3 % (min) to 7 % (median) behind k only, as the
+  implementer measured; every 12-block split ((3, 4), (4, 3), (6, 2))
+  ran faster than the 24-block one, and no 24-thread split beat the
+  best at 12 threads. On this machine (12 cores, two hardware threads
+  each) a block per hardware thread is too many; the rule does not know
+  the core count. Not changed here: one machine.
+
 **Open.**
 
 - The rule is tuned on one machine and one grid width (200).
-- The centred pass on Berlin prefers the #554 split at 24 threads.
+- The centred pass on Berlin prefers the #554 split at 24 threads, and
+  12 blocks to 24 (see the review).
 - The step gains nothing on Berlin until its substages run fused.
 - Past 12 threads the sweeps are limited by memory bandwidth and the
   compact cores, not by the block count.
