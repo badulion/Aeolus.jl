@@ -3566,6 +3566,10 @@ threads 1.9 ms (min) and 2.1 ms (median) faster. Against #555's form the
 pass is 1.7× (6 threads, min) and 2.3× (12) faster than the separate
 loops.
 
+Full test suite under the lock: 118 jobs, 6791 passed, 0 failed.
+Validation under the lock: gabls1.jl 8/8, gabls3.jl 19/19,
+urban_checks.jl 33/33, anelastic_cbl.jl 3/3 passed.
+
 **Open**: the cost of D itself (above); the open items of #554.
 
 ### Phase 85 — Asynchronous and in-situ workflows
