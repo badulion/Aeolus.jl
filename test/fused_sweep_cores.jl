@@ -510,7 +510,7 @@ end
         "has_surface_flux" => "builtin.anelastic_surface_flux", "add_surface_flux!" => "builtin.anelastic_surface_flux",
         "has_sponge" => "builtin.anelastic_sponge", "add_velocity_sponge!" => "builtin.anelastic_sponge",
         "body_force!" => "builtin.body_force", "post_predictor!" => "builtin.post_predictor",
-        "update_open_boundaries!" => "builtin.open_boundaries")
+        "update_open_boundaries!" => "builtin.anelastic_open_boundaries")
     rx = r"\bsim\.(has_\w+)|\b(add_\w+!|compute_sgs!|weighted_\w+!|laplacian|axpy!|zero_storage!)\(|\b(body_force!|post_predictor!)\("
     for m in eachmatch(rx, body)
         name = something(m.captures...)

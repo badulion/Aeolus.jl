@@ -37,8 +37,6 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                             "only the pipeline's components can be expressed as sweep terms",
     "builtin.post_predictor" => "a post_predictor! hook passed to the core as a function is a whole-field " *
                                 "operator; only the pipeline's components can be expressed as post terms",
-    "builtin.open_boundaries" => "open lateral faces: the radiating outflow and the boundary data's mass " *
-                                 "correction around the predictor are not yet verified inside the sweep",
     "builtin.imex_sgs" => "step_imex!'s explicit SGS parts (the transposed stress of sgs_stress = :symmetric, " *
                           "the off-diagonal part of a scalar diffusivity tensor) are whole-field operators",
     # --- built-in terms of the sound-proof cores (`_mass_weighted_step!`) -----
@@ -52,23 +50,22 @@ const SWEEP_FALLBACKS = Dict{String,String}(
                                   "step 2 not yet wired into these cores",
     "builtin.budgets_per_point" => "with the budgets on, the in-core terms are booked per level inside the " *
                                    "ring-buffer sweep; the per-point (GPU) form has no per-level sums yet",
+    "builtin.anelastic_open_boundaries" => "open lateral faces in the sound-proof cores: the update after the " *
+                                           "sweep was verified for the Boussinesq core only (plan step 5)",
     "builtin.anelastic_post_predictor" => "the post-predictor operators of the sound-proof cores: the post terms " *
                                           "of plan step 6 are wired into the Boussinesq core only",
     # --- components of :tendencies / :body_force -----------------------------
     "Components.LargeScale" => "has a fused form (plan step 3) except with a forcing without a column form: " *
                                "a ReferenceDamping toward a 3-D target, or a forcing type of another module " *
                                "(LargeScaleForcing.column_forcing_supported)",
-    "Components.SurfaceLayer" => "the MOST surface heat flux into the first level (:tendencies): plan step 5 " *
-                                 "(its post-predictor wall stress has a post term)",
-    "SimulationDriver.SimulationCouplings" => "the obstacles' IBM penalty (a mask, :body_force): plan step 5; " *
-                                              "without obstacles the slab's floor flux runs in the sweep",
     # --- the urban site ------------------------------------------------------
     "Urban.GeostrophicCoupling" => "mode = :nudging relaxes the plane means of the stage-start state " *
                                    "(LargeScaleForcing.ProfileNudging), which has no sweep term yet; the " *
                                    "pressure-gradient mode runs in the sweep (plan step 2)",
-    "Urban.WallModelFacades" => "the removal of the stencil's facade flux from the momentum tendency " *
-                                "(:body_force, masks as inputs): plan step 5 (its post-predictor stress has a post term)",
-    "Urban.NestingCoupling" => "the nest's flux registers and boundary relaxation of the child: plan step 5",
+    "Urban.NestingCoupling" => "the two-way child's interface-flux booking (:body_force) reads only the " *
+                               "stage-start state and could run in prepare! (as Nesting.RegisterBookingTerm " *
+                               "does for the hierarchy's hooks); a first term was withdrawn in review of plan " *
+                               "step 5 as untested, when no urban domain could run fused",
 )
 
 "The key of type `T` in [`SWEEP_FALLBACKS`](@ref): `\"<module>.<type>\"`."
@@ -140,10 +137,10 @@ _post_terms(sim, post_predictor!, Δt) = post_hook_terms(post_predictor!, sim, �
 # or Nothing.
 # (The hooks' types are parameters: an argument of a Function type that is
 # only passed on is otherwise not specialised on, and the plan's type
-# would be left to a dynamic call; review of #533 step 2.)
+# would be left to a dynamic call; review of #533 step 2.) Open lateral
+# faces do not block: their update runs after the sweep (#533 step 5).
 function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!::B, post_predictor!::P,
                       momentum_advection, ν) where {B, P}
-    has_open_boundaries(sim.bcs) && return nothing
     momentum_advection === momentum_advect! || return nothing
     closure === nothing || return nothing          # SGS terms in the sweep: plan step 4
     core = (BaseTendencies(ν), _builtin_terms(sim)...)
@@ -210,7 +207,6 @@ end
 # (only when reporting; allocates).
 function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection)
     out = Pair{String,String}[]
-    has_open_boundaries(sim.bcs) && push!(out, _blocker("builtin.open_boundaries"))
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
     closure === nothing || push!(out, _blocker("builtin.sgs"))
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))

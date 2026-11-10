@@ -224,6 +224,47 @@ function run_stage!(c::SurfaceLayer, d, ::Val{:tendencies}, dt)
     return nothing
 end
 
+# The same heat flux inside the fused sweep (#533 step 5): the first level's
+# rows get `wθ[i, j] / Δz` added to their θ tendency, the expression of the
+# stage-6 pass above. The wall stress (stage 8) is a post-predictor operator.
+"""
+    SurfaceHeatFluxTerm
+
+The fused-sweep term ([`FiniteVolume.SweepTerm`](@ref Aeolus.Operators.FiniteVolume.SweepTerm))
+of [`SurfaceLayer`](@ref)'s heat flux into the first level: `tθ += wθ[i, j] / Δz`
+on storage level `K`, with `wθ` the per-column kinematic flux of the step's
+surface solve (an input, read-only during the sweep). Its whole-field
+reference is the component's `:tendencies` stage.
+"""
+struct SurfaceHeatFluxTerm{A<:AbstractMatrix} <: FiniteVolume.SweepTerm
+    wθ::A
+    K::Int
+    Hx::Int
+    Hy::Int
+    dz::Float64
+end
+FiniteVolume.footprint(::SurfaceHeatFluxTerm) = (0, 0, 0)
+FiniteVolume.sweep_inputs(t::SurfaceHeatFluxTerm) = (t.wθ,)
+@inline function FiniteVolume.add_tendency!(t::SurfaceHeatFluxTerm, tb, i, j, k, st)
+    k == t.K && (tb[i, FiniteVolume.SWEEP_Θ] += @inbounds(t.wθ[i-t.Hx, j-t.Hy]) / t.dz)
+    return nothing
+end
+# a row of the first level only: the other rows return at once
+@noinline function FiniteVolume.add_row!(t::SurfaceHeatFluxTerm, buf, a, b, s, j, k, ii, st)
+    k == t.K || return nothing
+    _sl_heat_row!(buf, a, b, s, j - t.Hy, ii, t.wθ, t.Hx, t.dz)
+end
+@noinline function _sl_heat_row!(buf, a, b, s, jc, ii, wθ, Hx, dz)
+    @inbounds @simd ivdep for i in ii
+        buf[i, a, b, FiniteVolume.SWEEP_Θ, s] += wθ[i-Hx, jc] / dz
+    end
+    return nothing
+end
+function FiniteVolume.sweep_term(c::SurfaceLayer, d)
+    m = d.state.mesh
+    return SurfaceHeatFluxTerm(c.wθ, m.Hz + 1, m.Hx, m.Hy, Float64(m.dz))
+end
+
 const _SL_RK3_WEIGHTS = (1 / 6, 1 / 6, 2 / 3)
 
 # stage 8: the wall stress on the predicted velocity, every (sub)step; the

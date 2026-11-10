@@ -17,6 +17,7 @@ using ..Backends: launch_weighted!, backend     # KA-k (#307): the direct forcin
 using ..Simulations: BoussinesqSimulation
 using ..Operators: FiniteVolume                  # the post term of the fused sweep (#533)
 using ..BoundaryConditions: FieldBoundaryConditions, neighbor_index
+using ..Operators: FiniteVolume                  # the fused sweep's term interface (#533)
 
 export SolidMask, mark_solid!, apply_solid_mask!, add_ibm_penalty!,
        implicit_ibm_correction!, wall_distance, first_level_cells
@@ -156,6 +157,91 @@ end
         end
     end
     return nothing
+end
+
+# ---------------------------------------------------------------------------
+# the penalty inside the fused sweep (#533 step 5)
+# ---------------------------------------------------------------------------
+# Row (j, k) of `_ibm_row_body!` writes exactly the faces of storage row
+# (j, k) (the u faces i1:i2+1, the v and w faces of the row), reading the
+# velocity at the same face: run on the sweep's tendency buffer of that row
+# it applies the penalty of `add_ibm_penalty!` with the same operations in
+# the same order. (The u face i2 + 1 is a halo face the predictor skips,
+# as the interior axpy skips it after the separate pass.)
+
+# the tendency buffer of one row as the `out[I, J, K]` of `_ibm_row_body!`
+struct _RowOut{B<:AbstractArray}
+    buf::B
+    a::Int
+    b::Int
+    f::Int
+    s::Int
+end
+@inline Base.getindex(r::_RowOut, I::Integer, J::Integer, K::Integer) = @inbounds r.buf[I, r.a, r.b, r.f, r.s]
+@inline Base.setindex!(r::_RowOut, x, I::Integer, J::Integer, K::Integer) =
+    (@inbounds r.buf[I, r.a, r.b, r.f, r.s] = x; r)
+
+"""
+    IBMPenaltyTerm
+
+The fused-sweep term ([`FiniteVolume.SweepTerm`](@ref Aeolus.Operators.FiniteVolume.SweepTerm))
+of [`add_ibm_penalty!`](@ref) with `τ = penalty_time × Δt` of the
+substage: `prepare!` sets `invτ[] = 1/τ`, the row kernel subtracts
+`invτ · u` from the tendency of every face of the row touching a solid
+cell of the mask (an input), once per solid neighbour. Built by
+[`ibm_penalty_term`](@ref).
+"""
+struct IBMPenaltyTerm{M<:AbstractArray{Bool,3}} <: FiniteVolume.SweepTerm
+    mask::M
+    penalty_time::Float64
+    invτ::Base.RefValue{Float64}
+    i1::Int
+    i2::Int
+    j1::Int
+    j2::Int
+    k1::Int
+    k2::Int
+end
+FiniteVolume.footprint(::IBMPenaltyTerm) = (0, 0, 0)
+FiniteVolume.sweep_inputs(t::IBMPenaltyTerm) = (t.mask,)
+FiniteVolume.prepare!(t::IBMPenaltyTerm, sim, Δt) = (t.invτ[] = 1 / (t.penalty_time * Δt); nothing)
+@noinline FiniteVolume.add_row!(t::IBMPenaltyTerm, buf, a, b, s, j, k, ii, st) =
+    _ibm_row_body!(j, k, _penalty_op, _RowOut(buf, a, b, 1, s), _RowOut(buf, a, b, 2, s), _RowOut(buf, a, b, 3, s),
+                   st.u, st.v, st.w, t.mask, t.invτ[], t.i1, t.i2, t.j1, t.j2, t.k1, t.k2)
+
+# The point kernel of the per-point (GPU) form (#533 step 8; integration of
+# steps 5 and 8): the operations `_ibm_row_body!` applies to the faces of
+# point (i, j, k), in its order: the lower solid neighbour's first (cell
+# i-1 for the u face, met one iteration earlier in the row walk; cells
+# (i, j-1, k) and (i, j, k-1) for the v and w faces), then the cell's own.
+@inline function FiniteVolume.add_tendency!(t::IBMPenaltyTerm, tb, i, j, k, st)
+    mk = t.mask
+    x = t.invτ[]
+    @inbounds begin
+        (j - 1 >= t.j1 && mk[i, j-1, k]) && (tb[i, FiniteVolume.SWEEP_V] -= x * st.v[i, j, k])
+        (k - 1 >= t.k1 && mk[i, j, k-1]) && (tb[i, FiniteVolume.SWEEP_W] -= x * st.w[i, j, k])
+        (i - 1 >= t.i1 && mk[i-1, j, k]) && (tb[i, FiniteVolume.SWEEP_U] -= x * st.u[i, j, k])
+        if mk[i, j, k]
+            tb[i, FiniteVolume.SWEEP_U] -= x * st.u[i, j, k]
+            tb[i, FiniteVolume.SWEEP_V] -= x * st.v[i, j, k]
+            tb[i, FiniteVolume.SWEEP_W] -= x * st.w[i, j, k]
+        end
+    end
+    return nothing
+end
+
+"""
+    ibm_penalty_term(sm::SolidMask, penalty_time, invτ = Ref(NaN)) -> IBMPenaltyTerm
+
+The fused-sweep term of `add_ibm_penalty!(sim, sm; τ = penalty_time * Δt)`
+in a substage of length `Δt`. `invτ` is the slot its `prepare!` writes
+`1/τ` into: pass one the caller keeps, so building the term each substage
+allocates nothing.
+"""
+function ibm_penalty_term(sm::SolidMask, penalty_time::Real, invτ::Base.RefValue{Float64} = Ref(NaN))
+    ii, jj, kk = interior(sm.mesh)
+    return IBMPenaltyTerm(sm.mask, Float64(penalty_time), invτ, first(ii), last(ii), first(jj), last(jj),
+                          first(kk), last(kk))
 end
 
 # whether any of mk[i1:i2, j, k] is true; a BitArray is scanned 64 cells per word

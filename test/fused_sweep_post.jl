@@ -514,10 +514,20 @@ end
         @test _fp_agree(a, r)
         @test agree(slr.τ, sla.τ) && slr.nsub[] == sla.nsub[] == n && slr.τ[1] != 0
     end
-    # the domain is not fused for the surface layer's heat flux (:tendencies), only
+    # with #533 step 5 merged its heat flux (:tendencies) has a sweep term
+    # too, so the domain fuses (the old expectation that the heat flux keeps
+    # it unfused was made outdated by the integration of steps 5 and 6) ...
     rep = (step!(da, 0.5); CPp.sweep_report(da))
-    @test !any(startswith("builtin.post_predictor"), rep["not_fusable"])
-    @test any(startswith("Components.SurfaceLayer:"), rep["not_fusable"])
+    @test rep["substages_fused"] == "all" && isempty(rep["not_fusable"])
+    # ... and agrees with one loop per term over several steps
+    (sA, _, dA), (sN, _, dN) = mk(), mk()
+    SIMp.set_loop_fusion!(sA, :always); SIMp.set_loop_fusion!(sN, :never)
+    for _ in 1:3
+        step!(dA, 0.5); step!(dN, 0.5)
+    end
+    ok = _fp_agree(sA, sN)
+    ok || println("  [#533 s5×s6] SurfaceLayer domain: fused ≠ one loop per term")
+    @test ok && CPp.sweep_report(dA)["substages_fused"] == "all"
 end
 
 @testset "post hook: no row form built for a component that runs after the sweep; budgets reported once" begin

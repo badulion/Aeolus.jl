@@ -34,6 +34,37 @@ end
 _chain_hooks(hs) = (hs = filter(!isnothing, hs); isempty(hs) ? nothing :
                     length(hs) == 1 ? hs[1] : _HookChain(Tuple(hs)))
 
+# --- the register hooks in the fused sweep (#533 step 5) --------------------
+# A register hook books the stage's interface fluxes from the stage-start
+# state (and the stage's SGS diffusivity), which the fused sweep does not
+# change before a row's predictor; it adds no tendency. Inside the sweep it
+# runs before the rows, in its term's `prepare!`.
+"""
+    RegisterBookingTerm
+
+The fused-sweep term ([`FiniteVolume.SweepTerm`](@ref Aeolus.Operators.FiniteVolume.SweepTerm))
+of a nest's flux-register hook: its `prepare!` is the hook itself (the
+stage's interface fluxes booked into the registers); it adds nothing to
+the tendencies.
+"""
+struct RegisterBookingTerm{H} <: FiniteVolume.SweepTerm
+    h::H
+end
+FiniteVolume.footprint(::RegisterBookingTerm) = (0, 0, 0)
+FiniteVolume.prepare!(t::RegisterBookingTerm, sim, Δt) = (t.h(sim, Δt); nothing)
+@inline FiniteVolume.add_row!(::RegisterBookingTerm, buf, a, b, s, j, k, ii, st) = nothing
+@inline FiniteVolume.add_tendency!(::RegisterBookingTerm, tb, i, j, k, st) = nothing   # the per-point form (#533 step 8)
+Simulations.hook_terms(h::_RegisterHook, sim) = (RegisterBookingTerm(h),)
+Simulations.hook_terms(h::_HookChain, sim) = _chain_terms(h.hooks, sim)
+_chain_terms(::Tuple{}, sim) = ()
+function _chain_terms(hs::Tuple, sim)
+    a = Simulations.hook_terms(first(hs), sim)
+    b = _chain_terms(Base.tail(hs), sim)
+    return a === nothing || b === nothing ? nothing : (a..., b...)
+end
+Simulations.hook_blockers(h::_HookChain, sim) =
+    reduce(vcat, (Simulations.hook_blockers(x, sim) for x in h.hooks); init = Pair{String,String}[])
+
 # A domain's subtree: what its steps carry beyond the link that drives them
 # (the uplink of a child; the first link of the root).
 mutable struct _HDomain

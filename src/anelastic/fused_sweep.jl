@@ -96,7 +96,7 @@ FiniteVolume.sweep_inputs(t::AnelasticBuoyancy) = (t.θ̄f,)
 function Simulations._sweep_blockers(sim::MassWeightedSimulation, closure, body_force!, post_predictor!,
                                      momentum_advection)
     out = Pair{String,String}[]
-    has_open_boundaries(sim) && push!(out, Simulations._blocker("builtin.open_boundaries"))
+    has_open_boundaries(sim) && push!(out, Simulations._blocker("builtin.anelastic_open_boundaries"))
     closure === nothing || push!(out, Simulations._blocker("builtin.anelastic_sgs"))
     sim.has_coriolis && push!(out, Simulations._blocker("builtin.anelastic_coriolis"))
     sim.has_surface_flux && push!(out, Simulations._blocker("builtin.anelastic_surface_flux"))

@@ -180,16 +180,33 @@ function _stage_terms(cs::Tuple, d, v::Val, si, bk)
     (t === nothing || rest === nothing) && return nothing
     return (t..., rest...)
 end
-function _stage_term(c, d, v::Val{S}, bk, slot) where {S}
-    on = attaches(c, S) && !(S === :body_force && attaches(c, :tendencies))
-    t = FiniteVolume.sweep_term(c, d)
+function _stage_term(c, d, v::Val, bk, slot)
+    t, on = stage_sweep_term(c, d, v)
     t === nothing && return on ? nothing : ()
     return (FiniteVolume.OptionalTerm(on, _booked_term(t, bk, c, v, slot)),)
 end
+
+"""
+    stage_sweep_term(c, d, ::Val{S}) -> (term, on::Bool)
+
+The sweep term of what component `c` of domain `d` adds in the in-core
+stage `S` (`:tendencies` or `:body_force`) and whether it is switched on
+there (#533). The default is its [`FiniteVolume.sweep_term`](@ref Aeolus.Operators.FiniteVolume.sweep_term),
+all it adds in both stages, switched on once: at `:tendencies` when it
+attaches there, else at `:body_force` when it attaches there. A component
+whose two stages add different things (`SimulationDriver.SimulationCouplings`:
+a floor flux, an IBM penalty) gives each stage its own term, so each is
+booked in its own stage's budget context and runs in the stage order
+(integration of #533 steps 2 and 5). `term` may be `nothing` only where
+`on` is `false`, or the substage is not fused.
+"""
+stage_sweep_term(c, d, ::Val{S}) where {S} =
+    (FiniteVolume.sweep_term(c, d), attaches(c, S) && !(S === :body_force && attaches(c, :tendencies)))
+
 function Simulations.hook_blockers(h::_ForceHook, sim)
     out = Pair{String,String}[]
     for c in h.d.components
-        (attaches(c, :tendencies) || attaches(c, :body_force)) && FiniteVolume.sweep_term(c, h.d) === nothing &&
+        any(v -> ((t, on) = stage_sweep_term(c, h.d, v); on && t === nothing), (Val(:tendencies), Val(:body_force))) &&
             push!(out, Simulations._blocker(sweep_type(c)))
     end
     return out

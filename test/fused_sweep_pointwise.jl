@@ -292,11 +292,14 @@ end
     c = SD.SimulationCouplings(SD.SimCouplings(0.0, slab, nothing, nothing, nothing, nothing, nothing, 0.0))
     @test _fp_check("slab floor flux", grids[2:2], s -> (_FP_FV.sweep_term(c, (state = s,)),),
                     (s, Δt) -> _FP_CP.run_stage!(c, (state = s,), Val(:tendencies), Δt); moists = (false,)) == 0
-    # with obstacles the IBM penalty keeps it out of the sweep (plan step 5), with its reason
+    # with obstacles the IBM penalty is the sweep term of :body_force (#533
+    # step 5; the old expectation that it keeps the couplings out of the sweep
+    # was made outdated by the integration of steps 2 and 5)
     mask = Aeolus.IBM.SolidMask(g)
     co = SD.SimulationCouplings(SD.SimCouplings(0.0, slab, nothing, nothing, nothing, nothing, mask, 0.0))
-    @test _FP_FV.sweep_term(co, (state = BoussinesqSimulation(g),)) === nothing
-    @test occursin("IBM", _FP_SIM.sweep_reason(typeof(co)))
+    dd = (state = BoussinesqSimulation(g),)
+    @test first(_FP_CP.stage_sweep_term(co, dd, Val(:tendencies))) isa _FP_FV.SurfaceFluxTerm
+    @test first(_FP_CP.stage_sweep_term(co, dd, Val(:body_force))) isa Aeolus.IBM.IBMPenaltyTerm
 end
 
 @testset "step! and step_rk3!: every built-in pointwise term fused = one loop per term" begin
@@ -495,13 +498,18 @@ end
     rt = Base.return_types(_FP_SIM.hook_terms, typeof.((h3, s3)))
     @test length(rt) == 1 && isconcretetype(rt[1])
     co = SD.SimulationCouplings(SD.SimCouplings(0.0, slab, nothing, nothing, nothing, nothing, Aeolus.IBM.SolidMask(g), 0.0))
-    @test Base.return_types(_FP_FV.sweep_term, typeof.((co, d3))) == [Nothing]
+    # (with obstacles, each stage has its own term: #533 steps 2 and 5 integrated)
+    @test Base.return_types(_FP_FV.sweep_term, typeof.((co, d3))) == [_FP_FV.SurfaceFluxTerm{Float64}]
+    rtb = only(Base.return_types(_FP_CP.stage_sweep_term, typeof.((co, d3, Val(:body_force)))))
+    @test isconcretetype(rtb) && rtb <: Tuple{Aeolus.IBM.IBMPenaltyTerm,Bool}
     # no slab: the component does not attach to :tendencies, its term is off
     cn = SD.SimulationCouplings(SD.SimCouplings(0.0, nothing, zeros(g.Nx, g.Ny), nothing, nothing, nothing, nothing, 0.0))
     dn = Domain(Domain(_fp_seed!(BoussinesqSimulation(g; ν = 1e-2)); validate = false); components = (CentredAdvection(), cn))
     @test _FP_CP.core_hooks(dn).body_force! === nothing          # attached to no force stage
     htn = _FP_SIM.hook_terms(_FP_CP._ForceHook(dn), dn.state)
-    @test htn isa Tuple && length(htn) == 2 && !any(t -> t.on, htn)
+    # (one entry: without obstacles its :body_force stage has no term, the
+    # per-stage terms of the integration of #533 steps 2 and 5)
+    @test htn isa Tuple && length(htn) == 1 && !any(t -> t.on, htn)
 
     # a Domain's hooks are specialised on: the plan is built without a
     # dynamic call (an unspecialised Function argument once left it to one,
