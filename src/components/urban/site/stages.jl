@@ -145,11 +145,11 @@ function Aeolus.Operators.FiniteVolume.prepare!(t::UrbanSiteTerm, sim, Δt)
     case.open === nothing || capture_boundary_heat!(case.open, case.sim, sgs; fused = true)
     return nothing
 end
-Aeolus.Operators.FiniteVolume.add_row!(::UrbanSiteTerm{S,Nothing}, buf, a, b, s, j, k, ii, st) where {S} = nothing
+Aeolus.Operators.FiniteVolume.add_row!(::UrbanSiteTerm{S,Nothing}, buf, a, b, s, j, k, ii, st) where {S<:UrbanSite} = nothing
 Aeolus.Operators.FiniteVolume.add_row!(t::UrbanSiteTerm, buf, a, b, s, j, k, ii, st) =
     Aeolus.LargeScaleForcing.add_column_rows!(t.col, buf, a, b, s, j, k, ii, st)
 # the point forms, for the per-point form of the sweep (integration of #533 steps 3 and 8)
-@inline Aeolus.Operators.FiniteVolume.add_tendency!(::UrbanSiteTerm{S,Nothing}, tb, i, j, k, st) where {S} = nothing
+@inline Aeolus.Operators.FiniteVolume.add_tendency!(::UrbanSiteTerm{S,Nothing}, tb, i, j, k, st) where {S<:UrbanSite} = nothing
 @inline Aeolus.Operators.FiniteVolume.add_tendency!(t::UrbanSiteTerm, tb, i, j, k, st) =
     Aeolus.LargeScaleForcing.add_column_point!(t.col, tb, i, j, k, st)
 

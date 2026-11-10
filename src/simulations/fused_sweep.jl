@@ -29,8 +29,6 @@ reasons of the terms that kept it with one loop per term in its
 """
 const SWEEP_FALLBACKS = Dict{String,String}(
     # --- built-in terms of `_euler_projection!` ------------------------------
-    "builtin.sgs" => "the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): " *
-                     "νt and κh precomputed as inputs of the sweep, plan step 4",
     "builtin.momentum_advection" => "a momentum-advection operator other than the built-in centred one " *
                                     "is a whole-field function; only momentum_advect! is the sweep's base term",
     "builtin.body_force" => "a body_force! hook passed to the core as a function is a whole-field operator; " *
@@ -138,12 +136,18 @@ _post_terms(sim, post_predictor!, Δt) = post_hook_terms(post_predictor!, sim, �
 # (The hooks' types are parameters: an argument of a Function type that is
 # only passed on is otherwise not specialised on, and the plan's type
 # would be left to a dynamic call; review of #533 step 2.) Open lateral
-# faces do not block: their update runs after the sweep (#533 step 5).
-function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!::B, post_predictor!::P,
-                      momentum_advection, ν) where {B, P}
+# faces do not block: their update runs after the sweep (#533 step 5). The
+# SGS closure's term (#533 step 4) comes right after the base term, before
+# the built-in pointwise terms, the order of the separate passes; its
+# `prepare!` (compute_sgs!) therefore runs before the hook terms' `prepare!`,
+# which may read the substage's νt (the facade wall flux, the urban site's
+# top flux), as the separate passes compute it before the body-force hook.
+@inline function _sweep_terms(sim::BoussinesqSimulation, closure, body_force!::B, post_predictor!::P,
+                              momentum_advection, ν) where {B, P}
     momentum_advection === momentum_advect! || return nothing
-    closure === nothing || return nothing          # SGS terms in the sweep: plan step 4
-    core = (BaseTendencies(ν), _builtin_terms(sim)...)
+    sgs = _sgs_terms(sim, closure)                 # () or the closure's term (plan step 4)
+    sgs === nothing && return nothing
+    core = (BaseTendencies(ν), sgs..., _builtin_terms(sim)...)
     body_force! === nothing && return core
     ht = hook_terms(body_force!, sim)
     ht === nothing && return nothing
@@ -208,7 +212,7 @@ end
 function _sweep_blockers(sim::BoussinesqSimulation, closure, body_force!, post_predictor!, momentum_advection)
     out = Pair{String,String}[]
     momentum_advection === momentum_advect! || push!(out, _blocker("builtin.momentum_advection"))
-    closure === nothing || push!(out, _blocker("builtin.sgs"))
+    _sgs_blockers!(out, sim, closure)
     body_force! === nothing || append!(out, hook_blockers(body_force!, sim))
     _hook_books_per_point(sim, body_force!) && push!(out, _blocker("builtin.budgets_per_point"))
     post_predictor! === nothing || append!(out, post_hook_blockers(post_predictor!, sim))

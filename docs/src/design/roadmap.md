@@ -3487,6 +3487,185 @@ as a separate read pass of u, v, θ per substage; folding them into the
 previous substage's sweep (the means of the predicted state) is a later
 optimisation.
 
+**Step 4: the SGS closures inside the sweep** (branch `issue/533-s4-sgs`).
+
+Branch `issue/533-s4-sgs` (from step 1). What was built:
+- **One term for the closure**, `Operators.SGSTerm`
+  (`src/operators/sgs_sweep.jl`): its `prepare!` is the `compute_sgs!`
+  of the separate loops (and qv's own diffusivity, AMD), before the sweep;
+  its row kernel adds the momentum, θ and qv tendencies from the
+  precomputed coefficients. The row kernels (`FiniteVolume.EddyMomentum`,
+  `StressMomentum`, `EddyScalar`, `TensorScalar`,
+  `src/operators/fused_sweep_sgs.jl`) run the point bodies of the
+  whole-field operators themselves (`_b_eddy_u!` …, `_b_sgs_stress_div!`,
+  `_b_stress_div!`, `_b_eddy_scalar!`), writing into the sweep's row
+  buffer through a row adapter (`_RowField`): one source of truth, and
+  the fused step is bit-identical to one loop per term in every test. The
+  tensor face fluxes became value functions (`_tensor_fx/fy/fz`) shared
+  by the stored-flux launches and the sweep, which evaluates each interior
+  face twice instead of storing it.
+- **Which kernel, from the closure contract**: the momentum part from a
+  new generic `sgs_momentum_sweep` (default: the eddy viscosity of the
+  default `add_sgs_momentum!`, Laplacian or stress form by `sgs_stress`;
+  the Reynolds-stress closure its stored stress); θ's from the existing
+  `sgs_scalar_face_diffusivity` (diagonal) or `sgs_scalar_tensor`; qv's
+  from a new trait `sgs_tracer_own_diffusivity` (AMD `true`), checked at
+  run time against `sgs_tracer_diffusivity!` (a closure whose two answers
+  disagree stops with an error instead of fusing the wrong flux).
+  `SolidMaskedSGS` (the urban site's mask) now forwards
+  `sgs_scalar_face_diffusivity`, `sgs_scalar_tensor`, `sgs_explicit_stress`
+  and the two new generics to the closure it wraps.
+- **Every closure of the core is fused**: Smagorinsky (built-in `C_s`
+  and `StaticSmagorinsky`), dynamic (plane-averaged; the local and
+  masked variants go through the same contract defaults but are not
+  tested), Lagrangian
+  dynamic, Vreman, σ, `FunctionSGS`, `MLSGS`, AMD, the prognostic TKE
+  closure (also with a solid mask and on a stretched grid),
+  stability-corrected, isentropic tensor diffusion, the Reynolds-stress
+  closure and both `SolidMaskedSGS` uses; both `sgs_stress` forms
+  (the stress form, and the Reynolds stress's divergence, on a
+  `RegularGrid` only, as the operators).
+  `builtin.sgs` left `SWEEP_FALLBACKS`; a closure without a sweep form
+  is reported by its type (`Main.X: no sweep_term …`).
+- **The sweep form must match the closure's own tendencies**
+  (`Operators.sgs_sweep_form_matches`, added after the review): the sweep
+  evaluates the kernels the contract generics name, not the closure's
+  `add_sgs_momentum!`/`add_sgs_scalar!`/`sgs_tracer_diffusivity!`. So for
+  each of those, the method dispatch selects of the generic the sweep
+  reads instead (`sgs_momentum_sweep`; `sgs_scalar_face_diffusivity` and
+  `sgs_scalar_tensor`; `sgs_tracer_own_diffusivity`) must be at least as
+  specific as the tendency's, also for the closure a wrapper forwards to
+  (`sgs_sweep_wrapped`: `IsentropicDiffusion`, `SolidMaskedSGS`);
+  otherwise the closure runs one loop per term and is reported by its
+  type. Cached per closure and simulation type and per world (a method
+  defined later is seen); the step's allocation is unchanged (32 and 48
+  bytes).
+- **Footprint** (1, 1, 1): with νt precomputed, every SGS body reads the
+  state at most one point away (the compact flux differences; the
+  tensor's cross terms at the diagonal neighbours); νt, κh, the tensor
+  and a stored stress are inputs the predictor never overwrites, so they
+  do not enter the lag. The ring and edges stay those of the base term
+  (2 rows, 1 plane); the reversed-slab tests check the front edge.
+- **The decision** receives the closure with its `sgs_stress`
+  (`Simulations.SGSChoice`), so the decision functions of step 1 keep
+  their signatures. `_sweep_terms` infers a two-type union; a fused
+  `step_rk3!` with Smagorinsky or AMD allocates what one loop per term
+  does (32 and 48 bytes, the keyword call).
+
+**Not done: the masked scalar diffusion of plan step 4.** The plan
+names "the prognostic TKE closure (PrognosticSGS), including the masked
+scalar diffusion". What this branch fuses is the TKE closure's
+tendencies of u, v, w, θ and qv (mask included). Not inside the sweep:
+the TKE equation of `TKEClosure` (and the stress transport of the
+Reynolds-stress closure) runs in `advance_sgs!`, once per step after the
+projection, on its own field `e`, which the sweep's buffer does not
+carry; its masked diffusion (`add_eddy_diffusion_scalar!(…; mask)`) is
+part of that update (already one plane loop, KA-l). The urban tracers'
+masked SGS diffusion (`TracerSGSDiffusion`) is a component outside the
+core. Whether either has to move into the sweep for step 4 to count as
+done is left to the maintainer.
+
+**Tests** (`test/fused_sweep_sgs.jl`, 5656 assertions, 80–101 s alone
+and 284 s beside six other files, so tagged `heavy` in
+`test/test_tags.toml`): the sweep
+over (base, SGS term) against the separate loops + predictor for the 15
+closures above, both stress forms, 1–5 slabs forward and reversed,
+serial and threaded, Euler and the RK3 combination, dry and moist,
+periodic, walls and stretched (within ROUNDOFF_RTOL; measured
+bit-identical); `step!`/`step_rk3!` with `loop_fusion = "always"` against
+`"never"` for every closure; a closure without a sweep form reported and
+refused by `"always"`; the stress form on a stretched grid keeps the
+operator's error; footprint, inference, allocation; a guard that every
+closure type of Aeolus with its own `add_sgs_momentum!`, `add_sgs_scalar!` or
+`sgs_tracer_diffusivity!` method has the matching sweep generic; and, at
+run time, closures defined in the test (own θ flux, own momentum, own
+tracer diffusivity, the θ one inside `SolidMaskedSGS`) stay out of the
+sweep, are reported by type and agree with `"never"`, one with the
+matching face form fuses, a sweep method defined later is picked up, and
+the Reynolds stress has no sweep form on a stretched grid.
+`test/fused_sweep.jl`: `builtin.sgs` removed from its expectations.
+
+**Bugs the tests caught** (code wrong): the first `SGSTerm` boxed its
+parts per substage (1.5 kB per `step_rk3!`): the momentum part inferred
+as `Symbol` on the stress check's path, and qv's part depended on the
+run's moisture; fixed (see above). **Expectations that proved wrong**:
+the stress form on a stretched grid was in the first agreement matrix
+(the operator refuses it; it is now tested as an error); "the Reynolds
+stress acted" failed on its initial isotropic stress, which has no
+divergence (now three committed steps first, and θ's anomaly compared).
+**Bugs the review caught** (code wrong): nothing checked that the sweep's
+kernels are the closure's own; a closure from outside Aeolus that
+overrides `add_sgs_scalar!` without a face form (like the validation
+fixture `BackgroundGradient`, which adds a background θ flux) would have
+fused with the default diagonal kernel and silently dropped that flux.
+Latent in the repository (that run also passes a plain-function body
+force, which keeps it off the sweep); fixed by
+`sgs_sweep_form_matches` (above). The Reynolds stress's sweep form
+did not refuse a stretched grid (shadowed by its tensor's refusal);
+it now does.
+
+**Measured** (Ryzen AI 9 HX 370, 15 W cap, under the benchmark lock).
+On this branch alone no configured case with SGS fuses: the dry CBL still
+needs the pointwise terms (step 2) and the budgets (step 7), GABLS1 and
+GABLS3 also `LargeScale` (step 3) and `SurfaceLayer` (steps 5, 6). The
+CBL was therefore measured on a scratch merge of this branch with step 2
+(`issue/533-s2-pointwise`; the conflicts in `_sweep_terms` resolved with
+the SGS term between the base and the built-in terms, the order of the
+passes), with its `[checks]` removed so no budget is measured
+(`sweep_report`: every substage fused, no term reported). The fused step
+agrees with `loop_fusion = "never"` after 10 steps (max |Δ| of u, w, θ:
+0). `bench_roofline.jl config … 2 8` with `ROOFLINE_PROF=0
+ROOFLINE_ALTERNATE=1` (each step alternates the two settings in one
+process), min of 8 steps of each, ms per step; the thread counts run in
+the order 1, 2, 6, 12, one process each:
+
+| grid | setting | 1 | 2 | 6 | 12 |
+| :-- | :-- | --: | --: | --: | --: |
+| 32³ (the example) | never | 1.01 | 0.81 | 0.96 | 1.39 |
+| | fused | 0.93 | 0.60 | 0.64 | 0.89 |
+| 128 × 128 × 64 | never | 46.3 | 31.2 | 19.7 | 16.7 |
+| | fused | 38.2 | 22.0 | 13.0 | 10.5 |
+| | speed-up | 1.21 | 1.42 | 1.51 | 1.59 |
+
+The gain is that of steps 2 and 4 together (without either the CBL runs
+unfused). Re-measured after the review fixes (the same scratch merge
+with the fixes added, the order of the two settings swapped every step,
+one process per thread count, load 1.3–2.6), 128 × 128 × 64, ms per step,
+min (median) of 8 steps each:
+
+| threads | 1 | 2 | 6 | 12 | 24 |
+| :-- | --: | --: | --: | --: | --: |
+| never | 50.4 (51.3) | 32.7 (35.2) | 19.3 (20.9) | 16.3 (17.0) | 16.6 (17.3) |
+| fused | 43.3 (43.3) | 23.2 (26.0) | 13.2 (14.4) | 10.6 (11.0) | 11.1 (11.7) |
+| speed-up (median) | 1.19 | 1.35 | 1.45 | 1.55 | 1.48 |
+
+24 threads (SMT) gain nothing over 12 in either setting. These numbers
+stand for steps 2 + 4 without step 7's budgets; with step 7 merged the
+CBL's `[checks]` can stay on, which is not measured here. Full suite on
+this branch: 118 jobs, 10894 assertions, 0 failed; validation
+`gabls1.jl` 8/8, `gabls3.jl` 19/19. **Bytes** (profiled runs, 128 × 128 × 64, one Euler substage per
+step, the compulsory model of `bench_roofline.jl`, the FFT's pencil items
+left out): 547 MB per step (521 B/point) with `"never"`, 218 MB (208
+B/point) fused; time in launches 29.0 → 19.7 ms at 1 thread, 18.5 → 9.5
+ms at 6. GABLS1 and GABLS3 not measured fused (above); they run one loop
+per term as before; their validation runs on this branch pass
+(`validation/run.jl --only gabls1.jl,gabls3.jl`: 8 and 19 checks, 104 s
+and 83 s).
+
+**Plan step 9 (recompute νt in the sweep) would not pay on this
+evidence.** The coefficient pass (`_b_smagorinsky!`, reads u, v, w, writes
+νt) is 33.6 MB = 32 B/point, 15 % of the fused step's compulsory bytes;
+with the sweep's own read of νt, recomputing would remove at most 40
+B/point (19 %). But the pass is not at the bandwidth roof: 5.2 ms at 1
+thread (6.4 GB/s, against a DRAM triad of 43 GB/s) and 1.55 ms at 6 (21.7
+GB/s, against 52.6), so its time is mostly the strain rate's arithmetic,
+which recomputing keeps (and multiplies, unless the strain goes into a
+rolling plane buffer and the term's footprint grows to 2). Its bytes at
+the roof are 0.64 ms + 0.16 ms (the νt read) of the 13.0 ms fused step at
+6 threads, about 6 %, and nothing measurable at 1–2 threads. Worth
+revisiting only if a closure's coefficient pass is found at the roof
+(the dynamic and AMD closures, Berlin at 12–24 threads).
+
 **Step 5: near-wall terms, nest registers and open faces** (branch
 `issue/533-s5-nearwall-open`). What was built:
 

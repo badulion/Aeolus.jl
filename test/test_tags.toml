@@ -49,3 +49,8 @@ seconds = 53
 ["model_nesting.jl"]
 weight = "heavy"
 seconds = 49
+
+["fused_sweep_sgs.jl"]
+weight = "heavy"
+seconds = 100
+reason = "every SGS closure through the fused sweep and the separate loops (#533 step 4): 80-101 s alone, 284 s beside a full run"

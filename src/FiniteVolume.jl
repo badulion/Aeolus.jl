@@ -1362,8 +1362,8 @@ end
 # The bodies take the wall flags and the interior bounds as separate scalar
 # arguments: bundled into one struct they made the x-face flux 2.3x the old
 # loop (the compiler kept reloading the fields; measured at KA-d).
-@inline function _b_tensor_fx!(i, j, k, Fx, d, K11, K12, K13, idx, idy, idz, bx, by, bz,
-                               j1, j2, k1, k2, Hx, i2, dodiag, dooff)
+@inline function _tensor_fx(i, j, k, d, K11, K12, K13, idx, idy, idz, bx, by, bz,
+                            j1, j2, k1, k2, Hx, i2, dodiag, dooff)
     @inbounds begin
         T = eltype(d)
         f = zero(T)
@@ -1374,13 +1374,12 @@ end
                          K13[i,   j, k] * (_tg_B(d, i,   j, k, idz, bz, k1) + _tg_T(d, i,   j, k, idz, bz, k2)) +
                          K13[i+1, j, k] * (_tg_B(d, i+1, j, k, idz, bz, k1) + _tg_T(d, i+1, j, k, idz, bz, k2)))
         end
-        Fx[i, j, k] = f
     end
-    return nothing
+    return f
 end
 
-@inline function _b_tensor_fy!(i, j, k, Fy, d, K22, K12, K23, idx, idy, idz, bx, by, bz,
-                               i1, i2, k1, k2, Hy, j2, dodiag, dooff)
+@inline function _tensor_fy(i, j, k, d, K22, K12, K23, idx, idy, idz, bx, by, bz,
+                            i1, i2, k1, k2, Hy, j2, dodiag, dooff)
     @inbounds begin
         T = eltype(d)
         f = zero(T)
@@ -1391,13 +1390,12 @@ end
                          K23[i, j,   k] * (_tg_B(d, i, j,   k, idz, bz, k1) + _tg_T(d, i, j,   k, idz, bz, k2)) +
                          K23[i, j+1, k] * (_tg_B(d, i, j+1, k, idz, bz, k1) + _tg_T(d, i, j+1, k, idz, bz, k2)))
         end
-        Fy[i, j, k] = f
     end
-    return nothing
+    return f
 end
 
-@inline function _b_tensor_fz!(i, j, k, Fz, d, K33, K13, K23, idx, idy, idz, bx, by, bz,
-                               i1, i2, j1, j2, Hz, k2, dodiag, dooff)
+@inline function _tensor_fz(i, j, k, d, K33, K13, K23, idx, idy, idz, bx, by, bz,
+                            i1, i2, j1, j2, Hz, k2, dodiag, dooff)
     @inbounds begin
         T = eltype(d)
         f = zero(T)
@@ -1408,10 +1406,18 @@ end
                          K23[i, j, k  ] * (_tg_S(d, i, j, k,   idy, by, j1) + _tg_N(d, i, j, k,   idy, by, j2)) +
                          K23[i, j, k+1] * (_tg_S(d, i, j, k+1, idy, by, j1) + _tg_N(d, i, j, k+1, idy, by, j2)))
         end
-        Fz[i, j, k] = f
     end
-    return nothing
+    return f
 end
+
+# the face fluxes stored (the launches of `_add_tensor_diffusion_scalar!`);
+# the fused sweep (#533) evaluates the same `_tensor_f*` per point instead
+@inline _b_tensor_fx!(i, j, k, Fx, d, args::Vararg{Any,N}) where {N} =
+    (@inbounds Fx[i, j, k] = _tensor_fx(i, j, k, d, args...); nothing)
+@inline _b_tensor_fy!(i, j, k, Fy, d, args::Vararg{Any,N}) where {N} =
+    (@inbounds Fy[i, j, k] = _tensor_fy(i, j, k, d, args...); nothing)
+@inline _b_tensor_fz!(i, j, k, Fz, d, args::Vararg{Any,N}) where {N} =
+    (@inbounds Fz[i, j, k] = _tensor_fz(i, j, k, d, args...); nothing)
 
 @inline function _b_flux_divergence!(i, j, k, t, Fx, Fy, Fz, idx, idy, idz)
     @inbounds t[i, j, k] += (Fx[i, j, k] - Fx[i-1, j, k]) * idx +
@@ -1881,5 +1887,7 @@ include("operators/fused_sweep.jl")
 include("operators/fused_sweep_budgets.jl")
 # its pointwise terms: buoyancy, Coriolis, boundary fluxes, damping (#533 plan step 2)
 include("operators/sweep_pointwise.jl")
+# the SGS closures' tendencies as terms of the sweep (#533 plan step 4)
+include("operators/fused_sweep_sgs.jl")
 
 end # module

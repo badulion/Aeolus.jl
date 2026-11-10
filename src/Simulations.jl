@@ -520,8 +520,8 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     # term: steps 2-7 and 11 in one fused sweep (SC-e #405, #533), the
     # values of the passes below within round-off. Otherwise the passes
     # below (the reference), and the run reports which term caused it.
-    _try_fused!(sim, Δt, t_bc, stage, closure, body_force!, post_predictor!, momentum_advection,
-                sim.has_viscosity ? sim.ν : nothing) && return sim
+    _try_fused!(sim, Δt, t_bc, stage, _sgs_choice(closure, sgs_stress), body_force!, post_predictor!,
+                momentum_advection, sim.has_viscosity ? sim.ν : nothing) && return sim
 
     # 2.-3. The tendencies from zero: momentum + scalar advection, then the
     #       molecular viscosity / diffusion (qv: the same molecular
@@ -625,6 +625,7 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
 end
 
 include("simulations/fused_sweep.jl")   # the fused sweep: its terms, the report of terms that cannot be fused (#533)
+include("simulations/fused_sweep_sgs.jl")   # the SGS closure as a term of the fused sweep (#533 step 4)
 
 # The tendencies of steps 2-3 in one launch (`_fused_tendencies!`), and the
 # zero of their halos (`zero_storage!` zeroed the whole storage).

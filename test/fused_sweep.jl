@@ -392,8 +392,11 @@ end
 
 @testset "a built-in term or a hook keeps one loop per term, and is reported" begin
     # (buoyancy, Coriolis, surface flux and sponge are fused since plan step 2:
-    # test/fused_sweep_pointwise.jl)
-    for (kw, hook, key) in (((C_s = 0.17,), NamedTuple(), "builtin.sgs"),
+    # test/fused_sweep_pointwise.jl; the SGS closures since plan step 4:
+    # test/fused_sweep_sgs.jl. Those were this test's examples until the
+    # integration of steps 2 and 4 made them outdated; the hooks passed as
+    # functions are what is left)
+    for (kw, hook, key) in ((NamedTuple(), (body_force! = noop,), "builtin.body_force"),
                             (NamedTuple(), (post_predictor! = noop,), "builtin.post_predictor"))
         a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, kw...))
         fill!(a.tu.data, NaN)
@@ -406,8 +409,8 @@ end
     end
     # several terms: every one is reported
     a = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17))
-    step!(a, 0.5; post_predictor! = noop)
-    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.sgs", "builtin.post_predictor"])
+    step!(a, 0.5; post_predictor! = noop, body_force! = noop)
+    @test Set(first.(split.(SIMs.sweep_report(a)["not_fusable"], ":"))) == Set(["builtin.body_force", "builtin.post_predictor"])
     # (the anelastic core's fused sweep and its report: test/fused_sweep_cores.jl, #533 step 8)
 end
 
@@ -431,8 +434,9 @@ end
     # ... and an error naming every term without one, before anything is stepped
     c = SIMs.set_loop_fusion!(_fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17)), :always)
     t0 = c.t
-    err = try step!(c, 0.5; post_predictor! = noop); nothing catch e; e end
-    @test err isa ArgumentError && occursin("builtin.sgs", err.msg) && occursin("builtin.post_predictor", err.msg)
+    # (SGS was this test's example until #533 step 4 fused it: a body_force! function instead)
+    err = try step!(c, 0.5; post_predictor! = noop, body_force! = noop); nothing catch e; e end
+    @test err isa ArgumentError && occursin("builtin.body_force", err.msg) && occursin("builtin.post_predictor", err.msg)
     @test c.t == t0                                             # exact: the clock did not advance
     # invalid settings; every core takes every setting (#533 step 8)
     @test_throws ArgumentError SIMs.set_loop_fusion!(a, :sometimes)
@@ -488,22 +492,29 @@ end
                   vcat(small, ["checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]))
     @test rc == 0
     fs = only(values(res["loop_fusion"]))
+    # (with plan steps 2 and 4 merged every term of it has a fused form: the
+    # old expectation that SGS, buoyancy, the θ flux and the sponge keep it
+    # unfused was made outdated by the integration)
+    @test fs["substages_fused"] == "all" && isempty(fs["not_fusable"]) && fs["setting"] == "if_possible"
+    # the same case on the anelastic core, whose SGS closure has no fused form yet
+    an = ["core.model=\"anelastic\"", "checks.finite={}", "checks.energy_closure={}", "checks.momentum_closure={}"]
+    rc, res = run(joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"), vcat(small, an))
+    @test rc == 0
+    fs = only(values(res["loop_fusion"]))
     who = Set(first.(split.(fs["not_fusable"], ":")))
-    @test fs["substages_fused"] == "none" && fs["setting"] == "if_possible"
-    @test "builtin.sgs" in who
-    # fused since plan step 2: never reported
-    @test isempty(intersect(who, ["builtin.buoyancy", "Components.SurfaceThetaFlux", "Components.Sponge"]))
+    @test fs["substages_fused"] == "none" && "builtin.anelastic_sgs" in who
     @test !occursin("no documented reason", join(fs["not_fusable"]))
-    # the key: never on the DNS; always on the CBL stops the run (rc ≠ 0)
+    # the key: never on the DNS; always on the anelastic CBL stops the run (rc ≠ 0)
     rc, res = run(joinpath(ex, "taylor_green_vortex", "taylor_green_vortex.toml"),
                   vcat(small, ["timestep.loop_fusion=\"never\""]))
     fs = only(values(res["loop_fusion"]))
     @test rc == 0 && fs["setting"] == "never" && fs["substages_fused"] == "none"
     root = mktempdir()
+    er = IOBuffer()
     rc = Aeolus.main(String["run", joinpath(ex, "dry_convective_bl", "dry_convective_bl.toml"),
-                            collect(Iterators.flatten(("--set", x) for x in vcat(small, ["timestep.loop_fusion=\"always\""])))...,
-                            "--root", root, "--allow-uncommitted"]; io = IOBuffer(), err = IOBuffer())
-    @test rc != 0
+                            collect(Iterators.flatten(("--set", x) for x in vcat(small, an, ["timestep.loop_fusion=\"always\""])))...,
+                            "--root", root, "--allow-uncommitted"]; io = IOBuffer(), err = er)
+    @test rc != 0 && occursin("builtin.anelastic_sgs", String(take!(er)))
 end
 
 @testset "type stability and allocation" begin
@@ -515,8 +526,11 @@ end
                s, nothing, nothing, nothing, Aeolus.Operators.momentum_advect!, s.ν)) isa typeof(plan)
     @test first(plan) == FVs.BaseTendencies(s.ν) && !any(t -> t.on, Base.tail(plan))
     sb = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, C_s = 0.17))
-    @test SIMs._sweep_terms(sb, SIMs._active_sgs(sb, nothing, nothing), nothing, nothing,
-                            Aeolus.Operators.momentum_advect!, sb.ν) === nothing
+    # (with plan step 4 the closure is a term of the plan, after the base:
+    # step 2's expectation that it refuses was made outdated by the integration)
+    pb = SIMs._sweep_terms(sb, SIMs._sgs_choice(SIMs._active_sgs(sb, nothing, nothing), :laplacian),
+                           nothing, nothing, Aeolus.Operators.momentum_advect!, sb.ν)
+    @test pb isa Tuple && pb[2] isa Aeolus.Operators.SGSTerm && length(pb) == length(plan) + 1
     step_rk3!(s, 0.1); step_rk3!(s, 0.1)
     bufs = s.workspaces.sweep
     @test bufs isa FVs.SweepBuffers
@@ -579,8 +593,9 @@ end
         "has_viscosity" => :base, "has_moisture" => :base, "advect_centered!" => :base,
         "laplacian" => :base, "_base_tendencies!" => :base, "zero_storage!" => :base, "axpy!" => :predictor,
         "_advance_scalar!" => :predictor,
-        "add_sgs_momentum!" => "builtin.sgs", "add_sgs_scalar!" => "builtin.sgs", "_add_sgs_tracer!" => "builtin.sgs",
-        "compute_sgs!" => "builtin.sgs", "momentum_advection" => "builtin.momentum_advection",
+        # the SGS closure's term (Operators.SGSTerm, #533 step 4; test/fused_sweep_sgs.jl)
+        "add_sgs_momentum!" => :sgs, "add_sgs_scalar!" => :sgs, "_add_sgs_tracer!" => :sgs,
+        "compute_sgs!" => :sgs, "momentum_advection" => "builtin.momentum_advection",
         # the built-in pointwise terms of plan step 2 (Simulations._builtin_terms)
         "has_buoyancy" => :pointwise, "add_buoyancy!" => :pointwise,
         "has_coriolis" => :pointwise, "add_coriolis!" => :pointwise,
