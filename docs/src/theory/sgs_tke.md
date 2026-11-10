@@ -454,7 +454,9 @@ off-diagonals reads the stresses ``h_r`` rows back; the slabs keep
 ``h_r + 1`` edge planes (`rsm_blocked_lags`). Every value is computed by
 the point body of the separate loop: the stresses and the budget sums
 agree with the separate loops to round-off (measured identical).
-The pass pays little here: the update is limited by its arithmetic (the
+``N^2`` stays a whole-field loop before the pass (unlike the TKE pass,
+#556): computing it in the pass would save about 1.5 ms of an update of
+110–270 ms. The pass pays little here: the update is limited by its arithmetic (the
 6×6 solve, about 350 ns of thread time per cell), not by memory traffic.
 Measured on 200×200×60 it was faster only with centred advection on
 several threads (12 threads: 110 against 155 ms), and slower at one

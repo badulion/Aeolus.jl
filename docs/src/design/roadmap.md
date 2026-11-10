@@ -3777,6 +3777,34 @@ shape and one machine; the review's measurement adds that WENO-Z5
 without a mask at 6 threads might take the pass (−10 %), which the rule
 does not.
 
+**Combined with #556** (merge commit 91da865d, `origin/issue/556-tke-n2-strain`
+merged into this branch so the two PRs merge in order, #561 then #565;
+no rebase). Both rewrote `tke_blocked.jl`. Resolution: `_TKERings` keeps
+this branch's per-scalar flux rings (`f::_FluxRings`) and gains #556's
+two-row N² ring and one-row D buffer; the ring views carry both `f` and
+`n2`/`dd`. #556's N² ring is per slab, so a fixed argument tuple for ν no
+longer fits: `_ν_row!` now takes the slab's views and calls the closure's
+interior row `p.νrow!` — `_tke_ν_row!` (N² of the row, then the
+coefficient body reading the N² ring) and `_rsm_ν_row!`
+(`_rsm_viscosity_body!` on its arguments). The Reynolds-stress pass keeps
+N² as the whole-field loop before it: in the pass it would save about
+1.5 ms (the N² loop's cost) of a 110–270 ms update limited by its 6×6
+solve, and D does not apply (that closure has no dual strain).
+Re-measured after the merge under the lock, same scripts, one process
+per thread count; the machine was loaded by another agent's suite (load
+8.6–12.2, 25–28 W mean, 1.9–2.0 GHz), so absolute times are higher than
+above. TKE (Berlin 100 m, min / median ms; separate → #555's pass → the
+combined pass): 6 threads 32.0/34.9 → 19.3/20.8 → 17.9/20.0; 12 threads
+37.4/41.0 → 20.1/24.0 → 18.2/21.2; e identical (max |Δe| = 0). Reynolds
+stress (200×200×60, separate → pass): centred 6 threads 225/264 →
+186/232, 12 threads 173/206 → 134/162; WENO-Z5 6 threads 242/262 →
+269/317, 12 threads 226/245 → 257/312; τ identical. Both gains hold and
+the selection rule's split (centred takes the pass, WENO-Z5 does not)
+is unchanged. Full suite after the merge (under the lock, load 10.7):
+119 jobs, 7145 passed, 0 failed, 10.0 min. Validation: gabls1.jl,
+gabls3.jl (27 pass) and sgs_validation.jl (40 pass, 4 broken, the
+statistics above unchanged), 0 failures.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
