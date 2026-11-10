@@ -4784,6 +4784,204 @@ urban_checks.jl 33/33, anelastic_cbl.jl 3/3 passed.
 
 **Open**: the cost of D itself (above); the open items of #554.
 
+#### Branch-free face values of the flux-form advection (#557)
+
+Follow-up to #554 (branch `issue/557-branchfree-flux`, on
+`issue/556-tke-n2-strain`). #555 said the flux bodies' upwind branch
+(`_face_x/y/z`: `if vel >= 0`) kept their row loops scalar and so bounded
+the TKE pass. The plan was to make them branch-free with `ifelse`.
+
+**The premise was wrong in part.** `@code_llvm` of the row loops
+(`Backends._row!` with each body, on plain arrays and on the pass's ring
+adapters) shows that LLVM already vectorised every reconstructed-flux
+loop, by if-conversion. In the WENO-Z5 `x` flux row there were 66 masked
+loads (the right-biased stencil), and both reconstructions were evaluated
+in every lane. The centred faces, which Berlin uses, compiled to plain
+vector code: both branches read the same two cells. Only the first-order
+upwind faces (`_UpwindFirst`) were scalar. The upwind fluxes, the limiter
+and the divergence vectorised already.
+
+**Built.**
+
+- **Branch-free face values.** `_face_x/y/z` gather both stencils and
+  call `_upwind_value`. For a reconstruction whose right-biased form is
+  the left-biased one on the mirrored stencil (`mirror_symmetric`:
+  WENO-Z, TENO, WENO-JS, centred, first-order upwind, true by definition
+  of each), it chooses the *inputs* of one `reconstruct_left` value by
+  value with `ifelse`. Any other reconstruction gets both evaluated and
+  the result chosen with `ifelse`. The centred face takes the left stencil
+  without a choice: its left- and right-biased stencils are the same two
+  cells in the same order.
+  The reconstruction receives the same values in the same order as with
+  the branch, so every face value is bit-identical.
+- `@code_llvm` afterwards: no masked loads, one reconstruction per face.
+  The WENO-Z5 `x` flux row went from 241 to 144 vector instructions and
+  TENO5 from 282 to 174. The first-order upwind rows vectorise. The
+  centred rows are unchanged.
+- The limiter's ratio (`Pm > 0 ? min(1, Q/Pm) : 1`) and TENO's cut-off
+  use `ifelse`. Both already compiled to a select, so they are only
+  explicit now.
+- These bodies are shared by every user: `advect_positive!` (the TKE, the
+  Reynolds-stress closure, the urban scalars), `advect_weno_z!` /
+  `advect_teno!`, the WENO-Z momentum advection, `advective_face_flux` /
+  `scalar_face_flux` (`boundary_scalar_flux`, the nest flux registers).
+  There is still one copy of each body.
+- **Moist N².** This is a deviation from the plan, found in the
+  one-thread profile of the Berlin pass. The moist N² row (θ_v) did not
+  vectorise: `_θv_face_dir` read its arrays with bounds checks, because
+  the `@inbounds` of `_n2_body!` does not reach an inlined function. The
+  dry row vectorised. `_θv_face_dir`, `_θρ_face` and `_n2_cell` are now
+  `@propagate_inbounds`, and N² is unchanged.
+
+**Where the one-thread pass goes** (Berlin 100 m state after 3 steps,
+centred, moist N², no mask, no walls; `Profile`, 40 calls of
+`advance_sgs!`, 4076 samples at 0.5 ms, before the N² commit; 51.0 ms
+per call):
+
+| part | samples | share |
+| :-- | --: | --: |
+| dual strain D (`_dual_row!`) | 1256 | 31 % |
+| update of e and its budget sums (`_tke_update_row`) | 751 | 18 % |
+| the front: ν and N² (325 of them N²) | 532 | 13 % |
+| reconstructed and upwind face fluxes, limiter's ratio, limited faces | ≈ 680 | ≈ 17 % |
+| divergence and diffusion of the row | ≈ 290 | ≈ 7 % |
+| shell, halo fills, rest | ≈ 570 | ≈ 14 % |
+
+So in Berlin the flux and limiter bodies were not the bound. They
+vectorised already and take about a sixth of the pass. D and the update
+take half.
+
+**Measured** (all under the benchmark lock, package power logged; old =
+the branching bodies through a test descriptor `Branching(r)`
+(`test/support/branching_faces.jl`), new = the branch-free ones,
+interleaved in one process over 15 rounds of 3 calls. Min / median in ms.
+TKE calls include a copy of e, 0.8–1.0 ms. Every result is identical old
+against new: max |Δtend| = 0, max |Δe| = 0):
+
+| case | 1 thread old → new | 6 threads old → new | 12 threads old → new |
+| :-- | --: | --: | --: |
+| `advect_positive!` WENO-Z5, 200×200×60 | 39.30 / 40.13 → 31.97 / 32.79 | 17.53 / 18.54 → 15.89 / 16.82 | 17.04 / 17.92 → 16.35 / 17.03 |
+| `advect_positive!` centred, 200×200×60 | 20.01 / 20.63 → 19.86 / 20.51 | 14.69 / 15.54 → 15.01 / 15.52 | 15.56 / 16.62 → 15.71 / 16.74 |
+| TKE pass, WENO-Z5, 200×200×60 | 71.43 / 73.53 → 63.10 / 64.92 | 24.79 / 26.12 → 21.36 / 22.65 | 23.78 / 24.80 → 20.37 / 22.20 |
+| TKE separate loops, WENO-Z5 | 78.06 / 79.56 → 71.18 / 72.34 | 33.63 / 35.85 → 32.68 / 34.28 | 32.66 / 34.63 → 32.02 / 33.24 |
+| TKE pass, Berlin (centred) | 49.76 / 50.43 → 49.65 / 50.26 | 15.34 / 17.61 → 16.15 / 17.39 | 12.88 / 14.46 → 12.19 / 14.05 |
+| TKE separate loops, Berlin | 59.31 / 60.84 → 59.27 / 60.44 | 29.95 / 32.43 → 30.56 / 31.89 | 31.40 / 32.37 → 31.13 / 32.52 |
+
+Power (mean / peak, mean clock): 1 thread 18.0 / 29.9 W, 1.68 GHz; 6
+threads 18.9 / 30.3 W, 1.76 GHz; 12 threads 19.4 / 30.1 W, 1.81 GHz.
+The one-thread process loaded the code before the moist-N² commit, and
+the 6- and 12-thread processes loaded it after. Old and new share
+whichever N² was loaded, so each row compares the face bodies only.
+
+With WENO-Z5, the flux-limited advection is 19 % faster at one thread
+and 9 % at 6 (min). The TKE pass is 12 % faster at one thread and 14 %
+at 6 and 12 threads. With the centred scheme (Berlin) nothing changes, as
+`@code_llvm` predicted: the old and new numbers are within the noise of
+the interleaving (±0.8 ms). At 6 and 12 threads the WENO-Z5
+`advect_positive!` gains less (1–2 ms): its 14 launches (fluxes, limiter,
+halo, divergence) each sweep the field, and are probably limited by
+memory traffic there (not profiled).
+
+**The moist-N² commit** (Berlin, as above). It is measured with
+alternating processes, because the old N² cannot run in the same
+process: base = the face commit, new = with `@propagate_inbounds`, in
+the order base, new, base, new at each thread count. Each process
+interleaves its settings over 15 rounds of 3 calls. Min / median in ms;
+the two runs per thread count are listed in order:
+
+| threads | pass base → new | separate base → new | N² loop alone base → new |
+| --: | --: | --: | --: |
+| 1 | 48.90 / 49.80 → 48.23 / 49.21; 50.65 / 51.29 → 48.49 / 50.21 | 57.84 / 59.21 → 57.58 / 58.93; 58.14 / 59.72 → 57.59 / 58.91 | 3.71 / 3.92 → 2.07 / 2.58; 3.85 / 4.01 → 2.38 / 2.74 |
+| 6 | 16.10 / 17.41 → 15.50 / 17.06; 16.43 / 17.60 → 15.30 / 17.09 | 29.65 / 31.91 → 29.95 / 31.61; 30.15 / 32.38 → 30.03 / 32.13 | 1.55 / 1.65 → 1.55 / 1.66; 1.55 / 1.68 → 1.52 / 1.65 |
+| 12 | 13.02 / 14.67 → 11.92 / 14.09; 13.00 / 14.72 → 11.96 / 14.17 | 31.26 / 32.42 → 31.16 / 32.87; 31.56 / 33.00 → 31.34 / 32.69 | 1.97 / 2.17 → 1.95 / 2.14; 1.98 / 2.12 → 1.91 / 2.11 |
+
+Power (mean / peak, mean clock), base and new: 1 thread 16.0–16.4 /
+19–22 W, 1.44–1.48 GHz; 6 threads 17.9–18.3 / 30 W, 1.66–1.73 GHz; 12
+threads 18.7–19.2 / 30 W, 1.76–2.03 GHz.
+
+- At one thread the N² loop takes 3.7–3.9 → 2.1–2.4 ms (min), and the
+  pass is 0.7–2.2 ms faster (min).
+- At 6 and 12 threads the N² loop alone is unchanged: it is limited by
+  memory there. Inside the pass the gain is 0.6–1.1 ms (min) and
+  0.3–0.6 ms (median).
+- N² itself is bit-identical: base and new, on the same random dry, moist
+  and cloudy fields, differ in 0 values. e after the base and the new run
+  differs by up to 6.4e-14 (max e 17.2). That is the variation of the 3
+  model steps before the measurement between processes: the same
+  checkout, run twice at one thread, differs by 5.0e-14.
+
+**Tests** (`test/advection_branchfree.jl`, new):
+
+- Every face value (x, y, z) of all seven reconstructions, plus a
+  reconstruction that is not mirror-symmetric (the fallback), against the
+  branching form. Velocities of both signs, ±0.0 and ±1e-300: 3888
+  faces.
+- The mirror property for every reconstruction flagged
+  `mirror_symmetric`, and `advective_face_flux` on both signs.
+- `advect_positive!`, the reconstructed advection and the momentum
+  advection of all seven against `Branching(r)`, plus `advect_positive!`
+  on a stretched grid. These run serially, threaded, and in a `-t 4`
+  subprocess (four reconstructions).
+- The limiter's ratio is 1 where nothing flows out (Pm = 0, where the
+  discarded Q/Pm is 0/0).
+- The moist N² field against the formula written out cell by cell.
+- Tolerance: 4 eps of the largest value compared. The same values reach
+  the reconstruction in the same order, so the results are expected
+  identical, and the tolerance allows only a different order chosen by
+  the compiler. Measured: 0 in every case.
+- `tke_blocked.jl`, `tke.jl`, `advection.jl`, `sgs_numerics.jl`,
+  `nest_twoway.jl`, `urban_run.jl`, `io_checkpoint.jl` and
+  `stability_functions.jl` pass unchanged.
+
+No bug was caught. No test expectation was wrong: the results agreed
+exactly on the first run. The issue's expectation was wrong: the
+branch did not keep the flux loops scalar (LLVM if-converted it), and in
+Berlin, which uses the centred scheme, the flux bodies were not what
+bounded the pass.
+
+**Review** (independent, before the PR):
+
+- Checked: both stencils are now read at every face, also the downwind
+  one the branch skipped. Every reader has the halo for both
+  (`required_halo` covers the union; `_check_halo` guards the sweeps),
+  the TKE pass reads e from the field, not from a ring, and a value read
+  on the discarded side only feeds a discarded `ifelse` operand. Zero
+  and negative-zero velocities take the left stencil as before; a NaN
+  velocity takes the right one as before. No store was dropped. The
+  face bodies return the element type for Float64 and Float32 arrays,
+  and `advect_positive!` allocates the same per call as on the base
+  (128–192 bytes, the launches).
+- Fixed: the centred shortcut was justified as "the mean of (a, b) and
+  (b, a) is the same number". Its two stencils are in fact the same
+  cells in the same order, so the gathered tuples are identical; the
+  comment says so and a test checks that the stencils are equal.
+- Re-measured the one- and six-thread runs under the lock (power 18.6 /
+  20.0 W mean, 1.67 / 1.86 GHz): `advect_positive!` WENO-Z5 39.00 / 39.77
+  → 32.44 / 33.19 ms at 1 thread, 17.47 / 18.31 → 15.82 / 16.78 ms at 6;
+  the WENO-Z5 TKE pass 68.51 / 70.64 → 60.19 / 62.38 ms at 1 thread,
+  25.42 / 27.56 → 21.57 / 23.33 ms at 6; centred `advect_positive!`
+  unchanged (20.15 → 20.17, 15.19 → 15.14 ms min). The Berlin pass read
+  50.90 / 53.33 → 52.87 / 54.37 ms at 1 thread and 16.16 / 17.82 →
+  16.43 / 17.89 ms at 6: within the ±2 ms of this interleaving, since the
+  centred code is the same instructions old and new (the centred
+  `advect_positive!` above agrees to 0.02 ms).
+- Full suite under the lock: 119 files, 8300 passed, 0 failed (8.0 min).
+  Validation under the lock: gabls1.jl 8/8, gabls3.jl 19/19,
+  urban_checks.jl 33/33, anelastic_cbl.jl 3/3 passed.
+
+**Deviations.** The moist-N² `@inbounds` fix (above) was not in the plan.
+The issue's premise holds only for the higher-order reconstructions,
+where if-conversion doubled the arithmetic, and for first-order upwind.
+
+**Open**: in Berlin the pass is bound by D (31 % at one thread, #556's
+open item) and the update of e (18 %). The
+higher-order schemes' advection at 6+ threads gains little, probably
+from the memory traffic of its 14 launches (not profiled); loop fusion of `advect_positive!` itself
+(as the TKE pass does) would address that. Two branching bodies remain
+outside this issue: `FiniteVolume._advect_weno5!` (`advect_weno5!`) has
+its own WENO-5 upwinded with `?:`, and the cloudy N² keeps its `qc > 0`
+branch (its IR not inspected).
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
