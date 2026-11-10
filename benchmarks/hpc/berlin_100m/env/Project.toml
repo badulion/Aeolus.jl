@@ -1,0 +1,5 @@
+# The drivers' environment. Develop the two checkouts before use (HANDOFF.md, step P4):
+#   julia --project=env -e 'using Pkg; Pkg.develop(path="<Aeolus checkout>"); Pkg.develop(path="<AeolusPrep checkout>")'
+# AeolusPrep: github.com/badulion/AeolusPrep.jl, branch issue/6-era5-soil-profiles (PR #7) until merged.
+[deps]
+NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"

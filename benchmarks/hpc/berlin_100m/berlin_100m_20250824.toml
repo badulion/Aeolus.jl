@@ -1,0 +1,124 @@
+# Berlin at 100 m, 24 August 2025, 00-24 h local time (CEST = UTC+2):
+# one model domain without nesting, 20 km x 20 km x 3 km centred on Berlin
+# Mitte (52.515 N, 13.40 E), 200 x 200 x 60 cells (100 m x 100 m x 50 m).
+#
+#   * the surface: land-use tiles per 100 m cell (street, roof, park, water,
+#     wall fractions; plan and frontal area density, mean and maximum
+#     building height) from the OpenStreetMap buildings, parks and water
+#     (data/berlin_100m_landuse.csv -> input/berlin_100m_static.nc);
+#     buildings are unresolved at 100 m and act through the tiles' roughness
+#     and displacement height;
+#   * the atmosphere: ERA5 (hourly, 22 UTC 23 Aug - 22 UTC 24 Aug 2025):
+#     the initial profiles, the open lateral faces and the initial soil
+#     profiles (stl1-4, swvl1-4; #521) in input/berlin_100m_20250824_dynamic.nc;
+#   * radiation: the mean-column two-stream scheme at the sun of the date
+#     and place.
+#
+# The drivers are made by prepare.sh in this directory. Run (see README.md):
+#
+#   julia --project=env -t auto -m Aeolus run berlin_100m_20250824.toml
+
+schema_version = 2
+static_driver = "input/berlin_100m_static.nc"
+dynamic_driver = "input/berlin_100m_20250824_dynamic.nc"
+
+[run]
+name = "berlin_100m_20250824"
+seed = 2025
+
+[fftw]
+# the pressure solver's FFTs on the 12 physical cores. Without this, FFTW
+# runs on one thread per Julia thread (24 with -t auto, #524); an explicit
+# count wins. Under the measure planner, FFTW 12 with -t 24 planned this
+# grid without the #397 crash, which was seen with -t 12 and FFTW 12.
+threads = 12
+
+[checkpoint]
+# a checkpoint every 2 h of wall-clock time (every_seconds is wall clock;
+# every_steps counts model steps), the last 2 kept (resume with --resume)
+every_seconds = 7200.0
+keep = 2
+
+[output]
+netcdf = "berlin_100m.nc"
+# temperature: theta times the reference Exner function of the initial
+# sounding (K); surface_temperature: the tiles' area-weighted skin
+# temperature, surface_temperature_<class> per tile class (NaN where a
+# column has none); temperature_2m: the 2 m air temperature (#536)
+variables = ["u", "v", "w", "theta", "qv", "temperature", "theta_profile", "qv_profile",
+             "temperature_profile", "u_profile", "v_profile", "heat_flux_profile",
+             "surface_temperature", "surface_temperature_street", "surface_temperature_roof",
+             "surface_temperature_park", "surface_temperature_water", "surface_temperature_wall",
+             "temperature_2m", "budget_energy", "budget_water"]
+cadence = 1800.0
+
+[time]
+# a fixed step: the adaptive step's guard (max |div u| < 1e-6 s^-1 after
+# every step) fails with the open faces at step 1 (see README.md); 2 s keeps
+# the advective CFL below 0.5 up to 25 m/s at 100 m
+dt = 2.0
+duration = 86400.0
+
+[grid]
+size = [200, 200, 60]
+extent = [20000.0, 20000.0, 3000.0]
+halo = [2, 2, 2]
+# the domain centred on the anchor ([radiation] latitude, longitude)
+origin = [-10000.0, -10000.0]
+
+[core]
+model = "boussinesq"
+
+[timestep]
+scheme = "rk3"
+
+[dynamics]
+nu = 0.0
+theta0 = 293.0
+g = 9.81
+moisture = true
+
+[boundaries]
+# the lateral faces fed by ERA5's boundary planes
+x = "open"
+y = "open"
+z = "free_slip"
+
+[initial]
+# the ERA5 profiles at the domain centre at the start (the dynamic driver)
+perturbation_amplitude = 0.4
+perturbation_depth = 200.0
+
+[coriolis]
+f = 0.000115
+
+[large_scale_forcing]
+# the geostrophic wind of ERA5 (the driver's ls_u_g, ls_v_g tables)
+u_g = "driver"
+v_g = "driver"
+
+[sgs]
+model = "tke"
+e_min = 0.0001
+wall_cap = true
+wall_cap_top = false
+surface_value = true
+
+[surface]
+model = "tiles"
+period = 60.0
+u_min = 0.5
+
+[radiation]
+scheme = "mean_column"
+period = 600.0
+humid = "midlatitude_summer"
+latitude = 52.515
+longitude = 13.40
+elevation = 34.0
+date = 2025-08-24
+utc_offset = 2.0
+start_hour = 0.0
+
+[checks]
+finite = { required = true }
