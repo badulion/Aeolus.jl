@@ -1401,5 +1401,6 @@ end
 
 include("prognostic_sgs/tke_blocked.jl")      # #554: the update as one cache-blocked pass
 include("prognostic_sgs/reynolds_stress.jl")
+include("prognostic_sgs/reynolds_stress_blocked.jl")   # #560: the update as one cache-blocked pass
 
 end # module

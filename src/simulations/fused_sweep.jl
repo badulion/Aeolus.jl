@@ -280,9 +280,14 @@ The setting also chooses the update of a prognostic TKE closure
 (`PrognosticSGS.TKEClosure`, #554), on either core: one cache-blocked
 pass unless `:never`, which runs its separate loops; `:always` refuses a
 case the pass cannot run (a GPU backend). [`sweep_report`](@ref) records
-which ran (`tke_update_blocked`). The same holds for the SGS diffusion of
-the urban tracers (`TracerSGSDiffusion`, #559: one cache-blocked pass per
-tracer, `Operators.blocked_eddy_diffusion!`; `tracer_diffusion_blocked`).
+which ran (`tke_update_blocked`). Likewise the update of a Reynolds-stress
+closure that transports its stresses (`PrognosticSGS.ReynoldsStressClosure`,
+#560; under `:if_possible` blocked only with centred advection on several
+threads, where it was measured faster; `:always` runs it with every other
+scheme and refuses `:weno5`;
+`reynolds_stress_update_blocked`), and the SGS diffusion of the urban
+tracers (`TracerSGSDiffusion`, #559: one cache-blocked pass per tracer,
+`Operators.blocked_eddy_diffusion!`; `tracer_diffusion_blocked`).
 """
 function set_loop_fusion!(sim, setting)
     m = Symbol(setting)
@@ -324,9 +329,13 @@ With a prognostic TKE closure (`PrognosticSGS.TKEClosure`) the table also
 has `tke_update_blocked` (`"all"`, `"some"` or `"none"`): whether the
 closure's update of e ran as one cache-blocked pass (#554) or as separate
 loops (the reference, and what `loop_fusion = "never"` runs), and
-`tke_not_blocked`, the reason when the blocked pass could not run.
-Likewise `tracer_diffusion_blocked` and `tracer_diffusion_not_blocked` for
-the SGS diffusion of the urban tracers (`TracerSGSDiffusion`, #559).
+`tke_not_blocked`, the reason when the blocked pass could not run. With a
+Reynolds-stress closure that transports its stresses
+(`PrognosticSGS.ReynoldsStressClosure`, `transport = true`) it has
+`reynolds_stress_update_blocked` and `reynolds_stress_not_blocked`
+likewise (#560), and `tracer_diffusion_blocked` and
+`tracer_diffusion_not_blocked` for the SGS diffusion of the urban tracers
+(`TracerSGSDiffusion`, #559).
 """
 function sweep_report(sim)
     r = sim.workspaces.fused
@@ -337,6 +346,10 @@ function sweep_report(sim)
     if r.tke_blocked + r.tke_separate > 0         # a TKE closure's update of e (#554)
         d["tke_update_blocked"] = r.tke_separate == 0 ? "all" : r.tke_blocked == 0 ? "none" : "some"
         isempty(r.tke_reason) || (d["tke_not_blocked"] = r.tke_reason)
+    end
+    if r.rsm_blocked + r.rsm_separate > 0         # a Reynolds-stress closure's update (#560)
+        d["reynolds_stress_update_blocked"] = r.rsm_separate == 0 ? "all" : r.rsm_blocked == 0 ? "none" : "some"
+        isempty(r.rsm_reason) || (d["reynolds_stress_not_blocked"] = r.rsm_reason)
     end
     if r.tracer_blocked + r.tracer_separate > 0   # the urban tracers' SGS diffusion (#559)
         d["tracer_diffusion_blocked"] = r.tracer_separate == 0 ? "all" : r.tracer_blocked == 0 ? "none" : "some"

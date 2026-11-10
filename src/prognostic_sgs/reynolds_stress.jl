@@ -208,7 +208,9 @@ function _jacobi3(τ)
     a = MMatrix{3,3,T}(T(τ[1]), T(τ[4]), T(τ[5]), T(τ[4]), T(τ[2]), T(τ[6]), T(τ[5]), T(τ[6]), T(τ[3]))
     v = MMatrix{3,3,T}(one(T), zero(T), zero(T), zero(T), one(T), zero(T), zero(T), zero(T), one(T))
     scale = abs(a[1, 1]) + abs(a[2, 2]) + abs(a[3, 3]) + abs(a[1, 2]) + abs(a[1, 3]) + abs(a[2, 3])
-    for _ in 1:50
+    # (@inbounds: a bounds check's error path would let `a` escape to the
+    # heap, 192 B per projected cell, #560)
+    @inbounds for _ in 1:50
         off = abs(a[1, 2]) + abs(a[1, 3]) + abs(a[2, 3])
         off <= eps(T) * scale && break
         for (p, q) in ((1, 2), (1, 3), (2, 3))
@@ -537,6 +539,8 @@ struct ReynoldsStressClosure{T, F<:Field, LW, FL, MK, SF, Q, CL, CT, WS, AS, RC}
     snap::NTuple{6,Array{T,3}}
     stats::Vector{T}
     snapstats::Vector{T}
+    rowsums::Matrix{NTuple{8,T}}   # the budget sums of every i-row of the update (#560)
+    blocked::Base.RefValue{Any}    # scratch of the cache-blocked update (#560), built on first use
 end
 
 const _NRSTATS = 12
@@ -585,7 +589,8 @@ function ReynoldsStressClosure(g::RegularGrid{T}; τ = nothing, e0::Real = 0,
                                  mkf(), mkf(), mkf(), DiffusivityTensor(g), StressTensor(g),
                                  ntuple(_ -> mkf(), 6), ws, adv,
                                  ntuple(_ -> similar(τf[1].data), 6),
-                                 zeros(T, _NRSTATS), zeros(T, _NRSTATS))
+                                 zeros(T, _NRSTATS), zeros(T, _NRSTATS),
+                                 Matrix{NTuple{8,T}}(undef, g.Ny, g.Nz), Ref{Any}(nothing))
 end
 
 Base.show(io::IO, c::ReynoldsStressClosure) =
@@ -722,9 +727,55 @@ the projection):
    ``τ^n``;
 4. ``τ^{n+1}`` projected onto the realizable set, the correction booked;
    ``τ = 0`` in solids.
+
+With `transport`, on the CPU, steps 1 to 4 can run as one cache-blocked
+pass, row by row, on `Operators.FiniteVolume.blocked_update!` (#560, the driver
+of the TKE update, #554; the footprint in [`rsm_blocked_lags`](@ref)):
+``ν_t``, the limited fluxes of the diagonals, the plain advection of the
+off-diagonals, the diffusion and the update of all six stresses. ``N^2``
+stays a separate loop before it. The step core's `loop_fusion` setting
+(`Simulations.set_loop_fusion!`) chooses: `:never` runs separate
+whole-field loops (the reference, which agrees to round-off);
+`:if_possible` (the default) runs the blocked pass only where it was
+measured faster, centred advection on several threads, and the separate
+loops otherwise (the update is limited by its arithmetic, so one pass
+saves little; WENO-Z5 was slower, #560); `:always` runs the pass wherever
+it can and refuses a case it cannot run (a GPU backend, the `:weno5`
+off-diagonal scheme). Which form ran is recorded in
+`Simulations.sweep_report`. Without `transport` the update is one
+pointwise pass already and runs the same in every setting.
+
+The closure's scratch fields `ν`, `K2` and `tend` are not output: the
+blocked pass writes ``ν_t`` only on the one-cell boundary shell and does
+not write `K2` or `tend`.
 """
 function advance_sgs!(c::ReynoldsStressClosure{T}, sim, dt) where {T}
     Δt = T(dt)
+    if c.transport
+        setting = _fusion_setting(sim)
+        why = setting === :never ? nothing : _rsm_blocked_blocker(c, sim)
+        why === nothing && setting === :if_possible && (why = _rsm_blocked_slower(c, sim))
+        if setting !== :never && why === nothing
+            _rsm_advance_blocked!(c, sim, Δt)
+            _note_rsm!(sim, true, nothing)
+        else
+            setting === :always &&
+                throw(ArgumentError("loop_fusion = \"always\", but the Reynolds-stress update has no " *
+                                    "blocked form here: $why"))
+            _rsm_advance_separate!(c, sim, Δt)
+            _note_rsm!(sim, false, why)
+        end
+    else
+        _rsm_advance_separate!(c, sim, Δt)
+    end
+    c.surface === nothing || _rsm_surface!(c, sim)
+    return c
+end
+
+# The update as separate whole-field loops: the reference of the
+# cache-blocked pass (`_rsm_advance_blocked!`, prognostic_sgs/
+# reynolds_stress_blocked.jl), and the form `loop_fusion = "never"` runs.
+function _rsm_advance_separate!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     bcs = sim.bcs
     sbcs = _scalar_bcs(sim)
     fill_halos!(sim.u, bcs); fill_halos!(sim.v, bcs); fill_halos!(sim.w, bcs)
@@ -734,7 +785,6 @@ function advance_sgs!(c::ReynoldsStressClosure{T}, sim, dt) where {T}
         _rsm_transport!(c, sim, Δt, sbcs)
     end
     _rsm_update!(c, sim, Δt)
-    c.surface === nothing || _rsm_surface!(c, sim)
     return c
 end
 
@@ -807,8 +857,10 @@ function _rsm_transport!(c::ReynoldsStressClosure, sim, Δt, sbcs)
     return c
 end
 
-# Gaussian elimination with partial pivoting, A (n×n) x = b in place (b ← x)
-function _solve!(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+# Gaussian elimination with partial pivoting, A (n×n) x = b in place (b ← x).
+# Inlined: the caller's stack-allocated A and b then stay on the stack (a
+# call would make them escape to the heap, 368 B per cell, #560).
+@inline function _solve!(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     n = length(b)
     @inbounds for p in 1:n
         piv = p; amax = abs(A[p, p])
@@ -911,28 +963,39 @@ end
     return x, acc ./ n, n
 end
 
-# KA-l (#304): one work item per plane (`plane_map!`) updates the plane's
-# cells in their loop order; each cell writes its new stresses and adds its
-# contributions to the step's budget and counters (P, βh₃, ε, transport,
-# clips, clipped energy, split cells, unrealizable inputs) to the plane's
-# running sums, and the planes are combined in ascending k. The stresses
-# are the loop's bit for bit; the sums are a named one-time change of order
-# (per-plane sums instead of one running sum over the domain).
+# One work item per i-row (`row_map!`, #560; a plane per work item before,
+# KA-l #304) updates the row's cells in ascending i; each cell writes its
+# new stresses and adds its contributions to the step's budget and counters
+# (P, βh₃, ε, transport, clips, clipped energy, split cells, unrealizable
+# inputs) to the row's running sums; the rows of a plane are combined in
+# ascending j, the planes in ascending k (`_sum_rows`, as the TKE update).
+# The stresses are pointwise, the same bits at any thread count; the sums
+# differ from the per-plane running sums only in the order of the additions.
 function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     g = mesh(c.τ[1])
     q = _qv(c, sim)
+    par = _rsm_update_params(c, sim, Δt)
+    row_map!(c.rowsums, Backends.backend(c.τ[1].data), _rsm_update_row, interior(g),
+             map(x -> x.data, c.τ), map(x -> x.data, c.tend), sim.u.data, sim.v.data,
+             sim.w.data, sim.θ.data, q === nothing ? nothing : q.data, c.N2.data,
+             _Edges(c.mask, bounded_directions(sim.bcs), g), c, par)
+    _rsm_book!(c, par.V)
+    return c
+end
+
+# the parameters of the update's point body
+function _rsm_update_params(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
+    g = mesh(c.τ[1])
     Ω = _rsm_Ω(c, sim)
-    par = (V = g.dx * g.dy * g.dz, idx = 1 / g.dx, idy = 1 / g.dy, idz = 1 / g.dz,
-           Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, β = T(_β(c, sim)),
-           rot = Ω != (zero(T), zero(T), zero(T)), R = coriolis_rotation(Ω, Δt), Δt = Δt,
-           C1 = c.C1, C2 = c.C2, C3 = c.C3, transport = c.transport)
-    parts = Vector{NTuple{8,T}}(undef, g.Nz)
-    plane_map!(parts, Backends.backend(c.τ[1].data), _rsm_update_plane, interior(g),
-               map(x -> x.data, c.τ), map(x -> x.data, c.tend), sim.u.data, sim.v.data,
-               sim.w.data, sim.θ.data, q === nothing ? nothing : q.data, c.N2.data,
-               _Edges(c.mask, bounded_directions(sim.bcs), g), c, par)
-    sP, sB, sε, sT, nclip, eclip, nsplit, nin = ntuple(n -> ordered_sum(map(p -> p[n], parts)), Val(8))
-    V = par.V
+    return (V = g.dx * g.dy * g.dz, idx = 1 / g.dx, idy = 1 / g.dy, idz = 1 / g.dz,
+            Hx = g.Hx, Hy = g.Hy, Hz = g.Hz, β = T(_β(c, sim)),
+            rot = Ω != (zero(T), zero(T), zero(T)), R = coriolis_rotation(Ω, Δt), Δt = Δt,
+            C1 = c.C1, C2 = c.C2, C3 = c.C3, transport = c.transport)
+end
+
+# the row sums of the step (c.rowsums) into the statistics
+function _rsm_book!(c::ReynoldsStressClosure, V)
+    sP, sB, sε, sT, nclip, eclip, nsplit, nin = _sum_rows(c.rowsums)
     st = c.stats
     st[1] += nclip; st[2] += eclip
     st[3] = sP * V; st[4] = sB * V; st[5] = sε * V; st[6] = sT * V
@@ -944,12 +1007,14 @@ function _rsm_update!(c::ReynoldsStressClosure{T}, sim, Δt::T) where {T}
     return c
 end
 
-# one plane: the cells in their loop order, each updating its stresses and
-# adding its contributions to the plane's running sums
-function _rsm_update_plane(K, ir, jr, τd, td, ud, vd, wd, θd, qd, n2, E, c, p)
+# one row: the cells in ascending i, each updating its stresses and adding
+# its contributions to the row's running sums (the row of the separate
+# loops and of the blocked pass: `τd` and `td` are the fields there, the
+# pass's adapters here)
+function _rsm_update_row(J, K, ir, τd, td, ud, vd, wd, θd, qd, n2, E, c, p)
     T = eltype(n2)
     acc = ntuple(_ -> zero(T), Val(8))
-    for J in jr, I in ir
+    for I in ir
         acc = map(+, acc, _rsm_update_body(I, J, K, τd, td, ud, vd, wd, θd, qd, n2, E, c, p))
     end
     return acc

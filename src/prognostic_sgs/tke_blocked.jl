@@ -84,17 +84,18 @@ Base.size(r::_Ring{T,NR}) where {T, NR} = (size(r.buf, 1), size(r.buf, 2), NR)
 @inline Base.setindex!(r::_Ring{T,NR}, x, I::Integer, J::Integer, K::Integer) where {T, NR} =
     (@inbounds r.buf[I, K - r.koff, mod(J, NR) + 1, r.s] = x; r)
 
-# the driver's slot of one row: (I, J, K) ↦ buf[I, a, b, 1, s]
+# the driver's slot of one row of field f: (I, J, K) ↦ buf[I, a, b, f, s]
 struct _Slot{T, A<:AbstractArray{T,5}} <: AbstractArray{T,3}
     buf::A
     a::Int
     b::Int
+    f::Int
     s::Int
 end
 Base.size(r::_Slot) = (size(r.buf, 1), 1, 1)
-@inline Base.getindex(r::_Slot, I::Integer, J::Integer, K::Integer) = @inbounds r.buf[I, r.a, r.b, 1, r.s]
+@inline Base.getindex(r::_Slot, I::Integer, J::Integer, K::Integer) = @inbounds r.buf[I, r.a, r.b, r.f, r.s]
 @inline Base.setindex!(r::_Slot, x, I::Integer, J::Integer, K::Integer) =
-    (@inbounds r.buf[I, r.a, r.b, 1, r.s] = x; r)
+    (@inbounds r.buf[I, r.a, r.b, r.f, r.s] = x; r)
 
 # the old e read from the field, the new e written to the slot
 struct _ReadWrite{T, A<:AbstractArray{T,3}, B<:AbstractArray{T,3}} <: AbstractArray{T,3}
@@ -146,15 +147,21 @@ Base.size(::_Discard) = (0, 0, 0)
 # -------------------------------------------------------------------------
 
 # Per slab s, planes k0−1:k1+1 (`kl = k − k0 + 2`; the z faces k0−1:k1+2):
-# ν and the ratio of three rows, the x and z face fluxes (reconstructed H,
-# upwind L) of two rows, the y face fluxes of three face rows, and one row
-# of the tendency of e.
+# ν of three rows; for each flux-limited scalar (`_FluxRings`) the ratio of
+# three rows, the x and z face fluxes (reconstructed H, upwind L) of two
+# rows and the y face fluxes of three face rows; and one row of the
+# tendency of e.
+struct _FluxRings{A<:AbstractArray}
+    R::A
+    FxH::A; FxL::A; FzH::A; FzL::A
+    FyH::A; FyL::A
+end
+_flux_rings(r) = _FluxRings(r(3), r(2), r(2), r(2, 1), r(2, 1), r(3), r(3))
 # (mutable, as `SweepBuffers`: kept in the closure's `Any` slot without a
 # box per step; the fields are `const`)
 mutable struct _TKERings{A<:AbstractArray, M<:AbstractMatrix}
-    const ν::A; const R::A
-    const FxH::A; const FxL::A; const FzH::A; const FzL::A
-    const FyH::A; const FyL::A
+    const ν::A
+    const f::_FluxRings{A}
     const N2::A                   # N² of two rows (#556)
     const td::M
     const D::M                    # one row of the dual strain (#556)
@@ -177,8 +184,7 @@ function _tke_rings_(old, data::AbstractArray{T,3}, nkl::Int, ns::Int) where {T}
     old isa _TKERings && size(old.ν, 1) == sx && size(old.ν, 2) >= nkl && size(old.ν, 4) == ns &&
         return old
     r(nr, extra = 0) = similar(data, sx, nkl + extra, nr, ns)
-    return _TKERings(r(3), r(3), r(2), r(2), r(2, 1), r(2, 1), r(3), r(3), r(2), similar(data, sx, ns),
-                     similar(data, sx, ns))
+    return _TKERings(r(3), _flux_rings(r), r(2), similar(data, sx, ns), similar(data, sx, ns))
 end
 
 # -------------------------------------------------------------------------
@@ -186,10 +192,14 @@ end
 # -------------------------------------------------------------------------
 
 # Everything the pipeline reads (a NamedTuple, so every field is typed):
-# fields `e`, `νf`, `Rf` (ν and the ratio with their halos filled), `u, v,
-# w`, `n2`, `dd`, `pw`; the reconstruction `r` (nothing: no transport);
-# the closure's arrays and coefficients; the rings `rg`; the budget sums
-# of every row `rowsums`; the interior `J1:J2`, `Kb:Kt` (storage).
+# fields `e`, `νf` (ν with its halos filled), `u, v, w`, `n2`, `dd`, `pw`;
+# the arguments of the N² body `n2a` and of the D row kernel `da`
+# (nothing: read from `n2`, `dd`); the transported scalar `a = (ϕ = e,
+# Rf = the ratio with its halos filled)`; the closure's interior row of ν
+# `νrow!` (`_tke_ν_row!`: N², then the coefficient body); the
+# reconstruction `r` (nothing: no transport); the closure's
+# arrays and coefficients; the rings `rg`; the budget sums of every row
+# `rowsums`; the interior `J1:J2`, `Kb:Kt` (storage).
 struct _TKEUpdate{P<:NamedTuple, INPLACE} <: BlockedUpdate
     p::P
 end
@@ -198,13 +208,14 @@ _TKEUpdate(p::NamedTuple, inplace::Bool) = _TKEUpdate{typeof(p), inplace}(p)
 update_lags(op::_TKEUpdate) = (op.p.lag, op.p.lz)
 
 # the rings of slab s as 3-D arrays
+@inline _flux_views(f::_FluxRings, s, ko) =
+    (R = _Ring{3}(f.R, ko, s),
+     FxH = _Ring{2}(f.FxH, ko, s), FxL = _Ring{2}(f.FxL, ko, s),
+     FzH = _Ring{2}(f.FzH, ko, s), FzL = _Ring{2}(f.FzL, ko, s),
+     FyH = _Ring{3}(f.FyH, ko, s), FyL = _Ring{3}(f.FyL, ko, s))
 @inline function _rings(p, s, k0)
     rg = p.rg; ko = k0 - 2
-    return (ν = _Ring{3}(rg.ν, ko, s), R = _Ring{3}(rg.R, ko, s),
-            FxH = _Ring{2}(rg.FxH, ko, s), FxL = _Ring{2}(rg.FxL, ko, s),
-            FzH = _Ring{2}(rg.FzH, ko, s), FzL = _Ring{2}(rg.FzL, ko, s),
-            FyH = _Ring{3}(rg.FyH, ko, s), FyL = _Ring{3}(rg.FyL, ko, s),
-            td = _Line(rg.td, s),
+    return (ν = _Ring{3}(rg.ν, ko, s), f = _flux_views(rg.f, s, ko), td = _Line(rg.td, s),
             n2 = p.n2a === nothing ? p.n2 : _Ring{2}(rg.N2, ko, s),
             dd = p.da === nothing ? p.dd : _Line(rg.D, s))
 end
@@ -240,68 +251,114 @@ end
     return nothing
 end
 
-# ν of row J, planes ka:kb (interior: N² and the coefficient body; halo:
-# copied)
+# ν of the interior row (J, K) of the TKE pass into its ring: N² of the row
+# (when the pass computes it), then the coefficient body
+@inline function _tke_ν_row!(p, rs, J, K, ii)
+    _n2_row!(p, rs, J, K, ii)
+    Backends._row!(_coefficients_body!, ii, J, K, rs.ν, p.discard, p.e, rs.n2, p.Δk, p.mask,
+                   p.l_wall, p.Hx, p.Hy, p.Hz, p.ck, p.cl)
+    return nothing
+end
+
+# ν of row J, planes ka:kb into the ring `rs.ν` (interior: the closure's
+# row `p.νrow!(p, rs, J, K, ii)`; halo: copied)
 function _ν_row!(p, rs, J, ka, kb, ii)
+    ν = rs.ν
     iw = first(ii)-1:last(ii)+1
     for K in ka:kb
         if p.J1 <= J <= p.J2 && p.Kb <= K <= p.Kt
-            _n2_row!(p, rs, J, K, ii)
-            Backends._row!(_coefficients_body!, ii, J, K, rs.ν, p.discard, p.e, rs.n2, p.Δk, p.mask,
-                           p.l_wall, p.Hx, p.Hy, p.Hz, p.ck, p.cl)
-            _copy_ends!(rs.ν, p.νf, ii, J, K)
+            p.νrow!(p, rs, J, K, ii)
+            _copy_ends!(ν, p.νf, ii, J, K)
         else
-            _copy_row!(rs.ν, p.νf, iw, J, K)
+            _copy_row!(ν, p.νf, iw, J, K)
         end
     end
     return nothing
 end
 
+# The flux-limited advection of one scalar `a = (ϕ, Rf)` through its rings
+# `f` (`_flux_views`), the steps of `advect_positive!`: the reconstructed
+# and upwind face fluxes, the limiter's ratio, the limited fluxes.
+
 # the y faces J (between rows J−1 and J), planes k0−1:k1+1 of the interior
-function _yfaces_row!(p, rs, J, k0, k1, ii)
+function _yfaces_row!(p, a, f, J, k0, k1, ii)
     for K in _inner_planes(p, k0, k1)
-        Backends._row!(_b_rflux_y!, ii, J, K, rs.FyH, p.v, p.e, p.r)
-        Backends._row!(_b_uflux_y!, ii, J, K, rs.FyL, p.v, p.e)
+        Backends._row!(_b_rflux_y!, ii, J, K, f.FyH, p.v, a.ϕ, p.r)
+        Backends._row!(_b_uflux_y!, ii, J, K, f.FyL, p.v, a.ϕ)
     end
     return nothing
 end
 
-# The front of the pipeline at row Jn: ν, the x and z face fluxes and the
-# ratio of row Jn, the y faces between Jn and Jn+1 (halo rows: ν and the
+# The front of a scalar's pipeline at row Jn: the x and z face fluxes and
+# the ratio of row Jn, the y faces between Jn and Jn+1 (halo rows: the
 # ratio copied), then the y faces between Jn−1 and Jn limited.
-function _advance_front!(p, rs, Jn, k0, k1, ii)
-    _ν_row!(p, rs, Jn, k0 - 1, k1 + 1, ii)
+function _flux_front!(p, a, f, Jn, k0, k1, ii)
     iw = first(ii)-1:last(ii)+1
     kin = _inner_planes(p, k0, k1)
     if Jn <= p.J2
         xf = first(ii):last(ii)+1
         for K in kin
-            Backends._row!(_b_rflux_x!, xf, Jn, K, rs.FxH, p.u, p.e, p.r)
-            Backends._row!(_b_uflux_x!, xf, Jn, K, rs.FxL, p.u, p.e)
+            Backends._row!(_b_rflux_x!, xf, Jn, K, f.FxH, p.u, a.ϕ, p.r)
+            Backends._row!(_b_uflux_x!, xf, Jn, K, f.FxL, p.u, a.ϕ)
         end
         for K in max(k0 - 1, p.Kb):min(k1 + 2, p.Kt + 1)
-            Backends._row!(_b_rflux_z!, ii, Jn, K, rs.FzH, p.w, p.e, p.r)
-            Backends._row!(_b_uflux_z!, ii, Jn, K, rs.FzL, p.w, p.e)
+            Backends._row!(_b_rflux_z!, ii, Jn, K, f.FzH, p.w, a.ϕ, p.r)
+            Backends._row!(_b_uflux_z!, ii, Jn, K, f.FzL, p.w, a.ϕ)
         end
-        _yfaces_row!(p, rs, Jn + 1, k0, k1, ii)
+        _yfaces_row!(p, a, f, Jn + 1, k0, k1, ii)
         for K in k0-1:k1+1
             if K in kin
-                Backends._row!(_b_limit_ratio!, ii, Jn, K, rs.R, rs.FxH, rs.FyH, rs.FzH, p.e,
-                               rs.FxL, rs.FyL, rs.FzL, p.Δt, p.idx, p.idy, p.dzm)
-                _copy_ends!(rs.R, p.Rf, ii, Jn, K)
+                Backends._row!(_b_limit_ratio!, ii, Jn, K, f.R, f.FxH, f.FyH, f.FzH, a.ϕ,
+                               f.FxL, f.FyL, f.FzL, p.Δt, p.idx, p.idy, p.dzm)
+                _copy_ends!(f.R, a.Rf, ii, Jn, K)
             else
-                _copy_row!(rs.R, p.Rf, iw, Jn, K)
+                _copy_row!(f.R, a.Rf, iw, Jn, K)
             end
         end
     else
         for K in k0-1:k1+1
-            _copy_row!(rs.R, p.Rf, iw, Jn, K)
+            _copy_row!(f.R, a.Rf, iw, Jn, K)
         end
     end
-    z = zero(eltype(p.e))
+    z = zero(eltype(a.ϕ))
     for K in k0:k1
-        Backends._row!(_b_limit_y!, ii, Jn, K, rs.FyH, rs.R, rs.FyL, z)
+        Backends._row!(_b_limit_y!, ii, Jn, K, f.FyH, f.R, f.FyL, z)
     end
+    return nothing
+end
+
+# the start of a scalar's pipeline in a slab: the ratio of the halo row
+# before the first, the y faces of the first row, the front at the first row
+function _begin_flux!(p, a, f, J1, k0, k1, ii)
+    iw = first(ii)-1:last(ii)+1
+    for K in k0-1:k1+1
+        _copy_row!(f.R, a.Rf, iw, J1 - 1, K)
+    end
+    _yfaces_row!(p, a, f, J1, k0, k1, ii)
+    _flux_front!(p, a, f, J1, k0, k1, ii)
+    return nothing
+end
+
+# the x and z faces of row J limited, each once (planes k0:k1, the z faces
+# k0:k1+1)
+function _limit_xz!(f, J, k0, k1, ii, z)
+    for K in k0:k1+1
+        Backends._row!(_b_limit_z!, ii, J, K, f.FzH, f.R, f.FzL, z)
+    end
+    xf = first(ii):last(ii)+1
+    for K in k0:k1
+        Backends._row!(_b_limit_x!, xf, J, K, f.FxH, f.R, f.FxL, z)
+    end
+    return nothing
+end
+
+# the halo row of ν before the first row of a slab, and ν of the first row
+function _begin_ν!(p, rs, J1, k0, k1, ii)
+    iw = first(ii)-1:last(ii)+1
+    for K in k0-1:k1+1
+        _copy_row!(rs.ν, p.νf, iw, J1 - 1, K)
+    end
+    _ν_row!(p, rs, J1, k0 - 1, k1 + 1, ii)
     return nothing
 end
 
@@ -309,27 +366,26 @@ function begin_slab!(op::_TKEUpdate, s, k0, k1, ii, jj)
     p = op.p
     p.r === nothing && return nothing             # no transport: nothing ahead
     rs = _rings(p, s, k0)
-    J1 = first(jj)
-    iw = first(ii)-1:last(ii)+1
-    for K in k0-1:k1+1                            # the halo row before the first
-        _copy_row!(rs.ν, p.νf, iw, J1 - 1, K)
-        _copy_row!(rs.R, p.Rf, iw, J1 - 1, K)
-    end
-    _yfaces_row!(p, rs, J1, k0, k1, ii)
-    _advance_front!(p, rs, J1, k0, k1, ii)
+    _begin_ν!(p, rs, first(jj), k0, k1, ii)
+    _begin_flux!(p, p.a, rs.f, first(jj), k0, k1, ii)
     return nothing
 end
 
-# the tendency of e on row (J, K): the flux divergence and the diffusion
-# with 2ν, in the order of the separate loops (0, −div, + diffusion)
-@inline function _tendency_row!(p, rs, J, K, ii)
-    _zero_line!(rs.td, ii)
-    Backends._row!(_b_flux_div!, ii, J, K, rs.td, rs.FxH, rs.FyH, rs.FzH, p.idx, p.idy, p.dzm)
-    K2 = _Doubled(rs.ν)
+# the tendency of a flux-limited scalar ϕ on row (J, K) into the line td:
+# the divergence of its limited fluxes `f` and the diffusion with 2ν, in
+# the order of the separate loops (0, −div, + diffusion)
+@inline function _tendency_row!(p, td, ϕ, f, ν, J, K, ii)
+    _zero_line!(td, ii)
+    Backends._row!(_b_flux_div!, ii, J, K, td, f.FxH, f.FyH, f.FzH, p.idx, p.idy, p.dzm)
+    _diffusion_row!(p, td, ϕ, ν, J, K, ii)
+    return nothing
+end
+@inline function _diffusion_row!(p, td, ϕ, ν, J, K, ii)
+    K2 = _Doubled(ν)
     if p.mask === nothing
-        Backends._row!(_b_eddy_scalar!, ii, J, K, rs.td, p.e, K2, K2, one(eltype(p.e)), p.m)
+        Backends._row!(_b_eddy_scalar!, ii, J, K, td, ϕ, K2, K2, one(eltype(ϕ)), p.m)
     else
-        Backends._row!(_b_eddy_scalar_masked!, ii, J, K, rs.td, p.e, K2, K2, p.mask, nothing, nothing,
+        Backends._row!(_b_eddy_scalar_masked!, ii, J, K, td, ϕ, K2, K2, p.mask, nothing, nothing,
                        p.idx, p.idy, p.idz)
     end
     return nothing
@@ -339,30 +395,27 @@ function compute_rows!(op::_TKEUpdate{P,INPLACE}, ring, edge, r, s, J, k0, k1, i
     p = op.p
     rs = _rings(p, s, k0)
     if p.r === nothing                            # no transport: ν and the update, in place
-        _ν_row!(p, rs, J, k0, k1, ii)              # (planes k0:k1: no neighbour read)
+        _ν_row!(p, rs, J, k0, k1, ii)            # (planes k0:k1: no neighbour read)
         for K in k0:k1
             out = INPLACE ? p.e : _rowslot(ring, edge, r, J, K, k0, k1, lz, s)
             _update_row!(p, rs, J, K, ii, _ReadWrite(p.e, out), p.ztd)
         end
         return nothing
     end
-    _advance_front!(p, rs, J + 1, k0, k1, ii)
-    z = zero(eltype(p.e))
-    for K in k0:k1+1                              # the z faces of row J, each limited once
-        Backends._row!(_b_limit_z!, ii, J, K, rs.FzH, rs.R, rs.FzL, z)
-    end
-    xf = first(ii):last(ii)+1
+    _ν_row!(p, rs, J + 1, k0 - 1, k1 + 1, ii)    # the front at row J + 1
+    _flux_front!(p, p.a, rs.f, J + 1, k0, k1, ii)
+    _limit_xz!(rs.f, J, k0, k1, ii, zero(eltype(p.e)))
     for K in k0:k1
-        Backends._row!(_b_limit_x!, xf, J, K, rs.FxH, rs.R, rs.FxL, z)
-        _tendency_row!(p, rs, J, K, ii)
+        _tendency_row!(p, rs.td, p.e, rs.f, rs.ν, J, K, ii)
         _update_row!(p, rs, J, K, ii, _ReadWrite(p.e, _rowslot(ring, edge, r, J, K, k0, k1, lz, s)), rs.td)
     end
     return nothing
 end
 
-@inline function _rowslot(ring, edge, r, J, K, k0, k1, lz, s)
+# field f of the driver's slot of row (J, K)
+@inline function _rowslot(ring, edge, r, J, K, k0, k1, lz, s, f = 1)
     buf, a, b = _row_slot(ring, edge, r, J, K, k0, k1, lz)
-    return _Slot(buf, a, b, s)
+    return _Slot(buf, a, b, f, s)
 end
 
 # the update of row (J, K) and its budget sums (the row loop of `_update!`),
@@ -412,22 +465,24 @@ function _shell_coefficients!(c::TKEClosure, bcs, n2a, n2)
     return nothing
 end
 
-# the limiter's ratio of the shell cells into c.ws.ratio, each face flux
-# evaluated by its body where the ratio reads it (`_FaceFlux`), then its
-# halos filled with e's conditions, as `advect_positive!` fills them
-function _shell_ratio!(c::TKEClosure{T}, sim, Δt::T, ebcs) where {T}
-    g = mesh(c.e)
-    r = c.recon
-    b = Backends.backend(c.e.data)
-    ed = c.e.data; ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
+# the limiter's ratio of the shell cells of a scalar ϕ (reconstruction r)
+# into `ratio`, each face flux evaluated by its body where the ratio reads
+# it (`_FaceFlux`), then its halos filled with ϕ's conditions `ebcs`, as
+# `advect_positive!` fills them
+_shell_ratio!(c::TKEClosure{T}, sim, Δt::T, ebcs) where {T} =
+    _shell_ratio!(c.ws.ratio, c.e, c.recon, sim, Δt, ebcs)
+function _shell_ratio!(ratio::Field, ϕ::Field{CellCenter,T}, r, sim, Δt::T, ebcs) where {T}
+    g = mesh(ϕ)
+    b = Backends.backend(ϕ.data)
+    ed = ϕ.data; ud, vd, wd = sim.u.data, sim.v.data, sim.w.data
     idx = 1 / g.dx; idy = 1 / g.dy; dzm = _dz_metric(g)
     fx = _FaceFlux{T}(_b_rflux_x!, (ud, ed, r)); lx = _FaceFlux{T}(_b_uflux_x!, (ud, ed))
     fy = _FaceFlux{T}(_b_rflux_y!, (vd, ed, r)); ly = _FaceFlux{T}(_b_uflux_y!, (vd, ed))
     fz = _FaceFlux{T}(_b_rflux_z!, (wd, ed, r)); lz = _FaceFlux{T}(_b_uflux_z!, (wd, ed))
     for box in _shell_boxes(interior(g))
-        launch!(b, _b_limit_ratio!, box, c.ws.ratio.data, fx, fy, fz, ed, lx, ly, lz, Δt, idx, idy, dzm)
+        launch!(b, _b_limit_ratio!, box, ratio.data, fx, fy, fz, ed, lx, ly, lz, Δt, idx, idy, dzm)
     end
-    fill_halos!(c.ws.ratio, ebcs)
+    fill_halos!(ratio, ebcs)
     return nothing
 end
 
@@ -537,7 +592,8 @@ function _tke_pass!(c::TKEClosure{T}, sim, Δt::T, bufs, rings, par, b, g, pw, e
     # without transport (no reconstruction: `c.recon === nothing`, known
     # from the closure's type) the update is pointwise and writes e in place
     inplace = c.recon === nothing
-    p = (e = c.e.data, νf = c.ν.data, Rf = c.transport ? c.ws.ratio.data : c.ν.data,
+    p = (e = c.e.data, νf = c.ν.data, a = (ϕ = c.e.data, Rf = c.transport ? c.ws.ratio.data : c.ν.data),
+         νrow! = _tke_ν_row!,
          u = sim.u.data, v = sim.v.data, w = sim.w.data, n2a = n2a, n2 = n2, da = da, dd = dd, pw = pw,
          r = c.recon, discard = _Discard{T}(), ztd = _Zeros{T}(),
          Δk = c.Δk, vrel = c.vrel, l_wall = c.l_wall, first_level = c.first_level, mask = c.mask,
