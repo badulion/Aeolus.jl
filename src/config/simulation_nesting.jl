@@ -78,7 +78,7 @@ function _nest_checks(cfg)
         end
     end
     n == 1 && return e
-    if ds[1].nesting.budget_exchange === :off
+    if ds[1].nesting.budget_exchange === :off && budgets_enabled(cfg)   # (off: dropped, #539)
         for v in cfg.output.variables
             haskey(Components.BUDGET_OUTPUTS, v) &&
                 push!(e, ConfigError("output.variables", "$v: with [nesting] budget_exchange = \"off\" a nested model measures no budgets"))

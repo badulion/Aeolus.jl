@@ -52,6 +52,7 @@ function build(::Type{ParentStatistics}, opts, domain)
     return ParentStatistics(opts.start, opts.tau_avg, opts.refine, nlev, nothing, nothing)
 end
 stages(::ParentStatistics) = (Stage(:output),)
+budget_writes(::ParentStatistics, ::Val) = ()          # it reads the state (#539)
 
 # the running sums of ParentResolvedStatistics (what a restart needs)
 const _IS_SUMS = (:Um, :Rres, :Rband, :Cres, :Cband, :Rsgs, :esgs, :Cx, :Cy, :Cz, :Vz, :Bx, :By, :Bz, :BVz)

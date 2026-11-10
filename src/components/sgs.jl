@@ -75,6 +75,8 @@ _sum_wall_flux(cs::Tuple, d) = (a = wall_theta_flux(first(cs), d); b = _sum_wall
                                 (a[1] + b[1], a[2] + b[2]))
 
 stages(c::SGS) = c.wall_flux === nothing ? () : (Stage(:surface_flux; order = 1),)
+# it reads the walls' fluxes: nothing the budgets measure (#539)
+budget_writes(::SGS, ::Val{:surface_flux}) = ()
 function run_stage!(c::SGS, d, ::Val{:surface_flux}, dt)
     b, t = _sum_wall_flux(d.components, d)
     c.wall_flux[1] = b; c.wall_flux[2] = t
