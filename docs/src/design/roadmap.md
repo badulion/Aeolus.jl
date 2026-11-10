@@ -3454,6 +3454,124 @@ the rings); the Reynolds-stress closure (`_rsm_update_plane`) could use
 the same driver (plan step 4) and the urban `TracerSGSDiffusion` loops
 (plan step 3).
 
+#### N² and the dual strain inside the cache-blocked TKE pass (#556)
+
+Follow-up to #554 (branch `issue/556-tke-n2-strain`, on
+`issue/554-tke-blocked`). #554's pass still ran N² (`_n2_body!`) and the
+dual strain D (`_dual_strain_row!`) as whole-field loops before it, 1.4
+and 4.4 ms per Berlin step at 6 threads in #555's profile.
+
+**Built.**
+
+- **N².** Its three variants (dry θ, moist θ_v, cloudy θ_ρ with the
+  saturated form where q_c > 0) and the no-buoyancy case are chosen in
+  one place, `PrognosticSGS._with_n2_args`, which hands the arguments of
+  `Operators._n2_body!` (`Operators.n2_args`: θ, the humidity, Δz, g, θ₀)
+  to the whole-field loop (`_stratification!`) and to the pass. The
+  StretchedGrid's own N² loop is gone: Δz is a number on a RegularGrid and
+  `dzc` per level on a StretchedGrid (`_n2_dz`), read by the same body.
+  The pass computes N² of the front row (planes k0−1:k1+1) into a
+  two-row ring just before ν of that row, and the update reads the ring.
+  The shell's ν first computes the shell's N² into `c.N2` by the same
+  body. No buoyancy (g or θ₀ zero) reads a field of zeros.
+- **D.** The pass calls the row kernel `_dual_row!` (its arguments
+  collected by `_dual_args`, shared with `_dual_strain!`) for each row
+  just before its update, into a one-row buffer. Its footprint is one cell
+  in u, v, w, which the pass does not write, so the lags and edge planes
+  in e are unchanged.
+- **With immersed walls** N², ν, D and the wall production still run as
+  separate loops before the pass, as the issue planned: the wall
+  production corrects D and reads ν of every cell.
+- **Scratch.** The pass does not store `c.N2` (only on the boundary
+  shell) or `c.D`. Readers checked in `src/`, `test/`, `validation/`,
+  `examples/` and `benchmarks/`: only `advance_sgs!` itself,
+  `tke_budget` and `initialize_tke!` (both compute their own) and
+  `test/tke.jl` (which calls the separate loops) read them. The
+  `advance_sgs!` docstring and the theory page say so.
+
+**Measured** (Berlin 100 m state after 3 steps, centred, open lateral
+faces, moist N², no closure mask and no walls; under the benchmark lock,
+in one process per thread count, interleaved over 15 rounds of 3 calls;
+min / median in ms of the whole `advance_sgs!`, each call including a
+0.8–1.0 ms copy of e; e identical in all three, max |Δe| = 0). *Old pass*
+is #555's form (N² and D as loops, then the pass reading them), run from
+this branch's functions; two processes per thread count:
+
+| threads | separate (`never`) | old pass | new pass | N² loop alone | D loop alone |
+| --: | --: | --: | --: | --: | --: |
+| 6, run 1 | 30.91 / 33.24 | 18.34 / 20.60 | 17.90 / 19.34 | | |
+| 6, run 2 | 30.72 / 32.96 | 18.96 / 21.20 | 18.36 / 20.18 | 1.53 / 1.68 | 4.26 / 5.72 |
+| 12, run 1 | 31.03 / 32.34 | 15.28 / 16.90 | 13.65 / 15.16 | | |
+| 12, run 2 | 32.76 / 35.56 | 16.42 / 19.86 | 15.08 / 18.59 | 2.02 / 2.66 | 3.73 / 5.29 |
+
+Package power (mean / peak, mean clock): 6 threads 19.6 and 13.7 W /
+31.1 and 23.7 W, 1.83 and 1.63 GHz; 12 threads 17.8 and 14.6 W / 28.1 and
+31.6 W, 1.88 GHz. Each comparison is within one process, at one limit.
+
+So the gain is 0.4–0.6 ms (min) and 1.0–1.3 ms (median) at 6 threads and
+1.3–1.6 ms (min) and 1.3–1.7 ms (median) at 12, not the 5.8 ms the two
+loops cost. The reason is D: it is limited by computation, not memory.
+One thread, 200×200×64, every row by the row kernel: D costs 7.45 ns per
+point into a one-row buffer and 7.48 ns into the field; N² 1.43 against
+1.58 ns. Inside the pass D costs what it costs alone; what is saved is the
+memory traffic of the two loops (writing D and N², reading them back,
+their own sweeps over u, v, w, θ and qv) and two launches.
+The plan is right but worth about 1 ms per step in Berlin; the next gain
+is a cheaper D (each cell evaluates about 50 flux shares, most of which
+its neighbours evaluate again).
+
+**Tests** (`test/tke_blocked.jl`, new set "N² and D row by row"): the
+pass against the separate loops for every N² variant (none, moist,
+cloudy; dry is the existing set) on the three grids of the file (WENO-Z5,
+centred, stretched), with and without transport and the solid mask, at 1
+to 3 slabs, forward and reverse, serial and threaded; the `-t 4`
+subprocess now also runs cloudy and moist cases (20 runs, at least 20
+required). `tkb_run!` sets `c.N2` and `c.D` to NaN before each run, so a
+cell the pass failed to compute reaches e. e within 4 eps of max e and the
+budget sums within 1e-12 relative, as before; measured: e identical
+(max |Δe| = 0) and the sums within 1.9e-16 in every case, with 11 780
+saturated cells in the cloudy cases. No bug was caught and no test
+expectation proved wrong: the pass agreed exactly on the first run.
+
+**Deviations.** None from the plan. A correction to #554's record: the
+Berlin closure has no solid mask (`c.mask === nothing`); #555's Berlin
+rows say "the closure's solid mask", which its own log contradicts.
+
+**Review** (independent reviewer, fresh eyes on the diff against
+`issue/554-tke-blocked`). Checked: N² and D at slab and row edges (the
+two-row N² ring is filled for every interior row before ν and the update
+read it; halo rows and planes are never read from it), the halos the
+bodies read (θ, qv, the condensate's scratch copy filled in
+`_with_n2_args`; u, v, w before the pass), the D halo fold (`_dual_row!`
+writes only its row and reads nothing from it), the shell's N² on open
+faces, the stretched Δz (`dzc[k]`, the storage index the removed loop
+used), the per-slab rings under threads, and every reader of `c.N2` /
+`c.D` (the list above holds; the Reynolds-stress closure has its own).
+No correctness bug found. Fixed: the allocation check covered only the
+dry N², and now asserts 0 bytes for the none, moist and cloudy variants
+on the regular and stretched grids, with and without transport (measured
+0); the `advance_sgs!` docstring said the pass writes ν_t, κ_t and N² on
+the boundary shell, but without transport it writes none of them.
+Re-measured under the lock (same script, one process per thread count,
+15 rounds; e identical, max |Δe| = 0):
+
+| threads | separate (`never`) | old pass | new pass | N² loop alone | D loop alone | power mean / peak, clock |
+| --: | --: | --: | --: | --: | --: | :-- |
+| 6 | 30.47 / 32.35 | 18.03 / 20.96 | 18.08 / 19.52 | 1.54 / 1.72 | 4.24 / 5.61 | 12.0 / 23.6 W, 1.63 GHz |
+| 12 | 31.47 / 32.58 | 15.37 / 17.12 | 13.45 / 15.02 | 1.90 / 2.10 | 3.88 / 4.20 | 12.9 / 27.8 W, 1.79 GHz |
+
+This confirms the implementer's numbers: at 6 threads the new pass is no
+faster at the minimum (+0.05 ms) and 1.4 ms faster at the median; at 12
+threads 1.9 ms (min) and 2.1 ms (median) faster. Against #555's form the
+pass is 1.7× (6 threads, min) and 2.3× (12) faster than the separate
+loops.
+
+Full test suite under the lock: 118 jobs, 6791 passed, 0 failed.
+Validation under the lock: gabls1.jl 8/8, gabls3.jl 19/19,
+urban_checks.jl 33/33, anelastic_cbl.jl 3/3 passed.
+
+**Open**: the cost of D itself (above); the open items of #554.
+
 #### The Reynolds-stress update in one cache-blocked pass (#560)
 
 Plan step 4 of #554 (branch `issue/560-rsc-blocked`, on
@@ -3482,7 +3600,7 @@ off-diagonals 19 %, the flux pipeline of the diagonals 10 %.
 - **The TKE pass generalised to several scalars** (one source of truth):
   the flux-limited pipeline is per scalar (`_FluxRings`, `_flux_front!`,
   `_limit_xz!`, `_tendency_row!`, `_diffusion_row!`), the ring slots carry
-  a field index, and ν comes from a body argument (`νbody`, `νargs`), so
+  a field index, and ν comes from the closure's row function (`νrow!`), so
   the TKE pass and the Reynolds-stress pass share every flux and ring
   function; `_shell_ratio!` takes the scalar. The TKE tests are unchanged
   and pass.

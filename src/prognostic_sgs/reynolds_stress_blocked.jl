@@ -100,7 +100,7 @@ end
 
 # Everything the pipeline reads (a NamedTuple): the stresses `τ` (six
 # arrays) and the three diagonals as transported scalars `a` (ϕ and its
-# ratio field), `νf` (ν with its halos filled) and the body of ν with its
+# ratio field), `νf` (ν with its halos filled), the row of ν `νrow!` and its
 # arguments, `u, v, w`, `θ`, `q`, `n2`, the edges `E`, the closure `c` and
 # the update's parameters `par`; the reconstruction `r`, the plain
 # advection `padv`; the rings `rg`, the row sums `rowsums`; the interior.
@@ -116,10 +116,16 @@ update_lags(op::_RSCUpdate) = (op.p.lag, op.p.lz)
             td = map(t -> _Line(t, s), rg.td))
 end
 
+# ν of the interior row (J, K) into its ring: the body of the separate
+# loop. (N² is read from c.N2, computed before the pass by the whole-field
+# loop: the in-pass N² of the TKE pass (#556) would save about 1.5 ms of a
+# 110–270 ms update limited by its 6×6 solve.)
+@inline _rsm_ν_row!(p, rs, J, K, ii) = Backends._row!(_rsm_viscosity_body!, ii, J, K, rs.ν, p.νargs...)
+
 function begin_slab!(op::_RSCUpdate, s, k0, k1, ii, jj)
     p = op.p
     rs = _rsc_views(p, s, k0)
-    _begin_ν!(p, rs.ν, first(jj), k0, k1, ii)
+    _begin_ν!(p, rs, first(jj), k0, k1, ii)
     for m in 1:3
         _begin_flux!(p, p.a[m], rs.f[m], first(jj), k0, k1, ii)
     end
@@ -129,7 +135,7 @@ end
 function compute_rows!(op::_RSCUpdate, ring, edge, r, s, J, k0, k1, ii, lz)
     p = op.p
     rs = _rsc_views(p, s, k0)
-    _ν_row!(p, rs.ν, J + 1, k0 - 1, k1 + 1, ii)     # the front at row J + 1
+    _ν_row!(p, rs, J + 1, k0 - 1, k1 + 1, ii)     # the front at row J + 1
     z = zero(eltype(p.u))
     for m in 1:3
         _flux_front!(p, p.a[m], rs.f[m], J + 1, k0, k1, ii)
@@ -278,7 +284,7 @@ function _rsm_pass!(c::ReynoldsStressClosure{T}, sim, Δt::T, bufs, rings, ratio
     ii, jj, kk = interior(g)
     τd = map(x -> x.data, c.τ)
     p = (τ = τd, a = ntuple(m -> (ϕ = τd[m], Rf = ratios[m].data), Val(3)), νf = c.ν.data,
-         νbody = _rsm_viscosity_body!, νargs = (τd, c.N2.data, c, g.Hx, g.Hy, g.Hz),
+         νrow! = _rsm_ν_row!, νargs = (τd, c.N2.data, c, g.Hx, g.Hy, g.Hz),
          u = sim.u.data, v = sim.v.data, w = sim.w.data, θ = sim.θ.data,
          q = qd, n2 = c.N2.data,
          E = _Edges(c.mask, bounded_directions(sim.bcs), g), c = c, par = _rsm_update_params(c, sim, Δt),

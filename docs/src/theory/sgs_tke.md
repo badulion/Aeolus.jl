@@ -190,8 +190,11 @@ ahead keeps ``ν_t``, the face fluxes and the limiter's ratio in small
 rings, and the new ``e`` is written back once no later row reads the old
 one. Every value is computed by the point body of the separate loop, so
 ``e`` and the budget sums agree with the separate loops to round-off
-(measured identical). ``N^2``, the dual strain and the wall production do
-not read ``e`` and stay separate loops before it. `[timestep] loop_fusion
+(measured identical). ``N^2`` and the dual strain ``D`` are computed in
+the pass too, row by row by the same bodies (#556). With immersed walls
+attached they, ``ν_t`` and the wall production run as separate loops
+before the pass, because the wall production corrects ``D`` and reads
+``ν_t`` of every cell. `[timestep] loop_fusion
 = "never"` runs the separate loops; the run's `results.toml`
 (`[loop_fusion]`, `tke_update_blocked`) says which ran.
 
