@@ -377,11 +377,12 @@ struct VanGenuchtenMualem{T<:AbstractFloat} <: AbstractHydraulicModel
     l::T
     ψ_e::T
     S_c::T     # [1 + (α|ψ_e|)^n]^{-m}, = 1 for the classical model
+    f_c::T     # Mualem's 1 - (1 - S_c^{1/m})^m, the conductivity's normalisation (once, not per call: #537)
     function VanGenuchtenMualem{T}(θ_r, θ_s, α, n, K_s, l, ψ_e) where {T}
         (0 <= θ_r < θ_s < 1 && α > 0 && n > 1 && K_s > 0 && ψ_e <= 0) ||
             throw(ArgumentError("VanGenuchtenMualem: need 0 ≤ θ_r < θ_s < 1, α > 0, n > 1, K_s > 0, ψ_e ≤ 0"))
         S_c = (1 + (α * -ψ_e)^n)^(-(1 - 1 / n))
-        new{T}(θ_r, θ_s, α, n, K_s, l, ψ_e, S_c)
+        new{T}(θ_r, θ_s, α, n, K_s, l, ψ_e, S_c, _mualem_f(T(S_c), 1 - 1 / T(n)))   # as K evaluated it
     end
 end
 VanGenuchtenMualem(θ_r::Real, θ_s::Real, α::Real, n::Real, K_s::Real, l::Real = 0.5,
@@ -409,9 +410,9 @@ function soil_hydraulic_conductivity(h::VanGenuchtenMualem, ψ::Real)
     m = _vg_m(h)
     Γ = _vg_Γ(h, ψ)
     Se = Γ / h.S_c
-    f(x) = 1 - (1 - x^(1 / m))^m
-    return h.K_s * Se^h.l * (f(Γ) / f(h.S_c))^2
+    return h.K_s * Se^h.l * (_mualem_f(Γ, m) / h.f_c)^2
 end
+_mualem_f(x, m) = 1 - (1 - x^(1 / m))^m
 function soil_water_capacity(h::VanGenuchtenMualem, ψ::Real)
     ψ >= h.ψ_e && return 0.0
     m = _vg_m(h)
@@ -1870,12 +1871,16 @@ function _phase_state(col, i, H, W)
     Hstar = Cl * (Tstar - Tf)
     H >= Hstar && return (Tf + H / Cl, W, zero(W), 1 / Cl)
     # Solve Heq(T) = H on T < T*, Heq increasing: safeguarded Newton.
+    # The closures' θl, θi are their own (`local`): without it they are the
+    # function's θl, θi (assigned below and in the branch above), captured
+    # in a Core.Box, and every call of `_phase_state` allocated and returned
+    # an uninferred tuple (#537: ~60 KB per tiled column per surface step).
     Heq(T) = begin
-        θl, θi = _equilibrium_at(col, i, T, W)
+        local θl, θi = _equilibrium_at(col, i, T, W)
         _layer_enthalpy(col, i, T, θl, θi)
     end
     dHeq(T) = begin
-        θl, θi = _equilibrium_at(col, i, T, W)
+        local θl, θi = _equilibrium_at(col, i, T, W)
         θm, dθ = _liquid_max(col, i, T)
         dθl = θm < W ? dθ : zero(dθ)
         _layer_C(col, i, θl, θi) + dθl * c.ρ_water * ((cp_water(c) - cp_ice(c)) * (T - Tf) + LH_f0(c))
@@ -1945,7 +1950,11 @@ end
 
 Column enthalpy ``Σ_i Δz_i H_i`` relative to liquid water at ``T_f``.
 """
-soil_enthalpy(col::SoilThermalColumn) = sum(col.water.grid.dz .* col.H)
+soil_enthalpy(col::SoilThermalColumn) = _dz_sum(col.water.grid.dz, col.H)
+
+# Σ_i Δz_i x_i without a temporary array (the column steps call it every
+# sub-step: two vectors per tile per surface step before #537)
+_dz_sum(dz, x) = sum(i -> @inbounds(dz[i] * x[i]), eachindex(dz, x))
 
 """
     soil_ice_mass(col::SoilThermalColumn) -> kg m⁻²
@@ -1953,7 +1962,7 @@ soil_enthalpy(col::SoilThermalColumn) = sum(col.water.grid.dz .* col.H)
 Ice in the column, ``Σ_i Δz_i ρ_{ice} θ_{ice,i}``.
 """
 soil_ice_mass(col::SoilThermalColumn) =
-    col.water.constants.ρ_ice * sum(col.water.grid.dz .* col.water.θ_ice)
+    col.water.constants.ρ_ice * _dz_sum(col.water.grid.dz, col.water.θ_ice)
 
 """
     soil_thermal_layer_conductivity(col::SoilThermalColumn, i) -> W m⁻¹ K⁻¹
