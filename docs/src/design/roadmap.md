@@ -2492,6 +2492,130 @@ in a `-t 12` subprocess and checks that the round trip recovers the input
 to 1e-12. With the fix disabled, the subprocess crashes and the test
 fails. Remove the workaround once FFTW.jl ships the fix.
 
+**The budgets cost 13 passes per step instead of 50, and can be turned
+off (#539, 2026-11-07).** The measured budgets (`budget_energy`,
+`budget_water`) were the largest item of memory traffic in the Berlin
+100 m step (#531): 50 full-field level sums per step at 16 B per point
+(the field and a `Float64` air mask), 1.92 GB, 22 % of the step's bytes.
+
+*Inventory first.* Every measurement of one Berlin step (master
+a69f9751, step 4, energy and water) was logged with its context and
+whether the change it closed was exactly zero:
+- 2 at the step's begin and 2 at its end (zero: nothing between steps,
+  nothing outside the contexts);
+- 8 top-level closes before the core: `clock/large_scale_forcing` (both
+  quantities), `surface_flux/sgs` (both) and the water close of
+  `surface_flux/mean_column_radiation` measured exactly zero; only
+  `tiled_surface` (both) and the radiation's energy close changed
+  anything;
+- 36 in the core: 3 RK3 substages × 3 entries (`tendencies/coriolis`,
+  `body_force/large_scale_forcing`, `post_predictor/tiled_surface`) × 2
+  quantities × open and close. Every one measured exactly zero: these
+  entries write the momentum only. 6 opens were also exact repeats of the
+  previous close of the same array;
+- 2 closes of the dynamics (non-zero).
+
+So 41 of the 50 measured a component that cannot change the quantity;
+9 carried information.
+
+*What was built.*
+- **Declared writes.** `Components.budget_writes(c, Val(stage))` names
+  the quantities an entry can change (default: all, so an undeclared
+  component is measured as before). An entry is measured only for those
+  and skipped for the others (`budget_skip!`). Declared: Coriolis, the
+  sponge, the fringe, the kinematic flow, the tiles' and the urban
+  drags, the IBM and the facades' stress after the predictor (momentum);
+  the surface θ flux, the surface layer's tendency, the column
+  radiation's heating (energy); the tiles' and the prescribed surface
+  flux (energy, water); SGS, towers, parent statistics, the radiation
+  stage of the urban radiation components, the shortwave modifiers, the
+  moist buoyancy (`tw` only) and the site's clock (nothing); the
+  large-scale forcing and the urban geostrophic forcing (momentum when
+  only the geostrophic pressure gradient, else all).
+- **Nothing can hide.** At the top level a skip marks the budget stale,
+  and the next measuring context (or the end of the step) measures afresh
+  and books any change since the last measurement as `(:core,
+  :unattributed)`. An undeclared write is then neither hidden nor
+  attributed to its neighbour. This costs Berlin 4 of its 13 passes (the
+  fresh measurements before `tiled_surface`, the radiation and, for
+  water, the dynamics); trusting the declarations would make it 9. Inside
+  the core a skip is free, and an undeclared write stays in the
+  dynamics' share: the closure holds, but the term is the dynamics'.
+  This is a deviation from the issue, which expected the end-of-step
+  comparison to catch it: a tendency written inside the core is applied
+  by the predictor, so only a measurement of the tendency around the
+  entry could separate it, which is the pass being saved.
+- **The verify mode** (`[budgets] verify_writes = true`,
+  `with_budgets(…; verify = true)`) measures every entry and stops with
+  an error at a change a declaration left out. The Berlin run (30 steps,
+  one surface update) and the urban synthetic city run it without error.
+- **The meter's mask.** The air mask is a `Bool` array (9 B per point
+  where there are solid cells) and is not read at all in a domain
+  without solid cells (8 B per point). The sums are the same values in
+  the same canonical plane order.
+- **The switch.** `[budgets] enabled = false` builds no `DomainBudgets`
+  in model domains and urban sites (the site also skips its per-step
+  water snapshot). The requested `budget_*` outputs and budget checks
+  are dropped with one warning, and `results.toml` records `[budgets]
+  enabled = false`.
+
+*Measured.* Berlin 100 m (200 × 200 × 60), master a69f9751 against
+this branch, `estimate` planner, FFTW threads = Julia threads, 31 warm-up
+steps then 60 timed steps; the median step, minimum over 2 processes
+(the mean includes the surface and radiation steps):
+
+| | passes/step | bytes/step | 6 threads | 12 threads |
+| :-- | --: | --: | --: | --: |
+| before, budgets on | 50 | 1.92 GB | 239.9 ms | 258.4 ms |
+| after, budgets on | 13 | 0.25 GB | 217.8 ms | 222.3 ms |
+| after, `enabled = false` | 0 | 0 | 220.9 ms | 220.0 ms |
+| before, budget outputs removed | 0 | 0 | 220.8 ms | 221.4 ms |
+
+The budgets cost 19 ms (6 t) and 37 ms (12 t) before; after, the
+difference to budgets off is below the run-to-run spread (±10 ms
+between processes). Passes counted with `StageBudget.nmeasure`; bytes
+are passes × 2.4 M points × bytes per point.
+
+The dry convective boundary layer (`examples/dry_convective_bl`, at
+128 × 128 × 64; energy and momentum closure checks; Euler): 21 → 15
+passes per step (each remaining entry writes its quantity), 16 → 8 B
+per point. Median step 26.3 → 23.0 ms at 6 threads (off: 21.1 ms) and
+22.8 → 19.4 ms at 12 (off: 17.4 ms).
+
+The urban synthetic city (`test/data/urban/small_city.toml`, 16³ with
+buildings, energy ledger): 31.7 → 18.1 passes per step (the 14 in-core
+measurements per step and the clock, radiation-stage, shortwave and
+pollutant entries skipped), 16 → 9 B per point.
+
+*Rejected.* Fusing the level sums into the kernels that stream the
+field (the scalar update, the tendency kernels): with 13 passes left,
+4 of them the price of the guarantee, the remaining budget cost is
+below what the run resolves, and it would tie the meter into the
+kernels (#533 step 7 can revisit it). One launch for energy and water:
+it saves launches, not bytes (4 launches per step of ~20 µs). Reusing
+a close's measurement for the next open: after the skips no such pair
+is left in the runs measured.
+
+Tests (`budgets_output.jl`): the declared run agrees with the verify
+run term by term and in storage within 1e-12 of the quantity's content
+(the same sums; the skipped contexts measured exactly zero), closes to
+the same, with fewer passes (water: 4 per step); an undeclared write at
+the top level is booked as `(:core, :unattributed)` (rtol 1e-10) while
+the next entry keeps its exact term, inside the core the closure holds;
+the verify mode stops at each false declaration (top level, tendency,
+post-predictor); the switch builds nothing, warns once, drops the
+outputs and checks and records it, on is unchanged. `urban_run.jl`: the
+synthetic city's budget-checked configuration runs with the budgets
+off, and in the verify mode with its budgets closed. A test expectation
+that proved wrong in the first draft: the closure tolerance was scaled
+by the largest term, which is 2e-15 for a budget that barely changes;
+round-off is relative to the quantity's content.
+
+Suites: `test/run.jl` 4425 of 4426 passed in 115 files; the one failure
+was `config_model.jl`'s list of run-level sections, which `[budgets]`
+joins by design (expectation updated; 49/49 after). Validation
+`urban_checks.jl`: 33/33.
+
 # Chemistry and aerosol
 
 *From four toy species to a mechanism a chemist would accept.*

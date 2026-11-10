@@ -457,6 +457,10 @@ landuse_of_tiles(t::StaticTiles) =
                   t.lambda_f, t.h_mean, t.h_max, copy(t.notes))
 
 Components.stages(::TiledUrbanSurface) = (Stage(:surface_flux), Stage(:post_predictor))
+# what the budgets measure (#539): the tiles' heat and water enter the air in
+# :surface_flux, their drag the velocity after the predictor
+Components.budget_writes(::TiledUrbanSurface, ::Val{:surface_flux}) = (:energy, :water)
+Components.budget_writes(::TiledUrbanSurface, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)
 Components.surface_friction_velocity(c::TiledUrbanSurface, d) = c.ustar
 
 """
@@ -763,6 +767,7 @@ Components.enabled(::Type{<:PrescribedSurfaceFlux}, opts) = opts.model === :pres
 Components.enabled(::Type{<:TiledUrbanSurface}, opts) = opts.model === :tiles
 
 Components.stages(::PrescribedSurfaceFlux) = (Stage(:surface_flux),)
+Components.budget_writes(::PrescribedSurfaceFlux, ::Val{:surface_flux}) = (:energy, :water)   # (#539)
 
 function Components.run_stage!(c::PrescribedSurfaceFlux, d, ::Val{:surface_flux}, dt)
     sim = d.state
@@ -890,6 +895,7 @@ function Components.build(::Type{<:MeanColumnRadiation}, opts, domain)
 end
 
 Components.stages(::MeanColumnRadiation) = (Stage(:surface_flux; order = 1),)
+Components.budget_writes(::MeanColumnRadiation, ::Val{:surface_flux}) = (:energy,)   # the heating (#539)
 
 """
     radiate!(c::MeanColumnRadiation, d) -> c

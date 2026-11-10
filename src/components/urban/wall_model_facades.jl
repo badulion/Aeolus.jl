@@ -96,6 +96,8 @@ function run_stage!(c::WallModelFacades, case, ::Val{:body_force}, dt)
     return nothing
 end
 
+# the facades' stress after the predictor: the momentum only (#539)
+Components.budget_writes(::WallModelFacades, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)
 run_stage!(c::WallModelFacades, case, ::Val{:post_predictor}, dt) =
     (apply_immersed_wall_stress!(case.sim, c.iw, dt); nothing)
 

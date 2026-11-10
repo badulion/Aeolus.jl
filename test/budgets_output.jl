@@ -15,6 +15,8 @@
 # unchanged; the catalogue and the config validation.
 
 using Test
+using Logging
+using TOML
 using Aeolus
 using Aeolus.BudgetSystem
 using Aeolus.Output
@@ -365,6 +367,115 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# the cost of the budgets (#539): declared writes, skipped contexts, verify
+# ---------------------------------------------------------------------------
+
+"A component that writes what its `budget_writes` leaves out: θ in `stage` (+`J` K per step in level 1)."
+struct BOLiar{S} <: AbstractComponent
+    dθ::Float64
+end
+BOC.component_name(::Type{BOLiar{S}}) where {S} = Symbol(:liar_, S)
+BOC.section(::Type{BOLiar{S}}) where {S} = "liar_$S"
+BOC.stages(::BOLiar{S}) where {S} = (Stage(S),)
+BOC.budget_writes(::BOLiar, ::Val) = (:momentum_x, :momentum_y)
+function BOC.run_stage!(c::BOLiar{S}, d, ::Val{S}, dt) where {S}
+    tend = S in (:tendencies, :body_force)                 # the core's tendency, else the state
+    interior_view(tend ? d.state.tθ : d.state.θ)[:, :, 1] .+= tend ? c.dθ / dt : c.dθ
+    return nothing
+end
+"A component that reads the state only, declared so (a context the budgets skip)."
+struct BOReader <: AbstractComponent end
+BOC.component_name(::Type{BOReader}) = :reader
+BOC.section(::Type{BOReader}) = "reader"
+BOC.stages(::BOReader) = (Stage(:sources), Stage(:tendencies))
+BOC.budget_writes(::BOReader, ::Val) = ()
+BOC.run_stage!(::BOReader, d, ::Val, dt) = nothing
+
+bo_terms(d, q) = stage_budget(BOC.budgets(d).measured[q])
+
+@testset "declared writes: the skipped contexts change no term, the passes drop" begin
+    # the same moist run twice: measured everywhere (verify) and with the
+    # declared writes; every quantity, the components of the model's tests
+    specs = (SurfaceThetaFlux => BO_FLUX, Coriolis => (; f = 1e-3), Sponge => (alpha_max = 0.02, z_start = 250.0))
+    qs = (:energy, :water, :momentum_x, :momentum_y)
+    ds = map((true, false)) do verify
+        sim = bo_state!(bo_core(; ν = 0.5, moisture = true))
+        set!(sim.qv, (x, y, z) -> 0.01 - 1e-5 * z)
+        with_budgets(bo_domain(sim, specs...; scheme = :rk3, extra = (BOReader(),)), qs; verify = verify)
+    end
+    for _ in 1:4, d in ds
+        step!(Model(d), 3.0)
+    end
+    for q in qs
+        full, fast = bo_terms(ds[1], q), bo_terms(ds[2], q)
+        # the same sums of the same unchanged fields: agreement to round-off of the
+        # quantity's content (the skipped contexts measured exactly zero in the full run)
+        scale = sum(abs, BOC.budgets(ds[1]).measured[q].H_end)
+        @test keys(full.terms) == keys(fast.terms)
+        @test all(k -> abs(full.terms[k] - fast.terms[k]) <= 1e-12 * scale, keys(full.terms))
+        @test abs(full.storage - fast.storage) <= 1e-12 * scale
+        @test abs(fast.closure) <= 1e-12 * scale
+        @test !haskey(fast.terms, (:core, :unattributed))
+    end
+    # per step the full run measures every context: 2 (begin, end) + 2 per top-level entry
+    # + 2 per in-core entry and substage; the declared writes skip Coriolis and the sponge
+    # (momentum only) in the energy and water budgets, the surface flux (energy only)
+    # in the others, and the reader in all of them
+    n(d, q) = BOC.budgets(d).measured[q].nmeasure
+    @test all(q -> n(ds[2], q) < n(ds[1], q), qs)
+    # the water: per step the begin, the dynamics' open (measured afresh after the
+    # reader's skipped entry), its close and the end; every in-core entry skipped
+    @test n(ds[2], :water) == 4 * 4
+end
+
+@testset "declared writes: an undeclared write cannot hide" begin
+    J = 0.25                                        # K added to level 1 per step
+    heat = BO_RHO0 * BO_CP * J * BO_MESH.dz         # J m⁻² of ground per step
+    # at the top level: booked as (:core, :unattributed), not to the next measured entry
+    sim = bo_core()
+    d = with_budgets(bo_domain(sim, SurfaceThetaFlux => BO_FLUX; extra = (BOLiar{:sources}(J), BOReader())), (:energy,))
+    for _ in 1:3
+        step!(Model(d), 2.0)
+    end
+    r = bo_terms(d, :energy)
+    @test r.terms[(:core, :unattributed)] ≈ 3heat rtol = 1e-10
+    @test r.terms[(:tendencies, :surface_theta_flux)] ≈ BO_RHO0 * BO_CP * (BO_FLUX.bottom - BO_FLUX.top) * 6.0 rtol = 1e-10
+    @test abs(r.closure) <= 1e-12 * abs(r.storage)
+    # inside the core: the closure holds, the change is in the dynamics' share
+    sim = bo_core()
+    d = with_budgets(bo_domain(sim; extra = (BOLiar{:tendencies}(J),)), (:energy,))
+    step!(Model(d), 2.0)
+    r = bo_terms(d, :energy)
+    @test r.storage ≈ heat rtol = 1e-10
+    @test r.terms[(:dynamics, :transport)] + get(r.terms, (:dynamics, :redistribution), 0.0) ≈ heat rtol = 1e-10
+    @test abs(r.closure) <= 1e-12 * heat
+    # the verify mode measures every entry and stops at the false declaration
+    for S in (:sources, :tendencies, :post_predictor)
+        d = with_budgets(bo_domain(bo_core(); extra = (BOLiar{S}(J),)), (:energy,); verify = true)
+        err = try step!(Model(d), 2.0); nothing catch e; e end
+        msg = err === nothing ? "" : sprint(showerror, err)
+        @test occursin("liar_$S", msg) && occursin("verify mode", msg) && occursin("energy", msg)
+    end
+end
+
+@testset "level meter: a domain without solid cells reads the field alone" begin
+    m = BO_MESH; Nz = m.Nz
+    θ = Field(CellCenter(), m); set!(θ, (x, y, z) -> 290.0 + 0.01z + 0.1 * sin(x / 50))
+    plain = LevelMeter(m, ones(Nz), ones(Nz), 1.0)
+    empty_mask = LevelMeter(m, ones(Nz), ones(Nz), 1.0, falses(size(θ.data)))
+    @test !plain.hassolid && !empty_mask.hassolid
+    solid = falses(size(θ.data)); solid[m.Hx+2, m.Hy+3, m.Hz+4] = true
+    sm = LevelMeter(m, ones(Nz), ones(Nz), 1.0, solid)
+    @test sm.hassolid
+    a = measure_levels!(zeros(Nz), plain, θ); b = measure_levels!(zeros(Nz), sm, θ)
+    sb = solid_levels!(zeros(Nz), sm)
+    # the air and the solid cell add up to the whole level (one addition of round-off)
+    @test a ≈ b .+ sb rtol = 1e-14
+    @test all(iszero, solid_levels!(zeros(Nz), plain))
+    @test sb[4] ≈ interior_view(θ)[2, 3, 4] * m.dz / (m.Nx * m.Ny) rtol = 1e-14
+end
+
+# ---------------------------------------------------------------------------
 # the catalogue and the configuration
 # ---------------------------------------------------------------------------
 
@@ -414,4 +525,35 @@ end
     # without a budget variable the domain measures nothing
     @test BOC.budgets(only(Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(),
                                                load(String[])).model.domains)) === nothing
+end
+
+@testset "config: [budgets] enabled = false drops the budget outputs and checks, with one warning" begin
+    load(ov) = load_run_config(IOBuffer(""); overrides = vcat(["grid.size=[8,8,8]", "fftw.planner=\"estimate\"",
+                                                               "time.duration=\"none\"", "time.nsteps=3",
+                                                               "surface_theta_flux.bottom=0.1", "output.series_cadence=0.0",
+                                                               "output.variables=[\"theta_mean\",\"budget_energy\",\"budget_momentum\"]",
+                                                               "checks.energy_closure={required=true}",
+                                                               "checks.finite={required=true}"], ov))
+    on, off = load(String[]), load(["budgets.enabled=false"])
+    @test on.budgets.enabled && !off.budgets.enabled && !on.budgets.verify_writes
+    @test Aeolus.SimulationDriver.budget_dependents(off) == (["budget_energy", "budget_momentum"], ["energy_closure"])
+    build(c) = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), c)
+    # one warning that lists them; no budgets built
+    d = @test_logs (:warn, r"budgets are off.*budget_energy, budget_momentum.*energy_closure") match_mode = :any begin
+        only(build(off).model.domains)
+    end
+    @test BOC.budgets(d) === nothing
+    @test Set(BOC.budgets(only(build(on).model.domains)) |> b -> keys(b.measured)) == Set([:energy, :momentum_x, :momentum_y])
+    @test_logs min_level = Logging.Warn only(build(on).model.domains)     # on: no warning
+    # the run: the same configuration, no budget output, the checks without the closure, results.toml records it
+    r = run_config(off; root = mktempdir(), console = devnull, repo = mktempdir())
+    res = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
+    @test res["budgets"]["enabled"] == false
+    @test haskey(res["checks"], "finite") && !haskey(res["checks"], "energy_closure")
+    NCDataset(joinpath(r.folder.path, "output", "output.nc")) do nc
+        @test haskey(nc, "theta_mean") && !any(k -> startswith(k, "budget_"), keys(nc))
+    end
+    r = run_config(on; root = mktempdir(), console = devnull, repo = mktempdir())
+    res = TOML.parsefile(joinpath(r.folder.path, "output", "results.toml"))
+    @test res["budgets"]["enabled"] == true && haskey(res["checks"], "energy_closure")
 end

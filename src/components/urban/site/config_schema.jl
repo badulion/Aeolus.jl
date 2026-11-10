@@ -57,7 +57,8 @@ const SITE_FIELDS = (
     components = ("<slot>.<selector>", "*.enabled", "*.*"),
     canopy_top = ("urban.canopy_top",),
     child_boundaries = ("urban.child_boundaries",),
-    backend = ("urban.serial",))
+    backend = ("urban.serial",),
+    budgets = ("budgets.enabled", "budgets.verify_writes"))
 
 # ---------------------------------------------------------------------------
 # per-coupling options: the type of a value is the type of its default
@@ -725,7 +726,8 @@ function site_options(cfg::RunConfig)
             Ts_water_offset = f64(u.ts_water_offset), T_soil0 = f64(u.t_soil0),
             p_surface = u.p_surface === nothing ? nothing : f64(u.p_surface),
             components = components, canopy_top = f64(u.canopy_top), child_boundaries = _path(u.child_boundaries),
-            backend = CPUBackend(; serial = u.serial))
+            backend = CPUBackend(; serial = u.serial),
+            budgets = (enabled = Bool(cfg.budgets.enabled), verify = Bool(cfg.budgets.verify_writes)))
 end
 _path(::Nothing) = nothing
 _path(p) = String(p)
@@ -871,6 +873,16 @@ function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, si
     tol = BUDGET_TOLERANCES
     finite = all(f -> all(isfinite, interior_view(f)), (sim.u, sim.v, sim.w, sim.θ)) &&
              all(t -> all(isfinite, interior_view(t.field)), case.tracers.list) && all(isfinite, bus.Ts)
+    sim_h = simulated / 3600
+    rest = steps > 1 && sim_h > 0 ? (wall - wall_first_step) / (sim_h * (steps - 1) / steps) : NaN
+    timing = Dict{String,Any}("steps" => steps, "simulated_s" => simulated, "wall_s" => wall,
+                              "wall_first_step_s" => wall_first_step, "wall_s_per_simulated_h" => rest)
+    # [budgets] enabled = false (#539): nothing was measured, nothing to report
+    budgets_enabled(case) ||
+        return Dict{String,Any}("finite" => finite, "budgets" => Dict{String,Any}("enabled" => false),
+                                "theta_mean_below_100m_start" => θ_start,
+                                "theta_mean_below_100m_end" => mean_θ_below(case, RESULTS_LAYER),
+                                "timing" => timing)
     rows = surface_budget(l)
     surf = Dict{String,Any}(r.name => Dict{String,Any}("Rn" => r.Rn, "H" => r.H, "LE" => r.LE, "G" => r.G,
                                                        "dS" => r.dS, "closure" => r.closure, "columns" => r.ncol)
@@ -883,14 +895,10 @@ function run_results(case; θ_start = NaN, wall = NaN, wall_first_step = NaN, si
     closed = smax < tol.surface && abs(w.residual) < tol.water && abs(heat) <= tol.air_heat && !unattributed
     budgets = Dict{String,Any}("surface" => surf, "surface_max_abs_closure" => smax,
                                "water_residual" => w.residual, "air_heat_closure" => heat,
-                               "unattributed" => unattributed, "closed" => closed,
+                               "unattributed" => unattributed, "closed" => closed, "enabled" => true,
                                "tolerances" => Dict{String,Any}(string(k) => v for (k, v) in pairs(tol)))
     air = Dict{String,Any}("$(k[1]).$(k[2])" => (hb.elapsed > 0 ? v / hb.elapsed : 0.0) for (k, v) in hb.terms)
     air["storage"] = hb.elapsed > 0 ? hb.storage / hb.elapsed : 0.0
-    sim_h = simulated / 3600
-    rest = steps > 1 && sim_h > 0 ? (wall - wall_first_step) / (sim_h * (steps - 1) / steps) : NaN
-    timing = Dict{String,Any}("steps" => steps, "simulated_s" => simulated, "wall_s" => wall,
-                              "wall_first_step_s" => wall_first_step, "wall_s_per_simulated_h" => rest)
     out = Dict{String,Any}("finite" => finite, "budgets" => budgets, "air_heat" => air,
                            "theta_mean_below_100m_start" => θ_start,
                            "theta_mean_below_100m_end" => mean_θ_below(case, RESULTS_LAYER),

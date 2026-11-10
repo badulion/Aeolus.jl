@@ -18,6 +18,7 @@ slot(::Type{<:IBMCoupling}) = :immersed_boundary
 provider(::Type{<:IBMCoupling}) = :direct_forcing
 modules_used(::Type{<:IBMCoupling}) = (:IBM,)
 stages(::Type{<:IBMCoupling}) = ((:post_predictor, 10, EVERY_STEP),)
+Components.budget_writes(::IBMCoupling, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)   # the velocity (#539)
 build(::Type{<:IBMCoupling}, case, opts) = IBMCoupling(case.geom.sm)
 
 run_stage!(c::IBMCoupling, case, ::Val{:post_predictor}, dt) =

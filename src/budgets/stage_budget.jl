@@ -36,6 +36,17 @@
 #     (:core, :unattributed)), and the start of the next step with the end
 #     of this one (booked as (:output, :between_steps), the stage that
 #     runs after the budget closes a step);
+#   * a context whose component cannot change the quantity is skipped
+#     (`budget_skip!`, #539; the component's declared writes,
+#     `Components.budget_writes`): no pass. At the top level the budget
+#     then no longer knows the state between contexts, so the next context
+#     that measures, or the end of the step, measures afresh and books any
+#     change since the last measurement as (:core, :unattributed): a
+#     skipped component that did write cannot hide, and is not attributed
+#     to its neighbour. Inside a context (the stages inside the core) a
+#     skip is free: what an undeclared write did stays in the enclosing
+#     context's own share, the dynamics'. The verify mode of the domain's
+#     budgets measures every context anyway and fails on such a write;
 #   * a context opened with `defer = true` (the model's core step, which
 #     an adaptive step may retry) keeps what its nested contexts book until
 #     it closes; `budget_discard!` drops it when the core restarts a step.
@@ -80,7 +91,9 @@ the steps (see `budgets/stage_budget.jl`). Fields:
 * `canopy_top` — top (m) of the `:canopy` layer of [`stage_budget`](@ref)
   (the urban case sets it to the tallest roof);
 * `order` — the stages in the order the reports list them;
-* `active` — true while a step is being attributed.
+* `active` — true while a step is being attributed;
+* `nmeasure` — the passes over the field made since the start (one per
+  measurement; the cost of the budget, #539).
 """
 mutable struct StageBudget
     meter::Union{Nothing,LevelMeter}
@@ -101,11 +114,13 @@ mutable struct StageBudget
     nmeasure::Int
     nbins::Int
     order::Vector{Symbol}
+    stale::Bool               # a top-level context was skipped since the last measurement (#539)
+    changed::Bool             # the last closed context measured a change (the verify mode)
 end
 StageBudget(; bins::Integer = 24, order = ()) =
     StageBudget(nothing, Dict{Tuple{Symbol,Symbol},Matrix{Float64}}(), zeros(0, bins),
                 zeros(bins), 1, Float64[], Float64[], Float64[], Float64[], false, Float64[], false,
-                BudgetContext[], BudgetContext[], NaN, 0, Int(bins), collect(Symbol, order))
+                BudgetContext[], BudgetContext[], NaN, 0, Int(bins), collect(Symbol, order), false, false)
 
 """
     budget_start!(b, meter; canopy_top = NaN) -> b
@@ -126,6 +141,7 @@ function budget_start!(hl::StageBudget, m::LevelMeter; canopy_top::Real = hl.can
     empty!(hl.stack)
     hl.canopy_top = canopy_top
     hl.nmeasure = 0
+    hl.stale = false
     return hl
 end
 
@@ -182,6 +198,7 @@ function budget_begin_step!(hl::StageBudget, θ, hour::Real = 0.0;
         hl.have_end = true
     end
     empty!(hl.stack)
+    hl.stale = false
     hl.active = true
     return hl
 end
@@ -207,6 +224,7 @@ function budget_end_step!(hl::StageBudget, θ, dt::Real)
     copyto!(hl.H_now, hl.buf)
     copyto!(hl.Hs_now, hl.sbuf)
     hl.elapsed[b] += dt
+    hl.stale = false
     hl.active = false
     return hl
 end
@@ -244,6 +262,7 @@ function budget_open!(hl::StageBudget, stage::Symbol, name::Symbol, θ; split::B
     empty!(ctx.pending)
     fill!(ctx.booked, 0.0)
     if isempty(hl.stack) && scale == 1
+        hl.stale && _refresh!(hl, θ)
         copyto!(ctx.H0, hl.H_now); copyto!(ctx.S0, hl.Hs_now)
     else
         _measure!(ctx.H0, hl, θ); copyto!(ctx.S0, hl.sbuf)
@@ -275,6 +294,7 @@ function budget_close!(hl::StageBudget, θ; exchange::Union{Nothing,Tuple{Symbol
     H1 = hl.buf
     _measure!(H1, hl, θ)
     rest = H1 .- ctx.H0                       # measured change per level
+    hl.changed = any(!iszero, rest)
     if ctx.scale != 1
         rest .*= ctx.scale                    # a tendency: its effect over the step
     end
@@ -285,6 +305,7 @@ function budget_close!(hl::StageBudget, θ; exchange::Union{Nothing,Tuple{Symbol
         end
     elseif ctx.scale == 1
         copyto!(hl.H_now, H1); copyto!(hl.Hs_now, hl.sbuf)
+        hl.stale = false
     end
     @inbounds for k in 1:Nz
         rest[k] -= ctx.booked[k]
@@ -314,6 +335,35 @@ function budget_close!(hl::StageBudget, θ; exchange::Union{Nothing,Tuple{Symbol
         _book!(hl, (ctx.stage, ctx.name), rest, unlocated)
     end
     push!(hl.pool, ctx)
+    return hl
+end
+
+# a top-level context after skipped ones: measure the state afresh; what
+# changed since the last measurement was done outside every measured
+# context (by a component whose declared writes left the quantity out)
+function _refresh!(hl::StageBudget, θ)
+    _measure!(hl.buf, hl, θ)
+    gap = hl.buf .- hl.H_now
+    any(!iszero, gap) && _book!(hl, (:core, :unattributed), gap)
+    copyto!(hl.H_now, hl.buf); copyto!(hl.Hs_now, hl.sbuf)
+    hl.stale = false
+    return hl
+end
+
+"""
+    budget_skip!(b) -> b
+
+Skip a context: the component that would run in it cannot change the
+quantity (its declared writes, `Components.budget_writes`, #539), so it is
+not measured. At the top level the next context that measures (or the end
+of the step) measures afresh, and books a change since the last
+measurement as `(:core, :unattributed)`: a skipped component that did
+write is not attributed to the next context. Nested (inside the core
+step) it does nothing: an undeclared write stays in the enclosing
+context's own share. A no-op unless a step is being attributed.
+"""
+function budget_skip!(hl::StageBudget)
+    hl.active && isempty(hl.stack) && (hl.stale = true)
     return hl
 end
 
