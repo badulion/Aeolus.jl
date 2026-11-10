@@ -55,9 +55,6 @@ _AS.reconstruct_right(::_Skewed, t::NTuple{2}) = 0.75t[1] + 0.25t[2]
                   4eps() * maximum(abs, t)
         end
     end
-    # the centred face takes the left stencil without a choice: valid only
-    # while its two stencils are the same cells (integer offsets, exact)
-    @test _AS.stencil_left(_AS.Centered2()) === _AS.stencil_right(_AS.Centered2())
     # the skewed reconstruction really differs from its mirror (else the
     # fallback above would not be exercised)
     @test _AS._face_x(_Skewed(), d, 7, 7, 7, -1.0) != _AS.reconstruct_left(_Skewed(), (d[9, 7, 7], d[8, 7, 7], d[7, 7, 7]))

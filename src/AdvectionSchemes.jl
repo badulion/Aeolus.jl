@@ -659,8 +659,8 @@ mirror_symmetric(::Union{WENOZ, TENO, WENOJS, Centered2}) = true
 @inline _upwind_value(r, up::Bool, tl, tr) =
     mirror_symmetric(r) ? reconstruct_left(r, _select(up, tl, reverse(tr))) :
                           ifelse(up, reconstruct_left(r, tl), reconstruct_right(r, tr))
-# centred: `stencil_left` and `stencil_right` are the same two cells in the
-# same order, so `tl` and `tr` are the same tuple and need no selection
+# centred: the two stencils are the same cells; the mean of (a, b) and of
+# (b, a) is the same number (IEEE addition commutes), so no selection
 @inline _upwind_value(r::Centered2, up::Bool, tl, tr) = reconstruct_left(r, tl)
 @inline _select(up::Bool, a::NTuple{N}, b::NTuple{N}) where {N} =
     ntuple(m -> ifelse(up, a[m], b[m]), Val(N))

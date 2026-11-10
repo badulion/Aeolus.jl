@@ -4934,8 +4934,7 @@ and the divergence vectorised already.
   of each), it chooses the *inputs* of one `reconstruct_left` value by
   value with `ifelse`. Any other reconstruction gets both evaluated and
   the result chosen with `ifelse`. The centred face takes the left stencil
-  without a choice: its left- and right-biased stencils are the same two
-  cells in the same order.
+  without a choice: the mean of (a, b) and of (b, a) is the same number.
   The reconstruction receives the same values in the same order as with
   the branch, so every face value is bit-identical.
 - `@code_llvm` afterwards: no masked loads, one reconstruction per face.
@@ -5059,9 +5058,8 @@ threads 18.7–19.2 / 30 W, 1.76–2.03 GHz.
 
 No bug was caught. No test expectation was wrong: the results agreed
 exactly on the first run. The issue's expectation was wrong: the
-branch did not keep the flux loops scalar (LLVM if-converted it), and in
-Berlin, which uses the centred scheme, the flux bodies were not what
-bounded the pass.
+centred flux bodies, which bound Berlin's pass, did not stay scalar
+because of the branch.
 
 **Review** (independent, before the PR):
 
@@ -5097,8 +5095,8 @@ bounded the pass.
 The issue's premise holds only for the higher-order reconstructions,
 where if-conversion doubled the arithmetic, and for first-order upwind.
 
-**Open**: in Berlin the pass is bound by D (31 % at one thread, #556's
-open item) and the update of e (18 %). The
+**Open**: in Berlin the pass is bound by D (31 % at one thread, about 50
+flux shares per cell, #556's open item) and the update of e (18 %). The
 higher-order schemes' advection at 6+ threads gains little, probably
 from the memory traffic of its 14 launches (not profiled); loop fusion of `advect_positive!` itself
 (as the TKE pass does) would address that. Two branching bodies remain
