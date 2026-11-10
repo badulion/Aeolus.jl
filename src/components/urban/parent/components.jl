@@ -525,10 +525,14 @@ function step_tiles!(c::TiledUrbanSurface, sim, period::Real)
     # one work item per column (KA-m, #301): a column steps its own tiles
     # and writes only its own sources and u*; the area sums of its fluxes
     # are its partials, folded in column-major order (the same bits at
-    # every thread count)
+    # every thread count). A column's cost follows its tiles (a soil
+    # column's sub-stepped heat and water solves against a slab's one
+    # balance: 2-60 µs on Berlin's columns), so the threads claim runs of
+    # columns as they go (`schedule = :dynamic`, #537) instead of equal
+    # row groups.
     sRn, sH, sLE, sG, sE = column_sum(Aeolus.Backends.backend(c.θsrc), _tile_column!,
                                       (1:m.Nx, 1:m.Ny), c, sim, θd, qd, zf, kmax, period;
-                                      weight = TILE_COLUMN_WEIGHT)
+                                      weight = TILE_COLUMN_WEIGHT, schedule = :dynamic)
     n = m.Nx * m.Ny
     for (key, v) in ((:Rn, sRn), (:H, sH), (:LE, sLE), (:G, sG), (:E, sE))
         c.sfc_mean[key] += v / n * period
@@ -537,16 +541,31 @@ function step_tiles!(c::TiledUrbanSurface, sim, period::Real)
 end
 
 # the air of column (I, J) at its levels 1:kf, as the tiles see it: T = θ Π̄_k,
-# q_v, the cell-centre wind (at least U_min), p̄_k
-function _column_air(c::TiledUrbanSurface, sim, θd, qd, I, J, kf)
-    m, ref = sim.mesh, c.ref
-    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
-    return [SurfaceForcing(; sw_down = c.sw_down[], lw_down = c.lw_down[],
-                           T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
-                           q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
-                           U = max(_cell_speed(sim, I, J, k), c.U_min), p = ref.p̄[k], z_ref = 10.0)
-            for k in 1:kf]
+# q_v, the cell-centre wind (at least U_min), p̄_k. A lazy vector: level k's
+# forcing is made when a tile reads it, so a column builds no vector (#537).
+struct ColumnAir{C,S,A,Q} <: AbstractVector{SurfaceForcing{Float64}}
+    c::C
+    sim::S
+    θd::A
+    qd::Q
+    I::Int
+    J::Int
+    kf::Int
 end
+Base.size(a::ColumnAir) = (a.kf,)
+Base.IndexStyle(::Type{<:ColumnAir}) = IndexLinear()
+function Base.getindex(a::ColumnAir, k::Int)
+    @boundscheck checkbounds(a, k)
+    c, sim, θd, qd = a.c, a.sim, a.θd, a.qd
+    m, ref = sim.mesh, c.ref
+    I, J = a.I, a.J
+    Hx, Hy, Hz = m.Hx, m.Hy, m.Hz
+    return SurfaceForcing(; sw_down = c.sw_down[], lw_down = c.lw_down[],
+                          T_air = θd[Hx+I, Hy+J, Hz+k] * ref.π̄[k],
+                          q_air = qd === nothing ? 0.0 : max(qd[Hx+I, Hy+J, Hz+k], 0.0),
+                          U = max(_cell_speed(sim, I, J, k), c.U_min), p = ref.p̄[k], z_ref = 10.0)
+end
+_column_air(c::TiledUrbanSurface, sim, θd, qd, I, J, kf) = ColumnAir(c, sim, θd, qd, Int(I), Int(J), Int(kf))
 
 function _tile_column!(I, J, c, sim, θd, qd, zf, kmax, period)
     ref, ps = c.ref, c.surface

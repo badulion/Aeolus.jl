@@ -81,6 +81,28 @@ const SE = Aeolus.SurfaceExchange
         @test !cl.converged && cl.ζ == 1000 && isfinite(cl.C_H)
     end
 
+    @testset "Surface-layer solver: no allocation, the same solution (#537)" begin
+        # The closures of the solve once shared their locals with the
+        # function (Core.Box): ~9 KB and dynamic dispatch per solve. The
+        # stable and the unstable branch, and the fluxes of a slab.
+        sf = BusingerDyerBeljaarsHoltslag()
+        solve(sf, θs) = solve_surface_layer(sf; U = 3.0, z_m = 20.0, θ_a = 295.0, θ_s = θs, q_a = 0.008,
+                                            q_s = 0.01, z0m = 0.5, z0h = 0.05)
+        alloc(sf, θs) = @allocated solve(sf, θs)
+        fluxes(s, f) = turbulent_fluxes(s, f; U_min = 0.5)
+        alloc_fl(s, f) = @allocated fluxes(s, f)
+        slab = SlabLand(; T = 300.0, β = 0.3)
+        f = SurfaceForcing(sw_down = 500.0, lw_down = 330.0, T_air = 293.0, q_air = 0.009, U = 2.0, z_ref = 20.0)
+        for θs in (300.0, 290.0)
+            alloc(sf, θs)
+            @test alloc(sf, θs) == 0
+            s = solve(sf, θs)
+            @test s.converged && sign(s.ζ) == sign(295.0 - θs)    # stable over the cooler skin
+        end
+        fluxes(slab, f)
+        @test alloc_fl(slab, f) == 0
+    end
+
     # A minimal external implementer: a wet, grey, fixed-temperature surface.
     struct _WetPatch <: AbstractSurface
         T::Float64
