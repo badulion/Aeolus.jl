@@ -3500,8 +3500,13 @@ scalar. With `@inbounds` inside both helpers, the row loop uses
 1.43 ms at 6 threads). This speeds up the separate loops too, and every
 other user of the helpers: the masked TKE diffusion and the weighted
 eddy viscosity of the anelastic core. The values are unchanged, bit for
-bit. The callers already check the mask's size and the weights' length
-(`_check_mask_weights`).
+bit. (The review changed the helpers' `@inbounds` to
+`Base.@propagate_inbounds`, so a caller outside `@inbounds` keeps its
+checks; the row loop still compiles to `<8 x double>` with no
+`throw_boundserror`, checked with `code_llvm`. The entry points check the
+mask's size and the weights' length: `_check_mask_weights`,
+`_level_weights`, and since the review also `add_sgs_stress_divergence!`,
+which passed its weights on unchecked.)
 
 **Measurements** (synthetic 200×200×60, a solid mask of two blocks, a
 random tracer and κt; under the benchmark lock with package power
@@ -3541,7 +3546,7 @@ with counters):
 - **Blocked:** about 25 B. That is q, κ and the mask read, and q written
   back (+8 for κv).
 
-**Tests** (`test/tracer_diffusion_blocked.jl`, 147 checks; the cases in
+**Tests** (`test/tracer_diffusion_blocked.jl`, 150 checks; the cases in
 `test/support/tracer_diffusion_cases.jl`, which call `sgs_diffuse!` with a
 minimal case of `sim`, `mesh` and `budgets`):
 - **The pass against the separate loops.** Boussinesq and anelastic
@@ -3562,7 +3567,7 @@ minimal case of `sim`, `mesh` and `budgets`):
   missing scratch falls back and names the reason, and `"always"` then
   throws. A stretched grid's reason names the RegularGrid. 0 B allocated
   on a serial backend.
-- **A `-t 4` subprocess.** Both cores, κh ≠ κv, both halo kinds, 2–5 slabs
+- **A `-t 4` subprocess.** Both cores, κh ≠ κv, both halo kinds, 2–5 slabs (since the review, see below)
   running concurrently (16 runs, all within the tolerances above).
 
 No test expectation proved wrong. Validation `urban_checks.jl` (under
@@ -3584,6 +3589,49 @@ config tests and `naming_conventions`.
   (the TKE pass's pipeline is written for e), and the W-weighted
   increment. That is a larger piece of work than this issue; left open.
 - The halo fill stays a separate step (0.07 ms, boundary planes only).
+
+**Review findings** (independent review before the PR).
+- **Fixed: the pass ran at the backend's slab count, not its scratch's.**
+  `sgs_diffuse!` called `blocked_eddy_diffusion!` without `ns`, so a
+  scratch made for another slab count was replaced by a new one, about
+  31 kB, on every call (`TracerSGSDiffusion` is immutable and cannot keep
+  it). In practice the counts agree, as both come from `sweep_slabs`, but
+  the tests built scratches for 1–5 slabs: the forward runs of the
+  agreement test ran 1 slab whatever they asked for, and the `-t 4`
+  subprocess ran 4 slabs in each of its "2–5 slab" runs. Only the
+  reverse-order runs, which call the pass directly, covered 2–5 slabs.
+  `sgs_diffuse!` now passes the scratch's count (`Operators.nslabs`). The
+  test asserts 0 B and the count for a 3-slab scratch on a serial backend.
+  With the fix the agreement test and the subprocess cover what they
+  state (the same tolerances; worst errors unchanged: q 0, Σ|q| 4.5e-16,
+  Σ tendency 4.6e-15, water 9.1e-16).
+- **Fixed: `@inbounds` inside the helpers became `Base.@propagate_inbounds`.**
+  The same vectorised code (`code_llvm`: `<8 x double>`, no
+  `throw_boundserror`, mask only and mask + weights), but a caller outside
+  `@inbounds` keeps its bounds checks. The stress-form
+  `add_sgs_stress_divergence!` passed its weights to the kernel unchecked;
+  it now checks them with `_level_weights`, like the eddy viscosity (test
+  in `components_both_cores.jl`: short weights throw for the stress
+  divergence, the eddy viscosity and the scalar diffusion).
+- **Checked, no change:** no reader of `d.tend` outside the separate path
+  (src, test, validation, examples, benchmarks); the row sums are written
+  once per (j, k) by the slab that owns plane k, so concurrent slabs do
+  not race; the blocked pass with neither mask nor weights matches
+  `add_eddy_diffusion_scalar!`'s unmasked kernel bit for bit (measured
+  max |Δq| = 0); `κv === κ` (the 3-argument separate call) is the same
+  arithmetic as the pass's `κh = κv`.
+- **Re-measurement not usable.** A re-run of the benchmark under the lock
+  (`bench.jl`, the same 200×200×60 case) coincided with an unrelated
+  20-core job on the laptop (load average 17–22 on 24 threads). The minima
+  scattered by 2–5× between neighbouring runs (e.g. separate 22.4 ms at 1
+  thread against 8.5 ms above), so the table above, measured on an idle
+  machine, stands. The ordering held in every run: blocked faster than
+  separate at 1, 6 and 12 threads on both cores, q identical (max |Δq| =
+  0).
+- Full suite after the review: `test/run.jl` under the lock, 119 jobs,
+  6291 checks, all passed. Validation `urban_checks.jl` after the review,
+  under the lock: 33 of 33 checks passed, in 1472 s (the machine loaded
+  as above).
 
 **Open.**
 - Advection and diffusion of a tracer in one pass (above).
