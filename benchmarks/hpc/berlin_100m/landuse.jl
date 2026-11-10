@@ -5,6 +5,8 @@
 #
 #   julia --project=env landuse.jl            # fetch + write
 #   julia --project=env landuse.jl --cached   # reuse data/raw/berlin_100m.osm
+#   julia --project=env landuse.jl --cached --dx 50   # the 50 m cells (R = 5):
+#                                             # data/berlin_50m_landuse.csv (HPC benchmark #566)
 #
 # The buildings, parks and water of the 20 km box (+ 100 m) via the
 # Overpass API, classified (buildings lower than 8 m dropped; height from
@@ -18,11 +20,15 @@ using AeolusPrep
 using Aeolus
 
 const LAT0, LON0 = 52.515, 13.40          # the domain centre ([radiation] latitude, longitude)
-const L, DXC, R = 20000.0, 10.0, 10       # the domain (m), the raster cell (m), 10 m → 100 m
+const L, DXC = 20000.0, 10.0              # the domain (m), the raster cell (m)
+# the model cell (m), `--dx <m>` (default 100), and R, the raster cells per model cell (10 m → 100 m: 10)
+const DX = let i = findfirst(==("--dx"), ARGS); i === nothing ? 100 : parse(Int, ARGS[i+1]) end
+const R = round(Int, DX / DXC)
+R * DXC == DX || error("--dx $DX is not a multiple of the $(DXC) m raster")
 const MARGIN = 100.0
 const DIR = joinpath(@__DIR__, "data")
 
-csv = joinpath(DIR, "berlin_100m_landuse.csv")
+csv = joinpath(DIR, "berlin_$(DX)m_landuse.csv")
 raw = joinpath(DIR, "raw", "berlin_100m.osm")
 h = L / 2 + MARGIN
 R_E = Aeolus.InputDrivers._EARTH_R

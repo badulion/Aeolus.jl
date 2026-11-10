@@ -3,11 +3,13 @@
 # tiled domain alone (run_kind = :tiles, though it is a model domain that is
 # not an urban site): the same calls without that check.
 #
-#   julia --project=env dynamic.jl
+#   julia --project=env dynamic.jl                    # this directory's config
+#   julia --project=env dynamic.jl ../berlin_50m/berlin_50m_20250824.toml   # another grid
+#                                                     # (the same ERA5 data/; HPC benchmark #566)
 using AeolusPrep, Aeolus, Aeolus.Config
 using Aeolus.BoundaryConditions: open_boundary_states
 const AP = AeolusPrep
-cfg = load_run_config(joinpath(@__DIR__, "berlin_100m_20250824.toml"))
+cfg = load_run_config(isempty(ARGS) ? joinpath(@__DIR__, "berlin_100m_20250824.toml") : abspath(ARGS[1]))
 SD = Aeolus.SimulationDriver
 mesh = SD._mesh(cfg.grid)
 planes = only(open_boundary_states(SD._open_bcs(cfg, mesh))).planes
