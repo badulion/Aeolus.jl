@@ -265,6 +265,28 @@ end
     @test 0 < fw.G - fb.G < 100 && fw.H > fb.H
 end
 
+@testset "A coupled heat and water step allocates nothing (#537)" begin
+    # `_phase_state`'s closures once shared θl, θi with the function
+    # (Core.Box): every layer evaluation allocated and returned an
+    # uninferred tuple (~16 KB per step of this column). Unfrozen and
+    # frozen (freezing-point depression: the Newton branch of the closures).
+    h = carsel_parrish_texture(:loam)
+    p = clm_soil_thermal_properties(40, 20)
+    mk(T) = SoilThermalColumn(SoilWaterColumn(clm_exponential_soil_grid(8), h; θ = 0.25), p; T_soil = T)
+    f = SurfaceForcing(sw_down = 300.0, lw_down = 300.0, T_air = 285.0, q_air = 0.006, U = 3.0)
+    stepc(col, f) = step_surface!(col, f, 60.0; U_min = 0.5)
+    alloc(col, f) = @allocated stepc(col, f)
+    for T in (290.0, 268.0)
+        col = mk(T)
+        stepc(col, f)
+        E0 = soil_enthalpy(col) - col.budget.surface + col.budget.bottom - col.budget.water
+        @test alloc(col, f) == 0
+        T < 273 && @test soil_ice_mass(col) > 0
+        # the energy ledger still closes
+        @test soil_enthalpy(col) - col.budget.surface + col.budget.bottom - col.budget.water ≈ E0 rtol = 1e-10
+    end
+end
+
 @testset "Soil-limited evaporation returns the delivered water (#129)" begin
     h = carsel_parrish_texture(:loam)
     p = clm_soil_thermal_properties(40, 20)
