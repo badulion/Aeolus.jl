@@ -246,7 +246,11 @@ end
 const _BLAS_DEFAULT = Ref(0)
 const _DENSE_BLAS = Ref(0)
 _blas_default!() = (_BLAS_DEFAULT[] == 0 && (_BLAS_DEFAULT[] = BLAS.get_num_threads()); _BLAS_DEFAULT[])
-__init__() = (_blas_default!(); nothing)
+function __init__()
+    _blas_default!()
+    _TRACE[] = get(ENV, "AEOLUS_LAUNCH_TRACE", "0") == "1"     # the launch trace (#566)
+    return nothing
+end
 
 """
     dense_blas_threads() -> Int
@@ -428,6 +432,56 @@ end
     out[c] = plane!(c + ok, args...)
 end
 
+# The traced kernels of the launch trace (#566): the same work items, each
+# timed into `acc` in a `@noinline` function of fixed arity. (Timed inside
+# the kernel body, every work item allocated 32 bytes on KA's CPU backend.)
+# Only used when the trace is on: the kernels above stay as they are.
+@kernel inbounds = true function _rows3_kernel_tr!(body!, i1, i2, oj, ok, args, acc)
+    b, c = @index(Global, NTuple)
+    _item_row3!(acc, body!, i1:i2, b + oj, c + ok, args)
+end
+@noinline function _item_row3!(acc::Matrix{UInt64}, body!::F, ir::UnitRange{Int}, j::Int, k::Int,
+                               args::A) where {F, A}
+    t0 = time_ns()
+    _row!(body!, ir, j, k, args...)
+    _trace_work!(acc, t0)
+    return nothing
+end
+@kernel inbounds = true function _rows2_kernel_tr!(body!, i1, i2, oj, args, acc)
+    b = @index(Global, Linear)
+    _item_row2!(acc, body!, i1, i2, b + oj, args)
+end
+@noinline function _item_row2!(acc::Matrix{UInt64}, body!::F, i1::Int, i2::Int, j::Int, args::A) where {F, A}
+    t0 = time_ns()
+    for i in i1:i2
+        body!(i, j, args...)
+    end
+    _trace_work!(acc, t0)
+    return nothing
+end
+@kernel inbounds = true function _chunks1_kernel_tr!(body!, n1, n2, chunk, args, acc)
+    c = @index(Global, Linear)
+    lo = n1 + (c - 1) * chunk
+    _item_chunk!(acc, body!, lo, min(lo + chunk - 1, n2), args)
+end
+@noinline function _item_chunk!(acc::Matrix{UInt64}, body!::F, lo::Int, hi::Int, args::A) where {F, A}
+    t0 = time_ns()
+    for n in lo:hi
+        body!(n, args...)
+    end
+    _trace_work!(acc, t0)
+    return nothing
+end
+@kernel inbounds = true function _planes_kernel_tr!(out, plane!, ok, args, acc)
+    c = @index(Global, Linear)
+    _item_plane!(acc, out, plane!, c, ok, args)
+end
+@noinline function _item_plane!(acc::Matrix{UInt64}, out, plane!::F, c::Int, ok::Int, args::A) where {F, A}
+    t0 = time_ns()
+    @inbounds out[c] = plane!(c + ok, args...)
+    _trace_work!(acc, t0)
+    return nothing
+end
 const _ROWS_PER_GROUP = 4
 const _CHUNK_1D = 1024
 
@@ -461,28 +515,43 @@ end
 # ---- threaded CPU launches ------------------------------------------------
 
 function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args,
-                    weight::Int = 1) where {F}
+                    weight::Int = 1, acc = nothing) where {F}
     nj, nk = length(jr), length(kr)
     nt = _ntasks(length(ir) * nj * nk * weight)
     wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
-    kern = _rows3_kernel!(b.ka, wg)
-    kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args; ndrange = (nj, nk))
+    if acc === nothing
+        kern = _rows3_kernel!(b.ka, wg)
+        kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args; ndrange = (nj, nk))
+    else                                     # the launch trace (#566)
+        kern = _rows3_kernel_tr!(b.ka, wg)
+        kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args, acc; ndrange = (nj, nk))
+    end
     return nothing
 end
 function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args,
-                    weight::Int = 1) where {F}
+                    weight::Int = 1, acc = nothing) where {F}
     nj = length(jr)
     nt = _ntasks(length(ir) * nj * weight)
-    kern = _rows2_kernel!(b.ka, nt >= Threads.nthreads() ? min(nj, _ROWS_PER_GROUP) : cld(nj, nt))
-    kern(body!, first(ir), last(ir), first(jr) - 1, args; ndrange = nj)
+    if acc === nothing
+        kern = _rows2_kernel!(b.ka, nt >= Threads.nthreads() ? min(nj, _ROWS_PER_GROUP) : cld(nj, nt))
+        kern(body!, first(ir), last(ir), first(jr) - 1, args; ndrange = nj)
+    else                                     # the launch trace (#566)
+        kern = _rows2_kernel_tr!(b.ka, nt >= Threads.nthreads() ? min(nj, _ROWS_PER_GROUP) : cld(nj, nt))
+        kern(body!, first(ir), last(ir), first(jr) - 1, args, acc; ndrange = nj)
+    end
     return nothing
 end
 function _threaded!(b::CPUBackend, body!::F, (nr,)::NTuple{1,UnitRange{Int}}, args,
-                    weight::Int = 1) where {F}
+                    weight::Int = 1, acc = nothing) where {F}
     nt = _ntasks(length(nr) * weight)
     chunk = nt >= Threads.nthreads() ? max(1, _CHUNK_1D ÷ weight) : cld(length(nr), nt)
-    kern = _chunks1_kernel!(b.ka, 1)
-    kern(body!, first(nr), last(nr), chunk, args; ndrange = cld(length(nr), chunk))
+    if acc === nothing
+        kern = _chunks1_kernel!(b.ka, 1)
+        kern(body!, first(nr), last(nr), chunk, args; ndrange = cld(length(nr), chunk))
+    else                                     # the launch trace (#566)
+        kern = _chunks1_kernel_tr!(b.ka, 1)
+        kern(body!, first(nr), last(nr), chunk, args, acc; ndrange = cld(length(nr), chunk))
+    end
     return nothing
 end
 
@@ -532,6 +601,7 @@ function _launch!(b::CPUBackend, body!::F, ranges::NTuple{N,UnitRange{Int}}, arg
                   weight::Int = 1) where {F, N, A<:Tuple}
     np = _npoints(ranges)
     np == 0 && return nothing
+    _TRACE[] && return _traced_launch!(b, body!, ranges, args, weight, np)   # #566, off by default
     if runs_serially(b, np * weight)
         _serial!(body!, ranges, args)
     else
@@ -851,17 +921,27 @@ function _plane_partials!(b::CPUBackend, out::AbstractVector, p::Union{_PlaneRed
     length(out) == length(kr) ||
         throw(DimensionMismatch("partials has length $(length(out)), the k range $(length(kr))"))
     isempty(kr) && return out
+    _TRACE[] && return _traced_plane_partials!(b, out, p, kr, g)   # #566, off by default
     if runs_serially(b, length(p.ir) * length(p.jr) * length(kr)) || length(kr) == 1
         for (c, k) in enumerate(kr)
             out[c] = p(k, g)
         end
     else
-        nk = length(kr)
-        nt = _ntasks(length(p.ir) * length(p.jr) * nk)
-        kern = _planes_kernel!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
-        kern(out, p, first(kr) - 1, (g,); ndrange = length(kr))
+        _threaded_planes!(b, out, p, kr, g, nothing)
     end
     return out
+end
+function _threaded_planes!(b::CPUBackend, out, p, kr::UnitRange{Int}, g, acc)
+    nk = length(kr)
+    nt = _ntasks(length(p.ir) * length(p.jr) * nk)
+    if acc === nothing
+        kern = _planes_kernel!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
+        kern(out, p, first(kr) - 1, (g,); ndrange = length(kr))
+    else                                     # the launch trace (#566)
+        kern = _planes_kernel_tr!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
+        kern(out, p, first(kr) - 1, (g,), acc; ndrange = length(kr))
+    end
+    return nothing
 end
 _plane_partials!(b::GPUBackend, args...) = _gpu_error(b, "plane_partials!")
 
@@ -2010,5 +2090,271 @@ function _column_sums(P::AbstractMatrix{T}, ::Val{N}) where {T, N}
 end
 @inline _add_row(s::NTuple{N,T}, P, c) where {N, T} =
     ntuple(t -> (@inbounds s[t] + P[c, t]), Val(N))
+
+# ---- the launch trace: thread busy, idle and wait time (#566) ---------------
+#
+# Off unless AEOLUS_LAUNCH_TRACE=1 when Aeolus is loaded (or after
+# `set_launch_trace!(true)`): then every launch of this file — `launch!`,
+# `launch_weighted!` and what is built on them (`range_map!`,
+# `foreach_column!`, `row_map!`, …), and every plane reduction
+# (`plane_partials!`, `plane_map!`, `plane_reduce!`, `pcg!`'s sums) — is
+# timed: its wall time and, per thread, when the thread's first work item
+# started, when its last ended and how long its work items took. Off, the
+# cost is one load and one predictable branch per launch, and the kernels
+# receive `acc = nothing`, for which the timing compiles to nothing.
+
+const _TRACE = Ref(false)
+
+"""
+    LaunchRecord
+
+One launch of the trace ([`launch_trace`](@ref)):
+
+  * `name::Symbol`: the body's function name; for a generic wrapper body
+    (`_map_body!`, `_column_store_body!`, …) followed by `/` and the first
+    function among its arguments, for a plane reduction `plane_reduce/…`
+    or the plane function's name;
+  * `depth::Int`: the number of launches running when it started (0: a
+    top-level launch; ≥ 1: started inside a work item of another launch,
+    or from a concurrent task such as a nest's child domain);
+  * `t0, t1::UInt64`: its start and end (`time_ns()`), so the wall time
+    is `t1 - t0`;
+  * `serial::Bool`: whether it ran serially on the calling thread;
+  * `tid, start, stop, busy::Vector`: per thread that ran at least one of
+    its work items, the thread id, the start of its first work item, the
+    end of its last and the summed time of its work items (ns). With
+    KernelAbstractions' CPU backend one task runs per thread, so these are
+    also the tasks' spans. A work item that starts a nested launch counts
+    its wait for that launch as busy; while it waits, its thread may run
+    another work item of the same launch, which then counts as busy too,
+    so with nested launches a thread's `busy` can exceed its span.
+"""
+struct LaunchRecord
+    name::Symbol
+    depth::Int
+    t0::UInt64
+    t1::UInt64
+    serial::Bool
+    tid::Vector{Int}
+    start::Vector{UInt64}
+    stop::Vector{UInt64}
+    busy::Vector{UInt64}
+end
+
+const _TRACE_RECORDS = LaunchRecord[]
+const _TRACE_LOCK = ReentrantLock()
+const _TRACE_ACTIVE = Threads.Atomic{Int}(0)
+
+"""
+    launch_trace_enabled() -> Bool
+
+Whether the launch trace is recording (`AEOLUS_LAUNCH_TRACE=1` when the
+package was loaded, or [`set_launch_trace!`](@ref)).
+"""
+launch_trace_enabled() = _TRACE[]
+
+"""
+    set_launch_trace!(on::Bool) -> Bool
+
+Switch the launch trace on or off at run time (the environment variable
+`AEOLUS_LAUNCH_TRACE=1` switches it on at load). Returns the previous
+setting. Records already taken are kept ([`reset_launch_trace!`](@ref)).
+"""
+function set_launch_trace!(on::Bool)
+    old = _TRACE[]
+    _TRACE[] = on
+    return old
+end
+
+"""
+    launch_trace() -> Vector{LaunchRecord}
+
+A copy of the records taken since the last [`reset_launch_trace!`](@ref),
+in the order the launches ended (a nested launch ends before the launch
+it runs in). See [`LaunchRecord`](@ref) and
+[`launch_trace_summary`](@ref).
+"""
+launch_trace() = lock(() -> copy(_TRACE_RECORDS), _TRACE_LOCK)
+
+"""
+    reset_launch_trace!() -> nothing
+
+Drop every record of the launch trace (e.g. after the warm-up steps).
+"""
+reset_launch_trace!() = (lock(() -> empty!(_TRACE_RECORDS), _TRACE_LOCK); nothing)
+
+# A launch being traced: its name, depth, start and per-thread accumulators
+# `acc[1, t+1]` first start, `acc[2, t+1]` last end, `acc[3, t+1]` busy (ns).
+# A column of 16 (128 bytes) per thread and an unused column at either end:
+# no two threads, and nothing else allocated next to it (the launch's
+# tasks), write to the same cache line (false sharing made a traced launch
+# of 256 work items on 4 threads several times slower).
+struct _TraceToken
+    name::Symbol
+    depth::Int
+    t0::UInt64
+    acc::Matrix{UInt64}
+end
+
+"""
+    trace_begin(name::Symbol) -> token
+
+Start tracing a launch made outside [`launch!`](@ref) (a launch helper
+with its own tasks, e.g. a dynamically scheduled column loop): time each
+piece of work with `t0 = time_ns(); …; trace_work!(token, t0)` on the
+thread that ran it, and end with [`trace_end!`](@ref). Only call it when
+[`launch_trace_enabled`](@ref).
+"""
+function trace_begin(name::Symbol)
+    acc = Matrix{UInt64}(undef, 16, Threads.maxthreadid() + 2)
+    @inbounds for t in axes(acc, 2)
+        acc[1, t] = typemax(UInt64); acc[2, t] = 0; acc[3, t] = 0
+    end
+    depth = Threads.atomic_add!(_TRACE_ACTIVE, 1)
+    return _TraceToken(name, depth, time_ns(), acc)
+end
+
+"""
+    trace_work!(token, t0) -> nothing
+
+Book a piece of work of a traced launch that started at `t0` and ends now,
+on the calling thread (see [`trace_begin`](@ref)).
+"""
+@inline trace_work!(tok::_TraceToken, t0::UInt64) = _trace_work!(tok.acc, t0)
+
+"""
+    trace_end!(token; serial = false) -> nothing
+
+End a traced launch and store its [`LaunchRecord`](@ref).
+"""
+function trace_end!(tok::_TraceToken; serial::Bool = false)
+    t1 = time_ns()
+    Threads.atomic_sub!(_TRACE_ACTIVE, 1)
+    a = tok.acc
+    ts = [t for t in 1:Threads.maxthreadid() if a[3, t+1] > 0 || a[2, t+1] > 0]
+    c = ts .+ 1
+    r = LaunchRecord(tok.name, tok.depth, tok.t0, t1, serial, ts, a[1, c], a[2, c], a[3, c])
+    lock(() -> push!(_TRACE_RECORDS, r), _TRACE_LOCK)
+    return nothing
+end
+
+# a work item's time, on the thread that ran it
+@inline function _trace_work!(acc::Matrix{UInt64}, t0::UInt64)
+    t1 = time_ns()
+    t = Threads.threadid() + 1
+    # no yield between the read and the write: tasks on one thread do not interleave here
+    @inbounds begin
+        acc[1, t] = min(acc[1, t], t0)
+        acc[2, t] = max(acc[2, t], t1)
+        acc[3, t] += t1 - t0
+    end
+    return nothing
+end
+
+# the names of the records
+_fname(f::Function) = nameof(f)
+_fname(f) = nameof(typeof(f))
+const _WRAPPER_BODIES = (:_map_body!, :_column_store_body!, :_row_map_body!, :_column_body!,
+                         :_column_run_body!, :_column_run_store_body!)
+function _trace_name(body!, args::Tuple)
+    n = _fname(body!)
+    n in _WRAPPER_BODIES || return n
+    i = findfirst(x -> x isa Function, args)
+    return i === nothing ? n : Symbol(n, "/", _fname(args[i]))
+end
+
+"""
+    launch_trace_summary(records = launch_trace(); nthreads = Threads.nthreads())
+        -> NamedTuple
+
+What the records say about where the time went, from the **top-level**
+launches (`depth == 0`); all times in seconds:
+
+  * `launches`, `launch_wall`: their number and summed wall time. The
+    serial time between launches of a stretch of stepping with wall time
+    `W` is `W - launch_wall`;
+  * `serial_launches`, `serial_launch_wall`: those that ran on the calling
+    thread alone (too small to thread, or a serial backend);
+  * `busy`: per thread id `1:nthreads`, the summed time of its work items;
+  * `idle_in_launches`: `nthreads × launch_wall − Σ busy`, the thread time
+    inside launches spent waiting (load imbalance, task start-up and the
+    end-of-launch barrier, and the other threads during a serial launch);
+  * `nested`, `nested_wall`: the launches started inside another (counted
+    in neither of the above: their work is the busy time of the work item
+    that waited for them, the other threads' part of it is counted as
+    idle);
+  * `by_name`: per name, `(count, wall, busy, idle)` over the top-level
+    launches, sorted by wall time.
+
+Julia's idle worker threads spin before they sleep, so the operating
+system counts part of this idle time as CPU time; these numbers come from
+the work items' own clocks instead.
+"""
+function launch_trace_summary(recs::AbstractVector{LaunchRecord} = launch_trace();
+                              nthreads::Integer = Threads.nthreads())
+    nt = Int(nthreads)
+    busy = zeros(Float64, max(nt, maximum((maximum(r.tid; init = 0) for r in recs); init = 0)))
+    nl = ns = nn = 0
+    wall = swall = nwall = 0.0
+    byname = Dict{Symbol,NTuple{4,Float64}}()
+    for r in recs
+        w = (r.t1 - r.t0) * 1e-9
+        if r.depth > 0
+            nn += 1; nwall += w
+            continue
+        end
+        nl += 1; wall += w
+        r.serial && (ns += 1; swall += w)
+        b = 0.0
+        for (t, x) in zip(r.tid, r.busy)
+            busy[t] += x * 1e-9
+            b += x * 1e-9
+        end
+        c, cw, cb, ci = get(byname, r.name, (0.0, 0.0, 0.0, 0.0))
+        byname[r.name] = (c + 1, cw + w, cb + b, ci + nt * w - b)
+    end
+    bn = sort!([n => (count = Int(v[1]), wall = v[2], busy = v[3], idle = v[4]) for (n, v) in byname];
+               by = x -> -x.second.wall)
+    return (launches = nl, launch_wall = wall, serial_launches = ns, serial_launch_wall = swall,
+            busy = busy, idle_in_launches = nt * wall - sum(busy; init = 0.0),
+            nested = nn, nested_wall = nwall, by_name = bn)
+end
+
+# the traced form of `_launch!` (AEOLUS_LAUNCH_TRACE=1, #566): the same
+# paths, each timed
+@noinline function _traced_launch!(b::CPUBackend, body!::F, ranges, args::A, weight::Int,
+                                   np::Int) where {F, A<:Tuple}
+    tok = trace_begin(_trace_name(body!, args))
+    if runs_serially(b, np * weight)
+        t0 = time_ns()
+        _serial!(body!, ranges, args)
+        trace_work!(tok, t0)
+        trace_end!(tok; serial = true)
+    else
+        _threaded!(b, body!, ranges, args, weight, tok.acc)
+        trace_end!(tok)
+    end
+    return nothing
+end
+
+# the names of plane reductions in the launch trace (#566)
+_plane_trace_name(p::_PlaneFn, g) = _fname(p.f)
+_plane_trace_name(p::Union{_PlaneReduce,_PlaneMax}, g) =
+    hasproperty(g, :f) ? Symbol("plane_reduce/", _fname(getproperty(g, :f))) : :plane_reduce
+@noinline function _traced_plane_partials!(b::CPUBackend, out, p, kr::UnitRange{Int}, g)
+    tok = trace_begin(_plane_trace_name(p, g))
+    if runs_serially(b, length(p.ir) * length(p.jr) * length(kr)) || length(kr) == 1
+        t0 = time_ns()
+        for (c, k) in enumerate(kr)
+            out[c] = p(k, g)
+        end
+        trace_work!(tok, t0)
+        trace_end!(tok; serial = true)
+    else
+        _threaded_planes!(b, out, p, kr, g, tok.acc)
+        trace_end!(tok)
+    end
+    return out
+end
 
 end # module
