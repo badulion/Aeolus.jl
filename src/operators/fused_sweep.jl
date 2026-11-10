@@ -28,9 +28,11 @@
 #
 # The slab and ring machinery is one driver, `blocked_update!`, generic
 # over the update it runs (a `BlockedUpdate`, #554): the predictor here,
-# and the update of the SGS TKE (`PrognosticSGS`, src/prognostic_sgs/
+# the update of the SGS TKE (`PrognosticSGS`, src/prognostic_sgs/
 # tke_blocked.jl), whose row pipeline (eddy viscosity, limited fluxes,
-# diffusion, the update) keeps its own intermediate rows.
+# diffusion, the update) keeps its own intermediate rows, and the update
+# of the six SGS Reynolds stresses on the same pipeline (#560,
+# reynolds_stress_blocked.jl).
 #
 # Every value is the expression of the separate passes (`_tend_*`, the
 # terms' whole-field reference, then the predictor functor `pu` / `ps`),
@@ -354,10 +356,12 @@ The supertype of an update that [`blocked_update!`](@ref) runs over the
 interior, slab by slab and j-row by j-row: the new values of a row are
 computed while its neighbourhood is in cache, kept in the driver's ring
 (or, on a slab's edge planes, its edge buffer) while later rows still read
-the old values, and written back `lag` rows later (#533, #554). Two
+the old values, and written back `lag` rows later (#533, #554). Three
 updates use it: the predictor of a Boussinesq substage
-([`blocked_predictor!`](@ref)) and the update of the SGS TKE
-(`PrognosticSGS`, `advance_sgs!` of a `TKEClosure`). An update implements
+([`blocked_predictor!`](@ref)), the update of the SGS TKE
+(`PrognosticSGS`, `advance_sgs!` of a `TKEClosure`) and that of the six SGS
+Reynolds stresses (`advance_sgs!` of a `ReynoldsStressClosure` with
+transport, #560; six fields in the driver's buffers). An update implements
 
   * `update_lags(op) -> (lag, lz)`: rows between computing a row and
     writing it back (no row computed later reads the old values of row
