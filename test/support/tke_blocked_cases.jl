@@ -12,15 +12,29 @@ using Random: Xoshiro, randn
 # signs), e with zeros and a large range (the limiter active), a first
 # level, wall distance; optionally a solid mask with wall-modelled
 # immersed walls and a surface value.
+#
+# `buoyancy` (#556): the variant of N² the closure computes: `:dry` (θ),
+# `:moist` (θ_v, a moist core with a random qv), `:cloudy` (θ_ρ, and the
+# saturated N² where a condensate field qc > 0: about a third of the
+# cells) or `:none` (g = 0: N² = 0).
 function tkb_case(g; transport = true, dissipation = :semi_implicit, mask = false, walls = false,
-                  surface = false, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall))
-    sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs, θ_flux_bottom = 0.05)
+                  surface = false, bcs = FieldBoundaryConditions(:periodic, :periodic, :wall),
+                  buoyancy = :dry)
+    buoyancy in (:dry, :moist, :cloudy, :none) || throw(ArgumentError("buoyancy = $buoyancy"))
+    moist = buoyancy in (:moist, :cloudy)
+    sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs, θ_flux_bottom = 0.05, moisture = moist)
     rng = Xoshiro(554)
     n = (g.Nx, g.Ny, g.Nz)
     for f in (sim.u, sim.v, sim.w)
         interior_view(f) .= 2.0 .* randn(rng, size(interior_view(f)))
     end
     interior_view(sim.θ) .= 300 .+ 0.02 .* randn(rng, n) .+ reshape(0.004 .* (1:g.Nz), 1, 1, :)
+    moist && (interior_view(sim.qv) .= 0.008 .+ 1e-4 .* randn(rng, n))
+    qc = nothing
+    if buoyancy === :cloudy
+        qc = Field(CellCenter(), g)
+        interior_view(qc) .= 1e-4 .* rand(rng, n...) .* (rand(rng, n...) .< 0.35)
+    end
     sm = nothing
     if mask
         sm = SolidMask(g)
@@ -32,7 +46,9 @@ function tkb_case(g; transport = true, dissipation = :semi_implicit, mask = fals
     c = TKEClosure(g; mask = sm === nothing ? nothing : sm.mask, transport = transport,
                    dissipation = dissipation, first_level = fl, surface = sv,
                    wall_distance = 1.0 .+ 30 .* rand(rng, n...),
-                   walls = walls ? immersed_walls(sim, sm, RoughLogLaw(0.1)) : nothing)
+                   walls = walls ? immersed_walls(sim, sm, RoughLogLaw(0.1)) : nothing,
+                   qc = qc, p = qc === nothing ? nothing : 9.5e4,
+                   g_accel = buoyancy === :none ? 0.0 : nothing)
     initialize_tke!(c, sim; e_min = 1e-3)
     interior_view(c.e) .*= 4 .* rand(rng, n...) .* (rand(rng, n...) .> 0.15)
     return sim, c
@@ -40,12 +56,14 @@ end
 
 # e and the statistics after one update by `f!`, from the same start. The
 # scratch the blocked pass reads at the boundary (ν, κt, the limiter's
-# ratio) is first set to NaN: a reference run on the same closure leaves
+# ratio; N² and D, which the pass computes row by row without walls, #556)
+# is first set to NaN: a reference run on the same closure leaves
 # correct values in their interior, which would hide a boundary cell the
 # pass failed to compute itself (a NaN read reaches e).
 function tkb_run!(f!, c, sim, e0, Δt)
     copyto!(c.e.data, e0); fill!(c.stats, 0)
     fill!(c.ν.data, NaN); fill!(c.κt.data, NaN)
+    fill!(c.N2.data, NaN); fill!(c.D.data, NaN)      # computed by the pass itself (#556)
     c.ws === nothing || fill!(c.ws.ratio.data, NaN)
     f!(c, sim, Δt)
     return copy(c.e.data), tke_statistics(c)

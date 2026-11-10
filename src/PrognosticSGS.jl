@@ -61,7 +61,7 @@ using ..BoundaryConditions: FieldBoundaryConditions, Periodic, fill_halos!, homo
                             passive_scalar_bcs
 using ..Operators: AbstractSGSClosure, SGSFields, sgs_fields, add_eddy_diffusion_scalar!,
                    buoyancy_frequency_squared!, SymmetricTensorField, cloud_humidity,
-                   filled_condensate!
+                   filled_condensate!, n2_args, _n2_body!, _Cloudy
 import ..Operators: sgs_coefficients!, advance_sgs!, sgs_state, restore_sgs_state!, sgs_tke!
 using ..AdvectionSchemes: advect_positive!, FluxLimiterWorkspace, _reconstruction
 using ..WallModels: ImmersedWalls, immersed_wall_drag!
@@ -384,27 +384,36 @@ _qv(c, sim) = c.qv === :auto ?
 
 # N² at cell centres (zero without buoyancy). Fills the θ (and qv) halos.
 function _stratification!(c, sim)
-    θ₀ = _θref(c, sim); g = _gref(c, sim)
-    if θ₀ > 0 && g > 0
-        fill_halos!(sim.θ, sim.θ_bcs)
-        q = _qv(c, sim)
-        if q === nothing
-            c.cloud === nothing ||
-                throw(ArgumentError("a condensate field qc needs a humidity (qv, or a moist core)"))
-            buoyancy_frequency_squared!(c.N2, sim.θ; θ₀ = θ₀, g = g)
-        else
-            fill_halos!(q, passive_scalar_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
-            if c.cloud === nothing
-                buoyancy_frequency_squared!(c.N2, sim.θ, q; θ₀ = θ₀, g = g)
-            else                                            # cloudy air (#239)
-                qc = filled_condensate!(c.cloud, passive_scalar_bcs(sim.θ_bcs))
-                buoyancy_frequency_squared!(c.N2, sim.θ, q, qc; θ₀ = θ₀, g = g, p = c.cloud.p)
-            end
-        end
-    else
-        fill!(c.N2.data, 0)
+    _with_n2_args(c, sim) do a
+        a === nothing ? fill!(c.N2.data, 0) :
+            launch!(Backends.backend(c.N2.data), _n2_body!, interior(mesh(c.N2)), c.N2.data, a...)
+        return nothing
     end
     return c.N2
+end
+
+# `f(a)` with `a` the arguments of the N² point body `Operators._n2_body!`
+# after its output array (`Operators.n2_args`: θ, the humidity of the
+# closure (dry, θ_v with qv, cloudy air with qc), Δz, g, θ₀), or `a =
+# nothing` without buoyancy (N² = 0). Fills the halos the body reads (θ,
+# qv, the condensate's scratch copy). One selection of the variant for the
+# whole-field loop (`_stratification!`) and the rows of the cache-blocked
+# pass (#556); each branch calls `f` with concrete arguments.
+function _with_n2_args(f::F, c, sim) where {F}
+    θ₀ = _θref(c, sim); g = _gref(c, sim)
+    (θ₀ > 0 && g > 0) || return f(nothing)
+    fill_halos!(sim.θ, sim.θ_bcs)
+    m = mesh(sim.θ)
+    q = _qv(c, sim)
+    if q === nothing
+        c.cloud === nothing ||
+            throw(ArgumentError("a condensate field qc needs a humidity (qv, or a moist core)"))
+        return f(n2_args(sim.θ, nothing, θ₀, g, m))
+    end
+    fill_halos!(q, passive_scalar_bcs(sim.θ_bcs))   # qv: not θ's top gradient (#254)
+    c.cloud === nothing && return f(n2_args(sim.θ, q, θ₀, g, m))
+    qc = filled_condensate!(c.cloud, passive_scalar_bcs(sim.θ_bcs))   # cloudy air (#239)
+    return f(n2_args(sim.θ, _Cloudy(q.data, qc.data, c.cloud.p), θ₀, g, m))
 end
 
 # The buoyancy production of a prescribed surface heat flux (the
@@ -719,17 +728,25 @@ function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::Union{Reg
     d = D.data
     b = Backends.backend(d)
     _zero_halos!(d, g)
+    a = _dual_args(bcs, g)
+    # one work item per i-row (in chunks of rows, the row length as weight)
+    launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*g.Nz,), d, u.data, v.data, w.data, a.m, a.bx,
+                     a.ii, a.jj, a.kk, a.fold)
+    return D
+end
+
+# The arguments of the row kernel `_dual_row!` after the velocities: the
+# metrics, the interior box, the interior ranges and the halo fold of
+# `bcs` (the one set of the whole-field loop and of the rows of the
+# cache-blocked TKE pass, #556).
+function _dual_args(bcs, g::Union{RegularGrid,StretchedGrid})
     ii, jj, kk = interior(g)
     bx = _DualBox(first(ii), last(ii), first(jj), last(jj), first(kk), last(kk))
     lox, hix = _images(bcs.west, g.Hx, g.Nx)
     loy, hiy = _images(bcs.south, g.Hy, g.Ny)
     loz, hiz = _images(bcs.bottom, g.Hz, g.Nz)
-    m = _dual_metrics(g)
     fold = (g.Hx, g.Nx, lox, hix, g.Hy, g.Ny, loy, hiy, g.Hz, g.Nz, loz, hiz)
-    # one work item per i-row (in chunks of rows, the row length as weight)
-    launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*g.Nz,), d, u.data, v.data, w.data, m, bx,
-                     ii, jj, kk, fold)
-    return D
+    return (m = _dual_metrics(g), bx = bx, ii = ii, jj = jj, kk = kk, fold = fold)
 end
 
 # zero the halo cells of a storage array (the interior is overwritten): the
@@ -958,22 +975,28 @@ the sum over the pieces is the step):
 5. ``e = 0`` in solids; the first air cell of each column set to
    [`tke_surface_value`](@ref) when `surface` is given (booked).
 
-On the CPU, steps 1 (``ν_t``) to 5 run as one cache-blocked pass, row by
-row, on `Operators.FiniteVolume.blocked_update!` (#554; the footprint in
-[`tke_blocked_lags`](@ref)); ``N^2``, ``D`` and the wall production stay
-separate loops before it. The step core's `loop_fusion` setting
+On the CPU, steps 1 to 5 run as one cache-blocked pass, row by row, on
+`Operators.FiniteVolume.blocked_update!` (#554; the footprint in
+[`tke_blocked_lags`](@ref)), ``N^2`` and ``D`` included (#556). With
+immersed walls attached, ``N^2``, ``ν_t``, ``D`` and the wall production
+run as separate loops before the pass (the wall production corrects
+``D`` and reads ``ν_t`` of every cell). The step core's `loop_fusion` setting
 (`Simulations.set_loop_fusion!`) chooses: `:never` runs every step as
 separate whole-field loops (the reference, which agrees to round-off);
 `:always` refuses a case the pass cannot run (a GPU backend). Which form
 ran is recorded in `Simulations.sweep_report`.
 
-The closure's scratch fields `ν`, `κt`, `tend` and `Pw` are not output:
-read the step's coefficients from `sim.νt` / `sim.κt`
-([`sgs_coefficients!`](@ref)). The separate loops leave this step's values
-in them; the blocked pass does not keep them: it writes ``ν_t``, ``κ_t``
-only on the one-cell boundary shell (and everywhere, with ``P_w``, when
-walls are attached), so their interior keeps the values of an earlier
-call, and `tend` is not written.
+The closure's scratch fields `ν`, `κt`, `N2`, `D`, `tend` and `Pw` are
+not output: read the step's coefficients from `sim.νt` / `sim.κt`
+([`sgs_coefficients!`](@ref)), and ``N^2`` and ``D`` from
+`Operators.buoyancy_frequency_squared!` and [`dual_strain!`](@ref). The
+separate loops leave this step's values in them; the blocked pass does
+not keep them. Without walls it writes ``ν_t``, ``κ_t`` and (with
+buoyancy) ``N^2`` only on the one-cell boundary shell, and only with
+transport (without transport, none of them), and ``D`` not at all; with
+walls attached it writes ``N^2``, ``D``, ``P_w`` and ``ν_t``, ``κ_t``
+everywhere. What it does not write keeps the values of an earlier call,
+and `tend` is not written.
 """
 function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     Δt = T(dt)
