@@ -3520,7 +3520,7 @@ field split at the call site and the ring tuples built explicitly; now
 32 B per call, at most the separate path's (asserted). `_note_rsm!` was
 lost in a refactor and caught by the first `advance_sgs!` test.
 
-**Tests** (`test/reynolds_stress_blocked.jl`, 340 checks): blocked against
+**Tests** (`test/reynolds_stress_blocked.jl`, 340 checks; 354 with the review's cases): blocked against
 separate for WENO-Z5 and centred, with and without a solid mask and
 rotation, at 1–5 slabs, slabs in reverse order, serial and threaded;
 TENO5; no-flux faces; a 6×1×3 column; open faces at halo 2 and 3; the
@@ -3605,6 +3605,48 @@ Berlin 100 m state, `advance_sgs!(::TKEClosure)` at 6 threads, base
 against new, alternating processes: 17.03 / 18.22 → 17.31 / 19.32 ms and
 16.89 / 19.09 → 16.40 / 18.12 ms, unchanged within the noise.
 
+**Review** (independent, before the PR). No defect found in the pass.
+Checked beyond the tests: WENO-Z7 at halo 4 and TENO8 at halo 5 (lag
+hr, hr + 1 edge planes), a moist closure (q_v in N² and in the θ_v
+gradient of the update) and Float32, each against the separate loops at
+1–4 slabs: max |Δτ| = 0 and the statistics agree. WENO-Z7 and the moist
+case are now in the test file. No reader of the scratch the pass leaves
+unwritten (`ν` off the shell, `K2`, `tend`) in src/, test/, validation/,
+examples/ or benchmarks/; the only other user of `c.ν`,
+`initialize_reynolds_stress!`, writes it first. The urban
+`:reynolds_stress` option builds the closure with `transport = false`,
+so no TOML run reaches the pass. The closure is `RegularGrid` only, so
+stretched grids do not arise.
+
+After the review: full suite under the lock, all 119 jobs pass (6492
+checks, 7.8 min at load 8.6; `reynolds_stress_blocked.jl` 354 checks);
+`sgs_validation.jl` 40 pass, 4 broken (the documented `@test_broken`),
+0 fail, with the numbers above unchanged (isotropic RSM −11.4 %,
+rotating 0.064, Coriolis 5.55e-16, ⟨τ33⟩/⟨τ11⟩ 0.763, stratified II
+0.0492).
+
+Re-measured under the lock (interleaved "never" against "always", 11
+rounds of 3 calls, min / median ms; 12 threads at load 1.2, 25 W mean,
+33 W peak, 2.1 GHz; 6 threads at load 4.3, 22 W mean):
+
+| case | 6 threads | 12 threads |
+| :-- | --: | --: |
+| WENO-Z5 | 260 / 289 → 234 / 261 | 176 / 183 → 211 / 229 |
+| centred | 225 / 257 → 188 / 212 | 166 / 170 → 112 / 120 |
+| centred, solid mask | 190 / 212 → 190 / 211 | 155 / 163 → 138 / 141 |
+| WENO-Z5, solid mask | 232 / 243 → 249 / 256 | 180 / 191 → 270 / 342 |
+
+(the masked rows at load 8–10, 23–27 W mean). The 12-thread result that
+the selection rule rests on reproduces (WENO-Z5 +20 %, centred −33 %).
+The rule's centred case with a solid mask, not measured before, is
+faster at 12 threads (−11 %) and level at 6. WENO-Z5 without a mask at
+6 threads was faster with the pass here (−10 % min), where the first
+measurement had it level (−7 % min, median equal); with a mask it was
+slower (+7 % here, +21 % before). The rule keeps the separate loops for
+WENO-Z5 at every thread count; a rule on idle threads (slabs fewer than
+threads) would take the unmasked 6-thread case but also the slower
+masked one, so it is left as built and listed below.
+
 **Open**: the update's 6×6 solve per cell (about 350 ns of thread time)
 is the cost to attack, for example by vectorising the solve across the
 row (structure of arrays over i) instead of one `MMatrix` per cell. The
@@ -3613,7 +3655,9 @@ The one-thread disagreement above is unexplained. In a stepped run the
 pass with WENO-Z5 is not reachable: "always" also asks the step core to
 fuse terms it cannot (buoyancy, surface flux) and refuses. A per-closure
 switch might be better than the selection rule, which rests on one grid
-shape and one machine.
+shape and one machine; the review's measurement adds that WENO-Z5
+without a mask at 6 threads might take the pass (−10 %), which the rule
+does not.
 
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
