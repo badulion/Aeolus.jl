@@ -417,10 +417,11 @@ mirrored stencil.
     g2 = _ipow(one(T) + τ/(b2 + ε), q)
     gs = g0 + g1 + g2
     c  = T(C_T)
+    # the cut-off, branch-free (#557)
 
-    d0 = (g0/gs < c) ? zero(T) : T(1/10)
-    d1 = (g1/gs < c) ? zero(T) : T(6/10)
-    d2 = (g2/gs < c) ? zero(T) : T(3/10)
+    d0 = ifelse(g0/gs < c, zero(T), T(1/10))
+    d1 = ifelse(g1/gs < c, zero(T), T(6/10))
+    d2 = ifelse(g2/gs < c, zero(T), T(3/10))
     return (d0*q0 + d1*q1 + d2*q2)/(d0 + d1 + d2)
 end
 
@@ -481,13 +482,14 @@ on the mirrored stencil `(f_{i-2}, …, f_{i+5})`.
     g5 = _ipow(one(T) + τ/(b5 + ε), q)
     gs = g0 + g1 + g2 + g3 + g4 + g5
     c  = T(C_T)
+    # the cut-off, branch-free (#557)
 
-    d0 = (g0/gs < c) ? zero(T) : T(3/28)
-    d1 = (g1/gs < c) ? zero(T) : T(15/28)
-    d2 = (g2/gs < c) ? zero(T) : T(3/14)
-    d3 = (g3/gs < c) ? zero(T) : T(3/56)
-    d4 = (g4/gs < c) ? zero(T) : T(1/14)
-    d5 = (g5/gs < c) ? zero(T) : T(1/56)
+    d0 = ifelse(g0/gs < c, zero(T), T(3/28))
+    d1 = ifelse(g1/gs < c, zero(T), T(15/28))
+    d2 = ifelse(g2/gs < c, zero(T), T(3/14))
+    d3 = ifelse(g3/gs < c, zero(T), T(3/56))
+    d4 = ifelse(g4/gs < c, zero(T), T(1/14))
+    d5 = ifelse(g5/gs < c, zero(T), T(1/56))
     return (d0*q0 + d1*q1 + d2*q2 + d3*q3 + d4*q4 + d5*q5)/
            (d0 + d1 + d2 + d3 + d4 + d5)
 end
@@ -610,27 +612,58 @@ end
 # Upwinded face value of `d` along each axis. `c` is the cell to the left
 # of the interface (i.e. interface = face index c+1) and `vel` the
 # transporting velocity at that interface.
+#
+# Branch-free (#557): both stencils are gathered and `_upwind_value` picks
+# the upwind one with `ifelse`, so a row loop over these bodies is a
+# straight-line loop body that the compiler vectorises without masked
+# loads. With `if vel >= 0` LLVM did vectorise the row loops, but by
+# if-conversion: the right-biased gather as masked loads and *both*
+# reconstructions evaluated in every lane (for WENO-Z5 two sets of
+# smoothness indicators and weights, five divisions each).
 @inline function _face_x(r, d, c::Int, j::Int, k::Int, vel)
-    if vel >= 0
-        lo, n = stencil_left(r);  return reconstruct_left(r, _gather_x(d, c, j, k, lo, n))
-    else
-        lo, n = stencil_right(r); return reconstruct_right(r, _gather_x(d, c, j, k, lo, n))
-    end
+    lo, n = stencil_left(r);  tl = _gather_x(d, c, j, k, lo, n)
+    lo, n = stencil_right(r); tr = _gather_x(d, c, j, k, lo, n)
+    return _upwind_value(r, vel >= 0, tl, tr)
 end
 @inline function _face_y(r, d, i::Int, c::Int, k::Int, vel)
-    if vel >= 0
-        lo, n = stencil_left(r);  return reconstruct_left(r, _gather_y(d, i, c, k, lo, n))
-    else
-        lo, n = stencil_right(r); return reconstruct_right(r, _gather_y(d, i, c, k, lo, n))
-    end
+    lo, n = stencil_left(r);  tl = _gather_y(d, i, c, k, lo, n)
+    lo, n = stencil_right(r); tr = _gather_y(d, i, c, k, lo, n)
+    return _upwind_value(r, vel >= 0, tl, tr)
 end
 @inline function _face_z(r, d, i::Int, j::Int, c::Int, vel)
-    if vel >= 0
-        lo, n = stencil_left(r);  return reconstruct_left(r, _gather_z(d, i, j, c, lo, n))
-    else
-        lo, n = stencil_right(r); return reconstruct_right(r, _gather_z(d, i, j, c, lo, n))
-    end
+    lo, n = stencil_left(r);  tl = _gather_z(d, i, j, c, lo, n)
+    lo, n = stencil_right(r); tr = _gather_z(d, i, j, c, lo, n)
+    return _upwind_value(r, vel >= 0, tl, tr)
 end
+
+"""
+    mirror_symmetric(r::AbstractReconstruction) -> Bool
+
+Whether `reconstruct_right(r, t)` is `reconstruct_left(r, reverse(t))`
+for every stencil `t`, i.e. the right-biased reconstruction is the
+left-biased one applied to the mirrored stencil (the definition of every
+upwind-biased scheme of this module: WENO-Z, TENO, WENO-JS, centred,
+first-order upwind). The face bodies then select the *inputs* of one
+reconstruction branch-free (`ifelse` per stencil value) instead of
+evaluating both. A reconstruction for which it is false gets both
+evaluated and the upwind one selected, also branch-free.
+"""
+mirror_symmetric(::AbstractReconstruction) = false
+mirror_symmetric(::Union{WENOZ, TENO, WENOJS, Centered2}) = true
+
+# The upwind face value from the left- and right-biased stencils `tl`,
+# `tr` (`up`: the face velocity is ≥ 0), as `up ? reconstruct_left(r, tl) :
+# reconstruct_right(r, tr)` with no branch. For a mirror-symmetric `r` the
+# reconstruction receives the same values in the same order as with the
+# branch, so the face value is bit-identical to it.
+@inline _upwind_value(r, up::Bool, tl, tr) =
+    mirror_symmetric(r) ? reconstruct_left(r, _select(up, tl, reverse(tr))) :
+                          ifelse(up, reconstruct_left(r, tl), reconstruct_right(r, tr))
+# centred: the two stencils are the same cells; the mean of (a, b) and of
+# (b, a) is the same number (IEEE addition commutes), so no selection
+@inline _upwind_value(r::Centered2, up::Bool, tl, tr) = reconstruct_left(r, tl)
+@inline _select(up::Bool, a::NTuple{N}, b::NTuple{N}) where {N} =
+    ntuple(m -> ifelse(up, a[m], b[m]), Val(N))
 
 function _check_halo(r::AbstractReconstruction, g::Union{RegularGrid,StretchedGrid})
     H = required_halo(r)
@@ -988,7 +1021,9 @@ end
         div_lo = (lxe - lxw)*idx + (lyn - lys)*idy + (lzt - lzb)*idz
         Q = max(ϕd[i,j,k] - Δt*div_lo, z)
 
-        Rd[i,j,k] = Pm > z ? min(one(T), Q/Pm) : one(T)
+        # (branch-free, #557: the ratio Q/Pm is evaluated in every cell and
+        # discarded where nothing flows out, Pm = 0)
+        Rd[i,j,k] = ifelse(Pm > z, min(one(T), Q/Pm), one(T))
     end
     return nothing
 end
@@ -1727,6 +1762,7 @@ struct _UpwindFirst <: AbstractReconstruction end
 @inline stencil_right(::_UpwindFirst) = (Val(1), Val(1))
 @inline reconstruct_left(::_UpwindFirst, t::NTuple{1})  = t[1]
 @inline reconstruct_right(::_UpwindFirst, t::NTuple{1}) = t[1]
+mirror_symmetric(::_UpwindFirst) = true
 required_halo(::_UpwindFirst) = 1
 scheme_name(::_UpwindFirst) = :upwind
 
