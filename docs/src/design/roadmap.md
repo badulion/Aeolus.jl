@@ -3454,6 +3454,167 @@ the rings); the Reynolds-stress closure (`_rsm_update_plane`) could use
 the same driver (plan step 4) and the urban `TracerSGSDiffusion` loops
 (plan step 3).
 
+#### The Reynolds-stress update in one cache-blocked pass (#560)
+
+Plan step 4 of #554 (branch `issue/560-rsc-blocked`, on
+`issue/554-tke-blocked`): `advance_sgs!(::ReynoldsStressClosure)` with
+transport through `FiniteVolume.blocked_update!`, built from the TKE
+pass's pieces.
+
+**Profile first** (200×200×60, smooth random stresses, 6 threads, after
+the allocation fix below): the whole advance about 250 ms with WENO-Z5
+transport (211 ms centred); the source update (the 6×6 backward-Euler
+solve with sub-steps and the realizability projection) 133–141 ms of it,
+about 350 ns of thread time per cell; transport about 105 ms with WENO-Z5
+(diagonals 60, off-diagonals 44), 62 ms centred. So the update is limited
+by computation, not by memory traffic, and a single pass can save at most
+the transport's traffic, not the update's arithmetic. Serial profile of
+the blocked pass: the update row 61 %, the plain advection of the
+off-diagonals 19 %, the flux pipeline of the diagonals 10 %.
+
+**What was built**
+
+- **No heap allocation in the source update** (a bug the allocation test
+  caught, in the existing code): `_solve!` was not inlined, so its
+  `MMatrix` escaped (368 B per cell), and the bounds-error path of
+  `_jacobi3` let its matrix escape (192 B per projected cell). Now
+  `@inline` and `@inbounds`; τ bit-identical.
+- **The TKE pass generalised to several scalars** (one source of truth):
+  the flux-limited pipeline is per scalar (`_FluxRings`, `_flux_front!`,
+  `_limit_xz!`, `_tendency_row!`, `_diffusion_row!`), the ring slots carry
+  a field index, and ν comes from a body argument (`νbody`, `νargs`), so
+  the TKE pass and the Reynolds-stress pass share every flux and ring
+  function; `_shell_ratio!` takes the scalar. The TKE tests are unchanged
+  and pass.
+- **The Reynolds-stress pass** (`src/prognostic_sgs/reynolds_stress_blocked.jl`):
+  per row, ν (one row ahead), the three diagonals through the TKE flux
+  pipeline (flux-limited, three rings each), the three off-diagonals by
+  plain advection (`_b_recon!` for WENO-JS5/Z5/Z7/TENO5/TENO8,
+  `_b_advect_centered!` for centred) and diffusion, then the source
+  update row (`_rsm_update_row`, the same function the separate path
+  runs) writing all six stresses to the ring; budget sums per row into
+  `rowsums`, summed after the pass. `loop_fusion = "never"` keeps the
+  separate loops (`_rsm_advance_separate!`) as the reference; `:weno5`
+  (the old WENO5 form without a row reconstruction) falls back with the
+  reason in `sweep_report` ("reynolds_stress_not_blocked"), `"always"`
+  then throws. Without transport the update is one row loop already and
+  is not counted as a fallback.
+- **The reference sums** now come from the same row function: the
+  separate update runs `row_map!` with `_rsm_update_row` and sums the rows
+  (`_sum_rows`) instead of the plane kernel `_rsm_update_plane`, so both
+  paths reduce in the same order.
+- **Lags** (`rsm_blocked_lags`): the TKE pass's lag (hr − 2) is wrong
+  here, because the plain advection of the off-diagonals reads the *old*
+  stresses hr rows back; the lag is max(1, hr − 2, hr) = hr: (3, 4) for
+  WENO-Z5, (1, 2) centred. The test runs the pass with the TKE lag
+  (`lags = (1, 4)`) and asserts that it disagrees (by more than 1e-6), so
+  the footprint argument is checked, not assumed.
+- `sweep_report` counts `reynolds_stress_update_blocked` and the reason
+  for a fallback; the `loop_fusion` docs name the closure.
+
+**Bugs the tests caught** (in the new code): the blocked pass allocated
+9 kB per call through a dynamic call (the reconstruction looked up by
+name was not inferable, `q` was a `Union`, a `Core.Box` in the ring
+constructor). Fixed by the closure's stored reconstruction, the moisture
+field split at the call site and the ring tuples built explicitly; now
+32 B per call, at most the separate path's (asserted). `_note_rsm!` was
+lost in a refactor and caught by the first `advance_sgs!` test.
+
+**Tests** (`test/reynolds_stress_blocked.jl`, 340 checks): blocked against
+separate for WENO-Z5 and centred, with and without a solid mask and
+rotation, at 1–5 slabs, slabs in reverse order, serial and threaded;
+TENO5; no-flux faces; a 6×1×3 column; open faces at halo 2 and 3; the
+selection under "if_possible" (below). A `-t 4` subprocess runs the slabs
+concurrently (16 runs) and three `step!`s with "if_possible" against
+"never" on a threaded launch, centred, with a mask (τ, νt, κt within 1e-12
+of their maxima; measured 0). τ within 4 eps of max |τ|
+(round-off of the reordered flux sums; measured 0 in every case of the
+benchmark), budget sums within rtol 1e-12 (row sums added in another
+order), clip counts exactly (integers; 8 clipped cells in the main case,
+so the clipping branch is exercised). Full suite under the lock, before
+the selection rule: all 119 jobs pass (6479 checks); after it,
+`reynolds_stress_blocked.jl`, `fused_sweep.jl`, `sgs_closure.jl` pass.
+
+**Expectation that was wrong** (the test's): the three-step test first
+ran `step!` with "if_possible" in the one-thread gate. With the selection
+rule that is the separate loops on both sides, and "always" refuses the
+step core's unfused terms (buoyancy, surface flux), so it moved to the
+threaded subprocess with centred advection.
+
+**Validation** (`sgs_validation.jl`): 40 pass, 4 broken (the documented
+`@test_broken`), 0 fail. Isotropic decay: RSM −11.4 %; rotating: RSM
+0.064 against Smagorinsky 0.119 and TKE 0.225; Coriolis
+max |Δ tr τ| = 5.55e-16; stratified ⟨τ33⟩/⟨τ11⟩ DNS 0.701, RSM 0.763, TKE
+1.002; stratified II DNS 0.2694, RSM 0.0492 — the same as before the
+change.
+
+**Measured** (200×200×60, smooth random stresses, one `advance_sgs!`
+plus the copy that resets τ (7–55 ms, timed alone); min / median ms; under the benchmark lock with package power logged; a first run,
+during the user's jobs at load 16–23, was discarded: its medians varied by
+up to 2× between neighbouring calls). τ is the same in every comparison
+(max |Δτ| = 0).
+
+The blocked pass against the separate loops, `loop_fusion` "always"
+against "never", interleaved in one process (15 rounds of 3 calls, 5 at
+one thread; load 1.7–4.7; 19–26 W mean, 30–31 W peak, 1.7–2.2 GHz):
+
+| case | 1 thread | 6 threads | 12 threads |
+| :-- | --: | --: | --: |
+| WENO-Z5 | 1063 / 1249 → 1171 / 1406 | 259 / 287 → 241 / 287 | 169 / 180 → 212 / 238 |
+| WENO-Z5, solid mask | 865 / 953 → 1076 / 1240 | 256 / 294 → 311 / 372 | 169 / 188 → 267 / 304 |
+| centred | 691 / 708 → 734 / 761 | 200 / 233 → 196 / 242 | 155 / 171 → 110 / 118 |
+
+**The plan does not pay as planned.** The update's arithmetic, not memory
+traffic, bounds it, so one pass removes little. At one thread the pass
+is 6–24 % slower (not traced further; the serial profile puts 61 % of
+the pass in the update row and 19 % in the per-row reconstruction of the
+off-diagonals).
+With WENO-Z5 at 12 threads it is 25–58 % slower: 60 levels allow
+`nk ÷ 2lz` = 7 slabs of 8 planes, so 5 threads idle and every plane is an
+edge plane (the slab cap of #554). It is level at 6 threads, and faster
+only with centred advection on several threads (lz = 2, 15 slabs; 12
+threads −29 %). So `loop_fusion = "if_possible"` (the default) takes the
+pass only there (`_rsm_blocked_slower`): centred advection on a threaded
+launch. WENO-Z5 and serial launches keep the separate loops, and the
+report gives the reason. `"always"` runs the pass wherever it can. This
+is a deviation from the plan, which made the pass the default.
+
+The branch against its base (`issue/554-tke-blocked`, 0dc066a0), the
+default path in separate processes alternating base, new, base, new
+(21 calls, 7 at one thread; load 1.3–6.8). The 1-thread "new" runs still
+had the pass as the default; from 6 threads on they ran the selection
+above, which the measurement picked up while it ran:
+
+| case | 1 thread | 6 threads | 12 threads |
+| :-- | --: | --: | --: |
+| WENO-Z5 | 924 / 944 → 877 / 881 (pass) | 283 / 293 → 249 / 263 | 221 / 239 → 162 / 178 |
+| centred | 706 / 715 → 637 / 658 (pass) | 254 / 261 → 170 / 175 (pass) | 204 / 224 → 98 / 114 (pass) |
+| no transport | 604 / 606 → 496 / 500 | 192 / 202 → 132 / 139 | 139 / 154 → 75 / 84 |
+
+(base pair 1 shown, the second agrees within 4 %). Most of the gain is
+the removed allocation (no transport, which runs only the update: −18 %,
+−31 %, −46 %). The new code ran at a lower package power at 6 and 12
+threads (19.4–20.2 W mean against 22.5–24.3 W), so the gain is not
+bought with clock. One inconsistency is left open: at one thread the pass
+in its own process (877 ms WENO-Z5) beat the base's separate loops
+(924 ms), while in the interleaved process it lost to the new separate
+loops (1171 against 1063 ms).
+
+TKE regression check (the TKE pass now shares the generalised pipeline):
+Berlin 100 m state, `advance_sgs!(::TKEClosure)` at 6 threads, base
+against new, alternating processes: 17.03 / 18.22 → 17.31 / 19.32 ms and
+16.89 / 19.09 → 16.40 / 18.12 ms, unchanged within the noise.
+
+**Open**: the update's 6×6 solve per cell (about 350 ns of thread time)
+is the cost to attack, for example by vectorising the solve across the
+row (structure of arrays over i) instead of one `MMatrix` per cell. The
+slab cap (j-blocks with edge rows in j) would let WENO-Z5 use 12 threads.
+The one-thread disagreement above is unexplained. In a stepped run the
+pass with WENO-Z5 is not reachable: "always" also asks the step core to
+fuse terms it cannot (buoyancy, surface flux) and refuses. A per-closure
+switch might be better than the selection rule, which rests on one grid
+shape and one machine.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall
