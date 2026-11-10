@@ -187,6 +187,74 @@ end
                              st.ustar, st.t_surf, st.sw_down, st.lw_down, st.sfc_mean, st.wθ, st.wq))
 end
 
+@testset "TiledUrbanSurface: the surface step against a column-by-column reference (#537)" begin
+    # step_tiles! (lazy forcings, the mosaic's tile fluxes filled in a loop,
+    # the dynamic column launch) against the plain construction: each column's air as a vector
+    # of forcings by hand, step_parent_column!, the canopy sources and u* by
+    # hand. The same arithmetic per column; the area sums are folded in
+    # another order (a threaded launch folds the column partials), so they
+    # agree to round-off; the per-column fields to the last bits.
+    mk() = (sim = p_state!(p_core(:boussinesq)); d0 = Domain(sim; validate = false);
+            (sim, PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim; soil = true), d0)))
+    (sa, ta), (sb, tb) = mk(), mk()
+    m = sa.mesh
+    for s in (sa, sb)                                   # an uneven air: every column its own forcing
+        for k in 1:m.Nz, j in 1:m.Ny, i in 1:m.Nx
+            I, J, K = m.Hx + i, m.Hy + j, m.Hz + k
+            s.θ.data[I, J, K] = 299.0 + 0.3i - 0.2j + 0.05k
+            s.u.data[I, J, K] = 2.0 + 0.5i + 0.25j
+            s.v.data[I, J, K] = -1.0 + 0.3j
+            s.qv.data[I, J, K] = 0.006 + 0.0003i
+        end
+    end
+    P = 60.0
+    for _ in 1:3                                        # three surface steps
+        PU.step_tiles!(ta, sa, P)
+        fill_halos!(sb.u, sb.bcs); fill_halos!(sb.v, sb.bcs)
+        ref, ps = tb.ref, tb.surface
+        zf = PU._face_heights(m)
+        θsrc, qsrc, drag = zero(tb.θsrc), zero(tb.qsrc), zero(tb.drag)
+        sums = zeros(5)
+        for J in 1:m.Ny, I in 1:m.Nx
+            col = ps.columns[I, J]
+            air = [Aeolus.SurfaceExchange.SurfaceForcing(; sw_down = tb.sw_down[], lw_down = tb.lw_down[],
+                                  T_air = sb.θ.data[m.Hx+I, m.Hy+J, m.Hz+k] * ref.π̄[k],
+                                  q_air = max(sb.qv.data[m.Hx+I, m.Hy+J, m.Hz+k], 0.0),
+                                  U = max(hypot(0.5 * (sb.u.data[m.Hx+I, m.Hy+J, m.Hz+k] + sb.u.data[m.Hx+I+1, m.Hy+J, m.Hz+k]),
+                                                0.5 * (sb.v.data[m.Hx+I, m.Hy+J, m.Hz+k] + sb.v.data[m.Hx+I, m.Hy+J+1, m.Hz+k])),
+                                          tb.U_min),
+                                  p = ref.p̄[k], z_ref = 10.0) for k in 1:maximum(col.ktile)]
+            agg = PU.step_parent_column!(ps, col, air, P; U_min = tb.U_min)
+            sums .+= (agg.Rn, agg.H, agg.LE, agg.G, agg.E)
+            tf, fr = last_tile_fluxes(col.surface), mosaic_fractions(col.surface)
+            for n in eachindex(tf)
+                nl = max(1, col.ktile[n] - 1)
+                for k in 1:min(nl, size(θsrc, 3))
+                    θsrc[I, J, k] += fr[n] * tf[n].H / (zf[nl+1] * ref.ρ̄[k] * ref.cp * ref.π̄[k])
+                    qsrc[I, J, k] += fr[n] * tf[n].E / (zf[nl+1] * ref.ρ̄[k])
+                    drag[I, J, k] += fr[n] * tf[n].τ / (zf[nl+1] * ref.ρ̄[k])
+                end
+            end
+        end
+        # the same terms in the same order: agreement to the last bits (a tolerance, not ==: computed values)
+        @test ta.θsrc ≈ θsrc rtol = 1e-14
+        @test ta.qsrc ≈ qsrc rtol = 1e-14
+        @test ta.drag ≈ drag rtol = 1e-14
+        ustar(col) = sqrt(max(sum(mosaic_fractions(col.surface) .* getproperty.(last_tile_fluxes(col.surface), :τ)), 0.0) /
+                          tb.ref.ρ̄[1])
+        @test all(I -> isapprox(ta.ustar[I], ustar(tb.surface.columns[I]); rtol = 1e-14), CartesianIndices(ta.ustar))
+        for (n, key) in enumerate((:Rn, :H, :LE, :G, :E))
+            tb.sfc_mean[key] += sums[n] / (m.Nx * m.Ny) * P
+            @test ta.sfc_mean[key] ≈ tb.sfc_mean[key] rtol = 1e-12           # the fold order only
+        end
+    end
+    @test any(!=(0), ta.θsrc) && length(unique(ta.ustar)) > 1               # an uneven, nonzero answer
+    # every tile in the same state
+    tiles(t) = [x for col in t.surface.columns for x in col.surface.tiles]
+    Tsfc = Aeolus.SurfaceExchange.surface_temperature
+    @test all(((a, b),) -> isapprox(Tsfc(a), Tsfc(b); rtol = 1e-14), zip(tiles(ta), tiles(tb)))
+end
+
 @testset "TiledUrbanSurface temperatures: area weighting, the 2 m Monin–Obukhov value and interpolation (#536, $core)" for
         core in (:boussinesq, :anelastic)
     SE = Aeolus.SurfaceExchange

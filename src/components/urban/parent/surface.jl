@@ -474,8 +474,28 @@ indexed by parent level. Tile `i` takes the state of its level
 `col.ktile[i]`, with its reference height measured from its own
 displacement, ``z_{ref,i} = z_{k_i} - d_i`` (`z_ref` of `air` is ignored).
 """
-function parent_tile_forcings(ps::ParentSurface, col::ParentColumn, air)
-    return [_at_height(_air_at(air, k), ps.z_centres[k] - di) for (k, di) in zip(col.ktile, col.d)]
+parent_tile_forcings(ps::ParentSurface, col::ParentColumn, air) = collect(TileForcings(ps, col, air))
+
+# The forcings of a column's tiles as a lazy vector: tile `n`'s is made
+# when it is read, so a surface step builds none (#537). Its elements are
+# those of `parent_tile_forcings`, which collects it.
+struct TileForcings{T,A} <: AbstractVector{SurfaceForcing{T}}
+    z::Vector{Float64}
+    ktile::Vector{Int}
+    d::Vector{Float64}
+    air::A
+end
+# (the heights are Float64, so are the forcings made with them)
+TileForcings(ps::ParentSurface, col::ParentColumn, air) =
+    TileForcings{promote_type(_forcing_eltype(air), Float64),typeof(air)}(ps.z_centres, col.ktile, col.d, air)
+_forcing_eltype(::SurfaceForcing{T}) where {T} = T
+_forcing_eltype(::AbstractVector{SurfaceForcing{T}}) where {T} = T
+_forcing_eltype(a::AbstractVector) = _forcing_eltype(first(a))
+Base.size(t::TileForcings) = (length(t.ktile),)
+Base.IndexStyle(::Type{<:TileForcings}) = IndexLinear()
+Base.@propagate_inbounds function Base.getindex(t::TileForcings, n::Int)
+    k = t.ktile[n]
+    return _at_height(_air_at(t.air, k), t.z[k] - t.d[n])
 end
 
 _air_at(f::SurfaceForcing, k) = f
@@ -497,7 +517,7 @@ fraction-weighted displacement), and its tiles at the blending height.
 """
 function step_parent_column!(ps::ParentSurface, col::ParentColumn{<:SurfaceMosaic},
                              air, dt::Real; kwargs...)
-    return step_surface!(col.surface, parent_tile_forcings(ps, col, air), dt; kwargs...)
+    return step_surface!(col.surface, TileForcings(ps, col, air), dt; kwargs...)
 end
 function step_parent_column!(ps::ParentSurface, col::ParentColumn{<:BlendedMosaic},
                              air, dt::Real; kwargs...)
