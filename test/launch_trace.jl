@@ -109,7 +109,9 @@ const BT = Aeolus.Backends
         @test parse(Float64, kv["spin_busy_rest"]) < 0.005
         @test parse(Float64, kv["spin_idle"]) >= 3 * 0.05 * 0.95
         @test parse(Float64, kv["spin_wall"]) >= 0.05
-        @test 2 <= parse(Int, kv["spin_threads_used"]) <= 4 && kv["spin_record_ok"] == "true"
+        # (1 to 4 threads: only work item 1 has work, so the scheduler may run
+        # the three empty ones on any thread, also all on one)
+        @test 1 <= parse(Int, kv["spin_threads_used"]) <= 4 && kv["spin_record_ok"] == "true"
         # 3. nesting: four inner launches (depth ≥ 1) end before the outer (depth 0)
         @test kv["nest_count"] == "5"
         @test count(==("0"), split(kv["nest_depths"], ",")) == 1 && endswith(kv["nest_depths"], ",0")
