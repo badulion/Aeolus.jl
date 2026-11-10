@@ -37,8 +37,10 @@ include(joinpath(@__DIR__, "support", "rsc_blocked_cases.jl"))
             @allocated RSB._rsm_update!(c, sim, 0.4)
         end
     end
-    @test al[1] == al[2]
-    @test al[2] < 2048
+    # bench/only-D (#566): E6 (ea8c3fcb) is reverted in this build on
+    # purpose, so the per-cell allocation it removed is back
+    @test_broken al[1] == al[2]
+    @test_broken al[2] < 2048
 end
 
 @testset "Reynolds-stress update as one cache-blocked pass (#560)" begin
