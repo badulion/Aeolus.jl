@@ -61,3 +61,19 @@ Buildings below 8 m are dropped. The table gives mean λp 0.144, and the tallest
 - **`aeolusprep dynamic --from-era5` refuses a tiled domain alone.** `run_kind` returns `:tiles` and the command accepts only `:model`. `dynamic.jl` makes the same calls without that check.
 - **Start-up adjustment.** The smooth ERA5 inflow meets the perturbed interior. max |w| peaks at about 7 m/s about 4 min in, starting at the inflow faces, and is 3.5 m/s by 10 min, when rim and interior are alike (rms w 0.27 and 0.29 m s⁻¹). The first ~30 min are a spin-up and belong outside any analysis.
 - **Not tested beyond 10 min of model time.** The full 24 h, through the day's convective boundary layer, has not been run.
+
+## Timing runs (HPC benchmark #566)
+
+For timing, output, checkpoints and checks are off and the step count is fixed:
+
+```bash
+julia --project=env -t 72 -m Aeolus run berlin_100m_20250824.toml \
+    --set 'time.duration="none"' --set time.nsteps=5 \
+    --set 'output.variables=[]' --set checkpoint.every_seconds=inf
+```
+
+`[checks]` cannot be removed with `--set` (a table entry cannot be deleted); its
+one check (`finite`) runs once at the end of the run, not per step, so it does
+not touch the step time. A driver that builds the simulation from the config
+drops the `checks` table from the parsed TOML instead.
+The 50 m case (`../berlin_50m/`) shares this environment and the downloaded data.
