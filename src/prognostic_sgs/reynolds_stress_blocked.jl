@@ -182,6 +182,24 @@ function _rsm_blocked_blocker(c::ReynoldsStressClosure, sim)
     return nothing
 end
 
+# Whether `loop_fusion = "if_possible"` takes the blocked pass (nothing) or
+# keeps the separate loops (the reason). Measured on 200×200×60 (#560, see
+# the roadmap): the update is limited by its arithmetic (the 6×6 solve), so
+# one pass saves little traffic; it was faster only with centred advection
+# on several threads (12 threads 110 against 155 ms), level at 6 threads,
+# and slower at one thread (+6 % centred, +10–24 % WENO-Z5) and with
+# WENO-Z5 at 12 threads (+25 %, +58 % with a mask: 60 levels give
+# nk ÷ 2lz = 7 slabs, so 5 threads idle). `"always"` still runs it.
+function _rsm_blocked_slower(c::ReynoldsStressClosure, sim)
+    g = mesh(c.τ[1])
+    ii, jj, kk = interior(g)
+    serial = Backends.runs_serially(Backends.backend(c.τ[1].data), length(ii) * length(jj) * length(kk))
+    c.advection === :centered && !serial && return nothing
+    return "the separate loops measured as fast or faster here (#560: the blocked " *
+           "Reynolds-stress update pays only with centred advection on several threads); " *
+           "loop_fusion = \"always\" runs it"
+end
+
 # The scratch of the blocked pass (driver buffers, rings, the second and
 # third ratio fields), kept in the closure.
 struct _RSCBlockedScratch{B<:SweepBuffers, R<:_RSCRings, F<:Field}

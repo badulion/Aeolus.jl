@@ -451,7 +451,14 @@ off-diagonals reads the stresses ``h_r`` rows back; the slabs keep
 ``h_r + 1`` edge planes (`rsm_blocked_lags`). Every value is computed by
 the point body of the separate loop: the stresses and the budget sums
 agree with the separate loops to round-off (measured identical).
-`[timestep] loop_fusion = "never"` runs the separate loops; `results.toml`
+The pass pays little here: the update is limited by its arithmetic (the
+6×6 solve, about 350 ns of thread time per cell), not by memory traffic.
+Measured on 200×200×60 it was faster only with centred advection on
+several threads (12 threads: 110 against 155 ms), and slower at one
+thread and with WENO-Z5 at 12 threads (60 levels allow 7 slabs of
+``2(h_r+1)`` planes). So `loop_fusion = "if_possible"` (the default) takes
+it only with centred advection on several threads, `"always"` wherever it
+can run, and `"never"` runs the separate loops; `results.toml`
 (`[loop_fusion]`, `reynolds_stress_update_blocked`) says which ran.
 Without transport (the urban `:reynolds_stress` option, whose stresses
 the `:transport` stage moves) the update is one pointwise pass already.

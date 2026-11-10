@@ -131,8 +131,9 @@ end
     g = RegularGrid(; size = (16, 12, 16), extent = (160.0, 120.0, 160.0), halo = (3, 3, 3))
     sim, c = rsc_case(g; surface = true, mask = true)
     τ0 = map(f -> copy(f.data), c.τ)
-    # the default (if_possible) runs the blocked pass, "never" the separate
-    # loops; the surface value follows either
+    # "always" runs the blocked pass, "never" the separate loops; the
+    # surface value follows either
+    Aeolus.Simulations.set_loop_fusion!(sim, :always)
     τb, sb = rsc_run!(advance_sgs!, c, sim, τ0, 0.4)
     Aeolus.Simulations.set_loop_fusion!(sim, :never)
     τs, ss = rsc_run!(advance_sgs!, c, sim, τ0, 0.4)
@@ -141,6 +142,20 @@ end
     @test ss.surface_energy != 0
     r = Aeolus.Simulations.sweep_report(sim)
     @test r["reynolds_stress_update_blocked"] == "some" && !haskey(r, "reynolds_stress_not_blocked")
+    # "if_possible" (the default) takes the pass only where it was measured
+    # faster: centred advection on several threads (#560). WENO-Z5, or one
+    # thread: the separate loops, with the reason in the report (the
+    # threaded centred case is checked in the -t 4 subprocess below)
+    simi, ci = rsc_case(g)
+    @test Aeolus.Simulations.loop_fusion(simi) === :if_possible
+    advance_sgs!(ci, simi, 0.4)
+    ri = Aeolus.Simulations.sweep_report(simi)
+    @test ri["reynolds_stress_update_blocked"] == "none" && occursin("#560", ri["reynolds_stress_not_blocked"])
+    g2 = RegularGrid(; size = (16, 12, 16), extent = (160.0, 120.0, 160.0), halo = (2, 2, 2))
+    simc, cc = rsc_case(g2; advection = :centered)
+    with_backend(CPUBackend(serial = true)) do
+        @test RSB._rsm_blocked_slower(cc, simc) !== nothing
+    end
     # :weno5 has no row form: the separate loops under if_possible (with the
     # reason in the report), an error under always
     sim5, c5 = rsc_case(g; advection = :weno5)
@@ -171,40 +186,21 @@ end
     end
 end
 
-@testset "Reynolds-stress blocked pass: three steps, blocked and separate (#560)" begin
-    # Two identical runs of three steps, blocked and separate: the stresses
-    # and the step's νt, κt agree within 1e-12 of their maxima (each update
-    # is the same bits; the flow then evolves through the same arithmetic,
-    # so only round-off of a different summation order could separate them)
-    g = RegularGrid(; size = (12, 10, 16), extent = (120.0, 100.0, 160.0), halo = (3, 3, 3))
-    runs = map((:if_possible, :never)) do setting
-        sim, c = rsc_case(g; mask = true)
-        Aeolus.Simulations.set_loop_fusion!(sim, setting)
-        for _ in 1:3
-            step!(sim, 0.05; sgs = c)
-        end
-        (τ = map(f -> copy(interior_view(f)), c.τ), νt = copy(interior_view(sim.νt)),
-         κt = copy(interior_view(sim.κt)), rep = Aeolus.Simulations.sweep_report(sim)["reynolds_stress_update_blocked"])
-    end
-    b, s = runs
-    @test b.rep == "all" && s.rep == "none"
-    @test rsc_diff(b.τ, s.τ) <= 1e-12
-    for f in (:νt, :κt)
-        x, y = getfield(b, f), getfield(s, f)
-        @test maximum(y) > 0
-        @test maximum(abs.(x .- y)) <= 1e-12 * maximum(abs, y)
-    end
-end
-
 # The slabs of the pass run concurrently only with more than one thread;
 # the test gate runs each file at one thread. So the concurrent case runs
-# here in a -t 4 subprocess (skipped when this process already has 4
-# threads, where the main set ran them concurrently): WENO-Z5 and centred,
+# here in a -t 4 subprocess: WENO-Z5 and centred,
 # with the solid mask, at 2 to 5 slabs, against the separate loops (the
-# stresses within 4 eps of the largest, the statistics as above).
+# stresses within 4 eps of the largest, the statistics as above). Also
+# here, because "if_possible" takes the pass only on a threaded launch with
+# centred advection (and "always" refuses the step core's unfused terms):
+# the selection, and three `step!`s with "if_possible" against "never",
+# whose stresses and νt, κt agree within 1e-12 of their maxima (each update
+# agrees to round-off; the flow then evolves through the same arithmetic,
+# so only round-off of a different summation order can separate them).
 const _RSB_THREADED = """
 using Aeolus
 using Aeolus.Backends: CPUBackend, with_backend
+using Aeolus.Fields: interior_view
 const RSB = Aeolus.PrognosticSGS
 include($(repr(joinpath(@__DIR__, "support", "rsc_blocked_cases.jl"))))
 n = (14, 10, 40); worst = 0.0; stats_ok = true; runs = 0
@@ -223,26 +219,48 @@ for (h, adv) in ((2, :centered), (3, :weno_z5)), solid in (false, true)
         global runs += 1
     end
 end
-print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok)
+# the selection under if_possible: threaded centred blocked, WENO-Z5 not
+sel = with_backend(CPUBackend(threshold = 0)) do
+    g = RegularGrid(; size = n, extent = (140.0, 100.0, 200.0), halo = (3, 3, 3))
+    RSB._rsm_blocked_slower(rsc_case(g; advection = :centered)[2], nothing) === nothing &&
+        RSB._rsm_blocked_slower(rsc_case(g)[2], nothing) !== nothing
+end
+steps = with_backend(CPUBackend(threshold = 0)) do
+    g = RegularGrid(; size = (12, 10, 16), extent = (120.0, 100.0, 160.0), halo = (2, 2, 2))
+    map((:if_possible, :never)) do setting
+        sim, c = rsc_case(g; advection = :centered, mask = true)
+        Aeolus.Simulations.set_loop_fusion!(sim, setting)
+        for _ in 1:3
+            step!(sim, 0.05; sgs = c)
+        end
+        (τ = map(f -> copy(interior_view(f)), c.τ), νt = copy(interior_view(sim.νt)),
+         κt = copy(interior_view(sim.κt)), rep = Aeolus.Simulations.sweep_report(sim)["reynolds_stress_update_blocked"])
+    end
+end
+sb, ss = steps
+rel(x, y) = maximum(abs.(x .- y)) / maximum(abs, y)
+steps_ok = sb.rep == "all" && ss.rep == "none" && rsc_diff(sb.τ, ss.τ) <= 1e-12 &&
+           maximum(ss.νt) > 0 && maximum(ss.κt) > 0 && rel(sb.νt, ss.νt) <= 1e-12 && rel(sb.κt, ss.κt) <= 1e-12
+print("threads ", Threads.nthreads(), " runs ", runs, " worst ", worst, " stats ", stats_ok, " select ", sel,
+      " steps ", steps_ok, " (", sb.rep, "/", ss.rep, " dτ ", rsc_diff(sb.τ, ss.τ), " dνt ", rel(sb.νt, ss.νt), ")")
 """
 
 @testset "Reynolds-stress blocked pass: slabs run concurrently, -t 4 (#560)" begin
-    if Threads.nthreads() >= 4
-        @test true            # the main set above ran the slabs concurrently
-    else
-        project = dirname(Base.active_project())
-        cmd = `$(Base.julia_cmd()) --startup-file=no -t 4 --project=$project -e $_RSB_THREADED`
-        out = IOBuffer(); err = IOBuffer()
-        p = run(pipeline(ignorestatus(cmd); stdout = out, stderr = err))
-        msg = String(take!(out))
-        success(p) || @info "reynolds_stress_blocked.jl: the -t 4 subprocess failed" String(take!(err))
-        @test success(p)
-        m = match(r"threads (\d+) runs (\d+) worst ([0-9.eE+-]+) stats (true|false)", msg)
-        @test m !== nothing
-        if m !== nothing
-            @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 10
-            @test parse(Float64, m[3]) <= 4eps()
-            @test m[4] == "true"
-        end
+    project = dirname(Base.active_project())
+    cmd = `$(Base.julia_cmd()) --startup-file=no -t 4 --project=$project -e $_RSB_THREADED`
+    out = IOBuffer(); err = IOBuffer()
+    p = run(pipeline(ignorestatus(cmd); stdout = out, stderr = err))
+    msg = String(take!(out))
+    success(p) || @info "reynolds_stress_blocked.jl: the -t 4 subprocess failed" String(take!(err))
+    @test success(p)
+    m = match(r"threads (\d+) runs (\d+) worst ([0-9.eE+-]+) stats (true|false) select (true|false) steps (true|false)", msg)
+    @test m !== nothing
+    if m !== nothing
+        @test parse(Int, m[1]) == 4 && parse(Int, m[2]) >= 10
+        @test parse(Float64, m[3]) <= 4eps()
+        @test m[4] == "true"
+        @test m[5] == "true"
+        m[6] == "true" || @info "reynolds_stress_blocked.jl: the subprocess's steps" msg
+        @test m[6] == "true"
     end
 end

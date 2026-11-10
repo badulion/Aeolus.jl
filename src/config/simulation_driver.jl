@@ -476,8 +476,9 @@ function Config.driver_sections(::SimulationDriverType)
                       "never (one loop per term, the reference). Results agree within round-off. The step " *
                       "core's fusion is Boussinesq only: an anelastic core runs one loop per term and refuses " *
                       "always. The setting also chooses the update of a prognostic TKE closure on either core " *
-                      "(#554) and of a Reynolds-stress closure with transport (#560): one cache-blocked pass unless " *
-                      "never; results.toml tke_update_blocked / reynolds_stress_update_blocked says which ran")
+                      "(#554) and of a Reynolds-stress closure with transport (#560; if_possible blocks it only " *
+                      "with centred advection on several threads, where it was measured faster): one " *
+                      "cache-blocked pass unless never; results.toml tke_update_blocked / reynolds_stress_update_blocked says which ran")
     end
     tim = section("time"; doc = "The clock: a fixed dt or adaptive steps, for a duration or a number of steps.") do s
         option!(s, "dt", OneOf(Float64, Symbol); default = :adaptive, allowed = [:adaptive], range = (0, Inf),

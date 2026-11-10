@@ -717,15 +717,19 @@ the projection):
 4. ``τ^{n+1}`` projected onto the realizable set, the correction booked;
    ``τ = 0`` in solids.
 
-With `transport`, on the CPU, steps 1 to 4 run as one cache-blocked pass,
-row by row, on `Operators.FiniteVolume.blocked_update!` (#560, the driver
+With `transport`, on the CPU, steps 1 to 4 can run as one cache-blocked
+pass, row by row, on `Operators.FiniteVolume.blocked_update!` (#560, the driver
 of the TKE update, #554; the footprint in [`rsm_blocked_lags`](@ref)):
 ``ν_t``, the limited fluxes of the diagonals, the plain advection of the
 off-diagonals, the diffusion and the update of all six stresses. ``N^2``
 stays a separate loop before it. The step core's `loop_fusion` setting
 (`Simulations.set_loop_fusion!`) chooses: `:never` runs separate
-whole-field loops (the reference, which agrees to round-off); `:always`
-refuses a case the pass cannot run (a GPU backend, the `:weno5`
+whole-field loops (the reference, which agrees to round-off);
+`:if_possible` (the default) runs the blocked pass only where it was
+measured faster, centred advection on several threads, and the separate
+loops otherwise (the update is limited by its arithmetic, so one pass
+saves little; WENO-Z5 was slower, #560); `:always` runs the pass wherever
+it can and refuses a case it cannot run (a GPU backend, the `:weno5`
 off-diagonal scheme). Which form ran is recorded in
 `Simulations.sweep_report`. Without `transport` the update is one
 pointwise pass already and runs the same in every setting.
@@ -739,6 +743,7 @@ function advance_sgs!(c::ReynoldsStressClosure{T}, sim, dt) where {T}
     if c.transport
         setting = _fusion_setting(sim)
         why = setting === :never ? nothing : _rsm_blocked_blocker(c, sim)
+        why === nothing && setting === :if_possible && (why = _rsm_blocked_slower(c, sim))
         if setting !== :never && why === nothing
             _rsm_advance_blocked!(c, sim, Δt)
             _note_rsm!(sim, true, nothing)

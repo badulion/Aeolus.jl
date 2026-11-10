@@ -214,7 +214,9 @@ pass unless `:never`, which runs its separate loops; `:always` refuses a
 case the pass cannot run (a GPU backend). [`sweep_report`](@ref) records
 which ran (`tke_update_blocked`). Likewise the update of a Reynolds-stress
 closure that transports its stresses (`PrognosticSGS.ReynoldsStressClosure`,
-#560; `:always` also refuses its `:weno5` off-diagonal scheme;
+#560; under `:if_possible` blocked only with centred advection on several
+threads, where it was measured faster; `:always` runs it with every other
+scheme and refuses `:weno5`;
 `reynolds_stress_update_blocked`).
 """
 function set_loop_fusion!(sim, setting)
