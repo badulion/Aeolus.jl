@@ -1,0 +1,4 @@
+# the cases' downloaded data and drivers (made by prepare.sh, not in git) and run output
+berlin_*/data/
+berlin_*/input/
+berlin_*/runs/

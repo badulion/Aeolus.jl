@@ -1,5 +1,9 @@
 # The drivers' environment. Develop the two checkouts before use (HANDOFF.md, step P4):
-#   julia --project=env -e 'using Pkg; Pkg.develop(path="<Aeolus checkout>"); Pkg.develop(path="<AeolusPrep checkout>")'
+#   julia --project=env -e 'using Pkg; Pkg.develop([PackageSpec(path="<Aeolus checkout>"), PackageSpec(path="<AeolusPrep checkout>")])'
 # AeolusPrep: github.com/badulion/AeolusPrep.jl, branch issue/6-era5-soil-profiles (PR #7) until merged.
+# On Fritz (#566): Aeolus = the detached worktree .worktrees/drivers-master (origin/master 9053fe04),
+# AeolusPrep = $AEOLUS_BENCH/AeolusPrep.jl (d53b37b); the paths live in the untracked Manifest.
 [deps]
+Aeolus = "a1e01005-1e51-4a5e-8d1e-4a5e8d1e4a5e"
+AeolusPrep = "3e8a683b-ca9f-4705-957e-0943feb5d5ac"
 NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"
