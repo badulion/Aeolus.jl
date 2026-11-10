@@ -475,7 +475,8 @@ function Config.driver_sections(::SimulationDriverType)
                       "the terms without one), always (fused, or the run stops at its first step naming them), " *
                       "never (one loop per term, the reference). Results agree within round-off. Every core: " *
                       "Boussinesq and anelastic. The setting also chooses the update of a prognostic TKE closure " *
-                      "(#554): one cache-blocked pass unless never; results.toml tke_update_blocked says which ran")
+                      "(#554) and the SGS diffusion of the urban tracers (#559): one cache-blocked pass unless never; " *
+                      "results.toml tke_update_blocked and tracer_diffusion_blocked say which ran")
     end
     tim = section("time"; doc = "The clock: a fixed dt or adaptive steps, for a duration or a number of steps.") do s
         option!(s, "dt", OneOf(Float64, Symbol); default = :adaptive, allowed = [:adaptive], range = (0, Inf),

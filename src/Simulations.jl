@@ -63,8 +63,11 @@ mutable struct SweepReport
     tke_blocked::Int      # updates of a TKE closure's e as one cache-blocked pass (#554)
     tke_separate::Int     # ... as separate loops
     tke_reason::String    # why the blocked pass could not run ("" when it could, or by setting)
+    tracer_blocked::Int   # SGS diffusion steps of an urban tracer as one cache-blocked pass (#559)
+    tracer_separate::Int  # ... as separate loops
+    tracer_reason::String # why the blocked pass could not run
 end
-SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, false, 0, 0, "")
+SweepReport() = SweepReport(0, 0, Pair{String,String}[], false, :if_possible, false, 0, 0, "", 0, 0, "")
 
 """
     StepWorkspaces()

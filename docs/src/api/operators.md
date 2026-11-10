@@ -175,7 +175,9 @@ the fused IMEX launch call `finish_sweep!` as the Boussinesq core does.
 The slab and ring machinery is one driver, `blocked_update!`, generic
 over the update it runs (a `BlockedUpdate`, #554): the substage predictor
 (`blocked_predictor!`) and the update of a `TKEClosure`'s SGS energy
-(`advance_sgs!`, `PrognosticSGS`).
+(`advance_sgs!`, `PrognosticSGS`), and a scalar's explicit eddy-diffusion
+step (`blocked_eddy_diffusion!`, #559: the SGS diffusion of the urban
+tracers, `Urban.TracerSGSDiffusion`).
 
 ```@docs
 Aeolus.Operators.FiniteVolume.SweepTerm
@@ -220,6 +222,8 @@ Aeolus.Operators.FiniteVolume.LevelSums
 Aeolus.Operators.FiniteVolume.BookedTerm
 Aeolus.Operators.FiniteVolume.SWEEP_BOOKED
 Aeolus.Operators.FiniteVolume.books
+Aeolus.Operators.blocked_eddy_diffusion!
+Aeolus.Operators.EddyDiffusionScratch
 Aeolus.Simulations.SWEEP_FALLBACKS
 Aeolus.Simulations.SweepReport
 Aeolus.Simulations.sweep_report

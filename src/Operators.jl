@@ -961,5 +961,8 @@ include("operators/moist_buoyancy.jl")
 # The SGS closure as a term of the fused sweep (#533 plan step 4; uses the
 # contract, every built-in closure and the sweep's parts in FiniteVolume).
 include("operators/sgs_sweep.jl")
+# A scalar's explicit eddy-diffusion step as one cache-blocked pass, on the
+# blocked driver of FiniteVolume (#559; the urban tracer diffusion).
+include("operators/eddy_diffusion_blocked.jl")
 
 end # module

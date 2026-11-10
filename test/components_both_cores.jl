@@ -85,6 +85,15 @@ const BC_SGS = (model = :smagorinsky, c_s = 0.17, pr_t = 1 / 3, stability = :non
         @test all(i -> ta[i].data == tb[i].data, 1:3)
         @test maximum(abs, ta[3].data) > 0
     end
+    # weights shorter than the storage levels are refused, not read out of
+    # bounds (the kernels read them without bounds checks, #559 review)
+    short_w = (ones(n - 1), ones(n - 1))
+    tc = map(x -> Aeolus.Fields.Field(Aeolus.Fields.location(x), BC_MESH), (sim.tu, sim.tv, sim.tw))
+    @test_throws DimensionMismatch BC_OPS.add_sgs_stress_divergence!(tc..., sim.u, sim.v, sim.w, f.νh, f.νv;
+                                                                     weights = short_w)
+    @test_throws DimensionMismatch BC_OPS.add_eddy_viscosity_u!(tc[1], sim.u, f.νh; weights = short_w)
+    @test_throws DimensionMismatch BC_OPS.add_eddy_diffusion_scalar!(Aeolus.Fields.Field(CellCenter(), BC_MESH),
+                                                                     sim.θ, f.κh; weights = short_w)
     tθa = Aeolus.Fields.Field(CellCenter(), BC_MESH); tθb = Aeolus.Fields.Field(CellCenter(), BC_MESH)
     BC_OPS.add_eddy_diffusion_scalar!(tθa, sim.θ, f.κh); BC_OPS.add_eddy_diffusion_scalar!(tθb, sim.θ, f.κh; weights = one_w)
     @test tθa.data == tθb.data

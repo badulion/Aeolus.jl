@@ -4982,6 +4982,191 @@ outside this issue: `FiniteVolume._advect_weno5!` (`advect_weno5!`) has
 its own WENO-5 upwinded with `?:`, and the cloudy N² keeps its `qc > 0`
 branch (its IR not inspected).
 
+#### The urban tracer SGS diffusion in one cache-blocked pass (#559)
+
+Plan part 3 of #554 (branch `issue/559-tracer-diffusion-blocked`, on
+#555). `sgs_diffuse!(::TracerSGSDiffusion, …)`
+(`src/components/urban/scalar_advection.jl`) ran five whole-field loops
+per tracer and step: the halo fill, zeroing the tendency, the masked
+`add_eddy_diffusion_scalar!`, the per-level sums of |q| and of the
+tendency (`plane_reduce!`, for the conservation residual and the water
+ledger), and `q .+= dt .* tend`.
+
+**What was built.**
+- `Operators.blocked_eddy_diffusion!` (`src/operators/eddy_diffusion_blocked.jl`):
+  one explicit step `ϕ ← ϕ + Δt·D(ϕ)` of the masked and/or weighted
+  operator, with the per-level Σ|ϕ| and Σ D(ϕ), as one update on
+  `FiniteVolume.blocked_update!`. Per slab and j-row, the tendency of each
+  row goes into a one-row buffer, computed by the point body of the
+  separate loop (`_b_eddy_scalar_masked!`: one source of truth). The new
+  row goes into the driver's ring (or edge buffer) with the row's two
+  sums. D reads ϕ one cell away, so the lag is 1 row and each slab keeps 1
+  edge plane per end. The level sums are the row sums added in ascending
+  j, independent of the thread and slab counts.
+- The urban adapter: `sgs_diffuse!` runs the pass on the CPU unless
+  `loop_fusion = "never"`. The old loops are now `_sgs_diffuse_separate!`,
+  the reference. `"always"` refuses a case the pass cannot run (a GPU
+  backend; a stretched grid has no masked kernel at all). The pass's
+  scratch is built with the `TracerSGSDiffusion`, so it has a concrete
+  type and the call allocates nothing (0 B, tested).
+- `sweep_report` / results.toml `[loop_fusion]` gains
+  `tracer_diffusion_blocked` and `tracer_diffusion_not_blocked`.
+- The ring row helpers of #555 (`_Line`, `_zero_line!`, the write-back
+  row) moved from `tke_blocked.jl` to the driver's file, which both
+  updates now use.
+
+**A bug the profile found: the masked diffusion did not vectorise.** The
+first blocked version gained only 13.8 → 12.5 ms at 1 thread
+(200×200×60). The parts of the separate loops at 1 thread: masked
+diffusion 11.3 ms, unmasked 3.7 ms, zero 0.56, sums 0.64, update 1.0, halo
+0.08. The masked body's helpers `_open` (the mask read) and
+`_vertical_divergence` (the weights) are separate inlined functions. A
+callee does not inherit the caller's `@inbounds`, so every mask read was
+bounds-checked (`throw_boundserror` in the IR), and the loop stayed
+scalar. With `@inbounds` inside both helpers, the row loop uses
+`<8 x double>`, and the masked diffusion takes 4.8 ms at 1 thread (2.38 →
+1.43 ms at 6 threads). This speeds up the separate loops too, and every
+other user of the helpers: the masked TKE diffusion and the weighted
+eddy viscosity of the anelastic core. The values are unchanged, bit for
+bit. (The review changed the helpers' `@inbounds` to
+`Base.@propagate_inbounds`, so a caller outside `@inbounds` keeps its
+checks; the row loop still compiles to `<8 x double>` with no
+`throw_boundserror`, checked with `code_llvm`. The entry points check the
+mask's size and the weights' length: `_check_mask_weights`,
+`_level_weights`, and since the review also `add_sgs_stress_divergence!`,
+which passed its weights on unchecked.)
+
+**Measurements** (synthetic 200×200×60, a solid mask of two blocks, a
+random tracer and κt; under the benchmark lock with package power
+logged; min / median of 60 calls of the whole `sgs_diffuse!` with
+`water = true`, each with a copy of q that restores the input, 0.9–1.1
+ms). Before = the base branch (0dc066a0) against this branch (if_possible),
+in alternating processes base, new, base, new per thread count; the two
+runs of each agree within 0.7 ms and the table quotes the first pair. q is
+the same bits in all columns (max |Δq| = 0).
+
+| case | threads | before (base) | separate (never) | blocked (if_possible) |
+| :-- | --: | --: | --: | --: |
+| Boussinesq, κh = κv | 1 | 14.46 / 15.24 ms | 8.54 / 8.89 ms | 6.76 / 7.08 ms |
+| | 6 | 6.65 / 7.69 ms | 6.15 / 7.20 ms | 3.23 / 3.64 ms |
+| | 12 | 6.87 / 7.90 ms | 6.12 / 6.75 ms | 3.07 / 3.38 ms |
+| anelastic, κh ≠ κv | 1 | 15.20 / 15.47 ms | 9.17 / 9.34 ms | 7.57 / 7.97 ms |
+| | 6 | 6.99 / 8.02 ms | 5.57 / 6.25 ms | 3.27 / 3.57 ms |
+| | 12 | 6.48 / 7.50 ms | 6.28 / 6.98 ms | 3.03 / 3.47 ms |
+
+Separate → blocked ran interleaved in one process. The before column is
+separate processes, and there the new branch measured 6.42 / 3.11 / 2.81
+ms (Boussinesq) and 7.77 / 3.29 / 2.95 ms (anelastic) at 1 / 6 / 12
+threads. Without the copy of q (minus its own min), separate → blocked is
+7.5 → 5.7 ms at 1 thread (1.3×), 5.0 → 2.1 ms at 6 (2.4×) and 5.2 → 2.1
+ms at 12 (2.4×), Boussinesq.
+
+Package power varied between processes (mean 12–31 W, clock 1.6–2.7 GHz).
+A base/new pair differed by up to 6 W, and the new branch ran at the
+lower power in 7 of the 12 pairs. At 1 thread the second Boussinesq pair ran at
+26–31 W against 19–15 W in the first, and timed the same within 0.7 ms.
+
+Compulsory traffic per point, as estimated from the loops (not measured
+with counters):
+- **Separate:** about 81 B. That is zero 8 (+8 read for ownership), the
+  diffusion 33 (q, κ, mask 1 B, the tendency read and written), the sums
+  16 and the update 24, plus 8 for κv when it differs.
+- **Blocked:** about 25 B. That is q, κ and the mask read, and q written
+  back (+8 for κv).
+
+**Tests** (`test/tracer_diffusion_blocked.jl`, 150 checks; the cases in
+`test/support/tracer_diffusion_cases.jl`, which call `sgs_diffuse!` with a
+minimal case of `sim`, `mesh` and `budgets`):
+- **The pass against the separate loops.** Boussinesq and anelastic
+  (constraint weights), κh = κv and κh ≠ κv, periodic + no-flux and
+  mirror (open-case) halos, at 1 to 5 slabs, forward and in reverse slab
+  order (80 runs).
+  - q within 4 eps of max q (measured 0).
+  - Σ|q| per level within a relative 1e-13 (measured 4.5e-16).
+  - Σ tendency within 1e-13 of its largest level (measured 4.6e-15).
+  - The booked water (`dW`, `dWρ`, from `water_split_levels` with a ρ̄
+    falling with height) within 1e-12 of the step's water scale (measured
+    9.1e-16).
+  - The residual on the same side of 1e-12.
+- **Conservation.** Σ q (Σ W q) of the fluid cells kept to 1e-13 of Σ|q|.
+  The solid cells keep their value (copied, so `==`). The residual is below
+  1e-12.
+- **The setting.** The report reads `"some"` after one run of each. A
+  missing scratch falls back and names the reason, and `"always"` then
+  throws. A stretched grid's reason names the RegularGrid. 0 B allocated
+  on a serial backend.
+- **A `-t 4` subprocess.** Both cores, κh ≠ κv, both halo kinds, 2–5 slabs (since the review, see below)
+  running concurrently (16 runs, all within the tolerances above).
+
+No test expectation proved wrong. Validation `urban_checks.jl` (under
+the lock, after the vectorisation fix): 1 job, 33 checks passed, in 829 s.
+Its synthetic city diffuses qv, ql and the chemistry species with the
+blocked pass, and its ledgers close. The targeted tests passed:
+`tracer_diffusion_blocked`, `tke_blocked`, `tke`, `anelastic`,
+`sgs_closure`, `urban_run`, `urban_checks`, `fused_sweep`, `checks`, the
+config tests and `naming_conventions`.
+
+**Deviations from the plan.**
+- **Not in the same pass as the tracer's advection.** The diffusion of a
+  tracer reads the advected q with its halos refilled (Lie splitting,
+  `fill_halos!` between the two). In between, the slot books the
+  two-way nest's diffusive flux and the open faces' water from that
+  state. So a joint pass would need the advected q on a boundary shell
+  before the sweep, as the TKE pass does for ν and the limiter's ratio.
+  It would also need a blocked form of `advect_positive!` for tracers
+  (the TKE pass's pipeline is written for e), and the W-weighted
+  increment. That is a larger piece of work than this issue; left open.
+- The halo fill stays a separate step (0.07 ms, boundary planes only).
+
+**Review findings** (independent review before the PR).
+- **Fixed: the pass ran at the backend's slab count, not its scratch's.**
+  `sgs_diffuse!` called `blocked_eddy_diffusion!` without `ns`, so a
+  scratch made for another slab count was replaced by a new one, about
+  31 kB, on every call (`TracerSGSDiffusion` is immutable and cannot keep
+  it). In practice the counts agree, as both come from `sweep_slabs`, but
+  the tests built scratches for 1–5 slabs: the forward runs of the
+  agreement test ran 1 slab whatever they asked for, and the `-t 4`
+  subprocess ran 4 slabs in each of its "2–5 slab" runs. Only the
+  reverse-order runs, which call the pass directly, covered 2–5 slabs.
+  `sgs_diffuse!` now passes the scratch's count (`Operators.nslabs`). The
+  test asserts 0 B and the count for a 3-slab scratch on a serial backend.
+  With the fix the agreement test and the subprocess cover what they
+  state (the same tolerances; worst errors unchanged: q 0, Σ|q| 4.5e-16,
+  Σ tendency 4.6e-15, water 9.1e-16).
+- **Fixed: `@inbounds` inside the helpers became `Base.@propagate_inbounds`.**
+  The same vectorised code (`code_llvm`: `<8 x double>`, no
+  `throw_boundserror`, mask only and mask + weights), but a caller outside
+  `@inbounds` keeps its bounds checks. The stress-form
+  `add_sgs_stress_divergence!` passed its weights to the kernel unchecked;
+  it now checks them with `_level_weights`, like the eddy viscosity (test
+  in `components_both_cores.jl`: short weights throw for the stress
+  divergence, the eddy viscosity and the scalar diffusion).
+- **Checked, no change:** no reader of `d.tend` outside the separate path
+  (src, test, validation, examples, benchmarks); the row sums are written
+  once per (j, k) by the slab that owns plane k, so concurrent slabs do
+  not race; the blocked pass with neither mask nor weights matches
+  `add_eddy_diffusion_scalar!`'s unmasked kernel bit for bit (measured
+  max |Δq| = 0); `κv === κ` (the 3-argument separate call) is the same
+  arithmetic as the pass's `κh = κv`.
+- **Re-measurement not usable.** A re-run of the benchmark under the lock
+  (`bench.jl`, the same 200×200×60 case) coincided with an unrelated
+  20-core job on the laptop (load average 17–22 on 24 threads). The minima
+  scattered by 2–5× between neighbouring runs (e.g. separate 22.4 ms at 1
+  thread against 8.5 ms above), so the table above, measured on an idle
+  machine, stands. The ordering held in every run: blocked faster than
+  separate at 1, 6 and 12 threads on both cores, q identical (max |Δq| =
+  0).
+- Full suite after the review: `test/run.jl` under the lock, 119 jobs,
+  6291 checks, all passed. Validation `urban_checks.jl` after the review,
+  under the lock: 33 of 33 checks passed, in 1472 s (the machine loaded
+  as above).
+
+**Open.**
+- Advection and diffusion of a tracer in one pass (above).
+- Running several tracers in one pass: each tracer's step reads only
+  itself and the shared κ and mask, so the pass could update qv, ql and
+  the species together, reading κ and the mask once.
+
 ### Phase 85 — Asynchronous and in-situ workflows
 Asynchronous I/O, in-situ analysis and visualisation, in-transit
 compression, and streaming output so that a large run does not stall

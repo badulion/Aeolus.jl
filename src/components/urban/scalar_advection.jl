@@ -182,7 +182,7 @@ tracer gets the same shared `κt`, also under the `:amd` provider, whose
 per-scalar diffusivity is deliberately not used (one turbulent Schmidt
 number; #234, see the SGS theory page).
 """
-struct TracerSGSDiffusion{F, M, W}
+struct TracerSGSDiffusion{F, M, W, S}
     tend::F
     mask::M
     weights::W
@@ -192,6 +192,7 @@ struct TracerSGSDiffusion{F, M, W}
     resid::Base.RefValue{Float64}     # max relative change of the conserved total, this step
     Sq::Vector{Float64}               # scratch: per-level Σ|q| (canonical plane sums)
     St::Vector{Float64}               # scratch: per-level Σ tendency
+    blocked::S                        # Operators.EddyDiffusionScratch of the blocked pass (#559), or nothing
 end
 
 function TracerSGSDiffusion(case)
@@ -203,9 +204,26 @@ function TracerSGSDiffusion(case)
     sim = case.sim
     w = sim isa Aeolus.Anelastic.MassWeightedSimulation ?
         Aeolus.Anelastic.constraint_weights(sim) : nothing
-    return TracerSGSDiffusion(Field(CellCenter(), mesh), Array{Bool}(mf.data .> 0.5), w, bcs,
-                              Ref(0.0), Ref(0.0), Ref(0.0), zeros(mesh.Nz), zeros(mesh.Nz))
+    q = Field(CellCenter(), mesh)
+    # the blocked pass's scratch, made once here (a concrete field type: no
+    # dynamic call per tracer and step); nothing where the pass cannot run
+    sc = _tracer_blocked_blocker(q) === nothing ?
+        Aeolus.Operators._eddy_diffusion_scratch(nothing, q.data, _tracer_slabs(q), mesh.Ny, mesh.Nz) : nothing
+    return TracerSGSDiffusion(q, Array{Bool}(mf.data .> 0.5), w, bcs,
+                              Ref(0.0), Ref(0.0), Ref(0.0), zeros(mesh.Nz), zeros(mesh.Nz), sc)
 end
+
+# Why the blocked pass of the tracer diffusion cannot run on fields like
+# `q` (#559), or nothing.
+function _tracer_blocked_blocker(q)
+    Aeolus.Backends.backend(q.data) isa Aeolus.Backends.CPUBackend ||
+        return "the cache-blocked tracer diffusion runs on the CPU backend only"
+    q.mesh isa Aeolus.Grids.RegularGrid ||
+        return "the masked tracer diffusion and its blocked pass take a RegularGrid only"
+    return nothing
+end
+_tracer_slabs(q) = (m = q.mesh; Aeolus.Operators.FiniteVolume.sweep_slabs(
+    Aeolus.Backends.backend(q.data), m.Nx * m.Ny * m.Nz, m.Nz; lz = 1))
 
 """
     sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water = false, κ = case.sim.κt, κv = κ) -> q
@@ -219,6 +237,16 @@ isotropic operator, bit for bit). With `water = true` the increment is booked
 in `d.dW` / `d.dWρ` (`ledger_water_split`), and the relative change of the
 conserved total (`Σ q` over fluid cells, or `Σ W q`) is recorded in
 `d.resid`.
+
+On the CPU the step runs as one cache-blocked pass
+(`Operators.blocked_eddy_diffusion!`, #559): the same q bit for bit, the
+per-level sums to round-off. The core's `loop_fusion` setting chooses
+(`Simulations.set_loop_fusion!`): `:never` runs the separate loops (zero
+the tendency, the masked diffusion, the plane sums, the update; the
+reference), `:always` refuses a case the pass cannot run. Which ran is in
+`Simulations.sweep_report` (`tracer_diffusion_blocked`). The pass runs at
+the slab count of the scratch made with `d` (one per thread). `d.tend` is
+written only by the separate loops.
 """
 function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, κ = case.sim.κt,
                      κv = κ)
@@ -226,29 +254,35 @@ function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, �
     Hx, Hy, Hz = mesh.Hx, mesh.Hy, mesh.Hz
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     fill_halos!(q, d.bcs)
-    fill!(d.tend.data, 0)
-    if κv === κ
-        add_eddy_diffusion_scalar!(d.tend, q, κ; mask = d.mask, weights = d.weights)
-    else
-        add_eddy_diffusion_scalar!(d.tend, q, κ, κv; mask = d.mask, weights = d.weights)
-    end
-    tend = view(d.tend.data, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz)
-    qi = interior_view(q)
     Wk = d.weights === nothing ? nothing : view(d.weights[1], Hz+1:Hz+Nz)
-    # the conserved total (solid tendencies are zero, so the sum over all
-    # cells is the sum over fluid cells): the per-level sums of |q| and of
-    # the tendency in one canonical, thread-invariant pass (KA-b, #296),
-    # weighted and combined over k in ascending order
     Sq, St = d.Sq, d.St
-    plane_reduce!((Sq, St), Aeolus.Backends.backend(q.data), _abs_and_tend_at,
-                  Aeolus.Grids.interior(mesh), q.data, d.tend.data)
+    setting = Aeolus.Simulations.loop_fusion(sim)
+    why = d.blocked === nothing ? something(_tracer_blocked_blocker(q), "no scratch for the blocked pass") :
+                                  nothing
+    if setting !== :never && why === nothing
+        # one cache-blocked pass (#559): q and the per-level sums
+        # at the scratch's slab count (made once with the struct, which
+        # cannot take a new one: a different count would allocate a scratch
+        # every call)
+        Aeolus.Operators.blocked_eddy_diffusion!(d.blocked, Sq, St, q, κ, κv, dt;
+                                                 mask = d.mask, weights = d.weights,
+                                                 ns = Aeolus.Operators.nslabs(d.blocked))
+        _note_tracer!(sim, true, nothing)
+    else
+        setting === :always &&
+            throw(ArgumentError("loop_fusion = \"always\", but the tracer diffusion has no blocked form here: $why"))
+        _sgs_diffuse_separate!(d, q, dt, κ, κv)
+        _note_tracer!(sim, false, setting === :never ? nothing : why)
+    end
+    # the conserved total (solid tendencies are zero, so the sum over all
+    # cells is the sum over fluid cells): the per-level sums weighted and
+    # combined over k in ascending order
     tot = 0.0; dtot = 0.0
     @inbounds for k in 1:Nz
         wk = Wk === nothing ? 1.0 : Wk[k]
         tot += wk * Sq[k]; dtot += wk * St[k]
     end
     tot > 0 && (d.resid[] = max(d.resid[], abs(dt * dtot) / tot))
-    qi .+= dt .* tend
     if water
         flat, redis = water_split_levels(case.budgets, case.mesh, St, Wk === nothing ? nothing : collect(Wk))
         d.dW[] += dt * flat; d.dWρ[] += dt * redis
@@ -256,7 +290,37 @@ function sgs_diffuse!(d::TracerSGSDiffusion, case, q, dt; water::Bool = false, �
     return q
 end
 
+# The step as separate whole-field loops (the reference of the blocked
+# pass, `loop_fusion = "never"`): zero the tendency, the masked diffusion,
+# the per-level sums of |q| (before the step) and of the tendency in one
+# canonical, thread-invariant pass (KA-b, #296), the update. q's halos are
+# filled.
+function _sgs_diffuse_separate!(d::TracerSGSDiffusion, q, dt, κ, κv)
+    fill!(d.tend.data, 0)
+    if κv === κ
+        add_eddy_diffusion_scalar!(d.tend, q, κ; mask = d.mask, weights = d.weights)
+    else
+        add_eddy_diffusion_scalar!(d.tend, q, κ, κv; mask = d.mask, weights = d.weights)
+    end
+    plane_reduce!((d.Sq, d.St), Aeolus.Backends.backend(q.data), _abs_and_tend_at,
+                  Aeolus.Grids.interior(q.mesh), q.data, d.tend.data)
+    interior_view(q) .+= dt .* interior_view(d.tend)
+    return q
+end
+
 @inline _abs_and_tend_at(i, j, k, q, t) = @inbounds (abs(q[i, j, k]), t[i, j, k])
+
+# which form ran, in the step core's `SweepReport` (`sweep_report`)
+function _note_tracer!(sim, blocked::Bool, reason)
+    r = sim.workspaces.fused
+    if blocked
+        r.tracer_blocked += 1
+    else
+        r.tracer_separate += 1
+        reason === nothing || (r.tracer_reason = reason)
+    end
+    return nothing
+end
 
 "The tracer diffusion of the enabled `:scalar_advection` coupling, or `nothing`."
 function tracer_sgs_diffusion(case)

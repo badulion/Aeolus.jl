@@ -410,7 +410,7 @@ canonical order once, so later threaded kernels match it bit for bit.
 | Berlin `src/budgets/budgets.jl` | `ledger_water`, `ledger_water_split` (`level_sums`), `add_surface!` | `plane_partials!`; per-class ordered fold |
 | Berlin `src/budgets/meter.jl` | `air_heat_levels!` (fluid and solid sums) | `plane_reduce!` (tuple) |
 | Berlin `parent/case.jl` | `_level_sums!` (the parent's budget levels) | `plane_partials!` |
-| `scalar_advection` | `sgs_diffuse!` Σ\|q\|, Σ tendency, its water split | `plane_reduce!` (tuple) |
+| `scalar_advection` | `sgs_diffuse!` Σ\|q\|, Σ tendency, its water split | `plane_reduce!` (tuple) under `loop_fusion = "never"`; else the row sums of the blocked pass in ascending j (#559) |
 | `aq_chem` | species totals; level air temperature | `interior_sum`; `plane_reduce!` (masked) |
 | `moist_buoyancy` | the level means of ``(θ_ρ − θ)``, fused with the cell values | `plane_reduce!` (masked, fused) |
 | `column_radiation` | fluid-mean profiles | `plane_reduce!` (masked) |
