@@ -123,3 +123,22 @@ print("threads ", Threads.nthreads(), " cases ", length(res), " worst ", maximum
         @test parse(Float64, m[3]) <= 4eps()
     end
 end
+
+@testset "Moist N² under the caller's @inbounds (#557)" begin
+    # `_θv_face_dir`, `_θρ_face` and `_n2_cell` propagate the `@inbounds`
+    # of `_n2_body!` (bounds checks kept the moist N² row loop scalar). The
+    # field against the formula written out cell by cell: the same
+    # expressions, expected identical (4 eps of max |N²|: a compiler
+    # reordering only).
+    g = RegularGrid(; size = (12, 9, 8), extent = (120.0, 90.0, 80.0), halo = (2, 2, 2))
+    rng = Xoshiro(5572)
+    θ = Field(CellCenter(), g); qv = Field(CellCenter(), g); N2 = Field(CellCenter(), g)
+    θ.data .= 300 .+ randn(rng, size(θ.data)...)
+    qv.data .= 0.01 .+ 1e-3 .* randn(rng, size(qv.data)...)
+    Aeolus.Operators.buoyancy_frequency_squared!(N2, θ, qv; θ₀ = 300.0, g = 9.81)
+    θv(i, j, k) = 0.5 * (θ.data[i, j, k-1] + θ.data[i, j, k]) * (1 + 0.61 * 0.5 * (qv.data[i, j, k-1] + qv.data[i, j, k]))
+    ii, jj, kk = Aeolus.Grids.interior(g)
+    ref = [(9.81 / 300.0) * (θv(i, j, k+1) - θv(i, j, k)) * (1 / g.dz) for i in ii, j in jj, k in kk]
+    @test maximum(abs.(N2.data[ii, jj, kk] .- ref)) <= 4eps() * maximum(abs, ref)
+    @test maximum(abs, ref) > 0
+end
