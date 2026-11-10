@@ -136,8 +136,7 @@ function add_sgs_stress_divergence!(tu, tv, tw, u, v, w, νh, νv = νh; part::S
     a, b = part === :full ? (1, 1) : part === :diagonal ? (1, 0) :
            part === :transpose ? (0, 1) :
            throw(ArgumentError("part must be :full, :diagonal or :transpose, got $(repr(part))"))
-    # checked: the kernel reads the weights without bounds checks (#559 review)
-    wc, wf = weights === nothing ? (nothing, nothing) : _level_weights(u, weights)
+    wc, wf = weights === nothing ? (nothing, nothing) : weights
     _add_sgs_stress_divergence!(tu, tv, tw, u, v, w, _coefdata(νh), _coefdata(νv),
                                 a, b, mesh(u), wc, wf)
     return nothing
