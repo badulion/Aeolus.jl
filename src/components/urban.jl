@@ -79,6 +79,8 @@ using Printf
 using Dates: Dates, Date, DateTime, Millisecond
 using Statistics: mean
 import Random
+# the fused sweep of the step core: its term interface (#533)
+const FVK = Aeolus.Operators.FiniteVolume
 
 for f in ("config", "components", "geometry", "bus",
           "tracers", "budgets", "reference_state", "top_boundary",

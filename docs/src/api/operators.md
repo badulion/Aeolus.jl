@@ -223,6 +223,28 @@ Aeolus.Components.sweep_type
 Aeolus.Components.sweep_report
 ```
 
+### Pointwise terms of the sweep (#533 plan step 2)
+
+The core's buoyancy, Coriolis, surface flux and sponge, and the
+components `Coriolis`, `SurfaceThetaFlux`, `Sponge`, `Fringe`, the urban
+site's geostrophic forcing (pressure-gradient mode) and moist buoyancy and
+the slab's floor flux, as sweep terms. Each evaluates the expression of its
+whole-field kernel, which stays the reference. The built-in ones are
+`OptionalTerm`s on the core's switches, so a Boussinesq configuration has
+one compiled sweep whatever is switched on.
+
+```@docs
+Aeolus.Operators.FiniteVolume.BuoyancyTerm
+Aeolus.Operators.FiniteVolume.CoriolisTerm
+Aeolus.Operators.FiniteVolume.SurfaceFluxTerm
+Aeolus.Operators.FiniteVolume.DampingTerm
+Aeolus.Operators.FiniteVolume.DampingTargets
+Aeolus.Operators.FiniteVolume.sponge_term
+Aeolus.Operators.FiniteVolume.damping_levels
+Aeolus.Operators.FiniteVolume.OptionalTerm
+Aeolus.Simulations.SpongeTargets
+```
+
 ## LES analysis toolbox (Phase 54)
 
 Explicit filters, the isotropic energy spectrum and the isotropic

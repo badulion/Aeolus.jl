@@ -72,6 +72,10 @@ its domain; or a built-in operator of the core, with `ctx` the
 simulation) adds to the tendencies, or `nothing` (the default) when `x`
 cannot be expressed as a local term yet. A substage with one `nothing`
 runs one loop per term, and the run reports which term caused it (#533).
+For a component it is everything the component adds in the in-core
+stages `:tendencies` and `:body_force` together (one attached to both
+gets it switched on once); it may be asked at a stage the component does
+not attach to, so it must not assume one.
 """
 sweep_term(x, ctx) = nothing
 

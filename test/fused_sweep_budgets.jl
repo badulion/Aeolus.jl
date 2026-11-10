@@ -403,7 +403,12 @@ end
     ts = TBS.hook_terms(h.body_force!, d.state)
     @test (@inferred TBS.hook_terms(h.body_force!, d.state)) === ts       # cached: the same objects
     @test ts[1] isa TBC.SweepBudget
-    @test ts[2] isa TBF.BookedTerm && ts[3] isa TBF.BookedTerm && ts[4] isa TBForce   # the quiet one unbooked
+    # (#533 step 2 wraps every component term in an OptionalTerm per in-core
+    # stage; the booked term sits inside it: integration of steps 2 and 7)
+    @test all(t -> t isa TBF.OptionalTerm, ts[2:end])
+    on = [t.term for t in ts[2:end] if t.on]
+    @test length(on) == 3 && on[1] isa TBF.BookedTerm && on[2] isa TBF.BookedTerm && on[3] isa TBForce   # the quiet one unbooked
+    @test TBF.books(ts[2]) && TBF.books(ts[3])
     @test (@allocated TBS.hook_terms(h.body_force!, d.state)) == 0
     step!(Model(d), 0.2)
     s = d.state

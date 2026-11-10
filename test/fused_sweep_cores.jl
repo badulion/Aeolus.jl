@@ -229,16 +229,25 @@ end
     end
     @test _fc_agree(a.state, r.state) && !agree(interior_view(a.state.w), interior_view(z.state.w))
     @test SIMc.sweep_report(a.state)["substages_fused"] == "all"
-    # terms without a fused form: reported; refused under "always"
-    for (kw, key) in (((θ₀ = 300.0,), "builtin.buoyancy"), ((f_coriolis = 1e-4,), "builtin.coriolis"))
-        s = _fc_seed!(BoussinesqSimulation(g; ν = 1e-2, kw...))
-        step_imex!(s, 0.5, ARK2())
-        rep = SIMc.sweep_report(s)
-        @test rep["substages_fused"] == "none" && any(startswith(key * ":"), rep["not_fusable"])
-        c = SIMc.set_loop_fusion!(_fc_seed!(BoussinesqSimulation(g; ν = 1e-2, kw...)), :always)
-        err = try step_imex!(c, 0.5, ARK2()); nothing catch e; e end
-        @test err isa ArgumentError && occursin(key, err.msg)
+    # the built-in pointwise terms (#533 step 2) in the explicit part: fused, and
+    # equal to one loop per term. (Before steps 2 and 8 were combined, buoyancy
+    # and Coriolis were this test's examples of terms without a fused form;
+    # that expectation was made outdated by the integration, not weakened.)
+    for kw in ((θ₀ = 300.0,), (f_coriolis = 1e-4,), (θ₀ = 300.0, moisture = true), (θ_flux_bottom = 0.05,),
+               (sponge_α_max = 0.01, sponge_z_start = 0.5 * g.Lz))
+        mk2(setting) = SIMc.set_loop_fusion!(_fc_seed!(BoussinesqSimulation(g; ν = 1e-2, kw...)), setting)
+        a2 = mk2(:always); r2 = mk2(:never)
+        for _ in 1:2
+            step_imex!(a2, 0.5, ARK2()); step_imex!(r2, 0.5, ARK2())
+        end
+        ok = _fc_agree(a2, r2)
+        ok || println("  [#533 s2×s8] IMEX explicit part with $kw: fused ≠ one loop per term")
+        @test ok && SIMc.sweep_report(a2)["substages_fused"] == "all"
     end
+    # a term without a fused form: reported; refused under "always"
+    c = SIMc.set_loop_fusion!(_fc_seed!(BoussinesqSimulation(g; ν = 1e-2)), :always)
+    err = try step_imex!(c, 0.5, ARK2(); body_force! = noop); nothing catch e; e end
+    @test err isa ArgumentError && occursin("builtin.body_force", err.msg)
     s = _fc_seed!(BoussinesqSimulation(g; ν = 1e-2, C_s = 0.17))
     step_imex!(s, 0.5, ARK2(); sgs_stress = :symmetric)          # the explicit transposed stress
     @test any(startswith("builtin.imex_sgs:"), SIMc.sweep_report(s)["not_fusable"])
@@ -440,18 +449,23 @@ end
 # substage (+16 B per step!), and the fused IMEX launch boxed its Union-typed
 # arguments (+176 B per stage). Measured after the fix: equal bytes.
 @testset "no allocation added by the fused or the unfused report, any step core" begin
-    drivers = (("step!", s -> step!(s, 0.1)), ("step_rk3!", s -> step_rk3!(s, 0.1)),
-               ("step_imex! ARK2", s -> step_imex!(s, 0.1, ARK2())),
-               ("step_imex! Rosenbrock2", s -> step_imex!(s, 0.1, Rosenbrock2())))
-    for (lab, kw) in (("fusable", (;)), ("unfused (Coriolis)", (; f_coriolis = 1e-4))), moist in (false, true),
-        (dn, drv) in drivers
+    drivers = (("step!", (s; kw...) -> step!(s, 0.1; kw...)), ("step_rk3!", (s; kw...) -> step_rk3!(s, 0.1; kw...)),
+               ("step_imex! ARK2", (s; kw...) -> step_imex!(s, 0.1, ARK2(); kw...)),
+               ("step_imex! Rosenbrock2", (s; kw...) -> step_imex!(s, 0.1, Rosenbrock2(); kw...)))
+    # (Coriolis was the unfused example until steps 2 and 8 were combined: it
+    # now has a fused form in every Boussinesq driver, so it is a fusable
+    # case here, and a body_force! function is the unfused one)
+    for (lab, kw, skw, fused) in (("fusable", (;), (;), "all"),
+                                  ("fusable (Coriolis, buoyancy)", (; f_coriolis = 1e-4, θ₀ = 300.0), (;), "all"),
+                                  ("unfused (a body_force! function)", (;), (; body_force! = noop), "none")),
+        moist in (false, true), (dn, drv) in drivers
         mk(setting) = SIMc.set_loop_fusion!(_fc_seed!(BoussinesqSimulation(g; ν = 1e-2, moisture = moist, kw...)), setting)
         a = mk(:if_possible); r = mk(:never)
-        bytes(s) = (drv(s); drv(s); @allocated drv(s))
+        bytes(s) = (drv(s; skw...); drv(s; skw...); @allocated drv(s; skw...))
         n, nr = bytes(a), bytes(r)
         n <= nr || println("  [#533 s8] $dn $lab moist=$moist allocates $n bytes, $nr with one loop per term")
         @test n <= nr
-        @test SIMc.sweep_report(a)["substages_fused"] == (isempty(kw) ? "all" : "none")
+        @test SIMc.sweep_report(a)["substages_fused"] == fused
     end
     # the sound-proof cores, unfused (Coriolis has no fused form there)
     for drv in (ANc.step_anelastic!, step_rk3!)
@@ -512,10 +526,10 @@ end
     builtin = Dict(
         "has_moisture" => :base, "advect_centered!" => :base, "momentum_advection" => "builtin.momentum_advection",
         "add_sgs_stress_divergence!" => "builtin.imex_sgs", "add_tensor_diffusion_scalar!" => "builtin.imex_sgs",
-        "has_buoyancy" => "builtin.buoyancy", "add_buoyancy!" => "builtin.buoyancy",
-        "has_coriolis" => "builtin.coriolis", "add_coriolis!" => "builtin.coriolis",
-        "has_surface_flux" => "builtin.surface_flux", "add_surface_flux!" => "builtin.surface_flux",
-        "has_sponge" => "builtin.sponge", "add_velocity_sponge!" => "builtin.sponge",
+        # the pointwise terms of #533 step 2, in the sweep (`_builtin_terms`)
+        "has_buoyancy" => :sweep, "add_buoyancy!" => :sweep, "has_coriolis" => :sweep, "add_coriolis!" => :sweep,
+        "has_surface_flux" => :sweep, "add_surface_flux!" => :sweep, "has_sponge" => :sweep,
+        "add_velocity_sponge!" => :sweep,
         "body_force!" => "builtin.body_force")
     rx = r"\bsim\.(has_\w+)|\b(add_\w+!|advect_centered!)\(|\b(body_force!|momentum_advection)\("
     for m in eachmatch(rx, body)

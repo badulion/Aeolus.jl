@@ -3224,6 +3224,159 @@ sweep; a `body_force!` passed as a plain function always falls back (only
 pipeline components can be terms). The interface's `SweepRow` indexes
 fields by constant (`SWEEP_U` … `SWEEP_QV`) rather than by name.
 
+**Step 2: pointwise terms** (branch `issue/533-s2-pointwise`). What was
+built:
+- **Terms** (`src/operators/sweep_pointwise.jl`): `BuoyancyTerm` (dry,
+  or moist `θᵥ = θ(1 + 0.61 qv)` when the sweep carries qv; footprint
+  (0, 0, 1)), `CoriolisTerm` (the four-point averages; (1, 1, 0)),
+  `SurfaceFluxTerm` (rows of the first and last level only),
+  `DampingTerm` (the one damping kernel's `−λ(ξ)(φ − φ_target)`; along z
+  the rate once per row: the sponge, `sponge_term`; along x per point: the
+  fringe) and `OptionalTerm(on, term)`. Each evaluates its whole-field
+  kernel's expression in the same order; the kernels stay (the reference
+  and every other caller). `damping_levels(g, loc)`: the level heights
+  without a copy.
+- **Built-in terms** (`Simulations._builtin_terms`): buoyancy, Coriolis,
+  surface flux and sponge follow the base tendencies as `OptionalTerm`s on
+  `sim.has_*`, so every Boussinesq configuration has one plan type (one
+  compiled sweep whatever is switched on; one branch per row and term).
+  The sponge's targets (`sim.sponge_target`, a NamedTuple of abstract
+  fields) are read once into `DampingTargets` (kind + one concrete slot
+  per kind), cached in a new `StepWorkspaces` slot `sponge`, rebuilt when
+  the target is replaced; an in-place update of a level vector (the nest)
+  is seen.
+- **Components**: `Coriolis`, `SurfaceThetaFlux`, `Sponge` (a retargeted
+  sponge refreshes its level targets in `prepare!` from the stage-start
+  state, as `run_stage!` does before its pass), `Fringe` (target refreshed
+  to the substage time in `prepare!`), the urban `MoistBuoyancy`
+  (perturbation with its fluid-cell level means in `prepare!`, the w-face
+  sum in the sweep) and `GeostrophicCoupling` in its pressure-gradient
+  mode (level tendencies and the recorded diagnostics in `prepare!`,
+  `LargeScaleForcing.geostrophic_level_tendency` now the one evaluation
+  behind `apply_forcing!` too; the retargeted sponge's constant per row).
+  `SimulationCouplings`: the slab's floor flux is a `SurfaceFluxTerm`;
+  with obstacles its IBM penalty (plan step 5) keeps it unfused.
+- **Allowlist**: `builtin.buoyancy`, `.coriolis`, `.surface_flux`,
+  `.sponge`, `Components.Coriolis`, `.SurfaceThetaFlux`, `.Sponge`,
+  `.Fringe` and `Urban.MoistBuoyancy` removed. Kept with a narrowed
+  reason: `Urban.GeostrophicCoupling` (the nudging mode relaxes plane
+  means: plan step 3) and `SimulationDriver.SimulationCouplings` (the IBM
+  penalty: plan step 5). The urban terms are not exercised end to end in a
+  run yet: `Urban.UrbanSite` (step 5) keeps every urban domain unfused.
+
+**Bug the tests caught** (the code was wrong): a domain with `Coriolis`
+and `LargeScale` (components_both_cores.jl) crashed Julia 1.13.3's code
+generation (segfault in `box_union`). Whether a component attaches to a
+stage is a run-time value (`LargeScale`'s stages depend on its options),
+and with it deciding the plan's length inference widened `hook_terms` to
+`Union{Nothing, Tuple{Vararg{CoriolisTerm}}}`; the substage then went
+through a dynamic call. Step 1 never met it because every real component
+returned `nothing`. Each component with a sweep term now enters
+`hook_terms` as `OptionalTerm(attached, term)` at every in-core stage, so
+the plan type depends on the component types only (regression test in
+`test/fused_sweep_pointwise.jl`). The first `SpongeTargets` with
+`Union{T, Vector{T}, Array{T,3}}` fields was replaced by `DampingTargets`
+at the same time (no unions in the sweep's arguments).
+
+**Test expectations that changed** (right for step 1, outdated by this
+step): `components_pipeline.jl` expected a stage-6 `Coriolis` component to
+turn the fused sweep off (it now uses a recorder component without a
+sweep term for that, and asserts `Coriolis` stays fused);
+`test/fused_sweep.jl`'s examples of terms that are not fused are now the
+SGS closure and the post-predictor hook, and the dry CBL reports only
+`builtin.sgs`.
+
+**Tests** (`test/fused_sweep_pointwise.jl`, 780 assertions after the review fixes): each term in
+`blocked_predictor!` against the base tendencies + its `add_*!` operator
+or `run_stage!` + the predictor, for 1–5 slabs (and reversed), serial and
+threaded, regular and stretched, dry and moist, Euler and RK3 (agreement
+at ROUNDOFF_RTOL; measured bit-identical); `step!`/`step_rk3!` with every
+built-in pointwise term and domains with the components (rest and `mean`
+sponge, a time-dependent fringe target), `loop_fusion = "always"` against
+`"never"` (also at 6 threads); the geostrophic diagnostics against
+`run_stage!`'s (exact for the level means and wind means, rtol 1e-9 for
+the mean tendencies, which `run_stage!` takes as a difference of
+tendency-field means); `step_rk3!` with all four built-in terms allocates
+16 bytes (as the DNS). Full suite green on the final branch (118 jobs, 5997
+assertions; validation `urban_checks.jl` 33/33 and `gabls1.jl` 8/8 with
+it);
+`urban_run.jl`, `urban_checks.jl` green; validation `urban_checks.jl` 33/33.
+
+**Measured**: a configured case whose only terms besides advection and
+diffusion are these: the dry CBL of `examples/dry_convective_bl` with
+`[sgs] model = "none"`, `[coriolis] f = 1e-4`, `dynamics.nu = 1`, RK3,
+192 × 192 × 64 (built-in buoyancy; `SurfaceThetaFlux`, `Sponge`, `Coriolis`
+components; `loop_fusion = "if_possible"` reports every substage fused).
+`step!(domain)` (`benchmarks/bench_loop_fusion.jl`, case `bench_loop_fusion_cbl.toml`) with `"never"` (one loop per term: these cases' code
+before this step) and `"if_possible"`, alternating in blocks of 3 steps
+within one process (4 blocks; minimum per setting; short runs, the
+interleaving guards against the boost/sustained drift of #535), two
+processes per thread count, under the benchmark lock, other agents'
+unlocked tests running (1-min load 1.2–14); ms/step, the minimum of the
+two processes, and the speed-up of each process (Ryzen AI 9 HX 370):
+
+| threads | 1 | 2 | 6 | 12 |
+| :-- | --: | --: | --: | --: |
+| one loop per term | 282 | 196 | 142 | 112 |
+| fused | 242 | 152 | 95.6 | 77.7 |
+| speed-up per process | 1.25, 1.16 | 1.26, 1.29 | 1.48, 1.52 | 1.45, 1.44 |
+
+The first 1-thread process ran at a 1-min load of 15 (681 / 544 ms); the
+ratio within a process is the robust number. The
+byte model of the issue (compulsory arrays per substage, counted once per
+kernel as `bench_roofline.jl` does) for the tendency + predictor part of
+this case: one loop per term streams 8 (base tendencies) + 2 (buoyancy) + 4
+(Coriolis) + 1.5 (sponge, top quarter) + 6 (u, v, w predictor) + 3 (θ with
+the RK3 combination) ≈ 24.5 arrays, the fused sweep 5 (u, v, w, θ, the
+step-start θ): 196 → 40 B per point and substage; the projection is
+unchanged. A model, not a hardware count: **not measured** in this step
+are the bytes by counter, the STREAM-relative GB/s, 24 threads and a
+second machine.
+
+**Deviations**: the urban `GeostrophicCoupling` records its mean
+tendencies `dtu`, `dtv`, `dtu_sp`, `dtv_sp` as the level means of what it
+adds (in `run_stage!` a difference of two tendency-field means; equal
+within round-off). `hook_terms` now holds one `OptionalTerm` per component
+and in-core stage (an off one costs a branch per row). A component's
+sweep term stands for everything it adds in stages 6 and 7 (the interface
+has no stage argument): one attached to both is switched on once, at
+`:tendencies` (step 1 would have added it at both). `SimulationCouplings`,
+the one such component today, has no term when it attaches to
+`:body_force` (obstacles).
+
+**Review of step 2** (bugs, the code was wrong; a regression test each in
+the "review of step 2" testset of `test/fused_sweep_pointwise.jl`):
+- `DampingTerm` did not check a level-vector target's length, which
+  `_add_damping!` does: under `"if_possible"` a sponge target of `Nz + 4`
+  values ran on its first `Nz`, a shorter one read out of bounds. It now
+  throws the same `DimensionMismatch`. The axis is passed as a `Val`
+  (with the check the constructor was no longer inlined, and the term's
+  axis parameter, until then found by constant propagation, became
+  unknown: `step_rk3!` then allocated 6.7 kB per step, which the
+  allocation test of the built-in plan rejects).
+- `SimulationCouplings`' `sweep_term` returned
+  `Union{Nothing, SurfaceFluxTerm}`, so the plan's tuple length was again a
+  run-time value (`hook_terms` inferred as a `Vararg` tuple) for every TOML
+  run with a slab surface. Obstacles are now a type parameter of the
+  component and the term's type follows from it; "the plan type depends on
+  the component types only" holds now for every component with a sweep
+  term.
+- The step core did not specialise on `body_force!`/`post_predictor!`
+  (an argument of a `Function` type that is only passed on is not
+  specialised on), so a `Domain`'s plan was built and the sweep entered
+  through a dynamic call. `step!` (Euler, 20 × 12 × 12, 1 thread) of a
+  domain with a `Coriolis` component allocated 1120 B fused, now 0;
+  Coriolis + `SurfaceThetaFlux` + `Sponge` 4832 → 2368 B (one loop per term:
+  1488 B, the sponge component's own). What remains is the plan tuple
+  itself, heap-allocated once per substage when it holds more than the
+  built-in terms (496 B with Coriolis and `SurfaceThetaFlux`): plan
+  construction, independent of the grid, not in the sweep. The CBL timings
+  above were taken before this fix (a dynamic call per substage, against
+  77–242 ms per step) and were not re-measured.
+- The core sponge's 3-D targets (a `Field`, a halo-padded array:
+  `DampingTargets` kind 2) are now tested in `step!`/`step_rk3!`, fused
+  against one loop per term, on both grids, serial and threaded.
+
 **Step 3: terms that need a reduction of the stage-start state**
 (branch `issue/533-s3-reductions`). What was built:
 - **The column form of the large-scale forcings**

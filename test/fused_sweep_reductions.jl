@@ -274,7 +274,11 @@ _fr_domain(s, geo, extra; clock = :step) =
                 a = mk()
                 foreach(t -> fill!(t.data, NaN), (a.state.tu, a.state.tv, a.state.tw, a.state.tθ, a.state.tqv))
                 terms = _fr_sweep!(a, Δt, rk3, snap, ns; reversed = reversed)
-                @test length(terms) == 2 && terms[2] isa CPr.LargeScaleTerm
+                # (with #533 step 2 every component term sits in an OptionalTerm, one per
+                # in-core stage; only LargeScale's :body_force entry is switched on)
+                on = filter(t -> t.on, terms[2:end])
+                @test all(t -> t isa FVr.OptionalTerm, terms[2:end]) && length(on) == 1 &&
+                      only(on).term isa CPr.LargeScaleTerm
                 ok = all(f -> agree(interior_view(f[1]), interior_view(f[2])),
                          ((a.state.u, r.state.u), (a.state.v, r.state.v), (a.state.w, r.state.w),
                           (a.state.θ, r.state.θ), (a.state.qv, r.state.qv)))
@@ -333,7 +337,8 @@ end
     h = CPr.core_hooks(d)
     T = typeof(FVr.sweep_term(d.components[2], d))
     @test T <: CPr.LargeScaleTerm
-    @test (@inferred SIMr.hook_terms(h.body_force!, d.state)) isa Tuple{T}
+    # (an OptionalTerm per in-core stage, #533 step 2)
+    @test (@inferred SIMr.hook_terms(h.body_force!, d.state)) isa Tuple{FVr.OptionalTerm{T},FVr.OptionalTerm{T}}
     n = @allocated step!(d, 0.2)
     # the same case with twice the levels and more columns: an allocation per
     # level (the first version of prepare! boxed a Float64 per level), per row

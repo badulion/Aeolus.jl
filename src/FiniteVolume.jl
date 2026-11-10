@@ -1879,5 +1879,7 @@ end
 include("operators/fused_sweep.jl")
 # the budgets inside the sweep: per-level sums of what booked terms add (#533 plan step 7)
 include("operators/fused_sweep_budgets.jl")
+# its pointwise terms: buoyancy, Coriolis, boundary fluxes, damping (#533 plan step 2)
+include("operators/sweep_pointwise.jl")
 
 end # module

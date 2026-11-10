@@ -160,15 +160,31 @@ function Simulations.hook_terms(h::_ForceHook, sim)
     b === nothing && return nothing
     return bk === nothing ? (a..., b...) : (bk, a..., b...)
 end
+# Whether a component attaches to a stage is known only at run time
+# (`stages(c)` may depend on its options), so a component with a sweep term
+# enters as an `OptionalTerm` switched by its attachment: the tuple type
+# depends only on the component types (#533 step 2; with the attachment
+# deciding the tuple's length, inference widened a domain of Coriolis and
+# LargeScale to a Vararg tuple). One without a sweep term blocks where it
+# attaches and adds nothing where it does not. A component's sweep term is
+# all it adds in stages 6 and 7, so one attached to both is switched on
+# once, at :tendencies. With the budgets on, the term of an attributed
+# component is a `BookedTerm` inside its `OptionalTerm` (a switched-off
+# term sums nothing; integration of #533 steps 2 and 7). `attributed` is
+# decided by the component's type, so the tuple type still is too.
 _stage_terms(::Tuple{}, d, ::Val, si, bk) = ()
-function _stage_terms(cs::Tuple, d, v::Val{S}, si, bk) where {S}
+function _stage_terms(cs::Tuple, d, v::Val, si, bk)
     rest = _stage_terms(Base.tail(cs), d, v, si, bk)
-    c = first(cs)
-    attaches(c, S) || return rest
-    t = FiniteVolume.sweep_term(c, d)
-    (t === nothing || rest === nothing) && return nothing
     nc = length(d.components)
-    return (_booked_term(t, bk, c, v, _sweep_slot(si, nc - length(cs) + 1, nc)), rest...)
+    t = _stage_term(first(cs), d, v, bk, _sweep_slot(si, nc - length(cs) + 1, nc))
+    (t === nothing || rest === nothing) && return nothing
+    return (t..., rest...)
+end
+function _stage_term(c, d, v::Val{S}, bk, slot) where {S}
+    on = attaches(c, S) && !(S === :body_force && attaches(c, :tendencies))
+    t = FiniteVolume.sweep_term(c, d)
+    t === nothing && return on ? nothing : ()
+    return (FiniteVolume.OptionalTerm(on, _booked_term(t, bk, c, v, slot)),)
 end
 function Simulations.hook_blockers(h::_ForceHook, sim)
     out = Pair{String,String}[]

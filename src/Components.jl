@@ -42,7 +42,7 @@ using ..Simulations: Simulations, BoussinesqSimulation, step_rk3!, add_velocity_
 using ..PrognosticSGS: TKEClosure, initialize_tke!
 using ..IBM: SolidMask, first_level_cells, wall_distance
 using ..BoundaryConditions: Periodic, NoSlipWall
-using ..Grids: CellCenter
+using ..Grids: CellCenter, FaceX, FaceY, FaceZ, xnodes   # FaceX…, xnodes: the fringe in the fused sweep (#533)
 using ..StretchedGrids: StretchedGrid
 using ..BoundaryConditions: fill_halos!
 using ..SurfaceExchange: AbstractStabilityFunctions, BusingerDyerLogLinear, BusingerDyerBeljaarsHoltslag,

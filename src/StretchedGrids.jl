@@ -59,7 +59,7 @@ import ..Grids: totalsize, interior, xnodes, ynodes, znodes
 import ..Operators.FiniteVolume: _∂x!, _∂y!, _∂z!, _laplacian!, _divergence!,
                                  _interp_to_face!, _interp_to_center!,
                                  _add_surface_flux!, _add_sponge!, _add_buoyancy!,
-                                 damping_coordinates, grid_metrics
+                                 damping_coordinates, damping_levels, grid_metrics
 using ..Operators.FiniteVolume: sponge_profile, in_damping, damping_rate, _add_damping!,
                                 LevelZ, GridMetrics
 using ..Backends: Backends, launch!
@@ -601,6 +601,9 @@ _zloc_coords(g::StretchedGrid, ::Location) = g.zc
 # DampingProfile at, on a StretchedGrid (the generic is in FiniteVolume).
 damping_coordinates(g::StretchedGrid, loc::Location) =
     _zloc_coords(g, loc)[g.Hz+1:g.Hz+g.Nz]
+# the same heights without a copy (the fused sweep's damping term, #533)
+damping_levels(g::StretchedGrid, loc::Location) =
+    view(_zloc_coords(g, loc), g.Hz+1:g.Hz+g.Nz)
 
 # =========================================================================
 # TerrainFollowingGrid — Gal-Chen / Somerville σ-coordinate
