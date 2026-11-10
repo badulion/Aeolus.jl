@@ -30,6 +30,8 @@ schema(::Type{SurfaceThetaFlux}) =
 enabled(::Type{SurfaceThetaFlux}, opts) = opts.bottom != 0 || opts.top != 0
 build(::Type{SurfaceThetaFlux}, opts, domain) = SurfaceThetaFlux(opts.bottom, opts.top)
 stages(::SurfaceThetaFlux) = (Stage(:tendencies),)
+# the budgets measure it on the energy only (#539)
+budget_writes(::SurfaceThetaFlux, ::Val{:tendencies}) = (:energy,)
 
 function run_stage!(c::SurfaceThetaFlux, d, ::Val{:tendencies}, dt)
     add_surface_flux!(d.state.tθ, c.bottom, c.top)

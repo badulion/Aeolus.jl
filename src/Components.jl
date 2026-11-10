@@ -72,7 +72,8 @@ using ..Fields: interior_view, set!
 using ..Backends: plane_partials!
 using ..MoistThermodynamics: DEFAULT_CONSTANTS, R_d, virtual_temperature, PhasePartition
 using ..BudgetSystem: Budgets, StageBudget, LevelMeter, transport_conserved_weight, budget_start!,
-                      budget_begin_step!, budget_end_step!, budget_open!, budget_close!, budget_discard!, book_context!,
+                      budget_begin_step!, budget_end_step!, budget_open!, budget_close!, budget_discard!, budget_skip!,
+                      book_context!,
                       stage_budget
 using ..Output: OutputVariable, check_catalogue, cell_centres
 using ..Checks: Check, ReferenceProfile, reference_check

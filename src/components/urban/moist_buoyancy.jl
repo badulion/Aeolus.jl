@@ -29,6 +29,7 @@ end
 component_name(::Type{<:MoistBuoyancy}) = :moist_buoyancy
 modules_used(::Type{<:MoistBuoyancy}) = (:MoistThermodynamics,)
 stages(::Type{<:MoistBuoyancy}) = ((:body_force, 20, EVERY_STEP),)
+Components.budget_writes(::MoistBuoyancy, ::Val{:body_force}) = ()   # tw alone, no budget quantity (#539)
 
 function build(::Type{<:MoistBuoyancy}, case, o)
     m = case.mesh

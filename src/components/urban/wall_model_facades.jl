@@ -111,6 +111,8 @@ function Aeolus.Operators.FiniteVolume.sweep_term(c::WallModelFacades, d)
     return Aeolus.WallModels.stencil_wall_flux_term(case.sim, c.iw; rows = c.rows, sgs = c.sgs)
 end
 
+# the facades' stress after the predictor: the momentum only (#539)
+Components.budget_writes(::WallModelFacades, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)
 run_stage!(c::WallModelFacades, case, ::Val{:post_predictor}, dt) =
     (apply_immersed_wall_stress!(case.sim, c.iw, dt); nothing)
 

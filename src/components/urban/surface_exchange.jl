@@ -700,6 +700,8 @@ function air_delivery_time!(c::SurfaceExchangeMOST, t, dt)
     return τ
 end
 
+# the momentum flux after the predictor (#539)
+Components.budget_writes(::SurfaceExchangeMOST, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)
 function run_stage!(c::SurfaceExchangeMOST, case, ::Val{:post_predictor}, dt)
     # the ground is a WallModels wall at every column's first air level
     # (k_air > Nz: no surface, no wall); u_τ from this step's (filtered) wind
