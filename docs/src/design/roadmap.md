@@ -3585,6 +3585,10 @@ What the numbers say:
   ranges. The `-t 4` subprocess adds (1, 2), (1, 4) and (2, 2).
 - **Tolerances and results.** e must agree within 4 eps of max e
   (measured 0) and the budget sums within 1e-12 relative.
+- **The thread-invariance worker** (`AEOLUS_THREAD_TESTS=1`, sections
+  dns, fv, steps and sgs, at 1, 4 and 24 threads) agrees. Its
+  "columns" section stops at the urban nesting check, which this change
+  does not touch.
 - **No bug was caught.** The split agreed on the first run.
 - **Mutation check.** With the TKE edge rows one shallower (`ly = lz −
   1`), the j-split cases fail in both orders, by up to 4e-3 of max e.
