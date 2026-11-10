@@ -415,6 +415,34 @@ function write_row! end
 @inline _row_slot(ring, edge, r, j, k, k0, k1, lz) =
     (e = _edge_slot(k, k0, k1, lz); e > 0 ? (edge, j, e) : (ring, k - k0 + 1, r))
 
+# --- row helpers shared by the updates (#554, #559)
+
+# one row of slab s, whatever (J, K): (I, J, K) ↦ buf[I, s] (a row of an
+# intermediate quantity, e.g. a tendency, that a whole-field point body
+# writes while the update holds the row)
+struct _Line{T, A<:AbstractMatrix{T}} <: AbstractArray{T,3}
+    buf::A
+    s::Int
+end
+Base.size(r::_Line) = (size(r.buf, 1), 1, 1)
+@inline Base.getindex(r::_Line, I::Integer, J::Integer, K::Integer) = @inbounds r.buf[I, r.s]
+@inline Base.setindex!(r::_Line, x, I::Integer, J::Integer, K::Integer) = (@inbounds r.buf[I, r.s] = x; r)
+
+@noinline function _zero_line!(td, ii)
+    @inbounds for I in ii
+        td[I, 1, 1] = zero(eltype(td))
+    end
+    return nothing
+end
+
+# the new values of row (j, k) of one field from the driver's ring slot
+@noinline function _write_ring_row!(ϕ, ring, a, b, s, j, k, ii)
+    @inbounds @simd ivdep for i in ii
+        ϕ[i, j, k] = ring[i, a, b, 1, s]
+    end
+    return nothing
+end
+
 # slab s: the j-row sweep (one launch item per slab; slabs write disjoint
 # planes and read the others' only on their edge planes, not yet updated)
 function _b_sweep_slab!(s, op, ring, edge, ii, jj, kk, ns, lag, lz)
