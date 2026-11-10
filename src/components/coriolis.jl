@@ -30,6 +30,8 @@ coriolis_f(opts) = (lat = option(opts, :latitude, nothing); lat === nothing ? Fl
 enabled(::Type{Coriolis}, opts) = coriolis_f(opts) != 0
 build(::Type{Coriolis}, opts, domain) = Coriolis(coriolis_f(opts))
 stages(::Coriolis) = (Stage(:tendencies),)
+# the budgets measure it on the momentum only (#539)
+budget_writes(::Coriolis, ::Val{:tendencies}) = (:momentum_x, :momentum_y)
 
 function run_stage!(c::Coriolis, d, ::Val{:tendencies}, dt)
     s = d.state

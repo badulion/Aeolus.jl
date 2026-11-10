@@ -32,7 +32,7 @@ using ..Anelastic: MassWeightedSimulation, constraint_weights
 
 export LevelMeter, measure_levels!, solid_levels!, measure, air_heat, layer_fraction, level_thickness,
        split_transport, transport_conserved_weight,
-       StageBudget, budget_start!, budget_begin_step!, budget_end_step!, budget_open!, budget_close!,
+       StageBudget, budget_start!, budget_begin_step!, budget_end_step!, budget_open!, budget_close!, budget_skip!,
        budget_discard!, book!, book_context!, stage_budget, stage_report, report_order,
        Budgets, energy, measured_quantities, add_term!, water_tracer!, add_surface!, add_water!, add_heat!,
        heat_budget, level_sums, water_content, water_split, water_split_levels, surface_budget,

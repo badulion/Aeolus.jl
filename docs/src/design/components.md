@@ -310,6 +310,38 @@ obstacles) are not air.
   construction: `storage − Σ terms` is round-off. A change outside every
   context is booked as `(:core, :unattributed)`.
 
+- **Declared writes (#539).** A component names the quantities each of
+  its entries can change, `Components.budget_writes(c, Val(stage))`
+  (default: all of them). The budgets measure an entry only for those and
+  skip it for the others (`budget_skip!`): a skip costs no pass. At the
+  top level the budget no longer knows the state after a skip, so the
+  next entry that measures (or the end of the step) measures afresh and
+  books any change since the last measurement as `(:core,
+  :unattributed)`. An undeclared write of a top-level entry is therefore
+  neither hidden nor attributed to its neighbour. Inside the core, an
+  undeclared write of a skipped entry stays in the dynamics' share (the
+  closure holds, the attribution is the dynamics'). The verify mode
+  (`[budgets] verify_writes = true`, `with_budgets(…; verify = true)`)
+  measures every entry and stops with an error at a change the
+  declaration left out; the tests run it on the declared components.
+- **The switch.** `[budgets] enabled = false` builds no budgets in any
+  domain (model domains and urban sites) and measures nothing. The
+  `budget_*` outputs and budget checks the configuration requests are
+  dropped with one warning, and `results.toml` records `[budgets]
+  enabled = false`.
+
+The cost, measured on the Berlin 100 m run (200 × 200 × 60, energy and
+water budgets, RK3; #539): every measurement is one pass over the
+field. Before, a step made 50 passes of 16 B per point (the field and a
+`Float64` air mask), 1.92 GB. 36 of them measured an in-core entry
+(Coriolis, the geostrophic forcing, the tiles' drag) on a budget it
+cannot change, and 5 a top-level entry that changed nothing measured. Now
+a step makes 13 passes (energy 7, water 6) of 8 B per point (a domain
+without solid cells reads the field alone; with solid cells a one-byte
+mask, 9 B), 0.25 GB. Four of the 13 are the fresh measurements after
+skipped top-level entries, the price of booking an undeclared write as
+unattributed.
+
 After the stages of 11–12 and `:budgets` (13) have run, each component's
 `budget!(c, domain, budgets)` books the terms it *reports*: surface energy
 per class, water from outside the air, free-form terms. The step then

@@ -76,6 +76,8 @@ Components.post_after_sweep(e::UrbanEntry) = Components.post_after_sweep(e.c)
 # a coupling's whole-field form after the sweep runs through its entry (timed)
 _entry_post_term(t, e, d, Δt) = t
 _entry_post_term(::Aeolus.Operators.FiniteVolume.AfterSweep, e, d, Δt) = Components.run_after_sweep(e, d, Δt)
+# what the budgets measure: the coupling's declaration (#539; default every quantity)
+Components.budget_writes(e::UrbanEntry, v::Val) = Components.budget_writes(e.c, v)
 function Components.run_stage!(e::UrbanEntry, d::Domain, v::Val{S}, dt) where {S}
     case = urban_case(d)
     t0 = time_ns()
@@ -103,10 +105,21 @@ function Components.run_stage!(case::UrbanSite, d::Domain, ::Val{:clock}, dt)
     case.clock.n += 1
     l = case.budgets
     size(l.Ts_start) == size(case.bus.Ts) ? copyto!(l.Ts_start, case.bus.Ts) : (l.Ts_start = copy(case.bus.Ts))
-    l.W_start = air_water(case)
+    budgets_enabled(case) && (l.W_start = air_water(case))
     case.clock.hour = hour_of_day(case.cfg, case.sim.t)
     return nothing
 end
+"""
+    budgets_enabled(case) -> Bool
+
+Whether the site measures its budgets (`[budgets] enabled`, #539; a
+site built from options without the key: on).
+"""
+budgets_enabled(case) = get(case.cfg, :budgets, (enabled = true,)).enabled
+
+# the :clock entry snapshots the surfaces and the water: nothing measured changes (#539)
+Components.budget_writes(::UrbanSite, ::Val{:clock}) = ()
+
 # the open faces' θ relaxation is booked as (:dynamics, :relaxation) after
 # the step (book_dynamics_heat!), not measured as an entry of its own
 Components.attributed(::UrbanSite, ::Val{:tendencies}) = false
@@ -276,8 +289,11 @@ function build_domain!(case)
     # (its thermodynamic reference, `Components.thermodynamic_reference`: the site's own, #536)
     d = Domain(case.sim; id = case.nest === nothing ? string(cfg.name) : string(case.nest.id), components = comps,
                validate = false, drivers = (; reference = case.ref))
-    db = DomainBudgets(case.budgets, (:energy,), Dict(:energy => case.sim.θ), Dict(:energy => case.sim.tθ);
-                       nsub = 1, hour = t -> hour_of_day(cfg, t))
+    # [budgets] enabled = false (#539): no budgets, no measurement
+    bo = get(cfg, :budgets, (enabled = true, verify = false))
+    db = bo.enabled ?
+         DomainBudgets(case.budgets, (:energy,), Dict(:energy => case.sim.θ), Dict(:energy => case.sim.tθ);
+                       nsub = 1, hour = t -> hour_of_day(cfg, t), verify = bo.verify) : nothing
     case.domain = Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
     case.model = Model(case.domain)
     h = Components.core_hooks(case.domain)
@@ -439,6 +455,7 @@ function Components.run_results(case::UrbanSite, d::Domain)
     res = run_results(case; θ_start = clk.θ_start, wall = wall, wall_first_step = clk.t_first - clk.t_wall0,
                       simulated = case.sim.t - clk.t0, steps = clk.n - clk.n0)
     led = res["budgets"]
+    led["enabled"] || return res
     @info("budgets " * (led["closed"] ? "closed" : "NOT closed"), subsystem = :urban, domain = current_domain(),
           event = :results, surface = led["surface_max_abs_closure"], water = led["water_residual"],
           air_heat = led["air_heat_closure"])

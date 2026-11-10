@@ -21,9 +21,12 @@ that the components inside the core add to (`tendency`, or `nothing`),
 and the count of the core's in-core hook calls of the current step (to
 weight the RK3 substages and to notice a retried step), and `hour`, the
 function of the model time that picks a step's hour-of-day bin
-(`nothing`: one bin). Built by [`with_budgets`](@ref), or around a
-`Budgets` of its own by `DomainBudgets(budgets, quantities, state,
-tendency; nsub, hour)`.
+(`nothing`: one bin). `verify`: measure every context, also those whose
+component declares it cannot change the quantity
+([`budget_writes`](@ref)), and throw when such a context changed it (the
+check of the declarations, for tests and debugging; #539). Built by
+[`with_budgets`](@ref), or around a `Budgets` of its own by
+`DomainBudgets(budgets, quantities, state, tendency; nsub, hour, verify)`.
 """
 mutable struct DomainBudgets
     budgets::Budgets
@@ -35,13 +38,15 @@ mutable struct DomainBudgets
     nsub::Int
     hour::Any
     exchange::Union{Nothing,Tuple{Symbol,Symbol}}
+    verify::Bool
     sweep::Any       # the budget term of the fused sweep (`SweepBudget`, #533), built at its first use
 end
-DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing, exchange = nothing) =
+DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing, exchange = nothing,
+              verify::Bool = false) =
     DomainBudgets(b, collect(Symbol, quantities), Dict{Symbol,Any}(state), Dict{Symbol,Any}(tendency),
-                  0, 0.0, Int(nsub), hour, exchange)
-DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange) =
-    DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange, nothing)
+                  0, 0.0, Int(nsub), hour, exchange, verify, nothing)
+DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange, verify::Bool = false) =
+    DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange, verify, nothing)
 
 """
     NEST_EXCHANGE
@@ -98,7 +103,30 @@ _first_solid(::Tuple{}) = nothing
 _first_solid(cs::Tuple) = (m = solid_mask(first(cs)); m === nothing ? _first_solid(Base.tail(cs)) : m)
 
 """
-    with_budgets(d::Domain, quantities) -> Domain
+    budget_writes(c, ::Val{stage}) -> Tuple
+
+The budget quantities ([`BUDGET_QUANTITIES`](@ref)) that component `c`'s
+entry in `stage` can change: what it writes into the state the budgets
+measure (θ for `:energy`, qv and the components' water for `:water`, u
+and v for the momentum, the tracer) or, inside the core (`:tendencies`,
+`:body_force`), into the core's tendency of it. The budgets measure an
+entry only for the quantities it declares; for the others its context is
+skipped (`budget_skip!`), which saves a pass over the field per
+quantity and context (#539: 36 of the Berlin run's 50 passes per step
+measured an entry that cannot change the quantity).
+
+The default is every quantity: a component that declares nothing is
+measured everywhere. A declaration is a promise that the verify mode
+checks (`[budgets] verify_writes`, [`DomainBudgets`](@ref)): it measures
+every context and fails on a change the declaration left out. Without
+it, an undeclared change of a skipped top-level entry is booked as
+`(:core, :unattributed)`, and of a skipped entry inside the core in the
+dynamics' share.
+"""
+budget_writes(::Any, ::Val) = BUDGET_QUANTITIES
+
+"""
+    with_budgets(d::Domain, quantities; verify = false) -> Domain
 
 `d` with its budgets on for `quantities` (a subset of
 [`BUDGET_QUANTITIES`](@ref)), started from the current state:
@@ -114,8 +142,9 @@ _first_solid(cs::Tuple) = (m = solid_mask(first(cs)); m === nothing ? _first_sol
 constant ``ρ_0 = p_{ref} / (R_d θ_0)`` with ``Π̄ = 1`` (the Boussinesq
 transport conserves ``Σ θ``, so the energy budget has no redistribution
 term). Solid cells of the components' obstacles are left out of the air.
+`verify` is the verify mode of [`DomainBudgets`](@ref).
 """
-function with_budgets(d::Domain, quantities)
+function with_budgets(d::Domain, quantities; verify::Bool = false)
     qs = collect(Symbol, quantities)
     isempty(qs) && return d
     all(q -> q in BUDGET_QUANTITIES, qs) ||
@@ -153,7 +182,7 @@ function with_budgets(d::Domain, quantities)
         budget_start!(sb, m)
         b.measured[q] = sb
     end
-    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing, nothing)
+    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing, nothing, verify)
     return Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
 end
 
@@ -197,17 +226,32 @@ state (the urban site's record and sanity check), which books no term.
 """
 attributed(c, ::Val) = true
 
+# whether the context of `c`'s entry `v` is measured for `q`: declared, or
+# the verify mode
+@inline _measures(b::DomainBudgets, c, v::Val, q::Symbol) = b.verify || q in budget_writes(c, v)
+
+# after a context the declarations skip, measured in the verify mode
+function _verify_skip(b::DomainBudgets, c, v::Val{S}, q::Symbol) where {S}
+    b.budgets.measured[q].changed &&
+        error("budgets (verify mode): $(component_name(c))'s entry in :$S changed the $q budget, " *
+              "which its budget_writes(…, Val(:$S)) = $(budget_writes(c, v)) leaves out; declare it")
+    return nothing
+end
+
 # a component's stage entry outside the core: a context on the state
 @inline _attributed!(::Nothing, c, d, v::Val, dt) = run_stage!(c, d, v, dt)
 function _attributed!(b::DomainBudgets, c, d, v::Val{S}, dt) where {S}
     attributed(c, v) || return run_stage!(c, d, v, dt)
     n = component_name(c)
     for q in b.quantities
-        budget_open!(b.budgets.measured[q], S, n, b.state[q])
+        sb = b.budgets.measured[q]
+        _measures(b, c, v, q) ? budget_open!(sb, S, n, b.state[q]) : budget_skip!(sb)
     end
     run_stage!(c, d, v, dt)
     for q in Iterators.reverse(b.quantities)
+        _measures(b, c, v, q) || continue
         budget_close!(b.budgets.measured[q], b.state[q])
+        q in budget_writes(c, v) || _verify_skip(b, c, v, q)
     end
     return nothing
 end
@@ -227,14 +271,15 @@ function _attributed_in_core!(b::DomainBudgets, c, d, v::Val{S}, Δt) where {S}
     ontend = S !== :post_predictor
     for q in b.quantities
         x = ontend ? b.tendency[q] : b.state[q]
-        x === nothing && continue
+        (x === nothing || !_measures(b, c, v, q)) && continue
         budget_open!(b.budgets.measured[q], S, n, x; scale = ontend ? w * Δt : w)
     end
     run_stage!(c, d, v, Δt)
     for q in Iterators.reverse(b.quantities)
         x = ontend ? b.tendency[q] : b.state[q]
-        x === nothing && continue
+        (x === nothing || !_measures(b, c, v, q)) && continue
         budget_close!(b.budgets.measured[q], x)
+        q in budget_writes(c, v) || _verify_skip(b, c, v, q)
     end
     return nothing
 end

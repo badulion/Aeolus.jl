@@ -126,6 +126,8 @@ function build(::Type{<:Fringe}, opts, domain)
     return Fringe(fr, target, update!, U∞)
 end
 stages(::Fringe) = (Stage(:body_force),)
+# the velocity fringe: the budgets measure it on the momentum only (#539)
+budget_writes(::Fringe, ::Val{:body_force}) = (:momentum_x, :momentum_y)
 
 # with free-stream turbulence: the target and the time of its last refresh
 checkpoint_state(c::Fringe) = c.update! === nothing ? nothing :

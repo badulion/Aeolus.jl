@@ -62,6 +62,8 @@ function build(::Type{<:Sponge}, opts, domain)
     return Sponge(α, z0, (u = ut, v = vt, w = 0), kind, ut, vt)
 end
 stages(::Sponge) = (Stage(:body_force),)
+# the velocity sponge: the budgets measure it on the momentum only (#539)
+budget_writes(::Sponge, ::Val{:body_force}) = (:momentum_x, :momentum_y)
 
 # The large-scale forcing component of the domain (nothing without one).
 _large_scale(::Tuple{}) = nothing
