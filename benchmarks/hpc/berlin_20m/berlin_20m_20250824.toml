@@ -1,0 +1,111 @@
+# Berlin at 20 m, 24 August 2025: the Berlin 100 m case
+# (../berlin_100m/berlin_100m_20250824.toml) on the same 20 km x 20 km x 3 km
+# domain at 1000 x 1000 x 150 cells (20 m x 20 m x 20 m), dt = 0.4 s (the
+# 100 m and 50 m cases' dt scaled with the cell). 150 M grid points: about
+# 4.2 M points per core on one socket (36 cores) and 2.1 M on the node (72),
+# within the 1-4 M points per core of PALM's published strong-scaling runs
+# (PALM wiki doc/tec/parallel). The scaling test of #566 (../scaling.sh).
+# The land-use table is rasterised at 10 m and coarse-grained to 20 m
+# (R = 2). The drivers are made by prepare.sh in this directory.
+
+schema_version = 2
+static_driver = "input/berlin_20m_static.nc"
+dynamic_driver = "input/berlin_20m_20250824_dynamic.nc"
+
+[run]
+name = "berlin_20m_20250824"
+seed = 2025
+
+[fftw]
+# No threads key: FFTW then runs on Threads.nthreads() threads
+# (Backends.init_threads!). Run 1's configs fixed it at the laptop's 12.
+
+[checkpoint]
+# a checkpoint every 2 h of wall-clock time (every_seconds is wall clock;
+# every_steps counts model steps), the last 2 kept (resume with --resume)
+every_seconds = 7200.0
+keep = 2
+
+[output]
+netcdf = "berlin_20m.nc"
+# temperature: theta times the reference Exner function of the initial
+# sounding (K); surface_temperature: the tiles' area-weighted skin
+# temperature, surface_temperature_<class> per tile class (NaN where a
+# column has none); temperature_2m: the 2 m air temperature (#536)
+variables = ["u", "v", "w", "theta", "qv", "temperature", "theta_profile", "qv_profile",
+             "temperature_profile", "u_profile", "v_profile", "heat_flux_profile",
+             "surface_temperature", "surface_temperature_street", "surface_temperature_roof",
+             "surface_temperature_park", "surface_temperature_water", "surface_temperature_wall",
+             "temperature_2m", "budget_energy", "budget_water"]
+cadence = 1800.0
+
+[time]
+# a fixed step (the adaptive step fails with the open faces, see
+# ../berlin_100m/README.md); 1 s keeps the advective CFL below 0.5 up to
+# 25 m/s at 50 m, as 2 s at 100 m
+dt = 0.4
+duration = 86400.0
+
+[grid]
+size = [1000, 1000, 150]
+extent = [20000.0, 20000.0, 3000.0]
+halo = [2, 2, 2]
+# the domain centred on the anchor ([radiation] latitude, longitude)
+origin = [-10000.0, -10000.0]
+
+[core]
+model = "boussinesq"
+
+[timestep]
+scheme = "rk3"
+
+[dynamics]
+nu = 0.0
+theta0 = 293.0
+g = 9.81
+moisture = true
+
+[boundaries]
+# the lateral faces fed by ERA5's boundary planes
+x = "open"
+y = "open"
+z = "free_slip"
+
+[initial]
+# the ERA5 profiles at the domain centre at the start (the dynamic driver)
+perturbation_amplitude = 0.4
+perturbation_depth = 200.0
+
+[coriolis]
+f = 0.000115
+
+[large_scale_forcing]
+# the geostrophic wind of ERA5 (the driver's ls_u_g, ls_v_g tables)
+u_g = "driver"
+v_g = "driver"
+
+[sgs]
+model = "tke"
+e_min = 0.0001
+wall_cap = true
+wall_cap_top = false
+surface_value = true
+
+[surface]
+model = "tiles"
+period = 60.0
+u_min = 0.5
+
+[radiation]
+scheme = "mean_column"
+period = 600.0
+humid = "midlatitude_summer"
+latitude = 52.515
+longitude = 13.40
+elevation = 34.0
+date = 2025-08-24
+utc_offset = 2.0
+start_hour = 0.0
+
+[checks]
+finite = { required = true }
