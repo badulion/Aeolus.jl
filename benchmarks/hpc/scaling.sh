@@ -46,6 +46,10 @@ BUDGET=${BENCH_BUDGET:-900}
 mkdir -p "$OUT"
 exec > >(tee -a "$OUT/scaling.log") 2>&1
 export JULIA_EXCLUSIVE=1
+# GNU time where it exists; Fritz's compute nodes have none (timev.py: the same report)
+if [ -x /usr/bin/time ]; then TIMEV=(/usr/bin/time -v); else
+    command -v python3 >/dev/null || module load python/3.13-miniforge >/dev/null 2>&1
+    TIMEV=(python3 "$HPC/timev.py"); fi
 { echo "# scaling job ${SLURM_JOB_ID:-} $(date -Is) threads: $TS"; hostname; lscpu; numactl -H; free -g
   echo "bench-$B $(git -C "$BENCH_ROOT/bench-$B" log -1 --format='%H %s')"
   echo "scripts $(git -C "$HPC" rev-parse HEAD)"; } > "$OUT/machine.txt" 2>&1
@@ -53,7 +57,7 @@ export JULIA_EXCLUSIVE=1
 for t in $TS; do
     lab=scaling_20m_t${t}_$B
     echo "[$(date +%T)] $lab"
-    /usr/bin/time -v -o "$OUT/$lab.time.txt" \
+    "${TIMEV[@]}" -o "$OUT/$lab.time.txt" \
         julia -t "$t,0" --project="$BENCH_ROOT/bench-$B" "$HPC/bench_run.jl" time "$CFG" 0.4 "$OUT/$lab.toml" \
             build="$B" case=20m label="$lab" budget="$BUDGET" nwarm=2 rounds=1 nsteps=5 \
         || echo "FAILED $lab (exit $?)"
