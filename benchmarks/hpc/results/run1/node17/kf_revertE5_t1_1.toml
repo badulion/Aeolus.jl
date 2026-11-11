@@ -1,0 +1,40 @@
+t_load_s = 5.259873151779175
+label = "kf_revertE5_t1_1"
+commit = "1789ca23566c47578a30318622a260622aefc46b"
+fixes = ["E5"]
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all-revert-E5"
+threads = 1
+ref = "/home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node17/kf_all_t1_1.toml"
+host = "f0460"
+budget_s = 10.0
+build = "all-revert-E5"
+julia = "1.13.3"
+t_total_s = 35.372265100479126
+started = "2026-11-11T00:01:03.241"
+t_build_s = 0.0
+slurm_job = "4459830"
+
+[E5]
+rel_dq_pass_separate = 0.0
+solid_cells = 180000
+agree = true
+rel_dq_separate = 0.0
+t_s = 27.908684968948364
+tol = 1.0e-12
+case = "tdc_case 200x200x60 boussinesq, mask"
+rel_dq_pass = 0.0
+
+    [E5.timings.pass]
+    n = 135
+    median_ms = 33.934543
+    min_ms = 33.705351
+
+    [E5.timings.separate]
+    n = 135
+    median_ms = 38.890525
+    min_ms = 38.718773
+
+    [E5.timings.copy_q]
+    n = 135
+    median_ms = 2.485414
+    min_ms = 2.384205

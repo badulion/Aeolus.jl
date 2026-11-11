@@ -1,0 +1,11 @@
+threads: 16 default + 1 interactive, JULIA_EXCLUSIVE=1; OS-thread affinities: 0 | 0-71 | 1 | 10 | 11 | 12 | 13 | 14 | 15 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9; default threads on CPUs 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+STREAM copy  dram     63.6 GB/s
+ROW machine 16 stream_copy_dram 63.5889
+STREAM triad dram     72.6 GB/s
+ROW machine 16 stream_triad_dram 72.5941
+STREAM copy  l3      215.5 GB/s
+ROW machine 16 stream_copy_l3 215.515
+STREAM triad l3      169.5 GB/s
+ROW machine 16 stream_triad_l3 169.503
+empty threaded launch (8 rows of 64): 9.47 µs
+ROW machine 16 launch_empty 9.475

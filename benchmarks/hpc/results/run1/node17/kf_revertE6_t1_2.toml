@@ -1,0 +1,43 @@
+t_load_s = 2.4330458641052246
+label = "kf_revertE6_t1_2"
+commit = "e36258350f6697c06f9f229ce7b5c18a46962612"
+fixes = ["E6"]
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all-revert-E6"
+threads = 1
+ref = "/home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node17/kf_all_t1_1.toml"
+host = "f0460"
+budget_s = 10.0
+build = "all-revert-E6"
+julia = "1.13.3"
+t_total_s = 101.96274280548096
+started = "2026-11-11T00:05:53.958"
+t_build_s = 0.0
+slurm_job = "4459830"
+
+[E6]
+agree = true
+alloc_update_bytes = 856885760
+rel_dtau = 0.0
+tol = 1.0e-12
+t_s = 97.95970511436462
+case = "rsc_case 200x200x60 weno_z5, mask"
+
+    [E6.timings.pass]
+    n = 3
+    median_ms = 2538.02361
+    min_ms = 2533.770608
+
+    [E6.timings.copy_tau]
+    n = 3
+    median_ms = 19.101553
+    min_ms = 19.100998
+
+    [E6.timings.separate]
+    n = 3
+    median_ms = 2537.175056
+    min_ms = 2529.659033
+
+    [E6.timings.update]
+    n = 3
+    median_ms = 1891.445589
+    min_ms = 1887.373713

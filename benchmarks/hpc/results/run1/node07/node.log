@@ -1,0 +1,91 @@
+[23:13:29] ref_master_100m_t72 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/ref_master_100m_t72.toml
+[23:14:19] time_100m_t16_all-minus-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-D.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_100m_t16_all-minus-D.toml
+[23:15:20] time_50m_t16_all-minus-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-D.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_50m_t16_all-minus-D.toml
+[23:19:19] time_100m_t72_all-minus-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-D.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_100m_t72_all-minus-D.toml
+--------------------------------------------------------------------------------
+[23:20:50] time_50m_t72_all-minus-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-D.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_50m_t72_all-minus-D.toml
+--------------------------------------------------------------------------------
+[23:25:41] time_100m_t16_all-minus-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-E.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_100m_t16_all-minus-E.toml
+[23:26:42] time_50m_t16_all-minus-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-E.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_50m_t16_all-minus-E.toml
+[23:31:37] time_100m_t72_all-minus-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-E.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_100m_t72_all-minus-E.toml
+--------------------------------------------------------------------------------
+[23:33:06] time_50m_t72_all-minus-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/all-minus-E.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node07/time_50m_t72_all-minus-E.toml
+--------------------------------------------------------------------------------
+[23:37:55] node 7 done

@@ -1,0 +1,157 @@
+[23:10:33] ref_master_100m_t72 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/ref_master_100m_t72.toml
+[23:11:30] time_100m_t16_only-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-D.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+┌ Info: the step core runs one loop per term (not the fused sweep): builtin.open_boundaries, builtin.sgs, builtin.buoyancy, builtin.budgets, Components.Coriolis, Components.LargeScale, builtin.post_predictor, Urban.TiledUrbanSurface (no fused form; results.toml [loop_fusion])
+│   subsystem = :timestepping
+│   event = :not_fused
+└   reasons = "builtin.open_boundaries: open lateral faces: the radiating outflow and the boundary data's mass correction around the predictor are not yet verified inside the sweep; builtin.sgs: the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): νt an" ⋯ 565 bytes ⋯ "ost-predictor operators (the post_predictor! hook) run on the predicted field; the delayed-row scheme of the sweep for them is plan step 6; Urban.TiledUrbanSurface: the tiled surface's fluxes into the predicted first level (post-predictor): plan step 6"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_100m_t16_only-D.toml
+[23:12:45] time_50m_t16_only-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-D.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+┌ Info: the step core runs one loop per term (not the fused sweep): builtin.open_boundaries, builtin.sgs, builtin.buoyancy, builtin.budgets, Components.Coriolis, Components.LargeScale, builtin.post_predictor, Urban.TiledUrbanSurface (no fused form; results.toml [loop_fusion])
+│   subsystem = :timestepping
+│   event = :not_fused
+└   reasons = "builtin.open_boundaries: open lateral faces: the radiating outflow and the boundary data's mass correction around the predictor are not yet verified inside the sweep; builtin.sgs: the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): νt an" ⋯ 565 bytes ⋯ "ost-predictor operators (the post_predictor! hook) run on the predicted field; the delayed-row scheme of the sweep for them is plan step 6; Urban.TiledUrbanSurface: the tiled surface's fluxes into the predicted first level (post-predictor): plan step 6"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_50m_t16_only-D.toml
+[23:17:27] time_100m_t72_only-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-D.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_100m_t72_only-D.toml
+--------------------------------------------------------------------------------
+[23:19:10] time_50m_t72_only-D -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-D.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_50m_t72_only-D.toml
+--------------------------------------------------------------------------------
+[23:24:46] time_100m_t16_only-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-E.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+┌ Info: the step core runs one loop per term (not the fused sweep): builtin.open_boundaries, builtin.sgs, builtin.buoyancy, builtin.budgets, Components.Coriolis, Components.LargeScale, builtin.post_predictor, Urban.TiledUrbanSurface (no fused form; results.toml [loop_fusion])
+│   subsystem = :timestepping
+│   event = :not_fused
+└   reasons = "builtin.open_boundaries: open lateral faces: the radiating outflow and the boundary data's mass correction around the predictor are not yet verified inside the sweep; builtin.sgs: the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): νt an" ⋯ 565 bytes ⋯ "ost-predictor operators (the post_predictor! hook) run on the predicted field; the delayed-row scheme of the sweep for them is plan step 6; Urban.TiledUrbanSurface: the tiled surface's fluxes into the predicted first level (post-predictor): plan step 6"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_100m_t16_only-E.toml
+[23:26:01] time_50m_t16_only-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-E.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+┌ Info: the step core runs one loop per term (not the fused sweep): builtin.open_boundaries, builtin.sgs, builtin.buoyancy, builtin.budgets, Components.Coriolis, Components.LargeScale, builtin.post_predictor, Urban.TiledUrbanSurface (no fused form; results.toml [loop_fusion])
+│   subsystem = :timestepping
+│   event = :not_fused
+└   reasons = "builtin.open_boundaries: open lateral faces: the radiating outflow and the boundary data's mass correction around the predictor are not yet verified inside the sweep; builtin.sgs: the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): νt an" ⋯ 565 bytes ⋯ "ost-predictor operators (the post_predictor! hook) run on the predicted field; the delayed-row scheme of the sweep for them is plan step 6; Urban.TiledUrbanSurface: the tiled surface's fluxes into the predicted first level (post-predictor): plan step 6"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_50m_t16_only-E.toml
+[23:30:46] time_100m_t72_only-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-E.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_100m_t72_only-E.toml
+--------------------------------------------------------------------------------
+[23:32:24] time_50m_t72_only-E -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-E.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_50m_t72_only-E.toml
+--------------------------------------------------------------------------------
+[23:37:54] time_100m_t16_only-543 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-543.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+┌ Info: the step core runs one loop per term (not the fused sweep): builtin.open_boundaries, builtin.sgs, builtin.buoyancy, builtin.budgets, Components.Coriolis, Components.LargeScale, builtin.post_predictor, Urban.TiledUrbanSurface (no fused form; results.toml [loop_fusion])
+│   subsystem = :timestepping
+│   event = :not_fused
+└   reasons = "builtin.open_boundaries: open lateral faces: the radiating outflow and the boundary data's mass correction around the predictor are not yet verified inside the sweep; builtin.sgs: the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): νt an" ⋯ 565 bytes ⋯ "ost-predictor operators (the post_predictor! hook) run on the predicted field; the delayed-row scheme of the sweep for them is plan step 6; Urban.TiledUrbanSurface: the tiled surface's fluxes into the predicted first level (post-predictor): plan step 6"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_100m_t16_only-543.toml
+[23:39:13] time_50m_t16_only-543 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-543.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+┌ Info: the step core runs one loop per term (not the fused sweep): builtin.open_boundaries, builtin.sgs, builtin.buoyancy, builtin.budgets, Components.Coriolis, Components.LargeScale, builtin.post_predictor, Urban.TiledUrbanSurface (no fused form; results.toml [loop_fusion])
+│   subsystem = :timestepping
+│   event = :not_fused
+└   reasons = "builtin.open_boundaries: open lateral faces: the radiating outflow and the boundary data's mass correction around the predictor are not yet verified inside the sweep; builtin.sgs: the SGS closure (compute_sgs!, add_sgs_momentum!, add_sgs_scalar!): νt an" ⋯ 565 bytes ⋯ "ost-predictor operators (the post_predictor! hook) run on the predicted field; the delayed-row scheme of the sweep for them is plan step 6; Urban.TiledUrbanSurface: the tiled surface's fluxes into the predicted first level (post-predictor): plan step 6"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_50m_t16_only-543.toml
+[23:43:47] time_100m_t72_only-543 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-543.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_100m_t72_only-543.toml
+--------------------------------------------------------------------------------
+[23:45:30] time_50m_t72_only-543 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/only-543.so
+--------------------------------------------------------------------------------
+CPU name:	Intel(R) Xeon(R) Platinum 8360Y CPU @ 2.40GHz
+CPU type:	Intel Icelake SP processor
+CPU clock:	2.40 GHz
+--------------------------------------------------------------------------------
+# HWThreads: 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Memory read bandwidth [MBytes/s]|Memory read data volume [GBytes]|Memory write bandwidth [MBytes/s]|Memory write data volume [GBytes]|Memory bandwidth [MBytes/s]|Memory data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|DP [MFLOP/s]|AVX DP [MFLOP/s]|AVX512 DP [MFLOP/s]|Packed [MUOPS/s]|Scalar [MUOPS/s]|Vectorization ratio [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|L3 load bandwidth [MBytes/s]|L3 load data volume [GBytes]|L3 evict bandwidth [MBytes/s]|L3 evict data volume [GBytes]|L3|MEM evict bandwidth [MBytes/s]|L3|MEM evict data volume [GBytes]|Dropped CLs bandwidth [MBytes/s]|Dropped CLs data volume [GBytes]|L3 bandwidth [MBytes/s]|L3 data volume [GBytes]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|Received data bandwidth [MByte/s]|Received data volume [GByte]|Sent data bandwidth [MByte/s]|Sent data volume [GByte]|Total data bandwidth [MByte/s]|Total data volume [GByte]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|CPI|IPC|Total slots|Front End [%]|Speculation [%]|Retiring [%]|Back End [%]
+# GID|MetricsCount|CpuCount|Total runtime [s]|Runtime (RDTSC) [s]|Runtime unhalted [s]|Clock [MHz]|Uncore Clock [MHz]|CPI|Temperature [C]|Energy [J]|Power [W]|Energy PP0 [J]|Power PP0 [W]|Energy DRAM [J]|Power DRAM [W]|Energy PLATFORM [J]|Power PLATFORM [W]
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node05/time_50m_t72_only-543.toml
+--------------------------------------------------------------------------------
+[23:51:14] node 5 done

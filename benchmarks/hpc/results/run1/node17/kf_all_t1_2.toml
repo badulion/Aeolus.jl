@@ -1,0 +1,68 @@
+t_load_s = 2.50610089302063
+label = "kf_all_t1_2"
+commit = "21196f5e6a00c541fddff6f63d6b59613979f54a"
+fixes = ["E5", "E6"]
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all"
+threads = 1
+ref = "/home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node17/kf_all_t1_1.toml"
+host = "f0460"
+budget_s = 10.0
+build = "all"
+julia = "1.13.3"
+t_total_s = 114.39598178863525
+started = "2026-11-11T00:03:21.826"
+t_build_s = 0.0
+slurm_job = "4459830"
+
+[E6]
+agree = true
+alloc_update_bytes = 0
+rel_dtau = 0.0
+tol = 1.0e-12
+t_s = 82.1528651714325
+case = "rsc_case 200x200x60 weno_z5, mask"
+
+    [E6.timings.pass]
+    n = 3
+    median_ms = 2236.593551
+    min_ms = 2236.583916
+
+    [E6.timings.copy_tau]
+    n = 3
+    median_ms = 19.101415
+    min_ms = 18.917677
+
+    [E6.timings.separate]
+    n = 3
+    median_ms = 2234.383921
+    min_ms = 2234.14427
+
+    [E6.timings.update]
+    n = 3
+    median_ms = 1562.356497
+    min_ms = 1562.07325
+
+[E5]
+rel_dq_pass_separate = 0.0
+solid_cells = 180000
+agree = true
+rel_dq_separate = 0.0
+t_s = 27.66127300262451
+tol = 1.0e-12
+case = "tdc_case 200x200x60 boussinesq, mask"
+rel_dq_pass = 0.0
+
+    [E5.timings.pass]
+    n = 228
+    median_ms = 19.1087855
+    min_ms = 18.854955
+
+    [E5.timings.separate]
+    n = 228
+    median_ms = 22.675623
+    min_ms = 22.513883
+
+    [E5.timings.copy_q]
+    n = 228
+    median_ms = 2.4181280000000003
+    min_ms = 2.382803

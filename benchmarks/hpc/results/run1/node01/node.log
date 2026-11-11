@@ -1,0 +1,55 @@
+[23:06:01] ref_master_100m_t72 -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/ref_master_100m_t72.toml
+[23:06:52] time_100m_t1_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_100m_t1_master.toml
+[23:09:30] time_50m_t1_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_50m_t1_master.toml
+[23:17:56] time_100m_t2_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_100m_t2_master.toml
+[23:21:19] time_50m_t2_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_50m_t2_master.toml
+[23:29:41] time_100m_t4_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_100m_t4_master.toml
+[23:31:57] time_50m_t4_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_50m_t4_master.toml
+[23:40:00] time_100m_t8_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_100m/input/berlin_100m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_100m_t8_master.toml
+[23:41:36] time_50m_t8_master -J /home/atuin/b337bd/b337bd10/aeolus-bench/sysimages/master.so
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_20250824_dynamic.nc"
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/run1_20261110_2305/node01/time_50m_t8_master.toml
+[23:47:37] node 1 done

@@ -1,0 +1,167 @@
+t_load_s = 2.463348150253296
+label = "kf_all_t16_1"
+commit = "21196f5e6a00c541fddff6f63d6b59613979f54a"
+fixes = ["E1E2", "E3", "E4", "E5", "E6"]
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all"
+threads = 16
+ref = ""
+host = "f0460"
+budget_s = 10.0
+build = "all"
+julia = "1.13.3"
+t_total_s = 408.4300129413605
+started = "2026-11-10T23:31:51.683"
+t_build_s = 198.37078309059143
+slurm_job = "4459830"
+
+[E1E2]
+agree = true
+rel_dD = 0.0
+rel_de = 0.0
+tol = 8.881784197001252e-16
+t_s = 285.2160677909851
+tol_stats = 1.0e-12
+grid = [204, 204, 64]
+mask = false
+rel_dstats = 3.1755081928373774e-15
+
+    [E1E2.timings.update_new]
+    n = 105
+    median_ms = 12.774442
+    min_ms = 10.951174
+
+    [E1E2.timings.update_old]
+    n = 105
+    median_ms = 23.030707
+    min_ms = 20.873837
+
+    [E1E2.timings.copy_e]
+    n = 105
+    median_ms = 4.965996
+    min_ms = 4.295027
+
+    [E1E2.timings.strain_new]
+    n = 105
+    median_ms = 16.869956
+    min_ms = 16.592957
+
+    [E1E2.timings.strain_old]
+    n = 105
+    median_ms = 37.468948
+    min_ms = 37.022741
+
+[E3]
+recon = "Aeolus.AdvectionSchemes.Centered2()"
+agree = true
+t_s = 29.12428307533264
+tol = 1.0e-12
+rel_dtend = 0.0
+rel_de_pass = 0.0
+grid = [204, 204, 64]
+rel_de_separate = 0.0
+
+    [E3.timings.advect_new]
+    n = 36
+    median_ms = 17.4492465
+    min_ms = 16.657852
+
+    [E3.timings.pass_new]
+    n = 36
+    median_ms = 60.4730535
+    min_ms = 57.432599
+
+    [E3.timings.pass_old]
+    n = 36
+    median_ms = 60.079128499999996
+    min_ms = 55.026165
+
+    [E3.timings.advect_old]
+    n = 36
+    median_ms = 17.400754499999998
+    min_ms = 16.681119
+
+    [E3.timings.separate_old]
+    n = 36
+    median_ms = 61.7582145
+    min_ms = 60.782515
+
+    [E3.timings.separate_new]
+    n = 36
+    median_ms = 61.5000445
+    min_ms = 59.96965
+
+    [E3.timings.copy_e]
+    n = 36
+    median_ms = 4.1222270000000005
+    min_ms = 4.04766
+
+[E6]
+alloc_update_bytes = 26304
+t_s = 54.953481912612915
+case = "rsc_case 200x200x60 weno_z5, mask"
+
+    [E6.timings.pass]
+    n = 8
+    median_ms = 499.837303
+    min_ms = 494.84724
+
+    [E6.timings.copy_tau]
+    n = 8
+    median_ms = 37.090399500000004
+    min_ms = 34.967106
+
+    [E6.timings.separate]
+    n = 8
+    median_ms = 501.13458549999996
+    min_ms = 495.085884
+
+    [E6.timings.update]
+    n = 8
+    median_ms = 339.377527
+    min_ms = 334.626726
+
+[E4]
+cloud = false
+t_s = 14.059293031692505
+
+    [E4.timings.pass]
+    n = 78
+    median_ms = 59.064764
+    min_ms = 53.883795
+
+    [E4.timings.separate]
+    n = 78
+    median_ms = 61.8100045
+    min_ms = 60.147084
+
+    [E4.timings.n2_loop]
+    n = 78
+    median_ms = 2.966451
+    min_ms = 1.800487
+
+    [E4.timings.copy_e]
+    n = 78
+    median_ms = 4.06846
+    min_ms = 4.016757
+
+[E5]
+rel_dq_pass_separate = 0.0
+solid_cells = 180000
+t_s = 21.000062942504883
+berlin_mask = false
+case = "tdc_case 200x200x60 boussinesq, mask"
+
+    [E5.timings.pass]
+    n = 294
+    median_ms = 10.009161
+    min_ms = 9.112769
+
+    [E5.timings.separate]
+    n = 294
+    median_ms = 19.435927
+    min_ms = 16.975566
+
+    [E5.timings.copy_q]
+    n = 294
+    median_ms = 4.8535889999999995
+    min_ms = 4.753831
