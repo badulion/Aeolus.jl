@@ -1,36 +1,43 @@
-# Starting material from the laptop measurements (#554-#560), see benchmarks/hpc/HANDOFF.md.
-# Paths below point at the laptop's scratch and worktrees: adapt them before use.
-include(joinpath(@__DIR__, "setup.jl"))
-println("threads ", Threads.nthreads())
-function tm(f, n)
-    ts = Float64[]
-    for _ in 1:n
-        t0 = time_ns(); f(); push!(ts, (time_ns() - t0) / 1e6)
-    end
-    ts
+# E1 (16ad00c9, the update of e: row-parallel, branch-free, vectorised) and
+# E2 (cf704ba3, the dual strain rate: bulk loop without checks), old against
+# new in one process on the Berlin 100 m closure after 3 steps: the old
+# kernels are the copies of tke_update_strain_old.jl. The inputs of the
+# update (ν, N², D, the transport, P_w) are those of one separate-loop
+# advance from the stepped state; e is reset before every call (copy_e
+# times the reset alone).
+#
+#   julia -t N --project=<build> tke_update_strain_bench.jl <out.toml> [key=value ...]
+@isdefined(FIXES) || include(joinpath(@__DIR__, "common.jl"))
+include(joinpath(@__DIR__, "tke_update_strain_old.jl"))
+
+FIXES["E1E2"] = function ()
+    s = berlin(); c, sim = s.c, s.sim
+    g = PS.mesh(c.e); Δt = 2.0
+    e0 = copy(c.e.data); st0 = copy(c.stats)
+    PS._advance_separate!(c, sim, Δt)          # this step's ν, N², D, tend, Pw in the scratch
+    copyto!(c.e.data, e0)
+    pbs = PS._surface_buoyancy(c, sim)
+    u, v, w, bcs = sim.u, sim.v, sim.w, sim.bcs
+    upd(f) = (copyto!(c.e.data, e0); f(c, Δt, pbs))
+    # agreement: e pointwise (the same expressions, selected instead of
+    # branched: 0 expected), the budget sums to round-off (a different
+    # summation order), D the same shares in the same order (0 expected)
+    fill!(c.stats, 0); upd(PS._update_old!); eo = copy(c.e.data); so = copy(c.stats)
+    fill!(c.stats, 0); upd(PS._update!); en = copy(c.e.data); sn = copy(c.stats)
+    PS._dual_strain_old!(c.D, u, v, w, bcs, g); Do = copy(c.D.data)
+    PS._dual_strain!(c.D, u, v, w, bcs, g); Dn = copy(c.D.data)
+    ii, jj, kk = PS.interior(g)
+    de = relmax(en, eo); ds = relmax(sn, so); dD = relmax(Dn[ii, jj, kk], Do[ii, jj, kk])
+    println("  rel max|Δe| ", de, "  rel max|Δstats| ", ds, "  rel max|ΔD| ", dD)
+    t = measure(("update_old" => () -> upd(PS._update_old!), "update_new" => () -> upd(PS._update!),
+                 "strain_old" => () -> PS._dual_strain_old!(c.D, u, v, w, bcs, g),
+                 "strain_new" => () -> PS._dual_strain!(c.D, u, v, w, bcs, g),
+                 "copy_e" => () -> copyto!(c.e.data, e0)))
+    copyto!(c.e.data, e0); copyto!(c.stats, st0)
+    tol = 4eps()
+    return Dict{String,Any}("timings" => t, "grid" => collect(size(c.e.data)), "mask" => c.mask !== nothing,
+        "rel_de" => de, "rel_dstats" => ds, "rel_dD" => dD, "tol" => tol, "tol_stats" => 1e-12,
+        "agree" => de <= tol && dD <= tol && ds <= 1e-12)
 end
-for stretched in (false, true)
-    s = mksetup(; stretched)
-    c, sim, g = s.c, s.sim, s.g
-    D2 = similar(c.D.data); e0 = copy(c.e.data)
-    fs = Dict(
-      "strain_old" => () -> P._dual_strain_old!(c.D, sim.u, sim.v, sim.w, sim.bcs, g),
-      "strain_new" => () -> P._dual_strain!(c.D, sim.u, sim.v, sim.w, sim.bcs, g),
-      "update_old" => () -> (copyto!(c.e.data, e0); P._update_old!(c, 0.5, (0.0, 0.0))),
-      "update_new" => () -> (copyto!(c.e.data, e0); P._update!(c, 0.5, (0.0, 0.0))),
-      "copy_e" => () -> copyto!(c.e.data, e0))
-    for f in values(fs); f(); f(); end
-    copyto!(c.e.data, e0); fill!(c.stats, 0); P._update_old!(c, 0.5, (0.0, 0.0)); eo = copy(c.e.data); so = copy(c.stats)
-    copyto!(c.e.data, e0); fill!(c.stats, 0); P._update!(c, 0.5, (0.0, 0.0)); en = copy(c.e.data); sn = copy(c.stats)
-    println("update: max|Δe| = ", maximum(abs.(en .- eo)), "  max rel Δ stats = ", maximum(abs.(sn .- so) ./ max.(abs.(so), 1e-300)))
-    P._dual_strain_old!(c.D, sim.u, sim.v, sim.w, sim.bcs, g); Do = copy(c.D.data)
-    P._dual_strain!(c.D, sim.u, sim.v, sim.w, sim.bcs, g)
-    println("strain: max|ΔD|/max|D| = ", maximum(abs.(c.D.data .- Do)) / maximum(abs.(Do)))
-    res = Dict(k => Float64[] for k in keys(fs))
-    for rep in 1:15, k in sort(collect(keys(fs)))
-        append!(res[k], tm(fs[k], 3))
-    end
-    for k in sort(collect(keys(res)))
-        println(stretched ? "stretched " : "regular   ", rpad(k, 12), " min ", round(minimum(res[k]), digits=3), " ms  median ", round(median(res[k]), digits=3), " ms")
-    end
-end
+
+standalone("E1E2", @__FILE__)

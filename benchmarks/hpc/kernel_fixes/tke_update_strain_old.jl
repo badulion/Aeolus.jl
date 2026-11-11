@@ -1,7 +1,10 @@
-# Starting material from the laptop measurements (#554-#560), see benchmarks/hpc/HANDOFF.md.
-# Paths below point at the laptop's scratch and worktrees: adapt them before use.
-# Copies of the kernels as they were at f18feb68 (the baseline), evaluated
-# into Aeolus.PrognosticSGS under new names, for interleaved timing.
+# Copies of the kernels as they were at f18feb68 (the baseline of #554, before
+# E1 16ad00c9 and E2 cf704ba3), evaluated into Aeolus.PrognosticSGS under new
+# names, for interleaved timing (tke_update_strain_bench.jl). Checked against
+# bench/all (#566): the helpers they call (_dual_raw, _fold_src, _images,
+# _DualBox, _AllIn, _DualUniform, plane_map!, _surface!, ...) keep their
+# signatures; the separate-loop kernels _update! and _dual_strain! still
+# exist next to the TKE pass of #561.
 @eval Aeolus.PrognosticSGS begin
 struct _DualLevelsOld{T, V}
     idx2::T; idy2::T
