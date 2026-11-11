@@ -2,3 +2,4 @@
 berlin_*/data/
 berlin_*/input/
 berlin_*/runs/
+__pycache__/
