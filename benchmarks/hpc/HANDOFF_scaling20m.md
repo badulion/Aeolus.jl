@@ -248,7 +248,7 @@ That is issue 1.
 
 ## 6. Open items
 
-1. **Issue 1:** file it (§5.1).
+1. **Issue 1:** filed as #567 (§5.1).
 2. **Issue 2:** ask the maintainer whether to file it (§5.2). Until the surface-layer failure is fixed, or the case changes, the 20 m scaling test can't run.
 3. **Before rerunning the 20 m ladder:** a fix for issue 2, and ideally issue 1 too, since the ladder spends about 5 h on setup.
    - `scaling.sh` builds the model in every process (7 builds) and uses no system image.
