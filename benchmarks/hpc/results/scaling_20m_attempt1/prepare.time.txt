@@ -1,0 +1,6 @@
+	Command being timed: "./prepare.sh"
+	User time (seconds): 278.30
+	System time (seconds): 11.00
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04:35.94
+	Maximum resident set size (kbytes): 1887188
+	Exit status: 0

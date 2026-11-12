@@ -1,0 +1,25 @@
+12:35:04 +0min rss_kB=3172 cpu%=0.0 node_used_GB=7
+--- restarted, matching julia
+12:35:22 +0min rss_kB=2198260 cpu%=100.0 node_used_GB=8
+12:37:23 +2min rss_kB=36367012 cpu%=106.7 node_used_GB=42
+12:39:23 +4min rss_kB=36049684 cpu%=2980 node_used_GB=43
+12:41:24 +6min rss_kB=37326516 cpu%=100.0 node_used_GB=43
+12:43:24 +8min rss_kB=34940304 cpu%=100.0 node_used_GB=41
+12:45:25 +10min rss_kB=33602024 cpu%=3567 node_used_GB=41
+12:47:25 +12min rss_kB=37348184 cpu%=146.7 node_used_GB=43
+12:49:26 +14min rss_kB=37756192 cpu%=106.7 node_used_GB=46
+12:51:26 +16min rss_kB=38296208 cpu%=100.0 node_used_GB=45
+12:53:27 +19min rss_kB=37973740 cpu%=93.8 node_used_GB=45
+12:55:27 +21min rss_kB=38982000 cpu%=93.8 node_used_GB=46
+12:57:28 +23min rss_kB=37996536 cpu%=100.0 node_used_GB=45
+12:59:28 +25min rss_kB=39082692 cpu%=106.7 node_used_GB=46
+13:01:29 +27min rss_kB=37702420 cpu%=106.7 node_used_GB=45
+13:03:29 +29min rss_kB=38618204 cpu%=100.0 node_used_GB=46
+13:05:30 +31min rss_kB=37621720 cpu%=100.0 node_used_GB=45
+13:07:31 +33min rss_kB=38987400 cpu%=106.7 node_used_GB=46
+13:09:31 +35min rss_kB=39584084 cpu%=93.8 node_used_GB=46
+13:11:31 +37min rss_kB=38573636 cpu%=106.7 node_used_GB=46
+13:13:32 +39min rss_kB=39732664 cpu%=100.0 node_used_GB=47
+13:15:33 +41min rss_kB=38145568 cpu%=93.8 node_used_GB=45
+13:17:33 +43min rss_kB=55083360 cpu%=100.0 node_used_GB=62
+13:19:34 +45min rss_kB=738488 cpu%=100.0 node_used_GB=8

@@ -1,0 +1,6 @@
+	Command being timed: "julia -t 72,0 --project=.worktrees/bench-all .worktrees/issue-566/benchmarks/hpc/bench_run.jl time .worktrees/issue-566/benchmarks/hpc/berlin_20m/berlin_20m_20250824.toml 0.4 $WORK/aeolus-bench/results/scaling_20m/scaling_20m_t72_all.toml build=all case=20m label=scaling_20m_t72_all budget=900 nwarm=2 rounds=1 nsteps=5"
+	User time (seconds): 12626.30
+	System time (seconds): 3720.69
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:44:52.68
+	Maximum resident set size (kbytes): 69305020
+	Exit status: 1

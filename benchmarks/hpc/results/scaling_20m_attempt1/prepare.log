@@ -1,0 +1,34 @@
+No cgroup found
+[2026-11-11T12:29:32+01:00] prepare.sh on f0542
+               total        used        free      shared  buff/cache   available
+Mem:             251           6         245           0           0         244
+Swap:              9           0           9
+python3: /apps/python/3.13-miniforge/bin/python3 Python 3.13.12
+OSM extract: .worktrees/issue-566/benchmarks/hpc/berlin_100m/data/raw/berlin_100m.osm (265.5 MB)
+wrote .worktrees/issue-566/benchmarks/hpc/berlin_100m/data/berlin_20m_landuse.csv
+wrote .worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_static.nc
+wrote .worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc
+prepare.sh exit 0
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04:35.94
+	Maximum resident set size (kbytes): 1887188
+-rw-r--r-- 1 b337bd10 b337bd 43326798 Nov 11 12:31 .worktrees/issue-566/benchmarks/hpc/berlin_100m/data/berlin_20m_landuse.csv
+input:
+total 1463169
+drwxr-xr-x 2 b337bd10 b337bd      4096 Nov 11 12:33 .
+drwxr-xr-x 3 b337bd10 b337bd      4096 Nov 11 12:32 ..
+-rw-r--r-- 1 b337bd10 b337bd 745939523 Nov 11 12:34 berlin_20m_20250824_dynamic.nc
+-rw-r--r-- 1 b337bd10 b337bd   3184032 Nov 11 12:32 berlin_20m_static.nc
+[2026-11-11T12:34:08+01:00] land-use check
+100 m: cells 40000 (200 x 200), counts sum to R^2=100: True, lambda_p == n2/R^2: True, mean lambda_p 0.1439, mean lambda_f 0.0958, max lambda_f 1.27, max h_mean 142.0 m, mean h_mean 10.44 m, cells with buildings 75 % (30160)
+ 50 m: cells 160000 (400 x 400), counts sum to R^2=25: True, lambda_p == n2/R^2: True, mean lambda_p 0.1439, mean lambda_f 0.0958, max lambda_f 2.72, max h_mean 164.6 m, mean h_mean 8.16 m, cells with buildings 59 % (94463)
+ 20 m: cells 1000000 (1000 x 1000), counts sum to R^2=4: True, lambda_p == n2/R^2: True, mean lambda_p 0.1439, mean lambda_f 0.0958, max lambda_f 11.50, max h_mean 368.0 m, mean h_mean 4.09 m, cells with buildings 29 % (293631)
+[2026-11-11T12:34:15+01:00] static driver
+.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_static.nc
+  dim x = 1000
+  dim y = 1000
+  dim class = 5
+.worktrees/issue-566/benchmarks/hpc/berlin_50m/input/berlin_50m_static.nc
+  dim x = 400
+  dim y = 400
+  dim class = 5
+[2026-11-11T12:34:18+01:00] done

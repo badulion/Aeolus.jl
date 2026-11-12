@@ -1,0 +1,38 @@
+# Main thread at minute 33 of the 72-thread run (kill -USR1 stack dump; the other 71 Julia threads and the GC threads were waiting)
+__GI___lll_lock_wake at /lib64/libc.so.6 (unknown line)
+__GI___pthread_mutex_unlock_usercnt at /lib64/libc.so.6 (unknown line)
+uv_mutex_unlock at /workspace/srcdir/libuv/src/unix/thread.c:372
+gc_wake_all_for_marking at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:2728 [inlined]
+gc_mark_loop_parallel at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:2736 [inlined]
+gc_mark_loop at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:2756 [inlined]
+_jl_gc_collect at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:3123
+ijl_gc_collect at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:3563
+maybe_collect at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:355 [inlined]
+jl_gc_small_alloc_inner at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:734 [inlined]
+ijl_gc_small_alloc at /cache/build/builder-amdci4-1/julialang/julia-ci/src/gc-stock.c:783
+wrap at .worktrees/bench-all/src/IBM.jl:453 [inlined]
+#wall_distance#5 at .worktrees/bench-all/src/IBM.jl:472
+wall_distance at .worktrees/bench-all/src/IBM.jl:435 [inlined]
+_wall_distance at .worktrees/bench-all/src/components/sgs.jl:209 [inlined]
+_tke_sgs at .worktrees/bench-all/src/components/sgs.jl:196
+unknown function (ip: 0x1514dd372aa9) at (unknown file)
+build at .worktrees/bench-all/src/components/sgs.jl:184
+unknown function (ip: 0x1514dd36a559) at (unknown file)
+#build_components##0 at ./none (unknown line)
+iterate at ./generator.jl:48 [inlined]
+grow_to! at ./array.jl:923
+unknown function (ip: 0x1514dd369ab3) at (unknown file)
+grow_to! at ./array.jl:905
+collect at ./array.jl:825 [inlined]
+_totuple at ./tuple.jl:484 [inlined]
+Tuple at ./tuple.jl:450 [inlined]
+build_components at .worktrees/bench-all/src/components/domain.jl:62
+unknown function (ip: 0x1514dd364b54) at (unknown file)
+#_build_domain#146 at .worktrees/bench-all/src/config/simulation_driver.jl:1074
+_build_domain at .worktrees/bench-all/src/config/simulation_driver.jl:1034 [inlined]
+build at .worktrees/bench-all/src/config/simulation_driver.jl:1025
+unknown function (ip: 0x15158879f593) at (unknown file)
+jl_apply at /cache/build/builder-amdci4-1/julialang/julia-ci/src/julia.h:2319 [inlined]
+do_call at /cache/build/builder-amdci4-1/julialang/julia-ci/src/interpreter.c:123
+eval_value at /cache/build/builder-amdci4-1/julialang/julia-ci/src/interpreter.c:243
+eval_stmt_value at /cache/build/builder-amdci4-1/julialang/julia-ci/src/interpreter.c:194 [inlined]
