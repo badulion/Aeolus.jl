@@ -290,33 +290,50 @@ The value at height `z` of a vertical profile of `[initial]`:
   * `{kind = "tanh", value, amplitude, center, thickness}`: `value +
     amplitude tanh((z − center)/thickness)`, a shear layer.
 """
-function profile_value(p::AbstractDict, z::Real)
+profile_value(p::AbstractDict, z::Real) = profile_function(p)(z)
+
+"""
+    profile_function(p::AbstractDict) -> z -> Float64
+
+The profile `p` of [`profile_value`](@ref) read once into a function of the
+height: its numbers converted, its table copied into `Vector{Float64}`s.
+What a caller that evaluates a profile at many points uses (`set!` of an
+initial field: once per grid point), so the configuration's `Dict` is not
+read and its table not converted again at every point (#567).
+"""
+function profile_function(p::AbstractDict)
     kind = p["kind"]
     if kind == "constant"
-        return Float64(p["value"])
+        v = Float64(p["value"])
+        return z -> v
     elseif kind == "mixed_layer_lapse"
-        zi = Float64(p["z_i"])
-        return z < zi ? Float64(p["value"]) : Float64(p["value"]) + Float64(p["lapse"]) * (z - zi)
+        zi = Float64(p["z_i"]); v = Float64(p["value"]); Γ = Float64(p["lapse"])
+        return z -> z < zi ? v : v + Γ * (z - zi)
     elseif kind == "table"
         zs = Float64.(p["z"]); vs = Float64.(p["values"])
-        if z < zs[1] && haskey(p, "below")
-            b = p["below"]
-            if b["kind"] == "log"                 # from zero at z0 to the lowest tabulated value
-                z0 = Float64(b["z0"])
-                return vs[1] * (log(max(z, z0) / z0) / log(zs[1] / z0))
+        b = get(p, "below", nothing)
+        # below the lowest height: 0 none, 1 the log law, 2 linear
+        mode = b === nothing ? 0 : b["kind"] == "log" ? 1 : 2
+        z0 = mode == 1 ? Float64(b["z0"]) : NaN           # from zero at z0 to the lowest tabulated value
+        zb = mode == 2 ? Float64(b["z"]) : NaN            # linear from (z, value) to the lowest one
+        yb = mode == 2 ? Float64(b["value"]) : NaN
+        return function (z)
+            if z < zs[1] && mode != 0
+                mode == 1 && return vs[1] * (log(max(z, z0) / z0) / log(zs[1] / z0))
+                return yb + (vs[1] - yb) * (max(z, zb) - zb) / (zs[1] - zb)
             end
-            zb = Float64(b["z"]); yb = Float64(b["value"])   # linear from (z, value) to the lowest one
-            return yb + (vs[1] - yb) * (max(z, zb) - zb) / (zs[1] - zb)
+            z <= zs[1] && return vs[1]
+            z >= zs[end] && return vs[end]
+            i = searchsortedlast(zs, z)
+            w = (z - zs[i]) / (zs[i+1] - zs[i])
+            return (1 - w) * vs[i] + w * vs[i+1]
         end
-        z <= zs[1] && return vs[1]
-        z >= zs[end] && return vs[end]
-        i = searchsortedlast(zs, z)
-        w = (z - zs[i]) / (zs[i+1] - zs[i])
-        return (1 - w) * vs[i] + w * vs[i+1]
     elseif kind == "exponential"
-        return Float64(p["value"]) * exp(-z / Float64(p["scale_height"]))
+        v = Float64(p["value"]); H = Float64(p["scale_height"])
+        return z -> v * exp(-z / H)
     elseif kind == "tanh"
-        return Float64(p["value"]) + Float64(p["amplitude"]) * tanh((z - Float64(p["center"])) / Float64(p["thickness"]))
+        v = Float64(p["value"]); a = Float64(p["amplitude"]); c = Float64(p["center"]); d = Float64(p["thickness"])
+        return z -> v + a * tanh((z - c) / d)
     end
     throw(ArgumentError("profile_value: kind $(repr(kind)) is not a vertical profile"))
 end
@@ -934,7 +951,7 @@ initial profile read.
 function initial_theta_profile(cfg, dyn)
     p = cfg.initial.theta
     !isempty(p) && get(p, "kind", "") in ("constant", "mixed_layer_lapse", "table", "exponential", "tanh") &&
-        return z -> profile_value(p, z)
+        return profile_function(p)
     if isempty(p) && _sounding(dyn)
         tab = dyn.tables[:profile_theta]
         return z -> forcing_value(tab, z, 0.0)
@@ -1140,6 +1157,10 @@ function _initialise_dynamic!(sim, dyn, cfg)
     return sim
 end
 
+# a field of the height only (a function barrier: `g` is one of the closures
+# of `profile_function`)
+_set_column!(f, g::G) where {G} = set!(f, (x, y, z) -> g(z))
+
 function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
     if get(p, "kind", "") == "taylor_green"
         A = Float64(p["amplitude"]); k = Float64(p["k"])
@@ -1155,7 +1176,7 @@ function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
         v = Float64(p["value"]); bx = Float64.(p["x"]); by = Float64.(p["y"]); bz = Float64.(p["z"])
         set!(f, (x, y, z) -> (bx[1] < x < bx[2] && by[1] < y < by[2] && bz[1] < z < bz[2]) ? v : 0.0)
     else
-        set!(f, (x, y, z) -> profile_value(p, z))
+        _set_column!(f, profile_function(p))
     end
     return f
 end
