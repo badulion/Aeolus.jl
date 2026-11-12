@@ -302,20 +302,38 @@ function parent_morphometry(pl::ParentLanduse, frac::AbstractArray{<:Real,3}; wi
 end
 
 """
-    parent_forcing_level(z_centres, h) -> k
+    parent_forcing_level(z_centres, h; d = 0, z0 = 0) -> k
 
-The parent level whose air state forces a column's surface: the lowest
-level whose centre lies at or above the mean building height `h`. Below
-the roofs the air is inside the unresolved canopy, where the
-Monin–Obukhov profile ``\\ln((z - d)/z_0)`` of the built tiles does not
-hold (and ``z - d`` can be negative: with ``Δz = 25`` m the first centre,
-12.5 m, lies below a 20 m roof level and its displacement). Above `h`,
-``z - d ≥ h - d > z_0`` for every λ (Macdonald et al. 1998), so the
-logarithm is positive. `k = 1` where there are no buildings.
+The parent level whose air state forces a built tile: the lowest level
+whose centre lies at or above the mean building height `h` **and** at
+least twice the tile's roughness length `z0` above its displacement
+height `d`, ``z_k - d ≥ 2 z_0``. Below the roofs the air is inside the
+unresolved canopy, where the Monin–Obukhov profile ``\\ln((z - d)/z_0)``
+of the built tiles does not hold (and ``z - d`` can be negative: with
+``Δz = 25`` m the first centre, 12.5 m, lies below a 20 m roof level and
+its displacement). With `d = z0 = 0` this is the first centre at or
+above `h` (`k = 1` where there are no buildings).
+
+The first centre above `h` alone does not guarantee a valid surface
+layer, although ``h - d > z_0`` holds for Macdonald et al.'s (1998)
+roughness at every ``λ_p < 1``: (i) as ``λ_p → 1``, ``d → h`` and
+``z_k - d → z_k - h``, which is arbitrarily small when a level centre
+lies just above the roofs; (ii) a built tile's roughness is
+``\\max(z_{0,\\mathrm{Macdonald}}, z_{0,\\mathrm{class}})``, and the
+class floor is not covered by Macdonald's inequality. On the Berlin 20 m
+grid (#568) one roof tile, under a fully roofed 160 m morphometry window
+(``λ_p = 1``, ``h = 9.96`` m, ``d = 9.961`` m), had its first centre at
+10 m, so ``z_k - d = 0.039`` m below its class ``z_0 = 0.05`` m, and the
+surface-layer solve stopped the run. The margin ``z_0 < z/2`` is PALM's
+check of the first grid level against the roughness length
+(`land_surface_model_mod.f90`, which stops the run or, with
+`allow_roughness_limitation`, lowers ``z_0`` to ``z/2``); here the
+forcing level is raised instead and the roughness kept.
 """
-function parent_forcing_level(z_centres::AbstractVector{<:Real}, h::Real)
-    k = findfirst(>=(h), z_centres)
-    k === nothing && error("parent_forcing_level: buildings of $h m reach above the top level")
+function parent_forcing_level(z_centres::AbstractVector{<:Real}, h::Real; d::Real = 0.0, z0::Real = 0.0)
+    k = findfirst(z -> z >= h && z - d >= 2z0, z_centres)
+    k === nothing && error("parent_forcing_level: no level centre at or above the buildings ($h m) " *
+                           "and $(2z0) m above their displacement ($d m)")
     return k
 end
 
@@ -330,6 +348,7 @@ each tile, and the column's forcing level `k = maximum(ktile)` (the one
 level of a `BlendedMosaic`).
 
 Built tiles are forced at the first level above the mean roof height
+that lies at least ``2 z_0`` above their displacement height
 ([`parent_forcing_level`](@ref)); park and water tiles, which have no
 canopy of their own, at the first level (`k = 1`). Forcing a smooth
 tile above the neighbouring roofs instead decoupled it: a pure water
@@ -440,19 +459,22 @@ function build_parent_surface(case, pl::ParentLanduse;
         present = [c for c in 1:size(frac, 3) if frac[I, c] > 0]
         tiles = AbstractSurface[]
         dd = Float64[]
+        kt = Int[]
         for c in present
             Ts = tile_skin(case, c)
             built = is_built_class(c)
             z0c, z0hc = class_roughness(case, SurfaceSite(c; T_skin = Ts))
-            site = built ? SurfaceSite(c; T_skin = Ts, z0m = max(z0[I], z0c), z0h = z0hc) :
+            z0mt = max(z0[I], z0c)
+            site = built ? SurfaceSite(c; T_skin = Ts, z0m = z0mt, z0h = z0hc) :
                            SurfaceSite(c; T_skin = Ts)
             push!(tiles, class_surface(case, site))
             push!(dd, built ? d[I] : 0.0)
+            # a built tile: the first level above the roofs that is also a
+            # valid Monin–Obukhov height over its d and z0 (#568)
+            push!(kt, built && unresolved ? parent_forcing_level(zc, h[I]; d = d[I], z0 = max(z0mt, z0hc)) : 1)
         end
         m = SurfaceMosaic(tiles, frac[I, present])
         s = blending === nothing ? m : BlendedMosaic(m, blending)
-        kb = unresolved ? parent_forcing_level(zc, h[I]) : 1
-        kt = [is_built_class(c) ? kb : 1 for c in present]
         cols[I] = ParentColumn(s, UInt8.(present), dd, kt, maximum(kt))
     end
     return ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols)
