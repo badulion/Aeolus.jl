@@ -2714,6 +2714,20 @@ compiler-flag provenance remain.
   - The old name is rejected only where no surface publishes `surface_temperature`. With `"most"` or `"tiles"` the name is valid, with its new meaning.
   - The tiles of a blended mosaic are evaluated at their own forcing levels, not at the blending height.
 
+
+### Urban parent surface: forcing height above the roughness (#568)
+
+**Shipped** (#568). The Berlin 20 m case of the #566 scaling test (1000 × 1000 × 150 cells) built, then failed in its first step: `solve_surface_layer: need z_m > z0m > 0`.
+
+- **Cause, measured on the land-use tables** (`read_parent_landuse`, `parent_morphometry` with window 8, `macdonald_roughness`, the default class roughness, level centres at Δz/2, 3Δz/2, …):
+  - 20 m: one built tile of 1 379 716 fails. Cell (30, 615), roof class: λp = 1.0 over its 160 m window, λf = 0.047, h = 9.96 m, so Macdonald's d = h (9.961 m) and z0 = 0; the class floor gives z0m = 0.05 m. The first centre at or above h is 10.0 m, so z_ref = 0.039 m < z0m.
+  - 50 m and 100 m: no failing tile; the smallest z_ref/z0m is 3.92 and 4.44.
+  - Both of the issue's hypotheses hold at once in that tile: d → h as λp → 1, and the class floor, which Macdonald's ``h − d > z_0`` does not cover. The old docstring's claim "above h, z − d ≥ h − d > z0 for every λ" was wrong at λp = 1 and for the floor.
+- **What was built.** `parent_forcing_level(z_centres, h; d, z0)` returns the lowest centre at or above h with ``z_k − d ≥ 2 z_0``. `build_parent_surface` calls it per built tile with that tile's d and ``\max(z_{0m}, z_{0h})``. The margin is PALM's check of the first level against the roughness (`land_surface_model_mod.f90`: ``z_0 ≥ z_{mo}/2`` stops the run, or with `allow_roughness_limitation` lowers ``z_0`` to ``z_{mo}/2``). Here the forcing level is raised and the roughness kept, so a tile's surface parameters do not depend on the grid.
+- **Effect.** On the 20 m table exactly that one tile moves, from the 10 m level to 30 m (z_ref 20.04 m); afterwards the smallest z_ref/z0m is 2.03. No tile of the 50 m or 100 m tables changes, so those runs are unchanged.
+- **Test** (`components_parent.jl`): the unit cases (the old rule with d = z0 = 0; raised and unchanged levels; no level at all), and a synthetic 12 × 4 block of 20 m cells (r = 2): closed roof at h = 9.96 m next to half-built cells. Every built tile is forced at ``z_k − d ≥ 2\max(z_{0m}, z_{0h})``; the roof tile is raised to level 2 and the half-built ones stay at level 1; the old height is refused by the surface-layer solve, and the column now steps with finite fluxes.
+- **Not done here.** The 20 m case has not been rerun past its first step (setup takes about 43 min on Fritz, #567), so it is not shown that nothing else fails later.
+
 ---
 
 # Data assimilation and inverse problems
