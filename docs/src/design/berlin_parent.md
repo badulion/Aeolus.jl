@@ -116,8 +116,11 @@ hydrostatic integration (`hydrostatic_pressure`; since ONE-e #454 in
 Every 60 s each tile of each column is stepped
 (`step_parent_column!`) under the parent's own air at the tile's forcing
 level (the first level above the column's mean roof height for built
-tiles, raised until it lies at least ``2 z_0`` above the tile's
-displacement height, #568; the first level for park and water; #249), with the downwelling
+tiles; where that level lies less than ``2 z_0`` above the tile's
+displacement height the build stops, or with `[surface]
+raise_forcing_level = true` the tile is forced at the lowest level that
+clears it and listed in `results.toml`, #568; the first level for park
+and water; #249), with the downwelling
 shortwave and longwave of the last radiation call. A tile forced at level
 ``k_i`` releases its heat, vapour and momentum flux into the canopy levels
 below it, ``1 … \max(1, k_i − 1)``, uniformly per volume over their depth
