@@ -260,7 +260,7 @@ cell-centred source and solution. The default is the channel
 closed box of a nested or open-boundary child, whose normal velocity is
 prescribed on every face so that `∂φ/∂n = 0` everywhere.
 
-Each axis is diagonalised separately (Schumann & Sweet 1988):
+The horizontal axes are diagonalised separately (Schumann & Sweet 1988):
 
 * a **periodic** axis by the real FFT, eigenvalue
   ``4/Δ^2 \\sin^2(π m/N)``, ``m = 0 … N-1``;
@@ -271,17 +271,28 @@ Each axis is diagonalised separately (Schumann & Sweet 1988):
   mirror ghosts `φ₀ = φ₁`, `φ_{N+1} = φ_N` (zero face gradient) are
   enforced implicitly. The `2N` is the period of that even extension.
 
-```math
-λ_{m,n,l} = -\\frac{4}{Δx^2}\\sin^2\\frac{π m}{N_x^*}
-            -\\frac{4}{Δy^2}\\sin^2\\frac{π n}{N_y^*}
-            -\\frac{4}{Δz^2}\\sin^2\\frac{π l}{N_z^*},
-\\qquad N^* = N \\text{ (periodic)},\\quad 2N \\text{ (Neumann)}.
-```
+**The vertical axis.**
+
+* **Neumann `z`** (walls; every channel, open box and nested child) is
+  solved per horizontal wavenumber by the Thomas algorithm. The solver
+  delegates to [`ColumnTridiagonalSolver`](@ref) with the uniform
+  spacing `Δz` (field `impl`): the method of PALM's `poisfft` (1-D
+  transforms in x and y, `tridia_substi` in z). The tridiagonal system is
+  the 3-point `z` stencil with the same mirror closure, so the solution
+  is the same discrete one as a DCT along `z`: measured within 1.9e-12
+  (relative, round-off) at 1000 × 1000 × 150 (#572).
+* **Periodic `z`** is diagonalised by the transforms above along all
+  three axes (`_CosineTransformSolver`).
+
+Why not a DCT along `z` (#572): FFTW's `estimate` planner, with 4 or
+more FFTW threads, planned the `z` DCT of 150 levels as a serial loop
+over all Nx·Ny columns, each 150-point transform threaded on its own,
+so every column cost a thread hand-off. Measured at 1000 × 1000 × 150
+on 24 threads: 118 s per transform against 1.7 s on one thread. The
+tridiagonal solve leaves no `z` decision to the planner.
 
 The eigenvalues are those of the *discrete* 7-point Laplacian with that
-closure, so `L_h p = source` is satisfied to round-off. The cost is one
-`O(N log N)` transform pair; a DCT costs about the same as a real FFT of
-the same length.
+closure, so `L_h p = source` is satisfied to round-off.
 
 **Compatibility.** With no Dirichlet axis the `(0,0,0)` mode has zero
 eigenvalue: `p` is fixed up to a constant (the solver returns the
@@ -295,48 +306,15 @@ boundary velocities — is solved as `L_h p = s − \\bar s`: the residual
 mass-flux correction must make the net boundary volume flux vanish
 *before* the projection.
 
-The default `(:periodic, :periodic, :neumann)` builds exactly the plans,
-eigenvalues and normalisation of the original channel solver, so results
-are bit-for-bit unchanged.
-
 Reference: Schumann, U. & Sweet, R. A. (1988). Fast Fourier transforms for
 direct solution of Poisson's equation with staggered boundary conditions.
 *J. Comput. Phys.*, 75, 123-137.
 """
-struct CosineFFTPoissonSolver{T,
-                              PDF, PDI, PFF, PFI,
-                              RA<:Array{T,3},
-                              CA<:Union{Nothing,Array{Complex{T},3}}} <: AbstractPressureSolver
-    plan_dct_fwd::PDF        # DCT-II  along the Neumann axes (REDFT10), or nothing
-    plan_dct_inv::PDI        # DCT-III along the Neumann axes (REDFT01), or nothing
-    plan_fft_fwd::PFF        # rfft    along the periodic axes, or nothing
-    plan_fft_inv::PFI        # irfft   along the periodic axes, or nothing
-    real_buf::RA
-    real_buf2::RA            # scratch — plan_r2r is out-of-place
-    hat_buf::CA              # spectral buffer (nothing when no axis is periodic)
-    inv_eigenvalues::Array{T,3}
-    dct_scale::T             # 1 / ∏(2N) over the Neumann axes (DCT-II × DCT-III normaliser)
+struct CosineFFTPoissonSolver{T, S<:AbstractPressureSolver} <: AbstractPressureSolver
+    impl::S                  # ColumnTridiagonalSolver{T} (Neumann z) or _CosineTransformSolver{T}
     bc_x::Symbol
     bc_y::Symbol
     bc_z::Symbol
-end
-
-# Squared modified wavenumbers 4/Δ² sin²(π m / N*) of one axis, for the
-# `n` retained modes (n = N, or N÷2+1 on the halved rfft axis).
-_k2(Δ, N, n, bc::Symbol) = bc === :periodic ?
-    [ 4/Δ^2 * sin(π * (m - 1) / N)^2       for m in 1:n ] :
-    [ 4/Δ^2 * sin(π * (m - 1) / (2 * N))^2 for m in 1:n ]
-
-# a solver's work arrays: zeroed by the threads (Backends.allocate, #567)
-_zeros(::Type{T}, dims::Int...) where {T} = allocate(_host_backend(), T, dims)
-
-# 1/λ of one mode, zero for the mean mode (λ = 0)
-@inline function _inv_eigen_body!(m, n, l, invλ, kx², ky², kz²)
-    @inbounds begin
-        λ = -(kx²[m] + ky²[n] + kz²[l])
-        invλ[m, n, l] = λ == 0 ? zero(eltype(invλ)) : 1 / λ
-    end
-    return nothing
 end
 
 function CosineFFTPoissonSolver(mesh::RegularGrid{T};
@@ -344,45 +322,15 @@ function CosineFFTPoissonSolver(mesh::RegularGrid{T};
                                 bc_y::Symbol = :periodic,
                                 bc_z::Symbol = :neumann) where {T}
     _check_axis_bc("bc_x", bc_x); _check_axis_bc("bc_y", bc_y); _check_axis_bc("bc_z", bc_z)
-    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
-    dx, dy, dz = mesh.dx, mesh.dy, mesh.dz
-    N   = (Nx, Ny, Nz)
-    bcs = (bc_x, bc_y, bc_z)
-    pdims = Tuple(d for d in 1:3 if bcs[d] === :periodic)
-    ndims_ = Tuple(d for d in 1:3 if bcs[d] === :neumann)
-
-    real_buf  = _zeros(T, Nx, Ny, Nz)
-    real_buf2 = _zeros(T, Nx, Ny, Nz)
-
-    # The rfft halves the first periodic axis.
-    nhat = collect(N)
-    isempty(pdims) || (nhat[pdims[1]] = div(N[pdims[1]], 2) + 1)
-    hat_buf = isempty(pdims) ? nothing : _zeros(Complex{T}, nhat...)
-
-    plan_dct_fwd = isempty(ndims_) ? nothing :
-        FFTW.plan_r2r(real_buf, FFTW.REDFT10, ndims_; flags = fftw_planner_flags())
-    plan_dct_inv = isempty(ndims_) ? nothing :
-        FFTW.plan_r2r(real_buf, FFTW.REDFT01, ndims_; flags = fftw_planner_flags())
-    plan_fft_fwd = isempty(pdims) ? nothing :
-        FFTW.plan_rfft(real_buf, pdims; flags = fftw_planner_flags())
-    plan_fft_inv = isempty(pdims) ? nothing :
-        FFTW.plan_irfft(hat_buf, N[pdims[1]], pdims; flags = fftw_planner_flags())
-
-    kx² = _k2(dx, Nx, nhat[1], bc_x)
-    ky² = _k2(dy, Ny, nhat[2], bc_y)
-    kz² = _k2(dz, Nz, nhat[3], bc_z)
-
-    invλ = Array{T}(undef, nhat...)
-    launch!(_host_backend(), _inv_eigen_body!, (1:nhat[1], 1:nhat[2], 1:nhat[3]), invλ, kx², ky², kz²)
-
-    dct_scale = 1 / T(prod((2 * N[d] for d in ndims_); init = 1))
-
-    return CosineFFTPoissonSolver{T, typeof(plan_dct_fwd), typeof(plan_dct_inv),
-                                  typeof(plan_fft_fwd), typeof(plan_fft_inv),
-                                  typeof(real_buf), typeof(hat_buf)}(
-        plan_dct_fwd, plan_dct_inv, plan_fft_fwd, plan_fft_inv,
-        real_buf, real_buf2, hat_buf, invλ, T(dct_scale), bc_x, bc_y, bc_z
-    )
+    impl = if bc_z === :neumann
+        Nz = mesh.Nz
+        ColumnTridiagonalSolver(T, (mesh.Nx, mesh.Ny, Nz), (mesh.dx, mesh.dy),
+                                fill(T(mesh.dz), Nz), fill(T(mesh.dz), Nz + 1);
+                                bc_x = bc_x, bc_y = bc_y)
+    else
+        _CosineTransformSolver(mesh; bc_x = bc_x, bc_y = bc_y, bc_z = bc_z)
+    end
+    return CosineFFTPoissonSolver{T, typeof(impl)}(impl, bc_x, bc_y, bc_z)
 end
 
 """
@@ -419,15 +367,107 @@ function poisson_axis_bcs(bcs::FieldBoundaryConditions)
             bc_z = pair("z", bcs.bottom, bcs.top))
 end
 
-source_buffer(s::CosineFFTPoissonSolver) = s.real_buf
+source_buffer(s::CosineFFTPoissonSolver) = source_buffer(s.impl)
 
 function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
                 solver::CosineFFTPoissonSolver{T}) where {T}
+    return solve!(p, source, solver.impl)
+end
+
+solve_source_buffer!(p::Field{CellCenter,T}, solver::CosineFFTPoissonSolver{T}) where {T} =
+    solve_source_buffer!(p, solver.impl)
+
+# -------------------------------------------------------------------------
+# _CosineTransformSolver — the transforms along all three axes: the
+# periodic-z case of CosineFFTPoissonSolver (#572: Neumann z goes to the
+# column solver instead).
+# -------------------------------------------------------------------------
+
+struct _CosineTransformSolver{T,
+                              PDF, PDI, PFF, PFI,
+                              RA<:Array{T,3},
+                              CA<:Union{Nothing,Array{Complex{T},3}}} <: AbstractPressureSolver
+    plan_dct_fwd::PDF        # DCT-II  along the Neumann axes (REDFT10), or nothing
+    plan_dct_inv::PDI        # DCT-III along the Neumann axes (REDFT01), or nothing
+    plan_fft_fwd::PFF        # rfft    along the periodic axes, or nothing
+    plan_fft_inv::PFI        # irfft   along the periodic axes, or nothing
+    real_buf::RA
+    real_buf2::RA            # scratch — plan_r2r is out-of-place
+    hat_buf::CA              # spectral buffer (nothing when no axis is periodic)
+    inv_eigenvalues::Array{T,3}
+    dct_scale::T             # 1 / ∏(2N) over the Neumann axes (DCT-II × DCT-III normaliser)
+end
+
+# Squared modified wavenumbers 4/Δ² sin²(π m / N*) of one axis, for the
+# `n` retained modes (n = N, or N÷2+1 on the halved rfft axis).
+_k2(Δ, N, n, bc::Symbol) = bc === :periodic ?
+    [ 4/Δ^2 * sin(π * (m - 1) / N)^2       for m in 1:n ] :
+    [ 4/Δ^2 * sin(π * (m - 1) / (2 * N))^2 for m in 1:n ]
+
+# a solver's work arrays: zeroed by the threads (Backends.allocate, #567)
+_zeros(::Type{T}, dims::Int...) where {T} = allocate(_host_backend(), T, dims)
+
+# 1/λ of one mode, zero for the mean mode (λ = 0)
+@inline function _inv_eigen_body!(m, n, l, invλ, kx², ky², kz²)
+    @inbounds begin
+        λ = -(kx²[m] + ky²[n] + kz²[l])
+        invλ[m, n, l] = λ == 0 ? zero(eltype(invλ)) : 1 / λ
+    end
+    return nothing
+end
+
+function _CosineTransformSolver(mesh::RegularGrid{T}; bc_x::Symbol, bc_y::Symbol,
+                                bc_z::Symbol) where {T}
+    Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
+    dx, dy, dz = mesh.dx, mesh.dy, mesh.dz
+    N   = (Nx, Ny, Nz)
+    bcs = (bc_x, bc_y, bc_z)
+    pdims = Tuple(d for d in 1:3 if bcs[d] === :periodic)
+    ndims_ = Tuple(d for d in 1:3 if bcs[d] === :neumann)
+
+    real_buf  = _zeros(T, Nx, Ny, Nz)
+    real_buf2 = _zeros(T, Nx, Ny, Nz)
+
+    # The rfft halves the first periodic axis.
+    nhat = collect(N)
+    isempty(pdims) || (nhat[pdims[1]] = div(N[pdims[1]], 2) + 1)
+    hat_buf = isempty(pdims) ? nothing : _zeros(Complex{T}, nhat...)
+
+    plan_dct_fwd = isempty(ndims_) ? nothing :
+        FFTW.plan_r2r(real_buf, FFTW.REDFT10, ndims_; flags = fftw_planner_flags())
+    plan_dct_inv = isempty(ndims_) ? nothing :
+        FFTW.plan_r2r(real_buf, FFTW.REDFT01, ndims_; flags = fftw_planner_flags())
+    plan_fft_fwd = isempty(pdims) ? nothing :
+        FFTW.plan_rfft(real_buf, pdims; flags = fftw_planner_flags())
+    plan_fft_inv = isempty(pdims) ? nothing :
+        FFTW.plan_irfft(hat_buf, N[pdims[1]], pdims; flags = fftw_planner_flags())
+
+    kx² = _k2(dx, Nx, nhat[1], bc_x)
+    ky² = _k2(dy, Ny, nhat[2], bc_y)
+    kz² = _k2(dz, Nz, nhat[3], bc_z)
+
+    invλ = Array{T}(undef, nhat...)
+    launch!(_host_backend(), _inv_eigen_body!, (1:nhat[1], 1:nhat[2], 1:nhat[3]), invλ, kx², ky², kz²)
+
+    dct_scale = 1 / T(prod((2 * N[d] for d in ndims_); init = 1))
+
+    return _CosineTransformSolver{T, typeof(plan_dct_fwd), typeof(plan_dct_inv),
+                                  typeof(plan_fft_fwd), typeof(plan_fft_inv),
+                                  typeof(real_buf), typeof(hat_buf)}(
+        plan_dct_fwd, plan_dct_inv, plan_fft_fwd, plan_fft_inv,
+        real_buf, real_buf2, hat_buf, invλ, T(dct_scale)
+    )
+end
+
+source_buffer(s::_CosineTransformSolver) = s.real_buf
+
+function solve!(p::Field{CellCenter,T}, source::Field{CellCenter,T},
+                solver::_CosineTransformSolver{T}) where {T}
     copy_interior_in!(backend(solver.real_buf), solver.real_buf, source)
     return solve_source_buffer!(p, solver)
 end
 
-function solve_source_buffer!(p::Field{CellCenter,T}, solver::CosineFFTPoissonSolver{T}) where {T}
+function solve_source_buffer!(p::Field{CellCenter,T}, solver::_CosineTransformSolver{T}) where {T}
     b = backend(solver.real_buf)
     cur, other = solver.real_buf, solver.real_buf2   # the data lives in `cur`
 
@@ -579,7 +619,41 @@ function ColumnTridiagonalSolver(::Type{T}, (Nx, Ny, Nz)::NTuple{3,Int}, (dx, dy
         sum(m), sum(g), zeros(T, Nz), norm, bc_x, bc_y)
 end
 
-poisson_axis_bcs(s::ColumnTridiagonalSolver) = (bc_x = s.bc_x, bc_y = s.bc_y, bc_z = :neumann)
+"""
+    ColumnTridiagonalSolver(T, (Nx, Ny, Nz), (dx, dy), dzc, dzf;
+                            bc_x = :periodic, bc_y = :periodic)
+
+The column solver of the conservative cell-centred Laplacian with walls
+(zero flux) at the bottom and top: `dzc[k]` the thickness of cell `k`
+(length `Nz`), `dzf[k]` the distance between the centres `k-1` and `k`
+(length `Nz+1`; `dzf[1]` and `dzf[Nz+1]` are not used by the operator).
+The `z` coefficients are `a_k = 1/(Δz_c[k] Δz_f[k])`,
+`c_k = 1/(Δz_c[k] Δz_f[k+1])`, with `h = 1`, measure and gauge `Δz_c`.
+The returned `φ` has zero volume-weighted mean.
+
+The one place these coefficients are built: the stretched-z solver
+([`StretchedPoissonSolver`](@ref Aeolus.StretchedGrids.StretchedPoissonSolver))
+passes its grid's metrics, [`CosineFFTPoissonSolver`](@ref) with walls in
+`z` the uniform `Δz` (#572).
+"""
+function ColumnTridiagonalSolver(::Type{T}, N::NTuple{3,Int}, dxy, dzc::AbstractVector,
+                                 dzf::AbstractVector; bc_x::Symbol = :periodic,
+                                 bc_y::Symbol = :periodic) where {T}
+    Nz = N[3]
+    length(dzc) == Nz && length(dzf) == Nz + 1 ||
+        throw(DimensionMismatch("dzc must have length Nz = $Nz and dzf length Nz + 1"))
+    zc = T.(collect(dzc)); zf = T.(collect(dzf))
+    lower = zeros(T, Nz); upper = zeros(T, Nz)
+    for k in 1:Nz
+        k > 1  && (lower[k] = 1 / (zc[k] * zf[k]))
+        k < Nz && (upper[k] = 1 / (zc[k] * zf[k+1]))
+    end
+    return ColumnTridiagonalSolver(T, N, dxy; lower = lower, upper = upper,
+                                   hweight = ones(T, Nz), measure = zc, inv_coupling = zf,
+                                   gauge = zc, bc_x = bc_x, bc_y = bc_y)
+end
+
+poisson_axis_bcs(s::ColumnTridiagonalSolver) =(bc_x = s.bc_x, bc_y = s.bc_y, bc_z = :neumann)
 
 source_buffer(s::ColumnTridiagonalSolver) = s.buf
 

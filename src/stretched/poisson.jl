@@ -87,16 +87,9 @@ function StretchedPoissonSolver(g::StretchedGrid{T};
     dzc = T[cell_thickness(g)[k] for k in kk]
     dzf = T[center_spacing(g)[k] for k in g.Hz+1 : g.Hz+Nz+1]
 
-    # z-operator: a_k φ_{k-1} + (-(a_k + c_k)) φ_k + c_k φ_{k+1}; Neumann ends
-    # (the wall flux is zero) drop a_1 and c_Nz.
-    lower = zeros(T, Nz); upper = zeros(T, Nz)
-    for k in 1:Nz
-        k > 1  && (lower[k] = 1 / (dzc[k] * dzf[k]))
-        k < Nz && (upper[k] = 1 / (dzc[k] * dzf[k+1]))
-    end
-    core = ColumnTridiagonalSolver(T, (Nx, Ny, Nz), (T(g.dx), T(g.dy));
-                                   lower = lower, upper = upper, hweight = ones(T, Nz),
-                                   measure = dzc, inv_coupling = dzf, gauge = dzc,
+    # the conservative z-operator with wall ends: the column solver builds
+    # its coefficients (one source of truth with the uniform-z solver, #572)
+    core = ColumnTridiagonalSolver(T, (Nx, Ny, Nz), (T(g.dx), T(g.dy)), dzc, dzf;
                                    bc_x = bc_x, bc_y = bc_y)
     return StretchedPoissonSolver{T, typeof(core)}(core)
 end

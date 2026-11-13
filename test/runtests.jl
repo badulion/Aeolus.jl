@@ -913,6 +913,7 @@ include("chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition
     include("advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
     include("anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("multigrid.jl")   # Phase  29     geometric multigrid
+    include("pressure_column.jl") # #572       Neumann-z pressure solve: tridiagonal in z, not a DCT
 end
 
 # =========================================================================
