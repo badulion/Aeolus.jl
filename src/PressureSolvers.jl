@@ -29,8 +29,8 @@ from `source`'s interior; halos of `p` are left untouched.
 Phase 1a ships [`FFTPoissonSolver`](@ref) for triply-periodic
 `RegularGrid`. Future planned backends:
 
-  * `CosineFFTPoissonSolver` — FFT in horizontal, DCT-II in vertical
-    for channel-like domains (Phase 1b).
+  * `CosineFFTPoissonSolver` — FFT or DCT-II per horizontal axis, a
+    tridiagonal solve in z for walls (Phase 1b, #251, #572).
   * `CGPoissonSolver` — matrix-free preconditioned conjugate gradient
     for arbitrary BCs and immersed boundaries (Phase 3).
   * `SEMPoissonSolver` — element-local mass + matrix-free CG for the
