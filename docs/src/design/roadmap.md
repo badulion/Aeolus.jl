@@ -2715,6 +2715,34 @@ compiler-flag provenance remain.
   - The tiles of a blended mosaic are evaluated at their own forcing levels, not at the blending height.
 
 
+### Model setup time at large grids (#567)
+
+**Shipped** (#567). The Berlin 20 m case of the #566 scaling test (150 M points) spent about 43 min in `Config.build` on a Fritz node before its first step. Profiled on the Berlin 100 m and 50 m cases (local, 24 cores), two causes, both linear in the number of points:
+
+- **The initial profiles** (`SimulationDriver._set_profile!`) evaluated `profile_value(p, z)` at every grid point, and its `table` branch converted the configuration's `z` and `values` to new vectors at every call: about 17 kB of allocation per point (41 GB for the 100 m build) and the garbage collection that goes with it. `profile_function(p)` now reads a profile once into a function of z; `profile_value` delegates to it.
+- **`IBM.wall_distance`** (the TKE closure's wall cap) looked up each of the 26 neighbours of every cell, in the seed and in every sweep, through `neighbor_index` on boundary conditions built from run-time symbols: a dynamic dispatch with a keyword argument that allocated, serial. Now three index tables built once, the seed and sweeps behind a function barrier, and with no solid cell the height above the floor (below the lid) returned directly. Identical to the old implementation on 36 random masks (max relative difference 0); 200 × 200 × 60: 4.64 s → 0.44 s with a block, 4.75 s → 0.003 s floor only.
+
+Measured (one build, `fftw.planner = "estimate"`, local 24-core machine; "warm" = a second build in the same process, without compilation):
+
+| case | points | before | after |
+| :-- | --: | --: | --: |
+| Berlin 100 m, `-t 12`, warm | 2.4 M | 12.1 s, 41 GB alloc | 1.3 s, 2.5 GB |
+| Berlin 50 m, `-t 12`, warm | 9.6 M | 55.2 s, 164 GB alloc, GC 21 s | 4.1 s, 9.0 GB, GC 1.2 s |
+| Berlin 50 m, `-t 1`, warm | 9.6 M | 56.7 s | 4.8 s |
+| Berlin 20 m, `-t 24`, first build | 150 M | 890 s, 3487 GB alloc, GC 233 s | 88 s (23 s of it compilation), 99 GB |
+
+Peak memory of the 20 m build is unchanged (68.8 GB before, 70.4 GB after). What remains at 50 m (3.6 s): the TKE initial equilibrium (threaded), the tiled surface's soil columns (`build_parent_surface` → `soil_surface`, about 2 s, serial: one soil column per tile and column, about 4 µs each), and the field allocations. The roughly 20 s of compilation of a first build does not grow with the grid.
+
+**Second pass: the serial rest, and a race.** Profiled again on the 20 m build itself (compiled, `estimate` planner: 26.8 s), the main thread was in:
+
+- *field allocation*: `Backends.allocate` was `zeros`, so one thread zeroed (first-touched) every field. On a multi-socket node that also puts every page on the main thread's NUMA domain, whichever thread later works on it. It now zeroes a 3-D array larger than the serial threshold through a `launch!` over its indices, so each thread first touches about its own slab. The Poisson solvers' work arrays go through it, and the cosine solver's 1/λ table is a `launch!`. The NUMA effect on Fritz has not been measured.
+- *the tiled surface*: one soil column per tile and column, serial, 7.6 s at 20 m. Now `Threads.@threads :dynamic` over the columns, since each iteration writes only its own column; the one shared write, `GroundSoil.T_env` (a min/max for the smoke check), is under a lock. On the 50 m case (160 000 columns), `-t 1` and `-t 12` give identical classes, displacement heights and forcing levels per column.
+- *a data race in the initial noise (bug found here)*: the θ perturbation and the uniform velocity perturbation were `set!` closures calling `rand(rng)` on one `Xoshiro`. `set!` runs threaded above 32 768 points, so in every production-size run the threads shared one RNG state: the noise was not reproducible from `[run] seed`, and threads could repeat draws. The test suite runs one thread per job and never took that path. The draws are now one array from the RNG on the calling task, for the levels below the depth; the 50 m θ field is identical at `-t 1` and `-t 12`. The θ0 initial state also no longer reads the configuration at every point.
+
+After the second pass, the 20 m build at `-t 24` (compiled) takes 12.6 s with `estimate`, down from 26.8 s. One build including compilation takes 62 s with the default `measure` planner and 33 s with `estimate`, against 890 s on master. With `measure`, FFTW planning of the cosine transforms is about 28 s at 150 M points; `[fftw] wisdom` saves it after the first run. Peak memory is unchanged (70 GB).
+
+Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstring cited one): the floor and floor + lid distances, and a 4 × 4 × 2 cube on a 2:2:1 grid against the exact Euclidean distance to cube and floor (< 1e-12). `test/config_simulation_driver.jl`: every profile kind, the log and linear values below a table, and no allocation per evaluation of a 301-level table; the θ noise and the tapered uniform velocity noise equal the documented draws of `Xoshiro([run] seed)` (< 1e-12).
+
 ### Urban parent surface: forcing height above the roughness (#568)
 
 **Shipped** (#568). The Berlin 20 m case of the #566 scaling test (1000 × 1000 × 150 cells) built, then failed in its first step: `solve_surface_layer: need z_m > z0m > 0`.

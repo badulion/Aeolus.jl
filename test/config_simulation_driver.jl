@@ -136,6 +136,26 @@ end
     @test profile_value(tbl, 200.0) == 2.5 && profile_value(tbl, 1e4) == 2.0
     ml = Dict{String,Any}("kind" => "mixed_layer_lapse", "value" => 300.0, "z_i" => 800.0, "lapse" => 0.003)
     @test profile_value(ml, 799.0) == 300.0 && profile_value(ml, 1000.0) ≈ 300.6
+    # the values below the table (the log law, linear), the other kinds, and
+    # profile_function: read once, then no allocation per evaluation (#567:
+    # a table converted at every grid point allocated 17 kB per point)
+    lg = merge(tbl, Dict{String,Any}("z" => [10.0, 100.0], "values" => [4.0, 5.0],
+                                     "below" => Dict{String,Any}("kind" => "log", "z0" => 0.1)))
+    @test profile_value(lg, 1.0) ≈ 4.0 * log(10.0) / log(100.0) rtol = 1e-14   # log(z/z0)/log(z1/z0)
+    @test profile_value(lg, 0.01) == 0.0                                       # zero at and below z0
+    li = merge(lg, Dict{String,Any}("below" => Dict{String,Any}("kind" => "linear", "z" => 0.0, "value" => 2.0)))
+    @test profile_value(li, 5.0) ≈ 3.0 rtol = 1e-14
+    ex = Dict{String,Any}("kind" => "exponential", "value" => 0.01, "scale_height" => 2000.0)
+    @test profile_value(ex, 2000.0) ≈ 0.01 / ℯ rtol = 1e-14
+    th = Dict{String,Any}("kind" => "tanh", "value" => 1.0, "amplitude" => 2.0, "center" => 500.0, "thickness" => 50.0)
+    @test profile_value(th, 500.0) == 1.0
+    @test profile_value(th, 1e4) ≈ 3.0 rtol = 1e-14
+    @test_throws ArgumentError profile_value(Dict{String,Any}("kind" => "box"), 1.0)
+    big = Dict{String,Any}("kind" => "table", "z" => Any[collect(0.0:10.0:3000.0)...],
+                           "values" => Any[collect(range(290.0, 300.0; length = 301))...])
+    f = Aeolus.SimulationDriver.profile_function(big)
+    @test f(1234.5) ≈ 290.0 + 10 * 1234.5 / 3000 rtol = 1e-12
+    f(1.0); @test (@allocated f(1234.5)) == 0
     # the DCBL θ: the mixed layer, plus noise of amplitude 0.1 K below 100 m only
     cfg = sim_cfg("dry_convective_bl", 1, ["grid.size=[16,16,16]"])
     sim = simulation(Config.build(SIMD, cfg))
@@ -144,6 +164,21 @@ end
     δ = θ[:, :, below] .- 300.0
     @test maximum(abs, δ) <= 0.05 && maximum(abs, δ) > 0.04         # uniform in [−a/2, a/2]
     @test abs(sum(δ) / length(δ)) < 0.005
+    # the noise is the draws of Xoshiro([run] seed), one per cell below the
+    # depth in i, j, k order, whatever the thread count (#567: a threaded
+    # set! closure shared the RNG between threads)
+    r = rand(Aeolus.SimulationDriver.Xoshiro(cfg.run.seed), 16, 16, length(below))
+    @test maximum(abs, δ .- 0.1 .* (r .- 0.5)) < 1e-12        # θ = 300 + δ: round-off of 300
+    # the uniform velocity noise below a depth, tapered linearly: the next
+    # draws of the same RNG, A (r − 1/2)(1 − z/depth)
+    cfgv = load_run_config(cfgs("dry_convective_bl");
+                           overrides = ["grid.size=[16,16,16]", "initial.perturbation_amplitude=0.0",
+                                        "initial.velocity_perturbation={kind=\"uniform\", amplitude=0.2, depth=100.0, taper=\"linear\", components=[\"u\"]}"])
+    simv = simulation(Config.build(SIMD, cfgv))
+    u = interior_view(simv.u)
+    rv = rand(Aeolus.SimulationDriver.Xoshiro(cfgv.run.seed), size(u, 1), size(u, 2), length(below))
+    @test maximum(abs, u[:, :, below] .- 0.2 .* (rv .- 0.5) .* reshape(1 .- zc[below] ./ 100.0, 1, 1, :)) < 1e-12
+    @test all(iszero, u[:, :, above])
     @test all(θ[:, :, k] == fill(profile_value(cfg.initial.theta, zc[k]), 16, 16) for k in above)
     # the noise comes from [run] seed: the same seed, the same field; another, another
     @test agree(interior_view(simulation(Config.build(SIMD, cfg)).θ), θ)

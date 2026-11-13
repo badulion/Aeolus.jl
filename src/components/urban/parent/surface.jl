@@ -472,36 +472,48 @@ function build_parent_surface(case, pl::ParentLanduse;
     zc = collect(Float64, z_centres)
     cols = Matrix{Union{Nothing,ParentColumn}}(nothing, pl.nx, pl.ny)
     idx = columns === :all ? CartesianIndices((pl.nx, pl.ny)) : columns
-    raised = NamedTuple[]
-    for I in idx
-        present = [c for c in 1:size(frac, 3) if frac[I, c] > 0]
-        tiles = AbstractSurface[]
-        dd = Float64[]
-        kt = Int[]
-        for c in present
-            Ts = tile_skin(case, c)
-            built = is_built_class(c)
-            z0c, z0hc = class_roughness(case, SurfaceSite(c; T_skin = Ts))
-            z0mt = max(z0[I], z0c)
-            site = built ? SurfaceSite(c; T_skin = Ts, z0m = z0mt, z0h = z0hc) :
-                           SurfaceSite(c; T_skin = Ts)
-            push!(tiles, class_surface(case, site))
-            push!(dd, built ? d[I] : 0.0)
-            # a built tile: the first level above the roofs, or (#568) the
-            # lowest one that is a valid Monin–Obukhov height over its d and z0
-            k = 1
-            if built && unresolved
-                k1 = parent_forcing_level(zc, h[I])
-                k = parent_forcing_level(zc, h[I]; d = d[I], z0 = max(z0mt, z0hc))
-                k == k1 || push!(raised, (I = I[1], J = I[2], class = c, λp = λp[I], λf = λf[I], h = h[I],
-                                          d = d[I], z0m = z0mt, z0h = z0hc, k_first = k1, k = k))
+    # one column per iteration, each writing only its own cols[I] and
+    # raisedcol[n]: on the threads (the soil columns of every tile, about
+    # 4 µs each; #567)
+    cidx = collect(idx)
+    raisedcol = [NamedTuple[] for _ in cidx]
+    try
+        Threads.@threads :dynamic for n in eachindex(cidx)
+            I = cidx[n]
+            present = [c for c in 1:size(frac, 3) if frac[I, c] > 0]
+            tiles = AbstractSurface[]
+            dd = Float64[]
+            kt = Int[]
+            for c in present
+                Ts = tile_skin(case, c)
+                built = is_built_class(c)
+                z0c, z0hc = class_roughness(case, SurfaceSite(c; T_skin = Ts))
+                z0mt = max(z0[I], z0c)
+                site = built ? SurfaceSite(c; T_skin = Ts, z0m = z0mt, z0h = z0hc) :
+                               SurfaceSite(c; T_skin = Ts)
+                push!(tiles, class_surface(case, site))
+                push!(dd, built ? d[I] : 0.0)
+                # a built tile: the first level above the roofs, or (#568) the
+                # lowest one that is a valid Monin–Obukhov height over its d and z0
+                k = 1
+                if built && unresolved
+                    k1 = parent_forcing_level(zc, h[I])
+                    k = parent_forcing_level(zc, h[I]; d = d[I], z0 = max(z0mt, z0hc))
+                    k == k1 || push!(raisedcol[n], (I = I[1], J = I[2], class = c, λp = λp[I], λf = λf[I], h = h[I],
+                                                    d = d[I], z0m = z0mt, z0h = z0hc, k_first = k1, k = k))
+                end
+                push!(kt, k)
             end
-            push!(kt, k)
+            m = SurfaceMosaic(tiles, frac[I, present])
+            s = blending === nothing ? m : BlendedMosaic(m, blending)
+            cols[I] = ParentColumn(s, UInt8.(present), dd, kt, maximum(kt))
         end
-        m = SurfaceMosaic(tiles, frac[I, present])
-        s = blending === nothing ? m : BlendedMosaic(m, blending)
-        cols[I] = ParentColumn(s, UInt8.(present), dd, kt, maximum(kt))
+    catch e                       # the error of a column, not the threads' wrapper
+        e isa CompositeException && !isempty(e.exceptions) || rethrow()
+        x = first(e.exceptions)
+        throw(x isa TaskFailedException ? x.task.exception : x)
     end
+    raised = reduce(vcat, raisedcol; init = NamedTuple[])     # in column order, as a serial loop
     isempty(raised) || raise_forcing_level || throw(ArgumentError(_raised_message(raised, zc)))
     return ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols, raised)
 end
