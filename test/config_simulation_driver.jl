@@ -164,6 +164,21 @@ end
     δ = θ[:, :, below] .- 300.0
     @test maximum(abs, δ) <= 0.05 && maximum(abs, δ) > 0.04         # uniform in [−a/2, a/2]
     @test abs(sum(δ) / length(δ)) < 0.005
+    # the noise is the draws of Xoshiro([run] seed), one per cell below the
+    # depth in i, j, k order, whatever the thread count (#567: a threaded
+    # set! closure shared the RNG between threads)
+    r = rand(Aeolus.SimulationDriver.Xoshiro(cfg.run.seed), 16, 16, length(below))
+    @test maximum(abs, δ .- 0.1 .* (r .- 0.5)) < 1e-12        # θ = 300 + δ: round-off of 300
+    # the uniform velocity noise below a depth, tapered linearly: the next
+    # draws of the same RNG, A (r − 1/2)(1 − z/depth)
+    cfgv = load_run_config(cfgs("dry_convective_bl");
+                           overrides = ["grid.size=[16,16,16]", "initial.perturbation_amplitude=0.0",
+                                        "initial.velocity_perturbation={kind=\"uniform\", amplitude=0.2, depth=100.0, taper=\"linear\", components=[\"u\"]}"])
+    simv = simulation(Config.build(SIMD, cfgv))
+    u = interior_view(simv.u)
+    rv = rand(Aeolus.SimulationDriver.Xoshiro(cfgv.run.seed), size(u, 1), size(u, 2), length(below))
+    @test maximum(abs, u[:, :, below] .- 0.2 .* (rv .- 0.5) .* reshape(1 .- zc[below] ./ 100.0, 1, 1, :)) < 1e-12
+    @test all(iszero, u[:, :, above])
     @test all(θ[:, :, k] == fill(profile_value(cfg.initial.theta, zc[k]), 16, 16) for k in above)
     # the noise comes from [run] seed: the same seed, the same field; another, another
     @test agree(interior_view(simulation(Config.build(SIMD, cfg)).θ), θ)

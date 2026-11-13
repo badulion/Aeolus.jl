@@ -21,7 +21,7 @@ module SimulationDriver
 # included after Aeolus.Config; included at the end of Aeolus.jl.
 
 using Random: Xoshiro, randn
-using ..Grids: RegularGrid, CellCenter
+using ..Grids: Grids, RegularGrid, CellCenter
 using ..Operators: PassotPouquetSpectrum, isotropic_turbulence_field!, spectrum_wavenumbers
 using ..Fields: Field, set!, interior_view
 using ..BoundaryConditions: FieldBoundaryConditions, FluxBC, open_boundary_conditions, open_boundary_states,
@@ -1181,6 +1181,20 @@ function _set_profile!(f::Field, p::AbstractDict, comp::Symbol)
     return f
 end
 
+# The draws of `draw` (`rand` or `randn`) for the cells of `f`'s interior
+# below `depth`, the levels 1:nk, in i, j, k order, from `rng` on the calling
+# task. Not a `set!` closure over `rng`: `set!` runs threaded above
+# `Backends.SERIAL_THRESHOLD` points, and the threads then shared one RNG
+# state (a data race: noise not reproducible from the seed, repeated draws;
+# #567).
+function _draws_below(rng, f::Field, depth, draw)
+    zs = Grids.znodes(f.mesh, location(f))
+    nk = count(<(depth), zs)
+    all(<(depth), view(zs, 1:nk)) || error("_draws_below: level heights not increasing")
+    n1, n2 = size(interior_view(f))[1:2]
+    return draw(rng, n1, n2, nk), nk
+end
+
 function _initialise!(sim, cfg, dyn = nothing)
     ini = cfg.initial
     geo = any(p -> get(p, "kind", "") == "geostrophic", (ini.u, ini.v)) ? _geostrophic_at_start(cfg, dyn) : nothing
@@ -1196,7 +1210,7 @@ function _initialise!(sim, cfg, dyn = nothing)
         tab = dyn.tables[:profile_theta]
         set!(sim.θ, (x, y, z) -> forcing_value(tab, z, 0.0))
     elseif sim isa BoussinesqSimulation && cfg.dynamics.theta0 != 0
-        set!(sim.θ, (x, y, z) -> cfg.dynamics.theta0)
+        set!(sim.θ, Float64(cfg.dynamics.theta0))
     end                                  # anelastic: the constructor set θ = θ̄(z)
     if !isempty(ini.qv)
         _set_profile!(sim.qv, ini.qv, :qv)
@@ -1209,13 +1223,9 @@ function _initialise!(sim, cfg, dyn = nothing)
     rng = Xoshiro(cfg.run.seed)
     if a > 0
         depth = ini.perturbation_depth
-        noise = Field(CellCenter(), sim.mesh)
-        if ini.perturbation_kind === :normal
-            set!(noise, (x, y, z) -> z < depth ? a * randn(rng) : 0.0)
-        else
-            set!(noise, (x, y, z) -> z < depth ? a * (rand(rng) - 0.5) : 0.0)
-        end
-        interior_view(sim.θ) .+= interior_view(noise)
+        r, nk = _draws_below(rng, sim.θ, depth, ini.perturbation_kind === :normal ? randn : rand)
+        ini.perturbation_kind === :normal ? (r .*= a) : (r .= a .* (r .- 0.5))
+        view(interior_view(sim.θ), :, :, 1:nk) .+= r
     end
     vp = ini.velocity_perturbation
     if !isempty(vp)
@@ -1226,10 +1236,10 @@ function _initialise!(sim, cfg, dyn = nothing)
         tap(z) = linear ? 1 - z / depth : 1.0
         for (name, f) in (("u", sim.u), ("v", sim.v), ("w", sim.w))   # one field at a time, in this order
             name in comps || continue
-            if uniform                          # one draw per cell (below depth), in set!'s order
-                noise = Field(location(f), sim.mesh)
-                set!(noise, (x, y, z) -> z < depth ? A * (rand(rng) - 0.5) * tap(z) : 0.0)
-                interior_view(f) .+= interior_view(noise)
+            if uniform                          # one draw per cell below depth, in i, j, k order
+                r, nk = _draws_below(rng, f, depth, rand)
+                zs = Grids.znodes(f.mesh, location(f))
+                view(interior_view(f), :, :, 1:nk) .+= A .* (r .- 0.5) .* reshape(tap.(zs[1:nk]), 1, 1, nk)
             elseif !shaped                      # one array of normals per field (randn's bulk stream)
                 interior_view(f) .+= A .* randn(rng, size(interior_view(f))...)
             else                                # the same draws, zero above depth, tapered
