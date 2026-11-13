@@ -88,6 +88,86 @@ wsum(w, a, b) = sum(w[k] * sum(view(a, :, :, k) .- view(b, :, :, k)) for k in ea
 const NOON = (start_h = 13.0, utc_offset = 2.0, date = (2019, 6, 29), lat0 = 52.522, lon0 = 13.41, elevation = 34.0)
 const NIGHT = merge(NOON, (start_h = 1.0,))
 
+@testset "Parent forcing level: a valid Monin–Obukhov height over a closed roof (#568)" begin
+    SE = Aeolus.SurfaceExchange
+    # the unit: the first centre at or above h, raised until z_k − d ≥ 2 z0
+    zc = collect(10.0:20.0:2990.0)
+    @test PU.parent_forcing_level(zc, 9.96) == 1                       # d = z0 = 0: the old rule
+    @test PU.parent_forcing_level(zc, 0.0) == 1
+    @test PU.parent_forcing_level(zc, 9.96; d = 9.961, z0 = 0.05) == 2  # 10 − 9.961 < 0.1: up to 30 m
+    @test PU.parent_forcing_level(zc, 9.96; d = 9.0, z0 = 0.05) == 1    # 1 m ≥ 0.1 m: unchanged
+    @test PU.parent_forcing_level(zc, 31.0; d = 25.0, z0 = 1.0) == 3    # 50 − 25 ≥ 2
+    @test_throws ErrorException PU.parent_forcing_level(zc, 3000.0)
+    # the Berlin 20 m case (#568) in miniature: 20 m cells of a 10 m raster
+    # (r = 2), a block of closed roof (λp = 1 over the whole morphometry
+    # window, so Macdonald's d = h and z0 = 0) at h = 9.96 m, just below the
+    # first level centre (10 m), next to a block of half-built cells
+    nx, ny, r = 12, 4, 2
+    counts = zeros(Int, nx, ny, 5)
+    counts[1:6, :, PU.SURFACE_ROOF] .= r^2
+    counts[7:12, :, PU.SURFACE_ROOF] .= 2; counts[7:12, :, PU.SURFACE_STREET] .= 2
+    hm = fill(9.96, nx, ny); λf = fill(0.05, nx, ny)
+    pl = PU.ParentLanduse(nx, ny, 20.0, 0.0, 0.0, r, counts, λf, hm, copy(hm), String[])
+    tc = PU.TileClasses((;))
+    # by default the build refuses, naming the nearest tile (the closed roof:
+    # first level 10 m, 0.04 m above d) and the option that allows the raise
+    err = try
+        PU.build_parent_surface(tc, pl; z_centres = zc, window = 2); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("20 built tile(s) in 20 column(s)", err.msg)       # columns 1–5 × 4 rows have λp = 1
+    @test occursin("raise_forcing_level = true", err.msg) && occursin("h = 9.96 m", err.msg)
+    ps = PU.build_parent_surface(tc, pl; z_centres = zc, window = 2, raise_forcing_level = true)
+    I = CartesianIndex(2, 2)                      # deep inside the roof block
+    # the record: exactly the λp = 1 columns' roof tiles, each from level 1 to 2
+    @test length(ps.raised) == 20
+    @test all(r -> ps.λp[r.I, r.J] == 1.0 && r.class == PU.SURFACE_ROOF && (r.k_first, r.k) == (1, 2), ps.raised)
+    @test ps.λp[I] == 1.0
+    @test ps.d[I] ≈ 9.96 rtol = 1e-14            # d/h = 1 at λp = 1 (round-off in A^(−λp))
+    @test ps.z0[I] == 0.0                        # exactly: the drag term s is 0
+    # every built tile is forced at a height ≥ 2 max(z0m, z0h) above its
+    # displacement: the condition of the surface-layer solve with PALM's margin
+    for J in CartesianIndices(ps.columns)
+        col = ps.columns[J]
+        for (i, t) in enumerate(PU._mosaic(col).tiles)
+            PU.is_built_class(col.classes[i]) || continue
+            z0 = roughness_lengths(t)
+            @test zc[col.ktile[i]] - col.d[i] >= 2max(z0.z0m, z0.z0h)
+            @test zc[col.ktile[i]] >= ps.h[J]
+        end
+    end
+    @test ps.columns[I].ktile == [2]              # the roof tile, raised to 30 m
+    # the half-built block keeps the first centre above its roofs (d < h)
+    J = CartesianIndex(11, 2)
+    @test ps.λp[J] == 0.5 && all(==(1), ps.columns[J].ktile)
+    # and the closed-roof column now steps: at the old level (z_ref =
+    # 10 − 9.96 = 0.04 m < z0m = 0.05 m) the surface-layer solve refuses
+    f = SurfaceForcing(; sw_down = 600.0, lw_down = 350.0, T_air = 295.0, q_air = 0.008, U = 3.0,
+                       p = 101325.0, z_ref = 10.0)
+    col = ps.columns[I]
+    t = PU._mosaic(col).tiles[1]
+    @test_throws ArgumentError SE.solve_surface_layer(BusingerDyerBeljaarsHoltslag(); U = 3.0,
+        z_m = zc[1] - col.d[1], θ_a = 296.0, θ_s = 300.0, z0m = roughness_lengths(t).z0m,
+        z0h = roughness_lengths(t).z0h)
+    fl = PU.step_parent_column!(ps, col, f, 60.0)
+    @test isfinite(fl.H) && isfinite(fl.LE) && isfinite(fl.τ)
+    # the component reports the raised tiles in results.toml (and warns at build)
+    mesh = RegularGrid(; size = (nx, ny, 6), extent = (240.0, 80.0, 120.0), halo = (2, 2, 2))
+    sim = p_state!(p_core(:boussinesq; mesh = mesh))
+    d0 = Domain(sim; validate = false)
+    ts = @test_logs (:warn, r"20 built tile\(s\) raised") PC.build(PU.TiledUrbanSurface,
+        (; surface = ps, period = 60.0, u_min = 0.5, reference = p_ref(sim)), d0)
+    res = Components.run_results(ts, d0)["tiled_surface_main"]
+    @test res["forcing_levels_raised"] == 20
+    @test res["worst_raised"]["z_ref_first"] ≈ 10.0 - 9.96 rtol = 1e-9          # 0.04 m, below z0m = 0.05 m
+    @test res["worst_raised"]["z_ref"] ≈ 30.0 - 9.96 rtol = 1e-12
+    # a surface with nothing raised reports 0
+    ts0 = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
+    @test Components.run_results(ts0, d0)["tiled_surface_main"] == Dict{String,Any}("forcing_levels_raised" => 0)
+end
+
 @testset "TiledUrbanSurface: the air receives the tiles' mean fluxes × Δt, u*, the implicit drag ($core)" for
         core in (:boussinesq,)
     sim = p_state!(p_core(core))

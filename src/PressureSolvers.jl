@@ -8,7 +8,7 @@ using ..Fields
 using ..Fields: Field
 using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc, _halo_periodic!, _halo_mirror!
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
-using ..Backends: backend, launch!, launch_weighted!, runs_serially, apply_transform!,
+using ..Backends: backend, launch!, launch_weighted!, runs_serially, apply_transform!, allocate, _host_backend,
                   pcg!, PCGWorkspace, PointOperator, IdentityPreconditioner
 
 export AbstractPressureSolver, FFTPoissonSolver, CosineFFTPoissonSolver,
@@ -114,8 +114,8 @@ function FFTPoissonSolver(mesh::RegularGrid{T}) where {T}
     Nx, Ny, Nz = mesh.Nx, mesh.Ny, mesh.Nz
     dx, dy, dz = mesh.dx, mesh.dy, mesh.dz
 
-    src = zeros(T, Nx, Ny, Nz)
-    hat = zeros(Complex{T}, div(Nx, 2) + 1, Ny, Nz)
+    src = _zeros(T, Nx, Ny, Nz)
+    hat = _zeros(Complex{T}, div(Nx, 2) + 1, Ny, Nz)
     forward_plan = plan_rfft(src; flags = fftw_planner_flags())
     inverse_plan = plan_irfft(hat, Nx; flags = fftw_planner_flags())
 
@@ -327,6 +327,18 @@ _k2(Δ, N, n, bc::Symbol) = bc === :periodic ?
     [ 4/Δ^2 * sin(π * (m - 1) / N)^2       for m in 1:n ] :
     [ 4/Δ^2 * sin(π * (m - 1) / (2 * N))^2 for m in 1:n ]
 
+# a solver's work arrays: zeroed by the threads (Backends.allocate, #567)
+_zeros(::Type{T}, dims::Int...) where {T} = allocate(_host_backend(), T, dims)
+
+# 1/λ of one mode, zero for the mean mode (λ = 0)
+@inline function _inv_eigen_body!(m, n, l, invλ, kx², ky², kz²)
+    @inbounds begin
+        λ = -(kx²[m] + ky²[n] + kz²[l])
+        invλ[m, n, l] = λ == 0 ? zero(eltype(invλ)) : 1 / λ
+    end
+    return nothing
+end
+
 function CosineFFTPoissonSolver(mesh::RegularGrid{T};
                                 bc_x::Symbol = :periodic,
                                 bc_y::Symbol = :periodic,
@@ -339,13 +351,13 @@ function CosineFFTPoissonSolver(mesh::RegularGrid{T};
     pdims = Tuple(d for d in 1:3 if bcs[d] === :periodic)
     ndims_ = Tuple(d for d in 1:3 if bcs[d] === :neumann)
 
-    real_buf  = zeros(T, Nx, Ny, Nz)
-    real_buf2 = zeros(T, Nx, Ny, Nz)
+    real_buf  = _zeros(T, Nx, Ny, Nz)
+    real_buf2 = _zeros(T, Nx, Ny, Nz)
 
     # The rfft halves the first periodic axis.
     nhat = collect(N)
     isempty(pdims) || (nhat[pdims[1]] = div(N[pdims[1]], 2) + 1)
-    hat_buf = isempty(pdims) ? nothing : zeros(Complex{T}, nhat...)
+    hat_buf = isempty(pdims) ? nothing : _zeros(Complex{T}, nhat...)
 
     plan_dct_fwd = isempty(ndims_) ? nothing :
         FFTW.plan_r2r(real_buf, FFTW.REDFT10, ndims_; flags = fftw_planner_flags())
@@ -360,11 +372,8 @@ function CosineFFTPoissonSolver(mesh::RegularGrid{T};
     ky² = _k2(dy, Ny, nhat[2], bc_y)
     kz² = _k2(dz, Nz, nhat[3], bc_z)
 
-    invλ = zeros(T, nhat...)
-    @inbounds for l in 1:nhat[3], n in 1:nhat[2], m in 1:nhat[1]
-        λ = -(kx²[m] + ky²[n] + kz²[l])
-        invλ[m, n, l] = λ == 0 ? zero(T) : 1 / λ
-    end
+    invλ = Array{T}(undef, nhat...)
+    launch!(_host_backend(), _inv_eigen_body!, (1:nhat[1], 1:nhat[2], 1:nhat[3]), invλ, kx², ky², kz²)
 
     dct_scale = 1 / T(prod((2 * N[d] for d in ndims_); init = 1))
 
@@ -542,8 +551,8 @@ function ColumnTridiagonalSolver(::Type{T}, (Nx, Ny, Nz)::NTuple{3,Int}, (dx, dy
         throw(ArgumentError("the bottom and top faces carry no flux: lower[1] = upper[Nz] = 0"))
     kx_f, kx_i, sx = _r2r_kinds(bc_x)
     ky_f, ky_i, sy = _r2r_kinds(bc_y)
-    buf  = zeros(T, Nx, Ny, Nz)
-    buf2 = zeros(T, Nx, Ny, Nz)
+    buf  = _zeros(T, Nx, Ny, Nz)
+    buf2 = _zeros(T, Nx, Ny, Nz)
     plan_fwd = FFTW.plan_r2r(buf, (kx_f, ky_f), (1, 2); flags = fftw_planner_flags())
     plan_inv = FFTW.plan_r2r(buf, (kx_i, ky_i), (1, 2); flags = fftw_planner_flags())
     norm = one(T) / T(sx * Nx * sy * Ny)
@@ -551,7 +560,7 @@ function ColumnTridiagonalSolver(::Type{T}, (Nx, Ny, Nz)::NTuple{3,Int}, (dx, dy
     lo = T.(collect(lower)); up = T.(collect(upper)); hw = T.(collect(hweight))
     λx = _r2r_eigen(T, Nx, T(dx), bc_x)
     λy = _r2r_eigen(T, Ny, T(dy), bc_y)
-    cp = zeros(T, Nx, Ny, Nz); inv_den = zeros(T, Nx, Ny, Nz)
+    cp = _zeros(T, Nx, Ny, Nz); inv_den = _zeros(T, Nx, Ny, Nz)
     @inbounds for q in 1:Ny, p in 1:Nx
         λ = λx[p] + λy[q]
         (p == 1 && q == 1) && continue          # the mean mode: integrated directly

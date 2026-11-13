@@ -168,10 +168,23 @@ backend(::AbstractArray) = _host_backend()     # other host arrays (reshapes, Bi
     allocate(backend, T, dims) -> array
 
 A zero-filled array of element type `T` and size `dims` on `backend`
-(`Array{T}` for the CPU).
+(`Array{T}` for the CPU). A 3-D array of more points than the backend
+runs serially is zeroed by a [`launch!`](@ref) over its indices, so each
+thread first touches the pages of about the slab the kernels later give it:
+the memory is placed by the threads that use it (first-touch NUMA placement
+on a multi-socket node) and zeroing a large field is not one thread's
+work (#567).
 """
-allocate(::CPUBackend, ::Type{T}, dims::NTuple{N,Int}) where {T, N} =
-    zeros(T, dims...)
+function allocate(b::CPUBackend, ::Type{T}, dims::NTuple{N,Int}) where {T, N}
+    (N == 3 && isbitstype(T) && !runs_serially(b, prod(dims))) || return zeros(T, dims...)
+    a = Array{T}(undef, dims)
+    launch!(b, _zero_body!, (1:dims[1], 1:dims[2], 1:dims[3]), a)
+    return a
+end
+@inline function _zero_body!(i, j, k, a)
+    @inbounds a[i, j, k] = zero(eltype(a))
+    return nothing
+end
 allocate(b::GPUBackend, ::Type{T}, dims::NTuple{N,Int}) where {T, N} =
     _gpu_error(b, "allocate")
 
