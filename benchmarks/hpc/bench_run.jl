@@ -95,7 +95,8 @@ cfg = Aeolus.load_run_config(cfgpath; overrides = ["fftw.planner=\"estimate\""])
 # and 20 m attempt 1 planned with estimate, but with the default FFTW thread
 # count, not their configs' `threads = 12`. The policy used goes into the TOML.
 Aeolus.Config.apply_fftw_config!(cfg)
-model = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
+const BUILD = @timed Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
+model = BUILD.value
 const T_BUILT = time()
 const FFTW_USED = let p = Aeolus.Operators.fftw_policy(); (planner = string(p.planner), threads = p.threads) end
 
@@ -119,6 +120,7 @@ res = Dict{String,Any}(
     "has_loop_fusion" => HAS_FUSION, "has_launch_trace" => HAS_TRACE,
     "started" => string(now()),
     "t_load_s" => T_LOADED - T_START, "t_build_s" => T_BUILT - T_LOADED,
+    "build_gc_s" => BUILD.gctime, "build_alloc_bytes" => BUILD.bytes,
     "affinity" => affinity(), "thread_cpus" => thread_cpus(),
     "fftw_planner" => FFTW_USED.planner, "fftw_threads" => FFTW_USED.threads,
 )

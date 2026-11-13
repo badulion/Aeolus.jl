@@ -78,17 +78,19 @@ for f in readdir(out; join = true)
         m === nothing ? NaN : parse(Int, m[1]) / 2^20 end
     push!(rows, (t = d["threads"], build = d["t_build_s"], rss = rss,
                  ip = get(d, "steps_if_possible", Float64[]), nv = get(d, "steps_never", Float64[]),
-                 gc = d["gc_s"], wall = d["measured_wall_s"]))
+                 gc = d["gc_s"], wall = d["measured_wall_s"],
+                 bgc = get(d, "build_gc_s", NaN), balloc = get(d, "build_alloc_bytes", NaN) / 1e9))
 end
 sort!(rows; by = r -> r.t)
 isempty(rows) && exit()
 base = first(rows).t == 1 ? median(first(rows).ip) : NaN
 open(joinpath(out, "summary.md"), "w") do io
-    println(io, "| threads | build s | peak GB | if_possible median | mean | never median | GC % | speed-up vs 1 | efficiency |")
-    println(io, "| --: | --: | --: | --: | --: | --: | --: | --: | --: |")
+    println(io, "| threads | build s | build GC % | build alloc GB | peak GB | if_possible median | mean | never median | GC % | speed-up vs 1 | efficiency |")
+    println(io, "| --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |")
     for r in rows
         m = median(r.ip); s = base / m
-        println(io, "| $(r.t) | $(round(Int, r.build)) | $(round(r.rss; digits = 1)) | $(round(m; digits = 3)) | ",
+        println(io, "| $(r.t) | $(round(Int, r.build)) | $(round(100r.bgc / r.build; digits = 1)) | $(round(r.balloc; digits = 1)) | ",
+                "$(round(r.rss; digits = 1)) | $(round(m; digits = 3)) | ",
                 "$(round(mean(r.ip); digits = 3)) | $(isempty(r.nv) ? "-" : round(median(r.nv); digits = 3)) | ",
                 "$(round(100r.gc / r.wall; digits = 1)) | $(round(s; digits = 2)) | $(round(100s / r.t; digits = 0)) % |")
     end
