@@ -89,8 +89,15 @@ const HAS_FUSION = isdefined(SIMS, :set_loop_fusion!)
 const HAS_TRACE = isdefined(Aeolus.Backends, :set_launch_trace!)
 
 cfg = Aeolus.load_run_config(cfgpath; overrides = ["fftw.planner=\"estimate\""])
+# Config.build does not apply [fftw] (the CLI run does, Config.apply_fftw_config!):
+# without this the override above and the config's [fftw] threads were ignored,
+# and the planner came from AEOLUS_FFTW_PLANNER (env.sh: estimate) — so run 1
+# and 20 m attempt 1 planned with estimate, but with the default FFTW thread
+# count, not their configs' `threads = 12`. The policy used goes into the TOML.
+Aeolus.Config.apply_fftw_config!(cfg)
 model = Aeolus.Config.build(Aeolus.SimulationDriver.SimulationDriverType(), cfg).model
 const T_BUILT = time()
+const FFTW_USED = let p = Aeolus.Operators.fftw_policy(); (planner = string(p.planner), threads = p.threads) end
 
 set_fusion!(s) = HAS_FUSION && foreach(d -> SIMS.set_loop_fusion!(d.state, s), model.domains)
 function steps!(n)
@@ -113,6 +120,7 @@ res = Dict{String,Any}(
     "started" => string(now()),
     "t_load_s" => T_LOADED - T_START, "t_build_s" => T_BUILT - T_LOADED,
     "affinity" => affinity(), "thread_cpus" => thread_cpus(),
+    "fftw_planner" => FFTW_USED.planner, "fftw_threads" => FFTW_USED.threads,
 )
 
 nwarm = getint("nwarm", 5)
