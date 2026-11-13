@@ -275,12 +275,33 @@ function wall_distance(sm::SolidMask; bottom::Bool = true, top::Bool = false,
     @inbounds for k in 1:Nz, j in 1:Ny, i in 1:Nx
         solid[i, j, k] = sm.mask[Hx+i, Hy+j, Hz+k]
     end
-    offs = [(a, b, c) for c in -1:1 for b in -1:1 for a in -1:1 if (a, b, c) != (0, 0, 0)]
     # neighbour index with wrap-around (or `0` outside a non-periodic edge):
     # the one BC-aware helper, on `bcs` or on the axes `periodic` names
     nb = bcs === nothing ?
         FieldBoundaryConditions(ntuple(a -> periodic[a] ? :periodic : :noflux, 3)...) : bcs
-    @inline wrap(i, a) = neighbor_index(m, nb, i, a; outside = :none)
+    inf = T(Inf)
+    # no solid cell: the distance to the floor (lid) alone, exact, without
+    # the sweeps (the propagation reproduces it, d = Δz/2 + (k−1)Δz)
+    if !any(solid)
+        dk = [min(bottom ? (k - one(T) / 2) * dz : inf, top ? (Nz - k + one(T) / 2) * dz : inf) for k in 1:Nz]
+        return [dk[k] for _ in 1:Nx, _ in 1:Ny, k in 1:Nz]
+    end
+    # the neighbours of index i ± 1 along each axis, `tab[i + o + 1]` for
+    # o ∈ (−1, 0, 1), looked up once: `nb` is built from run-time symbols,
+    # so a call per neighbour and cell dispatched dynamically and allocated
+    # (#567)
+    tab(N, a) = [neighbor_index(m, nb, i, a; outside = :none) for i in 0:N+1]
+    tx, ty, tz = tab(Nx, 1), tab(Ny, 2), tab(Nz, 3)
+    _wall_distance_sweeps(solid, tx, ty, tz, T(dx), T(dy), T(dz), bottom, top, maxsweeps)
+end
+
+# the seed and the sweeps of `wall_distance` (a function barrier: concrete
+# argument types)
+function _wall_distance_sweeps(solid::Array{Bool,3}, tx::Vector{Int}, ty::Vector{Int}, tz::Vector{Int},
+                               dx::T, dy::T, dz::T, bottom::Bool, top::Bool, maxsweeps::Integer) where {T}
+    Nx, Ny, Nz = size(solid)
+    @inline wrap(i, a) = a == 1 ? tx[i+1] : a == 2 ? ty[i+1] : tz[i+1]
+    offs = [(a, b, c) for c in -1:1 for b in -1:1 for a in -1:1 if (a, b, c) != (0, 0, 0)]
     # displacement from the cell centre to its nearest surface point
     inf = T(Inf)
     rx = fill(inf, Nx, Ny, Nz); ry = fill(inf, Nx, Ny, Nz); rz = fill(inf, Nx, Ny, Nz)

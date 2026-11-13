@@ -63,3 +63,37 @@ end
 end
 
 end
+
+@testset "wall_distance: floor, lid, and a cube (Danielsson 1980; #567)" begin
+    using Aeolus.IBM: SolidMask, wall_distance
+    using Aeolus.Grids: RegularGrid
+    # no obstacle: the height above the floor, d = (k − 1/2) Δz, and with
+    # the lid the nearer of the two (the shortcut without sweeps)
+    m = RegularGrid(size = (6, 5, 8), extent = (12.0, 10.0, 4.0))
+    sm = SolidMask(m)
+    d = wall_distance(sm)
+    @test size(d) == (6, 5, 8)
+    @test all(d[i, j, k] ≈ (k - 0.5) * 0.5 for i in 1:6, j in 1:5, k in 1:8)
+    d = wall_distance(sm; top = true)
+    @test all(d[i, j, k] ≈ min(k - 0.5, 8.5 - k) * 0.5 for i in 1:6, j in 1:5, k in 1:8)
+    @test all(isinf, wall_distance(sm; bottom = false))
+    # a cube of 4 × 4 × 2 cells (4 m) on a 2:2:1 grid standing on the floor:
+    # the Euclidean distance from each cell centre to the nearer of the cube
+    # and the floor, to round-off (the sweeps propagate exact nearest points)
+    Δ = (2.0, 2.0, 1.0); N = (16, 16, 10)
+    m = RegularGrid(size = N, extent = N .* Δ)
+    sm = SolidMask(m)
+    ci, ck = 7:10, 1:4
+    sm.mask[m.Hx .+ ci, m.Hy .+ ci, m.Hz .+ ck] .= true
+    lo = (first(ci) - 1) .* (Δ[1], Δ[2]); hi = last(ci) .* (Δ[1], Δ[2]); top = last(ck) * Δ[3]
+    function exact(i, j, k)
+        x, y, z = (i - 0.5) * Δ[1], (j - 0.5) * Δ[2], (k - 0.5) * Δ[3]
+        dx = max(lo[1] - x, 0.0, x - hi[1]); dy = max(lo[2] - y, 0.0, y - hi[2]); dz = max(z - top, 0.0)
+        return min(sqrt(dx^2 + dy^2 + dz^2), z)
+    end
+    d = wall_distance(sm)
+    solid = [sm.mask[m.Hx + i, m.Hy + j, m.Hz + k] for i in 1:N[1], j in 1:N[2], k in 1:N[3]]
+    @test all(d[I] == 0 for I in findall(solid))
+    @test maximum(abs(d[i, j, k] - exact(i, j, k)) for i in 1:N[1], j in 1:N[2], k in 1:N[3]
+                  if !solid[i, j, k]) < 1e-12
+end
