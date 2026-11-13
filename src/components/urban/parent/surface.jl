@@ -372,8 +372,12 @@ The tiled surface of the parent (or of the subset of columns built):
 `landuse`, the class `fractions[I, J, c]`, the morphometry `λp`, `λf`,
 `h`, the unresolved-building roughness `z0` and displacement `d` (m) per
 column, the parent level centres `z_centres` (m), the `footprint` of the
-child (`nothing` if none was given) and `columns[I, J]` (a
-[`ParentColumn`](@ref), or `nothing` where none was built).
+child (`nothing` if none was given), `columns[I, J]` (a
+[`ParentColumn`](@ref), or `nothing` where none was built) and `raised`,
+one record per built tile whose forcing level was raised above the first
+level over the roofs (see `raise_forcing_level` of
+[`build_parent_surface`](@ref)): `(I, J, class, λp, λf, h, d, z0m, z0h,
+k_first, k)`.
 """
 struct ParentSurface
     landuse::ParentLanduse
@@ -386,7 +390,10 @@ struct ParentSurface
     z_centres::Vector{Float64}
     footprint::Any
     columns::Matrix{Union{Nothing,ParentColumn}}
+    raised::Vector{NamedTuple}
 end
+ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols) =
+    ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols, NamedTuple[])
 
 """
     build_parent_surface(case, pl::ParentLanduse; child = case,
@@ -419,6 +426,16 @@ Build the parent's tiled surface.
   displacement).
 * `macdonald` — keyword overrides for
   `SurfaceTiles.macdonald_roughness` (`A`, `β`, `C_D`, `κ`).
+* `raise_forcing_level = false` — what to do with a built tile whose
+  first level at or above the roofs lies less than ``2 z_0`` above its
+  displacement height ([`parent_forcing_level`](@ref); #568): `false`
+  stops the build with an `ArgumentError` naming the tiles (as PALM stops
+  a run whose first level is below ``2 z_0``); `true` forces those tiles
+  at the lowest level that is a valid Monin–Obukhov height (PALM's
+  `allow_roughness_limitation` lowers ``z_0`` instead) and lists them in
+  the surface's `raised`. Such tiles sit under a morphometry window that
+  is (almost) fully roofed, i.e. buildings about as large as the window,
+  which a grid that fine may resolve rather than parametrise.
 * `unresolved = false` switches the unresolved-building treatment off
   (every tile with its class's own roughness, `d = 0`, forced at the
   first level): the parent is then the class-weighted mean of the
@@ -444,7 +461,7 @@ function build_parent_surface(case, pl::ParentLanduse;
                               child = case isa UrbanSite ? case : nothing, columns = :all,
                               z_centres = 12.5:25.0:2987.5, window::Integer = 8,
                               blending = nothing, macdonald::NamedTuple = (;),
-                              unresolved::Bool = true)
+                              unresolved::Bool = true, raise_forcing_level::Bool = false)
     fp = child === nothing ? nothing : child_footprint(pl, child.cfg)
     frac = parent_fractions(pl; child_sfc = child === nothing ? nothing : child.geom.sfc,
                             footprint = fp)
@@ -455,10 +472,14 @@ function build_parent_surface(case, pl::ParentLanduse;
     zc = collect(Float64, z_centres)
     cols = Matrix{Union{Nothing,ParentColumn}}(nothing, pl.nx, pl.ny)
     idx = columns === :all ? CartesianIndices((pl.nx, pl.ny)) : columns
-    # one column per iteration, each writing only cols[I]: on the threads
-    # (the soil columns of every tile, about 4 µs each; #567)
+    # one column per iteration, each writing only its own cols[I] and
+    # raisedcol[n]: on the threads (the soil columns of every tile, about
+    # 4 µs each; #567)
+    cidx = collect(idx)
+    raisedcol = [NamedTuple[] for _ in cidx]
     try
-        Threads.@threads :dynamic for I in collect(idx)
+        Threads.@threads :dynamic for n in eachindex(cidx)
+            I = cidx[n]
             present = [c for c in 1:size(frac, 3) if frac[I, c] > 0]
             tiles = AbstractSurface[]
             dd = Float64[]
@@ -472,9 +493,16 @@ function build_parent_surface(case, pl::ParentLanduse;
                                SurfaceSite(c; T_skin = Ts)
                 push!(tiles, class_surface(case, site))
                 push!(dd, built ? d[I] : 0.0)
-                # a built tile: the first level above the roofs that is also a
-                # valid Monin–Obukhov height over its d and z0 (#568)
-                push!(kt, built && unresolved ? parent_forcing_level(zc, h[I]; d = d[I], z0 = max(z0mt, z0hc)) : 1)
+                # a built tile: the first level above the roofs, or (#568) the
+                # lowest one that is a valid Monin–Obukhov height over its d and z0
+                k = 1
+                if built && unresolved
+                    k1 = parent_forcing_level(zc, h[I])
+                    k = parent_forcing_level(zc, h[I]; d = d[I], z0 = max(z0mt, z0hc))
+                    k == k1 || push!(raisedcol[n], (I = I[1], J = I[2], class = c, λp = λp[I], λf = λf[I], h = h[I],
+                                                    d = d[I], z0m = z0mt, z0h = z0hc, k_first = k1, k = k))
+                end
+                push!(kt, k)
             end
             m = SurfaceMosaic(tiles, frac[I, present])
             s = blending === nothing ? m : BlendedMosaic(m, blending)
@@ -485,7 +513,25 @@ function build_parent_surface(case, pl::ParentLanduse;
         x = first(e.exceptions)
         throw(x isa TaskFailedException ? x.task.exception : x)
     end
-    return ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols)
+    raised = reduce(vcat, raisedcol; init = NamedTuple[])     # in column order, as a serial loop
+    isempty(raised) || raise_forcing_level || throw(ArgumentError(_raised_message(raised, zc)))
+    return ParentSurface(pl, frac, λp, λf, h, z0, d, zc, fp, cols, raised)
+end
+
+# The build's refusal (#568): how many built tiles, the worst of them.
+function _raised_message(raised, zc)
+    w = argmin(r -> (zc[r.k_first] - r.d) / max(r.z0m, r.z0h), raised)
+    zr = zc[w.k_first] - w.d
+    ncol = length(unique((r.I, r.J) for r in raised))
+    f(x) = round(x; sigdigits = 4)
+    return "build_parent_surface: $(length(raised)) built tile(s) in $ncol column(s) would be forced less than " *
+           "2 z0 above their displacement height, where the Monin–Obukhov surface layer does not hold (#568). " *
+           "Worst: column ($(w.I), $(w.J)), class $(w.class): λp = $(f(w.λp)), λf = $(f(w.λf)), h = $(f(w.h)) m, " *
+           "d = $(f(w.d)) m, z0m = $(f(w.z0m)) m, z0h = $(f(w.z0h)) m; the first level above the roofs, " *
+           "$(f(zc[w.k_first])) m, is $(f(zr)) m above d. Such columns lie under an (almost) fully roofed " *
+           "morphometry window: buildings about the size of the window, which a grid this fine may resolve " *
+           "rather than parametrise. To force these tiles at the lowest level with z − d ≥ 2 z0 instead, set " *
+           "[surface] raise_forcing_level = true (the run then lists them in results.toml)."
 end
 
 "The initial skin temperature (K) of a tile of class `c`: the site's `Ts0`, water `+ Ts_water_offset`."

@@ -108,8 +108,21 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
     hm = fill(9.96, nx, ny); λf = fill(0.05, nx, ny)
     pl = PU.ParentLanduse(nx, ny, 20.0, 0.0, 0.0, r, counts, λf, hm, copy(hm), String[])
     tc = PU.TileClasses((;))
-    ps = PU.build_parent_surface(tc, pl; z_centres = zc, window = 2)
+    # by default the build refuses, naming the nearest tile (the closed roof:
+    # first level 10 m, 0.04 m above d) and the option that allows the raise
+    err = try
+        PU.build_parent_surface(tc, pl; z_centres = zc, window = 2); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("20 built tile(s) in 20 column(s)", err.msg)       # columns 1–5 × 4 rows have λp = 1
+    @test occursin("raise_forcing_level = true", err.msg) && occursin("h = 9.96 m", err.msg)
+    ps = PU.build_parent_surface(tc, pl; z_centres = zc, window = 2, raise_forcing_level = true)
     I = CartesianIndex(2, 2)                      # deep inside the roof block
+    # the record: exactly the λp = 1 columns' roof tiles, each from level 1 to 2
+    @test length(ps.raised) == 20
+    @test all(r -> ps.λp[r.I, r.J] == 1.0 && r.class == PU.SURFACE_ROOF && (r.k_first, r.k) == (1, 2), ps.raised)
     @test ps.λp[I] == 1.0
     @test ps.d[I] ≈ 9.96 rtol = 1e-14            # d/h = 1 at λp = 1 (round-off in A^(−λp))
     @test ps.z0[I] == 0.0                        # exactly: the drag term s is 0
@@ -139,6 +152,19 @@ const NIGHT = merge(NOON, (start_h = 1.0,))
         z0h = roughness_lengths(t).z0h)
     fl = PU.step_parent_column!(ps, col, f, 60.0)
     @test isfinite(fl.H) && isfinite(fl.LE) && isfinite(fl.τ)
+    # the component reports the raised tiles in results.toml (and warns at build)
+    mesh = RegularGrid(; size = (nx, ny, 6), extent = (240.0, 80.0, 120.0), halo = (2, 2, 2))
+    sim = p_state!(p_core(:boussinesq; mesh = mesh))
+    d0 = Domain(sim; validate = false)
+    ts = @test_logs (:warn, r"20 built tile\(s\) raised") PC.build(PU.TiledUrbanSurface,
+        (; surface = ps, period = 60.0, u_min = 0.5, reference = p_ref(sim)), d0)
+    res = Components.run_results(ts, d0)["tiled_surface_main"]
+    @test res["forcing_levels_raised"] == 20
+    @test res["worst_raised"]["z_ref_first"] ≈ 10.0 - 9.96 rtol = 1e-9          # 0.04 m, below z0m = 0.05 m
+    @test res["worst_raised"]["z_ref"] ≈ 30.0 - 9.96 rtol = 1e-12
+    # a surface with nothing raised reports 0
+    ts0 = PC.build(PU.TiledUrbanSurface, p_tiles_opts(sim), d0)
+    @test Components.run_results(ts0, d0)["tiled_surface_main"] == Dict{String,Any}("forcing_levels_raised" => 0)
 end
 
 @testset "TiledUrbanSurface: the air receives the tiles' mean fluxes × Δt, u*, the implicit drag ($core)" for
