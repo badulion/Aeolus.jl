@@ -95,6 +95,11 @@ surface_value = true
 model = "tiles"
 period = 60.0
 u_min = 0.5
+# #568: at 20 m one built tile (column (30, 615), λp = 1, h = 9.96 m) has no
+# level over the roofs at least 2 z0 above its displacement height; by default
+# the build stops there. Raise it to the next level instead (the build warns,
+# results.toml lists it under tiled_surface_<domain>.forcing_levels_raised).
+raise_forcing_level = true
 
 [radiation]
 scheme = "mean_column"
