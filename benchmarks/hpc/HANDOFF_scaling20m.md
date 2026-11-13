@@ -250,6 +250,9 @@ That is issue 1.
 
 1. **Issue 1:** filed as #567 (§5.1).
 2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12). Until the surface-layer failure is fixed, or the case changes, the 20 m scaling test can't run.
+0. **20 m rerun (2026-11-13), in progress.** master 366d67d3 (#567, #568) merged into bench/all (0b498671) and this branch; the 20 m config sets `raise_forcing_level = true`; `bench_run.jl` applies `[fftw]` and records the FFTW policy and the build's GC time and allocation.
+   - Single-node test at `-t 72,0` (job 4468996): setup about 1 min, against 43 min before; 1 tile raised, as expected; no `solve_surface_layer` error.
+   - **But the steps stall in the pressure solve's 3-D DCT**: ~1.2 cores busy, ~656k context switches per second. See `REPORT_fft_20m.md`, to research and to compare with PALM's solver. The ladder is not started.
 3. **Before rerunning the 20 m ladder:** a fix for issue 2, and ideally issue 1 too, since the ladder spends about 5 h on setup.
    - `scaling.sh` builds the model in every process (7 builds) and uses no system image.
    - The maintainer's stop rule (setup over ~90 min or peak memory over ~230 GB at 72 threads) held this time: setup took 43 min and memory peaked at 69 GB.
