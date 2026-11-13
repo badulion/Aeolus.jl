@@ -1,0 +1,6 @@
+## E: z-only DCT (channel case), estimate, aeolus
+RESULT dims=3 Nx=200 Ny=200 Nz=60 pts=2400000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.09 min_s=0.007 ns_per_pt=2.92 cores=1.1 kernel=0.0% cs_per_s=37 os_threads=60
+RESULT dims=3 Nx=200 Ny=200 Nz=60 pts=2400000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.09 min_s=0.002 ns_per_pt=0.84 cores=3.03 kernel=0.0% cs_per_s=3588 os_threads=83
+RESULT dims=3 Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.0238 ns_per_pt=3.96 cores=0.96 kernel=0.0% cs_per_s=0 os_threads=60
+RESULT dims=3 Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.09 min_s=4.7458 ns_per_pt=790.96 cores=4.97 kernel=72.0% cs_per_s=1148502 os_threads=96
+RESULT dims=3 Nx=1000 Ny=1000 Nz=150 pts=150000000 jt=24 ft=24 planner=measure cb=aeolus plan_s=9.53 min_s=0.2069 ns_per_pt=1.38 cores=18.81 kernel=1.0% cs_per_s=25507 os_threads=90

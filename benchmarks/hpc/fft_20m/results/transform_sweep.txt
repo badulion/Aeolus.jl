@@ -1,0 +1,51 @@
+## A: 200x200x150, threads x planner x callback
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.13 min_s=0.05 ns_per_pt=8.33 cores=0.95 kernel=0.0% cs_per_s=35 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=2 planner=estimate cb=aeolus plan_s=0.1 min_s=0.049 ns_per_pt=8.16 cores=1.82 kernel=6.0% cs_per_s=67378 os_threads=61
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=4 planner=estimate cb=aeolus plan_s=0.1 min_s=0.6237 ns_per_pt=103.96 cores=1.71 kernel=63.0% cs_per_s=1121869 os_threads=65
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=12 planner=estimate cb=aeolus plan_s=0.1 min_s=2.1764 ns_per_pt=362.73 cores=3.2 kernel=65.0% cs_per_s=914080 os_threads=74
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=4.6425 ns_per_pt=773.75 cores=4.99 kernel=71.0% cs_per_s=1183716 os_threads=103
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=1 planner=measure cb=aeolus plan_s=0.73 min_s=0.0431 ns_per_pt=7.18 cores=1.01 kernel=0.0% cs_per_s=14 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=2 planner=measure cb=aeolus plan_s=2.28 min_s=0.0266 ns_per_pt=4.43 cores=1.78 kernel=0.0% cs_per_s=158 os_threads=61
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=4 planner=measure cb=aeolus plan_s=2.57 min_s=0.0153 ns_per_pt=2.55 cores=3.1 kernel=0.0% cs_per_s=399 os_threads=65
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=12 planner=measure cb=aeolus plan_s=3.87 min_s=0.0122 ns_per_pt=2.03 cores=6.14 kernel=0.0% cs_per_s=44139 os_threads=79
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=24 planner=measure cb=aeolus plan_s=4.14 min_s=0.0107 ns_per_pt=1.79 cores=10.23 kernel=0.0% cs_per_s=70541 os_threads=103
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=1 planner=estimate cb=julia plan_s=0.1 min_s=0.0548 ns_per_pt=9.13 cores=1.0 kernel=0.0% cs_per_s=11 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=2 planner=estimate cb=julia plan_s=0.1 min_s=0.0322 ns_per_pt=5.36 cores=1.84 kernel=0.0% cs_per_s=201 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=4 planner=estimate cb=julia plan_s=0.1 min_s=3.921 ns_per_pt=653.5 cores=23.16 kernel=0.0% cs_per_s=15607 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=12 planner=estimate cb=julia plan_s=0.11 min_s=5.8256 ns_per_pt=970.94 cores=23.13 kernel=0.0% cs_per_s=10032 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=24 planner=estimate cb=julia plan_s=0.1 min_s=9.9734 ns_per_pt=1662.24 cores=22.79 kernel=1.0% cs_per_s=10870 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=1 planner=measure cb=julia plan_s=0.74 min_s=0.044 ns_per_pt=7.34 cores=1.0 kernel=0.0% cs_per_s=7 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=2 planner=measure cb=julia plan_s=4.31 min_s=0.0262 ns_per_pt=4.36 cores=1.68 kernel=0.0% cs_per_s=198 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=4 planner=measure cb=julia plan_s=4.32 min_s=0.0165 ns_per_pt=2.75 cores=2.91 kernel=0.0% cs_per_s=771 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=12 planner=measure cb=julia plan_s=5.44 min_s=0.0105 ns_per_pt=1.75 cores=6.31 kernel=0.0% cs_per_s=2522 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=24 planner=measure cb=julia plan_s=5.6 min_s=0.0079 ns_per_pt=1.32 cores=9.72 kernel=2.0% cs_per_s=6102 os_threads=60
+## B: size ladder, estimate, aeolus, ft 24 vs 1
+RESULT Nx=100 Ny=100 Nz=60 pts=600000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.11 min_s=0.0038 ns_per_pt=6.26 cores=0.96 kernel=0.0% cs_per_s=0 os_threads=60
+RESULT Nx=100 Ny=100 Nz=60 pts=600000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=0.0015 ns_per_pt=2.58 cores=2.3 kernel=0.0% cs_per_s=13168 os_threads=98
+RESULT Nx=200 Ny=200 Nz=60 pts=2400000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.0187 ns_per_pt=7.81 cores=0.96 kernel=0.0% cs_per_s=19 os_threads=60
+RESULT Nx=200 Ny=200 Nz=60 pts=2400000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=0.004 ns_per_pt=1.67 cores=6.21 kernel=13.0% cs_per_s=21337 os_threads=99
+RESULT Nx=400 Ny=400 Nz=60 pts=9600000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.0985 ns_per_pt=10.26 cores=1.04 kernel=5.0% cs_per_s=5 os_threads=60
+RESULT Nx=400 Ny=400 Nz=60 pts=9600000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=0.0226 ns_per_pt=2.35 cores=12.31 kernel=1.0% cs_per_s=3883 os_threads=99
+RESULT Nx=600 Ny=600 Nz=60 pts=21600000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.2023 ns_per_pt=9.37 cores=0.99 kernel=0.0% cs_per_s=19 os_threads=60
+RESULT Nx=600 Ny=600 Nz=60 pts=21600000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.11 min_s=0.0545 ns_per_pt=2.52 cores=16.75 kernel=0.0% cs_per_s=7635 os_threads=99
+RESULT Nx=800 Ny=800 Nz=60 pts=38400000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.6828 ns_per_pt=17.78 cores=1.0 kernel=0.0% cs_per_s=12 os_threads=60
+RESULT Nx=800 Ny=800 Nz=60 pts=38400000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=0.132 ns_per_pt=3.44 cores=18.16 kernel=0.0% cs_per_s=2288 os_threads=99
+RESULT Nx=1000 Ny=1000 Nz=60 pts=60000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.6495 ns_per_pt=10.83 cores=1.0 kernel=0.0% cs_per_s=19 os_threads=60
+RESULT Nx=1000 Ny=1000 Nz=60 pts=60000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=0.1669 ns_per_pt=2.78 cores=18.08 kernel=0.0% cs_per_s=5285 os_threads=99
+RESULT Nx=100 Ny=100 Nz=150 pts=1500000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.12 min_s=0.0106 ns_per_pt=7.05 cores=1.14 kernel=0.0% cs_per_s=28 os_threads=60
+RESULT Nx=100 Ny=100 Nz=150 pts=1500000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.11 min_s=1.1705 ns_per_pt=780.34 cores=4.99 kernel=70.0% cs_per_s=1153281 os_threads=102
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.0539 ns_per_pt=8.98 cores=0.97 kernel=0.0% cs_per_s=16 os_threads=60
+RESULT Nx=200 Ny=200 Nz=150 pts=6000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.11 min_s=4.6497 ns_per_pt=774.94 cores=4.99 kernel=71.0% cs_per_s=1180055 os_threads=103
+RESULT Nx=400 Ny=400 Nz=150 pts=24000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.3177 ns_per_pt=13.24 cores=1.0 kernel=0.0% cs_per_s=18 os_threads=60
+RESULT Nx=400 Ny=400 Nz=150 pts=24000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=18.7824 ns_per_pt=782.6 cores=4.95 kernel=71.0% cs_per_s=1170712 os_threads=103
+RESULT Nx=600 Ny=600 Nz=150 pts=54000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=0.5595 ns_per_pt=10.36 cores=1.0 kernel=0.0% cs_per_s=15 os_threads=60
+RESULT Nx=600 Ny=600 Nz=150 pts=54000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.12 min_s=43.1608 ns_per_pt=799.27 cores=5.04 kernel=73.0% cs_per_s=1134009 os_threads=103
+RESULT Nx=800 Ny=800 Nz=150 pts=96000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=1.7839 ns_per_pt=18.58 cores=1.0 kernel=0.0% cs_per_s=16 os_threads=60
+RESULT Nx=800 Ny=800 Nz=150 pts=96000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.11 min_s=75.662 ns_per_pt=788.15 cores=4.93 kernel=71.0% cs_per_s=1164987 os_threads=103
+RESULT Nx=1000 Ny=1000 Nz=150 pts=150000000 jt=24 ft=1 planner=estimate cb=aeolus plan_s=0.1 min_s=1.7282 ns_per_pt=11.52 cores=1.0 kernel=0.0% cs_per_s=16 os_threads=60
+RESULT Nx=1000 Ny=1000 Nz=150 pts=150000000 jt=24 ft=24 planner=estimate cb=aeolus plan_s=0.1 min_s=118.1339 ns_per_pt=787.56 cores=4.97 kernel=71.0% cs_per_s=1165046 os_threads=103
+## C: 20 m size, measure
+RESULT Nx=1000 Ny=1000 Nz=150 pts=150000000 jt=24 ft=1 planner=measure cb=aeolus plan_s=8.17 min_s=1.3778 ns_per_pt=9.19 cores=1.0 kernel=0.0% cs_per_s=13 os_threads=60
+RESULT Nx=1000 Ny=1000 Nz=150 pts=150000000 jt=24 ft=24 planner=measure cb=aeolus plan_s=15.23 min_s=0.472 ns_per_pt=3.15 cores=18.06 kernel=2.0% cs_per_s=107945 os_threads=103
+## D: 20 m size, julia callback, estimate, ft 24, one rep
+TIMEOUT/FAIL 24 1000 1000 150 24 estimate julia 1

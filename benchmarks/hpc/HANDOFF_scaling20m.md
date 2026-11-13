@@ -253,6 +253,7 @@ That is issue 1.
 0. **20 m rerun (2026-11-13), in progress.** master 366d67d3 (#567, #568) merged into bench/all (0b498671) and this branch; the 20 m config sets `raise_forcing_level = true`; `bench_run.jl` applies `[fftw]` and records the FFTW policy and the build's GC time and allocation.
    - Single-node test at `-t 72,0` (job 4468996): setup about 1 min, against 43 min before; 1 tile raised, as expected; no `solve_surface_layer` error.
    - **But the steps stall in the pressure solve's 3-D DCT**: ~1.2 cores busy, ~656k context switches per second. See `REPORT_fft_20m.md`, to research and to compare with PALM's solver. The ladder is not started.
+   - **Researched (2026-11-13, `REPORT_fft_20m.md` § Findings):** under `estimate` with 4 or more FFTW threads, FFTW plans the z part of the DCT at Nz = 150 as a serial loop over the 10⁶ columns, threaded inside each column (the 72-thread plan of this run included). 118 s per transform on 24 threads, against 0.47 s with `measure`. Recommended fix: a tridiagonal solve in z (`ColumnTridiagonalSolver`, PALM's method), issue drafted in the report. Stopgap for the rerun: `measure` (drop the `estimate` override in `bench_run.jl`).
 3. **Before rerunning the 20 m ladder:** a fix for issue 2, and ideally issue 1 too, since the ladder spends about 5 h on setup.
    - `scaling.sh` builds the model in every process (7 builds) and uses no system image.
    - The maintainer's stop rule (setup over ~90 min or peak memory over ~230 GB at 72 threads) held this time: setup took 43 min and memory peaked at 69 GB.

@@ -1,0 +1,10 @@
+## F: 3-D DCT solver vs 2-D DCT + tridiagonal
+CMP Nx=200 Ny=200 Nz=150 jt=24 ft=1 planner=estimate build3d_s=0.7 buildcol_s=0.36 solve3d_s=0.1204 solvecol_s=0.0881 pair2d_fftwthreads_s=0.0711 pair2d_juliathreads_s=0.0181 ns_pt_3d=20.06 ns_pt_col=14.68 rel_diff=1.77e-13
+CMP Nx=200 Ny=200 Nz=150 jt=24 ft=24 planner=estimate build3d_s=0.76 buildcol_s=0.38 solve3d_s=9.6142 solvecol_s=0.023 pair2d_fftwthreads_s=0.0191 pair2d_juliathreads_s=0.0183 ns_pt_3d=1602.36 ns_pt_col=3.83 rel_diff=1.77e-13
+CMP Nx=1000 Ny=1000 Nz=150 jt=24 ft=1 planner=estimate build3d_s=0.96 buildcol_s=1.24 solve3d_s=3.6821 solvecol_s=2.7225 pair2d_fftwthreads_s=2.4185 pair2d_juliathreads_s=0.592 ns_pt_3d=24.55 ns_pt_col=18.15 rel_diff=1.91e-12
+CMP Nx=1000 Ny=1000 Nz=150 jt=24 ft=24 planner=estimate build3d_s=0.95 buildcol_s=1.24 solve3d_s=242.9678 solvecol_s=0.8977 pair2d_fftwthreads_s=0.6172 pair2d_juliathreads_s=0.6013 ns_pt_3d=1619.79 ns_pt_col=5.98 rel_diff=1.91e-12
+CMP Nx=200 Ny=200 Nz=150 jt=24 ft=1 planner=measure build3d_s=2.04 buildcol_s=0.38 solve3d_s=0.102 solvecol_s=0.0695 pair2d_fftwthreads_s=0.0582 pair2d_juliathreads_s=0.0154 ns_pt_3d=17.0 ns_pt_col=11.58 rel_diff=1.77e-13
+CMP Nx=200 Ny=200 Nz=150 jt=24 ft=24 planner=measure build3d_s=8.82 buildcol_s=0.38 solve3d_s=0.0364 solvecol_s=0.0357 pair2d_fftwthreads_s=0.0163 pair2d_juliathreads_s=0.0157 ns_pt_3d=6.06 ns_pt_col=5.96 rel_diff=1.77e-13
+CMP Nx=1000 Ny=1000 Nz=150 jt=24 ft=1 planner=measure build3d_s=17.42 buildcol_s=1.26 solve3d_s=3.0372 solvecol_s=2.2676 pair2d_fftwthreads_s=2.0378 pair2d_juliathreads_s=0.5478 ns_pt_3d=20.25 ns_pt_col=15.12 rel_diff=1.91e-12
+CMP Nx=1000 Ny=1000 Nz=150 jt=24 ft=24 planner=measure build3d_s=30.74 buildcol_s=1.24 solve3d_s=1.1546 solvecol_s=0.7936 pair2d_fftwthreads_s=0.5544 pair2d_juliathreads_s=0.5261 ns_pt_3d=7.7 ns_pt_col=5.29 rel_diff=1.91e-12
+CMP Nx=400 Ny=400 Nz=60 jt=24 ft=24 planner=estimate build3d_s=0.75 buildcol_s=0.45 solve3d_s=0.0709 solvecol_s=0.0601 pair2d_fftwthreads_s=0.033 pair2d_juliathreads_s=0.033 ns_pt_3d=7.39 ns_pt_col=6.26 rel_diff=1.28e-12
