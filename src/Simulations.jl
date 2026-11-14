@@ -1121,16 +1121,33 @@ end
     copy_storage!(dst, src) -> dst
 
 `dst .= src` over the whole storage (halos included); `dst` and `src`
-must have the same size. It is `copyto!` (a `memcpy`, which a GPU array
-also implements). A copy kernel measured no reliable gain (KA-j, #306;
-`benchmarks/bench_ka_step.jl kernels`): 1.01-1.07× the `memcpy` serially,
-and 1.09-1.30× at 64×64×32 and 0.82-1.58× at 128×128×64 on 4-24 threads.
+must have the same size. Up to `_COPY_THREADED_MIN` points (4 M) it is
+`copyto!` (a `memcpy`, which a GPU array also implements): a copy kernel
+measured no reliable gain there (KA-j, #306; `benchmarks/bench_ka_step.jl
+kernels`): 1.01-1.07× the `memcpy` serially, and 1.09-1.30× at 64×64×32
+and 0.82-1.58× at 128×128×64 on 4-24 threads. Above it, on a threaded
+CPU backend, it is a launch: at Berlin 20 m the five copies of the RK3
+start state (1.2 GB each) on one core were 15.5 % of the main thread
+(#566).
 """
 function copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {T}
     size(dst) == size(src) || throw(DimensionMismatch("copy_storage!: $(size(dst)) ≠ $(size(src))"))
-    copyto!(dst, src)
+    b = Backends.backend(dst)
+    if b isa Backends.CPUBackend && length(dst) >= _COPY_THREADED_MIN && !Backends.runs_serially(b, length(dst))
+        Backends.launch!(b, _copy_point!, _storage(dst), dst, src)
+    else
+        copyto!(dst, src)
+    end
     return dst
 end
+@inline function _copy_point!(i, j, k, dst, src)
+    @inbounds dst[i, j, k] = src[i, j, k]
+    return nothing
+end
+# Above this many points the copy is a threaded launch: one core's memcpy
+# was 15.5 % of the main thread at Berlin 20 m (five 1.2 GB copies a step,
+# #566). Below it, the KA-j measurement holds: no reliable gain.
+const _COPY_THREADED_MIN = 4_194_304
 
 
 """
