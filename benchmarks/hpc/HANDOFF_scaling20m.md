@@ -246,7 +246,7 @@ That is issue 1.
 >
 > Related: #566.
 
-### 5.3 Issue 3: draft for the local agent (allocation per kernel row and per step)
+### 5.3 Issue 3: filed as #574 (allocation per kernel row and per step)
 
 **Title:** Stepping allocates ~1.2 GiB per step at Berlin 20 m: boxed arguments per kernel row (`Backends.jl:356`) and a fresh open-boundary snapshot every step
 
@@ -280,6 +280,7 @@ That is issue 1.
 
 1. **Issue 1:** filed as #567 (§5.1).
 2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12). Until the surface-layer failure is fixed, or the case changes, the 20 m scaling test can't run.
+2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m.
 0. **20 m rerun after #572 (2026-11-14): the ladder ran; setup and the pressure solve are fixed, the steps don't scale.**
    - **Builds:** bench/all 51154519 and this branch, both with master 4f61b8a6 (#567, #568, #572) merged in. Job 4471418 (`results/scaling_20m_rerun2/`, `ladder.sh`), `scaling.sh` 72 36 16 8 4 2 1, `-t N,0`, `JULIA_EXCLUSIVE=1`, FFTW `estimate` on N threads. The earlier test job (4468996, 3-D DCT stall) was cancelled at 01:11:36 by SIGTERM with no TOML.
    - **Results** (s/step is the median of the `if_possible` steps; "busy cores" and "queued" are from `/proc/self/task/*/schedstat` over the measured steps, summed over the process's OS threads and divided by wall time):
@@ -298,7 +299,7 @@ That is issue 1.
    - **#568 confirmed:** each process raised exactly 1 tile (column (30, 615), h = d = 9.96 m, z0m = 0.05, 0.039 → 20.04 m), no `solve_surface_layer` error.
    - **#572 confirmed:** during stepping at 72 threads, 1–2 % kernel time and ~700 context switches/s (`procwatch.log`), against 82 % and 656 k/s before. The pressure solve alone at 1000 × 1000 × 150 on 72 threads: 0.44 s, agreement with the 3-D DCT 5e-16 (`solver_compare_t72.txt`). Three solves per step ≈ 1.3 s of 28.4 s, ~5 %.
    - **Why the steps don't scale: the benchmark's pinning, not the model (confirmed 2026-11-14).** With `JULIA_EXCLUSIVE=1` the threads created after startup inherit thread 1's affinity, core 0. At 72 threads the TOML's `affinity` shows 72 helper threads (probably GC) already pinned to core 0 at startup; the 99 threads created later (FFTW's own pthreads, #397) spent 227 s on a CPU and **15 124 s waiting in the run queue** over the 295 s measured: the FFTW pool ran on one core. At 16 threads: 5 748 s queued. Unpinned (memory job 4471714), the same 20 m step at 72 threads takes **5.9–6.2 s against 28.4 s** pinned; 50 m 1.0 s. Run 1's `node.sh` sets `JULIA_EXCLUSIVE=1` too, so its scaling curve (plateau at ~16 threads) is affected the same way and should be read with this caveat.
-   - **The growing RSS is garbage, not a leak** (job 4471714, `results/memory_20m/`): 1.22 GiB allocated per step at 20 m; the live heap returns exactly to its baseline after a full GC; a collection at 72 threads costs 1.7 s. ~1.15 GiB of it is boxed arguments per kernel row at `Backends.jl:356`, ~0.24 GiB a fresh `open_boundary_snapshot` per step. Issue draft: §5.3.
+   - **The growing RSS is garbage, not a leak** (job 4471714, `results/memory_20m/`): 1.22 GiB allocated per step at 20 m; the live heap returns exactly to its baseline after a full GC; a collection at 72 threads costs 1.7 s. ~1.15 GiB of it is boxed arguments per kernel row at `Backends.jl:356`, ~0.24 GiB a fresh `open_boundary_snapshot` per step. Filed as #574 (§5.3).
    - **Profile job 4471709 failed:** `Profile.print` hits the Fritz ENODEV bug (§7), and the fallback had a soft-scope bug (fixed in 559013ad). Raw samples kept in `$WORK/aeolus-bench/results/profile_20m_t72/*.jls`; no step times from it.
    - **Next:** the ladder rerun unpinned (`BENCH_PIN=0 scaling.sh`), `results/scaling_20m_unpinned/`.
    - Not done: the bench/all system image (only `node.sh` uses it) and the pressure-solver tests on Fritz.
