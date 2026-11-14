@@ -8,6 +8,8 @@ using ..Fields
 using ..Fields: Field
 using ..BoundaryConditions: FieldBoundaryConditions, axis_poisson_bc, _halo_periodic!, _halo_mirror!
 using ..Operators: fftw_planner_flags   # the one FFTW planning policy (#245)
+# serial FFTW plans on Julia's threads (#575)
+using ..Operators: BlockTransform, serial_r2r_plan, serial_rfft_plan, serial_brfft_plan, serial_fft_plan
 using ..Backends: backend, launch!, launch_weighted!, runs_serially, apply_transform!, allocate, _host_backend,
                   pcg!, PCGWorkspace, PointOperator, IdentityPreconditioner
 
@@ -98,16 +100,16 @@ so the returned `p` satisfies the *discrete* equation `L_h p = source` to
 machine precision (up to projection of `source` onto its zero-mean part,
 which is the periodic-Poisson compatibility condition).
 """
-struct FFTPoissonSolver{T,
-                        FP,
-                        IP,
+struct FFTPoissonSolver{T, FXY, FZ, IZ, IXY,
                         RA<:Array{T,3},
                         CA<:Array{Complex{T},3}} <: AbstractPressureSolver
-    forward_plan::FP
-    inverse_plan::IP
+    fwd_xy::FXY     # rfft in x and y, by blocks of levels
+    fwd_z::FZ       # DFT in z on the spectrum, in place, by blocks of rows
+    inv_z::IZ       # inverse DFT in z (unnormalised)
+    inv_xy::IXY     # inverse rfft in x and y (unnormalised)
     src_buffer::RA
     hat_buffer::CA
-    inv_eigenvalues::Array{T,3}   # 1 / λ_h,  zero at the k=0 mode
+    inv_eigenvalues::Array{T,3}   # 1 / (λ_h Nx Ny Nz),  zero at the k=0 mode
 end
 
 function FFTPoissonSolver(mesh::RegularGrid{T}) where {T}
@@ -116,22 +118,28 @@ function FFTPoissonSolver(mesh::RegularGrid{T}) where {T}
 
     src = _zeros(T, Nx, Ny, Nz)
     hat = _zeros(Complex{T}, div(Nx, 2) + 1, Ny, Nz)
-    forward_plan = plan_rfft(src; flags = fftw_planner_flags())
-    inverse_plan = plan_irfft(hat, Nx; flags = fftw_planner_flags())
+    # serial plans on Julia's threads (#575): x-y per block of levels, z per
+    # block of rows of the spectrum
+    fwd_xy = BlockTransform((o, i) -> serial_rfft_plan(o, i, (1, 2)), hat, src, 3)
+    fwd_z  = BlockTransform((o, i) -> serial_fft_plan(o, i, (3,), FFTW.FORWARD), hat, hat, 2)
+    inv_z  = BlockTransform((o, i) -> serial_fft_plan(o, i, (3,), FFTW.BACKWARD), hat, hat, 2)
+    inv_xy = BlockTransform((o, i) -> serial_brfft_plan(o, i, (1, 2)), src, hat, 3)
 
     kx² = [ 4/dx^2 * sin(π * (m - 1) / Nx)^2 for m in 1:div(Nx, 2) + 1 ]
     ky² = [ 4/dy^2 * sin(π * (m - 1) / Ny)^2 for m in 1:Ny ]
     kz² = [ 4/dz^2 * sin(π * (m - 1) / Nz)^2 for m in 1:Nz ]
 
+    # 1/λ with the 1/(Nx Ny Nz) of the unnormalised transform pair
+    nrm = 1 / T(Nx * Ny * Nz)
     invλ = zeros(T, div(Nx, 2) + 1, Ny, Nz)
     @inbounds for k in 1:Nz, j in 1:Ny, i in 1:div(Nx, 2) + 1
         λ = -(kx²[i] + ky²[j] + kz²[k])
-        invλ[i, j, k] = λ == 0 ? zero(T) : 1 / λ
+        invλ[i, j, k] = λ == 0 ? zero(T) : nrm / λ
     end
 
-    return FFTPoissonSolver{T, typeof(forward_plan), typeof(inverse_plan),
+    return FFTPoissonSolver{T, typeof(fwd_xy), typeof(fwd_z), typeof(inv_z), typeof(inv_xy),
                             typeof(src), typeof(hat)}(
-        forward_plan, inverse_plan, src, hat, invλ
+        fwd_xy, fwd_z, inv_z, inv_xy, src, hat, invλ
     )
 end
 
@@ -154,10 +162,13 @@ end
 function solve_source_buffer!(p::Field{CellCenter,T}, solver::FFTPoissonSolver{T}) where {T}
     b = backend(solver.src_buffer)
     buf, hat = solver.src_buffer, solver.hat_buffer
-    apply_transform!(b, hat, solver.forward_plan, buf)     # forward transform
-    # divide by eigenvalues (zero mode annihilated by inv_eigenvalues[1,1,1] = 0)
+    apply_transform!(b, hat, solver.fwd_xy, buf)           # forward transform: x-y,
+    apply_transform!(b, hat, solver.fwd_z, hat)            # then z
+    # divide by eigenvalues and normalise (the zero mode annihilated by
+    # inv_eigenvalues[1,1,1] = 0)
     scale_by!(b, hat, solver.inv_eigenvalues)
-    apply_transform!(b, buf, solver.inverse_plan, hat)     # inverse transform
+    apply_transform!(b, hat, solver.inv_z, hat)            # inverse transform: z,
+    apply_transform!(b, buf, solver.inv_xy, hat)           # then x-y (overwrites hat)
     copy_interior_out!(b, p, buf)                          # write back
     return p
 end
