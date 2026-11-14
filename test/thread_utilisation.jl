@@ -83,4 +83,19 @@ const Sim = Aeolus.Simulations
             end
         end
     end
+    # B1/B2/B5: a box thin along i (an x-normal boundary plane) launches one
+    # k-plane per work item; every point written once, as the serial loop
+    @testset "thin boxes along i: one k-plane per work item" begin
+        body!(i, j, k, d, a) = (@inbounds d[i, j, k] += 2 * a[i, j, k] + i - 3j + 5k; nothing)
+        a = randn(Xoshiro(7), 9, 40, 30)
+        for ir in (1:1, 2:4, 1:7), jr in (1:40, 3:38), kr in (1:30, 2:29)
+            d1 = zeros(size(a)); d2 = zeros(size(a))
+            Aeolus.Backends.launch!(tb, body!, (ir, jr, kr), d1, a)
+            for k in kr, j in jr, i in ir
+                body!(i, j, k, d2, a)
+            end
+            # the same expression once per point: equal to round-off (none expected)
+            @test maximum(abs.(d1 .- d2)) <= 4eps() * maximum(abs.(d2))
+        end
+    end
 end
