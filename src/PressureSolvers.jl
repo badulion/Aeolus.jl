@@ -394,19 +394,28 @@ solve_source_buffer!(p::Field{CellCenter,T}, solver::CosineFFTPoissonSolver{T}) 
 # column solver instead).
 # -------------------------------------------------------------------------
 
-struct _CosineTransformSolver{T,
-                              PDF, PDI, PFF, PFI,
+# The transforms run as serial FFTW plans on Julia's threads (#575): those
+# in x and y by blocks of levels, those along z by blocks of rows. Forward:
+# DCT-II along the Neumann axes (x-y, then z), then the DFT along the
+# periodic axes (rfft along the first, a complex DFT along z if z is
+# periodic and not the first); inverse in reverse order, unnormalised, the
+# normalisation `scale` applied in the write-back.
+struct _CosineTransformSolver{T, DXF, DZF, DXI, DZI, RF, CF, CI, RI,
                               RA<:Array{T,3},
                               CA<:Union{Nothing,Array{Complex{T},3}}} <: AbstractPressureSolver
-    plan_dct_fwd::PDF        # DCT-II  along the Neumann axes (REDFT10), or nothing
-    plan_dct_inv::PDI        # DCT-III along the Neumann axes (REDFT01), or nothing
-    plan_fft_fwd::PFF        # rfft    along the periodic axes, or nothing
-    plan_fft_inv::PFI        # irfft   along the periodic axes, or nothing
+    dct_xy_fwd::DXF          # DCT-II  (REDFT10) along the Neumann axes among x, y, or nothing
+    dct_z_fwd::DZF           # DCT-II along z if z is Neumann, or nothing
+    dct_xy_inv::DXI          # DCT-III (REDFT01), or nothing
+    dct_z_inv::DZI
+    rfft_fwd::RF             # r2c along the periodic axes among x, y (or along z alone), or nothing
+    cfft_z_fwd::CF           # complex DFT along z after an r2c in x-y, in place, or nothing
+    cfft_z_inv::CI
+    rfft_inv::RI             # c2r, unnormalised, or nothing
     real_buf::RA
-    real_buf2::RA            # scratch — plan_r2r is out-of-place
+    real_buf2::RA            # scratch — the r2r transforms are out-of-place
     hat_buf::CA              # spectral buffer (nothing when no axis is periodic)
     inv_eigenvalues::Array{T,3}
-    dct_scale::T             # 1 / ∏(2N) over the Neumann axes (DCT-II × DCT-III normaliser)
+    scale::T                 # 1 / (∏ 2N over the Neumann axes × ∏ N over the periodic axes)
 end
 
 # Squared modified wavenumbers 4/Δ² sin²(π m / N*) of one axis, for the
@@ -444,14 +453,25 @@ function _CosineTransformSolver(mesh::RegularGrid{T}; bc_x::Symbol, bc_y::Symbol
     isempty(pdims) || (nhat[pdims[1]] = div(N[pdims[1]], 2) + 1)
     hat_buf = isempty(pdims) ? nothing : _zeros(Complex{T}, nhat...)
 
-    plan_dct_fwd = isempty(ndims_) ? nothing :
-        FFTW.plan_r2r(real_buf, FFTW.REDFT10, ndims_; flags = fftw_planner_flags())
-    plan_dct_inv = isempty(ndims_) ? nothing :
-        FFTW.plan_r2r(real_buf, FFTW.REDFT01, ndims_; flags = fftw_planner_flags())
-    plan_fft_fwd = isempty(pdims) ? nothing :
-        FFTW.plan_rfft(real_buf, pdims; flags = fftw_planner_flags())
-    plan_fft_inv = isempty(pdims) ? nothing :
-        FFTW.plan_irfft(hat_buf, N[pdims[1]], pdims; flags = fftw_planner_flags())
+    # serial plans by blocks (#575): x-y transforms by levels, z transforms by rows
+    nxy = Tuple(d for d in ndims_ if d < 3)
+    pxy = Tuple(d for d in pdims if d < 3)
+    r2r(kind, region, split) = BlockTransform(
+        (o, i) -> serial_r2r_plan(o, i, ntuple(_ -> kind, length(region)), region),
+        real_buf2, real_buf, split)
+    dct_xy_fwd = isempty(nxy) ? nothing : r2r(FFTW.REDFT10, nxy, 3)
+    dct_xy_inv = isempty(nxy) ? nothing : r2r(FFTW.REDFT01, nxy, 3)
+    dct_z_fwd  = 3 in ndims_ ? r2r(FFTW.REDFT10, (3,), 2) : nothing
+    dct_z_inv  = 3 in ndims_ ? r2r(FFTW.REDFT01, (3,), 2) : nothing
+    # the r2c: over the periodic x-y axes by levels, or along z alone by rows
+    rregion, rsplit = isempty(pxy) ? ((3,), 2) : (pxy, 3)
+    rfft_fwd = isempty(pdims) ? nothing :
+        BlockTransform((o, i) -> serial_rfft_plan(o, i, rregion), hat_buf, real_buf, rsplit)
+    rfft_inv = isempty(pdims) ? nothing :
+        BlockTransform((o, i) -> serial_brfft_plan(o, i, rregion), real_buf, hat_buf, rsplit)
+    zc = (3 in pdims) && !isempty(pxy)        # z periodic and not the halved axis
+    cfft_z_fwd = zc ? BlockTransform((o, i) -> serial_fft_plan(o, i, (3,), FFTW.FORWARD), hat_buf, hat_buf, 2) : nothing
+    cfft_z_inv = zc ? BlockTransform((o, i) -> serial_fft_plan(o, i, (3,), FFTW.BACKWARD), hat_buf, hat_buf, 2) : nothing
 
     kx² = _k2(dx, Nx, nhat[1], bc_x)
     ky² = _k2(dy, Ny, nhat[2], bc_y)
@@ -460,13 +480,16 @@ function _CosineTransformSolver(mesh::RegularGrid{T}; bc_x::Symbol, bc_y::Symbol
     invλ = Array{T}(undef, nhat...)
     launch!(_host_backend(), _inv_eigen_body!, (1:nhat[1], 1:nhat[2], 1:nhat[3]), invλ, kx², ky², kz²)
 
-    dct_scale = 1 / T(prod((2 * N[d] for d in ndims_); init = 1))
+    # the DCT-II × DCT-III factor 2N per Neumann axis, N per periodic axis
+    # (the unnormalised DFT pair)
+    scale = 1 / T(prod((2 * N[d] for d in ndims_); init = 1) * prod((N[d] for d in pdims); init = 1))
 
-    return _CosineTransformSolver{T, typeof(plan_dct_fwd), typeof(plan_dct_inv),
-                                  typeof(plan_fft_fwd), typeof(plan_fft_inv),
-                                  typeof(real_buf), typeof(hat_buf)}(
-        plan_dct_fwd, plan_dct_inv, plan_fft_fwd, plan_fft_inv,
-        real_buf, real_buf2, hat_buf, invλ, T(dct_scale)
+    return _CosineTransformSolver{T, typeof(dct_xy_fwd), typeof(dct_z_fwd),
+                                  typeof(dct_xy_inv), typeof(dct_z_inv),
+                                  typeof(rfft_fwd), typeof(cfft_z_fwd), typeof(cfft_z_inv),
+                                  typeof(rfft_inv), typeof(real_buf), typeof(hat_buf)}(
+        dct_xy_fwd, dct_z_fwd, dct_xy_inv, dct_z_inv, rfft_fwd, cfft_z_fwd, cfft_z_inv,
+        rfft_inv, real_buf, real_buf2, hat_buf, invλ, T(scale)
     )
 end
 
@@ -482,28 +505,36 @@ function solve_source_buffer!(p::Field{CellCenter,T}, solver::_CosineTransformSo
     b = backend(solver.real_buf)
     cur, other = solver.real_buf, solver.real_buf2   # the data lives in `cur`
 
-    if solver.plan_dct_fwd !== nothing                     # DCT-II along the Neumann axes
-        apply_transform!(b, other, solver.plan_dct_fwd, cur)
-        cur, other = other, cur
-    end
+    # DCT-II along the Neumann axes (out of place: the data moves to `other`)
+    cur, other = _r2r_step!(b, solver.dct_xy_fwd, cur, other)
+    cur, other = _r2r_step!(b, solver.dct_z_fwd, cur, other)
 
-    if solver.plan_fft_fwd === nothing                     # all Neumann: real spectrum
+    if solver.rfft_fwd === nothing                         # all Neumann: real spectrum
         scale_by!(b, cur, solver.inv_eigenvalues)
     else
-        apply_transform!(b, solver.hat_buf, solver.plan_fft_fwd, cur)
-        scale_by!(b, solver.hat_buf, solver.inv_eigenvalues)
-        apply_transform!(b, cur, solver.plan_fft_inv, solver.hat_buf)
+        hat = solver.hat_buf
+        apply_transform!(b, hat, solver.rfft_fwd, cur)
+        solver.cfft_z_fwd === nothing || apply_transform!(b, hat, solver.cfft_z_fwd, hat)
+        scale_by!(b, hat, solver.inv_eigenvalues)
+        solver.cfft_z_inv === nothing || apply_transform!(b, hat, solver.cfft_z_inv, hat)
+        apply_transform!(b, cur, solver.rfft_inv, hat)     # overwrites hat
     end
 
-    if solver.plan_dct_inv !== nothing                     # DCT-III back
-        apply_transform!(b, other, solver.plan_dct_inv, cur)
-        cur, other = other, cur
-    end
+    # DCT-III back
+    cur, other = _r2r_step!(b, solver.dct_z_inv, cur, other)
+    cur, other = _r2r_step!(b, solver.dct_xy_inv, cur, other)
 
-    # the DCT normalisation fused into the write-back (same bits as the
-    # former `real_buf .*= dct_scale` followed by the copy)
-    copy_interior_out!(b, p, cur, solver.dct_scale)
+    # the normalisation of the transform pairs fused into the write-back
+    copy_interior_out!(b, p, cur, solver.scale)
     return p
+end
+
+# One out-of-place r2r step: `cur` → `other`, after which the data lives
+# in `other`; nothing to do for a missing transform.
+_r2r_step!(b, ::Nothing, cur, other) = (cur, other)
+function _r2r_step!(b, t, cur, other)
+    apply_transform!(b, other, t, cur)
+    return other, cur
 end
 
 # -------------------------------------------------------------------------
