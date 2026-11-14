@@ -1041,7 +1041,7 @@ each mapped to `:periodic` or `:neumann` by
 
 * triply periodic → [`FFTPoissonSolver`](@ref);
 * anything else → [`CosineFFTPoissonSolver`](@ref) with those axis kinds
-  — the channel `(:periodic, :periodic, :neumann)` (bit-for-bit the solver
+  — the channel `(:periodic, :periodic, :neumann)` (the solver
   chosen before #251), and the all-Neumann box of a nested or open
   child.
 
