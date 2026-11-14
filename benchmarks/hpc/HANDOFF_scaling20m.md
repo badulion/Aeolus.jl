@@ -336,67 +336,9 @@ That is issue 1.
 >
 > Related: #566, #397, #572.
 
-### 5.5 Issue 5: draft for the local agent (thread utilisation at 72 threads: every place the step loses threads)
+### 5.5 Where the step loses threads at 72 threads: a report, not an issue draft
 
-**Title:** Step at 72 threads: about half the wall time runs on one thread or a few. Exhaustive list from the Berlin 20 m trace and profile.
-
-**Body:**
-
-> **Measured** (#566, Fritz, bench/all 51154519 = master 4f61b8a6 + the bench PRs, unpinned, `-t 72,0`; `benchmarks/hpc/results/serial_t72/`, `bench_run.jl profile` mode: a launch trace of 2 steps, then `Profile` of 3 steps split by thread and sleep state):
->
-> - **Scaling, Berlin 20 m (1000 × 1000 × 150), unpinned, median s/step** (`results/scaling_20m_unpinned/`, ladder stopped after 8 threads):
->
->   | threads | 8 | 16 | 36 | 72 |
->   | :-- | --: | --: | --: | --: |
->   | s/step | 16.5 | 9.06 | 6.40 | 6.10 |
->
->   16 → 36 threads gains 1.42×, 36 → 72 gains 1.05×.
-> - **Per thread at 72** (`/proc/self/task/*/schedstat`): the main thread is on a CPU 78 % of the time, each of the other 71 Julia threads 37 %, evenly. The workers sleep ~60 % of the step: there is no parallel work for them.
-> - **Launch trace, 20 m, 2 steps (15.4 s; the trace slows steps by ~15 %):** 31 % of the wall time is outside any launch (`serial_between_s`), and 52 % of the threads' time inside launches is idle (402 of 766 thread-seconds). 50 m shows the same pattern with different weights (halo fills larger, the blend smaller).
->
-> The items below are ordered by the thread time they lose at 20 m ("lost" = launch wall × (1 − busy threads / 72), from the trace; the trace's `busy` counts time inside work items, so a kernel limited by memory bandwidth also shows as busy). Each estimate is for an untraced 6.5 s step, and each is an upper bound until measured. Separate PRs are fine; items 1–4 are the large ones.
->
-> **A. Serial code outside launches (31 % of the traced step)**
->
-> 1. **The pressure solve's FFTW transforms** (19.5 % of the main thread's awake samples: `solve_source_buffer!` → `apply_transform!` → FFTW `mul!`; `PressureSolvers.jl:377, 669, 683`). Three solves per step at ~0.44 s. The transforms are not launches, so the trace counts them as serial time, and FFTW's own thread pool runs them. **Already #575** (serial plans run on Julia's threads, PALM's method); estimate: part of ~1.3 s per step.
-> 2. **`copy_storage!`** (`Simulations.jl:1140`, 15.5 % of the main thread's samples): `step_rk3!` (`Simulations.jl:853-854`) saves u, v, w, θ (and qv) every step with a plain `copyto!`, a single-threaded memcpy of ~4 × 1.2 GB. Its docstring cites "no reliable gain" from a copy kernel, measured at 64×64×32 and 128×128×64 only. At 150 M points one core copies ~10 GB/s. **Fix:** a threaded copy (a launch) above a size threshold, or avoid the copy (the stage combination could read uⁿ from a buffer swapped in, not copied). Estimate ~0.4 s per step.
-> 3. **`apply_radiative_cooling!`** (`Radiation.jl:65-72`, 3.7 %): called by `MeanColumnRadiation`'s `:surface_flux` stage (`components/urban/parent/components.jl:1092`) every step. A serial loop of `@views tθ.data[:, :, k] .+= r` over all levels: one pass over the full θ array (1.2 GB) on one thread, plus a small allocation for `c.model.heat .* dt ./ c.π̄`. **Fix:** one `launch!` (or fold the profile into the θ tendency the sweep already writes). Estimate ~0.2 s per step.
-> 4. **Open-boundary mass-flux correction** (`correct_boundary_mass_flux!`, `update_open_boundaries!`, `_fold_faces`; `open_boundary.jl:953, 1033-1043, 1132`; 3.1 %): serial loops over every boundary face, with a closure per face, two or three passes (flux, area, correction). **Fix:** `plane_reduce`-style threaded reductions (they exist for `_air_at`), or one fused pass. Estimate ~0.1–0.2 s.
-> 5. **Component pipeline and budgets** (`_run_each`, `_run_stages!`, `budgets.jl:250 _attributed!`, 4.5 % inclusive): mostly the stages' own work (items 3, 4), but check the budget attribution for serial whole-field work (differences or copies per stage).
-> 6. **Smaller serial work in `_step_rk3!`** (`Simulations.jl:856, 858, 866, 873, 879`; 2–3 % each, including their launches): check each for serial work between the launches (stage bookkeeping, `combine_open_boundaries!`).
->
-> **B. Launches that run on one thread or a few** (busy ≤ 4 of 72)
->
-> 7. **`_blend_body!`, the open-boundary time blend** (`blend_window!`, `open_boundary.jl:291`): 120 launches per 2 steps, 2.41 s, **0.5 threads busy**, 16 % of the traced step; the largest single item. One launch per field × side × snapshot; each covers one thin plane (1 × Ny × Nz or Nx × 1 × Nz), whose rows are length 1 or whose point count falls below the backend's threshold (`Backends.jl:108`, `npoints < b.threshold`) or `_MIN_POINTS_PER_TASK = 16_384` (`Backends.jl:507`), so it runs serially. Thin planes also give only Nz (150) rows over j or k. **Fix:** one batched launch over all planes of a substep, with work items (plane, k) or (plane, j-block); or thread over the long axis of each plane. Estimate ~1 s per step.
-> 8. **`_map_body!`** (80 launches, 3.7 busy; `range_map!`/`interior_map!` callers): probably the same thin-plane pattern (the open-boundary stage combine, `_StageCombine`, and the snapshot copies). Find the callers by launch name with a stack in the trace; batch them like item 7. ~0.2 s.
-> 9. **`_b_shell!`** (`Simulations.jl:1207`, 12 launches, 4.1 busy): `launch_weighted!` over `(1:nj, 1:nk)` of a shell (the boundary layer of cells around a block); too few or too thin items. ~0.18 s.
-> 10. **`_b_limit_ratio!`** (`AdvectionSchemes.jl:1069`, `prognostic_sgs/tke_blocked.jl:483`; 12 launches, 2.4 busy): the limiter ratio over a box; find why it runs on ~2 threads (box shape, or the threshold). ~0.15 s.
-> 11. **`_b_∂x_cf!`, `_b_∂y_cf!`** (6 launches each, 1–2 busy): small, ~0.06 s, same check.
-> 12. **`_drag_apply!`, `_drag_denominators!`** at 50 m (1 and 8 busy): fine at 20 m (48–54 busy); a size threshold effect, only relevant for small grids.
->
-> **C. Launches with part of the threads idle** (busy 35–65 of 72)
->
-> 13. **The fused sweep, `_b_sweep_slab!`** (`fused_sweep.jl:771, 837`; 3.24 s, 37.6 busy, 21 %, ~1.55 thread-s lost per 2 steps) and **`_b_sweep_edge!`** (1.48 s, 59.5 busy). `launch_weighted!` over `ns` slabs along k with a lag between neighbours (a wavefront), so fewer than 72 slabs are active at a time, and the edges run after the slabs. **Fix:** more slabs (split in j as well), or a second level of tiling; check the edge/slab balance. Estimate ~0.5 s per step.
-> 14. **`_coefficients_body!`, `_n2_body!`** (PrognosticSGS, stratification; 45 and 49 busy, 18 launches each): check the decomposition (rows per item) and whether they are bandwidth-bound; fusing them into the SGS sweep would save a pass over memory each.
-> 15. **`plane_reduce/_air_at`** (26 launches, 49.5 busy), **`_b_correct!`** (58), **`_b_divergence_into!`** (61), **`_thomas_slab!`** (64.5), **`_copy_out_scaled_body!`** (53): small losses each (≤ 0.1 s); probably partial last chunks or bandwidth. Low priority.
-> 16. **Halo fills, `_xy_item!` / `_z_item!`** (`halo_sets.jl:140-144`): 1–3 % at 20 m (38–47 busy), but **32 % of the step at 50 m** (12–24 busy). Items are `n` parts of each field along one axis (k for x/y halos, j for z halos), weighted with `_MIN_POINTS_PER_TASK`, so smaller grids get too few items; the x-halo writes are strided (one cache line per row). **Fix:** items over (field, j-block, k-block), or merge the 33 fill launches per step into fewer; longer term deeper halos or the boundary condition folded into the stencils that read it. Matters for the 100 m and 50 m cases and for nested children.
->
-> **D. Allocation, GC, dispatch**
->
-> 17. **#574:** 1.22 GiB per step at 20 m (boxed arguments per kernel row at `Backends.jl:356`, a dynamic dispatch per row; plus `open_boundary_snapshot`). A collection at 72 threads costs 1.7 s. Also slows every affected row (dispatch, ~100 ns per row).
-> 18. **22 000 nested launches per step** (the launch trace's `nested`, mostly inside halo fills and the fused sweep). Nested launches run inline in their parent's task; check that each does not pay a launch setup (closure, range tuple, threshold check) that a plain loop would not.
->
-> **E. Placement and threads (to check)**
->
-> 19. **NUMA placement unpinned.** `Backends` places pages by first touch from the thread that later uses the slab (`Backends.jl:173`). Run 1 found no difference between first touch and `--interleave=all`, but pinned, at 15–22 % of STREAM. Unpinned, the scheduler may move a thread to the other socket after the first touch, so its slab is remote. With 36 → 72 threads gaining only 1.05×, check with `numastat -p` and with Julia threads pinned but helper threads free (the #575 fix makes this possible: pinning becomes safe once FFTW has no pool of its own).
-> 20. **The GC threads** (72 at startup, pinned to core 0 under `JULIA_EXCLUSIVE=1`, #575): with pinning back on, start Julia with `--gcthreads=N` placed explicitly, or check that they inherit a full mask.
-> 21. **The main thread's double role:** it runs its share of every launch and all the serial code between them; with 78 % busy against 37 % for the workers it is the critical path. Once A is fixed, check whether launches should skip thread 1 or give it a smaller share.
->
-> **Order of work suggested:** 7 (blend), 2 (copy), 3 (radiative cooling), 1 (#575), 13 (sweep slabs), 17 (#574), then 4, 8–11, 19; 14–16, 18, 20–21 as measured. Measure each with `bench_run.jl profile` (trace + profile) at 20 m and 50 m, 72 threads unpinned, and quote the before/after of its own line here plus the step time.
->
-> **Raw data:** `results/serial_t72/serial_{20m,50m}_t72_all.toml` (`trace_if_possible.by_name`: count, wall, busy per launch name; `serial_between_s`), `*.profile_threads.txt` (inclusive counts per frame for thread 1 awake, thread 1 asleep, other threads awake). The raw `Profile` samples (`*.profile.jls`, 1.4 and 5.6 MB) stay in `$WORK/aeolus-bench/results/serial_t72/`.
->
-> Related: #566, #574, #575.
+The full measurements and every candidate (21 items: serial code outside launches, launches on one thread or a few, partly idle launches, allocation and dispatch, placement) are in **`REPORT_threads_20m.md`**. The local agent decides what to do, what to file and in which order.
 
 ## 6. Open items
 
@@ -405,7 +347,7 @@ That is issue 1.
 2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m.
 2. **Issue 4:** filed as #575 (§5.4, 2026-11-14): `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0. Chosen fix: serial FFTW plans run on Julia's threads (option 4).
 2. **#572** (the pressure-solve stall): fixed by #573, confirmed on Fritz, closed 2026-11-14.
-2. **Issue 5:** draft §5.5 (2026-11-14): thread utilisation at 72 threads, 21 items; not filed yet.
+2. **Thread utilisation at 72 threads** (2026-11-14): `REPORT_threads_20m.md` (§5.5); the local agent decides what to file.
 0. **20 m rerun after #572 (2026-11-14): the ladder ran; setup and the pressure solve are fixed, the steps don't scale.**
    - **Builds:** bench/all 51154519 and this branch, both with master 4f61b8a6 (#567, #568, #572) merged in. Job 4471418 (`results/scaling_20m_rerun2/`, `ladder.sh`), `scaling.sh` 72 36 16 8 4 2 1, `-t N,0`, `JULIA_EXCLUSIVE=1`, FFTW `estimate` on N threads. The earlier test job (4468996, 3-D DCT stall) was cancelled at 01:11:36 by SIGTERM with no TOML.
    - **Results** (s/step is the median of the `if_possible` steps; "busy cores" and "queued" are from `/proc/self/task/*/schedstat` over the measured steps, summed over the process's OS threads and divided by wall time):
@@ -427,7 +369,7 @@ That is issue 1.
    - **The growing RSS is garbage, not a leak** (job 4471714, `results/memory_20m/`): 1.22 GiB allocated per step at 20 m; the live heap returns exactly to its baseline after a full GC; a collection at 72 threads costs 1.7 s. ~1.15 GiB of it is boxed arguments per kernel row at `Backends.jl:356`, ~0.24 GiB a fresh `open_boundary_snapshot` per step. Filed as #574 (§5.3).
    - **Profile job 4471709 failed:** `Profile.print` hits the Fritz ENODEV bug (§7), and the fallback had a soft-scope bug (fixed in 559013ad). Raw samples kept in `$WORK/aeolus-bench/results/profile_20m_t72/*.jls`; no step times from it.
    - **Unpinned ladder** (job 4471876, `results/scaling_20m_unpinned/`, `BENCH_PIN=0`), stopped after 8 threads for the serial finder: 72: 6.10 s/step, 36: 6.40, 16: 9.06, 8: 16.5 (build 119–138 s, peak RSS 71–82 GB). 4, 2, 1 threads not run.
-   - **Serial finder** (job 4471898, `results/serial_t72/`, `bench_run.jl profile`, 72 threads unpinned): at 20 m 31 % of the step is outside launches (FFTW transforms, `copy_storage!`, radiative cooling, open-boundary bookkeeping) and the open-boundary blend runs on 0.5 threads (16 %). Exhaustive list of where the step loses threads: §5.5 (draft, for the local agent to file).
+   - **Serial finder** (job 4471898, `results/serial_t72/`, `bench_run.jl profile`, 72 threads unpinned): at 20 m 31 % of the step is outside launches (FFTW transforms, `copy_storage!`, radiative cooling, open-boundary bookkeeping) and the open-boundary blend runs on 0.5 threads (16 %). Every place the step loses threads: `REPORT_threads_20m.md` (§5.5), for the local agent to decide on.
    - Not done: the bench/all system image (only `node.sh` uses it) and the pressure-solver tests on Fritz.
 3. **Before rerunning the 20 m ladder:** a fix for issue 2, and ideally issue 1 too, since the ladder spends about 5 h on setup.
    - `scaling.sh` builds the model in every process (7 builds) and uses no system image.
