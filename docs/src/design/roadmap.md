@@ -2914,6 +2914,36 @@ Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstr
 - **Follow-up: stop by default, raise on request, report** (maintainer decision after #569 was merged: raising the level silently hid that such a column may be better resolved than parametrised; PALM stops by default too). `build_parent_surface(...; raise_forcing_level = false)` now refuses at build, before the first step, with the number of tiles and the nearest one (column, class, λp, λf, h, d, z0m, z0h, the first level and its height above d) and the option to set. `[surface] raise_forcing_level = true` (the `"tiles"` provider) raises those tiles; the build then warns, `ParentSurface.raised` lists them, and `results.toml` gets `tiled_surface_<domain>`: `forcing_levels_raised` (0 when none) and the nearest tile's old and new heights above d. Test: the synthetic closed-roof block is refused by default ("20 built tile(s) in 20 column(s)", the 5 × 4 columns with λp = 1); with the option exactly those 20 roof tiles go from level 1 to 2, the component warns and reports 20, the worst z_ref 0.04 m → 20.04 m; a surface with nothing raised reports 0. The Berlin 20 m benchmark config needs `raise_forcing_level = true` to run.
 - **Not done here.** The 20 m case has not been rerun past its first step (setup takes about 43 min on Fritz, #567), so it is not shown that nothing else fails later.
 
+### Pressure solve: tridiagonal in z instead of a DCT along z (#572)
+
+**Shipped** (#572). The #566 rerun of Berlin 20 m (1000 × 1000 × 150, open lateral faces) built in about a minute after #567, then did not finish 12 steps in 55 min: one thread busy, 82% kernel time, 656 k context switches per second, every stack sample in the pressure solve's 3-D DCT.
+
+- **Cause, measured** (`benchmarks/hpc/REPORT_fft_20m.md` § Findings on `issue/566-hpc-benchmark`, development machine, 24 threads):
+  - With `FFTW_ESTIMATE` and 4 or more FFTW threads, FFTW planned the `z` part of the DCT at Nz = 150 as a serial loop over the 10⁶ columns, each 150-point transform threaded on its own. 118 s per transform against 1.73 s on one thread; 243 s per pressure solve, about 12 min per step.
+  - Nz = 60 (the 100 m and 50 m cases) and 1–3 threads give a plan that splits the columns between the threads. The cost per point at Nz = 150 was the same (~780 ns) from 100 × 100 up, so it depends on Nz, not on the size. The channel's z-only DCT collapsed the same way (790 against 4 ns per point).
+  - FFTW's own pool (Aeolus, #397) and FFTW.jl's Julia-task callback both collapse; the callback is 2× worse. `measure` picks the column split (0.47 s per transform, 15 s of planning per plan).
+  - The 72-thread plan of the Fritz run, printed offline (`estimate` is deterministic), has the same structure.
+- **What was built.** `CosineFFTPoissonSolver` keeps its interface (every caller, the urban `cosine_fft` provider and nesting included, is unchanged). With walls in `z` it now holds a `ColumnTridiagonalSolver` with the uniform `Δz` (field `impl`): transforms in `x` and `y`, the Thomas algorithm per horizontal wavenumber in `z`. That is PALM's `poisfft` method (checked in PALM 25.10.1, which uses it on non-cyclic domains too, with a DCT-I in x and y). Periodic `z` keeps the transforms along all three axes (`_CosineTransformSolver`, the former code). A new `ColumnTridiagonalSolver(T, N, (dx, dy), dzc, dzf)` builds the conservative `z` coefficients; `StretchedPoissonSolver` now delegates to it, so the uniform and stretched solvers share them.
+- **Measured** (minimum of 2–5 solves, 24 Julia threads; "old" is the former transforms along `z`):
+
+  | grid, case | FFTW threads, planner | old solve | new solve |
+  | :-- | :-- | --: | --: |
+  | 1000 × 1000 × 150, box | 24, estimate | 243 s | 0.58 s |
+  | 1000 × 1000 × 150, box | 24, measure | 0.67 s (build 47.8 s) | 0.53 s (build 3.2 s) |
+  | 1000 × 1000 × 150, channel | 24, measure | 0.73 s (build 28.6 s) | 0.49 s (build 2.1 s) |
+  | 1000 × 1000 × 150, box | 1, estimate | 5.80 s | 4.18 s |
+  | 400 × 400 × 60, box (50 m) | 24, estimate | 0.049 s | 0.036 s |
+  | 400 × 400 × 60, channel | 24, measure | 0.045 s (build 7.3 s) | 0.032 s (build 0.7 s) |
+  | 200 × 200 × 60, box (100 m) | 24, estimate | 0.010 s | 0.009 s |
+  | 200 × 200 × 60, channel | 1, estimate | 0.045 s | 0.047 s |
+
+  The new solve is faster or equal everywhere; the one row where it is slower (the 100 m channel on one thread) is 3%. With `measure`, setup drops from up to 48 s of planning to 2–3 s. Memory: four Nx·Ny·Nz arrays (two buffers and the Thomas factors) against three for the box (two buffers and 1/λ; +1.2 GB at 20 m) and about 3.5 for the channel (two buffers, the complex half-spectrum and a half-size 1/λ).
+- **Agreement.** The two solve the same 7-point Laplacian with the same mirror closure: 1.9e-12 relative at 1000 × 1000 × 150 on a random source, < 1e-11 in the test at 24 × 20 × 16. Results of every run with walls in `z` change at round-off.
+- **Tests** (`test/pressure_column.jl`): the implementation follows `bc_z`; agreement with the DCT along `z` for the channel, the box and mixed lateral axes (< 1e-11 relative, round-off); the zero-mean solution; an incompatible source leaves the uniform residual −s̄ (< 1e-10); the source-buffer path; the coefficient builder. The thread-invariance worker already covers all eight axis combinations.
+- **Suite and validation.** `test/run.jl`: 117 jobs, 4662 tests passed (4639 before, + 23 new). `validation/run.jl --only gabls1.jl,neutral_abl.jl,wall_models_channel.jl,nest_boundary.jl,outflow_conditions.jl,urban_checks.jl`: all six passed, 75 passed, 2 broken (the two existing `@test_broken` of `wall_models_channel.jl`).
+- **Docstrings corrected.** `set_fftw_policy!`, `init_threads!` and `apply_transform!` said FFTW's threaded plans hand whole 1-D transforms to the threads; the 20 m plan threads inside one. `ka_port.md` has the same correction.
+- **Not done here.** The #566 20 m single-node test on Fritz at `-t 72,0` has to report its step time with this change.
+
 ---
 
 # Data assimilation and inverse problems

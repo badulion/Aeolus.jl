@@ -923,6 +923,7 @@ include("chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition
     include("advection_branchfree.jl")   # #557: branch-free face values, against the branching form
     include("anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("multigrid.jl")   # Phase  29     geometric multigrid
+    include("pressure_column.jl") # #572       Neumann-z pressure solve: tridiagonal in z, not a DCT
 end
 
 # =========================================================================
