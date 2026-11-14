@@ -4,7 +4,8 @@
 # have no stage of their own.
 #
 #   :cosine_fft  (default) PressureSolvers.CosineFFTPoissonSolver — direct,
-#                exact to round-off for periodic x, y and walls in z.
+#                exact to round-off: FFT or DCT in x, y, a tridiagonal
+#                solve in z (#572).
 #   :multigrid   Multigrid.MultigridPoissonSolver — geometric V-cycles to
 #                a relative residual `tol`.
 #   :mg_cg       Multigrid.MGPreconditionedCG — CG with one V-cycle as the
@@ -36,7 +37,7 @@
 # periodic sides give a periodic axis, walls and prescribed-velocity
 # (open / nest) sides a Neumann one. The default case is periodic in x, y
 # with walls in z — (:periodic, :periodic, :neumann), the solver of before
-# #251 bit for bit; `cfg.lateral = :open` (#262) gives the all-Neumann
+# #251; `cfg.lateral = :open` (#262) gives the all-Neumann
 # solve. The sound-
 # proof cores derive the same axes from the same `bcs` inside
 # `Anelastic._build_mass_weighted`. Each smoke check asserts the solver's

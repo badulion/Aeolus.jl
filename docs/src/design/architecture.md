@@ -76,7 +76,8 @@ The Aeolus fractional-step driver calls this from `Simulations.step!`
 without knowing which concrete solver is in use. Currently
 `FFTPoissonSolver` (triply-periodic). Planned:
 
-  * `CosineFFTPoissonSolver` — FFT in x, y and cosine transform in z
+  * `CosineFFTPoissonSolver` — FFT or cosine transform in x, y; a
+    tridiagonal solve in z for walls (#572)
     for channel-like domains (Phase 1b).
   * `CGPoissonSolver` — matrix-free preconditioned conjugate gradient
     for arbitrary BCs and immersed boundaries (Phase 3).

@@ -148,6 +148,10 @@ Components.schema(::Type{<:TiledUrbanSurface}) =
                            doc = "step of the surface tiles")
             Config.option!(s, "u_min", Float64; default = 0.5, range = (0, Inf), units = "m s^-1",
                            doc = "wind floor of the surface layer")
+            Config.option!(s, "raise_forcing_level", Bool; default = false,
+                           doc = "a built tile whose first level above the roofs is less than 2 z0 above its " *
+                                 "displacement height: false stops the build, true forces it at the lowest valid " *
+                                 "level and lists it in results.toml (#568)")
             Config.option!(s, "sw_down", Float64; default = 0.0, units = "W m^-2",
                            doc = "downwelling shortwave without a :radiation component (and before its first call)")
             Config.option!(s, "lw_down", Float64; default = 350.0, units = "W m^-2",
@@ -445,7 +449,13 @@ function Components.build(::Type{<:TiledUrbanSurface}, opts, domain)
         # the tiles' soil from the dynamic driver (#521): its profile, or a
         # volume's mean profile (a tile has no column of its own)
         sd === nothing || tc.soil === nothing || (tc.soil.init[] = _driver_soil_init(tc.soil, sd.data, sd.path, m))
-        ps = build_parent_surface(tc, landuse_of_tiles(t); z_centres = level_centres(m))
+        ps = build_parent_surface(tc, landuse_of_tiles(t); z_centres = level_centres(m),
+                                  raise_forcing_level = Bool(Components.option(opts, :raise_forcing_level, false)))
+    end
+    if !isempty(ps.raised)
+        w = _worst_raised(ps)
+        @warn "TiledUrbanSurface: the forcing level of $(length(ps.raised)) built tile(s) raised to a valid " *
+              "Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml" domain = domain.id worst_column = (w.I, w.J) h = w.h d = w.d z0m = w.z0m z_ref_first = ps.z_centres[w.k_first] - w.d z_ref = ps.z_centres[w.k] - w.d
     end
     (size(ps.columns) == (m.Nx, m.Ny)) ||
         throw(DimensionMismatch("TiledUrbanSurface: $(size(ps.columns)) columns on a $(m.Nx) × $(m.Ny) grid"))
@@ -471,6 +481,30 @@ Components.stages(::TiledUrbanSurface) = (Stage(:surface_flux), Stage(:post_pred
 # :surface_flux, their drag the velocity after the predictor
 Components.budget_writes(::TiledUrbanSurface, ::Val{:surface_flux}) = (:energy, :water)
 Components.budget_writes(::TiledUrbanSurface, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)
+
+# The raised tile whose first level above the roofs was nearest its surface.
+_worst_raised(ps::ParentSurface) =
+    argmin(r -> (ps.z_centres[r.k_first] - r.d) / max(r.z0m, r.z0h), ps.raised)
+
+"""
+    Components.run_results(c::TiledUrbanSurface, d) -> Dict
+
+The tiled surface's entry of `results.toml`, under `tiled_surface_<domain>`:
+`forcing_levels_raised`, the number of built tiles forced above their
+first level over the roofs (#568), and for the nearest of them its column,
+class, `h`, `d`, `z0m` and the old and new forcing heights above `d`.
+"""
+function Components.run_results(c::TiledUrbanSurface, d)
+    ps = c.surface
+    r = Dict{String,Any}("forcing_levels_raised" => length(ps.raised))
+    if !isempty(ps.raised)
+        w = _worst_raised(ps)
+        r["worst_raised"] = Dict{String,Any}("column" => [w.I, w.J], "class" => Int(w.class), "h" => w.h, "d" => w.d,
+                                             "z0m" => w.z0m, "z_ref_first" => ps.z_centres[w.k_first] - w.d,
+                                             "z_ref" => ps.z_centres[w.k] - w.d)
+    end
+    return Dict{String,Any}("tiled_surface_$(d.id)" => r)
+end
 Components.surface_friction_velocity(c::TiledUrbanSurface, d) = c.ustar
 
 """

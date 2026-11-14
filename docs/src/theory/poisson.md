@@ -190,6 +190,34 @@ faces through `axis_poisson_bc(face)` (`:periodic` for `Periodic`,
 `:neumann` for every face with a prescribed normal velocity); an axis
 whose two faces disagree is an error.
 
+### Walls in z: a tridiagonal solve, not a DCT (#572)
+
+Diagonalising `z` by the DCT is exact, but it leaves the threading of
+the `z` transform to FFTW's planner. Under `ESTIMATE` with 4 or more
+threads, the planner made the 150-point `z` DCT of a
+1000 × 1000 × 150 grid a serial loop over the 10⁶ columns, each column's
+transform threaded on its own, so every column cost a thread hand-off:
+118 s per transform on 24 threads, against 1.7 s on one (Berlin 20 m,
+#566; 60 levels were not affected). With walls in `z` the solver
+therefore transforms only `x` and `y` and solves, for every horizontal
+wavenumber ``(m, n)``, the tridiagonal system of the `z` stencil
+
+```math
+\frac{\hat φ_{k-1} - 2\hat φ_k + \hat φ_{k+1}}{Δz^2} - λ_{mn}\,\hat φ_k = \hat s_k,
+\qquad \hat φ_0 = \hat φ_1,\ \hat φ_{N_z+1} = \hat φ_{N_z},
+```
+
+by the Thomas algorithm (Schumann & Sweet 1988), which is the same
+discrete problem as the DCT along `z`; the two agree to round-off
+(1.9e-12 relative at 1000 × 1000 × 150). It is the method of PALM's
+`poisfft` (1-D transforms in x and y threaded over lines, `tridia_substi`
+in z, also on non-cyclic domains with a DCT-I; PALM 25.10.1
+`fft_xy_mod.f90`, `tridia_solver_mod.f90`) and the solver Aeolus already
+used for stretched grids, so `CosineFFTPoissonSolver` delegates to
+`ColumnTridiagonalSolver`. The mean mode ``(0, 0)`` is singular and is
+integrated directly after removing the source's mean, which gives the
+compatibility behaviour below.
+
 ### The discrete compatibility condition
 
 With no Dirichlet face the operator is singular: constants are its null

@@ -168,10 +168,23 @@ backend(::AbstractArray) = _host_backend()     # other host arrays (reshapes, Bi
     allocate(backend, T, dims) -> array
 
 A zero-filled array of element type `T` and size `dims` on `backend`
-(`Array{T}` for the CPU).
+(`Array{T}` for the CPU). A 3-D array of more points than the backend
+runs serially is zeroed by a [`launch!`](@ref) over its indices, so each
+thread first touches the pages of about the slab the kernels later give it:
+the memory is placed by the threads that use it (first-touch NUMA placement
+on a multi-socket node) and zeroing a large field is not one thread's
+work (#567).
 """
-allocate(::CPUBackend, ::Type{T}, dims::NTuple{N,Int}) where {T, N} =
-    zeros(T, dims...)
+function allocate(b::CPUBackend, ::Type{T}, dims::NTuple{N,Int}) where {T, N}
+    (N == 3 && isbitstype(T) && !runs_serially(b, prod(dims))) || return zeros(T, dims...)
+    a = Array{T}(undef, dims)
+    launch!(b, _zero_body!, (1:dims[1], 1:dims[2], 1:dims[3]), a)
+    return a
+end
+@inline function _zero_body!(i, j, k, a)
+    @inbounds a[i, j, k] = zero(eltype(a))
+    return nothing
+end
 allocate(b::GPUBackend, ::Type{T}, dims::NTuple{N,Int}) where {T, N} =
     _gpu_error(b, "allocate")
 
@@ -209,11 +222,11 @@ plans) is built: an FFTW plan keeps the thread count it was made with.
     (the radiosity LU), take [`dense_blas_threads`](@ref) for their duration
     ([`with_dense_blas`](@ref)). `blas_threads` sets both.
   * **FFTW** runs on `Threads.nthreads()` threads (KA-h, #298; maintainer
-    decision on #291): FFTW's threaded plans split the independent 1-D
-    transforms between threads without changing any of them, so a solve
-    gives the same bits at every thread count under a deterministic
-    planner (`ESTIMATE`, or imported wisdom); measured in
-    docs/src/design/ka_port.md. A count chosen explicitly wins:
+    decision on #291): FFTW's threaded plans usually split the
+    independent 1-D transforms between threads (the planner may also
+    thread inside one transform, #572), and a solve gave the same bits at
+    every thread count under a deterministic planner (`ESTIMATE`, or
+    imported wisdom) where measured, docs/src/design/ka_port.md. A count chosen explicitly wins:
     `fftw_threads = n` here, or before the call `AEOLUS_FFTW_THREADS`,
     `Aeolus.Operators.set_fftw_policy!(threads = n)` or a namelist's
     `[fftw] threads`. The count is set through that FFTW policy, so
@@ -298,10 +311,11 @@ transform library (cuFFT) behind the same call.
 On the [`CPUBackend`](@ref) it is `mul!(out, plan, in)`. The plan carries
 its own thread count (FFTW's, set at planning time through the FFTW policy;
 [`init_threads!`](@ref) makes it `Threads.nthreads()`). FFTW's threaded
-plans split the independent 1-D transforms of a multidimensional transform
-between the threads without changing any of them, so the result is
-identical at every thread count under a deterministic planner (measured
-in docs/src/design/ka_port.md).
+plans usually split the independent 1-D transforms of a multidimensional
+transform between the threads; the planner may also thread inside one
+transform, which made the estimate plan of a 150-point z DCT serialise
+over 10⁶ columns (#572). Under a deterministic planner the result was
+identical at every thread count where measured (docs/src/design/ka_port.md).
 """
 apply_transform!(::CPUBackend, out, plan, in) = (mul!(out, plan, in); out)
 

@@ -133,12 +133,16 @@ site's columns and the tiles of a tiled surface, [`TileClasses`](@ref)):
 `c`'s soil, the class's albedo and emissivity of `params`, soil and base
 temperature `T0` (K), the roughness lengths `z0m`, `z0h` (m).
 """
+const _T_ENV_LOCK = ReentrantLock()
+
 function soil_surface(c::GroundSoil, p::SurfaceParams, T0::Real, z0m::Real, z0h::Real, site::SurfaceSite)
     cls = site.class
     grid = clm_exponential_soil_grid(c.nlayers)
     ini = soil_initial_state(c, grid, cls, site.column, T0)
-    c.T_env[1] = min(c.T_env[1], minimum(ini.T), ini.T_base)
-    c.T_env[2] = max(c.T_env[2], maximum(ini.T), ini.T_base)
+    lock(_T_ENV_LOCK) do              # the tiled surface builds its columns on several threads (#567)
+        c.T_env[1] = min(c.T_env[1], minimum(ini.T), ini.T_base)
+        c.T_env[2] = max(c.T_env[2], maximum(ini.T), ini.T_base)
+    end
     water = SoilWaterColumn(grid, c.hydraulics; θ = ini.θ)
     return SoilThermalColumn(water, c.thermal; T_soil = ini.T, T_skin = site.T_skin,
                              bottom = Aeolus.SoilColumn.BottomTemperature(ini.T_base),

@@ -106,10 +106,15 @@ processes and planning stays fast. A TOML namelist sets it with an
 and [`init_threads!`](@ref Aeolus.Backends.init_threads!) raises it to
 `Threads.nthreads()` (KA-h, #298). A count set here, through
 `AEOLUS_FFTW_THREADS` or by a namelist is explicit, and `init_threads!`
-keeps it. FFTW's threaded plans hand whole 1-D transforms to the
-threads, so under `:estimate` a solve gives identical bits at every FFTW
-thread count (measured for every pressure solver and axis-BC
-combination, 1-24 threads, docs/src/design/ka_port.md). Under the timing
+keeps it. FFTW's threaded plans usually split the loop over the
+independent 1-D transforms between the threads, but the planner may also
+thread *inside* one transform: under `:estimate` with 4 or more threads it
+did so for the 150-point z DCT of a 1000 × 1000 × 150 grid, a serial loop
+over 10⁶ columns with a thread hand-off in each (118 s per transform on 24
+threads against 1.7 s on one, #572; the pressure solvers no longer
+transform along z). Under `:estimate` a solve gave identical bits at
+every FFTW thread count where this was measured (every pressure solver
+and axis-BC combination, 1-24 threads, docs/src/design/ka_port.md). Under the timing
 planners the planner may pick a different algorithm for a different
 thread count (as it may for another process), so there it holds only
 with imported wisdom made at the same thread count.
