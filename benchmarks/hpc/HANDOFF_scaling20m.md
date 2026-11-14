@@ -276,7 +276,7 @@ That is issue 1.
 >
 > Related: #566.
 
-### 5.4 Issue 4: draft, not filed (the maintainer decides): pinning with `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on one core
+### 5.4 Issue 4: filed as #575 (2026-11-14; the fix chosen is option 4, serial FFTW plans on Julia's threads): pinning with `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on one core
 
 **Title:** `JULIA_EXCLUSIVE=1` serialises the step: helper threads inherit thread 1's pin to core 0 (28.4 s/step pinned against ~6 s unpinned at Berlin 20 m, 72 threads)
 
@@ -338,10 +338,11 @@ That is issue 1.
 
 ## 6. Open items
 
-1. **Issue 1:** filed as #567 (§5.1).
-2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12). Until the surface-layer failure is fixed, or the case changes, the 20 m scaling test can't run.
+1. **Issue 1:** filed as #567 (§5.1); fixed by #571, confirmed on Fritz, closed 2026-11-14.
+2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12); fixed by #569 and #570, confirmed on Fritz, closed 2026-11-14.
 2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m.
-2. **Issue 4 (draft, §5.4):** `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0; the maintainer decides whether to file it.
+2. **Issue 4:** filed as #575 (§5.4, 2026-11-14): `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0. Chosen fix: serial FFTW plans run on Julia's threads (option 4).
+2. **#572** (the pressure-solve stall): fixed by #573, confirmed on Fritz, closed 2026-11-14.
 0. **20 m rerun after #572 (2026-11-14): the ladder ran; setup and the pressure solve are fixed, the steps don't scale.**
    - **Builds:** bench/all 51154519 and this branch, both with master 4f61b8a6 (#567, #568, #572) merged in. Job 4471418 (`results/scaling_20m_rerun2/`, `ladder.sh`), `scaling.sh` 72 36 16 8 4 2 1, `-t N,0`, `JULIA_EXCLUSIVE=1`, FFTW `estimate` on N threads. The earlier test job (4468996, 3-D DCT stall) was cancelled at 01:11:36 by SIGTERM with no TOML.
    - **Results** (s/step is the median of the `if_possible` steps; "busy cores" and "queued" are from `/proc/self/task/*/schedstat` over the measured steps, summed over the process's OS threads and divided by wall time):
