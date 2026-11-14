@@ -293,7 +293,7 @@ if mode == "memory"
     res["memory"] = Dict{String,Any}("snapshots" => snaps, "steps" => stepinfo)
     rate = parse(Float64, get(kv, "sample_rate", "0.01"))
     Profile.Allocs.clear()
-    Profile.Allocs.@profile sample_rate = rate Aeolus.step!(model, dt)
+    Profile.Allocs.@profile sample_rate=rate Aeolus.step!(model, dt)
     pr = Profile.Allocs.fetch()
     isaeolus(fr) = occursin("Aeolus", string(fr.file)) && !occursin("benchmarks/hpc", string(fr.file))
     inner = Dict{String,Float64}(); incl = Dict{String,Float64}(); bytype = Dict{String,Float64}(); cnt = Dict{String,Int}()
