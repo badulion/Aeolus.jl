@@ -85,7 +85,15 @@ gave correct results and were only slow.
   compiled for `Function` / `Any`, and the loop then dispatches at every
   point: 375× the loop for an axpy, 17× for `set!(f, g)`. Write wrappers
   as `foo(f::F, args::Vararg{Any,M}) where {F, M}`. `launch!` itself
-  forwards its arguments as one type parameter.
+  forwards its arguments as one type parameter. The same rule holds for
+  a kernel: `_rows3_kernel!` only handed `body!` on to `_row!`, so
+  whenever the kernel was not inlined into KernelAbstractions' task it
+  was compiled for `body!::Function`, and `_row!` was dispatched at run
+  time for every row, boxing its arguments (#574: 157.6 MiB per step at
+  Berlin 50 m, 1.15 GiB at 20 m; correct results, and no slowdown that
+  the timings showed). The body now reaches the kernel in a tuple with
+  its arguments, `(body!, args)`; a tuple's element types are never
+  widened.
 * *Aliasing.* If the same array reaches the body through two arguments
   (`interior_map!(f, y, y, x)`: `out` and an input), the compiler cannot
   prove the loop free of dependences and keeps it scalar (1.8×).
