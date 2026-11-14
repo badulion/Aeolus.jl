@@ -3154,6 +3154,22 @@ julia -t 12 --project=. benchmarks/bench_ka_scaling.jl flagship 2 9
 AEOLUS_FFTW_PLANNER=estimate julia -t 12 --project=. benchmarks/bench_roofline.jl dns 256 1 3
 ```
 
+## Thread utilisation at 72 threads: work-item shapes (#566)
+
+The Berlin 20 m trace (1000 × 1000 × 150, 72 threads, unpinned; `benchmarks/hpc/REPORT_threads_20m.md` on `issue/566-hpc-benchmark`) showed passes that ran on one thread or on a few. These are the fixes in the launch layer and the passes they changed.
+
+- **Boxes thin along i.** A 3-D launch makes one work item per i-row. An x-normal boundary plane is only its H halo cells wide along i, so it became ~150 000 work items of 1–3 points each, and the time went into per-item overhead. A launch with fewer than 8 points along i (`_THIN_ROW`) now gives each work item one k-plane, running the serial nest of that plane (`_planes3_kernel!`). This changed three passes:
+  - the open-boundary time blend `_blend_body!`, 0.5 of 72 threads busy;
+  - the stage combination `combine_open_boundaries!`, `_map_body!`, 3.7 busy;
+  - the west-face gradient `_b_∂x_cf!`, 2.2 busy.
+- **The halo shell.** `_shell_map!` made one (j, k) row per work item over every plane. The 2Hz halo planes below and above the interior are whole planes, so a few work items held most of the shell (4.1 busy). Those planes now have launches of their own.
+- **Serial passes made launches:**
+  - the radiative cooling profile;
+  - the open-boundary mass-flux sums, as `plane_reduce!`, and the correction itself;
+  - the step-start copy, above 4 M points (`copy_storage!`).
+
+Measured numbers are in the roadmap section of the thread-utilisation issue.
+
 ## Dependency tree
 
 KernelAbstractions 0.9.43 → Adapt, Atomix 1.6.0, UnsafeAtomics 0.4.0
