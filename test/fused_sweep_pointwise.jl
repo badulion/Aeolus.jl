@@ -90,7 +90,7 @@ function _fp_sweep!(a, Δt, extra, rk3, snap, ns; reversed = false)
               m = _FP_FV.grid_metrics(mesh))
         p1, p2 = _FP_FV._sweep_pred(s1), _FP_FV._sweep_pred(s2)
         for s in ns:-1:1
-            _FP_FV._b_sweep_slab!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+            _FP_FV._b_sweep_block!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
         end
         for n in 1:2lz*ns, j in jj, i in ii
             _FP_FV._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)

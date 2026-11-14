@@ -99,7 +99,7 @@ function _sg_sweep!(a, c, stress, Δt, rk3, snap, ns; reverse = false)
               m = FVg.grid_metrics(g))
         p1, p2 = FVg._sweep_pred(s1), FVg._sweep_pred(s2)
         for s in ns:-1:1
-            FVg._b_sweep_slab!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+            FVg._b_sweep_block!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
         end
         for n in 1:2lz*ns, j in jj, i in ii
             FVg._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)

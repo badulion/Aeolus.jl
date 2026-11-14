@@ -239,7 +239,7 @@ function _fr_sweep!(d, Δt, rk3, snap, ns; reversed = false)
               m = FVr.grid_metrics(a.mesh))
         p1, p2 = FVr._sweep_pred(s1), FVr._sweep_pred(s2)
         for s in ns:-1:1
-            FVr._b_sweep_slab!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+            FVr._b_sweep_block!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
         end
         for n in 1:2lz*ns, j in jj, i in ii
             FVr._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)

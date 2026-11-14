@@ -8,16 +8,20 @@
 # `u ← u + Δt·tu` reads both back and writes u. The fused sweep runs both
 # per block, while the block is in cache:
 #
-#   * the k-range is cut into `ns` slabs, one task each;
-#   * a slab is swept j-row by j-row: the tendencies of row j (every k of
+#   * the k-range is cut into `ns` slabs and the j-range into `nt` row
+#     ranges, one task per block (a slab times a row range; #566, the split
+#     in j of #558);
+#   * a block is swept j-row by j-row: the tendencies of row j (every k of
 #     the slab) go into a ring of `lag + 1` rows, then row j − lag gets its
 #     predictor. `lag` is the largest y-radius of the terms' footprints (1
 #     for the base tendencies' j ± 1 stencils): no later tendency of the
-#     slab reads row j − lag, so the update can be in place;
+#     block reads row j − lag, so the update can be in place;
 #   * the slab's first and last `lz` planes (`lz` the largest z-radius) are
 #     read by the neighbouring slabs' stencils, so their tendencies are kept
-#     (`edge`) and their predictor runs in a second launch, after every slab
-#     is done.
+#     (`edge`) and their predictor runs in a second launch, after every
+#     block is done; likewise the first and last `ly = lag` rows of a row
+#     range, read by the neighbouring row ranges (kept in extra rows of the
+#     ring, their predictor in a third launch).
 #
 # What a row's tendency is, is a compile-time tuple of *terms* (#533):
 # the first initialises the row (the base tendencies of SC-d: advection
@@ -28,7 +32,7 @@
 #
 # Every value is the expression of the separate passes (`_tend_*`, the
 # terms' whole-field reference, then the predictor functor `pu` / `ps`),
-# so the result does not depend on the number of slabs, of threads, or on
+# so the result does not depend on the number of blocks, of threads, or on
 # whether the sweep is used, beyond round-off. The tendency fields are
 # neither read nor written. Measured in docs/src/design/ka_port.md,
 # "SC-e", and docs/src/design/roadmap.md (#533).
@@ -267,10 +271,11 @@ The driver runs a term with footprint `(0, 0, 0)` on a row right after
 the row's predictor; a term with y-radius `r` computes its factors `r`
 rows behind the front of its input and applies them `2r` rows behind, so
 every factor reads values its own operator has not changed yet (the
-delayed-row scheme). The points whose stencil reaches a halo or a plane
-the sweep updates only after all slabs (the slab edges), or a point an
-earlier operator had to defer, run after the sweep, in the same two
-phases, with the halos of the predicted velocity filled
+delayed-row scheme). The points whose stencil reaches a halo, a plane or
+a row the sweep updates only after all blocks (the slab edges and the
+row-range edges), or a point an earlier operator had to defer, run after
+the sweep, in the same two phases, with the halos of the predicted
+velocity filled
 ([`post_plan`](@ref)). An operator that needs the whole predicted field
 is an [`AfterSweep`](@ref). Several post terms run in tuple order (the
 pipeline's), each on the output of the one before.
@@ -391,20 +396,22 @@ end
 const _AFTER = typemax(Int) >> 4
 
 """
-    post_plan(post::Tuple, lz) -> NTuple{N,NTuple{8,Int}}
+    post_plan(post::Tuple, lz, ly = 0) -> NTuple{N,NTuple{8,Int}}
 
 The schedule of the post terms `post` in a sweep whose slabs keep `lz`
-edge planes: per term `(fx, fy, fz, ax, ay, az, df, da)`. A point runs
-phase 1 (its factors) inside the sweep when its index distance to the
-x- and y-boundaries exceeds `fx`, `fy` and its distance to its slab's
-first and last plane exceeds `fz` (phase 2: `ax, ay, az`), else after
-the sweep. Phase 1 runs `df` rows behind the predictor, phase 2 `da`.
-The widths grow by the term's radius over those of the previous term's
-phase 2 (the halos: 0; the slab edges: `lz`), so a stencil inside the
-sweep reads only values that are final for the previous term and not yet
+edge planes and whose row ranges keep `ly` edge rows (0: not split in j,
+[`sweep_blocks`](@ref)): per term `(fx, fy, fz, ax, ay, az, df, da)`. A
+point runs phase 1 (its factors) inside the sweep when its index distance
+to the x-boundaries exceeds `fx`, to its row range's first and last row
+`fy` and to its slab's first and last plane `fz` (phase 2: `ax, ay,
+az`), else after the sweep. Phase 1 runs `df` rows behind the predictor,
+phase 2 `da`. The widths grow by the term's radius over those of the
+previous term's phase 2 (the halos: 0; the slab edges: `lz`; the
+row-range edges: `ly`), so a stencil inside the sweep reads only values
+of its own block that are final for the previous term and not yet
 changed by its own; the delays grow by `r` and `2r` rows.
 """
-post_plan(post::Tuple, lz::Integer) = _post_plan(post, 0, 0, Int(lz), 0)
+post_plan(post::Tuple, lz::Integer, ly::Integer = 0) = _post_plan(post, 0, Int(ly), Int(lz), 0)
 _post_plan(::Tuple{}, wx, wy, wz, d) = ()
 function _post_plan(post::Tuple, wx, wy, wz, d)
     e = _plan_entry(first(post), wx, wy, wz, d)
@@ -422,7 +429,8 @@ end
 post_delay(::Tuple{}) = 0
 post_delay(plan::Tuple) = last(plan)[8]
 
-# the post terms on their rows behind the predictor row F of a slab k0:k1
+# the post terms on their rows behind the predictor row F of a block
+# (planes k0:k1, rows jj: the block's row range)
 @inline _post_rows!(::Tuple{}, ::Tuple{}, F, k0, k1, ii, jj, st) = nothing
 @inline function _post_rows!(post::Tuple, plan::Tuple, F, k0, k1, ii, jj, st)
     t = first(post)
@@ -442,7 +450,7 @@ end
     return nothing
 end
 
-# the slab of plane k
+# the slab of plane k (likewise the row range of row j)
 @inline function _slab_of(k, kk, ns)
     s = clamp(((k - first(kk)) * ns) ÷ length(kk) + 1, 1, ns)
     while k < first(_slab(kk, ns, s)); s -= 1; end
@@ -452,9 +460,10 @@ end
 
 # After the sweep, phase `ph` of a post term on the points the sweep left
 # to it (outside the widths of `post_plan`): row (j, k) whole, or its x-ends.
-@inline function _post_deferred_row!(j, k, t, ph, wx, wy, wz, st, ii, jj, kk, ns)
+@inline function _post_deferred_row!(j, k, t, ph, wx, wy, wz, st, ii, jj, kk, ns, nt)
     k0, k1 = _slab(kk, ns, _slab_of(k, kk, ns))
-    inner = j - first(jj) >= wy && last(jj) - j >= wy && k - k0 >= wz && k1 - k >= wz
+    j0, j1 = _slab(jj, nt, _slab_of(j, jj, nt))
+    inner = j - j0 >= wy && j1 - j >= wy && k - k0 >= wz && k1 - k >= wz
     i1, i2 = first(ii) + wx, last(ii) - wx
     if !inner || i1 > i2
         post_row!(t, ph, j, k, first(ii), last(ii), st)
@@ -468,32 +477,39 @@ end
 # every post term's points that ran outside the sweep, in order: the halos
 # of the predicted velocity first (`halo!()`) for a term that reads beyond
 # its own face, then phase 1 and phase 2 over its deferred points; an
-# AfterSweep runs its whole-field operator
-_post_deferred!(b, ::Tuple{}, ::Tuple{}, halo!, st, ii, jj, kk, ns) = nothing
-function _post_deferred!(b, post::Tuple, plan::Tuple, halo!::H, st, ii, jj, kk, ns) where {H}   # (H: specialise on a callable struct)
-    _post_deferred1!(b, first(post), first(plan), halo!, st, ii, jj, kk, ns)
-    return _post_deferred!(b, Base.tail(post), Base.tail(plan), halo!, st, ii, jj, kk, ns)
+# AfterSweep runs its whole-field operator. `ns` slabs, `nt` row ranges.
+_post_deferred!(b, ::Tuple{}, ::Tuple{}, halo!, st, ii, jj, kk, ns, nt = 1) = nothing
+function _post_deferred!(b, post::Tuple, plan::Tuple, halo!::H, st, ii, jj, kk, ns, nt = 1) where {H}   # (H: specialise on a callable struct)
+    _post_deferred1!(b, first(post), first(plan), halo!, st, ii, jj, kk, ns, nt)
+    return _post_deferred!(b, Base.tail(post), Base.tail(plan), halo!, st, ii, jj, kk, ns, nt)
 end
-_post_deferred1!(b, t::AfterSweep, e, halo!, st, ii, jj, kk, ns) = (t.f(); nothing)
-function _post_deferred1!(b, t::PostTerm, e, halo!::H, st, ii, jj, kk, ns) where {H}
+_post_deferred1!(b, t::AfterSweep, e, halo!, st, ii, jj, kk, ns, nt) = (t.f(); nothing)
+function _post_deferred1!(b, t::PostTerm, e, halo!::H, st, ii, jj, kk, ns, nt) where {H}
     fx, fy, fz, ax, ay, az = e
     footprint(t) == (0, 0, 0) || halo!()
-    launch!(b, _post_deferred_row!, (jj, kk), t, Val(1), fx, fy, fz, st, ii, jj, kk, ns)
-    launch!(b, _post_deferred_row!, (jj, kk), t, Val(2), ax, ay, az, st, ii, jj, kk, ns)
+    launch!(b, _post_deferred_row!, (jj, kk), t, Val(1), fx, fy, fz, st, ii, jj, kk, ns, nt)
+    launch!(b, _post_deferred_row!, (jj, kk), t, Val(2), ax, ay, az, st, ii, jj, kk, ns, nt)
     return nothing
 end
 
 # ---------------------------------------------------------------------------
-# buffers and slabs
+# buffers and blocks
 # ---------------------------------------------------------------------------
 
 """
     SweepBuffers
 
-The scratch of [`blocked_predictor!`](@ref): `ring[i, kl, r, f, s]`, the
-tendencies of field `f` on `lag + 1` j-rows (`r`) of slab `s`'s inner
-planes (`kl = k − k0 + 1`), and `edge[i, j, e, f, s]`, those of its first
-(`e ≤ lz`) and last (`e > lz`) `lz` planes. `ns` slabs, `nf` fields.
+The scratch of [`blocked_predictor!`](@ref) for a sweep cut into `ns`
+slabs in k and `nt` row ranges in j, `nb = ns·nt` blocks (block `n = (t −
+1)·ns + s` is slab `s` of row range `t`), `nf` fields:
+
+  * `ring[i, kl, r, f, n]`: the tendencies of field `f` on block `n`'s
+    inner planes (`kl = k − k0 + 1`), on the `lag + 1` ring rows `r ≤ lag
+    + 1` and on its `2ly` edge rows (`r = lag + 1 + d`, `d ≤ ly` the first
+    and `d > ly` the last `ly` rows of its row range; `ly = 0` when `nt =
+    1`);
+  * `edge[i, j, e, f, s]`: those of slab `s`'s first (`e ≤ lz`) and last
+    (`e > lz`) `lz` planes, every row.
 """
 mutable struct SweepBuffers{A<:AbstractArray}    # mutable: kept in an `Any` slot without a box per step
     ring::A
@@ -502,30 +518,38 @@ mutable struct SweepBuffers{A<:AbstractArray}    # mutable: kept in an `Any` slo
     nf::Int
     lag::Int
     lz::Int
+    nt::Int
+    ly::Int
 end
 
 """
-    sweep_buffers(old, data, nf, ns, nk; lag = 1, lz = 1) -> SweepBuffers
+    sweep_buffers(old, data, nf, ns, nk; lag = 1, lz = 1, nt = 1, ly = lag) -> SweepBuffers
 
-Buffers for `ns` slabs of a k-range of length `nk`, `nf` fields shaped like
-the storage array `data`, a ring of `lag + 1` rows and `lz` edge planes
-per slab end ([`sweep_lags`](@ref)); `old` (a `SweepBuffers` or
-`nothing`) is returned when it already fits.
+Buffers for `ns` slabs of a k-range of length `nk` times `nt` row ranges
+in j, `nf` fields shaped like the storage array `data`, a ring of `lag +
+1` rows, `lz` edge planes per slab end and, when `nt > 1`, `ly` edge rows
+per row-range end ([`sweep_lags`](@ref); the predictor needs `ly = lag`);
+`old` (a `SweepBuffers` or `nothing`) is returned when it already fits.
 """
 function sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int;
-                       lag::Int = 1, lz::Int = 1) where {T}
+                       lag::Int = 1, lz::Int = 1, nt::Int = 1, ly::Int = lag) where {T}
     # (the split keeps a cached `old::Any` from a dynamic call: no allocation)
-    return old isa SweepBuffers{_buf_type(data)} ? _sweep_buffers(old, data, nf, ns, nk, lag, lz) :
-                                                   _sweep_buffers(nothing, data, nf, ns, nk, lag, lz)
+    return old isa SweepBuffers{_buf_type(data)} ? _sweep_buffers(old, data, nf, ns, nk, lag, lz, nt, ly) :
+                                                   _sweep_buffers(nothing, data, nf, ns, nk, lag, lz, nt, ly)
 end
-function _sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int, lag::Int, lz::Int) where {T}
-    (lag >= 1 && lz >= 1) || throw(ArgumentError("sweep_buffers: lag and lz are ≥ 1, got $lag, $lz"))
-    old isa SweepBuffers && old.ns == ns && old.nf == nf && old.lag == lag && old.lz == lz &&
+function _sweep_buffers(old, data::AbstractArray{T,3}, nf::Int, ns::Int, nk::Int, lag::Int, lz::Int,
+                        nt::Int, ly::Int) where {T}
+    (lag >= 1 && lz >= 1 && ly >= 1) ||
+        throw(ArgumentError("sweep_buffers: lag, lz and ly are ≥ 1, got $lag, $lz, $ly"))
+    (ns >= 1 && nt >= 1) || throw(ArgumentError("sweep_buffers: ns and nt are ≥ 1, got $ns, $nt"))
+    lye = nt > 1 ? ly : 0
+    old isa SweepBuffers && old.ns == ns && old.nt == nt && old.nf == nf && old.lag == lag &&
+        old.lz == lz && old.ly == lye &&
         size(old.edge, 1) == size(data, 1) && size(old.edge, 2) == size(data, 2) &&
         size(old.ring, 2) >= cld(nk, ns) && return old
-    ring = similar(data, size(data, 1), cld(nk, ns), lag + 1, nf, ns)
+    ring = similar(data, size(data, 1), cld(nk, ns), lag + 1 + 2lye, nf, ns * nt)
     edge = similar(data, size(data, 1), size(data, 2), 2lz, nf, ns)
-    return SweepBuffers(ring, edge, ns, nf, lag, lz)
+    return SweepBuffers(ring, edge, ns, nf, lag, lz, nt, lye)
 end
 
 # the buffers' array type (a concrete type, so `sweep_buffers` infers)
@@ -533,14 +557,51 @@ _buf_type(::Array{T,3}) where {T} = Array{T,5}
 _buf_type(a::AbstractArray) = typeof(similar(a, 0, 0, 0, 0, 0))
 
 """
-    sweep_slabs(backend, npoints, nk; lz = 1) -> Int
+    sweep_blocks(backend, npoints, nk, nj; lz = 1, ly = 1) -> (ns, nt)
 
-The number of slabs of the blocked sweep: one per thread (at least `2lz`
-planes each) when a launch of `npoints` runs threaded, else one.
+The blocks of the blocked sweep (#566, the split in j of #558): `ns`
+slabs in k (at least `2lz` planes each) times `nt` row ranges in j (at
+least `2ly` rows each), one work item each, when a launch of `npoints`
+runs threaded; else `(1, 1)`.
+
+A slab keeps `lz` edge planes at each end and a row range `ly` edge rows:
+their predictor waits until every block is done and runs in a second and
+a third launch. Slabs alone (#405, #533) capped the threads that work at
+`nk ÷ 2lz`, 37 for 150 levels at `lz = 2` whatever the thread count
+(measured on 72 threads: 37.6 busy in the sweep, #566); the row ranges
+lift the cap to `(nk ÷ 2lz)(nj ÷ 2ly)`.
+
+The rule (measured on 200 × 200 × 60 at 6, 12 and 24 threads, #558):
+slabs no taller than 20 planes (`_SLAB_PLANES`) where the thread count
+allows (taller slabs keep too many rows of every field in cache: whole
+60-level columns ran 10-110 % slower), then the least estimated time
+`cld(ns·nt, T) / (ns·nt) · (1 + c·f_edge)` for `T` threads, a fraction
+`f_edge` of edge points and `c = 0.5` (`_C_EDGE`): the most blocks up to
+one per thread, and among those the fewest edge points.
 """
-sweep_slabs(b, npoints::Integer, nk::Integer; lz::Integer = 1) =
-    Backends.runs_serially(b, npoints) ? 1 : clamp(Threads.nthreads(), 1, max(1, nk ÷ (2lz)))
+function sweep_blocks(b, npoints::Integer, nk::Integer, nj::Integer; lz::Integer = 1, ly::Integer = 1)
+    Backends.runs_serially(b, npoints) && return (1, 1)
+    return _split_blocks(Threads.nthreads(), nk, nj, lz, ly)
+end
 
+# the tallest slab the split prefers, and the weight of an edge point
+# against an inner one (measured, #558)
+const _SLAB_PLANES = 20
+const _C_EDGE = 0.5
+
+function _split_blocks(T::Integer, nk::Integer, nj::Integer, lz::Integer, ly::Integer)
+    nsmax = max(1, min(T, nk ÷ (2lz)))
+    nsmin = min(nsmax, cld(nk, _SLAB_PLANES))
+    best, bc = (nsmax, 1), Inf
+    for ns in nsmin:nsmax, nt in 1:max(1, min(T ÷ ns, nj ÷ (2ly)))
+        fe = 1 - (1 - (ns > 1 ? min(1, 2lz * ns / nk) : 0.0)) * (1 - (nt > 1 ? min(1, 2ly * nt / nj) : 0.0))
+        c = cld(ns * nt, T) / (ns * nt) * (1 + _C_EDGE * fe)
+        c < bc * (1 - 1e-9) && ((best, bc) = ((ns, nt), c))
+    end
+    return best
+end
+
+# the part s of ns of the range kk (slabs in k, row ranges in j)
 @inline function _slab(kk, ns, s)
     nk = length(kk)
     return first(kk) + ((s - 1) * nk) ÷ ns, first(kk) + (s * nk) ÷ ns - 1
@@ -548,7 +609,8 @@ end
 
 # the edge slot of plane k of the slab k0:k1 (0: an inner plane): the
 # first lz planes are slots 1:lz, the last lz planes slots lz+1:2lz (a
-# slab shorter than 2lz, the one slab of a short column: front first)
+# slab shorter than 2lz, the one slab of a short column: front first).
+# The same for the edge rows of a row range (ly, j0:j1).
 @inline _edge_slot(k, k0, k1, lz) = k - k0 < lz ? k - k0 + 1 : k1 - k < lz ? 2lz - (k1 - k) : 0
 
 # ---------------------------------------------------------------------------
@@ -631,42 +693,62 @@ end
 # the sweep
 # ---------------------------------------------------------------------------
 
-# slab s: the j-row sweep (one launch item per slab; slabs write disjoint
-# planes and read the others' only on their edge planes, not yet updated).
-# Front t: the tendencies of row t, the predictor of row t − lag, then the
-# post-predictor operators `post` on their rows behind it (`plan`,
-# [`post_plan`](@ref)); the front runs `lag` + the operators' delay past
-# the last row, so every row gets its predictor and its operators.
-_b_sweep_slab!(s, terms, st, pu, p1, p2, ring, edge, ii, jj, kk, ns, lag, lz) =
-    _b_sweep_slab!(s, terms, (), (), st, pu, p1, p2, ring, edge, ii, jj, kk, ns, lag, lz)
-function _b_sweep_slab!(s, terms, post, plan, st, pu, p1, p2, ring, edge, ii, jj, kk, ns, lag, lz)
+# block n (slab s = (n − 1) % ns + 1, row range (n − 1) ÷ ns + 1): the
+# j-row sweep (one launch item per block; blocks write disjoint points and
+# read the others' only on their edge planes and edge rows, not yet
+# updated). Front t: the tendencies of row t, the predictor of row t − lag,
+# then the post-predictor operators `post` on their rows behind it
+# (`plan`, [`post_plan`](@ref)); the front runs `lag` + the operators'
+# delay past the last row, so every row gets its predictor and its
+# operators. `nt` row ranges with `ly` edge rows each (`nt = 1`: `ly = 0`,
+# the whole j-range, slabs alone). The short form (no post terms, one row
+# range) is the tests'.
+_b_sweep_block!(n, terms, st, pu, p1, p2, ring, edge, ii, jj, kk, ns, lag, lz) =
+    _b_sweep_block!(n, terms, (), (), st, pu, p1, p2, ring, edge, ii, jj, kk, ns, lag, lz)
+function _b_sweep_block!(n, terms, post, plan, st, pu, p1, p2, ring, edge, ii, jj, kk, ns, lag, lz,
+                         nt = 1, ly = 0)
+    s = (n - 1) % ns + 1
     k0, k1 = _slab(kk, ns, s)
+    j0, j1 = _slab(jj, nt, (n - 1) ÷ ns + 1)
     nr = lag + 1
-    for t in first(jj):last(jj)+lag+post_delay(plan)
-        if t <= last(jj)
-            r = mod(t, nr) + 1
+    for t in j0:j1+lag+post_delay(plan)
+        if t <= j1
+            d = ly > 0 ? _edge_slot(t, j0, j1, ly) : 0
+            r = d > 0 ? nr + d : mod(t, nr) + 1          # an edge row: its own slot, kept to the third launch
             for k in k0:k1
                 e = _edge_slot(k, k0, k1, lz)
                 if e > 0
                     _term_rows!(edge, t, e, s, t, k, ii, terms, st)
                 else
-                    _term_rows!(ring, k - k0 + 1, r, s, t, k, ii, terms, st)
+                    _term_rows!(ring, k - k0 + 1, r, n, t, k, ii, terms, st)
                 end
             end
         end
         jp = t - lag
-        if first(jj) <= jp <= last(jj)
+        if j0 <= jp <= j1 && (ly == 0 || _edge_slot(jp, j0, j1, ly) == 0)
             rp = mod(jp, nr) + 1
             for k in k0+lz:k1-lz
-                _prows!(ring, k - k0 + 1, rp, s, jp, k, ii, st, pu, p1, p2)
+                _prows!(ring, k - k0 + 1, rp, n, jp, k, ii, st, pu, p1, p2)
             end
         end
-        _post_rows!(post, plan, jp, k0, k1, ii, jj, st)
+        _post_rows!(post, plan, jp, k0, k1, ii, j0:j1, st)
     end
     return nothing
 end
 
-# the edge planes, after every slab: (i, j, n), n = (s − 1)·2lz + e for
+# the edge rows, after every block: (kl, d, n), plane k0 + kl − 1 of edge
+# row d of block n (its inner planes; an edge plane went to `edge`)
+@inline function _b_sweep_yedge!(kl, d, n, st, pu, p1, p2, ring, ii, jj, kk, ns, nt, lag, lz, ly)
+    k0, k1 = _slab(kk, ns, (n - 1) % ns + 1)
+    j0, j1 = _slab(jj, nt, (n - 1) ÷ ns + 1)
+    k = k0 + kl - 1
+    (k < k0 + lz || k > k1 - lz) && return nothing
+    j = d <= ly ? j0 + d - 1 : j1 - (2ly - d)
+    _prows!(ring, kl, lag + 1 + d, n, j, k, ii, st, pu, p1, p2)
+    return nothing
+end
+
+# the edge planes, after every block: (i, j, n), n = (s − 1)·2lz + e for
 # edge slot e of slab s
 @inline function _b_sweep_edge!(i, j, n, st, pu, p1, p2, edge, kk, ns, lz)
     s = (n - 1) ÷ (2lz) + 1
@@ -727,6 +809,11 @@ tendencies stay in `bufs` ([`sweep_buffers`](@ref) with the
 blocked so each field is streamed once. Every halo a term reads must be
 filled; nothing else may read or write the fields meanwhile.
 
+The interior is cut into `bufs.ns` slabs in k times `bufs.nt` row ranges
+in j ([`sweep_blocks`](@ref)), one launch item per block; the slabs' edge
+planes and the row ranges' edge rows (`bufs.ly = lag` when `nt > 1`) get
+their predictor in a second and a third launch.
+
 `post` (default none) is a tuple of [`PostTerm`](@ref)s, the core's
 post-predictor operators: inside the sweep on the rows behind the
 predictor, the rest after it ([`post_plan`](@ref)); `halo!()` fills the
@@ -741,23 +828,29 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{Swe
                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
                             pu, s1, s2, g::AbstractMesh) where {H}
     ii, jj, kk = interior(g)
-    ns = bufs.ns
+    ns, nt = bufs.ns, bufs.nt
     lag, lz = sweep_lags(terms)
+    ly = nt > 1 ? lag : 0
     nf = 3 + (s1 === nothing ? 0 : 1) + (s2 === nothing ? 0 : 1)
     (s1 === nothing && s2 !== nothing) && throw(ArgumentError("blocked_predictor!: s2 without s1"))
-    bufs.nf >= nf && bufs.lag == lag && bufs.lz == lz && size(bufs.ring, 2) >= cld(length(kk), ns) &&
-        (ns == 1 || 2lz * ns <= length(kk)) ||
+    bufs.nf >= nf && bufs.lag == lag && bufs.lz == lz && bufs.ly == ly &&
+        size(bufs.ring, 2) >= cld(length(kk), ns) && (ns == 1 || 2lz * ns <= length(kk)) &&
+        (nt == 1 || 2ly * nt <= length(jj)) ||
         throw(DimensionMismatch("blocked_predictor!: buffers do not fit ($ns slabs over $(length(kk)) " *
-                                "planes, lag $lag, $lz edge planes)"))
+                                "planes, $nt row ranges over $(length(jj)) rows, lag $lag, $lz edge " *
+                                "planes, $(bufs.ly) edge rows)"))
     b = Backends.backend(u.data)
     _check_inputs(b, terms)
     st = (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))
     p1, p2 = _sweep_pred(s1), _sweep_pred(s2)
-    plan = post_plan(post, lz)
-    launch_weighted!(b, cld(length(ii) * length(jj) * length(kk), ns), _b_sweep_slab!, (1:ns,),
-                     terms, post, plan, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+    plan = post_plan(post, lz, ly)
+    nb = ns * nt
+    launch_weighted!(b, cld(length(ii) * length(jj) * length(kk), nb), _b_sweep_block!, (1:nb,),
+                     terms, post, plan, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz, nt, ly)
     launch!(b, _b_sweep_edge!, (ii, jj, 1:2lz*ns), st, pu, p1, p2, bufs.edge, kk, ns, lz)
-    _post_deferred!(b, post, plan, halo!, st, ii, jj, kk, ns)
+    ly > 0 && launch_weighted!(b, length(ii), _b_sweep_yedge!, (1:size(bufs.ring, 2), 1:2ly, 1:nb),
+                               st, pu, p1, p2, bufs.ring, ii, jj, kk, ns, nt, lag, lz, ly)
+    _post_deferred!(b, post, plan, halo!, st, ii, jj, kk, ns, nt)
     return nothing
 end
 

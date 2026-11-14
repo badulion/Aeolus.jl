@@ -240,7 +240,7 @@ worst = Ref(0.0)
                               qv = TBF._sweep_field(s2), m = TBF.grid_metrics(mesh))
                         p1, p2 = TBF._sweep_pred(s1), TBF._sweep_pred(s2)
                         for sl in ns:-1:1
-                            TBF._b_sweep_slab!(sl, terms, st, p, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+                            TBF._b_sweep_block!(sl, terms, st, p, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
                         end
                         for n in 1:2lz*ns, j in jj, i in ii
                             TBF._b_sweep_edge!(i, j, n, st, p, p1, p2, bufs.edge, kk, ns, lz)

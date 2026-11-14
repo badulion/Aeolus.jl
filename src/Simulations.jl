@@ -29,7 +29,7 @@ using ..PressureSolvers: AbstractPressureSolver, FFTPoissonSolver, CosineFFTPois
 using ..Operators.FiniteVolume: _fused_tendencies!, _correct_velocity!, _face_gradient_slabs!,
                                 _divergence_into!
 # the blocked tendency + predictor sweep (SC-e, #405)
-using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_slabs, sweep_lags, BaseTendencies,
+using ..Operators.FiniteVolume: blocked_predictor!, sweep_buffers, sweep_blocks, sweep_lags, BaseTendencies,
                                 sweep_term, prepare!, pointwise_predictor!, TendencyFields, term_tendencies!,
                                 PostTerm, post_sweep_term, finish!, finish_sweep!, books,
                                 OptionalTerm, BuoyancyTerm, CoriolisTerm, SurfaceFluxTerm, sponge_term,
