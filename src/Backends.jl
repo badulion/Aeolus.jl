@@ -200,11 +200,9 @@ to_host(x::AbstractArray) = Array(x)
 # =========================================================================
 
 # Filled by Operators (the owner of the FFTW policy, #245), so that the
-# thread count is set through `set_fftw_policy!` and reported by
-# `fftw_policy()`; one source of truth for FFTW settings.
-# `_set_fftw_threads!(n; default = true)` sets `n` only if the count was
-# not chosen explicitly (AEOLUS_FFTW_THREADS, `set_fftw_policy!(threads =)`,
-# an `[fftw]` namelist table).
+# FFTW thread count is reported by `fftw_policy()`; one source of truth for
+# FFTW settings. Since #575 it is always 1: `_set_fftw_threads!(n)` with an
+# explicit `n` other than 1 is reported (deprecated) and ignored.
 function _set_fftw_threads! end
 
 """
@@ -212,27 +210,29 @@ function _set_fftw_threads! end
                   blas_threads = nothing) -> NamedTuple
 
 Prepare the process to run on `backend`: makes it the
-[`default_backend`](@ref) and sets the thread counts of the two libraries
-that thread on their own. Call it before the simulation (and so its FFT
-plans) is built: an FFTW plan keeps the thread count it was made with.
+[`default_backend`](@ref) and sets the thread count of BLAS, the one
+library that threads on its own (FFTW does not since #575). Call it before the simulation (and so its FFT
+plans) is built: a spectral solver cuts its transforms into blocks for
+the default backend it is built with (one block when it runs serially).
 
   * **BLAS** is pinned to one thread when Julia runs threaded
     (`Threads.nthreads() > 1`; #294): idle BLAS threads would compete with
     the kernel tasks. The dense solves, which run while the kernels wait
     (the radiosity LU), take [`dense_blas_threads`](@ref) for their duration
     ([`with_dense_blas`](@ref)). `blas_threads` sets both.
-  * **FFTW** runs on `Threads.nthreads()` threads (KA-h, #298; maintainer
-    decision on #291): FFTW's threaded plans usually split the
-    independent 1-D transforms between threads (the planner may also
-    thread inside one transform, #572), and a solve gave the same bits at
-    every thread count under a deterministic planner (`ESTIMATE`, or
-    imported wisdom) where measured, docs/src/design/ka_port.md. A count chosen explicitly wins:
-    `fftw_threads = n` here, or before the call `AEOLUS_FFTW_THREADS`,
-    `Aeolus.Operators.set_fftw_policy!(threads = n)` or a namelist's
-    `[fftw] threads`. The count is set through that FFTW policy, so
-    `fftw_policy()` and the checkpoint record report it.
+  * **FFTW** plans are single-threaded (#575): the spectral solvers cut
+    their transforms into blocks of levels or rows and run them on
+    Julia's threads ([`BlockTransform`](@ref Aeolus.Operators.BlockTransform)),
+    as PALM does, so FFTW starts no threads of its own. Before #575 FFTW
+    ran its own pool of `Threads.nthreads()` threads; created from thread
+    1, that pool inherited thread 1's CPU affinity, and with
+    `JULIA_EXCLUSIVE=1` all of it ran on core 0 (28.4 s per step pinned
+    against ~6 s unpinned at Berlin 20 m, 72 threads, #566).
+    `fftw_threads` is deprecated: a value other than 1 is reported once
+    and ignored (as are `AEOLUS_FFTW_THREADS` and `[fftw] threads`).
 
-Returns `(backend, julia_threads, blas_threads, fftw_threads)`.
+Returns `(backend, julia_threads, blas_threads, fftw_threads)`
+(`fftw_threads` is 1).
 """
 function init_threads!(b::AbstractBackend = default_backend();
                        fftw_threads::Union{Nothing,Integer} = nothing,
@@ -246,11 +246,7 @@ function init_threads!(b::AbstractBackend = default_backend();
     elseif nt > 1
         BLAS.set_num_threads(1)
     end
-    if fftw_threads === nothing
-        _set_fftw_threads!(nt; default = true)
-    else
-        _set_fftw_threads!(Int(fftw_threads))
-    end
+    fftw_threads === nothing || _set_fftw_threads!(Int(fftw_threads))   # deprecated (#575)
     return (backend = b, julia_threads = nt, blas_threads = BLAS.get_num_threads(),
             fftw_threads = _fftw_threads())
 end
@@ -308,14 +304,11 @@ through this method, from host orchestration between kernel launches and
 never inside a kernel, so that Phase 81 can give the GPU backend its own
 transform library (cuFFT) behind the same call.
 
-On the [`CPUBackend`](@ref) it is `mul!(out, plan, in)`. The plan carries
-its own thread count (FFTW's, set at planning time through the FFTW policy;
-[`init_threads!`](@ref) makes it `Threads.nthreads()`). FFTW's threaded
-plans usually split the independent 1-D transforms of a multidimensional
-transform between the threads; the planner may also thread inside one
-transform, which made the estimate plan of a 150-point z DCT serialise
-over 10⁶ columns (#572). Under a deterministic planner the result was
-identical at every thread count where measured (docs/src/design/ka_port.md).
+On the [`CPUBackend`](@ref) it is `mul!(out, plan, in)` for a plain FFTW
+plan, which is single-threaded (#575). The spectral pressure solvers pass
+a [`BlockTransform`](@ref Aeolus.Operators.BlockTransform) instead: serial
+plans applied to blocks of levels or rows on Julia's threads (its method
+is defined in `Operators`).
 """
 apply_transform!(::CPUBackend, out, plan, in) = (mul!(out, plan, in); out)
 
