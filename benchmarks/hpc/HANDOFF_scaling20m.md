@@ -314,7 +314,23 @@ That is issue 1.
 >    - The same could widen the masks of helper threads already present, by tid from `/proc/self/task`.
 >    - Cost: ~40 lines of OS-specific code, a Linux-only test, and a Fritz check. It fixes FFTW but not every library that starts threads later.
 >
-> **Proposal:** 1 and 2 now; 3 only if pinned runs are wanted.
+> 4. **Don't let FFTW start threads: PALM's method.**
+>    - Plan every transform single-threaded (`FFTW.set_num_threads(1)` while planning) and run the plans on Julia's own threads, each thread taking a block of levels (or of lines) through `launch!`.
+>    - This is what PALM does. It never calls `fftw_init_threads` or `fftw_plan_with_nthreads`; each OpenMP thread runs a serial 1-D plan on its own lines (`fft_xy_mod.f90:820-897`, PALM 25.10.1), and it parallelises mainly with MPI processes, one per core, pinned by the launcher.
+>    - **Effect:** there's no FFTW pool, so nothing inherits thread 1's pin, and every FFT runs on the threads the user placed. It also removes the reason for `_fftw_own_threads!`: there's no FFTW.jl callback either, so the #397 crash can't occur. And FFTW's planner can no longer decide how to thread a transform, the failure behind #572.
+>    - **Speed, measured** (the forward and inverse 2-D transform pair at 1000 × 1000 × 150, `solver_compare.jl`):
+>      - Fritz, 72 threads (`solver_compare_t72.txt`): **0.326 s** with serial plans on Julia threads over levels, against 0.353 s with FFTW's own threads.
+>      - Development machine, 24 threads: 0.60 s against 0.62 s.
+>    - **Where:**
+>      - the x-y plans of `ColumnTridiagonalSolver`, which serves `CosineFFTPoissonSolver` with walls in z, `StretchedPoissonSolver` and `DirectWeightedPoissonSolver`: one serial 2-D plan applied per level;
+>      - `_CosineTransformSolver` (periodic z) and the triply periodic `FFTPoissonSolver` also need their z transform split into blocks of columns, each with a serial 1-D plan;
+>      - the FFT diagnostics in `Operators`.
+>
+>      A plan made for one level can be reused on other levels only if they are aligned the same way. Levels of an Nx × Ny slab of Float64 are 16-byte aligned when Nx·Ny is even; otherwise plan with `FFTW.UNALIGNED`, or keep one plan per alignment class.
+>    - **Cost:** a moderate change in `PressureSolvers` and the FFTW policy; the FFTW thread count would lose its meaning (keep it as 1, or remove `[fftw] threads`); results change at round-off; tests for agreement with the current solves.
+>    - It doesn't touch the GC threads. They were pinned to core 0 too, but used no CPU during stepping here. Options 1 and 2 cover them.
+>
+> **Proposal:** 1 and 2 now; 4 as the fix, rather than 3: it removes the hidden pool instead of re-pinning it, and it was not slower in either measurement. 3 only if FFTW's own threads are kept.
 >
 > **Check:** the 20 m step at `-t 72,0` with `JULIA_EXCLUSIVE=1` should equal the unpinned ~6 s (after 3), or the warning should appear (after 1).
 >
