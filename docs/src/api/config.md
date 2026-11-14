@@ -134,7 +134,7 @@ Every driver's schema starts with these:
 | section | options |
 | :-- | :-- |
 | `[run]` | `name` (the model: `"aeolus"`), `seed = 0`, `root = "runs"`, `allow_uncommitted`; a legacy case's also `legacy` (default and only value: its name) |
-| `[fftw]` | `planner` (`estimate`, `measure`, `patient`, `exhaustive`), `threads` (`"none"`: one per Julia thread), `wisdom` |
+| `[fftw]` | `planner` (`estimate`, `measure`, `patient`, `exhaustive`), `threads` (deprecated and ignored since #575: FFTW plans are single-threaded), `wisdom` |
 | `[logging]` | `console_level`, `file_level = "debug"`, `flush_interval = 5.0` s, `diagnostics_cadence = 60.0` s |
 | `[checkpoint]` | `every_steps = 0` (off), `every_seconds = inf` (off), `keep = 2`, `prefix = "checkpoint"` |
 | `[output]` | `path` (`"none"`: the run folder's `output/`), `cadence = 3600.0` s |
