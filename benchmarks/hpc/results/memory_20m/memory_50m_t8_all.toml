@@ -1,0 +1,271 @@
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all"
+budget_s = 900.0
+build = "all"
+build_alloc_bytes = 20077163120
+build_gc_s = 5.337532131
+case = "50m"
+commit = "511545199bcbaebbdebae43c72a1e021e2cb6a7c"
+config = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_50m/berlin_50m_20250824.toml"
+dt = 1.0
+fftw_planner = "estimate"
+fftw_threads = 12
+finished = "2026-11-14T17:39:36.109"
+has_launch_trace = true
+has_loop_fusion = true
+host = "f1109"
+julia = "1.13.3"
+julia_exclusive = ""
+label = "memory_50m_t8_all"
+mode = "memory"
+numactl = ""
+slurm_job = "4471714"
+started = "2026-11-14T17:37:06.417"
+t_build_s = 118.31012105941772
+t_load_s = 2.0125679969787598
+t_total_s = 270.34928917884827
+thread_cpus = [18, 8, 57, 56, 39, 19, 64, 36]
+threads = 8
+warm_s = [98.912816658, 1.391062552]
+
+[affinity]
+2683449 = "0-71"
+2683450 = "0-71"
+2683451 = "0-71"
+2683452 = "0-71"
+2683453 = "0-71"
+2683454 = "0-71"
+2683455 = "0-71"
+2683456 = "0-71"
+2683457 = "0-71"
+2683458 = "0-71"
+2683459 = "0-71"
+2683460 = "0-71"
+2683461 = "0-71"
+2683462 = "0-71"
+2683463 = "0-71"
+2683464 = "0-71"
+2683465 = "0-71"
+2683466 = "0-71"
+2683467 = "0-71"
+2683468 = "0-71"
+2683469 = "0-71"
+2683470 = "0-71"
+2683471 = "0-71"
+2683472 = "0-71"
+2683473 = "0-71"
+2683474 = "0-71"
+2683475 = "0-71"
+2683476 = "0-71"
+2683477 = "0-71"
+2683478 = "0-71"
+2683479 = "0-71"
+2683480 = "0-71"
+2683481 = "0-71"
+2683482 = "0-71"
+2683483 = "0-71"
+2683484 = "0-71"
+2683485 = "0-71"
+2683486 = "0-71"
+2683487 = "0-71"
+2683488 = "0-71"
+2683489 = "0-71"
+2683490 = "0-71"
+2683491 = "0-71"
+2683492 = "0-71"
+2683493 = "0-71"
+2683494 = "0-71"
+2683495 = "0-71"
+2683496 = "0-71"
+2683497 = "0-71"
+2683498 = "0-71"
+2683499 = "0-71"
+
+[memory]
+allocs_est_gb = 0.18011284992098808
+allocs_sampled = 56584
+
+    [[memory.snapshots]]
+    allocd_total_gb = 28.903464280068874
+    live_gb = 6.483266726136208
+    rss_gb = 8.877880096435547
+    t = 1.794674332165547e9
+    tag = "after warm-up + full GC"
+
+        [memory.snapshots.smaps_gb]
+        AnonHugePages = 4.05859375
+        Anonymous = 8.668071746826172
+        FilePmdMapped = 0.0
+        LazyFree = 0.0
+        Locked = 0.0
+        Private_Clean = 2.01556396484375
+        Private_Dirty = 6.859477996826172
+        Private_Hugetlb = 0.0
+        Pss = 8.87548542022705
+        Pss_Anon = 8.668071746826172
+        Pss_File = 0.2074136734008789
+        Pss_Shmem = 0.0
+        Referenced = 8.877880096435547
+        Rss = 8.877880096435547
+        Shared_Clean = 0.002838134765625
+        Shared_Dirty = 0.0
+        Shared_Hugetlb = 0.0
+        ShmemPmdMapped = 0.0
+        Swap = 0.0
+        SwapPss = 0.0
+    [[memory.snapshots]]
+    allocd_total_gb = 29.052649967372417
+    live_gb = 6.632452413439751
+    rss_gb = 8.877880096435547
+    t = 1.794674333748344e9
+    tag = "after step 1"
+
+        [memory.snapshots.smaps_gb]
+        AnonHugePages = 4.07421875
+        Anonymous = 8.668071746826172
+        FilePmdMapped = 0.0
+        LazyFree = 0.0
+        Locked = 0.0
+        Private_Clean = 2.04290771484375
+        Private_Dirty = 6.832134246826172
+        Private_Hugetlb = 0.0
+        Pss = 8.87548542022705
+        Pss_Anon = 8.668071746826172
+        Pss_File = 0.2074136734008789
+        Pss_Shmem = 0.0
+        Referenced = 8.877880096435547
+        Rss = 8.877880096435547
+        Shared_Clean = 0.002838134765625
+        Shared_Dirty = 0.0
+        Shared_Hugetlb = 0.0
+        ShmemPmdMapped = 0.0
+        Swap = 0.0
+        SwapPss = 0.0
+    [[memory.snapshots]]
+    allocd_total_gb = 29.201442383229733
+    live_gb = 6.781244829297066
+    rss_gb = 8.969871520996094
+    t = 1.79467433524677e9
+    tag = "after step 2"
+
+        [memory.snapshots.smaps_gb]
+        AnonHugePages = 4.07421875
+        Anonymous = 8.760066986083984
+        FilePmdMapped = 0.0
+        LazyFree = 0.0
+        Locked = 0.0
+        Private_Clean = 2.17181396484375
+        Private_Dirty = 6.795223236083984
+        Private_Hugetlb = 0.0
+        Pss = 8.967480659484863
+        Pss_Anon = 8.760066986083984
+        Pss_File = 0.2074136734008789
+        Pss_Shmem = 0.0
+        Referenced = 8.96987533569336
+        Rss = 8.96987533569336
+        Shared_Clean = 0.002838134765625
+        Shared_Dirty = 0.0
+        Shared_Hugetlb = 0.0
+        ShmemPmdMapped = 0.0
+        Swap = 0.0
+        SwapPss = 0.0
+    [[memory.snapshots]]
+    allocd_total_gb = 29.350234739482403
+    live_gb = 6.930037185549736
+    rss_gb = 9.072662353515625
+    t = 1.794674336774808e9
+    tag = "after step 3"
+
+        [memory.snapshots.smaps_gb]
+        AnonHugePages = 4.07421875
+        Anonymous = 8.862857818603516
+        FilePmdMapped = 0.0
+        LazyFree = 0.0
+        Locked = 0.0
+        Private_Clean = 2.48040771484375
+        Private_Dirty = 6.589420318603516
+        Private_Hugetlb = 0.0
+        Pss = 9.070271492004395
+        Pss_Anon = 8.862857818603516
+        Pss_File = 0.2074136734008789
+        Pss_Shmem = 0.0
+        Referenced = 9.07266616821289
+        Rss = 9.07266616821289
+        Shared_Clean = 0.002838134765625
+        Shared_Dirty = 0.0
+        Shared_Hugetlb = 0.0
+        ShmemPmdMapped = 0.0
+        Swap = 0.0
+        SwapPss = 0.0
+    [[memory.snapshots]]
+    allocd_total_gb = 29.499027244746685
+    live_gb = 7.078829690814018
+    rss_gb = 9.176143646240234
+    t = 1.79467433832473e9
+    tag = "after step 4"
+
+        [memory.snapshots.smaps_gb]
+        AnonHugePages = 4.07421875
+        Anonymous = 8.966339111328125
+        FilePmdMapped = 0.0
+        LazyFree = 0.0
+        Locked = 0.0
+        Private_Clean = 2.27142333984375
+        Private_Dirty = 6.901885986328125
+        Private_Hugetlb = 0.0
+        Pss = 9.173752784729004
+        Pss_Anon = 8.966339111328125
+        Pss_File = 0.2074136734008789
+        Pss_Shmem = 0.0
+        Referenced = 9.1761474609375
+        Rss = 9.1761474609375
+        Shared_Clean = 0.002838134765625
+        Shared_Dirty = 0.0
+        Shared_Hugetlb = 0.0
+        ShmemPmdMapped = 0.0
+        Swap = 0.0
+        SwapPss = 0.0
+    [[memory.snapshots]]
+    allocd_total_gb = 29.499043993651867
+    live_gb = 6.47519413381815
+    rss_gb = 8.878002166748047
+    t = 1.794674341131583e9
+    tag = "after full GC"
+
+        [memory.snapshots.smaps_gb]
+        AnonHugePages = 4.06640625
+        Anonymous = 8.668193817138672
+        FilePmdMapped = 0.0
+        LazyFree = 0.0
+        Locked = 0.0
+        Private_Clean = 2.42376708984375
+        Private_Dirty = 6.451396942138672
+        Private_Hugetlb = 0.0
+        Pss = 8.87560749053955
+        Pss_Anon = 8.668193817138672
+        Pss_File = 0.2074136734008789
+        Pss_Shmem = 0.0
+        Referenced = 8.878002166748047
+        Rss = 8.878002166748047
+        Shared_Clean = 0.002838134765625
+        Shared_Dirty = 0.0
+        Shared_Hugetlb = 0.0
+        ShmemPmdMapped = 0.0
+        Swap = 0.0
+        SwapPss = 0.0
+
+    [[memory.steps]]
+    alloc_gb = 0.14877748489379883
+    gc_s = 0.0
+    s = 1.380006658
+    [[memory.steps]]
+    alloc_gb = 0.14876972138881683
+    gc_s = 0.0
+    s = 1.407174467
+    [[memory.steps]]
+    alloc_gb = 0.14876972138881683
+    gc_s = 0.0
+    s = 1.429532034
+    [[memory.steps]]
+    alloc_gb = 0.1487697809934616
+    gc_s = 0.0
+    s = 1.457628302

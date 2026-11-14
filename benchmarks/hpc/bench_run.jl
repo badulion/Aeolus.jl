@@ -245,8 +245,9 @@ if mode == "profile"
             @warn "Profile.print failed for $suffix" exception = (e, catch_backtrace())
         end
     end
-    res["profile"]["printed"] = printed
-    if length(printed) < 3          # fallback: inclusive counts per frame, all threads
+    # fallback: inclusive counts per frame, all threads (a function, so the
+    # counters are locals, not soft-scope globals)
+    function profile_fallback(file)
         d0 = Profile.fetch(include_meta = false); ld = Profile.getdict(d0)
         cnt = Dict{String,Int}(); seen = Set{String}(); nsamp = 0
         for ip in d0
@@ -259,13 +260,19 @@ if mode == "profile"
                 push!(seen, "$(fr.func) $(fr.file):$(fr.line)")
             end
         end
-        open(base * ".profile_fallback.txt", "w") do io
+        open(file, "w") do io
             println(io, "# samples (all threads) ", nsamp, "; inclusive count per frame")
             for (k, v) in sort!(collect(cnt); by = last, rev = true)[1:min(end, 400)]
                 println(io, v, "\t", k)
             end
         end
     end
+    length(printed) < 3 && try
+        profile_fallback(base * ".profile_fallback.txt")
+    catch e
+        @warn "profile fallback failed" exception = (e, catch_backtrace())
+    end
+    res["profile"]["printed"] = printed
 end
 if mode == "memory"
     set_fusion!(:if_possible)
