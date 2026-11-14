@@ -276,11 +276,56 @@ That is issue 1.
 >
 > Related: #566.
 
+### 5.4 Issue 4: draft, not filed (the maintainer decides): pinning with `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on one core
+
+**Title:** `JULIA_EXCLUSIVE=1` serialises the step: helper threads inherit thread 1's pin to core 0 (28.4 s/step pinned against ~6 s unpinned at Berlin 20 m, 72 threads)
+
+**Body:**
+
+> **Observed** (#566, Fritz, Berlin 20 m, 1000 × 1000 × 150, `-t 72,0`, FFTW `estimate` on 72 threads; job 4471418, `benchmarks/hpc/results/scaling_20m_rerun2/scaling_20m_t72_all.toml`, `[affinity]` and `[schedstat]`, 295 s of stepping measured):
+>
+> | threads of the process | count | pinned to | on a CPU | waiting in the run queue |
+> | :-- | --: | :-- | --: | --: |
+> | Julia thread 1 (main) | 1 | core 0 | 52 s | **194 s** |
+> | Julia threads 2–72 | 71 | cores 1–71, one each | ~29–32 s each | < 0.3 s each |
+> | helper threads present at startup (GC threads, presumably) | 71 | core 0 | 0 s | 0 s |
+> | threads created after startup (FFTW's own pool, #397, and other lazily started pools) | 99 | not recorded; inherited from their creator | 227 s in total | **15 124 s in total** |
+>
+> - With `JULIA_EXCLUSIVE=1`, Julia pins thread *i* to CPU *i − 1*. A thread created later by native code inherits the affinity of the thread that creates it (Linux `pthread_create` semantics).
+>   - FFTW's own pool (`_fftw_own_threads!`, #397) is created on the first threaded transform, from thread 1, so all its workers share core 0 with thread 1.
+>   - The startup helpers are pinned to core 0 too, so a parallel GC would run on one core.
+> - Because every kernel launch waits for thread 1, the whole step slows down, not only the FFTs:
+>   - 28.4 s/step pinned at 72 threads, flat from about 4 threads on (38.7 s at 4, 30.8 s at 16, 55.1 s at 1);
+>   - **5.9–6.2 s/step unpinned** (job 4471714).
+> - The same effect is visible on the 12-core development machine (`docs/src/design/ka_port.md`, "Thread pinning"): `-t 4,0` with `JULIA_EXCLUSIVE=1` was 18 % slower than unpinned for the Berlin example. That page concludes "pinning does not help", but doesn't name this mechanism, and it presents `JULIA_EXCLUSIVE=1` as a valid layout.
+> - Run 1 of #566 (`node.sh`) set `JULIA_EXCLUSIVE=1` too, so its scaling curve carries the same caveat.
+>
+> **Code.** Aeolus never sets affinities:
+> - `Backends.init_threads!` sets the thread counts of BLAS and FFTW only;
+> - `_fftw_own_threads!` removes FFTW.jl's callback, so FFTW creates its own pthreads, which inherit the caller's mask.
+>
+> FFTW.jl's callback (Julia tasks, so the pinned Julia threads) would avoid the inheritance, but it was removed for the #397 crashes and is 2× slower at 20 m (#572 report).
+>
+> **Options:**
+> 1. **Warn** in `Backends.init_threads!` (Linux) when thread 1's affinity mask is a single CPU while `Threads.nthreads() > 1` or FFTW threads > 1 (`sched_getaffinity` on thread 1, or `/proc/self/task/<tid>/status`, `Cpus_allowed_list`). The warning would say that helper threads (FFTW, GC) inherit that CPU, and recommend external binding (`srun --cpu-bind=cores` on the process) or no pinning.
+>    Cost: ~20 lines and a test with a narrowed mask. No behaviour change.
+> 2. **Document** in `docs/src/design/ka_port.md` ("Thread pinning") and `docs/src/benchmarks.md` that `JULIA_EXCLUSIVE=1` must not be combined with FFTW threading (or GC threads), with the numbers above.
+> 3. **Fix the masks:** in `init_threads!`, before FFTW's pool exists, widen the calling thread's mask to the union of the Julia threads' masks (`sched_setaffinity` via `ccall`, Linux only), run one small threaded transform so FFTW creates its workers with that mask, then restore thread 1's pin.
+>    - The same could widen the masks of helper threads already present, by tid from `/proc/self/task`.
+>    - Cost: ~40 lines of OS-specific code, a Linux-only test, and a Fritz check. It fixes FFTW but not every library that starts threads later.
+>
+> **Proposal:** 1 and 2 now; 3 only if pinned runs are wanted.
+>
+> **Check:** the 20 m step at `-t 72,0` with `JULIA_EXCLUSIVE=1` should equal the unpinned ~6 s (after 3), or the warning should appear (after 1).
+>
+> Related: #566, #397, #572.
+
 ## 6. Open items
 
 1. **Issue 1:** filed as #567 (§5.1).
 2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12). Until the surface-layer failure is fixed, or the case changes, the 20 m scaling test can't run.
 2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m.
+2. **Issue 4 (draft, §5.4):** `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0; the maintainer decides whether to file it.
 0. **20 m rerun after #572 (2026-11-14): the ladder ran; setup and the pressure solve are fixed, the steps don't scale.**
    - **Builds:** bench/all 51154519 and this branch, both with master 4f61b8a6 (#567, #568, #572) merged in. Job 4471418 (`results/scaling_20m_rerun2/`, `ladder.sh`), `scaling.sh` 72 36 16 8 4 2 1, `-t N,0`, `JULIA_EXCLUSIVE=1`, FFTW `estimate` on N threads. The earlier test job (4468996, 3-D DCT stall) was cancelled at 01:11:36 by SIGTERM with no TOML.
    - **Results** (s/step is the median of the `if_possible` steps; "busy cores" and "queued" are from `/proc/self/task/*/schedstat` over the measured steps, summed over the process's OS threads and divided by wall time):
