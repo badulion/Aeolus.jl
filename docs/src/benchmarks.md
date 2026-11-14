@@ -53,6 +53,69 @@ $ julia --project=. benchmarks/bench_roofline.jl merge flagship 12 f1.log f12.lo
 Results, the pinning experiment and the ranked fusion targets:
 [the kernel port design page](design/ka_port.md), section "SC-a".
 
+## Sustained load: power and thermal limits
+
+A long run does not run at the speed of its first minute. Under
+sustained all-core load a CPU's package power limit and its temperature
+limit lower the clocks, and the step gets slower with no change in the
+code or the work (#535). On a laptop the effect is large. On the
+12-core Ryzen AI 9 HX 370 development laptop, the Berlin 100 m step
+(200 × 200 × 60, 12 threads) runs through a repeating cycle:
+
+| phase | duration | package power | ms/step | SGS ms/step |
+| :-- | :-- | --: | --: | --: |
+| boost, at the temperature limit | first ~60 s | 25–30 W | 254–344 | 41–49 |
+| capped | next ~95 s | 15.0 W | 427–641 | 82–124 |
+| limit lifted | mid-run, nothing paused | 28–30 W | 253–267 | 41–45 |
+
+Classed by power, that is 299 ms/step boosted against 488 at the cap.
+The pressure solve goes from 33 to about 60 ms/step and an all-thread
+triad from 40–50 to 26–36 GB/s, so bandwidth-bound kernels slow down
+as well. A desktop or a server has different limits and a different
+cycle, or none. The protocol below applies to all of them.
+
+**Protocol for timings longer than a few seconds**
+
+  * **Log power, clocks and temperature next to the step times.** On
+    Linux they are under `/sys/class/hwmon/hwmon*/`: find the device by
+    its `name` file. On AMD the package power is `power1_average` of the
+    `amdgpu` device (label `PPT`, in µW) and the temperature `temp1_input`
+    of `k10temp` (`Tctl`, in m°C). On Intel it is the RAPL energy counter
+    `/sys/class/powercap/intel-rapl:0/energy_uj` (difference it over time)
+    and `coretemp`. The clocks are in
+    `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` (kHz).
+    Sampling once a second from a separate shell loop is enough.
+  * **A step-time drift is not a regression unless power and clocks
+    were flat.** First check whether the slowdown follows the power. A
+    data-dependent cost (subnormals, solver iterations, allocations)
+    stays when the power limit lifts, but a power limit does not.
+  * **Warm-up.** A window that starts right after the build measures the
+    boost phase. For a sustained number, average over whole cycles of the
+    power limit (on the laptop above the cap starts after about 1 minute
+    and a full cycle takes about 2.5 minutes), or report the phase each
+    window was taken in. Preheating
+    with a light load is not enough: it has to draw as much power as the
+    step does, or the boost budget is not used up.
+  * **A/B comparisons alternate the variants** (A, B, A, B, … in fresh
+    processes, or in turns within one process) and compare only windows
+    at the same power. Running all of A and then all of B puts one of them
+    in the capped phase.
+  * **Report the median and the phase**, not one window. Quote the
+    sustained mean of a long run (for example 0.604 s/step over 43,200
+    steps of the overnight 24-thread Berlin run) apart from the boosted
+    short-window numbers.
+  * **Thread count under a power cap.** The fastest thread count for a
+    sustained run can be lower than for a short one. On the laptop above,
+    6 threads stay at about 24 W, never reach the 15 W phase, and hold
+    280–324 ms/step over 450 steps (mean about 305), against a mean of
+    about 380 ms at 12 threads over 540 steps. This is a property of the
+    machine. Measure it on the machine that will do the run, and do not
+    build it into the code.
+
+Ruled out on the same run (#535): subnormal floats (1 value in 126.5 M,
+and flush-to-zero on every thread changes nothing), allocation growth
+(a flat 7.4 MB/step from step 2 to 560) and GC time (no trend).
+
 ## Reference numbers
 
 Absolute numbers below are from the development machine, single-core,
