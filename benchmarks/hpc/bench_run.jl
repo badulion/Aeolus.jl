@@ -25,7 +25,9 @@
 #          Writes <out>.profile_main.txt (flat, thread 1 only: where the main
 #          task, i.e. all serial code, spends its time), .profile_all.txt
 #          (flat, all threads) and .profile_tree.txt (thread 1, tree), and
-#          the raw samples (.profile.jls) for analysis elsewhere. If
+#          the raw samples (.profile.jls) for analysis elsewhere, and
+#          .profile_threads.txt (inclusive counts for thread 1 awake / asleep
+#          and the other threads awake, from the samples' metadata). If
 #          Profile.print fails (the ENODEV of Fritz's /proc/sys/fs/binfmt_misc
 #          seen with USR1), a fallback counts frames per sample itself.
 #   memory (the 20 m rerun's growing RSS) the warm-up, a full GC and a
@@ -266,6 +268,52 @@ if mode == "profile"
                 println(io, v, "\t", k)
             end
         end
+    end
+    # per thread and sleep state, from Profile's per-sample metadata (thread
+    # id, sleep state; internals, so guarded): inclusive counts per frame for
+    # thread 1 awake (the serial code and the main thread's share of
+    # launches), thread 1 asleep (what it waits in), and the other threads
+    # awake. Written always; Profile.print fails on Fritz anyway.
+    function profile_by_thread(file)
+        P = Profile
+        data = Profile.fetch(); ld = Profile.getdict(data)
+        groups = Dict("thread 1 awake" => Dict{String,Int}(), "thread 1 asleep" => Dict{String,Int}(),
+                      "other threads awake" => Dict{String,Int}())
+        nsamp = Dict(k => 0 for k in keys(groups))
+        start = 1
+        for i in eachindex(data)
+            P.is_block_end(data, i) || continue
+            tid = data[i - P.META_OFFSET_THREADID]
+            asleep = data[i - P.META_OFFSET_SLEEPSTATE] == 2
+            g = tid == 1 ? (asleep ? "thread 1 asleep" : "thread 1 awake") : (asleep ? nothing : "other threads awake")
+            if g !== nothing
+                nsamp[g] += 1
+                seen = Set{String}()
+                for ip in @view data[start:(i - P.nmeta - 2)]
+                    for fr in get(ld, ip, Base.StackTraces.StackFrame[])
+                        fr.from_c && continue
+                        push!(seen, "$(fr.func) $(replace(string(fr.file), r".*/src/" => "src/")):$(fr.line)")
+                    end
+                end
+                for k in seen; groups[g][k] = get(groups[g], k, 0) + 1; end
+            end
+            start = i + 1
+        end
+        open(file, "w") do io
+            println(io, "# samples: ", join(["$k $(nsamp[k])" for k in sort!(collect(keys(nsamp)))], ", "))
+            for g in ("thread 1 awake", "thread 1 asleep", "other threads awake")
+                println(io, "\n## ", g, " (", nsamp[g], " samples): inclusive count per frame")
+                for (k, v) in sort!(collect(groups[g]); by = last, rev = true)[1:min(end, 250)]
+                    println(io, v, "\t", round(100v / max(nsamp[g], 1), digits = 1), "%\t", k)
+                end
+            end
+        end
+        return nsamp
+    end
+    try
+        res["profile"]["samples"] = Dict(k => v for (k, v) in profile_by_thread(base * ".profile_threads.txt"))
+    catch e
+        @warn "profile by thread failed" exception = (e, catch_backtrace())
     end
     length(printed) < 3 && try
         profile_fallback(base * ".profile_fallback.txt")
