@@ -23,7 +23,8 @@
 # the slab's floor flux in :tendencies, the obstacles' penalty in
 # :body_force, and the rest right after the core in :surface_update.
 
-using ..IBM: SolidMask, add_ibm_penalty!
+using ..IBM: SolidMask, add_ibm_penalty!, ibm_penalty_term
+using ..Operators: FiniteVolume
 using ..Radiation: SlabLand, step_land!, surface_temperature, apply_radiative_cooling!
 using ..Microphysics: apply_kessler_step!
 using ..Chemistry: apply_linear_chemistry!
@@ -492,17 +493,22 @@ The microphysics, tracer and particles therefore run after the core, not
 in stage 5 as the design places them; that is a change of the splitting
 order, made when they become components of their own.
 """
-struct SimulationCouplings{S<:Tuple} <: Components.AbstractComponent
+struct SimulationCouplings{S<:Tuple,O} <: Components.AbstractComponent
     c::SimCouplings
     st::S
     step::Base.RefValue{Int}            # the step count of the particles' record cadence
+    invτ::Base.RefValue{Float64}        # 1/τ of the IBM penalty in the fused sweep (IBM.IBMPenaltyTerm)
+    # `O`: the type of the obstacles (`c.solid`: `Nothing` or a `SolidMask`),
+    # in the type so that the sweep terms' types follow from the component's
+    # type (#533 step 2; the mask's type since step 5's penalty term holds it)
+    SimulationCouplings{S,O}(c::SimCouplings, st::S, step, invτ) where {S<:Tuple,O} = new{S,O}(c, st, step, invτ)
 end
 function SimulationCouplings(c::SimCouplings)
     st = (Components.Stage(:surface_flux),
           (c.slab === nothing ? () : (Components.Stage(:tendencies),))...,
           (c.solid === nothing ? () : (Components.Stage(:body_force),))...,
           Components.Stage(:surface_update))
-    return SimulationCouplings(c, st, Ref(0))
+    return SimulationCouplings{typeof(st), typeof(c.solid)}(c, st, Ref(0), Ref(NaN))
 end
 
 Components.component_name(::Type{<:SimulationCouplings}) = :couplings
@@ -518,6 +524,28 @@ function Components.run_stage!(c::SimulationCouplings, d, ::Val{:body_force}, dt
     add_ibm_penalty!(d.state, c.c.solid; τ = c.c.penalty_time * dt)
     return nothing
 end
+# The fused sweep (#533): the slab's floor flux of :tendencies is pointwise
+# (step 2's `SurfaceFluxTerm`), the obstacles' IBM penalty of :body_force
+# is `IBM.IBMPenaltyTerm` (step 5). They are two stages, so each is the
+# component's sweep term of its own stage (`Components.stage_sweep_term`),
+# booked in its own stage's budget context, and they run in the pipeline's
+# stage order; with a slab and obstacles both run fused (integration of
+# steps 2 and 5: step 2 had no penalty term, step 5 no floor-flux term).
+# The types depend on the component's type only (obstacles are its
+# parameter `O`): a return type of Union{Nothing, SurfaceFluxTerm} made the
+# plan's tuple length a run-time value again (review of #533 step 2).
+# Without a slab the component does not attach to :tendencies, so its zero
+# flux term is switched off.
+_floor_flux_term(c::SimulationCouplings, d) =
+    FiniteVolume.SurfaceFluxTerm(c.c.slab === nothing ? 0.0 : c.c.slab.Q, 0.0, d.state.mesh)
+Components.stage_sweep_term(c::SimulationCouplings, d, ::Val{:tendencies}) =
+    (_floor_flux_term(c, d), Components.attaches(c, :tendencies))
+Components.stage_sweep_term(c::SimulationCouplings{<:Any,O}, d, ::Val{:body_force}) where {O<:SolidMask} =
+    (ibm_penalty_term(c.c.solid::O, c.c.penalty_time, c.invτ), true)
+Components.stage_sweep_term(c::SimulationCouplings{<:Any,Nothing}, d, ::Val{:body_force}) = (nothing, false)
+# what it adds in the in-core stages has a sweep form either way (the
+# completeness guard and the report ask `sweep_term`; the plan asks the stages)
+FiniteVolume.sweep_term(c::SimulationCouplings, d) = _floor_flux_term(c, d)
 function Components.run_stage!(c::SimulationCouplings, d, ::Val{:surface_update}, dt)
     c.step[] += 1
     return _after_step!(c.c, d.state, dt, c.step[])

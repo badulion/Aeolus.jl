@@ -37,6 +37,11 @@ seconds = 65
 weight = "heavy"
 seconds = 60
 
+["fused_sweep_reductions.jl"]
+weight = "heavy"
+seconds = 173
+reason = "every large-scale forcing at 1-5 slabs, serial and threaded, two grids, step! and step_rk3! (#533 step 3)"
+
 ["urban_run.jl"]
 weight = "heavy"
 seconds = 53
@@ -44,3 +49,8 @@ seconds = 53
 ["model_nesting.jl"]
 weight = "heavy"
 seconds = 49
+
+["fused_sweep_sgs.jl"]
+weight = "heavy"
+seconds = 100
+reason = "every SGS closure through the fused sweep and the separate loops (#533 step 4): 80-101 s alone, 284 s beside a full run"

@@ -18,6 +18,7 @@ slot(::Type{<:IBMCoupling}) = :immersed_boundary
 provider(::Type{<:IBMCoupling}) = :direct_forcing
 modules_used(::Type{<:IBMCoupling}) = (:IBM,)
 stages(::Type{<:IBMCoupling}) = ((:post_predictor, 10, EVERY_STEP),)
+Components.budget_writes(::IBMCoupling, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)   # the velocity (#539)
 build(::Type{<:IBMCoupling}, case, opts) = IBMCoupling(case.geom.sm)
 
 run_stage!(c::IBMCoupling, case, ::Val{:post_predictor}, dt) =
@@ -36,3 +37,8 @@ function smoke_check(c::IBMCoupling, case)
             "|u_h| inside the buildings < 0.3 × max outside" => u_in < 0.3 * u_out]
 end
 
+
+# in the fused sweep (#533 step 6): the same correction on each row right
+# after its predictor
+FiniteVolume.post_sweep_term(c::IBMCoupling, d, Δt) =
+    Aeolus.IBM.ibm_correction_term(c.sm; τ = 0.0, dt = Δt)

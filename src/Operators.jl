@@ -958,4 +958,8 @@ include("operators/sgs_stability.jl")
 # θ only (ONE-e, #454; from the urban case's glue).
 include("operators/moist_buoyancy.jl")
 
+# The SGS closure as a term of the fused sweep (#533 plan step 4; uses the
+# contract, every built-in closure and the sweep's parts in FiniteVolume).
+include("operators/sgs_sweep.jl")
+
 end # module

@@ -189,6 +189,7 @@ of this rule.
 | `plane_reduce!(p, [b,] body, ranges, args...)` | `p[c]` = canonical plane sum of the *indexed* `body(i, j, k, args...)`; a tuple-valued body sums each component into `p::NTuple` of vectors (KA-b) |
 | `range_max([b,] body, ranges, args...)` | NaN-propagating maximum of an indexed body, which must only read (KA-b); a tuple-valued body gives the component-wise maxima, several in one sweep (KA-j) |
 | `plane_map!(p, [b,] plane, ranges, args...)` | `p[c]` = `plane(k, ranges[1], ranges[2], args...)`: a whole-plane function in its own fixed loop order, one work item per plane (KA-b) |
+| `row_map!(p, [b,] row, ranges, args...)` | `p[b, c]` = `row(j, k, ranges[1], args...)`: a whole-row function in its own fixed loop order, one work item per i-row (#554); combine the rows of a plane, then the planes, in ascending order |
 
 `plane_reduce!` is the general form. Its body follows the launch
 contract: it may read a stencil (a strain rate, a centred `w`), may
@@ -2112,6 +2113,19 @@ weight, or `plane_reduce!` with per-plane partials. `weight` is the work
 of one column in grid points (its levels, or its root solves), so that
 the serial threshold counts the real work.
 
+**Schedule (#537).** By default a column launch is split like any other
+launch, into equal row groups. A body whose cost differs between columns
+passes `schedule = :dynamic`: the threads then claim contiguous runs of
+columns from an atomic counter, each run half of the remaining columns'
+share per thread
+([`dynamic_columns!`](@ref Aeolus.Backends.dynamic_columns!), guided
+self-scheduling), so they finish together on any core count or mix of
+fast and slow cores. Nothing is tuned to a machine. The partials are
+stored per column and folded in column order as before, so the totals
+do not depend on the schedule. The tiled surface of a domain
+(`TiledUrbanSurface`: 2–60 µs per Berlin column, set by its tiles) uses
+it.
+
 **What runs per column.**
 
 * Surface exchange (`step_all_surfaces!`): the columns are grouped by
@@ -3037,6 +3051,29 @@ boundary, on the CPU. That is the DNS core. θ (and qv) are updated in the
 same sweep, before the projection, which does not read them. The flagship
 child and parent have SGS, buoyancy and hooks, so they keep the SC-d path:
 SC-e does not change the flagship.
+
+**Since #533** the condition is a contract instead of a fixed list: the
+sweep composes a compile-time tuple of terms (`FiniteVolume.SweepTerm`:
+`footprint`, `add_tendency!`, `prepare!`, `sweep_inputs`), the base
+tendencies first, and a substage takes it when every term of the
+substage has a `sweep_term`. The ring holds `1 + max ry` rows and a slab
+keeps `max rz` edge planes per end, so a term with a wider stencil than
+the base's needs no change of the driver. A substage with a term that
+has none runs the passes above (the reference) and the run records the
+term and its documented reason (`Simulations.SWEEP_FALLBACKS`) in its
+`results.toml`. Plan step 1 moved only the base tendencies onto the
+interface; the terms follow in the later steps of #533.
+
+**#533 plan step 8** gave the other step cores the same sweep (the
+explicit part of `step_imex!` as one fused tendency launch, the
+sound-proof cores with the `W`-weighted advection as their base term) and
+added the GPU form: `Backends.launch_points!`, a KA kernel with one work
+item per point on any KA backend, runs the composed term tuple
+(`FiniteVolume.pointwise_predictor!`: the tendencies per point into the
+tendency fields, then the predictor), without the ring buffer, which
+only pays where a core reuses a row from cache. The step cores choose the
+form by backend (`Simulations.fused_predictor!`); on the CPU the
+per-point form runs on `KernelAbstractions.CPU()` as the tested stand-in.
 
 Three layouts were tried first (a prototype outside `src/`, momentum
 only, 256³, ms per substage, minimum of 3-6 processes at load < 4; its
