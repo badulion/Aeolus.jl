@@ -72,7 +72,7 @@ using ..BoundaryConditions: AbstractBC, FieldBoundaryConditions, fill_halos!,
                             OpenBoundaryState, open_boundary_conditions,
                             set_boundary_data!, open_boundary_states,
                             has_open_boundaries, update_open_boundaries!,
-                            open_boundary_snapshot, restore_open_boundaries!,
+                            open_boundary_snapshot, open_boundary_snapshot!, restore_open_boundaries!,
                             Periodic, NoFlux, ImpermeableWall, NoSlipWall,
                             mark_open_boundary_solids!, WindowedBoundaryData,
                             neighbor_index

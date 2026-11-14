@@ -9,7 +9,7 @@ using ..Backends: Backends, plane_partials!, plane_reduce!, plane_mean!, ordered
 using ..BoundaryConditions
 using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!, Periodic, ImpermeableWall,
                             update_open_boundaries!, prepare_open_boundaries!,
-                            assert_open_face_correction, open_boundary_snapshot,
+                            assert_open_face_correction, open_boundary_snapshot, open_boundary_snapshot!,
                             combine_open_boundaries!, mark_open_boundary_stage!
 using ..Operators
 using ..Operators: divergence, momentum_advect!, laplacian, ∂x, ∂y, ∂z,
@@ -62,8 +62,27 @@ mutable struct StepWorkspaces
     imex::Any
     sweep::Any            # FiniteVolume.SweepBuffers of the blocked core (SC-e, #405)
     rec::StepRecord
+    open::Dict{Symbol,Any} # the drivers' open-boundary snapshots, one per use (#574)
 end
-StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, StepRecord())
+StepWorkspaces() = StepWorkspaces(nothing, nothing, nothing, nothing, StepRecord(), Dict{Symbol,Any}())
+
+"""
+    open_snapshot!(sim, slot::Symbol) -> nothing | Vector{Array}
+
+The open-boundary buffers of `sim` copied into the snapshot the step
+drivers keep under `slot` in the simulation's [`StepWorkspaces`](@ref)
+([`open_boundary_snapshot!`](@ref)): allocated on first use, reused every
+step after (#574). `nothing` for closed boundaries. Each use that must
+survive another (`step_adaptive!`'s retry copy around `step_rk3!`'s
+step-start copy) has its own slot.
+"""
+function open_snapshot!(sim, slot::Symbol)
+    has_open_boundaries(sim) || return nothing
+    d = sim.workspaces.open
+    snap = open_boundary_snapshot!(get(d, slot, nothing), sim)
+    d[slot] = snap
+    return snap
+end
 
 """
     BoussinesqSimulation(mesh; kwargs...)
@@ -840,7 +859,7 @@ function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
     _check_sgs_stress(sgs_stress)
     prepare_open_boundaries!(sim)
     t0 = sim.t
-    bc0 = open_boundary_snapshot(sim)      # nothing for closed boundaries
+    bc0 = open_snapshot!(sim, :rk3)        # nothing for closed boundaries
     if bc0 !== nothing                     # uⁿ carries its boundary state into the combinations
         fill_state_halos!(sim, sim.θ_bcs)
     end

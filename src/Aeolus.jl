@@ -1150,7 +1150,7 @@ export AbstractOpenBoundary, OpenBoundary, OpenPlane, OpenBoundaryState,
        has_open_boundaries, open_boundary_states, update_open_boundaries!,
        prepare_open_boundaries!, correct_boundary_mass_flux!, open_boundary_flux,
        boundary_flux_weights, open_boundary_ledger, pinned_face_indices,
-       open_boundary_snapshot, restore_open_boundaries!, combine_open_boundaries!,
+       open_boundary_snapshot, open_boundary_snapshot!, restore_open_boundaries!, combine_open_boundaries!,
        assert_open_face_correction, open_intermediate_velocity!
 # #329 — the two-snapshot (windowed) boundary data: nest parents, mesoscale (#58).
 export WindowedBoundaryData, snapshot_values, window_fraction, blend_window!

@@ -1199,6 +1199,34 @@ function open_boundary_snapshot(sim)
 end
 
 """
+    open_boundary_snapshot!(snap, sim) -> nothing | Vector{Array}
+
+[`open_boundary_snapshot`](@ref) into the buffers of an earlier snapshot
+`snap`, which is returned: a step driver keeps one and allocates nothing
+per step (#574; at Berlin 20 m a fresh snapshot was 236 MiB per step). A
+fresh snapshot is returned when `snap` is `nothing` or no longer matches
+the buffers (planes added or resized since); `nothing` when `sim` has no
+open boundaries.
+"""
+open_boundary_snapshot!(::Nothing, sim) = open_boundary_snapshot(sim)
+function open_boundary_snapshot!(snap::AbstractVector, sim)
+    has_open_boundaries(sim) || return nothing
+    n = 0
+    for st in open_boundary_states(sim), p in st.planes
+        n += 1
+        (n <= length(snap) && size(snap[n]) == size(p.data)) || return open_boundary_snapshot(sim)
+    end
+    n == length(snap) || return open_boundary_snapshot(sim)
+    n = 0
+    for st in open_boundary_states(sim), p in st.planes
+        n += 1
+        # a pointwise kernel over the buffer, as restore_open_boundaries! (KA-j, #306)
+        Backends.range_map!(Backends.backend(p.data), identity, snap[n], _buffer_ranges(p.data), p.data)
+    end
+    return snap
+end
+
+"""
     restore_open_boundaries!(sim, snapshot) -> sim
 
 Copy an [`open_boundary_snapshot`](@ref) back into the buffers.
