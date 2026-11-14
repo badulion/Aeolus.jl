@@ -283,6 +283,18 @@ obstacles) are not air.
   (`add_heat!`) opts out with `Components.attributed(c, Val(stage)) =
   false`, so it is not counted twice: the urban site's open faces, whose
   θ relaxation is `(:dynamics, :relaxation)` (ONE-e, #454).
+- **Inside the fused sweep** (#533 plan step 7): when every in-core term
+  of a substage has a fused form, the core runs no body-force hook and
+  writes no tendency array. The sweep's term tuple then starts with the
+  domain's `Components.SweepBudget`, which counts the substage (the
+  hook's work) before the sweep, and each attributed component's term is
+  a `FiniteVolume.BookedTerm`: per row, while the row is in cache, it
+  sums each booked field of the tendency buffer (u, v, θ, qv; air cells
+  only where the budget leaves solid cells out) before and after it adds
+  its contribution, into per-level sums. After the sweep the budget term
+  books `scale × w_k ×` those sums as the context `(stage, component)`
+  (`BudgetSystem.book_context!`): the same bookings, without the two
+  passes over the tendency field per component, quantity and substage.
 - **The core step** is one context (`:dynamics`). Whatever the core does
   beyond the components inside it is split into `(:dynamics, :transport)`
   (what the transport conserves; over the whole column it is the
@@ -297,6 +309,38 @@ obstacles) are not air.
 - **Closure.** Every change is attributed, so each budget closes by
   construction: `storage − Σ terms` is round-off. A change outside every
   context is booked as `(:core, :unattributed)`.
+
+- **Declared writes (#539).** A component names the quantities each of
+  its entries can change, `Components.budget_writes(c, Val(stage))`
+  (default: all of them). The budgets measure an entry only for those and
+  skip it for the others (`budget_skip!`): a skip costs no pass. At the
+  top level the budget no longer knows the state after a skip, so the
+  next entry that measures (or the end of the step) measures afresh and
+  books any change since the last measurement as `(:core,
+  :unattributed)`. An undeclared write of a top-level entry is therefore
+  neither hidden nor attributed to its neighbour. Inside the core, an
+  undeclared write of a skipped entry stays in the dynamics' share (the
+  closure holds, the attribution is the dynamics'). The verify mode
+  (`[budgets] verify_writes = true`, `with_budgets(…; verify = true)`)
+  measures every entry and stops with an error at a change the
+  declaration left out; the tests run it on the declared components.
+- **The switch.** `[budgets] enabled = false` builds no budgets in any
+  domain (model domains and urban sites) and measures nothing. The
+  `budget_*` outputs and budget checks the configuration requests are
+  dropped with one warning, and `results.toml` records `[budgets]
+  enabled = false`.
+
+The cost, measured on the Berlin 100 m run (200 × 200 × 60, energy and
+water budgets, RK3; #539): every measurement is one pass over the
+field. Before, a step made 50 passes of 16 B per point (the field and a
+`Float64` air mask), 1.92 GB. 36 of them measured an in-core entry
+(Coriolis, the geostrophic forcing, the tiles' drag) on a budget it
+cannot change, and 5 a top-level entry that changed nothing measured. Now
+a step makes 13 passes (energy 7, water 6) of 8 B per point (a domain
+without solid cells reads the field alone; with solid cells a one-byte
+mask, 9 B), 0.25 GB. Four of the 13 are the fresh measurements after
+skipped top-level entries, the price of booking an undeclared write as
+unattributed.
 
 After the stages of 11–12 and `:budgets` (13) have run, each component's
 `budget!(c, domain, budgets)` books the terms it *reports*: surface energy

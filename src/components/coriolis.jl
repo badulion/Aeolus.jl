@@ -30,6 +30,8 @@ coriolis_f(opts) = (lat = option(opts, :latitude, nothing); lat === nothing ? Fl
 enabled(::Type{Coriolis}, opts) = coriolis_f(opts) != 0
 build(::Type{Coriolis}, opts, domain) = Coriolis(coriolis_f(opts))
 stages(::Coriolis) = (Stage(:tendencies),)
+# the budgets measure it on the momentum only (#539)
+budget_writes(::Coriolis, ::Val{:tendencies}) = (:momentum_x, :momentum_y)
 
 function run_stage!(c::Coriolis, d, ::Val{:tendencies}, dt)
     s = d.state
@@ -38,3 +40,6 @@ function run_stage!(c::Coriolis, d, ::Val{:tendencies}, dt)
 end
 
 limit_dt(c::Coriolis, d) = d.cfl === nothing ? nothing : (d.cfl.C_coriolis / abs(c.f), :coriolis)
+
+# the fused sweep (#533): the same term, pointwise
+FiniteVolume.sweep_term(c::Coriolis, d) = FiniteVolume.CoriolisTerm(c.f)

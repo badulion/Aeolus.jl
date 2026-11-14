@@ -52,6 +52,20 @@ step!(sim, 1.0; body_force! = (s, Δt) -> apply_forcing!(s, θdamp, s.t, Δt))
 damping_tendency(θdamp).integral     # ∫ ∂θ/∂t|_d dV, K m³ s⁻¹
 ```
 
+In the fused sweep of the step core (loop fusion, #533 plan step 3) the
+forcings do not write the tendency fields: every one is, per level, an
+affine function of its field's own column, ``c_0 + c_m(φ_{k-1}-φ_k) +
+c_p(φ_{k+1}-φ_k) + λ(r-φ_k)``. `column_forcing!` computes these
+coefficients into a `ColumnForcing` before the sweep, from the plane sums
+of the stage-start state (nudging, mean-gradient subsidence, a damping
+toward the slab mean) and with the records `apply_forcing!` keeps
+(`tendency_integrals`, `damping_tendency`); `add_column_rows!` adds them
+row by row inside the sweep (`add_column_point!` point by point, in the
+per-point form of the sweep). The large-scale forcing component
+(`Components.LargeScale`) and the urban site's open-face θ relaxation use
+it; `apply_forcing!` stays the reference. `column_forcing_supported`
+says which forcings have the form (all but a damping toward a 3-D target).
+
 The Berlin case runs `GeostrophicPressureGradient` by default
 (`:geostrophic` coupling, `mode = :pressure_gradient`) and
 `GeostrophicNudging` as the option `mode = :nudging`

@@ -19,6 +19,7 @@ component_name(::Type{<:VegDrag}) = :veg_drag
 modules_used(::Type{<:VegDrag}) = (:PlantCanopy,)
 default_options(::Type{<:VegDrag}) = (cd = 0.2, k_height = 3)
 stages(::Type{<:VegDrag}) = ((:post_predictor, 20, EVERY_STEP),)
+Components.budget_writes(::VegDrag, ::Val{:post_predictor}) = (:momentum_x, :momentum_y)   # the drag (#539)
 
 function build(::Type{<:VegDrag}, case, o)
     veg_mask, LAI_map = park_lai_map(case)
@@ -29,3 +30,7 @@ end
 run_stage!(c::VegDrag, case, ::Val{:post_predictor}, dt) =
     (apply_canopy_drag!(case.sim, c.drag, dt); nothing)
 
+
+# in the fused sweep (#533 step 6): the same drag on the sweep's delayed rows
+FiniteVolume.post_sweep_term(c::VegDrag, d, Δt) = Aeolus.PlantCanopy.canopy_drag_term(c.drag, d.state, Δt)
+Components.post_after_sweep(::VegDrag) = true     # (footprint 1: a domain runs it after the sweep)

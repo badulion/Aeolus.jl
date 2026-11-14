@@ -647,6 +647,14 @@ include(joinpath(@__DIR__, "support", "environment.jl"))
 
     include("backends.jl")   # KA-a (#294): launch!, set!/interior_map! kernels, canonical reductions
     include("ka_step.jl")    # KA-j (#306): step cores on kernels, fused CFL / step guard, per-sim workspaces
+    include("fused_sweep.jl")   # #533: the fused sweep's local-term interface, fallback report, completeness guard
+    include("fused_sweep_reductions.jl")   # #533 plan step 3: LargeScale and the urban site in the fused sweep
+    include("fused_sweep_post.jl")   # #533 step 6: the post-predictor operators inside the fused sweep
+    include("fused_sweep_budgets.jl")   # #533 plan step 7: the budgets booked inside the fused sweep
+    include("fused_sweep_cores.jl")   # #533 step 8: the fused sweep in step_imex! and the sound-proof cores, the per-point (GPU) form
+    include("fused_sweep_pointwise.jl")   # #533 step 2: buoyancy, Coriolis, surface flux, sponge, fringe in the sweep
+    include("fused_sweep_nearwall.jl")   # #533 step 5: open faces, near-wall and urban terms in the fused sweep
+    include("fused_sweep_sgs.jl")   # #533 step 4: the SGS closures inside the fused sweep
     include("thread_invariance.jl")  # KA-a (#294): N threads == 1 thread (subprocesses: AEOLUS_THREAD_TESTS=1)
 
     @testset "GLL nodes: endpoints exact, weights sum to 2, symmetry" begin
@@ -911,6 +919,7 @@ include("chemistry.jl")   # urban NOx–O3–VOC mechanism, dry / wet deposition
     include("stretched_boussinesq.jl") # #151 Boussinesq core + Poisson on a StretchedGrid
     include("timeint.jl")     # Phases 23, 25 adaptive dt, IMEX
     include("advection.jl")   # Phases 26, 28 WENO-Z/TENO, conservative ops
+    include("advection_branchfree.jl")   # #557: branch-free face values, against the branching form
     include("anelastic.jl")   # Phase  27     anelastic, pseudo-incompressible
     include("multigrid.jl")   # Phase  29     geometric multigrid
     include("pressure_column.jl") # #572       Neumann-z pressure solve: tridiagonal in z, not a DCT
@@ -1022,6 +1031,7 @@ end
     include("stability_functions.jl") # Phase 58 TurbulenceStability contract (#170)
     include("amd_vreman.jl")        # P55-d: AMD and Vreman closures (#176)
     include("tke.jl")               # P56-b: Deardorff prognostic SGS TKE, wall distance (#182)
+    include("reynolds_stress_blocked.jl") # #560: the Reynolds-stress source update allocates nothing per cell (E6)
     include("wall_models.jl")       # Phase 57: equilibrium wall laws, wall-stress operator (#169)
     include("transition_kh.jl")      # P59-c: turbulent fraction γ, intermittency, Ri_f, growth_rate (#180)
 end

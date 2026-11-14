@@ -234,12 +234,18 @@ end
     @test sim.workspaces.sweep === nothing
     step!(d, 0.1)
     @test sim.workspaces.sweep !== nothing
-    # a stage-6 component turns it off; a stage-11 one does not
+    # a stage-6 component without a fused form turns it off; one with a
+    # fused form (Coriolis, since #533 step 2) and a stage-11 one do not
+    sim = cp_core(:boussinesq; ν = 1.0); cp_state!(sim)
+    d = cp_domain(sim; extra = (CPRecorder((Stage(:tendencies),)),))
+    @test CPC.core_hooks(d).body_force! !== nothing
+    step!(d, 0.1)
+    @test sim.workspaces.sweep === nothing
     sim = cp_core(:boussinesq; ν = 1.0); cp_state!(sim)
     d = cp_domain(sim, Coriolis => CP_COR)
     @test CPC.core_hooks(d).body_force! !== nothing
     step!(d, 0.1)
-    @test sim.workspaces.sweep === nothing
+    @test sim.workspaces.sweep !== nothing
     sim = cp_core(:boussinesq; ν = 1.0); cp_state!(sim)
     d = cp_domain(sim; extra = (CPRecorder((Stage(:surface_update),)),))
     step!(d, 0.1)

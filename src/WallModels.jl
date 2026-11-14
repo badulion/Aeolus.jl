@@ -117,6 +117,7 @@ using ..Backends: launch!, launch_weighted!, backend      # KA-k (#307): the imm
 import ..Operators: phi_m_profile, total_stress_profile
 using ..Simulations: BoussinesqSimulation, step_rk3!
 using ..Operators: laplacian
+using ..Operators: FiniteVolume     # the fused sweep: the wall stresses as post terms, the stencil's wall flux as a sweep term (#533)
 using ..BoundaryConditions: NoSlipWall
 using ..TimeSteppers: step!
 using ..Backends: Backends, column_sum

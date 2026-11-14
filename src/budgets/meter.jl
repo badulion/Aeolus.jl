@@ -64,7 +64,8 @@ struct LevelMeter
     w::Vector{Float64}        # J m⁻² K⁻¹ per K of level sum Σ_ij θ: ρ̄ c_p Π̄ Δz / (Nx Ny)
     v::Vector{Float64}        # conserved-weight analogue: W Δz / (Nx Ny)
     zf::Vector{Float64}       # level faces (m above the domain bottom), length Nz + 1
-    fluid::Array{Float64,3}   # interior-sized: 1.0 = air, 0.0 = solid (a Float64 mask: the sum vectorizes)
+    fluid::Array{Bool,3}      # interior-sized: true = air, false = solid
+    hassolid::Bool            # any solid cell: without, a pass reads the field alone (#539)
     S::Vector{Float64}        # scratch: per-level fluid sums of θ
     Ssolid::Vector{Float64}   # scratch: per-level sums of θ over the solid cells
 end
@@ -94,7 +95,8 @@ function LevelMeter(mesh, ρ̄::AbstractVector, π̄::AbstractVector, cp::Real, 
     if solid !== nothing
         fluid = .!collect(Bool, view(solid, Hx+1:Hx+Nx, Hy+1:Hy+Ny, Hz+1:Hz+Nz))
     end
-    return LevelMeter(Nx, Ny, Nz, Hx, Hy, Hz, w, v, zf, collect(Float64, fluid), zeros(Nz), zeros(Nz))
+    fl = collect(Bool, fluid)
+    return LevelMeter(Nx, Ny, Nz, Hx, Hy, Hz, w, v, zf, fl, !all(fl), zeros(Nz), zeros(Nz))
 end
 
 "The per-level weight of the conserved transport quantity of `sim` (`nothing`: 1)."
@@ -119,13 +121,23 @@ for a `Field` `x` (or its halo-padded data array). One pass over the
 interior; the per-level sums are left in `meter.S`, and those over the
 solid cells (which the dynamics may exchange heat with, see
 `budgets/stage_budget.jl`) in `meter.Ssolid`.
+
+The pass reads the field and, where the domain has solid cells, the
+one-byte mask (9 B per point); a domain without solid cells reads the
+field alone (8 B per point; #539: the mask was a `Float64` array, 16 B
+per point, read even where every cell is air).
 """
 function measure_levels!(out::AbstractVector, m::LevelMeter, θ)
     d = _θdata(θ)
     # the fluid and solid sums of every level in one pass, each in the
     # canonical, thread-invariant plane order (KA-b, #296)
-    plane_reduce!((m.S, m.Ssolid), backend(d), _air_heat_at,
-                  (1:m.Nx, 1:m.Ny, 1:m.Nz), d, m.fluid, m.Hx, m.Hy, m.Hz)
+    if m.hassolid
+        plane_reduce!((m.S, m.Ssolid), backend(d), _air_heat_at,
+                      (1:m.Nx, 1:m.Ny, 1:m.Nz), d, m.fluid, m.Hx, m.Hy, m.Hz)
+    else
+        plane_reduce!(m.S, backend(d), _air_at, (1:m.Nx, 1:m.Ny, 1:m.Nz), d, m.Hx, m.Hy, m.Hz)
+        fill!(m.Ssolid, 0.0)
+    end
     @inbounds for k in 1:m.Nz
         out[k] = m.w[k] * m.S[k]
     end
@@ -154,9 +166,10 @@ end
 
 @inline function _air_heat_at(i, j, k, d, fl, Hx, Hy, Hz)
     @inbounds x = d[Hx+i, Hy+j, Hz+k]
-    @inbounds y = fl[i, j, k] * x          # x or 0, exactly
-    return (y, x - y)                      # (fluid, solid): x - y is 0 or x, exactly
+    @inbounds f = fl[i, j, k]
+    return (ifelse(f, x, zero(x)), ifelse(f, zero(x), x))   # (fluid, solid): x or 0, exactly
 end
+@inline _air_at(i, j, k, d, Hx, Hy, Hz) = @inbounds d[Hx+i, Hy+j, Hz+k]
 
 "The content ``w_k Σ_{solid} x`` per level of the solid cells at the last [`measure_levels!`](@ref)."
 solid_levels!(out::AbstractVector, m::LevelMeter) = (out .= m.w .* m.Ssolid; out)

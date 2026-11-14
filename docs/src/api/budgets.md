@@ -29,6 +29,11 @@ Each budget closes to round-off when nothing escapes: `storage − Σ terms`
 mechanism is described on
 [Components and the stage pipeline](@ref "Budgets: the stage-context measurement").
 
+The budgets cost one pass over the field per measurement. Entries whose
+component cannot change a quantity are not measured for it (the declared
+writes, `Components.budget_writes`, #539), and `[budgets] enabled =
+false` turns every budget off for a production run.
+
 ```julia
 using Aeolus, Aeolus.BudgetSystem
 mesh = RegularGrid(; size = (16, 16, 16), extent = (1600.0, 1600.0, 800.0))

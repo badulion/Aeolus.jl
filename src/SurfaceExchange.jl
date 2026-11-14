@@ -523,19 +523,23 @@ function solve_surface_layer(sf::AbstractStabilityFunctions = BusingerDyerBeljaa
     Δθ, Δq = T(θ_a) - T(θ_s), T(q_a) - T(q_s)
     θva = T(θ_a) * (1 + ε * T(q_a))
 
+    # The closures' locals are declared `local`: the function assigns the
+    # same names below, and without it they would be shared with it in
+    # Core.Boxes — every solve then allocated (~9 KB) and ran its iteration
+    # by dynamic dispatch (#537).
     scales(ζ) = begin
-        Φm = _Φm(sf, ζ, z_m, z0m)
-        Φh = _Φh(sf, ζ, z_m, z_h, z0h)
-        Φq = _Φh(sf, ζ, z_m, z_h, z0q)
-        u = κ * Ue / Φm
-        θ = κ * Δθ / Φh
-        q = κ * Δq / Φq
-        θv = θ * (1 + ε * T(q_a)) + ε * T(θ_a) * q
+        local Φm = _Φm(sf, ζ, z_m, z0m)
+        local Φh = _Φh(sf, ζ, z_m, z_h, z0h)
+        local Φq = _Φh(sf, ζ, z_m, z_h, z0q)
+        local u = κ * Ue / Φm
+        local θ = κ * Δθ / Φh
+        local q = κ * Δq / Φq
+        local θv = θ * (1 + ε * T(q_a)) + ε * T(θ_a) * q
         (u, θ, q, θv, Φm, Φh, Φq)
     end
     # Residual F(ζ) = ζ - ζ_implied(ζ); increasing through the root.
     F(ζ) = begin
-        u, _, _, θv = scales(ζ)
+        local u, _, _, θv = scales(ζ)
         ζ - z_m * κ * g * θv / (u^2 * θva)
     end
 

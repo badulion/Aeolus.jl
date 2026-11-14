@@ -1,0 +1,36 @@
+# benchmarks/bench_loop_fusion.jl (#533 step 2). The dry CBL of examples/dry_convective_bl without SGS ([sgs] model = "none"), with Coriolis and
+# molecular viscosity: the extra terms are only the pointwise ones of #533
+# step 2 (built-in buoyancy; SurfaceThetaFlux, Sponge, Coriolis components).
+schema_version = 2
+[run]
+name = "bench_loop_fusion_cbl"
+seed = 1
+[grid]
+size = [192, 192, 64]
+extent = [19200.0, 19200.0, 1600.0]
+[dynamics]
+theta0 = 300.0
+g = 9.81
+nu = 1.0
+[boundaries]
+z = "free_slip"
+[sgs]
+model = "none"
+[coriolis]
+f = 1e-4
+[surface_theta_flux]
+bottom = 0.24
+[sponge]
+alpha_max = 0.01
+z_start = 1200.0
+[initial]
+theta = { kind = "mixed_layer_lapse", value = 300.0, z_i = 800.0, lapse = 0.003 }
+perturbation_amplitude = 0.1
+perturbation_depth = 100.0
+[timestep]
+scheme = "rk3"
+[time]
+dt = 2.0
+duration = 300.0
+[fftw]
+planner = "estimate"

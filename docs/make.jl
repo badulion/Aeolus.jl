@@ -118,6 +118,7 @@ makedocs(
             "Checkpoint / restart and FFT planning" => "design/checkpoint_restart.md",
             "Kernel port (KernelAbstractions)" => "design/ka_port.md",
             "Roadmap"                     => "design/roadmap.md",
+            "Built but not merged"        => "design/not_merged.md",
         ],
         "Reference" => [
             "Options"              => OPTION_PAGES,
