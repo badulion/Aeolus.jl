@@ -154,9 +154,11 @@ Aeolus.Operators.dissipation_matched_cs
 
 ## FFT planning policy
 
-The one place the FFTW planner flag and thread count of every FFT plan
-(the pressure solvers, the diagnostics) are chosen (#245). Default
-`:measure`, `:patient` opt-in; the test suite uses `:estimate`. Why it matters for restarts:
+The one place the FFTW planner flag of every FFT plan (the pressure
+solvers, the diagnostics) is chosen (#245). Default `:measure`,
+`:patient` opt-in; the test suite uses `:estimate`. Every plan is
+single-threaded; the spectral solvers run serial plans over blocks of
+levels or rows on Julia's threads ([`BlockTransform`](@ref Aeolus.Operators.BlockTransform), #575). Why it matters for restarts:
 [Checkpoint / restart and FFT planning](../design/checkpoint_restart.md).
 
 ```@docs
@@ -165,4 +167,10 @@ Aeolus.Operators.fftw_policy
 Aeolus.Operators.fftw_planner_flags
 Aeolus.Operators.save_fftw_wisdom
 Aeolus.Operators.load_fftw_wisdom!
+Aeolus.Operators.BlockTransform
+Aeolus.Operators.nblocks
+Aeolus.Operators.serial_r2r_plan
+Aeolus.Operators.serial_rfft_plan
+Aeolus.Operators.serial_brfft_plan
+Aeolus.Operators.serial_fft_plan
 ```

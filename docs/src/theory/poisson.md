@@ -218,6 +218,12 @@ used for stretched grids, so `CosineFFTPoissonSolver` delegates to
 integrated directly after removing the source's mean, which gives the
 compatibility behaviour below.
 
+Since #575 no transform is threaded by FFTW at all: every plan is serial,
+and Julia's threads run the `x`-`y` transforms of blocks of levels (and
+any `z` transform by blocks of rows), as PALM's threads run serial 1-D
+plans over lines. The algorithm, and so the discrete solution, is
+unchanged; only who runs which transform.
+
 ### The discrete compatibility condition
 
 With no Dirichlet face the operator is singular: constants are its null

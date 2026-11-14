@@ -89,11 +89,12 @@ Logging page).
 
 The planner of every FFT plan is set in one place,
 `Aeolus.Operators.set_fftw_policy!` (`planner = :estimate | :measure |
-:patient | :exhaustive`, `threads`), default `:measure` (`:patient`
+:patient | :exhaustive`; `threads` is deprecated and ignored since #575,
+every plan being single-threaded), default `:measure` (`:patient`
 opt-in), or from the
-environment (`AEOLUS_FFTW_PLANNER`, `AEOLUS_FFTW_THREADS`) or a namelist
+environment (`AEOLUS_FFTW_PLANNER`) or a namelist
 `[fftw]` table ([`apply_fftw_config!`](@ref Aeolus.Config.apply_fftw_config!)). `fftw_policy()` reports
-the planner, the thread count and whether wisdom was loaded; every
+the planner, the thread count (1) and whether wisdom was loaded; every
 checkpoint records it, and `save_fftw_wisdom` / `load_fftw_wisdom!` let a
 restart reuse the plans instead of planning again. Bitwise reproducibility
 is not a goal (epic #493).

@@ -57,10 +57,18 @@ normalisation are pointwise [`launch!`](@ref Aeolus.Backends.launch!)
 kernels, bit-identical to the broadcasts they replaced. The transforms
 are executed from the host between launches through
 [`apply_transform!`](@ref Aeolus.Backends.apply_transform!), never inside
-a kernel, so a GPU backend can substitute its own FFT library. FFTW's
-plans are threaded (`init_threads!` sets FFTW to `Threads.nthreads()`)
-and give the same bits at every thread count under `ESTIMATE` or
-imported wisdom. The stretched solver's tridiagonal solve in z is one
+a kernel, so a GPU backend can substitute its own FFT library. Every
+FFTW plan is single-threaded (#575): a transform is cut into blocks, the
+`x`-`y` transforms into blocks of levels and the transforms along `z`
+into blocks of rows, and Julia's threads take the blocks
+([`BlockTransform`](@ref Aeolus.Operators.BlockTransform), PALM's method:
+serial 1-D plans inside `!$OMP DO`, `fft_xy_mod.f90`). FFTW starts no
+threads of its own. Its former pool was created from thread 1 and
+inherited thread 1's CPU affinity, so with `JULIA_EXCLUSIVE=1` all of it
+ran on core 0 (#566: 28.4 s per step pinned against ~6 s unpinned at
+Berlin 20 m, 72 threads); its planner could also thread inside one
+transform (#572). Solves with blocks and with one block agree to
+round-off. The stretched solver's tridiagonal solve in z is one
 launch over slabs of ky rows, serial in z within each work item. Measured
 speed-ups: [The kernel port](ka_port.md#Measured-at-KA-h).
 
