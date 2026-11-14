@@ -26,7 +26,7 @@
 #   * summary: mean and median per step and GC time (run 1 reported medians
 #     only, which hid the GC pauses at 50 m).
 #
-# Environment: BENCH_ROOT (worktrees bench-<build>), BENCH_ENV (env.sh),
+# Environment: BENCH_PIN (1: JULIA_EXCLUSIVE=1, default; 0: unpinned), BENCH_ROOT (worktrees bench-<build>), BENCH_ENV (env.sh),
 # BENCH_BUILD (default all), BENCH_BUDGET (seconds of measured stepping per
 # process, default 900).
 #SBATCH -p singlenode
@@ -45,7 +45,12 @@ CFG=$HPC/berlin_20m/berlin_20m_20250824.toml
 BUDGET=${BENCH_BUDGET:-900}
 mkdir -p "$OUT"
 exec > >(tee -a "$OUT/scaling.log") 2>&1
-export JULIA_EXCLUSIVE=1
+# BENCH_PIN=0: no JULIA_EXCLUSIVE. With it, every thread created after startup
+# (FFTW's own pthreads, #397; the GC threads) inherits thread 1's pin to core
+# 0 and queues there: 28.4 s/step at 20 m on 72 threads, 6 s unpinned
+# (HANDOFF_scaling20m.md section 6 item 0).
+if [ "${BENCH_PIN:-1}" = 1 ]; then export JULIA_EXCLUSIVE=1; else unset JULIA_EXCLUSIVE; fi
+echo "JULIA_EXCLUSIVE=${JULIA_EXCLUSIVE:-unset} (BENCH_PIN=${BENCH_PIN:-1})"
 # GNU time where it exists; Fritz's compute nodes have none (timev.py: the same report)
 if [ -x /usr/bin/time ]; then TIMEV=(/usr/bin/time -v); else
     command -v python3 >/dev/null || module load python/3.13-miniforge >/dev/null 2>&1

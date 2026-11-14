@@ -246,6 +246,36 @@ That is issue 1.
 >
 > Related: #566.
 
+### 5.3 Issue 3: draft for the local agent (allocation per kernel row and per step)
+
+**Title:** Stepping allocates ~1.2 GiB per step at Berlin 20 m: boxed arguments per kernel row (`Backends.jl:356`) and a fresh open-boundary snapshot every step
+
+**Body:**
+
+> **Observed** (#566, Fritz, bench/all 51154519 = master 4f61b8a6 + the bench PRs, unpinned; `benchmarks/hpc/results/memory_20m/`, `bench_run.jl memory` mode):
+>
+> | case, threads | s/step | allocated per step | live heap after a full GC |
+> | :-- | --: | --: | :-- |
+> | Berlin 20 m (1000 × 1000 × 150), 72 | 5.9–6.2 (7.7 with a GC) | 1.22 GiB | back to the baseline (73.61 GiB) |
+> | Berlin 50 m (400 × 400 × 60), 72 | 1.0 | 0.15 GiB | back to the baseline |
+> | Berlin 50 m, 8 | 1.4 | 0.15 GiB | back to the baseline |
+>
+> - Not a leak: the live heap grows by the allocated bytes and a full GC returns it exactly. But at a 74 GiB live heap Julia collects rarely, so RSS grows by ~10 GB over 10 steps, and a collection costs 1.7 s at 72 threads (~25 % of a step).
+> - The allocation grows with the grid (the number of rows), not with the thread count.
+>
+> **Where** (`Profile.Allocs`, 1 % sampling, one step at 20 m, 72 threads):
+>
+> 1. **~1150 MiB per step at `src/Backends.jl:356`**, `_row!(body!, i1:i2, j, k, args...)` in `_rows3_kernel!`: ~48 M allocations per step, a few per kernel row. Types: `Tuple{Int64,Int64,Int64}` 422 MiB, `UnitRange{Int64}` 275 MiB, `Float64` 183 MiB, `BoundaryConditions._StageCombine{Float64,Float64}` 94 MiB, `FiniteVolume.GridMetrics{…UniformZ…}` 41 MiB, `PrognosticSGS._FaceFlux{…}` 9 MiB.
+>    Boxed index tuples, ranges and floats per row mean the call to `@noinline _row!` is dynamically dispatched for some kernels: the "specialisation trap" the comment above it describes. Candidates: kernels with more than 24 arguments (they fall to the `Vararg{Any,N}` method at `Backends.jl:405`), or an `args` tuple whose type isn't concrete. The parameter types point at the open-boundary stage combine, the grid-metrics bodies and the SGS face fluxes.
+>    The stack inside a thread ends at the kernel, so the profile does not name the launch. To find them: a small grid with the launch trace (`Backends.set_launch_trace!`) and `@allocated` per launch name, or `@code_warntype`/JET on `_rows3_kernel!` for those bodies.
+> 2. **~236 MiB per step in `open_boundary_snapshot`** (`src/boundary_conditions/open_boundary.jl:1198`): `[copy(p.data) for …]` allocates every plane each step. `step_rk3!` could keep one snapshot buffer and `copyto!` into it.
+>
+> **Expected gain:** no GC pauses while stepping at 20 m, and less time per row in the affected kernels. To be measured.
+>
+> **Check:** `@allocated Aeolus.step!(model, dt)` after warm-up on a small open-boundary case, as a test with a near-zero bound, plus the 20 m step time on Fritz.
+>
+> Related: #566.
+
 ## 6. Open items
 
 1. **Issue 1:** filed as #567 (§5.1).
@@ -267,10 +297,11 @@ That is issue 1.
    - **#567 confirmed on Fritz:** build 128–159 s at every thread count, against ~2580 s in attempt 1. Build GC share 9–20 %, 86.6 GB allocated.
    - **#568 confirmed:** each process raised exactly 1 tile (column (30, 615), h = d = 9.96 m, z0m = 0.05, 0.039 → 20.04 m), no `solve_surface_layer` error.
    - **#572 confirmed:** during stepping at 72 threads, 1–2 % kernel time and ~700 context switches/s (`procwatch.log`), against 82 % and 656 k/s before. The pressure solve alone at 1000 × 1000 × 150 on 72 threads: 0.44 s, agreement with the 3-D DCT 5e-16 (`solver_compare_t72.txt`). Three solves per step ≈ 1.3 s of 28.4 s, ~5 %.
-   - **Why the steps don't scale: very likely the benchmark's pinning, not the model (preliminary).** With `JULIA_EXCLUSIVE=1` the threads created after startup inherit thread 1's affinity, core 0. At 72 threads the TOML's `affinity` shows 72 helper threads (probably GC) already pinned to core 0 at startup; the 99 threads created later (FFTW's own pthreads, #397) spent 227 s on a CPU and **15 124 s waiting in the run queue** over the 295 s measured, i.e. the FFTW pool runs on one core. At 16 threads: 5 748 s queued. At 1 thread none of this happens (no FFTW pool), which fits the flat curve after ~4 threads. Run 1's `node.sh` sets `JULIA_EXCLUSIVE=1` too, so its plateau at ~16 threads probably has the same cause.
-   - **Being checked (job 4471709, `results/profile_20m_t72/`):** `bench_run.jl profile` (launch trace + `Profile` of 2 steps) at 72 threads on 20 m with and without `JULIA_EXCLUSIVE=1`, and 50 m without. If unpinned scales, the ladder should be rerun unpinned (or with the FFTW and GC threads given 0-71) and the run 1 scaling curve read with this caveat.
+   - **Why the steps don't scale: the benchmark's pinning, not the model (confirmed 2026-11-14).** With `JULIA_EXCLUSIVE=1` the threads created after startup inherit thread 1's affinity, core 0. At 72 threads the TOML's `affinity` shows 72 helper threads (probably GC) already pinned to core 0 at startup; the 99 threads created later (FFTW's own pthreads, #397) spent 227 s on a CPU and **15 124 s waiting in the run queue** over the 295 s measured: the FFTW pool ran on one core. At 16 threads: 5 748 s queued. Unpinned (memory job 4471714), the same 20 m step at 72 threads takes **5.9–6.2 s against 28.4 s** pinned; 50 m 1.0 s. Run 1's `node.sh` sets `JULIA_EXCLUSIVE=1` too, so its scaling curve (plateau at ~16 threads) is affected the same way and should be read with this caveat.
+   - **The growing RSS is garbage, not a leak** (job 4471714, `results/memory_20m/`): 1.22 GiB allocated per step at 20 m; the live heap returns exactly to its baseline after a full GC; a collection at 72 threads costs 1.7 s. ~1.15 GiB of it is boxed arguments per kernel row at `Backends.jl:356`, ~0.24 GiB a fresh `open_boundary_snapshot` per step. Issue draft: §5.3.
+   - **Profile job 4471709 failed:** `Profile.print` hits the Fritz ENODEV bug (§7), and the fallback had a soft-scope bug (fixed in 559013ad). Raw samples kept in `$WORK/aeolus-bench/results/profile_20m_t72/*.jls`; no step times from it.
+   - **Next:** the ladder rerun unpinned (`BENCH_PIN=0 scaling.sh`), `results/scaling_20m_unpinned/`.
    - Not done: the bench/all system image (only `node.sh` uses it) and the pressure-solver tests on Fritz.
-   - Resident memory grows during stepping at 72 threads (78 → 88 GB over 10 steps) with no GC; not yet understood.
 3. **Before rerunning the 20 m ladder:** a fix for issue 2, and ideally issue 1 too, since the ladder spends about 5 h on setup.
    - `scaling.sh` builds the model in every process (7 builds) and uses no system image.
    - The maintainer's stop rule (setup over ~90 min or peak memory over ~230 GB at 72 threads) held this time: setup took 43 min and memory peaked at 69 GB.
