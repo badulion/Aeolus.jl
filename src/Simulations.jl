@@ -46,8 +46,9 @@ include("simulations/step_record.jl")   # the per-step record and diagnostics ho
 The per-simulation scratch of the step drivers: the step-start state of
 [`step_rk3!`](@ref) ([`RK3Workspace`](@ref)), the retry snapshot of
 `step_adaptive!` (`TimeIntegration.StateSnapshot`) and the IMEX stage
-state of `step_imex!` (`TimeIntegration.IMEXWorkspace`), and the
-[`StepRecord`](@ref) of the step cores (`rec`, #336). Each workspace slot is
+state of `step_imex!` (`TimeIntegration.IMEXWorkspace`), the
+[`StepRecord`](@ref) of the step cores (`rec`, #336) and the drivers'
+open-boundary snapshots (`open`, one per use, `open_snapshot!`, #574). Each workspace slot is
 allocated on first use, on the simulation's backend
 ([`Backends.allocate`](@ref Aeolus.Backends.allocate)), and lives as long
 as the simulation (`rk3_workspace`, `state_snapshot`, `imex_workspace`).
