@@ -27,9 +27,10 @@ makedocs(
         sidebar_sitename = true,
         # long single pages: the KA port log (223 KiB) and the generated option
         # references that hold the urban site (one table per urban component,
-        # ONE-e #454); Documenter's 200 KiB limit otherwise fails the build
+        # ONE-e #454) and the configuration API page (200.5 KiB after #576);
+        # Documenter's 200 KiB limit otherwise fails the build
         size_threshold_ignore = ["design/ka_port.md", "design/roadmap.md", "reference/options/model.md",
-                                 "api/urban.md"],
+                                 "api/urban.md", "api/config.md"],
     ),
     pages = [
         "Home"           => "index.md",
