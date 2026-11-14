@@ -19,6 +19,15 @@
 #          `time` with key trace=1 runs this after its timed steps in the same
 #          process (one model build less; the trace's cost stays outside the
 #          timed blocks).
+#   profile  (20 m rerun, the step's serial part) the warm-up, then the
+#          trace above (`ntrace` steps, if the build has the hook), then
+#          `nprof` (2) steps under Profile (sampling every `delay_ms`, 10).
+#          Writes <out>.profile_main.txt (flat, thread 1 only: where the main
+#          task, i.e. all serial code, spends its time), .profile_all.txt
+#          (flat, all threads) and .profile_tree.txt (thread 1, tree), and
+#          the raw samples (.profile.jls) for analysis elsewhere. If
+#          Profile.print fails (the ENODEV of Fritz's /proc/sys/fs/binfmt_misc
+#          seen with USR1), a fallback counts frames per sample itself.
 #   state  `nsteps` (20) steps with `setting` (if_possible), then u, v, w, θ, e
 #          written next to <out.toml> (Serialization, interior only), for the
 #          sanity check against bench/master (HANDOFF section 3, item 5).
@@ -31,7 +40,7 @@
 # Timestamps (`ts_*`, Unix seconds) bracket the measured steps, so a counter
 # timeline taken around the process (likwid-perfctr -t) can be cut to them.
 
-using TOML, Dates, Serialization, Statistics, InteractiveUtils
+using TOML, Dates, Serialization, Statistics, InteractiveUtils, Profile
 const T_START = time()
 
 mode, cfgpath, dtstr, outpath = ARGS[1], ARGS[2], ARGS[3], ARGS[4]
@@ -127,7 +136,7 @@ res = Dict{String,Any}(
 
 nwarm = getint("nwarm", 5)
 budget = parse(Float64, get(kv, "budget", "600"))
-if mode in ("time", "trace")
+if mode in ("time", "trace", "profile")
     set_fusion!(:if_possible)
     w = steps!(min(2, nwarm))
     last(w) <= 5 && append!(w, steps!(max(0, nwarm - 2)))
@@ -173,12 +182,12 @@ if mode == "time"
     res["gc_count"] = tm.gcstats.pause
     res["schedstat"] = schedstat_delta(s0, s1)
 end
-if mode == "trace" || (mode == "time" && get(kv, "trace", "0") == "1")
+if mode == "trace" || (mode == "profile" && HAS_TRACE) || (mode == "time" && get(kv, "trace", "0") == "1")
     HAS_TRACE || error("trace: this build has no launch trace (#566 hook)")
     B = Aeolus.Backends
-    ntrace = fit(getint(mode == "trace" ? "nsteps" : "ntrace", 10), HAS_FUSION ? 2 : 1)
+    ntrace = fit(getint(mode == "trace" ? "nsteps" : "ntrace", mode == "profile" ? 2 : 10), HAS_FUSION ? 2 : 1)
     res["ntrace"] = ntrace
-    for s in (HAS_FUSION ? (:never, :if_possible) : (:none,))
+    for s in (HAS_FUSION ? (mode == "profile" ? (:if_possible,) : (:never, :if_possible)) : (:none,))
         set_fusion!(s)
         B.set_launch_trace!(true); steps!(2); B.set_launch_trace!(false)   # the traced copies compiled
         B.reset_launch_trace!(); B.set_launch_trace!(true)
@@ -204,6 +213,53 @@ if mode == "trace" || (mode == "time" && get(kv, "trace", "0") == "1")
             end)
     end
 end
+if mode == "profile"
+    set_fusion!(:if_possible)
+    nprof = getint("nprof", 2)
+    Profile.init(n = 400_000_000, delay = parse(Float64, get(kv, "delay_ms", "10")) * 1e-3)
+    Profile.clear()
+    t0 = time()
+    ts = Profile.@profile steps!(nprof)
+    res["profile"] = Dict{String,Any}("ts_begin" => t0, "steps" => ts, "nprof" => nprof)
+    base = replace(outpath, r"\.toml$" => "")
+    data, lidict = Profile.retrieve()
+    serialize(base * ".profile.jls", (data, lidict))
+    wide = (:displaysize => (100_000, 300),)
+    printed = String[]
+    for (suffix, kw) in ((".profile_main.txt", (format = :flat, sortedby = :count, threads = 1, mincount = 10)),
+                         (".profile_all.txt", (format = :flat, sortedby = :count, mincount = 50)),
+                         (".profile_tree.txt", (format = :tree, threads = 1, mincount = 20, maxdepth = 60)))
+        try
+            open(base * suffix, "w") do io
+                Profile.print(IOContext(io, wide...), data, lidict; C = false, kw...)
+            end
+            push!(printed, suffix)
+        catch e
+            @warn "Profile.print failed for $suffix" exception = (e, catch_backtrace())
+        end
+    end
+    res["profile"]["printed"] = printed
+    if length(printed) < 3          # fallback: inclusive counts per frame, all threads
+        d0 = Profile.fetch(include_meta = false); ld = Profile.getdict(d0)
+        cnt = Dict{String,Int}(); seen = Set{String}(); nsamp = 0
+        for ip in d0
+            if ip == 0
+                for k in seen; cnt[k] = get(cnt, k, 0) + 1; end
+                empty!(seen); nsamp += 1; continue
+            end
+            for fr in get(ld, ip, Base.StackTraces.StackFrame[])
+                fr.from_c && continue
+                push!(seen, "$(fr.func) $(fr.file):$(fr.line)")
+            end
+        end
+        open(base * ".profile_fallback.txt", "w") do io
+            println(io, "# samples (all threads) ", nsamp, "; inclusive count per frame")
+            for (k, v) in sort!(collect(cnt); by = last, rev = true)[1:min(end, 400)]
+                println(io, v, "\t", k)
+            end
+        end
+    end
+end
 if mode == "state"
     s = Symbol(get(kv, "setting", "if_possible"))
     s === :never || s === :if_possible || error("state: setting must be never or if_possible")
@@ -221,7 +277,7 @@ if mode == "state"
     res["state_file"] = statefile
     res["state_fields"] = sort!(collect(keys(fields)))
 end
-mode in ("time", "trace", "state") || error("unknown mode $mode")
+mode in ("time", "trace", "profile", "state") || error("unknown mode $mode")
 
 res["finished"] = string(now())
 res["t_total_s"] = time() - T_START
