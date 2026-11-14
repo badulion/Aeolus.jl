@@ -552,7 +552,10 @@ integrated up, and the result is shifted to zero `gauge`-weighted mean,
 `Σ_k gauge_k Σ_{ij} φ_{ijk} = 0`.
 
 Cost: one 2-D transform pair and `O(N_x N_y N_z)` for the column solves;
-exact to round-off. Periodic `z` is not supported.
+exact to round-off. Periodic `z` is not supported. The 2-D transforms are
+single-threaded FFTW plans applied to blocks of levels on Julia's threads
+([`BlockTransform`](@ref Aeolus.Operators.BlockTransform), #575), the
+Thomas sweeps run on slabs of rows.
 """
 struct ColumnTridiagonalSolver{T, PF, PI} <: AbstractPressureSolver
     plan_fwd::PF
@@ -604,8 +607,9 @@ function ColumnTridiagonalSolver(::Type{T}, (Nx, Ny, Nz)::NTuple{3,Int}, (dx, dy
     ky_f, ky_i, sy = _r2r_kinds(bc_y)
     buf  = _zeros(T, Nx, Ny, Nz)
     buf2 = _zeros(T, Nx, Ny, Nz)
-    plan_fwd = FFTW.plan_r2r(buf, (kx_f, ky_f), (1, 2); flags = fftw_planner_flags())
-    plan_inv = FFTW.plan_r2r(buf, (kx_i, ky_i), (1, 2); flags = fftw_planner_flags())
+    # one serial 2-D plan per block of levels, on Julia's threads (#575)
+    plan_fwd = BlockTransform((o, i) -> serial_r2r_plan(o, i, (kx_f, ky_f), (1, 2)), buf2, buf, 3)
+    plan_inv = BlockTransform((o, i) -> serial_r2r_plan(o, i, (kx_i, ky_i), (1, 2)), buf, buf2, 3)
     norm = one(T) / T(sx * Nx * sy * Ny)
 
     lo = T.(collect(lower)); up = T.(collect(upper)); hw = T.(collect(hweight))
