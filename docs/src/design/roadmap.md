@@ -2872,6 +2872,45 @@ compiler-flag provenance remain.
   - At an open face the boundary-normal face is skipped (PALM's choice) rather than given a one-sided drag; one-sided averaging is used at a no-flux face, which has no boundary data.
 - **Open:** `PlantCanopy.ResolvedCanopyDrag` averages its LAD to the faces with the same periodic wrap at construction ("as the LES is horizontally periodic"); a vegetated column at an open edge would see the opposite edge's leaves. Not in the Berlin run, and left for its own issue. With #533 this pointwise drag becomes a `:post_predictor` term of the fused sweep.
 
+### Speedup integration: the measured speedups merged together (#566)
+
+**Merged as one integration** (branch `issue/566-speedup-integration`,
+2026-11-14). It brings in the speedup PRs that the HPC benchmark (#566,
+run 1 on Fritz, 2026-11-10) measured, in the merge order of the measured
+build `bench/all-minus-D` plus today's master:
+
+- **C:** loop fusion (#533: #545, #550 with #546–#549, #551–#553). It
+  contains #543.
+- **E:** the kernel fixes, cherry-picked from the group D branches. E1 and
+  E2 come from #555, E3 and E4 from #564, E5 from #562 and E6 from #565.
+- **B:** the budget passes, #541.
+- **A:** the tile update, #544. The canopy drag, #543, came with C.
+- **#542:** documentation of #535.
+
+**Measured** (run 1, Berlin 100 m and 50 m, median s/step,
+`if_possible`, pinned): this build against master is 1.42× (100 m, 16
+threads, 0.291 against 0.413 s), 1.42× (100 m, 72 threads, 0.249 against
+0.353 s), 1.39× (50 m, 16, 1.132 against 1.572 s) and 1.53× (50 m, 72,
+0.874 against 1.338 s). At 1 thread, where pinning plays no part,
+`bench/all` was 1.35–1.37× faster than master; this build was not run at 1
+thread. The groups' gains overlap: C is the only one that still counts
+with the others in (1.06–1.17×).
+
+**Left out** (maintainer decision, 2026-11-14), with branches, numbers and
+how to revive them in [Built but not merged](not_merged.md):
+
+- **group D**, the cache-blocked passes of the TKE, the tracer diffusion
+  and the Reynolds stresses (#555 part 2, #561, #562, #565). With the
+  rest in, it gains 0.98–1.10×, and it adds a second code path for each
+  closure.
+- **group F**, the split in j (#563): never measured.
+- **the launch trace** of #566.
+
+**Conflicts with master** (#567, #568, #572): unions only (the roadmap,
+the tiled surface's `budget_writes` next to its `run_results`, the imports
+of `simulation_driver.jl`). The result matches `bench/all` in those files,
+minus D.
+
 ### Model setup time at large grids (#567)
 
 **Shipped** (#567). The Berlin 20 m case of the #566 scaling test (150 M points) spent about 43 min in `Config.build` on a Fritz node before its first step. Profiled on the Berlin 100 m and 50 m cases (local, 24 cores), two causes, both linear in the number of points:
