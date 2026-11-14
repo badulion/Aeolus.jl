@@ -1,0 +1,61 @@
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all"
+alloc_bytes = 525141888
+budget_s = 900.0
+build = "all"
+build_alloc_bytes = 86547791960
+build_gc_s = 13.608625011
+case = "20m"
+commit = "511545199bcbaebbdebae43c72a1e021e2cb6a7c"
+config = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/berlin_20m_20250824.toml"
+dt = 0.4
+fftw_planner = "estimate"
+fftw_threads = 1
+finished = "2026-11-14T12:49:39.537"
+gc_count = 0
+gc_s = 0.0
+has_launch_trace = true
+has_loop_fusion = true
+host = "f1108"
+julia = "1.13.3"
+julia_exclusive = "1"
+label = "scaling_20m_t1_all"
+measured_wall_s = 583.33656009
+mode = "time"
+nsteps = 5
+numactl = ""
+rounds = 1
+slurm_job = "4471418"
+started = "2026-11-14T12:35:23.236"
+step_median_if_possible = 55.052750645
+step_median_never = 60.639740064
+step_min_if_possible = 54.974898394
+step_min_never = 60.458158161
+steps_if_possible = [55.019044076, 54.974898394, 56.358165416, 55.052750645, 56.355524021]
+steps_never = [62.040883497, 60.458158161, 60.471804683, 60.639740064, 61.859111197]
+t_build_s = 158.7016179561615
+t_load_s = 4.740900039672852
+t_total_s = 1019.9730539321899
+thread_cpus = [0]
+threads = 1
+ts_begin = 1.794656395239684e9
+ts_end = 1.794656978576572e9
+warm_s = [202.496391021, 54.967135165]
+
+[affinity]
+2942602 = "0"
+2942603 = "0-71"
+
+[[blocks]]
+setting = "never"
+ts_begin = 1.794656395297104e9
+ts_end = 1.794656700807822e9
+[[blocks]]
+setting = "if_possible"
+ts_begin = 1.7946567008157e9
+ts_end = 1.794656978576176e9
+
+[schedstat]
+on_cpu_s = [581.715106761, 0.0]
+runqueue_wait_s = [0.18103760300000002, 0.0]
+tid = [2942602, 2942603]
+timeslices = [792, 0]

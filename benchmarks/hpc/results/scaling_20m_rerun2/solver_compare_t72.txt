@@ -1,0 +1,1 @@
+CMP Nx=1000 Ny=1000 Nz=150 jt=72 ft=72 planner=estimate build3d_s=5.78 buildcol_s=2.53 solve3d_s=0.4127 solvecol_s=0.436 pair2d_fftwthreads_s=0.3532 pair2d_juliathreads_s=0.3261 ns_pt_3d=2.75 ns_pt_col=2.91 rel_diff=5.23e-16

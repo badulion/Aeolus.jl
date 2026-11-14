@@ -236,6 +236,13 @@ The report's PALM section was from memory. Point by point against the source:
 - Going back to FFTW.jl's callback: 2× worse here, and the #397 crashes.
 - Raising the thread count: it makes the collapse worse.
 
+## Fritz confirmation (2026-11-14, job 4471418)
+
+The #572 fix (master 4f61b8a6, merged into bench/all 51154519) on Fritz, Berlin 20 m, `-t 72,0`, FFTW `estimate` on 72 threads:
+- **The stall is gone.** During stepping: 1–2 % kernel time, ~700 context switches/s, against 82 % and 656 k/s before (`results/scaling_20m_rerun2/procwatch.log`).
+- **Pressure solve alone** (1000 × 1000 × 150, `solver_compare.jl`, 72 threads): 0.44 s per solve (`CosineFFTPoissonSolver`, now x/y transforms plus Thomas in z), 0.33–0.35 s for the 2-D transform pair, agreement with the old 3-D DCT 5e-16. Three solves per step ≈ 1.3 s of a 28.4 s step, ~5 %.
+- **The full ladder ran** (72 → 1 threads, all steps finished): 28.4 s/step at 72 threads, 55.1 s at 1. The poor scaling is not the pressure solve: FFTW's own pthreads inherit the benchmark's `JULIA_EXCLUSIVE=1` pin of thread 1 to core 0 and queue there (HANDOFF_scaling20m.md §6 item 0). With the threads unpinned the pressure solve's share may change; being measured.
+
 ## Draft issue (not filed: the maintainer decides)
 
 **Title:** Pressure solve: tridiagonal in z instead of a DCT along z (FFTW `estimate` serialises the z transform at Nz = 150)

@@ -250,10 +250,27 @@ That is issue 1.
 
 1. **Issue 1:** filed as #567 (§5.1).
 2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12). Until the surface-layer failure is fixed, or the case changes, the 20 m scaling test can't run.
-0. **20 m rerun (2026-11-13), in progress.** master 366d67d3 (#567, #568) merged into bench/all (0b498671) and this branch; the 20 m config sets `raise_forcing_level = true`; `bench_run.jl` applies `[fftw]` and records the FFTW policy and the build's GC time and allocation.
-   - Single-node test at `-t 72,0` (job 4468996): setup about 1 min, against 43 min before; 1 tile raised, as expected; no `solve_surface_layer` error.
-   - **But the steps stall in the pressure solve's 3-D DCT**: ~1.2 cores busy, ~656k context switches per second. See `REPORT_fft_20m.md`, to research and to compare with PALM's solver. The ladder is not started.
-   - **Researched (2026-11-13, `REPORT_fft_20m.md` § Findings):** under `estimate` with 4 or more FFTW threads, FFTW plans the z part of the DCT at Nz = 150 as a serial loop over the 10⁶ columns, threaded inside each column (the 72-thread plan of this run included). 118 s per transform on 24 threads, against 0.47 s with `measure`. Recommended fix: a tridiagonal solve in z (`ColumnTridiagonalSolver`, PALM's method), issue drafted in the report. Stopgap for the rerun: `measure` (drop the `estimate` override in `bench_run.jl`).
+0. **20 m rerun after #572 (2026-11-14): the ladder ran; setup and the pressure solve are fixed, the steps don't scale.**
+   - **Builds:** bench/all 51154519 and this branch, both with master 4f61b8a6 (#567, #568, #572) merged in. Job 4471418 (`results/scaling_20m_rerun2/`, `ladder.sh`), `scaling.sh` 72 36 16 8 4 2 1, `-t N,0`, `JULIA_EXCLUSIVE=1`, FFTW `estimate` on N threads. The earlier test job (4468996, 3-D DCT stall) was cancelled at 01:11:36 by SIGTERM with no TOML.
+   - **Results** (s/step is the median of the `if_possible` steps; "busy cores" and "queued" are from `/proc/self/task/*/schedstat` over the measured steps, summed over the process's OS threads and divided by wall time):
+
+     | threads | build s | s/step | speed-up | efficiency | peak RSS GB | busy cores | queued threads |
+     | --: | --: | --: | --: | --: | --: | --: | --: |
+     | 1 | 159 | 55.1 | 1.00 | 100 % | 71.0 | 1.00 | 0.0 |
+     | 2 | 159 | 51.6 | 1.07 | 53 % | 70.7 | 1.44 | |
+     | 4 | 146 | 38.7 | 1.42 | 36 % | 71.0 | 2.11 | |
+     | 8 | 136 | 33.9 | 1.62 | 20 % | 72.0 | 2.93 | |
+     | 16 | 128 | 30.8 | 1.79 | 11 % | 73.9 | 4.34 | 18.5 |
+     | 36 | 132 | 28.7 | 1.92 | 5 % | 86.6 | 6.10 | |
+     | 72 | 138 | 28.4 | 1.94 | 3 % | 89.2 | 8.15 | 52.0 |
+
+   - **#567 confirmed on Fritz:** build 128–159 s at every thread count, against ~2580 s in attempt 1. Build GC share 9–20 %, 86.6 GB allocated.
+   - **#568 confirmed:** each process raised exactly 1 tile (column (30, 615), h = d = 9.96 m, z0m = 0.05, 0.039 → 20.04 m), no `solve_surface_layer` error.
+   - **#572 confirmed:** during stepping at 72 threads, 1–2 % kernel time and ~700 context switches/s (`procwatch.log`), against 82 % and 656 k/s before. The pressure solve alone at 1000 × 1000 × 150 on 72 threads: 0.44 s, agreement with the 3-D DCT 5e-16 (`solver_compare_t72.txt`). Three solves per step ≈ 1.3 s of 28.4 s, ~5 %.
+   - **Why the steps don't scale: very likely the benchmark's pinning, not the model (preliminary).** With `JULIA_EXCLUSIVE=1` the threads created after startup inherit thread 1's affinity, core 0. At 72 threads the TOML's `affinity` shows 72 helper threads (probably GC) already pinned to core 0 at startup; the 99 threads created later (FFTW's own pthreads, #397) spent 227 s on a CPU and **15 124 s waiting in the run queue** over the 295 s measured, i.e. the FFTW pool runs on one core. At 16 threads: 5 748 s queued. At 1 thread none of this happens (no FFTW pool), which fits the flat curve after ~4 threads. Run 1's `node.sh` sets `JULIA_EXCLUSIVE=1` too, so its plateau at ~16 threads probably has the same cause.
+   - **Being checked (job 4471709, `results/profile_20m_t72/`):** `bench_run.jl profile` (launch trace + `Profile` of 2 steps) at 72 threads on 20 m with and without `JULIA_EXCLUSIVE=1`, and 50 m without. If unpinned scales, the ladder should be rerun unpinned (or with the FFTW and GC threads given 0-71) and the run 1 scaling curve read with this caveat.
+   - Not done: the bench/all system image (only `node.sh` uses it) and the pressure-solver tests on Fritz.
+   - Resident memory grows during stepping at 72 threads (78 → 88 GB over 10 steps) with no GC; not yet understood.
 3. **Before rerunning the 20 m ladder:** a fix for issue 2, and ideally issue 1 too, since the ladder spends about 5 h on setup.
    - `scaling.sh` builds the model in every process (7 builds) and uses no system image.
    - The maintainer's stop rule (setup over ~90 min or peak memory over ~230 GB at 72 threads) held this time: setup took 43 min and memory peaked at 69 GB.

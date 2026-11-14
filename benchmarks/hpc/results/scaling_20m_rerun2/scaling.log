@@ -1,0 +1,129 @@
+[11:19:16] scaling_20m_t72_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t72_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:10:39.58
+	Maximum resident set size (kbytes): 93580396
+[11:29:56] scaling_20m_t36_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t36_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:10:14.73
+	Maximum resident set size (kbytes): 90848948
+[11:40:11] scaling_20m_t16_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t16_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:10:49.49
+	Maximum resident set size (kbytes): 77492512
+[11:51:00] scaling_20m_t8_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t8_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:11:41.02
+	Maximum resident set size (kbytes): 75535192
+[12:02:41] scaling_20m_t4_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t4_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:13:07.27
+	Maximum resident set size (kbytes): 74423536
+[12:15:49] scaling_20m_t2_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t2_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:16:49.18
+	Maximum resident set size (kbytes): 74109484
+[12:32:38] scaling_20m_t1_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_rerun2/scaling_20m_t1_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:17:04.30
+	Maximum resident set size (kbytes): 74465652
+[12:49:42] scaling done
+| threads | build s | build GC % | build alloc GB | peak GB | if_possible median | mean | never median | GC % | speed-up vs 1 | efficiency |
+| --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| 1 | 159 | 8.6 | 86.5 | 71.0 | 55.053 | 55.552 | 60.64 | 0.0 | 1.0 | 100.0 % |
+| 2 | 159 | 9.6 | 86.6 | 70.7 | 51.611 | 52.282 | 62.374 | 0.0 | 1.07 | 53.0 % |
+| 4 | 146 | 10.7 | 86.6 | 71.0 | 38.731 | 39.293 | 41.777 | 0.0 | 1.42 | 36.0 % |
+| 8 | 136 | 12.0 | 86.6 | 72.0 | 33.895 | 34.184 | 35.347 | 0.0 | 1.62 | 20.0 % |
+| 16 | 128 | 11.7 | 86.6 | 73.9 | 30.768 | 31.108 | 32.253 | 0.0 | 1.79 | 11.0 % |
+| 36 | 132 | 17.8 | 86.6 | 86.6 | 28.694 | 29.152 | 30.636 | 0.8 | 1.92 | 5.0 % |
+| 72 | 138 | 20.1 | 86.6 | 89.2 | 28.373 | 28.378 | 29.531 | 0.0 | 1.94 | 3.0 % |

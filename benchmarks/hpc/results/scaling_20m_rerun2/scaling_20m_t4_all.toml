@@ -1,0 +1,67 @@
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all"
+alloc_bytes = 777629808
+budget_s = 900.0
+build = "all"
+build_alloc_bytes = 86640694728
+build_gc_s = 15.609165701
+case = "20m"
+commit = "511545199bcbaebbdebae43c72a1e021e2cb6a7c"
+config = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/berlin_20m_20250824.toml"
+dt = 0.4
+fftw_planner = "estimate"
+fftw_threads = 4
+finished = "2026-11-14T12:15:46.435"
+gc_count = 0
+gc_s = 0.0
+has_launch_trace = true
+has_loop_fusion = true
+host = "f1108"
+julia = "1.13.3"
+julia_exclusive = "1"
+label = "scaling_20m_t4_all"
+measured_wall_s = 413.945118846
+mode = "time"
+nsteps = 5
+numactl = ""
+rounds = 1
+slurm_job = "4471418"
+started = "2026-11-14T12:05:14.972"
+step_median_if_possible = 38.730905187
+step_median_never = 41.777073729
+step_min_if_possible = 38.350321493
+step_min_never = 40.691091366
+steps_if_possible = [38.350321493, 38.730905187, 38.582978587, 38.902172637, 41.897583786]
+steps_never = [51.474215006, 41.268827902, 42.150194771, 40.691091366, 41.777073729]
+t_build_s = 146.08919501304626
+t_load_s = 5.464558839797974
+t_total_s = 783.2489340305328
+thread_cpus = [0, 1, 2, 3]
+threads = 4
+ts_begin = 1.794654531199468e9
+ts_end = 1.79465494514723e9
+warm_s = [160.815047467, 42.202443634]
+
+[affinity]
+2939678 = "0"
+2939679 = "0-71"
+2939680 = "1"
+2939681 = "2"
+2939682 = "3"
+2939683 = "0"
+2939684 = "0"
+2939685 = "0"
+
+[[blocks]]
+setting = "never"
+ts_begin = 1.79465453125868e9
+ts_end = 1.794654748669897e9
+[[blocks]]
+setting = "if_possible"
+ts_begin = 1.794654748680489e9
+ts_end = 1.794654945144524e9
+
+[schedstat]
+on_cpu_s = [225.29787459300002, 0.0, 160.89145745800002, 160.68948628500002, 160.57982829800002, 0.0, 0.0, 0.0, 55.664759087, 55.57418443900001, 55.673520349]
+runqueue_wait_s = [163.21578023700002, 0.0, 0.0009049650000000001, 0.000749464, 0.0007974410000000001, 0.0, 0.0, 0.0, 165.15172856700002, 164.68224685200002, 165.16927822600002]
+tid = [2939678, 2939679, 2939680, 2939681, 2939682, 2939683, 2939684, 2939685, 2940147, 2940148, 2940149]
+timeslices = [12076, 0, 2074, 2092, 2085, 0, 0, 0, 7999, 7982, 8008]
