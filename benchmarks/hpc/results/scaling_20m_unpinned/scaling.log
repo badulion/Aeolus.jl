@@ -1,0 +1,91 @@
+JULIA_EXCLUSIVE=unset (BENCH_PIN=0)
+[20:34:31] scaling_20m_t72_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_unpinned/scaling_20m_t72_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05:38.35
+	Maximum resident set size (kbytes): 85750524
+[20:40:09] scaling_20m_t36_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_unpinned/scaling_20m_t36_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06:11.74
+	Maximum resident set size (kbytes): 81616984
+[20:46:21] scaling_20m_t16_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_unpinned/scaling_20m_t16_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06:37.47
+	Maximum resident set size (kbytes): 76570956
+[20:52:59] scaling_20m_t8_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_unpinned/scaling_20m_t8_all.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08:03.33
+	Maximum resident set size (kbytes): 74615148
+[21:01:02] scaling_20m_t4_all
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-all/src/components/urban/parent/components.jl:457

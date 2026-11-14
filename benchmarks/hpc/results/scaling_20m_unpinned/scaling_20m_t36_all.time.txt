@@ -1,0 +1,6 @@
+	Command being timed: "julia -t 36,0 --project=/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-all /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl time /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/berlin_20m_20250824.toml 0.4 /home/atuin/b337bd/b337bd10/aeolus-bench/results/scaling_20m_unpinned/scaling_20m_t36_all.toml build=all case=20m label=scaling_20m_t36_all budget=900 nwarm=2 rounds=1 nsteps=5"
+	User time (seconds): 3176.12
+	System time (seconds): 130.49
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06:11.74
+	Maximum resident set size (kbytes): 81616984
+	Exit status: 0
