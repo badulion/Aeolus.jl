@@ -2983,6 +2983,29 @@ Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstr
 - **Docstrings corrected.** `set_fftw_policy!`, `init_threads!` and `apply_transform!` said FFTW's threaded plans hand whole 1-D transforms to the threads; the 20 m plan threads inside one. `ka_port.md` has the same correction.
 - **Not done here.** The #566 20 m single-node test on Fritz at `-t 72,0` has to report its step time with this change.
 
+### Stepping allocations: per-row dispatch in the row kernel and the open-boundary snapshot (#574)
+
+**Shipped** (#574). The #566 memory run on Fritz (Berlin 20 m, 72 threads) allocated 1.22 GiB per step (0.15 GiB at 50 m). Not a leak (a full GC returns the live heap to its baseline), but at a 74 GiB live heap a collection costs 1.7 s, about 25 % of a step.
+
+- **Reproduced locally** on the Berlin 50 m case (400 × 400 × 60, open lateral faces, `benchmarks/hpc/bench_run.jl memory`): 0.151 GiB per step at 8 threads, as on Fritz. With `Profile.Allocs` attributed by the kernel's method instance: 107 MiB per step in the open-boundary blend (`_blend_body!`), 36 MiB in the stage combination (`_map_body!` with `_StageCombine`), 11 MiB in the buffer copies (`range_map!` with `identity`), the rest small.
+- **Cause 1 (the 1.15 GiB): the row kernel was compiled for `body!::Function`.** `_rows3_kernel!` only handed `body!` on to `_row!`. For an argument of type `Function` that a method only passes on, Julia's compileable signature widens it to `Function` (`Core.Compiler.get_compileable_sig` shows it), and that signature is used whenever the kernel is not inlined into KernelAbstractions' task. `_row!` was then dispatched at run time for every row, boxing the range, the index-offset tuples, the floats and `_StageCombine` (the types the Fritz profile listed). It hit the launches that are too small for every thread (their workgroup size is part of the kernel's type), which are the open-boundary buffers; the large interior kernels did not show it. Results were correct. The issue's suspects (more than 24 arguments, non-concrete `args`) were not the cause.
+- **Fix 1.** The body reaches the kernel in a tuple with its arguments, `(body!, args)`; a tuple's element types are never widened, so the compileable signature keeps `typeof(body!)`. `_rows2_kernel!`, `_chunks1_kernel!` and `_planes_kernel!` call their body themselves and were not affected.
+- **Cause 2 (the 236 MiB at 20 m): a fresh snapshot of every open-boundary buffer each step** (`open_boundary_snapshot`, `[copy(p.data) for …]`) in `step_rk3!`, `step_adaptive!`'s retry copy and the IMEX cores.
+- **Fix 2.** `open_boundary_snapshot!(snap, sim)` copies into an earlier snapshot (a pointwise kernel; a fresh one when the planes changed). `StepWorkspaces` keeps one per use (`open_snapshot!(sim, slot)`: `:rk3`, `:retry`, `:imex`, `:imex_intermediate`, separate because the retry copy must outlive the RK3 one). The nesting rollback's own reuse helper (`_snapshot_open!`) now delegates to it, so there is one copy routine.
+- **Measured** (Berlin 50 m, development machine, `memory` mode, 5 steps after 3 of warm-up, one process per row; master 4f61b8a6 against this branch):
+
+  | threads | allocated per step, master | this branch | step, master | this branch | live heap growth over 5 steps, master | this branch |
+  | --: | --: | --: | --: | --: | --: | --: |
+  | 8 | 151 MiB | 2 MiB | 1.13–1.26 s | 1.22–1.25 s | 0.76 GiB | 0.01 GiB |
+  | 24 | 153 MiB | 3 MiB | 1.44–1.53 s | 1.10–1.37 s | 0.77 GiB | 0.01 GiB |
+
+  **After merging master c7603464** (#576: loop fusion with the fused sweep, budgets, tile update, canopy drag), re-measured at 8 threads (5 steps; the machine was shared with other runs, so the step times are not comparable): master 151 MiB per step and 0.75 GiB of live-heap growth over 5 steps, this branch 1 MiB and 0.00 GiB. Attributed by kernel on the merged branch (`Profile.Allocs`, 1.29 MiB per step in all): no kernel allocates per row, the fused sweep's kernels (`_b_sweep_edge!` and the others) included; the largest share (1.19 MiB) has no kernel frame (task objects, bookkeeping).
+
+  The remaining 1–3 MiB per step are KernelAbstractions' task objects (a few kB per threaded launch) and small bookkeeping (the list of open faces, a plane lookup by name). The step times are one run each: no change at 8 threads; 24 % faster at 24 threads (median 1.12 against 1.48 s), which a repeat should confirm. No collection fell into the 5 measured steps here; at 20 m the gain is mainly the collections that no longer happen (1.7 s each at 72 threads).
+- **Tests.** `test/backends.jl`: the row kernel's compileable signature keeps the body's type (no `Function`), and the launch still covers every point once. `test/open_boundaries.jl`: `step_rk3!` keeps the same snapshot object from step to step; a copy into it holds the buffers' values (exact: data copied); a copy allocates under a tenth of one fresh snapshot; a closed box has none. A direct allocation test of the per-row dispatch was not possible: in a small script the kernel is inlined into its task and does not allocate on master either (1 936 B per launch on both).
+- **Suite and validation** (on the branch merged with master c7603464). `test/run.jl`: 127 jobs, 18 257 tests passed. `test/run.jl --only urban_run.jl,urban_checks.jl`: 70 passed. `validation/run.jl --only urban_checks.jl,outflow_conditions.jl,nest_boundary.jl,gabls1.jl`: 59 passed.
+- **Not done here.** The 20 m step on Fritz: allocated bytes per step and the step time with collections.
+
 ---
 
 # Data assimilation and inverse problems

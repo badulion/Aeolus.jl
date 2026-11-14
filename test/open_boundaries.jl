@@ -100,3 +100,31 @@ _ob_dif(a, b) = max(maximum(abs, interior_view(a.u) .- interior_view(b.u)),
     d = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, _ob_data()), θ₀ = 300.0)
     @test_throws ArgumentError restore_checkpoint!(d, pay)
 end
+
+# ---------------------------------------------------------------------------
+# #574: the step drivers keep their open-boundary snapshots and copy into them,
+# instead of allocating a copy of every buffer each step (236 MiB per step at
+# Berlin 20 m). The copy holds the buffers' values; the step reuses its slot.
+@testset "open box: the drivers' snapshots are reused, not reallocated (#574)" begin
+    m = RegularGrid(size = (32, 24, 16), extent = (_Lx, _Ly, _Lz), halo = (3, 3, 3))
+    s = BoussinesqSimulation(m; bcs = open_boundary_conditions(m, ProfileBoundaryData(u = 2.0, v = 0.5, w = 0.0, θ = 300.0);
+                                                               outflow = :orlanski), θ₀ = 300.0)
+    set!(s.u, 2.0); set!(s.v, 0.5); set!(s.θ, 300.0)
+    planes() = [p.data for st in Aeolus.BoundaryConditions.open_boundary_states(s) for p in st.planes]
+    snap!() = Aeolus.Simulations.open_snapshot!(s, :rk3)
+    for _ in 1:2; step_rk3!(s, 0.5); end
+    snap = s.workspaces.open[:rk3]
+    @test snap isa Vector && length(snap) == length(planes())
+    step_rk3!(s, 0.5)
+    @test s.workspaces.open[:rk3] === snap               # the same buffers, step after step
+    # a copy into the kept buffers: the buffers' values (copied, not computed)
+    planes()[1] .+= 1.0
+    snap!(); snap!()
+    @test snap!() === snap && all(snap[n] == planes()[n] for n in eachindex(snap))
+    # what is left is bookkeeping (the list of the open faces), not the buffers:
+    # well under a tenth of one fresh snapshot (sum(sizeof, snap) = 0.4 MiB here)
+    @test (@allocated snap!()) < sum(sizeof, snap) ÷ 10
+    # a closed box has none
+    c = BoussinesqSimulation(m)
+    @test Aeolus.Simulations.open_snapshot!(c, :rk3) === nothing
+end
