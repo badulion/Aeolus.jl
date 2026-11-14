@@ -193,22 +193,13 @@ end
         @test @inferred(backend(zeros(2, 2, 2))) isa CPUBackend
     end
 
-    @testset "init_threads!: FFTW on the policy's threads, an explicit count kept" begin
-        fftw0 = Aeolus.fftw_policy().threads
-        st = Aeolus.Operators._FFTW_POLICY
-        explicit0 = st.threads_explicit
+    @testset "init_threads!: FFTW single-threaded, fftw_threads deprecated (#575)" begin
         nfftw() = Aeolus.Operators.FFTW.get_num_threads()
-        try
-            # with no explicit count FFTW runs on Julia's threads (maintainer decision on #291)
-            st.threads_explicit = false
-            r = init_threads!(CPUBackend())
-            @test r.julia_threads == Threads.nthreads() && r.fftw_threads == Threads.nthreads() == nfftw()
-            @test init_threads!(CPUBackend(); fftw_threads = 2).fftw_threads == 2 == nfftw()
-            @test init_threads!(CPUBackend()).fftw_threads == 2         # the explicit count is kept
-        finally
-            init_threads!(CPUBackend(); fftw_threads = fftw0)
-            st.threads_explicit = explicit0
-        end
-        @test Aeolus.fftw_policy().threads == fftw0
+        r = init_threads!(CPUBackend())
+        @test r.julia_threads == Threads.nthreads() && r.fftw_threads == 1 == nfftw()
+        empty!(Aeolus.Operators._FFTW_THREADS_WARNED)
+        @test_logs (:warn, r"deprecated") init_threads!(CPUBackend(); fftw_threads = 2)
+        @test init_threads!(CPUBackend(); fftw_threads = 2).fftw_threads == 1 == nfftw()
+        @test_throws ArgumentError init_threads!(CPUBackend(); fftw_threads = 0)
     end
 end
