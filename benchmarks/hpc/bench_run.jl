@@ -28,6 +28,13 @@
 #          the raw samples (.profile.jls) for analysis elsewhere. If
 #          Profile.print fails (the ENODEV of Fritz's /proc/sys/fs/binfmt_misc
 #          seen with USR1), a fallback counts frames per sample itself.
+#   memory (the 20 m rerun's growing RSS) the warm-up, a full GC and a
+#          baseline (live heap, RSS, smaps_rollup), then `nmem` (4) steps with
+#          RSS, live heap and allocated bytes after each, then a full GC (how
+#          much of the growth was garbage); then one step under
+#          Profile.Allocs (`sample_rate`, 0.01), summed by the innermost Aeolus
+#          frame, by every Aeolus frame (inclusive) and by type, scaled by
+#          1/sample_rate: <out>.memory.txt.
 #   state  `nsteps` (20) steps with `setting` (if_possible), then u, v, w, θ, e
 #          written next to <out.toml> (Serialization, interior only), for the
 #          sanity check against bench/master (HANDOFF section 3, item 5).
@@ -136,7 +143,7 @@ res = Dict{String,Any}(
 
 nwarm = getint("nwarm", 5)
 budget = parse(Float64, get(kv, "budget", "600"))
-if mode in ("time", "trace", "profile")
+if mode in ("time", "trace", "profile", "memory")
     set_fusion!(:if_possible)
     w = steps!(min(2, nwarm))
     last(w) <= 5 && append!(w, steps!(max(0, nwarm - 2)))
@@ -260,6 +267,67 @@ if mode == "profile"
         end
     end
 end
+if mode == "memory"
+    set_fusion!(:if_possible)
+    rss_gb() = parse(Int, split(only(filter(l -> startswith(l, "VmRSS:"), readlines("/proc/self/status"))))[2]) / 2^20
+    function smaps()
+        d = Dict{String,Float64}()
+        for l in readlines("/proc/self/smaps_rollup")
+            m = match(r"^(\w+):\s+(\d+) kB", l); m === nothing || (d[m[1]] = parse(Int, m[2]) / 2^20)
+        end
+        d
+    end
+    snap(tag) = Dict{String,Any}("tag" => tag, "rss_gb" => rss_gb(), "live_gb" => Base.gc_live_bytes() / 2^30,
+                                 "allocd_total_gb" => Base.gc_bytes() / 2^30, "smaps_gb" => smaps(), "t" => time())
+    GC.gc(true); GC.gc(true)
+    snaps = [snap("after warm-up + full GC")]
+    nmem = getint("nmem", 4)
+    stepinfo = Dict{String,Any}[]
+    for i in 1:nmem
+        tm = @timed Aeolus.step!(model, dt)
+        push!(stepinfo, Dict{String,Any}("s" => tm.time, "alloc_gb" => tm.bytes / 2^30, "gc_s" => tm.gctime))
+        push!(snaps, snap("after step $i"))
+    end
+    GC.gc(true); GC.gc(true)
+    push!(snaps, snap("after full GC"))
+    res["memory"] = Dict{String,Any}("snapshots" => snaps, "steps" => stepinfo)
+    rate = parse(Float64, get(kv, "sample_rate", "0.01"))
+    Profile.Allocs.clear()
+    Profile.Allocs.@profile sample_rate = rate Aeolus.step!(model, dt)
+    pr = Profile.Allocs.fetch()
+    isaeolus(fr) = occursin("Aeolus", string(fr.file)) && !occursin("benchmarks/hpc", string(fr.file))
+    inner = Dict{String,Float64}(); incl = Dict{String,Float64}(); bytype = Dict{String,Float64}(); cnt = Dict{String,Int}()
+    for a in pr.allocs
+        sz = a.size / rate
+        bytype[string(a.type)] = get(bytype, string(a.type), 0.0) + sz
+        frs = [fr for fr in a.stacktrace if isaeolus(fr)]
+        key(fr) = "$(fr.func) $(replace(string(fr.file), r".*/src/" => "src/")):$(fr.line)"
+        k = isempty(frs) ? "(no Aeolus frame)" : key(first(frs))
+        inner[k] = get(inner, k, 0.0) + sz; cnt[k] = get(cnt, k, 0) + 1
+        for k2 in unique(key.(frs)); incl[k2] = get(incl, k2, 0.0) + sz; end
+    end
+    total = sum(values(inner); init = 0.0)
+    res["memory"]["allocs_sampled"] = length(pr.allocs)
+    res["memory"]["allocs_est_gb"] = total / 2^30
+    open(replace(outpath, r"\.toml$" => ".memory.txt"), "w") do io
+        println(io, "# threads $(Threads.nthreads()), case $(get(kv, "case", "")), sample_rate $rate, sampled allocations $(length(pr.allocs))")
+        println(io, "# estimated bytes allocated in one step: $(round(total / 2^30, digits = 3)) GiB")
+        println(io, "\n## snapshots (GiB)")
+        for sn in snaps
+            sm = sn["smaps_gb"]
+            println(io, rpad(sn["tag"], 26), " rss ", round(sn["rss_gb"], digits = 2), "  live ", round(sn["live_gb"], digits = 2),
+                    "  allocated so far ", round(sn["allocd_total_gb"], digits = 2),
+                    "  anon ", round(get(sm, "Anonymous", NaN), digits = 2), "  file ", round(get(sm, "Rss", NaN) - get(sm, "Anonymous", 0.0), digits = 2))
+        end
+        println(io, "\n## steps"); for (i, x) in enumerate(stepinfo); println(io, i, "  ", round(x["s"], digits = 2), " s  ", round(x["alloc_gb"], digits = 3), " GiB allocated  gc ", round(x["gc_s"], digits = 2), " s"); end
+        for (title, d) in (("innermost Aeolus frame", inner), ("every Aeolus frame (inclusive)", incl), ("type", bytype))
+            println(io, "\n## by $title (MiB per step, est.)")
+            for (k, v) in sort!(collect(d); by = last, rev = true)[1:min(end, 60)]
+                println(io, lpad(round(v / 2^20, digits = 1), 10), "  ", title == "innermost Aeolus frame" ? "n=$(cnt[k]) " : "", k)
+            end
+        end
+    end
+end
 if mode == "state"
     s = Symbol(get(kv, "setting", "if_possible"))
     s === :never || s === :if_possible || error("state: setting must be never or if_possible")
@@ -277,7 +345,7 @@ if mode == "state"
     res["state_file"] = statefile
     res["state_fields"] = sort!(collect(keys(fields)))
 end
-mode in ("time", "trace", "profile", "state") || error("unknown mode $mode")
+mode in ("time", "trace", "profile", "memory", "state") || error("unknown mode $mode")
 
 res["finished"] = string(now())
 res["t_total_s"] = time() - T_START
