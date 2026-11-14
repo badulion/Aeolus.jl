@@ -21,9 +21,12 @@ that the components inside the core add to (`tendency`, or `nothing`),
 and the count of the core's in-core hook calls of the current step (to
 weight the RK3 substages and to notice a retried step), and `hour`, the
 function of the model time that picks a step's hour-of-day bin
-(`nothing`: one bin). Built by [`with_budgets`](@ref), or around a
-`Budgets` of its own by `DomainBudgets(budgets, quantities, state,
-tendency; nsub, hour)`.
+(`nothing`: one bin). `verify`: measure every context, also those whose
+component declares it cannot change the quantity
+([`budget_writes`](@ref)), and throw when such a context changed it (the
+check of the declarations, for tests and debugging; #539). Built by
+[`with_budgets`](@ref), or around a `Budgets` of its own by
+`DomainBudgets(budgets, quantities, state, tendency; nsub, hour, verify)`.
 """
 mutable struct DomainBudgets
     budgets::Budgets
@@ -35,10 +38,15 @@ mutable struct DomainBudgets
     nsub::Int
     hour::Any
     exchange::Union{Nothing,Tuple{Symbol,Symbol}}
+    verify::Bool
+    sweep::Any       # the budget term of the fused sweep (`SweepBudget`, #533), built at its first use
 end
-DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing, exchange = nothing) =
+DomainBudgets(b::Budgets, quantities, state, tendency; nsub::Integer = 1, hour = nothing, exchange = nothing,
+              verify::Bool = false) =
     DomainBudgets(b, collect(Symbol, quantities), Dict{Symbol,Any}(state), Dict{Symbol,Any}(tendency),
-                  0, 0.0, Int(nsub), hour, exchange)
+                  0, 0.0, Int(nsub), hour, exchange, verify, nothing)
+DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange, verify::Bool = false) =
+    DomainBudgets(b, quantities, state, tendency, calls, t0, nsub, hour, exchange, verify, nothing)
 
 """
     NEST_EXCHANGE
@@ -95,7 +103,30 @@ _first_solid(::Tuple{}) = nothing
 _first_solid(cs::Tuple) = (m = solid_mask(first(cs)); m === nothing ? _first_solid(Base.tail(cs)) : m)
 
 """
-    with_budgets(d::Domain, quantities) -> Domain
+    budget_writes(c, ::Val{stage}) -> Tuple
+
+The budget quantities ([`BUDGET_QUANTITIES`](@ref)) that component `c`'s
+entry in `stage` can change: what it writes into the state the budgets
+measure (θ for `:energy`, qv and the components' water for `:water`, u
+and v for the momentum, the tracer) or, inside the core (`:tendencies`,
+`:body_force`), into the core's tendency of it. The budgets measure an
+entry only for the quantities it declares; for the others its context is
+skipped (`budget_skip!`), which saves a pass over the field per
+quantity and context (#539: 36 of the Berlin run's 50 passes per step
+measured an entry that cannot change the quantity).
+
+The default is every quantity: a component that declares nothing is
+measured everywhere. A declaration is a promise that the verify mode
+checks (`[budgets] verify_writes`, [`DomainBudgets`](@ref)): it measures
+every context and fails on a change the declaration left out. Without
+it, an undeclared change of a skipped top-level entry is booked as
+`(:core, :unattributed)`, and of a skipped entry inside the core in the
+dynamics' share.
+"""
+budget_writes(::Any, ::Val) = BUDGET_QUANTITIES
+
+"""
+    with_budgets(d::Domain, quantities; verify = false) -> Domain
 
 `d` with its budgets on for `quantities` (a subset of
 [`BUDGET_QUANTITIES`](@ref)), started from the current state:
@@ -111,8 +142,9 @@ _first_solid(cs::Tuple) = (m = solid_mask(first(cs)); m === nothing ? _first_sol
 constant ``ρ_0 = p_{ref} / (R_d θ_0)`` with ``Π̄ = 1`` (the Boussinesq
 transport conserves ``Σ θ``, so the energy budget has no redistribution
 term). Solid cells of the components' obstacles are left out of the air.
+`verify` is the verify mode of [`DomainBudgets`](@ref).
 """
-function with_budgets(d::Domain, quantities)
+function with_budgets(d::Domain, quantities; verify::Bool = false)
     qs = collect(Symbol, quantities)
     isempty(qs) && return d
     all(q -> q in BUDGET_QUANTITIES, qs) ||
@@ -150,7 +182,7 @@ function with_budgets(d::Domain, quantities)
         budget_start!(sb, m)
         b.measured[q] = sb
     end
-    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing, nothing)
+    db = DomainBudgets(b, qs, state, tend, 0, 0.0, d.scheme === :rk3 ? 3 : 1, nothing, nothing, verify)
     return Domain(d.id, d.state, d.scheme, d.cfl, d.drivers, d.components, db)
 end
 
@@ -194,17 +226,32 @@ state (the urban site's record and sanity check), which books no term.
 """
 attributed(c, ::Val) = true
 
+# whether the context of `c`'s entry `v` is measured for `q`: declared, or
+# the verify mode
+@inline _measures(b::DomainBudgets, c, v::Val, q::Symbol) = b.verify || q in budget_writes(c, v)
+
+# after a context the declarations skip, measured in the verify mode
+function _verify_skip(b::DomainBudgets, c, v::Val{S}, q::Symbol) where {S}
+    b.budgets.measured[q].changed &&
+        error("budgets (verify mode): $(component_name(c))'s entry in :$S changed the $q budget, " *
+              "which its budget_writes(…, Val(:$S)) = $(budget_writes(c, v)) leaves out; declare it")
+    return nothing
+end
+
 # a component's stage entry outside the core: a context on the state
 @inline _attributed!(::Nothing, c, d, v::Val, dt) = run_stage!(c, d, v, dt)
 function _attributed!(b::DomainBudgets, c, d, v::Val{S}, dt) where {S}
     attributed(c, v) || return run_stage!(c, d, v, dt)
     n = component_name(c)
     for q in b.quantities
-        budget_open!(b.budgets.measured[q], S, n, b.state[q])
+        sb = b.budgets.measured[q]
+        _measures(b, c, v, q) ? budget_open!(sb, S, n, b.state[q]) : budget_skip!(sb)
     end
     run_stage!(c, d, v, dt)
     for q in Iterators.reverse(b.quantities)
+        _measures(b, c, v, q) || continue
         budget_close!(b.budgets.measured[q], b.state[q])
+        q in budget_writes(c, v) || _verify_skip(b, c, v, q)
     end
     return nothing
 end
@@ -224,14 +271,15 @@ function _attributed_in_core!(b::DomainBudgets, c, d, v::Val{S}, Δt) where {S}
     ontend = S !== :post_predictor
     for q in b.quantities
         x = ontend ? b.tendency[q] : b.state[q]
-        x === nothing && continue
+        (x === nothing || !_measures(b, c, v, q)) && continue
         budget_open!(b.budgets.measured[q], S, n, x; scale = ontend ? w * Δt : w)
     end
     run_stage!(c, d, v, Δt)
     for q in Iterators.reverse(b.quantities)
         x = ontend ? b.tendency[q] : b.state[q]
-        x === nothing && continue
+        (x === nothing || !_measures(b, c, v, q)) && continue
         budget_close!(b.budgets.measured[q], x)
+        q in budget_writes(c, v) || _verify_skip(b, c, v, q)
     end
     return nothing
 end
@@ -250,6 +298,122 @@ function _count_substage!(b::DomainBudgets, sim)
     b.calls += 1
     return nothing
 end
+
+# --- the in-core components inside the fused sweep (#533 plan step 7) -------
+# With the budgets on and every in-core term fusable, the core runs no
+# body-force hook: the sweep's term tuple starts with the domain's
+# `SweepBudget`, which counts the substage before the sweep (the hook's
+# `_count_substage!`) and books after it what each attributed component's
+# term (a `FiniteVolume.BookedTerm`) added to the tendencies, per level,
+# summed in the sweep: the same bookings as `_attributed_in_core!`'s
+# contexts on the whole tendency fields, without their two passes per
+# component and quantity.
+
+"""
+    SweepBudget
+
+The budget term of a domain's fused sweep (#533 plan step 7): its
+`prepare!` counts the substage (the body-force hook's work with the
+budgets on), its `finish_sweep!` books what each attributed in-core
+component added to the core tendencies during the sweep, summed per level
+by its `FiniteVolume.BookedTerm` into `sums`, as the attribution context
+`(stage, component)` of every measured quantity with a core tendency
+([`book_context!`](@ref Aeolus.BudgetSystem.book_context!), scaled by the
+substage's weight × Δt as `_attributed_in_core!` scales its contexts).
+Adds nothing to the tendencies. Built once per domain, at the first
+substage that asks for the sweep's terms (`slots`: the `(stage, name)` of
+each slot, `active` the slots of every attributed in-core entry, whether
+or not its component has a sweep term yet: a slot whose component added
+nothing sums to 0 and books nothing; `quantity[f]` the budget of booked
+field `f`).
+"""
+struct SweepBudget{L<:FiniteVolume.LevelSums,C} <: FiniteVolume.SweepTerm
+    b::DomainBudgets
+    sums::L
+    components::C
+    slots::Vector{Tuple{Symbol,Symbol}}
+    active::Vector{Int}
+    quantity::NTuple{4,Symbol}
+    rest::Vector{Float64}
+end
+FiniteVolume.footprint(::SweepBudget) = (0, 0, 0)
+@inline FiniteVolume.add_row!(::SweepBudget, buf, a, b, s, j, k, ii, st) = nothing
+@inline FiniteVolume.add_tendency!(::SweepBudget, tb, i, j, k, st) = nothing
+FiniteVolume.books(::SweepBudget) = true
+function FiniteVolume.prepare!(t::SweepBudget, sim, Δt)
+    _count_substage!(t.b, sim)
+    fill!(t.sums.acc, 0.0)
+    return nothing
+end
+function FiniteVolume.finish_sweep!(t::SweepBudget, sim, Δt)
+    scale = _substage_weight(t.b) * Δt
+    acc = t.sums.acc; rest = t.rest
+    for slot in t.active, f in 1:4
+        t.sums.on[f] || continue
+        sb = t.b.budgets.measured[t.quantity[f]]
+        w = sb.meter.w
+        @inbounds for k in eachindex(rest)
+            rest[k] = scale * w[k] * acc[f, slot, k]
+        end
+        stage, name = t.slots[slot]
+        book_context!(sb, stage, name, rest)
+    end
+    return nothing
+end
+
+# the slot of the term of component number `pos` in stage `si` (1:
+# :tendencies, 2: :body_force) of `nc` components
+_sweep_slot(si, pos, nc) = (si - 1) * nc + pos
+
+# the domain's budget term, built at the first fused substage (and again
+# if the domain's components changed); a concrete type for the hook terms
+function _sweep_budget(b::DomainBudgets, d::Domain, sim)
+    S = SweepBudget{FiniteVolume.LevelSums{fieldtype(LevelMeter, :fluid)},typeof(d.components)}
+    c = b.sweep
+    c isa S && c.components === d.components && return c
+    return _build_sweep_budget(b, d, sim)::S
+end
+@noinline function _build_sweep_budget(b::DomainBudgets, d::Domain, sim)
+    cs = d.components; nc = length(cs)
+    # (a sound-proof core has no moisture field: integration of #533 steps 7 and 8)
+    tends = (sim.tu, sim.tv, sim.tθ, hasproperty(sim, :has_moisture) && sim.has_moisture ? sim.tqv : nothing)
+    on = fill(false, 4); masked = fill(false, 4); quantity = fill(:none, 4)
+    fluid = nothing
+    for q in b.quantities
+        x = b.tendency[q]
+        x === nothing && continue
+        f = findfirst(t -> t === x, tends)
+        f === nothing && throw(ArgumentError("budgets: the core tendency of $q is not one the fused sweep books"))
+        m = b.budgets.measured[q].meter
+        on[f] = true; quantity[f] = q
+        masked[f] = any(iszero, m.fluid)
+        if masked[f]
+            fluid === nothing || fluid == m.fluid ||
+                throw(ArgumentError("budgets: the fused sweep books with one solid mask; $q's differs"))
+            fluid = m.fluid
+        end
+    end
+    fluid === nothing && (fluid = first(values(b.budgets.measured)).meter.fluid)
+    slots = fill((:none, :none), 2nc); active = Int[]
+    for (si, S) in enumerate((:tendencies, :body_force)), (pos, c) in enumerate(cs)
+        # the slot set is the one `_booked_term` wraps (not decided by
+        # `sweep_term`, which may return a term only later)
+        attaches(c, S) && attributed(c, Val(S)) || continue
+        slot = _sweep_slot(si, pos, nc)
+        slots[slot] = (S, component_name(c)); push!(active, slot)
+    end
+    g = sim.mesh
+    sums = FiniteVolume.LevelSums(2nc, g.Nz, Tuple(on), Tuple(masked), fluid, g.Hx, g.Hy, g.Hz)
+    t = SweepBudget(b, sums, cs, slots, active, Tuple(quantity), zeros(g.Nz))
+    b.sweep = t
+    return t
+end
+
+# the term of an in-core component inside the sweep: booked when the budgets
+# attribute its entry
+@inline _booked_term(t, ::Nothing, c, v::Val, slot) = t
+@inline _booked_term(t, bk::SweepBudget, c, v::Val, slot) =
+    attributed(c, v) ? FiniteVolume.BookedTerm(t, bk.sums, slot) : t
 
 # the core step: one deferring context per quantity (the dynamics)
 _dynamics_open!(::Nothing, d) = nothing

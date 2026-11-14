@@ -1558,6 +1558,11 @@ function _explicit_tendencies!(sim::BoussinesqSimulation{T}, Δt;
                                scalar_tensor = nothing) where {T}
     fill_state_halos!(sim)
 
+    # every term a sweep term: the tendencies below in one fused launch
+    # (#533 plan step 8), within round-off of these passes (the reference)
+    Simulations._try_fused_tendencies!(sim, Δt, body_force!, momentum_advection,
+                                       sgs_transpose, scalar_tensor) && return sim
+
     fill!(sim.tu.data, 0); fill!(sim.tv.data, 0); fill!(sim.tw.data, 0)
     fill!(sim.tθ.data, 0)
     sim.has_moisture && fill!(sim.tqv.data, 0)

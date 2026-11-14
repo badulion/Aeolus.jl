@@ -73,10 +73,12 @@ end
 
 # θ_v on the face below cell (i, j, k) in direction (di, dj, dk) — the one
 # definition of the moist buoyancy variable at a face (also the horizontal
-# θ_v gradient of the Reynolds-stress closure, P56-d)
-@inline _θv_face(θ, qv, i, j, k) = _θv_face_dir(θ, qv, i, j, k, 0, 0, 1)
-@inline _θv_face_dir(θ, ::Nothing, i, j, k, di, dj, dk) = 0.5 * (θ[i-di, j-dj, k-dk] + θ[i, j, k])
-@inline function _θv_face_dir(θ, qv, i, j, k, di, dj, dk)
+# θ_v gradient of the Reynolds-stress closure, P56-d). These and `_n2_cell`
+# propagate the caller's `@inbounds` (#557): with bounds checks the moist
+# N² row loop of the TKE pass did not vectorise.
+Base.@propagate_inbounds _θv_face(θ, qv, i, j, k) = _θv_face_dir(θ, qv, i, j, k, 0, 0, 1)
+Base.@propagate_inbounds _θv_face_dir(θ, ::Nothing, i, j, k, di, dj, dk) = 0.5 * (θ[i-di, j-dj, k-dk] + θ[i, j, k])
+Base.@propagate_inbounds function _θv_face_dir(θ, qv, i, j, k, di, dj, dk)
     θface  = 0.5 * (θ[i-di, j-dj, k-dk]  + θ[i, j, k])
     qvface = 0.5 * (qv[i-di, j-dj, k-dk] + qv[i, j, k])
     return θface * (1 + 0.61 * qvface)
@@ -92,9 +94,9 @@ end
 
 # N² of cell (i, j, k) from the faces below and above, over Δz = dz: the one
 # per-cell stencil of the uniform and the stretched grids.
-@inline _n2_cell(θ, qv, i, j, k, dz, g, θr) =
+Base.@propagate_inbounds _n2_cell(θ, qv, i, j, k, dz, g, θr) =
     buoyancy_frequency_squared(_θv_face(θ, qv, i, j, k), _θv_face(θ, qv, i, j, k + 1), dz, g, θr)
-@inline function _n2_cell(θ, w::_Cloudy, i, j, k, dz, g, θr)
+Base.@propagate_inbounds function _n2_cell(θ, w::_Cloudy, i, j, k, dz, g, θr)
     qv, qc = w.qv, w.qc
     if qc[i, j, k] > 0
         # saturated: the moist-adiabatic parcel (Durran & Klemp 1982) against
@@ -112,7 +114,7 @@ end
 
 # θ_ρ = θ (1 + 0.61 q_v − q_c) on the face below cell (i, j, k): θ_v with
 # condensate loading (the linearised density potential temperature)
-@inline function _θρ_face(θ, qv, qc, i, j, k)
+Base.@propagate_inbounds function _θρ_face(θ, qv, qc, i, j, k)
     θface  = 0.5 * (θ[i, j, k-1]  + θ[i, j, k])
     qvface = 0.5 * (qv[i, j, k-1] + qv[i, j, k])
     qcface = 0.5 * (qc[i, j, k-1] + qc[i, j, k])

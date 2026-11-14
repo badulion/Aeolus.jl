@@ -23,10 +23,10 @@ using Random: AbstractRNG
 export AbstractBackend, CPUBackend, GPUBackend, allocate, to_host, backend_name,
        backend, default_backend, set_default_backend!, with_backend, init_threads!,
        dense_blas_threads, with_dense_blas,
-       runs_serially, launch!, launch_weighted!, range_map!,
+       runs_serially, launch!, launch_weighted!, launch_points!, ka_backend, range_map!,
        plane_partials!, ordered_sum, interior_sum, interior_dot, plane_mean!,
        column_partials, interior_max, interior_all_finite, plane_reduce!, range_max,
-       plane_map!, apply_transform!,
+       plane_map!, row_map!, apply_transform!,
        pcg!, PCGWorkspace, PointOperator, PointPreconditioner, IdentityPreconditioner,
        CounterRNG, counter_rng, counter_xoshiro, set_stream!,
        foreach_column!, foreach_cell!, column_sums, column_sum
@@ -572,6 +572,52 @@ launch_weighted!(b::GPUBackend, weight, body!, ranges::Tuple, args...) =
     _gpu_error(b, "launch_weighted!")
 launch!(b::GPUBackend, body!, ranges::Tuple, args...) = _gpu_error(b, "launch!")
 
+# ---- one point per work item, on any KernelAbstractions backend --------------
+
+# The GPU form of a launch: one work item per point (i, j, k), no row loop
+# and no serial path. On a GPU, neighbouring work items are neighbouring i,
+# so the loads of a stencil coalesce. On KA's CPU backend it runs too (KA
+# then loops over each workgroup's points), slower than `launch!`'s rows
+# (no vectorised i-loop, ka_port.md); there it is the stand-in that tests
+# the GPU form (#533 plan step 8).
+@kernel inbounds = true function _points3_kernel!(body!, oi, oj, ok, args)
+    a, b, c = @index(Global, NTuple)
+    body!(a + oi, b + oj, c + ok, args...)
+end
+
+"""
+    launch_points!(ka, body!, (ir, jr, kr), args...)
+
+Run `body!(i, j, k, args...)` once for every storage index of the 3-D
+ranges as a KernelAbstractions kernel on the KA backend `ka` (a
+`KernelAbstractions.Backend`: `KernelAbstractions.CPU()`, or a GPU's),
+one work item per point, then wait for it. The contract of
+[`launch!`](@ref): a body writes only its own point and reads nothing
+another point writes in the same launch; the results do not depend on the
+order. The workgroup size is KA's default for `ka`. This is the launch of
+the GPU form of the fused sweep (`FiniteVolume.pointwise_predictor!`,
+#533); on the CPU, `launch!` (one i-row per work item) is the faster one.
+"""
+function launch_points!(ka::KA.Backend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{Int}},
+                        args::Vararg{Any,M}) where {F, M}
+    (isempty(ir) || isempty(jr) || isempty(kr)) && return nothing
+    kern = _points3_kernel!(ka)
+    kern(body!, first(ir) - 1, first(jr) - 1, first(kr) - 1, args;
+         ndrange = (length(ir), length(jr), length(kr)))
+    KA.synchronize(ka)
+    return nothing
+end
+
+"""
+    ka_backend(b::AbstractBackend) -> KernelAbstractions.Backend
+
+The KernelAbstractions backend kernels of `b` run on: `KA.CPU()` for a
+[`CPUBackend`](@ref); a [`GPUBackend`](@ref) has none until its extension
+package provides it (an error).
+"""
+ka_backend(b::CPUBackend) = b.ka
+ka_backend(b::GPUBackend) = _gpu_error(b, "ka_backend")
+
 # ---- pointwise map ----------------------------------------------------------
 
 # An argument that is `out` itself (an in-place update, `y = f(y, x)`) is
@@ -1051,6 +1097,48 @@ plane_map!(partials::AbstractVector, b::AbstractBackend, plane::F,
 plane_map!(partials::AbstractVector, plane::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
            args::Vararg{Any,M}) where {F, M} =
     plane_map!(partials, _host_backend(), plane, map(UnitRange{Int}, ranges), args...)
+
+"""
+    row_map!(partials::AbstractMatrix, [backend,] row, ranges::NTuple{3,UnitRange{Int}}, args...)
+        -> partials
+
+`partials[b, c] = row(j, k, ranges[1], args...)` for `j = ranges[2][b]`,
+`k = ranges[3][c]`: a function of one i-row, one work item per row (in
+chunks of rows, as a 1-D [`launch_weighted!`](@ref) over the rows with the
+row length as weight). Every partial is computed by one task in the row
+function's own fixed loop order, so `partials` is identical at every
+thread count and with `serial = true`. Combine the rows of a plane, then
+the planes, in ascending order ([`ordered_sum`](@ref) of each column, then
+of those).
+
+The row parallelism of [`plane_map!`](@ref): a plane per work item leaves
+threads idle when the planes are few (60 levels at 24 threads: 3 planes
+for some threads, 2 for others), a row per work item does not (#554). The
+row function carries its own `@inbounds` and may write any point of its
+own row `(j, k)`, and only of it.
+"""
+function row_map!(partials::AbstractMatrix, b::AbstractBackend, row::F,
+                  (ir, jr, kr)::NTuple{3,UnitRange{Int}}, args::Vararg{Any,M}) where {F, M}
+    size(partials) == (length(jr), length(kr)) ||
+        throw(DimensionMismatch("partials has size $(size(partials)), the rows $((length(jr), length(kr)))"))
+    nj = length(jr)
+    launch_weighted!(b, length(ir), _row_map_body!, (1:length(partials),), partials, row, ir,
+                     first(jr) - 1, first(kr) - 1, nj, args)
+    return partials
+end
+row_map!(partials::AbstractMatrix, b::AbstractBackend, row::F,
+         ranges::NTuple{3,AbstractUnitRange{<:Integer}}, args::Vararg{Any,M}) where {F, M} =
+    row_map!(partials, b, row, map(UnitRange{Int}, ranges), args...)
+row_map!(partials::AbstractMatrix, row::F, ranges::NTuple{3,AbstractUnitRange{<:Integer}},
+         args::Vararg{Any,M}) where {F, M} =
+    row_map!(partials, _host_backend(), row, map(UnitRange{Int}, ranges), args...)
+
+# row n of a row_map! (column-major over (j, k), as `partials`)
+@inline function _row_map_body!(n, out, row::F, ir, oj, ok, nj, args::A) where {F, A}
+    kk, jj = divrem(n - 1, nj)
+    @inbounds out[n] = row(jj + 1 + oj, kk + 1 + ok, ir, args...)
+    return nothing
+end
 
 # ---- column partials: one sum over k per (i, j) ----------------------------
 
@@ -1674,8 +1762,8 @@ end
 end
 
 """
-    foreach_column!(backend, body!, cols, args...; partials = nothing, weight = 1)
-        -> partials
+    foreach_column!(backend, body!, cols, args...; partials = nothing, weight = 1,
+                    schedule = :static) -> partials
 
 Run the column body `body!(i, j, args...)` (`cols = (ir, jr)`, the
 `(i, j)` columns of a surface) or `body!(n, args...)` (`cols = (nr,)`, a
@@ -1702,18 +1790,38 @@ or the cost of its root solves in point-equivalents): the backend's
 serial threshold and its points-per-task rule count `weight × ncolumns`
 points (see [`launch_weighted!`](@ref)). Serially the columns run in the
 historical `for j, for i` (or ascending `n`) order.
+
+`schedule`: `:static` (the default) splits the columns into the equal
+row groups of [`launch!`](@ref); `:dynamic` lets every thread claim
+contiguous runs of columns from a shared counter until none are left
+(guided self-scheduling, [`dynamic_columns!`](@ref)), for a body whose
+cost differs between columns (a surface energy balance with sub-steps,
+a different set of tiles per column) or on cores of unequal speed. The
+work split is all that changes: every column still stores its own terms,
+so the folded totals are the same bits under both schedules.
 """
 function foreach_column!(b::AbstractBackend, body!::F, cols::NTuple{N,UnitRange{Int}},
                          args::Vararg{Any,M}; partials = nothing,
-                         weight::Integer = 1) where {F, N, M}
+                         weight::Integer = 1, schedule::Symbol = :static) where {F, N, M}
     N in (1, 2) || throw(ArgumentError("foreach_column!: cols must be (ir, jr) or (nr,)"))
+    schedule in (:static, :dynamic) ||
+        throw(ArgumentError("foreach_column!: schedule must be :static or :dynamic, got :$schedule"))
+    nc = _npoints(cols)
+    partials === nothing ||
+        size(partials, 1) == nc ||
+        throw(DimensionMismatch("partials has $(size(partials, 1)) rows, the launch $nc columns"))
+    if schedule === :dynamic && b isa CPUBackend && nc > 0 && !runs_serially(b, nc * max(1, Int(weight)))
+        if partials === nothing
+            dynamic_columns!(_column_run_body!, nc, (body!, cols, args))
+        else
+            dynamic_columns!(_column_run_store_body!, nc, (body!, cols, partials, args))
+        end
+        return partials
+    end
     if partials === nothing
         launch_weighted!(b, weight, body!, cols, args...)
         return nothing
     end
-    nc = _npoints(cols)
-    size(partials, 1) == nc ||
-        throw(DimensionMismatch("partials has $(size(partials, 1)) rows, the launch $nc columns"))
     if N == 2
         ir, jr = cols
         launch_weighted!(b, weight, _column_store_body!, cols, body!, partials,
@@ -1757,8 +1865,75 @@ foreach_cell!(b::AbstractBackend, body!::F, ranges::NTuple{3,AbstractUnitRange{<
               args::Vararg{Any,M}; kw...) where {F, M} =
     foreach_cell!(b, body!, map(UnitRange{Int}, ranges), args...; kw...)
 
+# ---- the dynamic (guided) schedule of column launches (#537) ---------------
+
 """
-    column_sum(backend, body, cols, args...; weight = 1) -> sum or NTuple of sums
+    dynamic_columns!(body!, n, args::Tuple; ntasks = Threads.nthreads())
+
+Run `body!(c, args...)` for `c = 1:n` on all Julia threads, each thread
+claiming the next contiguous run of indices from a shared atomic counter
+until none are left: guided self-scheduling (Polychronopoulos & Kuck
+1987), a run being half of the remaining indices' share per thread,
+``\\max(1, ⌊R/(2 n_t)⌋)``, so the runs shrink as the work runs out and
+the threads finish together whatever the cost of each index or the
+speed of each core. Nothing in it depends on the machine: the run
+lengths follow from `n` and the thread count alone. The bodies must
+obey the [`launch!`](@ref) contract (no index writes what another reads
+or writes); which thread runs which index is not reproducible, so the
+results must not depend on it.
+
+`ntasks` (default: the thread count, at most `n`) is the number of
+claiming tasks. More tasks than threads is allowed — they then share the
+threads — which lets a test exercise several interleaved claimers on a
+single-threaded process.
+
+Reference: Polychronopoulos, C. D. & Kuck, D. J. (1987). Guided
+self-scheduling: a practical scheduling scheme for parallel
+supercomputers. *IEEE Trans. Comput.*, C-36, 1425-1439.
+"""
+function dynamic_columns!(body!::F, n::Int, args::A;
+                          ntasks::Integer = Threads.nthreads()) where {F, A<:Tuple}
+    n <= 0 && return nothing
+    ntasks >= 1 || throw(ArgumentError("dynamic_columns!: ntasks must be ≥ 1, got $ntasks"))
+    nt = min(Int(ntasks), n)
+    next = Threads.Atomic{Int}(1)
+    @sync for _ in 1:nt
+        Threads.@spawn _claim_runs!(body!, next, n, nt, args)
+    end
+    return nothing
+end
+
+@noinline function _claim_runs!(body!::F, next::Threads.Atomic{Int}, n::Int, nt::Int, args::A) where {F, A<:Tuple}
+    while true
+        r = n - next[] + 1                    # remaining (a stale read only sizes the run)
+        r <= 0 && return nothing
+        len = max(1, r ÷ (2nt))
+        lo = Threads.atomic_add!(next, len)   # the run [lo, lo + len - 1] is this task's
+        lo > n && return nothing
+        for c in lo:min(lo + len - 1, n)
+            body!(c, args...)
+        end
+    end
+end
+
+# the column of linear index c (column-major, as the partials' rows)
+@inline function _column_at(c, (ir, jr)::NTuple{2,UnitRange{Int}})
+    ni = length(ir)
+    return (first(ir) + (c - 1) % ni, first(jr) + (c - 1) ÷ ni)
+end
+@inline _column_at(c, (nr,)::NTuple{1,UnitRange{Int}}) = (first(nr) + c - 1,)
+
+@inline function _column_run_body!(c, body!::F, cols, args) where {F}
+    body!(_column_at(c, cols)..., args...)
+    return nothing
+end
+@inline function _column_run_store_body!(c, body!::F, cols, P, args) where {F}
+    _store_terms!(P, c, body!(_column_at(c, cols)..., args...))
+    return nothing
+end
+
+"""
+    column_sum(backend, body, cols, args...; weight = 1, schedule = :static) -> sum or NTuple of sums
 
 The totals over the columns of what a column body returns — a number, or
 an `NTuple` of numbers — in column-major order from zero: the
@@ -1770,10 +1945,12 @@ added as they come, column after column — the old loops' running sums,
 with no partials array to fill and fold afterwards; threaded, every
 column stores its terms and the columns are folded in the same order. The
 two paths add the same numbers in the same order: the totals are
-identical, bit for bit, at every thread count.
+identical, bit for bit, at every thread count and under either
+`schedule` (`:dynamic` for columns of unequal cost, see
+[`foreach_column!`](@ref)).
 """
 function column_sum(b::AbstractBackend, body::F, cols::NTuple{N,AbstractUnitRange{<:Integer}},
-                    args::Vararg{Any,M}; weight::Integer = 1) where {F, N, M}
+                    args::Vararg{Any,M}; weight::Integer = 1, schedule::Symbol = :static) where {F, N, M}
     cr = map(UnitRange{Int}, cols)
     nc = _npoints(cr)
     R = N == 2 ? Base.promote_op(body, Int, Int, map(typeof, args)...) :
@@ -1782,7 +1959,7 @@ function column_sum(b::AbstractBackend, body::F, cols::NTuple{N,AbstractUnitRang
         return _serial_column_sum(body, cr, args, _zero_terms(R))
     end
     P = Matrix{_term_eltype(R)}(undef, nc, _nterms(R))
-    foreach_column!(b, body, cr, args...; partials = P, weight = weight)
+    foreach_column!(b, body, cr, args...; partials = P, weight = weight, schedule = schedule)
     S = column_sums(P)
     return R <: Tuple ? Tuple(S) : S[1]
 end

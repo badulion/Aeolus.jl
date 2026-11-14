@@ -176,6 +176,11 @@ function run_stage!(c::ColumnRadiation, case, ::Val{:radiation}, dt)
 end
 
 # the heating is dT/dt; θ = T/Π̄ gets it divided by Π̄_k (#253)
+# the budgets (#539): the :radiation entry computes the fluxes, the heating
+# enters θ in :column_tendency
+Components.budget_writes(::ColumnRadiation, ::Val{:radiation}) = ()
+Components.budget_writes(::ColumnRadiation, ::Val{:column_tendency}) = (:energy,)
+
 function run_stage!(c::ColumnRadiation, case, ::Val{:column_tendency}, dt)
     c.m.buf .= c.m.heat .* dt ./ case.ref.π̄
     apply_radiative_cooling!(case.sim.θ, c.m.buf; solid = case.geom.sm.mask)

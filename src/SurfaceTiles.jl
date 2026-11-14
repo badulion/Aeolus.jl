@@ -341,20 +341,32 @@ the tiles actually applied. `forcing` is one `SurfaceForcing` for the
 whole cell or a vector with one per tile (e.g. tile-specific wind at a
 blending height). `kwargs` are passed on to every tile's
 `step_surface!`. The per-tile fluxes are kept in
-[`last_tile_fluxes`](@ref).
+[`last_tile_fluxes`](@ref): a new vector per step, so a vector read
+before a step keeps that step's values (a caller relies on it, #537).
 
 Conservation: if each tile stores ``G_i\\,Δt`` per unit area, the cell
 stores ``\\sum f_i G_i Δt = \\bar G Δt`` — exactly the aggregate `G`
 returned here.
 """
 function step_surface!(ts::SurfaceMosaic, f::SurfaceForcing, dt::Real; kwargs...)
-    ts.fluxes = [_f64(_step(t, f, dt, kwargs)) for t in ts.tiles]
-    return aggregate_fluxes(ts.fluxes, ts.fractions)
+    fl = Vector{SurfaceFluxes{Float64}}(undef, length(ts.tiles))
+    for (l, t) in enumerate(ts.tiles)
+        fl[l] = _f64(_step(t, f, dt, kwargs))
+    end
+    ts.fluxes = fl
+    return aggregate_fluxes(fl, ts.fractions)
 end
 function step_surface!(ts::SurfaceMosaic, fs::AbstractVector{<:SurfaceForcing}, dt::Real; kwargs...)
     _check_forcings(ts, fs)
-    ts.fluxes = [_f64(_step(t, f, dt, kwargs)) for (t, f) in zip(ts.tiles, fs)]
-    return aggregate_fluxes(ts.fluxes, ts.fractions)
+    # a new vector of the known length and type, filled in a loop (a
+    # comprehension over the abstractly typed tiles goes through
+    # collect's type widening per element)
+    fl = Vector{SurfaceFluxes{Float64}}(undef, length(ts.tiles))
+    for l in eachindex(fl)
+        fl[l] = _f64(_step(ts.tiles[l], fs[l], dt, kwargs))
+    end
+    ts.fluxes = fl
+    return aggregate_fluxes(fl, ts.fractions)
 end
 
 """
