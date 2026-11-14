@@ -286,7 +286,11 @@ quotes its size.
   simulation is built: a plan keeps the thread count it was made with.
 * **Threaded FFTW is thread-invariant under ESTIMATE.** FFTW's threaded
   plans hand whole 1-D transforms (and contiguous slabs of them) to the
-  threads and leave each transform's arithmetic unchanged. Measured at
+  threads and leave each transform's arithmetic unchanged. (Correction,
+  #572: not always. At 1000 × 1000 × 150 the ESTIMATE plan with 4 or more
+  threads threads *inside* each 150-point z transform, serially over the
+  10⁶ columns, which made the transform 70× slower than on one thread.
+  The bit-identity measurements below stand for the sizes listed.) Measured at
   KA-h: every pressure solver (FFT, CosineFFT with each of the 8 axis-BC
   combinations, Stretched with each of the 4 lateral pairs) gives
   bit-identical solves with plans made at 1, 2, 4, 12 and 24 threads, at

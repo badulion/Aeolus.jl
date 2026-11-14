@@ -222,11 +222,11 @@ plans) is built: an FFTW plan keeps the thread count it was made with.
     (the radiosity LU), take [`dense_blas_threads`](@ref) for their duration
     ([`with_dense_blas`](@ref)). `blas_threads` sets both.
   * **FFTW** runs on `Threads.nthreads()` threads (KA-h, #298; maintainer
-    decision on #291): FFTW's threaded plans split the independent 1-D
-    transforms between threads without changing any of them, so a solve
-    gives the same bits at every thread count under a deterministic
-    planner (`ESTIMATE`, or imported wisdom); measured in
-    docs/src/design/ka_port.md. A count chosen explicitly wins:
+    decision on #291): FFTW's threaded plans usually split the
+    independent 1-D transforms between threads (the planner may also
+    thread inside one transform, #572), and a solve gave the same bits at
+    every thread count under a deterministic planner (`ESTIMATE`, or
+    imported wisdom) where measured, docs/src/design/ka_port.md. A count chosen explicitly wins:
     `fftw_threads = n` here, or before the call `AEOLUS_FFTW_THREADS`,
     `Aeolus.Operators.set_fftw_policy!(threads = n)` or a namelist's
     `[fftw] threads`. The count is set through that FFTW policy, so
@@ -311,10 +311,11 @@ transform library (cuFFT) behind the same call.
 On the [`CPUBackend`](@ref) it is `mul!(out, plan, in)`. The plan carries
 its own thread count (FFTW's, set at planning time through the FFTW policy;
 [`init_threads!`](@ref) makes it `Threads.nthreads()`). FFTW's threaded
-plans split the independent 1-D transforms of a multidimensional transform
-between the threads without changing any of them, so the result is
-identical at every thread count under a deterministic planner (measured
-in docs/src/design/ka_port.md).
+plans usually split the independent 1-D transforms of a multidimensional
+transform between the threads; the planner may also thread inside one
+transform, which made the estimate plan of a 150-point z DCT serialise
+over 10⁶ columns (#572). Under a deterministic planner the result was
+identical at every thread count where measured (docs/src/design/ka_port.md).
 """
 apply_transform!(::CPUBackend, out, plan, in) = (mul!(out, plan, in); out)
 

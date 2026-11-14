@@ -68,10 +68,13 @@ speed-ups: [The kernel port](ka_port.md#Measured-at-KA-h).
 
 ### `CosineFFTPoissonSolver` *(Phase 1b — shipped)*
 
-For channel-like domains — periodic in `x, y`, walls in `z`. Uses a
-Type-II discrete cosine transform in `z` (matches the pressure-Neumann
-BC at the walls) combined with a real FFT in `x, y`. Cost is still
-`O(N log N)`. Passes the manufactured-Poisson test to machine precision;
+For channel-like domains — periodic in `x, y`, walls in `z`. Until #572
+it used a Type-II discrete cosine transform in `z` (matches the
+pressure-Neumann BC at the walls) combined with a real FFT in `x, y`;
+since #572 walls in `z` are solved per horizontal wavenumber by the
+Thomas algorithm (it delegates to `ColumnTridiagonalSolver`, PALM's
+`poisfft` method), the same discrete solution to round-off. Cost is still
+`O(N log N)` per transform and `O(N)` for the column solves. Passes the manufactured-Poisson test to machine precision;
 see [Discrete Poisson & FFT](../theory/poisson.md#Extension-to-channel-BCs:-the-cosine-transform).
 
 Selecting it is a constructor-time decision:
@@ -89,8 +92,11 @@ Boundary Layer benchmark and everything downstream in Phase 1b.
 `CosineFFTPoissonSolver(mesh; bc_x = :periodic, bc_y = :periodic, bc_z = :neumann)`:
 every axis is `:periodic` (rfft) or `:neumann` (DCT-II). Neumann sides are
 an option of this one type, not a new solver — one source of truth for
-the transform solve. The default keeps the channel plans, eigenvalues and
-normalisation bit for bit. `poisson_axis_bcs(solver)` reports the axes of
+the transform solve. With walls in `z` (every case but periodic `z`) the
+type holds a `ColumnTridiagonalSolver` (field `impl`, #572), so the `z`
+axis never goes through FFTW; periodic `z` keeps the transforms along all
+three axes. The results changed at round-off with #572 (1.9e-12 relative
+at 1000 × 1000 × 150). `poisson_axis_bcs(solver)` reports the axes of
 any solver (FFT, cosine, CG, multigrid, MG-CG, density-weighted CG).
 
 #### Choosing the axes from the boundary conditions
