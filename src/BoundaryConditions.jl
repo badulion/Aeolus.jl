@@ -4,7 +4,7 @@ using ..Grids
 using ..Grids: CellCenter, FaceX, FaceY, FaceZ, Location
 using ..Fields
 using ..Fields: location, Field
-using ..Backends: Backends, launch!, launch_weighted!, runs_serially
+using ..Backends: Backends, launch!, launch_weighted!, runs_serially, plane_reduce!
 
 export AbstractBC, Periodic, NoFlux, ImpermeableWall, ValueBC, FluxBC,
        FieldBoundaryConditions, fill_halos!

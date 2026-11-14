@@ -62,4 +62,25 @@ const Sim = Aeolus.Simulations
             @test s.data[ir[4], jr[4], kr[2]] ≈ prof[2]
         end
     end
+    # A4: the flux, the areas and the correction as threaded plane sums and
+    # launches; the imbalance case of open_boundaries.jl on a backend that
+    # threads every launch (u = 1 + 0.2 x/Lx: outflow Q = 0.2 Ly Lz)
+    @testset "open-boundary mass-flux correction on the threaded path" begin
+        Lx, Ly, Lz = 800.0, 600.0, 400.0
+        Qimb = 0.2 * Ly * Lz
+        with_backend(tb) do
+            m = RegularGrid(size = (16, 12, 8), extent = (Lx, Ly, Lz))
+            data = FunctionBoundaryData(u = (x, y, z, t) -> 1.0 + 0.2 * x / Lx, v = 0.0, w = 0.0, θ = 300.0)
+            for corr in (:uniform, :outflow_only)
+                s = Aeolus.Simulations.BoussinesqSimulation(m; θ₀ = 300.0,
+                        bcs = open_boundary_conditions(m, data; correction = corr, record = true))
+                Aeolus.BoundaryConditions.update_open_boundaries!(s, 0.0, 1.0)
+                L = open_boundary_ledger(s)
+                @test L.Q ≈ Qimb rtol = 1e-12                      # round-off of the sums
+                @test abs(L.residual) < 1e-9 * Qimb
+                corr === :uniform &&
+                    @test L.δ ≈ Qimb / (2 * (Ly * Lz + Lx * Lz) + Lx * Ly) rtol = 1e-12
+            end
+        end
+    end
 end
