@@ -93,7 +93,8 @@ Conventions: keys are ASCII `snake_case`; values are SI and durations are
 in seconds; `"none"` stands for nothing (TOML has no null); a path is
 relative to the file that sets it and is stored absolute. Environment
 variables only fill a few defaults (`AEOLUS_LOG`, `AEOLUS_FFTW_PLANNER`,
-`AEOLUS_FFTW_THREADS`, `AEOLUS_ALLOW_UNCOMMITTED`). The resolved value is
+`AEOLUS_ALLOW_UNCOMMITTED`; `AEOLUS_FFTW_THREADS` and `[fftw] threads`
+are deprecated and ignored since #575, FFTW plans being single-threaded). The resolved value is
 always written, so the environment never changes a replay.
 
 ## Domains
@@ -329,7 +330,8 @@ Time scales, with the slowest eigenmode of each column: brick wall 9.3 h, roof 2
 | `aeolus run <folder> --resume` | the same run, a new session in its `run.toml` | the folder's newest checkpoint |
 
 A replay from `run.toml` is bit-identical to the original under the
-`ESTIMATE` FFTW planner and the same thread count (#245). `--resume`
+`ESTIMATE` FFTW planner and the same Julia thread count (#245; the
+transforms are cut into one block per thread, #575). `--resume`
 refuses `--set`, because a resumed run must be the run it continues. For
 the model (the SBL configurations among its runs) and the `urban` legacy case a run interrupted and
 resumed is bitwise equal to the uninterrupted run (`test/config_roundtrip.jl` (removed)).
