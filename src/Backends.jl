@@ -435,10 +435,10 @@ end
 # items for one plane of the Berlin 20 m grid: the open-boundary blend over
 # a 3 × 1006 × 156 west plane took 4.0 ms at 1 thread and 3.3 ms at 24,
 # against 0.13 and 0.05 ms for the 1006 × 3 × 156 south plane (#566).
-@kernel inbounds = true function _planes3_kernel!(body!, ir, jr, ok, args)
+@kernel inbounds = true function _planes3_kernel!(ir, jr, ok, call)
     c = @index(Global, Linear)
     k = c + ok
-    _nest!(body!, ir, jr, k:k, args...)
+    _nest!(call[1], ir, jr, k:k, call[2]...)    # `call = (body!, args)`, as `_rows3_kernel!` (#574)
 end
 const _THIN_ROW = 8
 
@@ -505,7 +505,7 @@ function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{In
         # a thin box across x (an x-normal boundary plane: 1 to H points
         # along i): one k-plane per work item instead of one 1-3-point row
         kern = _planes3_kernel!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
-        kern(body!, ir, jr, first(kr) - 1, args; ndrange = nk)
+        kern(ir, jr, first(kr) - 1, (body!, args); ndrange = nk)
         return nothing
     end
     wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
