@@ -3013,6 +3013,62 @@ Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstr
 *Once forward fidelity is real, make the model answer inverse
 questions.*
 
+### Thread utilisation of the step: work-item shapes and serial passes (#581)
+
+The Berlin 20 m trace at 72 threads (`REPORT_threads_20m.md` on
+`issue/566-hpc-benchmark`) showed passes that ran on one thread or a few.
+This PR fixes the ones in the launch layer and the serial passes next to
+them. The FFTW transforms (#575), the per-row dispatch and the
+open-boundary copies (#574, #577) and the fused sweep's split in j (#579)
+are separate.
+
+**Built**
+- **Boxes thin along i** (B1, B2, B5). A 3-D launch with fewer than 8
+  points along i (`_THIN_ROW`) gives each work item one k-plane
+  (`_planes3_kernel!`) instead of one 1–3-point i-row. This covers the
+  open-boundary time blend (`_blend_body!`, 0.5 of 72 threads busy on
+  Fritz), the stage combination (`_map_body!`, 3.7) and the west-face
+  gradient (`_b_∂x_cf!`, 2.2). Like `_rows3_kernel!` after #577, the
+  kernel takes the body in the tuple `(body!, args)`.
+- **The halo shell** (B3). `_shell_map!` launches the whole halo planes
+  below and above the interior over their own (i, j, k) points; the
+  interior levels keep the row launch.
+- **Radiative cooling** (A3). `apply_radiative_cooling!` is one launch
+  over the levels instead of a serial broadcast per level.
+- **Open-boundary mass-flux correction** (A4). The flux and the areas are
+  one `plane_reduce!` per face (`_face_sums`), and the correction is one
+  launch per face (`_face_subtract!`); `_fold_faces` is gone.
+
+**Measured** (24-thread desktop, under the bench lock, master with #577 in
+both builds): the blend of one x-normal plane, 3 × 1006 × 156 = 470 808
+points, took 3.88 ms on master and 3.68 ms here at 1 thread, and
+1.05 ms on master and 0.52 ms here at 24 threads. A y-normal plane of the
+same size takes 0.13 ms at 1 thread, so a thin plane still costs about
+30× more per point serially: that is the per-plane loop, not threads.
+Before #577 the same 24-thread blend took 5.35 ms on master and 0.63 ms
+here. The 72-thread Fritz step has not been re-measured.
+
+**Not merged: the threaded step-start copy** (A2). Built (`158a139b`) and
+reverted (`4326dbf6`): at 1006 × 1006 × 156 a threaded launch copied in
+61.5 ms against 61.5 ms for `copyto!` at 4 threads and 72.7 against
+60.6 ms at 24, and a threaded zeroing took 41.9 ms against 17.5 ms for
+`fill!`. One thread already saturates this machine's memory bandwidth; a
+two-socket node needs its own measurement (`not_merged.md`).
+
+**Tests** (`test/thread_utilisation.jl`, on a backend that threads every
+launch, threshold 0): the shell against the serial loop and the interior
+untouched; the cooling against the former loop, uniform and with solid
+cells; the mass-flux correction's Q, δ and residual on the imbalance case
+of `open_boundaries.jl`; thin boxes of 1, 3 and 7 points along i against
+the serial loop; in `test/backends.jl`, the k-plane kernel compiled for
+the body's own type. No bug was caught and no expectation proved wrong.
+
+**Left for measurement or later work:** the halo fills at 50 m
+(`_z_item!`, 28 % of the step, busy 24.3; cause not found in the code),
+the nested launches (D2), the state copy on Fritz (A2), and PALM's
+methods that change the scheme: the boundary blend once per step and the
+state buffer swap instead of the copy.
+
 ### Phase 74 — Adjoint model via automatic differentiation
 Full reverse-mode AD through the solver with `Enzyme.jl`: adjoint of
 dynamics, physics and I/O, with checkpointing for long windows.
