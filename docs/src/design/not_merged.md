@@ -172,6 +172,27 @@ Group D and group F were left out (maintainer decision, 2026-11-14).
   - Reviving it means porting it onto master's #533 driver, or reviving D1
     first.
 
+## Thread utilisation (#566 follow-up): what was left out
+
+### A2. The step-start copy as a threaded launch
+
+- **Where:** commit `158a139b` on `issue/thread-utilisation`, reverted
+  in `4326dbf6` before the PR. `copy_storage!` launched `_copy_point!`
+  over the array above 4 194 304 points (`_COPY_THREADED_MIN`), with a test
+  in `test/thread_utilisation.jl`.
+- **Why it was built:** at Berlin 20 m on 72 threads, the copy of the
+  state at the start of each step ran on one thread.
+- **Measured** on a 24-thread desktop, 1006 × 1006 × 156, after #577:
+  - copy: 61.5 ms threaded against 61.5 ms for `copyto!` at 4 threads, and
+    72.7 against 60.6 ms at 24;
+  - zeroing: 41.9 ms threaded against 17.5 ms for `fill!`.
+
+  One thread already saturates that machine's memory bandwidth.
+- **What is missing:** the same comparison on a two-socket Fritz node.
+  There a single thread reaches a small part of the node's bandwidth, and
+  the pages are spread over both sockets by the first touch. Reapply the
+  commit if the launch wins there.
+
 ## Tools that are not in master
 
 ### The launch trace (#566)
