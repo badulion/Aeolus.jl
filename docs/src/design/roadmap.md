@@ -2983,6 +2983,62 @@ Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstr
 - **Docstrings corrected.** `set_fftw_policy!`, `init_threads!` and `apply_transform!` said FFTW's threaded plans hand whole 1-D transforms to the threads; the 20 m plan threads inside one. `ka_port.md` has the same correction.
 - **Not done here.** The #566 20 m single-node test on Fritz at `-t 72,0` has to report its step time with this change.
 
+### FFTW single-threaded: serial plans on Julia's threads (#575)
+
+**Shipped** (#575, the fix chosen on the issue: PALM's method). On Fritz, with `JULIA_EXCLUSIVE=1`, the Berlin 20 m step took 28.4 s pinned against 5.9–6.2 s unpinned at 72 threads (#566). Julia thread 1 was pinned to core 0 and waited 194 s in its run queue over 295 s of stepping; the 99 threads created after start-up, FFTW's pool among them, inherited thread 1's affinity (Linux `pthread_create`) and waited 15 124 s in total.
+
+- **What was built.**
+  - FFTW's thread count is fixed at 1. `[fftw] threads`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!(threads = n)` and `init_threads!(; fftw_threads = n)` are deprecated: a value other than 1 is reported once per source and ignored; a value below 1 is still an error. `_fftw_own_threads!` (#397) is gone, since there is no FFTW thread pool.
+  - `Operators.BlockTransform` cuts a 3-D transform into blocks along an axis it does not transform, levels for the `x`-`y` transforms and rows for those along `z`, one block per Julia thread (one when the backend runs serially). It makes one serial FFTW plan per distinct block size and memory alignment, at most four. A level of an `Nx × Ny` Float64 array is 16-byte aligned only when `(k-1)·Nx·Ny` is even, and FFTW plans depend on the alignment. The blocks run through `launch_weighted!`.
+  - `serial_r2r_plan`, `serial_rfft_plan`, `serial_brfft_plan` and `serial_fft_plan` make a block's plan for the block's own output strides, with FFTW.jl's guru constructors. FFTW.jl's `plan_*` assume a fresh contiguous output, and a block of rows is not one.
+  - Every spectral pressure solver uses it:
+    - `ColumnTridiagonalSolver` (walls in `z`; behind `CosineFFTPoissonSolver`, `StretchedPoissonSolver` and `DirectWeightedPoissonSolver`): one 2-D plan per block of levels.
+    - `FFTPoissonSolver`: r2c in `x`-`y` by levels, then a complex DFT along `z` in place by rows. The inverse is unnormalised; its `1/(Nx Ny Nz)` is folded into `1/λ`.
+    - `_CosineTransformSolver` (periodic `z`): the DCTs along the Neumann axes by levels (`x`-`y`) and rows (`z`), then the r2c and the complex DFT along `z`. The DFT normalisation joins the DCT factor in the write-back.
+  - The diagnostics' FFTs (spectra, filters, the streamwise spectrum, the inflow statistics) are not on the step path. They keep their whole-array plans and are now serial; the spectral filter of the dynamic roughness wall model works on a 2-D surface field.
+- **Measured: the pressure solve.** Development machine (12 cores, 24 threads), minimum of 3 solves, random source. "Before" is master 4f61b8a6 with FFTW on `Threads.nthreads()` threads; "after" is this branch before the merge of #576. The machine was shared with other sessions' runs, so differences under about 10% are inside the noise.
+
+  | grid, solver | threads, planner | before | after | OS threads before → after |
+  | :-- | :-- | --: | --: | :-- |
+  | 1000 × 1000 × 150, walls in z | 24, measure | 0.813 s | 0.766 s | 103 → 60 |
+  | 1000 × 1000 × 150, walls in z | 24, estimate | 0.927 s | 0.848 s | 103 → 60 |
+  | 1000 × 1000 × 150, periodic z | 24, measure | 0.928 s (build 10.6 s) | 0.944 s (build 0.9 s) | 104 → 60 |
+  | 1000 × 1000 × 150, periodic z | 24, estimate | 1.154 s | 1.029 s | 103 → 60 |
+  | 1000 × 1000 × 150, triply periodic | 24, measure | 0.564 s (build 25.1 s) | 0.663 s (build 3.1 s) | 104 → 60 |
+  | 1000 × 1000 × 150, triply periodic | 24, estimate | 0.884 s | 0.784 s | 103 → 60 |
+  | 1000 × 1000 × 150, walls in z | 1, measure | 2.229 s | 2.278 s | 14 → 14 |
+  | 1000 × 1000 × 150, triply periodic | 1, estimate | 2.088 s | 2.049 s | 14 → 14 |
+  | 256 × 256 × 64, walls in z | 24, measure | 0.0176 s | 0.0170 s | 103 → 60 |
+  | 256 × 256 × 64, triply periodic | 24, measure | 0.0140 s | 0.0131 s | 103 → 60 |
+
+  - At 24 threads the solve is within −11% to +18% of FFTW's own threads. The one slower row is the triply periodic solve under MEASURE (+18%), where FFTW's threaded 3-D plan is better than serial plans per block. Under ESTIMATE, the planner the Fritz runs use, every solver is 8–11% faster.
+  - At one thread the plans are the same (one block): equal within 2%.
+  - Planning under MEASURE is 3–8× faster (25.1 → 3.1 s for the triply periodic solver), because serial plans are timed on one block, not on the whole array with every thread count.
+  - 43 fewer OS threads at 24 threads (103 → 60): those FFTW created for its threaded plans. Which of them belong to its pool and which are its helpers was not separated.
+  - Fritz (#566, `solver_compare.jl`, 72 threads): the 2-D transform pair took 0.326 s as serial plans over levels against 0.353 s on FFTW's threads.
+- **Measured: pinned against unpinned, Berlin example** (`examples/urban/berlin_summer.toml`, the nest, adaptive steps, `-t 4,0`, `benchmarks/hpc/bench_run.jl time`). Development machine, s per adaptive step, median of 20 steps per process with loop fusion on (`if_possible`), minimum of 3 processes. "Before" is master c7603464 (FFTW on 4 threads), "after" this branch merged with it. The machine was shared.
+
+  | | unpinned | `JULIA_EXCLUSIVE=1` | pinned / unpinned |
+  | :-- | --: | --: | --: |
+  | before (FFTW's pool, 4 threads) | 0.892 | 0.927 | +3.9% |
+  | after (serial plans on Julia's threads) | 0.889 | 0.853 | −4.0% |
+
+  - Unpinned the step is unchanged (0.889 against 0.892 s).
+  - Pinned it is 8% faster, and pinning goes from costing 3.9% to saving 4.0%. At 4 threads FFTW's pool adds only 3 threads to core 0, so the effect is small here; on Fritz at 72 threads it was 4.7× (#566).
+  - One unpinned "after" process took 3.9 s per step while the machine was loaded by other runs; it is excluded by the minimum.
+  - Loop fusion off (`never`): unpinned 0.953 / 0.960 s, pinned 0.986 / 0.905 s (before / after).
+- **Agreement.** A blocked solve is the same arithmetic as the one-block solve, with each block's plan chosen for its size. In `test/fftw_threads.jl` (subprocess, `-t 8`, MEASURE) every spectral solver and axis-BC combination agreed with its one-block build to 0.0 (identical bits) at 32 × 24 × 16 and 27 × 21 × 13. `BlockTransform` against FFTW's whole-array transforms (r2r, r2c, c2c and c2r at 15 × 13 × 9, several alignment classes) agrees to < 1e-13 relative. The residual of every solver and axis-BC combination at 24 × 20 × 16 and 15 × 13 × 9, blocked on 4 threads, was ≤ 7.5e-15.
+- **Tests.**
+  - `test/fftw_threads.jl` replaces the #397 crash test, which exercised the FFTW thread pool that no longer exists. It checks the agreement above and that planning and solving create no OS thread (`/proc/self/task`: 29 → 29). The same script on master went 29 → 42 after `init_threads!` put FFTW on 8 threads, so the test tells the two apart.
+  - `test/pressure_column.jl`: `BlockTransform` against the whole-array transforms.
+  - `test/backends.jl` and `test/config_model.jl`: FFTW stays at 1 thread; a deprecated count warns once and is ignored; 0 is an error.
+- **A test expectation that was wrong** (while writing the test, not in the code). The first `BlockTransform` round trip failed: the test made the inverse plans after transforming. A MEASURE plan overwrites its arrays while it times candidates, so the test now makes every plan before any data. The solvers already did: they plan on freshly zeroed buffers.
+- **Suite and validation.** Merged with master c7603464 (#576):
+  - `test/run.jl`: 127 jobs, 18 262 tests passed.
+  - `validation/run.jl --only gabls1.jl,neutral_abl.jl,wall_models_channel.jl,nest_boundary.jl,outflow_conditions.jl,urban_checks.jl`: all six jobs passed, 75 passed, 2 broken (the two existing `@test_broken` of `wall_models_channel.jl`).
+- **Docs.** `fftw_planning.jl` (the policy, `BlockTransform`, the plan constructors), `init_threads!` and `apply_transform!`, `pressure_solvers.md`, `theory/poisson.md`, `ka_port.md` (FFTW and BLAS; "Thread pinning" corrected), `run_configuration.md`, and the API pages for operators, config and I/O.
+- **Not done here.** The #566 20 m step on Fritz at `-t 72,0`, pinned (`JULIA_EXCLUSIVE=1`) and unpinned, has to be measured with this change. The GC threads were also pinned to core 0 on Fritz but used no CPU while stepping (#575 "Not covered").
+
 ---
 
 # Data assimilation and inverse problems

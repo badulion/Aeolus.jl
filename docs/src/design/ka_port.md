@@ -2722,6 +2722,17 @@ compute, not memory bandwidth. **Recommended launch setting: unchanged,
 `JULIA_EXCLUSIVE` and `taskset` produce the three layouts the issue asks
 about without a dependency, and none of them helps.
 
+**Correction (#575).** Part of the pinned loss above was FFTW's: its
+thread pool was created from Julia's thread 1 and inherited thread 1's
+CPU affinity (Linux `pthread_create`), so with `JULIA_EXCLUSIVE=1` every
+FFTW thread ran on core 0, next to thread 1. On Fritz at 72 threads that
+made the Berlin 20 m step 28.4 s pinned against ~6 s unpinned (#566).
+Since #575 FFTW plans are single-threaded and Julia's threads run them.
+Measured on the Berlin example at `-t 4,0` (master c7603464, minimum of 3
+processes, s per adaptive step): pinned against unpinned went from
+0.927 / 0.892 (+3.9%) to 0.853 / 0.889 (−4.0%). The recommendation stands:
+pinning is not needed. It no longer costs anything, though.
+
 ### Ranked targets for SC-d and SC-e
 
 Savings are estimated from the table: a pass over a field saved is its
