@@ -672,12 +672,13 @@ end
     return nothing
 end
 
-# Row n of the interior (j fastest): a bulk row (j, k both away from the
-# boundaries) is its two end cells in the shell and a branch-free loop over
-# the cells between; a row next to a j or k boundary is all shell.
-function _dual_strain_row!(n, d, u, v, w, m, bx, ii, jj, kk, fold)
+# Row n of the levels `kr` of the interior (j fastest): a bulk row (j, k
+# both away from the boundaries) is its two end cells in the shell and a
+# branch-free loop over the cells between; a row next to a j or k boundary
+# is all shell.
+function _dual_strain_row!(n, d, u, v, w, m, bx, ii, jj, kk, kr, fold)
     kq, jq = divrem(n - 1, length(jj))
-    J, K = first(jj) + jq, first(kk) + kq
+    J, K = first(jj) + jq, first(kr) + kq
     _dual_row!(J, K, d, u, v, w, m, bx, ii, jj, kk, fold...)
     return nothing
 end
@@ -719,9 +720,24 @@ function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::Union{Reg
     loz, hiz = _images(bcs.bottom, g.Hz, g.Nz)
     m = _dual_metrics(g)
     fold = (g.Hx, g.Nx, lox, hix, g.Hy, g.Ny, loy, hiy, g.Hz, g.Nz, loz, hiz)
-    # one work item per i-row (in chunks of rows, the row length as weight)
-    launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*g.Nz,), d, u.data, v.data, w.data, m, bx,
-                     ii, jj, kk, fold)
+    # one work item per i-row (in chunks of rows, the row length as weight).
+    # The rows of the bottom and top level are all shell, ~4.7x a bulk row
+    # (j-boundary rows ~10x; measured at 400 points per row); in one launch
+    # the static split of the rows into contiguous blocks gave each of them
+    # to one thread, so the launch waited for those two (23 of 72 threads
+    # busy at Berlin 20 m on Fritz, #581). The two levels are launched on
+    # their own, after the levels between.
+    a = (d, u.data, v.data, w.data, m, bx, ii, jj, kk)
+    k1, k2 = first(kk), last(kk)
+    if k2 - k1 >= 2
+        launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*(g.Nz-2),), a..., (k1+1):(k2-1), fold)
+        # weight 5 Nx: a shell row costs ~5 bulk rows, so a level gets as
+        # many tasks as its work (at 400 × 400, 24 threads: 1.11 → 0.81 ms)
+        launch_weighted!(b, 5g.Nx, _dual_strain_row!, (1:g.Ny,), a..., k1:k1, fold)
+        launch_weighted!(b, 5g.Nx, _dual_strain_row!, (1:g.Ny,), a..., k2:k2, fold)
+    else
+        launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*g.Nz,), a..., kk, fold)
+    end
     return D
 end
 
@@ -855,16 +871,23 @@ function attach_immersed_walls!(c::TKEClosure{T}, walls) where {T}
     end
     c.walls[] = walls
     resize!(c.adrag, walls === nothing ? 0 : length(walls.faces))
+    # without walls nothing writes c.Pw, and `_wall_production!` relies on it
+    # staying zero instead of zeroing it every step (#581)
+    walls === nothing && fill!(c.Pw.data, zero(T))
     return true
 end
 
 # Correct D (the stencil share out of the four edge cells) and fill c.Pw
 # (the wall-stress work) for the attached walls; the velocity halos and
-# c.ν must be filled and D folded already. No walls: Pw = 0. Returns the
-# interior sums (per unit cell volume) of the stencil production removed,
-# Σ ν ΔD, and of the wall-stress work, Σ Pw.
+# c.ν must be filled and D folded already. Returns the interior sums (per
+# unit cell volume) of the stencil production removed, Σ ν ΔD, and of the
+# wall-stress work, Σ Pw.
+#
+# No walls: Pw = 0, and it already is: Pw is zero when the closure is built
+# and `attach_immersed_walls!(c, nothing)` zeroes it, and nothing else
+# writes it. It used to be zeroed here every step, a serial whole-field
+# fill! (~0.30 s per step at Berlin 20 m on Fritz, #581).
 function _wall_production!(c::TKEClosure{T}, sim, bcs) where {T}
-    fill!(c.Pw.data, zero(T))
     iw = c.walls[]
     iw === nothing && return (zero(T), zero(T))
     return _wall_production!(c, iw, sim, bcs)      # (function barrier: c.walls is a Ref{Any})
@@ -872,6 +895,7 @@ end
 
 function _wall_production!(c::TKEClosure{T}, iw::ImmersedWalls, sim, bcs) where {T}
     pw, dd, nd = c.Pw.data, c.D.data, c.ν.data
+    fill!(pw, zero(T))
     g = mesh(c.e)
     q = (sim.u.data, sim.v.data, sim.w.data)
     Δ = (T(g.dx), T(g.dy), T(g.dz))
@@ -961,14 +985,18 @@ function advance_sgs!(c::TKEClosure{T}, sim, dt) where {T}
     fill_halos!(c.ν, bcs)
     dual_strain!(c.D, sim.u, sim.v, sim.w, bcs)
     _wall_production!(c, sim, bcs)
-    fill!(c.tend.data, 0)
     if c.transport
         ebcs = passive_scalar_bcs(sim.θ_bcs)     # e: not θ's top gradient (#254)
         fill_halos!(c.e, ebcs)
-        _advect_tke!(c, sim, Δt, ebcs, g)
+        _advect_tke!(c, sim, Δt, ebcs, g)        # writes the interior of c.tend (no fill!, #581)
         _double!(c.K2, c.ν)
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
     end
+    # transport = false (a driver transports e, as Berlin's `:transport`
+    # stage does): c.tend is zero, from `allocate`, and nothing writes it, so
+    # it is not zeroed every step (it was: a serial whole-field fill!, ~0.26 s
+    # per step at Berlin 20 m on Fritz, #581). `transport` is fixed when the
+    # closure is built.
     _update!(c, Δt, _surface_buoyancy(c, sim))
     return c
 end
@@ -977,9 +1005,12 @@ end
 # StretchedGrid with the centred reconstruction, the only one allowed there).
 # (`c.recon`: the reconstruction built once from the scheme's name, so the
 # call does not dispatch on a Symbol; KA-l.)
+# It writes the advection into the interior of c.tend rather than adding
+# to it: the first contribution of the step, so c.tend needs no zeroing
+# first (#581; `_update!` reads only the interior).
 _advect_tke!(c, sim, Δt, ebcs, g) =
     advect_positive!(c.tend, sim.u, sim.v, sim.w, c.e, Δt;
-                     scheme = c.recon, workspace = c.ws, bcs = ebcs)
+                     scheme = c.recon, workspace = c.ws, bcs = ebcs, accumulate = false)
 
 # K = 2ν over the whole storage (halos included): `2 * ν` per point, the
 # bits of the broadcast it replaces.
@@ -1218,10 +1249,9 @@ function tke_budget(c::TKEClosure{T}, sim) where {T}
     V0 = T(_tke_volume0(g))
     tr = zero(T)
     if c.transport
-        fill!(c.tend.data, 0)
         ebcs = passive_scalar_bcs(sim.θ_bcs)
         fill_halos!(c.e, ebcs)
-        _advect_tke!(c, sim, one(T), ebcs, g)
+        _advect_tke!(c, sim, one(T), ebcs, g)    # writes the interior of c.tend
         _double!(c.K2, c.ν)
         add_eddy_diffusion_scalar!(c.tend, c.e, c.K2; mask = c.mask)
         tr = _tke_volume_sum(interior_view(c.tend), c, V0, g)
