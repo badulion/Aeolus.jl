@@ -107,6 +107,19 @@ put("dyn_name", isempty(rs) ? "" : first(rs).name)
 put("dyn_record_ok", !isempty(rs) && check_record(first(rs)))
 put("dyn_busy_max", isempty(rs) ? 0.0 : maximum(first(rs).busy) * 1e-9)
 
+# 3c. a box thin along i (an x-normal boundary plane): master runs it with
+# `_planes3_kernel!`, one k-plane per work item (#581); the trace records it
+thin = zeros(3, 256, 64)
+B.launch!(b, body3!, (1:3, 1:256, 1:64), thin)
+B.reset_launch_trace!()
+B.launch!(b, body3!, (1:3, 1:256, 1:64), thin)
+rs = B.launch_trace()
+put("thin_count", length(rs))
+put("thin_serial", isempty(rs) ? "" : first(rs).serial)
+put("thin_record_ok", !isempty(rs) && check_record(first(rs)))
+put("thin_busy", isempty(rs) ? 0 : sum(first(rs).busy))
+put("thin_values_ok", all(==(2.0), thin))
+
 # 4. the cost of the trace on a small threaded launch (4 tasks, 65 536 points)
 function per_launch(b, a, n)
     t0 = time_ns()
