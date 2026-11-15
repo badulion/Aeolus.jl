@@ -3057,6 +3057,20 @@ term and its documented reason (`Simulations.SWEEP_FALLBACKS`) in its
 `results.toml`. Plan step 1 moved only the base tendencies onto the
 interface; the terms follow in the later steps of #533.
 
+**Since #566** the blocks are slabs in k times row ranges in j
+(`FiniteVolume.sweep_blocks`, the split of #558 ported to this driver).
+One slab per thread capped the threads that work at `nk ÷ 2lz`, and near
+the cap every plane of a slab was an edge plane, so the slab body only
+filled the edge buffer and the second launch did every predictor. A row
+range keeps its first and last `ly = max ry` rows out of the in-place
+predictor, as a slab its edge planes; their tendencies wait in `2ly`
+extra rows of the block's ring and a third launch applies them. Post
+terms run inside a block only at points whose stencil stays among the
+block's own inner rows (`post_plan(post, lz, ly)`); the rest run after
+the sweep as before. A term tuple that books per-level budget sums keeps
+one row range (the rows of a level must be summed by one task). The rule
+and the measurements are in the roadmap section "Fused sweep split in j".
+
 **#533 plan step 8** gave the other step cores the same sweep (the
 explicit part of `step_imex!` as one fused tendency launch, the
 sound-proof cores with the `W`-weighted advection as their base term) and

@@ -2983,6 +2983,194 @@ Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstr
 - **Docstrings corrected.** `set_fftw_policy!`, `init_threads!` and `apply_transform!` said FFTW's threaded plans hand whole 1-D transforms to the threads; the 20 m plan threads inside one. `ka_port.md` has the same correction.
 - **Not done here.** The #566 20 m single-node test on Fritz at `-t 72,0` has to report its step time with this change.
 
+### Fused sweep split in j (#566 thread utilisation, port of #563)
+
+**Built** (branch `issue/566-sweep-jsplit`). Item C1 of the #566 thread
+utilisation work. Run 1 at 20 m (1000 × 1000 × 150, 72 threads, unpinned)
+measured the fused sweep's `_b_sweep_slab!` at 21 % of the step with
+37.6 of 72 threads busy. The split in j of PR #563 (#558) is ported to
+master's predictor sweep, `FiniteVolume.blocked_predictor!`, in
+`src/operators/fused_sweep.jl`. It is not built on #563's
+`blocked_update!`, which needs group D (see [Built but not
+merged](not_merged.md), D1 and F). There is still one driver.
+
+**What was built.**
+
+- **Blocks.** The interior is cut into `ns` slabs in k times `nt` row
+  ranges in j. Each block (`_b_sweep_block!`, formerly `_b_sweep_slab!`)
+  is one launch item.
+- **Edge rows.** A row range keeps its first and last `ly = lag` rows
+  out of the in-place predictor, as a slab keeps its `lz` edge planes.
+  Their tendencies go to `2ly` extra rows of the block's ring
+  (`SweepBuffers.ring[:, :, lag + 1 + d, :, n]`). A third launch
+  (`_b_sweep_yedge!`) applies them after the edge-plane launch. A point
+  that is both an edge plane and an edge row goes to the edge-plane
+  buffer, as in #563.
+- **Post terms.** This part is not in #563. `post_plan(post, lz, ly)`
+  starts the y-widths at `ly`, as the z-widths start at `lz`. A post
+  term therefore runs inside a block only where its stencil stays among
+  the block's own inner rows. The rest runs after the sweep
+  (`_post_deferred!` finds a point's row range as it finds its slab).
+- **Budgets.** A term tuple that books per-level sums (`books`: the
+  budgets' `BookedTerm`, `SweepBudget`) keeps one row range. The rows of
+  a level must be summed by one task, and two row ranges would race on
+  `LevelSums.acc`.
+- **Interface.**
+  - `sweep_slabs` became `sweep_blocks(b, npoints, nk, nj; lz, ly) ->
+    (ns, nt)`.
+  - `sweep_buffers` takes `nt` and `ly` (default `lag`), and
+    `SweepBuffers` has `nt` and `ly`.
+  - The callers in `src/` (`Simulations._fused_buffers!`, also used by
+    the anelastic core) and `benchmarks/bench_post_sweep.jl` changed.
+
+**`lz` of Berlin.** The task assumed `lz = 2`, which would cap the
+slabs at 37 for 150 levels. That is not what the code has. Every sweep
+term's `footprint` in `src/` has z-radius ≤ 1, and the Berlin smoke
+case's fused tuple (base, SGS and ten optional terms) gives `lag = 1,
+lz = 1` (`sweep_lags`, printed from `_fused_buffers!`). The old rule
+therefore gave 72 slabs at 72 threads and 150 levels: 66 slabs of 2
+planes and 6 of 3. Every plane of a 2-plane slab is an edge plane, so
+the slab launch only filled the edge buffer and the second launch
+(`_b_sweep_edge!`, 9.6 % of that step) did every predictor. On top of
+that, the 3-plane slabs take 1.5× as long as the rest. Both are causes
+in the code. The 37.6 busy threads measured on Fritz have not been
+re-measured.
+
+**The rule** (`_split_blocks`). #558's rule is kept, with one change:
+the slab bound is planes × row length ≤ 5000 points (`_SLAB_POINTS`)
+instead of 20 planes. The rest is unchanged: at most one block per
+thread, at least `2lz` planes and `2ly` rows per block, and the least
+`cld(ns·nt, T)/(ns·nt) · (1 + 0.5 f_edge)`.
+
+- **The 20-plane bound was wrong here.** As ported, the rule picked
+  (8, 3) on 400 × 400 × 150 at 24 threads, slabs of 19 planes. That was
+  32 % slower than master's (24, 1) (127.8 against 95.3 ms median).
+- **Scan, 400 × 400 × 150, 24 threads** (interleaved, 25 calls, min /
+  median ms):
+
+  | split | slab height (planes) | min / median ms |
+  | :-- | --: | :-- |
+  | (24, 1) | 6 | 47.9 / 76.7 |
+  | (12, 1) | 12 | 59.4 / 65.3 |
+  | (16, 1) | 9 | 63.9 / 68.7 |
+  | (12, 2) | 12 | 71.3 / 78.6 |
+  | (8, 3) | 19 | 82.3 / 86.9 |
+  | (6, 4) | 25 | 83.0 / 90.0 |
+  | (4, 6) | 37 | 95.2 / 103.3 |
+  | (3, 8) | 50 | 104.5 / 112.6 |
+
+  At 12 threads, (12, 1) and (6, 2) gave 63.0 / 67.9 and 62.9 / 73.0 ms,
+  and (4, 3) and (3, 4) gave 76.3 / 85.8 and 81.3 / 94.2 ms.
+- **The bound fits both data sets.** #558 found 20 planes good at row
+  length 200 (4000 points). Here 12 planes are good at 400 (4800 points)
+  and 19 bad (7600 points). On this one 12-core machine, a block's rows
+  of every field stop fitting in cache somewhere above about 5000
+  points. That is an inference from two widths, not a cache model.
+- **The rule's picks:**
+
+  | grid (Nx × Ny × Nz) | 24 threads | 72 threads |
+  | :-- | :-- | :-- |
+  | 1000 × 1000 × 150 (Fritz 20 m) | (24, 1), as master | (36, 2), against master's (72, 1) |
+  | 400 × 400 × 150 | (24, 1) | (18, 4) |
+  | 400 × 400 × 24 | (2, 12), against master's (12, 1) | (2, 36) |
+
+  At 200 × 200 × 60 it picks (3, 8), #558's choice.
+- **Fewer blocks than threads.** The scans of #558 and of this change
+  both found 12 blocks about as fast as 24 on this machine (12 cores, 4
+  fast and 8 compact, two hardware threads each). On 400 × 400 × 24 the
+  best split was (3, 4) at 9.65 / 12.25 ms; the rule's (2, 12) ran
+  11.56 / 13.92 ms. The rule does not know the core count, and was not
+  changed for that.
+
+**Measured** (development machine, 24 threads, under the benchmark lock;
+master = `origin/master` c7603464 in a second worktree; two runs each,
+interleaved between the builds; 1-min load 2.1–4.8). The script is a
+`BoussinesqSimulation` with ν and buoyancy, random state, Δz = Δx = 2 m.
+"Sweep" times `blocked_predictor!` with the base term at the split
+`sweep_blocks` picks. "Step" times `step!`, which is fused, at that
+split. Each figure is the median (min) of 20 calls (10 at Nz = 150), in
+ms:
+
+| grid | build | split | sweep | step |
+| :-- | :-- | :-- | :-- | :-- |
+| 400 × 400 × 24 | master | (12, 1) | 21.56 (14.73), 22.10 (15.45) | 72.26 (70.79), 70.52 (63.04) |
+| | this branch | (2, 12) | 16.31 (8.63), 17.02 (8.67) | 69.43 (66.00), 69.22 (64.04) |
+| 400 × 400 × 150 | master | (24, 1) | 93.83 (87.77), 108.26 (94.03) | 417.19 (403.4), 598.8 (591.3) |
+| | this branch | (24, 1) | 96.50 (88.75), 91.87 (82.68) | 413.62 (402.42), 428.34 (386.54) |
+
+What the numbers say:
+
+- **Where the cap binds (24 levels, 24 threads),** the sweep is 23–24 %
+  faster at the median and 41–44 % at the min. The step gains 2–4 %
+  (median), because the sweep is about a quarter of it there.
+- **At 150 levels and 24 threads** the split is master's, so no change
+  is expected. The two builds agree within the run-to-run spread. The
+  second master run was 15 % (sweep) and 40 % (step) slower in both
+  measures, but the same build 15 minutes earlier was not, so this is
+  the machine and not the code.
+- **The 72-thread case** (Fritz 20 m) is not measurable here and has to
+  be measured on Fritz. The rule changes it from 72 two-plane slabs, all
+  edge planes, to (36, 2): slabs of 4–5 planes with 2–3 inner.
+- Earlier in the same session, before the rule change, 400 × 400 × 24
+  gave the same picture: master 21.93 (14.89) and 21.46 (14.73) ms;
+  this branch 17.96 (8.10) and 20.77 (8.80) ms.
+
+**PALM for comparison** (`prognostic_equations.f90`, 322–816). PALM
+splits the prognostic loop over i with OpenMP (`!$OMP DO` over `i =
+nxl, nxr`) and gives each thread whole columns. It writes the new
+values to separate arrays (`u_p` …), so it has no edge planes or edge
+rows to hold back. That is not reimplemented here: the sweep updates in
+place to save the second stream of each field.
+
+**Tests.**
+
+- **`test/fused_sweep.jl`** (1924 checks):
+  - The base term at 1–5 slabs times 1–3 row ranges, and the composed
+    terms of reach 2 (`ly = 2`, 3 + 4 ring rows) at up to 3 row ranges.
+    Both run serial and threaded, in forward and reversed block order,
+    on regular and stretched grids, dry and moist, Euler and RK3,
+    against the separate passes (`agree`, round-off).
+  - The buffers' reuse, their shapes, and the refusal of row ranges of
+    fewer than `2ly` rows.
+  - The rule's bounds over T ∈ {1, …, 72} and five grids, with the
+    lifted cap and the slab-height bound at row lengths 200 and 400.
+  - A `-t 4` subprocess that runs 30 splits concurrently against the
+    one-block sweep, with a tolerance of 4 eps of each field's maximum
+    (measured 0).
+  - In the same subprocess, `step_rk3!` on a 6-level grid, which the
+    rule splits as (1, 4), against `loop_fusion = "never"` after 5
+    steps. The tolerance is 1e-10 relative, for round-off growth;
+    measured 0.
+- **`test/fused_sweep_post.jl`** (2635 checks): the driver's post terms
+  and every model operator inside the sweep (kinematic flow, IBM, tiled
+  canopy drag, resolved canopy drag, facade and ground wall stress, the
+  urban chain) at 1–5 slabs times 1, 3 or 4 row ranges, both orders,
+  against the whole-field form, diagnostics included.
+- **Mutation check.** With the post terms' y-widths not starting at the
+  edge rows (`post_plan(post, lz, 0)`), `fused_sweep_post.jl` fails 560
+  of 2635 checks, among them the facade wall stress at nt = 4 for every
+  slab count, both backends and both stage forms.
+- **No bug was caught.** No test expectation proved wrong.
+- **Suite:** `test/run.jl` 127 jobs, 20 439 tests passed (before the
+  rule change; `fused_sweep.jl` was rerun after it).
+- **Validation:** `validation/run.jl --only gabls1.jl,urban_checks.jl`,
+  8 and 33 checks passed.
+
+**Deviations from #563.**
+
+- No `SweepBlock`, `block_slot` or `edge_rows`. The predictor's edge
+  rows are its lag, and its block is three integers.
+- No `reverse_slabs` keyword. The tests run the blocks in reverse
+  themselves, as master's tests did.
+- The slab bound depends on the row length (above).
+
+**Open.**
+
+- Fritz at 72 threads, 20 m: the step time and the busy threads in the
+  sweep with (36, 2).
+- The rule was tuned on one machine and two row lengths.
+- The TKE pass's split (#563's other half) needs D1.
+
 ---
 
 # Data assimilation and inverse problems

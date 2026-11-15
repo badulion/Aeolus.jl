@@ -580,7 +580,7 @@ for `T` threads, a fraction `f_edge` of edge points and `c = 0.5`
 fewest edge points. Measured on one 12-core machine (24 threads): at row
 length 200 slabs of 20 planes ran well and whole 60-level columns
 10-110 % slower (#558); at row length 400 and 150 levels slabs of 6-12
-planes ran 48-65 ms (min) and of 19-50 planes 82-104 ms (#566). Both fit
+planes ran 48-71 ms (min) and of 19-50 planes 82-104 ms (#566). Both fit
 a bound of about 5000 points per plane-row slab (docs/src/design/roadmap.md).
 """
 function sweep_blocks(b, npoints::Integer, nk::Integer, nj::Integer; lz::Integer = 1, ly::Integer = 1)
