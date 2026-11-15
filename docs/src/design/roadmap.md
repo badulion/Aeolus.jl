@@ -3034,7 +3034,7 @@ Tests: `test/tke.jl` (no test called `wall_distance` before, although its docstr
   - `test/backends.jl` and `test/config_model.jl`: FFTW stays at 1 thread; a deprecated count warns once and is ignored; 0 is an error.
 - **A test expectation that was wrong** (while writing the test, not in the code). The first `BlockTransform` round trip failed: the test made the inverse plans after transforming. A MEASURE plan overwrites its arrays while it times candidates, so the test now makes every plan before any data. The solvers already did: they plan on freshly zeroed buffers.
 - **Suite and validation.** Merged with master c7603464 (#576):
-  - `test/run.jl`: 127 jobs, 18 262 tests passed.
+  - `test/run.jl`: 127 jobs, 18 262 tests passed; after also merging master 03780fb2 (#577), 127 jobs, 18 270 tests passed.
   - `validation/run.jl --only gabls1.jl,neutral_abl.jl,wall_models_channel.jl,nest_boundary.jl,outflow_conditions.jl,urban_checks.jl`: all six jobs passed, 75 passed, 2 broken (the two existing `@test_broken` of `wall_models_channel.jl`).
 - **Docs.** `fftw_planning.jl` (the policy, `BlockTransform`, the plan constructors), `init_threads!` and `apply_transform!`, `pressure_solvers.md`, `theory/poisson.md`, `ka_port.md` (FFTW and BLAS; "Thread pinning" corrected), `run_configuration.md`, and the API pages for operators, config and I/O.
 - **Not done here.** The #566 20 m step on Fritz at `-t 72,0`, pinned (`JULIA_EXCLUSIVE=1`) and unpinned, has to be measured with this change. The GC threads were also pinned to core 0 on Fritz but used no CPU while stepping (#575 "Not covered").
