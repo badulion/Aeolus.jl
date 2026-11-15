@@ -482,6 +482,51 @@ end
     @test SIMs.loop_fusion(SIMs.set_loop_fusion!(an, :never)) === :never
 end
 
+@testset "step_rk3!: uⁿ kept by an array swap, not a copy (#584)" begin
+    # The first substage's fused sweep reads uⁿ from the simulation's arrays,
+    # writes u* into the workspace's and swaps them; the passes (`never`)
+    # copy uⁿ as before #584. Both agree within round-off (ROUNDOFF_RTOL)
+    # over three steps, dry and moist, with buoyancy, Coriolis and the SGS.
+    for moist in (false, true)
+        mk() = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2, θ₀ = 300.0, C_s = 0.17, f_coriolis = 1e-4,
+                                              moisture = moist))
+        a = mk(); r = SIMs.set_loop_fusion!(mk(), :never)
+        ws = SIMs.rk3_workspace(a); wr = SIMs.rk3_workspace(r)
+        ua, u0a, θa, θ0a = a.u.data, ws.u0, a.θ.data, ws.θ0
+        qa, q0a = a.qv.data, ws.q0
+        ur, u0r = r.u.data, wr.u0
+        step_rk3!(a, 0.5); step_rk3!(r, 0.5)
+        @test _fs_agree(a, r)
+        # the fused step swapped (identity, not values): the simulation holds
+        # the workspace's arrays and the workspace uⁿ's; the passes did not
+        @test a.u.data === u0a && ws.u0 === ua && a.θ.data === θ0a && ws.θ0 === θa
+        @test moist ? (a.qv.data === q0a && ws.q0 === qa) : (a.qv.data === qa && ws.q0 === q0a)
+        @test r.u.data === ur && wr.u0 === u0r
+        # and back on the next step
+        step_rk3!(a, 0.5); step_rk3!(r, 0.5)
+        @test a.u.data === ua && ws.u0 === u0a
+        step_rk3!(a, 0.5); step_rk3!(r, 0.5)
+        @test _fs_agree(a, r)
+        # the halo shell of the predicted state is uⁿ's, as with the copy:
+        # a step from a state with NaN in the workspace gives the same values
+        b = mk(); c = mk()
+        wb = SIMs.rk3_workspace(b)
+        for x in (wb.u0, wb.v0, wb.w0, wb.θ0, wb.q0)
+            fill!(x, NaN)
+        end
+        step_rk3!(b, 0.5); step_rk3!(c, 0.5)
+        @test _fs_agree(b, c)
+        @test !any(isnan, b.u.data) && !any(isnan, b.θ.data) && !any(isnan, b.w.data)
+    end
+    # a workspace of another array type than the fields': copied, not swapped
+    s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2)); r = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2))
+    al(x) = PermutedDimsArray(zeros(size(x)), (1, 2, 3))
+    wv = SIMs.RK3Workspace(al(s.u.data), al(s.v.data), al(s.w.data), al(s.θ.data), al(s.θ.data))
+    u = s.u.data
+    step_rk3!(s, 0.5; workspace = wv); step_rk3!(r, 0.5)
+    @test s.u.data === u && _fs_agree(s, r)
+end
+
 @testset "components: a sweep term keeps the fused sweep, a missing one is reported" begin
     for drv in (:euler, :rk3)
         mk(c) = (s = _fs_seed!(BoussinesqSimulation(g; ν = 1e-2));
