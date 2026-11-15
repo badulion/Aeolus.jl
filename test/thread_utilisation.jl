@@ -98,17 +98,4 @@ const Sim = Aeolus.Simulations
             @test maximum(abs.(d1 .- d2)) <= 4eps() * maximum(abs.(d2))
         end
     end
-    # A2: above 4 M points the state copy is a threaded launch
-    @testset "copy_storage!: large arrays copied by a launch, exactly" begin
-        n = (162, 162, 162)                              # 4.25 M points, above the threshold
-        @test prod(n) >= Sim._COPY_THREADED_MIN
-        src = randn(Xoshiro(11), n); dst = zeros(n)
-        with_backend(tb) do
-            Sim.copy_storage!(dst, src)
-        end
-        @test dst == src                                 # copied data: exact
-        small = randn(Xoshiro(12), 8, 8, 8); d2 = zeros(8, 8, 8)
-        @test Sim.copy_storage!(d2, small) == small
-        @test_throws DimensionMismatch Sim.copy_storage!(zeros(2, 2, 2), small)
-    end
 end

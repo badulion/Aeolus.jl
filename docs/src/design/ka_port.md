@@ -3173,8 +3173,8 @@ The Berlin 20 m trace (1000 × 1000 × 150, 72 threads, unpinned; `benchmarks/hp
 - **The halo shell.** `_shell_map!` made one (j, k) row per work item over every plane. The 2Hz halo planes below and above the interior are whole planes, so a few work items held most of the shell (4.1 busy). Those planes now have launches of their own.
 - **Serial passes made launches:**
   - the radiative cooling profile;
-  - the open-boundary mass-flux sums, as `plane_reduce!`, and the correction itself;
-  - the step-start copy, above 4 M points (`copy_storage!`).
+  - the open-boundary mass-flux sums, as `plane_reduce!`, and the correction itself.
+- **Not changed: the step-start copy.** `copy_storage!` stays `copyto!`. A threaded launch of the copy was measured against it on a 24-thread desktop: at 1006 × 1006 × 156 it took 61.5 ms against 61.5 ms at 4 threads and 72.7 ms against 60.6 ms at 24. A threaded zeroing took 41.9 ms against 17.5 ms for `fill!`. One thread already saturates that machine's memory bandwidth. Whether a launch pays on a two-socket node is unmeasured.
 
 Measured numbers are in the roadmap section of the thread-utilisation issue.
 
