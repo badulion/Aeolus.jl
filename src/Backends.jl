@@ -422,6 +422,19 @@ end
     return nothing
 end
 
+# A k-plane of a 3-D launch per work item, for boxes thin along i (fewer
+# than `_THIN_ROW` points: an x-normal boundary plane is its H halo cells
+# wide). One i-row per work item made those 1-3-point rows, ~150 000 work
+# items for one plane of the Berlin 20 m grid: the open-boundary blend over
+# a 3 × 1006 × 156 west plane took 4.0 ms at 1 thread and 3.3 ms at 24,
+# against 0.13 and 0.05 ms for the 1006 × 3 × 156 south plane (#566).
+@kernel inbounds = true function _planes3_kernel!(ir, jr, ok, call)
+    c = @index(Global, Linear)
+    k = c + ok
+    _nest!(call[1], ir, jr, k:k, call[2]...)    # `call = (body!, args)`, as `_rows3_kernel!` (#574)
+end
+const _THIN_ROW = 8
+
 @kernel inbounds = true function _rows2_kernel!(body!, i1, i2, oj, args)
     b = @index(Global, Linear)
     j = b + oj
@@ -481,6 +494,13 @@ function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{In
                     weight::Int = 1) where {F}
     nj, nk = length(jr), length(kr)
     nt = _ntasks(length(ir) * nj * nk * weight)
+    if length(ir) < _THIN_ROW && nk >= nt
+        # a thin box across x (an x-normal boundary plane: 1 to H points
+        # along i): one k-plane per work item instead of one 1-3-point row
+        kern = _planes3_kernel!(b.ka, nt >= Threads.nthreads() ? 1 : cld(nk, nt))
+        kern(ir, jr, first(kr) - 1, (body!, args); ndrange = nk)
+        return nothing
+    end
     wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
     kern = _rows3_kernel!(b.ka, wg)
     kern(first(ir), last(ir), first(jr) - 1, first(kr) - 1, (body!, args); ndrange = (nj, nk))

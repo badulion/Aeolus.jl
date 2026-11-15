@@ -937,42 +937,6 @@ boundary_flux_weights(sim) = nothing
 @inline _wtop(::Nothing, k) = 1
 @inline _wtop(W::Tuple, k) = W[2][k]
 
-# Fold over every fluid interior face of a normal plane:
-# acc = g(acc, value_ref_indices..., outward sign, weight·area). The
-# accumulator is threaded through the calls rather than captured and
-# reassigned by a closure, which boxed it (#329: 384 KiB per mass-flux
-# correction of a 32³ child).
-function _fold_faces(g, acc, p::OpenPlane{T}, m::AbstractMesh{T}, W) where {T}
-    fl = _face_local(p)
-    s = p.high ? one(T) : -one(T)
-    if p.axis == 1
-        for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz)
-            A = m.dy * _layer_dz(m, k)          # per level on a stretched mesh (#328)
-            for (a, j) in enumerate(m.Hy+1:m.Hy+m.Ny)
-                p.fluid[a, b] || continue
-                acc = g(acc, fl, j, k, s, T(_wlat(W, k)) * A)
-            end
-        end
-    elseif p.axis == 2
-        for (b, k) in enumerate(m.Hz+1:m.Hz+m.Nz)
-            A = m.dx * _layer_dz(m, k)
-            for (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
-                p.fluid[a, b] || continue
-                acc = g(acc, i, fl, k, s, T(_wlat(W, k)) * A)
-            end
-        end
-    else
-        A = m.dx * m.dy
-        kt = p.high ? m.Hz + m.Nz + 1 : m.Hz + 1      # top face, or an open bottom (nest)
-        wt = T(_wtop(W, kt))
-        for (b, j) in enumerate(m.Hy+1:m.Hy+m.Ny), (a, i) in enumerate(m.Hx+1:m.Hx+m.Nx)
-            p.fluid[a, b] || continue
-            acc = g(acc, i, j, fl, s, wt * A)
-        end
-    end
-    return acc
-end
-
 """
     open_boundary_flux(state, weights = nothing) -> Q
 
@@ -984,25 +948,75 @@ function open_boundary_flux(st::OpenBoundaryState{T}, W = nothing) where {T}
     Q = zero(T)
     for p in st.planes
         p.normal || continue
-        d = p.data
-        Q = _fold_faces((q, i, j, k, s, wA) -> q + s * d[i, j, k] * wA, Q, p, st.mesh, W)
+        Q += _face_sums(p, st.mesh, W)[1]
     end
     return Q
 end
 
+# The faces of a normal plane as launch ranges over its buffer (storage
+# indices j, k for an x face, i, k for a y face, i, j for the top), the
+# plane axis the reduction runs over last.
+function _face_ranges(p::OpenPlane, m::AbstractMesh)
+    fl = _face_local(p)
+    kt = p.high ? m.Hz + m.Nz + 1 : m.Hz + 1
+    p.axis == 1 && return (fl:fl, m.Hy+1:m.Hy+m.Ny, m.Hz+1:m.Hz+m.Nz)
+    p.axis == 2 && return (m.Hx+1:m.Hx+m.Nx, fl:fl, m.Hz+1:m.Hz+m.Nz)
+    return (m.Hx+1:m.Hx+m.Nx, m.Hy+1:m.Hy+m.Ny, fl:fl)
+end
+
+# weight × area of the face (i, j, k) of plane `p` (its storage indices
+# in the buffer), and whether it is a fluid face
+@inline function _face_wA(ax, high, i, j, k, fluid, m, W, ::Type{T}) where {T}
+    @inbounds if ax == 1
+        return fluid[j - m.Hy, k - m.Hz], T(_wlat(W, k)) * T(m.dy * _layer_dz(m, k))
+    elseif ax == 2
+        return fluid[i - m.Hx, k - m.Hz], T(_wlat(W, k)) * T(m.dx * _layer_dz(m, k))
+    else
+        kt = high ? m.Hz + m.Nz + 1 : m.Hz + 1      # top face, or an open bottom (nest)
+        return fluid[i - m.Hx, j - m.Hy], T(_wtop(W, kt)) * T(m.dx * m.dy)
+    end
+end
+
+# (outward flux, outflow area, area) of the face (i, j, k): the three sums
+# of the correction in one pass over the buffer
+@inline function _face_terms(i, j, k, d, ax, high, s, fluid, m, W)
+    T = eltype(d)
+    f, wA = _face_wA(ax, high, i, j, k, fluid, m, W, T)
+    f || return (zero(T), zero(T), zero(T))
+    v = s * @inbounds(d[i, j, k])
+    return (v * wA, v > 0 ? wA : zero(T), wA)
+end
+
+# The three sums over the fluid faces of plane `p`, as canonical plane sums
+# (`plane_reduce!`, threaded and thread-invariant). They were serial folds
+# with a closure per face, three or four passes per correction (#566,
+# 3.1 % of the main thread at Berlin 20 m).
+function _face_sums(p::OpenPlane{T}, m::AbstractMesh, W) where {T}
+    r = _face_ranges(p, m)
+    n = length(r[3])
+    parts = (zeros(T, n), zeros(T, n), zeros(T, n))
+    s = p.high ? one(T) : -one(T)
+    plane_reduce!(parts, Backends.backend(p.data), _face_terms, r, p.data, p.axis, p.high, s,
+                  p.fluid, m, W)
+    return (sum(parts[1]), sum(parts[2]), sum(parts[3]))
+end
+
+@inline function _face_subtract!(i, j, k, d, ax, high, s, fluid, m, W, δ, only_out)
+    f, _ = _face_wA(ax, high, i, j, k, fluid, m, W, eltype(d))
+    @inbounds if f && (!only_out || s * d[i, j, k] > 0)
+        d[i, j, k] -= s * δ
+    end
+    return nothing
+end
+
 # Subtract δ from the outward normal velocity of every open fluid face (only
-# the outflow faces with `only_out`). A function of its own so that no
-# closure captures a variable that is reassigned.
+# the outflow faces with `only_out`): one launch per plane.
 function _subtract_flux_correction!(st::OpenBoundaryState{T}, W, δ, only_out::Bool) where {T}
     for p in st.planes
         p.normal || continue
-        d = p.data
-        _fold_faces(nothing, p, st.mesh, W) do acc, i, j, k, s, wA
-            if !only_out || s * d[i, j, k] > 0
-                d[i, j, k] -= s * δ
-            end
-            acc
-        end
+        s = p.high ? one(T) : -one(T)
+        launch!(Backends.backend(p.data), _face_subtract!, _face_ranges(p, st.mesh), p.data,
+                p.axis, p.high, s, p.fluid, st.mesh, W, T(δ), only_out)
     end
     return st
 end
@@ -1032,23 +1046,20 @@ Records `Q`, `δ` and the post-correction `residual` in the state (and in
 """
 function correct_boundary_mass_flux!(st::OpenBoundaryState{T}, W = nothing;
                                      t::Real = st.t) where {T}
-    Q = open_boundary_flux(st, W)
+    # the flux and both areas in one pass per plane
+    Q = zero(T); Aout = zero(T); Aall = zero(T)
+    for p in st.planes
+        p.normal || continue
+        q, ao, aa = _face_sums(p, st.mesh, W)
+        Q += q; Aout += ao; Aall += aa
+    end
     δ = zero(T)
     if st.correction !== :none && Q != 0
         only_out = st.correction === :outflow_only
-        A = zero(T)
-        for p in st.planes
-            p.normal || continue
-            d = p.data
-            A = _fold_faces((a, i, j, k, s, wA) -> (!only_out || s * d[i, j, k] > 0) ? a + wA : a,
-                            A, p, st.mesh, W)
-        end
+        A = only_out ? Aout : Aall
         if A == 0          # no outflow face: fall back to all faces
             only_out = false
-            for p in st.planes
-                p.normal || continue
-                A = _fold_faces((a, i, j, k, s, wA) -> a + wA, A, p, st.mesh, W)
-            end
+            A = Aall
         end
         δ = Q / A
         _subtract_flux_correction!(st, W, δ, only_out)

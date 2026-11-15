@@ -17,6 +17,7 @@ module Radiation
 
 using ..Grids: RegularGrid, interior
 using ..Fields: Field
+using ..Backends: Backends, launch!
 using ..RadiationCore: STEFAN_BOLTZMANN
 using ..SurfaceExchange: SurfaceExchange, AbstractSurface, SurfaceForcing, SurfaceFluxes,
                          turbulent_fluxes
@@ -55,10 +56,12 @@ walls.
 function apply_radiative_cooling!(tθ::Field, rate::Real; solid = nothing)
     _, _, kk = interior(tθ.mesh)
     solid === nothing || return apply_radiative_cooling!(tθ, fill(rate, length(kk)); solid = solid)
-    r = eltype(tθ.data)(rate)
-    for k in kk
-        @views tθ.data[:, :, k] .+= r
-    end
+    d = tθ.data
+    # one launch over the storage columns of the interior levels (the planes
+    # the former serial loop added to, halo columns included): a serial pass
+    # over the field was 3.7 % of the main thread at Berlin 20 m (#566)
+    launch!(Backends.backend(d), _add_uniform!, (1:size(d, 1), 1:size(d, 2), UnitRange{Int}(kk)),
+            d, eltype(d)(rate))
     return tθ
 end
 
@@ -66,23 +69,32 @@ function apply_radiative_cooling!(tθ::Field, rate::AbstractVector; solid = noth
     ii, jj, kk = interior(tθ.mesh)
     length(rate) == length(kk) ||
         error("apply_radiative_cooling!: rate profile length $(length(rate)) ≠ Nz $(length(kk))")
+    d = tθ.data
+    r = convert(Vector{eltype(d)}, rate)          # Nz values
+    k0 = first(kk) - 1
     if solid === nothing
-        for (idx, k) in enumerate(kk)
-            r = eltype(tθ.data)(rate[idx])
-            @views tθ.data[:, :, k] .+= r
-        end
+        launch!(Backends.backend(d), _add_profile!, (1:size(d, 1), 1:size(d, 2), UnitRange{Int}(kk)),
+                d, r, k0)
     else
-        size(solid) == size(tθ.data) ||
-            error("apply_radiative_cooling!: solid mask is $(size(solid)), field data $(size(tθ.data))")
-        d = tθ.data
-        @inbounds for (idx, k) in enumerate(kk)
-            r = eltype(d)(rate[idx])
-            for j in jj, i in ii
-                solid[i, j, k] || (d[i, j, k] += r)
-            end
-        end
+        size(solid) == size(d) ||
+            error("apply_radiative_cooling!: solid mask is $(size(solid)), field data $(size(d))")
+        launch!(Backends.backend(d), _add_profile_air!, (UnitRange{Int}(ii), UnitRange{Int}(jj),
+                UnitRange{Int}(kk)), d, r, k0, solid)
     end
     return tθ
+end
+
+@inline function _add_uniform!(i, j, k, d, r)
+    @inbounds d[i, j, k] += r
+    return nothing
+end
+@inline function _add_profile!(i, j, k, d, r, k0)
+    @inbounds d[i, j, k] += r[k - k0]
+    return nothing
+end
+@inline function _add_profile_air!(i, j, k, d, r, k0, solid)
+    @inbounds solid[i, j, k] || (d[i, j, k] += r[k - k0])
+    return nothing
 end
 
 # -------------------------------------------------------------------------

@@ -1216,9 +1216,18 @@ function _shell_map!(f::F, outs::Tuple, ins, mesh) where {F}
         throw(DimensionMismatch("_shell_map!: sizes differ"))
     ni, nj, nk = size(o1)
     ir, jr, kr = interior(mesh)
-    launch_weighted!(Backends.backend(o1), ni, _b_shell!, (1:nj, 1:nk), f, outs, ins, ir, jr, kr, ni)
+    b = Backends.backend(o1)
+    # The halo k-planes below and above the interior are whole planes, each
+    # (Nx+2Hx)(Ny+2Hy) points: launched over their own rows. Inside one
+    # (j, k) launch over every plane they were a few work items holding most
+    # of the shell, 4 of 72 threads busy at Berlin 20 m (#566).
+    first(kr) > 1 && Backends.launch!(b, _b_shell_point!, (1:ni, 1:nj, 1:first(kr) - 1), f, outs, ins)
+    last(kr) < nk && Backends.launch!(b, _b_shell_point!, (1:ni, 1:nj, last(kr) + 1:nk), f, outs, ins)
+    # the interior levels: per (j, k) row, its halo points only
+    launch_weighted!(b, ni, _b_shell!, (1:nj, UnitRange{Int}(kr)), f, outs, ins, ir, jr, kr, ni)
     return nothing
 end
+@inline _b_shell_point!(i, j, k, f, outs, ins) = _shell_point!(f, outs, ins, i, j, k)
 
 # The whole storage of an array (halos included) as launch ranges.
 _storage(a::AbstractArray{T,3}) where {T} = map(r -> UnitRange{Int}(r), axes(a))

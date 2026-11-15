@@ -122,6 +122,15 @@ end
         A = zeros(5, 300, 40)
         launch!(b, body!, (1:5, 1:300, 1:40), A, 2.0)
         @test all(==(2.0), A)
+        # the k-plane kernel of thin boxes along i (#566) passes the body on
+        # to `_nest!` the same way, so it takes it in the same tuple
+        kp = Aeolus.Backends.cpu__planes3_kernel!
+        argP = Tuple{typeof(kp), Int, UnitRange{Int}, UnitRange{Int}, Int,
+                     Tuple{typeof(body!), Tuple{Array{Float64,3}, Float64}}}
+        if isdefined(Core.Compiler, :get_compileable_sig)
+            sig = Core.Compiler.get_compileable_sig(only(methods(kp)), argP, Core.svec())
+            @test sig !== nothing && !any(T -> T === Function, sig.parameters)
+        end
     end
 
     rng = Xoshiro(91)
