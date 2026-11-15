@@ -646,26 +646,26 @@ end
     end
     return nothing
 end
-@noinline function _prow_mom!(u, v, w, buf, a, b, s, j, k, ii, pu)
+@noinline function _prow_mom!(uo, vo, wo, u, v, w, buf, a, b, s, j, k, ii, pu)
     @inbounds @simd ivdep for i in ii
-        u[i, j, k] = pu(u[i, j, k], buf[i, a, b, 1, s])
-        v[i, j, k] = pu(v[i, j, k], buf[i, a, b, 2, s])
-        w[i, j, k] = pu(w[i, j, k], buf[i, a, b, 3, s])
+        uo[i, j, k] = pu(u[i, j, k], buf[i, a, b, 1, s])
+        vo[i, j, k] = pu(v[i, j, k], buf[i, a, b, 2, s])
+        wo[i, j, k] = pu(w[i, j, k], buf[i, a, b, 3, s])
     end
     return nothing
 end
-@noinline function _prow_ϕ!(ϕ, buf, a, b, f, s, j, k, ii, ps, snap)
+@noinline function _prow_ϕ!(ϕo, ϕ, buf, a, b, f, s, j, k, ii, ps, snap)
     @inbounds @simd ivdep for i in ii
-        ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], buf[i, a, b, f, s], snap, i, j, k)
+        ϕo[i, j, k] = _pred(ps, ϕ[i, j, k], buf[i, a, b, f, s], snap, i, j, k)
     end
     return nothing
 end
 @inline _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, ::Nothing, m, ν) = nothing
 @inline _trow_sc!(buf, a, b, f, s, j, k, ii, u, v, w, ϕ::AbstractArray, m, ν) =
     _trow_ϕ!(buf, a, b, f, s, j, k, ii, u, v, w, ϕ, m, ν)
-@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ::Nothing, p) = nothing
-@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ϕ::AbstractArray, p::Tuple) =
-    _prow_ϕ!(ϕ, buf, a, b, f, s, j, k, ii, p[1], p[2])
+@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ::Nothing, ϕ, p) = nothing
+@inline _prow_sc!(buf, a, b, f, s, j, k, ii, ϕo::AbstractArray, ϕ::AbstractArray, p::Tuple) =
+    _prow_ϕ!(ϕo, ϕ, buf, a, b, f, s, j, k, ii, p[1], p[2])
 
 @inline function _trows!(buf, a, b, s, j, k, ii, u, v, w, θ, qv, m, ν)
     _trow_mom!(buf, a, b, s, j, k, ii, u, v, w, m, ν)
@@ -686,12 +686,22 @@ end
     return _add_rows!(Base.tail(ts), buf, a, b, s, j, k, ii, st)
 end
 
-# the predictor of one row: u, v, w by `pu`, each scalar by its `(ps, snap)`
+# the predictor of one row: u, v, w by `pu`, each scalar by its `(ps, snap)`,
+# from the state the terms read (`st`) into the state the predictor writes
+# (`_dst(st)`: the same arrays, or other ones when out of place)
 @inline function _prows!(buf, a, b, s, j, k, ii, st, pu, p1, p2)
-    _prow_mom!(st.u, st.v, st.w, buf, a, b, s, j, k, ii, pu)
-    _prow_sc!(buf, a, b, 4, s, j, k, ii, st.θ, p1)
-    _prow_sc!(buf, a, b, 5, s, j, k, ii, st.qv, p2)
+    d = _dst(st)
+    _prow_mom!(d.u, d.v, d.w, st.u, st.v, st.w, buf, a, b, s, j, k, ii, pu)
+    _prow_sc!(buf, a, b, 4, s, j, k, ii, d.θ, st.θ, p1)
+    _prow_sc!(buf, a, b, 5, s, j, k, ii, d.qv, st.qv, p2)
 end
+
+# The arrays the predictor writes and the post terms correct. In place
+# (every caller but one) they are the arrays the terms read, `st` itself.
+# Out of place, `st.d`: the first RK3 stage reads uⁿ from the arrays it
+# keeps for the stage combinations and writes u* into the simulation's
+# (#584, instead of copying uⁿ). A `NamedTuple` field test: static.
+@inline _dst(st::NamedTuple) = hasfield(typeof(st), :d) ? getfield(st, :d) : st
 
 # ---------------------------------------------------------------------------
 # the sweep
@@ -735,7 +745,7 @@ function _b_sweep_block!(n, terms, post, plan, st, pu, p1, p2, ring, edge, ii, j
                 _prows!(ring, k - k0 + 1, rp, n, jp, k, ii, st, pu, p1, p2)
             end
         end
-        _post_rows!(post, plan, jp, k0, k1, ii, j0:j1, st)
+        _post_rows!(post, plan, jp, k0, k1, ii, j0:j1, _dst(st))
     end
     return nothing
 end
@@ -766,18 +776,19 @@ end
         (k < k0 || k - k0 < lz) && return nothing        # a front slot already
     end
     u, v, w = st.u, st.v, st.w
+    d = _dst(st)
     @inbounds begin
-        u[i, j, k] = pu(u[i, j, k], edge[i, j, e, 1, s])
-        v[i, j, k] = pu(v[i, j, k], edge[i, j, e, 2, s])
-        w[i, j, k] = pu(w[i, j, k], edge[i, j, e, 3, s])
+        d.u[i, j, k] = pu(u[i, j, k], edge[i, j, e, 1, s])
+        d.v[i, j, k] = pu(v[i, j, k], edge[i, j, e, 2, s])
+        d.w[i, j, k] = pu(w[i, j, k], edge[i, j, e, 3, s])
     end
-    _edge_sc!(i, j, k, e, 4, s, st.θ, p1, edge)
-    _edge_sc!(i, j, k, e, 5, s, st.qv, p2, edge)
+    _edge_sc!(i, j, k, e, 4, s, d.θ, st.θ, p1, edge)
+    _edge_sc!(i, j, k, e, 5, s, d.qv, st.qv, p2, edge)
     return nothing
 end
-@inline _edge_sc!(i, j, k, e, f, s, ::Nothing, p, edge) = nothing
-@inline function _edge_sc!(i, j, k, e, f, s, ϕ, (ps, snap), edge)
-    @inbounds ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], edge[i, j, e, f, s], snap, i, j, k)
+@inline _edge_sc!(i, j, k, e, f, s, ::Nothing, ϕ, p, edge) = nothing
+@inline function _edge_sc!(i, j, k, e, f, s, ϕo, ϕ, (ps, snap), edge)
+    @inbounds ϕo[i, j, k] = _pred(ps, ϕ[i, j, k], edge[i, j, e, f, s], snap, i, j, k)
     return nothing
 end
 
@@ -798,7 +809,7 @@ function _check_inputs(b, terms::Tuple)
 end
 
 """
-    blocked_predictor!(bufs, terms, [post, halo!,] u, v, w, pu, s1, s2, g)
+    blocked_predictor!(bufs, terms, [post, halo!,] u, v, w, pu, s1, s2, g; src = nothing)
 
 The tendencies of a substage and its predictor in one sweep (SC-e #405,
 #533): the tendency of each field is the sum of the `terms` (a tuple; the
@@ -823,6 +834,14 @@ post-predictor operators: inside the sweep on the rows behind the
 predictor, the rest after it ([`post_plan`](@ref)); `halo!()` fills the
 halos of the predicted u, v, w for the points run after the sweep. Their
 [`prepare!`](@ref) and [`finish!`](@ref) are the caller's.
+
+`src` (default `nothing`: in place) is the state out of place: a
+`NamedTuple` `(u, v, w, θ, qv)` of arrays shaped like the fields' (`θ`,
+`qv` `nothing` where `s1`, `s2` are). The terms then read it, and the
+predictor writes `u ← pu(src.u, tu)` (likewise the others) into the
+fields, whose interior it overwrites and whose halos it leaves; the post
+terms correct the fields. The first substage of `step_rk3!` runs this way,
+so uⁿ stays in `src` without a copy (#584).
 """
 blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
                    u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ}, pu, s1, s2, g::AbstractMesh) =
@@ -830,7 +849,7 @@ blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
 function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
                             post::Tuple{Vararg{PostTerm}}, halo!::H,
                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                            pu, s1, s2, g::AbstractMesh) where {H}
+                            pu, s1, s2, g::AbstractMesh; src = nothing) where {H}
     ii, jj, kk = interior(g)
     ns, nt = bufs.ns, bufs.nt
     lag, lz = sweep_lags(terms)
@@ -845,7 +864,7 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{Swe
                                 "planes, $(bufs.ly) edge rows)"))
     b = Backends.backend(u.data)
     _check_inputs(b, terms)
-    st = (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))
+    st = _sweep_io(u, v, w, s1, s2, g, src)
     p1, p2 = _sweep_pred(s1), _sweep_pred(s2)
     plan = post_plan(post, lz, ly)
     nb = ns * nt
@@ -854,8 +873,31 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{Swe
     launch!(b, _b_sweep_edge!, (ii, jj, 1:2lz*ns), st, pu, p1, p2, bufs.edge, kk, ns, lz)
     ly > 0 && launch_weighted!(b, length(ii), _b_sweep_yedge!, (1:size(bufs.ring, 2), 1:2ly, 1:nb),
                                st, pu, p1, p2, bufs.ring, ii, jj, kk, ns, nt, lag, lz, ly)
-    _post_deferred!(b, post, plan, halo!, st, ii, jj, kk, ns, nt)
+    _post_deferred!(b, post, plan, halo!, _dst(st), ii, jj, kk, ns, nt)
     return nothing
+end
+
+_check_src(::Nothing, o) = nothing
+function _check_src(a, o)
+    size(a) == size(o) || throw(DimensionMismatch("blocked_predictor!: src $(size(a)) ≠ $(size(o))"))
+    a === o && throw(ArgumentError("blocked_predictor!: src aliases the predicted state (pass src = nothing)"))
+    return nothing
+end
+
+# The sweep's state: the arrays of `u, v, w` and of the scalars, read and
+# written in place (`src = nothing`); or, out of place, read from `src`
+# (a `NamedTuple` `(u, v, w, θ, qv)` of arrays, `qv` `nothing` when dry)
+# and written into those of `u, v, w, s1, s2` (`st.d`, see `_dst`).
+function _sweep_io(u, v, w, s1, s2, g, ::Nothing)
+    return (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))
+end
+function _sweep_io(u, v, w, s1, s2, g, src::NamedTuple)
+    d = _sweep_io(u, v, w, s1, s2, g, nothing)
+    (src.θ === nothing) == (d.θ === nothing) && (src.qv === nothing) == (d.qv === nothing) ||
+        throw(ArgumentError("blocked_predictor!: src has other scalars than the predicted state"))
+    _check_src(src.u, d.u); _check_src(src.v, d.v); _check_src(src.w, d.w)
+    _check_src(src.θ, d.θ); _check_src(src.qv, d.qv)
+    return (u = src.u, v = src.v, w = src.w, θ = src.θ, qv = src.qv, m = d.m, d = d)
 end
 
 # ---------------------------------------------------------------------------
@@ -928,18 +970,19 @@ end
 # the predictor of one point from the tendency fields
 @inline function _b_point_predictor!(i, j, k, st, tf, pu, p1, p2)
     u, v, w = st.u, st.v, st.w
+    d = _dst(st)
     @inbounds begin
-        u[i, j, k] = pu(u[i, j, k], tf.u[i, j, k])
-        v[i, j, k] = pu(v[i, j, k], tf.v[i, j, k])
-        w[i, j, k] = pu(w[i, j, k], tf.w[i, j, k])
+        d.u[i, j, k] = pu(u[i, j, k], tf.u[i, j, k])
+        d.v[i, j, k] = pu(v[i, j, k], tf.v[i, j, k])
+        d.w[i, j, k] = pu(w[i, j, k], tf.w[i, j, k])
     end
-    _point_sc!(i, j, k, st.θ, tf.θ, p1)
-    _point_sc!(i, j, k, st.qv, tf.qv, p2)
+    _point_sc!(i, j, k, d.θ, st.θ, tf.θ, p1)
+    _point_sc!(i, j, k, d.qv, st.qv, tf.qv, p2)
     return nothing
 end
-@inline _point_sc!(i, j, k, ::Nothing, t, p) = nothing
-@inline function _point_sc!(i, j, k, ϕ, t, (ps, snap))
-    @inbounds ϕ[i, j, k] = _pred(ps, ϕ[i, j, k], t[i, j, k], snap, i, j, k)
+@inline _point_sc!(i, j, k, ::Nothing, ϕ, t, p) = nothing
+@inline function _point_sc!(i, j, k, ϕo, ϕ, t, (ps, snap))
+    @inbounds ϕo[i, j, k] = _pred(ps, ϕ[i, j, k], t[i, j, k], snap, i, j, k)
     return nothing
 end
 
@@ -977,7 +1020,7 @@ function term_tendencies!(tf::TendencyFields, terms::Tuple{BaseTerm,Vararg{Sweep
 end
 
 """
-    pointwise_predictor!(ka, tf::TendencyFields, terms, u, v, w, pu, s1, s2, g)
+    pointwise_predictor!(ka, tf::TendencyFields, terms, u, v, w, pu, s1, s2, g; src = nothing)
 
 The per-point form of [`blocked_predictor!`](@ref), for a GPU (#533 plan
 step 8; SC-d's form): one KernelAbstractions kernel on backend `ka` with
@@ -989,18 +1032,19 @@ snap)` as in `blocked_predictor!`). No ring buffer: the predictor cannot
 run in the first kernel, since a neighbour's stencil still reads the
 point. The values are those of the ring-buffer sweep within round-off
 (the same expressions). Tested on `KernelAbstractions.CPU()` as the
-stand-in for a GPU.
+stand-in for a GPU. `src`: the state out of place, as in
+[`blocked_predictor!`](@ref).
 """
 function pointwise_predictor!(ka, tf::TendencyFields, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
                               u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                              pu, s1, s2, g::AbstractMesh)
+                              pu, s1, s2, g::AbstractMesh; src = nothing)
     (s1 === nothing && s2 !== nothing) && throw(ArgumentError("pointwise_predictor!: s2 without s1"))
     (s1 === nothing || tf.θ !== nothing) && (s2 === nothing || tf.qv !== nothing) ||
         throw(ArgumentError("pointwise_predictor!: a scalar without its tendency field"))
     I3 = interior(g)
     b = Backends.backend(u.data)
     _check_inputs(b, terms)
-    st = (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))
+    st = _sweep_io(u, v, w, s1, s2, g, src)
     Backends.launch_points!(ka, _b_term_point!, I3, terms, st, tf)
     Backends.launch_points!(ka, _b_point_predictor!, I3, st, tf, pu, _sweep_pred(s1), _sweep_pred(s2))
     return nothing
@@ -1022,8 +1066,8 @@ Their [`prepare!`](@ref) and [`finish!`](@ref) are the caller's.
 function pointwise_predictor!(ka, tf::TendencyFields, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
                               post::Tuple{Vararg{PostTerm}}, halo!::H,
                               u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                              pu, s1, s2, g::AbstractMesh) where {H}
-    pointwise_predictor!(ka, tf, terms, u, v, w, pu, s1, s2, g)
+                              pu, s1, s2, g::AbstractMesh; src = nothing) where {H}
+    pointwise_predictor!(ka, tf, terms, u, v, w, pu, s1, s2, g; src)
     post === () && return nothing
     ii, jj, kk = interior(g)
     st = (u = u.data, v = v.data, w = w.data, θ = _sweep_field(s1), qv = _sweep_field(s2), m = grid_metrics(g))
