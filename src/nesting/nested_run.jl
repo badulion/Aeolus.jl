@@ -475,18 +475,7 @@ end
 
 # The open-boundary buffers copied into the preallocated snapshot (a fresh
 # one if planes were added since).
-_snapshot_open!(::Nothing, sim) = open_boundary_snapshot(sim)
-function _snapshot_open!(snap::AbstractVector, sim)
-    n = 0
-    for st in open_boundary_states(sim), p in st.planes
-        n += 1
-        (n <= length(snap) && size(snap[n]) == size(p.data)) ||
-            return open_boundary_snapshot(sim)
-        copyto!(snap[n], p.data)
-    end
-    n == length(snap) || return open_boundary_snapshot(sim)
-    return snap
-end
+_snapshot_open!(snap, sim) = open_boundary_snapshot!(snap, sim)
 
 function _restore_rb!(sim, rb::_Rollback, fields)
     restore_state!(sim, rb.snap)

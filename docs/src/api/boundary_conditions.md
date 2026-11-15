@@ -177,6 +177,7 @@ Aeolus.BoundaryConditions.open_boundary_flux
 Aeolus.BoundaryConditions.boundary_flux_weights
 Aeolus.BoundaryConditions.open_boundary_ledger
 Aeolus.BoundaryConditions.open_boundary_snapshot
+Aeolus.BoundaryConditions.open_boundary_snapshot!
 Aeolus.BoundaryConditions.open_boundary_checkpoint
 Aeolus.BoundaryConditions.restore_open_boundary_checkpoint!
 Aeolus.BoundaryConditions.restore_open_boundaries!
