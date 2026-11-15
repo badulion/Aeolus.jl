@@ -336,18 +336,18 @@ That is issue 1.
 >
 > Related: #566, #397, #572.
 
-### 5.5 Where the step loses threads at 72 threads: a report, not an issue draft
+### 5.5 Where the step loses threads at 72 threads: filed as #581 (2026-11-15)
 
-The full measurements and every candidate (21 items: serial code outside launches, launches on one thread or a few, partly idle launches, allocation and dispatch, placement) are in **`REPORT_threads_20m.md`**. The local agent decides what to do, what to file and in which order.
+The full measurements and every candidate (21 items: serial code outside launches, launches on one thread or a few, partly idle launches, allocation and dispatch, placement) are in **`REPORT_threads_20m.md`**. Filed as **#581** (milestone Speedup), each item checked against master's code; corrections to the report are marked ⚠ there (among them: the blend's cause is 3-point work items along i, not the serial threshold; Berlin's fused sweep has lz = 1, so master makes 72 slabs of 2–3 planes, not 37). Related PRs: #577 (fixes #574, merged), #580 (fixes #575), #579 (the fused sweep split in j).
 
 ## 6. Open items
 
 1. **Issue 1:** filed as #567 (§5.1); fixed by #571, confirmed on Fritz, closed 2026-11-14.
 2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12); fixed by #569 and #570, confirmed on Fritz, closed 2026-11-14.
-2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m.
-2. **Issue 4:** filed as #575 (§5.4, 2026-11-14): `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0. Chosen fix: serial FFTW plans run on Julia's threads (option 4).
+2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m. Fixed by #577 (merged 2026-11-15; 50 m: 151 → 1–3 MiB per step); open until confirmed on Fritz.
+2. **Issue 4:** filed as #575 (§5.4, 2026-11-14): `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0. Chosen fix: serial FFTW plans run on Julia's threads (option 4), PR #580.
 2. **#572** (the pressure-solve stall): fixed by #573, confirmed on Fritz, closed 2026-11-14.
-2. **Thread utilisation at 72 threads** (2026-11-14): `REPORT_threads_20m.md` (§5.5); the local agent decides what to file.
+2. **Thread utilisation at 72 threads:** filed as **#581** (§5.5, 2026-11-15) from `REPORT_threads_20m.md`. To measure on Fritz after #577, #580, #579 and the #581 PR: `bench_run.jl profile` and the unpinned ladder at 20 m and 50 m.
 0. **20 m rerun after #572 (2026-11-14): the ladder ran; setup and the pressure solve are fixed, the steps don't scale.**
    - **Builds:** bench/all 51154519 and this branch, both with master 4f61b8a6 (#567, #568, #572) merged in. Job 4471418 (`results/scaling_20m_rerun2/`, `ladder.sh`), `scaling.sh` 72 36 16 8 4 2 1, `-t N,0`, `JULIA_EXCLUSIVE=1`, FFTW `estimate` on N threads. The earlier test job (4468996, 3-D DCT stall) was cancelled at 01:11:36 by SIGTERM with no TOML.
    - **Results** (s/step is the median of the `if_possible` steps; "busy cores" and "queued" are from `/proc/self/task/*/schedstat` over the measured steps, summed over the process's OS threads and divided by wall time):

@@ -1,5 +1,7 @@
 # Where the step loses threads at 72 threads (Berlin 20 m, #566, 2026-11-14)
 
+> **Filed as #581** (2026-11-15, milestone Speedup). The issue checks each item against master's code and corrects this report where it was wrong (marked ⚠ there). Read the issue for the current state.
+
 Report for the local agent. It lists every place the measurements show the step not using the node, with the evidence and the options seen so far. Nothing here has been changed in `src/`. The agent decides what to do, what to file and in which order.
 
 ## Setup
