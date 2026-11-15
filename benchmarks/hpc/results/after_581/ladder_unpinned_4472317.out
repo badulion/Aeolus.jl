@@ -1,0 +1,126 @@
+### Starting TaskPrologue of job 4472317 on f0628 at Sun Nov 15 09:58:04 CET 2026
+#   SLURM_JOB_NODELIST=f0628
+#   SLURM_JOB_NUM_NODES=1
+#   SLURM_NTASKS=
+#   SLURM_NPROCS=
+#   SLURM_TASKS_PER_NODE=72
+#   SLURM_JOB_CPUS_PER_NODE=72
+#   SLURM_EXPORT_ENV=
+No cgroup found
+### Finished TaskPrologue
+[2026-11-15T09:58:04+01:00] f0628, bench/master-581 b188b88a, scripts 9807ade7
+Precompiling packages...
+    Aeolus Being precompiled by another machine (hostname: f1256, pid: 742323, pidfile: /home/atuin/b337bd/b337bd10/aeolus-bench/depot/compiled/v1.13/Aeolus/WJY3n_5kMQH.ji.pidfile)
+  21.0 s  ✓ Aeolus
+JULIA_EXCLUSIVE=unset (BENCH_PIN=0)
+[09:58:45] scaling_20m_t72_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/scaling_unpinned/scaling_20m_t72_master-581.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05:21.62
+	Maximum resident set size (kbytes): 79831268
+[10:04:07] scaling_20m_t36_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/scaling_unpinned/scaling_20m_t36_master-581.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05:28.84
+	Maximum resident set size (kbytes): 77178288
+[10:09:36] scaling_20m_t16_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/scaling_unpinned/scaling_20m_t16_master-581.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06:34.72
+	Maximum resident set size (kbytes): 75248708
+[10:16:11] scaling_20m_t8_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/scaling_unpinned/scaling_20m_t8_master-581.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08:17.31
+	Maximum resident set size (kbytes): 74716556
+[10:24:28] scaling done
+| threads | build s | build GC % | build alloc GB | peak GB | if_possible median | mean | never median | GC % | speed-up vs 1 | efficiency |
+| --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| 8 | 156 | 5.6 | 88.9 | 71.3 | 17.522 | 17.507 | 18.687 | 0.0 | NaN | NaN % |
+| 16 | 145 | 5.1 | 88.9 | 71.8 | 10.979 | 10.973 | 11.92 | 0.0 | NaN | NaN % |
+| 36 | 130 | 4.7 | 88.9 | 73.6 | 7.351 | 7.355 | 8.115 | 0.0 | NaN | NaN % |
+| 72 | 132 | 5.6 | 88.9 | 76.1 | 6.082 | 6.188 | 7.196 | 0.0 | NaN | NaN % |
+[2026-11-15T10:24:30+01:00] done
+=== JOB_STATISTICS ===
+=== current date     : Sun Nov 15 10:24:32 CET 2026
+= Job-ID             : 4472317 on fritz
+= Job-Name           : ladder_unpinned.sh
+= Job-Command        : /home/atuin/b337bd/b337bd10/aeolus-bench/after581/ladder_unpinned.sh
+= Initial workdir    : /home/atuin/b337bd/b337bd10/aeolus-bench/after581
+= Queue/Partition    : singlenode
+= Slurm account      : b337bd with QOS=normal
+= Features           : hwperf
+= Requested resources:  for 06:00:00
+= Elapsed runtime    : 00:26:31
+= Total RAM usage    : 0.0 GiB 
+= Node list          : f0628
+= Subm/Elig/Start/End: 2026-11-15T09:55:14 / 2026-11-15T09:55:14 / 2026-11-15T09:58:00 / 2026-11-15T10:24:31
+======================
+=== Quota infos ======
+    Path                 Used     SoftQ    HardQ    Gracetime  Filec    FileQ    FiHaQ    FileGrace    
+    /home/atuin            19.1G     0.0K     0.0K        N/A  37,810                           N/A    
+    /home/hpc               6.0G   104.9G   209.7G        N/A  32,177      300K     400K        N/A    
+    /home/vault             0.0K  1048.6G  2097.2G        N/A       1      200K     400K        N/A    
+    /lustre                 4.0K     0.0K     0.0K        N/A       1       80K     250K        N/A    
+    /anvme                295.6G     0.0K     0.0K        N/A     135    9,985K  11,985K        N/A    
+======================
+=== Network traffic stats (does not include Infiniband) ======
+= HPC internal traffic (e.g. to fileservers): 1 GB in / 0 GB out
+= External traffic: 0 GB in / 0 GB out
+======================

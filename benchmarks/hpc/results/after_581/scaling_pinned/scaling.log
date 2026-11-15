@@ -1,0 +1,44 @@
+JULIA_EXCLUSIVE=1 (BENCH_PIN=1)
+[10:01:04] scaling_20m_t72_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/scaling_pinned/scaling_20m_t72_master-581.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06:13.26
+	Maximum resident set size (kbytes): 81600188
+[10:07:18] scaling_20m_t36_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/scaling_pinned/scaling_20m_t36_master-581.toml
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06:05.27
+	Maximum resident set size (kbytes): 80340108
+[10:13:23] scaling done
+| threads | build s | build GC % | build alloc GB | peak GB | if_possible median | mean | never median | GC % | speed-up vs 1 | efficiency |
+| --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| 36 | 147 | 19.9 | 88.9 | 76.6 | 7.725 | 7.723 | 9.531 | 0.0 | NaN | NaN % |
+| 72 | 150 | 20.4 | 88.9 | 77.8 | 6.118 | 6.109 | 7.407 | 0.0 | NaN | NaN % |

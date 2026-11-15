@@ -1,0 +1,93 @@
+### Starting TaskPrologue of job 4472319 on f1256 at Sun Nov 15 10:09:06 CET 2026
+#   SLURM_JOB_NODELIST=f1256
+#   SLURM_JOB_NUM_NODES=1
+#   SLURM_NTASKS=
+#   SLURM_NPROCS=
+#   SLURM_TASKS_PER_NODE=72
+#   SLURM_JOB_CPUS_PER_NODE=72
+#   SLURM_EXPORT_ENV=
+No cgroup found
+### Finished TaskPrologue
+[2026-11-15T10:09:06+01:00] f1256, bench/master-581 b188b88a, scripts 9807ade7
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_581/memory/memory_20m_t72.toml
+# threads 72, case 20m, sample_rate 0.01, sampled allocations 749
+# estimated bytes allocated in one step: 0.008 GiB
+
+## snapshots (GiB)
+after warm-up + full GC    rss 76.04  live 72.52  allocated so far 104.54  anon 75.83  file 0.21
+after step 1               rss 76.04  live 72.53  allocated so far 104.55  anon 75.83  file 0.21
+after step 2               rss 76.04  live 72.54  allocated so far 104.56  anon 75.83  file 0.21
+after step 3               rss 76.04  live 72.55  allocated so far 104.56  anon 75.83  file 0.21
+after step 4               rss 76.04  live 72.55  allocated so far 104.57  anon 75.83  file 0.21
+after full GC              rss 76.04  live 72.51  allocated so far 104.57  anon 75.83  file 0.21
+
+## steps
+1  6.12 s  0.009 GiB allocated  gc 0.0 s
+2  6.15 s  0.009 GiB allocated  gc 0.0 s
+3  6.29 s  0.009 GiB allocated  gc 0.0 s
+4  6.3 s  0.009 GiB allocated  gc 0.0 s
+
+## by innermost Aeolus frame (MiB per step, est.)
+       3.4  n=270 _threaded! src/Backends.jl:604
+       3.2  n=349 _threaded! src/Backends.jl:0
+       0.9  n=84 _threaded_planes! src/Backends.jl:993
+       0.2  n=10 _threaded! src/Backends.jl:591
+       0.0  n=2 open_boundary_states src/boundary_conditions/open_boundary.jl:719
+       0.0  n=3 _threaded! src/Backends.jl:568
+       0.0  n=1 combine_open_boundaries! src/boundary_conditions/open_boundary.jl:1269
+       0.0  n=7 _threaded! src/Backends.jl:577
+       0.0  n=6 _threaded! src/Backends.jl:578
+       0.0  n=4 _closure_type src/operators/sgs_sweep.jl:145
+       0.0  n=6 _threaded! src/Backends.jl:603
+       0.0  n=4 _threaded! src/Backends.jl:567
+       0.0  n=1 plane_reduce! src/Backends.jl:1127
+       0.0  n=1 _face_sums src/boundary_conditions/open_boundary.jl:997
+       0.0  n=1 _threaded_planes! src/Backends.jl:992
+
+## by every Aeolus frame (inclusive) (MiB per step, est.)
+       7.8  #step!#26 src/components/domain.jl:508
+       7.8  step! src/components/domain.jl:508
+       7.8  #28 src/components/domain.jl:509
+       7.8  step! src/components/domain.jl:474
+       7.2  _core_step! src/components/domain.jl:391
+[2026-11-15T10:14:18+01:00] done
+=== JOB_STATISTICS ===
+=== current date     : Sun Nov 15 10:14:19 CET 2026
+= Job-ID             : 4472319 on fritz
+= Job-Name           : memory.sh
+= Job-Command        : /home/atuin/b337bd/b337bd10/aeolus-bench/after581/memory.sh
+= Initial workdir    : /home/atuin/b337bd/b337bd10/aeolus-bench/after581
+= Queue/Partition    : singlenode
+= Slurm account      : b337bd with QOS=normal
+= Features           : hwperf
+= Requested resources:  for 01:00:00
+= Elapsed runtime    : 00:05:15
+= Total RAM usage    : 0.0 GiB 
+= Node list          : f1256
+= Subm/Elig/Start/End: 2026-11-15T09:55:14 / 2026-11-15T09:55:14 / 2026-11-15T10:09:04 / 2026-11-15T10:14:19
+======================
+=== Quota infos ======
+    Path                 Used     SoftQ    HardQ    Gracetime  Filec    FileQ    FiHaQ    FileGrace    
+    /home/atuin            19.1G     0.0K     0.0K        N/A  37,805                           N/A    
+    /home/hpc               6.0G   104.9G   209.7G        N/A  32,177      300K     400K        N/A    
+    /home/vault             0.0K  1048.6G  2097.2G        N/A       1      200K     400K        N/A    
+    /lustre                 4.0K     0.0K     0.0K        N/A       1       80K     250K        N/A    
+    /anvme                295.6G     0.0K     0.0K        N/A     135    9,985K  11,985K        N/A    
+======================
+=== Network traffic stats (does not include Infiniband) ======
+= HPC internal traffic (e.g. to fileservers): 0 GB in / 0 GB out
+= External traffic: 0 GB in / 0 GB out
+======================

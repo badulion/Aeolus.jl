@@ -1,0 +1,19 @@
+Aeolus test suite: 0 parallel jobs then 1 exclusive, 2 jobs × 1 threads (1-min load 3.8, 72 CPU threads)
+Logs: /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-master-581/.testruns/20261115-095853-test
+Precompiled / loaded Aeolus in 3.6 s
+-- exclusive jobs, one at a time --
+[  1/1  ] launch_trace.jl                            24.0 s  pass     44  fail   0  error   0  broken   0  ok
+
+Aeolus test run: 2 jobs × 1 threads, wall 29.1 s (0.5 min), 1-min load at start 3.80
+Run folder: /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-master-581/.testruns/20261115-095853-test
+
+Per top-level @testset block:
+  block                                            pass   fail  error  broken    total
+  Aeolus.jl                                          44      0      0       0       44
+  TOTAL                                              44      0      0       0       44
+
+Slowest jobs:
+  launch_trace.jl                              24.0 s  (exclusive)
+
+All 1 jobs passed.
+test exit 0
