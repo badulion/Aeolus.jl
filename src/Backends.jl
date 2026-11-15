@@ -338,12 +338,22 @@ apply_transform!(b::GPUBackend, out, plan, in) = _gpu_error(b, "apply_transform!
 # (n_i, min(n_j, 4), 1) block. A GPU backend will launch the same body
 # point per item.
 
-@kernel inbounds = true function _rows3_kernel!(body!, i1, i2, oj, ok, args)
+@kernel inbounds = true function _rows3_kernel!(i1, i2, oj, ok, call)
     b, c = @index(Global, NTuple)
     j = b + oj
     k = c + ok
-    _row!(body!, i1:i2, j, k, args...)
+    _row!(call[1], i1:i2, j, k, call[2]...)
 end
+
+# `call = (body!, args)`: the body travels inside a tuple, not as an argument
+# of its own (#574). The kernel only passes `body!` on to `_row!`, so Julia's
+# heuristic compiled it for `body!::Function` whenever the launch reached the
+# kernel through a dynamic call (a launch too small for every thread, whose
+# workgroup size is part of the kernel's type): `_row!` was then dispatched at
+# run time for every row, boxing the range, the index tuples and the floats
+# among the arguments (1.15 GiB per step at Berlin 20 m: the open-boundary
+# blend, stage combination and snapshot copies). A tuple's element types are
+# never widened.
 
 # One i-row of a 3-D launch, as its own function that receives the body's
 # arguments as separate arguments (KA-d, #299). Inlined into a loop that
@@ -473,7 +483,7 @@ function _threaded!(b::CPUBackend, body!::F, (ir, jr, kr)::NTuple{3,UnitRange{In
     nt = _ntasks(length(ir) * nj * nk * weight)
     wg = nt >= Threads.nthreads() ? (min(nj, _ROWS_PER_GROUP), 1) : (nj, cld(nk, nt))
     kern = _rows3_kernel!(b.ka, wg)
-    kern(body!, first(ir), last(ir), first(jr) - 1, first(kr) - 1, args; ndrange = (nj, nk))
+    kern(first(ir), last(ir), first(jr) - 1, first(kr) - 1, (body!, args); ndrange = (nj, nk))
     return nothing
 end
 function _threaded!(b::CPUBackend, body!::F, (ir, jr)::NTuple{2,UnitRange{Int}}, args,

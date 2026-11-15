@@ -39,7 +39,7 @@ using ..BoundaryConditions: FieldBoundaryConditions, fill_halos!,
                             is_wall, homogeneous_bcs, pinned_face_indices,
                             has_open_boundaries, update_open_boundaries!,
                             prepare_open_boundaries!, assert_open_face_correction,
-                            open_boundary_snapshot, restore_open_boundaries!,
+                            open_boundary_snapshot, open_boundary_snapshot!, restore_open_boundaries!,
                             open_intermediate_velocity!, rewind_open_boundaries!,
                             has_radiating_outflow
 using ..Operators
@@ -60,7 +60,8 @@ using ..Simulations: BoussinesqSimulation, fill_state_halos!, max_divergence,
                      _project_velocity!,      # the projection (steps 8–10 of step!)
                      axpy!, pressure_from_potential!, copy_storage!, storage_like,
                      _Lin2,                   # the field algebra kernels (KA-j, #306)
-                     _step_begin!, _step_end!, _step_abort!, _note_pick!, _wall   # #336
+                     _step_begin!, _step_end!, _step_abort!, _note_pick!, _wall,  # #336
+                     open_snapshot!           # the drivers' open-boundary snapshots (#574)
 using ..Operators.FiniteVolume: grid_metrics, _div_at   # the one divergence stencil
 using ..IO: allfinite                    # the one finiteness check (#346)
 using ..TimeSteppers: step!
@@ -852,7 +853,7 @@ function _step_adaptive!(sim, constraints::CFLConstraints;
     # the step's start state, for an attached blowup guard (#514)
     rec.depth == 1 && (rec.entry_snap = snapshot)
     # open-boundary buffers are state too: a retry must start from them
-    bc_snap = open_boundary_snapshot(sim)
+    bc_snap = open_snapshot!(sim, :retry)
     # the closure's memory: the step commits it once (advance_sgs!); a
     # rejected step's commit is rolled back with the prognostic state
     sgs_snap = closure === nothing ? nothing : sgs_state(closure)
@@ -1722,7 +1723,7 @@ end
 # before the projection. `nothing` and a no-op for closed boundaries.
 function _open_intermediate!(sim::BoussinesqSimulation, τ)
     has_open_boundaries(sim) || return nothing
-    snap = open_boundary_snapshot(sim)
+    snap = open_snapshot!(sim, :imex_intermediate)
     open_intermediate_velocity!(sim, τ)
     return snap
 end
@@ -1890,7 +1891,7 @@ function _step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::ARK2;
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)
-    bc0 = has_radiating_outflow(sim) ? open_boundary_snapshot(sim) : nothing  # N-open-c
+    bc0 = has_radiating_outflow(sim) ? open_snapshot!(sim, :imex) : nothing  # N-open-c
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
 
@@ -1969,7 +1970,7 @@ function _step_imex!(sim::BoussinesqSimulation{T}, dt::Real, scheme::Rosenbrock2
 
     closure = _active_sgs(sim, sgs, eddy_viscosity!)
     prepare_open_boundaries!(sim)
-    bc0 = has_radiating_outflow(sim) ? open_boundary_snapshot(sim) : nothing  # N-open-c
+    bc0 = has_radiating_outflow(sim) ? open_snapshot!(sim, :imex) : nothing  # N-open-c
     νm, νs, sgsT, Ks = _freeze_viscosity!(sim, ws, closure, _check_sgs_stress(sgs_stress))
     _copy_fields!(ws.state0, sim, names)
     k2set = _k2_set!(ws)

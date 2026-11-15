@@ -98,6 +98,32 @@ end
         @test_throws ErrorException launch!(GPUBackend(), (i, j, k) -> nothing, I3)
     end
 
+    # #574: the 3-D row kernel only passes the body on (to `_row!`), and for
+    # such an argument of type Function Julia compiles a widened method
+    # (`::Function`) when the kernel is not inlined into its caller; `_row!`
+    # was then dispatched at run time for every row, boxing its arguments
+    # (1.15 GiB per step at Berlin 20 m). The body travels in a tuple with the
+    # arguments, whose element types are never widened: the signature Julia
+    # compiles for the kernel keeps the body's type. (A check of the
+    # mechanism, through the compiler's own query of that signature; the
+    # allocation itself depends on inlining decisions a small test does not
+    # reproduce.)
+    @testset "row kernel: compiled for the body's own type (#574)" begin
+        body!(i, j, k, A, τ) = (@inbounds A[i, j, k] = τ; nothing)
+        kern = Aeolus.Backends.cpu__rows3_kernel!
+        m = only(methods(kern))
+        argT = Tuple{typeof(kern), Int, Int, Int, Int, Int, Tuple{typeof(body!), Tuple{Array{Float64,3}, Float64}}}
+        if isdefined(Core.Compiler, :get_compileable_sig)
+            sig = Core.Compiler.get_compileable_sig(m, argT, Core.svec())
+            @test sig !== nothing && !any(T -> T === Function, sig.parameters)
+            @test sig.parameters[end] == Tuple{typeof(body!), Tuple{Array{Float64,3}, Float64}}
+        end
+        # and the launch is still right: every point once
+        A = zeros(5, 300, 40)
+        launch!(b, body!, (1:5, 1:300, 1:40), A, 2.0)
+        @test all(==(2.0), A)
+    end
+
     rng = Xoshiro(91)
     # magnitudes spread over four decades, so the order of the additions shows
     A = randn(rng, size(Field(mesh).data)) .* 10 .^ (4 .* rand(rng, size(Field(mesh).data)...))
