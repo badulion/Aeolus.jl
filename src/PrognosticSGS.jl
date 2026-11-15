@@ -731,8 +731,10 @@ function _dual_strain!(D::Field, u::Field, v::Field, w::Field, bcs, g::Union{Reg
     k1, k2 = first(kk), last(kk)
     if k2 - k1 >= 2
         launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*(g.Nz-2),), a..., (k1+1):(k2-1), fold)
-        launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny,), a..., k1:k1, fold)
-        launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny,), a..., k2:k2, fold)
+        # weight 5 Nx: a shell row costs ~5 bulk rows, so a level gets as
+        # many tasks as its work (at 400 × 400, 24 threads: 1.11 → 0.81 ms)
+        launch_weighted!(b, 5g.Nx, _dual_strain_row!, (1:g.Ny,), a..., k1:k1, fold)
+        launch_weighted!(b, 5g.Nx, _dual_strain_row!, (1:g.Ny,), a..., k2:k2, fold)
     else
         launch_weighted!(b, g.Nx, _dual_strain_row!, (1:g.Ny*g.Nz,), a..., kk, fold)
     end
