@@ -344,14 +344,14 @@ The full measurements and every candidate (21 items: serial code outside launche
 
 1. **Issue 1:** filed as #567 (§5.1); fixed by #571, confirmed on Fritz, closed 2026-11-14.
 2. **Issue 2:** filed as #568 (§5.2, maintainer agreed 2026-11-12); fixed by #569 and #570, confirmed on Fritz, closed 2026-11-14.
-2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m. Fixed by #577 (merged 2026-11-15; 50 m: 151 → 1–3 MiB per step); confirmed on Fritz 2026-11-15 (20 m: 0.0086 GiB per step, no GC; `REPORT_after_581.md`).
-2. **Issue 4:** filed as #575 (§5.4, 2026-11-14): `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0. Chosen fix: serial FFTW plans run on Julia's threads (option 4), PR #580; confirmed on Fritz 2026-11-15 (pinned 6.12 s/step at 72 threads, unpinned 6.08).
+2. **Issue 3:** filed as #574 (§5.3, 2026-11-14): ~1.2 GiB allocated per step at 20 m. Fixed by #577 (merged 2026-11-15; 50 m: 151 → 1–3 MiB per step); confirmed on Fritz 2026-11-15 (20 m: 0.0086 GiB per step, no GC; `REPORT_after_581.md`); closed 2026-11-15.
+2. **Issue 4:** filed as #575 (§5.4, 2026-11-14): `JULIA_EXCLUSIVE=1` puts FFTW's threads and thread 1 on core 0. Chosen fix: serial FFTW plans run on Julia's threads (option 4), PR #580; confirmed on Fritz 2026-11-15 (pinned 6.12 s/step at 72 threads, unpinned 6.08); closed 2026-11-15.
 2. **#572** (the pressure-solve stall): fixed by #573, confirmed on Fritz, closed 2026-11-14.
 2. **Thread utilisation at 72 threads:** filed as **#581** (§5.5, 2026-11-15) from `REPORT_threads_20m.md`. To measure on Fritz after #577, #580, #579 and the #581 PR: `bench_run.jl profile` and the unpinned ladder at 20 m and 50 m.
 0. **Master after #576–#582 measured on Fritz (2026-11-15, jobs 4472316–4472319, `bench/master-581` b188b88a): `REPORT_after_581.md`, `results/after_581/`.** 20 m unpinned: 6.08 s/step at 72 threads (bench/all 6.10, which had group D), 7.35 at 36, so 36 → 72 is 1.21× (was 1.05×). Pinned at 72: 6.12 s (28.37 before), run-queue wait 0.9 s (15 124 s before): #575 confirmed. Allocation 0.0086 GiB per step (1.22 before), no GC: #574 confirmed. Fused sweep 4.73 → 2.25 s per 2 traced steps, busy 37.6 → 49.9: #558/#579 confirmed. Outside launches 25 % of the traced step (31 % before). Remaining serial work: `copy_storage!` ~1.0 s per step, whole-field `fill!` in `advance_sgs!` ~0.55 s (new), the serial part of the pressure solve ~0.4 s. Issue comments posted 2026-11-15:
    - #574: https://github.com/badulion/Aeolus.jl/issues/574#issuecomment-6892495379
    - #575: https://github.com/badulion/Aeolus.jl/issues/575#issuecomment-6892496516
-   - #558: https://github.com/badulion/Aeolus.jl/issues/558#issuecomment-6892497677
+   - #558: https://github.com/badulion/Aeolus.jl/issues/558#issuecomment-6892497677 (#574, #575 and #558 closed by the maintainer's decision, 2026-11-15)
    - #581: https://github.com/badulion/Aeolus.jl/issues/581#issuecomment-6892498789
 
    #581's checklist is updated (B1, B2, B3, A3 and A4 ticked; A2 is the largest item; new A7 and C5; a ranked list). The comment corrects the report on two points, both checked in master's code:
