@@ -444,14 +444,18 @@ function fused_predictor!(sim, bufs, terms, post::Tuple, halo!::H, pu, s1, s2, t
 end
 
 # the sweep's buffers for `terms` over `sim` (`nf` fields), kept in its workspaces;
-# `nothing` for the per-point form, which has none
+# `nothing` for the per-point form, which has none. The blocks: slabs in k
+# times row ranges in j (#566); a tuple that books per-level sums (the
+# budgets, `books`) keeps the whole j-range per block, since the rows of a
+# level are summed by one task.
 function _fused_buffers!(sim, terms, nf)
     b = Backends.backend(sim.u.data)
     (b isa Backends.CPUBackend && !sim.workspaces.fused.per_point) || return nothing
     ii, jj, kk = interior(sim.mesh)
     lag, lz = sweep_lags(terms)
-    ns = sweep_slabs(b, length(ii) * length(jj) * length(kk), length(kk); lz = lz)
-    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, nf, ns, length(kk); lag = lag, lz = lz)
+    ns, nt = sweep_blocks(b, length(ii) * length(jj) * length(kk), length(kk),
+                          any(books, terms) ? 1 : length(jj); lz = lz, ly = lag)
+    bufs = sweep_buffers(sim.workspaces.sweep, sim.u.data, nf, ns, length(kk); lag = lag, lz = lz, nt = nt, ly = lag)
     sim.workspaces.sweep = bufs
     return bufs
 end

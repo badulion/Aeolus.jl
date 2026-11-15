@@ -109,7 +109,7 @@ function _nw_sweep!(a, Δt, terms, rk3, snap, ns; reversed = false)
           m = NWFV.grid_metrics(a.mesh))
     p1, p2 = NWFV._sweep_pred(s1), NWFV._sweep_pred(s2)
     for s in ns:-1:1
-        NWFV._b_sweep_slab!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+        NWFV._b_sweep_block!(s, terms, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
     end
     for n in 1:2lz*ns, j in jj, i in ii
         NWFV._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)

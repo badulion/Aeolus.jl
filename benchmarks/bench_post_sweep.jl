@@ -80,8 +80,8 @@ function loops!()
     return nothing
 end
 terms = (FV.BaseTendencies(s.ν),)
-ns = FV.sweep_slabs(Aeolus.Backends.backend(s.u.data), N * N * Nz, Nz)
-bufs = FV.sweep_buffers(nothing, s.u.data, 4, ns, Nz)
+ns, nt = FV.sweep_blocks(Aeolus.Backends.backend(s.u.data), N * N * Nz, Nz, N)
+bufs = FV.sweep_buffers(nothing, s.u.data, 4, ns, Nz; nt = nt)
 s1 = (s.θ, SIM._Axpy(Δt), nothing)
 h = SIM._VelocityHalos(s)
 after!() = (FV.blocked_predictor!(bufs, terms, (FV.AfterSweep(whole!),), h, s.u, s.v, s.w, SIM._Axpy(Δt), s1, nothing, g);
@@ -114,7 +114,7 @@ for _ in 1:ncalls, (n, f) in ways
     restore!()
     push!(times[n], @elapsed f())
 end
-println("post sweep N=$N Nz=$Nz threads=$(Threads.nthreads()) slabs=$ns pairs=$(length(iw.faces)) " *
+println("post sweep N=$N Nz=$Nz threads=$(Threads.nthreads()) blocks=($ns, $nt) pairs=$(length(iw.faces)) " *
         "canopy faces=$(length(dr.act)) solid=$(count(sm.mask))")
 for (n, _) in ways
     println(rpad(n, 6), " ", round(1e3 * median(times[n]); digits = 2), " ms/substage (median of $ncalls)")

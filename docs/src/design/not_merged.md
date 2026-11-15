@@ -171,6 +171,12 @@ Group D and group F were left out (maintainer decision, 2026-11-14).
     this PR does.
   - Reviving it means porting it onto master's #533 driver, or reviving D1
     first.
+- **Ported for the predictor sweep** (#566, branch `issue/566-sweep-jsplit`):
+  master's fused sweep (`blocked_predictor!`) now splits in j with the
+  same rule (`sweep_blocks`, edge rows, a third launch), without D1's
+  generic driver; see the roadmap section "Fused sweep split in j (#566
+  thread utilisation, port of #563)". What remains here is the TKE pass
+  part, which needs D1.
 
 ## Thread utilisation (#566 follow-up): what was left out
 

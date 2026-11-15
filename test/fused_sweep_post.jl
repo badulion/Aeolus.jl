@@ -3,8 +3,9 @@
 #   1. the driver: `FiniteVolume.blocked_predictor!` with post terms (a
 #      pointwise one, a Jacobi one whose factors read a radius-1 stencil
 #      of the predicted velocity, chained) is the predictor passes followed
-#      by each operator's whole-field form, for 1-5 slabs, the slabs in
-#      forward and in reverse order, serial and threaded, regular and
+#      by each operator's whole-field form, for 1-5 slabs times 1 and 3 row
+#      ranges in j (#566: the row-range edges defer points like the slab
+#      edges), the blocks in forward and in reverse order, serial and threaded, regular and
 #      stretched grids, dry and moist, Euler and RK3 stage; an AfterSweep
 #      operator and every one after it run on the whole field after the
 #      sweep;
@@ -159,20 +160,20 @@ function _fp_reference!(r, mesh, Δt, post, rk3, snap)
     return r
 end
 
-function _fp_args(a, mesh, Δt, rk3, snap, ns, terms)
+function _fp_args(a, mesh, Δt, rk3, snap, ns, terms, nt = 1)
     moist = a.has_moisture
     nk = length(interior(mesh)[3])
     lag, lz = FVp.sweep_lags(terms)
-    bufs = FVp.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz)
+    bufs = FVp.sweep_buffers(nothing, a.u.data, moist ? 5 : 4, ns, nk; lag = lag, lz = lz, nt = nt)
     c = SIMp._Lin2r(0.75, 0.25)
     ps = rk3 ? SIMp._AxpyStage(SIMp._Axpy(Δt), c) : SIMp._Axpy(Δt)
     s1 = (a.θ, ps, rk3 ? snap[1] : nothing)
     s2 = moist ? (a.qv, ps, rk3 ? snap[2] : nothing) : nothing
     return bufs, s1, s2
 end
-function _fp_sweep!(a, mesh, Δt, post, rk3, snap, ns)
+function _fp_sweep!(a, mesh, Δt, post, rk3, snap, ns, nt = 1)
     terms = (FVp.BaseTendencies(a.ν),)
-    bufs, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, ns, terms)
+    bufs, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, ns, terms, nt)
     foreach(t -> FVp.prepare!(t, a, Δt), post)
     FVp.blocked_predictor!(bufs, terms, post, _fp_halos!(a), a.u, a.v, a.w, SIMp._Axpy(Δt), s1, s2, mesh)
     foreach(t -> FVp.finish!(t, a, Δt), post)
@@ -190,29 +191,34 @@ function _fp_pointwise!(a, mesh, Δt, post, rk3, snap)
     foreach(t -> FVp.finish!(t, a, Δt), post)
     return a
 end
-# the slabs one after another in reverse order, then the edge planes and
-# the deferred points: the body of blocked_predictor! with its slab launch
-# replaced (in forward order slab s reads slab s+1's front planes before
-# slab s+1 has touched them; in reverse order after it has finished: the
-# two orders bound what concurrent slabs see)
-function _fp_sweep_reversed!(a, mesh, Δt, post, rk3, snap, ns)
+# the blocks one after another in reverse order, then the edge planes, the
+# edge rows and the deferred points: the body of blocked_predictor! with
+# its block launch replaced (in forward order slab s reads slab s+1's
+# front planes before slab s+1 has touched them; in reverse order after it
+# has finished, likewise for row ranges: the two orders bound what
+# concurrent blocks see)
+function _fp_sweep_reversed!(a, mesh, Δt, post, rk3, snap, ns, nt = 1)
     terms = (FVp.BaseTendencies(a.ν),)
-    bufs, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, ns, terms)
+    bufs, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, ns, terms, nt)
     ii, jj, kk = interior(mesh)
     lag, lz = FVp.sweep_lags(terms)
+    ly = nt > 1 ? lag : 0
     pu = SIMp._Axpy(Δt)
     st = (u = a.u.data, v = a.v.data, w = a.w.data, θ = FVp._sweep_field(s1), qv = FVp._sweep_field(s2),
           m = FVp.grid_metrics(mesh))
     p1, p2 = FVp._sweep_pred(s1), FVp._sweep_pred(s2)
-    plan = FVp.post_plan(post, lz)
+    plan = FVp.post_plan(post, lz, ly)
     foreach(t -> FVp.prepare!(t, a, Δt), post)
-    for s in ns:-1:1
-        FVp._b_sweep_slab!(s, terms, post, plan, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz)
+    for n in ns*nt:-1:1
+        FVp._b_sweep_block!(n, terms, post, plan, st, pu, p1, p2, bufs.ring, bufs.edge, ii, jj, kk, ns, lag, lz, nt, ly)
     end
     for n in 1:2lz*ns, j in jj, i in ii
         FVp._b_sweep_edge!(i, j, n, st, pu, p1, p2, bufs.edge, kk, ns, lz)
     end
-    FVp._post_deferred!(CPUBackend(serial = true), post, plan, _fp_halos!(a), st, ii, jj, kk, ns)
+    for n in 1:ns*nt, d in 1:2ly, kl in 1:size(bufs.ring, 2)
+        FVp._b_sweep_yedge!(kl, d, n, st, pu, p1, p2, bufs.ring, ii, jj, kk, ns, nt, lag, lz, ly)
+    end
+    FVp._post_deferred!(CPUBackend(serial = true), post, plan, _fp_halos!(a), st, ii, jj, kk, ns, nt)
     foreach(t -> FVp.finish!(t, a, Δt), post)
     return a
 end
@@ -282,6 +288,9 @@ grids = (("regular", g, FieldBoundaryConditions(:periodic)),
     p = FVp.post_plan((FPScale(0.1), FVp.AfterSweep(() -> nothing), FPDrag(0.1, s)), 1)
     @test p[1] == (0, 0, 1, 0, 0, 1, 0, 0) && all(e -> e[1] >= FVp._AFTER && e[8] == 0, p[2:3])
     @test (@inferred FVp.post_plan((FPDrag(0.1, s), FPScale(0.1)), 1)) isa NTuple{2,NTuple{8,Int}}
+    # split in j (#566): the y-widths start at the ly edge rows, as the z-widths at lz
+    p = FVp.post_plan((FPDrag(0.1, s), FPScale(0.1)), 1, 1)
+    @test p == ((1, 2, 2, 2, 3, 3, 1, 2), (2, 3, 3, 2, 3, 3, 2, 2))
 end
 
 @testset "row pointers: the entries of a row, and of an x-range of it by bisection" begin
@@ -322,17 +331,17 @@ end
                         ok || println("  [#533 s6+s8] per-point mismatch: $gname $pname moist=$moist rk3=$rk3")
                         @test ok
                     end
-                    for ns in 1:min(5, nk ÷ 2)
+                    for ns in 1:min(5, nk ÷ 2), nt in (1, 3)
                         a = mk()
-                        _fp_sweep!(a, mesh, Δt, mkpost(a), rk3, snap, ns)
+                        _fp_sweep!(a, mesh, Δt, mkpost(a), rk3, snap, ns, nt)
                         ok = _fp_agree(a, r)
-                        ok || println("  [#533 s6] mismatch: $gname $pname moist=$moist rk3=$rk3 $bn ns=$ns")
+                        ok || println("  [#533 s6] mismatch: $gname $pname moist=$moist rk3=$rk3 $bn ns=$ns nt=$nt")
                         @test ok
-                        if ns > 1 && bn == "serial"
+                        if ns * nt > 1 && bn == "serial"
                             a = mk()
-                            _fp_sweep_reversed!(a, mesh, Δt, mkpost(a), rk3, snap, ns)
+                            _fp_sweep_reversed!(a, mesh, Δt, mkpost(a), rk3, snap, ns, nt)
                             ok = _fp_agree(a, r)
-                            ok || println("  [#533 s6] reversed mismatch: $gname $pname moist=$moist rk3=$rk3 ns=$ns")
+                            ok || println("  [#533 s6] reversed mismatch: $gname $pname moist=$moist rk3=$rk3 ns=$ns nt=$nt")
                             @test ok
                         end
                     end
@@ -429,14 +438,14 @@ _fp_diag_agree(a, b) = all(i -> agree(collect(Float64, Iterators.flatten(a[i])),
             dr = diag()
             r0 = _fp_reference!(mk(), gU, Δt, (), rk3, snap)
             @test !agree(interior_view(r.u), interior_view(r0.u)) || !agree(interior_view(r.w), interior_view(r0.w))
-            for ns in 1:5
+            for ns in 1:5, nt in (1, 4)          # nt = 4: split in j as well (#566)
                 for rev in (false, true)
-                    (rev && (ns == 1 || bn != "serial")) && continue
+                    (rev && (ns * nt == 1 || bn != "serial")) && continue
                     a = mk()
                     post, ref, diag = setup(a, Δt)
-                    (rev ? _fp_sweep_reversed! : _fp_sweep!)(a, gU, Δt, post, rk3, snap, ns)
+                    (rev ? _fp_sweep_reversed! : _fp_sweep!)(a, gU, Δt, post, rk3, snap, ns, nt)
                     ok = _fp_agree(a, r) && _fp_diag_agree(diag(), dr)
-                    ok || println("  [#533 s6] $oname: mismatch $bname rk3=$rk3 $bn ns=$ns reversed=$rev")
+                    ok || println("  [#533 s6] $oname: mismatch $bname rk3=$rk3 $bn ns=$ns nt=$nt reversed=$rev")
                     @test ok
                 end
             end
