@@ -98,4 +98,26 @@ const Sim = Aeolus.Simulations
             @test maximum(abs.(d1 .- d2)) <= 4eps() * maximum(abs.(d2))
         end
     end
+    # A2 (#584): the step-start copy in contiguous chunks, one `copyto!` per
+    # task; chunks that do not divide the length, and more tasks than chunks
+    @testset "copy_storage!: chunked copy, every point exactly once" begin
+        src = randn(Xoshiro(11), 13, 11, 7)              # 1001 points
+        for p in (2, 3, 7, 1001, 1500)
+            dst = fill(NaN, size(src))
+            Sim._chunked_copy!(dst, src, p)
+            @test dst == src                             # copied data: exact
+        end
+        big = randn(Xoshiro(12), 130, 130, 130)          # 2.2 M points: 2 chunks of ≥ _COPY_CHUNK
+        @test length(big) ÷ Sim._COPY_CHUNK == 2
+        d = zeros(size(big))
+        with_backend(tb) do
+            @test Sim._copy_tasks(d, big) == min(2, Threads.nthreads())
+            Sim.copy_storage!(d, big)
+        end
+        @test d == big
+        @test Sim._copy_tasks(view(d, :, :, 1:3), view(big, :, :, 1:3)) == 1   # not an Array: copyto!
+        small = randn(Xoshiro(13), 8, 8, 8)
+        @test Sim.copy_storage!(zeros(8, 8, 8), small) == small
+        @test_throws DimensionMismatch Sim.copy_storage!(zeros(2, 2, 2), small)
+    end
 end
