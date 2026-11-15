@@ -1,5 +1,18 @@
 # Berlin 20 m on Fritz after #576–#582 (#566)
 
+## Summary
+
+- **At 72 threads the step is unchanged:** 6.08 s against 6.10 s, unpinned. **From 36 to 72 threads the gain rose from 1.05× to 1.21×.** At 8–36 threads master is 6–21 % slower than the earlier build. That build had group D, which master does not have, so the two effects are mixed. Only a build of master with group D added could separate them.
+- **#574 can be closed.** Allocation is 0.0086 GiB per step against 1.22, with no GC.
+- **#575 can be closed.** Pinned, the step takes 6.12 s against 28.37 before, and the run-queue wait fell from 15 124 s to 0.9 s.
+- **#558 can be closed.** The fused sweep (split in j, #579) took 2.25 s per 2 steps against 4.73, and busy threads rose from 37.6 to 49.9.
+- **#581 should stay open.** B1, B2, B3, A3 and A4 are confirmed. But 25 % of the step is still outside launches. Of that, about 2 s per step is three serial passes: `copy_storage!`, a new item (`fill!` in `advance_sgs!`), and the serial part of the pressure solve. The ranking is at the end.
+- **Not done:**
+  - No issue comments: Fritz has no `gh`. Ready-to-post text is in the last section.
+  - No group D build on master.
+  - No NUMA check.
+  - The one-off spike in the 50 m halo fill is unexplained.
+
 Measured 2026-11-15 on `bench/master-581` (b188b88a): master 92702802 (#576–#582 merged) plus the launch trace of `bench/hook-dyn` (c14e92f0, efb5ec4c, 5444aa27). The trace commit conflicted with #574's `(body!, args)` tuple and #581's `_planes3_kernel!`. I kept master's kernels; the traced variants take the same tuple, and `_planes3_kernel!` has a traced twin. A new case in `test/launch_trace.jl` checks a launch only 3 points wide along i; the trace test passed on the node (44 of 44).
 
 **Compared against** the `bench/all` build (51154519 = master 4f61b8a6 + the bench PRs, **including group D**, the once-per-step cache-blocked passes, which master does not have):
@@ -110,3 +123,33 @@ The remaining 8.8 MiB per step are KernelAbstractions' task objects in `_threade
 | 10 | D2: 44 064 nested launches per 2 steps (unchanged) | not separable in the trace |
 
 Launches together lose 1.2 thread-equivalent seconds per step at 20 m and 0.6 at 50 m. Items 1–3 are serial and add up to about 2 s of a 6 s step.
+
+## Issue comments, ready to post
+
+**#574:** Confirmed on Fritz (2026-11-15, job 4472319, master 92702802 + launch trace, Berlin 20 m, 72 threads, unpinned). Allocation is 0.0086 GiB per step against 1.22 GiB before, the live heap went 72.52 → 72.55 GiB over 4 steps, and there was no collection (1.66 s per collection before). The remaining 8.8 MiB per step are KA task objects in `_threaded!` and `_threaded_planes!`. Details: `benchmarks/hpc/REPORT_after_581.md` on `issue/566-hpc-benchmark`.
+
+**#575:** Confirmed on Fritz (2026-11-15, jobs 4472317 and 4472318, Berlin 20 m). Pinned (`JULIA_EXCLUSIVE=1`): 6.12 s per step at 72 threads and 7.72 s at 36. Before #580 these were 28.37 and 28.69 s. Unpinned: 6.08 and 7.35 s. The run-queue wait of all 144 tasks pinned at 72 threads is 0.9 s over 69 s of stepping, against 15 124 s before. FFTW reports 1 thread of its own. The transforms now run as `_block_transform_body!` launches: 1.15 s per step at 49 of 72 threads busy.
+
+**#558:** Confirmed on Fritz via #579 (2026-11-15, job 4472316, Berlin 20 m, 72 threads, launch trace of 2 steps). Before: `_b_sweep_slab!` 3.24 s at 37.6 of 72 threads busy, plus `_b_sweep_edge!` 1.48 s at 59.5. After: `_b_sweep_block!` 1.51 s at 49.9, plus `_b_sweep_edge!` 0.73 s at 63.5, so 4.73 → 2.25 s. The block launch still leaves ~22 threads idle, 0.23 s per step. At 50 m: 0.55 → 0.28 s.
+
+**#581:** Measured on Fritz after #582 (2026-11-15, jobs 4472316–4472319; `benchmarks/hpc/REPORT_after_581.md`).
+- **Confirmed fixes** (per 2 traced steps at 20 m, 72 threads):
+  - B1, the blend: 2.41 → 0.034 s;
+  - B2, `_map_body!`: 0.20 → 0.021 s;
+  - B3, the halo shell: 0.19 → 0.014 s, at 23.6 threads busy;
+  - A3 and A4: gone from the main thread's profile.
+- **The step:**
+  - At 72 threads, 6.08 s untraced. The earlier build with group D took 6.10 s.
+  - From 36 to 72 threads, 1.21× (was 1.05×).
+  - Outside launches: 25 % of the traced step (was 31 %).
+  - Idle inside launches: 27 % (was 52 %).
+- **Remaining, by time per step:**
+  1. A2 `copy_storage!` ~1.0 s serial;
+  2. new: whole-field `fill!` in `advance_sgs!` (`PrognosticSGS.jl:867`, `:964`) ~0.55 s serial;
+  3. the serial part of `solve_source_buffer!` ~0.4 s;
+  4. `_block_transform_body!` 0.36 s lost (49 busy);
+  5. sweep block + edge 0.27 s lost;
+  6. new: `_dual_strain_row!` 0.19 s lost (23 busy);
+  7. halo fills 0.07 s lost (50 m: 0.41 s, including a one-off);
+  8. the rest ≤ 0.04 s each; `_b_∂x_cf!` is still at 4.5 busy; the nested launches are unchanged (44 064 per 2 steps).
+- A2 was reverted on the 24-core desktop; on Fritz it is the largest item, and a two-socket node needs its own measurement.
