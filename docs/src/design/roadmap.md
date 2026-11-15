@@ -3217,6 +3217,62 @@ the nested launches (D2), the state copy on Fritz (A2), and PALM's
 methods that change the scheme: the boundary blend once per step and the
 state buffer swap instead of the copy.
 
+**Measured on Fritz after #582** (2026-11-15, jobs 4472316–4472319,
+`REPORT_after_581.md` on `issue/566-hpc-benchmark`): B1, B2, B3, A3 and A4
+confirmed (the blend 2.41 → 0.034 s per 2 traced steps at 20 m, 72
+threads). The step at 72 threads is 6.08 s, from 36 to 72 threads 1.21×
+(was 1.05×); 25 % of the traced step is still outside launches.
+
+**Second PR: the TKE step's serial zeroing and the strain's imbalance.**
+- **A7, whole-field `fill!` in `advance_sgs!`** (~0.55 s per step on
+  Fritz, 15 + 13 main-thread samples):
+  - `c.Pw` was zeroed every step. Without immersed walls nothing writes it
+    (Berlin: no profile samples in the wall path), so it is now zeroed
+    when built (`allocate`) and when walls detach, and the wall path
+    zeroes it itself.
+  - `c.tend` was zeroed every step. With `transport = false` (Berlin's
+    closures; a driver transports e) nothing writes it, so it stays zero.
+    With transport, the advection writes it instead of adding
+    (`advect_positive!(…; accumulate = false)`), so no fill is needed
+    first.
+- **C5, `_dual_strain_row!`** (23 of 72 threads busy on Fritz). The cause
+  is load imbalance, not the launch's shape:
+  - KernelAbstractions splits the 150 000 one-row items statically into
+    contiguous blocks of about two levels.
+  - Every row of the bottom and top level takes the checked path. On one
+    thread at 400 points per row: 9.05 µs against 1.93 µs for a bulk row
+    (4.7×), and 20.1 µs for a j-boundary row (10.4×).
+  - Replaying master's split at 400 × 400 × 48 on 24 threads, the thread
+    with the top level takes 12.8 ms against a median of 6.5 ms (13 of 24
+    busy); at 400 × 400 × 150, 19 of 24.
+  - The two levels now have launches of their own, weighted 5 Nx so that
+    a level gets as many tasks as its work.
+  - Measured in one process at 400 × 400 × 48, 24 threads: `dual_strain!`
+    13.5–13.7 ms against 13.2–14.4 ms for the one launch. On this desktop
+    24 threads saturate the memory bandwidth, which hides most of the
+    imbalance; the 72-thread effect needs Fritz.
+- **Not a serial pass: the report's item 3** (~0.4 s "around the
+  transforms"). The main-thread samples at `PressureSolvers.jl:388, 715,
+  729` sit under `fftw_planning.jl:319`, the transform launch itself: the
+  main thread running its own block or waiting at the launch's end. It is
+  the same cost as the launch's imbalance:
+  - The x–y transform is split by whole levels, 150 levels into 72
+    blocks: 66 of 2 levels and 6 of 3.
+  - So at most 72 × 2.08 / 3 ≈ 50 threads are busy; Fritz measured 49.3.
+  - A finer split needs separate x and y passes, with more memory traffic.
+    It is not done here.
+- **Tests** (`test/tke.jl`):
+  - `advect_positive!` with `accumulate = false` against adding into
+    zeros, with the halo untouched;
+  - a step with NaN in `tend` against one with zeros;
+  - with `transport = false`, `tend` and `Pw` still zero after steps, and
+    detaching walls zeroes `Pw`;
+  - the dual strain at Nz = 2 and 3 against the scatter reference, on a
+    serial and a fully threaded backend.
+
+  Mutation check: ignoring the level offset of the split fails 24 checks.
+  No bug was caught and no expectation proved wrong.
+
 ### Phase 74 — Adjoint model via automatic differentiation
 Full reverse-mode AD through the solver with `Enzyme.jl`: adjoint of
 dynamics, physics and I/O, with checkpointing for long windows.
