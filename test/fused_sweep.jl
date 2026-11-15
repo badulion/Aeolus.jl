@@ -333,7 +333,7 @@ end
     sb = FVs._split_blocks          # the rule at T threads, without that many threads
     for T in (1, 2, 4, 6, 12, 24, 72), (nk, nj) in ((24, 400), (60, 200), (150, 1000), (12, 12), (3, 3)),
         (lz, ly) in ((1, 1), (2, 2), (4, 4))
-        ns, nt = sb(T, nk, nj, lz, ly)
+        ns, nt = sb(T, nk, nj, lz, ly, nj)
         @test ns * nt <= T                  # at most one block per thread
         @test ns == 1 || 2lz * ns <= nk     # at least 2lz planes per slab
         @test nt == 1 || 2ly * nt <= nj     # at least 2ly rows per row range
@@ -343,8 +343,12 @@ end
     @test prod(sb(24, 24, 400, 1, 1)) == 24
     @test prod(sb(24, 150, 1000, 2, 1)) == 24 && prod(sb(72, 150, 1000, 2, 1)) == 72
     @test sb(1, 60, 200, 1, 1) == (1, 1) && sb(24, 3, 3, 1, 1) == (1, 1)
-    # slabs no taller than 20 planes where the threads allow
-    @test all(T -> cld(60, sb(T, 60, 200, 1, 1)[1]) <= 20, (3, 6, 12, 24))
+    # slabs no taller than 5000 points ÷ the row length where the threads
+    # allow: 25 planes at row length 200, 12 at 400 (measured, #558, #566)
+    @test all(T -> cld(60, sb(T, 60, 200, 1, 1, 200)[1]) <= 25, (3, 6, 12, 24))
+    @test all(T -> cld(150, sb(T, 150, 400, 1, 1, 400)[1]) <= 12, (13, 24, 72))
+    @test FVs.sweep_blocks(CPUBackend(threshold = 0), 400 * 400 * 150, 150, 400)[1] ==
+          FVs._split_blocks(Threads.nthreads(), 150, 400, 1, 1, 400)[1]   # the row length from npoints
     @test sb(24, 60, 1, 1, 1) == (24, 1)    # one row (a booking tuple): k alone, as before
 end
 

@@ -571,27 +571,31 @@ a third launch. Slabs alone (#405, #533) capped the threads that work at
 (measured on 72 threads: 37.6 busy in the sweep, #566); the row ranges
 lift the cap to `(nk ÷ 2lz)(nj ÷ 2ly)`.
 
-The rule (measured on 200 × 200 × 60 at 6, 12 and 24 threads, #558):
-slabs no taller than 20 planes (`_SLAB_PLANES`) where the thread count
-allows (taller slabs keep too many rows of every field in cache: whole
-60-level columns ran 10-110 % slower), then the least estimated time
-`cld(ns·nt, T) / (ns·nt) · (1 + c·f_edge)` for `T` threads, a fraction
-`f_edge` of edge points and `c = 0.5` (`_C_EDGE`): the most blocks up to
-one per thread, and among those the fewest edge points.
+The rule: slabs no taller than `_SLAB_POINTS ÷ nx` planes (`nx =
+npoints ÷ (nk·nj)`, the row length; at least `2lz`) where the thread
+count allows, since a block's rows of every field must stay in cache,
+then the least estimated time `cld(ns·nt, T) / (ns·nt) · (1 + c·f_edge)`
+for `T` threads, a fraction `f_edge` of edge points and `c = 0.5`
+(`_C_EDGE`): the most blocks up to one per thread, and among those the
+fewest edge points. Measured on one 12-core machine (24 threads): at row
+length 200 slabs of 20 planes ran well and whole 60-level columns
+10-110 % slower (#558); at row length 400 and 150 levels slabs of 6-12
+planes ran 48-65 ms (min) and of 19-50 planes 82-104 ms (#566). Both fit
+a bound of about 5000 points per plane-row slab (docs/src/design/roadmap.md).
 """
 function sweep_blocks(b, npoints::Integer, nk::Integer, nj::Integer; lz::Integer = 1, ly::Integer = 1)
     Backends.runs_serially(b, npoints) && return (1, 1)
-    return _split_blocks(Threads.nthreads(), nk, nj, lz, ly)
+    return _split_blocks(Threads.nthreads(), nk, nj, lz, ly, max(1, npoints ÷ max(1, nk * nj)))
 end
 
-# the tallest slab the split prefers, and the weight of an edge point
-# against an inner one (measured, #558)
-const _SLAB_PLANES = 20
+# the largest slab (planes × row length) the split prefers, and the weight
+# of an edge point against an inner one (measured, #558 and #566)
+const _SLAB_POINTS = 5000
 const _C_EDGE = 0.5
 
-function _split_blocks(T::Integer, nk::Integer, nj::Integer, lz::Integer, ly::Integer)
+function _split_blocks(T::Integer, nk::Integer, nj::Integer, lz::Integer, ly::Integer, nx::Integer = 200)
     nsmax = max(1, min(T, nk ÷ (2lz)))
-    nsmin = min(nsmax, cld(nk, _SLAB_PLANES))
+    nsmin = min(nsmax, cld(nk, max(2lz, _SLAB_POINTS ÷ nx)))
     best, bc = (nsmax, 1), Inf
     for ns in nsmin:nsmax, nt in 1:max(1, min(T ÷ ns, nj ÷ (2ly)))
         fe = 1 - (1 - (ns > 1 ? min(1, 2lz * ns / nk) : 0.0)) * (1 - (nt > 1 ? min(1, 2ly * nt / nj) : 0.0))
