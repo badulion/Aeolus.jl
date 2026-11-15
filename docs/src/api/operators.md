@@ -204,7 +204,7 @@ Aeolus.Operators.FiniteVolume.rows_sorted
 Aeolus.Operators.FiniteVolume.blocked_predictor!
 Aeolus.Operators.FiniteVolume.SweepBuffers
 Aeolus.Operators.FiniteVolume.sweep_buffers
-Aeolus.Operators.FiniteVolume.sweep_slabs
+Aeolus.Operators.FiniteVolume.sweep_blocks
 Aeolus.Operators.FiniteVolume.LevelSums
 Aeolus.Operators.FiniteVolume.BookedTerm
 Aeolus.Operators.FiniteVolume.SWEEP_BOOKED
