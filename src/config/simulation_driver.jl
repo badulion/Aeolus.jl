@@ -1023,10 +1023,10 @@ end
 _is_open(cfg) = cfg.boundaries.x === :open || cfg.boundaries.y === :open
 
 function Config.build(::SimulationDriverType, cfg::RunConfig)
-    # FFTW on Julia's threads and BLAS pinned to one (KA-h, maintainer decision
-    # on #291) for every model, before any plan is made; an explicit count
-    # ([fftw] threads, AEOLUS_FFTW_THREADS, set_fftw_policy!) wins. Until #524
-    # only the urban site called it, so every other domain's FFTs ran on one thread.
+    # BLAS pinned to one thread and the default backend set for every model,
+    # before any plan is made: the spectral solvers cut their transforms
+    # into blocks for Julia's threads (#575). Until #524 only the urban site
+    # called it.
     Backends.init_threads!(Backends.default_backend())
     warn_budgets_off(cfg)
     if Urban.urban_enabled(cfg) && !_nested(cfg)

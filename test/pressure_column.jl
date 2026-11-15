@@ -76,4 +76,42 @@ const PSc = Aeolus.PressureSolvers
         @test_throws DimensionMismatch PSc.ColumnTridiagonalSolver(Float64, (4, 4, 3), (1.0, 1.0),
                                                                      ones(3), ones(3))
     end
+
+    # #575: a transform cut into blocks (levels or rows), each block a
+    # serial plan, against FFTW's one plan over the whole array. Odd sizes:
+    # the blocks alternate between memory alignments mod 16, which needs a
+    # plan per alignment class. The same transform, other codelet order:
+    # agreement to round-off (1e-13 relative, measured O(1e-16)).
+    @testset "BlockTransform: blocks of serial plans equal the whole transform" begin
+        O = Aeolus.Operators; F = O.FFTW
+        x = randn(Xoshiro(575), 15, 13, 9)
+        rel(a, b) = maximum(abs.(a .- b)) / maximum(abs.(b))
+        be = Aeolus.Backends.CPUBackend(; threshold = 0)
+        # r2r in x-y by levels, along z by rows
+        for (region, split) in (((1, 2), 3), ((3,), 2))
+            kinds = ntuple(_ -> F.REDFT10, length(region))
+            y = similar(x)
+            t = O.BlockTransform((o, i) -> O.serial_r2r_plan(o, i, kinds, region), y, x, split;
+                                 backend = be, nblocks = 4)
+            @test O.nblocks(t) == 4 && length(t.plans) >= 2      # several alignments / sizes
+            Aeolus.Backends.apply_transform!(be, y, t, x)
+            @test rel(y, F.r2r(x, kinds, region)) < 1e-13
+        end
+        # r2c in x-y, complex DFT along z in place, and back
+        h = zeros(ComplexF64, 8, 13, 9)
+        tf = O.BlockTransform((o, i) -> O.serial_rfft_plan(o, i, (1, 2)), h, x, 3; backend = be, nblocks = 4)
+        tz = O.BlockTransform((o, i) -> O.serial_fft_plan(o, i, (3,), F.FORWARD), h, h, 2; backend = be, nblocks = 5)
+        # every plan before any data: a timing planner (MEASURE) overwrites its arrays
+        tzi = O.BlockTransform((o, i) -> O.serial_fft_plan(o, i, (3,), F.BACKWARD), h, h, 2; backend = be, nblocks = 5)
+        y = similar(x)
+        ti = O.BlockTransform((o, i) -> O.serial_brfft_plan(o, i, (1, 2)), y, h, 3; backend = be, nblocks = 4)
+        Aeolus.Backends.apply_transform!(be, h, tf, x)
+        Aeolus.Backends.apply_transform!(be, h, tz, h)
+        @test rel(h, F.rfft(x)) < 1e-13
+        Aeolus.Backends.apply_transform!(be, h, tzi, h)
+        Aeolus.Backends.apply_transform!(be, y, ti, h)
+        @test rel(y ./ length(x), x) < 1e-13                  # the unnormalised pair: × Nx Ny Nz
+        @test_throws ArgumentError O.BlockTransform((o, i) -> O.serial_r2r_plan(o, i, (F.REDFT10,), (1,)),
+                                                    y, x, 4)
+    end
 end

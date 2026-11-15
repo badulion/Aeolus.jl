@@ -25,7 +25,7 @@ reason = "with AEOLUS_THREAD_TESTS=1 it starts julia -t 1/4/24 subprocesses; the
 
 ["fftw_threads.jl"]
 exclusive = true
-reason = "starts a julia -t 12 subprocess planning a 256³ irfft under MEASURE (#397); with the parallel jobs it would compete for every core"
+reason = "starts a julia -t 8 subprocess that plans and solves every spectral pressure solver under MEASURE (#575); with the parallel jobs it would compete for every core"
 
 # --- heavy (started first) ----------------------------------------------------
 

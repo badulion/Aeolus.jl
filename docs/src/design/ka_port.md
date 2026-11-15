@@ -286,13 +286,17 @@ quotes its size.
 * **FFTW** plans come from the #245 policy (`set_fftw_policy!`): MEASURE
   by default, PATIENT opt-in, ESTIMATE in the tests (set by
   `test/runtests.jl` and inherited by every subprocess, including the
-  harness). ESTIMATE plans are deterministic. Since KA-h (#298)
-  `init_threads!` sets the FFTW thread count to `Threads.nthreads()`,
-  through that policy, so `fftw_policy()` and the checkpoint record
-  report it. A count chosen explicitly wins: `init_threads!(b;
-  fftw_threads = n)`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!(threads =
-  n)` or a namelist's `[fftw] threads`. Call `init_threads!` before the
-  simulation is built: a plan keeps the thread count it was made with.
+  harness). ESTIMATE plans are deterministic. From KA-h (#298) to #575
+  `init_threads!` set the FFTW thread count to `Threads.nthreads()`.
+  **Since #575 every FFTW plan is single-threaded** and the solvers cut
+  their transforms into blocks (levels for `x`-`y`, rows for `z`) that
+  Julia's threads run ([`BlockTransform`](@ref Aeolus.Operators.BlockTransform));
+  `fftw_threads`, `AEOLUS_FFTW_THREADS`, `set_fftw_policy!(threads = n)`
+  and `[fftw] threads` are deprecated and ignored. Two reasons: FFTW's
+  own pool was created from thread 1 and inherited its CPU affinity, so
+  with `JULIA_EXCLUSIVE=1` it ran on core 0 next to thread 1 (#566,
+  #575; see the correction under "Thread pinning"), and its planner may
+  thread inside one transform (#572).
 * **Threaded FFTW is thread-invariant under ESTIMATE.** FFTW's threaded
   plans hand whole 1-D transforms (and contiguous slabs of them) to the
   threads and leave each transform's arithmetic unchanged. (Correction,
@@ -309,7 +313,10 @@ quotes its size.
   12 and 24 threads). MEASURE runs are not bitwise reproducible anyway
   (#245), and imported wisdom made at the same thread count restores
   reproducibility. The pencil-parallel fallback the plan held in reserve
-  (serial 1-D plans launched over pencils) was not needed.
+  (serial 1-D plans launched over pencils) was not needed then; #575
+  adopted its form (serial plans over blocks of levels or rows) to remove
+  FFTW's thread pool. With blocks, the plans (so the last bits) follow
+  the Julia thread count; results agree to round-off.
 * **Transforms run from the host.** Plans are executed through
   [`apply_transform!`](@ref Aeolus.Backends.apply_transform!)`(backend,
   out, plan, in)` between kernel launches, never inside a kernel, so a GPU
@@ -2722,6 +2729,17 @@ compute, not memory bandwidth. **Recommended launch setting: unchanged,
 `julia -t 12` with no pinning.** ThreadPinning.jl was not tried:
 `JULIA_EXCLUSIVE` and `taskset` produce the three layouts the issue asks
 about without a dependency, and none of them helps.
+
+**Correction (#575).** Part of the pinned loss above was FFTW's: its
+thread pool was created from Julia's thread 1 and inherited thread 1's
+CPU affinity (Linux `pthread_create`), so with `JULIA_EXCLUSIVE=1` every
+FFTW thread ran on core 0, next to thread 1. On Fritz at 72 threads that
+made the Berlin 20 m step 28.4 s pinned against ~6 s unpinned (#566).
+Since #575 FFTW plans are single-threaded and Julia's threads run them.
+Measured on the Berlin example at `-t 4,0` (master c7603464, minimum of 3
+processes, s per adaptive step): pinned against unpinned went from
+0.927 / 0.892 (+3.9%) to 0.853 / 0.889 (−4.0%). The recommendation stands:
+pinning is not needed. It no longer costs anything, though.
 
 ### Ranked targets for SC-d and SC-e
 

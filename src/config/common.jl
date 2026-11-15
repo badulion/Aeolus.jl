@@ -21,8 +21,9 @@ legacy case's):
     (default: `AEOLUS_ALLOW_UNCOMMITTED == "1"`, else `false`), and for a
     legacy case `legacy`, pinned to its name;
   * `[fftw]`: `planner` (default `AEOLUS_FFTW_PLANNER`, else `measure`),
-    `threads` (default `AEOLUS_FFTW_THREADS`, else `"none"`: automatic,
-    one per Julia thread), `wisdom` (a file to import before planning);
+    `threads` (deprecated, #575: FFTW plans are single-threaded and the
+    transforms run on Julia's threads; a value other than 1 is reported
+    and ignored), `wisdom` (a file to import before planning);
   * `[logging]`: `console_level` (default `AEOLUS_LOG`, else `info`),
     `file_level`, `flush_interval`, `diagnostics_cadence`;
   * `[checkpoint]`: `every_steps`, `every_seconds`, `keep`, `prefix`;
@@ -50,7 +51,7 @@ function _common_sections(driver::String)
                 doc = "estimate | measure | patient | exhaustive (default: AEOLUS_FFTW_PLANNER, else measure)")
         option!(s, "threads", Optional{Int}; range = (1, 4096),
                 default = () -> (t = get(ENV, "AEOLUS_FFTW_THREADS", ""); isempty(t) ? nothing : something(tryparse(Int, t), t)),
-                doc = "FFTW threads; \"none\": one per Julia thread (default: AEOLUS_FFTW_THREADS)")
+                doc = "deprecated and ignored (#575): FFTW plans are single-threaded, the transforms run on Julia's threads")
         option!(s, "wisdom", Optional{Path}; input = false,
                 doc = "FFTW wisdom file imported before planning, if it exists")
     end
@@ -134,12 +135,13 @@ the simulation is built:
 ```toml
 [fftw]
 planner = "measure"   # estimate | measure (default) | patient | exhaustive
-threads = 4           # "none": one per Julia thread
+# threads             # deprecated (#575): FFTW plans are single-threaded
 wisdom  = "run/fftw_wisdom"   # optional: import before planning
 ```
 
 From a `RunConfig` every option is resolved, so the planner is always
-set (`threads = "none"` leaves the thread count automatic). From a `Dict`
+set (`threads` is deprecated, #575: a value other than 1 is reported and
+ignored). From a `Dict`
 (a namelist from [`load_config`](@ref)) only the keys present change
 anything, and without the table nothing changes. Returns the resulting
 [`fftw_policy`](@ref Aeolus.Operators.fftw_policy).
