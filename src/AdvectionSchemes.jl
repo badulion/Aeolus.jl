@@ -915,13 +915,26 @@ end
                            (fz[i,j,k+1] - fz[i,j,k])*idz
     return nothing
 end
+# the same divergence written instead of added (`accumulate = false`):
+# 0 - x is -x, so the values are those of a zeroed `td` plus the add
+@inline function _b_flux_div_set!(i, j, k, td, fx, fy, fz, idx, idy, dzm)
+    idz = _idz_at(dzm, k)
+    @inbounds td[i,j,k] = -((fx[i+1,j,k] - fx[i,j,k])*idx +
+                            (fy[i,j+1,k] - fy[i,j,k])*idy +
+                            (fz[i,j,k+1] - fz[i,j,k])*idz)
+    return nothing
+end
 
 function _add_flux_divergence!(tend::Field{CellCenter},
                                Fx::Field{FaceX}, Fy::Field{FaceY}, Fz::Field{FaceZ},
-                               g::_PosMesh)
+                               g::_PosMesh, accumulate::Bool = true)
     idx = 1/g.dx; idy = 1/g.dy
-    launch!(Backends.backend(tend.data), _b_flux_div!, interior(g),
-            tend.data, Fx.data, Fy.data, Fz.data, idx, idy, _dz_metric(g))
+    be, dzm = Backends.backend(tend.data), _dz_metric(g)
+    if accumulate
+        launch!(be, _b_flux_div!, interior(g), tend.data, Fx.data, Fy.data, Fz.data, idx, idy, dzm)
+    else
+        launch!(be, _b_flux_div_set!, interior(g), tend.data, Fx.data, Fy.data, Fz.data, idx, idy, dzm)
+    end
     return tend
 end
 
@@ -1086,7 +1099,7 @@ end
 
 """
     advect_positive!(tend, u, v, w, ϕ, dt; scheme = :weno_z5, C_T = 1e-5,
-                     p = 2, workspace = nothing, bcs = nothing)
+                     p = 2, workspace = nothing, bcs = nothing, accumulate = true)
 
 Positivity-preserving high-order scalar advection: reconstruct, limit,
 difference. Adds `-∂(uⱼϕ)/∂xⱼ` to `tend` such that a forward-Euler update
@@ -1114,6 +1127,11 @@ threaded (`julia -t N`, N > 1) the workspace is required and its absence
 is an `ArgumentError`. With a workspace the call allocates nothing on a
 serial backend.
 
+`accumulate = false` writes `-∂(uⱼϕ)/∂xⱼ` into the interior of `tend`
+instead of adding it, for a caller whose `tend` would otherwise be zeroed
+first (the TKE step, #581: a serial whole-field `fill!` per step). The
+halo of `tend` is not touched.
+
 Every stage (the reconstructed and the upwind face fluxes, the limiter's
 three phases, the flux divergence) is a `launch!` of a pointwise body
 (KA-e, #302): the tendency is identical at every thread count, and at one
@@ -1125,7 +1143,8 @@ function advect_positive!(tend::Field{CellCenter,T}, u::Field{FaceX,T},
                           scheme::Union{Symbol,AbstractReconstruction} = :weno_z5,
                           C_T::Real = 1e-5, p::Integer = 2,
                           workspace::Union{Nothing,FluxLimiterWorkspace} = nothing,
-                          bcs::Union{Nothing,FieldBoundaryConditions} = nothing) where {T}
+                          bcs::Union{Nothing,FieldBoundaryConditions} = nothing,
+                          accumulate::Bool = true) where {T}
     m  = mesh(ϕ)
     r  = _reconstruction(scheme; C_T = C_T, p = p)
     workspace === nothing && _threaded(ϕ.data) &&
@@ -1137,7 +1156,7 @@ function advect_positive!(tend::Field{CellCenter,T}, u::Field{FaceX,T},
     _upwind_fluxes!(ws.Lx, ws.Ly, ws.Lz, u, v, w, ϕ, m)
     apply_positivity_limiter!(ws.Fx, ws.Fy, ws.Fz, ϕ, dt, m;
                               flux_lo = (ws.Lx, ws.Ly, ws.Lz), ratio = ws.ratio, bcs = bcs)
-    _add_flux_divergence!(tend, ws.Fx, ws.Fy, ws.Fz, m)
+    _add_flux_divergence!(tend, ws.Fx, ws.Fy, ws.Fz, m, accumulate)
     return tend
 end
 

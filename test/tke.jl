@@ -220,7 +220,7 @@ end
     for (gname, mk) in (("regular", n -> RegularGrid(; size = n, extent = (120.0, 100.0, 80.0), halo = (2, 2, 2))),
                         ("stretched", n -> StretchedGrid(; size = n, extent = (120.0, 100.0, 240.0), halo = (2, 2, 2),
                                                          stretching = (:tanh, 1.5)))),
-        n in ((12, 10, 8), (3, 1, 4)),
+        n in ((12, 10, 8), (3, 1, 4), (6, 5, 3), (6, 5, 2)),   # Nz ≥ 3: the boundary levels launched on their own (#581)
         bcs in (FieldBoundaryConditions(:periodic, :periodic, :wall), FieldBoundaryConditions(:noflux, :noflux, :wall))
         g = mk(n)
         sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs)
@@ -242,6 +242,59 @@ end
     end
 end
 
+end
+
+@testset "no whole-field zeroing per step: Pw and tend (#581)" begin
+    n = (24, 20, 12)
+    g = RegularGrid(; size = n, extent = (240.0, 200.0, 120.0), halo = (3, 3, 3))
+    bcs = FieldBoundaryConditions(:periodic, :periodic, :wall)
+    function mk(transport)
+        sim = BoussinesqSimulation(g; θ₀ = 300.0, bcs = bcs)
+        rng = Xoshiro(581)
+        for f in (sim.u, sim.v, sim.w)
+            interior_view(f) .= 0.5 .* randn(rng, n)
+        end
+        c = TKEClosure(g; transport = transport)
+        initialize_tke!(c, sim; e_min = 1e-4)
+        return sim, c
+    end
+    # advect_positive!(…; accumulate = false) writes the interior of tend
+    # and leaves its halo alone; the values are those of adding into zeros
+    sim, c = mk(true)
+    e = c.e
+    fill_halos!(e, bcs)
+    ws = Aeolus.AdvectionSchemes.FluxLimiterWorkspace(g)
+    t0 = Aeolus.Fields.Field(Aeolus.Grids.CellCenter(), g)
+    t1 = Aeolus.Fields.Field(Aeolus.Grids.CellCenter(), g); t1.data .= NaN
+    for b in (CPUBackend(serial = true), CPUBackend(threshold = 0))
+        fill!(t0.data, 0); t1.data .= NaN
+        with_backend(b) do
+            Aeolus.AdvectionSchemes.advect_positive!(t0, sim.u, sim.v, sim.w, e, 0.5; workspace = ws, bcs = bcs)
+            Aeolus.AdvectionSchemes.advect_positive!(t1, sim.u, sim.v, sim.w, e, 0.5; workspace = ws, bcs = bcs,
+                                                     accumulate = false)
+        end
+        # 0 - x against -x: equal (no round-off expected)
+        @test maximum(abs.(interior_view(t1) .- interior_view(t0))) <= 4eps() * maximum(abs.(interior_view(t0)))
+        @test all(isnan, t1.data[1:3, :, :])                   # halo untouched
+    end
+    # transport = true: the step does not depend on what tend held before
+    # (garbage everywhere, halo included, against zeros)
+    sa, ca = mk(true); sb, cb = mk(true)
+    ca.tend.data .= NaN; fill!(cb.tend.data, 0)
+    advance_sgs!(ca, sa, 0.5); advance_sgs!(cb, sb, 0.5)
+    @test all(isfinite, interior_view(ca.e))
+    @test maximum(abs.(interior_view(ca.e) .- interior_view(cb.e))) <= 4eps() * maximum(abs.(interior_view(cb.e)))
+    # transport = false (Berlin): tend and Pw are zero when built and stay
+    # zero through steps without walls, with nothing zeroing them per step
+    sf, cf = mk(false)
+    for _ in 1:3
+        advance_sgs!(cf, sf, 0.5)
+    end
+    @test all(iszero, cf.tend.data) && all(iszero, cf.Pw.data)
+    # detaching walls zeroes Pw (the walls' wall-stress work must not stay)
+    cf.Pw.data .= 1.0
+    @test attach_immersed_walls!(cf, nothing)
+    @test all(iszero, cf.Pw.data)
 end
 
 @testset "wall_distance: floor, lid, and a cube (Danielsson 1980; #567)" begin
