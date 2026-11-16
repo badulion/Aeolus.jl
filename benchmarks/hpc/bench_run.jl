@@ -228,8 +228,11 @@ if mode == "profile"
     Profile.init(n = 400_000_000, delay = parse(Float64, get(kv, "delay_ms", "10")) * 1e-3)
     Profile.clear()
     t0 = time()
-    ts = Profile.@profile steps!(nprof)
-    res["profile"] = Dict{String,Any}("ts_begin" => t0, "steps" => ts, "nprof" => nprof)
+    tm = @timed Profile.@profile steps!(nprof)
+    ts = tm.value
+    res["profile"] = Dict{String,Any}("ts_begin" => t0, "steps" => ts, "nprof" => nprof,
+                                      "alloc_bytes" => tm.bytes, "alloc_gb_per_step" => tm.bytes / 2^30 / nprof,
+                                      "gc_s" => tm.gctime)
     base = replace(outpath, r"\.toml$" => "")
     data, lidict = Profile.retrieve()
     serialize(base * ".profile.jls", (data, lidict))
