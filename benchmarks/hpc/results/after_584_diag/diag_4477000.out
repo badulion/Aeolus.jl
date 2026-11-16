@@ -1,0 +1,87 @@
+### Starting TaskPrologue of job 4477000 on f0828 at Mon Nov 16 16:22:43 CET 2026
+#   SLURM_JOB_NODELIST=f0828
+#   SLURM_JOB_NUM_NODES=1
+#   SLURM_NTASKS=
+#   SLURM_NPROCS=
+#   SLURM_TASKS_PER_NODE=72
+#   SLURM_JOB_CPUS_PER_NODE=72
+#   SLURM_EXPORT_ENV=
+No cgroup found
+### Finished TaskPrologue
+[2026-11-16T16:22:43+01:00] f0828, scripts 272ab107
+bench/master-581 f6e8b10c Merge remote-tracking branch 'origin/master' into bench/master-581
+bench/584-swap 53059213 Merge remote-tracking branch 'origin/issue/584-rk3-swap' into bench/584-swap
+[16:22:43] master-581 trace t36
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_diag/trace_20m_t36_master-581.toml
+idle_in_launches_s = 151.80711838700233
+launch_wall_s = 23.344054435000064
+serial_between_s = 4.043519090999936
+step_wall_s = 27.387573526
+idle_in_launches_s = 158.5881177400006
+launch_wall_s = 26.632128387000012
+serial_between_s = 4.2453907089999845
+step_wall_s = 30.877519095999997
+[16:28:49] 584-swap trace t36
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-swap/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_diag/trace_20m_t36_584-swap.toml
+idle_in_launches_s = 155.30625058900011
+launch_wall_s = 23.954078803000005
+serial_between_s = 0.4138454849999924
+step_wall_s = 24.367924287999998
+idle_in_launches_s = 195.14406415099722
+launch_wall_s = 28.996788623999922
+serial_between_s = 4.04785801500007
+step_wall_s = 33.04464663899999
+[2026-11-16T16:35:06+01:00] done
+=== JOB_STATISTICS ===
+=== current date     : Mon Nov 16 16:35:07 CET 2026
+= Job-ID             : 4477000 on fritz
+= Job-Name           : diag.sh
+= Job-Command        : /home/atuin/b337bd/b337bd10/aeolus-bench/after584/diag.sh
+= Initial workdir    : /home/atuin/b337bd/b337bd10/aeolus-bench/after584
+= Queue/Partition    : singlenode
+= Slurm account      : b337bd with QOS=normal
+= Features           : hwperf
+= Requested resources:  for 01:00:00
+= Elapsed runtime    : 00:12:25
+= Total RAM usage    : 0.0 GiB 
+= Node list          : f0828
+= Subm/Elig/Start/End: 2026-11-16T16:19:26 / 2026-11-16T16:19:26 / 2026-11-16T16:22:42 / 2026-11-16T16:35:07
+======================
+=== Quota infos ======
+    Path                 Used     SoftQ    HardQ    Gracetime  Filec    FileQ    FiHaQ    FileGrace    
+    /home/atuin            19.5G     0.0K     0.0K        N/A  37,880                           N/A    
+    /home/hpc               6.1G   104.9G   209.7G        N/A  34,322      300K     400K        N/A    
+    /home/vault             0.0K  1048.6G  2097.2G        N/A       1      200K     400K        N/A    
+    /lustre                 4.0K     0.0K     0.0K        N/A       1       80K     250K        N/A    
+    /anvme                295.6G     0.0K     0.0K        N/A     135    9,985K  11,985K        N/A    
+======================
+=== Network traffic stats (does not include Infiniband) ======
+= HPC internal traffic (e.g. to fileservers): 1 GB in / 0 GB out
+= External traffic: 0 GB in / 0 GB out
+======================

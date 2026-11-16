@@ -74,7 +74,28 @@ At 36 threads with `loop_fusion = never`:
 | copy | 6.95 |
 | **swap** | **9.65** (+26 % against master) |
 
-The default (`if_possible`) is unaffected. Runs with fusion off (or any domain the fused sweep does not cover) would pay this. The cause is not checked; perhaps the unfused stage 1 with swapped arrays adds a copy or a pass.
+The default (`if_possible`) is unaffected. Runs with fusion off (or any domain the fused sweep does not cover) would pay this.
+
+### Diagnosis (job 4477000)
+
+The desktop could not reproduce it (the same 5 copies per step as master; Berlin 100 m 0.252 against 0.255 s). Job **4477000** (node f0828, 2026-11-16) ran `bench_run.jl trace` at `-t 36,0`, Berlin 20 m, unpinned: master-581, then 584-swap, each with 2 warm-up steps and then, for each setting, 2 discarded and 4 traced steps (`results/after_584_diag/`).
+
+| per step | master `never` | swap `never` | master `if_possible` | swap `if_possible` |
+| :-- | --: | --: | --: | --: |
+| step | 7.72 s | **8.26 s** (+0.54, +7 %) | 6.85 s | 6.09 s |
+| inside launches | 6.66 s | 7.25 s | 5.84 s | 5.99 s |
+| between launches (serial) | 1.06 s | 1.01 s | 1.01 s | 0.10 s |
+| idle thread-seconds in launches | 39.6 | 48.8 | 38.0 | 38.8 |
+
+- **The regression is smaller this time:** +7 % against +26 % in job 4474794, on a different node with the same builds. So its size varies from run to run.
+- **It is not extra serial work and not an extra pass.** The serial time between launches is the same (1.01 against 1.06 s, the 5 copies), and every launch runs the same number of times.
+- **It is spread over all the memory-bound launches:** each is 5–35 % longer, with slightly fewer busy threads. The largest are `_b_eddy_scalar!` (+0.09 s), `_coefficients_body!` (+0.08), `_map_body!` (+0.07), `_b_tendency_scalar!` (+0.05) and `_n2_body!` (+0.04).
+- **Reading:** the same work, with slower memory access throughout. That points to where the arrays' pages lie (NUMA, or page layout) rather than to the code path. A slowdown that varies by run fits this too. It is not explained yet:
+  - every array is first-touched in parallel (`Backends.allocate`);
+  - the 2 fused warm-up steps swap the arrays twice, so the state is back in its original arrays when the `never` steps start.
+
+  Whether Fritz migrates pages (`kernel.numa_balancing`), and how the fused sweep's writes to the workspace interact with that, is unchecked.
+- **The fused path is unaffected:** swap is again −0.76 s per step against master at 36 threads.
 
 ## Against the desktop reference
 
