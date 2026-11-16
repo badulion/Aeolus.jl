@@ -1143,13 +1143,39 @@ end
 
 `dst .= src` over the whole storage (halos included); `dst` and `src`
 must have the same size. It is `copyto!` (a `memcpy`, which a GPU array
-also implements). A copy kernel measured no reliable gain (KA-j, #306;
-`benchmarks/bench_ka_step.jl kernels`): 1.01-1.07× the `memcpy` serially,
-and 1.09-1.30× at 64×64×32 and 0.82-1.58× at 128×128×64 on 4-24 threads.
+also implements), split on a threaded CPU backend into contiguous chunks
+of at least `_COPY_CHUNK` points, one `copyto!` per task (#584). The
+copy of the RK3 start state (u, v, w, θ, qv) ran on one core: ~1.0 s per
+step at Berlin 20 m on 72 threads (#581 A2). Chunked, on a 24-thread
+desktop, the five copies took 33 against 52 ms at 518×518×102 and 194
+against 276 ms at 1012×1012×162, and never more than `copyto!` down to
+70×70×38. A copy *kernel* (one point per index) measured no reliable gain
+(KA-j, #306) and lost at 24 threads (72.7 against 60.6 ms, #566): each
+task must keep the `memcpy`, which streams its stores.
 """
 function copy_storage!(dst::AbstractArray{T,3}, src::AbstractArray{T,3}) where {T}
     size(dst) == size(src) || throw(DimensionMismatch("copy_storage!: $(size(dst)) ≠ $(size(src))"))
-    copyto!(dst, src)
+    p = _copy_tasks(dst, src)
+    p > 1 ? _chunked_copy!(dst, src, p) : copyto!(dst, src)
+    return dst
+end
+# chunks of at least this many points: smaller ones lose the streaming
+# stores of `memcpy` (4.8 M points: 5.8 ms on 4 tasks, 8.9 ms on 24)
+const _COPY_CHUNK = 1 << 20
+_copy_tasks(dst, src) = 1
+function _copy_tasks(dst::Array{T,3}, src::Array{T,3}) where {T}
+    b = Backends.backend(dst)
+    b isa Backends.CPUBackend && !Backends.runs_serially(b, length(dst)) || return 1
+    return clamp(length(dst) ÷ _COPY_CHUNK, 1, Threads.nthreads())
+end
+function _chunked_copy!(dst::Array, src::Array, p)
+    n = length(dst)
+    c = cld(n, p)
+    @sync for t in 1:p
+        lo = (t - 1) * c + 1
+        lo > n && break
+        Threads.@spawn copyto!(dst, lo, src, lo, min(c, n - lo + 1))
+    end
     return dst
 end
 
