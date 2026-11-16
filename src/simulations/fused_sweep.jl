@@ -382,31 +382,40 @@ function _blocked_projection!(sim::BoussinesqSimulation{T}, Δt::T, t_bc, stage,
     bufs = _fused_buffers!(sim, terms, moist ? 5 : 4)
     _prepare_terms!(terms, sim, Δt)
     _prepare_terms!(post, sim, Δt)
-    _blocked_sweep!(bufs, terms, post, sim, Δt, stage)
+    # the first RK3 substage: uⁿ to the workspace by a swap, the sweep then
+    # reads it there and writes u* into the simulation's arrays (#584)
+    swapped = _keep_start!(sim, stage, true)
+    _blocked_sweep!(bufs, terms, post, sim, Δt, stage, swapped)
+    c = _combination(stage)                 # the RK3 combination, or nothing
     _finish_terms!(post, sim, Δt)
     _finish_sweep_terms!(terms, sim, Δt)
     update_open_boundaries!(sim, t_bc, Δt)
-    _project_velocity!(sim, _DivBy(Δt), stage)
-    if stage !== nothing                    # the halos of the RK3 combination (step 11)
-        _shell_map!(stage.c, (sim.θ.data,), (stage.ws.θ0,), sim.mesh)
-        moist && _shell_map!(stage.c, (sim.qv.data,), (stage.ws.q0,), sim.mesh)
+    _project_velocity!(sim, _DivBy(Δt), c)
+    if c !== nothing                    # the halos of the RK3 combination (step 11)
+        _shell_map!(c.c, (sim.θ.data,), (c.ws.θ0,), sim.mesh)
+        moist && _shell_map!(c.c, (sim.qv.data,), (c.ws.q0,), sim.mesh)
     end
     sim.t += Δt
     return sim
 end
+# the sweep in place, or (the first RK3 substage after a swap) reading uⁿ
+# from the workspace and writing u* into the simulation's arrays
+_blocked_sweep!(bufs, terms, post, sim, Δt, stage, swapped::Bool) = _blocked_sweep!(bufs, terms, post, sim, Δt, stage)
+# (the method of the first RK3 substage, `_KeepStart`: in Simulations.jl, after the type)
+
 # the sweep with concrete arguments: the scalars' update is the axpy of
 # step 11 (`step!`), or with the RK3 combination and the step-start θ, qv
 _blocked_sweep!(bufs, terms, post, sim, Δt, ::Nothing) =
     _blocked_sweep!(bufs, terms, post, sim, Δt, _Axpy(Δt), nothing, nothing)
 _blocked_sweep!(bufs, terms, post, sim, Δt, stage) =
     _blocked_sweep!(bufs, terms, post, sim, Δt, _AxpyStage(_Axpy(Δt), stage.c), stage.ws.θ0, stage.ws.q0)
-function _blocked_sweep!(bufs, terms, post, sim, Δt, ps, θ0, q0)
+function _blocked_sweep!(bufs, terms, post, sim, Δt, ps, θ0, q0, src = nothing)
     s1 = (sim.θ, ps, θ0)
     h = _post_halos(sim, post)
     if sim.has_moisture
-        fused_predictor!(sim, bufs, terms, post, h, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.tqv)
+        fused_predictor!(sim, bufs, terms, post, h, _Axpy(Δt), s1, (sim.qv, ps, q0), sim.tqv; src)
     else
-        fused_predictor!(sim, bufs, terms, post, h, _Axpy(Δt), s1, nothing, nothing)
+        fused_predictor!(sim, bufs, terms, post, h, _Axpy(Δt), s1, nothing, nothing; src)
     end
     return nothing
 end
@@ -432,13 +441,13 @@ per-point form (#533 steps 6 and 8).
 """
 fused_predictor!(sim, bufs, terms, pu, s1, s2, tqv) =
     fused_predictor!(sim, bufs, terms, (), nothing, pu, s1, s2, tqv)
-function fused_predictor!(sim, bufs, terms, post::Tuple, halo!::H, pu, s1, s2, tqv) where {H}
+function fused_predictor!(sim, bufs, terms, post::Tuple, halo!::H, pu, s1, s2, tqv; src = nothing) where {H}
     b = Backends.backend(sim.u.data)
     if b isa Backends.CPUBackend && !sim.workspaces.fused.per_point
-        blocked_predictor!(bufs, terms, post, halo!, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
+        blocked_predictor!(bufs, terms, post, halo!, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh; src)
     else
         tf = TendencyFields(sim.tu.data, sim.tv.data, sim.tw.data, sim.tθ.data, tqv === nothing ? nothing : tqv.data)
-        pointwise_predictor!(Backends.ka_backend(b), tf, terms, post, halo!, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh)
+        pointwise_predictor!(Backends.ka_backend(b), tf, terms, post, halo!, sim.u, sim.v, sim.w, pu, s1, s2, sim.mesh; src)
     end
     return nothing
 end

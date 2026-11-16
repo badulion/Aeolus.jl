@@ -1077,8 +1077,11 @@ end
 # =========================================================================
 
 # Bind the cell-centred fields of `sim` that have planes (θ, qv, …) to
-# their names, so `fill_halos!` finds them by identity.
+# their names, so `fill_halos!` finds them by identity. Rebound at every
+# substep: the first RK3 substage swaps the arrays of θ, qv with its
+# workspace's (#584), so the previous ones are dropped first.
 function _bind!(st::OpenBoundaryState, sim)
+    empty!(st.bound)
     for p in st.planes
         p.normal && continue
         _loc_of(p.name) isa CellCenter || continue

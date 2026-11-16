@@ -543,6 +543,10 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     # below (the reference), and the run reports which term caused it.
     _try_fused!(sim, Δt, t_bc, stage, _sgs_choice(closure, sgs_stress), body_force!, post_predictor!,
                 momentum_advection, sim.has_viscosity ? sim.ν : nothing) && return sim
+    # the passes update in place: the first RK3 substage copies uⁿ (#584);
+    # `c` is the stage combination (nothing in the first substage)
+    _keep_start!(sim, stage, false)
+    c = _combination(stage)
 
     # 2.-3. The tendencies from zero: momentum + scalar advection, then the
     #       molecular viscosity / diffusion (qv: the same molecular
@@ -631,13 +635,13 @@ function _euler_projection!(sim::BoussinesqSimulation{T}, Δt::T,
     # 8.–10. Chorin projection of the predicted velocity; the correction
     # also writes the physical pressure p = φ/Δt (step 12) and, inside
     # step_rk3!, the stage combination with the step-start state (SC-d).
-    _project_velocity!(sim, _DivBy(Δt), stage)
+    _project_velocity!(sim, _DivBy(Δt), c)
 
     # 11. Advance θ (no projection needed for scalar), combined with the
     # step-start θ inside step_rk3!.
-    _advance_scalar!(sim.θ, Δt, sim.tθ, stage, stage === nothing ? nothing : stage.ws.θ0)
+    _advance_scalar!(sim.θ, Δt, sim.tθ, c, c === nothing ? nothing : c.ws.θ0)
     sim.has_moisture &&
-        _advance_scalar!(sim.qv, Δt, sim.tqv, stage, stage === nothing ? nothing : stage.ws.q0)
+        _advance_scalar!(sim.qv, Δt, sim.tqv, c, c === nothing ? nothing : c.ws.q0)
 
     # 12. Advance the clock.
     sim.t += Δt
@@ -758,12 +762,17 @@ end
 """
     RK3Workspace(sim)
 
-The step-start state `uⁿ` (`u0, v0, w0, θ0, q0`: storage-sized copies of
+The step-start state `uⁿ` (`u0, v0, w0, θ0, q0`: storage-sized arrays like
 `sim.u, v, w, θ, qv`) that [`step_rk3!`](@ref) combines with its later
 substages. Allocated once per simulation by [`rk3_workspace`](@ref), so a
 step allocates nothing for it (before #295 every step copied 9 fields).
+
+Mutable: the first substage writes u* into these arrays and then swaps
+them with the simulation's (`sim.u.data` ↔ `u0`, …), so `uⁿ` stays here
+without a copy (#584). Hold the workspace, never one of its arrays, across
+a step: after it, `u0` is the array that was `sim.u.data`.
 """
-struct RK3Workspace{A<:AbstractArray}
+mutable struct RK3Workspace{A<:AbstractArray}
     u0::A; v0::A; w0::A; θ0::A; q0::A
 end
 
@@ -859,17 +868,19 @@ function _step_rk3!(sim::BoussinesqSimulation{T}, dt::Real;
         fill_state_halos!(sim, sim.θ_bcs)
     end
 
-    # Save current state (into the workspace: no allocation per step, #295;
-    # copy and combinations are kernels over the whole storage, KA-j #306)
+    # u1 = uⁿ + Δt L(uⁿ), then project. uⁿ is kept in the workspace for the
+    # combinations: the fused sweep reads it from the simulation's arrays,
+    # writes u* into the workspace's and swaps the two (#584, no copy); the
+    # passes copy it first (`_keep_start!`). Before #584 every step copied it
+    # (#295: into the workspace, no allocation), ~1.0 s of 6.1 s per step on
+    # 72 threads at Berlin 20 m.
     ws = workspace
-    u0 = copy_storage!(ws.u0, sim.u.data); v0 = copy_storage!(ws.v0, sim.v.data)
-    w0 = copy_storage!(ws.w0, sim.w.data); θ0 = copy_storage!(ws.θ0, sim.θ.data)
     moist = sim.has_moisture
-    q0 = moist ? copy_storage!(ws.q0, sim.qv.data) : θ0      # qv is combined like θ (#177)
-
     _rk3_substep!(sim, Δt, closure, body_force!, post_predictor!, sgs_stress,
-                  t0 + Δt)                                                        # u1 = uⁿ + Δt L(uⁿ), then project
-    # u1 stays in sim (the next substage advances it in place)
+                  t0 + Δt, _KeepStart(ws))
+    # u1 stays in sim (the next substage advances it in place); uⁿ is in ws
+    u0, v0, w0, θ0 = ws.u0, ws.v0, ws.w0, ws.θ0
+    q0 = moist ? ws.q0 : θ0                                   # qv is combined like θ (#177)
 
     # u1 → u1 + Δt L(u1), projected and combined to u2 = 3/4 uⁿ + 1/4 (…):
     # the combination is written by the projection's correction and the
@@ -904,6 +915,67 @@ _rk3_substep!(sim::BoussinesqSimulation, Δt, closure, body_force!::B = nothing,
 struct _RK3Stage{A<:AbstractArray}
     u0::A; v0::A; w0::A; θ0::A; q0::A
 end
+
+# The `stage` of the first RK3 substage: a plain Euler substage that also
+# leaves uⁿ in the workspace `ws` (#584).
+struct _KeepStart{W<:RK3Workspace}
+    ws::W
+end
+# the stage combination of a substage (`_KeepStart`: none)
+_combination(stage) = stage
+_combination(::_KeepStart) = nothing
+
+# Keep uⁿ for the RK3 combinations. `nothing` (not stage 1): nothing to do.
+# By copy (the passes of `_euler_projection!`, and a workspace whose arrays
+# are not of the fields' type): returns `nothing`, the sweep runs in place.
+# By swap (the fused sweep): the workspace's arrays get the halo shell of
+# uⁿ and become the simulation's, uⁿ's arrays become the workspace's, and
+# the returned `(u, v, w, θ, qv)` of uⁿ's arrays is what the sweep reads
+# while it writes u* into the simulation's: the interior is the predictor's,
+# the shell uⁿ's, the same values as the copy and the in-place sweep.
+_keep_start!(sim, stage, swap::Bool) = false
+function _keep_start!(sim, k::_KeepStart, swap::Bool)
+    ws = k.ws
+    moist = sim.has_moisture
+    if !(swap && _swappable(sim, ws))
+        copy_storage!(ws.u0, sim.u.data); copy_storage!(ws.v0, sim.v.data)
+        copy_storage!(ws.w0, sim.w.data); copy_storage!(ws.θ0, sim.θ.data)
+        moist && copy_storage!(ws.q0, sim.qv.data)
+        return false
+    end
+    A = (sim.u.data, sim.v.data, sim.w.data, sim.θ.data)
+    if moist
+        Aq = sim.qv.data
+        _shell_map!(_Take(), (ws.u0, ws.v0, ws.w0, ws.θ0, ws.q0), (A..., Aq), sim.mesh)
+        sim.qv.data = ws.q0; ws.q0 = Aq
+    else
+        _shell_map!(_Take(), (ws.u0, ws.v0, ws.w0, ws.θ0), A, sim.mesh)
+    end
+    sim.u.data = ws.u0; sim.v.data = ws.v0; sim.w.data = ws.w0; sim.θ.data = ws.θ0
+    ws.u0, ws.v0, ws.w0, ws.θ0 = A
+    return true
+end
+# the first substage's fused sweep (the in-place method: simulations/fused_sweep.jl)
+function _blocked_sweep!(bufs, terms, post, sim, Δt, k::_KeepStart, swapped::Bool)
+    ws = k.ws
+    swapped || return _blocked_sweep!(bufs, terms, post, sim, Δt, nothing)   # copied: in place
+    # (a call per branch: one `src` of either type boxed 48 B per step)
+    if sim.has_moisture
+        _blocked_sweep!(bufs, terms, post, sim, Δt, _Axpy(Δt), nothing, nothing,
+                        (u = ws.u0, v = ws.v0, w = ws.w0, θ = ws.θ0, qv = ws.q0))
+    else
+        _blocked_sweep!(bufs, terms, post, sim, Δt, _Axpy(Δt), nothing, nothing,
+                        (u = ws.u0, v = ws.v0, w = ws.w0, θ = ws.θ0, qv = nothing))
+    end
+    return nothing
+end
+
+# the swap needs the workspace's arrays of the fields' own type (a nested
+# child's shell storage is not)
+_swappable(sim, ws::RK3Workspace{A}) where {A} =
+    sim.u.data isa A && sim.v.data isa A && sim.w.data isa A && sim.θ.data isa A &&
+    (!sim.has_moisture || sim.qv.data isa A)
+
 
 # -------------------------------------------------------------------------
 # Diagnostics
@@ -1177,6 +1249,8 @@ end
 
 struct _Zero end
 @inline (::_Zero)(x, s) = zero(x)
+struct _Take end
+@inline (::_Take)(x, s) = s
 
 @inline _shell_point!(f, ::Tuple{}, ins, i, j, k) = nothing
 @inline function _shell_point!(f, outs::Tuple, ins, i, j, k)

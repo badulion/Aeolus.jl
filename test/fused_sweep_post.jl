@@ -181,6 +181,24 @@ function _fp_sweep!(a, mesh, Δt, post, rk3, snap, ns, nt = 1)
 end
 # the per-point (GPU) form of #533 step 8 with the post terms after its
 # predictor on every point, on KernelAbstractions.CPU() as the stand-in
+# out of place (#584, the first RK3 substage): the sweep reads uⁿ from
+# copies and writes into the fields, whose interior is NaN before it (every
+# interior point must be written) and whose halos keep uⁿ's (the swap gives
+# them uⁿ's shell); the post terms are prepared on uⁿ, as in the core
+function _fp_sweep_src!(a, mesh, Δt, post, rk3, snap, ns, nt = 1)
+    terms = (FVp.BaseTendencies(a.ν),)
+    bufs, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, ns, terms, nt)
+    foreach(t -> FVp.prepare!(t, a, Δt), post)
+    moist = a.has_moisture
+    src = (u = copy(a.u.data), v = copy(a.v.data), w = copy(a.w.data), θ = copy(a.θ.data),
+           qv = moist ? copy(a.qv.data) : nothing)
+    for f in (moist ? (a.u, a.v, a.w, a.θ, a.qv) : (a.u, a.v, a.w, a.θ))
+        fill!(interior_view(f), NaN)
+    end
+    FVp.blocked_predictor!(bufs, terms, post, _fp_halos!(a), a.u, a.v, a.w, SIMp._Axpy(Δt), s1, s2, mesh; src)
+    foreach(t -> FVp.finish!(t, a, Δt), post)
+    return a
+end
 function _fp_pointwise!(a, mesh, Δt, post, rk3, snap)
     terms = (FVp.BaseTendencies(a.ν),)
     _, s1, s2 = _fp_args(a, mesh, Δt, rk3, snap, 1, terms)
@@ -448,6 +466,14 @@ _fp_diag_agree(a, b) = all(i -> agree(collect(Float64, Iterators.flatten(a[i])),
                     ok || println("  [#533 s6] $oname: mismatch $bname rk3=$rk3 $bn ns=$ns nt=$nt reversed=$rev")
                     @test ok
                 end
+                # out of place (#584): the same values, every interior point written
+                (ns in (1, 3)) || continue
+                a = mk()
+                post, ref, diag = setup(a, Δt)
+                _fp_sweep_src!(a, gU, Δt, post, rk3, snap, ns, nt)
+                ok = _fp_agree(a, r) && _fp_diag_agree(diag(), dr)
+                ok || println("  [#584] $oname: out of place mismatch $bname rk3=$rk3 $bn ns=$ns nt=$nt")
+                @test ok
             end
         end
     end
