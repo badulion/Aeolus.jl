@@ -1,0 +1,37 @@
+Precompiling packages...
+  1 dependency successfully precompiled in 47 seconds. 102 already precompiled.
+ERROR: LoadError: KeyError: key "SYSIMG_CFG" not found
+Stacktrace:
+ [1] (::Base.var"#getindex##11#getindex##12")(k::String)
+   @ Base ./env.jl:170
+ [2] access_env(onError::Base.var"#getindex##11#getindex##12", var::String)
+   @ Base ./env.jl:66
+ [3] getindex(::Base.EnvDict, k::String)
+   @ Base ./env.jl:170
+ [4] top-level scope
+   @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/workload.jl:6
+ [5] include(mod::Module, _path::String)
+   @ Base ./Base.jl:309
+ [6] exec_options(opts::Base.JLOptions)
+   @ Base ./client.jl:344
+ [7] _start()
+   @ Base ./client.jl:577
+in expression starting at /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/workload.jl:6
+  Activating project at `/home/atuin/b337bd/b337bd10/aeolus-bench/sysimg_env/584-swap`
+[ Info: PackageCompiler: Executing /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/workload.jl => /tmp/4474794.fritz/jl_packagecompiler_BbmlzK/jl_8llxZJ
+ERROR: LoadError: failed process: Process(setenv(`/home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/bin/julia --color=auto --startup-file=no --pkgimages=no --sysimage=/home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/lib/julia/sys.so --trace-compile=/tmp/4474794.fritz/jl_packagecompiler_BbmlzK/jl_8llxZJ /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/workload.jl`,["MODULES_AVAIL_OUTPUT=modulepath:alias:dirwsym:sym:tag", "SLURM_NODELIST=f0316", "GROUP=b337bd", "SLURM_GTIDS=0", "TERM=xterm-256color", "MODULES_CMD=/apps/modules/modulecmd.tcl", "SLURM_JOB_NAME=a2.sh", "AI_AGENT=claude-code_2-1-325_agent", "CLAUDE_CODE_SESSION_ID=cdaa1d02-f1d4-4f77-b8dc-f2a5e52e3224", "OPENBLAS_MAIN_FREE=1"  …  "OPENBLAS_DEFAULT_NUM_THREADS=1", "CLAUDECODE=1", "SLURMD_NODENAME=f0316", "HOME=/home/hpc/b337bd/b337bd10", "SLURM_TOPOLOGY_ADDR_PATTERN=switch.switch.node", "SLURM_CPUS_ON_NODE=72", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/216292/bus", "WORK=/home/atuin/b337bd/b337bd10", "AEOLUS_FFTW_PLANNER=estimate", "XDG_SESSION_CLASS=user"]), ProcessExited(1)) [1]
+
+Stacktrace:
+  [1] pipeline_error
+  [2] run(::Cmd; wait::Bool)
+  [3] run
+  [4] run_precompilation_script(project::String, sysimg::String, precompile_file::String, precompile_dir::String)
+  [5] create_sysimg_object_file(object_file::String, packages::Vector{String}, packages_sysimg::Set{Base.PkgId}; project::String, base_sysimage::String, precompile_execution_file::Vector{String}, precompile_statements_file::Vector{String}, cpu_target::String, script::Nothing, sysimage_build_args::Cmd, extra_precompiles::String, incremental::Bool, import_into_main::Bool)
+  [6] create_sysimg_object_file
+  [7] create_sysimage(packages::Vector{String}; sysimage_path::String, project::String, precompile_execution_file::String, precompile_statements_file::Vector{String}, incremental::Bool, filter_stdlibs::Bool, cpu_target::String, script::Nothing, sysimage_build_args::Cmd, compress_sysimage::Bool, include_transitive_dependencies::Bool, base_sysimage::Nothing, julia_init_c_file::Nothing, julia_init_h_file::Nothing, version::Nothing, soname::Nothing, compat_level::String, extra_precompiles::String, import_into_main::Bool, instantiate::Bool)
+  [8] top-level scope
+  [9] include(mod::Module, _path::String)
+ [10] exec_options(opts::Base.JLOptions)
+ [11] _start()
+in expression starting at /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/build.jl:23
+sysimage 584-swap exit 1

@@ -1,0 +1,531 @@
+### Starting TaskPrologue of job 4474794 on f0316 at Mon Nov 16 11:05:01 CET 2026
+#   SLURM_JOB_NODELIST=f0316
+#   SLURM_JOB_NUM_NODES=1
+#   SLURM_NTASKS=
+#   SLURM_NPROCS=
+#   SLURM_TASKS_PER_NODE=72
+#   SLURM_JOB_CPUS_PER_NODE=72
+#   SLURM_EXPORT_ENV=
+No cgroup found
+### Finished TaskPrologue
+[2026-11-16T11:05:01+01:00] f0316, scripts f085ad57
+bench/master-581 f6e8b10c Merge remote-tracking branch 'origin/master' into bench/master-581
+bench/584-swap 53059213 Merge remote-tracking branch 'origin/issue/584-rk3-swap' into bench/584-swap
+bench/584-copy 0fbd1140 Merge remote-tracking branch 'origin/issue/584-chunked-copy' into bench/584-copy
+bench_run.jl parses
+in expression starting at /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/build.jl:23
+sysimage master-581 exit 1
+in expression starting at /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/build.jl:23
+sysimage 584-swap exit 1
+in expression starting at /home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/sysimage/build.jl:23
+sysimage 584-copy exit 1
+[2026-11-16T11:11:32+01:00] builds done
+[11:11:32] master-581 profile t72
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Profile.print failed for .profile_main.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] print_flat(io::IOContext{IOStream}, lilist::Vector{Base.StackTraces.StackFrame}, n::Vector{Int64}, m::Vector{Int64}, cols::Int64, filenamemap::Dict{Symbol, Tuple{String, String, String}}, fmt::Profile.ProfileFormat)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:955
+│      [7] flat(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:840
+│      [8] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:393
+│      [9] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::Int64, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [10] (::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, threads::Int64, mincount::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [11] open(::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, threads::Int64, mincount::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [12] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [13] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [14] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [15] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [16] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Profile.print failed for .profile_all.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] print_flat(io::IOContext{IOStream}, lilist::Vector{Base.StackTraces.StackFrame}, n::Vector{Int64}, m::Vector{Int64}, cols::Int64, filenamemap::Dict{Symbol, Tuple{String, String, String}}, fmt::Profile.ProfileFormat)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:955
+│      [7] flat(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::UnitRange{Int64}, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:840
+│      [8] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::UnitRange{Int64}, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:393
+│      [9] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::UnitRange{Int64}, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [10] (::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, mincount::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [11] open(::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, mincount::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [12] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [13] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [14] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [15] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [16] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Profile.print failed for .profile_tree.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] tree_format(frames::Vector{Profile.StackFrameTree{Base.StackTraces.StackFrame}}, level::Int64, cols::Int64, maxes::@NamedTuple{count::Int64, count_flat::Int64, overhead::Int64, max_recur::Int64}, filenamemap::Dict{Symbol, Tuple{String, String, String}}, showpointer::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1063
+│      [7] print_tree(io::IOContext{IOStream}, bt::Profile.StackFrameTree{Base.StackTraces.StackFrame}, cols::Int64, fmt::Profile.ProfileFormat, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1254
+│      [8] tree(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1290
+│      [9] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:389
+│     [10] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::Int64, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [11] (::var"#15#16"{@NamedTuple{format::Symbol, threads::Int64, mincount::Int64, maxdepth::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [12] open(::var"#15#16"{@NamedTuple{format::Symbol, threads::Int64, mincount::Int64, maxdepth::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [13] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [14] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [15] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [16] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [17] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584/profile_20m_t72_master-581.toml
+[profile]
+alloc_bytes = 94331944
+alloc_gb_per_step = 0.008785346895456314
+alloc_gb_per_step = 0.008785346895456314
+steps = [5.170723239, 5.621591011, 5.585154034, 5.658543787, 5.613978407, 5.749614138, 5.660975865, 5.647322031, 5.644509065, 5.663337848]
+steps = [5.791754031, 5.653366606]
+[11:17:31] master-581 time t36
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584/time_20m_t36_master-581.toml
+alloc_bytes = 204558832
+build_alloc_bytes = 88909889600
+build_gc_s = 7.151304912
+gc_s = 0.0
+step_median_if_possible = 6.650934082
+step_median_never = 7.6717721270000006
+[11:24:10] 584-swap profile t72
+warning: address range table at offset 0x39a0 has a premature terminator entry at offset 0x42f0
+warning: address range table at offset 0x39a0 has a premature terminator entry at offset 0x4350
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-swap/src/components/urban/parent/components.jl:457
+┌ Warning: Profile.print failed for .profile_main.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] print_flat(io::IOContext{IOStream}, lilist::Vector{Base.StackTraces.StackFrame}, n::Vector{Int64}, m::Vector{Int64}, cols::Int64, filenamemap::Dict{Symbol, Tuple{String, String, String}}, fmt::Profile.ProfileFormat)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:955
+│      [7] flat(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:840
+│      [8] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:393
+│      [9] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::Int64, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [10] (::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, threads::Int64, mincount::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [11] open(::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, threads::Int64, mincount::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [12] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [13] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [14] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [15] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [16] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Profile.print failed for .profile_all.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] print_flat(io::IOContext{IOStream}, lilist::Vector{Base.StackTraces.StackFrame}, n::Vector{Int64}, m::Vector{Int64}, cols::Int64, filenamemap::Dict{Symbol, Tuple{String, String, String}}, fmt::Profile.ProfileFormat)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:955
+│      [7] flat(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::UnitRange{Int64}, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:840
+│      [8] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::UnitRange{Int64}, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:393
+│      [9] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::UnitRange{Int64}, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [10] (::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, mincount::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [11] open(::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, mincount::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [12] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [13] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [14] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [15] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [16] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Profile.print failed for .profile_tree.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] tree_format(frames::Vector{Profile.StackFrameTree{Base.StackTraces.StackFrame}}, level::Int64, cols::Int64, maxes::@NamedTuple{count::Int64, count_flat::Int64, overhead::Int64, max_recur::Int64}, filenamemap::Dict{Symbol, Tuple{String, String, String}}, showpointer::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1063
+│      [7] print_tree(io::IOContext{IOStream}, bt::Profile.StackFrameTree{Base.StackTraces.StackFrame}, cols::Int64, fmt::Profile.ProfileFormat, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1254
+│      [8] tree(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1290
+│      [9] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:389
+│     [10] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::Int64, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [11] (::var"#15#16"{@NamedTuple{format::Symbol, threads::Int64, mincount::Int64, maxdepth::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [12] open(::var"#15#16"{@NamedTuple{format::Symbol, threads::Int64, mincount::Int64, maxdepth::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [13] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [14] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [15] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [16] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [17] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584/profile_20m_t72_584-swap.toml
+[profile]
+alloc_bytes = 95543240
+alloc_gb_per_step = 0.008898157626390457
+alloc_gb_per_step = 0.008898157626390457
+steps = [4.652613121, 4.613751263, 4.810426235, 4.580130562, 4.797106803, 4.62844353, 4.759975737, 4.698670415, 4.826330559, 4.704843158]
+steps = [4.980515039, 5.078506953]
+[11:30:23] 584-swap time t36
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-swap/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584/time_20m_t36_584-swap.toml
+alloc_bytes = 205294224
+build_alloc_bytes = 88909770096
+build_gc_s = 6.359000565
+gc_s = 0.0
+step_median_if_possible = 6.017951321
+step_median_never = 9.6479041055
+[11:37:35] 584-copy profile t72
+warning: address range table at offset 0x39a0 has a premature terminator entry at offset 0x42f0
+warning: address range table at offset 0x39a0 has a premature terminator entry at offset 0x4350
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-copy/src/components/urban/parent/components.jl:457
+┌ Warning: Profile.print failed for .profile_main.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] print_flat(io::IOContext{IOStream}, lilist::Vector{Base.StackTraces.StackFrame}, n::Vector{Int64}, m::Vector{Int64}, cols::Int64, filenamemap::Dict{Symbol, Tuple{String, String, String}}, fmt::Profile.ProfileFormat)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:955
+│      [7] flat(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:840
+│      [8] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:393
+│      [9] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::Int64, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [10] (::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, threads::Int64, mincount::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [11] open(::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, threads::Int64, mincount::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [12] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [13] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [14] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [15] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [16] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Profile.print failed for .profile_all.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] print_flat(io::IOContext{IOStream}, lilist::Vector{Base.StackTraces.StackFrame}, n::Vector{Int64}, m::Vector{Int64}, cols::Int64, filenamemap::Dict{Symbol, Tuple{String, String, String}}, fmt::Profile.ProfileFormat)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:955
+│      [7] flat(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::UnitRange{Int64}, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:840
+│      [8] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::UnitRange{Int64}, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:393
+│      [9] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::UnitRange{Int64}, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [10] (::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, mincount::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [11] open(::var"#15#16"{@NamedTuple{format::Symbol, sortedby::Symbol, mincount::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [12] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [13] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [14] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [15] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [16] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Profile.print failed for .profile_tree.txt
+│   exception =
+│    IOError: ispath("/proc/sys/fs/binfmt_misc/WSLInterop"): no such device (ENODEV)
+│    Stacktrace:
+│      [1] _uv_error(prefix::String, c::Int32)
+│        @ Base ./libuv.jl:114
+│      [2] uv_error
+│        @ ./libuv.jl:113 [inlined]
+│      [3] ispath(path::String)
+│        @ Base.Filesystem ./stat.jl:381
+│      [4] uripath(path::String)
+│        @ Base.Filesystem ./path.jl:658
+│      [5] editor_link(path::String, linenum::Int64)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:886
+│      [6] tree_format(frames::Vector{Profile.StackFrameTree{Base.StackTraces.StackFrame}}, level::Int64, cols::Int64, maxes::@NamedTuple{count::Int64, count_flat::Int64, overhead::Int64, max_recur::Int64}, filenamemap::Dict{Symbol, Tuple{String, String, String}}, showpointer::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1063
+│      [7] print_tree(io::IOContext{IOStream}, bt::Profile.StackFrameTree{Base.StackTraces.StackFrame}, cols::Int64, fmt::Profile.ProfileFormat, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1254
+│      [8] tree(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, cols::Int64, fmt::Profile.ProfileFormat, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:1290
+│      [9] print_group(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}, fmt::Profile.ProfileFormat, format::Symbol, threads::Int64, tasks::UnitRange{UInt64}, is_subsection::Bool)
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:389
+│     [10] print(io::IOContext{IOStream}, data::Vector{UInt64}, lidict::Dict{UInt64, Vector{Base.StackTraces.StackFrame}}; format::Symbol, C::Bool, combine::Bool, maxdepth::Int64, mincount::Int64, noisefloor::Int64, sortedby::Symbol, groupby::Symbol, recur::Symbol, threads::Int64, tasks::UnitRange{UInt64})
+│        @ Profile /home/atuin/b337bd/b337bd10/aeolus-bench/julia-1.13.3/share/julia/stdlib/v1.13/Profile/src/Profile.jl:289
+│     [11] (::var"#15#16"{@NamedTuple{format::Symbol, threads::Int64, mincount::Int64, maxdepth::Int64}})(io::IOStream)
+│        @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:246
+│     [12] open(::var"#15#16"{@NamedTuple{format::Symbol, threads::Int64, mincount::Int64, maxdepth::Int64}}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+│        @ Base ./io.jl:429
+│     [13] open(::Function, ::String, ::String)
+│        @ Base ./io.jl:426
+│     [14] top-level scope
+│        @ ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:245
+│     [15] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:309
+│     [16] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:344
+│     [17] _start()
+│        @ Base ./client.jl:577
+└ @ Main ~/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/bench_run.jl:250
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584/profile_20m_t72_584-copy.toml
+[profile]
+alloc_bytes = 95754536
+alloc_gb_per_step = 0.008917836099863052
+alloc_gb_per_step = 0.008917836099863052
+steps = [4.856505982, 4.832809847, 4.807500419, 4.86698892, 4.959324845, 4.863450248, 4.872156178, 4.82770833, 4.79223433, 4.802292138]
+steps = [5.024231576, 4.754679838]
+[11:43:28] 584-copy time t36
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-copy/src/components/urban/parent/components.jl:457
+┌ Warning: Assignment to `tm` in soft scope is ambiguous because a global variable by the same name exists: `tm` will be treated as a new local. Disambiguate by using `local tm` to suppress this warning or `global tm` to assign to the existing global variable.
+└ @ timing.jl:707
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584/time_20m_t36_584-copy.toml
+alloc_bytes = 206075632
+build_alloc_bytes = 88909416912
+build_gc_s = 6.682783914
+gc_s = 0.0
+step_median_if_possible = 5.947045957
+step_median_never = 6.9468994209999995
+[2026-11-16T11:49:50+01:00] done
+=== JOB_STATISTICS ===
+=== current date     : Mon Nov 16 11:49:51 CET 2026
+= Job-ID             : 4474794 on fritz
+= Job-Name           : a2.sh
+= Job-Command        : /home/atuin/b337bd/b337bd10/aeolus-bench/after584/a2.sh
+= Initial workdir    : /home/atuin/b337bd/b337bd10/aeolus-bench/after584
+= Queue/Partition    : singlenode
+= Slurm account      : b337bd with QOS=normal
+= Features           : hwperf
+= Requested resources:  for 03:00:00
+= Elapsed runtime    : 00:44:52
+= Total RAM usage    : 0.0 GiB 
+= Node list          : f0316
+= Subm/Elig/Start/End: 2026-11-16T11:04:33 / 2026-11-16T11:04:33 / 2026-11-16T11:04:59 / 2026-11-16T11:49:51
+======================
+=== Quota infos ======
+    Path                 Used     SoftQ    HardQ    Gracetime  Filec    FileQ    FiHaQ    FileGrace    
+    /home/hpc               6.1G   104.9G   209.7G        N/A  34,260      300K     400K        N/A    
+    /home/atuin            19.5G     0.0K     0.0K        N/A  37,875                           N/A    
+    /home/vault             0.0K  1048.6G  2097.2G        N/A       1      200K     400K        N/A    
+    /lustre                 4.0K     0.0K     0.0K        N/A       1       80K     250K        N/A    
+    /anvme                295.6G     0.0K     0.0K        N/A     135    9,985K  11,985K        N/A    
+======================
+=== Network traffic stats (does not include Infiniband) ======
+= HPC internal traffic (e.g. to fileservers): 3 GB in / 0 GB out
+= External traffic: 0 GB in / 0 GB out
+======================
