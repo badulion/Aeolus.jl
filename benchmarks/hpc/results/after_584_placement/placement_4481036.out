@@ -1,0 +1,213 @@
+### Starting TaskPrologue of job 4481036 on f0313 at Wed Nov 18 10:17:44 CET 2026
+#   SLURM_JOB_NODELIST=f0313
+#   SLURM_JOB_NUM_NODES=1
+#   SLURM_NTASKS=
+#   SLURM_NPROCS=
+#   SLURM_TASKS_PER_NODE=72
+#   SLURM_JOB_CPUS_PER_NODE=72
+#   SLURM_EXPORT_ENV=
+No cgroup found
+### Finished TaskPrologue
+[2026-11-18T10:17:44+01:00] f0313, scripts 7b5f8d2d
+bench/master-581 f6e8b10c Merge remote-tracking branch 'origin/master' into bench/master-581
+bench/584-swap 27b12c34 Merge branch 'issue/584-rk3-swap' of github.com:badulion/Aeolus.jl into bench/584-swap
+hostname: f0313
+numa_balancing: 1
+--- numactl -H
+available: 4 nodes (0-3)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
+node 0 size: 64133 MB
+node 0 free: 59499 MB
+node 1 cpus: 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35
+node 1 size: 64507 MB
+node 1 free: 62673 MB
+node 2 cpus: 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53
+node 2 size: 64507 MB
+node 2 free: 62822 MB
+node 3 cpus: 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
+node 3 size: 64456 MB
+node 3 free: 62908 MB
+node distances:
+node     0    1    2    3 
+   0:   10   11   20   20 
+   1:   11   10   20   20 
+   2:   20   20   10   11 
+   3:   20   20   11   10 
+--- lscpu | grep -i numa
+NUMA node(s):                            4
+NUMA node0 CPU(s):                       0-17
+NUMA node1 CPU(s):                       18-35
+NUMA node2 CPU(s):                       36-53
+NUMA node3 CPU(s):                       54-71
+[10:19:43] trace_20m_t36_unpinned_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_placement/trace_20m_t36_unpinned_master-581.toml
+thread_cpus = [60, 32, 12, 59, 27, 29, 13, 30, 38, 31, 35, 58, 44, 63, 54, 46, 55, 56, 5, 50, 33, 51, 34, 57, 61, 41, 53, 4, 28, 42, 62, 6, 9, 21, 43, 1]
+idle_in_launches_s = 146.96081712600005
+launch_wall_s = 23.23322877800001
+serial_between_s = 4.039417402999991
+step_wall_s = 27.272646181000002
+idle_in_launches_s = 179.7616292320007
+launch_wall_s = 27.723082738000016
+serial_between_s = 3.891430936999985
+step_wall_s = 31.614513675
+[10:25:53] trace_20m_t36_unpinned_584-swap
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-swap/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_placement/trace_20m_t36_unpinned_584-swap.toml
+thread_cpus = [62, 22, 66, 21, 25, 47, 56, 69, 5, 60, 11, 61, 58, 18, 7, 67, 8, 65, 36, 10, 51, 9, 55, 26, 12, 0, 44, 19, 53, 48, 49, 52, 46, 45, 13, 27]
+idle_in_launches_s = 162.472614787
+launch_wall_s = 23.684695619000006
+serial_between_s = 0.447302693999994
+step_wall_s = 24.131998313
+idle_in_launches_s = 151.7241252010008
+launch_wall_s = 26.130475191000023
+serial_between_s = 4.257453660999975
+step_wall_s = 30.387928851999998
+[10:32:13] trace_20m_t36_pinned_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_placement/trace_20m_t36_pinned_master-581.toml
+thread_cpus = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
+idle_in_launches_s = 127.73763233899945
+launch_wall_s = 29.137603145999996
+serial_between_s = 3.717958131000003
+step_wall_s = 32.855561277
+idle_in_launches_s = 127.61919761400122
+launch_wall_s = 32.523521167000034
+serial_between_s = 3.6700472099999715
+step_wall_s = 36.193568377000005
+[10:38:42] trace_20m_t36_pinned_584-swap
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-swap/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_placement/trace_20m_t36_pinned_584-swap.toml
+thread_cpus = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
+idle_in_launches_s = 114.79139492000081
+launch_wall_s = 22.827560127000023
+serial_between_s = 0.3545001399999812
+step_wall_s = 23.182060267000004
+idle_in_launches_s = 124.15890704200103
+launch_wall_s = 28.24420900000003
+serial_between_s = 3.69898733599997
+step_wall_s = 31.943196336
+[10:45:19] trace_20m_t36_interleave_master-581
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-master-581/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_placement/trace_20m_t36_interleave_master-581.toml
+thread_cpus = [61, 17, 15, 56, 1, 24, 25, 0, 63, 47, 6, 10, 28, 50, 49, 64, 37, 11, 12, 52, 48, 14, 60, 59, 27, 71, 51, 20, 58, 16, 55, 22, 44, 21, 62, 23]
+idle_in_launches_s = 127.22342638199893
+launch_wall_s = 23.953128986999975
+serial_between_s = 3.8255673030000246
+step_wall_s = 27.77869629
+idle_in_launches_s = 125.25036786299984
+launch_wall_s = 29.408755926
+serial_between_s = 3.772446693999999
+step_wall_s = 33.18120262
+[10:51:22] trace_20m_t36_interleave_584-swap
+┌ Info: the soil starts from the dynamic driver: 4 levels to 1.95 m, temperature profile, water profile
+│   subsystem = :urban
+│   event = :soil_init
+└   driver = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/input/berlin_20m_20250824_dynamic.nc"
+┌ Warning: TiledUrbanSurface: the forcing level of 1 built tile(s) raised to a valid Monin–Obukhov height ([surface] raise_forcing_level = true, #568); listed in results.toml
+│   domain = "main"
+│   worst_column = (30, 615)
+│   h = 9.9609375
+│   d = 9.9609375
+│   z0m = 0.05
+│   z_ref_first = 0.0390625
+│   z_ref = 20.0390625
+└ @ Aeolus.Urban ~/smarttwin/Aeolus.jl/.worktrees/bench-584-swap/src/components/urban/parent/components.jl:457
+bench_run: wrote /home/atuin/b337bd/b337bd10/aeolus-bench/results/after_584_placement/trace_20m_t36_interleave_584-swap.toml
+thread_cpus = [13, 42, 40, 43, 31, 57, 41, 62, 30, 61, 45, 9, 10, 37, 14, 11, 35, 12, 55, 44, 58, 39, 63, 59, 60, 36, 26, 16, 27, 28, 29, 17, 56, 32, 34, 38]
+idle_in_launches_s = 129.26442273300017
+launch_wall_s = 23.968340533000003
+serial_between_s = 0.42222957899999614
+step_wall_s = 24.390570112
+idle_in_launches_s = 134.67231715599837
+launch_wall_s = 29.880725191999964
+serial_between_s = 3.820976615000035
+step_wall_s = 33.701701807
+[2026-11-18T10:57:43+01:00] done
+=== JOB_STATISTICS ===
+=== current date     : Wed Nov 18 10:57:44 CET 2026
+= Job-ID             : 4481036 on fritz
+= Job-Name           : placement.sh
+= Job-Command        : /home/atuin/b337bd/b337bd10/aeolus-bench/placement/placement.sh
+= Initial workdir    : /home/atuin/b337bd/b337bd10/aeolus-bench/placement
+= Queue/Partition    : singlenode
+= Slurm account      : b337bd with QOS=normal
+= Features           : hwperf
+= Requested resources:  for 02:00:00
+= Elapsed runtime    : 00:40:00
+= Total RAM usage    : 0.0 GiB 
+= Node list          : f0313
+= Subm/Elig/Start/End: 2026-11-18T10:17:43 / 2026-11-18T10:17:43 / 2026-11-18T10:17:44 / 2026-11-18T10:57:44
+======================
+=== Quota infos ======
+    Path                 Used     SoftQ    HardQ    Gracetime  Filec    FileQ    FiHaQ    FileGrace    
+    /home/hpc               6.9G   104.9G   209.7G        N/A  34,383      300K     400K        N/A    
+    /home/atuin            19.5G     0.0K     0.0K        N/A  37,898                           N/A    
+    /home/vault             0.0K  1048.6G  2097.2G        N/A       1      200K     400K        N/A    
+    /lustre                 4.0K     0.0K     0.0K        N/A       1       80K     250K        N/A    
+    /anvme                295.6G     0.0K     0.0K        N/A     135    9,985K  11,985K        N/A    
+======================
+=== Network traffic stats (does not include Infiniband) ======
+= HPC internal traffic (e.g. to fileservers): 1 GB in / 0 GB out
+= External traffic: 0 GB in / 0 GB out
+======================

@@ -97,6 +97,47 @@ The desktop could not reproduce it (the same 5 copies per step as master; Berlin
   Whether Fritz migrates pages (`kernel.numa_balancing`), and how the fused sweep's writes to the workspace interact with that, is unchecked.
 - **The fused path is unaffected:** swap is again −0.76 s per step against master at 36 threads.
 
+### Placement check (job 4481036)
+
+Job **4481036** ran on node f0313 on 2026-11-18. It used `bench_run.jl trace` at `-t 36,0`, Berlin 20 m, with `nwarm=2 nsteps=4`. The builds were `bench/master-581` (f6e8b10c) and `bench/584-swap` (27b12c34, which includes the open-boundary fix e918e33e). Each build ran in three variants, one process each; `numastat -p` was sampled every 20 s. The raw data is in `results/after_584_placement/`.
+
+**The node:**
+- `kernel.numa_balancing = 1`.
+- 4 NUMA nodes of about 64 GB each (sub-NUMA clustering, 2 per socket): cores 0–17, 18–35, 36–53 and 54–71.
+- Distances: 10 within a node, 11 to the other node of the same socket, 20 to the other socket.
+- **Pinned** (`JULIA_EXCLUSIVE=1`): the 36 threads sit on cores 0–35, which is one socket (NUMA nodes 0 and 1).
+
+**Per step (4 traced steps per setting):** step / inside launches / between launches, in s, then idle thread-seconds inside launches.
+
+| variant | build | `never` | `if_possible` | memory during `never`, GB on NUMA nodes 0/1/2/3 |
+| :-- | :-- | :-- | :-- | :-- |
+| unpinned | master | **7.90** / 6.93 / 0.97, 44.9 | 6.82 / 5.81 / 1.01, 36.7 | 18.2 / 24.7 / 16.2 / 15.9 |
+| unpinned | swap | **7.60** / 6.53 / 1.06, 37.9 | 6.03 / 5.92 / 0.11, 40.6 | 17.8 / 14.3 / 23.5 / 20.7 |
+| pinned | master | **9.05** / 8.13 / 0.92, 31.9 | 8.21 / 7.28 / 0.93, 31.9 | 49.0 / 29.2 / 0.0 / 0.0 |
+| pinned | swap | **7.99** / 7.06 / 0.92, 31.0 | 5.80 / 5.71 / 0.09, 28.7 | 44.0 / 35.0 / 0.0 / 0.0 |
+| interleaved | master | **8.30** / 7.35 / 0.94, 31.3 | 6.94 / 5.99 / 0.96, 31.8 | 19.1 / 19.1 / 19.1 / 18.9 |
+| interleaved | swap | **8.43** / 7.47 / 0.96, 33.7 | 6.10 / 5.99 / 0.11, 32.3 | 19.3 / 18.9 / 19.0 / 19.0 |
+
+The memory column is the last `numastat` snapshot inside the `never` block; the totals are 75–79 GB.
+
+**Swap against master with fusion off:**
+
+| variant | difference |
+| :-- | :-- |
+| unpinned | −0.30 s (−4 %) |
+| pinned | −1.06 s (−12 %) |
+| interleaved | +0.13 s (+1.6 %) |
+
+**Reading.**
+- **This node shows no gap unpinned.** Swap's unfused path is 4 % faster than master's here, against +26 % (job 4474794) and +7 % (job 4477000) before. Neither pinning nor interleaving has a gap to close, so the check can't tell thread placement from page placement.
+- **The differences between two processes running the same work follow where the pages land, not the build.**
+  - Unpinned, each process spreads its 76 GB unevenly over the 4 NUMA nodes, and differently each time: master 18/25/16/16 GB, swap 18/14/24/21 GB.
+  - Pinned, one NUMA node holds 44–49 GB of its 64 GB.
+  - Pinned, master is the slower one (by 1.06 s with fusion off). Its launches are slower although it runs the same unfused passes as swap (8.13 against 7.06 s inside launches); it also has the more lopsided split (49/29 GB against 44/35 GB).
+  - Interleaved, the pages are even (19 GB per node), and the two builds are within 1.6 %.
+- **Conclusion:** the earlier "regression" is run-to-run variation from page placement. It can go either way, and it is not a cost of the swap. Read single unpinned unfused comparisons at 20 m with ±10–25 % in mind.
+- **The fused default:** swap is faster than master in every variant: −0.79 s unpinned, −0.84 s interleaved, and −2.41 s pinned (where master's run was slow throughout).
+
 ## Against the desktop reference
 
 The desktop reference is 1006 × 1006 × 156 moist, sweep plus copy per step:

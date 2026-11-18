@@ -1,0 +1,580 @@
+aeolus_dir = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/bench-master-581"
+budget_s = 1800.0
+build = "master-581"
+build_alloc_bytes = 88909682824
+build_gc_s = 5.645822029
+case = "20m"
+commit = "f6e8b10c3340ebcf659218cda93bd47e2e25b6c9"
+config = "/home/hpc/b337bd/b337bd10/smarttwin/Aeolus.jl/.worktrees/issue-566/benchmarks/hpc/berlin_20m/berlin_20m_20250824.toml"
+dt = 0.4
+fftw_planner = "estimate"
+fftw_threads = 1
+finished = "2026-11-18T10:51:18.811"
+has_launch_trace = true
+has_loop_fusion = true
+host = "f0313"
+julia = "1.13.3"
+julia_exclusive = ""
+label = "trace_20m_t36_interleave_master-581"
+mode = "trace"
+ntrace = 4
+numactl = "--interleave=all"
+slurm_job = "4481036"
+started = "2026-11-18T10:47:33.625"
+t_build_s = 127.47732782363892
+t_load_s = 5.299779176712036
+t_total_s = 358.19805812835693
+thread_cpus = [61, 17, 15, 56, 1, 24, 25, 0, 63, 47, 6, 10, 28, 50, 49, 64, 37, 11, 12, 52, 48, 14, 60, 59, 27, 71, 51, 20, 58, 16, 55, 22, 44, 21, 62, 23]
+threads = 36
+warm_s = [96.397331727, 7.668387899]
+
+[affinity]
+454820 = "0-71"
+454822 = "0-71"
+454827 = "0-71"
+454828 = "0-71"
+454829 = "0-71"
+454830 = "0-71"
+454831 = "0-71"
+454832 = "0-71"
+454833 = "0-71"
+454834 = "0-71"
+454835 = "0-71"
+454836 = "0-71"
+454837 = "0-71"
+454838 = "0-71"
+454839 = "0-71"
+454840 = "0-71"
+454841 = "0-71"
+454842 = "0-71"
+454843 = "0-71"
+454844 = "0-71"
+454845 = "0-71"
+454846 = "0-71"
+454847 = "0-71"
+454848 = "0-71"
+454849 = "0-71"
+454850 = "0-71"
+454851 = "0-71"
+454852 = "0-71"
+454853 = "0-71"
+454854 = "0-71"
+454855 = "0-71"
+454856 = "0-71"
+454857 = "0-71"
+454858 = "0-71"
+454859 = "0-71"
+454860 = "0-71"
+454861 = "0-71"
+454862 = "0-71"
+454863 = "0-71"
+454864 = "0-71"
+454865 = "0-71"
+454866 = "0-71"
+454867 = "0-71"
+454868 = "0-71"
+454869 = "0-71"
+454870 = "0-71"
+454871 = "0-71"
+454872 = "0-71"
+454873 = "0-71"
+454874 = "0-71"
+454875 = "0-71"
+454876 = "0-71"
+454877 = "0-71"
+454878 = "0-71"
+454879 = "0-71"
+454880 = "0-71"
+454881 = "0-71"
+454882 = "0-71"
+454883 = "0-71"
+454884 = "0-71"
+454885 = "0-71"
+454886 = "0-71"
+454887 = "0-71"
+454888 = "0-71"
+454889 = "0-71"
+454890 = "0-71"
+454891 = "0-71"
+454892 = "0-71"
+454893 = "0-71"
+454894 = "0-71"
+454895 = "0-71"
+454896 = "0-71"
+454897 = "0-71"
+454898 = "0-71"
+454899 = "0-71"
+454900 = "0-71"
+454901 = "0-71"
+454902 = "0-71"
+454903 = "0-71"
+454904 = "0-71"
+454905 = "0-71"
+454906 = "0-71"
+454907 = "0-71"
+454908 = "0-71"
+454909 = "0-71"
+454910 = "0-71"
+454911 = "0-71"
+454912 = "0-71"
+454913 = "0-71"
+454914 = "0-71"
+454915 = "0-71"
+454916 = "0-71"
+454917 = "0-71"
+454918 = "0-71"
+454919 = "0-71"
+454920 = "0-71"
+454921 = "0-71"
+454922 = "0-71"
+454923 = "0-71"
+454924 = "0-71"
+454925 = "0-71"
+454926 = "0-71"
+454927 = "0-71"
+454928 = "0-71"
+454929 = "0-71"
+454930 = "0-71"
+454931 = "0-71"
+
+[trace_if_possible]
+busy_per_thread_s = [19.81220720900001, 20.46750739500003, 20.385792135000024, 20.37204200900001, 20.518239452000003, 20.669717707999975, 20.447059963000008, 20.570410465999988, 20.403125627000005, 20.231278670000005, 20.587965232999977, 20.248548980000034, 20.186916754999995, 20.373937376, 20.412986872000022, 20.275575665000005, 20.452443004999992, 20.52272887900001, 20.289208375000026, 20.50954226999999, 20.512615520999987, 20.274782603999984, 20.386796001999986, 20.541938555999987, 20.40209720199998, 20.437447993000006, 20.508530126999997, 20.686144088000027, 20.510103801999993, 20.55693294700001, 20.314795629000017, 20.371285816, 20.475918744000015, 20.484585145999997, 20.328262709, 20.559746220000008]
+idle_in_launches_s = 127.22342638199893
+launch_wall_s = 23.953128986999975
+launches = 1260
+nested = 44064
+serial_between_s = 3.8255673030000246
+step_wall_s = 27.77869629
+steps = [6.930613122, 6.909509094, 7.006785663, 6.931788411]
+ts_begin = 1.794995448882052e9
+
+    [trace_if_possible.by_name."_add_profile!"]
+    busy_s = 1.7906680560000001
+    count = 4
+    wall_s = 0.059764735
+
+    [trace_if_possible.by_name."_b_correct!"]
+    busy_s = 55.33575342100001
+    count = 12
+    wall_s = 1.675428025
+
+    [trace_if_possible.by_name."_b_divergence_into!"]
+    busy_s = 21.341618963000002
+    count = 12
+    wall_s = 0.660962264
+
+    [trace_if_possible.by_name."_b_eddy_scalar!"]
+    busy_s = 8.321971376
+    count = 4
+    wall_s = 0.24766930000000004
+
+    [trace_if_possible.by_name."_b_flux_div_set!"]
+    busy_s = 6.869684666
+    count = 4
+    wall_s = 0.210565045
+
+    [trace_if_possible.by_name."_b_limit_ratio!"]
+    busy_s = 14.162234024
+    count = 4
+    wall_s = 0.427343536
+
+    [trace_if_possible.by_name."_b_limit_x!"]
+    busy_s = 7.251881405000001
+    count = 4
+    wall_s = 0.214203429
+
+    [trace_if_possible.by_name."_b_limit_y!"]
+    busy_s = 7.153744714
+    count = 4
+    wall_s = 0.21607076400000003
+
+    [trace_if_possible.by_name."_b_limit_z!"]
+    busy_s = 4.738950785
+    count = 4
+    wall_s = 0.14402729200000003
+
+    [trace_if_possible.by_name."_b_rflux_x!"]
+    busy_s = 6.294184146
+    count = 4
+    wall_s = 0.195241882
+
+    [trace_if_possible.by_name."_b_rflux_y!"]
+    busy_s = 6.8383716880000005
+    count = 4
+    wall_s = 0.208572198
+
+    [trace_if_possible.by_name."_b_rflux_z!"]
+    busy_s = 4.500904774
+    count = 4
+    wall_s = 0.135794874
+
+    [trace_if_possible.by_name."_b_shell!"]
+    busy_s = 0.6389450300000001
+    count = 24
+    wall_s = 0.034825260000000004
+
+    [trace_if_possible.by_name."_b_shell_point!"]
+    busy_s = 0.53251089
+    count = 48
+    wall_s = 0.033623936
+
+    [trace_if_possible.by_name."_b_sweep_block!"]
+    busy_s = 140.233726375
+    count = 12
+    wall_s = 4.740501448
+
+    [trace_if_possible.by_name."_b_sweep_edge!"]
+    busy_s = 35.352881026999995
+    count = 12
+    wall_s = 1.099482686
+
+    [trace_if_possible.by_name."_b_uflux_x!"]
+    busy_s = 6.221394006000001
+    count = 4
+    wall_s = 0.180127325
+
+    [trace_if_possible.by_name."_b_uflux_y!"]
+    busy_s = 5.723547664
+    count = 4
+    wall_s = 0.16586631300000002
+
+    [trace_if_possible.by_name."_b_uflux_z!"]
+    busy_s = 4.312884729
+    count = 4
+    wall_s = 0.128706869
+
+    [trace_if_possible.by_name."_b_∂x_cf!"]
+    busy_s = 0.053783085
+    count = 12
+    wall_s = 0.009280948
+
+    [trace_if_possible.by_name."_b_∂y_cf!"]
+    busy_s = 0.0051633980000000005
+    count = 12
+    wall_s = 0.003419132
+
+    [trace_if_possible.by_name."_blend_body!"]
+    busy_s = 0.4396669920000001
+    count = 240
+    wall_s = 0.065487894
+
+    [trace_if_possible.by_name."_block_transform_body!"]
+    busy_s = 222.90445478100006
+    count = 24
+    wall_s = 7.512215702000001
+
+    [trace_if_possible.by_name."_coefficients_body!"]
+    busy_s = 39.630038221999996
+    count = 16
+    wall_s = 1.2024908530000002
+
+    [trace_if_possible.by_name."_copy_out_scaled_body!"]
+    busy_s = 8.743167695
+    count = 12
+    wall_s = 0.289366689
+
+    [trace_if_possible.by_name."_drag_apply!"]
+    busy_s = 0.612778773
+    count = 12
+    wall_s = 0.028051771000000003
+
+    [trace_if_possible.by_name."_drag_denominators!"]
+    busy_s = 2.742285365
+    count = 12
+    wall_s = 0.08299518500000001
+
+    [trace_if_possible.by_name."_dual_strain_row!"]
+    busy_s = 25.801470291000005
+    count = 12
+    wall_s = 0.736288063
+
+    [trace_if_possible.by_name."_face_subtract!"]
+    busy_s = 0.09883695400000003
+    count = 48
+    wall_s = 0.021319454999999994
+
+    [trace_if_possible.by_name."_map_body!"]
+    busy_s = 0.2372482729999999
+    count = 160
+    wall_s = 0.038260059999999985
+
+    [trace_if_possible.by_name."_map_body!/Fix"]
+    busy_s = 2.569793754
+    count = 4
+    wall_s = 0.082415216
+
+    [trace_if_possible.by_name."_map_body!/identity"]
+    busy_s = 0.10224206300000001
+    count = 80
+    wall_s = 0.019256956
+
+    [trace_if_possible.by_name."_n2_body!"]
+    busy_s = 34.097693148999994
+    count = 16
+    wall_s = 1.052621076
+
+    [trace_if_possible.by_name."_row_map_body!/_tke_update_row"]
+    busy_s = 18.990855943
+    count = 4
+    wall_s = 0.5743789570000001
+
+    [trace_if_possible.by_name."_thomas_slab!"]
+    busy_s = 15.736155698000001
+    count = 12
+    wall_s = 0.45951884900000006
+
+    [trace_if_possible.by_name."_xy_item!"]
+    busy_s = 6.408992416999999
+    count = 132
+    wall_s = 0.28984885700000007
+
+    [trace_if_possible.by_name."_z_item!"]
+    busy_s = 4.676404947999999
+    count = 132
+    wall_s = 0.20092756699999997
+
+    [trace_if_possible.by_name."plane_reduce/_air_at"]
+    busy_s = 13.411439930999997
+    count = 52
+    wall_s = 0.4593134610000001
+
+    [trace_if_possible.by_name."plane_reduce/_face_terms"]
+    busy_s = 0.21088767900000002
+    count = 96
+    wall_s = 0.046895115
+
+[trace_never]
+busy_per_thread_s = [25.251821043000046, 26.03770338200001, 26.284965234000033, 25.73614490999997, 26.00538770600001, 26.04293493500002, 25.977871825000054, 26.07747897999997, 25.89631965599999, 25.81723534099997, 26.18049860100003, 26.136179888999948, 25.93582017199998, 25.72953001899999, 25.93133786200001, 25.667708842000014, 25.669293211000006, 26.020447503999996, 25.901804413999972, 25.745072676999992, 25.829139441000013, 26.06850136399999, 25.65203956599999, 25.792324866000023, 26.230622677000014, 25.80153013999998, 25.69950084699998, 26.136138247000023, 25.922603675000005, 26.224689494000017, 25.98817782400002, 26.148670473999978, 25.837697048000013, 26.051639546000033, 25.923102011000005, 26.112912050000034]
+idle_in_launches_s = 125.25036786299984
+launch_wall_s = 29.408755926
+launches = 1464
+nested = 44064
+serial_between_s = 3.772446693999999
+step_wall_s = 33.18120262
+steps = [8.40972279, 8.266011381, 8.28158214, 8.223886309]
+ts_begin = 1.794995398131407e9
+
+    [trace_never.by_name."_add_profile!"]
+    busy_s = 1.794947172
+    count = 4
+    wall_s = 0.059729830000000005
+
+    [trace_never.by_name."_b_buoyancy_moist!"]
+    busy_s = 23.133229645
+    count = 12
+    wall_s = 0.7058456000000001
+
+    [trace_never.by_name."_b_coriolis!"]
+    busy_s = 19.493774568
+    count = 12
+    wall_s = 0.587393351
+
+    [trace_never.by_name."_b_correct!"]
+    busy_s = 57.045475224
+    count = 12
+    wall_s = 1.7179655760000003
+
+    [trace_never.by_name."_b_divergence_into!"]
+    busy_s = 21.547418356999998
+    count = 12
+    wall_s = 0.664840807
+
+    [trace_never.by_name."_b_eddy_scalar!"]
+    busy_s = 56.778808782
+    count = 28
+    wall_s = 1.685311699
+
+    [trace_never.by_name."_b_eddy_u!"]
+    busy_s = 27.599294041000004
+    count = 12
+    wall_s = 0.850435169
+
+    [trace_never.by_name."_b_eddy_v!"]
+    busy_s = 27.884890691000003
+    count = 12
+    wall_s = 0.833703448
+
+    [trace_never.by_name."_b_eddy_w!"]
+    busy_s = 22.821871787
+    count = 12
+    wall_s = 0.6740538779999999
+
+    [trace_never.by_name."_b_flux_div_set!"]
+    busy_s = 6.867140222000001
+    count = 4
+    wall_s = 0.21101518400000002
+
+    [trace_never.by_name."_b_limit_ratio!"]
+    busy_s = 14.291655887000001
+    count = 4
+    wall_s = 0.43424017100000006
+
+    [trace_never.by_name."_b_limit_x!"]
+    busy_s = 7.032555748
+    count = 4
+    wall_s = 0.206825739
+
+    [trace_never.by_name."_b_limit_y!"]
+    busy_s = 7.258781044
+    count = 4
+    wall_s = 0.218894883
+
+    [trace_never.by_name."_b_limit_z!"]
+    busy_s = 4.686464099
+    count = 4
+    wall_s = 0.14115839200000002
+
+    [trace_never.by_name."_b_rflux_x!"]
+    busy_s = 6.120939211000001
+    count = 4
+    wall_s = 0.189755885
+
+    [trace_never.by_name."_b_rflux_y!"]
+    busy_s = 6.521161316000001
+    count = 4
+    wall_s = 0.198667417
+
+    [trace_never.by_name."_b_rflux_z!"]
+    busy_s = 4.4077664290000005
+    count = 4
+    wall_s = 0.132261576
+
+    [trace_never.by_name."_b_shell!"]
+    busy_s = 1.2587441810000004
+    count = 36
+    wall_s = 0.06864170900000002
+
+    [trace_never.by_name."_b_shell_point!"]
+    busy_s = 1.0290282549999998
+    count = 72
+    wall_s = 0.061959027
+
+    [trace_never.by_name."_b_tendency_momentum!"]
+    busy_s = 51.71886637200001
+    count = 12
+    wall_s = 1.56751879
+
+    [trace_never.by_name."_b_tendency_scalar!"]
+    busy_s = 64.252483989
+    count = 24
+    wall_s = 1.930714347
+
+    [trace_never.by_name."_b_uflux_x!"]
+    busy_s = 6.161185838000001
+    count = 4
+    wall_s = 0.17737029199999998
+
+    [trace_never.by_name."_b_uflux_y!"]
+    busy_s = 5.910739337000001
+    count = 4
+    wall_s = 0.171237248
+
+    [trace_never.by_name."_b_uflux_z!"]
+    busy_s = 4.415585331000001
+    count = 4
+    wall_s = 0.131141528
+
+    [trace_never.by_name."_b_∂x_cf!"]
+    busy_s = 0.053588428
+    count = 12
+    wall_s = 0.009481453999999999
+
+    [trace_never.by_name."_b_∂y_cf!"]
+    busy_s = 0.005299879
+    count = 12
+    wall_s = 0.0037386999999999997
+
+    [trace_never.by_name."_blend_body!"]
+    busy_s = 0.41709607099999985
+    count = 240
+    wall_s = 0.05812879300000003
+
+    [trace_never.by_name."_block_transform_body!"]
+    busy_s = 218.60894750799997
+    count = 24
+    wall_s = 7.439460855
+
+    [trace_never.by_name."_coefficients_body!"]
+    busy_s = 39.457891262000004
+    count = 16
+    wall_s = 1.1961076800000001
+
+    [trace_never.by_name."_copy_out_scaled_body!"]
+    busy_s = 8.700371557
+    count = 12
+    wall_s = 0.28963446000000004
+
+    [trace_never.by_name."_drag_apply!"]
+    busy_s = 0.613463657
+    count = 12
+    wall_s = 0.027486776
+
+    [trace_never.by_name."_drag_denominators!"]
+    busy_s = 2.642701113
+    count = 12
+    wall_s = 0.083144053
+
+    [trace_never.by_name."_dual_strain_row!"]
+    busy_s = 25.707033391000007
+    count = 12
+    wall_s = 0.736209094
+
+    [trace_never.by_name."_face_subtract!"]
+    busy_s = 0.09424103300000002
+    count = 48
+    wall_s = 0.020862190000000003
+
+    [trace_never.by_name."_gpg_level!"]
+    busy_s = 9.808127200000001
+    count = 12
+    wall_s = 0.304004642
+
+    [trace_never.by_name."_map_body!"]
+    busy_s = 78.17796304399998
+    count = 220
+    wall_s = 2.363305409
+
+    [trace_never.by_name."_map_body!/Fix"]
+    busy_s = 2.4962241080000003
+    count = 4
+    wall_s = 0.079394563
+
+    [trace_never.by_name."_map_body!/identity"]
+    busy_s = 0.10050847200000006
+    count = 80
+    wall_s = 0.016112169000000003
+
+    [trace_never.by_name."_n2_body!"]
+    busy_s = 34.560119641
+    count = 16
+    wall_s = 1.062186477
+
+    [trace_never.by_name."_row_map_body!/_tke_update_row"]
+    busy_s = 19.064283219000004
+    count = 4
+    wall_s = 0.579061948
+
+    [trace_never.by_name."_thomas_slab!"]
+    busy_s = 15.645712329999999
+    count = 12
+    wall_s = 0.45552228200000006
+
+    [trace_never.by_name."_xy_item!"]
+    busy_s = 9.071715918
+    count = 132
+    wall_s = 0.35763963600000026
+
+    [trace_never.by_name."_z_item!"]
+    busy_s = 4.511269532000002
+    count = 132
+    wall_s = 0.19821498199999996
+
+    [trace_never.by_name."plane_reduce/_air_at"]
+    busy_s = 13.490859683
+    count = 52
+    wall_s = 0.46214823199999994
+
+    [trace_never.by_name."plane_reduce/_face_terms"]
+    busy_s = 0.20462090099999997
+    count = 96
+    wall_s = 0.046229985000000015
