@@ -695,6 +695,81 @@ end
     _prow_sc!(buf, a, b, 4, s, j, k, ii, d.θ, st.θ, p1)
     _prow_sc!(buf, a, b, 5, s, j, k, ii, d.qv, st.qv, p2)
 end
+# the same in the block launch: out of place by streaming stores
+@inline function _prows_block!(buf, a, b, s, j, k, ii, st, pu, p1, p2)
+    d = _dst(st)
+    d === st && return _prows!(buf, a, b, s, j, k, ii, st, pu, p1, p2)
+    u, v, w = st.u, st.v, st.w
+    _nt_row!(d.u, ii, j, k, _PredAt(pu, u, buf, a, b, 1, s, nothing, j, k))
+    _nt_row!(d.v, ii, j, k, _PredAt(pu, v, buf, a, b, 2, s, nothing, j, k))
+    _nt_row!(d.w, ii, j, k, _PredAt(pu, w, buf, a, b, 3, s, nothing, j, k))
+    _nt_row_sc!(d.θ, st.θ, p1, buf, a, b, 4, s, j, k, ii)
+    _nt_row_sc!(d.qv, st.qv, p2, buf, a, b, 5, s, j, k, ii)
+    return nothing
+end
+@inline _nt_row_sc!(::Nothing, ϕ, p, buf, a, b, f, s, j, k, ii) = nothing
+@inline _nt_row_sc!(ϕo, ϕ, (ps, snap), buf, a, b, f, s, j, k, ii) =
+    _nt_row!(ϕo, ii, j, k, _PredAt(ps, ϕ, buf, a, b, f, s, snap, j, k))
+
+# the predicted value at i of row (j, k) of field slot f
+struct _PredAt{P,A,B,S}
+    p::P; x::A; buf::B; a::Int; b::Int; f::Int; s::Int; snap::S; j::Int; k::Int
+end
+@inline (q::_PredAt)(i) = @inbounds _pred(q.p, q.x[i, q.j, q.k], q.buf[i, q.a, q.b, q.f, q.s], q.snap, i, q.j, q.k)
+
+# Out of place the predictor writes arrays it does not read: a plain store
+# first reads the line it writes (for ownership), a third stream of memory
+# traffic besides the state's read and the store (the sweep out of place:
+# 155 against 94 ms in place on 24 threads, 512² × 96, moist; #584).
+# Streaming (non-temporal) stores write without that read, as `memcpy`
+# does: a row of a dense Float64 `Array` in aligned chunks of 4 (an LLVM
+# vector store with `!nontemporal`: MOVNTPD on x86, STNP on AArch64), its
+# ends and any other array by plain stores. Streaming stores are weakly
+# ordered: the thread that made them reads them in order (the post terms
+# behind the predictor), others only after the fence that ends each block
+# (`_store_fence`, in `_b_sweep_block!`). A fence per row cost 20 % of the
+# row's time; per block it is negligible.
+@noinline function _nt_row!(o::Array{Float64,3}, ii, j, k, f::F) where {F}
+    i, i1 = first(ii), last(ii)
+    GC.@preserve o begin
+        p = pointer(o, LinearIndices(o)[i, j, k]) - 8i       # o[i, j, k] at p + 8i
+        @inbounds while i <= i1 && (UInt(p + 8i) & 31) != 0
+            o[i, j, k] = f(i); i += 1
+        end
+        @inbounds while i + 3 <= i1
+            _nt_store4!(p + 8i, (VecElement(f(i)), VecElement(f(i + 1)), VecElement(f(i + 2)), VecElement(f(i + 3))))
+            i += 4
+        end
+        @inbounds while i <= i1
+            o[i, j, k] = f(i); i += 1
+        end
+    end
+    return nothing
+end
+@noinline function _nt_row!(o, ii, j, k, f::F) where {F}
+    @inbounds @simd ivdep for i in ii
+        o[i, j, k] = f(i)
+    end
+    return nothing
+end
+@inline _nt_store4!(p::Ptr{Float64}, x::NTuple{4,VecElement{Float64}}) = Base.llvmcall(("""
+    define void @entry(i64 %p, <4 x double> %x) #0 {
+        %q = inttoptr i64 %p to <4 x double>*
+        store <4 x double> %x, <4 x double>* %q, align 32, !nontemporal !0
+        ret void
+    }
+    attributes #0 = { alwaysinline }
+    !0 = !{i32 1}
+    """, "entry"), Cvoid, Tuple{Ptr{Float64}, NTuple{4,VecElement{Float64}}}, p, x)
+# a full fence: the streaming stores of this thread before every later access
+@inline _store_fence() = Base.llvmcall(("""
+    define void @entry() #0 {
+        fence seq_cst
+        ret void
+    }
+    attributes #0 = { alwaysinline }
+    """, "entry"), Cvoid, Tuple{})
+@inline _fence_if_streamed(st) = (_dst(st) === st || _store_fence(); nothing)
 
 # The arrays the predictor writes and the post terms correct. In place
 # (every caller but one) they are the arrays the terms read, `st` itself.
@@ -742,11 +817,12 @@ function _b_sweep_block!(n, terms, post, plan, st, pu, p1, p2, ring, edge, ii, j
         if j0 <= jp <= j1 && (ly == 0 || _edge_slot(jp, j0, j1, ly) == 0)
             rp = mod(jp, nr) + 1
             for k in k0+lz:k1-lz
-                _prows!(ring, k - k0 + 1, rp, n, jp, k, ii, st, pu, p1, p2)
+                _prows_block!(ring, k - k0 + 1, rp, n, jp, k, ii, st, pu, p1, p2)
             end
         end
         _post_rows!(post, plan, jp, k0, k1, ii, j0:j1, _dst(st))
     end
+    _fence_if_streamed(st)
     return nothing
 end
 
