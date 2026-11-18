@@ -654,6 +654,28 @@ end
     end
     return nothing
 end
+@noinline function _prow_mom!(ko::NamedTuple, uo, vo, wo, u, v, w, buf, a, b, s, j, k, ii, pu)
+    ku, kv, kw = ko.u, ko.v, ko.w
+    @inbounds @simd ivdep for i in ii
+        x = u[i, j, k]; y = v[i, j, k]; z = w[i, j, k]
+        ku[i, j, k] = x; kv[i, j, k] = y; kw[i, j, k] = z
+        uo[i, j, k] = pu(x, buf[i, a, b, 1, s])
+        vo[i, j, k] = pu(y, buf[i, a, b, 2, s])
+        wo[i, j, k] = pu(z, buf[i, a, b, 3, s])
+    end
+    return nothing
+end
+@noinline function _prow_ϕk!(kϕ, ϕo, ϕ, buf, a, b, f, s, j, k, ii, ps, snap)
+    @inbounds @simd ivdep for i in ii
+        x = ϕ[i, j, k]
+        kϕ[i, j, k] = x
+        ϕo[i, j, k] = _pred(ps, x, buf[i, a, b, f, s], snap, i, j, k)
+    end
+    return nothing
+end
+@inline _prow_sck!(kϕ, buf, a, b, f, s, j, k, ii, ::Nothing, ϕ, p) = nothing
+@inline _prow_sck!(kϕ, buf, a, b, f, s, j, k, ii, ϕo::AbstractArray, ϕ::AbstractArray, p::Tuple) =
+    _prow_ϕk!(kϕ, ϕo, ϕ, buf, a, b, f, s, j, k, ii, p[1], p[2])
 @noinline function _prow_ϕ!(ϕo, ϕ, buf, a, b, f, s, j, k, ii, ps, snap)
     @inbounds @simd ivdep for i in ii
         ϕo[i, j, k] = _pred(ps, ϕ[i, j, k], buf[i, a, b, f, s], snap, i, j, k)
@@ -691,9 +713,16 @@ end
 # (`_dst(st)`: the same arrays, or other ones when out of place)
 @inline function _prows!(buf, a, b, s, j, k, ii, st, pu, p1, p2)
     d = _dst(st)
-    _prow_mom!(d.u, d.v, d.w, st.u, st.v, st.w, buf, a, b, s, j, k, ii, pu)
-    _prow_sc!(buf, a, b, 4, s, j, k, ii, d.θ, st.θ, p1)
-    _prow_sc!(buf, a, b, 5, s, j, k, ii, d.qv, st.qv, p2)
+    if hasfield(typeof(st), :k)
+        ko = getfield(st, :k)
+        _prow_mom!(ko, d.u, d.v, d.w, st.u, st.v, st.w, buf, a, b, s, j, k, ii, pu)
+        _prow_sck!(ko.θ, buf, a, b, 4, s, j, k, ii, d.θ, st.θ, p1)
+        _prow_sck!(ko.qv, buf, a, b, 5, s, j, k, ii, d.qv, st.qv, p2)
+    else
+        _prow_mom!(d.u, d.v, d.w, st.u, st.v, st.w, buf, a, b, s, j, k, ii, pu)
+        _prow_sc!(buf, a, b, 4, s, j, k, ii, d.θ, st.θ, p1)
+        _prow_sc!(buf, a, b, 5, s, j, k, ii, d.qv, st.qv, p2)
+    end
 end
 
 # The arrays the predictor writes and the post terms correct. In place
@@ -777,6 +806,14 @@ end
     end
     u, v, w = st.u, st.v, st.w
     d = _dst(st)
+    if hasfield(typeof(st), :k)
+        ko = getfield(st, :k)
+        @inbounds begin
+            ko.u[i, j, k] = u[i, j, k]; ko.v[i, j, k] = v[i, j, k]; ko.w[i, j, k] = w[i, j, k]
+            ko.θ === nothing || (ko.θ[i, j, k] = st.θ[i, j, k])
+            ko.qv === nothing || (ko.qv[i, j, k] = st.qv[i, j, k])
+        end
+    end
     @inbounds begin
         d.u[i, j, k] = pu(u[i, j, k], edge[i, j, e, 1, s])
         d.v[i, j, k] = pu(v[i, j, k], edge[i, j, e, 2, s])
@@ -849,7 +886,7 @@ blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
 function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{SweepTerm}},
                             post::Tuple{Vararg{PostTerm}}, halo!::H,
                             u::Field{FaceX}, v::Field{FaceY}, w::Field{FaceZ},
-                            pu, s1, s2, g::AbstractMesh; src = nothing) where {H}
+                            pu, s1, s2, g::AbstractMesh; src = nothing, keep = nothing) where {H}
     ii, jj, kk = interior(g)
     ns, nt = bufs.ns, bufs.nt
     lag, lz = sweep_lags(terms)
@@ -864,7 +901,7 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{Swe
                                 "planes, $(bufs.ly) edge rows)"))
     b = Backends.backend(u.data)
     _check_inputs(b, terms)
-    st = _sweep_io(u, v, w, s1, s2, g, src)
+    st = _with_keep(_sweep_io(u, v, w, s1, s2, g, src), keep)
     p1, p2 = _sweep_pred(s1), _sweep_pred(s2)
     plan = post_plan(post, lz, ly)
     nb = ns * nt
@@ -877,6 +914,8 @@ function blocked_predictor!(bufs::SweepBuffers, terms::Tuple{BaseTerm,Vararg{Swe
     return nothing
 end
 
+_with_keep(st, ::Nothing) = st
+_with_keep(st, keep::NamedTuple) = (; st..., k = keep)
 _check_src(::Nothing, o) = nothing
 function _check_src(a, o)
     size(a) == size(o) || throw(DimensionMismatch("blocked_predictor!: src $(size(a)) ≠ $(size(o))"))
