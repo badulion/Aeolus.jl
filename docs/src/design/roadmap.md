@@ -3273,6 +3273,72 @@ threads). The step at 72 threads is 6.08 s, from 36 to 72 threads 1.21×
   Mutation check: ignoring the level offset of the split fails 24 checks.
   No bug was caught and no expectation proved wrong.
 
+### The step-start state kept by swapping arrays, not copied (#584)
+
+`step_rk3!` copied u, v, w, θ (and qv) into its workspace at the start of
+every step, on one thread. On Fritz at Berlin 20 m and 72 threads that
+was ~1.0 s of a 6.1 s step (#581 A2). This PR removes the copy when the
+first substage takes the fused sweep. It follows PALM's method of
+swapping the state buffers instead of copying them.
+
+**Built**
+- **The sweep out of place** (`7a84ce28`). The fused sweep can read the
+  step-start state from one set of arrays (`src`) and write the predicted
+  state into another; every other path still updates in place.
+- **The swap** (`deff3df2`). In the first substage the workspace's arrays
+  get uⁿ's halo shell, the sweep reads uⁿ and writes u* into them, and
+  then `Field.data` and the now mutable `RK3Workspace` exchange arrays. uⁿ
+  stays in the workspace for the stage combinations, with no copy. The
+  passes (loop fusion off or not possible) and a workspace of another array
+  type (a nest child's shell storage) still copy (`_keep_start!`).
+- **Open boundaries** rebind θ and qv by identity at every substep,
+  because their arrays change.
+
+**Measured**
+- **Desktop, 24 threads, 1006 × 1006 × 156 moist, sweep plus copy per
+  step:** master 731 ms, swap 572 ms. At 8 threads: 759 against 597 ms.
+  At 1 thread: 1856 against 1746 ms.
+- **Fritz, Berlin 20 m** (job 4474794, `REPORT_after_584.md` on
+  `issue/566-hpc-benchmark`), s per step:
+
+  | build | 72 threads | 36 threads |
+  | :-- | --: | --: |
+  | master | 5.65 | 6.65 |
+  | swap | 4.70 | 6.02 |
+  | chunked copy (not merged) | 4.85 | 5.95 |
+
+- **Loop fusion off.** Swap was 26 % (job 4474794) and then 7 % (job
+  4477000) slower than master at 36 threads, with the same work: the
+  same launches, the same serial time, and slower memory access spread
+  over every launch. A placement check (job 4481036) found no gap: −4 %
+  unpinned, −12 % pinned and +1.6 % with `numactl --interleave=all`. The
+  differences follow how each process's ~76 GB lands on the node's 4
+  NUMA nodes. That is run-to-run variation from page placement, not a
+  cost of the swap. With fusion on, swap was faster than master in every
+  variant (−0.79 s per step unpinned, −0.84 s interleaved).
+- **The same states:** after 21 steps of Berlin 100 m, the swap and master
+  agree exactly in u, v, w, θ and e. The odd step count ends with the
+  arrays swapped.
+- **Allocation:** 16 B per step, as on master.
+
+**Tests** (`test/fused_sweep.jl`):
+- the fused sweep with the swap against the passes with the copy over 3
+  steps, dry and moist, with SGS, buoyancy and Coriolis, within round-off;
+- the arrays alternate between steps;
+- NaN in the workspace does not leak into the result;
+- a workspace of another array type copies;
+- an out-of-place sweep with each post-predictor operator against its
+  reference.
+
+**A bug the tests caught.** `_bind!` first emptied the open-boundary
+identity table, which also dropped the tracers that nesting binds
+(`nesting/boundary_data.jl`). As a result `nest_external.jl` failed 3
+tests: those tracers' halos were not filled. Fixed in `e918e33e`, which
+drops only the names `_bind!` rebinds. No expectation proved wrong.
+
+**Not merged** (`not_merged.md`): the chunked threaded copy, which was
+the alternative to the swap, plus two variants of it that measured slower.
+
 ### Phase 74 — Adjoint model via automatic differentiation
 Full reverse-mode AD through the solver with `Enzyme.jl`: adjoint of
 dynamics, physics and I/O, with checkpointing for long windows.

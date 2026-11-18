@@ -198,6 +198,59 @@ Group D and group F were left out (maintainer decision, 2026-11-14).
   There a single thread reaches a small part of the node's bandwidth, and
   the pages are spread over both sockets by the first touch. Reapply the
   commit if the launch wins there.
+- **Superseded by #584:** the swap removes the copy whenever the first
+  substage takes the fused sweep. The chunked copy (below) is the measured
+  successor of this launch.
+
+## The step-start copy (#584): what was left out
+
+#584 merged the array swap. These alternatives were built and measured
+against it. Desktop numbers are sweep plus copy per step at 1006 × 1006 ×
+156 moist, from one process under the bench lock.
+
+### The chunked threaded copy
+
+- **Where:** `issue/584-chunked-copy` (`8396bf1a`).
+- **What:** `copy_storage!` splits the array into contiguous chunks of at
+  least 1 M points, with one `copyto!` per task, so each task keeps
+  memcpy's streaming stores. The per-point launch of #581 A2 lost them.
+  Tests are in `test/thread_utilisation.jl`.
+- **Measured:**
+  - Desktop, the copy of the five state arrays at 1012 × 1012 × 162: 195
+    against 277 ms for `copyto!` at 4 threads, and the same at 1 thread.
+  - Desktop step at 24 threads: master 731 ms, chunked copy 654 ms, swap
+    572 ms.
+  - Fritz, Berlin 20 m (job 4474794), s per step: at 72 threads, 4.85
+    against 4.70 for the swap; at 36 threads, 5.95 against 6.02.
+- **Why not merged:** the maintainer chose the swap (2026-11-18). The swap
+  removes the copy rather than spreading it over threads, and the
+  regression first seen with loop fusion off turned out to be page
+  placement (job 4481036).
+- **Still useful:** with loop fusion off, the swap still copies the state.
+  This commit would thread that copy: on Fritz at 36 threads with fusion
+  off, 6.95 against 7.67 s per step for master.
+
+### uⁿ stored inside the sweep
+
+- **Where:** `issue/584-keep-in-sweep` (`dc3afd08`, on top of the swap's
+  `deff3df2`).
+- **What:** the sweep's predictor rows also store uⁿ into the workspace,
+  instead of swapping the arrays.
+- **Measured** on the desktop, per step:
+  - 24 threads: 688 ms, against 572 for the swap and 731 for master;
+  - 1 thread: 1953 ms, against 1746 for the swap and 1856 for master.
+
+  The extra stores cost more than the copy they replace.
+
+### Streaming (non-temporal) stores in the out-of-place sweep
+
+- **Where:** `issue/584-streaming-stores` (`e4e0807e`, on top of
+  `deff3df2`).
+- **What:** out of place, the predictor writes arrays it does not read.
+  This patch writes them with `nontemporal` stores and a fence per row.
+- **Measured** on the desktop: the out-of-place sweep took 302.3 ms with
+  streaming stores, against 249.5 ms with plain stores, at 1 thread. It is
+  slower.
 
 ## Tools that are not in master
 

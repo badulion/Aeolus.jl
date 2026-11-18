@@ -1077,17 +1077,22 @@ end
 # =========================================================================
 
 # Bind the cell-centred fields of `sim` that have planes (θ, qv, …) to
-# their names, so `fill_halos!` finds them by identity.
+# their names, so `fill_halos!` finds them by identity. Rebound at every
+# substep: the first RK3 substage swaps the arrays of θ, qv with its
+# workspace's (#584), so the previous arrays of these names are dropped
+# first. Only these: arrays bound by others (a nest's tracers,
+# `nesting/boundary_data.jl`) keep their binding.
 function _bind!(st::OpenBoundaryState, sim)
+    filter!(kv -> !_binds(st, sim, last(kv)), st.bound)
     for p in st.planes
-        p.normal && continue
-        _loc_of(p.name) isa CellCenter || continue
-        hasproperty(sim, p.name) || continue
-        f = getproperty(sim, p.name)
-        st.bound[f.data] = p.name
+        _binds(st, sim, p) || continue
+        st.bound[getproperty(sim, p.name).data] = p.name
     end
     return st
 end
+# whether `_bind!` binds plane `p` (or a plane named `name`) to a field of `sim`
+_binds(st, sim, p) = !p.normal && _loc_of(p.name) isa CellCenter && hasproperty(sim, p.name)
+_binds(st, sim, name::Symbol) = any(p -> p.name === name && _binds(st, sim, p), st.planes)
 
 """
     update_open_boundaries!(sim, t, dt) -> sim
